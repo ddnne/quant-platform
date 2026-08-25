@@ -15,7 +15,9 @@
     "index_url": "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html",
     "publication_days_only": true,
     "include_weekends": false,
-    "required_days": "official_index_listed_days_only"
+    "required_days": "official_index_listed_days_only",
+    "publication_label_semantics": "the archive label is the official publication day (the next business day relative to the 15:00 quote observation)",
+    "official_publication_times": ["17:30", "18:30"]
   },
   "entitlement_semantics": {
     "clamp_before_earliest": false,
@@ -31,8 +33,8 @@
     "not_calendar_day_count": 8784
   },
   "freshness_sla": {
-    "expected_after": "15:00",
-    "usable_by": "16:00",
+    "expected_after": "17:30",
+    "usable_by": "18:30",
     "timezone": "Asia/Tokyo",
     "rule": "official_archive_index_day"
   },
@@ -56,5 +58,9 @@
     "historical_research": true,
     "tip_only": false,
     "dataset_complete_claim": false
+  },
+  "required_domain_semantics": {
+    "basis": "official_archive_publication_days",
+    "empty_success_policy": "never_complete"
   }
 }

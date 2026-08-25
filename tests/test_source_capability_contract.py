@@ -9,8 +9,10 @@ import pytest
 
 from data_contracts.source_capability import (
     COLLECTION_COVERAGE_V3,
+    EMPTY_SUCCESS_POLICIES,
     HISTORY_MODES,
     POLICY_VERSION,
+    REQUIRED_DOMAIN_BASES,
     SCHEMA_PATH,
     SourceCapabilityContract,
     all_source_capability_contracts,
@@ -33,6 +35,7 @@ _NESTED_EVIDENCE_FIELDS = (
     "available_at",
     "revision_semantics",
     "research_profile_eligibility",
+    "required_domain_semantics",
 )
 
 
@@ -43,7 +46,7 @@ def _payload(**overrides: object) -> dict:
         "upstream_locator": "/v2/equities/bars/daily",
         "official_evidence_url": "https://jpx-jquants.com/en/spec/eq-bars-daily",
         "history_mode": "bounded_history",
-        "earliest_official_availability": "2008-05-01",
+        "earliest_official_availability": "2008-05-07",
         "historical_research_eligible": True,
         "tip_only_operational": False,
         "supported_query_parameters": ["code", "from", "to"],
@@ -81,6 +84,10 @@ def _payload(**overrides: object) -> dict:
             "exclude_from": [],
             "exclusion_reason": "none",
         },
+        "required_domain_semantics": {
+            "basis": "calendar_months_from_official_start",
+            "empty_success_policy": "never_complete",
+        },
     }
     body.update(overrides)
     return body
@@ -92,6 +99,8 @@ def test_policy_version_is_v3() -> None:
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     assert schema["$id"] == "source-capability/v3"
     assert set(schema["$defs"]["dataset"]["properties"]["history_mode"]["enum"]) == HISTORY_MODES
+    assert set(schema["$defs"]["required_domain_semantics"]["properties"]["basis"]["enum"]) == REQUIRED_DOMAIN_BASES
+    assert set(schema["$defs"]["required_domain_semantics"]["properties"]["empty_success_policy"]["enum"]) == EMPTY_SUCCESS_POLICIES
     for name in _NESTED_EVIDENCE_FIELDS:
         assert schema["$defs"][name].get("additionalProperties", True) is not False
     assert schema["$defs"]["dataset"]["additionalProperties"] is False
@@ -121,15 +130,19 @@ def test_extra_nested_evidence_keys_do_not_fail_load() -> None:
     assert loaded["jsda_otc_bond_reference_prices"].history_mode == "official_archive_index"
 
 
-def test_missing_v3_file_is_none_not_invented() -> None:
-    assert source_capability_contract_or_none("fins_summary") is None
-    assert source_capability_contract_or_none("equities_bars_daily") is None
+def test_core_v1_v3_files_are_present_and_unknown_stays_none() -> None:
     assert source_capability_contract_or_none("does_not_exist") is None
     present = {contract.dataset_id for contract in all_source_capability_contracts()}
-    assert "fins_summary" not in present
-    assert "equities_bars_daily" not in present
+    assert {
+        "equities_bars_daily",
+        "fins_details",
+        "fins_dividend",
+        "fins_earnings_date",
+        "fins_summary",
+        "markets_calendar",
+    } <= present
     with pytest.raises(KeyError, match="unknown SourceCapabilityContract"):
-        source_capability_contract_for("fins_summary")
+        source_capability_contract_for("does_not_exist")
 
 
 def test_missing_dataset_id_rejected() -> None:
@@ -144,9 +157,98 @@ def test_history_mode_enum_enforced() -> None:
         SourceCapabilityContract.from_dict(_payload(history_mode="full_history"))
     with pytest.raises(ValueError, match="history_mode"):
         SourceCapabilityContract.from_dict(_payload(history_mode="COMPLETE"))
-    for mode in sorted(HISTORY_MODES):
-        contract = SourceCapabilityContract.from_dict(_payload(history_mode=mode))
+    valid = {
+        "bounded_history": {},
+        "event_stream": {
+            "required_domain_semantics": {
+                "basis": "publication_windows_from_official_start",
+                "empty_success_policy": "trusted_exhausted_receipt_may_complete",
+            },
+        },
+        "recent_snapshot": {
+            "historical_research_eligible": False,
+            "tip_only_operational": True,
+            "collection_window": {
+                "grain": "same_trading_day_am_snapshot",
+                "open": "09:00",
+                "close": "11:30",
+            },
+            "required_domain_semantics": {
+                "basis": "issued_same_trading_day_snapshot",
+                "empty_success_policy": "never_complete",
+            },
+        },
+        "next_business_day_snapshot": {
+            "historical_research_eligible": False,
+            "tip_only_operational": True,
+            "collection_window": {
+                "grain": "collection_cutoff_snapshot",
+                "open": "generation",
+                "close": "cutoff",
+            },
+            "required_domain_semantics": {
+                "basis": "issued_collection_cutoff_snapshot",
+                "empty_success_policy": "never_complete",
+            },
+        },
+        "official_archive_index": {
+            "collection_window": {
+                "grain": "official_archive_index_day",
+                "open": "first_index_day",
+                "close": "latest_index_day",
+            },
+            "required_domain_semantics": {
+                "basis": "official_archive_publication_days",
+                "empty_success_policy": "never_complete",
+            },
+        },
+        "periodic_archive": {
+            "collection_window": {
+                "grain": "official_archive_year",
+                "open": "first_archive",
+                "close": "latest_archive",
+            },
+            "required_domain_semantics": {
+                "basis": "official_archive_periods",
+                "empty_success_policy": "never_complete",
+            },
+        },
+    }
+    assert set(valid) == HISTORY_MODES
+    for mode, overrides in valid.items():
+        contract = SourceCapabilityContract.from_dict(
+            _payload(history_mode=mode, **overrides)
+        )
         assert contract.history_mode == mode
+
+
+def test_required_domain_semantics_fail_closed() -> None:
+    with pytest.raises(ValueError, match="requires history_mode"):
+        SourceCapabilityContract.from_dict(
+            _payload(
+                required_domain_semantics={
+                    "basis": "publication_windows_from_official_start",
+                    "empty_success_policy": "never_complete",
+                }
+            )
+        )
+    with pytest.raises(ValueError, match="empty SUCCESS must never COMPLETE"):
+        SourceCapabilityContract.from_dict(
+            _payload(
+                history_mode="recent_snapshot",
+                historical_research_eligible=False,
+                tip_only_operational=True,
+                collection_window={
+                    "grain": "same_trading_day_am_snapshot",
+                    "open": "09:00",
+                    "close": "11:30",
+                },
+                required_domain_semantics={
+                    "basis": "issued_same_trading_day_snapshot",
+                    "empty_success_policy": "trusted_exhausted_receipt_may_complete",
+                },
+            )
+        )
 
 
 def test_empty_specs_dir_loads_empty(tmp_path: Path) -> None:
@@ -179,6 +281,15 @@ def test_loader_reads_json_and_skips_schema(tmp_path: Path) -> None:
                 history_mode="next_business_day_snapshot",
                 historical_research_eligible=False,
                 tip_only_operational=True,
+                collection_window={
+                    "grain": "collection_cutoff_snapshot",
+                    "open": "generation",
+                    "close": "cutoff",
+                },
+                required_domain_semantics={
+                    "basis": "issued_collection_cutoff_snapshot",
+                    "empty_success_policy": "never_complete",
+                },
             )
         ],
     }
@@ -193,7 +304,9 @@ def test_required_domain_subset_official() -> None:
     assert domain.policy_version == POLICY_VERSION
     assert domain.admit_historical_required_segments is True
     assert domain.publication_days_only is False
-    assert domain.earliest_official_availability == "2008-05-01"
+    assert domain.earliest_official_availability == "2008-05-07"
+    assert domain.required_domain_basis == "calendar_months_from_official_start"
+    assert domain.empty_success_policy == "never_complete"
 
     tip = SourceCapabilityContract.from_dict(
         _payload(
@@ -201,6 +314,15 @@ def test_required_domain_subset_official() -> None:
             history_mode="next_business_day_snapshot",
             historical_research_eligible=False,
             tip_only_operational=True,
+            collection_window={
+                "grain": "collection_cutoff_snapshot",
+                "open": "generation",
+                "close": "cutoff",
+            },
+            required_domain_semantics={
+                "basis": "issued_collection_cutoff_snapshot",
+                "empty_success_policy": "never_complete",
+            },
         )
     )
     tip_domain = required_domain_subset_official(tip)
@@ -212,6 +334,15 @@ def test_required_domain_subset_official() -> None:
             dataset_id="jsda_otc_bond_reference_prices",
             source="jsda",
             history_mode="official_archive_index",
+            collection_window={
+                "grain": "official_archive_index_day",
+                "open": "first_index_day",
+                "close": "latest_index_day",
+            },
+            required_domain_semantics={
+                "basis": "official_archive_publication_days",
+                "empty_success_policy": "never_complete",
+            },
         )
     )
     index_domain = required_domain_subset_official(index)
@@ -223,12 +354,19 @@ def test_derive_collection_coverage_v3_from_capability() -> None:
     bounded = SourceCapabilityContract.from_dict(_payload())
     derived = derive_collection_coverage_v3(bounded)
     assert derived["policy_version"] == COLLECTION_COVERAGE_V3
-    assert derived["history_target_start"] == "2008-05-01"
+    assert derived["history_target_start"] == "2008-05-07"
     assert derived["history_mode"] == "bounded_history"
     assert derived["segment_granularity"] == "calendar_month"
     with pytest.raises(TypeError, match="requires SourceCapabilityContract"):
         derive_collection_coverage_v3({"dataset_id": "equities_bars_daily"})
-    assert collection_coverage_v3_overrides("fins_summary") is None
+    assert collection_coverage_v3_overrides("fins_summary") == {
+        "policy_version": COLLECTION_COVERAGE_V3,
+        "history_target_start": "2008-07-07",
+        "history_mode": "event_stream",
+        "segment_granularity": "calendar_month",
+        "required_domain_basis": "publication_windows_from_official_start",
+        "empty_success_policy": "trusted_exhausted_receipt_may_complete",
+    }
 
 
 def test_module_docstring_states_planner_authority() -> None:

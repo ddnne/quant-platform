@@ -1,0 +1,60 @@
+{
+  "policy_version": "source-capability/v3",
+  "dataset_id": "fins_earnings_date",
+  "source": "jquants_premium_core",
+  "upstream_locator": "/v2/fins/earnings-date",
+  "official_evidence_url": "https://jpx-jquants.com/en/spec/fin-earnings-date",
+  "history_mode": "event_stream",
+  "earliest_official_availability": "2014-09-01",
+  "historical_research_eligible": true,
+  "tip_only_operational": false,
+  "supported_query_parameters": ["code", "date", "scheduled_date", "pagination_key"],
+  "publication_calendar": {
+    "kind": "jpx_business_day_publication",
+    "timezone": "Asia/Tokyo",
+    "official_history_evidence_url": "https://jpx-jquants.com/en/spec/data-spec",
+    "official_update_around": "10:05",
+    "changes_are_appended": true,
+    "cutoff_semantics": "a publication is required only after its PubDate and the collection cutoff"
+  },
+  "entitlement_semantics": {
+    "clamp_before_earliest": true,
+    "subscription_floor": null,
+    "official_data_provision_start": "2014-09-01",
+    "rejected_observed_floor": "2018-01-01",
+    "rejection_reason": "2018-01-01 is a repository observed collection floor, not the official vendor availability start"
+  },
+  "collection_window": {
+    "grain": "calendar_month",
+    "open": "2014-09-01",
+    "close": "latest_published_before_collection_cutoff"
+  },
+  "freshness_sla": {
+    "expected_after": "10:05",
+    "usable_by": "10:30",
+    "timezone": "Asia/Tokyo",
+    "rule": "business_day_publication_cutoff"
+  },
+  "event_time": {
+    "policy": "observation_date",
+    "fields": ["SchDate"]
+  },
+  "available_at": {
+    "policy": "explicit_disclosure_date",
+    "field": "PubDate",
+    "known_publication_lag": "publication time is not supplied; intraday availability stays conservative"
+  },
+  "revision_semantics": {
+    "policy": "append_change_history_capture_new_generation",
+    "generation_on_revision": true
+  },
+  "research_profile_eligibility": {
+    "include_in": ["core", "core_historical"],
+    "exclude_from": [],
+    "exclusion_reason": "none"
+  },
+  "required_domain_semantics": {
+    "basis": "publication_windows_from_official_start",
+    "empty_success_policy": "trusted_exhausted_receipt_may_complete"
+  }
+}

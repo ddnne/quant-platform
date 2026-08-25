@@ -26,20 +26,26 @@ from research.research_data_profile import (
 from storage.coverage_ledger import evaluate_segment, plan_required_segments
 
 _V3_DATASETS = coverage_v3_dataset_ids()
-_NO_V3_DATASET = "fins_summary"
+_NO_V3_DATASET = "indices_bars_daily_topix"
 
 
-def test_on_disk_v3_is_only_the_four_existing_rows() -> None:
+def test_on_disk_v3_has_core_v1_plus_tip_and_otc_rows() -> None:
     on_disk = sorted(
         path.name
         for path in specs_dir().glob("*.json")
         if path.name != "schema.json"
     )
     assert on_disk == [
+        "equities_bars_daily.json",
         "equities_bars_daily_am.json",
         "equities_earnings_calendar.json",
         "equities_master.json",
+        "fins_details.json",
+        "fins_dividend.json",
+        "fins_earnings_date.json",
+        "fins_summary.json",
         "jsda_otc_bond_reference_prices.json",
+        "markets_calendar.json",
     ]
     loaded = {contract.dataset_id for contract in all_source_capability_contracts()}
     assert loaded == _V3_DATASETS
@@ -66,7 +72,8 @@ def test_governed_datasets_without_v3_load_as_none() -> None:
         with pytest.raises(KeyError, match="unknown SourceCapabilityContract"):
             source_capability_contract_for(dataset.dataset_id)
     assert _NO_V3_DATASET in missing
-    assert "equities_bars_daily" in missing
+    assert "equities_bars_daily" not in missing
+    assert "fins_summary" not in missing
     assert missing
 
 
@@ -76,9 +83,9 @@ def test_plan_required_segments_without_v3_uses_coverage_json() -> None:
         required_domain_subset_official(None)  # type: ignore[arg-type]
 
     policy = coverage_contract_for(_NO_V3_DATASET)
-    assert policy.history_target_start == "2008-07-01"
-    planned = plan_required_segments(policy, "2008-08-31")
-    assert [segment.segment_id for segment in planned] == ["2008-07", "2008-08"]
+    assert policy.history_target_start == "2008-05-01"
+    planned = plan_required_segments(policy, "2008-06-30")
+    assert [segment.segment_id for segment in planned] == ["2008-05", "2008-06"]
     assert planned[0].segment_start == policy.history_target_start
     for segment in planned:
         assert segment.expected_scope["coverage_mode"] == policy.coverage_mode
@@ -91,19 +98,19 @@ def test_plan_required_segments_without_v3_uses_coverage_json() -> None:
     assert detail["reason"] == "missing collection receipt"
 
 
-def test_profile_ready_missing_v3_is_not_official_complete() -> None:
+def test_core_profile_has_source_capability_closure() -> None:
     profile = load_core_profile()
     missing_v3 = [
         dataset
         for dataset in profile.required_datasets
         if source_capability_contract_or_none(dataset) is None
     ]
-    assert missing_v3
+    assert missing_v3 == []
     evidence = {
         dataset: {"status": "COMPLETE", "coverage_mode": official_mode(dataset)}
         for dataset in profile.required_datasets
     }
-    assert profile_ready(profile, evidence) is False
+    assert profile_ready(profile, evidence) is True
 
     spec = profile.to_dict()
     spec.pop("profile_digest", None)

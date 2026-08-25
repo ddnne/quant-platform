@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "registry_version": "v1",
-  "registry_description": "Canonical registry of all known endpoints (governed + experimental). SoT for inventory/MCP/docs.",
+  "registry_description": "Canonical meta-index of endpoint identity, membership, ownership and contract links. History, coverage shape and V3 eligibility are compatibility projections validated against their owning contracts.",
   "datasets": [
     {
       "dataset_id": "equities_master",
@@ -43,7 +43,7 @@
         "code",
         "date"
       ],
-      "historical_start": "2008-05-01",
+      "historical_start": "2008-05-07",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
@@ -71,11 +71,11 @@
         "date"
       ],
       "historical_start": "2024-01-04",
-      "coverage_segment_granularity": "calendar_month",
+      "coverage_segment_granularity": "same_trading_day_am_snapshot",
       "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
       "collection_window": "morning_session",
-      "research_eligible": true,
+      "research_eligible": false,
       "enabled": true,
       "sla": {
         "expected_after": "11:30",
@@ -100,7 +100,7 @@
         "code",
         "disclosure_date"
       ],
-      "historical_start": "2008-07-01",
+      "historical_start": "2008-07-07",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
@@ -128,7 +128,7 @@
         "disclosure_date",
         "item_code"
       ],
-      "historical_start": "2018-01-01",
+      "historical_start": "2009-01-13",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
@@ -155,7 +155,7 @@
         "code",
         "disclosure_date"
       ],
-      "historical_start": "2013-02-01",
+      "historical_start": "2013-02-20",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
@@ -182,7 +182,7 @@
         "code",
         "disclosure_date"
       ],
-      "historical_start": "2018-01-01",
+      "historical_start": "2014-09-01",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
@@ -210,11 +210,11 @@
         "scheduled_date"
       ],
       "historical_start": "2010-01-04",
-      "coverage_segment_granularity": "calendar_month",
+      "coverage_segment_granularity": "collection_cutoff_snapshot",
       "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
       "collection_window": "disclosure_event",
-      "research_eligible": true,
+      "research_eligible": false,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -642,7 +642,7 @@
         "bond_name"
       ],
       "historical_start": "2002-08-02",
-      "coverage_segment_granularity": "official_archive_day",
+      "coverage_segment_granularity": "official_archive_index_day",
       "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
       "collection_window": "full_day",

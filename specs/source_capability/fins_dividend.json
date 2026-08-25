@@ -1,0 +1,56 @@
+{
+  "policy_version": "source-capability/v3",
+  "dataset_id": "fins_dividend",
+  "source": "jquants_premium_core",
+  "upstream_locator": "/v2/fins/dividend",
+  "official_evidence_url": "https://jpx-jquants.com/en/spec/fin-dividend",
+  "history_mode": "event_stream",
+  "earliest_official_availability": "2013-02-20",
+  "historical_research_eligible": true,
+  "tip_only_operational": false,
+  "supported_query_parameters": ["code", "date", "from", "to", "pagination_key"],
+  "publication_calendar": {
+    "kind": "jpx_dividend_announcement_event",
+    "timezone": "Asia/Tokyo",
+    "official_history_evidence_url": "https://jpx-jquants.com/en/spec/data-spec",
+    "official_update_schedule": "hourly_between_12:00_and_19:00"
+  },
+  "entitlement_semantics": {
+    "clamp_before_earliest": true,
+    "subscription_floor": null,
+    "official_data_provision_start": "2013-02-20"
+  },
+  "collection_window": {
+    "grain": "calendar_month",
+    "open": "2013-02-20",
+    "close": "latest_published_before_collection_cutoff"
+  },
+  "freshness_sla": {
+    "expected_after": "12:00",
+    "usable_by": "19:00",
+    "timezone": "Asia/Tokyo",
+    "rule": "hourly_dividend_publication_window"
+  },
+  "event_time": {
+    "policy": "explicit_timestamp_field",
+    "fields": ["PubDate", "PubTime"]
+  },
+  "available_at": {
+    "policy": "explicit_timestamp_field",
+    "field": "PubDate+PubTime",
+    "known_publication_lag": null
+  },
+  "revision_semantics": {
+    "policy": "source_overwrite_capture_new_generation",
+    "generation_on_revision": true
+  },
+  "research_profile_eligibility": {
+    "include_in": ["core", "core_historical"],
+    "exclude_from": [],
+    "exclusion_reason": "none"
+  },
+  "required_domain_semantics": {
+    "basis": "publication_windows_from_official_start",
+    "empty_success_policy": "trusted_exhausted_receipt_may_complete"
+  }
+}

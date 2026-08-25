@@ -35,7 +35,7 @@ _MASTER = "equities_master"
 _AM = "equities_bars_daily_am"
 _EARNINGS = "equities_earnings_calendar"
 _OTC = "jsda_otc_bond_reference_prices"
-_NO_V3 = "fins_summary"
+_NO_V3 = "indices_bars_daily_topix"
 _MASTER_START = "2008-05-07"
 _PARSE_ZERO = ("2002-08-02", "2002-08-05")
 _WEEKEND = "2002-08-03"
@@ -49,12 +49,23 @@ def _coverage_json_merged(dataset_id: str) -> dict:
     return {**defaults, "policy_version": document["policy_version"], **row}
 
 
-def test_four_source_capability_contracts_load() -> None:
+def test_ten_source_capability_contracts_load() -> None:
     loaded = all_source_capability_contracts()
     ids = coverage_v3_dataset_ids()
     assert ids == {contract.dataset_id for contract in loaded}
-    assert ids == {_MASTER, _AM, _EARNINGS, _OTC}
-    assert len(ids) == 4
+    assert ids == {
+        _MASTER,
+        _AM,
+        _EARNINGS,
+        _OTC,
+        "equities_bars_daily",
+        "fins_details",
+        "fins_dividend",
+        "fins_earnings_date",
+        "fins_summary",
+        "markets_calendar",
+    }
+    assert len(ids) == 10
     assert len(ids) != 23
     for dataset_id in sorted(ids):
         contract = source_capability_contract_or_none(dataset_id)
@@ -77,9 +88,7 @@ def test_master_history_target_start_is_2008_05_07() -> None:
 
 def test_missing_v3_overrides_stay_none() -> None:
     assert source_capability_contract_or_none(_NO_V3) is None
-    assert source_capability_contract_or_none("equities_bars_daily") is None
     assert collection_coverage_v3_overrides(_NO_V3) is None
-    assert collection_coverage_v3_overrides("equities_bars_daily") is None
     assert collection_coverage_v3_overrides("does_not_exist") is None
     with pytest.raises(TypeError, match="requires SourceCapabilityContract"):
         derive_collection_coverage_v3(None)  # type: ignore[arg-type]
@@ -113,6 +122,8 @@ def test_required_domain_subset_official_for_v3_rows() -> None:
         assert derived["history_target_start"] == domain.earliest_official_availability
         assert policy.history_mode == domain.history_mode
         assert policy.segment_granularity == domain.collection_window_grain
+        assert policy.required_domain_basis == domain.required_domain_basis
+        assert policy.empty_success_policy == domain.empty_success_policy
         if domain.tip_only_operational:
             assert domain.admit_historical_required_segments is False
             planned = plan_required_segments(policy, "2026-08-14")

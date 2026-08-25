@@ -50,6 +50,22 @@ HISTORY_MODES = frozenset(
 TIP_SNAPSHOT_MODES = frozenset(
     {"recent_snapshot", "next_business_day_snapshot"}
 )
+REQUIRED_DOMAIN_BASES = frozenset(
+    {
+        "calendar_months_from_official_start",
+        "publication_windows_from_official_start",
+        "issued_same_trading_day_snapshot",
+        "issued_collection_cutoff_snapshot",
+        "official_archive_publication_days",
+        "official_archive_periods",
+    }
+)
+EMPTY_SUCCESS_POLICIES = frozenset(
+    {
+        "never_complete",
+        "trusted_exhausted_receipt_may_complete",
+    }
+)
 
 _DATASET_FIELDS = (
     "dataset_id",
@@ -69,6 +85,7 @@ _DATASET_FIELDS = (
     "available_at",
     "revision_semantics",
     "research_profile_eligibility",
+    "required_domain_semantics",
 )
 _DATASET_ALLOWED = frozenset(_DATASET_FIELDS) | frozenset({"policy_version"})
 _BUNDLE_ALLOWED = frozenset({"policy_version", "datasets", "schema_version"})
@@ -310,6 +327,34 @@ class ResearchProfileEligibility:
 
 
 @dataclass(frozen=True)
+class RequiredDomainSemantics:
+    basis: str
+    empty_success_policy: str
+
+    @classmethod
+    def from_dict(
+        cls, raw: Mapping[str, Any], label: str
+    ) -> "RequiredDomainSemantics":
+        obj = _open_object(raw, label)
+        if "basis" not in obj or "empty_success_policy" not in obj:
+            raise ValueError(f"{label} missing basis/empty_success_policy")
+        basis = _nonempty(obj["basis"], f"{label}.basis")
+        if basis not in REQUIRED_DOMAIN_BASES:
+            raise ValueError(
+                f"{label}.basis must be one of {sorted(REQUIRED_DOMAIN_BASES)}"
+            )
+        empty_policy = _nonempty(
+            obj["empty_success_policy"], f"{label}.empty_success_policy"
+        )
+        if empty_policy not in EMPTY_SUCCESS_POLICIES:
+            raise ValueError(
+                f"{label}.empty_success_policy must be one of "
+                f"{sorted(EMPTY_SUCCESS_POLICIES)}"
+            )
+        return cls(basis=basis, empty_success_policy=empty_policy)
+
+
+@dataclass(frozen=True)
 class SourceCapabilityContract:
     """Per-dataset official availability. Unknown keys fail closed."""
 
@@ -330,6 +375,7 @@ class SourceCapabilityContract:
     available_at: AvailableAtSpec
     revision_semantics: RevisionSemantics
     research_profile_eligibility: ResearchProfileEligibility
+    required_domain_semantics: RequiredDomainSemantics
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> "SourceCapabilityContract":
@@ -355,6 +401,21 @@ class SourceCapabilityContract:
                 f"{dataset_id}.history_mode must be one of {sorted(HISTORY_MODES)}: "
                 f"{history_mode!r}"
             )
+        collection_window = CollectionWindow.from_dict(
+            obj["collection_window"], f"{dataset_id}.collection_window"
+        )
+        domain_semantics = RequiredDomainSemantics.from_dict(
+            obj["required_domain_semantics"],
+            f"{dataset_id}.required_domain_semantics",
+        )
+        _validate_required_domain_semantics(
+            dataset_id=dataset_id,
+            history_mode=history_mode,
+            historical_research_eligible=obj["historical_research_eligible"],
+            tip_only_operational=obj["tip_only_operational"],
+            collection_window=collection_window,
+            semantics=domain_semantics,
+        )
         return cls(
             dataset_id=dataset_id,
             source=_nonempty(obj["source"], f"{dataset_id}.source"),
@@ -386,9 +447,7 @@ class SourceCapabilityContract:
             entitlement_semantics=EntitlementSemantics.from_dict(
                 obj["entitlement_semantics"], f"{dataset_id}.entitlement_semantics"
             ),
-            collection_window=CollectionWindow.from_dict(
-                obj["collection_window"], f"{dataset_id}.collection_window"
-            ),
+            collection_window=collection_window,
             freshness_sla=FreshnessSla.from_dict(
                 obj["freshness_sla"], f"{dataset_id}.freshness_sla"
             ),
@@ -405,6 +464,74 @@ class SourceCapabilityContract:
                 obj["research_profile_eligibility"],
                 f"{dataset_id}.research_profile_eligibility",
             ),
+            required_domain_semantics=domain_semantics,
+        )
+
+
+_BASIS_HISTORY_MODE: Mapping[str, str] = MappingProxyType(
+    {
+        "calendar_months_from_official_start": "bounded_history",
+        "publication_windows_from_official_start": "event_stream",
+        "issued_same_trading_day_snapshot": "recent_snapshot",
+        "issued_collection_cutoff_snapshot": "next_business_day_snapshot",
+        "official_archive_publication_days": "official_archive_index",
+        "official_archive_periods": "periodic_archive",
+    }
+)
+_BASIS_GRAIN: Mapping[str, str] = MappingProxyType(
+    {
+        "calendar_months_from_official_start": "calendar_month",
+        "publication_windows_from_official_start": "calendar_month",
+        "issued_same_trading_day_snapshot": "same_trading_day_am_snapshot",
+        "issued_collection_cutoff_snapshot": "collection_cutoff_snapshot",
+        "official_archive_publication_days": "official_archive_index_day",
+        "official_archive_periods": "official_archive_year",
+    }
+)
+
+
+def _validate_required_domain_semantics(
+    *,
+    dataset_id: str,
+    history_mode: str,
+    historical_research_eligible: Any,
+    tip_only_operational: Any,
+    collection_window: CollectionWindow,
+    semantics: RequiredDomainSemantics,
+) -> None:
+    historical = _bool(
+        historical_research_eligible,
+        f"{dataset_id}.historical_research_eligible",
+    )
+    tip_only = _bool(tip_only_operational, f"{dataset_id}.tip_only_operational")
+    expected_mode = _BASIS_HISTORY_MODE[semantics.basis]
+    expected_grain = _BASIS_GRAIN[semantics.basis]
+    if history_mode != expected_mode:
+        raise ValueError(
+            f"{dataset_id}.required_domain_semantics.basis requires "
+            f"history_mode {expected_mode!r}"
+        )
+    if collection_window.grain != expected_grain:
+        raise ValueError(
+            f"{dataset_id}.required_domain_semantics.basis requires "
+            f"collection_window.grain {expected_grain!r}"
+        )
+    if tip_only != (history_mode in TIP_SNAPSHOT_MODES):
+        raise ValueError(
+            f"{dataset_id}.tip_only_operational must match snapshot history_mode"
+        )
+    if historical == tip_only:
+        raise ValueError(
+            f"{dataset_id} historical_research_eligible and tip_only_operational "
+            "must be opposite"
+        )
+    if (
+        history_mode
+        in TIP_SNAPSHOT_MODES | {"official_archive_index", "periodic_archive"}
+        and semantics.empty_success_policy != "never_complete"
+    ):
+        raise ValueError(
+            f"{dataset_id} snapshot/archive empty SUCCESS must never COMPLETE"
         )
 
 
@@ -428,6 +555,8 @@ class OfficialRequiredDomainSubset:
     supported_query_parameters: tuple[str, ...]
     research_profile_include_in: tuple[str, ...]
     research_profile_exclude_from: tuple[str, ...]
+    required_domain_basis: str
+    empty_success_policy: str
 
 
 def required_domain_subset_official(
@@ -456,6 +585,10 @@ def required_domain_subset_official(
         supported_query_parameters=contract.supported_query_parameters,
         research_profile_include_in=contract.research_profile_eligibility.include_in,
         research_profile_exclude_from=contract.research_profile_eligibility.exclude_from,
+        required_domain_basis=contract.required_domain_semantics.basis,
+        empty_success_policy=(
+            contract.required_domain_semantics.empty_success_policy
+        ),
     )
 
 
@@ -476,6 +609,10 @@ def derive_collection_coverage_v3(
         "history_target_start": contract.earliest_official_availability,
         "history_mode": contract.history_mode,
         "segment_granularity": contract.collection_window.grain,
+        "required_domain_basis": contract.required_domain_semantics.basis,
+        "empty_success_policy": (
+            contract.required_domain_semantics.empty_success_policy
+        ),
     }
 
 
@@ -615,10 +752,12 @@ def apply_official_query_clamp(
 __all__ = [
     "COLLECTION_COVERAGE_V3",
     "HISTORY_MODES",
+    "EMPTY_SUCCESS_POLICIES",
     "POLICY_VERSION",
     "SCHEMA_PATH",
     "SCHEMA_VERSION",
     "TIP_SNAPSHOT_MODES",
+    "REQUIRED_DOMAIN_BASES",
     "AvailableAtSpec",
     "CollectionWindow",
     "EntitlementSemantics",
@@ -627,6 +766,7 @@ __all__ = [
     "OfficialRequiredDomainSubset",
     "PublicationCalendar",
     "ResearchProfileEligibility",
+    "RequiredDomainSemantics",
     "RevisionSemantics",
     "SourceCapabilityContract",
     "all_source_capability_contracts",

@@ -65,7 +65,12 @@ VENDOR_ANNOTATION_FIELDS = (
     "vendor_data_provision_citation",
     "vendor_history_policy_citation",
 )
-_OPTIONAL_STRINGS = ("policy_version", "history_mode") + VENDOR_ANNOTATION_FIELDS
+_OPTIONAL_STRINGS = (
+    "policy_version",
+    "history_mode",
+    "required_domain_basis",
+    "empty_success_policy",
+) + VENDOR_ANNOTATION_FIELDS
 
 
 @dataclass(frozen=True)
@@ -91,6 +96,8 @@ class CollectionCoverageContract:
     governance_tier: str
     policy_version: str | None = None
     history_mode: str | None = None
+    required_domain_basis: str | None = None
+    empty_success_policy: str | None = None
     not_historical_required_start: str | None = None
     earliest_official_availability: str | None = None
     official_mode: str | None = None
@@ -142,6 +149,30 @@ class CollectionCoverageContract:
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{dataset_id}.{name} must be non-empty string")
             optional[name] = value
+        if optional.get("policy_version") == "collection-coverage/v3":
+            from .source_capability import (
+                EMPTY_SUCCESS_POLICIES,
+                REQUIRED_DOMAIN_BASES,
+            )
+
+            missing_v3 = {
+                "history_mode",
+                "required_domain_basis",
+                "empty_success_policy",
+            } - optional.keys()
+            if missing_v3:
+                raise ValueError(
+                    f"{dataset_id} collection-coverage/v3 missing "
+                    f"{sorted(missing_v3)}"
+                )
+            if optional["required_domain_basis"] not in REQUIRED_DOMAIN_BASES:
+                raise ValueError(
+                    f"{dataset_id}.required_domain_basis is not supported"
+                )
+            if optional["empty_success_policy"] not in EMPTY_SUCCESS_POLICIES:
+                raise ValueError(
+                    f"{dataset_id}.empty_success_policy is not supported"
+                )
         return cls(
             dataset_id=dataset_id,
             **{name: raw[name] for name in _REQUIRED},

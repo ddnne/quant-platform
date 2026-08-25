@@ -19,6 +19,8 @@
     "non_business_day_resolution": "next_business_day"
   },
   "entitlement_semantics": {
+    "clamp_before_earliest": true,
+    "subscription_floor": null,
     "plan": "premium",
     "subscription_entitlement_floor": "2006-08-13",
     "subscription_entitlement_floor_live": "2006-08-19",
@@ -28,6 +30,8 @@
   },
   "collection_window": {
     "grain": "calendar_month",
+    "open": "2008-05-07",
+    "close": "latest_published_before_collection_cutoff",
     "required_domain_start": "2008-05-07",
     "required_segment_start_month": "2008-05",
     "pit_history_start": "2008-05-07",
@@ -39,7 +43,10 @@
     }
   },
   "freshness_sla": {
+    "expected_after": "17:30",
+    "usable_by": "next_business_day_08:00",
     "timezone": "Asia/Tokyo",
+    "rule": "trading_day",
     "same_day": true,
     "next_business_day_after": "17:30",
     "policy": "trading_day"
@@ -54,13 +61,22 @@
     "field": null
   },
   "revision_semantics": {
+    "policy": "scd2_event_sourcing",
+    "generation_on_revision": true,
     "kind": "scd2_event_sourcing",
     "corrections_not_visible_before_available_at": true
   },
   "research_profile_eligibility": {
+    "include_in": ["core", "core_historical"],
+    "exclude_from": [],
+    "exclusion_reason": "none",
     "historical_research": true,
     "pit_history_start": "2008-05-07",
     "tip_ops": true,
     "dataset_complete_claim": false
+  },
+  "required_domain_semantics": {
+    "basis": "calendar_months_from_official_start",
+    "empty_success_policy": "never_complete"
   }
 }

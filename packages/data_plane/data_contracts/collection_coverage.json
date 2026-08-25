@@ -17,12 +17,18 @@
       "vendor_data_provision_citation": "https://jpx-jquants.com/en/spec/eq-master",
       "coverage_mode": "scd2_event_sourcing",
       "history_mode": "bounded_history",
+      "required_domain_basis": "calendar_months_from_official_start",
+      "empty_success_policy": "never_complete",
       "expected_frequency": "trading_day",
       "universe_rule": "all_listed_equities_at_event_date"
     },
     "equities_bars_daily": {
-      "history_target_start": "2008-05-01",
+      "policy_version": "collection-coverage/v3",
+      "history_target_start": "2008-05-07",
       "coverage_mode": "trading_calendar",
+      "history_mode": "bounded_history",
+      "required_domain_basis": "calendar_months_from_official_start",
+      "empty_success_policy": "never_complete",
       "expected_frequency": "trading_day",
       "universe_rule": "all_listed_equities_at_event_date"
     },
@@ -33,31 +39,49 @@
       "vendor_history_policy_citation": "https://jpx-jquants.com/en/spec/eq-bars-daily-am",
       "coverage_mode": "recent_snapshot",
       "history_mode": "recent_snapshot",
+      "required_domain_basis": "issued_same_trading_day_snapshot",
+      "empty_success_policy": "never_complete",
       "expected_frequency": "trading_day",
       "universe_rule": "all_listed_equities_at_event_date",
       "segment_granularity": "same_trading_day_am_snapshot"
     },
     "fins_summary": {
-      "history_target_start": "2008-07-01",
+      "policy_version": "collection-coverage/v3",
+      "history_target_start": "2008-07-07",
       "coverage_mode": "event_reconciled",
+      "history_mode": "event_stream",
+      "required_domain_basis": "publication_windows_from_official_start",
+      "empty_success_policy": "trusted_exhausted_receipt_may_complete",
       "expected_frequency": "event_driven",
       "universe_rule": "all_disclosures_in_collection_window"
     },
     "fins_details": {
-      "history_target_start": "2018-01-01",
+      "policy_version": "collection-coverage/v3",
+      "history_target_start": "2009-01-13",
       "coverage_mode": "event_reconciled",
+      "history_mode": "event_stream",
+      "required_domain_basis": "publication_windows_from_official_start",
+      "empty_success_policy": "trusted_exhausted_receipt_may_complete",
       "expected_frequency": "event_driven",
       "universe_rule": "all_disclosures_in_collection_window"
     },
     "fins_dividend": {
-      "history_target_start": "2013-02-01",
+      "policy_version": "collection-coverage/v3",
+      "history_target_start": "2013-02-20",
       "coverage_mode": "event_reconciled",
+      "history_mode": "event_stream",
+      "required_domain_basis": "publication_windows_from_official_start",
+      "empty_success_policy": "trusted_exhausted_receipt_may_complete",
       "expected_frequency": "event_driven",
       "universe_rule": "all_announcements_in_collection_window"
     },
     "fins_earnings_date": {
-      "history_target_start": "2018-01-01",
+      "policy_version": "collection-coverage/v3",
+      "history_target_start": "2014-09-01",
       "coverage_mode": "event_reconciled",
+      "history_mode": "event_stream",
+      "required_domain_basis": "publication_windows_from_official_start",
+      "empty_success_policy": "trusted_exhausted_receipt_may_complete",
       "expected_frequency": "event_driven",
       "universe_rule": "all_published_schedules_in_collection_window"
     },
@@ -68,13 +92,19 @@
       "vendor_history_policy_citation": "https://jpx-jquants.com/en/spec/eq-earnings-cal",
       "coverage_mode": "next_business_day_snapshot",
       "history_mode": "next_business_day_snapshot",
+      "required_domain_basis": "issued_collection_cutoff_snapshot",
+      "empty_success_policy": "never_complete",
       "expected_frequency": "event_driven",
       "universe_rule": "all_calendar_entries_in_collection_window",
       "segment_granularity": "collection_cutoff_snapshot"
     },
     "markets_calendar": {
+      "policy_version": "collection-coverage/v3",
       "history_target_start": "2008-01-01",
       "coverage_mode": "calendar",
+      "history_mode": "bounded_history",
+      "required_domain_basis": "calendar_months_from_official_start",
+      "empty_success_policy": "never_complete",
       "expected_frequency": "calendar_day",
       "universe_rule": "jpx_calendar_days"
     },
@@ -169,6 +199,8 @@
       "history_target_end_rule": "latest_official_archive_index_day",
       "coverage_mode": "official_archive_index_reconciled",
       "history_mode": "official_archive_index",
+      "required_domain_basis": "official_archive_publication_days",
+      "empty_success_policy": "never_complete",
       "expected_frequency": "trading_day",
       "universe_rule": "all_bonds_in_official_publication_file",
       "segment_granularity": "official_archive_index_day"

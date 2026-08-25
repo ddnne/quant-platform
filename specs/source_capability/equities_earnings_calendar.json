@@ -12,7 +12,10 @@
   "publication_calendar": {
     "kind": "jpx_financial_announcement_page",
     "timezone": "Asia/Tokyo",
-    "index_url": "https://www.jpx.co.jp/english/listing/event-schedules/financial-announcement/index.html"
+    "index_url": "https://www.jpx.co.jp/english/listing/event-schedules/financial-announcement/index.html",
+    "official_update_around": "19:00",
+    "issuance_scope": "next_business_day_only",
+    "cutoff_semantics": "capture the snapshot actually issued by the collection cutoff; no row means no next-business-day announcement in that issued snapshot"
   },
   "entitlement_semantics": {
     "clamp_before_earliest": false,
@@ -46,5 +49,9 @@
     "include_in": ["tip_operational"],
     "exclude_from": ["historical_research", "core_historical"],
     "exclusion_reason": "Vendor next-business-day snapshot only (pagination_key; March/September FY). Historical announcement dates route to fins_earnings_date."
+  },
+  "required_domain_semantics": {
+    "basis": "issued_collection_cutoff_snapshot",
+    "empty_success_policy": "never_complete"
   }
 }
