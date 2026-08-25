@@ -42,6 +42,7 @@ max_batch_size = 1
 max_batch_timeout = 5
 max_retries = 8
 retry_delay = 60
+dead_letter_queue = "quant-jsda-ingestion-rejects"
 max_concurrency = 1
 
 # Secrets (optional):
@@ -49,6 +50,7 @@ max_concurrency = 1
 
 [vars]
 USER_AGENT = "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
+JSDA_DLQ_QUEUE = "quant-jsda-ingestion-dlq"
 
 [triggers]
 # Daily 01:30 UTC == 10:30 JST — after typical JSDA morning publication window.
@@ -95,10 +97,12 @@ max_batch_size = 1
 max_batch_timeout = 5
 max_retries = 8
 retry_delay = 60
+dead_letter_queue = "quant-jsda-ingestion-rejects"
 max_concurrency = 1
 
 [env.production.vars]
 USER_AGENT = "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
+JSDA_DLQ_QUEUE = "quant-jsda-ingestion-dlq"
 
 [env.production.triggers]
 # Named environments do not inherit top-level triggers.

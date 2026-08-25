@@ -137,11 +137,12 @@ describe("JSDA Queue v2 contract", () => {
   });
 
   it("identifies DLQ queues by name, not by attempt count", () => {
-    expect(isJsdaDlqQueue("quant-jsda-ingestion")).toBe(false);
-    expect(isJsdaDlqQueue("quant-jsda-ingestion-test")).toBe(false);
-    expect(isJsdaDlqQueue("quant-jsda-ingestion-dlq")).toBe(true);
-    expect(isJsdaDlqQueue("quant-jsda-ingestion-dlq-staging")).toBe(true);
-    expect(isJsdaDlqQueue("quant-jsda-ingestion-dlq-test")).toBe(true);
+    const configured = "quant-jsda-ingestion-dlq";
+    expect(isJsdaDlqQueue("quant-jsda-ingestion", configured)).toBe(false);
+    expect(isJsdaDlqQueue("quant-jsda-ingestion-test", configured)).toBe(false);
+    expect(isJsdaDlqQueue(configured, configured)).toBe(true);
+    expect(isJsdaDlqQueue("evil-dlq-shadow", configured)).toBe(false);
+    expect(isJsdaDlqQueue("quant-jsda-ingestion-dlq-staging", configured)).toBe(false);
   });
 
   it("rejects unknown fields and a caller-selected contract digest", async () => {

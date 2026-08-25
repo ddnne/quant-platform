@@ -341,16 +341,23 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       "2026-08-25T01:30:00.000Z",
     );
     await registerJob(runtimeEnv.DB, root);
+    const terminal = await makeChildJob(
+      root,
+      await descriptorForFile(
+        "https://www.jsda.or.jp/shiryoshitsu/toukei/trr/files/trrts.xls",
+      ),
+    );
+    await registerJob(runtimeEnv.DB, terminal);
     const audit = await putQueueAuditReceipt(runtimeEnv.RAW_BUCKET, {
       event: "completed",
-      work_key: root.work_key,
-      run_key: root.run_key,
-      dataset: root.dataset,
-      job_type: root.job_type,
-      segment_id: root.segment_id,
-      target_url: root.target_url,
-      parent_work_key: null,
-      contract_digest: root.contract_digest,
+      work_key: terminal.work_key,
+      run_key: terminal.run_key,
+      dataset: terminal.dataset,
+      job_type: terminal.job_type,
+      segment_id: terminal.segment_id,
+      target_url: terminal.target_url,
+      parent_work_key: terminal.parent_work_key,
+      contract_digest: terminal.contract_digest,
       attempt: 1,
       cursor: 0,
       frontier_size: 1,
@@ -360,6 +367,11 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       detail: "runtime terminal fixture",
       recorded_at: "2026-08-25T01:31:00.000Z",
     });
+    await runtimeEnv.RAW_BUCKET.put(
+      "raw/jsda/already-complete.html",
+      "terminal fixture",
+      { customMetadata: { sha256: "2".repeat(64) } },
+    );
     await runtimeEnv.DB.prepare(
       `UPDATE jsda_acquisition_jobs_v2
        SET state='completed', completed_at=?, audit_receipt_key=?,
@@ -372,16 +384,16 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
         audit.digest,
         "2".repeat(64),
         "raw/jsda/already-complete.html",
-        root.work_key,
+        terminal.work_key,
       )
       .run();
-    const result = await deliver(root, "completed-duplicate");
+    const result = await deliver(terminal, "completed-duplicate");
     expect(result.explicitAcks).toEqual(["completed-duplicate"]);
     expect(result.retryMessages).toEqual([]);
     const events = await runtimeEnv.DB.prepare(
       "SELECT COUNT(*) AS n FROM jsda_acquisition_events_v2 WHERE work_key=?",
     )
-      .bind(root.work_key)
+      .bind(terminal.work_key)
       .first<{ n: number }>();
     expect(events?.n).toBe(0);
   });
@@ -984,6 +996,11 @@ describe("JSDA descendant run closure", () => {
         root.work_key,
       )
       .run();
+    await runtimeEnv.RAW_BUCKET.put(
+      "raw/jsda/test/closure-index.html",
+      "closure discovery fixture",
+      { customMetadata: { sha256: "a".repeat(64) } },
+    );
     const result = await deliver(root, "seed-waiting-root");
     expect(result.explicitAcks).toEqual(["seed-waiting-root"]);
     const waiting = await loadJob(runtimeEnv.DB, root.work_key);

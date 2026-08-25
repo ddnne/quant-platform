@@ -180,6 +180,22 @@ describe("0012 populated JSDA migration semantics and FK preservation", () => {
       .bind("b".repeat(64), "audit/jsda/legacy-msg.json", "c".repeat(64), now)
       .run();
 
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO ingestion_run_log (ran_at, source, runtime, status, detail)
+       VALUES (?, 'jsda', 'cloudflare_queue_v2', 'pass', ?)`,
+    )
+      .bind(
+        now,
+        JSON.stringify({
+          mode: "cloudflare_queue_v2",
+          run_id: root.run_key,
+          job_id: archiveOk.work_key,
+          result: "completed",
+          detail: "legacy leaf incorrectly published run PASS",
+        }),
+      )
+      .run();
+
     const secondRoot = await makeRootJob(
       "jsda_otc_bond_reference_prices",
       "cron",
@@ -396,6 +412,18 @@ describe("0012 populated JSDA migration semantics and FK preservation", () => {
       .first<{ closure_state: string }>();
     expect(["failed", "partial"]).toContain(firstClosure?.closure_state);
     expect(firstRoot?.state).not.toBe("completed");
+
+    const correctedLog = await runtimeEnv.DB.prepare(
+      `SELECT status, json_extract(detail, '$.reason') AS reason
+         FROM ingestion_run_log
+        WHERE source='jsda' AND runtime='cloudflare_queue_v2'
+          AND json_extract(detail, '$.run_id')=?
+        ORDER BY id DESC LIMIT 1`,
+    )
+      .bind(root.run_key)
+      .first<{ status: string; reason: string | null }>();
+    expect(correctedLog?.status).not.toBe("pass");
+    expect(correctedLog?.reason).toBe("migration_invalidated_legacy_false_pass");
   });
 
   it("reopens a legacy completed root that still has a nonterminal child", async () => {

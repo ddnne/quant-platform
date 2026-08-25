@@ -114,6 +114,11 @@ async function seedWaitingRoot(
       root.work_key,
     )
     .run();
+  await runtimeEnv.RAW_BUCKET.put(
+    `raw/jsda/test/${messageId}.html`,
+    "discovery fixture",
+    { customMetadata: { sha256: "a".repeat(64) } },
+  );
   const result = await deliver(root, messageId);
   expect(result.explicitAcks).toEqual([messageId]);
   const membership = await loadRunMembership(runtimeEnv.DB, root.run_key);
@@ -183,6 +188,42 @@ describe("JSDA run-scoped membership and archive adoption", () => {
           .bind(second.root.work_key)
           .first<{ n: number }>())?.n,
       ).toBe(0);
+    } finally {
+      restore();
+    }
+  });
+
+  it("rejects an adopted archive when its immutable R2 raw evidence is absent", async () => {
+    const restore = mockOfficialFetch({ [ARCHIVE_A]: "archive-to-lose" });
+    try {
+      const first = await seedWaitingRoot(
+        "2026-08-24T01:30:00.000Z",
+        [ARCHIVE_A],
+        "missing-adopt-first-root",
+      );
+      const firstChild = first.membership[0];
+      await deliver(await childJob(firstChild.child_work_key), "missing-adopt-first-child");
+      const stored = await loadJob(runtimeEnv.DB, firstChild.child_work_key);
+      expect(stored?.raw_key).toBeTruthy();
+      await runtimeEnv.RAW_BUCKET.delete(stored!.raw_key!);
+
+      const second = await seedWaitingRoot(
+        "2026-08-25T01:30:00.000Z",
+        [ARCHIVE_A],
+        "missing-adopt-second-root",
+      );
+      expect(second.membership[0]).toMatchObject({
+        membership_kind: "adopted",
+        terminal_state: "rejected",
+        failure_reason_code: "adopted_evidence_missing",
+      });
+      expect((await loadJob(runtimeEnv.DB, second.root.work_key))?.state).toBe(
+        "rejected",
+      );
+      expect((await loadRunClosure(runtimeEnv.DB, second.root.run_key))?.closure_state).toBe(
+        "failed",
+      );
+      expect(await passLogCount(second.root.run_key)).toBe(0);
     } finally {
       restore();
     }
@@ -276,7 +317,7 @@ describe("JSDA run-scoped membership and archive adoption", () => {
       child_work_key: childKey,
       membership_kind: "adopted",
       terminal_state: "rejected",
-      failure_reason_code: "insufficient_legacy_evidence",
+      failure_reason_code: "adopted_evidence_missing",
     });
     expect((await loadJob(runtimeEnv.DB, childKey))?.run_key).toBe(first.root.run_key);
     expect((await loadJob(runtimeEnv.DB, second.root.work_key))?.state).toBe("rejected");

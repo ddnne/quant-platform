@@ -172,6 +172,7 @@ function detailJson(
     raw_key: event.rawKey,
     content_digest: event.contentDigest,
     audit_receipt_key: event.audit.key,
+    audit_receipt_digest: event.audit.digest,
     detail: event.detail.slice(0, 500),
   });
 }
@@ -718,7 +719,9 @@ function insertRunTerminalLogStatement(
              WHERE source='jsda'
                AND runtime='cloudflare_queue_v2'
                AND json_extract(detail, '$.run_id') = ?
-               AND json_extract(detail, '$.result') IN ('completed', 'rejected')
+               AND json_extract(detail, '$.result') = ?
+               AND json_extract(detail, '$.job_id') = ?
+               AND json_extract(detail, '$.audit_receipt_digest') = ?
           )`,
     )
     .bind(
@@ -731,6 +734,9 @@ function insertRunTerminalLogStatement(
       event.audit.key,
       event.audit.digest,
       job.run_key,
+      event.result,
+      job.work_key,
+      event.audit.digest,
     );
 }
 
@@ -1068,6 +1074,56 @@ export async function loadRunMembership(
     .bind(runKey)
     .all<RunMembershipRow>();
   return rows.results;
+}
+
+export async function rejectAdoptedMembership(
+  db: D1Database,
+  runKey: string,
+  childWorkKey: string,
+  detail: string,
+  audit: AuditRef,
+  now: string,
+): Promise<void> {
+  const result = await db
+    .prepare(
+      `UPDATE jsda_run_membership
+          SET terminal_state='rejected',
+              content_digest=NULL,
+              raw_key=NULL,
+              audit_receipt_key=?,
+              audit_receipt_digest=?,
+              failure_reason_code='adopted_evidence_missing',
+              failure_detail=?,
+              updated_at=?
+        WHERE run_key=? AND child_work_key=?
+          AND membership_kind='adopted'
+          AND terminal_state IN ('completed','rejected')`,
+    )
+    .bind(
+      audit.key,
+      audit.digest,
+      detail.slice(0, 500),
+      now,
+      runKey,
+      childWorkKey,
+    )
+    .run();
+  if ((result.meta.changes ?? 0) < 1) {
+    const current = await db
+      .prepare(
+        `SELECT terminal_state, failure_reason_code
+           FROM jsda_run_membership
+          WHERE run_key=? AND child_work_key=? AND membership_kind='adopted'`,
+      )
+      .bind(runKey, childWorkKey)
+      .first<{ terminal_state: string; failure_reason_code: string | null }>();
+    if (
+      current?.terminal_state !== "rejected" ||
+      current.failure_reason_code !== "adopted_evidence_missing"
+    ) {
+      throw new Error(`JSDA adopted membership rejection lost: ${childWorkKey}`);
+    }
+  }
 }
 
 export async function loadPendingRunJobs(
@@ -1680,6 +1736,26 @@ export async function ensureRunTerminalLog(
   if ((result.meta.changes ?? 0) < 0) {
     throw new Error(`JSDA run terminal log write failed: ${row.work_key}`);
   }
+  const persisted = await db
+    .prepare(
+      `SELECT status FROM ingestion_run_log
+        WHERE source='jsda' AND runtime='cloudflare_queue_v2'
+          AND json_extract(detail, '$.run_id')=?
+          AND json_extract(detail, '$.result')=?
+          AND json_extract(detail, '$.job_id')=?
+          AND json_extract(detail, '$.audit_receipt_digest')=?
+        ORDER BY id DESC LIMIT 1`,
+    )
+    .bind(row.run_key, event.result, row.work_key, row.audit_receipt_digest)
+    .first<{ status: string }>();
+  if (
+    persisted === null ||
+    (row.state === "completed"
+      ? persisted.status !== "pass"
+      : persisted.status === "pass")
+  ) {
+    throw new Error(`JSDA run terminal log is not authoritative: ${row.work_key}`);
+  }
 }
 
 export async function rejectFromDeadLetter(
@@ -1729,5 +1805,3 @@ export async function rejectFromDeadLetter(
   }
   return rejected;
 }
-
-

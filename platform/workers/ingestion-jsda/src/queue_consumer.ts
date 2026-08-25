@@ -139,17 +139,27 @@ function rowMatchesMessage(row: JobRow, job: JsdaQueueJob): boolean {
   );
 }
 
-async function terminalAuditIsDurable(
+async function terminalEvidenceIsDurable(
   env: JsdaWorkerEnv,
   row: JobRow,
 ): Promise<boolean> {
   if (row.audit_receipt_key === null || row.audit_receipt_digest === null) {
     return false;
   }
-  const object = await env.RAW_BUCKET.head(row.audit_receipt_key);
+  if ((row.raw_key === null) !== (row.content_digest === null)) return false;
+  const [audit, raw] = await Promise.all([
+    env.RAW_BUCKET.head(row.audit_receipt_key),
+    row.raw_key === null ? Promise.resolve(null) : env.RAW_BUCKET.head(row.raw_key),
+  ]);
+  if (
+    audit === null ||
+    audit.customMetadata?.sha256 !== row.audit_receipt_digest
+  ) {
+    return false;
+  }
   return (
-    object !== null &&
-    object.customMetadata?.sha256 === row.audit_receipt_digest
+    row.raw_key === null ||
+    (raw !== null && raw.customMetadata?.sha256 === row.content_digest)
   );
 }
 
@@ -558,8 +568,8 @@ async function repairTerminalClosure(
   env: JsdaWorkerEnv,
   row: JobRow,
 ): Promise<void> {
-  if (!(await terminalAuditIsDurable(env, row))) {
-    throw new Error("terminal_audit_missing");
+  if (!(await terminalEvidenceIsDurable(env, row))) {
+    throw new Error("terminal_evidence_missing");
   }
   await advanceAncestorClosures(env, row);
 }

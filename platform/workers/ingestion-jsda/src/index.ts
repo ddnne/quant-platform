@@ -80,7 +80,7 @@ export default {
     env: JsdaWorkerEnv,
     _ctx: ExecutionContext,
   ): Promise<void> {
-    const dlq = isJsdaDlqQueue(batch.queue);
+    const dlq = isJsdaDlqQueue(batch.queue, env.JSDA_DLQ_QUEUE);
     for (const message of batch.messages) {
       if (dlq) await consumeDlqMessage(message, env, batch.queue);
       else await consumeQueueMessage(message, env);

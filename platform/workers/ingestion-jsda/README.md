@@ -58,6 +58,7 @@ npm install
 npm test
 npx wrangler queues create quant-jsda-ingestion
 npx wrangler queues create quant-jsda-ingestion-dlq
+npx wrangler queues create quant-jsda-ingestion-rejects
 printf '%s' "$INGESTION_RUN_TOKEN" | npx wrangler secret put INGESTION_RUN_TOKEN
 npx wrangler deploy
 ```
@@ -65,10 +66,14 @@ npx wrangler deploy
 Apply `ingestion-premium/migrations/0012_jsda_observation_identity.sql` through
 the canonical `quant-ingest` migration owner before deploying this Worker.
 
-Production uses `quant-jsda-ingestion` and `quant-jsda-ingestion-dlq`.
+Production uses `quant-jsda-ingestion`, `quant-jsda-ingestion-dlq`, and the
+unconsumed terminal quarantine queue `quant-jsda-ingestion-rejects`.
 Staging uses the distinct `quant-jsda-ingestion-staging` and
-`quant-jsda-ingestion-dlq-staging` queues defined in `wrangler.staging.toml`.
+`quant-jsda-ingestion-dlq-staging` queues plus
+`quant-jsda-ingestion-rejects-staging`, as defined in
+`wrangler.staging.toml`.
 The same Worker consumes `quant-jsda-ingestion-dlq` (staging:
 `quant-jsda-ingestion-dlq-staging`) as a terminal convergence path. D1
-failures retry on the DLQ consumer; messages are not re-enqueued onto the
-original queue.
+failures retry on the DLQ consumer; after that consumer's retry limit, the
+message moves to the terminal quarantine queue instead of being deleted.
+Messages are never re-enqueued onto the original queue.

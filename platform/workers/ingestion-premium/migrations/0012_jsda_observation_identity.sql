@@ -876,3 +876,39 @@ UPDATE jsda_run_closures
           AND descendant_nonterminal = 0 THEN updated_at
          ELSE NULL
        END;
+
+-- Earlier queue-v2 code emitted PASS for individual leaves. Preserve those
+-- rows for audit, but append an authoritative correction for every affected
+-- run whose governed closure is not actually complete. Current projections
+-- select the latest row and therefore cannot surface the superseded PASS.
+INSERT INTO ingestion_run_log (ran_at, source, runtime, status, detail)
+SELECT COALESCE(rc.updated_at, CURRENT_TIMESTAMP),
+       'jsda',
+       'cloudflare_queue_v2',
+       CASE WHEN rc.closure_state = 'partial' THEN 'partial' ELSE 'fail' END,
+       json_object(
+         'mode', 'cloudflare_queue_v2',
+         'run_id', rc.run_key,
+         'job_id', rc.root_work_key,
+         'result', 'rejected',
+         'reason', 'migration_invalidated_legacy_false_pass',
+         'closure_state', rc.closure_state,
+         'supersedes_false_pass', 1
+       )
+  FROM jsda_run_closures AS rc
+ WHERE rc.closure_state != 'completed'
+   AND EXISTS (
+     SELECT 1 FROM ingestion_run_log AS old
+      WHERE old.source = 'jsda'
+        AND old.runtime = 'cloudflare_queue_v2'
+        AND old.status = 'pass'
+        AND json_extract(old.detail, '$.run_id') = rc.run_key
+   )
+   AND NOT EXISTS (
+     SELECT 1 FROM ingestion_run_log AS correction
+      WHERE correction.source = 'jsda'
+        AND correction.runtime = 'cloudflare_queue_v2'
+        AND json_extract(correction.detail, '$.run_id') = rc.run_key
+        AND json_extract(correction.detail, '$.reason') =
+            'migration_invalidated_legacy_false_pass'
+   );

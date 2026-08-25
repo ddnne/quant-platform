@@ -33,8 +33,10 @@ max_batch_size = 1
 max_batch_timeout = 5
 max_retries = 8
 retry_delay = 60
+dead_letter_queue = "quant-jsda-ingestion-rejects-test"
 max_concurrency = 1
 
 [vars]
 USER_AGENT = "quant-platform-jsda-runtime-test/0.1"
 INGESTION_RUN_TOKEN = "jsda-runtime-test-token"
+JSDA_DLQ_QUEUE = "quant-jsda-ingestion-dlq-test"
