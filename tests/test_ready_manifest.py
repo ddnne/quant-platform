@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import base64
+import inspect
 import json
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization
 
 from paper_runtime.snapshot import READY_MANIFEST_SCHEMA as PUBLISH_SCHEMA
 from paper_runtime.snapshot_publish_policy import READY_MANIFEST_SCHEMA as POLICY_SCHEMA
@@ -16,20 +21,29 @@ from research.ready_manifest import (
     READY_MANIFEST_FORMAT,
     READY_MANIFEST_SCHEMA,
     UNKNOWN,
+    ExactFourPilotReadyBinding,
     ReadyManifest,
     build_ready_manifest,
     canonical_digest,
     core_profile_source_capability_gaps,
+    load_exact_four_pilot_ready_binding,
     load_ready_manifest,
-    mint_verified_research_readiness,
     missing_ready_manifest_proofs,
     ready_manifest_from_snapshot_document,
     require_core_profile_deps_subseteq_source_capability_registry,
     serialize_ready_manifest,
 )
-from research.readiness import ReadinessAttestationPublisher
-from research.research_data_profile import load_core_profile
+from research.readiness import (
+    GovernedMassReadinessAuthority,
+    ReadinessPublicKeyRegistry,
+    _ReadyPublicationSigner,
+    load_verified_pilot_readiness,
+)
 from selection.budget_ledger import MassResearchDisabledError
+from tests.readiness_test_support import (
+    make_readiness_signer,
+    mint_pilot_readiness,
+)
 
 _SNAPSHOT_PY = (
     repo_root()
@@ -48,8 +62,8 @@ _POLICY_PY = (
 
 
 @pytest.fixture
-def readiness_publisher() -> ReadinessAttestationPublisher:
-    return ReadinessAttestationPublisher(
+def readiness_publisher() -> _ReadyPublicationSigner:
+    return make_readiness_signer(
         key_id="test-readiness-v1",
         private_key=Ed25519PrivateKey.generate(),
     )
@@ -61,23 +75,17 @@ def _digest(label: str) -> str:
 
 def _complete_manifest(**overrides: object) -> ReadyManifest:
     digest = _digest("complete")
-    profile = load_core_profile()
+    binding = load_exact_four_pilot_ready_binding()
     payload = {
         "snapshot_id": digest,
-        "publication_scope": "MASS",
-        "profile_id": profile.profile_id,
-        "profile_version": profile.profile_version,
-        "profile_digest": profile.profile_digest,
-        "plan_ids": (f"mass-profile:{profile.profile_id}",),
-        "plan_set_digest": canonical_digest({"mass_profile": profile.to_dict()}),
-        "dependency_closure_digest": canonical_digest(
-            {
-                "mass_profile_digest": profile.profile_digest,
-                "required_datasets": list(profile.required_datasets),
-                "contract_versions": dict(profile.contract_versions),
-            }
-        ),
-        "dataset_ids": profile.required_datasets,
+        "publication_scope": "PILOT",
+        "profile_id": binding.profile_id,
+        "profile_version": binding.profile_version,
+        "profile_digest": binding.profile_digest,
+        "plan_ids": binding.plan_ids,
+        "plan_set_digest": binding.plan_set_digest,
+        "dependency_closure_digest": binding.closure_set_digest,
+        "dataset_ids": binding.required_datasets,
         "coverage_proof_digest": _digest("coverage"),
         "raw_proof_digest": _digest("raw"),
         "receipt_proof_digest": _digest("receipt"),
@@ -98,6 +106,118 @@ def _complete_manifest(**overrides: object) -> ReadyManifest:
     return build_ready_manifest(**payload)  # type: ignore[arg-type]
 
 
+def test_pilot_readiness_sidecar_loader_is_strict_public_key_only(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private_key = Ed25519PrivateKey.generate()
+    publisher = make_readiness_signer(
+        key_id="sidecar-loader-test",
+        private_key=private_key,
+    )
+    manifest = _complete_manifest()
+    readiness = mint_pilot_readiness(
+        manifest,
+        publisher=publisher,
+        immutable_db_digest=_digest("immutable-db"),
+    )
+    sidecar = tmp_path / "pilot.readiness.json"
+    sidecar.write_text(json.dumps(readiness.to_dict()), encoding="utf-8")
+    public_raw = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    registry = tmp_path / "readiness-public-keys.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "keys": [
+                    {
+                        "key_id": "sidecar-loader-test",
+                        "algorithm": "Ed25519",
+                        "public_key_b64": base64.b64encode(public_raw).decode("ascii"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    trusted_registry = ReadinessPublicKeyRegistry.from_file(registry)
+    monkeypatch.setattr(
+        ReadinessPublicKeyRegistry,
+        "load_pinned",
+        classmethod(lambda cls: trusted_registry),
+    )
+    loaded = load_verified_pilot_readiness(
+        sidecar,
+        expected_snapshot_id=manifest.snapshot_id,
+        expected_ready_manifest_digest=manifest.to_dict()["manifest_digest"],
+    )
+    assert loaded == readiness
+
+    tampered = readiness.to_dict()
+    tampered["caller_override"] = True
+    sidecar.write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(MassResearchDisabledError, match="fields are not closed"):
+        load_verified_pilot_readiness(sidecar)
+
+    expired = mint_pilot_readiness(
+        manifest,
+        publisher=publisher,
+        immutable_db_digest=_digest("immutable-db"),
+        now=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        ttl_seconds=60,
+    )
+    sidecar.write_text(json.dumps(expired.to_dict()), encoding="utf-8")
+    with pytest.raises(MassResearchDisabledError, match="expired"):
+        load_verified_pilot_readiness(sidecar)
+
+
+def test_caller_environment_registry_cannot_self_root_pilot_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attacker_key = Ed25519PrivateKey.generate()
+    attacker = make_readiness_signer(
+        key_id="attacker-readiness",
+        private_key=attacker_key,
+    )
+    manifest = _complete_manifest()
+    readiness = mint_pilot_readiness(
+        manifest,
+        publisher=attacker,
+        immutable_db_digest=_digest("attacker-db"),
+    )
+    sidecar = tmp_path / "attacker.readiness.json"
+    sidecar.write_text(json.dumps(readiness.to_dict()), encoding="utf-8")
+    public_raw = attacker_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    attacker_registry = tmp_path / "attacker-registry.json"
+    attacker_registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "purpose": "readiness_attestation_verification",
+                "keys": [
+                    {
+                        "key_id": "attacker-readiness",
+                        "algorithm": "Ed25519",
+                        "public_key_b64": base64.b64encode(public_raw).decode("ascii"),
+                        "status": "active",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "QUANT_READINESS_PUBLIC_KEY_REGISTRY", str(attacker_registry)
+    )
+    with pytest.raises(MassResearchDisabledError, match="untrusted"):
+        load_verified_pilot_readiness(sidecar)
+
+
 def test_single_ready_manifest_schema_is_the_publish_gate() -> None:
     assert READY_MANIFEST_SCHEMA["$id"] == READY_MANIFEST_FORMAT
     assert POLICY_SCHEMA["$id"] == READY_MANIFEST_FORMAT
@@ -110,6 +230,22 @@ def test_single_ready_manifest_schema_is_the_publish_gate() -> None:
     assert "ReadyPublicationPolicy" not in snapshot_src
     assert "ready_manifest.schema.json" in policy_src
     assert "def evaluate_ready_publication" in policy_src
+
+
+def test_ready_private_key_and_mint_are_not_public_control_plane_api() -> None:
+    import research
+    import research.readiness as readiness_module
+    import research.ready_manifest as manifest_module
+
+    assert not hasattr(research, "ReadinessAttestationPublisher")
+    assert not hasattr(readiness_module, "ReadinessAttestationPublisher")
+    assert not hasattr(manifest_module, "mint_verified_research_readiness")
+    assert not hasattr(manifest_module, "mint_verified_pilot_readiness")
+    with pytest.raises(MassResearchDisabledError, match="publication service"):
+        _ReadyPublicationSigner(
+            key_id="caller-key",
+            private_key=Ed25519PrivateKey.generate(),
+        )
 
 
 def test_profile_manifest_builder_has_one_product_owned_call_site() -> None:
@@ -161,13 +297,13 @@ def test_unknown_fields_and_missing_proofs_are_not_pass() -> None:
     assert "b0_proof_digest" in missing
     assert "PASS" not in missing
     with pytest.raises(MassResearchDisabledError, match="UNKNOWN/MISSING"):
-        mint_verified_research_readiness(
+        mint_pilot_readiness(
             manifest, immutable_db_digest=_digest("db")
         )
 
 
 def test_ready_manifest_offline_e2e_serialize_reload_mint(
-    tmp_path: Path, readiness_publisher: ReadinessAttestationPublisher
+    tmp_path: Path, readiness_publisher: _ReadyPublicationSigner
 ) -> None:
     """Publisher helpers → serialize → reload → mint. No live R2. Not production READY."""
     built = _complete_manifest()
@@ -177,7 +313,7 @@ def test_ready_manifest_offline_e2e_serialize_reload_mint(
     assert reloaded.to_canonical_dict() == built.to_canonical_dict()
     assert reloaded.manifest_digest == built.manifest_digest
     assert reloaded.published_at == "2026-08-24T00:01:00+00:00"
-    readiness = mint_verified_research_readiness(
+    readiness = mint_pilot_readiness(
         reloaded,
         immutable_db_digest=_digest("offline-fixture-db"),
         publisher=readiness_publisher,
@@ -188,7 +324,7 @@ def test_ready_manifest_offline_e2e_serialize_reload_mint(
     assert readiness.b0_quality_proof_digest.startswith("sha256:")
     assert readiness.require_valid(
         expected_snapshot_id=built.snapshot_id,
-        verifier=readiness_publisher.public_registry(),
+        verifier=readiness_publisher._public_registry(),
     ) is readiness
     dumped = path.read_text(encoding="utf-8")
     assert "r2://" not in dumped
@@ -196,15 +332,80 @@ def test_ready_manifest_offline_e2e_serialize_reload_mint(
     assert json.loads(dumped)["published_at"] == "2026-08-24T00:01:00+00:00"
 
 
-def test_production_mint_cannot_accept_caller_supplied_artifact_digest(
-    monkeypatch: pytest.MonkeyPatch,
-    readiness_publisher: ReadinessAttestationPublisher,
+def test_production_mint_cannot_accept_caller_supplied_artifact_digest_or_clock(
+    readiness_publisher: _ReadyPublicationSigner,
 ) -> None:
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    with pytest.raises(MassResearchDisabledError, match="test-only"):
-        readiness_publisher.mint_mass(
+    parameters = inspect.signature(readiness_publisher._mint_pilot).parameters
+    assert "immutable_db_digest" not in parameters
+    assert "now" not in parameters
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        readiness_publisher._mint_pilot(
             _complete_manifest(),
             immutable_db_digest=_digest("caller-asserted-db"),
+        )  # type: ignore[call-arg]
+
+
+def test_mass_mint_requires_unavailable_governed_authority_and_stays_disabled(
+    readiness_publisher: _ReadyPublicationSigner,
+) -> None:
+    manifest = _complete_manifest(publication_scope="MASS")
+    with pytest.raises(
+        MassResearchDisabledError,
+        match="GovernedMassReadinessAuthority",
+    ):
+        readiness_publisher._mint_mass(manifest)
+    with pytest.raises(MassResearchDisabledError, match="no public issuer"):
+        GovernedMassReadinessAuthority(
+            policy_id="mass-policy/v1",
+            profile_id="mass/governed-v1",
+            policy_digest=_digest("mass-policy"),
+        )
+
+
+def test_ready_manifest_rejects_caller_asserted_coverage_policy_binding() -> None:
+    manifest = replace(
+        _complete_manifest(),
+        coverage_policy_digest=_digest("caller-asserted-policy"),
+        manifest_digest="",
+    )
+    missing = missing_ready_manifest_proofs(manifest)
+    assert "coverage_policy_digest.binding" in missing
+    with pytest.raises(MassResearchDisabledError, match="Coverage policy-set"):
+        from research.ready_manifest import validate_ready_manifest_profile_binding
+
+        validate_ready_manifest_profile_binding(manifest)
+
+
+def test_exact_four_binding_rejects_self_consistent_caller_substitution() -> None:
+    from research.dependency_closure import build_plan_dependency_closure
+    from research.research_data_profile import profile_from_dependency_closure
+
+    canonical = load_exact_four_pilot_ready_binding()
+    substituted = replace(
+        canonical.plans[0], hypothesis="caller-controlled alternate hypothesis"
+    )
+    substituted_closure = build_plan_dependency_closure(substituted)
+    substituted_profile = profile_from_dependency_closure(substituted_closure)
+    with pytest.raises(MassResearchDisabledError):
+        ExactFourPilotReadyBinding(
+            plans=(substituted, *canonical.plans[1:]),
+            closures=(substituted_closure, *canonical.closures[1:]),
+            profiles=(substituted_profile, *canonical.profiles[1:]),
+        )
+
+
+def test_private_signer_cannot_mint_generic_caller_pilot_manifest(
+    readiness_publisher: _ReadyPublicationSigner,
+) -> None:
+    caller_manifest = _complete_manifest(
+        profile_id="caller/generic-pilot",
+        profile_digest=_digest("caller-profile"),
+    )
+    with pytest.raises(MassResearchDisabledError, match="profile_id mismatch"):
+        readiness_publisher._mint_pilot(
+            caller_manifest,
+            db_path=Path("/nonexistent/caller-db.sqlite"),
+            profile_binding=load_exact_four_pilot_ready_binding(),
         )
 
 
@@ -240,7 +441,7 @@ def test_manifest_mint_rejects_profile_or_evidence_gaps(
 ) -> None:
     manifest = _complete_manifest(**override)
     with pytest.raises(MassResearchDisabledError, match=expected):
-        mint_verified_research_readiness(
+        mint_pilot_readiness(
             manifest, immutable_db_digest=_digest("immutable-db")
         )
 

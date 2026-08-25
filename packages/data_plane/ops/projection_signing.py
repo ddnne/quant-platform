@@ -24,7 +24,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 SIGNED_DOCUMENT_SCHEMA = "ops-projection-signed-envelope/v1"
 ENVELOPE_SCHEMA = "ops-projection-envelope/v1"
 SIGNING_KEY_ENV = "QUANT_OPS_PROJECTION_SIGNING_KEY_PEM"
-VERIFY_REGISTRY_ENV = "QUANT_OPS_PROJECTION_VERIFY_REGISTRY"
 DEFAULT_SIGNING_KEY_PATH = (
     Path.home() / ".config" / "quant-platform" / "ops_projection_signing_key.pem"
 )
@@ -250,12 +249,10 @@ class OpsProjectionPublicKeyRegistry:
         return cls(keys)
 
     @classmethod
-    def load(
-        cls, path: str | Path | None = None
+    def from_file(
+        cls, path: str | Path
     ) -> "OpsProjectionPublicKeyRegistry":
-        selected = Path(
-            path or os.environ.get(VERIFY_REGISTRY_ENV) or DEFAULT_VERIFY_REGISTRY_PATH
-        ).expanduser()
+        selected = Path(path).expanduser()
         try:
             document = json.loads(selected.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -264,6 +261,26 @@ class OpsProjectionPublicKeyRegistry:
             ) from exc
         if not isinstance(document, Mapping):
             raise OpsProjectionSignatureError("Ops Projection registry must be an object")
+        return cls.from_document(document)
+
+    @classmethod
+    def load_pinned(cls) -> "OpsProjectionPublicKeyRegistry":
+        """Load only the committed production registry; no env/path override."""
+        try:
+            document = json.loads(
+                DEFAULT_VERIFY_REGISTRY_PATH.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            raise OpsProjectionSignatureError(
+                "cannot load the pinned Ops Projection public key registry"
+            ) from exc
+        if (
+            not isinstance(document, Mapping)
+            or document.get("purpose") != "ops_projection_verification"
+        ):
+            raise OpsProjectionSignatureError(
+                "pinned Ops Projection registry purpose mismatch"
+            )
         return cls.from_document(document)
 
     def verify(self, document: Mapping[str, Any]) -> dict[str, Any]:
@@ -334,7 +351,6 @@ __all__ = [
     "OpsProjectionSigningKey",
     "SIGNED_DOCUMENT_SCHEMA",
     "SIGNING_KEY_ENV",
-    "VERIFY_REGISTRY_ENV",
     "canonical_json_bytes",
     "load_ops_projection_signer",
     "sha256_digest",

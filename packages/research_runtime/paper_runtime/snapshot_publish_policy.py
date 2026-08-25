@@ -13,7 +13,7 @@ from typing import Any
 
 from cf_platform.ingest_premium.coverage import run_coverage, summarize
 from data_contracts.loader import all_contracts
-from paper_runtime.snapshot_coverage_proof import _coverage_v2_proof
+from paper_runtime.snapshot_coverage_proof import _coverage_proof
 from qp_paths import repo_root
 from storage.coverage_ledger import refresh_coverage_ledger
 
@@ -105,19 +105,19 @@ def _transition_policy(
     conn.commit()
 
 
-def _evaluate_publication_gate(
+def _evaluate_publication_gate_impl(
     conn: sqlite3.Connection,
     staging_path: Path,
     *,
     build_id: str,
     required: tuple[str, ...],
-    _fixture_policy: bool = False,
+    fixture_compatibility: bool,
 ) -> tuple[
     int, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]],
     dict[str, int], list[dict[str, Any]], dict[str, dict[str, Any]],
     dict[str, Any],
 ]:
-    """Strict B0 + Phase 3.5 daily checks + Coverage V2 ledger."""
+    """Strict B0 + Phase 3.5 daily checks + governed Coverage ledger."""
     from paper_runtime.snapshot import (
         QUALITY_POLICY_VERSION,
         SnapshotRejected,
@@ -153,7 +153,7 @@ def _evaluate_publication_gate(
         result.as_log_dict() for result in quality_results
         if result.status == "fail"
     ]
-    if _fixture_policy:
+    if fixture_compatibility:
         # Explicit test-only compatibility: structural READY proofs and B4
         # still run, but sparse synthetic fixtures may omit unrelated daily
         # matrix observations such as K3.
@@ -174,7 +174,7 @@ def _evaluate_publication_gate(
     coverage_proof: dict[str, Any] | None = None
     proof_failure: str | None = None
     try:
-        coverage_proof = _coverage_v2_proof(conn, required, coverage_rows)
+        coverage_proof = _coverage_proof(conn, required, coverage_rows)
     except SnapshotRejected as exc:
         proof_failure = str(exc)
     evaluated_at = datetime.now(timezone.utc).isoformat()
@@ -219,12 +219,33 @@ def _evaluate_publication_gate(
             parts.append(proof_failure)
         raise SnapshotRejected("; ".join(parts))
     if coverage_proof is None:  # pragma: no cover - guarded by passed
-        raise SnapshotRejected("Coverage V2 proof was not produced")
+        raise SnapshotRejected("governed Coverage proof was not produced")
     return (
         run_id, run_detail, validations, coverage_rows, quality_summary,
         failures,
         raw_manifests,
         coverage_proof,
+    )
+
+
+def _evaluate_publication_gate(
+    conn: sqlite3.Connection,
+    staging_path: Path,
+    *,
+    build_id: str,
+    required: tuple[str, ...],
+) -> tuple[
+    int, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]],
+    dict[str, int], list[dict[str, Any]], dict[str, dict[str, Any]],
+    dict[str, Any],
+]:
+    """Production B0/Coverage gate; compatibility cannot be selected."""
+    return _evaluate_publication_gate_impl(
+        conn,
+        staging_path,
+        build_id=build_id,
+        required=required,
+        fixture_compatibility=False,
     )
 
 
@@ -234,7 +255,6 @@ def evaluate_ready_publication(
     *,
     build_id: str,
     required: tuple[str, ...],
-    _fixture_policy: bool = False,
 ) -> tuple[
     int, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]],
     dict[str, int], list[dict[str, Any]], dict[str, dict[str, Any]],
@@ -253,17 +273,12 @@ def evaluate_ready_publication(
         staging_path,
         build_id=build_id,
         required=required,
-        _fixture_policy=_fixture_policy,
     )
     (
         run_id, _run_detail, _validations, _coverage_rows, _quality_summary,
         failures, _raw_manifests, coverage_proof,
     ) = result
-    policy = (
-        ReadyPublicationPolicy._for_fixture_tests()
-        if _fixture_policy
-        else ReadyPublicationPolicy()
-    )
+    policy = ReadyPublicationPolicy()
     bundle = policy.evaluate(
         conn,
         staging_path,

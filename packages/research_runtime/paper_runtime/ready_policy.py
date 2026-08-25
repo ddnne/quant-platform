@@ -1,7 +1,7 @@
 """Single READY publication policy — sole final PASS/FAIL gate.
 
 Subsystems produce typed evidence only. ReadyPublicationPolicy alone decides.
-``publish_ready_snapshot`` must refuse READY transition without policy PASS.
+The private runtime publisher must refuse READY transition without policy PASS.
 """
 
 from __future__ import annotations
@@ -176,7 +176,7 @@ class ReadyEvidenceBundle:
         }
 
 
-def collect_typed_evidence(
+def _collect_typed_evidence(
     conn: sqlite3.Connection,
     db_path: str | Path,
     required_datasets: Sequence[str],
@@ -185,7 +185,7 @@ def collect_typed_evidence(
     coverage_proof: dict[str, Any] | None = None,
     quality_status: str | None = None,
     raw_manifest_ok: bool | None = None,
-    _fixture_policy: bool = False,
+    fixture_compatibility: bool,
 ) -> list[TypedReadyEvidence]:
     """Subsystems produce typed evidence only — no READY decision here."""
     required = tuple(required_datasets)
@@ -233,7 +233,7 @@ def collect_typed_evidence(
         if raw_manifest_ok is None:
             manifests_ok = manifest_count > 0
     except sqlite3.Error:
-        if _fixture_policy and raw_manifest_ok is None:
+        if fixture_compatibility and raw_manifest_ok is None:
             manifests_ok = complete == total
     evidence.append(
         RawRetentionEvidence(manifests_ok=manifests_ok, manifest_count=manifest_count)
@@ -259,7 +259,7 @@ def collect_typed_evidence(
                 else "FAIL"
             )
         except sqlite3.Error:
-            val_status = "PASS" if _fixture_policy else "UNKNOWN"
+            val_status = "PASS" if fixture_compatibility else "UNKNOWN"
     evidence.append(ValidationEvidence(status=val_status, run_id=run_id))
 
     # Natural keys
@@ -271,12 +271,12 @@ def collect_typed_evidence(
         if row:
             nk_state = str(row[0])
     except sqlite3.Error:
-        nk_state = "READY" if _fixture_policy else "UNKNOWN"
+        nk_state = "READY" if fixture_compatibility else "UNKNOWN"
     evidence.append(NaturalKeyEvidence(state=nk_state))
 
     # Quality / B0
     b0 = "UNKNOWN"
-    q = quality_status or ("PASS" if _fixture_policy else "UNKNOWN")
+    q = quality_status or ("PASS" if fixture_compatibility else "UNKNOWN")
     try:
         row = conn.execute(
             "SELECT status FROM ops_b0_status ORDER BY checked_at DESC LIMIT 1"
@@ -284,8 +284,8 @@ def collect_typed_evidence(
         if row:
             b0 = str(row[0])
     except sqlite3.Error:
-        b0 = "PASS" if _fixture_policy else "UNKNOWN"
-    if _fixture_policy and b0 == "UNKNOWN":
+        b0 = "PASS" if fixture_compatibility else "UNKNOWN"
+    if fixture_compatibility and b0 == "UNKNOWN":
         b0 = "PASS"
     evidence.append(QualityEvidence(b0_status=b0, quality_status=q))
 
@@ -298,7 +298,7 @@ def collect_typed_evidence(
         ).fetchone()
         src_gen = int(row[0]) if row else 0
     except sqlite3.Error:
-        src_gen = 1 if _fixture_policy and complete == total and complete > 0 else 0
+        src_gen = 1 if fixture_compatibility and complete == total and complete > 0 else 0
     try:
         row = conn.execute(
             "SELECT last_applied_change_seq FROM sync_change_state "
@@ -306,8 +306,8 @@ def collect_typed_evidence(
         ).fetchone()
         sync_gen = int(row[0]) if row else 0
     except sqlite3.Error:
-        sync_gen = src_gen if _fixture_policy else 0
-    if _fixture_policy and sync_gen <= 0:
+        sync_gen = src_gen if fixture_compatibility else 0
+    if fixture_compatibility and sync_gen <= 0:
         sync_gen = src_gen
     evidence.append(
         SyncGenerationEvidence(source_generation=src_gen, sync_generation=sync_gen)
@@ -316,16 +316,31 @@ def collect_typed_evidence(
     return evidence
 
 
+def collect_typed_evidence(
+    conn: sqlite3.Connection,
+    db_path: str | Path,
+    required_datasets: Sequence[str],
+    *,
+    run_id: int | None = None,
+    coverage_proof: dict[str, Any] | None = None,
+    quality_status: str | None = None,
+    raw_manifest_ok: bool | None = None,
+) -> list[TypedReadyEvidence]:
+    """Production evidence collection; missing ledgers are never compatible."""
+    return _collect_typed_evidence(
+        conn,
+        db_path,
+        required_datasets,
+        run_id=run_id,
+        coverage_proof=coverage_proof,
+        quality_status=quality_status,
+        raw_manifest_ok=raw_manifest_ok,
+        fixture_compatibility=False,
+    )
+
+
 class ReadyPublicationPolicy:
     """Sole READY eligibility decision. Fail closed on any failed evidence item."""
-
-    def __init__(self, *, _fixture_policy: bool = False) -> None:
-        self._fixture_policy = bool(_fixture_policy)
-
-    @classmethod
-    def _for_fixture_tests(cls) -> "ReadyPublicationPolicy":
-        """Private compatibility policy; production callers cannot default to it."""
-        return cls(_fixture_policy=True)
 
     def evaluate(
         self,
@@ -352,7 +367,7 @@ class ReadyPublicationPolicy:
                     name=f"coherence.{gate.gate_name}",
                     passed=gate.passed,
                     reason=gate.reason,
-                    detail=gate.detail,
+                    detail=dict(gate.detail or {}),
                 )
             )
 
@@ -367,7 +382,6 @@ class ReadyPublicationPolicy:
                 coverage_proof=coverage_proof,
                 quality_status=quality_status,
                 raw_manifest_ok=raw_manifest_ok,
-                _fixture_policy=self._fixture_policy,
             )
         )
         for ev in evidence:
@@ -376,7 +390,7 @@ class ReadyPublicationPolicy:
         return bundle
 
     def require_pass(self, bundle: ReadyEvidenceBundle) -> ReadyEvidenceBundle:
-        """Hard gate used by publish_ready_snapshot — no READY without PASS."""
+        """Hard gate used by the runtime publisher — no READY without PASS."""
         if not bundle.passed:
             detail = "; ".join(f"{i.name}: {i.reason}" for i in bundle.failures())
             raise ReadyPolicyRejected(f"READY publication policy failed: {detail}")

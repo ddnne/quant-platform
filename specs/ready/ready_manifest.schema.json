@@ -39,6 +39,8 @@
     "dependency_closure_digest",
     "dataset_ids",
     "dataset_membership_digest",
+    "coverage_policy_version",
+    "coverage_policy_digest",
     "coverage_proof_digest",
     "raw_proof_digest",
     "receipt_proof_digest",
@@ -75,6 +77,8 @@
       "items": { "$ref": "#/$defs/nonempty_string" }
     },
     "dataset_membership_digest": { "$ref": "#/$defs/proof_digest" },
+    "coverage_policy_version": { "$ref": "#/$defs/generation_pin" },
+    "coverage_policy_digest": { "$ref": "#/$defs/proof_digest" },
     "coverage_proof_digest": { "$ref": "#/$defs/proof_digest" },
     "raw_proof_digest": { "$ref": "#/$defs/proof_digest" },
     "receipt_proof_digest": { "$ref": "#/$defs/proof_digest" },

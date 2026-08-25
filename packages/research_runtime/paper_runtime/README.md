@@ -8,7 +8,6 @@ Lives **outside** `strategies` so strategy code stays isolated from storage.
 
 ```python
 from paper_runtime import (
-    publish_ready_snapshot,
     open_ready_snapshot,
     latest_ready_snapshot,
     check_ready_coherence,
@@ -18,9 +17,13 @@ from paper_runtime import (
     # …
 )
 from paper_runtime.ready_policy import ReadyPublicationPolicy, ReadyEvidenceBundle
+from research.ready_manifest import publish_exact_four_pilot_ready_snapshot
 ```
 
-Production READY publication remains residual-gated (**NO-GO** until residual says otherwise).
+Production READY publication is exposed only through the plan/profile-bound
+exact-four bridge. It returns the immutable snapshot together with the signed
+`VerifiedPilotReadiness` sidecar. The generic publisher is private and
+test-fixture-only.
 
 ## Allowed imports
 

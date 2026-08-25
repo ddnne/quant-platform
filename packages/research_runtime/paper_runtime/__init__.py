@@ -21,7 +21,6 @@ from .snapshot import (
     latest_ready_snapshot,
     list_ready_snapshots,
     open_ready_snapshot,
-    publish_ready_snapshot,
 )
 from .code_fingerprints import (
     feature_definition_hashes,
@@ -51,7 +50,6 @@ __all__ = [
     "latest_ready_snapshot",
     "list_ready_snapshots",
     "open_ready_snapshot",
-    "publish_ready_snapshot",
     "ExperimentIndex",
     "feature_definition_hashes",
     "git_commit",

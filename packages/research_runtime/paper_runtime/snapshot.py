@@ -17,14 +17,14 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from data_contracts.coverage import (
-    POLICY_VERSION as COVERAGE_POLICY_VERSION,
     all_coverage_contracts,
+    coverage_policy_set_binding,
 )
 from data_contracts.jsda import JSDA_CONTRACT_VERSION
 from data_contracts.loader import SCHEMA_VERSION as DATASET_CONTRACT_VERSION
 from paper_runtime.snapshot_coverage_proof import (
-    _coverage_v2_proof,
-    _verify_coverage_v2_manifest,
+    _coverage_proof,
+    _verify_coverage_manifest,
 )
 from paper_runtime.snapshot_persist import (
     _atomic_json,
@@ -50,7 +50,7 @@ from paper_runtime.snapshot_read import (
 DATA_SNAPSHOT_FORMAT = "paper-data-snapshot/v1"
 LOCAL_SNAPSHOT_MANIFEST_FORMAT = "local-snapshot-manifest/v1"
 RESEARCH_SNAPSHOT_MANIFEST_FORMAT = "research-snapshot-manifest/v2"
-QUALITY_POLICY_VERSION = "b0+phase35-daily+coverage/v2"
+QUALITY_POLICY_VERSION = "b0+phase35-daily+coverage-set/v1"
 SNAPSHOT_STATES = frozenset(
     {"BUILDING", "SYNCED", "VALIDATING", "READY", "REJECTED"}
 )
@@ -527,7 +527,7 @@ def _watermarks_for(
     coverage = {
         str(row["dataset"]): row for row in (coverage_rows or [])
     }
-    # JSDA has no D1 watermark; COMPLETE Coverage V2 observed_end is the bound.
+    # JSDA has no D1 watermark; current governed Coverage observed_end is the bound.
     for dataset in sorted(set(required) - present):
         row = coverage.get(dataset)
         if (
@@ -540,7 +540,7 @@ def _watermarks_for(
                 "dataset": dataset,
                 "last_event_date": row["observed_end"],
                 "last_ingested_at": row["evaluated_at"],
-                "derived_from": "coverage_v2_receipts",
+                "derived_from": "governed_coverage_receipts",
             })
             present.add(dataset)
     watermarks.sort(key=lambda row: str(row["dataset"]))
@@ -550,7 +550,7 @@ def _watermarks_for(
     return watermarks
 
 
-def publish_ready_snapshot(
+def _publish_ready_snapshot(
     staging_db: str | Path,
     snapshot_dir: str | Path,
     *,
@@ -559,7 +559,33 @@ def publish_ready_snapshot(
     _ready_manifest_builder: (
         Callable[[Mapping[str, Any]], Mapping[str, Any]] | None
     ) = None,
-    _fixture_policy: bool = False,
+    _ready_attestation_builder: Callable[[ReadySnapshot], Path | None] | None = None,
+) -> ReadySnapshot:
+    """Production-only profile/plan-bound snapshot publication boundary."""
+    return _publish_ready_snapshot_impl(
+        staging_db,
+        snapshot_dir,
+        required_datasets=required_datasets,
+        _profile_coverage_evidence=_profile_coverage_evidence,
+        _ready_manifest_builder=_ready_manifest_builder,
+        _ready_attestation_builder=_ready_attestation_builder,
+        publication_gate=evaluate_ready_publication,
+        fixture_compatibility=False,
+    )
+
+
+def _publish_ready_snapshot_impl(
+    staging_db: str | Path,
+    snapshot_dir: str | Path,
+    *,
+    required_datasets: Iterable[str],
+    _profile_coverage_evidence: Mapping[str, Any] | None = None,
+    _ready_manifest_builder: (
+        Callable[[Mapping[str, Any]], Mapping[str, Any]] | None
+    ) = None,
+    _ready_attestation_builder: Callable[[ReadySnapshot], Path | None] | None = None,
+    publication_gate: Callable[..., tuple[Any, ...]],
+    fixture_compatibility: bool,
 ) -> ReadySnapshot:
     """Gate a staging DB and atomically publish a read-only snapshot.
 
@@ -567,10 +593,6 @@ def publish_ready_snapshot(
     a closed ReadyManifest builder. Both must be present together.
     """
     staging_path = Path(staging_db).resolve()
-    if _fixture_policy and not os.environ.get("PYTEST_CURRENT_TEST"):
-        raise SnapshotRejected(
-            "fixture READY policy is test-only and unavailable in production"
-        )
     if not staging_path.is_file():
         raise FileNotFoundError(f"staging database does not exist: {staging_path}")
     required = tuple(sorted(set(str(item) for item in required_datasets)))
@@ -586,6 +608,22 @@ def publish_ready_snapshot(
     if profile_bound != (_profile_coverage_evidence is not None):
         raise SnapshotRejected(
             "profile coverage evidence and ReadyManifest builder must be supplied together"
+        )
+    if _ready_attestation_builder is not None and not profile_bound:
+        raise SnapshotRejected(
+            "READY attestation builder requires a profile-bound ReadyManifest"
+        )
+    if not profile_bound and not fixture_compatibility:
+        raise SnapshotRejected(
+            "production READY requires a profile/plan-bound ReadyManifest publisher"
+        )
+    if (
+        profile_bound
+        and not fixture_compatibility
+        and _ready_attestation_builder is None
+    ):
+        raise SnapshotRejected(
+            "production READY requires an atomic signed readiness attestation"
         )
     if not profile_bound and (
         not governed <= required_set or not required_set <= set(policies)
@@ -604,9 +642,18 @@ def publish_ready_snapshot(
     build_id = "build-" + uuid4().hex
     created_at = datetime.now(timezone.utc).isoformat()
     contract = f"jquants-premium-core/v{DATASET_CONTRACT_VERSION}"
-    coverage_policy_version = COVERAGE_POLICY_VERSION
+    governed_required = [
+        dataset_id
+        for dataset_id in required
+        if policies[dataset_id].governance_tier == "governed"
+    ]
+    coverage_policy = coverage_policy_set_binding(governed_required)
+    coverage_policy_version = str(coverage_policy["policy_version"])
+    coverage_policy_digest = str(coverage_policy["policy_digest"])
     quality_policy_version = QUALITY_POLICY_VERSION
     published_ready: ReadySnapshot | None = None
+    recoverable_artifact_path: Path | None = None
+    readiness_sidecar_path: Path | None = None
     try:
         _persist_building_publication(
             conn,
@@ -631,12 +678,11 @@ def publish_ready_snapshot(
                 run_id, run_detail, validations, coverage_rows,
                 quality_summary, quality_failures, raw_manifests,
                 coverage_proof, ready_evidence,
-            ) = evaluate_ready_publication(
+            ) = publication_gate(
                 conn,
                 staging_path,
                 build_id=build_id,
                 required=required,
-                _fixture_policy=_fixture_policy,
             )
             watermarks = _watermarks_for(conn, required, coverage_rows)
             if READY_MANIFEST_SCHEMA.get("$id") != "ready-manifest/v1":
@@ -704,6 +750,7 @@ def publish_ready_snapshot(
             },
             "change_seq": change_seq,
             "coverage_policy_version": coverage_policy_version,
+            "coverage_policy_digest": coverage_policy_digest,
             "quality_policy_version": quality_policy_version,
             "required_datasets": list(required),
             "dataset_watermarks": watermarks,
@@ -720,7 +767,7 @@ def publish_ready_snapshot(
                 }
                 for row in coverage_rows
             ],
-            "coverage_v2_proof": coverage_proof,
+            "coverage_proof": coverage_proof,
             "quality": {
                 "status": "PASS",
                 "summary": quality_summary,
@@ -802,6 +849,7 @@ def publish_ready_snapshot(
                 embedded.close()
             os.chmod(temp_db, 0o444)
             if artifact_path.exists():
+                recoverable_artifact_path = artifact_path
                 existing = describe_snapshot(destination, snapshot_id)
                 temp_db.unlink(missing_ok=True)
                 ready = existing
@@ -811,24 +859,12 @@ def publish_ready_snapshot(
                 committed_at = existing.committed_at
             else:
                 os.replace(temp_db, artifact_path)
+                recoverable_artifact_path = artifact_path
                 _atomic_json(manifest_path, manifest, mode=0o444)
                 ready = ReadySnapshot(
                     snapshot_id, artifact_path, manifest_path, manifest
                 )
             published_ready = ready
-            try:
-                _atomic_json(
-                    destination / "latest-ready.json",
-                    {
-                        "format": "research-snapshot-pointer/v1",
-                        "snapshot_id": snapshot_id,
-                        "manifest": manifest_path.name,
-                        "committed_at": committed_at,
-                    },
-                    mode=0o644,
-                )
-            except OSError:
-                pass
         except Exception:
             temp_db.unlink(missing_ok=True)
             raise
@@ -852,15 +888,52 @@ def publish_ready_snapshot(
             (snapshot_id,),
         )
         conn.commit()
+
+        # Signing is deliberately after the authoritative source transaction:
+        # a failed READY commit must never leave a usable signed capability.
+        # If pointer finalization later fails, the returned sidecar path is
+        # removed by the rejection handler below before control escapes.
+        if _ready_attestation_builder is not None:
+            readiness_sidecar_path = _ready_attestation_builder(ready)
+        _atomic_json(
+            destination / "latest-ready.json",
+            {
+                "format": "research-snapshot-pointer/v1",
+                "snapshot_id": snapshot_id,
+                "manifest": manifest_path.name,
+                "committed_at": committed_at,
+            },
+            mode=0o644,
+        )
         return ready
     except Exception as exc:
-        if published_ready is not None:
-            return published_ready
+        original_exc = exc
+        if readiness_sidecar_path is not None:
+            try:
+                readiness_sidecar_path.unlink(missing_ok=True)
+            except OSError:
+                # A retained signed capability would be unsafe even though the
+                # source publication is rejected. Surface that cleanup failure
+                # rather than reporting the original finalization error alone.
+                exc = SnapshotRejected(
+                    "READY publication rejected but readiness sidecar cleanup "
+                    f"failed: {readiness_sidecar_path}"
+                )
+        retained_path = (
+            published_ready.db_path
+            if published_ready is not None
+            else recoverable_artifact_path
+        )
+        if retained_path is not None and retained_path.is_file():
+            exc = SnapshotRejected(
+                "READY publication finalization failed; recoverable immutable "
+                f"artifact retained at {retained_path}: {exc}"
+            )
         try:
             conn.rollback()
             conn.execute(
                 "UPDATE snapshot_publications SET state='REJECTED', "
-                "rejection_reason=? WHERE build_id=? AND state!='READY'",
+                "rejection_reason=? WHERE build_id=?",
                 (str(exc)[:4000], build_id),
             )
             conn.execute(
@@ -872,6 +945,8 @@ def publish_ready_snapshot(
             conn.commit()
         except sqlite3.Error:
             conn.rollback()
+        if exc is not original_exc:
+            raise exc from original_exc
         raise
     finally:
         conn.close()
@@ -907,7 +982,7 @@ def _manifest_snapshot_state(
         expected_id = _research_manifest_id(manifest)
         if manifest.get("manifest_digest") != _research_manifest_digest(manifest):
             raise RuntimeError("latest local snapshot full-manifest checksum mismatch")
-        _verify_coverage_v2_manifest(conn, manifest)
+        _verify_coverage_manifest(conn, manifest)
     else:
         expected_id = _canonical_digest(manifest)
     if expected_id != row["snapshot_id"]:
@@ -990,5 +1065,4 @@ __all__ = [
     "latest_ready_snapshot",
     "list_ready_snapshots",
     "open_ready_snapshot",
-    "publish_ready_snapshot",
 ]

@@ -8,7 +8,6 @@ import json
 import sqlite3
 
 import pytest
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pit
 import paper_runtime.snapshot as snapshot_module
 import research.research_data_profile as profile_module
@@ -21,23 +20,21 @@ from paper_runtime import (
     latest_ready_snapshot,
     list_ready_snapshots,
     open_ready_snapshot,
-    publish_ready_snapshot,
 )
-from research.readiness import ReadinessAttestationPublisher, ResearchReadinessService
-from research.ready_manifest import (
-    publish_profile_bound_ready_snapshot,
-    ready_manifest_from_snapshot_document,
-)
+from paper_runtime.snapshot import _publish_ready_snapshot
 from research.research_data_profile import load_core_profile, official_mode
 from selection.budget_ledger import MassResearchDisabledError
 from storage.coverage_ledger import (
-    EXPECTED_EMPTY_WITH_EVIDENCE,
     plan_required_segments,
     record_collection_receipt,
     record_required_segments,
     refresh_coverage_ledger,
 )
 from storage.sqlite_store import SqliteStore
+from tests.ready_snapshot_test_support import (
+    publish_core_profile_ready_fixture,
+    publish_ready_snapshot_fixture,
+)
 
 
 def _jquants_coverage_contracts():
@@ -161,12 +158,14 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
             for dataset in required
         ],
     )
-    from ingestion.runtime_authority import reconcile_collection_evidence
-    from storage.trusted_receipt import SignedReceiptAuthority
+    from tests.receipt_test_support import (
+        _SignedReceiptAuthority,
+        _reconcile_collection_evidence,
+    )
     from tests import test_phase61_coverage_v2 as phase61
 
     assert phase61._SIGNED_KEY is not None  # noqa: SLF001
-    authority = SignedReceiptAuthority(signing_key=phase61._SIGNED_KEY)  # noqa: SLF001
+    authority = _SignedReceiptAuthority(signing_key=phase61._SIGNED_KEY)  # noqa: SLF001
     for policy in policies:
         # Tip snapshots stay PARTIAL on empty receipts; event-zero COMPLETE
         # is only for genuine event_driven historical windows.
@@ -175,9 +174,10 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
             or "snapshot" in (policy.coverage_mode or "")
             or "snapshot" in (policy.history_mode or "")
         )
-        observed = 0 if (
-            policy.expected_frequency == "event_driven" and not tip_snapshot
-        ) else 1
+        # Production v4 forbids caller-declared empty SUCCESS.  These fixtures
+        # exercise READY publication, so every synthetic test segment carries
+        # one positive observation instead of inventing an empty COMPLETE.
+        observed = 1
         # JQ-only (see _jquants_coverage_contracts). index_text omitted:
         # OTC would be empty required set, never invented weekend COMPLETE.
         planned = tuple(
@@ -186,25 +186,19 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
             else replace(segment, expected_items=observed)
             for segment in plan_required_segments(policy, today)
         )
-        record_required_segments(conn, planned)
+        record_required_segments(
+            conn, planned, policy_version=policy.policy_version
+        )
         for segment in planned:
-            raw_records = [] if observed == 0 else [{"ok": True}]
+            raw_records = [{"ok": True}]
             raw = json.dumps({"data": raw_records}).encode("utf-8")
-            expected_empty_evidence = (
-                {EXPECTED_EMPTY_WITH_EVIDENCE: True}
-                if observed == 0
-                else None
-            )
-            evidence = reconcile_collection_evidence(
+            evidence = _reconcile_collection_evidence(
                 required=segment,
                 run_id=run_id,
                 raw_pages=(raw,),
                 raw_records=raw_records,
                 structured_records=raw_records,
-                pagination_exhausted=True,
-                discovery_exhausted=True,
                 checked_at=today + "T16:00:00Z",
-                extra_evidence=expected_empty_evidence,
             )
             receipt = authority.issue(evidence)
             record_collection_receipt(conn, receipt)
@@ -270,7 +264,7 @@ def test_ready_source_run_stays_jquants_and_jsda_watermark_comes_from_receipts(
         "dataset": "jsda_tokyo_repo_rates",
         "last_event_date": "2025-04-02",
         "last_ingested_at": "2026-08-11T00:00:00Z",
-        "derived_from": "coverage_v2_receipts",
+        "derived_from": "governed_coverage_receipts",
     }
     store.close()
 
@@ -332,7 +326,7 @@ def test_publish_gate_rejects_partial_coverage_and_exposes_no_ready(tmp_path):
 
     snapshots = tmp_path / "snapshots"
     with pytest.raises(SnapshotRejected):
-        publish_ready_snapshot(path, snapshots, required_datasets=(dataset,))
+        _publish_ready_snapshot(path, snapshots, required_datasets=(dataset,))
     with pytest.raises(FileNotFoundError, match="no READY"):
         latest_ready_snapshot(snapshots)
 
@@ -360,8 +354,8 @@ def test_ready_rejects_missing_middle_segment_and_writes_no_artifact(
     conn.close()
 
     snapshot_dir = tmp_path / "snapshots"
-    with pytest.raises(SnapshotRejected, match="coverage not COMPLETE|Coverage V2"):
-        publish_ready_snapshot(
+    with pytest.raises(SnapshotRejected, match="coverage not COMPLETE|Coverage"):
+        publish_ready_snapshot_fixture(
             path, snapshot_dir, required_datasets=required
         )
 
@@ -388,17 +382,18 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(
     required = _seed_publishable_db(path)
     snapshot_dir = tmp_path / "snapshots"
 
-    ready = publish_ready_snapshot(
-        path, snapshot_dir, required_datasets=required, _fixture_policy=True
+    ready = publish_ready_snapshot_fixture(
+        path, snapshot_dir, required_datasets=required
     )
     assert ready.snapshot_id == ready.manifest["snapshot_id"]
     assert ready.manifest["state"] == "READY"
     assert ready.manifest["quality"]["status"] == "PASS"
     assert {row["status"] for row in ready.manifest["coverage"]} == {"COMPLETE"}
-    proof = ready.manifest["coverage_v2_proof"]
-    assert proof["format"] == "coverage-v2-proof/v1"
+    proof = ready.manifest["coverage_proof"]
+    assert proof["format"] == "coverage-proof/v1"
     assert proof["status"] == "COMPLETE"
-    assert proof["policy_version"] == "collection-coverage/v2"
+    assert proof["policy_version"]
+    assert proof["policy_digest"].startswith("sha256:")
     assert proof["dataset_count"] == len(required)
     assert proof["segment_count"] == proof["receipt_count"] > len(required)
     assert proof["proof_digest"].startswith("sha256:")
@@ -433,11 +428,56 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(
         with pytest.raises(sqlite3.OperationalError, match="readonly"):
             conn.execute("DELETE FROM jquants_records")
 
-    repeated = publish_ready_snapshot(
-        path, snapshot_dir, required_datasets=required, _fixture_policy=True
+    repeated = publish_ready_snapshot_fixture(
+        path, snapshot_dir, required_datasets=required
     )
     assert repeated.snapshot_id == ready.snapshot_id
     assert len(list_ready_snapshots(snapshot_dir)) == 1
+
+
+def test_pointer_finalization_failure_is_reported_and_retains_recoverable_artifact(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
+    )
+    path = tmp_path / "finalization.sqlite"
+    required = _seed_publishable_db(path)
+    snapshot_dir = tmp_path / "snapshots"
+    write_json = snapshot_module._atomic_json
+
+    def fail_latest_pointer(target, payload, *, mode):
+        if target.name == "latest-ready.json":
+            raise OSError("simulated pointer write failure")
+        return write_json(target, payload, mode=mode)
+
+    monkeypatch.setattr(snapshot_module, "_atomic_json", fail_latest_pointer)
+    with pytest.raises(
+        SnapshotRejected,
+        match="finalization failed; recoverable immutable artifact retained",
+    ):
+        publish_ready_snapshot_fixture(
+            path,
+            snapshot_dir,
+            required_datasets=required,
+        )
+
+    assert list(snapshot_dir.glob("sha256_*.sqlite"))
+    assert list(snapshot_dir.glob("sha256_*.manifest.json"))
+    assert not (snapshot_dir / "latest-ready.json").exists()
+    conn = sqlite3.connect(path)
+    state, reason = conn.execute(
+        "SELECT state,rejection_reason FROM snapshot_publications "
+        "ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    assert state == "REJECTED"
+    assert "recoverable immutable artifact retained" in reason
+    policy = conn.execute(
+        "SELECT snapshot_ready,publication_state,active_snapshot_id "
+        "FROM local_snapshot_policy WHERE singleton=1"
+    ).fetchone()
+    assert policy == (0, "REJECTED", None)
+    conn.close()
 
 
 def _offline_current_profile_evidence() -> dict[str, dict[str, object]]:
@@ -469,17 +509,16 @@ def test_profile_bound_publisher_fails_closed_on_stale_profile_evidence(
         MassResearchDisabledError,
         match="incomplete, stale, unpinned, or not V3",
     ):
-        publish_profile_bound_ready_snapshot(
+        publish_core_profile_ready_fixture(
             path,
             snapshot_dir,
             profile_id=profile.profile_id,
             evidence_by_dataset=evidence,
-            _fixture_policy=True,
         )
     assert not list(snapshot_dir.glob("sha256_*"))
 
 
-def test_profile_bound_publisher_to_verified_readiness_offline_fixture(
+def test_legacy_core_fixture_cannot_mint_verified_readiness(
     tmp_path, monkeypatch
 ):
     """Exercise the real closed path with explicit offline V3 capability fixtures."""
@@ -508,30 +547,10 @@ def test_profile_bound_publisher_to_verified_readiness_offline_fixture(
     conn.close()
     snapshot_dir = tmp_path / "snapshots"
 
-    ready = publish_profile_bound_ready_snapshot(
-        path,
-        snapshot_dir,
-        profile_id=profile.profile_id,
-        evidence_by_dataset=_offline_current_profile_evidence(),
-        _fixture_policy=True,
-    )
-    nested = ready.manifest["ready_manifest"]
-    assert nested["profile_id"] == profile.profile_id
-    assert nested["profile_version"] == profile.profile_version
-    assert nested["profile_digest"] == profile.profile_digest
-    assert set(nested["dataset_ids"]) == set(profile.required_datasets)
-    assert nested["published_at"] == ready.manifest["committed_at"]
-
-    publisher = ReadinessAttestationPublisher(
-        key_id="profile-publisher-offline",
-        private_key=Ed25519PrivateKey.generate(),
-    )
-    readiness = publisher.mint_mass(
-        ready_manifest_from_snapshot_document(ready.manifest),
-        db_path=ready.db_path,
-    )
-    assert readiness.profile_digest == profile.profile_digest
-    assert set(readiness.dataset_ids) == set(profile.required_datasets)
-    assert ResearchReadinessService(
-        verifier=publisher.public_registry()
-    ).verify(readiness, expected_snapshot_id=ready.snapshot_id) is readiness
+    with pytest.raises(SnapshotRejected, match="every governed dataset"):
+        publish_core_profile_ready_fixture(
+            path,
+            snapshot_dir,
+            profile_id=profile.profile_id,
+            evidence_by_dataset=_offline_current_profile_evidence(),
+        )

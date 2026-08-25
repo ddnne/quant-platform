@@ -14,7 +14,6 @@ import tempfile
 import pytest
 
 from data_contracts import coverage_contract_for, all_coverage_contracts
-from storage.coverage_ledger import POLICY_VERSION
 from paper_runtime.coherence import check_ready_coherence, CoherenceGateResult
 from storage import (
     CollectionReceipt,
@@ -112,7 +111,11 @@ def fixture_db_with_coverage_without_receipts(fixture_db_with_schema):
 
     required_segments = _plan_jq_required("fins_summary", "2025-03-31")
 
-    record_required_segments(conn, required_segments)
+    record_required_segments(
+        conn,
+        required_segments,
+        policy_version=coverage_contract_for("fins_summary").policy_version,
+    )
     conn.commit()
     store.close()
 
@@ -127,7 +130,11 @@ def fixture_db_with_complete_coverage_and_receipts(fixture_db_with_schema):
 
     required_segments = _plan_jq_required("fins_summary", "2025-03-31")
 
-    record_required_segments(conn, required_segments)
+    record_required_segments(
+        conn,
+        required_segments,
+        policy_version=coverage_contract_for("fins_summary").policy_version,
+    )
 
     # Create synthetic COMPLETE receipts for each segment
     checked_at = datetime.now(timezone.utc).isoformat()
@@ -177,7 +184,7 @@ def fixture_db_with_complete_coverage_and_receipts(fixture_db_with_schema):
     """, (
         "COMPLETE", 1, datetime.now(timezone.utc).isoformat(),
         '{"reason": "synthetic COMPLETE receipts for test"}',
-        "fins_summary", POLICY_VERSION
+        "fins_summary", coverage_contract_for("fins_summary").policy_version
     ))
 
     # Add validation pass
@@ -249,13 +256,15 @@ def test_coherence_fails_without_receipts(fixture_db_with_coverage_without_recei
     # The coverage gate should FAIL because segments without receipts aren't COMPLETE
     assert coverage_gate.passed is False, "Coverage gate should fail without COMPLETE segments"
 
-    # The receipts gate should PASS because there are no COMPLETE segments to check
+    # Missing current-policy COMPLETE segments cannot vacuously PASS receipt
+    # authority in production.
     receipts_gate = next(
         (r for r in results if r.gate_name == "receipts_with_raw_retention"),
         None
     )
     assert receipts_gate is not None, "Should have receipts_with_raw_retention gate"
-    assert receipts_gate.passed is True, "Receipts gate should pass when no COMPLETE segments exist"
+    assert receipts_gate.passed is False
+    assert "no COMPLETE segments for governed policy" in receipts_gate.reason
 
 
 def test_coherence_passes_with_synthetic_complete_receipts(fixture_db_with_complete_coverage_and_receipts):
@@ -297,14 +306,8 @@ def test_coverage_completeness_gate_requires_segments(fixture_db_with_schema):
     conn = store._conn
 
     # No segments recorded
-    governed_datasets = tuple(
-        c.dataset_id
-        for c in all_coverage_contracts()
-        if c.governance_tier == "governed"
-    )
-
     results = check_ready_coherence(
-        conn, fixture_db_with_schema, governed_datasets
+        conn, fixture_db_with_schema, ("fins_summary",)
     )
 
     store.close()
@@ -334,7 +337,8 @@ def test_receipts_gate_checks_all_requirements(fixture_db_with_schema):
          expected_scope, expected_items, status, receipt_run_id, evaluated_at, detail_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        segment.source, segment.dataset, segment.segment_id, POLICY_VERSION,
+        segment.source, segment.dataset, segment.segment_id,
+        coverage_contract_for(segment.dataset).policy_version,
         segment.segment_start, segment.segment_end,
         '{"coverage_mode": "full", "expected_frequency": "event_driven"}',
         segment.expected_items, "COMPLETE", 1,
@@ -396,7 +400,11 @@ def test_synthetic_receipts_must_match_required_scope(fixture_db_with_schema):
     required_segments = _plan_jq_required("fins_summary", "2025-01-31")
     segment = required_segments[0]
 
-    record_required_segments(conn, [segment])
+    record_required_segments(
+        conn,
+        [segment],
+        policy_version=coverage_contract_for(segment.dataset).policy_version,
+    )
 
     # Create a receipt with mismatched scope
     mismatched_receipt = CollectionReceipt(
@@ -422,8 +430,16 @@ def test_synthetic_receipts_must_match_required_scope(fixture_db_with_schema):
     conn.commit()
 
     # Read segments - the segment should not be COMPLETE
-    from storage.coverage_ledger import read_coverage_segments
-    segments = read_coverage_segments(fixture_db_with_schema, dataset="fins_summary")
+    segments = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT * FROM coverage_segments WHERE dataset=? AND policy_version=?",
+            (
+                "fins_summary",
+                coverage_contract_for("fins_summary").policy_version,
+            ),
+        )
+    ]
 
     store.close()
 

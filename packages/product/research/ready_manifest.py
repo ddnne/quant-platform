@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,7 @@ PROOF_DIGEST_FIELDS: tuple[str, ...] = (
     "plan_set_digest",
     "dependency_closure_digest",
     "dataset_membership_digest",
+    "coverage_policy_digest",
     "coverage_proof_digest",
     "raw_proof_digest",
     "receipt_proof_digest",
@@ -151,6 +153,8 @@ class ReadyManifest:
     dependency_closure_digest: str
     dataset_ids: tuple[str, ...]
     dataset_membership_digest: str
+    coverage_policy_version: str
+    coverage_policy_digest: str
     coverage_proof_digest: str
     raw_proof_digest: str
     receipt_proof_digest: str
@@ -182,6 +186,8 @@ class ReadyManifest:
             "dependency_closure_digest": self.dependency_closure_digest,
             "dataset_ids": list(self.dataset_ids),
             "dataset_membership_digest": self.dataset_membership_digest,
+            "coverage_policy_version": self.coverage_policy_version,
+            "coverage_policy_digest": self.coverage_policy_digest,
             "coverage_proof_digest": self.coverage_proof_digest,
             "raw_proof_digest": self.raw_proof_digest,
             "receipt_proof_digest": self.receipt_proof_digest,
@@ -246,6 +252,12 @@ class ReadyManifest:
             "dataset_ids": dataset_ids,
             "dataset_membership_digest": proof_or_missing(
                 document.get("dataset_membership_digest")
+            ),
+            "coverage_policy_version": pin_or_missing(
+                document.get("coverage_policy_version")
+            ),
+            "coverage_policy_digest": proof_or_missing(
+                document.get("coverage_policy_digest")
             ),
             "coverage_proof_digest": proof_or_missing(
                 document.get("coverage_proof_digest")
@@ -322,6 +334,15 @@ def build_ready_manifest(
         if dataset_membership_digest is not None
         else compute_dataset_membership_digest(dataset_ids)
     )
+    from data_contracts.coverage import coverage_policy_set_binding
+
+    try:
+        policy_set = coverage_policy_set_binding(list(dataset_ids or ()))
+        coverage_policy_version = str(policy_set["policy_version"])
+        coverage_policy_digest = str(policy_set["policy_digest"])
+    except (KeyError, ValueError):
+        coverage_policy_version = MISSING
+        coverage_policy_digest = MISSING
     return ReadyManifest.from_dict(
         {
             "format": READY_MANIFEST_FORMAT,
@@ -337,6 +358,8 @@ def build_ready_manifest(
             ),
             "dataset_ids": list(dataset_ids or ()),
             "dataset_membership_digest": proof_or_missing(membership),
+            "coverage_policy_version": coverage_policy_version,
+            "coverage_policy_digest": proof_or_missing(coverage_policy_digest),
             "coverage_proof_digest": proof_or_missing(coverage_proof_digest),
             "raw_proof_digest": proof_or_missing(raw_proof_digest),
             "receipt_proof_digest": proof_or_missing(receipt_proof_digest),
@@ -371,7 +394,22 @@ class ExactFourPilotReadyBinding:
 
     def __post_init__(self) -> None:
         from research.dependency_closure import verify_plan_dependency_closure
-        from research.experiment_plans import PILOT_PLAN_COUNT
+        from research.experiment_plans import (
+            PILOT_EXPERIMENT_PLAN_IDS,
+            PILOT_PLAN_COUNT,
+            load_experiment_plan_closures,
+            load_experiment_plan_profiles,
+            load_experiment_plans,
+        )
+
+        if (
+            self.publication_scope != "PILOT"
+            or self.profile_id != "controlled-pilot/exact-four"
+            or self.profile_version != "research-data-profile-set/v1"
+        ):
+            raise MassResearchDisabledError(
+                "controlled pilot READY identity is not canonical"
+            )
 
         if (
             len(self.plans) != PILOT_PLAN_COUNT
@@ -382,6 +420,10 @@ class ExactFourPilotReadyBinding:
                 f"controlled pilot READY requires exactly {PILOT_PLAN_COUNT} plans"
             )
         plan_ids = tuple(plan.plan_id for plan in self.plans)
+        if plan_ids != PILOT_EXPERIMENT_PLAN_IDS:
+            raise MassResearchDisabledError(
+                "controlled pilot READY plan ids/order are not canonical exact-four"
+            )
         if len(plan_ids) != len(set(plan_ids)):
             raise MassResearchDisabledError("controlled pilot plan ids are not unique")
         if tuple(closure.plan_id for closure in self.closures) != plan_ids:
@@ -400,10 +442,41 @@ class ExactFourPilotReadyBinding:
                 profile.plan_digest != closure.plan_digest
                 or profile.dependency_closure_digest != closure.closure_digest
                 or tuple(profile.required_datasets) != tuple(closure.required_datasets)
+                or profile.period_start != closure.period_start
+                or profile.period_end != closure.period_end
+                or profile.required_lookback_trading_days
+                != closure.required_lookback_trading_days
+                or tuple(dict(item) for item in profile.dataset_scopes)
+                != tuple(scope.to_dict() for scope in closure.dataset_scopes)
             ):
                 raise MassResearchDisabledError(
                     f"controlled pilot profile binding mismatch for {plan.plan_id}"
                 )
+
+        # Public construction cannot turn a self-consistent alternate set into
+        # the governed pilot. Compare every canonical artifact and digest with
+        # the checked-in exact-four compiler output.
+        canonical_plans = load_experiment_plans()
+        canonical_closures = load_experiment_plan_closures()
+        canonical_profiles = load_experiment_plan_profiles()
+        if tuple(plan.to_dict() for plan in self.plans) != tuple(
+            plan.to_dict() for plan in canonical_plans
+        ):
+            raise MassResearchDisabledError(
+                "controlled pilot ExperimentPlan digest chain is noncanonical"
+            )
+        if tuple(closure.to_dict() for closure in self.closures) != tuple(
+            closure.to_dict() for closure in canonical_closures
+        ):
+            raise MassResearchDisabledError(
+                "controlled pilot dependency closure digest chain is noncanonical"
+            )
+        if tuple(profile.to_dict() for profile in self.profiles) != tuple(
+            profile.to_dict() for profile in canonical_profiles
+        ):
+            raise MassResearchDisabledError(
+                "controlled pilot profile digest chain is noncanonical"
+            )
 
     @property
     def plan_ids(self) -> tuple[str, ...]:
@@ -457,15 +530,22 @@ class ExactFourPilotReadyBinding:
 
     @property
     def contract_versions(self) -> Mapping[str, str]:
+        from data_contracts.coverage import coverage_policy_set_binding
+
         versions: dict[str, str] = {}
         for profile in self.profiles:
             for key, value in profile.contract_versions.items():
+                if key in {"coverage_policy", "coverage_policy_digest"}:
+                    continue
                 previous = versions.get(str(key))
                 if previous is not None and previous != str(value):
                     raise MassResearchDisabledError(
                         f"controlled pilot contract version conflict: {key}"
                     )
                 versions[str(key)] = str(value)
+        policy_set = coverage_policy_set_binding(list(self.required_datasets))
+        versions["coverage_policy"] = str(policy_set["policy_version"])
+        versions["coverage_policy_digest"] = str(policy_set["policy_digest"])
         return versions
 
     def to_dict(self) -> dict[str, Any]:
@@ -480,6 +560,54 @@ class ExactFourPilotReadyBinding:
             "required_datasets": list(self.required_datasets),
             "profiles": [profile.to_dict() for profile in self.profiles],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedPilotReadyPublication:
+    """Atomic exact-four publication result with its signed pilot capability."""
+
+    snapshot: Any
+    readiness: Any
+    readiness_path: Path
+
+    def __post_init__(self) -> None:
+        from paper_runtime.snapshot import ReadySnapshot
+        from research.readiness import VerifiedPilotReadiness
+
+        if not isinstance(self.snapshot, ReadySnapshot):
+            raise MassResearchDisabledError("ReadySnapshot publication required")
+        if not isinstance(self.readiness, VerifiedPilotReadiness):
+            raise MassResearchDisabledError(
+                "VerifiedPilotReadiness publication required"
+            )
+        if self.readiness.snapshot_id != self.snapshot.snapshot_id:
+            raise MassResearchDisabledError(
+                "published snapshot/readiness identity mismatch"
+            )
+        if not Path(self.readiness_path).is_file():
+            raise MassResearchDisabledError(
+                "immutable readiness attestation sidecar is missing"
+            )
+
+    @property
+    def snapshot_id(self) -> str:
+        return str(self.snapshot.snapshot_id)
+
+    @property
+    def db_path(self) -> Path:
+        return Path(self.snapshot.db_path)
+
+    @property
+    def manifest_path(self) -> Path:
+        return Path(self.snapshot.manifest_path)
+
+    @property
+    def manifest(self) -> Mapping[str, Any]:
+        return self.snapshot.manifest
+
+    @property
+    def committed_at(self) -> str:
+        return str(self.snapshot.committed_at)
 
 
 def load_exact_four_pilot_ready_binding(
@@ -523,6 +651,10 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
     profile: Any,
 ) -> ReadyManifest:
     """Build the closed manifest from the publisher's retained evidence."""
+    from data_contracts.coverage import (
+        coverage_policy_binding,
+        coverage_policy_set_binding,
+    )
     from pit.models import PIT_API_VERSION
     from research.research_data_profile import official_mode
 
@@ -538,11 +670,25 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
         raise MassResearchDisabledError(
             "profile-bound snapshot does not exactly match the research profile"
         )
-    coverage_proof = document.get("coverage_v2_proof")
+    coverage_proof = document.get("coverage_proof")
     if not isinstance(coverage_proof, Mapping) or not is_sha256_digest(
         coverage_proof.get("proof_digest")
     ):
         raise MassResearchDisabledError("snapshot coverage proof missing")
+    expected_policy_set = coverage_policy_set_binding(list(profile.required_datasets))
+    if (
+        coverage_proof.get("policy_version")
+        != expected_policy_set["policy_version"]
+        or coverage_proof.get("policy_digest")
+        != expected_policy_set["policy_digest"]
+        or document.get("coverage_policy_version")
+        != expected_policy_set["policy_version"]
+        or document.get("coverage_policy_digest")
+        != expected_policy_set["policy_digest"]
+    ):
+        raise MassResearchDisabledError(
+            "snapshot governed Coverage policy-set binding mismatch"
+        )
     profile_evidence = document.get("profile_coverage_evidence")
     if not isinstance(profile_evidence, Mapping) or set(profile_evidence) != set(
         profile.required_datasets
@@ -566,10 +712,15 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
         applied_value = str(
             row.get("applied_sync_generation") or row.get("applied_cursor") or ""
         ).strip()
+        expected_policy = coverage_policy_binding(dataset_id)
         if (
             row.get("status") != "COMPLETE"
             or row.get("projection_status") == "STALE"
             or row.get("coverage_mode") != official_mode(dataset_id)
+            or any(
+                row.get(field) != expected_policy[field]
+                for field in ("policy_id", "policy_version", "policy_digest")
+            )
             or not source_value
             or not export_value
             or source_value != export_value
@@ -595,6 +746,30 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
                 "signed Ops Projection applied cursor does not match the "
                 "local snapshot generation"
             )
+
+    dependency_scope = document.get("dependency_scope_evidence")
+    if (
+        not isinstance(dependency_scope, Mapping)
+        or dependency_scope.get("format") != "pit-dependency-scope-proof/v1"
+        or dependency_scope.get("status") != "PASS"
+        or dependency_scope.get("profile_digest") != profile.profile_digest
+        or dependency_scope.get("plan_set_digest") != profile.plan_set_digest
+        or dependency_scope.get("dependency_closure_digest")
+        != profile.closure_set_digest
+        or not is_sha256_digest(dependency_scope.get("proof_digest"))
+    ):
+        raise MassResearchDisabledError(
+            "snapshot PIT dependency-period availability proof is missing or invalid"
+        )
+    scope_body = {
+        key: value
+        for key, value in dependency_scope.items()
+        if key != "proof_digest"
+    }
+    if canonical_digest(scope_body) != dependency_scope.get("proof_digest"):
+        raise MassResearchDisabledError(
+            "snapshot PIT dependency-period availability proof digest mismatch"
+        )
 
     raw_manifests = document.get("raw_manifests")
     validations = document.get("validations")
@@ -682,33 +857,30 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
     plan_ids = tuple(
         str(item) for item in getattr(profile, "plan_ids", ()) if str(item)
     )
-    if not plan_ids:
-        plan_ids = (
-            str(
-                getattr(profile, "plan_id", "")
-                or f"mass-profile:{profile.profile_id}"
-            ),
-        )
+    if not plan_ids and str(getattr(profile, "plan_id", "") or ""):
+        plan_ids = (str(profile.plan_id),)
     plan_digest = str(
         getattr(profile, "plan_set_digest", "")
         or getattr(profile, "plan_digest", "")
-        or canonical_digest({"mass_profile": profile.to_dict()})
     )
     closure_digest = str(
         getattr(profile, "closure_set_digest", "")
         or getattr(profile, "dependency_closure_digest", "")
-        or canonical_digest(
-            {
-                "mass_profile_digest": profile.profile_digest,
-                "required_datasets": list(profile.required_datasets),
-                "contract_versions": dict(profile.contract_versions),
-            }
-        )
     )
     publication_scope = str(
         getattr(profile, "publication_scope", "")
-        or ("PILOT" if getattr(profile, "plan_id", None) else "MASS")
+        or ("PILOT" if getattr(profile, "plan_id", None) else "")
     )
+    if (
+        not plan_ids
+        or not is_sha256_digest(plan_digest)
+        or not is_sha256_digest(closure_digest)
+        or publication_scope != "PILOT"
+    ):
+        raise MassResearchDisabledError(
+            "READY publication requires an explicit plan-bound PILOT profile; "
+            "generic/core Mass publication is disabled"
+        )
 
     return build_ready_manifest(
         snapshot_id=str(snapshot_id),
@@ -722,7 +894,9 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
         dataset_ids=profile.required_datasets,
         coverage_proof_digest=canonical_digest(
             {
-                "coverage_v2_proof_digest": coverage_proof["proof_digest"],
+                "coverage_proof_digest": coverage_proof["proof_digest"],
+                "coverage_policy_version": coverage_proof["policy_version"],
+                "coverage_policy_digest": coverage_proof["policy_digest"],
                 "profile_id": profile.profile_id,
                 "profile_version": profile.profile_version,
                 "profile_evidence_by_dataset": profile_evidence,
@@ -748,7 +922,8 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
         export_cursor=canonical_digest(exported),
         applied_cursor=canonical_digest(applied),
         pit_contract_digests={
-            "pit_api": canonical_digest({"pit_api_version": PIT_API_VERSION})
+            "pit_api": canonical_digest({"pit_api_version": PIT_API_VERSION}),
+            "dependency_scope": str(dependency_scope["proof_digest"]),
         },
         feature_generation=canonical_digest(
             {
@@ -768,11 +943,127 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
     )
 
 
+def _verify_exact_four_pit_dependency_scope(
+    db_path: str | Path,
+    binding: ExactFourPilotReadyBinding,
+) -> dict[str, Any]:
+    """Prove the immutable local DB has PIT-visible rows for every plan scope.
+
+    Dataset-level COMPLETE alone is insufficient: historical rows re-fetched
+    after a plan period are not visible to that historical ``as_of``.  This
+    proof checks the local row-level ``available_at`` wall, including every
+    derivable feature lookback, and is recomputed on the immutable artifact
+    before the readiness sidecar is signed.
+    """
+    source = Path(db_path)
+    if not source.is_file():
+        raise MassResearchDisabledError(
+            f"PIT dependency scope database is missing: {source}"
+        )
+    uri = "file:" + str(source.resolve()) + "?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+        conn.row_factory = sqlite3.Row
+    except sqlite3.Error as exc:
+        raise MassResearchDisabledError(
+            "cannot open PIT dependency scope database"
+        ) from exc
+    try:
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(jquants_records)")
+        }
+        required_columns = {"dataset", "event_time", "available_at"}
+        if not required_columns <= columns:
+            raise MassResearchDisabledError(
+                "PIT dependency scope requires jquants_records dataset/event_time/available_at"
+            )
+        entries: list[dict[str, Any]] = []
+        for profile in binding.profiles:
+            for raw_scope in profile.dataset_scopes:
+                scope = dict(raw_scope)
+                dataset_id = str(scope["dataset_id"])
+                period_start = str(scope["period_start"])
+                period_end = str(scope["period_end"])
+                lookback = int(scope["required_lookback_trading_days"])
+                start_as_of = f"{period_start}T23:59:59+09:00"
+                end_as_of = f"{period_end}T23:59:59+09:00"
+                row = conn.execute(
+                    """
+                    SELECT
+                      SUM(CASE WHEN substr(event_time, 1, 10) <= ?
+                                    AND julianday(available_at) <= julianday(?)
+                               THEN 1 ELSE 0 END) AS visible_at_start,
+                      SUM(CASE WHEN substr(event_time, 1, 10) BETWEEN ? AND ?
+                                    AND julianday(available_at) <= julianday(?)
+                               THEN 1 ELSE 0 END) AS visible_in_period,
+                      COUNT(DISTINCT CASE
+                        WHEN substr(event_time, 1, 10) < ?
+                         AND julianday(available_at) <= julianday(?)
+                        THEN substr(event_time, 1, 10) END
+                      ) AS visible_pre_period_dates
+                    FROM jquants_records
+                    WHERE dataset = ?
+                    """,
+                    (
+                        period_start,
+                        start_as_of,
+                        period_start,
+                        period_end,
+                        end_as_of,
+                        period_start,
+                        start_as_of,
+                        dataset_id,
+                    ),
+                ).fetchone()
+                visible_at_start = int(row[0] or 0) if row is not None else 0
+                visible_in_period = int(row[1] or 0) if row is not None else 0
+                visible_pre_dates = int(row[2] or 0) if row is not None else 0
+                if (
+                    visible_at_start <= 0
+                    or visible_in_period <= 0
+                    or visible_pre_dates < lookback
+                ):
+                    raise MassResearchDisabledError(
+                        "PIT dependency scope is not usable for "
+                        f"{profile.plan_id}/{dataset_id}: "
+                        f"visible_at_start={visible_at_start}, "
+                        f"visible_in_period={visible_in_period}, "
+                        f"visible_pre_period_dates={visible_pre_dates}, "
+                        f"required_lookback={lookback}"
+                    )
+                entries.append(
+                    {
+                        "plan_id": profile.plan_id,
+                        "dataset_id": dataset_id,
+                        "period_start": period_start,
+                        "period_end": period_end,
+                        "required_lookback_trading_days": lookback,
+                        "visible_at_start": visible_at_start,
+                        "visible_in_period": visible_in_period,
+                        "visible_pre_period_dates": visible_pre_dates,
+                    }
+                )
+    except sqlite3.Error as exc:
+        raise MassResearchDisabledError(
+            "PIT dependency scope query failed closed"
+        ) from exc
+    finally:
+        conn.close()
+    body = {
+        "format": "pit-dependency-scope-proof/v1",
+        "status": "PASS",
+        "profile_digest": binding.profile_digest,
+        "plan_set_digest": binding.plan_set_digest,
+        "dependency_closure_digest": binding.closure_set_digest,
+        "entries": entries,
+    }
+    return {**body, "proof_digest": canonical_digest(body)}
+
+
 def _verified_production_projection_evidence(
     signed_document: Mapping[str, Any] | None,
     required_datasets: Sequence[str],
-    *,
-    verifier: Any | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Verify one signed Ops envelope and derive the bounded READY input.
 
@@ -780,7 +1071,10 @@ def _verified_production_projection_evidence(
     authority.  The registry contains public keys only; its default checked-in
     document intentionally has no active key until operations provisions one.
     """
-    from data_contracts.coverage import POLICY_VERSION as COVERAGE_POLICY_VERSION
+    from data_contracts.coverage import (
+        coverage_policy_binding,
+        coverage_policy_set_binding,
+    )
     from ops.projection_signing import (
         OpsProjectionPublicKeyRegistry,
         OpsProjectionSignatureError,
@@ -792,7 +1086,10 @@ def _verified_production_projection_evidence(
             "production READY requires a signed Ops Projection evidence envelope"
         )
     try:
-        registry = verifier or OpsProjectionPublicKeyRegistry.load()
+        # Production trust roots are loaded by the publication service.  A
+        # caller-provided registry would let the caller sign its own envelope
+        # and turn a syntactically valid document into READY authority.
+        registry = OpsProjectionPublicKeyRegistry.load_pinned()
         if not isinstance(registry, OpsProjectionPublicKeyRegistry):
             raise OpsProjectionSignatureError(
                 "Ops Projection public-key registry required"
@@ -825,9 +1122,27 @@ def _verified_production_projection_evidence(
         raise MassResearchDisabledError(
             "signed Ops Projection evidence is outside the freshness SLA"
         )
-    if envelope.get("coverage_policy_version") != COVERAGE_POLICY_VERSION:
+    signed_coverage = envelope.get("dataset_coverage")
+    if not isinstance(signed_coverage, Mapping):  # verifier validates shape
         raise MassResearchDisabledError(
-            "signed Ops Projection Coverage policy version mismatch"
+            "signed Ops Projection dataset Coverage evidence is missing"
+        )
+    try:
+        signed_policy_set = coverage_policy_set_binding(
+            sorted(str(dataset_id) for dataset_id in signed_coverage)
+        )
+    except (KeyError, ValueError) as exc:
+        raise MassResearchDisabledError(
+            "signed Ops Projection contains an unknown governed policy row"
+        ) from exc
+    if (
+        envelope.get("coverage_policy_version")
+        != signed_policy_set["policy_version"]
+        or envelope.get("coverage_policy_digest")
+        != signed_policy_set["policy_digest"]
+    ):
+        raise MassResearchDisabledError(
+            "signed Ops Projection Coverage policy-set binding mismatch"
         )
     if envelope.get("b0_status") != "PASS" or envelope.get("b4_status") != "PASS":
         raise MassResearchDisabledError(
@@ -849,111 +1164,24 @@ def _verified_production_projection_evidence(
     document_digest = canonical_digest(dict(signed_document))
     issuer_key_id = str(signed_document.get("issuer_key_id") or "").strip()
     for dataset_id, row in evidence.items():
-        if row.get("policy_version") != COVERAGE_POLICY_VERSION:
+        expected_policy = coverage_policy_binding(dataset_id)
+        if any(
+            row.get(field) != expected_policy[field]
+            for field in ("policy_id", "policy_version", "policy_digest")
+        ):
             raise MassResearchDisabledError(
-                f"signed Ops Projection policy mismatch for {dataset_id}"
+                f"signed Ops Projection governed policy binding mismatch for {dataset_id}"
             )
         row["signed_projection_document_digest"] = document_digest
         row["signed_projection_issuer_key_id"] = issuer_key_id
     return evidence
 
 
-def publish_profile_bound_ready_snapshot(
+def _publish_exact_four_pilot_ready_snapshot_impl(
     staging_db: str | Path,
     snapshot_dir: str | Path,
     *,
-    profile_id: str,
-    evidence_by_dataset: Mapping[str, Any] | None = None,
-    signed_projection_document: Mapping[str, Any] | None = None,
-    projection_verifier: Any | None = None,
-    _fixture_policy: bool = False,
-) -> Any:
-    """Product-owned publisher bridge for the runtime immutable snapshot.
-
-    The dependency direction stays product -> research_runtime.  The bridge
-    validates READY(P), fixes required datasets to the governed profile, and
-    supplies the sole ReadyManifest builder to the runtime publisher.
-    """
-    from paper_runtime.snapshot import publish_ready_snapshot
-    from research.research_data_profile import (
-        CORE_PROFILE_ID,
-        load_core_profile,
-        profile_ready,
-    )
-
-    if profile_id != CORE_PROFILE_ID:
-        raise MassResearchDisabledError(
-            f"unsupported governed research profile: {profile_id!r}"
-        )
-    profile = load_core_profile()
-    if _fixture_policy:
-        if signed_projection_document is not None:
-            raise MassResearchDisabledError(
-                "fixture READY accepts fixture evidence only, not production authority"
-            )
-        evidence = evidence_by_dataset
-    else:
-        if evidence_by_dataset is not None:
-            raise MassResearchDisabledError(
-                "production READY requires a signed projection-evidence envelope; "
-                "unsigned evidence mappings are not publication authority"
-            )
-        evidence = _verified_production_projection_evidence(
-            signed_projection_document,
-            profile.required_datasets,
-            verifier=projection_verifier,
-        )
-    if not profile_ready(profile, evidence):
-        raise MassResearchDisabledError(
-            "profile-bound READY evidence is incomplete, stale, unpinned, or not V3"
-        )
-    if not isinstance(evidence, Mapping) or set(
-        evidence
-    ) != set(profile.required_datasets):
-        raise MassResearchDisabledError(
-            "profile-bound READY evidence must have exact core dataset membership"
-        )
-
-    # Validate generation currency before the runtime gate creates publication
-    # state. The builder repeats and cryptographically binds these checks.
-    for dataset_id in profile.required_datasets:
-        row = evidence.get(dataset_id)
-        if not isinstance(row, Mapping):  # pragma: no cover - profile_ready
-            raise MassResearchDisabledError(
-                f"profile evidence missing for {dataset_id}"
-            )
-        source = str(row.get("source_generation") or "").strip()
-        applied = str(
-            row.get("applied_sync_generation") or row.get("applied_cursor") or ""
-        ).strip()
-        if not source or source != applied:
-            raise MassResearchDisabledError(
-                f"profile generation is missing or not current for {dataset_id}"
-            )
-    def _build(document: Mapping[str, Any]) -> Mapping[str, Any]:
-        return build_profile_bound_ready_manifest_from_snapshot_document(
-            document, profile=profile
-        ).to_dict()
-
-    return publish_ready_snapshot(
-        staging_db,
-        snapshot_dir,
-        required_datasets=profile.required_datasets,
-        _profile_coverage_evidence=evidence,
-        _ready_manifest_builder=_build,
-        _fixture_policy=_fixture_policy,
-    )
-
-
-def publish_exact_four_pilot_ready_snapshot(
-    staging_db: str | Path,
-    snapshot_dir: str | Path,
-    *,
-    evidence_by_dataset: Mapping[str, Any] | None = None,
-    signed_projection_document: Mapping[str, Any] | None = None,
-    projection_verifier: Any | None = None,
-    binding: ExactFourPilotReadyBinding | None = None,
-    _fixture_policy: bool = False,
+    signed_projection_document: Mapping[str, Any],
 ) -> Any:
     """Publish one immutable READY generation bound to the exact-four closure.
 
@@ -961,27 +1189,14 @@ def publish_exact_four_pilot_ready_snapshot(
     They are compiled from the governed exact-four plans before the runtime
     publication transaction starts.
     """
-    from paper_runtime.snapshot import publish_ready_snapshot
+    from paper_runtime.snapshot import _publish_ready_snapshot
     from research.research_data_profile import profile_ready
 
-    governed = binding or load_exact_four_pilot_ready_binding()
-    if _fixture_policy:
-        if signed_projection_document is not None:
-            raise MassResearchDisabledError(
-                "fixture pilot READY accepts fixture evidence only"
-            )
-        evidence = evidence_by_dataset
-    else:
-        if evidence_by_dataset is not None:
-            raise MassResearchDisabledError(
-                "production pilot READY requires a signed projection-evidence "
-                "envelope; unsigned evidence mappings are not publication authority"
-            )
-        evidence = _verified_production_projection_evidence(
-            signed_projection_document,
-            governed.required_datasets,
-            verifier=projection_verifier,
-        )
+    governed = load_exact_four_pilot_ready_binding()
+    evidence = _verified_production_projection_evidence(
+        signed_projection_document,
+        governed.required_datasets,
+    )
     if not isinstance(evidence, Mapping) or set(
         evidence
     ) != set(governed.required_datasets):
@@ -1008,18 +1223,112 @@ def publish_exact_four_pilot_ready_snapshot(
             raise MassResearchDisabledError(
                 f"pilot READY cursor chain is missing or not current for {dataset_id}"
             )
+        scopes = [
+            dict(scope)
+            for profile in governed.profiles
+            for scope in profile.dataset_scopes
+            if scope.get("dataset_id") == dataset_id
+        ]
+        required_start = min(str(scope["period_start"]) for scope in scopes)
+        required_end = max(str(scope["period_end"]) for scope in scopes)
+        observed_start = str(row.get("observed_start") or "")[:10]
+        observed_end = str(row.get("observed_end") or "")[:10]
+        if (
+            not observed_start
+            or not observed_end
+            or observed_start > required_start
+            or observed_end < required_end
+        ):
+            raise MassResearchDisabledError(
+                "pilot READY Coverage does not span the dependency period for "
+                f"{dataset_id}: observed={observed_start}..{observed_end}, "
+                f"required={required_start}..{required_end}"
+            )
+
     def _build(document: Mapping[str, Any]) -> Mapping[str, Any]:
+        scope_proof = _verify_exact_four_pit_dependency_scope(
+            staging_db, governed
+        )
+        enriched = dict(document)
+        enriched["dependency_scope_evidence"] = scope_proof
         return build_profile_bound_ready_manifest_from_snapshot_document(
-            document, profile=governed
+            enriched, profile=governed
         ).to_dict()
 
-    return publish_ready_snapshot(
+    published_attestation: dict[str, Any] = {}
+
+    def _attest(ready: Any) -> Path:
+        from paper_runtime.snapshot_persist import _atomic_json
+        from research.readiness import _load_pinned_ready_publication_signer
+
+        manifest = ready_manifest_from_snapshot_document(ready.manifest)
+        immutable_scope_proof = _verify_exact_four_pit_dependency_scope(
+            ready.db_path, governed
+        )
+        if (
+            manifest.pit_contract_digests.get("dependency_scope")
+            != immutable_scope_proof["proof_digest"]
+        ):
+            raise MassResearchDisabledError(
+                "immutable snapshot PIT dependency scope proof drifted before signing"
+            )
+        signer = _load_pinned_ready_publication_signer()
+        readiness = signer._mint_pilot(
+            manifest,
+            db_path=ready.db_path,
+            profile_binding=governed,
+        )
+        readiness_path = ready.db_path.with_name(
+            f"{ready.db_path.stem}.{readiness.attestation_id}.readiness.json"
+        )
+        try:
+            _atomic_json(readiness_path, readiness.to_dict(), mode=0o444)
+        except Exception:
+            # `_atomic_json` is replace-last, but a filesystem error may be
+            # raised after the destination appears. Never retain a signed
+            # capability for a publication that the caller observes failing.
+            readiness_path.unlink(missing_ok=True)
+            raise
+        published_attestation.update(
+            readiness=readiness,
+            readiness_path=readiness_path,
+        )
+        return readiness_path
+
+    snapshot = _publish_ready_snapshot(
         staging_db,
         snapshot_dir,
         required_datasets=governed.required_datasets,
         _profile_coverage_evidence=evidence,
         _ready_manifest_builder=_build,
-        _fixture_policy=_fixture_policy,
+        _ready_attestation_builder=_attest,
+    )
+    if set(published_attestation) != {"readiness", "readiness_path"}:
+        raise MassResearchDisabledError(
+            "atomic pilot readiness attestation was not produced"
+        )
+    return VerifiedPilotReadyPublication(
+        snapshot=snapshot,
+        readiness=published_attestation["readiness"],
+        readiness_path=Path(published_attestation["readiness_path"]),
+    )
+
+
+def publish_exact_four_pilot_ready_snapshot(
+    staging_db: str | Path,
+    snapshot_dir: str | Path,
+    *,
+    signed_projection_document: Mapping[str, Any],
+) -> Any:
+    """Production exact-four READY publisher; signed Ops authority is required.
+
+    The public surface has no fixture switch, unsigned evidence mapping, or
+    caller-selected plan/profile binding.
+    """
+    return _publish_exact_four_pilot_ready_snapshot_impl(
+        staging_db,
+        snapshot_dir,
+        signed_projection_document=signed_projection_document,
     )
 
 
@@ -1096,6 +1405,23 @@ def missing_ready_manifest_proofs(manifest: ReadyManifest) -> list[str]:
         "dataset_membership_digest"
     ):
         missing.append("dataset_membership_digest.binding")
+    if dataset_ids:
+        from data_contracts.coverage import coverage_policy_set_binding
+
+        try:
+            expected_policy = coverage_policy_set_binding(dataset_ids)
+        except (KeyError, ValueError):
+            missing.append("coverage_policy.binding")
+        else:
+            if body.get("coverage_policy_version") != expected_policy["policy_version"]:
+                missing.append("coverage_policy_version.binding")
+            if body.get("coverage_policy_digest") != expected_policy["policy_digest"]:
+                missing.append("coverage_policy_digest.binding")
+    if (
+        not isinstance(body.get("coverage_policy_version"), str)
+        or str(body.get("coverage_policy_version")).strip() in ABSENT_PROOFS
+    ):
+        missing.append("coverage_policy_version")
     plan_ids = body.get("plan_ids")
     if (
         not isinstance(plan_ids, list)
@@ -1152,11 +1478,13 @@ def validate_ready_manifest_profile_binding(
     profile: Any | None = None,
 ) -> Any:
     """Require exact membership and identity against the governed profile."""
-    from research.research_data_profile import (
-        CORE_PROFILE_ID,
-        ResearchDataProfile,
-        load_core_profile,
-    )
+    from research.research_data_profile import ResearchDataProfile
+
+    if manifest.publication_scope == "MASS":
+        raise MassResearchDisabledError(
+            "Mass ReadyManifest validation requires a separately governed Mass "
+            "authority; Mass Research remains disabled"
+        )
 
     governed = profile
     if governed is None:
@@ -1165,8 +1493,6 @@ def validate_ready_manifest_profile_binding(
             and manifest.profile_id == "controlled-pilot/exact-four"
         ):
             governed = load_exact_four_pilot_ready_binding()
-        elif manifest.profile_id == CORE_PROFILE_ID:
-            governed = load_core_profile()
         else:
             from research.experiment_plans import load_experiment_plan_profiles
 
@@ -1192,38 +1518,35 @@ def validate_ready_manifest_profile_binding(
         raise MassResearchDisabledError("ReadyManifest profile_digest mismatch")
     governed_scope = str(
         getattr(governed, "publication_scope", "")
-        or ("PILOT" if getattr(governed, "plan_id", None) else "MASS")
+        or ("PILOT" if getattr(governed, "plan_id", None) else "")
     )
     if manifest.publication_scope != governed_scope:
         raise MassResearchDisabledError("ReadyManifest publication_scope mismatch")
     governed_plan_ids = tuple(
         str(item) for item in getattr(governed, "plan_ids", ()) if str(item)
     )
-    if not governed_plan_ids:
-        governed_plan_ids = (
-            str(
-                getattr(governed, "plan_id", "")
-                or f"mass-profile:{governed.profile_id}"
-            ),
+    if not governed_plan_ids and str(getattr(governed, "plan_id", "") or ""):
+        governed_plan_ids = (str(governed.plan_id),)
+    if not governed_plan_ids or governed_scope != "PILOT":
+        raise MassResearchDisabledError(
+            "ReadyManifest requires an explicit governed plan binding"
         )
     if manifest.plan_ids != governed_plan_ids:
         raise MassResearchDisabledError("ReadyManifest plan_ids mismatch")
     expected_plan_set = str(
         getattr(governed, "plan_set_digest", "")
         or getattr(governed, "plan_digest", "")
-        or canonical_digest({"mass_profile": governed.to_dict()})
     )
     expected_closure = str(
         getattr(governed, "closure_set_digest", "")
         or getattr(governed, "dependency_closure_digest", "")
-        or canonical_digest(
-            {
-                "mass_profile_digest": governed.profile_digest,
-                "required_datasets": list(governed.required_datasets),
-                "contract_versions": dict(governed.contract_versions),
-            }
-        )
     )
+    if not is_sha256_digest(expected_plan_set) or not is_sha256_digest(
+        expected_closure
+    ):
+        raise MassResearchDisabledError(
+            "governed profile has no explicit plan/dependency digest authority"
+        )
     if manifest.plan_set_digest != expected_plan_set:
         raise MassResearchDisabledError("ReadyManifest plan_set_digest mismatch")
     if manifest.dependency_closure_digest != expected_closure:
@@ -1242,90 +1565,17 @@ def validate_ready_manifest_profile_binding(
         raise MassResearchDisabledError(
             "ReadyManifest dataset_membership_digest does not match the research profile"
         )
+    from data_contracts.coverage import coverage_policy_set_binding
+
+    expected_policy = coverage_policy_set_binding(list(governed.required_datasets))
+    if (
+        manifest.coverage_policy_version != expected_policy["policy_version"]
+        or manifest.coverage_policy_digest != expected_policy["policy_digest"]
+    ):
+        raise MassResearchDisabledError(
+            "ReadyManifest governed Coverage policy-set binding mismatch"
+        )
     return governed
-
-
-def mint_verified_research_readiness(
-    manifest: ReadyManifest,
-    *,
-    publisher: Any | None = None,
-    db_path: str | Path | None = None,
-    immutable_db_digest: str | None = None,
-    ttl_seconds: int = 3600,
-    now: datetime | None = None,
-) -> Any:
-    """Compatibility dispatcher requiring an explicit READY publisher.
-
-    There is intentionally no environment HMAC and no receipt-key fallback.
-    New code should call ``publisher.mint_pilot`` or ``publisher.mint_mass``.
-    """
-    from research.readiness import ReadinessAttestationPublisher
-
-    if not isinstance(manifest, ReadyManifest):
-        raise MassResearchDisabledError("ReadyManifest required")
-    missing = missing_ready_manifest_proofs(manifest)
-    if missing:
-        raise MassResearchDisabledError(
-            "ReadyManifest proofs UNKNOWN/MISSING: " + ", ".join(missing)
-        )
-    validate_ready_manifest_profile_binding(manifest)
-    if not isinstance(publisher, ReadinessAttestationPublisher):
-        raise MassResearchDisabledError(
-            "dedicated ReadinessAttestationPublisher is required"
-        )
-    kwargs = {
-        "db_path": db_path,
-        "immutable_db_digest": immutable_db_digest,
-        "ttl_seconds": ttl_seconds,
-        "now": now,
-    }
-    if manifest.publication_scope == "PILOT":
-        return publisher.mint_pilot(manifest, **kwargs)
-    if manifest.publication_scope == "MASS":
-        return publisher.mint_mass(manifest, **kwargs)
-    raise MassResearchDisabledError("ReadyManifest publication_scope is invalid")
-
-
-def mint_verified_pilot_readiness(
-    manifest: ReadyManifest,
-    *,
-    publisher: Any,
-    db_path: str | Path | None = None,
-    immutable_db_digest: str | None = None,
-    ttl_seconds: int = 3600,
-    now: datetime | None = None,
-) -> Any:
-    if manifest.publication_scope != "PILOT":
-        raise MassResearchDisabledError("PILOT ReadyManifest required")
-    return mint_verified_research_readiness(
-        manifest,
-        publisher=publisher,
-        db_path=db_path,
-        immutable_db_digest=immutable_db_digest,
-        ttl_seconds=ttl_seconds,
-        now=now,
-    )
-
-
-def mint_verified_mass_readiness(
-    manifest: ReadyManifest,
-    *,
-    publisher: Any,
-    db_path: str | Path | None = None,
-    immutable_db_digest: str | None = None,
-    ttl_seconds: int = 3600,
-    now: datetime | None = None,
-) -> Any:
-    if manifest.publication_scope != "MASS":
-        raise MassResearchDisabledError("MASS ReadyManifest required")
-    return mint_verified_research_readiness(
-        manifest,
-        publisher=publisher,
-        db_path=db_path,
-        immutable_db_digest=immutable_db_digest,
-        ttl_seconds=ttl_seconds,
-        now=now,
-    )
 
 
 def core_profile_source_capability_gaps(*, root: Path | None = None) -> tuple[str, ...]:
@@ -1374,6 +1624,7 @@ __all__ = [
     "TIMESTAMP_FIELDS",
     "ExactFourPilotReadyBinding",
     "ReadyManifest",
+    "VerifiedPilotReadyPublication",
     "build_ready_manifest",
     "build_profile_bound_ready_manifest_from_snapshot_document",
     "canonical_digest",
@@ -1383,13 +1634,9 @@ __all__ = [
     "load_ready_manifest",
     "load_ready_manifest_schema",
     "load_exact_four_pilot_ready_binding",
-    "mint_verified_mass_readiness",
-    "mint_verified_pilot_readiness",
-    "mint_verified_research_readiness",
     "missing_ready_manifest_proofs",
     "pin_or_missing",
     "publish_exact_four_pilot_ready_snapshot",
-    "publish_profile_bound_ready_snapshot",
     "proof_or_missing",
     "ready_manifest_from_snapshot_document",
     "require_core_profile_deps_subseteq_source_capability_registry",
