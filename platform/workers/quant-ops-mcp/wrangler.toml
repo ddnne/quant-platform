@@ -13,6 +13,7 @@ main = "src/index.js"
 compatibility_date = "2026-08-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
+preview_urls = false
 
 # OAuth token storage. Binding name MUST be OAUTH_KV (library requirement).
 [[kv_namespaces]]
@@ -51,6 +52,7 @@ enabled = true
 [env.production]
 name = "quant-platform-ops-read-mcp"
 workers_dev = true
+preview_urls = false
 
 [[env.production.kv_namespaces]]
 binding = "OAUTH_KV"

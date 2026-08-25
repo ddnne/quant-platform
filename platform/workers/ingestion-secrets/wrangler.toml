@@ -11,6 +11,7 @@ name = "quant-platform-ingestion-secrets"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 workers_dev = true
+preview_urls = false
 
 # Secret bindings (values set via `wrangler secret put`, never in this file):
 # - JQUANTS_API_KEY
@@ -22,3 +23,4 @@ enabled = true
 [env.production]
 name = "quant-platform-ingestion-secrets"
 workers_dev = true
+preview_urls = false

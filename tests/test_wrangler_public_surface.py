@@ -25,8 +25,7 @@ INTERNAL_PRODUCT = (
 WORKERS_DEV_TRUE_EXCEPTIONS = frozenset(
     {
         "quant-ops-mcp",  # GitHub OAuth callback host
-        "ingestion-secrets",  # HUMAN Access/mTLS/Tunnel residual
-        "ci-aggregate",  # not a public research API; Lane G will abolish
+        "ingestion-secrets",  # Access-protected transition proxy
     }
 )
 

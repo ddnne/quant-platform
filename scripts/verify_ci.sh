@@ -17,7 +17,6 @@ WORKERS=(
   platform/workers/quant-ops-mcp
   platform/workers/research-ai-gateway
   platform/workers/research-mass-eval
-  platform/workers/ci-aggregate
 )
 
 # Print package.json scripts.<name> body, or empty if missing.
@@ -90,6 +89,9 @@ if ! python_is_311_plus "$py"; then
   echo "uv-managed .venv must be Python 3.11+ with working stdlib sqlite3." >&2
   exit 1
 fi
+
+echo "==> Cloudflare active-worker binding manifest"
+"$py" scripts/cloudflare_binding_manifest.py
 
 echo "==> python pytest"
 "$py" -m pytest tests/
@@ -201,7 +203,8 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
-for dir in "${WORKERS[@]}"; do
+verify_worker() {
+  local dir="$1" name
   name="$(basename "$dir")"
   if [[ ! -d "$dir" ]]; then
     echo "worker $name: missing directory ($dir)" >&2
@@ -223,10 +226,11 @@ for dir in "${WORKERS[@]}"; do
   echo "==> npm run typecheck ($name)"
   (cd "$dir" && npm run typecheck)
   echo "==> wrangler deploy --dry-run --env= ($name)"
-  # Several production configs define a named env.production for explicit
-  # promotion. CI validates the top-level deployment surface deliberately;
-  # never leave Wrangler to infer an environment.
-  (cd "$dir" && npx wrangler deploy --dry-run --env="")
+  (cd "$dir" && npx --no-install wrangler deploy --dry-run --env="")
+  echo "==> wrangler deploy --dry-run --env=production ($name)"
+  (cd "$dir" && npx --no-install wrangler deploy --dry-run --env=production)
+  echo "==> wrangler deploy --dry-run --config=wrangler.staging.toml ($name)"
+  (cd "$dir" && npx --no-install wrangler deploy --dry-run --config=wrangler.staging.toml)
   if [[ -n "$(npm_script_body "$py" "$dir/package.json" types)" ]]; then
     echo "==> wrangler types --check ($name)"
     # Honor scripts.types flags (include-runtime false). Bare
@@ -234,9 +238,35 @@ for dir in "${WORKERS[@]}"; do
     (cd "$dir" && npm run types -- --check)
   else
     echo "==> wrangler types ($name)"
-    (cd "$dir" && npx wrangler types)
+    (cd "$dir" && npx --no-install wrangler types)
   fi
+}
+
+echo "==> active Worker lanes (parallel, fail-closed aggregation)"
+ci_log_dir="$(mktemp -d "${TMPDIR:-/tmp}/quant-platform-ci.XXXXXX")"
+trap 'rm -rf -- "$ci_log_dir"' EXIT
+worker_pids=()
+worker_names=()
+for dir in "${WORKERS[@]}"; do
+  name="$(basename "$dir")"
+  worker_names+=("$name")
+  (verify_worker "$dir") >"$ci_log_dir/$name.log" 2>&1 &
+  worker_pids+=("$!")
 done
+
+worker_failed=0
+for i in "${!worker_pids[@]}"; do
+  name="${worker_names[$i]}"
+  if ! wait "${worker_pids[$i]}"; then
+    worker_failed=1
+    echo "worker lane failed: $name" >&2
+  fi
+  cat "$ci_log_dir/$name.log"
+done
+if [[ "$worker_failed" -ne 0 ]]; then
+  echo "one or more active Worker lanes failed" >&2
+  exit 1
+fi
 
 echo "==> git working tree clean (generated types)"
 if ! git diff --quiet || ! git diff --cached --quiet; then
