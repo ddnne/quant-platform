@@ -2,7 +2,7 @@
 
 This barrel re-exports the fail-closed control plane only. Candidate eval is
 ``research.cf_daily_path_job`` (POST /v1/daily-path). Smoke codes live in
-``research.eval_universe.HARNESS_SMOKE_CODES``. Mass is NO-GO.
+Offline fixtures choose their own explicit codes. Mass is NO-GO.
 """
 
 from research.readiness import (
