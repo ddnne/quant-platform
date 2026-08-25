@@ -136,6 +136,37 @@ class ContractDependency:
         return body
 
 
+@dataclass(frozen=True, slots=True)
+class DatasetDependencyScope:
+    """Machine-readable event/PIT scope required by one plan dataset."""
+
+    dataset_id: str
+    period_start: str
+    period_end: str
+    required_lookback_trading_days: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.dataset_id:
+            raise PlanDependencyClosureError("dataset scope id is required")
+        if self.period_start > self.period_end:
+            raise PlanDependencyClosureError("dataset scope period is reversed")
+        if (
+            isinstance(self.required_lookback_trading_days, bool)
+            or self.required_lookback_trading_days < 0
+        ):
+            raise PlanDependencyClosureError(
+                "dataset scope lookback must be a non-negative integer"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "dataset_id": self.dataset_id,
+            "period_start": self.period_start,
+            "period_end": self.period_end,
+            "required_lookback_trading_days": self.required_lookback_trading_days,
+        }
+
+
 _UNIVERSE_DEPENDENCIES: Mapping[str, ContractDependency] = MappingProxyType(
     {
         "tse_prime_with_fins": ContractDependency(
@@ -250,6 +281,10 @@ class PlanDependencyClosure:
     cost_dependency: ContractDependency
     research_data_profile_id: str
     required_datasets: tuple[str, ...]
+    period_start: str
+    period_end: str
+    required_lookback_trading_days: int
+    dataset_scopes: tuple[DatasetDependencyScope, ...]
     version: str = PLAN_DEPENDENCY_CLOSURE_VERSION
 
     def __post_init__(self) -> None:
@@ -266,6 +301,32 @@ class PlanDependencyClosure:
             raise PlanDependencyClosureError(
                 "feature and universe dependencies must be non-empty"
             )
+        if self.period_start > self.period_end:
+            raise PlanDependencyClosureError("closure period is reversed")
+        if (
+            isinstance(self.required_lookback_trading_days, bool)
+            or self.required_lookback_trading_days < 0
+        ):
+            raise PlanDependencyClosureError(
+                "closure lookback must be a non-negative integer"
+            )
+        if tuple(scope.dataset_id for scope in self.dataset_scopes) != self.required_datasets:
+            raise PlanDependencyClosureError(
+                "dataset scopes must exactly match required_datasets"
+            )
+        if any(
+            scope.period_start != self.period_start
+            or scope.period_end != self.period_end
+            for scope in self.dataset_scopes
+        ):
+            raise PlanDependencyClosureError(
+                "dataset scopes must match the plan evaluation period"
+            )
+        if max(
+            (scope.required_lookback_trading_days for scope in self.dataset_scopes),
+            default=0,
+        ) != self.required_lookback_trading_days:
+            raise PlanDependencyClosureError("closure lookback summary mismatch")
 
     def to_canonical_dict(self) -> dict[str, Any]:
         return {
@@ -286,6 +347,10 @@ class PlanDependencyClosure:
             "cost_dependency": self.cost_dependency.to_dict(),
             "research_data_profile_id": self.research_data_profile_id,
             "required_datasets": list(self.required_datasets),
+            "period_start": self.period_start,
+            "period_end": self.period_end,
+            "required_lookback_trading_days": self.required_lookback_trading_days,
+            "dataset_scopes": [scope.to_dict() for scope in self.dataset_scopes],
         }
 
     @property
@@ -349,6 +414,33 @@ def build_plan_dependency_closure(plan: ExperimentPlan) -> PlanDependencyClosure
     for dependency in (*universe_dependencies, evaluation, risk, cost):
         required_datasets.update(dependency.dataset_dependencies)
 
+    lookback_by_dataset = {dataset_id: 0 for dataset_id in required_datasets}
+    for dependency in feature_dependencies:
+        lookback = max(
+            (
+                int(value)
+                for key, value in dependency.params.items()
+                if key in {"n", "lookback", "lookback_days", "window", "window_days"}
+                and isinstance(value, int)
+                and not isinstance(value, bool)
+                and value > 0
+            ),
+            default=0,
+        )
+        for dataset_id in dependency.dataset_dependencies:
+            lookback_by_dataset[dataset_id] = max(
+                lookback_by_dataset.get(dataset_id, 0), lookback
+            )
+    dataset_scopes = tuple(
+        DatasetDependencyScope(
+            dataset_id=dataset_id,
+            period_start=plan.period_start,
+            period_end=plan.period_end,
+            required_lookback_trading_days=lookback_by_dataset[dataset_id],
+        )
+        for dataset_id in sorted(required_datasets)
+    )
+
     return PlanDependencyClosure(
         plan_id=plan.plan_id,
         plan_digest=experiment_plan_digest(plan),
@@ -362,6 +454,10 @@ def build_plan_dependency_closure(plan: ExperimentPlan) -> PlanDependencyClosure
         cost_dependency=cost,
         research_data_profile_id=plan.research_data_profile_id,
         required_datasets=tuple(sorted(required_datasets)),
+        period_start=plan.period_start,
+        period_end=plan.period_end,
+        required_lookback_trading_days=max(lookback_by_dataset.values(), default=0),
+        dataset_scopes=dataset_scopes,
     )
 
 
@@ -377,6 +473,7 @@ def verify_plan_dependency_closure(
 
 __all__ = [
     "ContractDependency",
+    "DatasetDependencyScope",
     "PLAN_DEPENDENCY_CLOSURE_VERSION",
     "PlanDependencyClosure",
     "PlanDependencyClosureError",

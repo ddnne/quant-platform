@@ -12,7 +12,10 @@ import sqlite3
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 from urllib.parse import quote
 
-from data_contracts.coverage import COVERAGE_STATUSES, POLICY_VERSION
+from data_contracts.coverage import (
+    COVERAGE_STATUSES,
+    coverage_policy_binding,
+)
 
 if TYPE_CHECKING:
     from storage.coverage_ledger import CollectionReceipt, RequiredCoverageSegment
@@ -83,9 +86,9 @@ def record_required_segments(
     conn: sqlite3.Connection,
     required_segments: Sequence[RequiredCoverageSegment],
     *,
-    policy_version: str = POLICY_VERSION,
+    policy_version: str | None = None,
 ) -> None:
-    """Persist source-planned requirements independently of any receipt."""
+    """Persist source-planned requirements under each effective policy row."""
     evaluated_at = _now()
     columns = (
         "source", "dataset", "segment_id", "policy_version",
@@ -106,8 +109,14 @@ def record_required_segments(
     for segment in required_segments:
         if segment.expected_items is not None and segment.expected_items < 0:
             raise ValueError("expected segment items must be non-negative")
+        effective_policy_version = (
+            policy_version
+            if policy_version is not None
+            else coverage_policy_binding(segment.dataset)["policy_version"]
+        )
         rows.append((
-            segment.source, segment.dataset, segment.segment_id, policy_version,
+            segment.source, segment.dataset, segment.segment_id,
+            effective_policy_version,
             segment.segment_start, segment.segment_end,
             _canonical_json(dict(segment.expected_scope)), segment.expected_items,
             "UNKNOWN", None, evaluated_at,
@@ -172,20 +181,31 @@ def read_coverage_segments(
         raise ValueError(f"unknown coverage status: {status!r}")
     conn = _connect_readonly(db_path)
     try:
-        clauses = ["policy_version=?"]
-        values: list[Any] = [POLICY_VERSION]
+        clauses: list[str] = []
+        values: list[Any] = []
         if dataset is not None:
             clauses.append("dataset=?")
             values.append(dataset)
+            clauses.append("policy_version=?")
+            values.append(coverage_policy_binding(dataset)["policy_version"])
         if status is not None:
             clauses.append("status=?")
             values.append(status)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
         cursor = conn.execute(
-            "SELECT * FROM coverage_segments WHERE " + " AND ".join(clauses)
+            "SELECT * FROM coverage_segments" + where
             + " ORDER BY dataset, segment_start, segment_id",
             values,
         )
-        return [dict(row) for row in cursor]
+        rows = [dict(row) for row in cursor]
+        if dataset is not None:
+            return rows
+        return [
+            row
+            for row in rows
+            if row["policy_version"]
+            == coverage_policy_binding(str(row["dataset"]))["policy_version"]
+        ]
     finally:
         conn.close()
 

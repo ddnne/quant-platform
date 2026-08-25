@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -30,6 +31,7 @@ from data_contracts import (
     REGISTRY_VERSION,
     canonical_dataset_for,
     coverage_contract_for,
+    coverage_policy_set_binding,
     coverage_v3_dataset_ids,
     source_capability_contract_or_none,
 )
@@ -98,6 +100,10 @@ _PROFILE_FIELDS: frozenset[str] = frozenset(
         "plan_id",
         "plan_digest",
         "dependency_closure_digest",
+        "period_start",
+        "period_end",
+        "required_lookback_trading_days",
+        "dataset_scopes",
     }
 )
 _DEPS_REQUIRED_KEYS: tuple[str, ...] = (
@@ -227,6 +233,10 @@ class ResearchDataProfile:
     plan_id: str | None = None
     plan_digest: str | None = None
     dependency_closure_digest: str | None = None
+    period_start: str | None = None
+    period_end: str | None = None
+    required_lookback_trading_days: int = 0
+    dataset_scopes: tuple[Mapping[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         body = {
@@ -250,6 +260,12 @@ class ResearchDataProfile:
                     "plan_id": self.plan_id,
                     "plan_digest": self.plan_digest,
                     "dependency_closure_digest": self.dependency_closure_digest,
+                    "period_start": self.period_start,
+                    "period_end": self.period_end,
+                    "required_lookback_trading_days": (
+                        self.required_lookback_trading_days
+                    ),
+                    "dataset_scopes": [dict(item) for item in self.dataset_scopes],
                 }
             )
         return body
@@ -272,6 +288,10 @@ class ResearchDataProfile:
             "plan_id",
             "plan_digest",
             "dependency_closure_digest",
+            "period_start",
+            "period_end",
+            "required_lookback_trading_days",
+            "dataset_scopes",
         }
         missing_fields = sorted(
             key
@@ -304,6 +324,22 @@ class ResearchDataProfile:
                 payload.get("dependency_closure_digest"),
                 "dependency_closure_digest",
             )
+            period_start = _require_iso_date(
+                payload.get("period_start"), "period_start"
+            )
+            period_end = _require_iso_date(payload.get("period_end"), "period_end")
+            if period_start > period_end:
+                raise ResearchDataProfileError("profile period is reversed")
+            raw_lookback = payload.get("required_lookback_trading_days")
+            if (
+                isinstance(raw_lookback, bool)
+                or not isinstance(raw_lookback, int)
+                or raw_lookback < 0
+            ):
+                raise ResearchDataProfileError(
+                    "required_lookback_trading_days must be a non-negative integer"
+                )
+            required_lookback = raw_lookback
         else:
             present_v2 = sorted(optional_v2_fields.intersection(payload))
             if present_v2:
@@ -313,6 +349,9 @@ class ResearchDataProfile:
             plan_id = None
             plan_digest = None
             closure_digest = None
+            period_start = None
+            period_end = None
+            required_lookback = 0
         purpose = _require_str(payload.get("purpose"), "purpose")
         required_coverage_mode = _require_str(
             payload.get("required_coverage_mode"), "required_coverage_mode"
@@ -339,6 +378,27 @@ class ResearchDataProfile:
 
         # resolve_deps fail-closed on missing Deps / omitted listed datasets.
         required_datasets = resolve_deps(payload)
+        if profile_version == PROFILE_VERSION_V2:
+            dataset_scopes = _require_dataset_scopes(
+                payload.get("dataset_scopes"),
+                required_datasets=required_datasets,
+                period_start=period_start,
+                period_end=period_end,
+                required_lookback=required_lookback,
+            )
+            expected_policy = coverage_policy_set_binding(list(required_datasets))
+            if (
+                contract_versions.get("coverage_policy")
+                != expected_policy["policy_version"]
+                or contract_versions.get("coverage_policy_digest")
+                != expected_policy["policy_digest"]
+            ):
+                raise ResearchDataProfileError(
+                    "ResearchDataProfile v2 coverage policy-set version/digest "
+                    "does not match required_datasets"
+                )
+        else:
+            dataset_scopes = ()
 
         body = {
             "profile_id": profile_id,
@@ -364,6 +424,10 @@ class ResearchDataProfile:
                     "plan_id": plan_id,
                     "plan_digest": plan_digest,
                     "dependency_closure_digest": closure_digest,
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "required_lookback_trading_days": required_lookback,
+                    "dataset_scopes": [dict(item) for item in dataset_scopes],
                 }
             )
         digest = compute_digest(body)
@@ -391,6 +455,10 @@ class ResearchDataProfile:
             plan_id=plan_id,
             plan_digest=plan_digest,
             dependency_closure_digest=closure_digest,
+            period_start=period_start,
+            period_end=period_end,
+            required_lookback_trading_days=required_lookback,
+            dataset_scopes=dataset_scopes,
         )
 
 
@@ -421,6 +489,17 @@ def default_contract_versions() -> dict[str, str]:
     }
 
 
+def contract_versions_for_datasets(
+    dataset_ids: Sequence[str],
+) -> dict[str, str]:
+    """Pinned versions plus the exact governed Coverage policy-set identity."""
+    policy_set = coverage_policy_set_binding(list(dataset_ids))
+    versions = default_contract_versions()
+    versions["coverage_policy"] = str(policy_set["policy_version"])
+    versions["coverage_policy_digest"] = str(policy_set["policy_digest"])
+    return versions
+
+
 def profile_from_dependency_closure(closure: Any) -> ResearchDataProfile:
     """Materialize the exact v2 data profile bound to one plan closure."""
     from research.dependency_closure import PlanDependencyClosure
@@ -446,7 +525,9 @@ def profile_from_dependency_closure(closure: Any) -> ResearchDataProfile:
         ),
         "required_datasets": list(closure.required_datasets),
         "required_coverage_mode": REQUIRED_COVERAGE_MODE_OFFICIAL,
-        "contract_versions": default_contract_versions(),
+        "contract_versions": contract_versions_for_datasets(
+            closure.required_datasets
+        ),
         "feature_dependencies": feature_dependencies,
         "strategy_dependencies": [
             {
@@ -459,7 +540,7 @@ def profile_from_dependency_closure(closure: Any) -> ResearchDataProfile:
             f"{closure.risk_dependency.dependency_id}@"
             f"{closure.risk_dependency.version}"
         ],
-        "snapshot_cutoff": None,
+        "snapshot_cutoff": closure.period_end,
         "permitted_universe": [
             dependency.dependency_id
             for dependency in closure.universe_dependencies
@@ -468,6 +549,10 @@ def profile_from_dependency_closure(closure: Any) -> ResearchDataProfile:
         "plan_id": closure.plan_id,
         "plan_digest": closure.plan_digest,
         "dependency_closure_digest": closure.closure_digest,
+        "period_start": closure.period_start,
+        "period_end": closure.period_end,
+        "required_lookback_trading_days": closure.required_lookback_trading_days,
+        "dataset_scopes": [scope.to_dict() for scope in closure.dataset_scopes],
     }
     profile = ResearchDataProfile.from_dict(payload)
     if profile.required_datasets != closure.required_datasets:
@@ -525,6 +610,76 @@ def _complete_under_official(
 def _evaluation_protocol(raw: Any) -> str:
     versions = _require_contract_versions(raw)
     return versions["evaluation_ir"]
+
+
+def _require_iso_date(raw: Any, where: str) -> str:
+    value = _require_str(raw, where)
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise ResearchDataProfileError(f"{where} must be an ISO date") from exc
+    if parsed.isoformat() != value:
+        raise ResearchDataProfileError(f"{where} must be an ISO date")
+    return value
+
+
+def _require_dataset_scopes(
+    raw: Any,
+    *,
+    required_datasets: tuple[str, ...],
+    period_start: str,
+    period_end: str,
+    required_lookback: int,
+) -> tuple[dict[str, Any], ...]:
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        raise ResearchDataProfileError("dataset_scopes must be an array")
+    normalized: list[dict[str, Any]] = []
+    expected_fields = {
+        "dataset_id",
+        "period_start",
+        "period_end",
+        "required_lookback_trading_days",
+    }
+    for index, item in enumerate(raw):
+        if not isinstance(item, Mapping) or set(item) != expected_fields:
+            raise ResearchDataProfileError(
+                f"dataset_scopes[{index}] fields are not closed"
+            )
+        dataset_id = _require_str(item.get("dataset_id"), "dataset_scope.dataset_id")
+        start = _require_iso_date(item.get("period_start"), "dataset_scope.period_start")
+        end = _require_iso_date(item.get("period_end"), "dataset_scope.period_end")
+        lookback = item.get("required_lookback_trading_days")
+        if (
+            isinstance(lookback, bool)
+            or not isinstance(lookback, int)
+            or lookback < 0
+        ):
+            raise ResearchDataProfileError(
+                "dataset_scope lookback must be a non-negative integer"
+            )
+        if start != period_start or end != period_end:
+            raise ResearchDataProfileError(
+                "dataset_scope period must match profile period"
+            )
+        normalized.append(
+            {
+                "dataset_id": dataset_id,
+                "period_start": start,
+                "period_end": end,
+                "required_lookback_trading_days": lookback,
+            }
+        )
+    normalized.sort(key=lambda item: str(item["dataset_id"]))
+    if tuple(str(item["dataset_id"]) for item in normalized) != required_datasets:
+        raise ResearchDataProfileError(
+            "dataset_scopes must exactly match required_datasets"
+        )
+    if max(
+        (int(item["required_lookback_trading_days"]) for item in normalized),
+        default=0,
+    ) != required_lookback:
+        raise ResearchDataProfileError("profile lookback summary mismatch")
+    return tuple(normalized)
 
 
 def _require_contract_versions(raw: Any) -> dict[str, str]:
@@ -749,6 +904,7 @@ __all__ = [
     "TIP_ONLY_AM_DATASET",
     "TIP_ONLY_EARNINGS_CALENDAR_DATASET",
     "compute_digest",
+    "contract_versions_for_datasets",
     "default_contract_versions",
     "load_core_profile",
     "official_mode",

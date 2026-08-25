@@ -1,0 +1,58 @@
+{
+  "policy_version": "source-capability/v3",
+  "dataset_id": "indices_bars_daily_topix",
+  "source": "jquants_premium_core",
+  "upstream_locator": "/v2/indices/bars/daily/topix",
+  "official_evidence_url": "https://jpx-jquants.com/en?lang=ja",
+  "history_mode": "bounded_history",
+  "earliest_official_availability": "2008-05-01",
+  "historical_research_eligible": true,
+  "tip_only_operational": false,
+  "supported_query_parameters": ["from", "to", "pagination_key"],
+  "publication_calendar": {
+    "kind": "jpx_trading_day",
+    "timezone": "Asia/Tokyo",
+    "official_history_evidence_url": "https://jpx-jquants.com/en?lang=ja",
+    "official_history_evidence_limit": "The official landing page confirms TOPIX/index daily history and Premium max 20 years but does not state an exact first date; preserve the existing 2008-05-01 contract floor.",
+    "official_update_around": "16:30"
+  },
+  "entitlement_semantics": {
+    "clamp_before_earliest": true,
+    "subscription_floor": null,
+    "official_data_provision_start": "2008-05-01",
+    "premium_history_limit": "20 years"
+  },
+  "collection_window": {
+    "grain": "calendar_month",
+    "open": "2008-05-01",
+    "close": "latest_published_before_collection_cutoff"
+  },
+  "freshness_sla": {
+    "expected_after": "16:30",
+    "usable_by": "17:00",
+    "timezone": "Asia/Tokyo",
+    "rule": "daily_index_publication"
+  },
+  "event_time": {
+    "policy": "session_close",
+    "fields": ["Date"]
+  },
+  "available_at": {
+    "policy": "session_close",
+    "field": "Date",
+    "known_publication_lag": null
+  },
+  "revision_semantics": {
+    "policy": "source_overwrite_capture_new_generation",
+    "generation_on_revision": true
+  },
+  "research_profile_eligibility": {
+    "include_in": ["controlled-pilot", "core_historical"],
+    "exclude_from": [],
+    "exclusion_reason": "none"
+  },
+  "required_domain_semantics": {
+    "basis": "calendar_months_from_official_start",
+    "empty_success_policy": "never_complete"
+  }
+}

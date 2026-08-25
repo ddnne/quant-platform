@@ -64,6 +64,17 @@ def test_core_v1_has_exact_official_source_capability_boundaries() -> None:
         )
 
 
+def test_exact_four_dependency_profile_has_no_source_capability_gap() -> None:
+    from research.ready_manifest import load_exact_four_pilot_ready_binding
+
+    binding = load_exact_four_pilot_ready_binding()
+    assert "indices_bars_daily_topix" in binding.required_datasets
+    assert all(
+        source_capability_contract_for(dataset_id).dataset_id == dataset_id
+        for dataset_id in binding.required_datasets
+    )
+
+
 def test_production_validation_uses_governed_coverage_starts() -> None:
     """C6/C7 cannot retain a second V2-era start-date authority."""
     for dataset_id in EXPECTED_START:
@@ -96,6 +107,10 @@ def test_per_row_required_domain_semantics_are_frozen() -> None:
             "never_complete",
         ),
         "equities_bars_daily": (
+            "calendar_months_from_official_start",
+            "never_complete",
+        ),
+        "indices_bars_daily_topix": (
             "calendar_months_from_official_start",
             "never_complete",
         ),

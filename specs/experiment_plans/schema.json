@@ -16,7 +16,6 @@
     "strategy_spec_hash",
     "feature_refs",
     "research_data_profile_id",
-    "ready_snapshot_id",
     "universe",
     "period_start",
     "period_end",
@@ -56,7 +55,6 @@
       }
     },
     "research_data_profile_id": {"type": "string", "const": "core"},
-    "ready_snapshot_id": {"type": "string", "const": "not-declared"},
     "universe": {
       "type": "array",
       "minItems": 1,

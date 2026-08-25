@@ -26,7 +26,7 @@ from research.research_data_profile import (
 from storage.coverage_ledger import evaluate_segment, plan_required_segments
 
 _V3_DATASETS = coverage_v3_dataset_ids()
-_NO_V3_DATASET = "indices_bars_daily_topix"
+_NO_V3_DATASET = "indices_bars_daily"
 
 
 def test_on_disk_v3_has_core_v1_plus_tip_and_otc_rows() -> None:
@@ -44,6 +44,7 @@ def test_on_disk_v3_has_core_v1_plus_tip_and_otc_rows() -> None:
         "fins_dividend.json",
         "fins_earnings_date.json",
         "fins_summary.json",
+        "indices_bars_daily_topix.json",
         "jsda_otc_bond_reference_prices.json",
         "markets_calendar.json",
     ]

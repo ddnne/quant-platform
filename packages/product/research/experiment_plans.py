@@ -41,7 +41,6 @@ PILOT_EXPERIMENT_PLAN_IDS: tuple[str, ...] = (
 )
 PILOT_PLAN_COUNT: int = 4
 PILOT_EXECUTION_ENABLED: bool = False
-PILOT_READY_SNAPSHOT_ID: str = "not-declared"
 PILOT_COST_SCENARIO: str = "default_one_way_10bp"
 PILOT_EVALUATION_PROTOCOL: str = "standard_research_eval"
 PILOT_RISK_POLICY: str = "core_crash_high_vol"
@@ -71,11 +70,6 @@ def load_experiment_plan_schema(*, root: Path | None = None) -> dict[str, Any]:
         != EXPERIMENT_PLAN_VERSION
     ):
         raise ValueError("ExperimentPlan schema version is not in codec lockstep")
-    if (
-        raw.get("properties", {}).get("ready_snapshot_id", {}).get("const")
-        != PILOT_READY_SNAPSHOT_ID
-    ):
-        raise ValueError("ExperimentPlan schema must keep READY snapshot undeclared")
     return dict(raw)
 
 
@@ -94,10 +88,6 @@ def _require_typed_payload(payload: Mapping[str, Any]) -> ExperimentPlan:
         raise ValueError(f"{plan.plan_id}: execution_enabled must stay false")
     if payload.get("execution_enabled") is not False:
         raise ValueError(f"{plan.plan_id}: execution_enabled must be false")
-    if plan.ready_snapshot_id != PILOT_READY_SNAPSHOT_ID:
-        raise ValueError(
-            f"{plan.plan_id}: ready_snapshot_id must stay {PILOT_READY_SNAPSHOT_ID!r}"
-        )
     if plan.version != EXPERIMENT_PLAN_VERSION:
         raise ValueError(f"{plan.plan_id}: version must be {EXPERIMENT_PLAN_VERSION}")
     if not plan.period_start or not plan.period_end:
@@ -207,7 +197,6 @@ __all__ = [
     "PILOT_PERIOD_END",
     "PILOT_PERIOD_START",
     "PILOT_PLAN_COUNT",
-    "PILOT_READY_SNAPSHOT_ID",
     "PILOT_RISK_POLICY",
     "PLANS_REL",
     "SCHEMA_REL",

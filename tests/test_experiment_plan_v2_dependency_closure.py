@@ -98,6 +98,42 @@ def test_closure_is_deterministic_transitive_and_profile_bound() -> None:
         assert profile.plan_digest == closure.plan_digest
         assert profile.dependency_closure_digest == closure.closure_digest
         assert profile.required_datasets == closure.required_datasets
+        assert closure.period_start == plan.period_start
+        assert closure.period_end == plan.period_end
+        assert tuple(scope.dataset_id for scope in closure.dataset_scopes) == (
+            closure.required_datasets
+        )
+        assert profile.period_start == closure.period_start
+        assert profile.period_end == closure.period_end
+        assert profile.required_lookback_trading_days == (
+            closure.required_lookback_trading_days
+        )
+        assert tuple(dict(scope) for scope in profile.dataset_scopes) == tuple(
+            scope.to_dict() for scope in closure.dataset_scopes
+        )
+        assert profile.contract_versions["coverage_policy"] == (
+            "collection-coverage/v3"
+        )
+        assert profile.contract_versions["coverage_policy_digest"].startswith(
+            "sha256:"
+        )
+        assert "collection-coverage/v2" not in profile.contract_versions.values()
+
+
+def test_feature_lookback_is_machine_readable_and_digest_bound() -> None:
+    closures = {
+        closure.plan_id: closure for closure in load_experiment_plan_closures()
+    }
+    momentum = closures["exp-mdh-hold10-momentum"]
+    bars_scope = next(
+        scope
+        for scope in momentum.dataset_scopes
+        if scope.dataset_id == "equities_bars_daily"
+    )
+    assert bars_scope.required_lookback_trading_days == 10
+    assert momentum.required_lookback_trading_days == 10
+    event = closures["exp-event-post-hold5"]
+    assert event.required_lookback_trading_days == 0
 
 
 @pytest.mark.parametrize(

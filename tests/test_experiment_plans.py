@@ -21,7 +21,6 @@ from research.experiment_plans import (
     PILOT_PERIOD_END,
     PILOT_PERIOD_START,
     PILOT_PLAN_COUNT,
-    PILOT_READY_SNAPSHOT_ID,
     load_experiment_plan_schema,
     load_experiment_plans,
     start,
@@ -48,7 +47,8 @@ def test_typed_experiment_plans_are_exactly_four() -> None:
         assert plan.period_end == PILOT_PERIOD_END
         assert plan.cost_scenario == PILOT_COST_SCENARIO
         assert plan.evaluation_protocol == PILOT_EVALUATION_PROTOCOL
-        assert plan.ready_snapshot_id == PILOT_READY_SNAPSHOT_ID
+        assert not hasattr(plan, "ready_snapshot_id")
+        assert "ready_snapshot_id" not in payload
         assert plan.execution_enabled is False
         assert payload["execution_enabled"] is False
         assert plan.version == EXPERIMENT_PLAN_VERSION
@@ -69,6 +69,10 @@ def test_experiment_plan_schema_is_closed() -> None:
     armed["execution_enabled"] = True
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(armed, schema)
+    circular = plans[0].to_dict()
+    circular["ready_snapshot_id"] = "not-declared"
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(circular, schema)
 
 
 def test_start_still_raises_mass_research_disabled() -> None:

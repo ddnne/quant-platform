@@ -18,6 +18,7 @@ from data_contracts.coverage import (
     CollectionCoverageContract,
     all_coverage_contracts,
     coverage_contract_for,
+    coverage_policy_set_binding,
 )
 from data_contracts.source_capability import (
     TIP_SNAPSHOT_MODES,
@@ -868,10 +869,10 @@ def refresh_coverage_ledger(
     placeholders = ",".join("?" for _ in selected)
     # status + receipt_run_id: sticky COMPLETE needs prior COMPLETE inventory.
     inventory_cursor = conn.execute(
-        "SELECT source,dataset,segment_id,segment_start,segment_end,"
+        "SELECT source,dataset,segment_id,policy_version,segment_start,segment_end,"
         "expected_scope,expected_items,status,receipt_run_id FROM coverage_segments "
-        f"WHERE policy_version=? AND dataset IN ({placeholders})",
-        (POLICY_VERSION, *selected),
+        f"WHERE dataset IN ({placeholders})",
+        selected,
     )
     inventory_by_dataset: dict[str, dict[str, Mapping[str, Any]]] = {
         dataset: {} for dataset in selected
@@ -879,10 +880,13 @@ def refresh_coverage_ledger(
     for raw in inventory_cursor.fetchall():
         row: Mapping[str, Any] = dict(raw) if isinstance(raw, sqlite3.Row) else {
             "source": raw[0], "dataset": raw[1], "segment_id": raw[2],
-            "segment_start": raw[3], "segment_end": raw[4],
-            "expected_scope": raw[5], "expected_items": raw[6],
-            "status": raw[7], "receipt_run_id": raw[8],
+            "policy_version": raw[3],
+            "segment_start": raw[4], "segment_end": raw[5],
+            "expected_scope": raw[6], "expected_items": raw[7],
+            "status": raw[8], "receipt_run_id": raw[9],
         }
+        if row.get("policy_version") != policies[str(row["dataset"])].policy_version:
+            continue
         inventory_by_dataset[str(row["dataset"])][str(row["segment_id"])] = row
     receipt_cursor = conn.execute(
         "SELECT * FROM collection_receipts "
@@ -1029,7 +1033,7 @@ def refresh_coverage_ledger(
                 "source": required_segment.source,
                 "dataset": required_segment.dataset,
                 "segment_id": required_segment.segment_id,
-                "policy_version": POLICY_VERSION,
+                "policy_version": policy.policy_version,
                 "segment_start": required_segment.segment_start,
                 "segment_end": required_segment.segment_end,
                 "expected_scope": _canonical_json(
@@ -1061,6 +1065,9 @@ def refresh_coverage_ledger(
         detail = {
             "checks": [result.as_log_dict() for result in dataset_evidence],
             "global_failures": [result.as_log_dict() for result in global_failures],
+            # Compatibility shape for existing operational readers. The
+            # authoritative policy version is the per-dataset column above;
+            # this nested key is not used as READY policy authority.
             "coverage_v2": {
                 "required_segments": len(segment_statuses),
                 "status_counts": {
@@ -1085,7 +1092,7 @@ def refresh_coverage_ledger(
             "dataset": dataset,
             **asdict(policy),
             "status": status,
-            "policy_version": POLICY_VERSION,
+            "policy_version": policy.policy_version,
             "observed_start": observed_start,
             "observed_end": observed_end,
             "row_count": count,
@@ -1104,7 +1111,7 @@ def refresh_coverage_ledger(
     persist_refreshed_coverage(
         conn,
         delete_keys=[
-            (_coverage_source(dataset), dataset, POLICY_VERSION)
+            (_coverage_source(dataset), dataset, policies[dataset].policy_version)
             for dataset in selected
         ],
         segment_rows=segment_rows,
@@ -1115,12 +1122,20 @@ def refresh_coverage_ledger(
 
 def coverage_summary(db_path: str | Path) -> dict[str, Any]:
     rows = read_dataset_coverage(db_path)
+    policy_set = coverage_policy_set_binding(
+        [str(row["dataset"]) for row in rows]
+    ) if rows else None
     counts = {status: 0 for status in sorted(COVERAGE_STATUSES)}
     for row in rows:
         counts[str(row["status"])] += 1
     governed = [row for row in rows if row["governance_tier"] == "governed"]
     return {
-        "policy_version": POLICY_VERSION,
+        "policy_version": (
+            policy_set["policy_version"] if policy_set is not None else "UNKNOWN"
+        ),
+        "policy_digest": (
+            policy_set["policy_digest"] if policy_set is not None else "UNKNOWN"
+        ),
         "dataset_count": len(rows),
         "status_counts": counts,
         "governed_ready": bool(governed) and all(
@@ -1205,7 +1220,7 @@ def sync_dataset_coverage_from_segments(
     conn: sqlite3.Connection,
     *,
     datasets: Iterable[str] | None = None,
-    policy_version: str = POLICY_VERSION,
+    policy_version: str | None = None,
     dry_run: bool = False,
     require_no_failing_checks: bool = True,
     refuse_empty_complete: bool = True,
@@ -1231,6 +1246,44 @@ def sync_dataset_coverage_from_segments(
     ).fetchone()[0]
 
     for dataset in selected:
+        if policy_version is not None:
+            effective_policy_version = policy_version
+        else:
+            try:
+                governed_policy_version = coverage_contract_for(
+                    dataset
+                ).policy_version
+            except KeyError:
+                governed_policy_version = None
+            available_versions = tuple(
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT DISTINCT policy_version FROM coverage_segments "
+                    "WHERE dataset=? ORDER BY policy_version",
+                    (dataset,),
+                ).fetchall()
+                if row[0]
+            )
+            if governed_policy_version in available_versions:
+                effective_policy_version = governed_policy_version
+            else:
+                aggregate_policy_row = conn.execute(
+                    "SELECT policy_version FROM dataset_coverage WHERE dataset=?",
+                    (dataset,),
+                ).fetchone()
+                aggregate_policy_version = (
+                    str(aggregate_policy_row[0])
+                    if aggregate_policy_row is not None and aggregate_policy_row[0]
+                    else None
+                )
+                if aggregate_policy_version in available_versions:
+                    effective_policy_version = aggregate_policy_version
+                elif len(available_versions) == 1:
+                    effective_policy_version = available_versions[0]
+                else:
+                    effective_policy_version = (
+                        governed_policy_version or POLICY_VERSION
+                    )
         seg_rows = conn.execute(
             """
             SELECT status, COUNT(*) AS n
@@ -1238,7 +1291,7 @@ def sync_dataset_coverage_from_segments(
             WHERE dataset=? AND policy_version=?
             GROUP BY status
             """,
-            (dataset, policy_version),
+            (dataset, effective_policy_version),
         ).fetchall()
         raw_counts = {
             str(row[0]): int(row[1]) for row in seg_rows if int(row[1]) > 0
@@ -1286,7 +1339,7 @@ def sync_dataset_coverage_from_segments(
                     WHERE dataset=? AND policy_version=? AND status='COMPLETE'
                       AND (receipt_run_id IS NULL OR receipt_run_id=0)
                     """,
-                    (dataset, policy_version),
+                    (dataset, effective_policy_version),
                 ).fetchone()[0]
             )
 

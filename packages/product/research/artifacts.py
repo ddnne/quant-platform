@@ -125,7 +125,6 @@ _PLAN_FIELDS = {
     "strategy_spec_hash",
     "feature_refs",
     "research_data_profile_id",
-    "ready_snapshot_id",
     "universe",
     "period_start",
     "period_end",
@@ -146,7 +145,6 @@ _PLAN_REQUIRED = {
     "strategy_spec_hash",
     "feature_refs",
     "research_data_profile_id",
-    "ready_snapshot_id",
     "universe",
     "period_start",
     "period_end",
@@ -235,7 +233,6 @@ class ExperimentPlan:
     strategy_spec_version: str
     strategy_spec_hash: str
     feature_refs: tuple[FeatureRef, ...]
-    ready_snapshot_id: str
     universe: tuple[str, ...]
     period_start: str
     period_end: str
@@ -328,7 +325,6 @@ class ExperimentPlan:
                 payload["strategy_spec_hash"], "strategy_spec_hash"
             ),
             feature_refs=feature_refs,
-            ready_snapshot_id=_text(payload["ready_snapshot_id"], "ready_snapshot_id"),
             universe=universe,
             period_start=period_start,
             period_end=period_end,
@@ -360,7 +356,6 @@ class ExperimentPlan:
             "strategy_spec_hash": self.strategy_spec_hash,
             "feature_refs": [ref.to_dict() for ref in self.feature_refs],
             "research_data_profile_id": self.research_data_profile_id,
-            "ready_snapshot_id": self.ready_snapshot_id,
             "universe": list(self.universe),
             "period_start": self.period_start,
             "period_end": self.period_end,

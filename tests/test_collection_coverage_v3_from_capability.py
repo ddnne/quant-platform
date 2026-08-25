@@ -35,7 +35,8 @@ _MASTER = "equities_master"
 _AM = "equities_bars_daily_am"
 _EARNINGS = "equities_earnings_calendar"
 _OTC = "jsda_otc_bond_reference_prices"
-_NO_V3 = "indices_bars_daily_topix"
+_NO_V3 = "indices_bars_daily"
+_TOPIX = "indices_bars_daily_topix"
 _MASTER_START = "2008-05-07"
 _REPROOF_REQUIRED = ("2002-08-02", "2002-08-05")
 _WEEKEND = "2002-08-03"
@@ -49,7 +50,7 @@ def _coverage_json_merged(dataset_id: str) -> dict:
     return {**defaults, "policy_version": document["policy_version"], **row}
 
 
-def test_ten_source_capability_contracts_load() -> None:
+def test_eleven_source_capability_contracts_load() -> None:
     loaded = all_source_capability_contracts()
     ids = coverage_v3_dataset_ids()
     assert ids == {contract.dataset_id for contract in loaded}
@@ -64,8 +65,9 @@ def test_ten_source_capability_contracts_load() -> None:
         "fins_earnings_date",
         "fins_summary",
         "markets_calendar",
+        _TOPIX,
     }
-    assert len(ids) == 10
+    assert len(ids) == 11
     assert len(ids) != 23
     for dataset_id in sorted(ids):
         contract = source_capability_contract_or_none(dataset_id)
@@ -84,6 +86,17 @@ def test_master_history_target_start_is_2008_05_07() -> None:
     assert policy.history_target_start == _MASTER_START
     assert policy.history_target_start != "2006-08-13"
     assert contract.earliest_official_availability == _MASTER_START
+
+
+def test_topix_v3_uses_verified_official_endpoint_and_history_start() -> None:
+    contract = source_capability_contract_or_none(_TOPIX)
+    assert contract is not None
+    assert contract.upstream_locator == "/v2/indices/bars/daily/topix"
+    assert contract.official_evidence_url == (
+        "https://jpx-jquants.com/en?lang=ja"
+    )
+    assert contract.earliest_official_availability == "2008-05-01"
+    assert coverage_contract_for(_TOPIX).policy_version == COLLECTION_COVERAGE_V3
 
 
 def test_missing_v3_overrides_stay_none() -> None:

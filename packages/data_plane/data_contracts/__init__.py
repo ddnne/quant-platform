@@ -15,6 +15,9 @@ from .coverage import (
     CollectionCoverageContract,
     all_coverage_contracts,
     coverage_contract_for,
+    coverage_policy_binding,
+    coverage_policy_digest,
+    coverage_policy_set_binding,
 )
 from .jsda import (
     JSDA_CONTRACT_PATH,
@@ -86,6 +89,9 @@ __all__ = [
     "CollectionCoverageContract",
     "all_coverage_contracts",
     "coverage_contract_for",
+    "coverage_policy_binding",
+    "coverage_policy_digest",
+    "coverage_policy_set_binding",
     "JSDA_CONTRACT_PATH",
     "JSDA_CONTRACT_VERSION",
     "JsdaDatasetContract",
