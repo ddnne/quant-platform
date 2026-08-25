@@ -44,6 +44,7 @@ pass.
 | R5 | Generic READY publication and a same-UID arbitrary READY signer remained reachable | OPEN | Dedicated READY authority independently rechecks the authenticated mirror, exact-four closure and immutable copy; Mass requires a separate explicit policy and stays disabled |
 | R6 | Missing natural-key ledger could pass through fixture compatibility | OPEN | Production missing evidence is UNKNOWN/FAIL; compatibility is private test-only policy |
 | R10 | Trader authorization remained a same-UID HOME-key signing oracle over caller-constructed approval decisions | OPEN | Rotate/tombstone the current key; production is verify-only; a separately permissioned human-approval authority independently reconstructs and signs the exact READY/plan/universe/gross-limit decision |
+| R11 | Controlled execution duplicated authority lineage into a caller-writable HOME store | OPEN | The authority UID is the only canonical Paper/Risk/Selection/Knowledge writer; the product client only verifies authority-returned content-addressed artifacts and exposes no production writer |
 
 ### P1
 
@@ -82,7 +83,7 @@ pass.
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
 | A1 | JSDA Queue repeatedly selected only the newest year/files and could not converge on history | FIXED | `7afffade`; stable child segment identity, cursor progress, retry/DLQ evidence |
-| A2 | Receipt, Ops and READY keys had separate filenames but no principal/evidence-authority isolation | OPEN | Dedicated service principals hold private keys; public packages are verify-only and cannot sign caller-authored bodies |
+| A2 | Receipt, D1, Ops, READY, Trader, transition and execution keys had filenames but no complete principal/evidence-authority isolation | OPEN | Retire same-user keys; dedicated principals hold fresh private keys; public packages are verify-only; unprovisioned authorities remain PENDING/UNKNOWN |
 
 ### P1
 
@@ -96,7 +97,7 @@ pass.
 ## Integration gate
 
 The latest independent adversarial review rejected the Coverage/READY candidate
-with P0 rows D2, D3, R1-R6, C4, C9, C10 and A2 unresolved. Remediation is in
+with P0 rows D2, D3, R1-R6, R10-R11, C4, C9, C10 and A2 unresolved. Remediation is in
 progress. After those rows are closed, run a fresh independent review against
 one immutable SHA, then run the full native CI-equivalent suite. Only that
 reviewed SHA may be pushed for the release PR.

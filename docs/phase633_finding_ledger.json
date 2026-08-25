@@ -1,6 +1,6 @@
 {
   "schema_version": "phase631-finding-ledger/v1",
-  "updated_at": "2026-08-26T04:45:57+09:00",
+  "updated_at": "2026-08-26T05:09:04+09:00",
   "merge_policy": {
     "required_p0_status": "FIXED",
     "independent_review_unresolved_p0": 0,
@@ -21,6 +21,7 @@
     {"id":"R5","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Generic READY and a same-UID arbitrary READY signer remained reachable","closure":"Dedicated READY evidence authority, profile closure publication, explicit separate Mass policy; Mass disabled"},
     {"id":"R6","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Missing natural-key evidence could pass fixture compatibility","closure":"Production UNKNOWN or FAIL; private test-only compatibility"},
     {"id":"R10","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Trader authorization remained a same-UID HOME-key signing oracle","closure":"Rotate current key; production verify-only; separately permissioned human-approval authority independently binds exact READY plan universe and gross limit"},
+    {"id":"R11","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Controlled execution duplicated authority lineage into a caller-writable HOME store","closure":"Authority UID is the only canonical Paper Risk Selection Knowledge writer; product client verifies authority-returned content-addressed artifacts and exposes no production writer"},
     {"id":"R7","area":"ready_plan_execution","severity":"P1","status":"OPEN","summary":"Snapshot publication swallowed a database exception","closure":"Abort publication and mint no READY authority"},
     {"id":"R8","area":"ready_plan_execution","severity":"P1","status":"FIXED","summary":"Controlled Paper shared a boolean fixture bypass","evidence":"ddc85178"},
     {"id":"R9","area":"ready_plan_execution","severity":"P1","status":"FIXED","summary":"Pilot and Mass readiness authority was not structurally separated","evidence":"ddc85178"},
@@ -37,7 +38,7 @@
     {"id":"C8","area":"cloudflare_ops_ci","severity":"P1","status":"DEFERRED","summary":"Six active Worker lockfiles remain","closure":"ADR exit criteria prove native-build and rollback parity"},
 
     {"id":"A1","area":"architecture_test_operations","severity":"P0","status":"FIXED","summary":"JSDA Queue could not converge on historical discovery","evidence":"7afffade"},
-    {"id":"A2","area":"architecture_test_operations","severity":"P0","status":"OPEN","summary":"Separate key files did not isolate Receipt Ops and READY signing principals","closure":"Dedicated service principals own keys; public packages are verify-only"},
+    {"id":"A2","area":"architecture_test_operations","severity":"P0","status":"OPEN","summary":"Separate key files did not isolate Receipt D1 Ops READY Trader transition and execution signing principals","closure":"Retire same-user keys; dedicated service principals own fresh private keys; public packages are verify-only and unprovisioned authorities report PENDING or UNKNOWN"},
     {"id":"A3","area":"architecture_test_operations","severity":"P1","status":"FIXED","summary":"Worker coverage was almost entirely Node mocks","evidence":"32a1ea7d"},
     {"id":"A4","area":"architecture_test_operations","severity":"P1","status":"FIXED","summary":"Legacy strategy catalog was a product-runtime input","evidence":"e5969f50"},
     {"id":"A5","area":"architecture_test_operations","severity":"P1","status":"DEFERRED","summary":"Source, AST, and spelling-dependent Python tests remain","closure":"Replace incrementally with structural invariants"},
