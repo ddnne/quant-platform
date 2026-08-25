@@ -35,6 +35,12 @@ not release authorities.
   local dry runs only stage bytes, and immutable remote writes use the Worker
   children-then-manifest operation. Read acceptance observes the pinned
   `wrangler r2 object get --remote` invocation.
+- Removed the production-runbook prose scanner and the Phase 3.5 validation
+  matrix's Markdown/count coupling. Machine-readable binding and migration
+  manifests remain executable authorities; matrix uniqueness/tier behavior is
+  still tested directly.
+- Replaced the watermark migration's SQL spelling assertions with an applied
+  SQLite schema/index observation.
 - Replaced the runner's `inspect.getsource`/string check for `shell=False` with
   an intercepted invocation that asserts the actual subprocess contract.
 - Removed the JSDA recovery sealer's function-name/import spelling assertions;

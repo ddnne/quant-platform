@@ -16,54 +16,10 @@ Offline-only: no network, no Cloudflare, no API keys.
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
-
 import pytest
 
 from cf_platform.ingest_premium import matrix
 from ingestion.jquants.catalog import PREMIUM_CORE_DATASETS, list_datasets
-
-_REPO = Path(__file__).resolve().parents[1]
-MATRIX_DOC = _REPO / "docs" / "phase35_validation_matrix.md"
-
-
-def _doc_check_ids() -> set[str]:
-    """Parse the markdown tables for check IDs (C1, M3, X4, etc.)."""
-    text = MATRIX_DOC.read_text(encoding="utf-8")
-    # IDs are uppercase letter(s) + digits, used as the first column of
-    # doc tables. Pull every match in the right-hand tables; ignore stray
-    # mentions in prose by requiring a leading ``|`` (table cell) on the
-    # same logical line.
-    ids: set[str] = set()
-    for line in text.splitlines():
-        if not line.startswith("|"):
-            continue
-        # First cell after the leading ``|``.
-        first = line[1:].split("|", 1)[0].strip()
-        m = re.fullmatch(r"([A-Z]+)(\d+)", first)
-        if m:
-            ids.add(first)
-    return ids
-
-
-def test_matrix_doc_exists():
-    assert MATRIX_DOC.exists(), f"missing {MATRIX_DOC}"
-
-
-def test_every_doc_id_is_in_matrix():
-    doc_ids = _doc_check_ids()
-    code_ids = {c.id for c in matrix.CHECKS}
-    missing = doc_ids - code_ids
-    assert not missing, f"ids in doc but not in matrix.CHECKS: {sorted(missing)}"
-
-
-def test_every_matrix_id_is_in_doc():
-    doc_ids = _doc_check_ids()
-    code_ids = {c.id for c in matrix.CHECKS}
-    extra = code_ids - doc_ids
-    assert not extra, f"ids in matrix.CHECKS but not in doc: {sorted(extra)}"
-
 
 def test_check_ids_unique():
     ids = [c.id for c in matrix.CHECKS]
@@ -116,4 +72,3 @@ def test_premium_core_datasets_match_catalog_sot():
     core_ids = matrix.premium_core_datasets()
     assert core_ids == PREMIUM_CORE_DATASETS
     assert core_ids == tuple(list_datasets("core")) + tuple(list_datasets("edinet"))
-    assert len(core_ids) == 23

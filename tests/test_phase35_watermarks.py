@@ -56,14 +56,6 @@ def _apply_0001_then_0002(conn: sqlite3.Connection) -> None:
     conn.executescript(_MIGRATION.read_text())
 
 
-def test_migration_file_exists():
-    assert _MIGRATION.exists(), "0002_watermarks.sql should exist"
-    sql = _MIGRATION.read_text()
-    # Surface the table + index in the doc / regression.
-    assert "CREATE TABLE IF NOT EXISTS ingestion_watermarks" in sql
-    assert "CREATE INDEX IF NOT EXISTS ix_watermarks_last_ingested_at" in sql
-
-
 def test_migration_creates_expected_schema_in_memory():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -82,6 +74,11 @@ def test_migration_creates_expected_schema_in_memory():
         "WHERE pk > 0 ORDER BY pk"
     ).fetchall()
     assert [row["name"] for row in pk] == ["dataset"]
+    indexes = {
+        row["name"]
+        for row in conn.execute("PRAGMA index_list(ingestion_watermarks)")
+    }
+    assert "ix_watermarks_last_ingested_at" in indexes
 
 
 def test_migration_is_idempotent():
