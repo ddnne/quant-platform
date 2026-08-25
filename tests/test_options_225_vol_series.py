@@ -12,7 +12,6 @@ from research.options_225_vol_series import (
     GAP_POLICY,
     IV_FIELDS_AVAILABLE_FROM,
     OPTIONS_225_VOL_SERIES_VERSION,
-    OPTIONS_225_VOL_SERIES_WAVE,
     SKEW_CONVENTION,
     build_daily_atm_iv_series,
     build_daily_basevol_delta_series,
@@ -150,11 +149,8 @@ def _mini_chain_day(
     return rows
 
 
-def test_wave_pins_and_freezes():
+def test_vol_series_contract_semantics():
     assert OPTIONS_225_VOL_SERIES_VERSION == "research-options-225-vol-series/v1.2"
-    assert (
-        "W95" in OPTIONS_225_VOL_SERIES_WAVE or "W94" in OPTIONS_225_VOL_SERIES_WAVE
-    )
     assert DATASET_ID == "derivatives_bars_daily_options_225"
     assert GAP_POLICY == "disclose_only_no_ffill_no_invent"
     assert IV_FIELDS_AVAILABLE_FROM == "2016-07-19"

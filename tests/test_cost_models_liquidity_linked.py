@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from research.cost_models import (
     COST_MODELS_VERSION,
-    COST_MODELS_WAVE,
     DEFAULT_ONE_WAY_COST,
     DEFAULT_ONE_WAY_COST_BP,
     DEFAULT_SHORT_BORROW_ANNUAL_BP,
@@ -255,7 +254,6 @@ def test_long_only_tx_scaled_by_low_liquidity():
         prefer_liquidity_linked=True,
     )
     assert ass["version"] == COST_MODELS_VERSION
-    assert ass["wave"] == COST_MODELS_WAVE
     assert ass["liquidity_linked"] is True
     assert ass["liquidity"]["bucket"] == LIQUIDITY_BUCKET_LOW
     assert abs(
