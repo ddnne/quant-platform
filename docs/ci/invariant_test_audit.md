@@ -46,6 +46,9 @@ not release authorities.
   now observe PIT calls and assert that runtime contexts expose no DB handle.
 - Replaced the remaining aggregate-namespace string scan with the same parsed
   import graph and removed its deferred-phase existence assertion.
+- Removed the research harness's AST/function-name/environment-spelling freeze;
+  Mass fail-closed behavior is already exercised through the public start gate
+  and Worker scheduler/runtime tests.
 - Replaced the runner's `inspect.getsource`/string check for `shell=False` with
   an intercepted invocation that asserts the actual subprocess contract.
 - Removed the JSDA recovery sealer's function-name/import spelling assertions;

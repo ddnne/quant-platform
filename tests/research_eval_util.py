@@ -6,42 +6,12 @@ in the helpers that assert them.
 
 from __future__ import annotations
 
-import ast
 import json
 from datetime import date, timedelta
-from pathlib import Path
 from typing import Any
 
 _MISSING = object()
 
-_AST_BANNED_IMPORTS = (
-    "agents",
-    "mass_research",
-    "start_mass_research",
-    "require_mass_research_start",
-    "VerifiedResearchReadiness",
-    "ResearchReadinessService",
-    "OrderIntent",
-    "paper_service",
-)
-_AST_BANNED_CALLS = (
-    "start_mass_research",
-    "place_order",
-    "submit_order",
-    "mint_ready",
-)
-REPO_ROOT = Path(__file__).resolve().parents[1]
-_RESEARCH_PKG = REPO_ROOT / "packages" / "product" / "research"
-HARNESS_AST_PATHS = (
-    _RESEARCH_PKG / "r2_io.py",
-    _RESEARCH_PKG / "complete21.py",
-    _RESEARCH_PKG / "r2_feature_context.py",
-    _RESEARCH_PKG / "r2_feature_parse.py",
-    _RESEARCH_PKG / "r2_feature_normalize.py",
-    _RESEARCH_PKG / "r2_feature_mirror.py",
-    _RESEARCH_PKG / "r2_available_at.py",
-    _RESEARCH_PKG / "daily_path_eval.py",
-)
 _DEFAULT_INGESTED_AT = "2026-08-12T00:00:00+09:00"
 _FREEZE_FALSE = (
     "connected_to_ready",
@@ -83,46 +53,6 @@ def _assert_mass_ready_off(obj, *, allow_research_candidate: bool = False) -> No
         candidate = _field(obj, "research_candidate")
         if candidate is not _MISSING:
             assert candidate is False
-
-
-def _ast_imports_and_calls(path: Path) -> tuple[set[str], set[str]]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    imported: set[str] = set()
-    called: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imported.add(alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imported.add(node.module.split(".")[0])
-                for alias in node.names:
-                    imported.add(alias.name)
-        elif isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Name):
-                called.add(func.id)
-            elif isinstance(func, ast.Attribute):
-                called.add(func.attr)
-    return imported, called
-
-
-def assert_ast_bans_mass_ready_orders(
-    path: Path, *, extra_banned_imports: tuple[str, ...] = ()
-) -> str:
-    imported, called = _ast_imports_and_calls(path)
-    src = path.read_text(encoding="utf-8")
-    for name in _AST_BANNED_IMPORTS + extra_banned_imports:
-        assert name not in imported, path.name
-    for name in _AST_BANNED_CALLS:
-        assert name not in called, path.name
-    assert "MASS_RESEARCH_ENABLE" not in src
-    assert "PHASE7_ENABLE" not in src
-    assert 'MASS_RESEARCH_STATUS: str = "GO"' not in src
-    assert 'PHASE7_STATUS: str = "ON"' not in src
-    assert "READY_DECLARED: bool = True" not in src
-    assert "ORDER_EXECUTION: bool = True" not in src
-    return src
 
 
 def _r2_jsonl(

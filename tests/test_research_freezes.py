@@ -104,23 +104,6 @@ def test_harness_default_eval_codes_are_smoke_three() -> None:
     assert len(eu.EVAL_UNIVERSE_POOL) > 3
 
 
-def test_research_modules_ast_bans_mass_ready_orders() -> None:
-    from agents.mass_research import start_mass_research
-    from selection.budget_ledger import MassResearchDisabledError
-    from tests.research_eval_util import (
-        HARNESS_AST_PATHS,
-        assert_ast_bans_mass_ready_orders,
-    )
-    import pytest
-
-    assert HARNESS_AST_PATHS
-    for path in HARNESS_AST_PATHS:
-        assert path.is_file(), path
-        assert_ast_bans_mass_ready_orders(path)
-    with pytest.raises(MassResearchDisabledError):
-        start_mass_research(budget=None, readiness=None)
-
-
 def test_factory_templates_do_not_clone_combo_catalog() -> None:
     from research.offline.factory import LOGIC_TEMPLATES
     from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
@@ -193,4 +176,3 @@ def test_default_logic_specs_leftover_and_bar_native() -> None:
     assert native[0]["logic_id"] == "mdh_sticky_momentum"
     assert native[0]["family_id"] == "multi_day_hold"
     assert native[0]["params"]
-
