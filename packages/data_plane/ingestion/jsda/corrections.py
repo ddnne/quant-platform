@@ -211,9 +211,6 @@ def _record(
     digests: Mapping[str, Any],
     receipt_service=None,
     raw_artifact_paths: Sequence[Path | str] = (),
-    raw_records: Sequence[Any] = (),
-    structured_table: str = "",
-    normalized_records: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     record_governed_receipt(
         store,
@@ -230,9 +227,6 @@ def _record(
         digests=digests,
         receipt_service=receipt_service,
         raw_artifact_paths=raw_artifact_paths,
-        raw_records=raw_records,
-        structured_table=structured_table,
-        normalized_records=normalized_records,
     )
 
 
@@ -313,6 +307,7 @@ def run_otc_reference_corrections(
     checked_at: Optional[str] = None,
     correction_ids: Optional[Sequence[str]] = None,
     force: bool = False,
+    receipt_service=None,
 ) -> OtcCorrectionReport:
     """Apply section-1 replacement corrections as later PIT revisions."""
     checked_at = checked_at or now_iso()
@@ -320,12 +315,11 @@ def run_otc_reference_corrections(
     fetcher = JsdaFetcher(http)
     registrar = Registrar(store)
     policy = coverage_contract_for(OTC_REFERENCE_DATASET)
-    receipt_service = None
     authority_error: Optional[str] = None
     try:
         try:
-            receipt_service = require_jsda_receipt_service()
-        except RuntimeError as exc:
+            receipt_service = require_jsda_receipt_service(receipt_service)
+        except (RuntimeError, TypeError) as exc:
             authority_error = str(exc)
         correction_index_url = otc_reference_corrections_index_url()
         correction_index_raw = fetcher.fetch_file(correction_index_url)
@@ -531,9 +525,6 @@ def run_otc_reference_corrections(
                     pagination_exhausted=True, digests=evidence,
                     receipt_service=receipt_service,
                     raw_artifact_paths=source_raw_paths,
-                    raw_records=changed_records,
-                    structured_table="jsda_otc_bond_reference_prices",
-                    normalized_records=normalized_rows,
                 )
                 applied += 1
                 changed_total += changed_count

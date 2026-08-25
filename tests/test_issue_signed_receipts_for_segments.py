@@ -172,3 +172,6 @@ def test_main_refresh_site_passes_index_text(cli_module) -> None:
     assert "urllib" not in src
     assert "requests." not in inspect.getsource(cli_module)
     assert "urlopen" not in inspect.getsource(cli_module)
+    assert "open_governed_receipt_service" not in inspect.getsource(cli_module)
+    assert "record_persisted_success" not in inspect.getsource(cli_module)
+    assert "RECOVERED_RAW_ONLY" in inspect.getsource(cli_module)

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Issue Ed25519-signed receipts for planned segments. Does not invent COMPLETE."""
+"""Record unsigned recovery evidence for planned segments.
+
+After-the-fact raw/DB matching is not a trusted ingestion transaction and can
+never issue COMPLETE-eligible evidence.  Governed signing occurs only inline
+in the ingestion runtime.
+"""
 
 from __future__ import annotations
 
@@ -26,16 +31,16 @@ ROOT = ensure_repo_root()
 from ingestion.jsda.official_index import (  # noqa: E402
     read_local_index_text as _read_index_text,
 )
-from ingestion.runtime_authority import (  # noqa: E402
-    open_governed_receipt_service,
-)
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
+    build_collection_receipt,
     refresh_coverage_ledger,
+    record_collection_receipt,
     record_required_segments,
     sync_dataset_coverage_from_segments,
 )
 from storage.sqlite_store import SqliteStore  # noqa: E402
+from storage.receipt_crypto import partition_extra_digests  # noqa: E402
 
 _FROM_TO_RE = re.compile(
     r"from=(?P<fr>\d{4}-\d{2}-\d{2}).*?to=(?P<to>\d{4}-\d{2}-\d{2})",
@@ -245,12 +250,6 @@ def main(argv: list[str] | None = None) -> int:
     if not db.is_file():
         print(f"db missing: {db}", file=sys.stderr)
         return 2
-    try:
-        receipt_service = open_governed_receipt_service()
-    except RuntimeError as exc:
-        print(f"signing authority unavailable: {exc}", file=sys.stderr)
-        return 2
-
     store = SqliteStore(db)
     conn = store._conn  # noqa: SLF001 - operator tool owns this store
     dataset_list = [d.strip() for d in args.datasets.split(",") if d.strip()]
@@ -342,22 +341,26 @@ def main(argv: list[str] | None = None) -> int:
             )
             continue
         record_required_segments(conn, [required])
-        receipt = receipt_service.record_persisted_success(
-            store,
+        receipt = build_collection_receipt(
             required=required,
             run_id=next_run,
-            raw_artifact_paths=(raw_path,),
-            raw_records=raw_records,
-            structured_table="jquants_records",
-            normalized_records=structured_records,
+            raw=raw,
+            observed_items=1 if raw_records else 0,
+            raw_row_count=len(raw_records),
+            structured_row_count=structured,
             pagination_exhausted=True,
-            discovery_exhausted=True,
+            extra_digests=partition_extra_digests({
+                "eligibility": "RECOVERED_RAW_ONLY",
+                "origin": "after-the-fact-operator-recovery",
+                "raw_path": str(raw_path),
+            }),
         )
+        record_collection_receipt(conn, receipt)
         next_run += 1
         issued += 1
         issued_datasets.add(required.dataset)
         print(
-            f"issued signed receipt {required.dataset}/{required.segment_id} "
+            f"recorded recovery receipt {required.dataset}/{required.segment_id} "
             f"structured={structured} run_id={receipt.run_id}"
         )
     conn.commit()

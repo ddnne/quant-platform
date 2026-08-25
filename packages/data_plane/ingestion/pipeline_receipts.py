@@ -10,10 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .jquants.receipts import (
-    emit_segment_receipt,
-    require_governed_receipt_service,
-)
+from .jquants.receipts import emit_segment_receipt
 
 
 def count_raw_items(raw: bytes | list | tuple) -> int:
@@ -114,10 +111,8 @@ def emit_catalog_job_receipt(
     store,
     *,
     job: Any,
-    when: str,
-    raw_path,
-    rows: list,
-    structured_records: list[dict[str, Any]],
+    collection_context,
+    persisted_collection,
     receipt_service,
 ) -> None:
     """Record required segments and a signed SUCCESS receipt for one catalog job.
@@ -128,6 +123,7 @@ def emit_catalog_job_receipt(
     from data_contracts import coverage_contract_for
     from storage.coverage_ledger import record_required_segments
 
+    when = collection_context.checked_at
     params = dict(getattr(job, "params", None) or {})
     policy = coverage_contract_for(job.dataset_id)
     target_end = (
@@ -188,12 +184,8 @@ def emit_catalog_job_receipt(
             store,
             required=req,
             run_id=run_id,
-            raw_artifact_paths=(raw_path,),
-            raw_records=rows,
-            structured_table="jquants_records",
-            normalized_records=structured_records,
-            pagination_exhausted=True,
-            discovery_exhausted=True,
+            persisted_collection=persisted_collection,
+            collection_context=collection_context,
             source_request={
                 "dataset": str(job.dataset_id),
                 "params": params,
@@ -210,6 +202,5 @@ __all__ = [
     "count_raw_items",
     "emit_catalog_job_receipt",
     "observed_items_from_actual",
-    "require_governed_receipt_service",
     "rollback_governed_catalog_write",
 ]

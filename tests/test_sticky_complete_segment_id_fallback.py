@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from data_contracts import coverage_contract_for
-from ingestion.runtime_authority import reconcile_collection_evidence
+from tests.receipt_test_support import (
+    _SignedReceiptAuthority,
+    _reconcile_collection_evidence,
+)
 from storage.coverage_ledger import (
     RequiredCoverageSegment,
     _latest_complete_receipt_for_required,
 )
-from storage.trusted_receipt import SignedReceiptAuthority
 
 
 def test_segment_id_fallback_rejects_end_drift(receipt_ed25519_keys):
@@ -27,17 +29,15 @@ def test_segment_id_fallback_rejects_end_drift(receipt_ed25519_keys):
         expected_items=1,
     )
     record = {"Date": "2026-08-11", "HolidayDivision": "1"}
-    evidence = reconcile_collection_evidence(
+    evidence = _reconcile_collection_evidence(
         required=old_required,
         run_id=10,
         raw_pages=(b'[{"Date":"2026-08-11","HolidayDivision":"1"}]',),
         raw_records=(record,),
         structured_records=(record,),
-        pagination_exhausted=True,
-        discovery_exhausted=True,
         checked_at="2026-08-12T00:00:00+00:00",
     )
-    old_receipt = SignedReceiptAuthority(
+    old_receipt = _SignedReceiptAuthority(
         signing_key=receipt_ed25519_keys.signing_key
     ).issue(evidence)
     rolled_required = RequiredCoverageSegment(

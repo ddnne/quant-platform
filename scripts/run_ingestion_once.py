@@ -251,6 +251,10 @@ def main(argv=None) -> int:
                 and not tokyo_repo_selected
                 and not corrections_selected
             )
+            jsda_receipt_service = None
+            # JSDA does not yet expose an opaque, redirect/discovery-bound fetch
+            # capability. These runners therefore remain recovery-only and the
+            # general CLI must never open the signing service for them.
             if legacy_selected:
                 jsda_bond = args.jsda_only != "repo"
                 jsda_repo = args.jsda_only != "bond"
@@ -273,6 +277,7 @@ def main(argv=None) -> int:
                     from_year=args.jsda_from_year,
                     to_year=args.jsda_to_year,
                     force=args.jsda_force,
+                    receipt_service=jsda_receipt_service,
                 )
                 archive_run_report = archive_report.as_run_report()
                 all_reports.append(archive_run_report)
@@ -285,6 +290,7 @@ def main(argv=None) -> int:
                     store=store,
                     data_base=data_base,
                     force=args.jsda_force,
+                    receipt_service=jsda_receipt_service,
                 )
                 repo_run_report = repo_report.as_run_report()
                 all_reports.append(repo_run_report)
@@ -298,6 +304,7 @@ def main(argv=None) -> int:
                     data_base=data_base,
                     correction_ids=args.jsda_correction_ids,
                     force=args.jsda_force,
+                    receipt_service=jsda_receipt_service,
                 )
                 correction_run_report = correction_report.as_run_report()
                 all_reports.append(correction_run_report)

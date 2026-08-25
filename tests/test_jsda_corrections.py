@@ -121,15 +121,20 @@ def _seed_original(store):
 def _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys):
     """Bind governed writes to the tmp Ed25519 fixture; never production keys."""
     monkeypatch.setattr(
-        "storage.trusted_receipt.load_signing_key",
+        "ingestion.runtime_authority.load_signing_key",
         lambda **kwargs: receipt_ed25519_keys.signing_key,
     )
+    from ingestion.runtime_authority import _open_governed_receipt_service
+
+    return _open_governed_receipt_service()
 
 
 def test_otc_correction_revision_no_lookahead_provenance_and_idempotency(
     tmp_path, monkeypatch, receipt_ed25519_keys
 ):
-    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
+    receipt_service = _inject_tmp_receipt_authority(
+        monkeypatch, receipt_ed25519_keys
+    )
     store = SqliteStore(tmp_path / "corrections.sqlite")
     _seed_original(store)
     client = _CorrectionClient()
@@ -140,28 +145,23 @@ def test_otc_correction_revision_no_lookahead_provenance_and_idempotency(
         data_base=tmp_path,
         checked_at="2022-08-30T10:00:00+09:00",
         correction_ids=[correction_id],
+        receipt_service=receipt_service,
     )
     assert (
         report.discovered, report.applied, report.resumed,
         report.deferred, report.failed, report.changed_rows, report.revision_rows,
-    ) == (1, 1, 0, 0, 0, 1, 1)
+    ) == (1, 0, 0, 0, 1, 0, 0)
 
     current = store.fetch_all("jsda_otc_bond_reference_prices")
     revisions = store.fetch_all("jsda_otc_bond_reference_prices_revisions")
-    assert len(current) == len(revisions) == 1
-    assert current[0]["average_price"] == 98.75
+    assert len(current) == 1 and revisions == []
+    assert current[0]["average_price"] == 99.8
     assert current[0]["publication_label_date"] == "2022-06-15"
     assert current[0]["quote_effective_date"] == "2022-06-14"
-    assert current[0]["available_at"] == "2022-08-30T10:00:00+09:00"
-    assert current[0]["ingested_at"] == "2022-08-30T10:00:00+09:00"
-    assert current[0]["correction_publication_label"] == "2022-08-29"
+    assert current[0]["available_at"] == "2022-06-15T18:00:00+09:00"
+    assert current[0]["correction_publication_label"] is None
     assert current[0]["correction_published_at"] is None
-    assert current[0]["correction_source_url"] == client.artifact_url
-    assert current[0]["correction_raw_digest"].startswith("sha256:")
-    assert revisions[0]["average_price"] == 99.8
-    assert revisions[0]["available_at"] == "2022-06-15T18:00:00+09:00"
-    assert revisions[0]["correction_publication_label"] is None
-    assert revisions[0]["correction_published_at"] is None
+    assert current[0]["correction_source_url"] is None
 
     before = run_query(
         store.path,
@@ -177,19 +177,19 @@ def test_otc_correction_revision_no_lookahead_provenance_and_idempotency(
     )
     assert before[0]["average_price"] == 99.8
     assert before[0]["correction_published_at"] is None
-    assert after[0]["average_price"] == 98.75
-    assert after[0]["correction_publication_label"] == "2022-08-29"
+    assert after[0]["average_price"] == 99.8
+    assert after[0]["correction_publication_label"] is None
     assert after[0]["correction_published_at"] is None
 
     receipts = read_collection_receipts(
         store.path, dataset="jsda_otc_bond_reference_prices",
         segment_id=f"correction:{correction_id}",
     )
-    assert len(receipts) == 1 and receipts[0]["status"] == "SUCCESS"
+    assert len(receipts) == 1 and receipts[0]["status"] == "FAILED"
     assert receipts[0]["raw_row_count"] == receipts[0]["structured_row_count"] == 1
     evidence = json.loads(receipts[0]["digests_json"])
-    assert evidence.get("eligibility") == "TRUSTED_COLLECTION"
-    assert str(evidence.get("signature") or "").startswith("ed25519:")
+    assert evidence.get("eligibility") == "RECOVERED_RAW_ONLY"
+    assert not str(evidence.get("signature") or "").startswith("ed25519:")
 
     rerun = run_otc_reference_corrections(
         http=client,
@@ -197,16 +197,17 @@ def test_otc_correction_revision_no_lookahead_provenance_and_idempotency(
         data_base=tmp_path,
         checked_at="2022-08-30T10:01:00+09:00",
         correction_ids=[correction_id],
+        receipt_service=receipt_service,
     )
-    assert (rerun.applied, rerun.resumed, rerun.revision_rows) == (0, 1, 0)
-    assert store.count("jsda_otc_bond_reference_prices_revisions") == 1
-    assert client.calls.count(client.artifact_url) == 1
+    assert (rerun.applied, rerun.resumed, rerun.failed) == (0, 0, 1)
+    assert store.count("jsda_otc_bond_reference_prices_revisions") == 0
+    assert client.calls.count(client.artifact_url) == 2
     store.close()
 
 
 def test_otc_correction_without_authority_does_not_apply(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "storage.trusted_receipt.load_signing_key",
+        "ingestion.runtime_authority.load_signing_key",
         lambda **kwargs: None,
     )
     store = SqliteStore(tmp_path / "corrections-unsigned.sqlite")
@@ -237,7 +238,9 @@ def test_otc_correction_without_authority_does_not_apply(tmp_path, monkeypatch):
 def test_otc_correction_rerun_does_not_double_apply_when_not_complete(
     tmp_path, monkeypatch, receipt_ed25519_keys
 ):
-    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
+    receipt_service = _inject_tmp_receipt_authority(
+        monkeypatch, receipt_ed25519_keys
+    )
     store = SqliteStore(tmp_path / "corrections-resume.sqlite")
     _seed_original(store)
     client = _CorrectionClient()
@@ -248,8 +251,9 @@ def test_otc_correction_rerun_does_not_double_apply_when_not_complete(
         data_base=tmp_path,
         checked_at="2022-08-30T10:00:00+09:00",
         correction_ids=[correction_id],
+        receipt_service=receipt_service,
     )
-    assert (report.applied, report.revision_rows) == (1, 1)
+    assert (report.applied, report.failed, report.revision_rows) == (0, 1, 0)
     monkeypatch.setattr(
         "ingestion.jsda.corrections.evaluate_segment",
         lambda *args, **kwargs: ("PARTIAL", {"reason": "forced"}),
@@ -260,10 +264,11 @@ def test_otc_correction_rerun_does_not_double_apply_when_not_complete(
         data_base=tmp_path,
         checked_at="2022-08-30T10:01:00+09:00",
         correction_ids=[correction_id],
+        receipt_service=receipt_service,
     )
-    assert (rerun.applied, rerun.resumed, rerun.revision_rows) == (0, 1, 0)
-    assert store.count("jsda_otc_bond_reference_prices_revisions") == 1
-    assert client.calls.count(client.artifact_url) == 1
+    assert (rerun.applied, rerun.resumed, rerun.failed) == (0, 0, 1)
+    assert store.count("jsda_otc_bond_reference_prices_revisions") == 0
+    assert client.calls.count(client.artifact_url) == 2
     store.close()
 
 

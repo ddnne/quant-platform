@@ -12,6 +12,7 @@ import csv
 import importlib.util
 import inspect
 import io
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -169,7 +170,6 @@ def test_seal_day_parser_capable_stays_unsealed_without_trusted_reproof(
             day,
             path,
             "",
-            None,
             quote_effective_date=quote_day,
         )
         assert result["status"] == "REPROOF_REQUIRED"
@@ -192,7 +192,6 @@ def test_seal_day_rejects_publication_label_as_quote_day(
         "2002-08-02",
         path,
         "",
-        None,
         quote_effective_date="2002-08-02",
     )
     assert result == {
@@ -223,3 +222,48 @@ def test_seal_source_does_not_fetch_live_html_or_invent_complete(seal) -> None:
     assert seal.OTC_GRAIN == "official_archive_index_day"
     assert seal.EARLY_LAYOUT_RECONCILIATION_PROOF == {}
     assert WEEKEND_IN_TINY_SPAN not in seal.EARLY_LAYOUT_REPROOF_DAYS
+    assert "open_governed_receipt_service" not in src
+    assert "record_persisted_success" not in src
+    assert "bulk_insert_day" not in src
+    assert "TRUSTED_COLLECTION" not in src
+
+
+def test_recovery_sealer_records_only_failed_reproof_evidence(
+    seal, tmp_path: Path,
+) -> None:
+    body = _CSV_FULL.read_bytes()
+    raw = body * ((seal.FULL_OK_MIN // len(body)) + 2)
+    path = tmp_path / "S020806.csv"
+    path.write_bytes(raw)
+    store = seal.SqliteStore(tmp_path / "recovery.sqlite")
+    try:
+        result = seal.seal_day(
+            store,
+            "2002-08-06",
+            path,
+            "https://www.jsda.or.jp/example/S020806.csv",
+            quote_effective_date="2002-08-05",
+        )
+        assert result["status"] == "REPROOF_REQUIRED"
+        assert result["reason"] == "GOVERNED_INGESTION_REPLAY_REQUIRED"
+        row = store._conn.execute(  # noqa: SLF001
+            "SELECT status,error,digests_json,structured_row_count "
+            "FROM collection_receipts WHERE dataset=? AND segment_id=? "
+            "ORDER BY run_id DESC LIMIT 1",
+            (seal.OTC_DATASET, "2002-08-06"),
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "FAILED"
+        assert str(row[1]).startswith("REPROOF_REQUIRED:")
+        digests = json.loads(str(row[2]))
+        assert digests["eligibility"] == "RECOVERED_RAW_ONLY"
+        assert digests["quote_effective_date"] == "2002-08-05"
+        assert "signature" not in digests
+        assert int(row[3]) == 0
+        facts = store._conn.execute(  # noqa: SLF001
+            "SELECT COUNT(*) FROM jsda_otc_bond_reference_prices "
+            "WHERE publication_label_date='2002-08-06'"
+        ).fetchone()[0]
+        assert int(facts) == 0
+    finally:
+        store.close()

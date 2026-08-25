@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parallel signed-receipt issuance. Never invent COMPLETE without raw.
+"""Parallel after-the-fact recovery evidence. Never issues signed COMPLETE.
 
 Optional --index-text PATH is local official-index HTML. Omitted:
 index_text is None so OTC required set is fail-closed empty, not
@@ -34,16 +34,16 @@ ROOT = ensure_repo_root()
 from ingestion.jsda.official_index import (  # noqa: E402
     read_local_index_text as _read_index_text,
 )
-from ingestion.runtime_authority import (  # noqa: E402
-    open_governed_receipt_service,
-)
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
+    build_collection_receipt,
     refresh_coverage_ledger,
+    record_collection_receipt,
     record_required_segments,
     sync_dataset_coverage_from_segments,
 )
 from storage.sqlite_store import SqliteStore  # noqa: E402
+from storage.receipt_crypto import partition_extra_digests  # noqa: E402
 
 _FROM_TO_RE = re.compile(
     r"from=(?P<fr>\d{4}-\d{2}-\d{2}).*?to=(?P<to>\d{4}-\d{2}-\d{2})",
@@ -447,26 +447,29 @@ def issue_prepared(
     store: SqliteStore,
     prepared_list: Sequence[PreparedIssue],
     *,
-    receipt_service: Any,
     start_run_id: int,
 ) -> list[dict[str, Any]]:
-    """Serial persisted reconciliation + issue. Returns summary rows."""
+    """Record serial RECOVERED_RAW_ONLY observations; never sign."""
     conn = store._conn  # noqa: SLF001 - operator tool shares governed store
     issued_rows: list[dict[str, Any]] = []
     next_run = start_run_id
     for prep in prepared_list:
         record_required_segments(conn, [prep.required])
-        receipt = receipt_service.record_persisted_success(
-            store,
+        receipt = build_collection_receipt(
             required=prep.required,
             run_id=next_run,
-            raw_artifact_paths=(prep.raw_path,),
-            raw_records=prep.raw_records,
-            structured_table="jquants_records",
-            normalized_records=prep.structured_records,
+            raw=prep.raw,
+            observed_items=1 if prep.raw_records else 0,
+            raw_row_count=len(prep.raw_records),
+            structured_row_count=prep.structured,
             pagination_exhausted=True,
-            discovery_exhausted=True,
+            extra_digests=partition_extra_digests({
+                "eligibility": "RECOVERED_RAW_ONLY",
+                "origin": "after-the-fact-operator-recovery",
+                "raw_path": str(prep.raw_path),
+            }),
         )
+        record_collection_receipt(conn, receipt)
         next_run += 1
         issued_rows.append(
             {
@@ -581,15 +584,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    if not args.dry_run:
-        try:
-            receipt_service = open_governed_receipt_service()
-        except RuntimeError as exc:
-            print(f"signing authority unavailable: {exc}", file=sys.stderr)
-            return 2
-    else:
-        receipt_service = None
-
     # A dry-run is deliberately read-only: opening ``SqliteStore`` would apply
     # schema migrations and therefore make an operator preview mutate its input.
     # The production path owns the governed store and its migrations.
@@ -660,7 +654,7 @@ def main(argv: list[str] | None = None) -> int:
     elif not ready:
         print(f"summary issued=0 skipped={skipped}")
     else:
-        assert store is not None and receipt_service is not None
+        assert store is not None
         max_run = conn.execute(
             "SELECT COALESCE(MAX(run_id), 900000) FROM collection_receipts"
         ).fetchone()[0]
@@ -668,13 +662,12 @@ def main(argv: list[str] | None = None) -> int:
         issued_rows = issue_prepared(
             store,
             ready,
-            receipt_service=receipt_service,
             start_run_id=start_run,
         )
         conn.commit()
         for row in issued_rows:
             print(
-                f"issued signed receipt {row['dataset']}/{row['segment_id']} "
+                f"recorded recovery receipt {row['dataset']}/{row['segment_id']} "
                 f"structured={row['structured']} run_id={row['run_id']}"
             )
         print(f"summary issued={len(issued_rows)} skipped={skipped}")
@@ -739,7 +732,10 @@ def main(argv: list[str] | None = None) -> int:
         "local_complete_segments": int(complete_after),
         "dry_run": bool(args.dry_run),
         "workers": int(args.workers),
-        "note": "COMPLETE only after signed SUCCESS + ledger refresh; never without raw.",
+        "note": (
+            "RECOVERED_RAW_ONLY: a governed ingestion replay must independently "
+            "persist, parse, commit, reread, reconcile, and sign before COMPLETE."
+        ),
     }
     if args.json_summary:
         print(json.dumps(summary, ensure_ascii=False))

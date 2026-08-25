@@ -32,14 +32,16 @@ DISABLE_HOST_PEM_ENV = "QUANT_RECEIPT_DISABLE_HOST_PEM"
 
 
 def _host_pem_disabled() -> bool:
-    """True under pytest or QUANT_RECEIPT_DISABLE_HOST_PEM=1.
+    """Return the explicit operator policy for disabling the host key file.
 
     Explicit pem=/path=/QUANT_RECEIPT_SIGNING_KEY_PEM are unaffected.
     Missing keys stay fail-closed (None).
+
+    Test-runner environment variables deliberately have no effect here.  A
+    caller can set those variables in production, so they are not a security
+    boundary.  Tests inject an ephemeral key explicitly instead.
     """
-    if os.environ.get(DISABLE_HOST_PEM_ENV, "").strip() == "1":
-        return True
-    return bool(os.environ.get("PYTEST_CURRENT_TEST"))
+    return os.environ.get(DISABLE_HOST_PEM_ENV, "").strip() == "1"
 
 
 def _contracts_dir() -> Path:
@@ -210,9 +212,10 @@ def load_signing_key(
     Returns None if no private material is configured (production fail-closed
     for signing; tests inject keys explicitly).
 
-    Under pytest (PYTEST_CURRENT_TEST) or QUANT_RECEIPT_DISABLE_HOST_PEM=1,
-    the host config file is not read. Explicit pem=, path=, and
-    QUANT_RECEIPT_SIGNING_KEY_PEM still apply.
+    When the explicit operator setting QUANT_RECEIPT_DISABLE_HOST_PEM=1 is
+    present, the host config file is not read. Explicit pem=, path=, and
+    QUANT_RECEIPT_SIGNING_KEY_PEM still apply. Test-runner environment
+    variables never alter production key resolution.
     """
     material: bytes | None = None
     if pem is not None:

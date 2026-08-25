@@ -1,0 +1,197 @@
+"""Test-only signed receipt fixture builder.
+
+Production deliberately exposes neither an evidence constructor nor a signing
+authority.  Tests which exercise downstream receipt verification still need a
+way to construct adversarial envelopes, so that power lives under ``tests``
+and requires an explicitly injected ephemeral test key.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any, Mapping, Sequence
+from weakref import WeakSet
+
+from data_contracts import coverage_contract_for
+from storage.coverage_ledger import CollectionReceipt, RequiredCoverageSegment
+from storage.receipt_crypto import (
+    ReceiptSigningKey,
+    build_signed_digest_fields,
+    canonical_evidence_digest,
+    partition_extra_digests,
+)
+
+
+_TEST_EVIDENCE_SEAL = object()
+_TEST_EVIDENCE: WeakSet[Any] = WeakSet()
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    return value
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    return value
+
+
+@dataclass(frozen=True, eq=False)
+class TestReconciledEvidence:
+    _seal: object
+    required: RequiredCoverageSegment
+    claims: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        if self._seal is not _TEST_EVIDENCE_SEAL:
+            raise TypeError("test evidence is opaque")
+
+    @property
+    def extra_digests(self) -> Mapping[str, Any]:
+        value = self.claims["extra_digests"]
+        assert isinstance(value, Mapping)
+        return value
+
+
+TestReconciledEvidence.__test__ = False
+
+
+@dataclass(frozen=True)
+class TestSignedReceiptAuthority:
+    """Ephemeral fixture authority; never imported by production code."""
+
+    signing_key: ReceiptSigningKey
+
+    def issue(self, evidence: TestReconciledEvidence) -> CollectionReceipt:
+        if not isinstance(evidence, TestReconciledEvidence) or evidence not in _TEST_EVIDENCE:
+            raise TypeError("test evidence is not fixture-minted")
+        claims = _thaw(evidence.claims)
+        signed = build_signed_digest_fields(
+            signing_key=self.signing_key,
+            closure_claims=claims,
+        )
+        required = evidence.required
+        return CollectionReceipt(
+            source=required.source,
+            dataset=required.dataset,
+            segment_id=required.segment_id,
+            segment_start=required.segment_start,
+            segment_end=required.segment_end,
+            expected_scope=_thaw(required.expected_scope),
+            expected_items=required.expected_items,
+            observed_items=int(claims["observed_items"]),
+            raw_page_count=int(claims["raw_page_count"]),
+            raw_row_count=int(claims["raw_count"]),
+            structured_row_count=int(claims["structured_count"]),
+            pagination_exhausted=bool(claims["pagination_exhausted"]),
+            digests=MappingProxyType(dict(signed)),
+            run_id=int(claims["run_id"]),
+            status=str(claims["status"]),
+            error=None,
+            checked_at=str(claims["checked_at"]),
+        )
+
+
+def reconcile_test_evidence(
+    *,
+    required: RequiredCoverageSegment,
+    run_id: int,
+    raw_pages: Sequence[bytes],
+    raw_records: Sequence[Any],
+    structured_records: Sequence[Mapping[str, Any]],
+    checked_at: str,
+    source_request: Mapping[str, Any] | None = None,
+    extra_evidence: Mapping[str, Any] | None = None,
+) -> TestReconciledEvidence:
+    """Build closed claims strictly for verifier/policy unit tests."""
+    pages = tuple(bytes(page) for page in raw_pages)
+    raw_rows = tuple(raw_records)
+    structured_rows = tuple(dict(row) for row in structured_records)
+    if not pages:
+        raise ValueError("test receipt requires at least one raw page")
+    if not raw_rows:
+        raise ValueError("zero-row SUCCESS is not trusted")
+    extras = partition_extra_digests(extra_evidence)
+    manifest = [
+        {
+            "index": index,
+            "digest": canonical_evidence_digest(page),
+            "size": len(page),
+        }
+        for index, page in enumerate(pages)
+    ]
+    raw_digest = (
+        manifest[0]["digest"]
+        if len(manifest) == 1
+        else canonical_evidence_digest({"pages": manifest})
+    )
+    policy = coverage_contract_for(required.dataset)
+    scope = {
+        "coverage_policy_version": policy.policy_version,
+        "source": required.source,
+        "dataset": required.dataset,
+        "segment_id": required.segment_id,
+        "segment_start": required.segment_start,
+        "segment_end": required.segment_end,
+        "expected_scope": dict(required.expected_scope),
+        "expected_items": required.expected_items,
+    }
+    unit = str(required.expected_scope.get("expected_item_unit") or "")
+    observed = int(bool(raw_rows)) if unit in {
+        "source_query",
+        "official_archive_file",
+        "official_archive_index",
+        "official_full_timeseries_file",
+        "official_correction_artifact",
+    } else len(raw_rows)
+    claims = {
+        **scope,
+        "observed_items": observed,
+        "raw_page_count": len(pages),
+        "raw_count": len(raw_rows),
+        "structured_count": len(structured_rows),
+        "status": "SUCCESS",
+        "error": None,
+        "pagination_exhausted": True,
+        "discovery_exhausted": True,
+        "source_request_digest": canonical_evidence_digest(
+            dict(source_request or scope)
+        ),
+        "raw_manifest_digest": canonical_evidence_digest({"pages": manifest}),
+        "raw_digest": raw_digest,
+        "structured_digest": canonical_evidence_digest(list(structured_rows)),
+        "structured_generation": int(run_id),
+        "scope_digest": canonical_evidence_digest(scope),
+        "run_id": int(run_id),
+        "checked_at": checked_at,
+        "extra_digests": extras,
+    }
+    claims["observation_digest"] = canonical_evidence_digest(claims)
+    frozen_required = RequiredCoverageSegment(
+        source=required.source,
+        dataset=required.dataset,
+        segment_id=required.segment_id,
+        segment_start=required.segment_start,
+        segment_end=required.segment_end,
+        expected_scope=_freeze(required.expected_scope),
+        expected_items=required.expected_items,
+    )
+    evidence = TestReconciledEvidence(
+        _seal=_TEST_EVIDENCE_SEAL,
+        required=frozen_required,
+        claims=_freeze(claims),
+    )
+    _TEST_EVIDENCE.add(evidence)
+    return evidence
+
+
+# Old names are aliases only inside the test tree, keeping fixture diffs small.
+_SignedReceiptAuthority = TestSignedReceiptAuthority
+_reconcile_collection_evidence = reconcile_test_evidence

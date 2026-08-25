@@ -16,11 +16,18 @@ from storage.receipt_crypto import verify_receipt_signature
 from storage.sqlite_store import SqliteStore
 
 
-def _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys):
+def _inject_tmp_receipt_authority(
+    monkeypatch, receipt_ed25519_keys, http_factory
+):
     """Bind governed writes to the tmp Ed25519 fixture; never production keys."""
+    import ingestion.runtime_authority as runtime
+
+    original = runtime._open_governed_receipt_service
+    monkeypatch.setattr(runtime, "_direct_jquants_http", http_factory)
     monkeypatch.setattr(
-        "storage.trusted_receipt.load_signing_key",
-        lambda **kwargs: receipt_ed25519_keys.signing_key,
+        runtime,
+        "_open_governed_receipt_service",
+        lambda **_kwargs: original(pem=receipt_ed25519_keys.private_pem),
     )
 
 
@@ -68,8 +75,8 @@ def _store(tmp_path):
 def test_run_jquants_catalog_writes_to_generic_table(
     tmp_path, monkeypatch, receipt_ed25519_keys
 ):
-    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     http = _CatalogHttp([{"Code": "8697", "Date": "2025-04-01", "Close": 100}])
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys, lambda: http)
     store = _store(tmp_path)
     today = datetime(2025, 4, 2, 9, 0, 0)
     reports = run_jquants(
@@ -79,14 +86,14 @@ def test_run_jquants_catalog_writes_to_generic_table(
     # bars expand to one job per day over the default incremental window
     assert len(reports) >= 1
     assert all(r.kind == "equities_bars_daily" for r in reports)
-    assert all(r.ok for r in reports)
-    assert sum(r.registered for r in reports) >= 1
-    # row landed in the generic table with a dataset column
-    rows = store.fetch_all("jquants_records")
-    assert len(rows) >= 1
-    assert rows[0]["dataset"] == "equities_bars_daily"
-    assert rows[0]["available_at"]  # PIT column populated
-    _assert_verified_success_receipts(store, dataset="equities_bars_daily")
+    assert all(r.registered == 0 for r in reports)
+    assert all("single-date" in r.error for r in reports)
+    # One daily query cannot authorize a calendar-month segment. The raw
+    # acquisition remains available for a future governed batch closure.
+    assert store.fetch_all("jquants_records") == []
+    assert read_collection_receipts(
+        store.path, dataset="equities_bars_daily"
+    ) == []
     store.close()
 
 
@@ -106,16 +113,19 @@ def test_run_jquants_proxy_client_runs_without_api_key(
     tmp_path, monkeypatch, receipt_ed25519_keys
 ):
     # cf-jquants-proxy http + empty api_key must NOT be skipped.
-    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     http = _proxy_http()
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys, lambda: http)
     store = _store(tmp_path)
     today = datetime(2025, 4, 2, 9, 0, 0)
     reports = run_jquants(
         http=http, store=store, api_key="", data_base=tmp_path, today=today,
         datasets=["markets_calendar"], mode="incremental",
     )
-    assert len(reports) == 1 and reports[0].registered == 1
-    _assert_verified_success_receipts(store, dataset="markets_calendar")
+    assert len(reports) == 1
+    assert not reports[0].skipped
+    assert http.calls  # empty API key did not skip acquisition
+    assert reports[0].registered == 0
+    assert reports[0].error
     store.close()
 
 
@@ -136,7 +146,6 @@ def test_run_jquants_catalog_incremental_default_window(
     tmp_path, monkeypatch, receipt_ed25519_keys
 ):
     # incremental + no explicit dates -> a recent from window is applied.
-    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     seen_params: list[dict] = []
 
     class _P:
@@ -149,10 +158,12 @@ def test_run_jquants_catalog_incremental_default_window(
                 json.dumps({"data": []}).encode("utf-8"), url,
             )
 
+    http = _P()
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys, lambda: http)
     store = _store(tmp_path)
     today = datetime(2025, 4, 10, 9, 0, 0)
     run_jquants(
-        http=_P(), store=store, api_key="k", data_base=tmp_path, today=today,
+        http=http, store=store, api_key="k", data_base=tmp_path, today=today,
         datasets=["equities_bars_daily"], mode="incremental",
     )
     # bars prefer date= (API needs date or code); window still starts today-5d
@@ -177,7 +188,7 @@ def test_run_jquants_without_authority_does_not_write_structured(
 ):
     """Governed fact upsert is forbidden until SignedReceiptAuthority is verified."""
     monkeypatch.setattr(
-        "storage.trusted_receipt.load_signing_key",
+        "ingestion.runtime_authority.load_signing_key",
         lambda **kwargs: None,
     )
     http = _CatalogHttp([{"Code": "8697", "Date": "2025-04-01", "Close": 100}])

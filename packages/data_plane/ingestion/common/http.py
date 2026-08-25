@@ -95,6 +95,7 @@ class LocalHttpClient:
         timeout: float = 30.0,
         verify: bool = True,
         transport: Any = None,
+        trust_env: bool | None = None,
     ) -> None:
         import httpx  # lazy: only the local runtime needs it
 
@@ -106,7 +107,7 @@ class LocalHttpClient:
             headers={"User-Agent": user_agent},
             # Unit tests must not pick up ambient HTTPS_PROXY/SOCKS.
             # Local ingest may set QP_HTTP_TRUST_ENV=1 to use the environment.
-            trust_env=_http_trust_env(),
+            trust_env=_http_trust_env() if trust_env is None else bool(trust_env),
         )
         if transport is not None:
             kwargs["transport"] = transport

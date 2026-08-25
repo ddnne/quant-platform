@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from io import BytesIO
+import json
 from pathlib import Path
+
+import pytest
 
 from data_contracts.jsda import all_jsda_contracts, jsda_contract_for
 from data_contracts import coverage_contract_for
@@ -248,15 +251,20 @@ class _ArchiveClient:
 def _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys):
     """Bind governed writes to the tmp Ed25519 fixture; never production keys."""
     monkeypatch.setattr(
-        "storage.trusted_receipt.load_signing_key",
+        "ingestion.runtime_authority.load_signing_key",
         lambda **kwargs: receipt_ed25519_keys.signing_key,
     )
+    from ingestion.runtime_authority import _open_governed_receipt_service
+
+    return _open_governed_receipt_service()
 
 
 def test_otc_archive_backfill_receipts_raw_resume_and_missing_partial(
     tmp_path, monkeypatch, receipt_ed25519_keys
 ):
-    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
+    receipt_service = _inject_tmp_receipt_authority(
+        monkeypatch, receipt_ed25519_keys
+    )
     store = SqliteStore(tmp_path / "structured.sqlite")
     client = _ArchiveClient()
     report = run_otc_reference_backfill(
@@ -266,20 +274,29 @@ def test_otc_archive_backfill_receipts_raw_resume_and_missing_partial(
         from_year=2002,
         to_year=2002,
         checked_at="2025-04-02T10:00:00+09:00",
+        receipt_service=receipt_service,
     )
     assert (report.discovered, report.completed, report.resumed, report.failed) == (
-        3, 2, 0, 1
+        3, 0, 0, 3
     )
-    assert store.count("jsda_otc_bond_reference_prices") == 4
+    assert store.count("jsda_otc_bond_reference_prices") == 0
 
     receipts = read_collection_receipts(
         store.path, dataset="jsda_otc_bond_reference_prices"
     )
     assert len(receipts) == 3
-    success = [row for row in receipts if row["status"] == "SUCCESS"]
-    missing = [row for row in receipts if row["status"] == "FAILED"]
-    assert len(success) == 2 and len(missing) == 1
-    for row in success:
+    assert all(row["status"] == "FAILED" for row in receipts)
+    acquired = [
+        row for row in receipts
+        if json.loads(row["digests_json"]).get("raw_path")
+    ]
+    missing = [
+        row for row in receipts
+        if json.loads(row["digests_json"]).get("failure_kind")
+        == "MISSING_EXPECTED_SEGMENT"
+    ]
+    assert len(acquired) == 2 and len(missing) == 1
+    for row in acquired:
         digests = __import__("json").loads(row["digests_json"])
         assert digests["source_url"].startswith("https://market.jsda.or.jp/")
         assert digests["fetched_at"] == "2025-04-02T10:00:00+09:00"
@@ -287,9 +304,9 @@ def test_otc_archive_backfill_receipts_raw_resume_and_missing_partial(
         raw_path = Path(digests["raw_path"])
         assert raw_path.read_bytes() == client.csv
         assert row["observed_items"] == row["expected_items"] == 1
-        assert row["raw_row_count"] == row["structured_row_count"] == 2
-        assert digests.get("eligibility") == "TRUSTED_COLLECTION"
-        assert str(digests.get("signature") or "").startswith("ed25519:")
+        assert row["structured_row_count"] == 2
+        assert digests.get("eligibility") == "RECOVERED_RAW_ONLY"
+        assert not str(digests.get("signature") or "").startswith("ed25519:")
     missing_digests = __import__("json").loads(missing[0]["digests_json"])
     assert missing_digests["failure_kind"] == "MISSING_EXPECTED_SEGMENT"
 
@@ -302,14 +319,13 @@ def test_otc_archive_backfill_receipts_raw_resume_and_missing_partial(
         policy, report.required_segments, receipt_objects
     )
     assert status == "PARTIAL"
-    assert [item[2] for item in evaluated] == ["COMPLETE", "COMPLETE", "PARTIAL"]
+    assert [item[2] for item in evaluated] == ["PARTIAL", "PARTIAL", "PARTIAL"]
     coverage = read_dataset_coverage(
         store.path, dataset="jsda_otc_bond_reference_prices"
     )
     assert len(coverage) == 1 and coverage[0]["status"] == "PARTIAL"
 
-    # Exact COMPLETE receipts are durable resume checkpoints. Only the missing
-    # source segment is retried; facts remain idempotent.
+    # Recovery-only evidence never becomes a COMPLETE resume checkpoint.
     second = run_otc_reference_backfill(
         http=client,
         store=store,
@@ -317,15 +333,16 @@ def test_otc_archive_backfill_receipts_raw_resume_and_missing_partial(
         from_year=2002,
         to_year=2002,
         checked_at="2025-04-02T10:00:01+09:00",
+        receipt_service=receipt_service,
     )
-    assert (second.completed, second.resumed, second.failed) == (0, 2, 1)
-    assert store.count("jsda_otc_bond_reference_prices") == 4
-    assert sum(url.endswith("20020802_reference.csv") for url in client.calls) == 1
-    assert sum(url.endswith("20020805_reference.csv") for url in client.calls) == 1
+    assert (second.completed, second.resumed, second.failed) == (0, 0, 3)
+    assert store.count("jsda_otc_bond_reference_prices") == 0
+    assert sum(url.endswith("20020802_reference.csv") for url in client.calls) == 2
+    assert sum(url.endswith("20020805_reference.csv") for url in client.calls) == 2
     second_receipts = read_collection_receipts(
         store.path, dataset="jsda_otc_bond_reference_prices"
     )
-    assert len(second_receipts) == 4  # two success + one missing per run
+    assert len(second_receipts) == 6
     store.close()
 
 
@@ -336,7 +353,9 @@ def test_otc_archive_refresh_reuses_fetched_index_html_not_weekends(
     from ingestion.jsda import archive as archive_mod
     from ingestion.jsda.official_index import parse_official_index_publication_days
 
-    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
+    receipt_service = _inject_tmp_receipt_authority(
+        monkeypatch, receipt_ed25519_keys
+    )
     captured: dict[str, object] = {}
     real_refresh = archive_mod.refresh_coverage_ledger
 
@@ -354,6 +373,7 @@ def test_otc_archive_refresh_reuses_fetched_index_html_not_weekends(
         from_year=2002,
         to_year=2002,
         checked_at="2025-04-02T10:00:00+09:00",
+        receipt_service=receipt_service,
     )
     listed = ["2002-08-02", "2002-08-05", "2002-08-06"]
     weekend = "2002-08-03"
@@ -381,7 +401,7 @@ def test_otc_archive_refresh_reuses_fetched_index_html_not_weekends(
 def test_otc_archive_without_authority_does_not_write_structured(tmp_path, monkeypatch):
     """Governed fact upsert is forbidden until SignedReceiptAuthority is verified."""
     monkeypatch.setattr(
-        "storage.trusted_receipt.load_signing_key",
+        "ingestion.runtime_authority.load_signing_key",
         lambda **kwargs: None,
     )
     store = SqliteStore(tmp_path / "unsigned.sqlite")
@@ -417,7 +437,7 @@ def test_otc_archive_unsigned_stays_partial_without_complete_resume(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(
-        "storage.trusted_receipt.load_signing_key",
+        "ingestion.runtime_authority.load_signing_key",
         lambda **kwargs: None,
     )
     store = SqliteStore(tmp_path / "unsigned-resume.sqlite")
@@ -463,14 +483,14 @@ def test_otc_archive_unsigned_stays_partial_without_complete_resume(
     store.close()
 
 
-def test_governed_jsda_receipt_rejects_empty_raw_success(
+def test_governed_jsda_receipt_rejects_fake_local_raw_success(
     tmp_path, receipt_ed25519_keys
 ):
     from ingestion.jsda.receipts import record_governed_receipt
-    from ingestion.runtime_authority import open_governed_receipt_service
+    from ingestion.runtime_authority import _open_governed_receipt_service
     from storage.coverage_ledger import RequiredCoverageSegment
 
-    receipt_service = open_governed_receipt_service(
+    receipt_service = _open_governed_receipt_service(
         pem=receipt_ed25519_keys.private_pem
     )
     store = SqliteStore(tmp_path / "empty-raw.sqlite")
@@ -483,10 +503,10 @@ def test_governed_jsda_receipt_rejects_empty_raw_success(
         expected_scope={"coverage_mode": "official_archive_index_reconciled"},
         expected_items=1,
     )
-    raw_path = tmp_path / "empty.csv"
-    raw_path.write_bytes(b"")
+    raw_path = tmp_path / "caller-forged.csv"
+    raw_path.write_bytes(b"security_code,price\nFAKE,100\n")
     raw_path.chmod(0o444)
-    try:
+    with pytest.raises(RuntimeError, match="JSDA SUCCESS is disabled"):
         record_governed_receipt(
             store,
             required=required,
@@ -498,14 +518,7 @@ def test_governed_jsda_receipt_rejects_empty_raw_success(
             digests={"origin": "test"},
             receipt_service=receipt_service,
             raw_artifact_paths=(raw_path,),
-            raw_records=(),
-            structured_table="jsda_otc_bond_reference_prices",
-            normalized_records=(),
         )
-    except ValueError as exc:
-        assert "non-empty raw pages" in str(exc)
-    else:
-        raise AssertionError("empty-raw SUCCESS must be rejected")
     n = store._conn.execute("select count(*) from collection_receipts").fetchone()[0]
     assert n == 0
     store.close()

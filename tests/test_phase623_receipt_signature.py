@@ -15,14 +15,16 @@ from storage.coverage_ledger import (
     evaluate_segment,
     is_complete_eligible_receipt,
 )
-from ingestion.runtime_authority import reconcile_collection_evidence
-from storage.trusted_receipt import SignedReceiptAuthority
-from storage.trusted_receipt import ReconciledCollectionEvidence
+from tests.receipt_test_support import (
+    TestReconciledEvidence,
+    _SignedReceiptAuthority,
+    _reconcile_collection_evidence,
+)
 from storage.verified_receipt import ReceiptVerificationError, verify
 
 
 def _issue(
-    auth: SignedReceiptAuthority,
+    auth: _SignedReceiptAuthority,
     required: RequiredCoverageSegment,
     *,
     raw: bytes = b'{"data":[{"Date":"2025-01-01"}]}',
@@ -32,14 +34,12 @@ def _issue(
 ):
     raw_records = records or [{"Date": "2025-01-01"}]
     structured_records = structured or list(raw_records)
-    evidence = reconcile_collection_evidence(
+    evidence = _reconcile_collection_evidence(
         required=required,
         run_id=1,
         raw_pages=(raw,),
         raw_records=raw_records,
         structured_records=structured_records,
-        pagination_exhausted=True,
-        discovery_exhausted=True,
         checked_at="2025-04-01T00:00:01+00:00",
         extra_evidence=extra_evidence,
     )
@@ -50,54 +50,44 @@ def test_storage_package_hides_synthetic() -> None:
     import storage
 
     assert not hasattr(storage, "build_synthetic_complete_receipt")
-    assert not hasattr(storage, "SignedReceiptAuthority")
+    assert not hasattr(storage, "_SignedReceiptAuthority")
     assert not hasattr(storage, "TrustedReceiptIssuer")
 
 
 def test_reconciled_evidence_constructor_and_replace_are_not_capabilities(
     receipt_ed25519_keys: SimpleNamespace,
 ) -> None:
-    auth = SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
+    auth = _SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
     required = _calendar_required()
+    import ingestion.runtime_authority as runtime
+    import storage.trusted_receipt as trusted
+
+    assert not hasattr(runtime, "_reconcile_collection_evidence")
+    assert not hasattr(trusted, "_make_reconciled_collection_evidence")
+    assert not hasattr(trusted, "_SignedReceiptAuthority")
     with pytest.raises(TypeError, match="opaque"):
-        ReconciledCollectionEvidence(  # type: ignore[call-arg]
-            _seal=object(),
-            required=required,
-            coverage_policy_version="collection-coverage/v3",
-            run_id=1,
-            observed_items=1,
-            raw_page_count=1,
-            raw_row_count=1,
-            structured_row_count=1,
-            pagination_exhausted=True,
-            discovery_exhausted=True,
-            source_request_digest="sha256:" + "0" * 64,
-            raw_manifest_digest="sha256:" + "0" * 64,
-            raw_digest="sha256:" + "0" * 64,
-            structured_digest="sha256:" + "0" * 64,
-            structured_generation=1,
-            scope_digest="sha256:" + "0" * 64,
-            observation_digest="sha256:" + "0" * 64,
-            checked_at="2025-04-01T00:00:01+00:00",
-            extra_digests={},
+        TestReconciledEvidence(  # type: ignore[call-arg]
+            _seal=object(), required=required, claims={}
         )
-    evidence = reconcile_collection_evidence(
+    evidence = _reconcile_collection_evidence(
         required=required,
         run_id=1,
         raw_pages=(b'[{"Date":"2025-01-01"}]',),
         raw_records=({"Date": "2025-01-01"},),
         structured_records=({"Date": "2025-01-01"},),
-        pagination_exhausted=True,
+        checked_at="2025-04-01T00:00:01+00:00",
     )
-    forged = replace(evidence, observed_items=2)
-    with pytest.raises(TypeError, match="runtime-minted"):
+    forged_claims = dict(evidence.claims)
+    forged_claims["observed_items"] = 2
+    forged = replace(evidence, claims=forged_claims)
+    with pytest.raises(TypeError, match="fixture-minted"):
         auth.issue(forged)
 
 
 def test_reconciled_evidence_and_verified_closure_are_deeply_immutable(
     receipt_ed25519_keys: SimpleNamespace,
 ) -> None:
-    auth = SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
+    auth = _SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
     required = replace(
         _calendar_required(),
         expected_scope={
@@ -105,13 +95,13 @@ def test_reconciled_evidence_and_verified_closure_are_deeply_immutable(
             "selection": {"markets": ["TSE"]},
         },
     )
-    evidence = reconcile_collection_evidence(
+    evidence = _reconcile_collection_evidence(
         required=required,
         run_id=1,
         raw_pages=(b'[{"Date":"2025-01-01"}]',),
         raw_records=({"Date": "2025-01-01"},),
         structured_records=({"Date": "2025-01-01"},),
-        pagination_exhausted=True,
+        checked_at="2025-04-01T00:00:01+00:00",
         extra_evidence={"audit": {"sources": ["official"]}},
     )
 
@@ -134,7 +124,7 @@ def test_reconciled_evidence_and_verified_closure_are_deeply_immutable(
 
 
 def test_forged_signature_rejected(receipt_ed25519_keys: SimpleNamespace):
-    auth = SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
+    auth = _SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
     req = RequiredCoverageSegment(
         source="jquants",
         dataset="markets_calendar",
@@ -173,6 +163,38 @@ def test_forged_signature_rejected(receipt_ed25519_keys: SimpleNamespace):
     assert not is_complete_eligible_receipt(forged)
 
 
+def test_prior_v3_receipt_remains_audit_only_and_loses_complete_eligibility(
+    receipt_ed25519_keys: SimpleNamespace,
+) -> None:
+    from storage.receipt_crypto import body_digest, canonical_receipt_body
+    from storage.verified_receipt import audit_signed_receipt_claims
+
+    receipt = _issue(
+        _SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key),
+        _calendar_required(),
+    )
+    claims = json.loads(base64.b64decode(receipt.digests["signed_body_b64"]))
+    claims["parser_normalizer_version"] = "coverage-receipt/v3-ed25519-closure"
+    body = canonical_receipt_body(claims)
+    digests = dict(receipt.digests)
+    digests.update(
+        {
+            "parser_normalizer_version": claims["parser_normalizer_version"],
+            "signed_body_b64": base64.b64encode(body).decode("ascii"),
+            "signature": receipt_ed25519_keys.signing_key.sign(body),
+            "body_digest": body_digest(body),
+        }
+    )
+    prior_v3 = replace(receipt, digests=digests)
+
+    assert audit_signed_receipt_claims(prior_v3)[
+        "parser_normalizer_version"
+    ] == "coverage-receipt/v3-ed25519-closure"
+    with pytest.raises(ReceiptVerificationError, match="parser_normalizer_version"):
+        verify(prior_v3, required=_calendar_required())
+    assert not is_complete_eligible_receipt(prior_v3)
+
+
 def _calendar_required() -> RequiredCoverageSegment:
     return RequiredCoverageSegment(
         source="jquants",
@@ -190,7 +212,7 @@ def test_signature_transplant_onto_mutated_outer_receipt_rejected(
 ):
     from data_contracts import coverage_contract_for
 
-    auth = SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
+    auth = _SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
     req = _calendar_required()
     raw = b'{"data":[{"Date":"2025-01-01"}]}'
     good = _issue(auth, req, raw=raw)
@@ -225,7 +247,7 @@ def test_extra_digests_cannot_override_standard_claims(
 ):
     from storage.coverage_ledger import compute_raw_digest
 
-    auth = SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
+    auth = _SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
     req = _calendar_required()
     raw = b'{"data":[{"Date":"2025-01-01"}]}'
     receipt = _issue(
@@ -274,7 +296,7 @@ def test_extra_digests_cannot_override_standard_claims(
 def test_every_outer_complete_input_is_bound(
     receipt_ed25519_keys: SimpleNamespace, field: str, value: object
 ) -> None:
-    auth = SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
+    auth = _SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
     receipt = _issue(auth, _calendar_required())
     mutated = replace(receipt, **{field: value})
     with pytest.raises(ReceiptVerificationError):
@@ -296,7 +318,7 @@ def test_every_outer_complete_input_is_bound(
 def test_every_digest_alias_is_bound(
     receipt_ed25519_keys: SimpleNamespace, field: str
 ) -> None:
-    auth = SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
+    auth = _SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
     receipt = _issue(auth, _calendar_required())
     digests = dict(receipt.digests)
     digests[field] = "sha256:" + "f" * 64
@@ -310,7 +332,7 @@ def test_valid_signature_cannot_bypass_scope_observation_digest_chain(
 ) -> None:
     from storage.receipt_crypto import build_signed_digest_fields
 
-    auth = SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
+    auth = _SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
     receipt = _issue(auth, _calendar_required())
     claims = json.loads(base64.b64decode(receipt.digests["signed_body_b64"]))
     claims["scope_digest"] = "sha256:" + "f" * 64

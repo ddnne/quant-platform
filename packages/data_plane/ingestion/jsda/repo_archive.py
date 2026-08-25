@@ -203,9 +203,6 @@ def _record(
     digests: Mapping[str, Any],
     receipt_service=None,
     raw_artifact_paths: Sequence[Path | str] = (),
-    raw_records: Sequence[Any] = (),
-    structured_table: str = "",
-    normalized_records: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     record_governed_receipt(
         store,
@@ -222,9 +219,6 @@ def _record(
         digests=digests,
         receipt_service=receipt_service,
         raw_artifact_paths=raw_artifact_paths,
-        raw_records=raw_records,
-        structured_table=structured_table,
-        normalized_records=normalized_records,
     )
 
 
@@ -277,6 +271,7 @@ def run_tokyo_repo_backfill(
     data_base: Path,
     checked_at: Optional[str] = None,
     force: bool = False,
+    receipt_service=None,
 ) -> TokyoRepoBackfillReport:
     """Ingest and reconcile JSDA's complete authoritative TRR workbook."""
     checked_at = checked_at or now_iso()
@@ -287,13 +282,12 @@ def run_tokyo_repo_backfill(
     fetcher = JsdaFetcher(http)
     registrar = Registrar(store)
     run_id = _start_run(store, checked_at)
-    receipt_service = None
     authority_error: Optional[str] = None
 
     try:
         try:
-            receipt_service = require_jsda_receipt_service()
-        except RuntimeError as exc:
+            receipt_service = require_jsda_receipt_service(receipt_service)
+        except (RuntimeError, TypeError) as exc:
             authority_error = str(exc)
         index_url = repo_index_url()
         index_raw = fetcher.fetch_file(index_url)
@@ -408,9 +402,6 @@ def run_tokyo_repo_backfill(
                     },
                     receipt_service=receipt_service,
                     raw_artifact_paths=(raw_path,),
-                    raw_records=governed,
-                    structured_table="jsda_repo_rates",
-                    normalized_records=rows,
                 )
                 report = TokyoRepoBackfillReport(
                     run_id, 1, 0, 0, 0, parsed_rows, structured_rows, required

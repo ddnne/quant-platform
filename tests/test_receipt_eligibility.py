@@ -5,14 +5,16 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from data_contracts import coverage_contract_for
-from ingestion.runtime_authority import reconcile_collection_evidence
+from tests.receipt_test_support import (
+    _SignedReceiptAuthority,
+    _reconcile_collection_evidence,
+)
 from storage.coverage_ledger import (
     build_collection_receipt,
     evaluate_segment,
     is_complete_eligible_receipt,
     plan_required_segments,
 )
-from storage.trusted_receipt import SignedReceiptAuthority
 
 
 def _month_required():
@@ -27,19 +29,18 @@ def _month_required():
     )[0]
 
 
-def _authority(keys: SimpleNamespace) -> SignedReceiptAuthority:
-    return SignedReceiptAuthority(signing_key=keys.signing_key)
+def _authority(keys: SimpleNamespace) -> _SignedReceiptAuthority:
+    return _SignedReceiptAuthority(signing_key=keys.signing_key)
 
 
 def _issue(authority, required, raw, records):
-    evidence = reconcile_collection_evidence(
+    evidence = _reconcile_collection_evidence(
         required=required,
         run_id=1,
         raw_pages=(raw,),
         raw_records=records,
         structured_records=records,
-        pagination_exhausted=True,
-        discovery_exhausted=True,
+        checked_at="2025-02-01T00:00:00+00:00",
     )
     return authority.issue(evidence)
 

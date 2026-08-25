@@ -25,9 +25,12 @@ not redistribute raw data.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from dataclasses import dataclass
+import json
+from types import MappingProxyType
+from typing import Any, Callable, Mapping, Optional
 
-from ..common.http import HttpClient, transport_exception_types
+from ..common.http import HttpClient, HttpResponse, transport_exception_types
 from ..common.rate_limit import RateLimiter
 from ..common.retry import with_retry
 from . import catalog
@@ -41,6 +44,38 @@ _PARAM_ALIASES = {"from_date": "from", "to_date": "to"}
 
 class _Transient(Exception):
     """Retriable transport / rate-limit error."""
+
+
+_FETCH_RESULT_SEAL = object()
+
+
+@dataclass(frozen=True)
+class _JQuantsRawPage:
+    request_path: str
+    request_params: Mapping[str, Any]
+    response_url: str
+    response_status: int
+    response_body: bytes
+    pagination_in: str | None
+    pagination_out: str | None
+
+
+@dataclass(frozen=True, eq=False)
+class _JQuantsFetchResult:
+    """Fetcher-minted rows plus every verbatim response page."""
+
+    _seal: object
+    dataset_id: str
+    base_params: Mapping[str, Any]
+    rows: tuple[dict[str, Any], ...]
+    pages: tuple[_JQuantsRawPage, ...]
+    transport_name: str
+
+    def __post_init__(self) -> None:
+        if self._seal is not _FETCH_RESULT_SEAL:
+            raise TypeError("J-Quants fetch evidence is minted by the client")
+        if not self.pages:
+            raise ValueError("J-Quants fetch evidence requires at least one page")
 
 
 def _records(payload: Any, *fallbacks: str) -> list:
@@ -94,10 +129,12 @@ class JQuantsClient:
         # so this is defence in depth rather than a correctness path).
         return {"x-api-key": self._api_key} if self._api_key else {}
 
-    def _get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
+    def _request(
+        self, path: str, params: Optional[dict[str, Any]] = None
+    ) -> HttpResponse:
         url = f"{BASE}{path}"
 
-        def call() -> Any:
+        def call() -> HttpResponse:
             self._rl.acquire()
             try:
                 resp = self._http.get(url, headers=self._headers(), params=params)
@@ -110,12 +147,15 @@ class JQuantsClient:
                 raise RuntimeError(
                     f"J-Quants {path} -> HTTP {resp.status}: {resp.text()[:200]}"
                 )
-            return resp.json()
+            return resp
 
         kwargs: dict[str, Any] = {"retries": self._retries, "exceptions": (_Transient,)}
         if self._sleep is not None:
             kwargs["sleep"] = self._sleep
         return with_retry(call, **kwargs)
+
+    def _get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
+        return self._request(path, params=params).json()
 
     # --- generic catalog access -----------------------------------------
 
@@ -138,24 +178,78 @@ class JQuantsClient:
         loop adds ``pagination_key`` on follow-up calls without mutating the
         caller's dict.
         """
+        return list(
+            self._fetch_paginated_evidence(
+                path, params=params, dataset_id=path
+            ).rows
+        )
+
+    def _fetch_paginated_evidence(
+        self,
+        path: str,
+        params: Optional[dict[str, Any]] = None,
+        *,
+        dataset_id: str,
+    ) -> _JQuantsFetchResult:
+        """Fetch all pages while retaining verbatim response/token evidence."""
         base = self._normalize_params(params)
         rows: list[dict] = []
         pagination: Optional[str] = None
+        pages: list[_JQuantsRawPage] = []
+        seen_tokens: set[str] = set()
         while True:
             req = dict(base)
             if pagination:
                 req["pagination_key"] = pagination
-            data = self._get(path, params=req)
+            response = self._request(path, params=req)
+            data = response.json()
             rows.extend(_records(data))
-            pagination = data.get("pagination_key") if isinstance(data, dict) else None
-            if not pagination:
+            next_pagination = (
+                data.get("pagination_key") if isinstance(data, dict) else None
+            )
+            if not next_pagination:
                 # legacy response key fallback
-                pagination = (
+                next_pagination = (
                     data.get("pagination_token") if isinstance(data, dict) else None
                 )
-            if not pagination:
+            next_token = str(next_pagination) if next_pagination else None
+            pages.append(
+                _JQuantsRawPage(
+                    request_path=path,
+                    request_params=MappingProxyType(dict(req)),
+                    response_url=str(
+                        getattr(response, "url", f"{BASE}{path}")
+                    ),
+                    response_status=response.status,
+                    response_body=bytes(
+                        getattr(
+                            response,
+                            "body",
+                            json.dumps(
+                                data,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ).encode("utf-8"),
+                        )
+                    ),
+                    pagination_in=pagination,
+                    pagination_out=next_token,
+                )
+            )
+            if not next_token:
                 break
-        return rows
+            if next_token in seen_tokens:
+                raise RuntimeError("J-Quants pagination token loop detected")
+            seen_tokens.add(next_token)
+            pagination = next_token
+        return _JQuantsFetchResult(
+            _seal=_FETCH_RESULT_SEAL,
+            dataset_id=dataset_id,
+            base_params=MappingProxyType(dict(base)),
+            rows=tuple(dict(row) for row in rows),
+            pages=tuple(pages),
+            transport_name=str(getattr(self._http, "name", "")),
+        )
 
     def fetch_dataset(self, dataset_id: str, **params: Any) -> list[dict]:
         """Fetch any catalog dataset by id, paginating as needed.
@@ -163,7 +257,17 @@ class JQuantsClient:
         Example: ``client.fetch_dataset("equities_bars_daily", code="8697",
         from_date="2025-04-01", to_date="2025-04-05")``.
         """
-        return self.fetch_paginated(catalog.path_of(dataset_id), params=params)
+        return list(self.fetch_dataset_evidenced(dataset_id, **params).rows)
+
+    def fetch_dataset_evidenced(
+        self, dataset_id: str, **params: Any
+    ) -> _JQuantsFetchResult:
+        """Catalog fetch retaining the complete continuation chain."""
+        return self._fetch_paginated_evidence(
+            catalog.path_of(dataset_id),
+            params=params,
+            dataset_id=dataset_id,
+        )
 
     # --- Phase-1 convenience wrappers (back-compat) ---------------------
 

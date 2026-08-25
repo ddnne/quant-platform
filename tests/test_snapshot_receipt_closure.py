@@ -8,10 +8,13 @@ import json
 
 import pytest
 
-from data_contracts.coverage import POLICY_VERSION
-from ingestion.runtime_authority import reconcile_collection_evidence
+from data_contracts.coverage import coverage_policy_binding
+from tests.receipt_test_support import (
+    _SignedReceiptAuthority,
+    _reconcile_collection_evidence,
+)
 from paper_runtime.snapshot import SnapshotRejected
-from paper_runtime.snapshot_coverage_proof import _coverage_v2_proof
+from paper_runtime.snapshot_coverage_proof import _coverage_proof
 from storage.coverage_ledger import (
     RequiredCoverageSegment,
     record_collection_receipt,
@@ -23,7 +26,6 @@ from storage.receipt_crypto import (
     canonical_receipt_body,
 )
 from storage.sqlite_store import SqliteStore
-from storage.trusted_receipt import SignedReceiptAuthority
 from storage.verified_receipt import (
     ReceiptVerificationError,
     audit_signed_receipt_claims,
@@ -33,6 +35,7 @@ from storage.verified_receipt import (
 
 _DATASET = "markets_calendar"
 _CHECKED_AT = "2026-08-25T00:00:00+00:00"
+_POLICY_VERSION = coverage_policy_binding(_DATASET)["policy_version"]
 
 
 def _seed_closed_segment(tmp_path, receipt_ed25519_keys):
@@ -52,21 +55,19 @@ def _seed_closed_segment(tmp_path, receipt_ed25519_keys):
         expected_items=1,
     )
     raw_record = {"Date": "2026-08-25", "HolidayDivision": "1"}
-    evidence = reconcile_collection_evidence(
+    evidence = _reconcile_collection_evidence(
         required=required,
         run_id=41,
         raw_pages=[json.dumps({"data": [raw_record]}).encode("utf-8")],
         raw_records=[raw_record],
         structured_records=[raw_record],
-        pagination_exhausted=True,
-        discovery_exhausted=True,
         checked_at=_CHECKED_AT,
         source_request={"from": "2026-08-01", "to": "2026-08-31"},
     )
-    receipt = SignedReceiptAuthority(
+    receipt = _SignedReceiptAuthority(
         signing_key=receipt_ed25519_keys.signing_key
     ).issue(evidence)
-    record_required_segments(conn, (required,), policy_version=POLICY_VERSION)
+    record_required_segments(conn, (required,), policy_version=_POLICY_VERSION)
     record_collection_receipt(conn, receipt)
     conn.execute(
         "UPDATE coverage_segments SET status='COMPLETE', receipt_run_id=? "
@@ -76,13 +77,13 @@ def _seed_closed_segment(tmp_path, receipt_ed25519_keys):
             required.source,
             required.dataset,
             required.segment_id,
-            POLICY_VERSION,
+            _POLICY_VERSION,
         ),
     )
     conn.commit()
     coverage_rows = [{
         "dataset": _DATASET,
-        "policy_version": POLICY_VERSION,
+        "policy_version": _POLICY_VERSION,
         "status": "COMPLETE",
     }]
     return store, receipt, coverage_rows
@@ -95,7 +96,7 @@ def test_snapshot_proof_hashes_verified_closure_and_rejects_outer_mutation(
         tmp_path, receipt_ed25519_keys
     )
     conn = store._conn  # noqa: SLF001
-    proof = _coverage_v2_proof(conn, (_DATASET,), coverage_rows)
+    proof = _coverage_proof(conn, (_DATASET,), coverage_rows)
     assert proof["status"] == "COMPLETE"
     assert proof["receipt_count"] == 1
     assert proof["proof_digest"].startswith("sha256:")
@@ -109,7 +110,7 @@ def test_snapshot_proof_hashes_verified_closure_and_rejects_outer_mutation(
     )
     conn.commit()
     with pytest.raises(SnapshotRejected, match="receipt closure invalid"):
-        _coverage_v2_proof(conn, (_DATASET,), coverage_rows)
+        _coverage_proof(conn, (_DATASET,), coverage_rows)
     store.close()
 
 
@@ -150,5 +151,5 @@ def test_snapshot_proof_rejects_validly_signed_legacy_v1(
     with pytest.raises(
         SnapshotRejected, match="v1 is audit-only and not COMPLETE-eligible"
     ):
-        _coverage_v2_proof(conn, (_DATASET,), coverage_rows)
+        _coverage_proof(conn, (_DATASET,), coverage_rows)
     store.close()

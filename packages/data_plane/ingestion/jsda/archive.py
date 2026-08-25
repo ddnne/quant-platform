@@ -217,9 +217,6 @@ def _record(
     digests: Mapping[str, Any],
     receipt_service=None,
     raw_artifact_paths: Sequence[Path | str] = (),
-    raw_records: Sequence[Any] = (),
-    structured_table: str = "",
-    normalized_records: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     record_governed_receipt(
         store,
@@ -236,9 +233,6 @@ def _record(
         digests=digests,
         receipt_service=receipt_service,
         raw_artifact_paths=raw_artifact_paths,
-        raw_records=raw_records,
-        structured_table=structured_table,
-        normalized_records=normalized_records,
     )
 
 
@@ -295,6 +289,7 @@ def run_otc_reference_backfill(
     to_year: Optional[int] = None,
     checked_at: Optional[str] = None,
     force: bool = False,
+    receipt_service=None,
 ) -> OtcArchiveBackfillReport:
     """Discover and ingest official OTC-reference files one day at a time."""
     checked_at = checked_at or now_iso()
@@ -310,13 +305,12 @@ def run_otc_reference_backfill(
     requirements: list[RequiredCoverageSegment] = []
     selected_segments: list[JsdaArchiveSegment] = []
     index_digests: dict[str, str] = {}
-    receipt_service = None
     authority_error: Optional[str] = None
 
     try:
         try:
-            receipt_service = require_jsda_receipt_service()
-        except RuntimeError as exc:
+            receipt_service = require_jsda_receipt_service(receipt_service)
+        except (RuntimeError, TypeError) as exc:
             authority_error = str(exc)
         root_raw = fetcher.fetch_file(root_url)
         root_path = _save_index_raw(
@@ -488,15 +482,13 @@ def run_otc_reference_backfill(
                         "source_url": segment.source_url,
                         "fetched_at": checked_at,
                         "raw_path": str(raw_path),
+                        "quote_effective_date": effective_date,
                         "archive_index": index_digests.get(
                             segment.publication_label_date[:4]
                         ),
                     },
                     receipt_service=receipt_service,
                     raw_artifact_paths=(raw_path,),
-                    raw_records=records,
-                    structured_table="jsda_otc_bond_reference_prices",
-                    normalized_records=rows,
                 )
                 completed += 1
             except Exception as exc:  # noqa: BLE001

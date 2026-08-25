@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Seal official JSDA OTC archive days. No invent COMPLETE.
+"""Record official JSDA OTC raw recovery evidence. Never mint COMPLETE.
 
 Coverage refresh takes local official-index HTML as index_text.
 Omitted/blank text is fail-closed empty, not calendar COMPLETE.
 The parser supports the early 21-column 2002-08-02/05 artifacts, but this
 recovery sealer keeps them REPROOF_REQUIRED until a trusted digest/count is
-approved and raw-to-structured reconciliation succeeds.
+approved and the governed ingestion runtime replays raw-to-structured
+reconciliation.
 Does not fetch live JSDA HTML.
 """
 from __future__ import annotations
@@ -31,15 +32,12 @@ from _bootstrap import ensure_repo_root  # noqa: E402
 
 ROOT = ensure_repo_root()
 
-from ingestion.jsda.normalize import normalize_otc_reference_prices  # noqa: E402
 from ingestion.jsda.archive import resolve_quote_effective_dates  # noqa: E402
 from ingestion.jsda.official_index import (  # noqa: E402
     read_local_index_text as _read_index_text,
 )
 from ingestion.jsda.parse import parse_otc_reference_csv, parse_otc_reference_xlsx  # noqa: E402
-from ingestion.runtime_authority import (  # noqa: E402
-    open_governed_receipt_service,
-)
+from ingestion.jsda.receipts import record_governed_receipt  # noqa: E402
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
     record_required_segments,
@@ -60,61 +58,6 @@ EARLY_LAYOUT_REPROOF_DAYS = frozenset({"2002-08-02", "2002-08-05"})
 # authority.  A deliberate trusted-reconciliation release may pin a digest and
 # parser count here; empty means the two parser-capable days stay PARTIAL.
 EARLY_LAYOUT_RECONCILIATION_PROOF: dict[str, tuple[str, int]] = {}
-
-TRIGGERS_DROP = [
-    "invalidate_snapshot_jsda_otc_reference_i",
-    "invalidate_snapshot_jsda_otc_reference_u",
-    "invalidate_snapshot_jsda_otc_reference_d",
-    "invalidate_snapshot_jsda_otc_reference_revisions_i",
-    "invalidate_snapshot_jsda_otc_reference_revisions_u",
-    "invalidate_snapshot_jsda_otc_reference_revisions_d",
-]
-
-TRIGGERS_CREATE_SQL = """
-CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_otc_reference_i
-AFTER INSERT ON jsda_otc_bond_reference_prices BEGIN
-    UPDATE local_snapshot_policy SET snapshot_ready=0,
-        active_snapshot_id=NULL,
-        last_error='fact mutation invalidated research snapshot'
-    WHERE singleton=1;
-END;
-CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_otc_reference_u
-AFTER UPDATE ON jsda_otc_bond_reference_prices BEGIN
-    UPDATE local_snapshot_policy SET snapshot_ready=0,
-        active_snapshot_id=NULL,
-        last_error='fact mutation invalidated research snapshot'
-    WHERE singleton=1;
-END;
-CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_otc_reference_d
-AFTER DELETE ON jsda_otc_bond_reference_prices BEGIN
-    UPDATE local_snapshot_policy SET snapshot_ready=0,
-        active_snapshot_id=NULL,
-        last_error='fact mutation invalidated research snapshot'
-    WHERE singleton=1;
-END;
-CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_otc_reference_revisions_i
-AFTER INSERT ON jsda_otc_bond_reference_prices_revisions BEGIN
-    UPDATE local_snapshot_policy SET snapshot_ready=0,
-        active_snapshot_id=NULL,
-        last_error='fact mutation invalidated research snapshot'
-    WHERE singleton=1;
-END;
-CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_otc_reference_revisions_u
-AFTER UPDATE ON jsda_otc_bond_reference_prices_revisions BEGIN
-    UPDATE local_snapshot_policy SET snapshot_ready=0,
-        active_snapshot_id=NULL,
-        last_error='fact mutation invalidated research snapshot'
-    WHERE singleton=1;
-END;
-CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_otc_reference_revisions_d
-AFTER DELETE ON jsda_otc_bond_reference_prices_revisions BEGIN
-    UPDATE local_snapshot_policy SET snapshot_ready=0,
-        active_snapshot_id=NULL,
-        last_error='fact mutation invalidated research snapshot'
-    WHERE singleton=1;
-END;
-"""
-
 
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -307,62 +250,21 @@ def parse_raw(
     return raw, [], suffix.lstrip(".")
 
 
-def drop_triggers(conn: sqlite3.Connection) -> None:
-    for name in TRIGGERS_DROP:
-        conn.execute(f"DROP TRIGGER IF EXISTS {name}")
-    conn.commit()
-
-
-def restore_triggers(conn: sqlite3.Connection) -> None:
-    conn.executescript(TRIGGERS_CREATE_SQL)
-    try:
-        conn.execute(
-            """
-            UPDATE local_snapshot_policy SET snapshot_ready=0,
-                active_snapshot_id=NULL,
-                last_error='W107 OTC batch11 official PARTIAL seal invalidated research snapshot'
-            WHERE singleton=1
-            """
-        )
-    except sqlite3.Error:
-        pass
-    conn.commit()
-
-
-def bulk_insert_day(conn: sqlite3.Connection, day: str, rows: list[dict]) -> int:
-    """Replace one day inside the governed transaction. Triggers must be off."""
-    exists = conn.execute(
-        "SELECT 1 FROM jsda_otc_bond_reference_prices "
-        "WHERE source='jsda' AND publication_label_date=? LIMIT 1",
-        (day,),
-    ).fetchone()
-    if exists:
-        conn.execute(
-            "DELETE FROM jsda_otc_bond_reference_prices "
-            "WHERE source='jsda' AND publication_label_date=?",
-            (day,),
-        )
-    cols = list(rows[0].keys())
-    placeholders = ",".join("?" for _ in cols)
-    colsql = ",".join(cols)
-    conn.executemany(
-        f"INSERT INTO jsda_otc_bond_reference_prices ({colsql}) VALUES ({placeholders})",
-        [tuple(r.get(c) for c in cols) for r in rows],
-    )
-    return len(rows)
-
-
 def seal_day(
     store,
     day,
     path,
     source_url,
-    receipt_service,
     *,
     quote_effective_date,
 ):
+    """Validate raw and record unsigned recovery evidence only.
+
+    This operator helper intentionally cannot obtain the receipt minting
+    capability.  A canonical ingestion replay must persist, parse, normalize,
+    commit, reread, and reconcile the artifact before COMPLETE is possible.
+    """
     t0 = time.time()
-    conn = None if store is None else store._conn  # noqa: SLF001
     if (
         not isinstance(quote_effective_date, str)
         or not quote_effective_date
@@ -383,49 +285,33 @@ def seal_day(
         # ~4200 rows). Zero parse ≠ empty source and must not become COMPLETE.
         return {"segment_id": day, "status": "PARSE_ZERO", "path": str(path), "fmt": fmt}
     digest = sha256_file(path)
-    if _early_layout_reproof_required(day, digest, len(parsed)):
-        # Parser capability is not a receipt.  The recovery path stays PARTIAL
-        # until the approved artifact is persisted and independently reconciled.
-        return {
-            "segment_id": day,
-            "status": "REPROOF_REQUIRED",
-            "reason": "TRUSTED_RAW_RECONCILIATION_REQUIRED",
-            "path": str(path),
-            "fmt": fmt,
-            "raw": len(parsed),
-            "digest": digest,
-        }
     if path.is_symlink():
         return {"segment_id": day, "status": "RAW_SYMLINK_REJECTED"}
     path.chmod(0o444)
-    now = datetime.now(timezone.utc).isoformat()
-    rows = normalize_otc_reference_prices(
-        parsed,
-        ingested_at=now,
-        publication_label_date=day,
-        quote_effective_date=quote_effective_date,
-        source_url=source_url,
-        raw_digest=digest,
-        segment_id=day,
-        source_format=fmt,
-    )
-    structured = bulk_insert_day(conn, day, rows)
     raw_count = len(parsed)
-    if structured <= 0 or raw_count <= 0:
-        return {
-            "segment_id": day,
-            "status": "EMPTY_COMPLETE_BAN",
-            "raw": raw_count,
-            "struct": structured,
-        }
-    if int(structured) != int(raw_count):
-        return {
-            "segment_id": day,
-            "status": "RECONCILE_FAIL",
-            "raw": raw_count,
-            "struct": structured,
-            "path": str(path),
-        }
+    reason = (
+        "TRUSTED_RAW_RECONCILIATION_REQUIRED"
+        if _early_layout_reproof_required(day, digest, raw_count)
+        else "GOVERNED_INGESTION_REPLAY_REQUIRED"
+    )
+    result = {
+        "dataset": OTC_DATASET,
+        "segment_id": day,
+        "status": "REPROOF_REQUIRED",
+        "reason": reason,
+        "raw": raw_count,
+        "struct": 0,
+        "digest": digest,
+        "path": str(path),
+        "size": len(raw),
+        "fmt": fmt,
+        "quote_effective_date": quote_effective_date,
+        "secs": round(time.time() - t0, 2),
+    }
+    if store is None:
+        return result
+
+    conn = store._conn  # noqa: SLF001
     scope, seg_start, seg_end = inventory_scope(conn, day)
     scope = dict(scope)
     scope.setdefault("coverage_mode", "official_archive_index_reconciled")
@@ -448,46 +334,42 @@ def seal_day(
         expected_items=1,
     )
     record_required_segments(conn, [required])
-    receipt_service.record_persisted_success(
+    now = datetime.now(timezone.utc).isoformat()
+    record_governed_receipt(
         store,
         required=required,
         run_id=run_id,
-        raw_artifact_paths=(path,),
-        raw_records=parsed,
-        structured_table="jsda_otc_bond_reference_prices",
-        normalized_records=rows,
-        pagination_exhausted=True,
-        discovery_exhausted=True,
         checked_at=now,
-        source_request={"source_url": source_url, "segment_id": day},
-        extra_evidence={
+        status="FAILED",
+        error=f"REPROOF_REQUIRED:{reason}",
+        pagination_exhausted=False,
+        digests={
+            "raw": digest,
+            "eligibility": "RECOVERED_RAW_ONLY",
+            "origin": "after-the-fact-jsda-operator-recovery",
             "fetched_via": "cf_workers_fetch+local_raw",
             "local_raw_path": str(path),
-            "r2_key_hint": f"raw/jsda/jsda_otc_bond_reference_prices/file_{path.name}/",
+            "r2_key_hint": (
+                "raw/jsda/jsda_otc_bond_reference_prices/"
+                f"file_{path.name}/"
+            ),
             "source_url": source_url,
-            "parser_note": f"parse_otc_reference ({fmt}) + normalize_otc_reference_prices",
+            "source_format": fmt,
+            "quote_effective_date": quote_effective_date,
+            "parser_note": (
+                f"canonical parse_otc_reference ({fmt}); normalization and "
+                "structured commit deliberately deferred to governed runtime"
+            ),
             "wave": WAVE,
-            "full_ok": "http200_size_gt_100kb",
-            "policy": "W107_planned_official_historical_partial_backfill",
-            "gate": "historical_gt_100kb_or_tip_1_5mb",
-            "path_style": path.suffix,
-            "opt": "triggers_off_bulk",
         },
+        raw_artifact_paths=(path,),
+        observed_items=1,
+        raw_page_count=1,
+        raw_row_count=raw_count,
+        structured_row_count=0,
     )
-    return {
-        "dataset": OTC_DATASET,
-        "segment_id": day,
-        "status": "SEALED",
-        "raw": raw_count,
-        "struct": structured,
-        "run_id": run_id,
-        "digest": digest,
-        "path": str(path),
-        "size": len(raw),
-        "fmt": fmt,
-        "quote_effective_date": quote_effective_date,
-        "secs": round(time.time() - t0, 2),
-    }
+    result["run_id"] = run_id
+    return result
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -522,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {e}", flush=True)
         return 1
     print(
-        f"official PARTIAL seal n={len(ITEMS)} wave={WAVE} "
+        f"official raw recovery n={len(ITEMS)} wave={WAVE} "
         f"span={ITEMS[0]['day'] if ITEMS else None}..{ITEMS[-1]['day'] if ITEMS else None}",
         flush=True,
     )
@@ -552,69 +434,55 @@ def main(argv: list[str] | None = None) -> int:
     )
     print("PRE OTC COMPLETE", pre, flush=True)
 
-    print("drop snapshot triggers...", flush=True)
-    drop_triggers(conn)
-
-    receipt_service = open_governed_receipt_service()
     results = []
-    sealed_n = 0
+    reproof_n = 0
     t_all = time.time()
-    try:
-        for i, item in enumerate(ITEMS, 1):
-            day = item["day"]
-            code = item["code"]
-            url = item.get("url") or item.get("winning_url") or ""
-            has_success = conn.execute(
-                "SELECT 1 FROM collection_receipts "
-                "WHERE dataset='jsda_otc_bond_reference_prices' "
-                "AND segment_id=? AND status='SUCCESS' LIMIT 1",
-                (day,),
-            ).fetchone()
-            if has_success:
-                results.append({"segment_id": day, "status": "ALREADY_RECEIPT_SUCCESS"})
-                continue
-            path = resolve_path(day, code)
-            if path is None:
-                results.append({"segment_id": day, "status": "RAW_MISS", "code": code})
-                print(results[-1], flush=True)
-                continue
-            r = seal_day(
-                store,
-                day,
-                path,
-                url,
-                receipt_service,
-                quote_effective_date=effective_dates.get(day),
+    for i, item in enumerate(ITEMS, 1):
+        day = item["day"]
+        code = item["code"]
+        url = item.get("url") or item.get("winning_url") or ""
+        path = resolve_path(day, code)
+        if path is None:
+            results.append({"segment_id": day, "status": "RAW_MISS", "code": code})
+            print(results[-1], flush=True)
+            continue
+        r = seal_day(
+            store,
+            day,
+            path,
+            url,
+            quote_effective_date=effective_dates.get(day),
+        )
+        results.append(r)
+        if r.get("status") == "REPROOF_REQUIRED":
+            reproof_n += 1
+        else:
+            print("RECOVERY_REJECTED", r, flush=True)
+        if i % 5 == 0 or r.get("status") != "REPROOF_REQUIRED":
+            rate = reproof_n / max(time.time() - t_all, 1e-6)
+            print(
+                f"recover {i}/{len(ITEMS)} day={day} status={r.get('status')} "
+                f"reproof={reproof_n} secs={r.get('secs')} rate={rate:.2f}/s "
+                f"run={r.get('run_id')}",
+                flush=True,
             )
-            results.append(r)
-            if r.get("status") == "SEALED":
-                sealed_n += 1
-            else:
-                print("NON_SEAL", r, flush=True)
-            if i % 5 == 0 or r.get("status") != "SEALED":
-                rate = sealed_n / max(time.time() - t_all, 1e-6)
-                print(
-                    f"seal {i}/{len(ITEMS)} day={day} status={r.get('status')} "
-                    f"sealed={sealed_n} secs={r.get('secs')} rate={rate:.2f}/s "
-                    f"run={r.get('run_id')}",
-                    flush=True,
-                )
-            if i % 100 == 0:
-                try:
-                    ck = conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
-                    print(f"wal_checkpoint_passive {ck}", flush=True)
-                except sqlite3.Error as e:
-                    print(f"wal_checkpoint err {e}", flush=True)
-    finally:
-        print("restore snapshot triggers...", flush=True)
-        restore_triggers(conn)
+        if i % 100 == 0:
+            try:
+                ck = conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+                print(f"wal_checkpoint_passive {ck}", flush=True)
+            except sqlite3.Error as e:
+                print(f"wal_checkpoint err {e}", flush=True)
 
     if os.environ.get("SKIP_REFRESH"):
         print("SKIP_REFRESH set — defer ledger refresh", flush=True)
         Path(LOGDIR / "otc_seal_result_partial.json").write_text(
-            json.dumps({"results": results, "sealed_n": sealed_n}, indent=2, default=str)
+            json.dumps(
+                {"results": results, "reproof_required_n": reproof_n},
+                indent=2,
+                default=str,
+            )
         )
-        print("PARTIAL_SEAL_DONE", sealed_n, flush=True)
+        print("RECOVERY_EVIDENCE_DONE", reproof_n, flush=True)
         store.close()
         return 0
     print("refresh_coverage_ledger (OTC)...", flush=True)
@@ -655,7 +523,7 @@ def main(argv: list[str] | None = None) -> int:
           AND (expected_items IS NULL OR expected_items=0)
         """
     ).fetchone()[0]
-    sealed = [r for r in results if r.get("status") == "SEALED"]
+    reproof = [r for r in results if r.get("status") == "REPROOF_REQUIRED"]
     summary = {
         "wave": WAVE,
         "as_of": datetime.now(timezone.utc).isoformat(),
@@ -663,8 +531,9 @@ def main(argv: list[str] | None = None) -> int:
         "post_complete": len(post_ids),
         "delta": len(post_ids) - pre,
         "tip_input_n": len(ITEMS),
-        "sealed_n": len(sealed),
-        "sealed_days": [r["segment_id"] for r in sealed],
+        "sealed_n": 0,
+        "reproof_required_n": len(reproof),
+        "reproof_required_days": [r["segment_id"] for r in reproof],
         "status_counts": [
             {"status": s[0], "n": s[1], "min": s[2], "max": s[3]} for s in status_counts
         ],
@@ -679,16 +548,36 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(summary, indent=2, ensure_ascii=False) + "\n"
     )
     (LOGDIR / "otc_seal.json").write_text(
-        json.dumps({k: summary[k] for k in summary if k not in ("results", "sealed_days")}, indent=2)
+        json.dumps(
+            {
+                k: summary[k]
+                for k in summary
+                if k not in ("results", "reproof_required_days")
+            },
+            indent=2,
+        )
         + "\n"
     )
     print(
         json.dumps(
-            {k: summary[k] for k in summary if k not in ("results", "sealed_days")},
+            {
+                k: summary[k]
+                for k in summary
+                if k not in ("results", "reproof_required_days")
+            },
             indent=2,
         )
     )
-    print("sealed_n", len(sealed), "COMPLETE", pre, "->", len(post_ids), "span", summary["complete_span"])
+    print(
+        "reproof_required_n",
+        len(reproof),
+        "COMPLETE",
+        pre,
+        "->",
+        len(post_ids),
+        "span",
+        summary["complete_span"],
+    )
     store.close()
     return 0
 
