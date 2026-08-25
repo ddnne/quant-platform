@@ -31,7 +31,9 @@
     "format",
     "snapshot_id",
     "profile_id",
+    "profile_version",
     "profile_digest",
+    "dataset_ids",
     "dataset_membership_digest",
     "coverage_proof_digest",
     "raw_proof_digest",
@@ -49,7 +51,13 @@
     "format": { "const": "ready-manifest/v1" },
     "snapshot_id": { "$ref": "#/$defs/sha256_digest" },
     "profile_id": { "$ref": "#/$defs/nonempty_string" },
+    "profile_version": { "$ref": "#/$defs/generation_pin" },
     "profile_digest": { "$ref": "#/$defs/proof_digest" },
+    "dataset_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/nonempty_string" }
+    },
     "dataset_membership_digest": { "$ref": "#/$defs/proof_digest" },
     "coverage_proof_digest": { "$ref": "#/$defs/proof_digest" },
     "raw_proof_digest": { "$ref": "#/$defs/proof_digest" },

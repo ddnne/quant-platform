@@ -10,6 +10,7 @@ import sqlite3
 import pytest
 import pit
 import paper_runtime.snapshot as snapshot_module
+import research.research_data_profile as profile_module
 
 from data_contracts import all_contracts, all_coverage_contracts
 from data_contracts.coverage import SNAPSHOT_SEGMENT_GRANULARITIES
@@ -21,8 +22,13 @@ from paper_runtime import (
     open_ready_snapshot,
     publish_ready_snapshot,
 )
+from research.readiness import ResearchReadinessService
+from research.ready_manifest import publish_profile_bound_ready_snapshot
+from research.research_data_profile import load_core_profile, official_mode
+from selection.budget_ledger import MassResearchDisabledError
 from storage.coverage_ledger import (
     CollectionReceipt,
+    EXPECTED_EMPTY_WITH_EVIDENCE,
     plan_required_segments,
     record_collection_receipt,
     record_required_segments,
@@ -183,6 +189,11 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
             from tests.test_phase61_coverage_v2 import _signed_digests as _sd
         for segment in planned:
             raw = b'{"data":[{"ok":true}]}'
+            expected_empty_evidence = (
+                {EXPECTED_EMPTY_WITH_EVIDENCE: True}
+                if observed == 0
+                else None
+            )
             if authority is not None:
                 receipt = authority.issue(
                     required=segment,
@@ -193,6 +204,7 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
                     raw_row_count=observed,
                     pagination_exhausted=True,
                     checked_at=today + "T16:00:00Z",
+                    extra_digests=expected_empty_evidence,
                 )
             else:
                 receipt = CollectionReceipt(
@@ -220,6 +232,7 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
                         segment_start=segment.segment_start,
                         segment_end=segment.segment_end,
                         checked_at=today + "T16:00:00Z",
+                        extra_digests=expected_empty_evidence,
                     ),
                     run_id=run_id,
                     status="SUCCESS",
@@ -457,3 +470,91 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(
     )
     assert repeated.snapshot_id == ready.snapshot_id
     assert len(list_ready_snapshots(snapshot_dir)) == 1
+
+
+def _offline_current_profile_evidence() -> dict[str, dict[str, object]]:
+    profile = load_core_profile()
+    return {
+        dataset_id: {
+            "status": "COMPLETE",
+            "coverage_mode": official_mode(dataset_id),
+            "projection_status": "FRESH",
+            "applied_cursor": "offline-generation-1",
+            "source_generation": "offline-generation-1",
+        }
+        for dataset_id in profile.required_datasets
+    }
+
+
+def test_profile_bound_publisher_fails_closed_on_current_core_capability_gaps(
+    tmp_path,
+):
+    path = tmp_path / "profile-gap.sqlite"
+    _seed_publishable_db(path)
+    profile = load_core_profile()
+    snapshot_dir = tmp_path / "snapshots"
+
+    with pytest.raises(
+        MassResearchDisabledError,
+        match="incomplete, stale, unpinned, or not V3",
+    ):
+        publish_profile_bound_ready_snapshot(
+            path,
+            snapshot_dir,
+            profile_id=profile.profile_id,
+            evidence_by_dataset=_offline_current_profile_evidence(),
+        )
+    assert not list(snapshot_dir.glob("sha256_*"))
+
+
+def test_profile_bound_publisher_to_verified_readiness_offline_fixture(
+    tmp_path, monkeypatch
+):
+    """Exercise the real closed path with explicit offline V3 capability fixtures."""
+    monkeypatch.setattr(
+        profile_module,
+        "source_capability_contract_or_none",
+        lambda _dataset_id: object(),
+    )
+    monkeypatch.setenv(
+        "QUANT_READINESS_HMAC_SECRET", "profile-publisher-offline-hmac"
+    )
+    path = tmp_path / "profile-ready.sqlite"
+    _seed_publishable_db(path)
+    profile = load_core_profile()
+    conn = sqlite3.connect(path)
+    run = conn.execute(
+        "SELECT id, detail FROM ingestion_run_log ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    detail = json.loads(run[1])
+    detail.update(
+        datasetCount=len(profile.required_datasets),
+        passed=len(profile.required_datasets),
+    )
+    conn.execute(
+        "UPDATE ingestion_run_log SET detail=? WHERE id=?",
+        (json.dumps(detail), run[0]),
+    )
+    conn.commit()
+    conn.close()
+    snapshot_dir = tmp_path / "snapshots"
+
+    ready = publish_profile_bound_ready_snapshot(
+        path,
+        snapshot_dir,
+        profile_id=profile.profile_id,
+        evidence_by_dataset=_offline_current_profile_evidence(),
+    )
+    nested = ready.manifest["ready_manifest"]
+    assert nested["profile_id"] == profile.profile_id
+    assert nested["profile_version"] == profile.profile_version
+    assert nested["profile_digest"] == profile.profile_digest
+    assert set(nested["dataset_ids"]) == set(profile.required_datasets)
+    assert nested["published_at"] == ready.manifest["committed_at"]
+
+    readiness = ResearchReadinessService(
+        snapshot_dir=snapshot_dir, snapshot_id=ready.snapshot_id
+    ).mint()
+    assert readiness.profile_digest == profile.profile_digest
+    assert set(readiness.dataset_ids) == set(profile.required_datasets)
+    assert readiness.require_valid(expected_snapshot_id=ready.snapshot_id) is readiness

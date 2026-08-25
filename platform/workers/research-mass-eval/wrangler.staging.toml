@@ -1,10 +1,5 @@
-# STAGING STUB — not a production config. Do not wrangler deploy this file
-# against the production Cloudflare account.
-#
-# HUMAN: create a physically separate Cloudflare account, Worker name, D1,
-# R2, and secrets. Do not copy production binding IDs into this file.
-# Do not create those resources from this lane.
-# Freeze vars stay NO-GO / OFF / false until an explicit human GO.
+# Staging uses distinct D1/R2 resources and the private staging gateway.
+# Freeze vars stay NO-GO / OFF / false.
 
 name = "quant-platform-research-mass-eval-staging"
 main = "src/index.ts"
@@ -20,10 +15,15 @@ OPERATIONAL_GO = "false"
 CONTINUOUS_PAPER = "UNARMED"
 NETS_ONLY = "deny"
 
-# Bindings omitted on purpose. Do not paste production D1 ids,
-# production R2 bucket names, or the production gateway Worker name.
-#
-# After HUMAN creates staging resources, bind only staging names/ids:
-#   STRUCTURED_BUCKET -> staging R2 (distinct bucket)
-#   DB                -> staging D1 (distinct database)
-#   AI_GATEWAY        -> quant-platform-research-ai-gateway-staging
+[[r2_buckets]]
+binding = "STRUCTURED_BUCKET"
+bucket_name = "quant-structured-staging"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "quant-ingest-staging"
+database_id = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
+
+[[services]]
+binding = "AI_GATEWAY"
+service = "quant-platform-research-ai-gateway-staging"

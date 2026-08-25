@@ -2,16 +2,52 @@
 
 Collection SUCCESS is not Coverage COMPLETE. Missing index_text stays
 fail-closed empty (not a calendar walk). Never fakes COMPLETE.
+source_query observed_items come from actual raw counts, never expected.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .jquants.receipts import (
     emit_segment_receipt,
     require_signed_receipt_authority,
 )
+
+
+def count_raw_items(raw: bytes | list | tuple) -> int:
+    """Count records actually present in a raw payload. Never uses expected."""
+    if isinstance(raw, (list, tuple)):
+        return len(raw)
+    if not raw:
+        return 0
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+        return 0
+    if isinstance(payload, list):
+        return len(payload)
+    if isinstance(payload, dict):
+        for key in ("data", "rows", "results", "records"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return len(value)
+        return 0
+    return 0
+
+
+def observed_items_from_actual(*, unit: str, raw_item_count: int) -> int:
+    """Map actual raw counts to observed_items. Never copies expected.
+
+    source_query is one exhausted query (1 iff the payload had items).
+    Empty actual is 0. expected_empty is not Coverage COMPLETE without a
+    trusted EXPECTED_EMPTY_WITH_EVIDENCE receipt.
+    """
+    actual = max(0, int(raw_item_count))
+    if unit == "source_query":
+        return 1 if actual > 0 else 0
+    return actual
 
 
 def _uses_official_archive_index(policy) -> bool:
@@ -148,10 +184,8 @@ def emit_catalog_job_receipt(
             "SELECT COALESCE(MAX(id), 0) FROM ingestion_run_log"
         ).fetchone()
         run_id = int(run_id_row[0]) if run_id_row else 0
-        if unit == "source_query":
-            obs = 1 if len(rows) > 0 else 0
-        else:
-            obs = len(rows)
+        raw_count = count_raw_items(rows)
+        obs = observed_items_from_actual(unit=unit, raw_item_count=raw_count)
         emit_segment_receipt(
             store._conn,
             required=req,
@@ -159,7 +193,7 @@ def emit_catalog_job_receipt(
             raw=raw_bytes,
             observed_items=obs,
             structured_row_count=structured_row_count,
-            raw_row_count=len(rows),
+            raw_row_count=raw_count,
             pagination_exhausted=True,
             status="SUCCESS",
             authority=authority,
@@ -172,7 +206,9 @@ __all__ = [
     "_index_text_for_plan",
     "_plan_required_segments",
     "commit_governed_catalog_receipt",
+    "count_raw_items",
     "emit_catalog_job_receipt",
+    "observed_items_from_actual",
     "require_signed_receipt_authority",
     "rollback_governed_catalog_write",
 ]

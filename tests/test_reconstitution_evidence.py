@@ -71,6 +71,10 @@ def test_reconstitution_evidence_apply_false_both_options() -> None:
         assert "drop_children_keep_parents" in sleeve
         assert sleeve["drop_parents_keep_children"]["apply"] is False
         assert sleeve["drop_children_keep_parents"]["apply"] is False
+        assert sleeve["parent_child_indistinguishable"] is True
+        assert sleeve["recommended_choice"] == "drop_children_keep_parents"
+        assert sleeve["recommended_choice_is_not_apply"] is True
+        assert sleeve["occupancy_mean_is_not_a_score"] is True
         for key in COMPARISON_METRIC_KEYS:
             assert key in sleeve["drop_parents_keep_children"]["metrics"]
             assert key in sleeve["drop_children_keep_parents"]["metrics"]
@@ -118,6 +122,8 @@ def test_event_fund_three_parents_vs_child_cuts() -> None:
     assert drop_c["sleeve_breadth"] == 4
     assert "event_ac_peps_taup" not in drop_c["members"]
     assert evf["economics_clearly_better"] is False
+    assert evf["parent_child_indistinguishable"] is True
+    assert evf["recommended_choice"] == "drop_children_keep_parents"
 
 
 def test_occupancy_maps_do_not_invent_sharpe() -> None:
@@ -141,6 +147,12 @@ def test_occupancy_maps_do_not_invent_sharpe() -> None:
     assert current["liq_large"] == 0.41
     assert pack["recommended_choice"] == "drop_children_keep_parents"
     assert pack["economics_clearly_better"] is False
+    assert fund["parent_child_indistinguishable"] is True
+    assert fund["recommended_choice"] == "drop_children_keep_parents"
+    assert fund["occupancy_mean_is_not_a_score"] is True
+    event = _by_id(pack)["basket_event_fund"]
+    assert event["parent_child_indistinguishable"] is True
+    assert event["recommended_choice"] == "drop_children_keep_parents"
 
 
 def test_missing_cells_root_is_r2_missing(tmp_path) -> None:
@@ -268,3 +280,5 @@ def test_injected_cells_fill_sharpe_without_apply() -> None:
     assert isinstance(mid["net_sharpe"], float)
     assert pack["recommended_choice"] == "drop_children_keep_parents"
     assert pack["economics_clearly_better"] is False
+    assert fund["parent_child_indistinguishable"] is True
+    assert fund["recommended_choice"] == "drop_children_keep_parents"

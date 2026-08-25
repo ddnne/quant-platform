@@ -5,21 +5,29 @@
  * - Outbound host allowlist only (jsda.or.jp / www / market)
  * - Immutable raw keys: raw/jsda/{dataset}/{segment_id}/{sha256}.{ext}
  * - Archive discovery: year indexes + data files (not maxDataFiles=3 heuristic PASS)
+ * - MAX_YEAR_PAGES default "1" is a rate/safety cap, not pagination exhaustion
  * - Structured XLS/XLSX parse stays trusted Python downstream (not TS)
  */
 
 import { authorized } from "./authorized";
+import {
+  discoveryCapSemantics,
+  parseDataFileCap,
+  parseYearPageCap,
+  type DiscoveryRunStatus,
+} from "./discovery_caps";
 import { json } from "./http_json";
 import { sha256Hex } from "./sha256";
 
 export interface Env {
   RAW_BUCKET: R2Bucket;
   DB: D1Database;
+  JSDA_QUEUE: Queue<JsdaDatasetJob>;
   INGESTION_RUN_TOKEN?: string;
   USER_AGENT?: string;
-  /** 0 = unlimited data-file fetches; small N for min-segment runs. */
+  /** 0 = unlimited data-file fetches; small N is a rate/safety cap, not exhaustion. */
   MAX_DATA_FILES?: string;
-  /** 0 = all year archive pages; small N for min-segment runs. */
+  /** Rate/safety cap. Default "1". 0 = unlimited. Cap-hit is not exhaustion. */
   MAX_YEAR_PAGES?: string;
 }
 
@@ -43,10 +51,77 @@ const DATA_EXT = [".csv", ".xlsx", ".xls"];
 const YEAR_ARCHIVE_RE = /archive(20\d{2})\.html/i;
 const NON_DATA = ["reference", "bessi", "kijun", "koubo", "youkou"];
 
-type DatasetId =
+export type DatasetId =
   | "jsda_otc_bond_reference_prices"
   | "jsda_tokyo_repo_rates"
   | "jsda_corporate_bond_transactions";
+
+const DATASET_IDS = [
+  "jsda_otc_bond_reference_prices",
+  "jsda_tokyo_repo_rates",
+  "jsda_corporate_bond_transactions",
+] as const satisfies readonly DatasetId[];
+
+const DATASET_ROOTS: Readonly<Record<DatasetId, string>> = {
+  jsda_otc_bond_reference_prices: OTC_INDEX,
+  jsda_tokyo_repo_rates: REPO_INDEX,
+  jsda_corporate_bond_transactions: CORP_INDEX,
+};
+
+const DATASET_JOB_VERSION = "jsda-dataset-job/v1" as const;
+const DATASET_JOB_KEYS = new Set([
+  "version",
+  "dataset",
+  "requested_by",
+  "requested_at",
+  "job_id",
+]);
+
+export interface JsdaDatasetJob {
+  version: typeof DATASET_JOB_VERSION;
+  dataset: DatasetId;
+  requested_by: "cron" | "manual";
+  requested_at: string;
+  job_id: string;
+}
+
+function isDatasetId(value: unknown): value is DatasetId {
+  return (
+    typeof value === "string" &&
+    (DATASET_IDS as readonly string[]).includes(value)
+  );
+}
+
+function isJsdaDatasetJob(value: unknown): value is JsdaDatasetJob {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  const keys = Object.keys(candidate);
+  if (
+    keys.length !== DATASET_JOB_KEYS.size ||
+    keys.some((key) => !DATASET_JOB_KEYS.has(key))
+  ) {
+    return false;
+  }
+  if (
+    candidate.version !== DATASET_JOB_VERSION ||
+    !isDatasetId(candidate.dataset) ||
+    (candidate.requested_by !== "cron" && candidate.requested_by !== "manual") ||
+    typeof candidate.requested_at !== "string" ||
+    typeof candidate.job_id !== "string" ||
+    candidate.job_id.length < 1 ||
+    candidate.job_id.length > 200 ||
+    !/^[A-Za-z0-9:._-]+$/.test(candidate.job_id)
+  ) {
+    return false;
+  }
+  const requestedAt = new Date(candidate.requested_at);
+  return (
+    !Number.isNaN(requestedAt.getTime()) &&
+    requestedAt.toISOString() === candidate.requested_at
+  );
+}
 
 const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024; // 32 MiB hard cap per artifact
 
@@ -217,12 +292,15 @@ async function putManifest(
 
 interface CollectResult {
   dataset: DatasetId;
-  status: "pass" | "fail" | "partial";
+  status: DiscoveryRunStatus;
   expectedPages: number;
   fetchedPages: number;
   filesStored: number;
   keys: string[];
   detail: string;
+  pagination_exhausted: boolean;
+  year_page_cap_hit: boolean;
+  data_file_cap_hit: boolean;
 }
 
 async function collectWithDiscovery(
@@ -245,6 +323,9 @@ async function collectWithDiscovery(
         filesStored: 0,
         keys,
         detail: `root index HTTP ${root.status}`,
+        pagination_exhausted: false,
+        year_page_cap_hit: false,
+        data_file_cap_hit: false,
       };
     }
     const rootHtml = new TextDecoder().decode(root.bytes);
@@ -261,24 +342,20 @@ async function collectWithDiscovery(
     keys.push(rootPut.key);
 
     const rootLinks = extractLinks(rootHtml, rootIndex);
-    let yearPages = rootLinks.filter(isYearArchive);
+    const yearPagesFound = rootLinks.filter(isYearArchive);
     // Prefer highest archive year first (list order on index is not reliable).
-    yearPages = yearPages.slice().sort((a, b) => {
+    let yearPages = yearPagesFound.slice().sort((a, b) => {
       const ya = Number(YEAR_ARCHIVE_RE.exec(new URL(a).pathname)?.[1] || 0);
       const yb = Number(YEAR_ARCHIVE_RE.exec(new URL(b).pathname)?.[1] || 0);
       return yb - ya;
     });
-    const maxYearPages = Math.max(
-      0,
-      Math.min(100, Number(env.MAX_YEAR_PAGES ?? "0") || 0),
-    );
+    const maxYearPages = parseYearPageCap(env.MAX_YEAR_PAGES);
     if (maxYearPages > 0) {
       yearPages = yearPages.slice(0, maxYearPages);
     }
     const dataFromRoot = rootLinks.filter(isDataUrl);
 
-    // Crawl year archives when present (OTC style).
-    const pageUrls = [rootIndex, ...yearPages];
+    // Crawl year archives when present (OTC style). Cap is a rate/safety limit.
     const allData = new Set<string>(dataFromRoot);
     let fetchedPages = 1;
     for (const yearUrl of yearPages) {
@@ -307,10 +384,7 @@ async function collectWithDiscovery(
 
     // Fetch discovered data files. Optional max_files (query/env) for min-segment
     // evidence closure without multi-hour full-archive crawls.
-    const maxFiles = Math.max(
-      0,
-      Math.min(10_000, Number(env.MAX_DATA_FILES ?? "0") || 0),
-    );
+    const maxFiles = parseDataFileCap(env.MAX_DATA_FILES);
     let stored = 0;
     const errors: string[] = [];
     const artifacts: { url: string; key: string; digest: string }[] = [];
@@ -346,42 +420,44 @@ async function collectWithDiscovery(
       }
     }
 
+    const sem = discoveryCapSemantics({
+      yearPagesFound: yearPagesFound.length,
+      maxYearPages,
+      dataFilesDiscovered: allData.size,
+      dataFilesStored: stored,
+      maxDataFiles: maxFiles,
+      fetchErrors: errors.length,
+    });
+
     const manifestKey = await putManifest(env, dataset, `discovery_${day}`, {
       dataset,
       rootIndex,
-      discovered_year_pages: yearPages.length,
+      discovered_year_pages: yearPagesFound.length,
+      fetched_year_pages: yearPages.length,
       discovered_data_files: allData.size,
       stored,
+      year_page_cap_hit: sem.year_page_cap_hit,
+      data_file_cap_hit: sem.data_file_cap_hit,
+      pagination_exhausted: sem.pagination_exhausted,
       artifacts,
       errors: errors.slice(0, 20),
       fetched_at: new Date().toISOString(),
     });
     keys.push(manifestKey);
 
-    // Complete acquisition only when discovery scope fully fetched without errors
-    // and we observed at least the expected discovery surface.
-    // Repo series may only expose a single timeseries file on root — that is OK
-    // if all discovered data files were stored.
-    let status: "pass" | "partial" | "fail" = "partial";
-    if (allData.size === 0 && yearPages.length === 0) {
-      status = "partial"; // index only; deeper discovery may be needed
-    } else if (stored === allData.size && errors.length === 0 && stored > 0) {
-      status = "pass";
-    } else if (stored === 0) {
-      status = "fail";
-    } else {
-      status = "partial";
-    }
-
     return {
       dataset,
-      status,
-      expectedPages: pageUrls.length,
+      status: sem.status,
+      expectedPages: 1 + yearPagesFound.length,
       fetchedPages,
       filesStored: stored,
       keys,
+      pagination_exhausted: sem.pagination_exhausted,
+      year_page_cap_hit: sem.year_page_cap_hit,
+      data_file_cap_hit: sem.data_file_cap_hit,
       detail:
-        `years=${yearPages.length} data_discovered=${allData.size} stored=${stored}` +
+        `years=${yearPages.length}/${yearPagesFound.length} data_discovered=${allData.size}` +
+        ` stored=${stored} pagination_exhausted=${sem.pagination_exhausted}` +
         (errors.length ? ` errors=${errors.slice(0, 5).join("|")}` : ""),
     };
   } catch (e) {
@@ -392,180 +468,184 @@ async function collectWithDiscovery(
       fetchedPages: 0,
       filesStored: 0,
       keys,
+      pagination_exhausted: false,
+      year_page_cap_hit: false,
+      data_file_cap_hit: false,
       detail: (e as Error).message || String(e),
     };
   }
 }
 
-async function enqueueRootDiscovery(env: Env): Promise<number> {
-  const now = new Date().toISOString();
-  const plans: { dataset: DatasetId; url: string }[] = [
-    { dataset: "jsda_otc_bond_reference_prices", url: OTC_INDEX },
-    { dataset: "jsda_tokyo_repo_rates", url: REPO_INDEX },
-    { dataset: "jsda_corporate_bond_transactions", url: CORP_INDEX },
-  ];
-  let n = 0;
-  for (const plan of plans) {
-    const jobId = `discover:${plan.dataset}:${now.slice(0, 10)}`;
-    try {
-      await env.DB.prepare(
-        `INSERT OR IGNORE INTO jsda_acquisition_jobs
-         (job_id, dataset, job_type, target_url, segment_id, state, attempt, priority, created_at, updated_at)
-         VALUES (?, ?, 'discover_root', ?, NULL, 'pending', 0, 10, ?, ?)`,
-      )
-        .bind(jobId, plan.dataset, plan.url, now, now)
-        .run();
-      n++;
-    } catch {
-      // Table may not be migrated yet — ignore.
-    }
-  }
-  return n;
-}
-
-const CRON_JOB_BATCH = 3;
-
-async function drainJobBatch(
-  env: Env,
-  ua: string,
-): Promise<Record<string, unknown>> {
-  const now = new Date().toISOString();
-  let jobs: { job_id: string; dataset: string; job_type: string; target_url: string }[] = [];
-  try {
-    const res = await env.DB.prepare(
-      `SELECT job_id, dataset, job_type, target_url FROM jsda_acquisition_jobs
-       WHERE state IN ('pending','retry')
-       ORDER BY priority ASC, created_at ASC LIMIT ?`,
-    )
-      .bind(CRON_JOB_BATCH)
-      .all();
-    jobs = (res.results || []) as typeof jobs;
-  } catch (e) {
-    return {
-      mode: "job_queue",
-      error: (e as Error).message,
-      note: "jsda_acquisition_jobs missing — apply migration 0008",
-    };
-  }
-  const results = [];
-  for (const job of jobs) {
-    await env.DB.prepare(
-      `UPDATE jsda_acquisition_jobs SET state='running', attempt=attempt+1, updated_at=? WHERE job_id=?`,
-    )
-      .bind(now, job.job_id)
-      .run();
-    try {
-      if (job.job_type === "discover_root") {
-        const r = await collectWithDiscovery(
-          env,
-          job.dataset as DatasetId,
-          job.target_url,
-          ua,
-        );
-        const state = r.status === "pass" ? "pass" : r.status === "fail" ? "fail" : "partial";
-        await env.DB.prepare(
-          `UPDATE jsda_acquisition_jobs SET state=?, detail=?, updated_at=? WHERE job_id=?`,
-        )
-          .bind(state, r.detail.slice(0, 500), new Date().toISOString(), job.job_id)
-          .run();
-        results.push({ job_id: job.job_id, ...r });
-      } else {
-        await env.DB.prepare(
-          `UPDATE jsda_acquisition_jobs SET state='fail', reason_code='unsupported_job_type', updated_at=? WHERE job_id=?`,
-        )
-          .bind(new Date().toISOString(), job.job_id)
-          .run();
-        results.push({ job_id: job.job_id, status: "fail", detail: "unsupported" });
-      }
-    } catch (e) {
-      await env.DB.prepare(
-        `UPDATE jsda_acquisition_jobs SET state='retry', detail=?, updated_at=? WHERE job_id=?`,
-      )
-        .bind((e as Error).message.slice(0, 500), new Date().toISOString(), job.job_id)
-        .run();
-      results.push({ job_id: job.job_id, status: "retry", detail: (e as Error).message });
-    }
-  }
-  return { mode: "job_queue", drained: results.length, results };
-}
-
-async function runAll(
-  env: Env,
-  triggeredBy: "cron" | "manual",
-  onlyDataset?: DatasetId,
-): Promise<Record<string, unknown>> {
-  const ua = env.USER_AGENT || UA;
-  const startedAt = new Date().toISOString();
-
-  // Cron: durable bounded path — enqueue roots + drain a small batch.
-  if (triggeredBy === "cron") {
-    const enqueued = await enqueueRootDiscovery(env);
-    const drain = await drainJobBatch(env, ua);
-    const summary = {
-      startedAt,
-      finishedAt: new Date().toISOString(),
-      status: "partial",
-      triggeredBy,
-      mode: "durable_job_queue",
-      enqueued,
-      ...drain,
-    };
-    try {
-      await env.DB.prepare(
-        `INSERT INTO ingestion_run_log (ran_at, source, runtime, status, detail)
-         VALUES (?, 'jsda', 'cloudflare', ?, ?)`,
-      )
-        .bind(startedAt, "partial", JSON.stringify(summary))
-        .run();
-    } catch {
-      /* ignore */
-    }
-    return summary;
-  }
-
-  // Manual: full discovery still available for ops backfill.
-  // Optional onlyDataset short-circuits to one source for min-segment runs.
-  const allPlans: { dataset: DatasetId; url: string }[] = [
-    { dataset: "jsda_otc_bond_reference_prices", url: OTC_INDEX },
-    { dataset: "jsda_tokyo_repo_rates", url: REPO_INDEX },
-    { dataset: "jsda_corporate_bond_transactions", url: CORP_INDEX },
-  ];
-  const plans = onlyDataset
-    ? allPlans.filter((p) => p.dataset === onlyDataset)
-    : allPlans;
-  const results: CollectResult[] = [];
-  for (const plan of plans) {
-    results.push(await collectWithDiscovery(env, plan.dataset, plan.url, ua));
-  }
-  const passed = results.filter((r) => r.status === "pass").length;
-  const failed = results.filter((r) => r.status === "fail").length;
-  const partial = results.filter((r) => r.status === "partial").length;
-  const finishedAt = new Date().toISOString();
-  const status =
-    failed > 0 ? "partial" : partial > 0 ? "partial" : passed === results.length ? "pass" : "partial";
-  const summary = {
-    startedAt,
-    finishedAt,
-    status,
-    triggeredBy,
-    mode: "manual_full_discovery",
-    datasetCount: results.length,
-    passed,
-    failed,
-    partial,
-    results,
+function newDatasetJob(
+  dataset: DatasetId,
+  requestedBy: JsdaDatasetJob["requested_by"],
+  requestedAt: string,
+): JsdaDatasetJob {
+  return {
+    version: DATASET_JOB_VERSION,
+    dataset,
+    requested_by: requestedBy,
+    requested_at: requestedAt,
+    job_id: `jsda:${dataset}:${requestedAt}:${crypto.randomUUID()}`,
   };
+}
+
+async function enqueueDatasetJobs(
+  env: Env,
+  requestedBy: JsdaDatasetJob["requested_by"],
+  onlyDataset?: DatasetId,
+): Promise<readonly DatasetId[]> {
+  const datasets = onlyDataset ? [onlyDataset] : [...DATASET_IDS];
+  const requestedAt = new Date().toISOString();
+  await env.JSDA_QUEUE.sendBatch(
+    datasets.map((dataset) => ({
+      body: newDatasetJob(dataset, requestedBy, requestedAt),
+      contentType: "json",
+    })),
+  );
+  return datasets;
+}
+
+async function recordJobState(
+  env: Env,
+  job: JsdaDatasetJob,
+  state: "running" | "pass" | "partial" | "fail" | "retry",
+  attempt: number,
+  detail: string,
+  reasonCode: string | null = null,
+): Promise<void> {
+  const now = new Date().toISOString();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO jsda_acquisition_jobs
+       (job_id, dataset, job_type, target_url, segment_id, state, attempt, priority,
+        reason_code, detail, created_at, updated_at)
+       VALUES (?, ?, 'discover_root', ?, NULL, ?, ?, 10, ?, ?, ?, ?)
+       ON CONFLICT(job_id) DO UPDATE SET
+         state=excluded.state,
+         attempt=excluded.attempt,
+         reason_code=excluded.reason_code,
+         detail=excluded.detail,
+         updated_at=excluded.updated_at`,
+    )
+      .bind(
+        job.job_id,
+        job.dataset,
+        DATASET_ROOTS[job.dataset],
+        state,
+        attempt,
+        reasonCode,
+        detail.slice(0, 500),
+        job.requested_at,
+        now,
+      )
+      .run();
+  } catch (error) {
+    // Acquisition remains governed by Queue retry/DLQ even before migration 0008.
+    console.error("jsda_job_audit_write_failed", {
+      job_id: job.job_id,
+      dataset: job.dataset,
+      state,
+      error: (error as Error).message,
+    });
+  }
+}
+
+async function recordRunResult(
+  env: Env,
+  job: JsdaDatasetJob,
+  result: CollectResult,
+  attempt: number,
+): Promise<void> {
+  const status = queueOutcome(result);
   try {
     await env.DB.prepare(
       `INSERT INTO ingestion_run_log (ran_at, source, runtime, status, detail)
        VALUES (?, 'jsda', 'cloudflare', ?, ?)`,
     )
-      .bind(startedAt, summary.status, JSON.stringify(summary))
+      .bind(
+        job.requested_at,
+        status,
+        JSON.stringify({
+          mode: "cloudflare_queue",
+          job_id: job.job_id,
+          requested_by: job.requested_by,
+          attempt,
+          ...result,
+          status,
+        }),
+      )
       .run();
-  } catch (e) {
-    (summary as Record<string, unknown>).d1Error = (e as Error).message;
+  } catch (error) {
+    console.error("jsda_run_log_write_failed", {
+      job_id: job.job_id,
+      dataset: job.dataset,
+      error: (error as Error).message,
+    });
   }
-  return summary;
+}
+
+function queueOutcome(result: CollectResult): DiscoveryRunStatus {
+  const strictPass =
+    result.status === "pass" &&
+    result.pagination_exhausted === true &&
+    result.filesStored > 0;
+  if (strictPass) return "pass";
+  return result.status === "fail" ? "fail" : "partial";
+}
+
+async function consumeDatasetMessage(
+  message: Message<unknown>,
+  env: Env,
+): Promise<void> {
+  if (!isJsdaDatasetJob(message.body)) {
+    console.error("jsda_queue_message_rejected", {
+      message_id: message.id,
+      attempt: message.attempts,
+      reason: "invalid_dataset_job",
+    });
+    // Invalid schemas are permanent failures; do not poison the retry/DLQ path.
+    message.ack();
+    return;
+  }
+
+  const job = message.body;
+  try {
+    await recordJobState(env, job, "running", message.attempts, "queue consumer started");
+    const result = await collectWithDiscovery(
+      env,
+      job.dataset,
+      DATASET_ROOTS[job.dataset],
+      env.USER_AGENT || UA,
+    );
+    await recordRunResult(env, job, result, message.attempts);
+    const outcome = queueOutcome(result);
+    if (outcome === "pass") {
+      await recordJobState(env, job, "pass", message.attempts, result.detail);
+      message.ack();
+      return;
+    }
+
+    await recordJobState(
+      env,
+      job,
+      outcome,
+      message.attempts,
+      result.detail,
+      `discovery_${outcome}`,
+    );
+    message.retry();
+  } catch (error) {
+    await recordJobState(
+      env,
+      job,
+      "retry",
+      message.attempts,
+      (error as Error).message || String(error),
+      "consumer_exception",
+    );
+    message.retry();
+  }
 }
 
 export default {
@@ -591,25 +671,40 @@ export default {
       if (!(await authorized(request, env.INGESTION_RUN_TOKEN))) {
         return json({ error: "unauthorized" }, 401);
       }
-      const ds = url.searchParams.get("dataset") || "";
-      const allowed: DatasetId[] = [
-        "jsda_otc_bond_reference_prices",
-        "jsda_tokyo_repo_rates",
-        "jsda_corporate_bond_transactions",
-      ];
-      const only =
-        ds && (allowed as string[]).includes(ds) ? (ds as DatasetId) : undefined;
-      const summary = await runAll(env, "manual", only);
-      return json({ ok: summary.status === "pass", summary });
+      const requestedDataset = url.searchParams.get("dataset");
+      if (url.searchParams.has("dataset") && !isDatasetId(requestedDataset)) {
+        return json({ error: "invalid dataset" }, 400);
+      }
+      const datasets = await enqueueDatasetJobs(
+        env,
+        "manual",
+        requestedDataset as DatasetId | undefined,
+      );
+      return json(
+        {
+          accepted: true,
+          mode: "cloudflare_queue",
+          queued: datasets.length,
+          datasets,
+        },
+        202,
+      );
     }
     return json({ error: "not found" }, 404);
   },
 
   async scheduled(
-    _event: ScheduledEvent,
+    _controller: ScheduledController,
     env: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
-    ctx.waitUntil(runAll(env, "cron"));
+    ctx.waitUntil(enqueueDatasetJobs(env, "cron"));
   },
-};
+
+  async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+    // Keep JSDA outbound acquisition polite and bounded within each batch.
+    for (const message of batch.messages) {
+      await consumeDatasetMessage(message, env);
+    }
+  },
+} satisfies ExportedHandler<Env, unknown>;

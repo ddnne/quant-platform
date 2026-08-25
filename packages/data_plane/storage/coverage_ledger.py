@@ -40,6 +40,7 @@ from storage.coverage_ledger_io import (
     update_dataset_coverage_row,
 )
 from storage.coverage_receipts import (
+    EXPECTED_EMPTY_WITH_EVIDENCE,
     SYNTHETIC_RECEIPT_MARKER,
     build_collection_receipt,
     build_synthetic_complete_receipt,
@@ -373,7 +374,7 @@ def evaluate_segment(
     )
     if not identity_matches:
         return "PARTIAL", {"reason": "receipt does not match required scope"}
-    # Trusted-path gate: only a VerifiedReceipt may COMPLETE.
+    # Trusted-path gate: VerifiedReceipt plus non-empty trusted raw (or expected-empty flag).
     try:
         from storage.verified_receipt import (
             ReceiptVerificationError,
@@ -435,6 +436,12 @@ def evaluate_segment(
         and receipt.raw_row_count != receipt.structured_row_count
     ):
         return "FAILED", {"reason": "raw/structured row mismatch"}
+    if not _has_nonempty_trusted_raw_evidence(receipt):
+        return "PARTIAL", {
+            "reason": "empty raw is not COMPLETE-eligible without "
+            "EXPECTED_EMPTY_WITH_EVIDENCE",
+            "raw_row_count": int(receipt.raw_row_count),
+        }
     return "COMPLETE", {
         "reason": "receipt reconciled",
         "event_zero": receipt.observed_items == 0,
@@ -1425,8 +1432,21 @@ def receipt_eligibility(receipt: CollectionReceipt) -> str:
     return "TRUSTED_COLLECTION"
 
 
+def _has_nonempty_trusted_raw_evidence(receipt: CollectionReceipt) -> bool:
+    """COMPLETE needs raw_count>0 or signed EXPECTED_EMPTY_WITH_EVIDENCE.
+
+    Unsigned ``[]`` / ``{"data":[]}`` is not expected-empty evidence.
+    """
+    if int(receipt.raw_row_count) > 0:
+        return True
+    extras = receipt.digests.get("extra_digests")
+    return isinstance(extras, dict) and bool(
+        extras.get(EXPECTED_EMPTY_WITH_EVIDENCE)
+    )
+
+
 def is_complete_eligible_receipt(receipt: CollectionReceipt) -> bool:
-    """COMPLETE only with a VerifiedReceipt (signed claims bound to the outer receipt)."""
+    """COMPLETE only with VerifiedReceipt and non-empty trusted raw evidence."""
     if is_synthetic_receipt(receipt):
         return False
     from storage.verified_receipt import ReceiptVerificationError, require_verified_receipt
@@ -1435,11 +1455,13 @@ def is_complete_eligible_receipt(receipt: CollectionReceipt) -> bool:
         require_verified_receipt(receipt)
     except ReceiptVerificationError:
         return False
-    return True
+    return _has_nonempty_trusted_raw_evidence(receipt)
+
 
 __all__ = [
     "CollectionReceipt",
     "RequiredCoverageSegment",
+    "EXPECTED_EMPTY_WITH_EVIDENCE",
     "SYNTHETIC_RECEIPT_MARKER",
     "build_collection_receipt",
     "build_synthetic_complete_receipt",

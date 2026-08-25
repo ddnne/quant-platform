@@ -60,13 +60,19 @@ def catalog_kind(logic_id: str) -> CatalogKind:
     raise KeyError(f"unknown catalog logic_id: {lid}")
 
 
+@lru_cache(maxsize=1)
 def pilot_candidates() -> frozenset[str]:
-    """Pilot helper returns active only. Legacy IDs stay out.
+    """Four ExperimentPlan strategy_spec_ids. Not the 2092 active remainder.
 
-    n_active is not a quality metric. go=False, not_a_pass=True. AND rows
-    remaining classified active/pilot_candidates are inventory, not a pass.
+    Does not alias active_logic_ids(). Those AND rows are inventory, not
+    a selection. start() stays off. Not GO.
     """
-    return active_logic_ids()
+    from research.experiment_plans import PILOT_PLAN_COUNT, load_experiment_plans
+
+    ids = frozenset(plan.strategy_spec_id for plan in load_experiment_plans())
+    if len(ids) != PILOT_PLAN_COUNT:
+        return frozenset()
+    return ids
 
 
 def summary() -> dict[str, Any]:

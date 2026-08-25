@@ -22,9 +22,11 @@ from research.ready_manifest import (
     load_ready_manifest,
     mint_verified_research_readiness,
     missing_ready_manifest_proofs,
+    ready_manifest_from_snapshot_document,
     require_core_profile_deps_subseteq_source_capability_registry,
     serialize_ready_manifest,
 )
+from research.research_data_profile import load_core_profile
 from selection.budget_ledger import MassResearchDisabledError
 
 _TEST_HMAC = "ready-manifest-offline-e2e-hmac"
@@ -55,11 +57,13 @@ def _digest(label: str) -> str:
 
 def _complete_manifest(**overrides: object) -> ReadyManifest:
     digest = _digest("complete")
+    profile = load_core_profile()
     payload = {
         "snapshot_id": digest,
-        "profile_id": "core",
-        "profile_digest": _digest("profile"),
-        "dataset_ids": ["equities_master"],
+        "profile_id": profile.profile_id,
+        "profile_version": profile.profile_version,
+        "profile_digest": profile.profile_digest,
+        "dataset_ids": profile.required_datasets,
         "coverage_proof_digest": _digest("coverage"),
         "raw_proof_digest": _digest("raw"),
         "validation_proof_digest": _digest("validation"),
@@ -70,7 +74,7 @@ def _complete_manifest(**overrides: object) -> ReadyManifest:
         "feature_generation": _digest("feature"),
         "catalog_generation": _digest("catalog"),
         "created_at": "2026-08-24T00:00:00+00:00",
-        "published_at": MISSING,
+        "published_at": "2026-08-24T00:01:00+00:00",
     }
     payload.update(overrides)
     return build_ready_manifest(**payload)  # type: ignore[arg-type]
@@ -90,6 +94,18 @@ def test_single_ready_manifest_schema_is_the_publish_gate() -> None:
     assert "def evaluate_ready_publication" in policy_src
 
 
+def test_profile_manifest_builder_has_one_product_owned_call_site() -> None:
+    allowed = repo_root() / "packages" / "product" / "research" / "ready_manifest.py"
+    callers = []
+    for path in (repo_root() / "packages").rglob("*.py"):
+        if path in (allowed, _SNAPSHOT_PY):
+            continue
+        if "_ready_manifest_builder=" in path.read_text(encoding="utf-8"):
+            callers.append(path.relative_to(repo_root()).as_posix())
+    assert callers == []
+    assert "_ready_manifest_builder=_build" in allowed.read_text(encoding="utf-8")
+
+
 def test_unknown_fields_and_missing_proofs_are_not_pass() -> None:
     digest = _digest("fields")
     with pytest.raises(MassResearchDisabledError, match="schema invalid"):
@@ -98,7 +114,9 @@ def test_unknown_fields_and_missing_proofs_are_not_pass() -> None:
                 "format": READY_MANIFEST_FORMAT,
                 "snapshot_id": digest,
                 "profile_id": "core",
+                "profile_version": MISSING,
                 "profile_digest": MISSING,
+                "dataset_ids": [],
                 "dataset_membership_digest": MISSING,
                 "coverage_proof_digest": MISSING,
                 "raw_proof_digest": MISSING,
@@ -140,7 +158,7 @@ def test_ready_manifest_offline_e2e_serialize_reload_mint(tmp_path: Path) -> Non
     reloaded = load_ready_manifest(path)
     assert reloaded.to_canonical_dict() == built.to_canonical_dict()
     assert reloaded.manifest_digest == built.manifest_digest
-    assert reloaded.published_at == MISSING
+    assert reloaded.published_at == "2026-08-24T00:01:00+00:00"
     readiness = mint_verified_research_readiness(reloaded, db_path=artifact)
     assert readiness.snapshot_id == built.snapshot_id
     assert readiness.ready_manifest_digest == built.manifest_digest
@@ -150,7 +168,60 @@ def test_ready_manifest_offline_e2e_serialize_reload_mint(tmp_path: Path) -> Non
     dumped = path.read_text(encoding="utf-8")
     assert "r2://" not in dumped
     assert "production READY" not in dumped
-    assert json.loads(dumped)["published_at"] == MISSING
+    assert json.loads(dumped)["published_at"] == "2026-08-24T00:01:00+00:00"
+
+
+@pytest.mark.parametrize(
+    ("override", "expected"),
+    [
+        ({"dataset_ids": ["equities_master"]}, "exactly match"),
+        ({"profile_id": MISSING}, "profile_id"),
+        ({"profile_version": MISSING}, "profile_version"),
+        ({"profile_digest": MISSING}, "profile_digest"),
+        ({"dataset_membership_digest": _digest("wrong-membership")}, "binding"),
+        ({"published_at": MISSING}, "published_at"),
+        ({"created_at": MISSING}, "created_at"),
+        ({"coverage_proof_digest": MISSING}, "coverage_proof_digest"),
+        ({"raw_proof_digest": MISSING}, "raw_proof_digest"),
+        ({"validation_proof_digest": MISSING}, "validation_proof_digest"),
+        ({"b0_proof_digest": MISSING}, "b0_proof_digest"),
+        ({"source_generation": MISSING}, "source_generation"),
+        ({"applied_sync_generation": MISSING}, "applied_sync_generation"),
+        ({"pit_contract_digests": {"pit_api": MISSING}}, "pit_contract_digests"),
+        (
+            {"source_generation": "source-2", "applied_sync_generation": "source-1"},
+            "current_sync",
+        ),
+    ],
+)
+def test_manifest_mint_rejects_profile_or_evidence_gaps(
+    override: dict[str, object], expected: str
+) -> None:
+    manifest = _complete_manifest(**override)
+    with pytest.raises(MassResearchDisabledError, match=expected):
+        mint_verified_research_readiness(
+            manifest, immutable_db_digest=_digest("immutable-db")
+        )
+
+
+def test_snapshot_adapter_requires_publisher_owned_outer_bindings() -> None:
+    manifest = _complete_manifest()
+    outer = {
+        "format": "research-snapshot-manifest/v2",
+        "state": "READY",
+        "snapshot_id": manifest.snapshot_id,
+        "required_datasets": list(manifest.dataset_ids),
+        "committed_at": manifest.published_at,
+        "ready_manifest": manifest.to_dict(),
+    }
+    with pytest.raises(MassResearchDisabledError, match="coverage proof missing"):
+        ready_manifest_from_snapshot_document(outer)
+    with pytest.raises(MassResearchDisabledError, match="no publisher-owned"):
+        ready_manifest_from_snapshot_document({key: value for key, value in outer.items() if key != "ready_manifest"})
+    tampered = dict(outer)
+    tampered["required_datasets"] = ["equities_master"]
+    with pytest.raises(MassResearchDisabledError, match="membership binding"):
+        ready_manifest_from_snapshot_document(tampered)
 
 
 def test_core_profile_deps_subseteq_source_capability_registry() -> None:

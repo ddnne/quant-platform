@@ -1,6 +1,7 @@
 /** Domain-only Quant Ops reads. No SQL or storage handles cross this boundary. */
 
 /** Official JSDA product/index locators. Overlay when inventory SLA omits them. */
+/** @type {Readonly<Record<string, string>>} */
 export const JSDA_UPSTREAM_LOCATORS = Object.freeze({
   jsda_otc_bond_reference_prices:
     "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html",
@@ -49,8 +50,11 @@ export function honestProjectionStatus(metadata, now = Date.now()) {
   return { status, age, refreshStatus, refreshAttempt, refreshOk };
 }
 
+/** @param {unknown} raw @returns {Record<string, unknown>} */
 export function parseSla(raw) {
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) return { ...raw };
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return { .../** @type {Record<string, unknown>} */ (raw) };
+  }
   if (typeof raw !== "string" || !raw.trim()) return {};
   try {
     const parsed = JSON.parse(raw);
@@ -60,9 +64,10 @@ export function parseSla(raw) {
   }
 }
 
+/** @param {Record<string, unknown>} row @returns {Record<string, unknown>} */
 export function overlayInventoryRow(row) {
   const sla = parseSla(row.sla);
-  const loc = JSDA_UPSTREAM_LOCATORS[row.dataset_id];
+  const loc = JSDA_UPSTREAM_LOCATORS[String(row.dataset_id ?? "")];
   if (loc && !sla.upstream_locator) sla.upstream_locator = loc;
   return { ...row, sla };
 }
@@ -71,6 +76,7 @@ export function overlayInventoryRow(row) {
  * Raw-plane captured labels. ACQUIRED is the live write; COMPLETE is a
  * historical raw-captured label. Neither is dataset Coverage COMPLETE.
  */
+/** @param {unknown} completeness */
 export function isRawCaptured(completeness) {
   return completeness === "ACQUIRED" || completeness === "COMPLETE";
 }
@@ -80,6 +86,7 @@ export function isRawCaptured(completeness) {
  * ACQUIRED|legacy completeness=COMPLETE. complete is a deprecated alias of
  * that sum so live MCP readers of .complete are not Dataset COMPLETE.
  */
+/** @param {*} raw */
 export function rawRetentionOpsCounts(raw) {
   const manifests = Number(raw?.manifests || 0);
   const acquired = Number(raw?.acquired || 0);
@@ -92,6 +99,7 @@ export function rawRetentionOpsCounts(raw) {
 }
 
 /** Raw acquisition ≠ dataset Coverage COMPLETE. */
+/** @param {*} row */
 export function classifyRawAcquisition(row) {
   const completeness = String(row?.completeness || "");
   const rows = Number(row?.row_count ?? 0);
@@ -106,8 +114,10 @@ export function classifyRawAcquisition(row) {
 /**
  * CURRENT requires a local applied cursor. Export lag 0 with applied_cursor null
  * is EXPORT_CURRENT_APPLY_UNPINNED, never CURRENT.
+ * @param {{exported?: *, applied?: *, lag?: *, changeLogRows?: *}} parts
  */
-export function syncDatasetState({ exported, applied, lag, changeLogRows }) {
+export function syncDatasetState(parts) {
+  const { exported, applied, lag, changeLogRows } = parts;
   if (exported == null) {
     return changeLogRows === 0 ? "CHANGE_LOG_EMPTY" : "EXPORT_CURSOR_NULL";
   }
@@ -154,6 +164,7 @@ export function lastKnownGoodNotCurrentReason(lkg, { hasActive }) {
 
 /** @param {string} policy */
 export function _parseFreshnessWindow(policy) {
+  /** @type {Record<string, number>} */
   const map = {
     "intraday_best_effort": 86400000, // 1 day
     "trading_day": 172800000, // 2 days

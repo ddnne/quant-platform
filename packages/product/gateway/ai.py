@@ -11,7 +11,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Generic, Mapping, Protocol, TypeVar
+from typing import Any, ClassVar, Generic, Mapping, Protocol, TypeVar
 from uuid import uuid4
 
 from selection.budget_ledger import (
@@ -56,6 +56,13 @@ class GatewaySchemaRejected(RuntimeError):
 
 @dataclass
 class GatewayBudget:
+    """In-process estimate helper. Not Edge occupancy authority.
+
+    Edge Budget DO (research-ai-gateway BudgetLedger) is occupancy authority.
+    This class is not a second cap envelope, not Mass GO, and not live occupancy.
+    """
+
+    EDGE_OCCUPANCY_AUTHORITY: ClassVar[bool] = False
     max_calls: int = 20
     max_tokens: int = 100_000
     calls_used: int = 0

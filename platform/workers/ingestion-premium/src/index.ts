@@ -33,7 +33,11 @@ import {
   writeRequiredCoverageSegment,
   type CollectionSegment,
 } from "./collection_receipts";
-import { upsertRecords, upsertWatermark } from "./persist_records";
+import {
+  upsertRecords,
+  upsertWatermark,
+  type MasterScd2UniverseEvidence,
+} from "./persist_records";
 import { fetchDataset } from "./fetch_jq";
 import { todayJst, toJstIso } from "./identity";
 import { sha256HexFromString } from "./sha256";
@@ -159,6 +163,43 @@ function collectionSegment(
       ? null
       : queries.length,
     canonicalMonth,
+  };
+}
+
+/** SCD2 delist evidence from this fetch only. Omit when either flag is unproven. */
+function masterUniverseEvidence(
+  spec: DatasetSpec,
+  outcome: {
+    error: string;
+    paginationErrors: number;
+    queries: Record<string, string>[];
+  },
+): MasterScd2UniverseEvidence | undefined {
+  if (spec.id !== "equities_master") return undefined;
+  // Fail-closed: an error or page-cap leaves pagination unproven.
+  if (outcome.error || outcome.paginationErrors !== 0) return undefined;
+  if (outcome.queries.length === 0) return undefined;
+
+  const dayKey = spec.dayParam || "date";
+  const days = new Set<string>();
+  let codeFiltered = false;
+  for (const query of outcome.queries) {
+    if (query.code) codeFiltered = true;
+    if (query.from && query.to && query.from !== query.to) {
+      days.add(query.from);
+      days.add(query.to);
+    }
+    const day = query[dayKey]
+      || (query.from && query.from === query.to ? query.from : undefined);
+    if (day) {
+      days.add(day);
+    } else if (query.from || query.to) {
+      return undefined;
+    }
+  }
+  return {
+    paginationExhausted: outcome.paginationErrors === 0,
+    fullUniverse: !codeFiltered && days.size <= 1,
   };
 }
 
@@ -308,7 +349,13 @@ async function ingestOne(
   }
 
   if (!streamD1) {
-    const inserted = await upsertRecords(env, spec, outcome.rows, when);
+    const inserted = await upsertRecords(
+      env,
+      spec,
+      outcome.rows,
+      when,
+      masterUniverseEvidence(spec, outcome),
+    );
     insertedTotal = inserted.inserted;
     revisionsTotal = inserted.revisions;
     structuredRowCount = outcome.rows.length;

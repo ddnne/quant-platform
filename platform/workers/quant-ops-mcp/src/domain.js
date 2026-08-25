@@ -111,7 +111,7 @@ function limitArg(value) {
   return result;
 }
 
-/** @param {D1Database} db @param {string} sql @param {unknown[]} binds */
+/** @param {D1Database} db @param {string} sql @param {unknown[]} binds @returns {Promise<Record<string, unknown>[]>} */
 async function all(db, sql, binds = []) {
   try {
     const result = await db.prepare(sql).bind(...binds).all();
@@ -122,7 +122,7 @@ async function all(db, sql, binds = []) {
   }
 }
 
-/** @param {D1Database} db @param {string} sql @param {unknown[]} binds */
+/** @param {D1Database} db @param {string} sql @param {unknown[]} binds @returns {Promise<Record<string, unknown> | null>} */
 async function first(db, sql, binds = []) {
   try {
     return await db.prepare(sql).bind(...binds).first();
@@ -603,7 +603,9 @@ export async function callOpsTool(db, name, rawArguments) {
       const honest = honestProjectionStatus(projMeta);
       projectionStale = honest.status !== "FRESH" || !honest.refreshOk;
     }
+    /** @param {string} [datasetFilter] */
     const projectFromInventory = async (datasetFilter) => {
+      /** @type {unknown[]} */
       const binds = [];
       let where = "";
       if (datasetFilter) {
@@ -618,14 +620,15 @@ export async function callOpsTool(db, name, rawArguments) {
       const markMap = new Map((marks || []).map((m) => [String(m.dataset), m.last_event_date ?? null]));
       return (inv || []).map((row) => {
         const sla = parseSla(row.sla);
-        const loc = JSDA_UPSTREAM_LOCATORS[row.dataset_id];
+        const datasetId = String(row.dataset_id ?? "");
+        const loc = JSDA_UPSTREAM_LOCATORS[datasetId];
         if (loc && !sla.upstream_locator) sla.upstream_locator = loc;
         let current_state = "UNKNOWN";
         let state_reason = "sla_table_empty_projected_from_inventory";
         if (projectionStale) {
           current_state = "PROJECTION_STALE";
           state_reason = "ops_projection_stale";
-        } else if (row.dataset_id === "equities_bars_daily_am") {
+        } else if (datasetId === "equities_bars_daily_am") {
           current_state = "NOT_PUBLISHED";
           state_reason = "am_publication_not_proven_for_session";
         }
@@ -638,7 +641,7 @@ export async function callOpsTool(db, name, rawArguments) {
           upstream_locator: sla.upstream_locator ?? null,
           current_state,
           state_reason,
-          last_event_date: markMap.get(row.dataset_id) ?? null,
+          last_event_date: markMap.get(datasetId) ?? null,
           last_checked_at: new Date().toISOString(),
         };
       });
@@ -748,6 +751,7 @@ export async function callOpsTool(db, name, rawArguments) {
   // Fact counts are plane-local; JSDA COMPLETE is receipt-owned (coverage ledger).
   if (name === "storage_plane_status") {
     const hotCutoff = "2026-07-01";
+    /** @param {string} sql @param {unknown[]} [binds] */
     const n = async (sql, binds = []) => {
       const row = await first(db, sql, binds);
       const v = row?.n ?? row?.c ?? 0;
@@ -807,10 +811,12 @@ export async function callOpsTool(db, name, rawArguments) {
     const emptyLegacy =
       legacyBars === 0 && legacyListed === 0 && legacyCal === 0;
     const coldCleared = barsCold === 0;
+    /** @type {Record<string, {status?: unknown, coverage_row_count: number, observed_start: unknown, observed_end: unknown}>} */
     const jsdaCoverage = {};
     for (const row of jsdaCovRows || []) {
-      if (!row?.dataset) continue;
-      jsdaCoverage[row.dataset] = {
+      const dataset = String(row?.dataset || "");
+      if (!dataset) continue;
+      jsdaCoverage[dataset] = {
         status: row.status,
         coverage_row_count: Number(row.row_count) || 0,
         observed_start: row.observed_start ?? null,
@@ -822,6 +828,7 @@ export async function callOpsTool(db, name, rawArguments) {
       jsda_corporate_bond_transactions: corpRows,
       jsda_tokyo_repo_rates: tokyoRepoRows,
     };
+    /** @type {Record<string, string>} */
     const factTableByDataset = {
       jsda_otc_bond_reference_prices: "jsda_otc_bond_reference_prices",
       jsda_corporate_bond_transactions: "jsda_corporate_bond_transactions",

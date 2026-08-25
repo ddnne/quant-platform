@@ -203,8 +203,27 @@ def _verify_coverage_v2_manifest(
         dataset for dataset, policy in policies.items()
         if policy.governance_tier == "governed"
     }
-    if not governed <= set(required) or not set(required) <= set(policies):
-        raise RuntimeError("READY snapshot omits governed Coverage V2 datasets")
+    required_set = set(required)
+    if not required_set <= set(policies):
+        raise RuntimeError("READY snapshot includes unknown Coverage V2 datasets")
+    if not governed <= required_set:
+        # A profile-bound snapshot may intentionally be narrower than the
+        # legacy all-governed set, but only when the publisher embedded a
+        # structurally bound ReadyManifest. Product-layer profile/digest
+        # authority is rechecked before minting VerifiedResearchReadiness.
+        profile_manifest = manifest.get("ready_manifest")
+        if (
+            not isinstance(profile_manifest, dict)
+            or profile_manifest.get("format") != "ready-manifest/v1"
+            or profile_manifest.get("snapshot_id") != manifest.get("snapshot_id")
+            or profile_manifest.get("published_at") != manifest.get("committed_at")
+            or set(profile_manifest.get("dataset_ids") or ()) != required_set
+            or len(profile_manifest.get("dataset_ids") or ()) != len(required)
+        ):
+            raise RuntimeError(
+                "READY snapshot omits governed Coverage V2 datasets without "
+                "an exact profile-bound ReadyManifest"
+            )
     rows = [
         dict(row) for row in conn.execute(
             "SELECT * FROM dataset_coverage ORDER BY dataset"

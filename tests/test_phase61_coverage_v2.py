@@ -18,6 +18,7 @@ from storage import (
     read_collection_receipts,
     record_collection_receipt,
 )
+from storage.coverage_ledger import EXPECTED_EMPTY_WITH_EVIDENCE
 from storage.receipt_crypto import build_signed_digest_fields
 from storage.sqlite_store import SqliteStore
 
@@ -32,6 +33,7 @@ def _receipt(
     raw_rows: int | None = None,
     structured_rows: int | None = None,
     pagination_exhausted: bool = True,
+    extra_digests: dict | None = None,
 ) -> CollectionReceipt:
     raw_count = observed if raw_rows is None else raw_rows
     structured_count = raw_count if structured_rows is None else structured_rows
@@ -62,6 +64,7 @@ def _receipt(
             segment_start=segment.segment_start,
             segment_end=segment.segment_end,
             checked_at=checked_at,
+            extra_digests=extra_digests,
         ),
         run_id=run_id,
         status="SUCCESS",
@@ -100,6 +103,7 @@ def _signed_digests(
     source_request_digest=None,
     raw_manifest_digest=None,
     structured_generation=None,
+    extra_digests=None,
 ):
     """Sign with the tmp Ed25519 registry from receipt_ed25519_keys."""
     assert _SIGNED_KEY is not None
@@ -122,6 +126,7 @@ def _signed_digests(
         segment_start=segment_start,
         segment_end=segment_end,
         checked_at=checked_at,
+        extra_digests=extra_digests,
     )
     signed["raw"] = raw_digest
     return signed
@@ -167,7 +172,13 @@ def test_event_zero_successful_exhausted_raw_receipt_is_complete():
         )
         required = plan_required_segments(policy, "2025-01-31")[0]
         status, detail = evaluate_segment(
-            policy, required, _receipt(required, observed=0)
+            policy,
+            required,
+            _receipt(
+                required,
+                observed=0,
+                extra_digests={EXPECTED_EMPTY_WITH_EVIDENCE: True},
+            ),
         )
         assert status == "COMPLETE", dataset_id
         assert detail["event_zero"] is True

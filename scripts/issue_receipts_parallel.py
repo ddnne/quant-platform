@@ -34,6 +34,10 @@ ROOT = ensure_repo_root()
 from ingestion.jsda.official_index import (  # noqa: E402
     read_local_index_text as _read_index_text,
 )
+from ingestion.pipeline_receipts import (  # noqa: E402
+    count_raw_items,
+    observed_items_from_actual,
+)
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
     refresh_coverage_ledger,
@@ -351,16 +355,15 @@ def prepare_one(
         expected_scope=scope,
         expected_items=expected_items,
     )
-    observed = 1 if unit == "source_query" else structured
-    if required.expected_items is not None and unit == "source_query":
-        observed = int(required.expected_items)
+    raw_count = count_raw_items(raw)
+    observed = observed_items_from_actual(unit=unit, raw_item_count=raw_count)
     prepared = PreparedIssue(
         job=job,
         required=required,
         structured=structured,
         raw=raw,
         observed=observed,
-        raw_rows=structured,
+        raw_rows=raw_count,
     )
     return PrepareResult(job=job, prepared=prepared)
 

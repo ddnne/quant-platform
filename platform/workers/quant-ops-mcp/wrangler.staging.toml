@@ -1,29 +1,33 @@
-# STAGING STUB — not a production config. Do not wrangler deploy this file
-# against the production Cloudflare account.
-#
-# HUMAN: create a physically separate Cloudflare account, Worker name, D1,
-# KV, OAuth App callback, and secrets. Do not copy production binding IDs
-# into this file. Do not create those resources from this lane.
-#
-# Public surface remains GitHub OAuth read-only Ops MCP only. workers_dev
-# may stay true so a *staging* OAuth callback host exists; it must not be
-# the production workers.dev URL.
+# Staging uses distinct resources. It stays private until a separate OAuth
+# application and callback are configured; no production secrets are copied.
 
 name = "quant-platform-ops-read-mcp-staging"
 main = "src/index.js"
 compatibility_date = "2026-08-01"
 compatibility_flags = ["nodejs_compat"]
-workers_dev = true
+workers_dev = false
+preview_urls = false
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "4402f398df93412ebe6774d1bc603142"
+
+[[d1_databases]]
+binding = "OPS_DB"
+database_name = "quant-ingest-staging"
+database_id = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
+migrations_dir = "migrations"
+migrations_table = "d1_migrations_ops"
+
+[durable_objects]
+bindings = [{ name = "MCP_OBJECT", class_name = "QuantOpsMcpAgent" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["QuantOpsMcpAgent"]
 
 [vars]
 ALLOWED_LOGIN = "ddnne"
 DAILY_ROW_QUOTA = "25000"
-# OAUTH_AUTHORIZATION_SERVER must be the staging workers.dev host after HUMAN
-# creates it. Do not set the production callback URL here.
-
-# Bindings omitted on purpose. Do not paste production KV or D1 ids.
-# Do not set OAUTH_AUTHORIZATION_SERVER to the production workers.dev host.
-#
-# After HUMAN creates staging resources, bind only staging names/ids:
-#   OAUTH_KV -> staging KV (distinct namespace)
-#   OPS_DB   -> staging D1 (distinct database)
+# OAUTH_AUTHORIZATION_SERVER intentionally absent: fail closed until the
+# separate staging OAuth app exists.
