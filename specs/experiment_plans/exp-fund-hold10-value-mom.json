@@ -1,9 +1,11 @@
 {
-  "version": "experiment-plan/v1",
+  "version": "experiment-plan/v2",
   "plan_id": "exp-fund-hold10-value-mom",
   "idea_id": "idea-fund-hold10-value-mom",
   "hypothesis": "Fundamentals value×momentum agree with hold=10 and momentum_n=10 (frozen KEEP pin, not retuned) is a 2-condition fund sleeve on TSE Prime with fins.",
   "strategy_spec_id": "fundamentals_hold_10",
+  "strategy_spec_version": "strategy-spec/v3",
+  "strategy_spec_hash": "sha256:59c0128401097901c029340f49e92acfef3abcb4d9eb6a3bbd01f6930fbb7d3b",
   "feature_refs": [
     {
       "id": "fundamental_value_score",
@@ -26,6 +28,7 @@
   "period_end": "2023-10-13",
   "cost_scenario": "default_one_way_10bp",
   "evaluation_protocol": "standard_research_eval",
+  "risk_policy": "core_crash_high_vol",
   "budget_allocation": {
     "generations": 1
   },

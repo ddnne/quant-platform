@@ -102,13 +102,13 @@ def test_and_plus_n_freeze_still_true() -> None:
     assert len(FROZEN_PIN_SNAPSHOT) == 3
     xs = next(p for p in load_experiment_plans() if p.plan_id == "exp-xs-hold10-mom5")
     assert xs.strategy_spec_id == "cross_section_hold_10"
-    assert xs.feature_refs[0]["params"]["n"] == 5
+    assert xs.feature_refs[0].params["n"] == 5
     fund = next(
         p for p in load_experiment_plans() if p.plan_id == "exp-fund-hold10-value-mom"
     )
     assert fund.strategy_spec_id == "fundamentals_hold_10"
-    mom = next(r for r in fund.feature_refs if r["id"] == "momentum_n")
-    assert mom["params"]["n"] == 10
+    mom = next(r for r in fund.feature_refs if r.id == "momentum_n")
+    assert mom.params["n"] == 10
 
 
 def test_on_disk_plan_files_match_shortlist() -> None:

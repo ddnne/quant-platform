@@ -12,6 +12,8 @@ duplicate ``(id, version)`` keys raise ``ValueError``.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Iterable
 
 from .types import (
@@ -44,6 +46,42 @@ def register(feature: FeatureDefinition) -> FeatureDefinition:
         )
     _FEATURES[key] = feature
     return feature
+
+
+def feature_definition_digest(feature: FeatureDefinition) -> str:
+    """Digest the immutable, JSON-safe portion of a feature definition.
+
+    The callable itself is versioned by ``FeatureVersion`` and remains outside
+    this metadata digest.  Dependency closure uses this digest together with an
+    exact ``(id, version)`` lookup, so changing declared datasets invalidates a
+    previously compiled closure without relying on registry insertion order.
+    """
+    if not isinstance(feature, FeatureDefinition):
+        raise TypeError("FeatureDefinition required")
+    payload = {
+        "contract": "feature-definition-metadata/v1",
+        "id": feature.id,
+        "version": str(feature.version),
+        "inputs": {
+            "required_kwargs": list(feature.inputs.required_kwargs),
+            "optional_kwargs": dict(feature.inputs.optional_kwargs),
+            "as_of_rule": feature.inputs.as_of_rule,
+        },
+        "description": feature.description,
+        "intended_role": feature.intended_role,
+        "dataset_dependencies": list(feature.dataset_dependencies),
+        "tags": list(feature.tags),
+        "status": feature.status,
+        "price_basis": feature.price_basis,
+    }
+    raw = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
 def get(feature_id: str, version: str | None = None) -> FeatureDefinition:
@@ -135,6 +173,7 @@ __all__ = [
     "IntendedRole",
     "FeatureStatus",
     "FeatureGovernanceError",
+    "feature_definition_digest",
     "register",
     "get",
     "get_for_strategy",

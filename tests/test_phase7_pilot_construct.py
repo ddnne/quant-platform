@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from research.artifacts import ExperimentPlan
+from research.experiment_plans import load_experiment_plans
 from research.phase7_pilot import (
     PILOT_MAX_HYPOTHESES,
     AuthorizedEvaluationService,
@@ -79,21 +80,7 @@ def _budget(tmp_path: Path) -> ResearchBudgetCapability:
 
 
 def _plan(*, snapshot_id: str = "snap-1") -> ExperimentPlan:
-    return ExperimentPlan.from_dict(
-        {
-            "plan_id": "p1",
-            "idea_id": "i1",
-            "strategy_spec_id": "st1",
-            "feature_refs": [{"id": "f", "version": "v1"}],
-            "ready_snapshot_id": snapshot_id,
-            "universe": ["1301"],
-            "period_start": "2024-01-01",
-            "period_end": "2024-12-31",
-            "cost_scenario": "default",
-            "evaluation_protocol": "signal-default",
-            "budget_allocation": {"generations": 1},
-        }
-    )
+    return replace(load_experiment_plans()[0], ready_snapshot_id=snapshot_id)
 
 
 def _eval_service() -> AuthorizedEvaluationService:

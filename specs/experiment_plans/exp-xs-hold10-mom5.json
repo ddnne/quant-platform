@@ -1,9 +1,11 @@
 {
-  "version": "experiment-plan/v1",
+  "version": "experiment-plan/v2",
   "plan_id": "exp-xs-hold10-mom5",
   "idea_id": "idea-xs-hold10-mom5",
   "hypothesis": "Cross-section rank long-short with hold=10 and momentum_n=5 (frozen KEEP pin, not retuned) is a relative sleeve on TSE Prime with fins, not a catalog dump.",
   "strategy_spec_id": "cross_section_hold_10",
+  "strategy_spec_version": "strategy-spec/v3",
+  "strategy_spec_hash": "sha256:8ee8a821f3311ed8d82dc3e83130063cdb78229c177c221a5c0a92fe3abae30c",
   "feature_refs": [
     {
       "id": "momentum_n",
@@ -22,6 +24,7 @@
   "period_end": "2023-10-13",
   "cost_scenario": "default_one_way_10bp",
   "evaluation_protocol": "standard_research_eval",
+  "risk_policy": "core_crash_high_vol",
   "budget_allocation": {
     "generations": 1
   },

@@ -1,9 +1,11 @@
 {
-  "version": "experiment-plan/v1",
+  "version": "experiment-plan/v2",
   "plan_id": "exp-event-post-hold5",
   "idea_id": "idea-event-post-hold5",
   "hypothesis": "A 5-day post-event hold on disclosure_flag_fins isolates event drift from nested 3-AND event-fund parents. Parent/child reconstitution is not applied here.",
   "strategy_spec_id": "paper_event_post_hold5_disclosure_proxy",
+  "strategy_spec_version": "strategy-spec/v3",
+  "strategy_spec_hash": "sha256:4fb9953081e1016dece08e09eab7ae11ad2f59c1ea7fdf59438c85739080cc2b",
   "feature_refs": [
     {
       "id": "disclosure_flag_fins",
@@ -19,6 +21,7 @@
   "period_end": "2023-10-13",
   "cost_scenario": "default_one_way_10bp",
   "evaluation_protocol": "standard_research_eval",
+  "risk_policy": "core_crash_high_vol",
   "budget_allocation": {
     "generations": 1
   },

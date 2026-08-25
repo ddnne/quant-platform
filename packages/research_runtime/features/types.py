@@ -10,6 +10,7 @@ reproducible (``as_of``, ``feature_id``, ``feature_version``,
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Sequence
 from typing import Any, Callable, Literal, Mapping
 
 from price_basis import PriceBasis
@@ -101,6 +102,7 @@ class FeatureDefinition:
     description: str
     compute: Callable[[Any], FeatureOutput]
     intended_role: IntendedRole
+    dataset_dependencies: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
     status: FeatureStatus = "candidate"
     price_basis: PriceBasis | None = None
@@ -124,3 +126,16 @@ class FeatureDefinition:
                 f"invalid price_basis {self.price_basis!r}; choose RAW, "
                 "PIT_ADJUSTED, or None"
             )
+        raw_dependencies = self.dataset_dependencies
+        if isinstance(raw_dependencies, (str, bytes)) or not isinstance(
+            raw_dependencies, Sequence
+        ):
+            raise ValueError("dataset_dependencies must be an array of dataset ids")
+        normalized = tuple(
+            sorted(str(item).strip() for item in raw_dependencies if str(item).strip())
+        )
+        if len(normalized) != len(raw_dependencies):
+            raise ValueError("dataset_dependencies cannot contain blank dataset ids")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("dataset_dependencies cannot contain duplicates")
+        object.__setattr__(self, "dataset_dependencies", normalized)

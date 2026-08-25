@@ -1,9 +1,11 @@
 {
-  "version": "experiment-plan/v1",
+  "version": "experiment-plan/v2",
   "plan_id": "exp-mdh-hold10-momentum",
   "idea_id": "idea-mdh-hold10-momentum",
   "hypothesis": "A 10-day sticky hold on momentum_n (n=10) earns after default 10bp one-way costs on TSE Prime names with fundamentals history. Daily flip is not the primary.",
   "strategy_spec_id": "paper_mdh_hold10_momentum_topk",
+  "strategy_spec_version": "strategy-spec/v3",
+  "strategy_spec_hash": "sha256:298dca13e0caa1dae7cd9b196ea9c298f3b3507e84a7463bfeecc538ccf7fe8f",
   "feature_refs": [
     {
       "id": "momentum_n",
@@ -22,6 +24,7 @@
   "period_end": "2023-10-13",
   "cost_scenario": "default_one_way_10bp",
   "evaluation_protocol": "standard_research_eval",
+  "risk_policy": "core_crash_high_vol",
   "budget_allocation": {
     "generations": 1
   },
