@@ -32,6 +32,7 @@ from data_contracts import (
     REGISTRY_VERSION,
     canonical_dataset_for,
     coverage_contract_for,
+    coverage_policy_binding,
     coverage_policy_set_binding,
     coverage_v3_dataset_ids,
     source_capability_contract_or_none,
@@ -628,10 +629,10 @@ def _assert_core_exclusions(profile: ResearchDataProfile) -> None:
 def _complete_under_official(
     dataset_id: str, evidence_by_dataset: Mapping[str, Any]
 ) -> bool:
-    """True iff mapping evidence is COMPLETE under official_mode(dataset_id).
+    """True iff evidence is COMPLETE under the exact governed policy row.
 
-    A string COMPLETE label is not official-mode proof. Missing V3 is not
-    official-complete.
+    A string COMPLETE label is not official-mode proof. Missing V3 or any
+    missing/mismatched policy identity, version, or digest is fail-closed.
     """
     if source_capability_contract_or_none(dataset_id) is None:
         return False
@@ -645,6 +646,12 @@ def _complete_under_official(
     if "applied_cursor" in evidence and evidence.get("applied_cursor") in (None, ""):
         return False
     if evidence.get("status") != "COMPLETE":
+        return False
+    expected_policy = coverage_policy_binding(dataset_id)
+    if any(
+        evidence.get(field) != expected_policy[field]
+        for field in ("policy_id", "policy_version", "policy_digest")
+    ):
         return False
     required_mode = official_mode(dataset_id)
     if "coverage_mode" in evidence:

@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 
 from data_contracts.canonical import governed_datasets
-from data_contracts.coverage import coverage_contract_for
+from data_contracts.coverage import (
+    coverage_contract_for,
+    coverage_policy_binding,
+)
 from data_contracts.source_capability import (
     all_source_capability_contracts,
     coverage_v3_dataset_ids,
@@ -27,6 +30,14 @@ from storage.coverage_ledger import evaluate_segment, plan_required_segments
 
 _V3_DATASETS = coverage_v3_dataset_ids()
 _NO_V3_DATASET = "indices_bars_daily"
+
+
+def _complete_evidence(dataset_id: str) -> dict[str, str]:
+    return {
+        "status": "COMPLETE",
+        "coverage_mode": official_mode(dataset_id),
+        **dict(coverage_policy_binding(dataset_id)),
+    }
 
 
 def test_on_disk_v3_has_core_v1_plus_tip_and_otc_rows() -> None:
@@ -108,7 +119,7 @@ def test_core_profile_has_source_capability_closure() -> None:
     ]
     assert missing_v3 == []
     evidence = {
-        dataset: {"status": "COMPLETE", "coverage_mode": official_mode(dataset)}
+        dataset: _complete_evidence(dataset)
         for dataset in profile.required_datasets
     }
     assert profile_ready(profile, evidence) is True
@@ -117,22 +128,12 @@ def test_core_profile_has_source_capability_closure() -> None:
     spec.pop("profile_digest", None)
     spec["required_datasets"] = ["equities_master"]
     v3_profile = ResearchDataProfile.from_dict(spec)
-    v3_evidence = {
-        "equities_master": {
-            "status": "COMPLETE",
-            "coverage_mode": official_mode("equities_master"),
-        }
-    }
+    v3_evidence = {"equities_master": _complete_evidence("equities_master")}
     assert source_capability_contract_or_none("equities_master") is not None
     assert profile_ready(v3_profile, v3_evidence) is True
 
     spec["required_datasets"] = [_NO_V3_DATASET]
     missing_profile = ResearchDataProfile.from_dict(spec)
-    missing_evidence = {
-        _NO_V3_DATASET: {
-            "status": "COMPLETE",
-            "coverage_mode": official_mode(_NO_V3_DATASET),
-        }
-    }
+    missing_evidence = {_NO_V3_DATASET: _complete_evidence(_NO_V3_DATASET)}
     assert source_capability_contract_or_none(_NO_V3_DATASET) is None
     assert profile_ready(missing_profile, missing_evidence) is False

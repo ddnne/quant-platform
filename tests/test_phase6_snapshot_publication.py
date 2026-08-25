@@ -13,7 +13,10 @@ import paper_runtime.snapshot as snapshot_module
 import research.research_data_profile as profile_module
 
 from data_contracts import all_contracts, all_coverage_contracts
-from data_contracts.coverage import SNAPSHOT_SEGMENT_GRANULARITIES
+from data_contracts.coverage import (
+    SNAPSHOT_SEGMENT_GRANULARITIES,
+    coverage_policy_binding,
+)
 from paper_runtime import (
     SnapshotRejected,
     data_snapshot_id,
@@ -587,6 +590,7 @@ def _offline_current_profile_evidence() -> dict[str, dict[str, object]]:
         dataset_id: {
             "status": "COMPLETE",
             "coverage_mode": official_mode(dataset_id),
+            **dict(coverage_policy_binding(dataset_id)),
             "projection_status": "FRESH",
             "export_cursor": "offline-generation-1",
             "applied_cursor": "offline-generation-1",
