@@ -63,30 +63,33 @@ if git ls-files | grep -E '(^|/)\.env$|\.pem$'; then
   exit 1
 fi
 
-venv_py="$ROOT/.venv/bin/python"
-if [[ ! -x "$venv_py" ]]; then
-  echo "==> bootstrap .venv (Python 3.11+)"
-  host_py=""
-  if ! host_py="$(find_python_311_plus)"; then
-    echo "Python 3.11+ with working stdlib sqlite3 is required to create .venv." >&2
-    echo "do not silently use system python" >&2
-    exit 1
-  fi
-  "$host_py" -m venv "$ROOT/.venv"
-  if [[ ! -x "$venv_py" ]]; then
-    echo "failed to create .venv/bin/python with $host_py" >&2
-    exit 1
-  fi
-fi
-if ! python_is_311_plus "$venv_py"; then
-  echo ".venv must be Python 3.11+ with working stdlib sqlite3 (got $($venv_py -V 2>&1))." >&2
+host_py=""
+if ! host_py="$(find_python_311_plus)"; then
+  echo "Python 3.11+ with working stdlib sqlite3 is required." >&2
   echo "do not silently use system python" >&2
   exit 1
 fi
-py="$venv_py"
 
-echo "==> pip install -e \".[dev]\""
-"$py" -m pip install -e ".[dev]"
+UV_VERSION="0.11.26"
+uv_cmd="$(command -v uv 2>/dev/null || true)"
+if [[ -z "$uv_cmd" ]]; then
+  echo "==> bootstrap uv $UV_VERSION"
+  "$host_py" -m venv "$ROOT/.ci-uv"
+  "$ROOT/.ci-uv/bin/python" -m pip install "uv==$UV_VERSION"
+  uv_cmd="$ROOT/.ci-uv/bin/uv"
+fi
+if [[ "$($uv_cmd --version)" != "uv $UV_VERSION "* && "$($uv_cmd --version)" != "uv $UV_VERSION" ]]; then
+  echo "uv version drift: expected $UV_VERSION, got $($uv_cmd --version)" >&2
+  exit 1
+fi
+
+echo "==> uv sync --frozen --extra dev"
+"$uv_cmd" sync --frozen --extra dev --python "$host_py"
+py="$ROOT/.venv/bin/python"
+if ! python_is_311_plus "$py"; then
+  echo "uv-managed .venv must be Python 3.11+ with working stdlib sqlite3." >&2
+  exit 1
+fi
 
 echo "==> python pytest"
 "$py" -m pytest tests/
