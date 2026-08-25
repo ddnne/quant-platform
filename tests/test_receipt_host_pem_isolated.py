@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -112,6 +113,48 @@ def test_production_signer_derives_id_from_exact_pinned_public_key(
     signing_key = load_signing_key()
     assert signing_key is not None
     assert signing_key.key_id == receipt_ed25519_keys.key_id
+
+
+def test_committed_receipt_registry_has_one_explicit_production_authority() -> None:
+    import storage.receipt_crypto as crypto
+
+    committed_path = (
+        Path(crypto.__file__).resolve().parents[1]
+        / "data_contracts"
+        / "receipt_verify_public_keys.json"
+    )
+    document = json.loads(committed_path.read_text(encoding="utf-8"))
+    assert document["purpose"] == "receipt_verification"
+    assert all(
+        row.get("status") in {"active", "revoked"}
+        for row in document["keys"]
+    )
+    active = [row for row in document["keys"] if row["status"] == "active"]
+    assert [row["key_id"] for row in active] == ["receipt-20260825-v1"]
+    stat = committed_path.stat()
+    loaded = crypto._load_verify_key_file(
+        str(committed_path), stat.st_mtime_ns, stat.st_size
+    )
+    assert [row.key_id for row in loaded] == ["receipt-20260825-v1"]
+
+
+def test_receipt_registry_never_defaults_missing_status_to_active(
+    tmp_path: Path,
+) -> None:
+    import storage.receipt_crypto as crypto
+
+    _private, public_raw, key_id = generate_test_receipt_keypair()
+    path = write_test_receipt_registry(
+        tmp_path / "missing-status.json",
+        key_id=key_id,
+        public_raw=public_raw,
+    )
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["keys"][0].pop("status")
+    path.write_text(json.dumps(document), encoding="utf-8")
+    stat = path.stat()
+    with pytest.raises(ReceiptKeyConfigurationError, match="explicit active/revoked"):
+        crypto._load_verify_key_file(str(path), stat.st_mtime_ns, stat.st_size)
 
 
 def test_readiness_publisher_never_falls_back_to_receipt_pem(

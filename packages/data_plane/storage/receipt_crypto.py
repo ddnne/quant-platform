@@ -33,8 +33,9 @@ DISABLE_HOST_PEM_ENV = "QUANT_RECEIPT_DISABLE_HOST_PEM"
 def _host_pem_disabled() -> bool:
     """Return the explicit operator policy for disabling the host key file.
 
-    Explicit pem=/path=/QUANT_RECEIPT_SIGNING_KEY_PEM are unaffected.
-    Missing keys stay fail-closed (None).
+    The dedicated environment PEM is unaffected. Missing keys stay
+    fail-closed (None); the production factory accepts no caller-supplied key
+    or registry arguments.
 
     Test-runner environment variables deliberately have no effect here.  A
     caller can set those variables in production, so they are not a security
@@ -236,6 +237,7 @@ def _load_verify_key_file(
     if (
         not isinstance(doc, Mapping)
         or doc.get("schema_version") != 1
+        or doc.get("purpose") != "receipt_verification"
         or not isinstance(doc.get("keys"), list)
     ):
         raise ReceiptKeyConfigurationError(
@@ -246,7 +248,12 @@ def _load_verify_key_file(
             raise ReceiptKeyConfigurationError(
                 "pinned receipt registry requires Ed25519 entries"
             )
-        if row.get("status", "active") != "active":
+        status = row.get("status")
+        if status not in {"active", "revoked"}:
+            raise ReceiptKeyConfigurationError(
+                "pinned receipt registry requires an explicit active/revoked status"
+            )
+        if status != "active":
             continue
         kid = str(row.get("key_id") or "").strip()
         if not kid or kid in out:

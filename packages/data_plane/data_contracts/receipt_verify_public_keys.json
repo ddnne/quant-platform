@@ -1,31 +1,48 @@
 {
   "schema_version": 1,
+  "purpose": "receipt_verification",
   "keys": [
+    {
+      "key_id": "receipt-20260825-v1",
+      "public_key_b64": "DCVwl1tFSnA7QoHV5QxppUsU9uqNo2Fasc8kakH3UBY=",
+      "algorithm": "Ed25519",
+      "status": "active",
+      "note": "dedicated production receipt authority"
+    },
     {
       "key_id": "dev-receipt-v1",
       "public_key_b64": "DCVwl1tFSnA7QoHV5QxppUsU9uqNo2Fasc8kakH3UBY=",
       "algorithm": "Ed25519",
-      "note": "dev/bootstrap; rotate for production"
+      "status": "revoked",
+      "note": "legacy bootstrap identity retained for audit only"
     },
     {
       "key_id": "phase61-test",
       "public_key_b64": "4sQriRWsaz6YQUa+IHwtGVUeQ5RQJe/b4nWOcn4sIRQ=",
-      "algorithm": "Ed25519"
+      "algorithm": "Ed25519",
+      "status": "revoked",
+      "note": "historical test key retained for audit only"
     },
     {
       "key_id": "k1",
       "public_key_b64": "IKRDieroyrvYX1uGpQ3U1O1RDMoaFcyc8wfB2qYhaBI=",
-      "algorithm": "Ed25519"
+      "algorithm": "Ed25519",
+      "status": "revoked",
+      "note": "historical test key retained for audit only"
     },
     {
       "key_id": "test-key",
       "public_key_b64": "PZ9W3MW2ZRKmmgqYhtdlc8xSn0GtG2Odj6ujWJV9Mwk=",
-      "algorithm": "Ed25519"
+      "algorithm": "Ed25519",
+      "status": "revoked",
+      "note": "historical test key retained for audit only"
     },
     {
       "key_id": "t1",
       "public_key_b64": "00vPBvGv26PQRJiOurfDHGGzCURaCkZlAMfojd0yJ48=",
-      "algorithm": "Ed25519"
+      "algorithm": "Ed25519",
+      "status": "revoked",
+      "note": "historical test key retained for audit only"
     }
   ]
 }

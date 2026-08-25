@@ -59,11 +59,13 @@ def write_test_receipt_registry(
         json.dumps(
             {
                 "schema_version": 1,
+                "purpose": "receipt_verification",
                 "keys": [
                     {
                         "key_id": key_id,
                         "public_key_b64": base64.b64encode(public_raw).decode("ascii"),
                         "algorithm": "Ed25519",
+                        "status": "active",
                     }
                 ],
             },
