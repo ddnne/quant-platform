@@ -112,6 +112,12 @@ export async function handleBudgetRequest(
                   body: (rec.result as Record<string, unknown>).body,
                 }
               : undefined,
+          settlement:
+            rec.settlement &&
+            typeof rec.settlement === "object" &&
+            !Array.isArray(rec.settlement)
+              ? (rec.settlement as import("./budget_do").BudgetSettlement)
+              : undefined,
         },
         now,
       );

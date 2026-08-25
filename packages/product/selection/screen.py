@@ -2,22 +2,43 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+
+_POLICY_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "specs"
+    / "policy"
+    / "controlled_pilot_policy.json"
+)
+_CONTROLLED_PILOT_POLICY = json.loads(_POLICY_PATH.read_text(encoding="utf-8"))
 
 
 @dataclass(frozen=True)
 class ExperimentBudget:
-    max_parallel_experiments: int = 4
-    max_generations: int = 3
-    max_model_calls: int = 50
-    max_paper_runs: int = 20
+    """Controlled-pilot limits loaded from the cross-runtime policy SoT."""
+
+    max_parallel_experiments: int = int(
+        _CONTROLLED_PILOT_POLICY["max_parallel_experiments"]
+    )
+    max_generations: int = int(_CONTROLLED_PILOT_POLICY["max_generations"])
+    max_model_calls: int = int(_CONTROLLED_PILOT_POLICY["max_model_calls"])
+    max_paper_runs: int = int(_CONTROLLED_PILOT_POLICY["max_paper_runs"])
     # Hard token/cost caps (required for mass research; never leave None).
-    max_input_tokens: int = 2_000_000
-    max_output_tokens: int = 500_000
-    max_cached_tokens: int = 2_000_000
+    max_input_tokens: int = int(_CONTROLLED_PILOT_POLICY["max_input_tokens"])
+    max_output_tokens: int = int(_CONTROLLED_PILOT_POLICY["max_output_tokens"])
+    max_cached_tokens: int = int(_CONTROLLED_PILOT_POLICY["max_cached_tokens"])
     max_compute_time_ms: int = 3_600_000
-    max_estimated_cost_micros: int = 50_000_000  # $50 in micros
+    max_estimated_cost_micros: int = int(
+        float(_CONTROLLED_PILOT_POLICY["max_cost_usd"]) * 1_000_000
+    )
+    lease_ttl_seconds: int = int(_CONTROLLED_PILOT_POLICY["lease_ttl_seconds"])
+    automatic_promotion: bool = bool(
+        _CONTROLLED_PILOT_POLICY["automatic_promotion"]
+    )
 
     def __post_init__(self) -> None:
         if self.max_parallel_experiments < 1:
@@ -26,6 +47,10 @@ class ExperimentBudget:
             raise ValueError("max_generations must be >= 1")
         if self.max_input_tokens < 1 or self.max_output_tokens < 1:
             raise ValueError("token budgets must be >= 1")
+        if self.lease_ttl_seconds < 30:
+            raise ValueError("lease_ttl_seconds must be >= 30")
+        if self.automatic_promotion:
+            raise ValueError("automatic promotion is disabled")
 
 
 def screen_candidates(

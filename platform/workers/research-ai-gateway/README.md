@@ -15,4 +15,7 @@ Health (`GET /health`) returns `{ok, service}` only.
 
 ## Bindings
 
-Research mass-eval uses a service binding `AI_GATEWAY` → this worker.
+Research mass-eval uses the named `GatewayService` RPC entrypoint through the
+`AI_GATEWAY` service binding. The binding itself is the capability; mass-eval
+does not hold or send `GATEWAY_TOKEN`. Header-token auth remains only for the
+closed HTTP defense-in-depth surface.

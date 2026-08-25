@@ -8,10 +8,15 @@ from selection.screen import ExperimentBudget, early_stop, screen_candidates
 def test_experiment_budget_defaults():
     """ExperimentBudget should have sensible defaults."""
     budget = ExperimentBudget()
-    assert budget.max_parallel_experiments == 4
-    assert budget.max_generations == 3
-    assert budget.max_model_calls == 50
-    assert budget.max_paper_runs == 20
+    assert budget.max_parallel_experiments == 2
+    assert budget.max_generations == 1
+    assert budget.max_model_calls == 16
+    assert budget.max_paper_runs == 8
+    assert budget.max_input_tokens == 400_000
+    assert budget.max_output_tokens == 80_000
+    assert budget.max_estimated_cost_micros == 20_000_000
+    assert budget.lease_ttl_seconds == 1800
+    assert budget.automatic_promotion is False
 
 
 def test_experiment_budget_custom_values():

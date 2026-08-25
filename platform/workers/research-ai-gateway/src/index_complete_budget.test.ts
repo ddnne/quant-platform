@@ -237,6 +237,74 @@ describe("POST /v1/complete control-plane occupancy", () => {
       expect(snap.active_leases).toBe(0);
       expect(snap.auto_promotion).toBe(false);
     }
+    const state = await storage.get<{
+      reservations: Record<
+        string,
+        {
+          settlement: {
+            outcome: string;
+            usage_source: string;
+            actual_input_tokens: number;
+            actual_output_tokens: number;
+            actual_cached_tokens: number;
+            estimated_cost_usd: number;
+            actual_cost_usd: number;
+          };
+        }
+      >;
+    }>("ledger");
+    const reservations = state?.reservations ?? {};
+    const receipt = reservations[Object.keys(reservations)[0]];
+    expect(receipt?.settlement).toMatchObject({
+      outcome: "schema_reject",
+      usage_source: "provider",
+      actual_input_tokens: 8,
+      actual_output_tokens: 2,
+      actual_cached_tokens: 0,
+    });
+    expect(receipt?.settlement.estimated_cost_usd).toBeGreaterThanOrEqual(
+      receipt?.settlement.actual_cost_usd ?? 0,
+    );
+  });
+
+  it("provider failure settles the reservation and records estimated usage", async () => {
+    const { BUDGET_LEDGER, storage } = memoryLedger();
+    const env: GatewayEnv = {
+      GATEWAY_TOKEN,
+      BUDGET_LEDGER,
+      AI: {
+        run: async () => {
+          throw new Error("provider unavailable");
+        },
+      } as unknown as Ai,
+    };
+    const res = await worker.fetch(completeWithBudget(), env);
+    expect(res.status).toBe(502);
+    const payload = (await res.json()) as { error?: string; budget_run_id?: string };
+    expect(payload.error).toBe("ai_run_failed");
+    expect(payload.budget_run_id).toBeTruthy();
+    const snap = await snapshotBudget(storage);
+    expect(snap.ok).toBe(true);
+    if (snap.ok) {
+      expect(snap.reserved.model_calls).toBe(0);
+      expect(snap.active_leases).toBe(0);
+      expect(snap.used.model_calls).toBe(1);
+      expect(snap.used.input_tokens).toBeGreaterThan(0);
+      expect(snap.used.output_tokens).toBe(0);
+    }
+    const state = await storage.get<{
+      reservations: Record<
+        string,
+        { settlement: { outcome: string; usage_source: string; actual_cost_usd: null } }
+      >;
+    }>("ledger");
+    const reservations = state?.reservations ?? {};
+    const receipt = reservations[Object.keys(reservations)[0]];
+    expect(receipt?.settlement).toMatchObject({
+      outcome: "provider_error",
+      usage_source: "estimated_no_provider_usage",
+      actual_cost_usd: null,
+    });
   });
 
   it("finalize failure after provider does not return the success artifact", async () => {

@@ -370,7 +370,7 @@ describe("budget ledger algebra", () => {
     }
   });
 
-  it("actual over reserved freezes the ledger with an audit record and does not overspend", async () => {
+  it("actual over reserved records full spend, releases reserve, and freezes", async () => {
     const storage = new MemoryBudgetStorage();
     await reserveBudget(
       storage,
@@ -388,7 +388,7 @@ describe("budget ledger algebra", () => {
     expect(snap.ok).toBe(true);
     if (snap.ok) {
       expect(snap.frozen).toBe(true);
-      expect(snap.used.input_tokens).toBe(10);
+      expect(snap.used.input_tokens).toBe(11);
       expect(snap.reserved.input_tokens).toBe(0);
       expect(snap.auto_promotion).toBe(false);
     }

@@ -1,16 +1,18 @@
 /** Durable Object hard budget occupancy algebra. Presence of budget_id is not a reserve. */
 
+import controlledPilotPolicy from "../../../../specs/policy/controlled_pilot_policy.json";
+
 export const PILOT_BUDGET_CAPS = {
-  max_experiment_plans: 4,
-  max_parallel_experiments: 2,
-  max_generations: 1,
-  max_model_calls: 16,
-  max_input_tokens: 400_000,
-  max_output_tokens: 80_000,
-  max_paper_runs: 8,
-  max_cost_usd: 20,
-  lease_ttl_seconds: 1800,
-  auto_promotion: false,
+  max_experiment_plans: controlledPilotPolicy.plans_exactly,
+  max_parallel_experiments: controlledPilotPolicy.max_parallel_experiments,
+  max_generations: controlledPilotPolicy.max_generations,
+  max_model_calls: controlledPilotPolicy.max_model_calls,
+  max_input_tokens: controlledPilotPolicy.max_input_tokens,
+  max_output_tokens: controlledPilotPolicy.max_output_tokens,
+  max_paper_runs: controlledPilotPolicy.max_paper_runs,
+  max_cost_usd: controlledPilotPolicy.max_cost_usd,
+  lease_ttl_seconds: controlledPilotPolicy.lease_ttl_seconds,
+  auto_promotion: controlledPilotPolicy.automatic_promotion,
 } as const;
 
 /** Single control-plane ledger name. Caller budget_id is not occupancy. */
@@ -35,6 +37,17 @@ export type CachedBudgetResult = {
   body: unknown;
 };
 
+export type BudgetSettlement = {
+  outcome: "success" | "schema_reject" | "provider_error" | "timeout";
+  usage_source: "provider" | "estimated_no_provider_usage";
+  estimated_cost_usd: number;
+  actual_cost_usd: number | null;
+  billed_cost_usd: number;
+  actual_input_tokens: number | null;
+  actual_output_tokens: number | null;
+  actual_cached_tokens: number | null;
+};
+
 export type BudgetAuditRecord = {
   kind: "actual_exceeds_reserved";
   reservation_id: string;
@@ -57,6 +70,7 @@ export type Reservation = {
   request_digest: string | null;
   cached_result: CachedBudgetResult | null;
   finalize_error: string | null;
+  settlement: BudgetSettlement | null;
 };
 
 export type Lease = {
@@ -287,19 +301,6 @@ function counterGreater(name: CounterName, left: number, right: number): boolean
   return left > right;
 }
 
-function minCounter(name: CounterName, left: number, right: number): number {
-  if (name === "cost_usd") return usdMicros(left) <= usdMicros(right) ? left : right;
-  return Math.min(left, right);
-}
-
-function minCounters(left: Counters, right: Counters): Counters {
-  const out = zeroCounters();
-  for (const name of COUNTERS) {
-    out[name] = minCounter(name, left[name], right[name]);
-  }
-  return out;
-}
-
 export function exceedsReserved(
   reserved: Counters,
   actual: Counters,
@@ -318,6 +319,7 @@ function coerceReservation(raw: Reservation): Reservation {
     request_digest: raw.request_digest ?? null,
     cached_result: raw.cached_result ?? null,
     finalize_error: raw.finalize_error ?? null,
+    settlement: raw.settlement ?? null,
   };
 }
 
@@ -512,6 +514,7 @@ export async function reserveBudget(
     request_digest: digest,
     cached_result: null,
     finalize_error: null,
+    settlement: null,
   };
   state.reserved = applyDelta(state.reserved, reservation.amounts, 1);
   state.reservations[key.idempotency_key] = reservation;
@@ -557,6 +560,7 @@ export async function finalizeBudget(
     idempotency_key: string;
     amounts: unknown;
     result?: CachedBudgetResult;
+    settlement?: BudgetSettlement;
   },
   now = Date.now(),
 ): Promise<
@@ -601,10 +605,12 @@ export async function finalizeBudget(
 
   const over = exceedsReserved(reservation.amounts, actual);
   state.reserved = applyDelta(state.reserved, reservation.amounts, -1);
-  const charged = over ? minCounters(actual, reservation.amounts) : actual;
-  state.used = applyDelta(state.used, charged, 1);
+  // Release the estimate in full, then record billed spend exactly.  If the
+  // estimate was too low, freeze future work without clipping audit history.
+  state.used = applyDelta(state.used, actual, 1);
   reservation.status = "reconciled";
   reservation.actual = amountsFromCounters(actual);
+  reservation.settlement = input.settlement ?? null;
   reservation.reconciled_at = now;
   applyCachedResult(reservation, input.result);
   closeReservationLease(state, reservation, now);
@@ -725,4 +731,3 @@ export async function snapshotBudget(
     frozen: state.frozen === true,
   };
 }
-

@@ -133,8 +133,10 @@ class ResearchBudgetCapability:
         finally:
             conn.close()
 
-    def acquire_slot(self, *, ttl_seconds: int = 3600) -> ExperimentSlotLease:
+    def acquire_slot(self, *, ttl_seconds: int | None = None) -> ExperimentSlotLease:
         """Transactional experiment slot lease (max_parallel_experiments bound)."""
+        if ttl_seconds is None:
+            ttl_seconds = int(self.limits.lease_ttl_seconds)
         if ttl_seconds < 30 or ttl_seconds > 86_400:
             raise ValueError("ttl_seconds must be in [30, 86400]")
         conn = self._connect()
@@ -183,7 +185,14 @@ class ResearchBudgetCapability:
         finally:
             conn.close()
 
-    def heartbeat(self, lease: ExperimentSlotLease, *, extend_seconds: int = 3600) -> ExperimentSlotLease:
+    def heartbeat(
+        self,
+        lease: ExperimentSlotLease,
+        *,
+        extend_seconds: int | None = None,
+    ) -> ExperimentSlotLease:
+        if extend_seconds is None:
+            extend_seconds = int(self.limits.lease_ttl_seconds)
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")

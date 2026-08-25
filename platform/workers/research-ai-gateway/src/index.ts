@@ -1,5 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { authorized } from "./authorized";
 import {
   bindIdempotencyKey,
@@ -28,6 +29,11 @@ export interface GatewayEnv {
   MASS_EVAL_TOKEN?: string;
   BUDGET_LEDGER?: DurableObjectNamespace;
 }
+
+export type GatewayServiceResult = {
+  http_status: number;
+  body: unknown;
+};
 
 function extractModelValue(
   res: unknown,
@@ -149,20 +155,52 @@ function tokenCount(
   res: unknown,
   fallbackText: string,
   prompt: string,
-): { input: number; output: number } {
+): { input: number; output: number; cached: number; measured: boolean } {
   const rec = res && typeof res === "object" ? (res as Record<string, unknown>) : {};
   const usage =
     rec.usage && typeof rec.usage === "object" ? (rec.usage as Record<string, unknown>) : {};
-  const input = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0);
-  const output = Number(usage.completion_tokens ?? usage.output_tokens ?? 0);
+  const inputDetails =
+    usage.input_tokens_details && typeof usage.input_tokens_details === "object"
+      ? (usage.input_tokens_details as Record<string, unknown>)
+      : {};
+  const measuredNumber = (
+    source: Record<string, unknown>,
+    keys: string[],
+  ): number | null => {
+    for (const key of keys) {
+      if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+      const value = Number(source[key]);
+      if (Number.isFinite(value) && value >= 0) return value;
+    }
+    return null;
+  };
+  const input = measuredNumber(usage, ["prompt_tokens", "input_tokens"]);
+  const output = measuredNumber(usage, ["completion_tokens", "output_tokens"]);
+  const cached =
+    measuredNumber(usage, ["cached_tokens"]) ??
+    measuredNumber(inputDetails, ["cached_tokens"]);
   return {
-    input: Number.isFinite(input) && input > 0 ? input : Math.ceil(prompt.length / 4),
-    output: Number.isFinite(output) && output > 0 ? output : Math.ceil(fallbackText.length / 4),
+    input: input ?? Math.ceil(prompt.length / 4),
+    output: output ?? Math.ceil(fallbackText.length / 4),
+    cached: cached ?? 0,
+    measured: input !== null || output !== null || cached !== null,
   };
 }
 
-export default {
-  async fetch(request: Request, env: GatewayEnv): Promise<Response> {
+const AI_CALL_TIMEOUT_MS = 120_000;
+
+class GatewayProviderTimeout extends Error {
+  constructor() {
+    super("Workers AI call timed out");
+    this.name = "GatewayProviderTimeout";
+  }
+}
+
+async function handleGatewayRequest(
+  request: Request,
+  env: GatewayEnv,
+  serviceBindingAuthorized = false,
+): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health" || url.pathname === "/") {
       if (request.method !== "GET") return json({ error: "GET required" }, 405);
@@ -172,7 +210,7 @@ export default {
       return json({ error: "not found" }, 404);
     }
     if (request.method !== "POST") return json({ error: "POST required" }, 405);
-    if (!(await authorized(request, env))) {
+    if (!serviceBindingAuthorized && !(await authorized(request, env))) {
       return json({ error: "unauthorized" }, 401);
     }
     let body: unknown;
@@ -237,102 +275,169 @@ export default {
       );
     }
 
-    const failClosed = async (
-      errorBody: Record<string, unknown>,
-      httpStatus: number,
-      amounts: {
-        model_calls: number;
-        input_tokens: number;
-        output_tokens: number;
-        cost_usd: number;
-      },
-    ): Promise<Response> => {
-      const body = { ...errorBody, budget_run_id: budgetRunId };
-      const finalized = await budgetRpc(env, "/finalize", {
-        idempotency_key: bound.idempotency_key,
-        amounts,
-        result: { http_status: httpStatus, body },
-      });
-      if (!finalized.ok) {
-        return json(
-          {
-            ok: false,
-            error: finalized.error || "budget_finalize_failed",
-            detail: finalized.detail,
-            budget_run_id: budgetRunId,
-          },
-          finalized.status || 500,
-        );
-      }
-      return json(body, httpStatus);
+    let responseStatus = 502;
+    let responseBody: Record<string, unknown> = {
+      ok: false,
+      error: "ai_run_failed",
     };
-
+    let billed = {
+      model_calls: 1,
+      input_tokens: estimatedInput,
+      output_tokens: 0,
+      cost_usd: estimateCostUsd(req.model, estimatedInput, 0),
+    };
+    let settlement: {
+      outcome: "success" | "schema_reject" | "provider_error" | "timeout";
+      usage_source: "provider" | "estimated_no_provider_usage";
+      estimated_cost_usd: number;
+      actual_cost_usd: number | null;
+      billed_cost_usd: number;
+      actual_input_tokens: number | null;
+      actual_output_tokens: number | null;
+      actual_cached_tokens: number | null;
+    } = {
+      outcome: "provider_error",
+      usage_source: "estimated_no_provider_usage",
+      estimated_cost_usd: estimatedCost,
+      actual_cost_usd: null,
+      billed_cost_usd: billed.cost_usd,
+      actual_input_tokens: null,
+      actual_output_tokens: null,
+      actual_cached_tokens: null,
+    };
+    let finalized: BudgetRpc | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const res = await env.AI.run(req.model, {
-        messages: req.messages,
-        max_tokens: req.max_tokens,
-      });
+      const res = await Promise.race([
+        env.AI.run(req.model, {
+          messages: req.messages,
+          max_tokens: req.max_tokens,
+        }),
+        new Promise<never>((_resolve, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new GatewayProviderTimeout()),
+            AI_CALL_TIMEOUT_MS,
+          );
+        }),
+      ]);
       const extracted = extractModelValue(res);
       const tokens = tokenCount(
         res,
         extracted.ok ? extracted.rawForTokens : "",
         prompt,
       );
-      const actual = {
+      billed = {
         model_calls: 1,
         input_tokens: tokens.input,
         output_tokens: tokens.output,
         cost_usd: estimateCostUsd(req.model, tokens.input, tokens.output),
       };
-      if (!extracted.ok) {
-        return failClosed({ ok: false, error: extracted.error }, 400, actual);
-      }
-      const decoded = decodeTypedArtifact(extracted.value, req.expected_schema);
-      if (!decoded.ok) {
-        return failClosed({ ok: false, error: decoded.error }, 400, actual);
-      }
-      const canonical = JSON.stringify(decoded.value.artifact);
-      const outputDigest = `sha256:${await sha256Hex(canonical)}`;
-      const payload: GatewayOk = {
-        ok: true,
-        schema: decoded.value.schema_name,
-        schema_version: decoded.value.schema_version,
-        artifact: decoded.value.artifact,
-        model: req.model,
-        input_tokens: tokens.input,
-        output_tokens: tokens.output,
-        monetary_cost_usd: estimateCostUsd(req.model, tokens.input, tokens.output),
-        prompt_digest: promptDigest,
-        output_digest: outputDigest,
-        ready_snapshot_id: req.ready_snapshot_id ?? null,
-        experiment_id: req.experiment_id ?? null,
-        budget_id: req.budget_id,
-        budget_run_id: budgetRunId || "",
+      settlement = {
+        outcome: "schema_reject",
+        usage_source: tokens.measured ? "provider" : "estimated_no_provider_usage",
+        estimated_cost_usd: estimatedCost,
+        actual_cost_usd: tokens.measured ? billed.cost_usd : null,
+        billed_cost_usd: billed.cost_usd,
+        actual_input_tokens: tokens.measured ? tokens.input : null,
+        actual_output_tokens: tokens.measured ? tokens.output : null,
+        actual_cached_tokens: tokens.measured ? tokens.cached : null,
       };
-      const finalized = await budgetRpc(env, "/finalize", {
-        idempotency_key: bound.idempotency_key,
-        amounts: actual,
-        result: { http_status: 200, body: payload },
-      });
-      if (!finalized.ok) {
-        return json(
-          {
-            ok: false,
-            error: finalized.error || "budget_finalize_failed",
-            detail: finalized.detail,
-            budget_run_id: budgetRunId,
-          },
-          finalized.status || 500,
-        );
+      if (!extracted.ok) {
+        responseStatus = 400;
+        responseBody = { ok: false, error: extracted.error };
+      } else {
+        const decoded = decodeTypedArtifact(extracted.value, req.expected_schema);
+        if (!decoded.ok) {
+          responseStatus = 400;
+          responseBody = { ok: false, error: decoded.error };
+        } else {
+          const canonical = JSON.stringify(decoded.value.artifact);
+          const outputDigest = `sha256:${await sha256Hex(canonical)}`;
+          const payload: GatewayOk = {
+            ok: true,
+            schema: decoded.value.schema_name,
+            schema_version: decoded.value.schema_version,
+            artifact: decoded.value.artifact,
+            model: req.model,
+            input_tokens: tokens.input,
+            output_tokens: tokens.output,
+            monetary_cost_usd: billed.cost_usd,
+            prompt_digest: promptDigest,
+            output_digest: outputDigest,
+            ready_snapshot_id: req.ready_snapshot_id ?? null,
+            experiment_id: req.experiment_id ?? null,
+            budget_id: req.budget_id,
+            budget_run_id: budgetRunId || "",
+          };
+          settlement.outcome = "success";
+          responseStatus = 200;
+          responseBody = payload;
+        }
       }
-      return json(payload);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      return failClosed(
-        { ok: false, error: "ai_run_failed", detail: msg.slice(0, 180) },
-        502,
-        reserveAmounts,
+      const timedOut = e instanceof GatewayProviderTimeout;
+      settlement.outcome = timedOut ? "timeout" : "provider_error";
+      responseStatus = timedOut ? 504 : 502;
+      responseBody = {
+        ok: false,
+        error: timedOut ? "ai_run_timeout" : "ai_run_failed",
+        detail: msg.slice(0, 180),
+      };
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      responseBody = { ...responseBody, budget_run_id: budgetRunId };
+      finalized = await budgetRpc(env, "/finalize", {
+        idempotency_key: bound.idempotency_key,
+        amounts: billed,
+        settlement,
+        result: { http_status: responseStatus, body: responseBody },
+      });
+    }
+    if (!finalized || !finalized.ok) {
+      return json(
+        {
+          ok: false,
+          error: finalized?.error || "budget_finalize_failed",
+          detail: finalized?.detail,
+          budget_run_id: budgetRunId,
+        },
+        finalized?.status || 500,
       );
     }
+    return json(responseBody, responseStatus);
+}
+
+export class GatewayService extends WorkerEntrypoint<GatewayEnv> {
+  async complete(
+    body: unknown,
+    options: { idempotency_key?: string } = {},
+  ): Promise<GatewayServiceResult> {
+    const headers = new Headers({ "content-type": "application/json" });
+    if (options.idempotency_key) {
+      headers.set("Idempotency-Key", options.idempotency_key);
+    }
+    const response = await handleGatewayRequest(
+      new Request("https://service-binding/v1/complete", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+      this.env,
+      true,
+    );
+    let parsed: unknown;
+    try {
+      parsed = await response.json();
+    } catch {
+      parsed = { ok: false, error: "gateway_invalid_json" };
+    }
+    return { http_status: response.status, body: parsed };
+  }
+}
+
+export default {
+  fetch(request: Request, env: GatewayEnv): Promise<Response> {
+    return handleGatewayRequest(request, env, false);
   },
 };
