@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import pricingPolicyDocument from "../../../../specs/policy/ai_gateway_pricing_policy.json";
 import {
+  ALLOWED_MODELS,
   decodeGatewayRequest,
   decodeTypedArtifact,
   estimateCostUsd,
@@ -9,6 +11,20 @@ import {
   parseModelJson,
   providerInputBounds,
 } from "./schema";
+import { AI_GATEWAY_PRICING_POLICY_DIGEST } from "./pricing_policy";
+import { sha256Hex } from "./sha256";
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
 const base = {
   model: "@cf/meta/llama-3.1-8b-instruct-fp8",
@@ -208,10 +224,24 @@ describe("parseModelJson", () => {
 });
 
 describe("estimateCostUsd", () => {
-  it("is non-negative", () => {
-    expect(estimateCostUsd("@cf/meta/llama-3.1-8b-instruct-fp8", 10, 10)).toBeGreaterThanOrEqual(
-      0,
+  it("uses the official input/output rates independently", () => {
+    expect(estimateCostUsd(ALLOWED_MODELS[0], 1_000_000, 0)).toBe(0.293);
+    expect(estimateCostUsd(ALLOWED_MODELS[0], 0, 1_000_000)).toBe(2.253);
+    expect(estimateCostUsd(ALLOWED_MODELS[1], 1_000_000, 0)).toBe(0.06);
+    expect(estimateCostUsd(ALLOWED_MODELS[1], 0, 1_000_000)).toBe(0.4);
+    expect(estimateCostUsd(ALLOWED_MODELS[2], 1_000_000, 0)).toBe(0.152);
+    expect(estimateCostUsd(ALLOWED_MODELS[2], 0, 1_000_000)).toBe(0.287);
+  });
+
+  it("has one canonical price for every allowed model", () => {
+    expect(pricingPolicyDocument.policy.model_rates.map(({ model }) => model).sort()).toEqual(
+      [...ALLOWED_MODELS].sort(),
     );
   });
-});
 
+  it("is bound to the canonical policy payload digest", async () => {
+    const digest = `sha256:${await sha256Hex(canonicalJson(pricingPolicyDocument.policy))}`;
+    expect(digest).toBe(pricingPolicyDocument.policy_digest);
+    expect(digest).toBe(AI_GATEWAY_PRICING_POLICY_DIGEST);
+  });
+});

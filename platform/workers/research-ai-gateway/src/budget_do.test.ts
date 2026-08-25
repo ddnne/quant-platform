@@ -17,6 +17,10 @@ import {
   type PublicReservation,
   type Reservation,
 } from "./budget_do";
+import {
+  AI_GATEWAY_PRICING_POLICY_DIGEST,
+  AI_GATEWAY_PRICING_POLICY_ID,
+} from "./pricing_policy";
 
 /** In-memory ledger algebra. Live Cloudflare Durable Object occupancy is unproven. */
 
@@ -42,6 +46,10 @@ function actualUsage(overrides: Record<string, unknown> = {}): Record<string, un
     output_tokens: 0,
     cached_tokens: 0,
     cost_usd: 0,
+    cost_source: "provider",
+    provider_model: "@cf/meta/llama-3.1-8b-instruct-fp8",
+    pricing_policy_id: null,
+    pricing_policy_digest: null,
     ...overrides,
   };
 }
@@ -210,6 +218,82 @@ describe("budget ledger algebra", () => {
       expect(snap.used.output_tokens).toBe(7);
       expect(snap.reserved.model_calls).toBe(0);
     }
+  });
+
+  it.each([
+    [
+      "missing policy identity",
+      {
+        cost_source: "pricing_policy_estimate",
+        provider_model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        pricing_policy_id: null,
+        pricing_policy_digest: null,
+        input_tokens: 1_000,
+        cost_usd: 0.0003,
+      },
+    ],
+    [
+      "wrong canonical policy cost",
+      {
+        cost_source: "pricing_policy_estimate",
+        provider_model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        pricing_policy_id: AI_GATEWAY_PRICING_POLICY_ID,
+        pricing_policy_digest: AI_GATEWAY_PRICING_POLICY_DIGEST,
+        input_tokens: 1_000,
+        cost_usd: 0.25,
+      },
+    ],
+    [
+      "policy metadata on provider cost",
+      {
+        cost_source: "provider",
+        pricing_policy_id: AI_GATEWAY_PRICING_POLICY_ID,
+        pricing_policy_digest: AI_GATEWAY_PRICING_POLICY_DIGEST,
+      },
+    ],
+  ])("fails closed for %s usage provenance", async (_label, overrides) => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("usage-provenance", {
+        model_calls: 1,
+        input_tokens: 2_000,
+        output_tokens: 10,
+        cost_usd: 1,
+      }),
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "usage-provenance",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-usage-provenance",
+      },
+      T0 + 1,
+    );
+    if (!started.ok || !started.settlement_capability) throw new Error("capability");
+    const finalized = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "usage-provenance",
+        request_digest: "digest-usage-provenance",
+        lease_id: reserved.lease.lease_id,
+        settlement_capability: started.settlement_capability,
+        usage: actualUsage(overrides),
+        terminal_result: { http_status: 200, body: { ok: true } },
+      },
+      T0 + 2,
+    );
+    expect(finalized).toMatchObject({ ok: false, error: "provider_usage_invalid" });
+    const snapshot = await snapshotBudget(storage, T0 + 3);
+    expect(snapshot).toMatchObject({
+      ok: true,
+      frozen: true,
+      reserved: { model_calls: 0 },
+      used: { model_calls: 1, input_tokens: 2_000, cost_usd: 1 },
+    });
   });
 
   it("atomically caps concurrent leases at max_parallel_experiments=2", async () => {
@@ -1014,6 +1098,9 @@ describe("budget ledger algebra", () => {
           actual_input_tokens: 0,
           actual_output_tokens: 0,
           actual_cached_tokens: 0,
+          provider_model: null,
+          pricing_policy_id: null,
+          pricing_policy_digest: null,
         },
       },
       T0 + 2,
@@ -2415,5 +2502,159 @@ describe("P0 terminal replay and capability isolation", () => {
         error: "cached_result_invalid",
       });
     }
+  });
+
+  it.each([
+    ["non-numeric", (state: Record<string, any>) => {
+      state.used.input_tokens = "0";
+    }],
+    ["missing", (state: Record<string, any>) => {
+      delete state.reserved.model_calls;
+    }],
+    ["fractional", (state: Record<string, any>) => {
+      state.used.output_tokens = 0.5;
+    }],
+  ])("fails closed for %s persisted occupancy instead of coercing it to zero", async (_label, mutate) => {
+    const storage = new MemoryBudgetStorage();
+    await createBudget(storage, T0);
+    const state = await storage.get<Record<string, any>>("ledger");
+    if (!state) throw new Error("ledger missing");
+    mutate(state);
+    await storage.commit("ledger", state, null);
+
+    await expect(snapshotBudget(storage, T0 + 1)).rejects.toThrow(
+      /persisted_budget_state_invalid/,
+    );
+    const persisted = await storage.get<Record<string, any>>("ledger");
+    expect(persisted).toEqual(state);
+  });
+
+  it("fails closed for a malformed persisted lease instead of releasing occupancy", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("corrupt-lease", { model_calls: 1, input_tokens: 100 }),
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("reservation missing");
+    const state = await storage.get<Record<string, any>>("ledger");
+    if (!state) throw new Error("ledger missing");
+    state.leases[reserved.lease.lease_id].expires_at = "expired";
+    await storage.commit("ledger", state, null);
+
+    await expect(recoverExpiredLeases(storage, T0 + 10_000_000)).rejects.toThrow(
+      /persisted_budget_state_invalid:lease_identity_invalid/,
+    );
+    const persisted = await storage.get<Record<string, any>>("ledger");
+    expect(persisted?.reserved.input_tokens).toBe(100);
+  });
+
+  it("fails closed when valid-looking aggregate counters do not reconcile to reservations", async () => {
+    const storage = new MemoryBudgetStorage();
+    await reserveBudget(
+      storage,
+      leased("counter-divergence", { model_calls: 1, input_tokens: 100 }),
+      T0,
+    );
+    const state = await storage.get<Record<string, any>>("ledger");
+    if (!state) throw new Error("ledger missing");
+    state.reserved.input_tokens = 0;
+    await storage.commit("ledger", state, null);
+
+    await expect(snapshotBudget(storage, T0 + 1)).rejects.toThrow(
+      /persisted_budget_state_invalid:ledger_occupancy_not_reconciled/,
+    );
+  });
+
+  it("fails closed when a reservation points outside its persisted lease authority", async () => {
+    const storage = new MemoryBudgetStorage();
+    await reserveBudget(
+      storage,
+      leased("lease-divergence", { model_calls: 1, input_tokens: 100 }),
+      T0,
+    );
+    const state = await storage.get<Record<string, any>>("ledger");
+    if (!state) throw new Error("ledger missing");
+    state.reservations["lease-divergence"].lease_id = "missing-lease";
+    await storage.commit("ledger", state, null);
+
+    await expect(snapshotBudget(storage, T0 + 1)).rejects.toThrow(
+      /persisted_budget_state_invalid:reservation_lease_link_invalid/,
+    );
+  });
+
+  it("downgrades legacy provider-cost claims to unattributed instead of inventing actual cost", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("legacy-cost", { model_calls: 1, input_tokens: 10, cost_usd: 1 }),
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const started = await markProviderStarted(storage, {
+      idempotency_key: "legacy-cost",
+      request_digest: "digest-legacy-cost",
+      lease_id: reserved.lease.lease_id,
+    }, T0 + 1);
+    if (!started.ok || !started.settlement_capability) throw new Error("capability");
+    const finalized = await finalizeBudget(storage, {
+      idempotency_key: "legacy-cost",
+      request_digest: "digest-legacy-cost",
+      lease_id: reserved.lease.lease_id,
+      settlement_capability: started.settlement_capability,
+      usage: actualUsage({ input_tokens: 2, cost_usd: 0.1 }),
+      terminal_result: { http_status: 200, body: { ok: true } },
+    }, T0 + 2);
+    expect(finalized.ok).toBe(true);
+
+    const legacy = await storage.get<Record<string, any>>("ledger");
+    if (!legacy) throw new Error("ledger missing");
+    delete legacy.reservations["legacy-cost"].settlement.provider_model;
+    delete legacy.reservations["legacy-cost"].settlement.pricing_policy_id;
+    delete legacy.reservations["legacy-cost"].settlement.pricing_policy_digest;
+    await storage.commit("ledger", legacy, null);
+
+    await expect(snapshotBudget(storage, T0 + 3)).resolves.toMatchObject({ ok: true });
+    const migrated = await storage.get<Record<string, any>>("ledger");
+    expect(migrated?.reservations["legacy-cost"].settlement).toMatchObject({
+      usage_source: "legacy_unattributed",
+      actual_cost_usd: null,
+      billed_cost_usd: 0.1,
+      provider_model: null,
+      pricing_policy_id: null,
+      pricing_policy_digest: null,
+    });
+  });
+
+  it("fails closed when persisted settlement tokens diverge from billed occupancy", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("settlement-divergence", { model_calls: 1, input_tokens: 10, cost_usd: 1 }),
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const started = await markProviderStarted(storage, {
+      idempotency_key: "settlement-divergence",
+      request_digest: "digest-settlement-divergence",
+      lease_id: reserved.lease.lease_id,
+    }, T0 + 1);
+    if (!started.ok || !started.settlement_capability) throw new Error("capability");
+    await finalizeBudget(storage, {
+      idempotency_key: "settlement-divergence",
+      request_digest: "digest-settlement-divergence",
+      lease_id: reserved.lease.lease_id,
+      settlement_capability: started.settlement_capability,
+      usage: actualUsage({ input_tokens: 2, cost_usd: 0.1 }),
+      terminal_result: { http_status: 200, body: { ok: true } },
+    }, T0 + 2);
+    const state = await storage.get<Record<string, any>>("ledger");
+    if (!state) throw new Error("ledger missing");
+    state.reservations["settlement-divergence"].settlement.actual_input_tokens = 3;
+    await storage.commit("ledger", state, null);
+
+    await expect(snapshotBudget(storage, T0 + 3)).rejects.toThrow(
+      /persisted_budget_state_invalid:settlement_counter_binding_invalid/,
+    );
   });
 });

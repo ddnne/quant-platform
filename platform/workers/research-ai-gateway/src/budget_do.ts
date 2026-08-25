@@ -1,6 +1,11 @@
 /** Durable Object hard budget occupancy algebra. Presence of budget_id is not a reserve. */
 
 import controlledPilotPolicy from "../../../../specs/policy/controlled_pilot_policy.json";
+import {
+  AI_GATEWAY_PRICING_POLICY_DIGEST,
+  AI_GATEWAY_PRICING_POLICY_ID,
+  estimateCostUsd,
+} from "./pricing_policy";
 
 export const PILOT_BUDGET_CAPS = {
   max_experiment_plans: controlledPilotPolicy.plans_exactly,
@@ -41,13 +46,20 @@ export type CachedBudgetResult = {
 
 export type BudgetSettlement = {
   outcome: "success" | "schema_reject" | "provider_error" | "timeout";
-  usage_source: "provider" | "reserved_max_uncertain";
+  usage_source:
+    | "provider"
+    | "provider_tokens_estimated_cost"
+    | "legacy_unattributed"
+    | "reserved_max_uncertain";
   estimated_cost_usd: number;
   actual_cost_usd: number | null;
   billed_cost_usd: number;
   actual_input_tokens: number | null;
   actual_output_tokens: number | null;
   actual_cached_tokens: number | null;
+  provider_model: string | null;
+  pricing_policy_id: string | null;
+  pricing_policy_digest: string | null;
 };
 
 export type BudgetAuditRecord =
@@ -151,6 +163,13 @@ export type LedgerState = {
 export type BudgetErr = { ok: false; error: string; detail?: string };
 export type BudgetOk<T> = { ok: true } & T;
 export type BudgetResult<T> = BudgetOk<T> | BudgetErr;
+
+export class PersistedBudgetStateError extends Error {
+  constructor(detail: string) {
+    super(`persisted_budget_state_invalid:${detail}`);
+    this.name = "PersistedBudgetStateError";
+  }
+}
 
 export interface AtomicBudgetStorage {
   get<T>(key: string): Promise<T | undefined>;
@@ -325,13 +344,26 @@ export function parseAmounts(raw: unknown): BudgetResult<{ amounts: Counters }> 
   return { ok: true, amounts };
 }
 
-function parseActualUsage(raw: unknown): BudgetResult<{ amounts: Counters }> {
+type ExactUsageEvidence = {
+  amounts: Counters;
+  reported_cost_usd: number;
+  cost_source: "provider" | "pricing_policy_estimate";
+  provider_model: string;
+  pricing_policy_id: string | null;
+  pricing_policy_digest: string | null;
+};
+
+function parseActualUsage(raw: unknown): BudgetResult<ExactUsageEvidence> {
   const required = [
     "model_calls",
     "input_tokens",
     "output_tokens",
     "cached_tokens",
     "cost_usd",
+    "cost_source",
+    "provider_model",
+    "pricing_policy_id",
+    "pricing_policy_digest",
   ] as const;
   let values: Record<string, unknown>;
   try {
@@ -384,28 +416,82 @@ function parseActualUsage(raw: unknown): BudgetResult<{ amounts: Counters }> {
   ) {
     return { ok: false, error: "cost_usd must be a finite number >= 0" };
   }
+  const costSource = values.cost_source;
+  if (costSource !== "provider" && costSource !== "pricing_policy_estimate") {
+    return { ok: false, error: "cost_source must identify provider or pricing policy" };
+  }
+  const providerModel = values.provider_model;
+  if (typeof providerModel !== "string" || !providerModel || providerModel.length > 256) {
+    return { ok: false, error: "provider_model must be a bounded non-empty string" };
+  }
+  const pricingPolicyId = values.pricing_policy_id;
+  const pricingPolicyDigest = values.pricing_policy_digest;
+  if (costSource === "provider") {
+    if (pricingPolicyId !== null || pricingPolicyDigest !== null) {
+      return { ok: false, error: "provider cost must not claim a pricing policy" };
+    }
+  } else {
+    if (
+      pricingPolicyId !== AI_GATEWAY_PRICING_POLICY_ID ||
+      pricingPolicyDigest !== AI_GATEWAY_PRICING_POLICY_DIGEST
+    ) {
+      return { ok: false, error: "pricing policy identity mismatch" };
+    }
+    const expected = estimateCostUsd(
+      providerModel,
+      values.input_tokens as number,
+      values.output_tokens as number,
+    );
+    if (usdMicros(cost) !== usdMicros(expected)) {
+      return { ok: false, error: "pricing policy cost mismatch" };
+    }
+  }
   const amounts = zeroCounters();
   amounts.model_calls = 1;
   amounts.input_tokens = values.input_tokens as number;
   amounts.output_tokens = values.output_tokens as number;
   amounts.cached_tokens = values.cached_tokens as number;
   amounts.cost_usd = usdMicros(cost) / 1_000_000;
-  return { ok: true, amounts };
+  return {
+    ok: true,
+    amounts,
+    reported_cost_usd: cost,
+    cost_source: costSource,
+    provider_model: providerModel,
+    pricing_policy_id: pricingPolicyId as string | null,
+    pricing_policy_digest: pricingPolicyDigest as string | null,
+  };
 }
 
 function amountsFromCounters(c: Counters): Counters {
   return { ...c };
 }
 
-function coerceCounters(raw: Partial<Counters> | null | undefined): Counters {
+function requirePersistedCounters(raw: unknown, label: string): Counters {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PersistedBudgetStateError(`${label}:counters_not_object`);
+  }
+  const values = raw as Record<string, unknown>;
+  const keys = Object.keys(values);
+  if (
+    keys.length !== COUNTERS.length ||
+    keys.some((key) => !COUNTERS.includes(key as CounterName))
+  ) {
+    throw new PersistedBudgetStateError(`${label}:counter_fields_not_closed`);
+  }
   const out = zeroCounters();
   for (const name of COUNTERS) {
-    const value = Number(raw?.[name] ?? 0);
-    out[name] = Number.isFinite(value) && value >= 0
-      ? name === "cost_usd"
-        ? usdMicros(value) / 1_000_000
-        : Math.floor(value)
-      : 0;
+    const value = values[name];
+    if (
+      typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      value < 0 ||
+      (name !== "cost_usd" && !Number.isSafeInteger(value)) ||
+      (name === "cost_usd" && !Number.isSafeInteger(usdMicros(value)))
+    ) {
+      throw new PersistedBudgetStateError(`${label}:${name}_invalid`);
+    }
+    out[name] = name === "cost_usd" ? usdMicros(value) / 1_000_000 : value;
   }
   return out;
 }
@@ -483,15 +569,202 @@ export function exceedsReserved(
   return null;
 }
 
+function requireNullableUsageToken(value: unknown, label: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new PersistedBudgetStateError(`${label}_invalid`);
+  }
+  return value;
+}
+
+function requirePersistedSettlement(
+  raw: unknown,
+  reservedAmounts: Counters,
+  actualAmounts: Counters | null,
+): BudgetSettlement | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PersistedBudgetStateError("settlement_not_object");
+  }
+  const settlement = raw as Record<string, unknown>;
+  const outcome = settlement.outcome;
+  if (!(["success", "schema_reject", "provider_error", "timeout"] as const).includes(
+    outcome as BudgetSettlement["outcome"],
+  )) {
+    throw new PersistedBudgetStateError("settlement_outcome_invalid");
+  }
+  const estimated = settlement.estimated_cost_usd;
+  const actual = settlement.actual_cost_usd;
+  const billed = settlement.billed_cost_usd;
+  if (
+    typeof estimated !== "number" ||
+    !Number.isFinite(estimated) ||
+    estimated < 0 ||
+    (actual !== null &&
+      (typeof actual !== "number" || !Number.isFinite(actual) || actual < 0)) ||
+    typeof billed !== "number" ||
+    !Number.isFinite(billed) ||
+    billed < 0
+  ) {
+    throw new PersistedBudgetStateError("settlement_cost_invalid");
+  }
+  const input = requireNullableUsageToken(
+    settlement.actual_input_tokens,
+    "settlement_input_tokens",
+  );
+  const output = requireNullableUsageToken(
+    settlement.actual_output_tokens,
+    "settlement_output_tokens",
+  );
+  const cached = requireNullableUsageToken(
+    settlement.actual_cached_tokens,
+    "settlement_cached_tokens",
+  );
+  const source = settlement.usage_source;
+  const hasAttribution = ["provider_model", "pricing_policy_id", "pricing_policy_digest"].every(
+    (key) => Object.prototype.hasOwnProperty.call(settlement, key),
+  );
+  if (source === "provider" && !hasAttribution) {
+    if (
+      actualAmounts === null ||
+      usdMicros(billed) !== usdMicros(actualAmounts.cost_usd)
+    ) {
+      throw new PersistedBudgetStateError("settlement_legacy_counter_binding_invalid");
+    }
+    return {
+      outcome: outcome as BudgetSettlement["outcome"],
+      usage_source: "legacy_unattributed",
+      estimated_cost_usd: estimated,
+      actual_cost_usd: null,
+      billed_cost_usd: billed,
+      actual_input_tokens: input,
+      actual_output_tokens: output,
+      actual_cached_tokens: cached,
+      provider_model: null,
+      pricing_policy_id: null,
+      pricing_policy_digest: null,
+    };
+  }
+  const providerModel = settlement.provider_model;
+  const pricingPolicyId = settlement.pricing_policy_id;
+  const pricingPolicyDigest = settlement.pricing_policy_digest;
+  if (source === "provider" || source === "provider_tokens_estimated_cost") {
+    if (
+      typeof providerModel !== "string" ||
+      !providerModel ||
+      providerModel.length > 256 ||
+      input === null ||
+      output === null ||
+      cached === null
+    ) {
+      throw new PersistedBudgetStateError("settlement_usage_attribution_invalid");
+    }
+    if (
+      actualAmounts === null ||
+      input !== actualAmounts.input_tokens ||
+      output !== actualAmounts.output_tokens ||
+      cached !== actualAmounts.cached_tokens ||
+      usdMicros(billed) !== usdMicros(actualAmounts.cost_usd) ||
+      usdMicros(estimated) !==
+        usdMicros(
+          estimateCostUsd(
+            providerModel,
+            reservedAmounts.input_tokens,
+            reservedAmounts.output_tokens,
+          ),
+        )
+    ) {
+      throw new PersistedBudgetStateError("settlement_counter_binding_invalid");
+    }
+    if (source === "provider") {
+      if (actual === null || pricingPolicyId !== null || pricingPolicyDigest !== null) {
+        throw new PersistedBudgetStateError("settlement_provider_cost_invalid");
+      }
+    } else if (
+      actual !== null ||
+      pricingPolicyId !== AI_GATEWAY_PRICING_POLICY_ID ||
+      pricingPolicyDigest !== AI_GATEWAY_PRICING_POLICY_DIGEST ||
+      usdMicros(billed) !== usdMicros(estimateCostUsd(providerModel, input, output))
+    ) {
+      throw new PersistedBudgetStateError("settlement_pricing_policy_invalid");
+    }
+  } else if (source === "reserved_max_uncertain") {
+    if (
+      actual !== null ||
+      input !== null ||
+      output !== null ||
+      cached !== null ||
+      (hasAttribution &&
+        (providerModel !== null || pricingPolicyId !== null || pricingPolicyDigest !== null))
+    ) {
+      throw new PersistedBudgetStateError("settlement_uncertain_usage_invalid");
+    }
+    if (
+      actualAmounts === null ||
+      !persistedCountersEqual(actualAmounts, reservedAmounts) ||
+      usdMicros(estimated) !== usdMicros(reservedAmounts.cost_usd) ||
+      usdMicros(billed) !== usdMicros(reservedAmounts.cost_usd)
+    ) {
+      throw new PersistedBudgetStateError("settlement_uncertain_counter_binding_invalid");
+    }
+  } else if (source === "legacy_unattributed") {
+    if (
+      actual !== null ||
+      actualAmounts === null ||
+      usdMicros(billed) !== usdMicros(actualAmounts.cost_usd) ||
+      (hasAttribution &&
+        (providerModel !== null || pricingPolicyId !== null || pricingPolicyDigest !== null))
+    ) {
+      throw new PersistedBudgetStateError("settlement_legacy_attribution_invalid");
+    }
+  } else {
+    throw new PersistedBudgetStateError("settlement_usage_source_invalid");
+  }
+  return {
+    outcome: outcome as BudgetSettlement["outcome"],
+    usage_source: source,
+    estimated_cost_usd: estimated,
+    actual_cost_usd: actual as number | null,
+    billed_cost_usd: billed,
+    actual_input_tokens: input,
+    actual_output_tokens: output,
+    actual_cached_tokens: cached,
+    provider_model: typeof providerModel === "string" ? providerModel : null,
+    pricing_policy_id: typeof pricingPolicyId === "string" ? pricingPolicyId : null,
+    pricing_policy_digest: typeof pricingPolicyDigest === "string" ? pricingPolicyDigest : null,
+  };
+}
+
 function coerceReservation(raw: Reservation): Reservation {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PersistedBudgetStateError("reservation_not_object");
+  }
+  if (
+    typeof raw.idempotency_key !== "string" ||
+    !raw.idempotency_key ||
+    typeof raw.reservation_id !== "string" ||
+    !raw.reservation_id ||
+    !(["reserved", "reconciled", "released"] as const).includes(raw.status) ||
+    (raw.lease_id !== null && (typeof raw.lease_id !== "string" || !raw.lease_id)) ||
+    !Number.isFinite(raw.created_at) ||
+    (raw.reconciled_at !== null && !Number.isFinite(raw.reconciled_at)) ||
+    (raw.released_at !== null && !Number.isFinite(raw.released_at))
+  ) {
+    throw new PersistedBudgetStateError("reservation_identity_invalid");
+  }
+  const amounts = requirePersistedCounters(raw.amounts, "reservation.amounts");
+  const actual =
+    raw.actual === null
+      ? null
+      : requirePersistedCounters(raw.actual, "reservation.actual");
   return {
     ...raw,
-    amounts: coerceCounters(raw.amounts),
-    actual: raw.actual ? coerceCounters(raw.actual) : null,
+    amounts,
+    actual,
     request_digest: raw.request_digest ?? null,
     cached_result: raw.cached_result ?? null,
     finalize_error: raw.finalize_error ?? null,
-    settlement: raw.settlement ?? null,
+    settlement: requirePersistedSettlement(raw.settlement, amounts, actual),
     provider_started_at: raw.provider_started_at ?? null,
     uncertainty_reason: raw.uncertainty_reason ?? null,
     settlement_capability_hash: raw.settlement_capability_hash ?? null,
@@ -503,19 +776,137 @@ function coerceReservation(raw: Reservation): Reservation {
   };
 }
 
+function requirePersistedLease(raw: unknown, key: string): Lease {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PersistedBudgetStateError("lease_not_object");
+  }
+  const lease = raw as Lease;
+  if (
+    lease.lease_id !== key ||
+    (lease.reservation_key !== null &&
+      (typeof lease.reservation_key !== "string" || !lease.reservation_key)) ||
+    !Number.isFinite(lease.acquired_at) ||
+    !Number.isFinite(lease.expires_at) ||
+    !Number.isFinite(lease.last_heartbeat_at) ||
+    lease.expires_at < lease.acquired_at ||
+    lease.last_heartbeat_at < lease.acquired_at ||
+    lease.last_heartbeat_at > lease.expires_at ||
+    (lease.released_at !== null &&
+      (!Number.isFinite(lease.released_at) || lease.released_at < lease.acquired_at))
+  ) {
+    throw new PersistedBudgetStateError("lease_identity_invalid");
+  }
+  return { ...lease };
+}
+
+function persistedCountersEqual(left: Counters, right: Counters): boolean {
+  return COUNTERS.every((name) =>
+    name === "cost_usd"
+      ? usdMicros(left[name]) === usdMicros(right[name])
+      : left[name] === right[name],
+  );
+}
+
+function requirePersistedOccupancyClosure(state: LedgerState): void {
+  let derivedUsed = zeroCounters();
+  let derivedReserved = zeroCounters();
+  for (const [key, reservation] of Object.entries(state.reservations)) {
+    const lease = reservation.lease_id ? state.leases[reservation.lease_id] : undefined;
+    if (!lease || lease.reservation_key !== key) {
+      throw new PersistedBudgetStateError("reservation_lease_link_invalid");
+    }
+    if (reservation.status === "reserved") {
+      if (
+        reservation.actual !== null ||
+        reservation.settlement !== null ||
+        reservation.reconciled_at !== null ||
+        reservation.released_at !== null ||
+        lease.released_at !== null
+      ) {
+        throw new PersistedBudgetStateError("reserved_lifecycle_invalid");
+      }
+      derivedReserved = applyDelta(derivedReserved, reservation.amounts, 1);
+      continue;
+    }
+    if (lease.released_at === null) {
+      throw new PersistedBudgetStateError("terminal_lease_still_active");
+    }
+    if (reservation.status === "reconciled") {
+      if (
+        reservation.actual === null ||
+        reservation.settlement === null ||
+        reservation.reconciled_at === null
+      ) {
+        throw new PersistedBudgetStateError("reconciled_lifecycle_invalid");
+      }
+      derivedUsed = applyDelta(derivedUsed, reservation.actual, 1);
+      continue;
+    }
+    if (
+      reservation.actual !== null ||
+      reservation.settlement !== null ||
+      reservation.reconciled_at !== null ||
+      reservation.released_at === null ||
+      reservation.provider_started_at !== null
+    ) {
+      throw new PersistedBudgetStateError("released_lifecycle_invalid");
+    }
+  }
+  if (
+    !persistedCountersEqual(state.used, derivedUsed) ||
+    !persistedCountersEqual(state.reserved, derivedReserved)
+  ) {
+    throw new PersistedBudgetStateError("ledger_occupancy_not_reconciled");
+  }
+}
+
 function coerceState(state: LedgerState): LedgerState {
+  if (state === null || typeof state !== "object" || Array.isArray(state)) {
+    throw new PersistedBudgetStateError("ledger_not_object");
+  }
+  if (typeof state.created !== "boolean" || !Number.isFinite(state.created_at)) {
+    throw new PersistedBudgetStateError("ledger_creation_identity_invalid");
+  }
   state.caps = { ...PILOT_BUDGET_CAPS };
-  state.used = coerceCounters(state.used);
-  state.reserved = coerceCounters(state.reserved);
-  state.frozen = state.frozen === true;
+  state.used = requirePersistedCounters(state.used, "ledger.used");
+  state.reserved = requirePersistedCounters(state.reserved, "ledger.reserved");
+  if (typeof state.frozen !== "boolean") {
+    throw new PersistedBudgetStateError("ledger_frozen_flag_invalid");
+  }
   state.frozen_at = state.frozen_at ?? null;
   state.frozen_reason = state.frozen_reason ?? null;
-  state.audit = Array.isArray(state.audit) ? state.audit : [];
+  if (!Array.isArray(state.audit)) {
+    throw new PersistedBudgetStateError("ledger_audit_invalid");
+  }
+  if (
+    state.reservations === null ||
+    typeof state.reservations !== "object" ||
+    Array.isArray(state.reservations)
+  ) {
+    throw new PersistedBudgetStateError("ledger_reservations_invalid");
+  }
+  if (
+    state.leases === null ||
+    typeof state.leases !== "object" ||
+    Array.isArray(state.leases)
+  ) {
+    throw new PersistedBudgetStateError("ledger_leases_invalid");
+  }
   const reservations: Record<string, Reservation> = {};
-  for (const [k, v] of Object.entries(state.reservations || {})) {
-    reservations[k] = coerceReservation(v);
+  for (const [k, v] of Object.entries(state.reservations)) {
+    const reservation = coerceReservation(v);
+    if (reservation.idempotency_key !== k) {
+      throw new PersistedBudgetStateError("reservation_key_mismatch");
+    }
+    reservations[k] = reservation;
   }
   state.reservations = reservations;
+  const leases: Record<string, Lease> = {};
+  for (const [k, v] of Object.entries(state.leases)) {
+    leases[k] = requirePersistedLease(v, k);
+  }
+  state.leases = leases;
+  requirePersistedOccupancyClosure(state);
   return state;
 }
 
@@ -583,6 +974,9 @@ function chargeUncertainReservation(
     actual_input_tokens: null,
     actual_output_tokens: null,
     actual_cached_tokens: null,
+    provider_model: null,
+    pricing_policy_id: null,
+    pricing_policy_digest: null,
   };
   reservation.cached_result = uncertainResult(reservation, reason);
   reservation.settlement_capability_secret = null;
@@ -625,7 +1019,7 @@ export function recoverExpired(state: LedgerState, now: number): number {
 
 async function loadState(storage: AtomicBudgetStorage, now: number): Promise<LedgerState> {
   const existing = await storage.get<LedgerState>(STATE_KEY);
-  return existing ? coerceState(existing) : emptyLedger(now);
+  return existing === undefined ? emptyLedger(now) : coerceState(existing);
 }
 
 async function saveState(storage: AtomicBudgetStorage, state: LedgerState): Promise<void> {
@@ -811,6 +1205,9 @@ const PUBLIC_SUCCESS_BODY_KEYS = new Set([
   "output_tokens",
   "cached_tokens",
   "monetary_cost_usd",
+  "monetary_cost_source",
+  "pricing_policy_id",
+  "pricing_policy_digest",
   "prompt_digest",
   "output_digest",
   "ready_snapshot_id",
@@ -1432,7 +1829,7 @@ export async function reconcileBudget(
 
 function deriveExactSettlement(
   reservation: Reservation,
-  usage: Counters,
+  usage: ExactUsageEvidence,
   terminalResult: CachedBudgetResult | undefined,
 ): BudgetSettlement {
   const httpStatus = Number(terminalResult?.http_status);
@@ -1440,13 +1837,21 @@ function deriveExactSettlement(
     httpStatus === 200 ? "success" : "schema_reject";
   return {
     outcome,
-    usage_source: "provider",
-    estimated_cost_usd: reservation.amounts.cost_usd,
-    actual_cost_usd: usage.cost_usd,
-    billed_cost_usd: usage.cost_usd,
-    actual_input_tokens: usage.input_tokens,
-    actual_output_tokens: usage.output_tokens,
-    actual_cached_tokens: usage.cached_tokens,
+    usage_source:
+      usage.cost_source === "provider" ? "provider" : "provider_tokens_estimated_cost",
+    estimated_cost_usd: estimateCostUsd(
+      usage.provider_model,
+      reservation.amounts.input_tokens,
+      reservation.amounts.output_tokens,
+    ),
+    actual_cost_usd: usage.cost_source === "provider" ? usage.reported_cost_usd : null,
+    billed_cost_usd: usage.amounts.cost_usd,
+    actual_input_tokens: usage.amounts.input_tokens,
+    actual_output_tokens: usage.amounts.output_tokens,
+    actual_cached_tokens: usage.amounts.cached_tokens,
+    provider_model: usage.provider_model,
+    pricing_policy_id: usage.pricing_policy_id,
+    pricing_policy_digest: usage.pricing_policy_digest,
   };
 }
 
@@ -1577,7 +1982,7 @@ export async function finalizeBudget(
     reservation.actual = amountsFromCounters(actual);
     reservation.settlement = deriveExactSettlement(
       reservation,
-      actual,
+      parsed,
       canonical.value,
     );
     reservation.reconciled_at = now;

@@ -20,6 +20,10 @@ import {
 } from "./schema";
 import { sha256Hex } from "./sha256";
 import { AI_CALL_TIMEOUT_MS } from "./runtime_policy";
+import {
+  AI_GATEWAY_PRICING_POLICY_DIGEST,
+  AI_GATEWAY_PRICING_POLICY_ID,
+} from "./pricing_policy";
 
 export { BudgetLedger };
 
@@ -448,19 +452,16 @@ async function handleGatewayRequest(
       ok: false,
       error: "ai_run_failed",
     };
-    let billed = {
-      model_calls: 1,
-      input_tokens: estimatedInput,
-      output_tokens: req.max_tokens,
-      cached_tokens: estimatedInput,
-      cost_usd: estimatedCost,
-    };
     let measuredUsage: {
       model_calls: number;
       input_tokens: number;
       output_tokens: number;
       cached_tokens: number;
       cost_usd: number;
+      cost_source: "provider" | "pricing_policy_estimate";
+      provider_model: string;
+      pricing_policy_id: string | null;
+      pricing_policy_digest: string | null;
     } | null = null;
     let uncertainReason: UncertainProviderReason | null = null;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -484,15 +485,24 @@ async function handleGatewayRequest(
         responseStatus = 500;
         responseBody = { ok: false, error: "provider_usage_unavailable" };
       } else {
-        billed = {
+        const usesPricingPolicy = tokens.actualCostUsd === null;
+        const exactUsage = {
           model_calls: 1,
           input_tokens: tokens.input,
           output_tokens: tokens.output,
           cached_tokens: tokens.cached,
           cost_usd:
             tokens.actualCostUsd ?? estimateCostUsd(req.model, tokens.input, tokens.output),
+          cost_source: usesPricingPolicy
+            ? ("pricing_policy_estimate" as const)
+            : ("provider" as const),
+          provider_model: req.model,
+          pricing_policy_id: usesPricingPolicy ? AI_GATEWAY_PRICING_POLICY_ID : null,
+          pricing_policy_digest: usesPricingPolicy
+            ? AI_GATEWAY_PRICING_POLICY_DIGEST
+            : null,
         };
-        measuredUsage = billed;
+        measuredUsage = exactUsage;
         if (!extracted.ok) {
           responseStatus = 400;
           responseBody = { ok: false, error: extracted.error };
@@ -513,7 +523,10 @@ async function handleGatewayRequest(
               input_tokens: tokens.input,
               output_tokens: tokens.output,
               cached_tokens: tokens.cached,
-              monetary_cost_usd: billed.cost_usd,
+              monetary_cost_usd: exactUsage.cost_usd,
+              monetary_cost_source: exactUsage.cost_source,
+              pricing_policy_id: exactUsage.pricing_policy_id,
+              pricing_policy_digest: exactUsage.pricing_policy_digest,
               prompt_digest: promptDigest,
               output_digest: outputDigest,
               ready_snapshot_id: req.ready_snapshot_id ?? null,

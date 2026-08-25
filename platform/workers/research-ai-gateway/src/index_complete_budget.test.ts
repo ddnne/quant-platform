@@ -11,6 +11,10 @@ import { handleBudgetRequest } from "./budget_http";
 import worker, { type GatewayEnv } from "./index";
 import { AI_CALL_TIMEOUT_MS } from "./runtime_policy";
 import { ALLOWED_MODELS, providerInputBounds } from "./schema";
+import {
+  AI_GATEWAY_PRICING_POLICY_DIGEST,
+  AI_GATEWAY_PRICING_POLICY_ID,
+} from "./pricing_policy";
 
 const GATEWAY_TOKEN = "gateway-secret";
 
@@ -201,22 +205,44 @@ describe("POST /v1/complete control-plane occupancy", () => {
       ok?: boolean;
       budget_id?: string;
       budget_run_id?: string;
+      monetary_cost_source?: string;
+      pricing_policy_id?: string | null;
+      pricing_policy_digest?: string | null;
     };
     expect(payload.ok).toBe(true);
     expect(payload.budget_id).toBe("gw-budget-1");
     expect(payload.budget_run_id).toBeTruthy();
     expect(payload.budget_run_id).not.toBe("gw-budget-1");
+    expect(payload.monetary_cost_source).toBe("pricing_policy_estimate");
+    expect(payload.pricing_policy_id).toBe(AI_GATEWAY_PRICING_POLICY_ID);
+    expect(payload.pricing_policy_digest).toBe(AI_GATEWAY_PRICING_POLICY_DIGEST);
     expect(names.length).toBeGreaterThan(0);
     expect(names.every((n) => n === CONTROL_PLANE_LEDGER_NAME)).toBe(true);
     expect(names).not.toContain("gw-budget-1");
     expect(calls).toHaveLength(1);
     const state = await storage.get<{
-      reservations: Record<string, { amounts: { input_tokens: number; cached_tokens: number } }>;
+      reservations: Record<string, {
+        amounts: { input_tokens: number; cached_tokens: number };
+        settlement: {
+          usage_source: string;
+          actual_cost_usd: number | null;
+          billed_cost_usd: number;
+          pricing_policy_id: string | null;
+          pricing_policy_digest: string | null;
+        };
+      }>;
     }>("ledger");
     const reservation = Object.values(state?.reservations ?? {})[0];
     const inputUpperBound = providerInputBounds(insightBody.messages).token_upper_bound;
     expect(reservation?.amounts.input_tokens).toBe(inputUpperBound);
     expect(reservation?.amounts.cached_tokens).toBe(inputUpperBound);
+    expect(reservation?.settlement).toMatchObject({
+      usage_source: "provider_tokens_estimated_cost",
+      actual_cost_usd: null,
+      pricing_policy_id: AI_GATEWAY_PRICING_POLICY_ID,
+      pricing_policy_digest: AI_GATEWAY_PRICING_POLICY_DIGEST,
+    });
+    expect(reservation?.settlement.billed_cost_usd).toBeGreaterThanOrEqual(0);
   });
 
   it("duplicate digest returns cached success and does not re-call AI", async () => {
@@ -254,7 +280,7 @@ describe("POST /v1/complete control-plane occupancy", () => {
           calls.push(args);
           return {
             response: JSON.stringify({ ...insightArtifact, smuggled: true }),
-            usage: { prompt_tokens: 8, completion_tokens: 2, cost_usd: 0.000001 },
+            usage: { prompt_tokens: 8, completion_tokens: 2, cost_usd: 0.00000104 },
           };
         },
       } as unknown as Ai,
@@ -294,6 +320,7 @@ describe("POST /v1/complete control-plane occupancy", () => {
             actual_cached_tokens: number;
             estimated_cost_usd: number;
             actual_cost_usd: number;
+            billed_cost_usd: number;
           };
         }
       >;
@@ -306,7 +333,8 @@ describe("POST /v1/complete control-plane occupancy", () => {
       actual_input_tokens: 8,
       actual_output_tokens: 2,
       actual_cached_tokens: 0,
-      actual_cost_usd: 0.000001,
+      actual_cost_usd: 0.00000104,
+      billed_cost_usd: 0.000001,
     });
     expect(receipt?.settlement.estimated_cost_usd).toBeGreaterThanOrEqual(
       receipt?.settlement.actual_cost_usd ?? 0,

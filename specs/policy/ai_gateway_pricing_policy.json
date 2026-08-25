@@ -1,0 +1,26 @@
+{
+  "policy_digest": "sha256:c1fdc5a18b90acd17ee56feb07f5789839ed7a81b0d24f573e53b021bac839ba",
+  "policy": {
+    "schema_version": "ai-gateway-pricing-policy/v2",
+    "policy_id": "workers-ai-official-2026-08-18/v1",
+    "source_url": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
+    "source_last_updated": "2026-08-18",
+    "model_rates": [
+      {
+        "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        "input_usd_per_million_tokens": 0.293,
+        "output_usd_per_million_tokens": 2.253
+      },
+      {
+        "model": "@cf/zai-org/glm-4.7-flash",
+        "input_usd_per_million_tokens": 0.06,
+        "output_usd_per_million_tokens": 0.4
+      },
+      {
+        "model": "@cf/meta/llama-3.1-8b-instruct-fp8",
+        "input_usd_per_million_tokens": 0.152,
+        "output_usd_per_million_tokens": 0.287
+      }
+    ]
+  }
+}

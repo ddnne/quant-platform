@@ -1,6 +1,7 @@
 /** Strict AI Gateway request/response. Unknown fields rejected. */
 
 import { PILOT_BUDGET_CAPS } from "./budget_do";
+export { estimateCostUsd } from "./pricing_policy";
 
 export const ALLOWED_MODELS = [
   "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
@@ -123,6 +124,9 @@ export type GatewayOk = {
   output_tokens: number;
   cached_tokens: number;
   monetary_cost_usd: number;
+  monetary_cost_source: "provider" | "pricing_policy_estimate";
+  pricing_policy_id: string | null;
+  pricing_policy_digest: string | null;
   prompt_digest: string;
   output_digest: string;
   ready_snapshot_id: string | null;
@@ -853,15 +857,4 @@ export function decodeTypedArtifact(
   }
   const body = isObj(raw) ? stripEnvelope(raw) : raw;
   return decodeByName(schema, body);
-}
-
-/** Rough USD per 1k tokens. Ledger charge uses these measured tokens. */
-export function estimateCostUsd(
-  model: string,
-  inputTokens: number,
-  outputTokens: number,
-): number {
-  const perK =
-    model.includes("70b") ? 0.0003 : model.includes("glm") ? 0.00008 : 0.00004;
-  return Number((((inputTokens + outputTokens) / 1000) * perK).toFixed(8));
 }

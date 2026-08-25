@@ -51,6 +51,10 @@ function actualUsage(overrides: Record<string, unknown> = {}): Record<string, un
     output_tokens: 0,
     cached_tokens: 0,
     cost_usd: 0,
+    cost_source: "provider",
+    provider_model: "@cf/meta/llama-3.1-8b-instruct-fp8",
+    pricing_policy_id: null,
+    pricing_policy_digest: null,
     ...overrides,
   };
 }
