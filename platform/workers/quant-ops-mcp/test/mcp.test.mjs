@@ -1,9 +1,19 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { OPS_TOOLS, callOpsTool } from "../src/domain.js";
 import { handleHealthRequest } from "../src/health.js";
 import { handleJsonRpc, handleMcpHttp, MCP_PROTOCOL_VERSION } from "../src/mcp.js";
+import {
+  ACCEPTED_OPS_TOOL_SCHEMA_DIGEST,
+  opsToolSchemaDigest,
+} from "../src/tool_schema_digest.js";
+
+const acceptedToolSchema = JSON.parse(readFileSync(
+  new URL("../../../../specs/ops_projection/mcp_tool_schema_acceptance.json", import.meta.url),
+  "utf8",
+));
 
 /** Minimal mock that returns empty projection (UNKNOWN paths). */
 function mockDb() {
@@ -121,7 +131,30 @@ test("initialize and tools/list implement MCP 2025-06-18", async () => {
     db,
   );
   assert.equal(listed.result.tools.length, 17);
+  assert.equal(acceptedToolSchema.tool_count, listed.result.tools.length);
+  assert.deepEqual(
+    acceptedToolSchema.tool_names,
+    listed.result.tools.map((tool) => tool.name),
+  );
+  assert.equal(
+    acceptedToolSchema.schema_digest,
+    ACCEPTED_OPS_TOOL_SCHEMA_DIGEST,
+  );
+  assert.equal(
+    listed.result._meta["quant-platform/tool-schema-digest"],
+    ACCEPTED_OPS_TOOL_SCHEMA_DIGEST,
+  );
+  assert.equal(
+    await opsToolSchemaDigest(listed.result.tools),
+    ACCEPTED_OPS_TOOL_SCHEMA_DIGEST,
+  );
   const names = listed.result.tools.map((tool) => tool.name);
+  for (const tool of listed.result.tools) {
+    assert.equal(tool.inputSchema.type, "object", tool.name);
+    assert.equal(tool.inputSchema.additionalProperties, false, tool.name);
+    assert.equal(tool.outputSchema.type, "object", tool.name);
+    assert.equal(tool.outputSchema.additionalProperties, false, tool.name);
+  }
   for (const banned of ["ingest", "delete", "publish", "run_ingestion"]) {
     assert.ok(!names.includes(banned));
   }

@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from jsonschema import Draft202012Validator
 
+from data_contracts.coverage import all_coverage_contracts, coverage_policy_binding
+from ops import projection_signing
 from ops.projection_meta import build_projection_metadata
+from ops.projection_content import (
+    PROJECTED_CONTENT_TABLES,
+    build_projection_content_manifest,
+)
 from ops.projection_signing import (
     OpsProjectionPublicKeyRegistry,
     OpsProjectionSignatureError,
@@ -19,16 +27,66 @@ from ops.projection_signing import (
     load_ops_projection_signer,
 )
 from scripts import publish_ops_projection as publisher
-from scripts.export_ops_projection import render_projection_bundle
+from scripts.export_ops_projection import (
+    _render_projection_bundle_for_test,
+    _render_trusted_projection_bundle,
+    render_projection_bundle,
+)
 from storage.sqlite_store import SqliteStore
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "platform/workers/quant-ops-mcp/migrations/projection/0001_ops_projection.sql"
 
 
+def test_projection_content_digest_matches_worker_storage_representation() -> None:
+    rows = {table: [] for table in PROJECTED_CONTENT_TABLES}
+    rows["endpoint_inventory"] = [
+        {
+            "projection_generation_id": "g",
+            "dataset_id": "日本株",
+            "research_eligible": True,
+            "enabled": False,
+            "weight": 1.0,
+            "note": "東京",
+        }
+    ]
+    manifest, _digest = build_projection_content_manifest(rows)
+    assert manifest["endpoint_inventory"]["content_digest"] == (
+        "sha256:76195ac60aedf9a62db147dd1c8914282617553423c5d0fb918627447aac7d61"
+    )
+    rows["endpoint_inventory"][0]["weight"] = 1.25
+    with pytest.raises(ValueError, match="non-integral REAL"):
+        build_projection_content_manifest(rows)
+
+
 def _source(path: Path) -> None:
     store = SqliteStore(path)
-    store._conn.execute(  # noqa: SLF001
+    coverage_rows = []
+    for contract in all_coverage_contracts():
+        observed = contract.dataset_id == "equities_bars_daily"
+        coverage_rows.append(
+            (
+                contract.dataset_id,
+                "PARTIAL",
+                coverage_policy_binding(contract.dataset_id)["policy_version"],
+                contract.collection_scope,
+                contract.history_target_start,
+                contract.history_target_end_rule,
+                contract.coverage_mode,
+                contract.expected_frequency,
+                contract.universe_rule,
+                int(contract.raw_retention_required),
+                int(contract.structured_reconciliation_required),
+                contract.governance_tier,
+                "2008-05-07" if observed else None,
+                "2026-08-24" if observed else None,
+                10 if observed else 0,
+                10,
+                "2026-08-25T00:00:00Z",
+                "{}",
+            )
+        )
+    store._conn.executemany(  # noqa: SLF001
         """INSERT INTO dataset_coverage
            (dataset,status,policy_version,collection_scope,
             history_target_start,history_target_end_rule,coverage_mode,
@@ -36,12 +94,7 @@ def _source(path: Path) -> None:
             structured_reconciliation_required,governance_tier,
             observed_start,observed_end,row_count,source_run_id,evaluated_at,
             detail_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            "equities_bars_daily", "PARTIAL", "collection-coverage/v3", "jquants",
-            "2008-05-07", "current", "official", "daily", "all", 1, 1,
-            "governed", "2008-05-07", "2026-08-24", 10, 10,
-            "2026-08-25T00:00:00Z", "{}",
-        ),
+        coverage_rows,
     )
     store._conn.execute(  # noqa: SLF001
         """INSERT INTO coverage_segments
@@ -80,8 +133,20 @@ def test_render_is_append_only_and_pointer_is_last(tmp_path: Path) -> None:
     sql = _bundle(source, "projgen-one").sql
     assert "DELETE FROM" not in sql
     assert "INSERT OR REPLACE" not in sql
-    assert "UPDATE ops_projection_generation" not in sql
     statements = [line for line in sql.splitlines() if line and line != "COMMIT;"]
+    open_index = next(
+        index for index, statement in enumerate(statements)
+        if statement.startswith("INSERT INTO ops_projection_generation")
+    )
+    metadata_index = next(
+        index for index, statement in enumerate(statements)
+        if statement.startswith("INSERT INTO ops_projection_metadata")
+    )
+    seal_index = next(
+        index for index, statement in enumerate(statements)
+        if statement.startswith("UPDATE ops_projection_generation")
+    )
+    assert open_index < metadata_index < seal_index < len(statements) - 1
     assert statements[-1].startswith("INSERT INTO ops_projection_active")
 
 
@@ -93,14 +158,40 @@ def test_two_generations_preserve_prior_rows_and_flip_pointer(tmp_path: Path) ->
     target = _target()
     target.executescript(first.sql)
     target.executescript(second.sql)
-    assert target.execute("SELECT COUNT(*) FROM dataset_coverage").fetchone() == (2,)
+    assert target.execute("SELECT COUNT(*) FROM dataset_coverage").fetchone() == (
+        2 * len(all_coverage_contracts()),
+    )
     assert target.execute(
         "SELECT generation_id FROM ops_projection_active WHERE singleton=1"
     ).fetchone() == ("projgen-second",)
     assert target.execute(
         "SELECT COUNT(*) FROM dataset_coverage WHERE projection_generation_id=?",
         ("projgen-first",),
-    ).fetchone() == (1,)
+    ).fetchone() == (len(all_coverage_contracts()),)
+    target.close()
+
+
+def test_published_sql_storage_rows_rehash_to_the_signed_manifest(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    bundle = _bundle(source, "projgen-storage-parity")
+    target = _target()
+    target.executescript(bundle.sql)
+    stored: dict[str, list[dict[str, object]]] = {}
+    for table in PROJECTED_CONTENT_TABLES:
+        cursor = target.execute(
+            f"SELECT * FROM {table} WHERE projection_generation_id=?",  # noqa: S608
+            (bundle.generation_id,),
+        )
+        columns = [str(item[0]) for item in cursor.description or ()]
+        stored[table] = [dict(zip(columns, row, strict=True)) for row in cursor]
+    manifest, digest = build_projection_content_manifest(stored)
+    assert digest == bundle.content_digest
+    assert {table: row["row_count"] for table, row in manifest.items()} == dict(
+        bundle.row_counts
+    )
     target.close()
 
 
@@ -122,7 +213,7 @@ def test_incomplete_generation_cannot_replace_active_pointer(tmp_path: Path) -> 
     assert target.execute(
         "SELECT status FROM ops_projection_generation WHERE generation_id=?",
         ("projgen-incomplete",),
-    ).fetchone() is None
+    ).fetchone() == ("OPEN",)
     target.close()
 
 
@@ -267,7 +358,7 @@ def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
     _source(source)
     private = Ed25519PrivateKey.generate()
     signer = OpsProjectionSigningKey("ops-projection-test-v1", private)
-    bundle = render_projection_bundle(
+    bundle = _render_projection_bundle_for_test(
         source,
         generation_id="projgen-signed",
         producer_commit_sha="f" * 40,
@@ -318,7 +409,11 @@ def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
         bundle.signed_envelope, ["equities_bars_daily"]
     )["equities_bars_daily"]
     assert derived["status"] == "PARTIAL"
-    assert derived["coverage_mode"] == "official"
+    assert derived["coverage_mode"] == next(
+        row.coverage_mode
+        for row in all_coverage_contracts()
+        if row.dataset_id == "equities_bars_daily"
+    )
     assert derived["source_generation"] == 12
     assert derived["export_cursor"] == 11
     assert derived["applied_cursor"] is None
@@ -329,14 +424,91 @@ def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
         registry.verify(tampered)
 
 
+def test_trusted_renderer_rejects_caller_cursor_without_sync_audit(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "manual.sqlite"
+    _source(source)
+    signer = OpsProjectionSigningKey(
+        "ops-projection-test-v1", Ed25519PrivateKey.generate()
+    )
+    with pytest.raises(RuntimeError, match="authenticated local-sync audit"):
+        _render_trusted_projection_bundle(
+            source,
+            source_cursor=99,
+            export_cursor=99,
+            projection_signer=signer,
+            generation_id="projgen-forged",
+            producer_commit_sha="f" * 40,
+        )
+
+
 def test_remote_publish_requires_dedicated_ops_projection_signer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "source.sqlite"
     _source(source)
+    monkeypatch.setattr(publisher, "GOVERNED_LOCAL_DB", source.resolve())
+    monkeypatch.setattr(
+        publisher, "_authenticated_export_cursor_chain", lambda _path: (1, 1)
+    )
     monkeypatch.delenv("QUANT_OPS_PROJECTION_SIGNING_KEY_PEM", raising=False)
-    monkeypatch.delenv("QUANT_OPS_PROJECTION_SIGNING_KEY_ID", raising=False)
+    monkeypatch.setattr(
+        projection_signing, "DEFAULT_SIGNING_KEY_PATH", tmp_path / "missing.pem"
+    )
     assert publisher.main([f"--db={source}", "--apply-remote"]) == 6
+
+
+def test_remote_publish_rejects_arbitrary_db_before_signing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "manual.sqlite"
+    _source(source)
+    monkeypatch.setattr(
+        publisher, "_authenticated_export_cursor_chain", lambda _path: (9, 9)
+    )
+    assert publisher.main([f"--db={source}", "--apply-remote"]) == 7
+
+
+@pytest.mark.parametrize(
+    "forbidden",
+    [
+        ["--source-cursor", "9"],
+        ["--export-cursor", "9"],
+        ["--projection-signing-key", "/tmp/fake.pem"],
+        ["--projection-signing-key-id", "fake-key"],
+        ["--force-apply-remote"],
+    ],
+)
+def test_publisher_has_no_public_evidence_or_signer_override(
+    forbidden: list[str],
+) -> None:
+    with pytest.raises(SystemExit):
+        publisher.main(forbidden)
+
+
+def test_remote_probe_uses_pinned_ops_wrangler_and_withholds_output(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    secret = "provider-secret-must-not-appear"
+    calls = []
+
+    def fail(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=1, stdout=secret, stderr=secret)
+
+    monkeypatch.setattr(publisher.subprocess, "run", fail)
+    assert publisher.count_remote_complete() is None
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+    argv, kwargs = calls[0]
+    assert argv[0] == str(publisher.OPS_WRANGLER_BIN.resolve())
+    assert "npx" not in argv
+    assert argv[1:4] == ["d1", "execute", "quant-ops-projection"]
+    assert argv[argv.index("--env") + 1] == "production"
+    assert kwargs["cwd"] == str(publisher.OPS_WRANGLER_CWD)
+    assert kwargs["capture_output"] is True
 
 
 def test_receipt_and_ready_keys_never_mint_ops_projection(
@@ -353,8 +525,85 @@ def test_receipt_and_ready_keys_never_mint_ops_projection(
     monkeypatch.setenv("QUANT_RECEIPT_SIGNING_KEY_PEM", pem.decode("ascii"))
     monkeypatch.setenv("QUANT_READINESS_SIGNING_KEY_FILE", str(ready_path))
     monkeypatch.delenv("QUANT_OPS_PROJECTION_SIGNING_KEY_PEM", raising=False)
-    monkeypatch.delenv("QUANT_OPS_PROJECTION_SIGNING_KEY_ID", raising=False)
+    monkeypatch.setattr(
+        projection_signing, "DEFAULT_SIGNING_KEY_PATH", tmp_path / "missing.pem"
+    )
     assert load_ops_projection_signer() is None
+
+
+def test_ops_signer_factory_derives_id_from_pinned_public_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = Ed25519PrivateKey.generate()
+    pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    public = private.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    registry = tmp_path / "verify_public_keys.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "purpose": "ops_projection_verification",
+                "keys": [
+                    {
+                        "key_id": "registry-derived-id",
+                        "algorithm": "Ed25519",
+                        "public_key_base64": base64.b64encode(public).decode(),
+                        "status": "active",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("QUANT_OPS_PROJECTION_SIGNING_KEY_PEM", pem.decode("ascii"))
+    monkeypatch.setattr(projection_signing, "DEFAULT_VERIFY_REGISTRY_PATH", registry)
+
+    signer = load_ops_projection_signer()
+    assert signer is not None
+    assert signer.key_id == "registry-derived-id"
+    with pytest.raises(TypeError, match="unexpected keyword argument 'key_id'"):
+        load_ops_projection_signer(key_id="caller-asserted")
+
+
+def test_ops_signer_factory_rejects_unregistered_private_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = Ed25519PrivateKey.generate()
+    pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    monkeypatch.setenv("QUANT_OPS_PROJECTION_SIGNING_KEY_PEM", pem.decode("ascii"))
+    with pytest.raises(OpsProjectionSignatureError, match="pinned registry"):
+        load_ops_projection_signer()
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--snapshot-dir", "/tmp/caller-snapshot"],
+        ["--otc-index-html", "/tmp/caller-index.html"],
+        ["--storage-hot-cutoff", "2026-01-01"],
+    ],
+)
+def test_remote_publish_rejects_caller_selected_evidence_paths_and_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: list[str],
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    monkeypatch.setattr(publisher, "GOVERNED_LOCAL_DB", source.resolve())
+    monkeypatch.setattr(
+        publisher, "_authenticated_export_cursor_chain", lambda _path: (1, 1)
+    )
+    assert publisher.main([f"--db={source}", "--apply-remote", *extra]) == 7
 
 
 def test_failed_refresh_never_publishes_fresh_or_applies(
@@ -366,6 +615,10 @@ def test_failed_refresh_never_publishes_fresh_or_applies(
     def fail(*_args, **_kwargs):
         raise RuntimeError("ledger failure")
 
+    monkeypatch.setattr(publisher, "GOVERNED_LOCAL_DB", source.resolve())
+    monkeypatch.setattr(
+        publisher, "_authenticated_export_cursor_chain", lambda _path: (1, 1)
+    )
     monkeypatch.setattr("storage.coverage_ledger.refresh_coverage_ledger", fail)
     monkeypatch.setattr(publisher, "count_local_complete", lambda _path: 0)
     monkeypatch.setattr(publisher, "count_remote_complete", lambda **_kwargs: 0)
@@ -384,8 +637,8 @@ def test_failed_refresh_never_publishes_fresh_or_applies(
             "--refresh-coverage", "--apply-remote",
         ]
     ) == 4
-    document = json.loads(meta.read_text(encoding="utf-8"))
-    assert document["status"] == "FAILED"
+    assert not output.exists()
+    assert not meta.exists()
 
 
 def test_projection_metadata_requires_successful_refresh_for_fresh(tmp_path: Path) -> None:

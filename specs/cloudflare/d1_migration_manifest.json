@@ -146,7 +146,7 @@
         {
           "migration_id": "quant-ops-projection:0001_ops_projection",
           "path": "platform/workers/quant-ops-mcp/migrations/projection/0001_ops_projection.sql",
-          "checksum": "sha256:5268e798ee11330fccd86b958634ebc619067c89c0b32219624d0aaad7fdb895",
+          "checksum": "sha256:18fe5cbae5d404e9f111b4c841047db8b72c25f9cc70c7fe5d5ffcf8ff4b30f0",
           "order": 1,
           "depends_on": null
         }

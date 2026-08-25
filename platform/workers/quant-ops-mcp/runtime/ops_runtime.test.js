@@ -13,6 +13,11 @@ import {
   verifyState,
 } from "../src/github-handler.js";
 import { canonicalProjectionBytes } from "../src/projection_signature.js";
+import {
+  PROJECTED_CONTENT_TABLES,
+  projectedManifestDigest,
+  projectedTableContent,
+} from "../src/projection_content.js";
 
 const projectionMigrations = inject("opsProjectionD1Migrations");
 const quotaMigrations = inject("opsQuotaD1Migrations");
@@ -58,18 +63,59 @@ async function projectionSigner() {
   };
 }
 
-async function seedSignedGeneration(signer, generationId, marker) {
+async function seedSignedGeneration(
+  signer,
+  generationId,
+  marker,
+  { afterManifest = null } = {},
+) {
   const generatedAt = "2026-08-25T06:00:00.000Z";
+  await env.OPS_PROJECTION_DB.prepare(
+    `INSERT INTO ops_projection_generation
+       (generation_id,status,source_db_digest,content_digest,generated_at,
+        producer_commit_sha,contract_digest,registry_digest,coverage_policy_version,
+        sealed_at,signed_envelope_json,issuer_key_id,signature,detail_json)
+     VALUES (?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, '{}')`,
+  ).bind(
+    generationId,
+    digest("0"),
+    digest("0"),
+    generatedAt,
+    "a".repeat(40),
+    digest("0"),
+    digest("0"),
+    "collection-coverage/v3",
+  ).run();
+  await env.OPS_PROJECTION_DB.prepare(
+    `INSERT INTO ops_storage_plane_status
+       (projection_generation_id, materialized_at, payload_json)
+     VALUES (?, ?, ?)`,
+  ).bind(
+    generationId,
+    generatedAt,
+    JSON.stringify({ schema: "ops-storage/runtime-v1", counts: { marker } }),
+  ).run();
+  const contentManifest = {};
+  for (const table of PROJECTED_CONTENT_TABLES) {
+    contentManifest[table] = await projectedTableContent(
+      env.OPS_PROJECTION_DB,
+      generationId,
+      table,
+    );
+  }
+  const contentDigest = await projectedManifestDigest(contentManifest);
+  if (afterManifest) await afterManifest(generationId);
   const envelope = {
     schema_version: "ops-projection-envelope/v1",
     generation_id: generationId,
-    content_digest: digest(marker),
+    content_digest: contentDigest,
     source_db_digest: digest("2"),
     generated_at: generatedAt,
     producer_commit_sha: "a".repeat(40),
     contract_digest: digest("3"),
     registry_digest: digest("4"),
     coverage_policy_version: "collection-coverage/v3",
+    coverage_policy_digest: digest("8"),
     projection_status: "FRESH",
     source_generation: 11,
     source_snapshot_generation: 11,
@@ -83,7 +129,10 @@ async function seedSignedGeneration(signer, generationId, marker) {
     b4_status: "PASS",
     b4_evidence_digest: digest("7"),
     evidence_digests: { coverage: digest("5") },
-    row_counts: { ops_storage_plane_status: 1 },
+    content_manifest: contentManifest,
+    row_counts: Object.fromEntries(
+      Object.entries(contentManifest).map(([table, row]) => [table, row.row_count]),
+    ),
   };
   const unsigned = {
     schema_version: "ops-projection-signed-envelope/v1",
@@ -100,34 +149,27 @@ async function seedSignedGeneration(signer, generationId, marker) {
   const document = { ...unsigned, signature };
 
   await env.OPS_PROJECTION_DB.prepare(
-    `INSERT INTO ops_projection_generation
-       (generation_id,status,source_db_digest,content_digest,generated_at,
-        producer_commit_sha,contract_digest,registry_digest,coverage_policy_version,
-        sealed_at,signed_envelope_json,issuer_key_id,signature,detail_json)
-     VALUES (?, 'SEALED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}')`,
+    `UPDATE ops_projection_generation
+        SET source_db_digest=?,content_digest=?,producer_commit_sha=?,contract_digest=?,
+            registry_digest=?,coverage_policy_version=?,signed_envelope_json=?,
+            issuer_key_id=?,signature=?
+      WHERE generation_id=? AND status='OPEN'`,
   ).bind(
-    generationId,
     envelope.source_db_digest,
     envelope.content_digest,
-    generatedAt,
     envelope.producer_commit_sha,
     envelope.contract_digest,
     envelope.registry_digest,
     envelope.coverage_policy_version,
-    generatedAt,
     JSON.stringify(document),
     signer.keyId,
     signature,
+    generationId,
   ).run();
   await env.OPS_PROJECTION_DB.prepare(
-    `INSERT INTO ops_storage_plane_status
-       (projection_generation_id, materialized_at, payload_json)
-     VALUES (?, ?, ?)`,
-  ).bind(
-    generationId,
-    generatedAt,
-    JSON.stringify({ schema: "ops-storage/runtime-v1", marker }),
-  ).run();
+    `UPDATE ops_projection_generation SET status='SEALED',sealed_at=?
+      WHERE generation_id=? AND status='OPEN'`,
+  ).bind(generatedAt, generationId).run();
 }
 
 async function activate(generationId) {
@@ -158,24 +200,22 @@ describe("Ops Projection in the Workers runtime", () => {
       mutable: false,
       projection_generation: "runtime-current",
       projection_signature_verified: true,
-      marker: "9",
+      projection_content_verified: true,
+      counts: { marker: "9" },
     });
   });
 
-  it("fails closed when the active generation signature is tampered", async () => {
+  it("fails closed when signed content differs from the active D1 row", async () => {
     const signer = await projectionSigner();
-    await seedSignedGeneration(signer, "runtime-tampered", "a");
+    await seedSignedGeneration(signer, "runtime-tampered", "a", {
+      afterManifest: async (generationId) => {
+        await env.OPS_PROJECTION_DB.prepare(
+          `UPDATE ops_storage_plane_status SET payload_json='{"marker":"changed"}'
+            WHERE projection_generation_id=?`,
+        ).bind(generationId).run();
+      },
+    });
     await activate("runtime-tampered");
-    const row = await env.OPS_PROJECTION_DB.prepare(
-      `SELECT signed_envelope_json FROM ops_projection_generation
-        WHERE generation_id='runtime-tampered'`,
-    ).first();
-    const document = JSON.parse(row.signed_envelope_json);
-    document.envelope.applied_cursor = 10;
-    await env.OPS_PROJECTION_DB.prepare(
-      `UPDATE ops_projection_generation SET signed_envelope_json=?
-        WHERE generation_id='runtime-tampered'`,
-    ).bind(JSON.stringify(document)).run();
 
     const value = await callOpsTool(
       env.OPS_PROJECTION_DB,
@@ -186,8 +226,21 @@ describe("Ops Projection in the Workers runtime", () => {
     expect(value).toMatchObject({
       status: "NOT_PROJECTED",
       projection_generation: "runtime-tampered",
+      projection_signature_verified: true,
+      projection_content_verified: false,
     });
-    expect(value.reason).toContain("signature is invalid");
+    expect(value.reason).toContain("content mismatch for ops_storage_plane_status");
+  });
+
+  it("rejects payload mutation after the generation is sealed", async () => {
+    const signer = await projectionSigner();
+    await seedSignedGeneration(signer, "runtime-frozen", "b");
+    await expect(
+      env.OPS_PROJECTION_DB.prepare(
+        `UPDATE ops_storage_plane_status SET payload_json='{}'
+          WHERE projection_generation_id='runtime-frozen'`,
+      ).run(),
+    ).rejects.toThrow(/immutable after projection seal/);
   });
 });
 

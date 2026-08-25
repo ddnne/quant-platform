@@ -7,14 +7,37 @@ import {
   overlayInventoryRow,
   syncDatasetState,
 } from "./domain_policy.js";
+import { verifyProjectedContent } from "./projection_content.js";
 import { verifyProjectionGeneration } from "./projection_signature.js";
+import { OPS_OUTPUT_SCHEMAS } from "./tool_output_schemas.js";
 
 const STRING = { type: "string" };
 const OPTIONAL_DATASET = {
   dataset: { ...STRING, minLength: 1, maxLength: 160 },
 };
 
-/** @type {ReadonlyArray<{name:string, description:string, inputSchema:Record<string, unknown>}>} */
+/** @type {Readonly<Record<string, readonly string[]>>} */
+const TOOL_CONTENT_TABLES = Object.freeze({
+  ops_status: ["ingestion_run_log", "dataset_coverage", "raw_retention_manifests", "ops_alerts"],
+  source_inventory: ["endpoint_inventory"],
+  endpoint_status: ["endpoint_inventory", "dataset_coverage"],
+  projection_status: ["ops_projection_metadata"],
+  collection_sla_status: ["collection_sla_status"],
+  ingestion_last_run: ["ingestion_run_log"],
+  dataset_coverage: ["dataset_coverage"],
+  coverage_gaps: ["dataset_coverage"],
+  coverage_segments: ["coverage_segments"],
+  backfill_status: ["coverage_segments"],
+  validation_summary: ["ingestion_validation"],
+  b0_status: ["ops_b0_status"],
+  latest_ready_snapshot: ["ops_ready_state", "ops_ready_snapshots"],
+  snapshot_quality: ["ops_ready_state", "ops_snapshot_quality"],
+  raw_retention_status: ["raw_retention_manifests"],
+  sync_status: ["ops_sync_feed", "ingestion_watermarks"],
+  storage_plane_status: ["ops_storage_plane_status"],
+});
+
+/** @type {ReadonlyArray<{name:string, description:string, inputSchema:Record<string, unknown>, outputSchema:Record<string, unknown>}>} */
 export const OPS_TOOLS = Object.freeze([
   tool("ops_status", "Active immutable Ops projection summary; never a research-data query."),
   tool("source_inventory", "Active canonical endpoint inventory and governance tier."),
@@ -44,7 +67,11 @@ function tool(name, description, properties = {}, required = []) {
   /** @type {Record<string, unknown>} */
   const inputSchema = { type: "object", properties, additionalProperties: false };
   if (required.length) inputSchema.required = required;
-  return { name, description, inputSchema };
+  const outputSchema = /** @type {Record<string, Record<string, unknown>>} */ (
+    OPS_OUTPUT_SCHEMAS
+  )[name];
+  if (!outputSchema) throw new TypeError(`output schema is missing for ${name}`);
+  return { name, description, inputSchema, outputSchema };
 }
 
 /** @param {unknown} value */
@@ -143,6 +170,7 @@ function generationFields(active) {
     projection_activated_at: active.activated_at,
     projection_content_digest: active.content_digest,
     projection_signature_verified: true,
+    projection_content_verified: true,
     projection_issuer_key_id: active.issuer_key_id,
   };
 }
@@ -186,6 +214,26 @@ export async function callOpsTool(db, name, rawArguments, options = {}) {
     );
   }
   const generation = String(active.generation_id);
+  const content = await verifyProjectedContent(
+    db,
+    /** @type {Record<string, unknown>} */ (verified.envelope),
+    TOOL_CONTENT_TABLES[name] || [],
+  );
+  if (!content.ok) {
+    return {
+      ...notProjected(
+        active,
+        content.reason || "active Ops Projection content is unverifiable",
+        name.startsWith("snapshot") || name === "latest_ready_snapshot"
+          ? "research_ready"
+          : "ops_current",
+      ),
+      projection_content_digest: active.content_digest,
+      projection_signature_verified: true,
+      projection_content_verified: false,
+      projection_issuer_key_id: active.issuer_key_id,
+    };
+  }
 
   if (name === "ingestion_last_run") {
     const run = await first(db, `
@@ -596,8 +644,17 @@ export async function callOpsTool(db, name, rawArguments, options = {}) {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       return notProjected(active, "storage aggregate payload is invalid JSON");
     }
+    const allowedPayloadFields = [
+      "schema", "generation", "source_db_digest", "counts", "hot_window",
+      "jsda_coverage", "missing_source_tables", "p0_claims",
+    ];
+    const projectedPayload = Object.fromEntries(
+      allowedPayloadFields
+        .filter((field) => Object.hasOwn(payload, field))
+        .map((field) => [field, /** @type {Record<string, unknown>} */ (payload)[field]]),
+    );
     return {
-      ...payload,
+      ...projectedPayload,
       plane: "ops_current",
       mutable: false,
       status: "AVAILABLE",

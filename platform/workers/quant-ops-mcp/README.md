@@ -31,11 +31,23 @@ rows return `NOT_PROJECTED`; older generations and unsealed content rows are
 never fallback data. `storage_plane_status` reads a publisher-materialized JSON
 aggregate and does not scan ingestion facts.
 
-The generation is accepted only after its
+The generation is accepted only after three checks: its
 `ops-projection-signed-envelope/v1` Ed25519 signature verifies against
-`OPS_PROJECTION_VERIFY_KEYS_JSON`. The committed registry contains public
-verification material only. Its matching private key remains outside Git and
-is readable only by the projection publisher.
+`OPS_PROJECTION_VERIFY_KEYS_JSON`, the signed all-table content manifest hashes
+to the envelope `content_digest`, and every table used by the selected tool is
+rehashed from D1. A valid signature with mutated content returns
+`NOT_PROJECTED`. D1 triggers allow payload writes only while a generation is
+`OPEN`; the transition to `SEALED` freezes every payload row before the active
+pointer is changed. The committed registry contains public verification
+material only. Its matching private key remains outside Git and is readable
+only by the projection publisher.
+
+All 17 tools publish closed `inputSchema` and `outputSchema` objects. The
+deterministic SHA-256 over every tool name and both schemas is returned from
+`tools/list` as `_meta["quant-platform/tool-schema-digest"]`; a reviewed digest
+is frozen in the Worker and in
+`specs/ops_projection/mcp_tool_schema_acceptance.json`, so acceptance fails
+closed on unreviewed schema drift.
 
 ## Migrations
 
@@ -59,29 +71,30 @@ writes that database.
 
 ## Publish
 
-The publisher appends a complete generation and flips the active pointer last:
+The publisher creates an `OPEN` generation, inserts and verifies every expected
+row count, seals it, and flips the active pointer last:
 
 ```bash
 .venv/bin/python scripts/publish_ops_projection.py \
   --db data/structured/ingestion.sqlite \
   --refresh-coverage \
-  --source-cursor "$SOURCE_CURSOR" \
-  --export-cursor "$EXPORT_CURSOR" \
-  --projection-signing-key-id "$OPS_PROJECTION_KEY_ID" \
   --apply-remote
 ```
 
-The publisher loads only the dedicated private key from
-`QUANT_OPS_PROJECTION_SIGNING_KEY_PEM`, an explicit
-`--projection-signing-key` path, or
-`~/.config/quant-platform/ops_projection_signing_key.pem`. It never falls back
-to Receipt or READY keys. Public consumers use
+The publisher derives source/export cursors from the latest COMPLETE,
+content-addressed authenticated D1 sync audit and requires exact equality with
+the local applied cursor. Remote publication accepts only the governed local
+mirror path. The publisher loads only the dedicated private key from
+`QUANT_OPS_PROJECTION_SIGNING_KEY_PEM` or the dedicated default key path. Its
+issuer id is derived by matching that key to the pinned public-key registry;
+there are no CLI cursor, signer-path, signer-id, or generic remote-apply
+overrides. It never falls back to Receipt or READY keys. Public consumers use
 `specs/ops_projection/verify_public_keys.json`; the Worker receives the same
 registry as `OPS_PROJECTION_VERIFY_KEYS_JSON`.
 
-No date is assumed for the storage hot window. Supply a reviewed date with
-`--storage-hot-cutoff YYYY-MM-DD`, or the aggregate reports that window as
-`NOT_PROJECTED`.
+No date is assumed for the storage hot window. A diagnostic render may supply a
+reviewed `--storage-hot-cutoff YYYY-MM-DD`; remote publication rejects this
+caller-selected policy until it is backed by a governed configuration.
 
 ## Verify and deploy
 

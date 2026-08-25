@@ -4,9 +4,9 @@
 The source database is an ingestion/local-sync control database.  The target is
 the dedicated ``quant-ops-projection`` database; it is never the ingestion D1.
 Every projected row is tagged with a new generation. Existing generations are
-left untouched. A sealed generation row is appended only after all expected
-row counts are present, and the singleton active pointer is the final SQL
-statement. Generation rows are never updated after insertion.
+left untouched. A generation is created OPEN, populated, content-addressed,
+sealed only after all expected row counts are present, and exposed by the
+singleton active pointer as the final SQL statement.
 """
 
 from __future__ import annotations
@@ -36,6 +36,8 @@ else:  # pragma: no cover - repository layout invariant
 from _bootstrap import ensure_repo_root  # noqa: E402
 
 ROOT = ensure_repo_root()
+
+from ops.projection_content import build_projection_content_manifest  # noqa: E402
 
 PROJECTION_VERSION = "ops_projection/v4"
 DEFAULT_MAX_AGE_SECONDS = 86_400
@@ -795,7 +797,7 @@ def _tag(rows: Iterable[Mapping[str, Any]], generation_id: str) -> list[dict[str
     ]
 
 
-def render_projection_bundle(
+def _render_projection_bundle(
     db_path: str | Path,
     *,
     snapshot_dir: str | Path | None = None,
@@ -811,8 +813,14 @@ def render_projection_bundle(
     export_cursor: int | None = None,
     storage_hot_cutoff: str | None = None,
     projection_signer: Any | None = None,
+    _test_authority: bool = False,
 ) -> ProjectionBundle:
     """Render an append-only projection and a pointer-last activation guard."""
+    from data_contracts.coverage import (
+        all_coverage_contracts,
+        coverage_policy_binding,
+        coverage_policy_set_binding,
+    )
     from ops.projection_meta import build_projection_metadata
 
     path = Path(db_path).resolve()
@@ -826,6 +834,30 @@ def render_projection_bundle(
     conn = sqlite3.connect("file:" + quote(str(path)) + "?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
+        # Freeze every source query (coverage, receipts, cursors, READY and
+        # evidence digests) to one SQLite read snapshot.
+        conn.execute("BEGIN")
+        if projection_signer is not None and not _test_authority:
+            from scripts.sync_d1_to_sqlite import (
+                _authenticated_export_cursor_chain_from_conn,
+            )
+
+            try:
+                trusted_source, trusted_export = (
+                    _authenticated_export_cursor_chain_from_conn(conn)
+                )
+            except (ValueError, TypeError, json.JSONDecodeError, sqlite3.Error):
+                trusted_source, trusted_export = None, None
+            if (
+                trusted_source is None
+                or trusted_export is None
+                or source_cursor != trusted_source
+                or export_cursor != trusted_export
+            ):
+                raise RuntimeError(
+                    "signed Ops projection cursor chain is not bound to the "
+                    "authenticated local-sync audit"
+                )
         coverage = _rows(
             conn,
             "dataset_coverage",
@@ -861,14 +893,27 @@ def render_projection_bundle(
             snapshot_dir, gen, generated_at
         )
 
-        coverage_policy_versions = sorted(
-            {str(row["policy_version"]) for row in coverage if row.get("policy_version")}
-        )
-        coverage_policy_version = (
-            coverage_policy_versions[0]
-            if len(coverage_policy_versions) == 1
-            else "mixed:" + _content_digest({"versions": coverage_policy_versions})
-        )
+        expected_coverage_ids = {
+            contract.dataset_id for contract in all_coverage_contracts()
+        }
+        observed_coverage_ids = {str(row["dataset"]) for row in coverage}
+        if observed_coverage_ids != expected_coverage_ids:
+            raise RuntimeError(
+                "dataset_coverage does not exactly match the governed catalog: "
+                f"missing={sorted(expected_coverage_ids - observed_coverage_ids)}, "
+                f"extra={sorted(observed_coverage_ids - expected_coverage_ids)}"
+            )
+        policy_set = coverage_policy_set_binding(sorted(observed_coverage_ids))
+        coverage_policy_version = str(policy_set["policy_version"])
+        coverage_policy_digest = str(policy_set["policy_digest"])
+        for row in coverage:
+            expected_policy = coverage_policy_binding(str(row["dataset"]))
+            if row.get("policy_version") != expected_policy["policy_version"]:
+                raise RuntimeError(
+                    "dataset_coverage policy drift for "
+                    f"{row['dataset']}: observed={row.get('policy_version')!r}, "
+                    f"expected={expected_policy['policy_version']!r}"
+                )
 
         metadata = build_projection_metadata(
             path,
@@ -1045,7 +1090,7 @@ def render_projection_bundle(
     ]
     row_counts = {table: len(rows) for table, _columns_, rows in tables}
     generated = str(metadata_row["generated_at"])
-    content_digest = _content_digest(
+    content_manifest, content_digest = build_projection_content_manifest(
         {table: rows for table, _columns_, rows in tables}
     )
     coverage_digest = _content_digest(
@@ -1069,7 +1114,7 @@ def render_projection_bundle(
         str(row["dataset"]): {
             "status": row.get("status"),
             "coverage_mode": row.get("coverage_mode"),
-            "policy_version": row.get("policy_version"),
+            **dict(coverage_policy_binding(str(row["dataset"]))),
             "collection_scope": row.get("collection_scope"),
             "observed_start": row.get("observed_start"),
             "observed_end": row.get("observed_end"),
@@ -1086,6 +1131,7 @@ def render_projection_bundle(
         "contract_digest": contract_digest,
         "registry_digest": registry_digest,
         "coverage_policy_version": coverage_policy_version,
+        "coverage_policy_digest": coverage_policy_digest,
         "projection_status": status,
         "source_generation": source_cursor,
         "source_snapshot_generation": metadata_row.get("source_generation"),
@@ -1099,6 +1145,7 @@ def render_projection_bundle(
         "b4_status": b4["status"],
         "b4_evidence_digest": b4_digest,
         "evidence_digests": evidence_digests,
+        "content_manifest": content_manifest,
         "row_counts": row_counts,
     }
     signed_envelope = projection_signer.sign(envelope) if projection_signer else None
@@ -1111,6 +1158,20 @@ def render_projection_bundle(
     signature = signed_envelope.get("signature") if signed_envelope else None
 
     statements = ["BEGIN TRANSACTION;"] if use_sql_transaction else []
+    statements.append(
+        "INSERT INTO ops_projection_generation "
+        "(generation_id,status,source_db_digest,content_digest,generated_at,"
+        "producer_commit_sha,contract_digest,registry_digest,coverage_policy_version,"
+        "sealed_at,signed_envelope_json,issuer_key_id,signature,detail_json) "
+        "VALUES ("
+        f"{_sql_literal(gen)},'OPEN',{_sql_literal(source_db_digest)},"
+        f"{_sql_literal(content_digest)},"
+        f"{_sql_literal(generated)},{_sql_literal(commit_sha)},"
+        f"{_sql_literal(contract_digest)},{_sql_literal(registry_digest)},"
+        f"{_sql_literal(coverage_policy_version)},NULL,"
+        f"{_sql_literal(signed_envelope_json)},{_sql_literal(issuer_key_id)},"
+        f"{_sql_literal(signature)},'{{}}');"
+    )
     for table, columns, rows in tables:
         statements.extend(_insert_sql(table, columns, rows))
 
@@ -1128,22 +1189,12 @@ def render_projection_bundle(
         for table in required_counts
     )
     statements.append(
-        "INSERT INTO ops_projection_generation "
-        "(generation_id,status,source_db_digest,content_digest,generated_at,"
-        "producer_commit_sha,contract_digest,registry_digest,coverage_policy_version,"
-        "sealed_at,signed_envelope_json,issuer_key_id,signature,detail_json) "
-        "SELECT "
-        f"{_sql_literal(gen)},'SEALED',{_sql_literal(source_db_digest)},"
-        f"{_sql_literal(content_digest)},"
-        f"{_sql_literal(generated)},{_sql_literal(commit_sha)},"
-        f"{_sql_literal(contract_digest)},{_sql_literal(registry_digest)},"
-        f"{_sql_literal(coverage_policy_version)},{_sql_literal(generated)},"
-        f"{_sql_literal(signed_envelope_json)},{_sql_literal(issuer_key_id)},"
-        f"{_sql_literal(signature)},'{{}}' "
-        f"WHERE {guard};"
+        "UPDATE ops_projection_generation "
+        f"SET status='SEALED',sealed_at={_sql_literal(generated)} "
+        f"WHERE generation_id={_sql_literal(gen)} AND status='OPEN' AND {guard};"
     )
-    # Deliberately last: partial imports can leave unreferenced content rows but
-    # cannot append a sealed generation or make it visible to an MCP query.
+    # Deliberately last: partial imports leave an unreferenced OPEN generation
+    # but cannot seal it or make it visible to an MCP query.
     statements.append(
         "INSERT INTO ops_projection_active (singleton,generation_id,activated_at) "
         f"SELECT 1,{_sql_literal(gen)},{_sql_literal(generated)} "
@@ -1165,6 +1216,65 @@ def render_projection_bundle(
     )
 
 
+def render_projection_bundle(
+    db_path: str | Path,
+    *,
+    snapshot_dir: str | Path | None = None,
+    max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
+    use_sql_transaction: bool = True,
+    generation_id: str | None = None,
+    producer_commit_sha: str | None = None,
+    refresh_status: str | None = None,
+    refresh_error: str | None = None,
+    last_refresh_attempt_at: str | None = None,
+    last_success_at: str | None = None,
+    storage_hot_cutoff: str | None = None,
+) -> ProjectionBundle:
+    """Render an unsigned diagnostic projection from a caller-selected DB.
+
+    Production cursor pins and signing authority are intentionally absent from
+    this public API. The publisher uses the private trusted entrypoint after it
+    validates the authenticated local-sync audit.
+    """
+    return _render_projection_bundle(
+        db_path,
+        snapshot_dir=snapshot_dir,
+        max_age_seconds=max_age_seconds,
+        use_sql_transaction=use_sql_transaction,
+        generation_id=generation_id,
+        producer_commit_sha=producer_commit_sha,
+        refresh_status=refresh_status,
+        refresh_error=refresh_error,
+        last_refresh_attempt_at=last_refresh_attempt_at,
+        last_success_at=last_success_at,
+        storage_hot_cutoff=storage_hot_cutoff,
+        projection_signer=None,
+    )
+
+
+def _render_trusted_projection_bundle(
+    db_path: str | Path,
+    *,
+    source_cursor: int,
+    export_cursor: int,
+    projection_signer: Any,
+    **kwargs: Any,
+) -> ProjectionBundle:
+    """Private publisher seam; arguments come from trusted audit/key loaders."""
+    return _render_projection_bundle(
+        db_path,
+        source_cursor=source_cursor,
+        export_cursor=export_cursor,
+        projection_signer=projection_signer,
+        **kwargs,
+    )
+
+
+def _render_projection_bundle_for_test(db_path: str | Path, **kwargs: Any) -> ProjectionBundle:
+    """Private unit-test seam for synthetic cursors and ephemeral signers."""
+    return _render_projection_bundle(db_path, _test_authority=True, **kwargs)
+
+
 def render_projection_sql(db_path: str | Path, **kwargs: Any) -> str:
     """Compatibility wrapper for callers that only need the SQL document."""
     return render_projection_bundle(db_path, **kwargs).sql
@@ -1175,8 +1285,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", required=True, help="validated local control SQLite")
     parser.add_argument("--snapshot-dir", default=None)
     parser.add_argument("--output", default=None)
-    parser.add_argument("--source-cursor", type=int, default=None)
-    parser.add_argument("--export-cursor", type=int, default=None)
     parser.add_argument("--storage-hot-cutoff", default=None)
     parser.add_argument("--max-age-seconds", type=int, default=DEFAULT_MAX_AGE_SECONDS)
     args = parser.parse_args(argv)
@@ -1184,8 +1292,6 @@ def main(argv: list[str] | None = None) -> int:
         args.db,
         snapshot_dir=args.snapshot_dir,
         max_age_seconds=args.max_age_seconds,
-        source_cursor=args.source_cursor,
-        export_cursor=args.export_cursor,
         storage_hot_cutoff=args.storage_hot_cutoff,
     )
     if args.output:

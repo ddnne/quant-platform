@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sqlite3
 
+from data_contracts.coverage import all_coverage_contracts, coverage_policy_binding
 from scripts.export_ops_projection import render_projection_bundle
 from storage.sqlite_store import SqliteStore
 
@@ -13,7 +14,32 @@ MIGRATION = ROOT / "platform/workers/quant-ops-mcp/migrations/projection/0001_op
 
 def _seed_jsda(path: Path) -> None:
     store = SqliteStore(path)
-    store._conn.execute(  # noqa: SLF001
+    rows = []
+    for contract in all_coverage_contracts():
+        observed = contract.dataset_id == "jsda_otc_bond_reference_prices"
+        rows.append(
+            (
+                contract.dataset_id,
+                "PARTIAL",
+                coverage_policy_binding(contract.dataset_id)["policy_version"],
+                contract.collection_scope,
+                contract.history_target_start,
+                contract.history_target_end_rule,
+                contract.coverage_mode,
+                contract.expected_frequency,
+                contract.universe_rule,
+                int(contract.raw_retention_required),
+                int(contract.structured_reconciliation_required),
+                contract.governance_tier,
+                "2002-08-02" if observed else None,
+                "2026-08-22" if observed else None,
+                5886 if observed else 0,
+                7,
+                "2026-08-25T00:00:00Z",
+                "{}",
+            )
+        )
+    store._conn.executemany(  # noqa: SLF001
         """INSERT INTO dataset_coverage
            (dataset,status,policy_version,collection_scope,
             history_target_start,history_target_end_rule,coverage_mode,
@@ -21,13 +47,7 @@ def _seed_jsda(path: Path) -> None:
             structured_reconciliation_required,governance_tier,
             observed_start,observed_end,row_count,source_run_id,evaluated_at,
             detail_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            "jsda_otc_bond_reference_prices", "PARTIAL", "collection-coverage/v3",
-            "jsda", "2002-08-02", "current",
-            "official_archive_index_reconciled", "official_archive_day",
-            "official_index", 1, 1, "governed", "2002-08-02", "2026-08-22",
-            5886, 7, "2026-08-25T00:00:00Z", "{}",
-        ),
+        rows,
     )
     store._conn.execute(  # noqa: SLF001
         """INSERT INTO coverage_segments
@@ -60,8 +80,8 @@ def test_projection_populates_dedicated_jsda_read_model_without_local_paths(
     target.executescript(bundle.sql)
     assert target.execute(
         "SELECT dataset,status,policy_version FROM dataset_coverage "
-        "WHERE projection_generation_id=?",
-        (bundle.generation_id,),
+        "WHERE projection_generation_id=? AND dataset=?",
+        (bundle.generation_id, "jsda_otc_bond_reference_prices"),
     ).fetchone() == (
         "jsda_otc_bond_reference_prices",
         "PARTIAL",

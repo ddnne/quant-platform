@@ -4,7 +4,7 @@
 
 CREATE TABLE IF NOT EXISTS ops_projection_generation (
     generation_id           TEXT PRIMARY KEY,
-    status                  TEXT NOT NULL CHECK (status = 'SEALED'),
+    status                  TEXT NOT NULL CHECK (status IN ('OPEN', 'SEALED')),
     source_db_digest        TEXT NOT NULL,
     content_digest          TEXT NOT NULL,
     generated_at            TEXT NOT NULL,
@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS ops_projection_generation (
     contract_digest         TEXT NOT NULL,
     registry_digest         TEXT NOT NULL,
     coverage_policy_version TEXT NOT NULL,
-    sealed_at               TEXT NOT NULL,
+    sealed_at               TEXT,
     signed_envelope_json    TEXT,
     issuer_key_id           TEXT,
     signature               TEXT,
@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS ops_projection_generation (
         (signed_envelope_json IS NULL AND issuer_key_id IS NULL AND signature IS NULL)
         OR
         (signed_envelope_json IS NOT NULL AND issuer_key_id IS NOT NULL AND signature IS NOT NULL)
+    ),
+    CHECK (
+        (status = 'OPEN' AND sealed_at IS NULL)
+        OR (status = 'SEALED' AND sealed_at IS NOT NULL)
     )
 );
 
@@ -275,3 +279,641 @@ CREATE TABLE IF NOT EXISTS ops_alerts (
 
 CREATE INDEX IF NOT EXISTS ix_ops_alerts_status
     ON ops_alerts (projection_generation_id, status, severity, alert_key);
+
+
+-- Publication is a capability transition. Content may be assembled only while
+-- its generation is OPEN. The signed metadata transition to SEALED freezes the
+-- generation before the singleton pointer can expose it.
+CREATE TRIGGER IF NOT EXISTS ops_projection_generation_insert_open
+BEFORE INSERT ON ops_projection_generation
+WHEN NEW.status <> 'OPEN'
+BEGIN
+    SELECT RAISE(ABORT, 'Ops Projection generations must be created OPEN');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_projection_generation_sealed_immutable
+BEFORE UPDATE ON ops_projection_generation
+WHEN OLD.status = 'SEALED'
+  OR EXISTS (
+      SELECT 1 FROM ops_projection_active
+       WHERE generation_id = OLD.generation_id
+  )
+  OR NEW.generation_id IS NOT OLD.generation_id
+  OR (
+      NEW.status = 'SEALED'
+      AND (
+          NEW.source_db_digest IS NOT OLD.source_db_digest
+          OR NEW.content_digest IS NOT OLD.content_digest
+          OR NEW.generated_at IS NOT OLD.generated_at
+          OR NEW.producer_commit_sha IS NOT OLD.producer_commit_sha
+          OR NEW.contract_digest IS NOT OLD.contract_digest
+          OR NEW.registry_digest IS NOT OLD.registry_digest
+          OR NEW.coverage_policy_version IS NOT OLD.coverage_policy_version
+          OR NEW.signed_envelope_json IS NOT OLD.signed_envelope_json
+          OR NEW.issuer_key_id IS NOT OLD.issuer_key_id
+          OR NEW.signature IS NOT OLD.signature
+          OR NEW.detail_json IS NOT OLD.detail_json
+          OR NEW.sealed_at IS NULL
+      )
+  )
+BEGIN
+    SELECT RAISE(ABORT, 'sealed Ops Projection generation is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_projection_generation_delete_guard
+BEFORE DELETE ON ops_projection_generation
+WHEN OLD.status = 'SEALED'
+  OR EXISTS (
+      SELECT 1 FROM ops_projection_active
+       WHERE generation_id = OLD.generation_id
+  )
+BEGIN
+    SELECT RAISE(ABORT, 'sealed Ops Projection generation is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_projection_active_insert_sealed
+BEFORE INSERT ON ops_projection_active
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.generation_id AND status = 'SEALED'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'active Ops Projection generation must be SEALED');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_projection_active_update_sealed
+BEFORE UPDATE ON ops_projection_active
+WHEN NEW.singleton <> 1
+  OR NOT EXISTS (
+      SELECT 1 FROM ops_projection_generation
+       WHERE generation_id = NEW.generation_id AND status = 'SEALED'
+  )
+BEGIN
+    SELECT RAISE(ABORT, 'active Ops Projection generation must be SEALED');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_projection_active_delete_guard
+BEFORE DELETE ON ops_projection_active
+BEGIN
+    SELECT RAISE(ABORT, 'active Ops Projection pointer is immutable except pointer-last rotation');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS dataset_coverage_open_insert
+BEFORE INSERT ON dataset_coverage
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'dataset_coverage rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS dataset_coverage_open_update
+BEFORE UPDATE ON dataset_coverage
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'dataset_coverage rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS dataset_coverage_open_delete
+BEFORE DELETE ON dataset_coverage
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'dataset_coverage rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS coverage_segments_open_insert
+BEFORE INSERT ON coverage_segments
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'coverage_segments rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS coverage_segments_open_update
+BEFORE UPDATE ON coverage_segments
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'coverage_segments rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS coverage_segments_open_delete
+BEFORE DELETE ON coverage_segments
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'coverage_segments rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS ops_ready_snapshots_open_insert
+BEFORE INSERT ON ops_ready_snapshots
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_ready_snapshots rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_ready_snapshots_open_update
+BEFORE UPDATE ON ops_ready_snapshots
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_ready_snapshots rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_ready_snapshots_open_delete
+BEFORE DELETE ON ops_ready_snapshots
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_ready_snapshots rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS ops_ready_state_open_insert
+BEFORE INSERT ON ops_ready_state
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_ready_state rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_ready_state_open_update
+BEFORE UPDATE ON ops_ready_state
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_ready_state rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_ready_state_open_delete
+BEFORE DELETE ON ops_ready_state
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_ready_state rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS ops_snapshot_quality_open_insert
+BEFORE INSERT ON ops_snapshot_quality
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_snapshot_quality rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_snapshot_quality_open_update
+BEFORE UPDATE ON ops_snapshot_quality
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_snapshot_quality rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_snapshot_quality_open_delete
+BEFORE DELETE ON ops_snapshot_quality
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_snapshot_quality rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS ops_b0_status_open_insert
+BEFORE INSERT ON ops_b0_status
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_b0_status rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_b0_status_open_update
+BEFORE UPDATE ON ops_b0_status
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_b0_status rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_b0_status_open_delete
+BEFORE DELETE ON ops_b0_status
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_b0_status rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS endpoint_inventory_open_insert
+BEFORE INSERT ON endpoint_inventory
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'endpoint_inventory rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS endpoint_inventory_open_update
+BEFORE UPDATE ON endpoint_inventory
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'endpoint_inventory rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS endpoint_inventory_open_delete
+BEFORE DELETE ON endpoint_inventory
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'endpoint_inventory rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS collection_sla_status_open_insert
+BEFORE INSERT ON collection_sla_status
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'collection_sla_status rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS collection_sla_status_open_update
+BEFORE UPDATE ON collection_sla_status
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'collection_sla_status rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS collection_sla_status_open_delete
+BEFORE DELETE ON collection_sla_status
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'collection_sla_status rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS ops_projection_metadata_open_insert
+BEFORE INSERT ON ops_projection_metadata
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_projection_metadata rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_projection_metadata_open_update
+BEFORE UPDATE ON ops_projection_metadata
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_projection_metadata rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_projection_metadata_open_delete
+BEFORE DELETE ON ops_projection_metadata
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_projection_metadata rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS ingestion_run_log_open_insert
+BEFORE INSERT ON ingestion_run_log
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ingestion_run_log rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ingestion_run_log_open_update
+BEFORE UPDATE ON ingestion_run_log
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ingestion_run_log rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ingestion_run_log_open_delete
+BEFORE DELETE ON ingestion_run_log
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ingestion_run_log rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS ingestion_validation_open_insert
+BEFORE INSERT ON ingestion_validation
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ingestion_validation rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ingestion_validation_open_update
+BEFORE UPDATE ON ingestion_validation
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ingestion_validation rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ingestion_validation_open_delete
+BEFORE DELETE ON ingestion_validation
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ingestion_validation rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS raw_retention_manifests_open_insert
+BEFORE INSERT ON raw_retention_manifests
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'raw_retention_manifests rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS raw_retention_manifests_open_update
+BEFORE UPDATE ON raw_retention_manifests
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'raw_retention_manifests rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS raw_retention_manifests_open_delete
+BEFORE DELETE ON raw_retention_manifests
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'raw_retention_manifests rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS ingestion_watermarks_open_insert
+BEFORE INSERT ON ingestion_watermarks
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ingestion_watermarks rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ingestion_watermarks_open_update
+BEFORE UPDATE ON ingestion_watermarks
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ingestion_watermarks rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ingestion_watermarks_open_delete
+BEFORE DELETE ON ingestion_watermarks
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ingestion_watermarks rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS ops_sync_feed_open_insert
+BEFORE INSERT ON ops_sync_feed
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_sync_feed rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_sync_feed_open_update
+BEFORE UPDATE ON ops_sync_feed
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_sync_feed rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_sync_feed_open_delete
+BEFORE DELETE ON ops_sync_feed
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_sync_feed rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS ops_storage_plane_status_open_insert
+BEFORE INSERT ON ops_storage_plane_status
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_storage_plane_status rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_storage_plane_status_open_update
+BEFORE UPDATE ON ops_storage_plane_status
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_storage_plane_status rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_storage_plane_status_open_delete
+BEFORE DELETE ON ops_storage_plane_status
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_storage_plane_status rows are immutable after projection seal');
+END;
+
+
+CREATE TRIGGER IF NOT EXISTS ops_alerts_open_insert
+BEFORE INSERT ON ops_alerts
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_alerts rows require an OPEN projection generation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_alerts_open_update
+BEFORE UPDATE ON ops_alerts
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+  OR NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = NEW.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_alerts rows are immutable after projection seal');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ops_alerts_open_delete
+BEFORE DELETE ON ops_alerts
+WHEN NOT EXISTS (
+    SELECT 1 FROM ops_projection_generation
+     WHERE generation_id = OLD.projection_generation_id AND status = 'OPEN'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'ops_alerts rows are immutable after projection seal');
+END;

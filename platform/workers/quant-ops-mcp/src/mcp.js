@@ -1,5 +1,6 @@
 import { OPS_TOOLS, callOpsTool } from "./domain.js";
 import { QuotaExceeded, quotaCost } from "./quota.js";
+import { acceptedOpsToolSchemaDigest } from "./tool_schema_digest.js";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
@@ -55,7 +56,13 @@ export async function handleJsonRpc(payload, db, context = {}) {
       });
     }
     if (request.method === "ping") return response(id, {});
-    if (request.method === "tools/list") return response(id, { tools: OPS_TOOLS });
+    if (request.method === "tools/list") {
+      const schemaDigest = await acceptedOpsToolSchemaDigest(OPS_TOOLS);
+      return response(id, {
+        tools: OPS_TOOLS,
+        _meta: { "quant-platform/tool-schema-digest": schemaDigest },
+      });
+    }
     if (request.method === "notifications/initialized") return null;
     if (id === undefined) return null;
     if (request.method === "tools/call") {

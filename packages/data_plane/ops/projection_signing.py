@@ -20,6 +20,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
+from ops.projection_content import PROJECTED_CONTENT_TABLES, projection_content_digest
+
 
 SIGNED_DOCUMENT_SCHEMA = "ops-projection-signed-envelope/v1"
 ENVELOPE_SCHEMA = "ops-projection-envelope/v1"
@@ -40,7 +42,9 @@ class OpsProjectionSignatureError(RuntimeError):
 
 
 def canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
 
 def sha256_digest(value: Mapping[str, Any]) -> str:
@@ -69,6 +73,7 @@ def _validate_envelope(envelope: Mapping[str, Any]) -> None:
         "contract_digest",
         "registry_digest",
         "coverage_policy_version",
+        "coverage_policy_digest",
         "projection_status",
         "source_generation",
         "source_snapshot_generation",
@@ -82,6 +87,7 @@ def _validate_envelope(envelope: Mapping[str, Any]) -> None:
         "b4_status",
         "b4_evidence_digest",
         "evidence_digests",
+        "content_manifest",
         "row_counts",
     }
     if envelope.get("schema_version") != ENVELOPE_SCHEMA:
@@ -97,6 +103,7 @@ def _validate_envelope(envelope: Mapping[str, Any]) -> None:
         "contract_digest",
         "registry_digest",
         "coverage_status_digest",
+        "coverage_policy_digest",
         "b0_evidence_digest",
         "b4_evidence_digest",
     ):
@@ -117,8 +124,66 @@ def _validate_envelope(envelope: Mapping[str, Any]) -> None:
         raise OpsProjectionSignatureError("evidence_digests must be an object")
     if not isinstance(envelope.get("dataset_coverage"), Mapping):
         raise OpsProjectionSignatureError("dataset_coverage must be an object")
+    for dataset_id, row in envelope["dataset_coverage"].items():
+        if not isinstance(dataset_id, str) or not dataset_id or not isinstance(row, Mapping):
+            raise OpsProjectionSignatureError("dataset_coverage rows must be named objects")
+        if row.get("policy_id") != dataset_id:
+            raise OpsProjectionSignatureError(
+                f"dataset_coverage policy_id mismatch for {dataset_id}"
+            )
+        if not isinstance(row.get("policy_version"), str) or not row["policy_version"]:
+            raise OpsProjectionSignatureError(
+                f"dataset_coverage policy_version missing for {dataset_id}"
+            )
+        policy_digest = str(row.get("policy_digest") or "")
+        if not policy_digest.startswith("sha256:") or len(policy_digest) != 71:
+            raise OpsProjectionSignatureError(
+                f"dataset_coverage policy_digest invalid for {dataset_id}"
+            )
     if not isinstance(envelope.get("row_counts"), Mapping):
         raise OpsProjectionSignatureError("row_counts must be an object")
+    content_manifest = envelope.get("content_manifest")
+    row_counts = envelope["row_counts"]
+    if not isinstance(content_manifest, Mapping):
+        raise OpsProjectionSignatureError("content_manifest must be an object")
+    expected_tables = set(PROJECTED_CONTENT_TABLES)
+    if set(content_manifest) != expected_tables or set(row_counts) != expected_tables:
+        raise OpsProjectionSignatureError(
+            "Ops Projection content manifest membership drift"
+        )
+    normalized_manifest: dict[str, dict[str, Any]] = {}
+    for table in PROJECTED_CONTENT_TABLES:
+        row = content_manifest.get(table)
+        if not isinstance(row, Mapping) or set(row) != {
+            "content_digest",
+            "row_count",
+        }:
+            raise OpsProjectionSignatureError(
+                f"invalid content manifest row for {table}"
+            )
+        count = row.get("row_count")
+        digest = str(row.get("content_digest") or "")
+        if (
+            not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 0
+            or row_counts.get(table) != count
+            or not digest.startswith("sha256:")
+            or len(digest) != 71
+        ):
+            raise OpsProjectionSignatureError(
+                f"invalid content manifest row for {table}"
+            )
+        normalized_manifest[table] = {
+            "row_count": count,
+            "content_digest": digest,
+        }
+    if projection_content_digest({"tables": normalized_manifest}) != envelope.get(
+        "content_digest"
+    ):
+        raise OpsProjectionSignatureError(
+            "Ops Projection content digest does not bind its manifest"
+        )
 
 
 @dataclass(frozen=True)
@@ -331,7 +396,11 @@ class OpsProjectionPublicKeyRegistry:
                 "dataset": str(dataset),
                 "status": row.get("status"),
                 "coverage_mode": row.get("coverage_mode"),
+                "policy_id": row.get("policy_id"),
                 "policy_version": row.get("policy_version"),
+                "policy_digest": row.get("policy_digest"),
+                "observed_start": row.get("observed_start"),
+                "observed_end": row.get("observed_end"),
                 "projection_status": envelope["projection_status"],
                 "projection_generation": envelope["generation_id"],
                 "projection_content_digest": envelope["content_digest"],

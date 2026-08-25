@@ -9,16 +9,29 @@ function canonicalize(value) {
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(/** @type {Record<string, unknown>} */ (value))
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
         .map(([key, item]) => [key, canonicalize(item)]),
     );
   }
   return value;
 }
 
-/** @param {Record<string, unknown>} value */
+/** @param {unknown} value */
+export function canonicalProjectionJson(value) {
+  return JSON.stringify(canonicalize(value));
+}
+
+/** @param {unknown} value */
 export function canonicalProjectionBytes(value) {
-  return new TextEncoder().encode(JSON.stringify(canonicalize(value)));
+  return new TextEncoder().encode(canonicalProjectionJson(value));
+}
+
+/** @param {unknown} value */
+export async function projectionSha256(value) {
+  const raw = await crypto.subtle.digest("SHA-256", canonicalProjectionBytes(value));
+  return "sha256:" + Array.from(new Uint8Array(raw))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 /** @param {string} value */
@@ -53,18 +66,20 @@ function validateEnvelope(envelope) {
   const required = [
     "generation_id", "content_digest", "source_db_digest", "generated_at",
     "producer_commit_sha", "contract_digest", "registry_digest",
-    "coverage_policy_version", "projection_status", "source_generation",
+    "coverage_policy_version", "coverage_policy_digest", "projection_status",
+    "source_generation",
     "source_snapshot_generation", "source_cursor",
     "export_cursor", "applied_cursor", "coverage_status_digest", "b0_status",
     "b0_evidence_digest", "b4_status", "b4_evidence_digest",
-    "dataset_coverage", "evidence_digests", "row_counts",
+    "dataset_coverage", "evidence_digests", "content_manifest", "row_counts",
   ];
   if (required.some((field) => !Object.hasOwn(envelope, field))) {
     return "envelope fields are incomplete";
   }
   for (const field of [
     "content_digest", "source_db_digest", "contract_digest", "registry_digest",
-    "coverage_status_digest", "b0_evidence_digest", "b4_evidence_digest",
+    "coverage_status_digest", "coverage_policy_digest", "b0_evidence_digest",
+    "b4_evidence_digest",
   ]) {
     if (!/^sha256:[0-9a-f]{64}$/.test(String(envelope[field] || ""))) {
       return `invalid ${field}`;
@@ -81,6 +96,23 @@ function validateEnvelope(envelope) {
   }
   if (!envelope.dataset_coverage || typeof envelope.dataset_coverage !== "object" ||
       Array.isArray(envelope.dataset_coverage)) return "dataset_coverage must be an object";
+  for (const [dataset, raw] of Object.entries(
+    /** @type {Record<string, unknown>} */ (envelope.dataset_coverage),
+  )) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return `dataset_coverage row is malformed for ${dataset}`;
+    }
+    const row = /** @type {Record<string, unknown>} */ (raw);
+    if (row.policy_id !== dataset || typeof row.policy_version !== "string" ||
+        !row.policy_version ||
+        !/^sha256:[0-9a-f]{64}$/.test(String(row.policy_digest || ""))) {
+      return `dataset_coverage policy binding is invalid for ${dataset}`;
+    }
+  }
+  if (!envelope.content_manifest || typeof envelope.content_manifest !== "object" ||
+      Array.isArray(envelope.content_manifest)) return "content_manifest must be an object";
+  if (!envelope.row_counts || typeof envelope.row_counts !== "object" ||
+      Array.isArray(envelope.row_counts)) return "row_counts must be an object";
   for (const field of ["source_generation", "source_cursor", "export_cursor", "applied_cursor"]) {
     const cursor = envelope[field];
     if (cursor !== null && (!Number.isInteger(cursor) || Number(cursor) < 0)) {

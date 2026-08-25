@@ -5,7 +5,11 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from scripts.export_ops_projection import render_projection_bundle, sync_dataset_state
+from data_contracts.coverage import all_coverage_contracts, coverage_policy_binding
+from scripts.export_ops_projection import (
+    _render_projection_bundle_for_test,
+    sync_dataset_state,
+)
 from storage.sqlite_store import SqliteStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +21,32 @@ PROJECTION_MIGRATION = (
 
 def _source_db(path: Path, *, applied: int | None) -> None:
     store = SqliteStore(path)
-    store._conn.execute(  # noqa: SLF001
+    rows = []
+    for contract in all_coverage_contracts():
+        observed = contract.dataset_id == "markets_calendar"
+        rows.append(
+            (
+                contract.dataset_id,
+                "PARTIAL",
+                coverage_policy_binding(contract.dataset_id)["policy_version"],
+                contract.collection_scope,
+                contract.history_target_start,
+                contract.history_target_end_rule,
+                contract.coverage_mode,
+                contract.expected_frequency,
+                contract.universe_rule,
+                int(contract.raw_retention_required),
+                int(contract.structured_reconciliation_required),
+                contract.governance_tier,
+                "2008-01-01" if observed else None,
+                "2008-01-01" if observed else None,
+                1 if observed else 0,
+                1,
+                "2026-08-25T00:00:00Z",
+                "{}",
+            )
+        )
+    store._conn.executemany(  # noqa: SLF001
         """INSERT INTO dataset_coverage
            (dataset,status,policy_version,collection_scope,
             history_target_start,history_target_end_rule,coverage_mode,
@@ -26,12 +55,7 @@ def _source_db(path: Path, *, applied: int | None) -> None:
             observed_start,observed_end,row_count,source_run_id,evaluated_at,
             detail_json)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            "markets_calendar", "PARTIAL", "collection-coverage/v3", "jquants",
-            "2008-01-01", "current", "official", "daily", "all", 1, 1,
-            "governed", "2008-01-01", "2008-01-01", 1, 1,
-            "2026-08-25T00:00:00Z", "{}",
-        ),
+        rows,
     )
     store._conn.execute(  # noqa: SLF001
         """INSERT INTO coverage_segments
@@ -88,7 +112,7 @@ def test_source_export_applied_cursors_are_projected_without_coercion(
 ) -> None:
     path = tmp_path / "source.sqlite"
     _source_db(path, applied=42)
-    bundle = render_projection_bundle(
+    bundle = _render_projection_bundle_for_test(
         path,
         generation_id="projgen-cursors",
         producer_commit_sha="a" * 40,
@@ -113,7 +137,7 @@ def test_source_export_applied_cursors_are_projected_without_coercion(
 def test_missing_applied_cursor_projects_sql_null_not_zero(tmp_path: Path) -> None:
     path = tmp_path / "source.sqlite"
     _source_db(path, applied=None)
-    bundle = render_projection_bundle(
+    bundle = _render_projection_bundle_for_test(
         path,
         generation_id="projgen-unpinned",
         producer_commit_sha="b" * 40,

@@ -16,10 +16,10 @@
       "required": [
         "schema_version", "generation_id", "content_digest", "source_db_digest",
         "generated_at", "producer_commit_sha", "contract_digest", "registry_digest",
-        "coverage_policy_version", "projection_status", "source_generation",
+        "coverage_policy_version", "coverage_policy_digest", "projection_status", "source_generation",
         "source_snapshot_generation", "source_cursor", "export_cursor", "applied_cursor",
         "coverage_status_digest", "dataset_coverage", "b0_status", "b0_evidence_digest",
-        "b4_status", "b4_evidence_digest", "evidence_digests", "row_counts"
+        "b4_status", "b4_evidence_digest", "evidence_digests", "content_manifest", "row_counts"
       ],
       "properties": {
         "schema_version": { "const": "ops-projection-envelope/v1" },
@@ -31,6 +31,7 @@
         "contract_digest": { "$ref": "#/$defs/sha256" },
         "registry_digest": { "$ref": "#/$defs/sha256" },
         "coverage_policy_version": { "type": "string", "minLength": 1 },
+        "coverage_policy_digest": { "$ref": "#/$defs/sha256" },
         "projection_status": { "enum": ["FRESH", "STALE", "FAILED", "UNKNOWN"] },
         "source_generation": { "$ref": "#/$defs/cursor" },
         "source_snapshot_generation": { "type": ["string", "integer", "null"] },
@@ -43,11 +44,13 @@
           "additionalProperties": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["status", "coverage_mode", "policy_version", "collection_scope", "observed_start", "observed_end"],
+            "required": ["status", "coverage_mode", "policy_id", "policy_version", "policy_digest", "collection_scope", "observed_start", "observed_end"],
             "properties": {
               "status": { "type": "string" },
               "coverage_mode": { "type": "string" },
+              "policy_id": { "type": "string", "minLength": 1 },
               "policy_version": { "type": "string" },
+              "policy_digest": { "$ref": "#/$defs/sha256" },
               "collection_scope": { "type": "string" },
               "observed_start": { "type": ["string", "null"] },
               "observed_end": { "type": ["string", "null"] }
@@ -59,12 +62,81 @@
         "b4_status": { "enum": ["PASS", "FAIL", "UNKNOWN"] },
         "b4_evidence_digest": { "$ref": "#/$defs/sha256" },
         "evidence_digests": { "type": "object", "additionalProperties": { "$ref": "#/$defs/sha256" } },
-        "row_counts": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+        "content_manifest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "collection_sla_status", "coverage_segments", "dataset_coverage",
+            "endpoint_inventory", "ingestion_run_log", "ingestion_validation",
+            "ingestion_watermarks", "ops_alerts", "ops_b0_status",
+            "ops_projection_metadata", "ops_ready_snapshots", "ops_ready_state",
+            "ops_snapshot_quality", "ops_storage_plane_status", "ops_sync_feed",
+            "raw_retention_manifests"
+          ],
+          "properties": {
+            "collection_sla_status": { "$ref": "#/$defs/tableContent" },
+            "coverage_segments": { "$ref": "#/$defs/tableContent" },
+            "dataset_coverage": { "$ref": "#/$defs/tableContent" },
+            "endpoint_inventory": { "$ref": "#/$defs/tableContent" },
+            "ingestion_run_log": { "$ref": "#/$defs/tableContent" },
+            "ingestion_validation": { "$ref": "#/$defs/tableContent" },
+            "ingestion_watermarks": { "$ref": "#/$defs/tableContent" },
+            "ops_alerts": { "$ref": "#/$defs/tableContent" },
+            "ops_b0_status": { "$ref": "#/$defs/tableContent" },
+            "ops_projection_metadata": { "$ref": "#/$defs/tableContent" },
+            "ops_ready_snapshots": { "$ref": "#/$defs/tableContent" },
+            "ops_ready_state": { "$ref": "#/$defs/tableContent" },
+            "ops_snapshot_quality": { "$ref": "#/$defs/tableContent" },
+            "ops_storage_plane_status": { "$ref": "#/$defs/tableContent" },
+            "ops_sync_feed": { "$ref": "#/$defs/tableContent" },
+            "raw_retention_manifests": { "$ref": "#/$defs/tableContent" }
+          }
+        },
+        "row_counts": { "$ref": "#/$defs/rowCounts" }
       }
     }
   },
   "$defs": {
     "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
-    "cursor": { "type": ["integer", "null"], "minimum": 0 }
+    "cursor": { "type": ["integer", "null"], "minimum": 0 },
+    "tableContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["row_count", "content_digest"],
+      "properties": {
+        "row_count": { "type": "integer", "minimum": 0 },
+        "content_digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "rowCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "collection_sla_status", "coverage_segments", "dataset_coverage",
+        "endpoint_inventory", "ingestion_run_log", "ingestion_validation",
+        "ingestion_watermarks", "ops_alerts", "ops_b0_status",
+        "ops_projection_metadata", "ops_ready_snapshots", "ops_ready_state",
+        "ops_snapshot_quality", "ops_storage_plane_status", "ops_sync_feed",
+        "raw_retention_manifests"
+      ],
+      "properties": {
+        "collection_sla_status": { "type": "integer", "minimum": 0 },
+        "coverage_segments": { "type": "integer", "minimum": 0 },
+        "dataset_coverage": { "type": "integer", "minimum": 0 },
+        "endpoint_inventory": { "type": "integer", "minimum": 0 },
+        "ingestion_run_log": { "type": "integer", "minimum": 0 },
+        "ingestion_validation": { "type": "integer", "minimum": 0 },
+        "ingestion_watermarks": { "type": "integer", "minimum": 0 },
+        "ops_alerts": { "type": "integer", "minimum": 0 },
+        "ops_b0_status": { "type": "integer", "minimum": 0 },
+        "ops_projection_metadata": { "type": "integer", "minimum": 0 },
+        "ops_ready_snapshots": { "type": "integer", "minimum": 0 },
+        "ops_ready_state": { "type": "integer", "minimum": 0 },
+        "ops_snapshot_quality": { "type": "integer", "minimum": 0 },
+        "ops_storage_plane_status": { "type": "integer", "minimum": 0 },
+        "ops_sync_feed": { "type": "integer", "minimum": 0 },
+        "raw_retention_manifests": { "type": "integer", "minimum": 0 }
+      }
+    }
   }
 }
