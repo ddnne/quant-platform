@@ -14,7 +14,14 @@ if [[ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
   exit 1
 fi
 
-bash "$ROOT/scripts/verify_ci.sh"
+# Keep production credentials out of dependency installation, tests, builds,
+# and dry-runs. Only the read-only live inventory below receives them.
+env \
+  -u CLOUDFLARE_API_TOKEN \
+  -u CLOUDFLARE_API_KEY \
+  -u CLOUDFLARE_EMAIL \
+  -u CLOUDFLARE_ACCOUNT_ID \
+  bash "$ROOT/scripts/verify_ci.sh"
 
 py="$ROOT/.venv/bin/python"
 if [[ ! -x "$py" ]]; then

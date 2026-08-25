@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
+from scripts import verify_cloudflare_secret_inventory as secret_inventory_module
 from scripts.verify_cloudflare_secret_inventory import (
     SecretInventoryError,
     expected_production_secret_names,
@@ -13,6 +15,18 @@ from scripts.verify_cloudflare_secret_inventory import (
     verify_live_secret_inventory,
     wrangler_command,
 )
+
+
+@pytest.fixture(autouse=True)
+def _pinned_wrangler_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(secret_inventory_module, "WORKER_ROOT", tmp_path)
+    for worker in expected_production_secret_names():
+        executable = tmp_path / worker / "node_modules" / ".bin" / "wrangler"
+        executable.parent.mkdir(parents=True)
+        executable.write_text("fixture", encoding="utf-8")
 
 
 def _completed(payload: object) -> subprocess.CompletedProcess[str]:

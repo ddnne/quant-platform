@@ -77,6 +77,11 @@ def test_deployment_acceptance_is_authenticated_read_only_and_fail_closed() -> N
     assert "verify_cloudflare_secret_inventory.py" in source
     assert "CLOUDFLARE_API_TOKEN" in source
     assert "CLOUDFLARE_ACCOUNT_ID" in source
+    assert "-u CLOUDFLARE_API_TOKEN" in source
+    assert "-u CLOUDFLARE_API_KEY" in source
+    assert source.index("-u CLOUDFLARE_API_TOKEN") < source.index(
+        "verify_cloudflare_secret_inventory.py"
+    )
     assert "wrangler deploy" not in source
     assert SECRET_INVENTORY.is_file()
     assert os.access(SECRET_INVENTORY, os.X_OK)
