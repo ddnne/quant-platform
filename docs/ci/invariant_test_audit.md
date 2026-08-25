@@ -41,6 +41,9 @@ not release authorities.
   still tested directly.
 - Replaced the watermark migration's SQL spelling assertions with an applied
   SQLite schema/index observation.
+- Removed duplicate core/features substring import bans. The single AST plane
+  dependency graph remains the structural import check; core/features tests
+  now observe PIT calls and assert that runtime contexts expose no DB handle.
 - Replaced the runner's `inspect.getsource`/string check for `shell=False` with
   an intercepted invocation that asserts the actual subprocess contract.
 - Removed the JSDA recovery sealer's function-name/import spelling assertions;

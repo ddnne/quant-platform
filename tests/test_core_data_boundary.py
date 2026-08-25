@@ -1,22 +1,15 @@
-"""Core data boundary: facts enter only via ``pit``; no direct SQLite/HTTP.
+"""Core runtime boundary: facts enter via ``pit`` and contexts expose no DB.
 
-Two layers of enforcement:
-
-1. **Static import ban** — scan every ``core/**/*.py`` for forbidden data
-   dependencies (``sqlite3``, ``storage``, ``httpx``, ``requests``, raw
-   ``urllib``/``socket``). The engine may import :mod:`pit` and the shared JST
-   time helpers — nothing else that reads facts.
-2. **Runtime pit spy** — run a real backtest with the PIT getters wrapped to
-   record calls, and assert facts were read through ``pit.get_*``.
+The centralized plane dependency test owns the import graph.  These tests
+exercise the stronger runtime observations: a real backtest calls the PIT
+getters and strategy contexts receive scoped data/capabilities, not storage
+handles.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
-import core
 import pit
 from core import run_backtest, standard_cost
 from core.execution import close_as_of
@@ -24,46 +17,6 @@ from core.strategies.buy_hold import BuyHold
 from core.universe import membership_at
 
 from _coreseed import CODES, TRADING_DAYS, seed_db
-
-CORE_DIR = Path(core.__file__).resolve().parent
-
-# Modules that read facts or hit the network — forbidden inside ``core/``.
-# ``pit`` itself is allowed (it IS the boundary); ``pit.query`` is allowed for
-# the pure path helper ``resolve_db_path``.
-FORBIDDEN_SUBSTRINGS = [
-    "import sqlite3",
-    "from sqlite3",
-    "import storage",
-    "from storage",
-    "import httpx",
-    "from httpx",
-    "import requests",
-    "from requests",
-    "import urllib",
-    "from urllib",
-    "import socket",
-]
-
-
-def _core_python_files() -> list[Path]:
-    return sorted(p for p in CORE_DIR.rglob("*.py"))
-
-
-def test_core_modules_do_not_import_forbidden_data_paths():
-    """No ``core/`` source imports sqlite/storage/http clients."""
-    offenders: list[str] = []
-    for path in _core_python_files():
-        text = path.read_text(encoding="utf-8")
-        for bad in FORBIDDEN_SUBSTRINGS:
-            # skip line comments so a docstring/mention doesn't false-positive
-            for line in text.splitlines():
-                stripped = line.lstrip()
-                if stripped.startswith("#"):
-                    continue
-                if bad in line:
-                    offenders.append(f"{path.relative_to(CORE_DIR.parent)}: {line.strip()}")
-    assert not offenders, "forbidden fact/network imports in core/:\n" + "\n".join(offenders)
-
 
 def test_core_reads_facts_through_pit(tmp_path, monkeypatch):
     """A backtest exercises pit.get_market_calendar / get_equity_master / bars."""
