@@ -20,8 +20,8 @@ pass.
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
 | D1 | Fixed allowlists were intersected with PIT master only on the first day | FIXED | `d99083f4`; daily listing/delisting invariant tests |
-| D2 | COMPLETE issuer accepted caller-originated parsed rows, counts, digests, and exhaustion state | OPEN | Must reparse immutable raw, normalize canonically, reread exact natural keys, prove exhaustion, and reject an unrelated same-count row |
-| D3 | A generally importable issuer/service could mint signed SUCCESS outside governed ingestion | OPEN | COMPLETE capability must be private to the governed transaction; recovery scripts remain non-COMPLETE |
+| D2 | COMPLETE issuer accepted caller-originated parsed rows, counts, digests, and exhaustion state | OPEN | Rotate the current key, then independently reparse immutable raw, normalize canonically, reread exact natural keys, prove exhaustion, and reject an unrelated same-count row |
+| D3 | A same-UID importable signing oracle could mint signed SUCCESS outside governed ingestion | OPEN | Remove public PEM/sign APIs; a dedicated evidence authority accepts only an opaque governed reconciliation handle; recovery remains non-COMPLETE |
 | D4 | JSDA publication labels were used as quote-effective dates | FIXED | `56d4fcf9`; `2002-08-02 -> 2002-08-01`, `2002-08-05 -> 2002-08-02` |
 
 ### P1
@@ -41,7 +41,7 @@ pass.
 | R2 | READY/coherence paths hard-coded one global V2 policy and rejected valid per-dataset V3 evidence | OPEN | Bind signed policy id/version/digest per dataset and fail on unknown/missing evidence |
 | R3 | ExperimentPlan embedded `ready_snapshot_id=not-declared`, making later immutable snapshot equality circular | OPEN | Remove the placeholder from plan identity; bind snapshot at signed execution authorization |
 | R4 | exact-four bindings were caller-overridable | OPEN | Only the canonical four plan ids and exact digests may reach Controlled Pilot |
-| R5 | Generic READY publication and implicit core-profile Mass minting remained reachable | OPEN | Production publication must be profile/closure-bound; Mass requires an explicit governed Mass policy and stays disabled |
+| R5 | Generic READY publication and a same-UID arbitrary READY signer remained reachable | OPEN | Dedicated READY authority independently rechecks the authenticated mirror, exact-four closure and immutable copy; Mass requires a separate explicit policy and stays disabled |
 | R6 | Missing natural-key ledger could pass through fixture compatibility | OPEN | Production missing evidence is UNKNOWN/FAIL; compatibility is private test-only policy |
 
 ### P1
@@ -61,12 +61,14 @@ pass.
 | C1 | Ops MCP was bound directly to production ingestion D1 | FIXED | `dbd5dc74`, `ca9c4410`; dedicated signed projection and quota D1 bindings |
 | C2 | Mass-to-Gateway authorization copied a shared bearer secret | FIXED | `de7915d1`; typed Service Binding RPC capability |
 | C3 | Caller-supplied CI receipts could impersonate the required gate | FIXED | `6421d89b`; native Cloudflare required check is authoritative |
+| C4 | Ops Projection signer accepted a publisher-authored evidence envelope | OPEN | Dedicated authority must consume an authenticated full-source FD/opaque export handle and independently recompute tables, Coverage, B0/B4 and cursors before signing |
+| C9 | Coverage V3 transition could omit required or failed segments and mark the remaining subset COMPLETE | OPEN | Exact equality with canonical bounded-history and authority-issued tip/index inventory; reject omitted, duplicate and unexpected identities |
+| C10 | Domain-separated production Coverage transition authority was not provisioned or callable | OPEN | Authority independently verifies active and target states, signs the transition domain, and records a durable one-shot CAS tombstone |
 
 ### P1
 
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
-| C4 | Signed Ops metadata did not bind and reverify the projected D1 table contents | OPEN | Sign per-table row/digest manifest, seal the generation, recompute before reads, reject post-seal mutation |
 | C5 | 17 MCP tools lacked closed output schemas and deployment schema-digest acceptance | OPEN | All tools require closed input/output schemas and deterministic aggregate digest parity |
 | C6 | Production Cron triggers disappeared under non-inherited named environments | FIXED | `6a37f61f`; Premium and JSDA production triggers explicit |
 | C7 | `ingestion-secrets` workers.dev endpoint is not protected by Access | HOLD | Zero Trust account activation requires explicit human agreement; header token remains enabled |
@@ -79,7 +81,7 @@ pass.
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
 | A1 | JSDA Queue repeatedly selected only the newest year/files and could not converge on history | FIXED | `7afffade`; stable child segment identity, cursor progress, retry/DLQ evidence |
-| A2 | Readiness and receipt signing could share a private key | FIXED | `95b6c06d`; dedicated public registries and local private-key files |
+| A2 | Receipt, Ops and READY keys had separate filenames but no principal/evidence-authority isolation | OPEN | Dedicated service principals hold private keys; public packages are verify-only and cannot sign caller-authored bodies |
 
 ### P1
 
@@ -92,8 +94,8 @@ pass.
 
 ## Integration gate
 
-The latest independent adversarial review of the pre-remediation candidate found
-P0 rows D2, D3, R1-R6 unresolved. Remediation is in progress. After those rows
-are closed, run a fresh independent review against one immutable SHA, then run
-the full native CI-equivalent suite. Only that reviewed SHA may be pushed for
-the release PR.
+The latest independent adversarial review rejected the Coverage/READY candidate
+with P0 rows D2, D3, R1-R6, C4, C9, C10 and A2 unresolved. Remediation is in
+progress. After those rows are closed, run a fresh independent review against
+one immutable SHA, then run the full native CI-equivalent suite. Only that
+reviewed SHA may be pushed for the release PR.
