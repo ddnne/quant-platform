@@ -47,6 +47,7 @@ def build_projection_metadata(
     """Build unified projection metadata.
 
     Age is request_now - generated_at (never a frozen zero).
+    FRESH requires refresh_status == "success" (never skipped/null/failed).
     Mixed table generations force DEGRADED_MIXED_GENERATION (never FRESH).
     """
     path = Path(db_path)
@@ -115,6 +116,10 @@ def build_projection_metadata(
 
     if refresh_status == "failed":
         status = "DEGRADED_REFRESH_FAILED"
+    elif status == "FRESH" and refresh_status != "success":
+        # Export-only / skipped / clock-rotation is not a successful refresh.
+        # Stored D1 CHECK only allows FRESH|STALE|FAILED|UNKNOWN; callers coerce.
+        status = "STALE"
 
     if table_generations:
         gens = {str(v) for v in table_generations.values() if v}

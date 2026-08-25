@@ -112,11 +112,12 @@ def test_typescript_paths_match_python():
 # ---------------------------------------------------------------------------
 DATEMODE_EXPECTED = {
     # Endpoints that accept bare from/to without code (verified live).
-    "equities_earnings_calendar": "range",
     "markets_calendar": "range",
     "equities_investor_types": "range",
     "indices_bars_daily_topix": "range",
     # Everything else in the Premium core set is single-day market-wide.
+    # Earnings calendar is a next-business-day snapshot (pagination_key only).
+    "equities_earnings_calendar": "today",
     "equities_master": "today",
     "equities_bars_daily": "today",
     "equities_bars_daily_am": "today",

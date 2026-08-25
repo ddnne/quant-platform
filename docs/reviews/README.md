@@ -25,6 +25,16 @@ IR `golden.jsonl` (`7f2dc12`).
 - [`original_plan_gap.md`](original_plan_gap.md) — 08-20/21 recording reset held; 08-22 funds held; AND-as-product invalid and already stopped
 - unique22 park is leftover occupancy (`UNIQUE22_PARK_REASONS` / `daily_path.ts`), not YAML; COMPLETE 22 is last-known STALE projection, not FRESH
 
+## Phase 6.3.2 (feature `grok/phase63-ci-source-closure`)
+
+Historical 6.3.1 files above are not live OPEN/CLOSED for 6.3.2. See:
+
+- [`P632_wave0_live.md`](P632_wave0_live.md) — fetch remeasure
+- [`P632_brief_leaks.md`](P632_brief_leaks.md) — A–S vs feature branch
+- [`P632_ind_A_pit_complete.md`](P632_ind_A_pit_complete.md) / [`P632_ind_A_revisit.md`](P632_ind_A_revisit.md) / [`P632_ind_B_ci_authority.md`](P632_ind_B_ci_authority.md) / [`P632_ind_C_catalog_pilot.md`](P632_ind_C_catalog_pilot.md)
+- [`P632_projection_stale.md`](P632_projection_stale.md) — `refresh_success=false` root cause
+- [`P632_test_inventory.md`](P632_test_inventory.md)
+
 Later on this branch (after the A01/A07 freeze): occupancy `yaml_remains_sot` removed; unused `cells_candidate_counts` deleted; compiled `catalog_path` is `migration.jsonl`; JSDA/JQ tests inject tmp Ed25519. Host PEM isolation and fresh-venv pytest remain OPEN.
 
 Phase 7 Controlled Pilot and Mass Research remain **NO-GO** until §19 gates.

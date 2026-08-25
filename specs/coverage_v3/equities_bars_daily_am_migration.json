@@ -342,7 +342,7 @@
     "general_historical_research": "equities_bars_daily",
     "dedicated_historical_am_profile": "actually_stored_periods_only",
     "ops_sla": "expected_after 11:30 JST / usable_by 12:30 JST",
-    "collection_coverage_json": "unchanged_until_wire",
+    "collection_coverage_json": "wired_v3_planner",
     "empty_complete_31_months": "FORBIDDEN",
     "dataset_complete_23": "FORBIDDEN",
     "not_same_as_full_day_bars": true

@@ -47,9 +47,11 @@ CORE_TIP_ONLY_EXCLUSIONS: Mapping[str, str] = {
     ),
 }
 
-# Governed historical-research baseline. fins_* here are history-eligible names;
+# Governed historical-research baseline. equities_master is PIT listed-name
+# membership from official 2008-05-07. fins_* here are history-eligible names;
 # earnings calendar is excluded (see CORE_TIP_ONLY_EXCLUSIONS).
 CORE_REQUIRED_DATASETS: tuple[str, ...] = (
+    "equities_master",
     "equities_bars_daily",
     "fins_details",
     "fins_dividend",

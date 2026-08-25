@@ -94,7 +94,7 @@
       "freshness_sla"
     ],
     "history_substitute_dataset": "fins_earnings_date",
-    "collection_coverage_json": "unchanged_until_wire",
+    "collection_coverage_json": "wired_v3_planner",
     "empty_complete_past_months": "FORBIDDEN"
   },
   "vendor_scope_limits": [

@@ -272,6 +272,18 @@ def _read_applied_pins(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         })
     return pins
 
+_D1_METADATA_STATUS = frozenset({"FRESH", "STALE", "FAILED", "UNKNOWN"})
+
+
+def coerce_d1_metadata_status(status: str | None) -> str:
+    """ops_projection_metadata.status CHECK allows only FRESH|STALE|FAILED|UNKNOWN."""
+    if status in _D1_METADATA_STATUS:
+        return str(status)
+    if status == "DEGRADED_REFRESH_FAILED":
+        return "FAILED"
+    return "STALE"
+
+
 def render_projection_sql(
     db_path: str | Path,
     *,
@@ -280,6 +292,10 @@ def render_projection_sql(
     use_sql_transaction: bool = True,
     generation_id: str | None = None,
     producer_commit_sha: str | None = None,
+    refresh_status: str | None = None,
+    refresh_error: str | None = None,
+    last_refresh_attempt_at: str | None = None,
+    last_success_at: str | None = None,
 ) -> str:
     """Return a complete replaceable projection transaction.
 
@@ -309,7 +325,14 @@ def render_projection_sql(
         coverage = _read_rows(conn, "dataset_coverage", DATASET_COVERAGE_COLUMNS)
         segments = _read_rows(conn, "coverage_segments", COVERAGE_SEGMENT_COLUMNS)
         b0_status = _read_latest_b0(conn)
-        metadata = _projection_metadata(db_path, max_age_seconds=max_age_seconds)
+        metadata = _projection_metadata(
+            db_path,
+            max_age_seconds=max_age_seconds,
+            refresh_status=refresh_status,
+            refresh_error=refresh_error,
+            last_refresh_attempt_at=last_refresh_attempt_at,
+            last_success_at=last_success_at,
+        )
         inventory = _source_inventory(db_path)
         applied_pins = _read_applied_pins(conn)
     finally:
@@ -328,6 +351,7 @@ def render_projection_sql(
     metadata["projection_generation_id"] = gen_id
     metadata["active_generation"] = gen_id
     metadata["producer_commit_sha"] = commit_sha
+    metadata["status"] = coerce_d1_metadata_status(metadata.get("status"))
     # Digest over row counts for integrity of this generation.
     source_digest = "sha256:" + hashlib.sha256(
         json.dumps(

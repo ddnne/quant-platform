@@ -3,6 +3,7 @@
   "profile_version": "research-data-profile/v1",
   "purpose": "Baseline historical research. Tip-only AM bars and earnings calendar are excluded unless a FeatureRef or StrategySpec lists them.",
   "required_datasets": [
+    "equities_master",
     "equities_bars_daily",
     "fins_details",
     "fins_dividend",

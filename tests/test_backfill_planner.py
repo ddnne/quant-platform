@@ -73,13 +73,10 @@ def test_planner_dataset_and_range_filter():
 
 
 def test_planner_clamps_subscription_floor_no_oos_before_live_floor():
-    """Live entitlement clamp: dates before JQUANTS_SUBSCRIPTION_FLOOR → HTTP 400.
+    """Official master domain starts 2008-05-07; 2006-08 is not required.
 
-    Historical fail id 2522 used floor 2006-08-13; W98 live re-probe shows
-    vendor message ``2006-08-19 ~``. Planner must never emit jobs starting
-    before the live floor. Uses equities_master (MISDATE band still in
-    contract) — equities_bars_daily floor was raised to 2008-05-01 (w0815ae)
-    so it no longer exercises the clamp.
+    Subscription floor remains 2006-08-19 (HTTP 400). MISDATE months
+    2006-08..2008-04 are excluded_official_unavailable, not COMPLETE.
     """
     from datetime import date
 
@@ -89,7 +86,7 @@ def test_planner_clamps_subscription_floor_no_oos_before_live_floor():
     )
 
     assert JQUANTS_SUBSCRIPTION_FLOOR == date(2006, 8, 19)
-    plan = BackfillPlanner(
+    oos = BackfillPlanner(
         cutoff=date(2006, 8, 31),
         prefer_month_chunks_for_today=False,
         chunk_days_for_today_mode=1,
@@ -98,12 +95,20 @@ def test_planner_clamps_subscription_floor_no_oos_before_live_floor():
         from_date="2000-07-13",
         to_date="2006-08-31",
     )
-    assert plan.jobs, "expected jobs on/after subscription floor"
-    assert all(
-        j.requested_from >= "2006-08-19" for j in plan.jobs
-    ), min(j.requested_from for j in plan.jobs)
+    assert oos.jobs == []
+
+    plan = BackfillPlanner(
+        cutoff=date(2008, 5, 31),
+        prefer_month_chunks_for_today=False,
+        chunk_days_for_today_mode=1,
+    ).plan(
+        datasets=["equities_master"],
+        from_date="2008-05-07",
+        to_date="2008-05-31",
+    )
+    assert plan.jobs, "expected jobs on/after official 2008-05-07"
+    assert all(j.requested_from >= "2008-05-07" for j in plan.jobs)
     assert all(j.requested_to >= j.requested_from for j in plan.jobs)
-    # Explicit OOS days must not appear as a job window start.
     assert not any(j.requested_from == "2006-08-12" for j in plan.jobs)
     assert not any(j.requested_from == "2006-08-13" for j in plan.jobs)
     assert not any(j.requested_from == "2006-08-18" for j in plan.jobs)

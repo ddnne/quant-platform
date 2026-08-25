@@ -186,9 +186,9 @@ def test_publish_dry_run_prints_sql_preview_and_metadata(tmp_path, capsys):
     assert "DELETE FROM dataset_coverage;" in output
     # Note: COMMIT may not be in first 2000 chars, so we don't check for it here
 
-    # Should contain metadata JSON
+    # Should contain metadata JSON. Export-only (no --refresh-coverage) is STALE.
     assert "projection_status" in output
-    assert "FRESH" in output
+    assert "STALE" in output
     assert "publisher" in output
     assert "scripts/publish_ops_projection.py" in output
 
@@ -228,7 +228,8 @@ def test_publish_writes_sql_and_metadata_files(tmp_path):
 
     # Check metadata file content
     meta_content = json.loads(meta_file.read_text(encoding="utf-8"))
-    assert meta_content["projection_status"] == "FRESH"
+    assert meta_content["projection_status"] == "STALE"
+    assert meta_content["last_refresh_status"] == "skipped"
     assert "projection_generated_at" in meta_content
     assert meta_content["publisher"] == "scripts/publish_ops_projection.py"
     assert meta_content["local_db"] == str(db_path)
@@ -310,6 +311,7 @@ def test_export_includes_projection_metadata_with_status_check(tmp_path):
     assert row is not None
     status, version = row
     assert status in ("FRESH", "STALE", "FAILED", "UNKNOWN")
+    assert status != "FRESH"  # skipped refresh cannot be FRESH
     assert version == "ops_projection/v3"
 
 
@@ -405,3 +407,42 @@ def test_failed_refresh_never_fresh(tmp_path: Path):
     )
     assert meta["status"] == "DEGRADED_REFRESH_FAILED"
     assert meta["last_refresh_error"] == "boom"
+
+
+def test_skipped_refresh_never_fresh(tmp_path: Path):
+    db_path = _setup_test_db(tmp_path)
+    meta = build_projection_metadata(db_path, refresh_status="skipped")
+    assert meta["status"] != "FRESH"
+    assert meta["status"] == "STALE"
+    success = build_projection_metadata(db_path, refresh_status="success")
+    assert success["status"] == "FRESH"
+
+
+def test_publish_failed_refresh_refuses_apply_remote(tmp_path, monkeypatch):
+    db_path = _setup_test_db(tmp_path)
+    output_file = tmp_path / "ops" / "projection.sql"
+    meta_file = tmp_path / "ops" / "projection_meta.json"
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("ledger boom")
+
+    monkeypatch.setattr(
+        "storage.coverage_ledger.refresh_coverage_ledger", _boom
+    )
+    monkeypatch.setattr(_MODULE, "count_local_complete", lambda _db: 1)
+    monkeypatch.setattr(_MODULE, "count_remote_complete", lambda **_k: 1)
+    rc = _MODULE.main([
+        f"--db={db_path}",
+        f"--output={output_file}",
+        f"--meta-output={meta_file}",
+        "--refresh-coverage",
+        "--apply-remote",
+    ])
+    assert rc == 4
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    assert meta["status"] == "DEGRADED_REFRESH_FAILED"
+    insert = output_file.read_text(encoding="utf-8").split(
+        "INSERT INTO ops_projection_metadata", 1
+    )[1].split(";", 1)[0]
+    assert ",'FRESH'," not in insert
+    assert ",'FAILED'," in insert

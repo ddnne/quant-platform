@@ -44,7 +44,7 @@ Contracts → ingest → store → PIT read → ops meta.
 | `scripts/issue_receipts_parallel.py` | A3: seal months with **usable raw + structured** (empty-raw ban; no backfill) |
 | `scripts/publish_ops_projection.py` | Export + fail-closed remote apply (`local COMPLETE ≥ remote`) |
 | `scripts/ops_reeval_observed_window.py` | Receipt-plane `observed_*` reeval (no segment rewrite) |
-| `scripts/ops_reeval_freshness.py` | Projection FRESH clock (no COMPLETE claim) |
+| `scripts/ops_reeval_freshness.py` | Targeted evaluated_at bump; does not claim projection FRESH |
 
 ## Policy
 

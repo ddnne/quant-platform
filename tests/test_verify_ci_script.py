@@ -15,6 +15,7 @@ WORKERS = (
     "quant-ops-mcp",
     "research-ai-gateway",
     "research-mass-eval",
+    "ci-aggregate",
 )
 
 SKIP_FLAGS = (
@@ -55,8 +56,7 @@ def test_verify_ci_script_exists_executable_and_covers_required_steps() -> None:
     assert "specs/evaluation_ir/schema.json" in src
     assert "evaluation_ir.py" in src
     assert "evaluation_ir.ts" in src
-    assert "ci-aggregate" not in src
-    assert len(WORKERS) == 6
+    assert len(WORKERS) == 7
     assert "package-lock.json" in src
     assert "npm ci" in src
     assert "npm test" in src

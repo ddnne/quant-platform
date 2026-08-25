@@ -1,7 +1,8 @@
 """JSDA OTC required set is official index listed days, not calendar 8784.
 
-V2 collection_coverage.json is unwired. Not a Dataset COMPLETE claim.
-Does not fetch live HTML.
+plan_required_segments takes listed publication days from index HTML.
+Missing index text is fail-closed empty (UNKNOWN), not a calendar walk.
+Does not COMPLETE weekends or PARSE_ZERO days. Does not fetch live HTML.
 """
 
 from __future__ import annotations
@@ -19,7 +20,11 @@ from data_contracts.source_capability import (
 )
 from ingestion.jsda.urls import discover_otc_reference_segments
 from qp_paths import repo_root
-from storage.coverage_ledger import plan_required_segments
+from storage.coverage_ledger import (
+    evaluate_segment,
+    official_index_days,
+    plan_required_segments,
+)
 
 _REPO = repo_root()
 _CAPABILITY = _REPO / "specs" / "source_capability" / "jsda_otc_bond_reference_prices.json"
@@ -168,24 +173,75 @@ def test_5886_complete_days_map_into_required_set_not_recomplete() -> None:
     assert mig["dataset_complete_claim"] is False
 
 
-def test_v2_planner_still_expands_calendar_days_v3_does_not_use_that_set() -> None:
-    """V2 ledger is unchanged here; V3 required set is official index days."""
-    v2 = coverage_contract_for(DATASET)
-    assert v2.history_target_start == OFFICIAL_START
-    assert v2.segment_granularity == "official_archive_day"
-    planned = plan_required_segments(v2, V2_TARGET_END, source="jsda")
-    assert len(planned) == V2_REQUIRED
-    planned_ids = [seg.segment_id for seg in planned]
-    assert planned_ids[0] == OFFICIAL_START
-    assert planned_ids[-1] == V2_TARGET_END
-    assert WEEKEND_IN_TINY_SPAN in planned_ids
+def test_official_index_days_fail_closed_without_index_text() -> None:
+    assert official_index_days(DATASET, None) == ()
+    assert official_index_days(DATASET, "") == ()
+    assert official_index_days(DATASET, "   ") == ()
+    html = _FIXTURE.read_text(encoding="utf-8")
+    assert official_index_days("equities_master", html) == ()
 
+
+def test_official_index_days_tiny_fixture_lists_publication_days_only() -> None:
+    html = _FIXTURE.read_text(encoding="utf-8")
+    listed = official_index_days(DATASET, html)
+    assert listed == LISTED_TINY_DAYS
+    assert WEEKEND_IN_TINY_SPAN not in listed
+    calendar = _calendar_days("2002-08-02", "2002-08-06")
+    assert len(calendar) == 5
+    assert len(listed) == 3
+    assert len(listed) != V2_REQUIRED
+
+
+def test_plan_required_segments_fail_closed_without_index_text() -> None:
+    policy = coverage_contract_for(DATASET)
+    assert policy.coverage_mode == "official_archive_index_reconciled"
+    planned = plan_required_segments(policy, V2_TARGET_END, source="jsda")
+    assert planned == ()
+    assert len(planned) != V2_REQUIRED
     mig = _load(_MIGRATION)
-    assert mig["before"]["required_segments"] == len(planned)
+    assert mig["before"]["required_segments"] == V2_REQUIRED
     assert mig["after"]["required_set"]["expand_calendar_days"] is False
-    assert mig["after"]["required_set"]["not_calendar_day_count"] == len(planned)
-    assert mig["behavior_change"]["collection_coverage_json"] == "unchanged_until_wire"
     assert mig["behavior_change"]["required_calendar_days"] is False
+
+
+def test_plan_required_segments_uses_official_index_not_calendar() -> None:
+    policy = coverage_contract_for(DATASET)
+    html = _FIXTURE.read_text(encoding="utf-8")
+    planned = plan_required_segments(
+        policy, "2002-08-06", source="jsda", index_text=html,
+    )
+    ids = [seg.segment_id for seg in planned]
+    calendar = _calendar_days("2002-08-02", "2002-08-06")
+    assert ids == list(LISTED_TINY_DAYS)
+    assert WEEKEND_IN_TINY_SPAN not in ids
+    assert len(ids) != len(calendar)
+    assert len(ids) != V2_REQUIRED
+    for day in PARSE_ZERO_DAYS:
+        assert day in ids
+
+
+def test_plan_required_segments_clips_index_days_to_window() -> None:
+    policy = coverage_contract_for(DATASET)
+    html = _FIXTURE.read_text(encoding="utf-8")
+    planned = plan_required_segments(
+        policy, "2002-08-05", source="jsda", index_text=html,
+    )
+    assert [seg.segment_id for seg in planned] == ["2002-08-02", "2002-08-05"]
+
+
+def test_weekend_and_parse_zero_are_not_invented_complete() -> None:
+    policy = coverage_contract_for(DATASET)
+    html = _FIXTURE.read_text(encoding="utf-8")
+    planned = plan_required_segments(
+        policy, "2002-08-06", source="jsda", index_text=html,
+    )
+    ids = {seg.segment_id for seg in planned}
+    assert WEEKEND_IN_TINY_SPAN not in ids
+    for day in PARSE_ZERO_DAYS:
+        required = next(seg for seg in planned if seg.segment_id == day)
+        status, _detail = evaluate_segment(policy, required, None)
+        assert status == "PARTIAL"
+        assert status != "COMPLETE"
 
 
 def test_v2_coverage_floor_not_rewritten_here() -> None:

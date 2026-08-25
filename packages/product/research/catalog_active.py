@@ -2,12 +2,13 @@
 
 Active = countable Worker theses in the compiled map, minus unique-22 park
 and generation_enabled-False clones with no Worker body. Legacy is the
-compiled remainder (replay/lineage only). Does not add YAML.
+compiled remainder (replay/lineage only). Does not add YAML. n_active is
+not a quality metric.
 """
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from research.unique_logic.catalog import compiled_migration_ids, load_catalog_specs
 from research.unique_logic.worker_bodies import (
@@ -60,5 +61,22 @@ def catalog_kind(logic_id: str) -> CatalogKind:
 
 
 def pilot_candidates() -> frozenset[str]:
-    """Pilot helper returns active only. Legacy IDs stay out."""
+    """Pilot helper returns active only. Legacy IDs stay out.
+
+    n_active is not a quality metric. go=False, not_a_pass=True. AND rows
+    remaining classified active/pilot_candidates are inventory, not a pass.
+    """
     return active_logic_ids()
+
+
+def summary() -> dict[str, Any]:
+    """Active/pilot inventory. n_active is not a quality metric. Not GO."""
+    n_active = len(active_logic_ids())
+    return {
+        "n_active": n_active,
+        "n_legacy": len(legacy_logic_ids()),
+        "n_pilot_candidates": len(pilot_candidates()),
+        "n_active_is_not_a_quality_metric": True,
+        "go": False,
+        "not_a_pass": True,
+    }

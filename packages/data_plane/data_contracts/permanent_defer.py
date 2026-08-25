@@ -29,17 +29,15 @@ via this module. Other PD ids (bars_am, OTC, master, earn_cal) remain.
 **W98 / w0819a equities_master scope (PD-D2-MASTER):**
 
 * ``PRE_PLAN`` months ``2000-07…2006-07`` (n=73) are **catalog OUT_OF_SCOPE**
-  via V2 ``history_target_start=2006-08-13`` — not “missing”, not densify targets.
+  via the W98 subscription-floor raise to ``2006-08-13`` — not “missing”,
+  not densify targets. ``2006-08-13`` remains the Premium entitlement floor
+  (historical fact), not historical required start.
 * Official listed-info provision start is **2008-05-07**
-  (https://jpx-jquants.com/en/spec/eq-master). ``2006-08-13`` is the Premium
-  subscription entitlement floor, **not** historical required start.
-  Coverage V3 records that official domain in
-  ``specs/source_capability/equities_master.json`` and
-  ``specs/coverage_v3/equities_master_migration.json``.
+  (https://jpx-jquants.com/en/spec/eq-master). Planner / coverage policy
+  track that official domain; ``2006-08-13`` is not a densify start.
 * ``MISDATE`` months ``2006-08…2008-04`` (n=21) are
-  **excluded_official_unavailable** under V3 (vendor clamp to 2008-05-07),
-  not missing backfill and not COMPLETE. V2 ``collection_coverage.json``
-  still inventories them until wire-later.
+  **excluded_official_unavailable** (vendor clamp to 2008-05-07),
+  not REQUIRED_PARTIAL, not missing backfill, and not COMPLETE.
 * This defer record stays. Do not invent Dataset COMPLETE by floor bump.
   Remaining genuine gaps on or after 2008-05-07 stay PARTIAL.
 * Honest island remains ``2008-05→latest`` (tip continuous). PIT history
@@ -81,14 +79,15 @@ SUPERSEDED_PERMANENT_DEFER_IDS: dict[str, str] = {
 
 # W98 / w0819a — equities_master coverage bands (PD-D2-MASTER).
 # PRE_PLAN is explicit **coverage out-of-scope (de-scope)** — not "missing".
-# Official provision start is 2008-05-07 (V3). V2 history_target_start stays
-# 2006-08-13 until collection_coverage.json is wired. Do not invent Dataset
-# COMPLETE by copying the official floor into V2 without the migration artifact.
+# Official provision start is 2008-05-07 (planner wired). 2006-08-13 remains
+# the Premium subscription entitlement floor (historical fact), not densify.
+# Do not invent Dataset COMPLETE by treating excluded MISDATE as required.
 # Focus seal/ops on POST_ISLAND 2008-05→latest; remaining genuine gaps stay PARTIAL.
 MASTER_JQ_SCOPE: dict[str, object] = {
     "dataset": "equities_master",
     "pd_id": "PD-D2-MASTER",
-    "history_target_start": "2006-08-13",
+    "history_target_start": "2008-05-07",
+    "not_historical_required_start": "2006-08-13",
     "wave_locked": "W98 / w0819a",
     "bands": {
         "PRE_PLAN": {
@@ -102,29 +101,31 @@ MASTER_JQ_SCOPE: dict[str, object] = {
             "seal": "FORBIDDEN",
             "invent_fill": "FORBIDDEN",
             "reason": (
-                "Below Premium subscription entitlement; catalog "
-                "history_target_start raised to 2006-08-13 (W98 product de-scope). "
-                "Not missing-to-invent; never densify / never raise floor to fake COMPLETE."
+                "Below Premium subscription entitlement; W98 product de-scope "
+                "raised the catalog floor to 2006-08-13 "
+                "(not_historical_required_start). Not missing-to-invent; "
+                "never densify / never raise floor to fake COMPLETE."
             ),
         },
         "MISDATE": {
             "span": "2006-08..2008-04",
             "n_segs": 21,
-            "coverage": "REQUIRED_PARTIAL",
-            "status": "PARTIAL_held",
+            "coverage": "excluded_official_unavailable",
+            "status": "excluded_official_unavailable",
             "de_scope": False,
             "densify": "FORBIDDEN",
-            "seal": "only_if_window_ok_Date",
+            "seal": "FORBIDDEN",
             "invent_fill": "FORBIDDEN",
             "reason": (
                 "Official listed-info provision starts 2008-05-07 "
                 "(https://jpx-jquants.com/en/spec/eq-master). "
                 "Queries before that clamp Date to 2008-05-07 (vendor MISDATE), "
-                "not a missing-backfill gap. V3 coverage migration excludes "
-                "2006-08..2008-04 as excluded_official_unavailable, not COMPLETE. "
-                "V2 collection_coverage.json still lists these months as required "
-                "until wire-later. PD-D2-MASTER remains; remaining genuine gaps "
-                "after 2008-05-07 stay PARTIAL. Do not invent Dataset COMPLETE."
+                "not a missing-backfill gap. 2006-08..2008-04 are "
+                "excluded_official_unavailable, not REQUIRED_PARTIAL to densify "
+                "and not COMPLETE. 2006-08-13 remains the Premium subscription "
+                "entitlement floor (historical fact). PD-D2-MASTER remains; "
+                "remaining genuine gaps after 2008-05-07 stay PARTIAL. "
+                "Do not invent Dataset COMPLETE."
             ),
         },
         "POST_ISLAND": {
@@ -144,8 +145,8 @@ MASTER_JQ_SCOPE: dict[str, object] = {
     # Official listed-info /equities/master provision start (not the Premium
     # HTTP 400 floor). Earlier dates still return Date=2008-05-07.
     # https://jpx-jquants.com/en/spec/eq-master
-    # V3 historical required start. Do not copy into V2 history_target_start
-    # to invent Dataset COMPLETE; wire via coverage_v3 migration only.
+    # Planner tracks this official start. 2006-08-13 is the subscription
+    # floor (not_historical_required_start), not a densify target.
     "vendor_data_provision_start": "2008-05-07",
     "vendor_data_provision_citation": "https://jpx-jquants.com/en/spec/eq-master",
     "invent_complete_via_floor_to_2008_05": "FORBIDDEN",

@@ -125,7 +125,7 @@ function requestQueries(
     return [{ [dayKey]: opts.today || defaultMarketDayJst() }];
   }
 
-  // range: calendar / earnings-calendar / topix / investor-types (bare from/to).
+  // range: calendar / topix / investor-types (bare from/to). Earnings calendar vendor is pagination_key snapshot.
   const from = opts.from || (opts.to ? opts.to : daysAgoJst(5));
   const to = opts.to || todayJst();
   if (from > to) throw new Error("from must be on or before to");

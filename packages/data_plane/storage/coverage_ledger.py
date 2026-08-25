@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 import json
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -14,9 +15,17 @@ from cf_platform.ingest_premium.coverage import CheckResult, run_coverage
 from data_contracts.coverage import (
     COVERAGE_STATUSES,
     POLICY_VERSION,
+    SNAPSHOT_SEGMENT_GRANULARITIES,
     CollectionCoverageContract,
     all_coverage_contracts,
     coverage_contract_for,
+)
+from data_contracts.source_capability import (
+    TIP_SNAPSHOT_MODES,
+    OfficialRequiredDomainSubset,
+    SourceCapabilityContract,
+    required_domain_subset_official,
+    source_capability_contract_for,
 )
 from storage.coverage_ledger_io import (
     persist_refreshed_coverage,
@@ -86,20 +95,193 @@ def _month_end(value: date) -> date:
     return value.replace(day=calendar.monthrange(value.year, value.month)[1])
 
 
+_TIP_COVERAGE_MODES = frozenset({
+    "recent_snapshot",
+    "next_business_day_snapshot",
+    "same_day_am_snapshot",
+    "tip_snapshot",
+})
+_OFFICIAL_ARCHIVE_INDEX_MODES = frozenset({
+    "official_archive_index",
+    "official_archive_index_reconciled",
+})
+_OFFICIAL_ARCHIVE_INDEX_DATASETS = frozenset({
+    "jsda_otc_bond_reference_prices",
+})
+_INDEX_PUBLICATION_DATE_RE = re.compile(
+    r"(?<!\d)(20\d{2})[./年]\s*(\d{1,2})[./月]\s*(\d{1,2})(?:日)?(?!\d)"
+)
+
+
+def _source_capability_for(
+    dataset_id: str,
+) -> SourceCapabilityContract | None:
+    try:
+        return source_capability_contract_for(dataset_id)
+    except KeyError:
+        return None
+
+
+def _official_domain_for(
+    capability: SourceCapabilityContract | None,
+) -> OfficialRequiredDomainSubset | None:
+    if capability is None:
+        return None
+    return required_domain_subset_official(capability)
+
+
+def _is_tip_snapshot_policy(
+    policy: CollectionCoverageContract,
+    domain: OfficialRequiredDomainSubset | None,
+) -> bool:
+    if domain is not None and not domain.admit_historical_required_segments:
+        return True
+    if policy.segment_granularity in SNAPSHOT_SEGMENT_GRANULARITIES:
+        return True
+    if policy.coverage_mode in _TIP_COVERAGE_MODES:
+        return True
+    history_mode = policy.history_mode
+    return history_mode in TIP_SNAPSHOT_MODES
+
+
+def _snapshot_extra_scope(
+    policy: CollectionCoverageContract,
+    capability: SourceCapabilityContract | None,
+    domain: OfficialRequiredDomainSubset | None,
+    grain: str,
+) -> dict[str, Any]:
+    history_mode = (
+        domain.history_mode
+        if domain is not None
+        else (policy.history_mode or policy.coverage_mode)
+    )
+    extra: dict[str, Any] = {
+        "history_mode": history_mode,
+        "tip_only_operational": True,
+    }
+    if capability is None:
+        return extra
+    sla = capability.freshness_sla
+    extra["freshness_sla"] = {
+        "expected_after": sla.expected_after,
+        "usable_by": sla.usable_by,
+        "timezone": sla.timezone,
+        "rule": sla.rule,
+    }
+    window = capability.collection_window
+    extra["collection_window"] = {
+        "grain": grain,
+        "open": window.open,
+        "close": window.close,
+    }
+    if history_mode == "next_business_day_snapshot":
+        extra["evaluate_via"] = [
+            "collection_generation",
+            "collection_cutoff",
+            "freshness_sla",
+        ]
+    return extra
+
+
+def _uses_official_archive_index(
+    policy: CollectionCoverageContract,
+    domain: OfficialRequiredDomainSubset | None,
+) -> bool:
+    if policy.dataset_id in _OFFICIAL_ARCHIVE_INDEX_DATASETS:
+        return True
+    if policy.coverage_mode in _OFFICIAL_ARCHIVE_INDEX_MODES:
+        return True
+    if policy.history_mode == "official_archive_index":
+        return True
+    if domain is None:
+        return False
+    return (
+        domain.history_mode == "official_archive_index"
+        or domain.publication_days_only
+    )
+
+
+def official_index_days(
+    dataset: str,
+    index_text: str | None,
+) -> tuple[str, ...]:
+    """Official year-index listed publication days for ``dataset``.
+
+    Missing ``index_text`` is fail-closed: empty set, never a calendar walk.
+    """
+    if dataset not in _OFFICIAL_ARCHIVE_INDEX_DATASETS:
+        return ()
+    if index_text is None or not str(index_text).strip():
+        return ()
+    from ingestion.jsda.urls import discover_otc_reference_segments
+
+    text = str(index_text)
+    years = {
+        int(match.group(1))
+        for match in _INDEX_PUBLICATION_DATE_RE.finditer(text)
+    }
+    if not years:
+        return ()
+    seen: set[str] = set()
+    days: list[str] = []
+    for year in sorted(years):
+        for item in discover_otc_reference_segments(text, year=year):
+            if item.segment_id in seen:
+                continue
+            seen.add(item.segment_id)
+            days.append(item.segment_id)
+    days.sort()
+    return tuple(days)
+
+
 def plan_required_segments(
     policy: CollectionCoverageContract,
     target_end: str,
     *,
     source: str = "jquants",
     expected_items_by_segment: Mapping[str, int] | None = None,
+    index_text: str | None = None,
 ) -> tuple[RequiredCoverageSegment, ...]:
-    """Create the required inventory independently of observed rows/receipts."""
+    """Create the required inventory independently of observed rows/receipts.
+
+    SourceCapabilityContract V3 is SoT when present: official availability
+    clips bounded history, and tip/snapshot history modes yield a current
+    snapshot segment instead of invented monthly shells.
+
+    Official-archive-index datasets take listed publication days from
+    ``index_text``. Missing index text yields an empty required set
+    (UNKNOWN / fail-closed), not a calendar-day walk.
+    """
+    capability = _source_capability_for(policy.dataset_id)
+    domain = _official_domain_for(capability)
     start = date.fromisoformat(policy.history_target_start)
+    if domain is not None:
+        official = date.fromisoformat(domain.earliest_official_availability)
+        if start < official:
+            start = official
     end = date.fromisoformat(target_end)
     if end < start:
         raise ValueError("target_end precedes coverage history target")
-    granularity = policy.segment_granularity
+    tip_snapshot = _is_tip_snapshot_policy(policy, domain)
+    if tip_snapshot:
+        grain = (
+            domain.collection_window_grain
+            if domain is not None
+            else policy.segment_granularity
+        )
+        if grain not in SNAPSHOT_SEGMENT_GRANULARITIES:
+            grain = policy.segment_granularity
+            if grain not in SNAPSHOT_SEGMENT_GRANULARITIES:
+                grain = "collection_cutoff_snapshot"
+    else:
+        grain = policy.segment_granularity
+    granularity = grain
     segments: list[RequiredCoverageSegment] = []
+    extra_scope = (
+        _snapshot_extra_scope(policy, capability, domain, grain)
+        if tip_snapshot
+        else None
+    )
 
     def _append(segment_id: str, segment_start: date, segment_end: date) -> None:
         expected_items = None
@@ -115,7 +297,7 @@ def plan_required_segments(
         # Non-event source_query needs expected_items for COMPLETE; default one exhausted query.
         if expected_items is None and unit == "source_query":
             expected_items = 1
-        scope = {
+        scope: dict[str, Any] = {
             "coverage_mode": policy.coverage_mode,
             "expected_frequency": policy.expected_frequency,
             "expected_item_unit": unit,
@@ -124,6 +306,8 @@ def plan_required_segments(
             "universe_rule": policy.universe_rule,
             "segment_granularity": granularity,
         }
+        if extra_scope:
+            scope.update(extra_scope)
         segments.append(RequiredCoverageSegment(
             source=source,
             dataset=policy.dataset_id,
@@ -134,6 +318,17 @@ def plan_required_segments(
             expected_items=expected_items,
         ))
 
+    if tip_snapshot:
+        # Current collection window only. Do not expand monthly history.
+        _append(end.isoformat(), end, end)
+        return tuple(segments)
+    if _uses_official_archive_index(policy, domain):
+        # Listed index days only. Missing index_text → empty, not weekends.
+        for day_s in official_index_days(policy.dataset_id, index_text):
+            day = date.fromisoformat(day_s)
+            if start <= day <= end:
+                _append(day_s, day, day)
+        return tuple(segments)
     if granularity == "calendar_month":
         cursor = start
         while cursor <= end:
@@ -146,11 +341,7 @@ def plan_required_segments(
             segment_end = min(end, date(year, 12, 31))
             _append(str(year), segment_start, segment_end)
     elif granularity == "official_archive_day":
-        # Walks every calendar day. JSDA OTC coverage_mode is
-        # official_archive_index_reconciled — required publication days come
-        # from the official year index, not weekends/holidays. Calendar-day
-        # inventory is why jsda_otc PARTIAL (~2898) >> PARSE_ZERO (2).
-        # Do not COMPLETE empty non-index days from this expansion.
+        # Non-index official_archive_day only. Index datasets returned above.
         cursor = start
         while cursor <= end:
             _append(cursor.isoformat(), cursor, cursor)
@@ -1243,6 +1434,7 @@ __all__ = [
     "evaluate_segment",
     "evaluate_required_segments",
     "is_synthetic_receipt",
+    "official_index_days",
     "plan_required_segments",
     "read_collection_receipts",
     "read_coverage_segments",

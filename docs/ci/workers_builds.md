@@ -81,9 +81,13 @@ later. Disconnecting Git does not replace this policy — the deploy command is
 the switch
 ([disable automatic deployments](https://developers.cloudflare.com/workers/ci-cd/builds/#disconnecting-builds)).
 
-Local pre-push remains [`scripts/verify_all.sh`](../../scripts/verify_all.sh)
-(pytest + catalog freeze + worker `npm test`; no live deploy). That script is
-not a GitHub check and does not promote.
+Local **mandatory** CI is [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh)
+(fresh `.venv`, pytest, catalog freeze, Evaluation IR schema, all seven
+Workers `npm ci` / test / typecheck / dry-run; no `VERIFY_*` skips; no live
+deploy). [`scripts/verify_all.sh`](../../scripts/verify_all.sh) is a fast local
+helper only. Six-lane `npm test` receipts alone skip Python/catalog and are
+**not** `verify_ci`. Merge requires GitHub context `ci-aggregate` after
+authenticated receipts **and** `verify_ci`.
 
 ## Aggregate required check
 
@@ -101,6 +105,7 @@ Each lane POSTs `{worker, sha, result, command}`. The gate accepts a batch:
 ```http
 POST /v1/receipts
 Content-Type: application/json
+X-CI-Lane-Token: <CI_LANE_TOKEN>
 
 {
   "receipts": [
@@ -121,6 +126,16 @@ A wrapper at the end of CI (or a seventh Builds job) POSTs the **six**
 receipts together. Posting a PR comment, a Cloudflare check-run id, or a
 preview URL does **not** count.
 
+### Receipt auth
+
+`POST /v1/receipts` is fail-closed on inbound auth. Header `X-CI-Lane-Token`
+must match bound secret `CI_LANE_TOKEN` (`wrangler secret put CI_LANE_TOKEN`).
+Unbound or blank `CI_LANE_TOKEN` → HTTP **503** (same as unbound
+`GITHUB_STATUS_TOKEN`; nothing posted). Wrong or missing header → HTTP **401**.
+Do not accept a GitHub PR comment as a success signal.
+
+GET `/health` and `/` stay unauthenticated.
+
 ### Fail-closed rules
 
 | Condition | Gate | GitHub `ci-aggregate` status |
@@ -129,6 +144,8 @@ preview URL does **not** count.
 | Any lane `fail` | not ok (`lane_failed`) | `failure` (never `success`) |
 | Receipt SHAs differ | not ok (`sha_mismatch`) | `failure` (never `success`) |
 | Missing worker receipt | not ok (`missing_receipt`) | `failure` (never `success`) |
+| `CI_LANE_TOKEN` unbound | HTTP **503** | nothing posted |
+| Wrong / missing `X-CI-Lane-Token` | HTTP **401** | nothing posted |
 | `GITHUB_STATUS_TOKEN` unbound | HTTP **503** | nothing posted |
 
 The token is a GitHub PAT / fine-grained token with `repo:status` (or
@@ -149,6 +166,7 @@ After `npm test` in `platform/workers/ingestion-jsda`:
 # result=pass only if npm test exited 0. SHA from Workers Builds, not from a comment.
 printf '%s' "$RECEIPT_JSON" | curl -sS -X POST "$CI_AGGREGATE_URL/v1/receipts" \
   -H 'content-type: application/json' \
+  -H "X-CI-Lane-Token: $CI_LANE_TOKEN" \
   --data-binary @-
 ```
 
@@ -162,4 +180,32 @@ on `missing_receipt`.
 - Does not `wrangler deploy` to production as a side effect of a green check.
 - Does not arm Mass / READY / GO.
 - Does not read GitHub PR comments, issue comments, or check-run conclusions
-  as inputs. Only POSTed receipts plus the bound status token.
+  as inputs. Only POSTed receipts that present a matching `X-CI-Lane-Token`,
+  plus the bound GitHub status token.
+
+## Public surfaces (preview vs production)
+
+Do not publish every Worker on a stable `*.workers.dev` hostname.
+Top-level config matches production (same Wrangler `name`; no `-production`
+suffix). Production deploys use `--env production` (or `CLOUDFLARE_ENV=production`).
+Default `wrangler deploy` without `--env` still targets the top-level Worker;
+wrangler 4.x warns to pass `--env=""` or `--env production` when named envs exist.
+
+Preview is **version Preview URLs** (`preview_urls = true`), not a second
+product hostname. Those URLs are not a public research API, not public
+research execution, and not an ingest API.
+
+| Worker | Wrangler `name` | Preview | Production `workers_dev` | Public surface |
+|---|---|---|---|---|
+| quant-ops-mcp | `quant-platform-ops-read-mcp` | `workers_dev=true` (OAuth callback host) | `true` | remote public, OAuth required, read-only |
+| research-ai-gateway | `quant-platform-research-ai-gateway` | `preview_urls` only | `false` | service binding only; not a public research API |
+| research-mass-eval | `quant-platform-research-mass-eval` | `preview_urls` only | `false` | internal/admin; no public research execution |
+| ingestion-premium | `quant-platform-ingestion-premium` | `preview_urls` only | `false` | cron/internal |
+| ingestion-jsda | `quant-platform-ingestion-jsda` | `preview_urls` only | `false` | cron/internal |
+| ingestion-secrets | `quant-platform-ingestion-secrets` | `workers_dev=true` (token-gated proxy host) | `true` | narrow authenticated proxy |
+
+`research-ai-gateway` keeps `[ai]`; `research-mass-eval` keeps service binding
+`AI_GATEWAY` and must not bind `env.AI`. wrangler 4.125.0 still dry-runs the
+gateway with `workers_dev=false` (no custom route). Ops MCP does not gain
+arbitrary SQL, URL fetch, ingest triggers, delete, READY publication, feature
+approve, broker/order, shell, or secret-read tools.

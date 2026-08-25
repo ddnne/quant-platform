@@ -20,14 +20,16 @@ from .validate import PREMIUM_CORE_DATASETS
 
 # C6/C7 assumed Premium-start dates (conservative; not contractual).
 EXPECTED_START: dict[str, str] = {
-    "equities_master": "2006-08-13",  # PRE_PLAN 2000-07..2006-07 de-scoped
+    "equities_master": "2008-05-07",  # official listed-info domain; not 2006-08-13 entitlement
     "equities_bars_daily": "2008-05-01",  # observed floor
-    "equities_bars_daily_am": "2024-01-04",  # AM recent-only by spec
+    # V3 tip/same-day snapshot — not an EXPECTED_START history floor; do not densify months.
+    "equities_bars_daily_am": "2024-01-04",
     "fins_summary": "2008-07-01",
     "fins_details": "2018-01-01",
     "fins_dividend": "2013-02-01",
     "fins_earnings_date": "2018-01-01",
-    "equities_earnings_calendar": "2010-01-04",  # tip-only vendor
+    # V3 tip snapshot — not an EXPECTED_START history floor; do not densify months.
+    "equities_earnings_calendar": "2010-01-04",
     "markets_calendar": "2008-01-01",
     "equities_investor_types": "2013-01-04",
     "indices_bars_daily_topix": "2008-05-01",

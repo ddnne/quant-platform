@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-import json
+import csv
+import io
 from pathlib import Path
 
 from ingestion.jsda.normalize import normalize_bond_trades
-from ingestion.jsda.parse import parse_csv
+from ingestion.jsda.parse import parse_csv, parse_otc_reference_csv
 from ingestion.jsda.urls import index_url, pick_latest, resolve_download_links
 from ingestion.pipeline import run_jsda
 from storage.sqlite_store import SqliteStore
+
+_FIXTURES = Path(__file__).parent / "fixtures"
 
 
 # --------------------------------------------------------------------------- parse
@@ -49,6 +52,84 @@ def test_parse_ignores_title_rows_without_date():
     records = parse_csv(text)
     assert len(records) == 1
     assert records[0]["trade_date"] == "2025-04-01"
+
+
+def _otc_raw_row_count(text: str) -> int:
+    return sum(1 for row in csv.reader(io.StringIO(text)) if any(c.strip() for c in row))
+
+
+def test_otc_headerless_23col_maps_overlapping_positional_fields():
+    # Synthetic prefix of the 29-col fixture; not a live 2002-08-02 COMPLETE seal.
+    text = (_FIXTURES / "jsda_otc_reference_headerless_23col.csv").read_text(
+        encoding="utf-8"
+    )
+    raw_count = _otc_raw_row_count(text)
+    records = parse_otc_reference_csv(
+        text.encode("cp932"),
+        publication_label_date="2002-08-02",
+        quote_effective_date="2002-08-01",
+    )
+    assert records, "23-col adapter must yield nz parse"
+    assert len(records) == raw_count == 2
+    first = records[0]
+    assert first["publication_label_date"] == "2002-08-02"
+    assert first["quote_effective_date"] == "2002-08-01"
+    assert first["security_code"] == "123456789"
+    assert first["bond_name"] == "10年国債"
+    assert first["maturity_date"] == "2012-08-20"
+    assert first["coupon_rate"] == 1.5
+    assert first["average_yield"] == 1.225
+    assert first["average_price"] == 99.85
+    assert first["individual_investor_flag"] == "0"
+    assert first["high_price"] == 100.0
+    assert first["low_price"] == 99.5
+    assert first["high_yield"] == 1.1
+    assert first["low_yield"] is None
+    assert first["median_yield"] is None
+    assert first["median_price"] is None
+    assert first["source_row_number"] == 1
+    assert records[1]["security_code"] == "987654321"
+    assert records[1]["individual_investor_flag"] == "1"
+
+
+def test_otc_headerless_23col_overlapping_fields_match_29col_prefix():
+    full = (_FIXTURES / "jsda_otc_reference_headerless.csv").read_text(encoding="utf-8")
+    early = (_FIXTURES / "jsda_otc_reference_headerless_23col.csv").read_text(
+        encoding="utf-8"
+    )
+    kwargs = {
+        "publication_label_date": "2002-08-02",
+        "quote_effective_date": "2002-08-01",
+    }
+    full_records = parse_otc_reference_csv(full, **kwargs)
+    early_records = parse_otc_reference_csv(early, **kwargs)
+    overlapping = (
+        "publication_label_date",
+        "quote_effective_date",
+        "security_code",
+        "bond_name",
+        "coupon_rate",
+        "maturity_date",
+        "average_price",
+        "average_yield",
+        "high_price",
+        "high_yield",
+        "low_price",
+        "individual_investor_flag",
+        "source_row_number",
+    )
+    assert len(full_records) == len(early_records) == 2
+    for full_row, early_row in zip(full_records, early_records):
+        for field in overlapping:
+            assert early_row[field] == full_row[field]
+        for field in ("low_yield", "median_yield", "median_price"):
+            assert early_row[field] is None
+            assert full_row[field] is not None
+
+
+def test_otc_headerless_short_non_identity_stays_parse_zero():
+    text = "not-a-date,x,code,name,20020820,1.5,1.2,99.8\n"
+    assert parse_otc_reference_csv(text) == []
 
 
 # --------------------------------------------------------------------------- normalize

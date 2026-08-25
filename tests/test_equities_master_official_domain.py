@@ -1,6 +1,6 @@
 """equities_master official domain starts 2008-05-07 (coverage v3).
 
-Not a Dataset COMPLETE claim. V2 collection_coverage.json is unwired.
+Not a Dataset COMPLETE claim. 2006-08..2008-04 stay excluded_official_unavailable.
 """
 
 from __future__ import annotations
@@ -9,12 +9,16 @@ import json
 from datetime import date
 from pathlib import Path
 
+from cf_platform.ingest_premium.coverage import EXPECTED_START
+from data_contracts.canonical import canonical_dataset_for
 from data_contracts.coverage import coverage_contract_for
 from data_contracts.permanent_defer import (
     MASTER_JQ_SCOPE,
     PERMANENT_DEFER_DATASETS,
     PERMANENT_DEFER_IDS,
 )
+from ops.range_batch_scheduler import TRACK_A_FOCUS_RANGES
+from storage.coverage_ledger import plan_required_segments
 
 _REPO = Path(__file__).resolve().parents[1]
 _CAPABILITY = _REPO / "specs" / "source_capability" / "equities_master.json"
@@ -142,14 +146,60 @@ def test_remaining_genuine_gaps_stay_partial_no_dataset_complete():
     assert mig["invent_complete"] is False
 
 
-def test_v2_coverage_floor_not_rewritten_here():
-    """collection_coverage.json stays V2 until a later wire; this lane does not invent COMPLETE."""
-    v2 = coverage_contract_for("equities_master")
-    assert v2.history_target_start == NOT_REQUIRED_START
-    assert MASTER_JQ_SCOPE["history_target_start"] == NOT_REQUIRED_START
+def test_v3_planner_required_start_is_official_not_entitlement_floor():
+    """Official 2008-05-07 is required start; 2006-08..2008-04 stay excluded, not COMPLETE."""
+    policy = coverage_contract_for("equities_master")
+    assert policy.history_target_start == OFFICIAL_START
+    assert policy.policy_version == "collection-coverage/v3"
+    planned = plan_required_segments(policy, "2008-06-30")
+    ids = [segment.segment_id for segment in planned]
+    assert ids == ["2008-05", "2008-06"]
+    assert planned[0].segment_start == OFFICIAL_START
+    for month in OLD_MISDATE_MONTHS:
+        assert month not in ids
+
+    # Entitlement floor remains recorded; it is not historical required start.
+    assert MASTER_JQ_SCOPE["history_target_start"] == OFFICIAL_START
+    assert MASTER_JQ_SCOPE["not_historical_required_start"] == NOT_REQUIRED_START
     assert MASTER_JQ_SCOPE["vendor_data_provision_start"] == OFFICIAL_START
     assert MASTER_JQ_SCOPE["invent_complete_via_floor_to_2008_05"] == "FORBIDDEN"
     assert MASTER_JQ_SCOPE["dataset_complete_invent"] == "FORBIDDEN"
+
+    mig = _load(_MIGRATION)
+    mapping = mig["old_new_required_segment_mapping"]["excluded_official_unavailable"]
+    excluded_ids = [row["segment_id"] for row in mapping]
+    assert excluded_ids == OLD_MISDATE_MONTHS
+    for row in mapping:
+        assert row["v3_status"] == EXCLUDED_STATUS
+        assert row["v3_status"] != "COMPLETE"
+
+
+def test_parallel_sot_master_historical_start_is_official_domain():
+    """canonical + scheduler + EXPECTED_START align to 2008-05-07.
+
+    2006-08-13 remains the entitlement floor / excluded_official_unavailable
+    marker, not historical required start. Not a Dataset COMPLETE claim.
+    """
+    assert canonical_dataset_for("equities_master").historical_start == OFFICIAL_START
+    assert TRACK_A_FOCUS_RANGES["equities_master"][0] == OFFICIAL_START
+    assert EXPECTED_START["equities_master"] == OFFICIAL_START
+    assert EXPECTED_START["equities_master"] != NOT_REQUIRED_START
+    assert TRACK_A_FOCUS_RANGES["equities_master"][0] != NOT_REQUIRED_START
+
+    # V3 tip modes are not EXPECTED_START history floors; dates stay vendor
+    # provision starts, not TODAY, and must not densify phantom months.
+    assert EXPECTED_START["equities_bars_daily_am"] == "2024-01-04"
+    assert EXPECTED_START["equities_earnings_calendar"] == "2010-01-04"
+
+    mapping = _load(_MIGRATION)["old_new_required_segment_mapping"][
+        "excluded_official_unavailable"
+    ]
+    excluded_ids = [row["segment_id"] for row in mapping]
+    assert "2006-08" in excluded_ids
+    assert excluded_ids == OLD_MISDATE_MONTHS
+    for row in mapping:
+        assert row["v3_status"] == EXCLUDED_STATUS
+        assert row["v3_status"] != "COMPLETE"
 
 
 def test_pd_d2_master_defer_retained_reason_records_official_start():
@@ -157,12 +207,17 @@ def test_pd_d2_master_defer_retained_reason_records_official_start():
     assert PERMANENT_DEFER_IDS["equities_master"] == "PD-D2-MASTER"
     bands = MASTER_JQ_SCOPE["bands"]
     assert isinstance(bands, dict)
-    assert bands["MISDATE"]["coverage"] == "REQUIRED_PARTIAL"  # V2 inventory until wire
+    assert bands["MISDATE"]["coverage"] == EXCLUDED_STATUS
+    assert bands["MISDATE"]["densify"] == "FORBIDDEN"
+    assert bands["MISDATE"]["seal"] == "FORBIDDEN"
     reason = str(bands["MISDATE"]["reason"])
     assert OFFICIAL_START in reason
     assert EXCLUDED_STATUS in reason
+    assert "not REQUIRED_PARTIAL" in reason
     assert "not COMPLETE" in reason
     assert "Do not invent Dataset COMPLETE" in reason
+    assert NOT_REQUIRED_START in reason
+    assert MASTER_JQ_SCOPE["not_historical_required_start"] == NOT_REQUIRED_START
     assert MASTER_JQ_SCOPE["dataset_complete_invent"] == "FORBIDDEN"
 
 

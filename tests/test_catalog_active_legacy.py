@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 
+from research import catalog_active
 from research.catalog_active import (
     active_logic_ids,
     catalog_kind,
@@ -80,6 +81,17 @@ def test_pilot_candidates_are_active_only() -> None:
     assert pilots.isdisjoint(legacy)
     assert compiler_pilot_candidates() == pilots
     assert not any(catalog_kind(lid) == "legacy" for lid in pilots)
+
+
+def test_active_catalog_count_is_not_a_pass() -> None:
+    pack = catalog_active.summary()
+    assert catalog_active.summary()["go"] is False
+    assert catalog_active.summary()["not_a_pass"] is True
+    assert pack["n_active_is_not_a_quality_metric"] is True
+    assert pack["n_active"] == len(pilot_candidates()) == len(active_logic_ids())
+    assert pack["n_pilot_candidates"] == pack["n_active"]
+    assert pack["go"] is False
+    assert pack["not_a_pass"] is True
 
 
 def test_unique22_park_is_legacy_not_unparked() -> None:
