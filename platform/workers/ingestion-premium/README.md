@@ -141,16 +141,14 @@ npx wrangler deploy -c platform/workers/ingestion-premium/wrangler.toml
 ## Local sync (Phase 3.5 S6)
 
 ```bash
-# Pull each D1 table to local SQLite so pit.get_* can read it.
+# Pull the governed production D1 through the pinned authenticated Wrangler.
 python3 scripts/sync_d1_to_sqlite.py \
-  --url "$INGESTION_PREMIUM_URL" \
-  --token "$DATA_EXPORT_TOKEN" \
+  --wrangler-remote \
   --db data/structured/ingestion.sqlite
 
 # Incremental: skip rows already mirrored locally by ingested_at watermark.
 python3 scripts/sync_d1_to_sqlite.py --incremental \
-  --url "$INGESTION_PREMIUM_URL" \
-  --token "$DATA_EXPORT_TOKEN" \
+  --wrangler-remote \
   --db data/structured/ingestion.sqlite
 ```
 

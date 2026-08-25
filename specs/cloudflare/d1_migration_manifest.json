@@ -106,7 +106,7 @@
         {
           "migration_id": "quant-ingest:0011_jsda_queue_v2",
           "path": "platform/workers/ingestion-premium/migrations/0011_jsda_queue_v2.sql",
-          "checksum": "sha256:0346322b939f7a0eb248fea3b0bbc71cef20389cb52d72bcc1545f18c55cbce5",
+          "checksum": "sha256:4faab156820a85ef2d8b22ffd30984f50194b680a1c0df6b59af41e24a5d04ce",
           "order": 11,
           "depends_on": "quant-ingest:0010_raw_acquisition_status"
         }

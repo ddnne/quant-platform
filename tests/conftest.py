@@ -154,6 +154,7 @@ def synced_cf_d1_db(
     # fast rather than touching the network.
     monkeypatch.setattr(sync_module, "_new_http_client", lambda: object())
     monkeypatch.setattr(sync_module, "_http_get_json", fake_export)
+    monkeypatch.setenv("DATA_EXPORT_TOKEN", "fixture-token")
     db = tmp_path / "cf-export.sqlite"
     rc = sync_module.main(
         [
@@ -161,8 +162,6 @@ def synced_cf_d1_db(
             str(db),
             "--url",
             "https://fixture.invalid",
-            "--token",
-            "fixture-token",
             "--table",
             "jquants_records",
             "--page-limit",

@@ -1,14 +1,17 @@
-"""Phase 3.5 — local sync script behavior.
+"""Phase 3.5 — private D1 export and legacy HTTP local-sync behavior.
 
-Exit 2 when no URL/config is available (never touch the network). Require a
-real worker URL — the secrets-proxy worker has no /v1/export/d1. Offline
-paths only; live smokes are ``@pytest.mark.live``.
+Exit 2 when no source is configured. Offline artifact tests never touch the
+network; live HTTP smokes are ``@pytest.mark.live``.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
+import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -19,21 +22,93 @@ _REPO = Path(__file__).resolve().parents[1]
 _SYNC = _REPO / "scripts" / "sync_d1_to_sqlite.py"
 
 
+def _record(value: int, *, ingested_at: str) -> dict:
+    payload = {"Code": "8697", "Date": "2025-04-01", "Close": value}
+    return {
+        "source": "jquants",
+        "dataset": "equities_bars_daily",
+        "natural_key": '{"Code":"8697","Date":"2025-04-01"}',
+        "event_time": "2025-04-01T15:30:00+09:00",
+        "available_at": "2025-04-01T15:30:00+09:00",
+        "ingested_at": ingested_at,
+        "payload": json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        "raw_payload": json.dumps(payload, separators=(",", ":")),
+    }
+
+
+def _write_private_d1_export(
+    path: Path,
+    *,
+    current_rows: tuple[dict, ...] = (),
+    change_rows: tuple[dict, ...] = (),
+) -> None:
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE jquants_records (
+                source TEXT NOT NULL,
+                dataset TEXT NOT NULL,
+                natural_key TEXT NOT NULL,
+                event_time TEXT NOT NULL,
+                available_at TEXT NOT NULL,
+                ingested_at TEXT NOT NULL,
+                payload TEXT,
+                raw_payload TEXT,
+                PRIMARY KEY (source, dataset, natural_key)
+            );
+            CREATE TABLE ingestion_change_log (
+                change_seq INTEGER PRIMARY KEY,
+                table_name TEXT NOT NULL,
+                source TEXT NOT NULL,
+                dataset TEXT NOT NULL,
+                natural_key TEXT NOT NULL,
+                event_time TEXT NOT NULL,
+                available_at TEXT NOT NULL,
+                ingested_at TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                raw_payload TEXT,
+                changed_at TEXT NOT NULL
+            );
+            """
+        )
+        record_columns = tuple(_record(0, ingested_at="x"))
+        placeholders = ",".join("?" for _ in record_columns)
+        for row in current_rows:
+            conn.execute(
+                f"INSERT INTO jquants_records ({','.join(record_columns)}) "
+                f"VALUES ({placeholders})",
+                tuple(row[column] for column in record_columns),
+            )
+        change_columns = ("change_seq", "table_name", *record_columns, "changed_at")
+        change_placeholders = ",".join("?" for _ in change_columns)
+        for row in change_rows:
+            conn.execute(
+                f"INSERT INTO ingestion_change_log ({','.join(change_columns)}) "
+                f"VALUES ({change_placeholders})",
+                tuple(row[column] for column in change_columns),
+            )
+
+
 def test_sync_script_exists():
     assert _SYNC.exists()
 
 
-def test_sync_exits_2_when_no_url(tmp_path, sync_module, monkeypatch):
-    """Offline-safe: no URL → exit 2, no network touch."""
+def test_sync_defaults_to_pinned_private_d1_not_url_env(
+    tmp_path, sync_module, monkeypatch
+):
     db = tmp_path / "x.sqlite"
-    monkeypatch.delenv("INGESTION_PREMIUM_URL", raising=False)
-    monkeypatch.delenv("INGESTION_PROXY_TOKEN", raising=False)
+    monkeypatch.setenv("INGESTION_PREMIUM_URL", "https://must-not-be-used.invalid")
+    called = []
 
-    rc = sync_module.main([
-        "--db", str(db),
-        "--url", "",
-    ])
-    assert rc == 2
+    def fail_private(*, output_path):
+        called.append(output_path)
+        raise RuntimeError("offline private acquisition sentinel")
+
+    monkeypatch.setattr(sync_module, "_run_wrangler_d1_export", fail_private)
+
+    rc = sync_module.main(["--db", str(db)])
+    assert rc == 1
+    assert len(called) == 1
     assert not db.exists()
 
 
@@ -120,6 +195,581 @@ def test_cf_export_sync_reaches_nonempty_pit_path(synced_cf_d1_db):
     )
     assert len(bars.rows) == 4
     assert [row["close"] for row in bars.rows] == [100.0, 102.0, 101.0, 104.0]
+
+
+def test_private_sqlite_export_bootstraps_without_worker_url(
+    tmp_path, sync_module, monkeypatch
+):
+    export = tmp_path / "d1-export.sqlite"
+    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
+    _write_private_d1_export(export, current_rows=(row,))
+    monkeypatch.delenv("INGESTION_PREMIUM_URL", raising=False)
+
+    local = tmp_path / "local.sqlite"
+    rc = sync_module.main(
+        [
+            "--db",
+            str(local),
+            "--d1-export",
+            str(export),
+            "--table",
+            "jquants_records",
+        ]
+    )
+
+    assert rc == 0
+    with sqlite3.connect(local) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM jquants_records").fetchone()[0] == 1
+        audit = conn.execute(
+            "SELECT source_mode,status,source_change_seq,applied_change_seq "
+            "FROM local_d1_export_sync_runs"
+        ).fetchone()
+        assert audit == ("LOCAL_ARTIFACT", "COMPLETE", None, 0)
+        policy = conn.execute(
+            "SELECT snapshot_ready,publication_state FROM local_snapshot_policy "
+            "WHERE singleton=1"
+        ).fetchone()
+        assert policy == (0, "REJECTED")
+    assert sync_module._authenticated_export_cursor_chain(local) == (None, None)
+
+
+def test_authenticated_wrangler_apply_binds_projection_cursor_chain(
+    tmp_path, sync_module
+):
+    local = tmp_path / "local.sqlite"
+    store = SqliteStore(local)
+    sync_module._ensure_control_tables(store._conn)
+    sync_module._record_change_seq(store, 7)
+    content_digest, table_counts = sync_module._governed_local_content_identity(store)
+    sync_module._mark_export_sync(
+        store,
+        export_digest="sha256:" + "a" * 64,
+        artifact_format="sql",
+        source_mode="WRANGLER_REMOTE",
+        sync_kind="FULL",
+        source_change_seq=7,
+        source_content_digest="sha256:" + "b" * 64,
+        local_content_digest=content_digest,
+        table_counts=table_counts,
+        status="COMPLETE",
+    )
+    store.close()
+
+    assert sync_module._authenticated_export_cursor_chain(local) == (7, 7)
+    store = SqliteStore(local)
+    sync_module._record_change_seq(store, 8)
+    store.close()
+    assert sync_module._authenticated_export_cursor_chain(local) == (None, None)
+
+
+def test_trusted_cursor_chain_rejects_post_audit_content_mutation(
+    tmp_path, sync_module
+):
+    local = tmp_path / "local.sqlite"
+    store = SqliteStore(local)
+    sync_module._ensure_control_tables(store._conn)
+    sync_module._record_change_seq(store, 7)
+    content_digest, table_counts = sync_module._governed_local_content_identity(store)
+    sync_module._mark_export_sync(
+        store,
+        export_digest="sha256:" + "c" * 64,
+        artifact_format="sql",
+        source_mode="WRANGLER_REMOTE",
+        sync_kind="FULL",
+        source_change_seq=7,
+        source_content_digest="sha256:" + "d" * 64,
+        local_content_digest=content_digest,
+        table_counts=table_counts,
+        status="COMPLETE",
+    )
+    assert sync_module._authenticated_export_cursor_chain(local) == (7, 7)
+    store.upsert(
+        "jquants_records",
+        [_record(777, ingested_at="2025-04-02T03:00:00+09:00")],
+    )
+    store.close()
+    assert sync_module._authenticated_export_cursor_chain(local) == (None, None)
+
+
+def test_private_export_incremental_replay_is_idempotent_and_monotonic(
+    tmp_path, sync_module
+):
+    first = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
+    second = _record(101, ingested_at="2025-04-02T02:00:00+09:00")
+    change_rows = (
+        {"change_seq": 1, "table_name": "jquants_records", **first,
+         "changed_at": "2025-04-02T01:00:00+09:00"},
+        {"change_seq": 2, "table_name": "jquants_records", **second,
+         "changed_at": "2025-04-02T02:00:00+09:00"},
+    )
+    export = tmp_path / "d1-export.sqlite"
+    _write_private_d1_export(export, change_rows=change_rows)
+    local = tmp_path / "local.sqlite"
+    argv = [
+        "--db",
+        str(local),
+        "--d1-export",
+        str(export),
+        "--table",
+        "jquants_records",
+        "--incremental",
+        "--page-limit",
+        "1",
+    ]
+
+    assert sync_module.main(argv) == 0
+    assert sync_module.main(argv) == 0
+    with sqlite3.connect(local) as conn:
+        assert conn.execute(
+            "SELECT last_applied_change_seq FROM sync_change_state "
+            "WHERE feed='jquants_records'"
+        ).fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM jquants_records").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM jquants_records_revisions"
+        ).fetchone()[0] == 1
+        payload = conn.execute("SELECT payload FROM jquants_records").fetchone()[0]
+        assert json.loads(payload)["Close"] == 101
+
+
+def test_private_change_feed_recovers_after_apply_before_cursor_crash(
+    tmp_path, sync_module, monkeypatch
+):
+    first = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
+    second = _record(101, ingested_at="2025-04-02T02:00:00+09:00")
+    export = tmp_path / "d1-export.sqlite"
+    _write_private_d1_export(
+        export,
+        change_rows=(
+            {"change_seq": 1, "table_name": "jquants_records", **first,
+             "changed_at": first["ingested_at"]},
+            {"change_seq": 2, "table_name": "jquants_records", **second,
+             "changed_at": second["ingested_at"]},
+        ),
+    )
+    source = sync_module._open_export_sqlite(export)
+    store = SqliteStore(tmp_path / "local.sqlite")
+    real_record_cursor = sync_module._record_change_seq
+    crashed = False
+
+    def crash_before_cursor(_store, _value):
+        nonlocal crashed
+        if not crashed:
+            crashed = True
+            raise RuntimeError("simulated process interruption")
+        return real_record_cursor(_store, _value)
+
+    monkeypatch.setattr(sync_module, "_record_change_seq", crash_before_cursor)
+    with pytest.raises(RuntimeError, match="simulated process interruption"):
+        sync_module._sync_export_changes(store, source, page_limit=1)
+    assert sync_module._last_change_seq(store) == 0
+    assert store.count("jquants_records") == 1
+
+    monkeypatch.setattr(sync_module, "_record_change_seq", real_record_cursor)
+    assert sync_module._sync_export_changes(store, source, page_limit=1) == (2, 2, 2, 2)
+    assert sync_module._last_change_seq(store) == 2
+    assert store.count("jquants_records") == 1
+    assert store.count("jquants_records_revisions") == 1
+    store.close()
+    source.close()
+
+
+def test_private_export_rejects_cursor_rollback(tmp_path, sync_module):
+    export = tmp_path / "stale-export.sqlite"
+    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
+    _write_private_d1_export(
+        export,
+        change_rows=(
+            {"change_seq": 2, "table_name": "jquants_records", **row,
+             "changed_at": row["ingested_at"]},
+        ),
+    )
+    source = sync_module._open_export_sqlite(export)
+    store = SqliteStore(tmp_path / "local.sqlite")
+    sync_module._record_change_seq(store, 3)
+
+    with pytest.raises(ValueError, match="older than the local applied cursor"):
+        sync_module._sync_export_changes(store, source, page_limit=10)
+    assert sync_module._last_change_seq(store) == 3
+    store.close()
+    source.close()
+
+
+def test_local_export_is_apply_only_and_cannot_publish_ready(
+    tmp_path, sync_module, monkeypatch
+):
+    export = tmp_path / "d1-export.sqlite"
+    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
+    _write_private_d1_export(
+        export,
+        current_rows=(row,),
+        change_rows=(
+            {"change_seq": 1, "table_name": "jquants_records", **row,
+             "changed_at": row["ingested_at"]},
+        ),
+    )
+    evidence = tmp_path / "caller-evidence.json"
+    evidence.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
+    local = tmp_path / "local.sqlite"
+
+    rc = sync_module.main(
+        [
+            "--db",
+            str(local),
+            "--d1-export",
+            str(export),
+            "--pilot-ready-evidence",
+            str(evidence),
+        ]
+    )
+
+    assert rc == 1
+    with sqlite3.connect(local) as conn:
+        policy = conn.execute(
+            "SELECT snapshot_ready,publication_state,last_error "
+            "FROM local_snapshot_policy WHERE singleton=1"
+        ).fetchone()
+        assert policy[0:2] == (0, "REJECTED")
+        assert "authenticated production D1" in policy[2]
+        assert conn.execute(
+            "SELECT COUNT(*) FROM local_snapshot_manifests"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT last_applied_change_seq FROM sync_change_state "
+            "WHERE feed='jquants_records'"
+        ).fetchone()[0] == 1
+
+
+def test_wrangler_export_uses_argv_and_withholds_provider_output(
+    tmp_path, sync_module, monkeypatch
+):
+    calls = []
+    secret = "cf-secret-must-not-appear"
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", secret)
+
+    def failed_runner(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(
+            returncode=1,
+            stdout=f"account output {secret}".encode(),
+            stderr=f"provider error {secret}".encode(),
+        )
+
+    monkeypatch.setattr(sync_module, "_run_process", failed_runner)
+    with pytest.raises(RuntimeError, match="provider output withheld") as caught:
+        sync_module._run_wrangler_d1_export(
+            output_path=tmp_path / "remote.sql",
+        )
+
+    assert secret not in str(caught.value)
+    argv, kwargs = calls[0]
+    assert secret not in argv
+    assert argv[1:4] == ["d1", "export", "quant-ingest"]
+    assert "--remote" in argv
+    assert "--skip-confirmation" in argv
+    assert kwargs["stdin"] is not None
+    assert kwargs["stdout"] is not None
+    assert kwargs["stderr"] is not None
+    assert "shell" not in kwargs
+
+
+@pytest.mark.parametrize(
+    "forbidden",
+    [
+        ["--wrangler-d1", "fake-db"],
+        ["--wrangler-bin", "/tmp/fake-wrangler"],
+        ["--wrangler-config", "/tmp/fake.toml"],
+        ["--wrangler-env", "staging"],
+        ["--token", "secret-on-argv"],
+    ],
+)
+def test_production_wrangler_authority_has_no_public_override(sync_module, forbidden):
+    parser = sync_module._build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--db=test.sqlite", *forbidden])
+
+
+def test_governed_wrangler_rejects_wrong_production_database_binding(
+    tmp_path, sync_module, monkeypatch
+):
+    fake_config = tmp_path / "wrangler.toml"
+    fake_config.write_text(
+        """name = "fake"
+[env.production]
+name = "fake"
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "quant-ingest"
+database_id = "00000000-0000-0000-0000-000000000000"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sync_module._private_export, "DEFAULT_WRANGLER_CONFIG", fake_config
+    )
+    with pytest.raises(RuntimeError, match="production Wrangler config"):
+        sync_module._run_wrangler_d1_export(output_path=tmp_path / "remote.sql")
+
+
+def test_manual_poison_is_removed_by_authenticated_full_reconciliation(
+    tmp_path, sync_module, monkeypatch
+):
+    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
+    poison = _record(999, ingested_at="2025-04-02T01:00:00+09:00")
+    poison["natural_key"] = '{"Code":"POISON","Date":"2025-04-01"}'
+    poison_payload = json.loads(poison["payload"])
+    poison_payload["Code"] = "POISON"
+    poison["payload"] = json.dumps(
+        poison_payload, sort_keys=True, separators=(",", ":")
+    )
+    manual = tmp_path / "manual.sqlite"
+    _write_private_d1_export(
+        manual,
+        current_rows=(poison,),
+        change_rows=(
+            {
+                "change_seq": 1,
+                "table_name": "jquants_records",
+                **poison,
+                "changed_at": poison["ingested_at"],
+            },
+        ),
+    )
+    local = tmp_path / "local.sqlite"
+    assert sync_module.main(
+        ["--db", str(local), "--d1-export", str(manual)]
+    ) == 0
+
+    clean = _record(100, ingested_at="2025-04-02T02:00:00+09:00")
+    remote = tmp_path / "authenticated.sqlite"
+    _write_private_d1_export(
+        remote,
+        current_rows=(clean,),
+        change_rows=(
+            {
+                "change_seq": 1,
+                "table_name": "jquants_records",
+                **clean,
+                "changed_at": clean["ingested_at"],
+            },
+        ),
+    )
+
+    def acquire_governed_export(*, output_path):
+        shutil.copyfile(remote, output_path)
+
+    monkeypatch.setattr(
+        sync_module, "_run_wrangler_d1_export", acquire_governed_export
+    )
+    assert sync_module.main(
+        ["--db", str(local), "--wrangler-remote"]
+    ) == 0
+
+    with sqlite3.connect(local) as conn:
+        assert conn.execute(
+            "SELECT natural_key FROM jquants_records"
+        ).fetchall() == [('{"Code":"8697","Date":"2025-04-01"}',)]
+        audit = conn.execute(
+            "SELECT source_mode,sync_kind,status,source_content_digest,"
+            "local_content_digest,table_counts_json FROM local_d1_export_sync_runs "
+            "ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+        assert audit[:3] == ("WRANGLER_REMOTE", "FULL", "COMPLETE")
+        assert audit[3].startswith("sha256:")
+        assert audit[4].startswith("sha256:")
+        assert json.loads(audit[5]) == {"jquants_records": 1}
+    assert sync_module._authenticated_export_cursor_chain(local) == (1, 1)
+
+
+def test_authenticated_full_inventory_exact_reconciles_all_governed_tables(
+    tmp_path, sync_module, monkeypatch
+):
+    remote = tmp_path / "authenticated-full.sqlite"
+    source_store = SqliteStore(remote)
+    sync_module._ensure_control_tables(source_store._conn)
+    source_store._conn.execute(
+        """CREATE TABLE ingestion_change_log (
+             change_seq INTEGER PRIMARY KEY, table_name TEXT NOT NULL,
+             source TEXT NOT NULL, dataset TEXT NOT NULL, natural_key TEXT NOT NULL,
+             event_time TEXT NOT NULL, available_at TEXT NOT NULL,
+             ingested_at TEXT NOT NULL, payload TEXT NOT NULL, raw_payload TEXT,
+             changed_at TEXT NOT NULL)"""
+    )
+    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
+    source_store.upsert("jquants_records", [row])
+    source_store._conn.execute(
+        "INSERT INTO ingestion_change_log VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            1,
+            "jquants_records",
+            *(row[column] for column in row),
+            row["ingested_at"],
+        ),
+    )
+    source_store._conn.commit()
+    source_store.close()
+
+    def acquire_governed_export(*, output_path):
+        shutil.copyfile(remote, output_path)
+
+    monkeypatch.setattr(
+        sync_module, "_run_wrangler_d1_export", acquire_governed_export
+    )
+    local = tmp_path / "local.sqlite"
+    assert sync_module.main(
+        ["--db", str(local), "--wrangler-remote"]
+    ) == 0
+    assert sync_module._authenticated_export_cursor_chain(local) == (1, 1)
+    with sqlite3.connect(local) as conn:
+        counts = json.loads(
+            conn.execute(
+                "SELECT table_counts_json FROM local_d1_export_sync_runs"
+            ).fetchone()[0]
+        )
+    assert set(counts) == set(sync_module.DEFAULT_TABLES)
+    assert counts["jquants_records"] == 1
+
+
+def test_interrupted_remote_reset_cannot_publish_trusted_cursor(
+    tmp_path, sync_module, monkeypatch
+):
+    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
+    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
+    remote = tmp_path / "authenticated.sqlite"
+    _write_private_d1_export(
+        remote,
+        current_rows=(row,),
+        change_rows=(
+            {
+                "change_seq": 1,
+                "table_name": "jquants_records",
+                **row,
+                "changed_at": row["ingested_at"],
+            },
+        ),
+    )
+
+    def acquire_governed_export(*, output_path):
+        shutil.copyfile(remote, output_path)
+
+    real_sync_table = sync_module._sync_export_table
+
+    def interrupt_after_partial_apply(*args, **kwargs):
+        real_sync_table(*args, **kwargs)
+        raise RuntimeError("simulated interruption after reset")
+
+    monkeypatch.setattr(
+        sync_module, "_run_wrangler_d1_export", acquire_governed_export
+    )
+    monkeypatch.setattr(
+        sync_module, "_sync_export_table", interrupt_after_partial_apply
+    )
+    local = tmp_path / "local.sqlite"
+    assert sync_module.main(
+        ["--db", str(local), "--wrangler-remote"]
+    ) == 1
+    with sqlite3.connect(local) as conn:
+        assert conn.execute(
+            "SELECT status FROM local_d1_export_sync_runs"
+        ).fetchone() == ("FAILED",)
+        assert conn.execute(
+            "SELECT snapshot_ready,publication_state FROM local_snapshot_policy "
+            "WHERE singleton=1"
+        ).fetchone() == (0, "REJECTED")
+    assert sync_module._authenticated_export_cursor_chain(local) == (None, None)
+
+
+def test_authenticated_incremental_rejects_missing_trusted_base(
+    tmp_path, sync_module, monkeypatch
+):
+    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
+    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
+    remote = tmp_path / "authenticated.sqlite"
+    _write_private_d1_export(
+        remote,
+        current_rows=(row,),
+        change_rows=(
+            {
+                "change_seq": 1,
+                "table_name": "jquants_records",
+                **row,
+                "changed_at": row["ingested_at"],
+            },
+        ),
+    )
+
+    def acquire_governed_export(*, output_path):
+        shutil.copyfile(remote, output_path)
+
+    monkeypatch.setattr(
+        sync_module, "_run_wrangler_d1_export", acquire_governed_export
+    )
+    local = tmp_path / "local.sqlite"
+    assert sync_module.main(
+        ["--db", str(local), "--wrangler-remote", "--incremental"]
+    ) == 1
+    with sqlite3.connect(local) as conn:
+        assert conn.execute(
+            "SELECT status,error FROM local_d1_export_sync_runs"
+        ).fetchone() == (
+            "FAILED",
+            "change_feed: authenticated incremental apply requires a prior "
+            "trusted full bootstrap",
+        )
+
+
+def test_ops_projection_failure_propagates_nonzero(
+    tmp_path, sync_module, monkeypatch
+):
+    export = tmp_path / "d1.sqlite"
+    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
+    _write_private_d1_export(export, current_rows=(row,))
+    monkeypatch.setattr(sync_module, "_maybe_publish_ops_projection", lambda *a, **k: 9)
+    assert sync_module.main(
+        [
+            "--db",
+            str(tmp_path / "local.sqlite"),
+            "--d1-export",
+            str(export),
+            "--table",
+            "jquants_records",
+            "--publish-ops",
+        ]
+    ) == 9
+
+
+def test_sql_export_import_rejects_sqlite_dot_commands(tmp_path, sync_module):
+    malicious = tmp_path / "malicious.sql"
+    malicious.write_text(".shell echo should-not-run\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="dot-commands"):
+        sync_module._materialize_d1_export(
+            malicious,
+            tmp_path / "materialized.sqlite",
+        )
+
+
+def test_wrangler_sql_export_materializes_without_loading_whole_file(
+    tmp_path, sync_module
+):
+    sqlite_export = tmp_path / "source.sqlite"
+    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
+    _write_private_d1_export(sqlite_export, current_rows=(row,))
+    sql_export = tmp_path / "wrangler-export.sql"
+    with sqlite3.connect(sqlite_export) as conn:
+        sql_export.write_text("\n".join(conn.iterdump()) + "\n", encoding="utf-8")
+
+    digest, size, artifact_format = sync_module._materialize_d1_export(
+        sql_export,
+        tmp_path / "materialized.sqlite",
+    )
+
+    assert digest.startswith("sha256:")
+    assert size == sql_export.stat().st_size
+    assert artifact_format == "sql"
+    with sqlite3.connect(tmp_path / "materialized.sqlite") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM jquants_records").fetchone()[0] == 1
 
 
 def test_publish_ops_flag_default_off(sync_module):

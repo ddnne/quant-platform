@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Phase 3.5 S6 — sync Cloudflare D1 → local SQLite for `pit.get_*`.
 
-Pulls structured fact tables from the ingestion-premium Worker (`/v1/export/d1`)
-and upserts them into local SQLite matching `storage/schema.py`.
+The preferred production path uses the operator's authenticated Wrangler
+session to export the private ingestion D1 directly.  An explicit local D1 SQL
+export is also accepted for offline/bootstrap recovery, while the legacy
+authenticated Worker export remains available during migration.
 
-No `--url` / ``INGESTION_PREMIUM_URL`` → exit 2, no network.
-``--incremental`` applies ``change_seq > last_applied_change_seq`` after each
-durable page. Full table export is bootstrap.
+No explicit source defaults to the pinned private production D1 path; legacy
+HTTP is used only with an explicit ``--url``. ``--incremental`` applies ``change_seq >
+last_applied_change_seq`` after each durable page. Full table export is
+bootstrap.  Replaying a page after interruption is idempotent; the cursor is
+never allowed to move backwards.
 
 Sync never mints READY from caller assertions. It can invoke the exact-four
 publisher only with an Ed25519-verified Ops Projection envelope; otherwise it
@@ -16,13 +20,15 @@ finishes the apply and leaves snapshot publication closed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 _here = Path(__file__).resolve().parent
 for _d in (_here, _here.parent):
@@ -36,6 +42,7 @@ from _bootstrap import ensure_repo_root  # noqa: E402
 
 ensure_repo_root()
 
+import _private_d1_export as _private_export  # noqa: E402
 from paper_runtime import (  # noqa: E402
     begin_snapshot_sync,
     fail_snapshot_sync,
@@ -69,6 +76,12 @@ _CHANGE_FEED_SKIP_TABLES = frozenset({
     "jquants_records_r2",
     "equities_master_scd2",
 })
+_DEFAULT_WRANGLER_CONFIG = _private_export.DEFAULT_WRANGLER_CONFIG
+_DEFAULT_WRANGLER_BIN = _private_export.DEFAULT_WRANGLER_BIN
+_GOVERNED_D1_NAME = _private_export.GOVERNED_D1_NAME
+_GOVERNED_D1_ID = _private_export.GOVERNED_D1_ID
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Sync CF D1 → local SQLite (PIT)")
     p.add_argument(
@@ -77,15 +90,28 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_PAGES,
         help="Fail if one export stream exceeds this many pages (default: 10000).",
     )
-    p.add_argument(
+    source = p.add_mutually_exclusive_group()
+    source.add_argument(
         "--url",
-        default=os.environ.get("INGESTION_PREMIUM_URL"),
-        help="Base URL of the ingestion-premium worker",
+        default=None,
+        help="Legacy base URL of the authenticated ingestion-premium worker",
     )
-    p.add_argument(
-        "--token",
-        default=os.environ.get("DATA_EXPORT_TOKEN"),
-        help="X-Ingestion-Token for /v1/export/d1",
+    source.add_argument(
+        "--d1-export",
+        default=None,
+        help=(
+            "Existing Wrangler D1 SQL or standalone SQLite export to apply "
+            "offline. This input is operator-supplied/apply-only and cannot "
+            "authorize READY."
+        ),
+    )
+    source.add_argument(
+        "--wrangler-remote",
+        action="store_true",
+        help=(
+            "Privately export the governed production ingestion D1 with the "
+            "repository-pinned Wrangler and apply it without a Worker URL."
+        ),
     )
     p.add_argument(
         "--table",
@@ -155,6 +181,26 @@ def _http_get_json(client, url: str, token: str) -> dict:
     resp = client.get(url, headers=headers)
     resp.raise_for_status()
     return resp.json()
+
+
+def _run_process(argv: list[str], **kwargs):
+    """Small injectable subprocess boundary used only for Wrangler export."""
+    return _private_export.run_process(argv, **kwargs)
+
+
+def _run_wrangler_d1_export(
+    *,
+    output_path: Path,
+) -> None:
+    """Delegate acquisition while retaining a monkeypatchable CLI boundary."""
+    _private_export.run_wrangler_d1_export(
+        output_path=output_path,
+        runner=_run_process if os.environ.get("PYTEST_CURRENT_TEST") else None,
+    )
+
+
+_materialize_d1_export = _private_export.materialize_d1_export
+_open_export_sqlite = _private_export.open_export_sqlite
 
 
 # Control-plane / non-PIT tables: no available_at column; must not be filtered.
@@ -471,6 +517,13 @@ def _last_change_seq(store: SqliteStore) -> int:
 
 
 def _record_change_seq(store: SqliteStore, value: int) -> None:
+    if not isinstance(value, int) or value < 0:
+        raise ValueError("applied change_seq must be a non-negative integer")
+    current = _last_change_seq(store)
+    if value < current:
+        raise ValueError(
+            f"refusing to move applied change_seq backwards ({current} -> {value})"
+        )
     store._conn.execute(  # noqa: SLF001
         """
         INSERT INTO sync_change_state (feed, last_applied_change_seq, updated_at)
@@ -585,41 +638,631 @@ def _sync_changes(
     return pages, seen, registered, after_seq
 
 
-def main(argv=None) -> int:
-    args = _build_parser().parse_args(argv)
-    if not 1 <= args.page_limit <= 1000:
-        print("[sync] --page-limit must be between 1 and 1000", file=sys.stderr)
-        return 2
-    if args.max_pages < 1:
-        print("[sync] --max-pages must be at least 1", file=sys.stderr)
-        return 2
-    if args.since and not args.incremental:
-        print("[sync] --since requires --incremental", file=sys.stderr)
-        return 2
-    url, token = args.url, args.token
-    if not url:
+def _source_table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _validate_sync_table(table: str) -> str:
+    if table not in DEFAULT_TABLES:
+        raise ValueError(f"table is outside the governed sync inventory: {table!r}")
+    return table
+
+
+def _source_change_seq(conn: sqlite3.Connection) -> int:
+    if not _source_table_exists(conn, "ingestion_change_log"):
+        raise ValueError("D1 export is missing ingestion_change_log")
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(ingestion_change_log)").fetchall()
+    }
+    required = {
+        "change_seq",
+        "table_name",
+        "source",
+        "dataset",
+        "natural_key",
+        "event_time",
+        "available_at",
+        "ingested_at",
+        "payload",
+        "raw_payload",
+    }
+    missing = sorted(required - columns)
+    if missing:
+        raise ValueError(f"D1 change feed is missing required columns: {missing}")
+    row = conn.execute(
+        "SELECT COALESCE(MAX(change_seq), 0) FROM ingestion_change_log"
+    ).fetchone()
+    value = row[0] if row is not None else 0
+    if not isinstance(value, int) or value < 0:
+        raise ValueError("D1 source change_seq is invalid")
+    return value
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> tuple[str, ...]:
+    return tuple(
+        str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')
+    )
+
+
+def _canonical_fingerprint_value(column: str, value):
+    if column == "available_at" and isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed.astimezone(timezone.utc).isoformat()
+        except ValueError:
+            return value
+    return value
+
+
+def _projected_table_fingerprint(
+    conn: sqlite3.Connection,
+    table: str,
+    columns: tuple[str, ...],
+    *,
+    source_side: bool,
+) -> tuple[int, str]:
+    """Hash an order-independent table projection without loading row payloads."""
+    if not columns:
+        raise ValueError(f"no comparable columns for governed table: {table}")
+    selected = ",".join(f'"{column}"' for column in columns)
+    row_digests: list[bytes] = []
+    count = 0
+    for row in conn.execute(f'SELECT {selected} FROM "{table}"'):
+        values = [row[index] for index in range(len(columns))]
+        if (
+            source_side
+            and table not in _NO_AVAILABLE_AT_TABLES
+            and "available_at" in columns
+            and not values[columns.index("available_at")]
+        ):
+            # Mirrors _sync_one's fail-closed omission of unusable PIT rows.
+            continue
+        canonical = [
+            _canonical_fingerprint_value(column, value)
+            for column, value in zip(columns, values, strict=True)
+        ]
+        encoded = json.dumps(
+            canonical,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        row_digests.append(hashlib.sha256(encoded).digest())
+        count += 1
+    digest = hashlib.sha256()
+    digest.update(str(count).encode("ascii"))
+    digest.update(b"\0")
+    for row_digest in sorted(row_digests):
+        digest.update(row_digest)
+    return count, "sha256:" + digest.hexdigest()
+
+
+def _governed_local_content_identity(
+    store: SqliteStore | sqlite3.Connection,
+    tables: tuple[str, ...] | None = None,
+) -> tuple[str, dict[str, int]]:
+    """Content-address all governed source-derived tables in the local mirror."""
+    inventory: dict[str, dict[str, object]] = {}
+    counts: dict[str, int] = {}
+    conn = store if isinstance(store, sqlite3.Connection) else store._conn  # noqa: SLF001
+    tables = tables or DEFAULT_TABLES
+    for table in tables:
+        if not _source_table_exists(conn, table):
+            raise ValueError(f"local mirror is missing governed table: {table}")
+        columns = _table_columns(conn, table)
+        count, digest = _projected_table_fingerprint(
+            conn, table, columns, source_side=False
+        )
+        counts[table] = count
+        inventory[table] = {
+            "columns": list(columns),
+            "count": count,
+            "digest": digest,
+        }
+    encoded = json.dumps(
+        inventory, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest(), counts
+
+
+def _verify_source_local_parity(
+    store: SqliteStore,
+    source: sqlite3.Connection,
+    tables: list[str],
+) -> tuple[str, str, dict[str, int]]:
+    """Verify exact source/local row counts and digests on shared columns."""
+    parity: dict[str, dict[str, object]] = {}
+    local = store._conn  # noqa: SLF001
+    for table in tables:
+        if not _source_table_exists(source, table):
+            raise ValueError(f"D1 export is missing required table: {table}")
+        if not _source_table_exists(local, table):
+            raise ValueError(f"local mirror is missing governed table: {table}")
+        source_columns = set(_table_columns(source, table))
+        local_columns = _table_columns(local, table)
+        columns = tuple(column for column in local_columns if column in source_columns)
+        source_count, source_digest = _projected_table_fingerprint(
+            source, table, columns, source_side=True
+        )
+        local_count, local_digest = _projected_table_fingerprint(
+            local, table, columns, source_side=False
+        )
+        if source_count != local_count or source_digest != local_digest:
+            raise ValueError(
+                "authenticated D1 source/local reconciliation failed for "
+                f"{table}: source_count={source_count} local_count={local_count}"
+            )
+        parity[table] = {
+            "columns": list(columns),
+            "count": source_count,
+            "digest": source_digest,
+        }
+    source_encoded = json.dumps(
+        parity, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    source_identity = "sha256:" + hashlib.sha256(source_encoded).hexdigest()
+    local_identity, counts = _governed_local_content_identity(
+        store, tuple(tables)
+    )
+    return source_identity, local_identity, counts
+
+
+def _reset_governed_local_tables(store: SqliteStore, tables: list[str]) -> None:
+    """Remove the prior mirror before a trusted full bootstrap.
+
+    The audit row is intentionally outside this inventory. If the process is
+    interrupted, its APPLYING status prevents cursor publication and a rerun
+    reconstructs the governed tables from the authenticated export.
+    """
+    conn = store._conn  # noqa: SLF001
+    for table in tables:
+        if not _source_table_exists(conn, table):
+            raise ValueError(f"local mirror is missing governed table: {table}")
+        conn.execute(f'DELETE FROM "{table}"')
+    conn.execute("DELETE FROM sync_change_state WHERE feed='jquants_records'")
+    conn.commit()
+
+
+def _sync_export_table(
+    store: SqliteStore,
+    source: sqlite3.Connection,
+    table: str,
+    *,
+    page_limit: int,
+    since: str | None,
+    max_pages: int = DEFAULT_MAX_PAGES,
+) -> tuple[int, int, int, int, str | None]:
+    """Apply one table from an isolated D1 export SQLite database."""
+    table = _validate_sync_table(table)
+    if not _source_table_exists(source, table):
+        raise ValueError(f"D1 export is missing required table: {table}")
+    cursor = 0
+    pages = seen = registered = skipped = 0
+    while True:
+        if pages >= max_pages:
+            raise ValueError(
+                f"export exceeded max_pages={max_pages} for table={table}"
+            )
+        fetched = source.execute(
+            f'SELECT rowid AS "__sync_rowid", * FROM "{table}" '
+            'WHERE rowid > ? ORDER BY rowid LIMIT ?',
+            (cursor, page_limit + 1),
+        ).fetchall()
+        has_more = len(fetched) > page_limit
+        page = fetched[:page_limit]
+        rows = []
+        for source_row in page:
+            row = dict(source_row)
+            cursor = int(row.pop("__sync_rowid"))
+            rows.append(row)
+        if since:
+            rows, page_skipped = _filter_since(rows, since)
+            skipped += page_skipped
+        seen += len(rows)
+        registered += _sync_one(store, table, rows)[1]
+        pages += 1
+        if not has_more:
+            break
+    return pages, seen, registered, skipped, since
+
+
+def _sync_export_changes(
+    store: SqliteStore,
+    source: sqlite3.Connection,
+    *,
+    page_limit: int,
+    max_pages: int = DEFAULT_MAX_PAGES,
+    source_max_seq: int | None = None,
+) -> tuple[int, int, int, int]:
+    """Apply a private export's append-only change log page by page.
+
+    Each page's fact upserts commit before its cursor. If the process stops in
+    between, replay starts from the older cursor and the PIT upserts remain
+    idempotent. A stale export can never roll the cursor back.
+    """
+    maximum = _source_change_seq(source) if source_max_seq is None else source_max_seq
+    after_seq = _last_change_seq(store)
+    if maximum < after_seq:
+        raise ValueError(
+            "D1 export is older than the local applied cursor; refusing stale apply"
+        )
+    pages = seen = registered = skipped = 0
+    select_columns = (
+        "change_seq, table_name, source, dataset, natural_key, event_time, "
+        "available_at, ingested_at, payload, raw_payload"
+    )
+    while True:
+        if pages >= max_pages:
+            raise ValueError(f"change feed exceeded max_pages={max_pages}")
+        fetched = source.execute(
+            f"SELECT {select_columns} FROM ingestion_change_log "
+            "WHERE change_seq > ? ORDER BY change_seq LIMIT ?",
+            (after_seq, page_limit + 1),
+        ).fetchall()
+        has_more = len(fetched) > page_limit
+        rows = [dict(row) for row in fetched[:page_limit]]
+        pages += 1
+        previous = after_seq
+        for row in rows:
+            seq = row.get("change_seq")
+            if not isinstance(seq, int) or seq <= previous:
+                raise ValueError("change feed sequence is not strictly increasing")
+            previous = seq
+        page_registered, page_skipped = _apply_change_rows(store, rows)
+        registered += page_registered
+        skipped += page_skipped
+        seen += len(rows)
+        _record_change_seq(store, previous)
+        after_seq = previous
+        if not has_more:
+            break
+        if not rows:
+            raise ValueError("change feed pagination did not advance")
+    if after_seq != maximum:
+        raise ValueError(
+            "D1 export change feed did not converge to its measured source cursor"
+        )
+    if skipped:
         print(
-            "[sync] no worker URL (pass --url or set INGESTION_PREMIUM_URL). "
-            "Nothing synced.",
+            f"[sync] change_feed: skipped_non_local={skipped} "
+            f"(R2/SCD2 markers; seq advanced)",
             file=sys.stderr,
         )
-        return 2
+    return pages, seen, registered, after_seq
 
-    tables = args.table or list(DEFAULT_TABLES)
-    store = SqliteStore(Path(args.db))
-    begin_snapshot_sync(
-        store._conn,  # noqa: SLF001
-        started_at=datetime.now(timezone.utc).isoformat(),
+
+def _ensure_export_sync_audit(store: SqliteStore) -> None:
+    store._conn.execute(  # noqa: SLF001
+        """
+        CREATE TABLE IF NOT EXISTS local_d1_export_sync_runs (
+            export_digest     TEXT PRIMARY KEY,
+            artifact_format   TEXT NOT NULL,
+            source_mode       TEXT NOT NULL,
+            sync_kind         TEXT NOT NULL DEFAULT 'UNTRUSTED',
+            source_change_seq INTEGER,
+            applied_change_seq INTEGER NOT NULL,
+            source_content_digest TEXT,
+            local_content_digest TEXT,
+            table_counts_json TEXT,
+            authority_id      TEXT,
+            status            TEXT NOT NULL
+                CHECK (status IN ('APPLYING', 'COMPLETE', 'FAILED')),
+            started_at        TEXT NOT NULL,
+            updated_at        TEXT NOT NULL,
+            error             TEXT
+        )
+        """
     )
-    base = url.rstrip("/")
+    columns = _local_table_columns(store._conn, "local_d1_export_sync_runs")  # noqa: SLF001
+    additions = {
+        "sync_kind": "TEXT NOT NULL DEFAULT 'UNTRUSTED'",
+        "source_content_digest": "TEXT",
+        "local_content_digest": "TEXT",
+        "table_counts_json": "TEXT",
+        "authority_id": "TEXT",
+    }
+    for column, declaration in additions.items():
+        if column not in columns:
+            store._conn.execute(  # noqa: SLF001
+                f"ALTER TABLE local_d1_export_sync_runs ADD COLUMN {column} {declaration}"
+            )
+    store._conn.commit()  # noqa: SLF001
+
+
+def _mark_export_sync(
+    store: SqliteStore,
+    *,
+    export_digest: str,
+    artifact_format: str,
+    source_mode: str,
+    sync_kind: str,
+    source_change_seq: int | None,
+    source_content_digest: str | None = None,
+    local_content_digest: str | None = None,
+    table_counts: dict[str, int] | None = None,
+    status: str,
+    error: str | None = None,
+) -> None:
+    _ensure_export_sync_audit(store)
+    now = datetime.now(timezone.utc).isoformat()
+    store._conn.execute(  # noqa: SLF001
+        """
+        INSERT INTO local_d1_export_sync_runs (
+            export_digest, artifact_format, source_mode, source_change_seq,
+            applied_change_seq, status, started_at, updated_at, error,
+            sync_kind, source_content_digest, local_content_digest,
+            table_counts_json, authority_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(export_digest) DO UPDATE SET
+            artifact_format=excluded.artifact_format,
+            source_mode=excluded.source_mode,
+            source_change_seq=excluded.source_change_seq,
+            applied_change_seq=excluded.applied_change_seq,
+            status=excluded.status,
+            updated_at=excluded.updated_at,
+            error=excluded.error
+            ,sync_kind=excluded.sync_kind
+            ,source_content_digest=excluded.source_content_digest
+            ,local_content_digest=excluded.local_content_digest
+            ,table_counts_json=excluded.table_counts_json
+            ,authority_id=excluded.authority_id
+        """,
+        (
+            export_digest,
+            artifact_format,
+            source_mode,
+            source_change_seq,
+            _last_change_seq(store),
+            status,
+            now,
+            now,
+            error[:1000] if error else None,
+            sync_kind,
+            source_content_digest,
+            local_content_digest,
+            json.dumps(table_counts, sort_keys=True, separators=(",", ":"))
+            if table_counts is not None
+            else None,
+            f"cloudflare-d1:{_GOVERNED_D1_ID}"
+            if source_mode == "WRANGLER_REMOTE"
+            else None,
+        ),
+    )
+    store._conn.commit()  # noqa: SLF001
+
+
+def _latest_trusted_sync_audit(store: SqliteStore) -> sqlite3.Row | None:
+    _ensure_export_sync_audit(store)
+    return store._conn.execute(  # noqa: SLF001
+        "SELECT * FROM local_d1_export_sync_runs "
+        "WHERE source_mode='WRANGLER_REMOTE' AND status='COMPLETE' "
+        "AND sync_kind IN ('FULL','INCREMENTAL') "
+        "AND authority_id=? ORDER BY updated_at DESC LIMIT 1",
+        (f"cloudflare-d1:{_GOVERNED_D1_ID}",),
+    ).fetchone()
+
+
+def _require_trusted_incremental_base(store: SqliteStore) -> sqlite3.Row:
+    row = _latest_trusted_sync_audit(store)
+    if row is None:
+        raise ValueError(
+            "authenticated incremental apply requires a prior trusted full bootstrap"
+        )
+    expected_cursor = row["applied_change_seq"]
+    expected_digest = row["local_content_digest"]
+    if (
+        not isinstance(expected_cursor, int)
+        or expected_cursor != _last_change_seq(store)
+        or not isinstance(expected_digest, str)
+        or not expected_digest.startswith("sha256:")
+    ):
+        raise ValueError("trusted incremental base cursor/content identity is invalid")
+    observed_digest, _ = _governed_local_content_identity(store)
+    if observed_digest != expected_digest:
+        raise ValueError(
+            "local governed content changed after the trusted base; "
+            "run a full authenticated bootstrap"
+        )
+    return row
+
+
+def _run_private_export_sync(
+    store: SqliteStore,
+    source: sqlite3.Connection,
+    tables: list[str],
+    args,
+    *,
+    export_digest: str,
+    artifact_format: str,
+    source_mode: str,
+) -> tuple[int, int, int, list[str]]:
     total_seen = total_registered = total_skipped = 0
     failures: list[str] = []
+    _ensure_control_tables(store._conn)  # noqa: SLF001
+    store._conn.commit()  # noqa: SLF001
+    trusted_full_inventory = bool(
+        source_mode == "WRANGLER_REMOTE" and not args.table
+    )
+    sync_kind = (
+        "INCREMENTAL"
+        if trusted_full_inventory and args.incremental
+        else "FULL"
+        if trusted_full_inventory
+        else "UNTRUSTED"
+    )
+    needs_change_feed = bool(
+        args.incremental and any(table in _CHANGE_FEED_TABLES for table in tables)
+    )
+    needs_bootstrap_cursor = not args.incremental and not args.table
+    source_max: int | None = None
+    source_content_digest: str | None = None
+    local_content_digest: str | None = None
+    table_counts: dict[str, int] | None = None
+    if needs_change_feed or needs_bootstrap_cursor:
+        try:
+            source_max = _source_change_seq(source)
+            if trusted_full_inventory and args.incremental:
+                base = _require_trusted_incremental_base(store)
+                prior_cursor = base["applied_change_seq"]
+            elif trusted_full_inventory:
+                base = _latest_trusted_sync_audit(store)
+                prior_cursor = base["applied_change_seq"] if base is not None else 0
+            else:
+                prior_cursor = _last_change_seq(store)
+            if not isinstance(prior_cursor, int) or source_max < prior_cursor:
+                raise ValueError(
+                    "D1 export is older than the local applied cursor; "
+                    "refusing stale apply"
+                )
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"change_feed: {exc}")
+    _mark_export_sync(
+        store,
+        export_digest=export_digest,
+        artifact_format=artifact_format,
+        source_mode=source_mode,
+        sync_kind=sync_kind,
+        source_change_seq=source_max,
+        status="APPLYING",
+    )
+    if failures:
+        _mark_export_sync(
+            store,
+            export_digest=export_digest,
+            artifact_format=artifact_format,
+            source_mode=source_mode,
+            sync_kind=sync_kind,
+            source_change_seq=source_max,
+            status="FAILED",
+            error="; ".join(failures),
+        )
+        return total_seen, total_registered, total_skipped, failures
 
-    client = _new_http_client()
+    if trusted_full_inventory and not args.incremental:
+        try:
+            _reset_governed_local_tables(store, tables)
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"bootstrap_reset: {exc}")
+    if failures:
+        _mark_export_sync(
+            store,
+            export_digest=export_digest,
+            artifact_format=artifact_format,
+            source_mode=source_mode,
+            sync_kind=sync_kind,
+            source_change_seq=source_max,
+            status="FAILED",
+            error="; ".join(failures),
+        )
+        return total_seen, total_registered, total_skipped, failures
+
+    change_feed_done = False
+    for table in tables:
+        if args.incremental and table in _CHANGE_FEED_TABLES:
+            if change_feed_done:
+                continue
+            try:
+                pages, seen, registered, change_seq = _sync_export_changes(
+                    store,
+                    source,
+                    page_limit=args.page_limit,
+                    max_pages=args.max_pages,
+                    source_max_seq=source_max,
+                )
+            except Exception as exc:  # noqa: BLE001
+                failures.append(f"change_feed: {exc}")
+                print(f"[sync] change_feed FAILED: {exc}", file=sys.stderr)
+            else:
+                total_seen += seen
+                total_registered += registered
+                print(
+                    f"[sync] change_feed: pages={pages} seen={seen} "
+                    f"registered={registered} change_seq={change_seq}"
+                )
+            change_feed_done = True
+            continue
+        if args.incremental:
+            since = None if table in _NO_AVAILABLE_AT_TABLES else (
+                args.since or _derive_since(store, table)
+            )
+        else:
+            since = None
+        try:
+            pages, seen, registered, skipped, effective_since = _sync_export_table(
+                store,
+                source,
+                table,
+                page_limit=args.page_limit,
+                since=since,
+                max_pages=args.max_pages,
+            )
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"{table}: {exc}")
+            print(f"[sync] {table} FAILED: {exc}", file=sys.stderr)
+            continue
+        total_seen += seen
+        total_registered += registered
+        total_skipped += skipped
+        print(
+            f"[sync] {table}: pages={pages} seen={seen} "
+            f"registered={registered} skipped={skipped}"
+            + (f" since={effective_since}" if effective_since else "")
+        )
+    if not failures and needs_bootstrap_cursor:
+        assert source_max is not None
+        try:
+            _record_change_seq(store, source_max)
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"change_feed: {exc}")
+    if not failures and trusted_full_inventory:
+        try:
+            (
+                source_content_digest,
+                local_content_digest,
+                table_counts,
+            ) = _verify_source_local_parity(store, source, tables)
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"source_local_reconciliation: {exc}")
+    _mark_export_sync(
+        store,
+        export_digest=export_digest,
+        artifact_format=artifact_format,
+        source_mode=source_mode,
+        sync_kind=sync_kind,
+        source_change_seq=source_max,
+        source_content_digest=source_content_digest,
+        local_content_digest=local_content_digest,
+        table_counts=table_counts,
+        status="FAILED" if failures else "COMPLETE",
+        error="; ".join(failures) if failures else None,
+    )
+    return total_seen, total_registered, total_skipped, failures
+
+
+def _run_http_sync(
+    store: SqliteStore,
+    tables: list[str],
+    args,
+    *,
+    base: str,
+    token: str,
+) -> tuple[int, int, int, list[str]]:
+    """Run the legacy authenticated Worker export during client migration."""
+    total_seen = total_registered = total_skipped = 0
+    failures: list[str] = []
+    try:
+        client = _new_http_client()
+    except Exception as exc:  # noqa: BLE001
+        return 0, 0, 0, [f"http_client: {exc}"]
     try:
         change_feed_done = False
-        for t in tables:
-            if args.incremental and t in _CHANGE_FEED_TABLES:
+        for table in tables:
+            if args.incremental and table in _CHANGE_FEED_TABLES:
                 if change_feed_done:
                     continue
                 try:
@@ -627,10 +1270,10 @@ def main(argv=None) -> int:
                         store,
                         client,
                         base,
-                        token or "",
+                        token,
                         page_limit=args.page_limit,
                         max_pages=args.max_pages,
-                        legacy_since=args.since or _derive_since(store, t),
+                        legacy_since=args.since or _derive_since(store, table),
                     )
                 except Exception as exc:  # noqa: BLE001
                     failures.append(f"change_feed: {exc}")
@@ -645,92 +1288,219 @@ def main(argv=None) -> int:
                 change_feed_done = True
                 continue
             if args.incremental:
-                since = None if t in _NO_AVAILABLE_AT_TABLES else (
-                    args.since or _derive_since(store, t)
+                since = None if table in _NO_AVAILABLE_AT_TABLES else (
+                    args.since or _derive_since(store, table)
                 )
                 if since:
-                    print(f"[sync] {t}: incremental since={since}", file=sys.stderr)
+                    print(
+                        f"[sync] {table}: incremental since={since}",
+                        file=sys.stderr,
+                    )
                 else:
                     print(
-                        f"[sync] {t}: incremental since=<none> (full pull)",
+                        f"[sync] {table}: incremental since=<none> (full pull)",
                         file=sys.stderr,
                     )
             else:
                 since = None
             try:
-                pages, seen, registered, skipped, eff_since = _sync_table(
+                pages, seen, registered, skipped, effective_since = _sync_table(
                     store,
                     client,
                     base,
-                    token or "",
-                    t,
+                    token,
+                    table,
                     page_limit=args.page_limit,
                     since=since,
                     max_pages=args.max_pages,
                 )
             except Exception as exc:  # noqa: BLE001
-                failures.append(f"{t}: {exc}")
-                print(f"[sync] {t} FAILED: {exc}", file=sys.stderr)
+                failures.append(f"{table}: {exc}")
+                print(f"[sync] {table} FAILED: {exc}", file=sys.stderr)
                 continue
             total_seen += seen
             total_registered += registered
             total_skipped += skipped
             print(
-                f"[sync] {t}: pages={pages} seen={seen} "
+                f"[sync] {table}: pages={pages} seen={seen} "
                 f"registered={registered} skipped={skipped}"
-                + (f" since={eff_since}" if eff_since else "")
-            )
-        if failures:
-            fail_snapshot_sync(store._conn, "; ".join(failures))  # noqa: SLF001
-        elif args.table:
-            fail_snapshot_sync(
-                store._conn,  # noqa: SLF001
-                "targeted sync completed, but a full required-dataset sync "
-                "is required before paper research",
-            )
-        elif args.pilot_ready_evidence:
-            try:
-                from ops.projection_signing import OpsProjectionPublicKeyRegistry
-                from research.ready_manifest import (
-                    publish_exact_four_pilot_ready_snapshot,
-                )
-
-                signed_document = json.loads(
-                    Path(args.pilot_ready_evidence).read_text(encoding="utf-8")
-                )
-                snapshot_dir = (
-                    Path(args.snapshot_dir)
-                    if args.snapshot_dir
-                    else Path(args.db).resolve().parent / "snapshots"
-                )
-                ready = publish_exact_four_pilot_ready_snapshot(
-                    args.db,
-                    snapshot_dir,
-                    signed_projection_document=signed_document,
-                    projection_verifier=OpsProjectionPublicKeyRegistry.load(),
-                )
-                print(f"[sync] READY published snapshot_id={ready.snapshot_id}")
-            except Exception as exc:  # noqa: BLE001 - CLI fail-closed boundary
-                message = f"snapshot: signed pilot READY publication failed: {exc}"
-                failures.append(message)
-                fail_snapshot_sync(store._conn, message)  # noqa: SLF001
-                print(f"[sync] snapshot FAILED: {message}", file=sys.stderr)
-        else:
-            fail_snapshot_sync(  # noqa: SLF001
-                store._conn,
-                "sync applied; exact-four profile/plan/closure READY evidence "
-                "was not supplied",
-            )
-            print(
-                "[sync] data applied; READY not published (missing "
-                "--pilot-ready-evidence)"
+                + (f" since={effective_since}" if effective_since else "")
             )
     finally:
         try:
             client.close()
         except Exception:  # pragma: no cover
             pass
+    return total_seen, total_registered, total_skipped, failures
+
+
+def _finalize_sync_policy(
+    store: SqliteStore,
+    args,
+    failures: list[str],
+    *,
+    source_mode: str,
+) -> None:
+    """Keep production READY profile-bound and closed after every apply path."""
+    if failures:
+        fail_snapshot_sync(store._conn, "; ".join(failures))  # noqa: SLF001
+        return
+    if args.table:
+        fail_snapshot_sync(
+            store._conn,  # noqa: SLF001
+            "targeted sync completed, but a full required-dataset sync "
+            "is required before paper research",
+        )
+        return
+    if args.pilot_ready_evidence:
+        if source_mode != "WRANGLER_REMOTE":
+            message = (
+                "snapshot: only the pinned authenticated production D1 path "
+                "can authorize production READY; use --wrangler-remote"
+            )
+            failures.append(message)
+            fail_snapshot_sync(store._conn, message)  # noqa: SLF001
+            print(f"[sync] snapshot FAILED: {message}", file=sys.stderr)
+            return
+        try:
+            from research.ready_manifest import (
+                publish_exact_four_pilot_ready_snapshot,
+            )
+
+            signed_document = json.loads(
+                Path(args.pilot_ready_evidence).read_text(encoding="utf-8")
+            )
+            snapshot_dir = (
+                Path(args.snapshot_dir)
+                if args.snapshot_dir
+                else Path(args.db).resolve().parent / "snapshots"
+            )
+            ready = publish_exact_four_pilot_ready_snapshot(
+                args.db,
+                snapshot_dir,
+                signed_projection_document=signed_document,
+            )
+            print(f"[sync] READY published snapshot_id={ready.snapshot_id}")
+        except Exception as exc:  # noqa: BLE001 - CLI fail-closed boundary
+            message = f"snapshot: signed pilot READY publication failed: {exc}"
+            failures.append(message)
+            fail_snapshot_sync(store._conn, message)  # noqa: SLF001
+            print(f"[sync] snapshot FAILED: {message}", file=sys.stderr)
+        return
+    fail_snapshot_sync(  # noqa: SLF001
+        store._conn,
+        "sync applied; exact-four profile/plan/closure READY evidence "
+        "was not supplied",
+    )
+    print(
+        "[sync] data applied; READY not published (missing "
+        "--pilot-ready-evidence)"
+    )
+
+
+def main(argv=None) -> int:
+    args = _build_parser().parse_args(argv)
+    if not 1 <= args.page_limit <= 1000:
+        print("[sync] --page-limit must be between 1 and 1000", file=sys.stderr)
+        return 2
+    if args.max_pages < 1:
+        print("[sync] --max-pages must be at least 1", file=sys.stderr)
+        return 2
+    if args.since and not args.incremental:
+        print("[sync] --since requires --incremental", file=sys.stderr)
+        return 2
+    if not args.d1_export and not args.wrangler_remote and not args.url:
+        # Production default: authenticated private D1 acquisition. The legacy
+        # Worker transport is entered only by an explicit --url argument.
+        args.wrangler_remote = True
+    private_mode = bool(args.d1_export or args.wrangler_remote)
+    url = args.url
+    token = os.environ.get("DATA_EXPORT_TOKEN")
+
+    tables = args.table or list(DEFAULT_TABLES)
+    try:
+        tables = [_validate_sync_table(table) for table in tables]
+    except ValueError as exc:
+        print(f"[sync] invalid table selection: {exc}", file=sys.stderr)
+        return 2
+
+    temporary: tempfile.TemporaryDirectory[str] | None = None
+    source_conn: sqlite3.Connection | None = None
+    export_digest = ""
+    artifact_format = ""
+    source_mode = "WORKER_HTTP"
+    if private_mode:
+        temporary = tempfile.TemporaryDirectory(prefix="quant-d1-sync-")
+        temporary_path = Path(temporary.name)
+        try:
+            if args.wrangler_remote:
+                raw_artifact = temporary_path / "remote-export.sql"
+                _run_wrangler_d1_export(
+                    output_path=raw_artifact,
+                )
+                source_mode = "WRANGLER_REMOTE"
+                print("[sync] acquired private D1 export via authenticated Wrangler")
+            else:
+                raw_artifact = Path(args.d1_export)
+                source_mode = "LOCAL_ARTIFACT"
+            materialized = temporary_path / "export.sqlite"
+            export_digest, artifact_size, artifact_format = _materialize_d1_export(
+                raw_artifact,
+                materialized,
+            )
+            source_conn = _open_export_sqlite(materialized)
+            print(
+                f"[sync] private export verified format={artifact_format} "
+                f"bytes={artifact_size} digest={export_digest}"
+            )
+        except Exception as exc:  # noqa: BLE001 - operator CLI boundary
+            print(f"[sync] private export preparation FAILED: {exc}", file=sys.stderr)
+            temporary.cleanup()
+            return 1
+
+    store = SqliteStore(Path(args.db))
+    begin_snapshot_sync(
+        store._conn,  # noqa: SLF001
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+    total_seen = total_registered = total_skipped = 0
+    failures: list[str] = []
+    try:
+        if source_conn is not None:
+            (
+                total_seen,
+                total_registered,
+                total_skipped,
+                failures,
+            ) = _run_private_export_sync(
+                store,
+                source_conn,
+                tables,
+                args,
+                export_digest=export_digest,
+                artifact_format=artifact_format,
+                source_mode=source_mode,
+            )
+        else:
+            (
+                total_seen,
+                total_registered,
+                total_skipped,
+                failures,
+            ) = _run_http_sync(
+                store,
+                tables,
+                args,
+                base=(url or "").rstrip("/"),
+                token=token or "",
+            )
+        _finalize_sync_policy(store, args, failures, source_mode=source_mode)
+    finally:
         store.close()
+        if source_conn is not None:
+            source_conn.close()
+        if temporary is not None:
+            temporary.cleanup()
 
     print(
         f"[sync] done db={args.db} seen={total_seen} "
@@ -739,14 +1509,20 @@ def main(argv=None) -> int:
     )
     exit_code = 1 if failures else 0
     if exit_code == 0 and getattr(args, "publish_ops", False):
-        _maybe_publish_ops_projection(
+        projection_exit = _maybe_publish_ops_projection(
             args.db,
             apply_remote=bool(getattr(args, "apply_remote_ops", False)),
         )
+        if projection_exit != 0:
+            print(
+                f"[sync] ops projection publication FAILED exit={projection_exit}",
+                file=sys.stderr,
+            )
+            return projection_exit
     return exit_code
 
 
-def _maybe_publish_ops_projection(db_path, *, apply_remote: bool = False) -> None:
+def _maybe_publish_ops_projection(db_path, *, apply_remote: bool = False) -> int:
     import subprocess
 
     cmd = [
@@ -757,8 +1533,79 @@ def _maybe_publish_ops_projection(db_path, *, apply_remote: bool = False) -> Non
     ]
     if apply_remote:
         cmd.append("--apply-remote")
-    print(f"[sync] publishing ops projection: {' '.join(cmd)}")
-    subprocess.run(cmd, check=False)
+    print("[sync] publishing ops projection")
+    completed = subprocess.run(cmd, check=False)
+    return int(completed.returncode)
+
+
+def _authenticated_export_cursor_chain_from_conn(
+    conn: sqlite3.Connection,
+) -> tuple[int | None, int | None]:
+    """Validate the trusted cursor/content chain in one caller-owned read view."""
+    row = conn.execute(
+            "SELECT r.source_mode,r.status,r.source_change_seq,"
+            "r.applied_change_seq,s.last_applied_change_seq,"
+            "r.sync_kind,r.local_content_digest,r.table_counts_json,"
+            "r.authority_id "
+            "FROM local_d1_export_sync_runs r "
+            "LEFT JOIN sync_change_state s ON s.feed='jquants_records' "
+            "ORDER BY r.updated_at DESC LIMIT 1"
+        ).fetchone()
+    if (
+        row is None
+        or row[0] != "WRANGLER_REMOTE"
+        or row[1] != "COMPLETE"
+        or row[5] not in {"FULL", "INCREMENTAL"}
+        or row[8] != f"cloudflare-d1:{_GOVERNED_D1_ID}"
+    ):
+        return None, None
+    source = row[2]
+    applied = row[3]
+    current_applied = row[4]
+    expected_content_digest = row[6]
+    expected_counts_json = row[7]
+    if (
+        not isinstance(source, int)
+        or not isinstance(applied, int)
+        or not isinstance(current_applied, int)
+        or source <= 0
+        or source != applied
+        or applied != current_applied
+        or not isinstance(expected_content_digest, str)
+        or not expected_content_digest.startswith("sha256:")
+    ):
+        return None, None
+    observed_content_digest, observed_counts = _governed_local_content_identity(conn)
+    expected_counts = json.loads(expected_counts_json)
+    if (
+        observed_content_digest != expected_content_digest
+        or expected_counts != observed_counts
+    ):
+        return None, None
+    return source, source
+
+
+def _authenticated_export_cursor_chain(
+    db_path: str | Path,
+) -> tuple[int | None, int | None]:
+    """Return source/export cursors only for a completed direct Wrangler apply.
+
+    A caller-supplied local artifact never becomes signed source-generation
+    evidence. The applied cursor must equal the immutable export's measured
+    source maximum before the projection publisher receives either value.
+    """
+    path = Path(db_path).resolve()
+    if not path.is_file():
+        return None, None
+    uri = f"file:{quote(str(path), safe='/')}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        conn.execute("BEGIN")
+        return _authenticated_export_cursor_chain_from_conn(conn)
+    except (ValueError, TypeError, json.JSONDecodeError, sqlite3.Error):
+        return None, None
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
