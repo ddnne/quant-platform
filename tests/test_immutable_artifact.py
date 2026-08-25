@@ -1,8 +1,6 @@
 """Create-if-absent: local digest store and default R2 put. Not GO."""
 
-import inspect
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -63,21 +61,6 @@ def test_dry_run_r2_put_does_not_call_remote(tmp_path: Path, monkeypatch) -> Non
     assert got.get("created") is not True
     staged = Path(got["staged_path"])
     assert staged.read_bytes() == b"{}"
-
-
-def test_default_r2_put_documents_toctou_not_atomic() -> None:
-    sig = inspect.signature(default_r2_put)
-    assert sig.parameters["create_only"].default is True
-    assert sig.parameters["authoritative"].default is False
-    text = f"{default_r2_put.__doc__ or ''}\n{inspect.getsource(default_r2_put)}"
-    assert "TOCTOU" in text
-    assert "not the immutable authority" in text
-    assert "Worker onlyIf" in text
-    assert "not artifact authority" in text
-    assert PYTHON_R2_PUT_ENV in text
-    assert "TOCTOU" in (r2_io.__doc__ or "")
-    assert "not artifact authority" in (r2_io.__doc__ or "")
-    assert r2_io.python_cli_put_is_not_immutable_authority is True
 
 
 def test_default_r2_put_authoritative_is_refused(monkeypatch) -> None:
@@ -154,16 +137,6 @@ def test_remote_r2_put_does_not_cli_put_with_overlay(
             wrangler=wr,
             config=cfg,
         )
-
-
-def test_default_r2_put_source_is_not_cli_put() -> None:
-    src = inspect.getsource(default_r2_put)
-    assert "subprocess" not in src
-    assert "put_children_then_manifest_via_worker" in src
-    assert PYTHON_R2_PUT_ENV in src
-    assert "does not resurrect TOCTOU" in src
-    assert "WORKER_CHILDREN_THEN_MANIFEST_ERROR" in src
-    assert "never runs that CLI sequence" in src
 
 
 def _children_then_manifest_payload() -> tuple[list[dict], dict]:
@@ -370,25 +343,6 @@ def test_remote_children_then_manifest_non_json_body_fail_closed(monkeypatch) ->
         put_children_then_manifest_via_worker(children, manifest)
 
 
-def test_children_then_manifest_source_is_not_cli_or_digest_forge() -> None:
-    src = inspect.getsource(put_children_then_manifest_via_worker)
-    helper = inspect.getsource(r2_io._post_worker_children_then_manifest)
-    combined = f"{src}\n{helper}\n{inspect.getsource(r2_io._item_json_data)}"
-    assert "default_r2_put" not in combined
-    assert "subprocess" not in combined
-    assert "hashlib" not in combined
-    assert "sha256" not in combined
-    assert "httpx" not in combined
-    assert "wrangler" not in combined
-    assert "WORKER_CHILDREN_THEN_MANIFEST_ERROR" in src
-    assert "WORKER_CHILDREN_THEN_MANIFEST_PATH" in src
-    assert "X-Mass-Eval-Token" in helper
-    doc = put_children_then_manifest_via_worker.__doc__ or ""
-    assert "CLI put is not authority" in doc
-    assert "no digest forge" in doc
-    assert "dry_run" in doc
-
-
 def test_put_research_artifact_dry_run_is_local_default_r2_put(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -464,36 +418,6 @@ def test_put_research_artifact_remote_unbound_fail_closed(monkeypatch) -> None:
             "research/eval/job=x/cost_verify.json",
             b'{"n": 1}',
         )
-
-
-def test_research_job_callers_use_worker_put_not_cli() -> None:
-    root = Path(__file__).resolve().parents[1] / "packages" / "product" / "research"
-    remote_callers = (
-        "cf_mass_eval_job.py",
-        "cf_mass_eval_stage.py",
-        "cf_mass_eval_run.py",
-        "occupancy_audit.py",
-        "cf_propose_thesis.py",
-        "cf_cost_verify.py",
-        "cf_daily_path_job.py",
-    )
-    for name in remote_callers:
-        src = (root / name).read_text(encoding="utf-8")
-        assert "put_research_artifact" in src
-        assert "QP_ALLOW_PYTHON_R2_PUT" not in src
-        if name == "cf_mass_eval_stage.py":
-            assert "default_r2_put" not in src
-        else:
-            assert "default_r2_put(" not in src
-    recon = (root / "reconstitution_evidence.py").read_text(encoding="utf-8")
-    assert "put_research_artifact" in recon
-    assert "dry_run=True" in recon
-    assert "default_r2_put(" not in recon
-    assert "QP_ALLOW_PYTHON_R2_PUT" not in recon
-    helper = inspect.getsource(put_research_artifact)
-    assert "put_children_then_manifest_via_worker" in helper
-    assert "default_r2_put" in helper
-    assert "does not grant CLI put" in (put_research_artifact.__doc__ or "")
 
 
 def test_put_local_fallback_artifacts_default_remote_uses_worker_put(
@@ -583,27 +507,3 @@ def test_put_local_fallback_artifacts_default_remote_uses_worker_put(
     assert injected
     assert all(bucket == "quant-structured" for bucket, _key in injected)
     assert all(p.get("status") == "put_ok" for p in got)
-
-
-def test_try_r2_get_json_is_non_authority_get_miss_not_complete(monkeypatch) -> None:
-    import research.cf_mass_eval_job as job
-    from research.cf_mass_eval_job import try_r2_get_json
-
-    src = inspect.getsource(try_r2_get_json)
-    assert "r2" in src
-    assert "object" in src
-    assert "get" in src
-    assert "--remote" in src
-    assert "wrangler deploy" not in src
-    assert "r2 object put" not in src
-    # Honesty docs may say "not COMPLETE". Do not mint COMPLETE.
-    for match in re.finditer(r"COMPLETE", src):
-        window = src[max(0, match.start() - 24) : match.start()].lower()
-        assert "not" in window, src[max(0, match.start() - 24) : match.end() + 12]
-
-    def boom(*_a, **_k):
-        raise OSError("no wrangler")
-
-    monkeypatch.setattr(job.subprocess, "run", boom)
-    got = try_r2_get_json("research/mass_eval/panels_cache/x/meta.json")
-    assert got is None

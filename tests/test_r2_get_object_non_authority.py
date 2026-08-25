@@ -1,37 +1,42 @@
-"""Pin r2_io.default_r2_get_object: wrangler --remote get, not artifact authority."""
+"""Exercise the bounded remote R2 read adapter through its public behavior."""
 
-import inspect
+from pathlib import Path
+from types import SimpleNamespace
 
 import research.r2_io as r2_io
-from research.r2_io import (
-    WORKER_CHILDREN_THEN_MANIFEST_PATH,
-    default_r2_get_object,
-    put_children_then_manifest_via_worker,
-)
+from research.r2_io import default_r2_get_object
 
 
-def test_default_r2_get_object_is_wrangler_remote_not_artifact_authority() -> None:
-    src = inspect.getsource(default_r2_get_object)
-    doc = default_r2_get_object.__doc__ or ""
+def test_default_r2_get_object_uses_pinned_remote_read(
+    tmp_path: Path, monkeypatch
+) -> None:
+    wrangler = tmp_path / "wrangler"
+    wrangler.write_text("#!/bin/sh\n", encoding="utf-8")
+    config = tmp_path / "wrangler.toml"
+    config.write_text("name = 'test'\n", encoding="utf-8")
+    seen: dict[str, object] = {}
 
-    assert "wrangler r2 object get" in doc
-    assert '"r2"' in src
-    assert '"object"' in src
-    assert '"get"' in src
-    assert "--remote" in src
-    assert "subprocess.run" in src
-    # 03409ccd / current origin: no Python R2 get overlay env.
-    assert "QP_ALLOW_PYTHON_R2_GET" not in src
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = list(cmd)
+        seen["kwargs"] = kwargs
+        output_arg = next(part for part in cmd if part.startswith("--file="))
+        Path(output_arg.removeprefix("--file=")).write_bytes(b"payload")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    # CLI get is not Coverage COMPLETE / FRESH and not immutable artifact authority.
-    assert "COMPLETE" not in src
-    assert "FRESH" not in src
-    assert "children-then-manifest" not in src
-    assert WORKER_CHILDREN_THEN_MANIFEST_PATH not in src
-
-    authority_src = inspect.getsource(put_children_then_manifest_via_worker)
-    authority_doc = put_children_then_manifest_via_worker.__doc__ or ""
-    assert WORKER_CHILDREN_THEN_MANIFEST_PATH in authority_src
-    assert "CLI put is not authority" in authority_doc
-    mod_doc = " ".join((r2_io.__doc__ or "").split())
-    assert "children-then-manifest is the immutable authority" in mod_doc
+    monkeypatch.setattr(r2_io.subprocess, "run", fake_run)
+    assert default_r2_get_object(
+        "quant-structured",
+        "research/eval/job=x/result.json",
+        wrangler=wrangler,
+        config=config,
+    ) == b"payload"
+    cmd = seen["cmd"]
+    assert cmd[:4] == [
+        str(wrangler),
+        "r2",
+        "object",
+        "get",
+    ]
+    assert "quant-structured/research/eval/job=x/result.json" in cmd
+    assert "--remote" in cmd
+    assert f"--config={config}" in cmd
