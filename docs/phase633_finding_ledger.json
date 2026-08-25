@@ -1,0 +1,43 @@
+{
+  "schema_version": "phase631-finding-ledger/v1",
+  "updated_at": "2026-08-25T17:53:29+09:00",
+  "merge_policy": {
+    "required_p0_status": "FIXED",
+    "independent_review_unresolved_p0": 0,
+    "candidate_patch_is_not_closure": true
+  },
+  "findings": [
+    {"id":"D1","area":"data_pit_receipt","severity":"P0","status":"FIXED","summary":"Fixed allowlist was not intersected with daily PIT master","evidence":"d99083f4"},
+    {"id":"D2","area":"data_pit_receipt","severity":"P0","status":"OPEN","summary":"COMPLETE issuer accepted caller-originated collection claims","closure":"Canonical immutable-raw reparse, exact structured reread, exhaustion proof, adversarial rejection"},
+    {"id":"D3","area":"data_pit_receipt","severity":"P0","status":"OPEN","summary":"Receipt minting capability remained generally importable","closure":"Private governed transaction capability; recovery remains non-COMPLETE"},
+    {"id":"D4","area":"data_pit_receipt","severity":"P0","status":"FIXED","summary":"JSDA publication label was used as quote-effective date","evidence":"56d4fcf9"},
+    {"id":"D5","area":"data_pit_receipt","severity":"P1","status":"HOLD","summary":"Existing COMPLETE receipts predate final trusted path","closure":"Trusted reproof before COMPLETE eligibility"},
+    {"id":"D6","area":"data_pit_receipt","severity":"P1","status":"FIXED","summary":"Canonical Registry duplicated PIT and Coverage semantics","evidence":"2bd96d69"},
+
+    {"id":"R1","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"TOPIX exact-four dependency lacked V3 SourceCapability","closure":"Official capability and complete exact-four dependency proof"},
+    {"id":"R2","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"READY assumed one global V2 policy","closure":"Signed per-dataset policy id, version, and digest"},
+    {"id":"R3","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"ExperimentPlan snapshot placeholder made identity circular","closure":"Snapshot binding only in signed execution authorization"},
+    {"id":"R4","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Exact-four bindings were caller-overridable","closure":"Canonical four plan ids and exact digests only"},
+    {"id":"R5","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Generic READY and implicit Mass minting remained reachable","closure":"Profile closure publication and explicit governed Mass policy; Mass disabled"},
+    {"id":"R6","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Missing natural-key evidence could pass fixture compatibility","closure":"Production UNKNOWN or FAIL; private test-only compatibility"},
+    {"id":"R7","area":"ready_plan_execution","severity":"P1","status":"OPEN","summary":"Snapshot publication swallowed a database exception","closure":"Abort publication and mint no READY authority"},
+    {"id":"R8","area":"ready_plan_execution","severity":"P1","status":"FIXED","summary":"Controlled Paper shared a boolean fixture bypass","evidence":"ddc85178"},
+    {"id":"R9","area":"ready_plan_execution","severity":"P1","status":"FIXED","summary":"Pilot and Mass readiness authority was not structurally separated","evidence":"ddc85178"},
+
+    {"id":"C1","area":"cloudflare_ops_ci","severity":"P0","status":"FIXED","summary":"Ops MCP bound production ingestion D1 directly","evidence":"dbd5dc74,ca9c4410"},
+    {"id":"C2","area":"cloudflare_ops_ci","severity":"P0","status":"FIXED","summary":"Mass-to-Gateway used a shared bearer secret","evidence":"de7915d1"},
+    {"id":"C3","area":"cloudflare_ops_ci","severity":"P0","status":"FIXED","summary":"Caller receipts could impersonate the required CI gate","evidence":"6421d89b"},
+    {"id":"C4","area":"cloudflare_ops_ci","severity":"P1","status":"OPEN","summary":"Signed Ops metadata did not bind projected D1 contents","closure":"Per-table digest, sealed generation, pre-read verification, immutable rows"},
+    {"id":"C5","area":"cloudflare_ops_ci","severity":"P1","status":"OPEN","summary":"MCP tools lacked closed output-schema digest acceptance","closure":"Closed input and output schemas for all 17 tools with aggregate parity"},
+    {"id":"C6","area":"cloudflare_ops_ci","severity":"P1","status":"FIXED","summary":"Production Cron triggers were omitted from named environments","evidence":"6a37f61f"},
+    {"id":"C7","area":"cloudflare_ops_ci","severity":"P1","status":"HOLD","summary":"ingestion-secrets workers.dev endpoint lacks Access","closure":"Human Zero Trust agreement, then service-token Access"},
+    {"id":"C8","area":"cloudflare_ops_ci","severity":"P1","status":"DEFERRED","summary":"Six active Worker lockfiles remain","closure":"ADR exit criteria prove native-build and rollback parity"},
+
+    {"id":"A1","area":"architecture_test_operations","severity":"P0","status":"FIXED","summary":"JSDA Queue could not converge on historical discovery","evidence":"7afffade"},
+    {"id":"A2","area":"architecture_test_operations","severity":"P0","status":"FIXED","summary":"READY signing could fall back to receipt key","evidence":"95b6c06d"},
+    {"id":"A3","area":"architecture_test_operations","severity":"P1","status":"FIXED","summary":"Worker coverage was almost entirely Node mocks","evidence":"32a1ea7d"},
+    {"id":"A4","area":"architecture_test_operations","severity":"P1","status":"FIXED","summary":"Legacy strategy catalog was a product-runtime input","evidence":"e5969f50"},
+    {"id":"A5","area":"architecture_test_operations","severity":"P1","status":"DEFERRED","summary":"Source, AST, and spelling-dependent Python tests remain","closure":"Replace incrementally with structural invariants"},
+    {"id":"A6","area":"architecture_test_operations","severity":"P1","status":"OPEN","summary":"Immutable remote release evidence is not yet published","closure":"Content-addressed non-secret release manifest after production acceptance"}
+  ]
+}

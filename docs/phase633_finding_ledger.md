@@ -1,88 +1,99 @@
-# Phase 6.3.3 finding ledger (live)
+# Phase 6.3.1 finding ledger (live)
 
-> **Single current finding ledger.** Independent reviewers fill rows.
-> Live residual **flags** remain [`phase62_residual_status.md`](phase62_residual_status.md).
-> Historical review waves are available in Git history, not the active documentation tree.
-> Do **not** declare GO, Mass ON, production READY, Phase 7 ON, Projection FRESH, or invented COMPLETE from this file.
+> **Single current finding ledger.** Operational measurements and GO flags live
+> in [`phase62_residual_status.md`](phase62_residual_status.md). Historical
+> review waves remain in Git history. Machine-readable rows are in
+> [`phase633_finding_ledger.json`](phase633_finding_ledger.json).
 
 Policy: [`architecture/adr_review_findings_sot.md`](architecture/adr_review_findings_sot.md).
-Status vocabulary: **OPEN** / **FIXED** / **DEFERRED** / **HOLD**. Empty sections are empty — not a pass.
+Status vocabulary: **OPEN** / **FIXED** / **DEFERRED** / **HOLD**.
 
-Prior independent review prose is retained in Git history. This ledger is the only active findings authority.
+The merge gate is fail-closed: every P0 row must be `FIXED` and an independent
+review of the final candidate must report unresolved P0 = 0. A candidate patch
+does not change an `OPEN` row until its regression test and independent review
+pass.
 
-Unresolved live P0 (merge gate) remains **>0**. Do not merge PR #1.
-
-## Data / PIT
-
-### P0
-
-| ID | Finding | Status | Evidence | Notes |
-|----|---------|--------|----------|-------|
-| D1 | Signed claims not bound to outer receipt; no VerifiedReceipt | FIXED (tree) | `verified_receipt.py`; `ec848bc4` | Independent review `6e112837` |
-| D2 | `extra_digests` overwrites standard claims | FIXED (tree) | `partition_extra_digests` | |
-| D3 | Empty-raw signed SUCCESS can evaluate COMPLETE | FIXED (tree) | `4caaa813` evaluate_segment + envelope classification | `{"data":[]}` not COMPLETE |
-| D4 | Master CURRENT parse miss → empty snapshot put | FIXED (tree) | `master_scd2/write.ts` quarantine | Lane I `8fa95798` |
-
-### P1
-
-| ID | Finding | Status | Evidence | Notes |
-|----|---------|--------|----------|-------|
-| D5 | Recovery origin still not COMPLETE-eligible | HOLD | `is_complete_eligible_receipt` | Keep ineligible |
-
-## Cloudflare / CI
+## Data / PIT / Receipt
 
 ### P0
 
-| ID | Finding | Status | Evidence | Notes |
-|----|---------|--------|----------|-------|
-| C1 | `ci-aggregate` is caller-supplied receipts, not native CF Build | OPEN | Worker 10007 absent; check-runs 0 | HUMAN: GitHub App + repo-root Build |
-| C2 | Required GitHub check never posted | OPEN | `gh` check-runs total 0 | Same as C1 |
-| C3 | GitHub Actions present | FIXED | `.github/workflows` absent | Must stay absent |
-| C4 | `workers_dev=false` still serves `*.workers.dev` on live deploys | OPEN | live `/health` 200 | HUMAN dashboard disable |
-| C5 | Caller `budget_id` minted occupancy via `idFromName` | FIXED (tree) | control-plane DO run id | Live Edge unproven |
+| ID | Finding | Status | Evidence / closure condition |
+|----|---------|--------|------------------------------|
+| D1 | Fixed allowlists were intersected with PIT master only on the first day | FIXED | `d99083f4`; daily listing/delisting invariant tests |
+| D2 | COMPLETE issuer accepted caller-originated parsed rows, counts, digests, and exhaustion state | OPEN | Must reparse immutable raw, normalize canonically, reread exact natural keys, prove exhaustion, and reject an unrelated same-count row |
+| D3 | A generally importable issuer/service could mint signed SUCCESS outside governed ingestion | OPEN | COMPLETE capability must be private to the governed transaction; recovery scripts remain non-COMPLETE |
+| D4 | JSDA publication labels were used as quote-effective dates | FIXED | `56d4fcf9`; `2002-08-02 -> 2002-08-01`, `2002-08-05 -> 2002-08-02` |
 
 ### P1
 
-| ID | Finding | Status | Evidence | Notes |
-|----|---------|--------|----------|-------|
-| C6 | GATEWAY_TOKEN dual copy; CF-Worker not auth | HOLD | P632B-03 | |
-| C7 | Secrets proxy public host | OPEN | HUMAN Access/mTLS/Tunnel | |
-| C8 | `verify_all` skippable ≠ merge gate | HOLD | keep split; native check is SoT | |
+| ID | Finding | Status | Evidence / closure condition |
+|----|---------|--------|------------------------------|
+| D5 | Existing 22 COMPLETE datasets were issued before the final trusted path | HOLD | Preserve audit history but remove eligibility until trusted reproof |
+| D6 | Canonical Registry duplicated PIT/Coverage semantics | FIXED | `2bd96d69`; registry is membership/routing metadata only |
 
-## Architecture / Test
+## READY / Plan / Execution
 
 ### P0
 
-| ID | Finding | Status | Evidence | Notes |
-|----|---------|--------|----------|-------|
-| A1 | Two `PaperExecutionService` paths; weak `run_paper` | FIXED (tree) | DTO delegates to product service | `c1b5caf6` |
+| ID | Finding | Status | Evidence / closure condition |
+|----|---------|--------|------------------------------|
+| R1 | exact-four closure required TOPIX but `indices_bars_daily_topix` had no V3 SourceCapability | OPEN | Add official capability and prove the full exact-four closure |
+| R2 | READY/coherence paths hard-coded one global V2 policy and rejected valid per-dataset V3 evidence | OPEN | Bind signed policy id/version/digest per dataset and fail on unknown/missing evidence |
+| R3 | ExperimentPlan embedded `ready_snapshot_id=not-declared`, making later immutable snapshot equality circular | OPEN | Remove the placeholder from plan identity; bind snapshot at signed execution authorization |
+| R4 | exact-four bindings were caller-overridable | OPEN | Only the canonical four plan ids and exact digests may reach Controlled Pilot |
+| R5 | Generic READY publication and implicit core-profile Mass minting remained reachable | OPEN | Production publication must be profile/closure-bound; Mass requires an explicit governed Mass policy and stays disabled |
+| R6 | Missing natural-key ledger could pass through fixture compatibility | OPEN | Production missing evidence is UNKNOWN/FAIL; compatibility is private test-only policy |
 
 ### P1
 
-| ID | Finding | Status | Evidence | Notes |
-|----|---------|--------|----------|-------|
-| A2 | `ProcessIsolatedRunner` defaulted `sys.executable` | FIXED (tree) | closed tool-id map | Lane J |
-| A3 | ReadyManifest split publisher/coherence/readiness | FIXED (tree) | `ready_manifest.py` | No live READY |
-| A4 | `pilot_candidates()==active` 2092 | FIXED (tree) | `87f5d7d7` four ExperimentPlan ids | start() still OFF |
-| A5 | leftover occupancy | HOLD | `daily_path.ts` | Do not extract |
-| A6 | live math size | KEEP | `cost_models` / `options_225` | Do not split |
-| A7 | `skipLibCheck` hides Env mismatch | PARTIAL | ci-aggregate/secrets/jsda/premium `false`; gateway/mass-eval/ops-mcp still true | generated Env vs source still split on ci-aggregate |
-| A8 | Ops MCP still JS | PARTIAL | `checkJs: true` (`536ffe14`); source remains JS | skipLibCheck still true on MCP |
+| ID | Finding | Status | Evidence / closure condition |
+|----|---------|--------|------------------------------|
+| R7 | Snapshot publication swallowed a database publication exception | OPEN | Publication failure must abort and leave no READY authority |
+| R8 | Controlled and fixture Paper shared a boolean readiness bypass | FIXED | `ddc85178`; separate OfflineFixture and ControlledPilot services |
+| R9 | Pilot and Mass used nominally compatible readiness authority | FIXED | `ddc85178`; distinct verified types; Mass remains hard-disabled |
 
-## Integration
+## Cloudflare / Ops / CI
 
 ### P0
 
-| ID | Finding | Status | Evidence | Notes |
-|----|---------|--------|----------|-------|
-| N1 | PR #1 unreviewable (450 commits / 421 files) | OPEN | ADR `adr_phase633_pr_stack.md` | Do not force-push; 10 PRs from main not assembled |
-| N2 | Live merge gate dead | OPEN | ci-aggregate absent | HUMAN |
-| N3 | Projection STALE, READY null, B0 UNKNOWN, applied_cursor null | OPEN | quant-mcp this turn | Lane M HUMAN |
-| N4 | Coverage JSON v3 in tree vs live V2 ledger | OPEN | Lane E derive helper | Do not claim live V3 |
-| N5 | Four independent reviews required | FIXED (process) | four finding files on this SHA | Unresolved live P0 ≠ 0 |
+| ID | Finding | Status | Evidence / closure condition |
+|----|---------|--------|------------------------------|
+| C1 | Ops MCP was bound directly to production ingestion D1 | FIXED | `dbd5dc74`, `ca9c4410`; dedicated signed projection and quota D1 bindings |
+| C2 | Mass-to-Gateway authorization copied a shared bearer secret | FIXED | `de7915d1`; typed Service Binding RPC capability |
+| C3 | Caller-supplied CI receipts could impersonate the required gate | FIXED | `6421d89b`; native Cloudflare required check is authoritative |
 
 ### P1
 
-| ID | Finding | Status | Evidence | Notes |
-|----|---------|--------|----------|-------|
-| N6 | Dated review-document proliferation | FIXED (tree) | active review snapshots removed | Git history retains audit trail |
+| ID | Finding | Status | Evidence / closure condition |
+|----|---------|--------|------------------------------|
+| C4 | Signed Ops metadata did not bind and reverify the projected D1 table contents | OPEN | Sign per-table row/digest manifest, seal the generation, recompute before reads, reject post-seal mutation |
+| C5 | 17 MCP tools lacked closed output schemas and deployment schema-digest acceptance | OPEN | All tools require closed input/output schemas and deterministic aggregate digest parity |
+| C6 | Production Cron triggers disappeared under non-inherited named environments | FIXED | `6a37f61f`; Premium and JSDA production triggers explicit |
+| C7 | `ingestion-secrets` workers.dev endpoint is not protected by Access | HOLD | Zero Trust account activation requires explicit human agreement; header token remains enabled |
+| C8 | Six Worker lockfiles remain instead of one npm workspace | DEFERRED | Build-isolation exception in `architecture/adr_worker_dependency_isolation.md`; exact dependency parity required |
+
+## Architecture / Test / Operations
+
+### P0
+
+| ID | Finding | Status | Evidence / closure condition |
+|----|---------|--------|------------------------------|
+| A1 | JSDA Queue repeatedly selected only the newest year/files and could not converge on history | FIXED | `7afffade`; stable child segment identity, cursor progress, retry/DLQ evidence |
+| A2 | Readiness and receipt signing could share a private key | FIXED | `95b6c06d`; dedicated public registries and local private-key files |
+
+### P1
+
+| ID | Finding | Status | Evidence / closure condition |
+|----|---------|--------|------------------------------|
+| A3 | Worker tests were almost entirely Node mocks | FIXED | `32a1ea7d`; focused workerd and `createTestHarness()` boundary tests |
+| A4 | Legacy 2,254-strategy catalog was imported by the product runtime | FIXED | `e5969f50`; immutable replay artifact only |
+| A5 | More than 70 Python tests inspect source text, AST, or implementation spelling | DEFERRED | Replace incrementally with type/capability/transaction invariants; do not increase this class |
+| A6 | Release evidence existed only at local absolute paths | OPEN | Publish a content-addressed non-secret manifest after production acceptance; backup body remains private/encrypted |
+
+## Integration gate
+
+The latest independent adversarial review of the pre-remediation candidate found
+P0 rows D2, D3, R1-R6 unresolved. Remediation is in progress. After those rows
+are closed, run a fresh independent review against one immutable SHA, then run
+the full native CI-equivalent suite. Only that reviewed SHA may be pushed for
+the release PR.
