@@ -27,3 +27,4 @@ database_id = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
 [[services]]
 binding = "AI_GATEWAY"
 service = "quant-platform-research-ai-gateway-staging"
+entrypoint = "GatewayService"

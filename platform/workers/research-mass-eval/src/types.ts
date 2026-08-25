@@ -1,8 +1,8 @@
 export interface Env {
   STRUCTURED_BUCKET: R2Bucket;
   DB?: D1Database;
-  /** Service binding to research-ai-gateway. Direct Workers AI is forbidden. */
-  AI_GATEWAY?: Fetcher;
+  /** Typed Service Binding RPC. Direct Workers AI and shared tokens are forbidden. */
+  AI_GATEWAY?: AiGatewayService;
   MASS_EVAL_TOKEN?: string;
   MASS_EVAL_VERSION?: string;
   MASS_EVAL_WAVE?: string;
@@ -13,6 +13,13 @@ export interface Env {
   CONTINUOUS_PAPER?: string;
   /** nets_only is deny-by-default; only the exact value "allow" opts in. */
   NETS_ONLY?: string;
+}
+
+export interface AiGatewayService {
+  complete(
+    body: unknown,
+    options?: { idempotency_key?: string },
+  ): Promise<{ http_status: number; body: unknown }>;
 }
 
 export interface LogicSpec {

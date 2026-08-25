@@ -41,7 +41,8 @@ route. Health is the only unauthenticated endpoint and returns `{ok,service,vers
 
 Mass / daily-path / propose require typed capabilities (`src/capabilities.ts`).
 Env flags can only deny. Worker does **not** bind Workers AI; propose uses
-service binding `AI_GATEWAY`. R2 writes are create-if-absent (duplicate job_id → 409).
+typed `GatewayService` RPC binding `AI_GATEWAY`; no shared Gateway bearer token
+is present in this Worker. R2 writes are create-if-absent (duplicate job_id → 409).
 
 | Mass (operational) | **NO-GO** |
 | READY | **false / 未宣言** |

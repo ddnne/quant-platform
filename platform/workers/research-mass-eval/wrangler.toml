@@ -49,6 +49,7 @@ database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 [[services]]
 binding = "AI_GATEWAY"
 service = "quant-platform-research-ai-gateway"
+entrypoint = "GatewayService"
 
 [vars]
 MASS_EVAL_VERSION = "research-mass-eval/v142-63-failclosed"
@@ -82,6 +83,7 @@ database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 [[env.production.services]]
 binding = "AI_GATEWAY"
 service = "quant-platform-research-ai-gateway"
+entrypoint = "GatewayService"
 
 [env.production.vars]
 MASS_EVAL_VERSION = "research-mass-eval/v142-63-failclosed"
