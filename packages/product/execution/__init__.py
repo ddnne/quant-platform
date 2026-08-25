@@ -19,6 +19,11 @@ from .paper_service import (
     PaperExecutionRejected,
     PaperExecutionService,
 )
+from .trader_authority import (
+    TraderAuthorizationPublicKeyRegistry,
+    VerifiedTraderAuthorization,
+    open_controlled_trader_authorization_issuer,
+)
 
 __all__ = [
     "ControlledPilotExecutionService",
@@ -27,4 +32,7 @@ __all__ = [
     "OfflineFixturePaperService",
     "PaperExecutionRejected",
     "PaperExecutionService",
+    "TraderAuthorizationPublicKeyRegistry",
+    "VerifiedTraderAuthorization",
+    "open_controlled_trader_authorization_issuer",
 ]

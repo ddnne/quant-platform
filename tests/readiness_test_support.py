@@ -127,17 +127,59 @@ def mint_pilot_readiness(
 def controlled_pilot_execution_service(
     *,
     verifier: ReadinessPublicKeyRegistry,
+    trader_verifier: Any,
     paper_store: Any | None = None,
 ) -> Any:
     """Construct the public execution service under a test-only config patch."""
     from execution.paper_service import ControlledPilotExecutionService
+    from execution.trader_authority import (
+        TraderAuthorizationPublicKeyRegistry,
+    )
 
     with patch.object(
         ReadinessPublicKeyRegistry,
         "load_pinned",
         return_value=verifier,
+    ), patch.object(
+        TraderAuthorizationPublicKeyRegistry,
+        "load_pinned",
+        return_value=trader_verifier,
     ):
         return ControlledPilotExecutionService(paper_store=paper_store)
+
+
+def make_trader_authorization_issuer(
+    *,
+    key_id: str = "test-trader-authorization-v1",
+    private_key: Ed25519PrivateKey | None = None,
+) -> Any:
+    """Create the private trader issuer strictly inside test support."""
+    from execution.trader_authority import (
+        _ControlledTraderAuthorizationIssuer,
+        _ISSUER_TOKEN,
+    )
+
+    key = private_key or Ed25519PrivateKey.generate()
+    return _ControlledTraderAuthorizationIssuer(
+        key_id=key_id,
+        private_key=key,
+        _token=_ISSUER_TOKEN,
+    )
+
+
+def issue_trader_authorization(
+    issuer: Any,
+    *,
+    readiness_verifier: ReadinessPublicKeyRegistry,
+    **kwargs: Any,
+) -> Any:
+    """Issue under an ephemeral readiness trust root for unit tests."""
+    with patch.object(
+        ReadinessPublicKeyRegistry,
+        "load_pinned",
+        return_value=readiness_verifier,
+    ):
+        return issuer.issue(**kwargs)
 
 
 def controlled_pilot_scheduler(

@@ -1,6 +1,5 @@
 """Deterministic Phase 6 research-role agents and paper orchestrator."""
 
-from .pipeline import AgentPaperPipeline, AgentPipelineResult
 from .artifacts import ARTIFACT_SCHEMA_VERSION, ArtifactEnvelope
 from .roles import AgentRole, Capability, ROLE_MATRIX, RoleContract
 from .runtime import (
@@ -24,6 +23,22 @@ from .types import (
     RiskAudit,
     TradePlan,
 )
+
+
+def __getattr__(name: str):
+    """Load the orchestrator lazily across the execution-authority boundary."""
+    if name in {"AgentPaperPipeline", "AgentPipelineResult"}:
+        from .pipeline import AgentPaperPipeline, AgentPipelineResult
+
+        globals().update(
+            {
+                "AgentPaperPipeline": AgentPaperPipeline,
+                "AgentPipelineResult": AgentPipelineResult,
+            }
+        )
+        return globals()[name]
+    raise AttributeError(name)
+
 
 __all__ = [
     "AgentPaperPipeline",

@@ -54,7 +54,10 @@ class PaperRunConfig:
     starting_capital: float = 1_000_000.0
     lookback_days: int = 30
     price_basis: str = RAW
-    lifecycle: Lifecycle | str = Lifecycle.PAPER
+    # The low-level runtime is an offline fixture/backtest surface.  A PAPER
+    # lifecycle is available only to ControlledPilotExecutionService, which
+    # supplies an opaque one-shot capability after all READY gates pass.
+    lifecycle: Lifecycle | str = Lifecycle.DRAFT
     calendar_as_of: str | None = None
     # W85 / w0816t — short-leg financing = f(repo[t] + fixed spread).
     # Default **off** preserves long-only / legacy paper numerics. Enable
@@ -108,7 +111,10 @@ class PaperRunConfig:
             self, "price_basis", require_supported_price_basis(self.price_basis)
         )
         if self.universe is not None:
-            if getattr(self.universe, "membership_proof", None):
+            if getattr(self.universe, "membership_by_date", None) is not None:
+                if not self.universe.membership_by_date:
+                    raise ValueError("resolved daily universe cannot be empty")
+            elif getattr(self.universe, "membership_proof", None):
                 if not tuple(self.universe):
                     raise ValueError("PIT-proven universe cannot be empty")
             else:

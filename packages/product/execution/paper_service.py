@@ -18,15 +18,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 import features
 from agents.types import AuthorizedPaperExecutionRequest
 from paper_runtime import data_snapshot_id
+from selection.budget_ledger import MassResearchDisabledError
 from strategies.paper import (
     JsonPaperStore,
     Lifecycle,
@@ -80,27 +79,6 @@ class ImmutableSnapshotHandle:
         return artifact
 
 
-class _GovernedCandidateAllowlist:
-    """Closure-bound candidates; daily PIT membership is still authoritative."""
-
-    __slots__ = ("membership", "membership_proof", "_codes")
-    membership: Mapping[str, None]
-    membership_proof: str
-    _codes: tuple[str, ...]
-
-    def __init__(self, codes: Sequence[str], *, closure_digest: str) -> None:
-        normalized = tuple(sorted({str(code) for code in codes}))
-        self._codes = normalized
-        self.membership = MappingProxyType({code: None for code in normalized})
-        self.membership_proof = f"controlled-plan-closure:{closure_digest}"
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._codes)
-
-    def __len__(self) -> int:
-        return len(self._codes)
-
-
 @dataclass(frozen=True, slots=True)
 class ControlledPilotRunConfig:
     """Controlled-only inputs; no mutable DB or readiness boolean exists."""
@@ -108,8 +86,7 @@ class ControlledPilotRunConfig:
     snapshot: ImmutableSnapshotHandle
     start: str
     end: str
-    universe_contract_id: str
-    universe: tuple[str, ...]
+    resolved_universe: Any
     execution_mode: str = "next_close"
     cost_bps: float = 5.0
     starting_capital: float = 1_000_000.0
@@ -123,14 +100,19 @@ class ControlledPilotRunConfig:
             raise ValueError("ImmutableSnapshotHandle required")
         if not self.start or not self.end or self.start > self.end:
             raise ValueError("controlled pilot period requires start <= end")
-        if not self.universe_contract_id.strip():
-            raise ValueError("controlled pilot universe contract required")
-        normalized = tuple(
-            sorted({str(code).strip() for code in self.universe if str(code).strip()})
-        )
-        if not normalized:
-            raise ValueError("controlled pilot requires an explicit universe")
-        object.__setattr__(self, "universe", normalized)
+        from research.universe_contract import ResolvedUniverseMembership
+
+        if not isinstance(self.resolved_universe, ResolvedUniverseMembership):
+            raise ValueError(
+                "controlled pilot requires snapshot-resolved universe membership"
+            )
+        if (
+            self.resolved_universe.period_start != self.start
+            or self.resolved_universe.period_end != self.end
+        ):
+            raise ValueError(
+                "controlled pilot resolved universe period mismatch"
+            )
         if self.execution_mode != "next_close":
             raise ValueError("controlled pilot execution_mode is fixed to next_close")
         if not 0.0 < float(self.max_gross_weight) <= 1.0:
@@ -138,19 +120,13 @@ class ControlledPilotRunConfig:
 
     def to_runtime_config(
         self,
-        *,
-        artifact_path: Path,
-        dependency_closure_digest: str,
+        *, artifact_path: Path,
     ) -> PaperRunConfig:
-        candidates = _GovernedCandidateAllowlist(
-            self.universe,
-            closure_digest=dependency_closure_digest,
-        )
         return PaperRunConfig(
             start=self.start,
             end=self.end,
             db_path=artifact_path,
-            universe=candidates,
+            universe=self.resolved_universe,
             execution_mode="next_close",
             cost_bps=self.cost_bps,
             starting_capital=self.starting_capital,
@@ -293,33 +269,28 @@ class PaperExecutionService:
             raise PaperExecutionRejected(
                 "offline fixture execution cannot consume READY authority"
             )
-        return self._execute_verified(
+        pinned_snapshot = self._authorize_offline(plan, spec, config)
+        strategy: Any = interpret_strategy_spec(spec)
+        result = run_paper(strategy, config, store=None)
+        return self._finalize_result(
             plan,
             spec,
-            config,
-            require_ready=False,
+            result,
+            pinned_snapshot=pinned_snapshot,
             execution_scope="OFFLINE_FIXTURE",
+            gross_cap=None,
         )
 
-    def _execute_verified(
+    def _finalize_result(
         self,
-        plan: AuthorizedPaperExecutionRequest,
+        plan: Any,
         spec: StrategySpec,
-        config: PaperRunConfig,
+        result: PaperRunResult,
         *,
-        require_ready: bool,
+        pinned_snapshot: str,
         execution_scope: str,
-        gross_cap: float | None = None,
+        gross_cap: float | None,
     ) -> PaperRunResult:
-        pinned_snapshot = self._authorize(
-            plan, spec, config, require_ready=require_ready
-        )
-        strategy: Any = interpret_strategy_spec(spec)
-        if gross_cap is not None:
-            strategy = _GrossCappedStrategy(
-                strategy, max_gross_weight=float(gross_cap)
-            )
-        result = run_paper(strategy, config, store=None)
         consumed = str(result.reproducibility.get("data_snapshot_id", ""))
         if consumed != pinned_snapshot:
             # run_paper already fails closed on an intra-run mutation; this is
@@ -409,13 +380,11 @@ class PaperExecutionService:
         )
         return self.execute(plan, spec, config)
 
-    def _authorize(
+    def _authorize_offline(
         self,
         plan: AuthorizedPaperExecutionRequest,
         spec: StrategySpec,
         config: PaperRunConfig,
-        *,
-        require_ready: bool,
     ) -> str:
         # 1. mode: the Phase 7 trader supports paper execution only.
         if plan.mode != "paper":
@@ -489,11 +458,6 @@ class PaperExecutionService:
             raise PaperExecutionRejected(str(exc)) from exc
 
         auth_snap = getattr(plan, "ready_snapshot_id", "") or ""
-        if require_ready and not str(auth_snap).strip():
-            raise PaperExecutionRejected(
-                "controlled authorization has empty "
-                "ready_snapshot_id; refusing paper execution without READY pin"
-            )
         if auth_snap and auth_snap != pinned_snapshot:
             raise PaperExecutionRejected(
                 "authorized ready_snapshot_id does not match config db snapshot; "
@@ -609,6 +573,9 @@ class ControlledPilotExecutionService:
         *,
         paper_store: JsonPaperStore | None = None,
     ) -> None:
+        from execution.trader_authority import (
+            TraderAuthorizationPublicKeyRegistry,
+        )
         from research.readiness import ReadinessPublicKeyRegistry
 
         verifier = ReadinessPublicKeyRegistry.load_pinned()
@@ -617,6 +584,14 @@ class ControlledPilotExecutionService:
                 "controlled pilot requires a public-key-only readiness verifier"
             )
         self._verifier = verifier
+        trader_verifier = TraderAuthorizationPublicKeyRegistry.load_pinned()
+        if not isinstance(
+            trader_verifier, TraderAuthorizationPublicKeyRegistry
+        ):
+            raise PaperExecutionRejected(
+                "controlled pilot requires a pinned trader authorization verifier"
+            )
+        self._trader_verifier = trader_verifier
         self._core = PaperExecutionService(paper_store=paper_store)
 
     def execute(
@@ -627,7 +602,7 @@ class ControlledPilotExecutionService:
         plan_set_binding: Any,
         ready_manifest: Any,
         readiness: Any,
-        authorization: AuthorizedPaperExecutionRequest,
+        authorization: Any,
         strategy_spec: StrategySpec,
         config: ControlledPilotRunConfig,
     ) -> PaperRunResult:
@@ -642,6 +617,11 @@ class ControlledPilotExecutionService:
             ReadyManifest,
             validate_ready_manifest_profile_binding,
         )
+        from execution.trader_authority import VerifiedTraderAuthorization
+        from research.universe_contract import (
+            ResolvedUniverseMembership,
+            resolve_tse_prime_with_fins,
+        )
 
         if not isinstance(experiment_plan, ExperimentPlan):
             raise PaperExecutionRejected("exact ExperimentPlan v2 required")
@@ -655,8 +635,10 @@ class ControlledPilotExecutionService:
             raise PaperExecutionRejected("VerifiedPilotReadiness required")
         if not isinstance(config, ControlledPilotRunConfig):
             raise PaperExecutionRejected("ControlledPilotRunConfig required")
-        if not isinstance(authorization, AuthorizedPaperExecutionRequest):
-            raise PaperExecutionRejected("Trader paper authorization required")
+        if not isinstance(authorization, VerifiedTraderAuthorization):
+            raise PaperExecutionRejected(
+                "VerifiedTraderAuthorization required"
+            )
 
         verify_plan_dependency_closure(experiment_plan, dependency_closure)
         if experiment_plan.plan_id not in plan_set_binding.plan_ids:
@@ -715,13 +697,38 @@ class ControlledPilotExecutionService:
         if (
             config.start != experiment_plan.period_start
             or config.end != experiment_plan.period_end
-            or config.universe_contract_id not in experiment_plan.universe
+            or not isinstance(
+                config.resolved_universe, ResolvedUniverseMembership
+            )
+            or config.resolved_universe.rule_id not in experiment_plan.universe
         ):
             raise PaperExecutionRejected(
                 "controlled config period or universe contract mismatches ExperimentPlan"
             )
         if authorization.mode != "paper":
             raise PaperExecutionRejected("controlled execution mode is fixed to paper")
+        try:
+            authorization.require_valid(verifier=self._trader_verifier)
+        except MassResearchDisabledError as exc:
+            raise PaperExecutionRejected(str(exc)) from exc
+        recomputed_universe = resolve_tse_prime_with_fins(
+            artifact,
+            period_start=experiment_plan.period_start,
+            period_end=experiment_plan.period_end,
+        )
+        if (
+            config.resolved_universe.to_dict() != recomputed_universe.to_dict()
+            or ready_manifest.universe_rule_digest
+            != recomputed_universe.rule_digest
+            or ready_manifest.resolved_universe_digest
+            != recomputed_universe.resolved_membership_digest
+            or readiness.universe_rule_digest != recomputed_universe.rule_digest
+            or readiness.resolved_universe_digest
+            != recomputed_universe.resolved_membership_digest
+        ):
+            raise PaperExecutionRejected(
+                "controlled universe is not the snapshot-resolved READY membership"
+            )
         expected_auth_fields = {
             "ready_snapshot_id": ready_manifest.snapshot_id,
             "ready_manifest_digest": manifest_digest,
@@ -729,6 +736,11 @@ class ControlledPilotExecutionService:
             "profile_digest": plan_set_binding.profile_digest,
             "plan_set_digest": plan_set_binding.plan_set_digest,
             "dependency_closure_digest": plan_set_binding.closure_set_digest,
+            "universe_contract_id": recomputed_universe.rule_id,
+            "universe_rule_digest": recomputed_universe.rule_digest,
+            "resolved_universe_digest": (
+                recomputed_universe.resolved_membership_digest
+            ),
         }
         for field, expected in expected_auth_fields.items():
             if str(getattr(authorization, field, "") or "") != expected:
@@ -739,7 +751,6 @@ class ControlledPilotExecutionService:
             authorization.period_start != experiment_plan.period_start
             or authorization.period_end != experiment_plan.period_end
             or authorization.cost_scenario != experiment_plan.cost_scenario
-            or tuple(authorization.universe) != tuple(config.universe)
         ):
             raise PaperExecutionRejected(
                 "Trader authorization period/universe/cost does not match plan"
@@ -748,16 +759,38 @@ class ControlledPilotExecutionService:
             raise PaperExecutionRejected(
                 "Trader authorization exceeds controlled gross limit"
             )
+        expected_spec_hash = _strategy_spec_hash(strategy_spec)
+        if (
+            authorization.strategy_id != strategy_spec.strategy_id
+            or authorization.strategy_spec_hash != expected_spec_hash
+        ):
+            raise PaperExecutionRejected(
+                "Trader authorization does not bind the exact StrategySpec"
+            )
 
         runtime_config = config.to_runtime_config(
             artifact_path=artifact,
-            dependency_closure_digest=dependency_closure.closure_digest,
         )
-        return self._core._execute_verified(
+        self._core._validate_feature_refs(strategy_spec)
+        self._core._attest_research_profile(authorization, strategy_spec)
+        strategy: Any = _GrossCappedStrategy(
+            interpret_strategy_spec(strategy_spec),
+            max_gross_weight=float(authorization.max_gross_weight),
+        )
+        from strategies.paper.runner import _mint_controlled_paper_capability
+
+        capability = _mint_controlled_paper_capability(runtime_config)
+        result = run_paper(
+            strategy,
+            runtime_config,
+            store=None,
+            _controlled_capability=capability,
+        )
+        return self._core._finalize_result(
             authorization,
             strategy_spec,
-            runtime_config,
-            require_ready=True,
+            result,
+            pinned_snapshot=ready_manifest.snapshot_id,
             execution_scope="CONTROLLED_PILOT",
             # The controlled config is the system ceiling.  A Trader may
             # authorize a narrower book, and execution must preserve that

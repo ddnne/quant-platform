@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "purpose": "controlled_trader_authorization_verification",
+  "keys": [
+    {
+      "key_id": "trader-authorization-20260825-v1",
+      "algorithm": "Ed25519",
+      "public_key_b64": "WBDPvEg6RW7vUDxBgTn+W6Y50pSc3WddXnDINKTRc2g=",
+      "status": "active"
+    }
+  ]
+}

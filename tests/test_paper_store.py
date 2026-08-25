@@ -34,7 +34,7 @@ def _fixture_run(tmp_path):
         end=days[-1],
         db_path=db,
         universe=None,
-        lifecycle=Lifecycle.PAPER,
+        lifecycle=Lifecycle.DRAFT,
     )
     return run_paper(Return1dFeatureStrategy(), config), db, config
 
@@ -74,14 +74,14 @@ def test_save_idempotently_indexes_immutable_result_in_sqlite_wal(tmp_path):
     assert len(rows) == 1
     assert rows[0]["experiment_id"] == result.experiment_id
     assert rows[0]["run_id"] == result.run_id
-    assert rows[0]["lifecycle"] == Lifecycle.PAPER.value
+    assert rows[0]["lifecycle"] == Lifecycle.DRAFT.value
     assert rows[0]["start_date"] == config.start
     assert rows[0]["end_date"] == config.end
     assert json.loads(rows[0]["feature_ids_json"]) == sorted(
         result.metadata["feature_versions"]
     )
     assert rows[0]["result_path"] == path.relative_to(store.root).as_posix()
-    assert store.load_by_experiment_id(result.experiment_id).lifecycle is Lifecycle.PAPER
+    assert store.load_by_experiment_id(result.experiment_id).lifecycle is Lifecycle.DRAFT
 
 
 def test_save_rejects_different_json_at_existing_run_path(tmp_path):
@@ -91,10 +91,10 @@ def test_save_rejects_different_json_at_existing_run_path(tmp_path):
     original = path.read_bytes()
 
     with pytest.raises(FileExistsError, match="immutable paper result"):
-        store.save(replace(result, lifecycle=Lifecycle.DRAFT))
+        store.save(replace(result, lifecycle=Lifecycle.PAPER))
 
     assert path.read_bytes() == original
-    assert store.load_by_experiment_id(result.experiment_id).lifecycle is Lifecycle.PAPER
+    assert store.load_by_experiment_id(result.experiment_id).lifecycle is Lifecycle.DRAFT
 
 
 def test_parallel_identical_saves_share_one_index_record(tmp_path):
@@ -147,6 +147,4 @@ def test_run_paper_persists_when_store_is_supplied(tmp_path):
 
 def test_json_store_default_root_is_data_paper():
     assert Path(JsonPaperStore().root).parts[-2:] == ("data", "paper")
-
-
 

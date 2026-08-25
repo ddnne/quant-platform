@@ -25,13 +25,49 @@ from paper_runtime import (
 )
 
 from .store import JsonPaperStore
-from .types import PaperRunConfig, PaperRunResult
+from .types import Lifecycle, PaperRunConfig, PaperRunResult
 
 
 # 0.6.0 — Phase 5 paper runner baseline
 # 0.6.1 — W85 optional short financing via PaperRunConfig
 # 0.7.0 — W86 daily repo auto-load + leverage financing (mid + repo default)
 PAPER_RUNNER_VERSION = "0.7.0"
+_CONTROLLED_PAPER_SEAL = object()
+
+
+class _ControlledPaperCapability:
+    """One-shot authority minted only after the product gate succeeds."""
+
+    __slots__ = ("_config_identity", "_consumed", "_seal")
+
+    def __init__(
+        self, config: PaperRunConfig, *, _seal: object | None = None
+    ) -> None:
+        if _seal is not _CONTROLLED_PAPER_SEAL:
+            raise TypeError("controlled PAPER capability is authority-minted")
+        if config.lifecycle is not Lifecycle.PAPER:
+            raise ValueError("controlled PAPER capability requires PAPER config")
+        self._config_identity = id(config)
+        self._consumed = False
+        self._seal = _seal
+
+    def consume(self, config: PaperRunConfig) -> None:
+        if (
+            self._seal is not _CONTROLLED_PAPER_SEAL
+            or self._consumed
+            or self._config_identity != id(config)
+        ):
+            raise PermissionError(
+                "controlled PAPER capability is invalid, reused, or config-mismatched"
+            )
+        self._consumed = True
+
+
+def _mint_controlled_paper_capability(
+    config: PaperRunConfig,
+) -> _ControlledPaperCapability:
+    """Internal bridge used by ``ControlledPilotExecutionService`` only."""
+    return _ControlledPaperCapability(config, _seal=_CONTROLLED_PAPER_SEAL)
 
 
 def fingerprint_db(db_path: str | Path) -> str:
@@ -240,8 +276,14 @@ def _reproducibility(
         "leverage_financing": core_md.get("leverage_financing"),
         "leverage_financing_applied": core_md.get("leverage_financing_applied"),
         "repo_financing_load": financing_load,
-        "universe": list(config.universe) if config.universe is not None else None,
+        "universe": (
+            None
+            if getattr(config.universe, "membership_by_date", None) is not None
+            else (list(config.universe) if config.universe is not None else None)
+        ),
         "universe_rule": core_md["universe_rule"],
+        "universe_rule_digest": core_md.get("universe_rule_digest"),
+        "resolved_universe_digest": core_md.get("resolved_universe_digest"),
         "lookback_days": core_md["lookback_days"],
         "price_basis": core_md["price_basis"],
         "starting_capital": core_md["starting_capital"],
@@ -283,6 +325,10 @@ def _experiment_id(reproduction: dict[str, Any]) -> str:
             "leverage_financing": reproduction.get("leverage_financing"),
             "universe": reproduction["universe"],
             "universe_rule": reproduction["universe_rule"],
+            "universe_rule_digest": reproduction.get("universe_rule_digest"),
+            "resolved_universe_digest": reproduction.get(
+                "resolved_universe_digest"
+            ),
             "lookback_days": reproduction["lookback_days"],
             "price_basis": reproduction["price_basis"],
             "starting_capital": reproduction["starting_capital"],
@@ -300,6 +346,7 @@ def run_paper(
     config: PaperRunConfig,
     *,
     store: JsonPaperStore | None = None,
+    _controlled_capability: _ControlledPaperCapability | None = None,
 ) -> PaperRunResult:
     """Run ``strategy`` through ``core.run_backtest`` and optionally persist it.
 
@@ -312,6 +359,16 @@ def run_paper(
     series auto-loaded from the paper DB when present; leverage financing
     uses the same repo without re-applying short spread.
     """
+    if config.lifecycle is Lifecycle.PAPER:
+        if not isinstance(_controlled_capability, _ControlledPaperCapability):
+            raise PermissionError(
+                "Lifecycle.PAPER requires an opaque controlled execution capability"
+            )
+        _controlled_capability.consume(config)
+    elif _controlled_capability is not None:
+        raise PermissionError(
+            "controlled execution capability cannot be used for DRAFT"
+        )
     configured_path = Path(config.db_path or "data/structured/ingestion.sqlite")
     feature_versions = _feature_versions(strategy)
     feature_hashes = feature_definition_hashes(feature_versions)
