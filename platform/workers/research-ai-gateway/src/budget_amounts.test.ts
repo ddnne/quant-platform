@@ -12,6 +12,7 @@ const INTEGER_COUNTERS = [
   "model_calls",
   "input_tokens",
   "output_tokens",
+  "cached_tokens",
   "paper_runs",
 ] as const;
 

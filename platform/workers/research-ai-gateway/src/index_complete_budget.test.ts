@@ -1,8 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { CONTROL_PLANE_LEDGER_NAME, MemoryBudgetStorage, snapshotBudget } from "./budget_do";
+import { describe, expect, it, vi } from "vitest";
+import {
+  CONTROL_PLANE_LEDGER_NAME,
+  MemoryBudgetStorage,
+  PILOT_BUDGET_CAPS,
+  recoverExpiredLeases,
+  snapshotBudget,
+} from "./budget_do";
 import { handleBudgetRequest } from "./budget_http";
 import worker, { type GatewayEnv } from "./index";
-import { ALLOWED_MODELS } from "./schema";
+import { AI_CALL_TIMEOUT_MS } from "./runtime_policy";
+import { ALLOWED_MODELS, providerInputBounds } from "./schema";
 
 const GATEWAY_TOKEN = "gateway-secret";
 
@@ -144,8 +151,37 @@ function memoryLedger(): {
 }
 
 describe("POST /v1/complete control-plane occupancy", () => {
+  it("rejects hard request bounds before touching the ledger or provider", async () => {
+    const calls: unknown[] = [];
+    const env: GatewayEnv = {
+      GATEWAY_TOKEN,
+      BUDGET_LEDGER: throwingLedger(),
+      AI: {
+        run: async (...args: unknown[]) => {
+          calls.push(args);
+          throw new Error("provider must not run");
+        },
+      } as unknown as Ai,
+    };
+    const res = await worker.fetch(
+      completeWithBudget({
+        body: {
+          ...insightBody,
+          messages: Array.from({ length: 17 }, () => ({ role: "user", content: "x" })),
+        },
+      }),
+      env,
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("messages[] exceeds hard limit"),
+    });
+    expect(calls).toEqual([]);
+  });
+
   it("reserves the control-plane ledger, not caller budget_id", async () => {
-    const { BUDGET_LEDGER, names } = memoryLedger();
+    const { BUDGET_LEDGER, names, storage } = memoryLedger();
     const calls: unknown[] = [];
     const env: GatewayEnv = {
       GATEWAY_TOKEN,
@@ -172,6 +208,13 @@ describe("POST /v1/complete control-plane occupancy", () => {
     expect(names.every((n) => n === CONTROL_PLANE_LEDGER_NAME)).toBe(true);
     expect(names).not.toContain("gw-budget-1");
     expect(calls).toHaveLength(1);
+    const state = await storage.get<{
+      reservations: Record<string, { amounts: { input_tokens: number; cached_tokens: number } }>;
+    }>("ledger");
+    const reservation = Object.values(state?.reservations ?? {})[0];
+    const inputUpperBound = providerInputBounds(insightBody.messages).token_upper_bound;
+    expect(reservation?.amounts.input_tokens).toBe(inputUpperBound);
+    expect(reservation?.amounts.cached_tokens).toBe(inputUpperBound);
   });
 
   it("duplicate digest returns cached success and does not re-call AI", async () => {
@@ -209,7 +252,7 @@ describe("POST /v1/complete control-plane occupancy", () => {
           calls.push(args);
           return {
             response: JSON.stringify({ ...insightArtifact, smuggled: true }),
-            usage: { prompt_tokens: 8, completion_tokens: 2 },
+            usage: { prompt_tokens: 8, completion_tokens: 2, cost_usd: 0.000001 },
           };
         },
       } as unknown as Ai,
@@ -261,13 +304,14 @@ describe("POST /v1/complete control-plane occupancy", () => {
       actual_input_tokens: 8,
       actual_output_tokens: 2,
       actual_cached_tokens: 0,
+      actual_cost_usd: 0.000001,
     });
     expect(receipt?.settlement.estimated_cost_usd).toBeGreaterThanOrEqual(
       receipt?.settlement.actual_cost_usd ?? 0,
     );
   });
 
-  it("provider failure settles the reservation and records estimated usage", async () => {
+  it("provider failure charges the reserved maximum, freezes, and leaves no phantom reserve", async () => {
     const { BUDGET_LEDGER, storage } = memoryLedger();
     const env: GatewayEnv = {
       GATEWAY_TOKEN,
@@ -290,7 +334,9 @@ describe("POST /v1/complete control-plane occupancy", () => {
       expect(snap.active_leases).toBe(0);
       expect(snap.used.model_calls).toBe(1);
       expect(snap.used.input_tokens).toBeGreaterThan(0);
-      expect(snap.used.output_tokens).toBe(0);
+      expect(snap.used.output_tokens).toBe(insightBody.max_tokens);
+      expect(snap.used.cached_tokens).toBe(snap.used.input_tokens);
+      expect(snap.frozen).toBe(true);
     }
     const state = await storage.get<{
       reservations: Record<
@@ -302,13 +348,95 @@ describe("POST /v1/complete control-plane occupancy", () => {
     const receipt = reservations[Object.keys(reservations)[0]];
     expect(receipt?.settlement).toMatchObject({
       outcome: "provider_error",
-      usage_source: "estimated_no_provider_usage",
+      usage_source: "reserved_max_uncertain",
       actual_cost_usd: null,
     });
   });
 
-  it("finalize failure after provider does not return the success artifact", async () => {
+  it("missing provider usage is conservatively settled instead of using text heuristics", async () => {
+    const { BUDGET_LEDGER, storage } = memoryLedger();
+    const env: GatewayEnv = {
+      GATEWAY_TOKEN,
+      BUDGET_LEDGER,
+      AI: {
+        run: async () => ({ response: JSON.stringify(insightArtifact) }),
+      } as unknown as Ai,
+    };
+    const res = await worker.fetch(completeWithBudget(), env);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: "budget_settlement_uncertain",
+    });
+    const snap = await snapshotBudget(storage);
+    if (!snap.ok) throw new Error("snapshot");
+    expect(snap.frozen).toBe(true);
+    expect(snap.reserved).toEqual(expect.objectContaining({
+      model_calls: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cached_tokens: 0,
+    }));
+    expect(snap.used.output_tokens).toBe(insightBody.max_tokens);
+    expect(snap.used.cached_tokens).toBe(snap.used.input_tokens);
+  });
+
+  it("charges the maximum on timeout and ignores a late provider completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const { BUDGET_LEDGER, storage } = memoryLedger();
+      let providerCalls = 0;
+      let providerStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        providerStarted = resolve;
+      });
+      let resolveProvider!: (value: unknown) => void;
+      const lateProvider = new Promise<unknown>((resolve) => {
+        resolveProvider = resolve;
+      });
+      const env: GatewayEnv = {
+        GATEWAY_TOKEN,
+        BUDGET_LEDGER,
+        AI: {
+          run: async () => {
+            providerCalls += 1;
+            providerStarted();
+            return lateProvider;
+          },
+        } as unknown as Ai,
+      };
+      const pending = worker.fetch(completeWithBudget(), env);
+      await started;
+      await vi.advanceTimersByTimeAsync(AI_CALL_TIMEOUT_MS);
+      const timedOut = await pending;
+      expect(timedOut.status).toBe(504);
+      expect(await timedOut.json()).toMatchObject({ ok: false, error: "ai_run_timeout" });
+
+      resolveProvider({
+        response: JSON.stringify(insightArtifact),
+        usage: { prompt_tokens: 4, completion_tokens: 3 },
+      });
+      await Promise.resolve();
+      const snap = await snapshotBudget(storage);
+      if (!snap.ok) throw new Error("snapshot");
+      expect(snap.frozen).toBe(true);
+      expect(snap.reserved.model_calls).toBe(0);
+      expect(snap.used.output_tokens).toBe(insightBody.max_tokens);
+
+      const retry = await worker.fetch(completeWithBudget(), env);
+      expect(retry.status).toBe(504);
+      expect(providerCalls).toBe(1);
+      const afterRetry = await snapshotBudget(storage);
+      if (!afterRetry.ok) throw new Error("snapshot");
+      expect(afterRetry.used).toEqual(snap.used);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("finalize RPC throw after provider charges maximum and returns a safe 500", async () => {
     const names: string[] = [];
+    const storage = new MemoryBudgetStorage();
     const env: GatewayEnv = {
       GATEWAY_TOKEN,
       BUDGET_LEDGER: {
@@ -320,22 +448,10 @@ describe("POST /v1/complete control-plane occupancy", () => {
           return {
             fetch: async (request: Request) => {
               const url = new URL(request.url);
-              if (url.pathname === "/reserve") {
-                return new Response(
-                  JSON.stringify({
-                    ok: true,
-                    existing: false,
-                    budget_run_id: "run-1",
-                    reservation: { reservation_id: "run-1", status: "reserved", cached_result: null },
-                    lease: { lease_id: "lease-1" },
-                  }),
-                  { headers: { "content-type": "application/json" } },
-                );
+              if (url.pathname === "/finalize") {
+                throw new Error("RPC transport interrupted after provider side effect");
               }
-              return new Response(
-                JSON.stringify({ ok: false, error: "budget_frozen" }),
-                { status: 409, headers: { "content-type": "application/json" } },
-              );
+              return handleBudgetRequest(storage, request);
             },
           };
         },
@@ -348,11 +464,109 @@ describe("POST /v1/complete control-plane occupancy", () => {
       } as unknown as Ai,
     };
     const res = await worker.fetch(completeWithBudget(), env);
-    expect(names).toEqual([CONTROL_PLANE_LEDGER_NAME, CONTROL_PLANE_LEDGER_NAME]);
-    expect(res.status).toBe(409);
+    expect(names).toEqual(Array(4).fill(CONTROL_PLANE_LEDGER_NAME));
+    expect(res.status).toBe(500);
     const payload = (await res.json()) as { ok?: boolean; error?: string; artifact?: unknown };
     expect(payload.ok).toBe(false);
-    expect(payload.error).toBe("budget_frozen");
+    expect(payload.error).toBe("budget_finalize_failed");
     expect(payload.artifact).toBeUndefined();
+    const snap = await snapshotBudget(storage);
+    if (!snap.ok) throw new Error("snapshot");
+    expect(snap.reserved).toMatchObject({ model_calls: 0, input_tokens: 0, output_tokens: 0 });
+    expect(snap.used.model_calls).toBe(1);
+    expect(snap.used.output_tokens).toBe(insightBody.max_tokens);
+    expect(snap.frozen).toBe(true);
+  });
+
+  it("alarm recovery remains durable when finalize and immediate recovery RPCs both fail", async () => {
+    const storage = new MemoryBudgetStorage();
+    const env: GatewayEnv = {
+      GATEWAY_TOKEN,
+      BUDGET_LEDGER: {
+        idFromName(name: string) {
+          return { toString: () => name } as DurableObjectId;
+        },
+        get() {
+          return {
+            fetch: async (request: Request) => {
+              const path = new URL(request.url).pathname;
+              if (path === "/finalize" || path === "/settle-uncertain") {
+                throw new Error("ledger transport unavailable");
+              }
+              return handleBudgetRequest(storage, request);
+            },
+          };
+        },
+      } as unknown as DurableObjectNamespace,
+      AI: {
+        run: async () => ({
+          response: JSON.stringify(insightArtifact),
+          usage: { prompt_tokens: 4, completion_tokens: 3 },
+        }),
+      } as unknown as Ai,
+    };
+    const res = await worker.fetch(completeWithBudget(), env);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ ok: false, error: "budget_finalize_failed" });
+    const pending = await snapshotBudget(storage);
+    if (!pending.ok) throw new Error("snapshot");
+    expect(pending.reserved.model_calls).toBe(1);
+    expect(pending.used.model_calls).toBe(0);
+    expect(pending.active_leases).toBe(1);
+
+    const recovered = await recoverExpiredLeases(
+      storage,
+      Date.now() + PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000 + 1,
+    );
+    expect(recovered).toMatchObject({ ok: true, recovered: 1 });
+    const after = await snapshotBudget(
+      storage,
+      Date.now() + PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000 + 2,
+    );
+    if (!after.ok) throw new Error("snapshot");
+    expect(after.reserved.model_calls).toBe(0);
+    expect(after.used.model_calls).toBe(1);
+    expect(after.used.output_tokens).toBe(insightBody.max_tokens);
+    expect(after.frozen).toBe(true);
+  });
+
+  it("invalid finalize response cannot leak success or double-charge a committed settlement", async () => {
+    const storage = new MemoryBudgetStorage();
+    const env: GatewayEnv = {
+      GATEWAY_TOKEN,
+      BUDGET_LEDGER: {
+        idFromName(name: string) {
+          return { toString: () => name } as DurableObjectId;
+        },
+        get() {
+          return {
+            fetch: async (request: Request) => {
+              if (new URL(request.url).pathname !== "/finalize") {
+                return handleBudgetRequest(storage, request);
+              }
+              const committed = await handleBudgetRequest(storage, request);
+              await committed.arrayBuffer();
+              return new Response("not-json", { status: 200 });
+            },
+          };
+        },
+      } as unknown as DurableObjectNamespace,
+      AI: {
+        run: async () => ({
+          response: JSON.stringify(insightArtifact),
+          usage: { prompt_tokens: 4, completion_tokens: 3 },
+        }),
+      } as unknown as Ai,
+    };
+    const res = await worker.fetch(completeWithBudget(), env);
+    expect(res.status).toBe(500);
+    const payload = (await res.json()) as { ok?: boolean; error?: string; artifact?: unknown };
+    expect(payload).toMatchObject({ ok: false, error: "budget_finalize_failed" });
+    expect(payload.artifact).toBeUndefined();
+    const snap = await snapshotBudget(storage);
+    if (!snap.ok) throw new Error("snapshot");
+    expect(snap.reserved.model_calls).toBe(0);
+    expect(snap.used).toMatchObject({ model_calls: 1, input_tokens: 4, output_tokens: 3 });
+    expect(snap.frozen).toBe(false);
   });
 });

@@ -3,7 +3,11 @@ import {
   decodeGatewayRequest,
   decodeTypedArtifact,
   estimateCostUsd,
+  MAX_GATEWAY_INPUT_TOKENS,
+  MAX_GATEWAY_MESSAGES,
+  MAX_GATEWAY_PROMPT_UTF8_BYTES,
   parseModelJson,
+  providerInputBounds,
 } from "./schema";
 
 const base = {
@@ -33,6 +37,44 @@ describe("decodeGatewayRequest", () => {
   it("rejects oversize max_tokens", () => {
     const got = decodeGatewayRequest({ ...base, max_tokens: 9999 });
     expect(got.ok).toBe(false);
+  });
+
+  it("rejects message count, UTF-8 bytes, and token upper bounds before provider use", () => {
+    const tooMany = decodeGatewayRequest({
+      ...base,
+      messages: Array.from({ length: MAX_GATEWAY_MESSAGES + 1 }, () => ({
+        role: "user",
+        content: "x",
+      })),
+    });
+    expect(tooMany).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("messages[] exceeds hard limit"),
+    });
+
+    const tooManyBytes = decodeGatewayRequest({
+      ...base,
+      messages: [{ role: "user", content: "x".repeat(MAX_GATEWAY_PROMPT_UTF8_BYTES + 1) }],
+    });
+    expect(tooManyBytes).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("UTF-8 bytes exceed hard limit"),
+    });
+
+    const tokenHeavyButByteBounded = "x".repeat(
+      MAX_GATEWAY_PROMPT_UTF8_BYTES - 1_000,
+    );
+    const bounds = providerInputBounds([{ role: "user", content: tokenHeavyButByteBounded }]);
+    expect(bounds.utf8_bytes).toBeLessThanOrEqual(MAX_GATEWAY_PROMPT_UTF8_BYTES);
+    expect(bounds.token_upper_bound).toBeGreaterThan(MAX_GATEWAY_INPUT_TOKENS);
+    const tooManyTokens = decodeGatewayRequest({
+      ...base,
+      messages: [{ role: "user", content: tokenHeavyButByteBounded }],
+    });
+    expect(tooManyTokens).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("token upper bound exceeds hard limit"),
+    });
   });
 
   it("refuses missing budget_id", () => {
@@ -172,5 +214,4 @@ describe("estimateCostUsd", () => {
     );
   });
 });
-
 

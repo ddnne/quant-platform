@@ -7,10 +7,12 @@ import {
   createBudget,
   finalizeBudget,
   heartbeatLease,
+  markProviderStarted,
   reconcileBudget,
   recoverExpiredLeases,
   releaseBudget,
   reserveBudget,
+  settleUncertainBudget,
   snapshotBudget,
   zeroCounters,
 } from "./budget_do";
@@ -28,6 +30,7 @@ describe("PILOT_BUDGET_CAPS", () => {
       max_model_calls: 16,
       max_input_tokens: 400_000,
       max_output_tokens: 80_000,
+      max_cached_tokens: 400_000,
       max_paper_runs: 8,
       max_cost_usd: 20,
       lease_ttl_seconds: 1800,
@@ -219,6 +222,69 @@ describe("budget ledger algebra", () => {
     }
   });
 
+  it("allows a same-digest retry only after a pre-provider release", async () => {
+    const storage = new MemoryBudgetStorage();
+    const first = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "retry-pre-provider",
+        request_digest: "digest-retry",
+        amounts: { model_calls: 1 },
+        acquire_lease: true,
+      },
+      T0,
+    );
+    if (!first.ok || !first.lease) throw new Error("lease");
+    await releaseBudget(
+      storage,
+      {
+        idempotency_key: "retry-pre-provider",
+        lease_id: first.lease.lease_id,
+      },
+      T0 + 1,
+    );
+    const retry = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "retry-pre-provider",
+        request_digest: "digest-retry",
+        amounts: { model_calls: 1 },
+        acquire_lease: true,
+      },
+      T0 + 2,
+    );
+    expect(retry.ok).toBe(true);
+    if (retry.ok) {
+      expect(retry.existing).toBe(false);
+      expect(retry.budget_run_id).not.toBe(first.budget_run_id);
+    }
+  });
+
+  it("rejects a mismatched lease and reservation key without releasing either", async () => {
+    const storage = new MemoryBudgetStorage();
+    const first = await reserveBudget(
+      storage,
+      { idempotency_key: "mismatch-a", amounts: { model_calls: 1 }, acquire_lease: true },
+      T0,
+    );
+    const second = await reserveBudget(
+      storage,
+      { idempotency_key: "mismatch-b", amounts: { model_calls: 1 }, acquire_lease: true },
+      T0,
+    );
+    if (!first.ok || !first.lease || !second.ok) throw new Error("leases");
+    const mismatch = await releaseBudget(
+      storage,
+      { idempotency_key: "mismatch-b", lease_id: first.lease.lease_id },
+      T0 + 1,
+    );
+    expect(mismatch).toMatchObject({ ok: false, error: "lease_reservation_mismatch" });
+    const snap = await snapshotBudget(storage, T0 + 2);
+    if (!snap.ok) throw new Error("snapshot");
+    expect(snap.reserved.model_calls).toBe(2);
+    expect(snap.active_leases).toBe(2);
+  });
+
   it("expired lease recovery returns capacity before a later reserve", async () => {
     const storage = new MemoryBudgetStorage();
     const first = await reserveBudget(
@@ -242,6 +308,205 @@ describe("budget ledger algebra", () => {
       expect(snap.reserved.model_calls).toBe(8);
       expect(snap.active_leases).toBe(1);
     }
+  });
+
+  it("charges the reserved maximum and freezes when a provider-started lease expires", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "uncertain-expiry",
+        amounts: {
+          model_calls: 1,
+          input_tokens: 200,
+          output_tokens: 20,
+          cached_tokens: 200,
+          cost_usd: 0.5,
+        },
+        acquire_lease: true,
+      },
+      T0,
+    );
+    expect(reserved.ok).toBe(true);
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    expect(await storage.getAlarm()).toBe(reserved.lease.expires_at);
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "uncertain-expiry",
+        lease_id: reserved.lease.lease_id,
+      },
+      T0 + 1,
+    );
+    expect(started.ok).toBe(true);
+
+    const recovered = await recoverExpiredLeases(
+      storage,
+      T0 + PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000 + 1,
+    );
+    expect(recovered).toMatchObject({ ok: true, recovered: 1 });
+    const snap = await snapshotBudget(
+      storage,
+      T0 + PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000 + 2,
+    );
+    expect(snap.ok).toBe(true);
+    if (snap.ok) {
+      expect(snap.reserved).toEqual(zeroCounters());
+      expect(snap.active_leases).toBe(0);
+      expect(snap.frozen).toBe(true);
+      expect(snap.used).toMatchObject({
+        model_calls: 1,
+        input_tokens: 200,
+        output_tokens: 20,
+        cached_tokens: 200,
+        cost_usd: 0.5,
+      });
+    }
+    expect(await storage.getAlarm()).toBeNull();
+    const state = await storage.get<{
+      audit: Array<{ kind: string; reason?: string }>;
+      reservations: Record<string, { cached_result: { http_status: number } | null }>;
+    }>("ledger");
+    expect(state?.audit).toContainEqual(
+      expect.objectContaining({ kind: "uncertain_provider_charge", reason: "lease_expired" }),
+    );
+    expect(state?.reservations["uncertain-expiry"].cached_result?.http_status).toBe(500);
+  });
+
+  it("never releases a provider-started reservation at zero", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "no-zero-release",
+        amounts: { model_calls: 1, input_tokens: 100, output_tokens: 10 },
+        acquire_lease: true,
+      },
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    await markProviderStarted(
+      storage,
+      { idempotency_key: "no-zero-release", lease_id: reserved.lease.lease_id },
+      T0 + 1,
+    );
+    const released = await releaseBudget(
+      storage,
+      { idempotency_key: "no-zero-release", lease_id: reserved.lease.lease_id },
+      T0 + 2,
+    );
+    expect(released).toMatchObject({ ok: false, error: "provider_usage_uncertain" });
+    const snap = await snapshotBudget(storage, T0 + 3);
+    expect(snap.ok).toBe(true);
+    if (snap.ok) {
+      expect(snap.reserved.model_calls).toBe(0);
+      expect(snap.used.model_calls).toBe(1);
+      expect(snap.used.input_tokens).toBe(100);
+      expect(snap.used.output_tokens).toBe(10);
+      expect(snap.frozen).toBe(true);
+    }
+  });
+
+  it("uncertain settlement is idempotent and leaves no phantom reservation", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "uncertain-idempotent",
+        request_digest: "digest-uncertain",
+        amounts: { model_calls: 1, input_tokens: 50, output_tokens: 5, cached_tokens: 50 },
+        acquire_lease: true,
+      },
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    await markProviderStarted(
+      storage,
+      { idempotency_key: "uncertain-idempotent", lease_id: reserved.lease.lease_id },
+      T0 + 1,
+    );
+    const first = await settleUncertainBudget(
+      storage,
+      { idempotency_key: "uncertain-idempotent", reason: "finalize_failed" },
+      T0 + 2,
+    );
+    const second = await settleUncertainBudget(
+      storage,
+      { idempotency_key: "uncertain-idempotent", reason: "finalize_failed" },
+      T0 + 3,
+    );
+    expect(first.ok && second.ok).toBe(true);
+    const duplicate = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "uncertain-idempotent",
+        request_digest: "digest-uncertain",
+        amounts: { model_calls: 1 },
+      },
+      T0 + 4,
+    );
+    expect(duplicate.ok).toBe(true);
+    if (duplicate.ok) {
+      expect(duplicate.existing).toBe(true);
+      expect(duplicate.reservation.cached_result?.http_status).toBe(500);
+    }
+    const snap = await snapshotBudget(storage, T0 + 5);
+    if (!snap.ok) throw new Error("snapshot");
+    expect(snap.used.model_calls).toBe(1);
+    expect(snap.reserved).toEqual(zeroCounters());
+    expect(snap.active_leases).toBe(0);
+  });
+
+  it("a freeze prevents a second reserved request from crossing the provider boundary", async () => {
+    const storage = new MemoryBudgetStorage();
+    const first = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "freeze-first",
+        amounts: { model_calls: 1, input_tokens: 10 },
+        acquire_lease: true,
+      },
+      T0,
+    );
+    const second = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "freeze-second",
+        amounts: { model_calls: 1, input_tokens: 10 },
+        acquire_lease: true,
+      },
+      T0,
+    );
+    if (!first.ok || !first.lease || !second.ok || !second.lease) {
+      throw new Error("leases");
+    }
+    await markProviderStarted(
+      storage,
+      { idempotency_key: "freeze-first", lease_id: first.lease.lease_id },
+      T0 + 1,
+    );
+    await settleUncertainBudget(
+      storage,
+      { idempotency_key: "freeze-first", reason: "provider_error" },
+      T0 + 2,
+    );
+    const denied = await markProviderStarted(
+      storage,
+      { idempotency_key: "freeze-second", lease_id: second.lease.lease_id },
+      T0 + 3,
+    );
+    expect(denied).toMatchObject({ ok: false, error: "budget_frozen" });
+    const released = await releaseBudget(
+      storage,
+      { idempotency_key: "freeze-second", lease_id: second.lease.lease_id },
+      T0 + 4,
+    );
+    expect(released.ok).toBe(true);
+    const snap = await snapshotBudget(storage, T0 + 5);
+    if (!snap.ok) throw new Error("snapshot");
+    expect(snap.used.model_calls).toBe(1);
+    expect(snap.reserved.model_calls).toBe(0);
+    expect(snap.active_leases).toBe(0);
   });
 
   it("reserve recovers expired leases inline", async () => {

@@ -9,6 +9,7 @@ export const PILOT_BUDGET_CAPS = {
   max_model_calls: controlledPilotPolicy.max_model_calls,
   max_input_tokens: controlledPilotPolicy.max_input_tokens,
   max_output_tokens: controlledPilotPolicy.max_output_tokens,
+  max_cached_tokens: controlledPilotPolicy.max_cached_tokens,
   max_paper_runs: controlledPilotPolicy.max_paper_runs,
   max_cost_usd: controlledPilotPolicy.max_cost_usd,
   lease_ttl_seconds: controlledPilotPolicy.lease_ttl_seconds,
@@ -24,6 +25,7 @@ export type CounterName =
   | "model_calls"
   | "input_tokens"
   | "output_tokens"
+  | "cached_tokens"
   | "paper_runs"
   | "cost_usd";
 
@@ -39,7 +41,7 @@ export type CachedBudgetResult = {
 
 export type BudgetSettlement = {
   outcome: "success" | "schema_reject" | "provider_error" | "timeout";
-  usage_source: "provider" | "estimated_no_provider_usage";
+  usage_source: "provider" | "reserved_max_uncertain";
   estimated_cost_usd: number;
   actual_cost_usd: number | null;
   billed_cost_usd: number;
@@ -48,13 +50,21 @@ export type BudgetSettlement = {
   actual_cached_tokens: number | null;
 };
 
-export type BudgetAuditRecord = {
-  kind: "actual_exceeds_reserved";
-  reservation_id: string;
-  reserved: Counters;
-  actual: Counters;
-  at: number;
-};
+export type BudgetAuditRecord =
+  | {
+      kind: "actual_exceeds_reserved";
+      reservation_id: string;
+      reserved: Counters;
+      actual: Counters;
+      at: number;
+    }
+  | {
+      kind: "uncertain_provider_charge";
+      reservation_id: string;
+      charged: Counters;
+      reason: string;
+      at: number;
+    };
 
 export type Reservation = {
   idempotency_key: string;
@@ -71,6 +81,9 @@ export type Reservation = {
   cached_result: CachedBudgetResult | null;
   finalize_error: string | null;
   settlement: BudgetSettlement | null;
+  /** Persisted before invoking Workers AI. Null proves no provider side effect was started. */
+  provider_started_at: number | null;
+  uncertainty_reason: string | null;
 };
 
 export type Lease = {
@@ -102,9 +115,8 @@ export type BudgetResult<T> = BudgetOk<T> | BudgetErr;
 
 export interface BudgetStorage {
   get<T>(key: string): Promise<T | undefined>;
-  put(key: string, value: unknown): Promise<void>;
-  delete(key: string): Promise<void>;
-  list(prefix: string): Promise<Map<string, unknown>>;
+  /** Atomically persist ledger state and its one recovery alarm. */
+  commit(key: string, value: unknown, nextAlarm: number | null): Promise<void>;
 }
 
 const STATE_KEY = "ledger";
@@ -114,6 +126,7 @@ const COUNTERS: CounterName[] = [
   "model_calls",
   "input_tokens",
   "output_tokens",
+  "cached_tokens",
   "paper_runs",
   "cost_usd",
 ];
@@ -124,6 +137,7 @@ const CAP_FOR: Record<CounterName, number> = {
   model_calls: PILOT_BUDGET_CAPS.max_model_calls,
   input_tokens: PILOT_BUDGET_CAPS.max_input_tokens,
   output_tokens: PILOT_BUDGET_CAPS.max_output_tokens,
+  cached_tokens: PILOT_BUDGET_CAPS.max_cached_tokens,
   paper_runs: PILOT_BUDGET_CAPS.max_paper_runs,
   cost_usd: PILOT_BUDGET_CAPS.max_cost_usd,
 };
@@ -135,6 +149,7 @@ export function zeroCounters(): Counters {
     model_calls: 0,
     input_tokens: 0,
     output_tokens: 0,
+    cached_tokens: 0,
     paper_runs: 0,
     cost_usd: 0,
   };
@@ -158,27 +173,22 @@ export function emptyLedger(now: number): LedgerState {
 
 export class MemoryBudgetStorage implements BudgetStorage {
   private readonly data = new Map<string, unknown>();
+  private alarm: number | null = null;
 
   async get<T>(key: string): Promise<T | undefined> {
     if (!this.data.has(key)) return undefined;
     return structuredClone(this.data.get(key)) as T;
   }
 
-  async put(key: string, value: unknown): Promise<void> {
+  async commit(key: string, value: unknown, nextAlarm: number | null): Promise<void> {
     this.data.set(key, structuredClone(value));
+    this.alarm = nextAlarm;
   }
 
-  async delete(key: string): Promise<void> {
-    this.data.delete(key);
+  async getAlarm(): Promise<number | null> {
+    return this.alarm;
   }
 
-  async list(prefix: string): Promise<Map<string, unknown>> {
-    const out = new Map<string, unknown>();
-    for (const [k, v] of this.data) {
-      if (k.startsWith(prefix)) out.set(k, structuredClone(v));
-    }
-    return out;
-  }
 }
 
 function usdMicros(usd: number): number {
@@ -238,6 +248,19 @@ export function parseAmounts(raw: unknown): BudgetResult<{ amounts: Counters }> 
 
 function amountsFromCounters(c: Counters): Counters {
   return { ...c };
+}
+
+function coerceCounters(raw: Partial<Counters> | null | undefined): Counters {
+  const out = zeroCounters();
+  for (const name of COUNTERS) {
+    const value = Number(raw?.[name] ?? 0);
+    out[name] = Number.isFinite(value) && value >= 0
+      ? name === "cost_usd"
+        ? usdMicros(value) / 1_000_000
+        : Math.floor(value)
+      : 0;
+  }
+  return out;
 }
 
 function insufficient(
@@ -316,14 +339,21 @@ export function exceedsReserved(
 function coerceReservation(raw: Reservation): Reservation {
   return {
     ...raw,
+    amounts: coerceCounters(raw.amounts),
+    actual: raw.actual ? coerceCounters(raw.actual) : null,
     request_digest: raw.request_digest ?? null,
     cached_result: raw.cached_result ?? null,
     finalize_error: raw.finalize_error ?? null,
     settlement: raw.settlement ?? null,
+    provider_started_at: raw.provider_started_at ?? null,
+    uncertainty_reason: raw.uncertainty_reason ?? null,
   };
 }
 
 function coerceState(state: LedgerState): LedgerState {
+  state.caps = { ...PILOT_BUDGET_CAPS };
+  state.used = coerceCounters(state.used);
+  state.reserved = coerceCounters(state.reserved);
   state.frozen = state.frozen === true;
   state.frozen_at = state.frozen_at ?? null;
   state.frozen_reason = state.frozen_reason ?? null;
@@ -360,6 +390,52 @@ function freezeForOverage(
   });
 }
 
+function freezeForUncertainty(
+  state: LedgerState,
+  reservation: Reservation,
+  reason: UncertainProviderReason,
+  now: number,
+): void {
+  state.frozen = true;
+  state.frozen_at = now;
+  state.frozen_reason = `provider_usage_uncertain:${reason}`;
+  state.audit.push({
+    kind: "uncertain_provider_charge",
+    reservation_id: reservation.reservation_id,
+    charged: amountsFromCounters(reservation.amounts),
+    reason,
+    at: now,
+  });
+}
+
+function chargeUncertainReservation(
+  state: LedgerState,
+  reservation: Reservation,
+  reason: UncertainProviderReason,
+  now: number,
+): void {
+  state.reserved = applyDelta(state.reserved, reservation.amounts, -1);
+  state.used = applyDelta(state.used, reservation.amounts, 1);
+  reservation.status = "reconciled";
+  reservation.actual = amountsFromCounters(reservation.amounts);
+  reservation.reconciled_at = now;
+  reservation.uncertainty_reason = reason;
+  reservation.finalize_error = "provider_usage_uncertain";
+  reservation.settlement = {
+    outcome: reason === "timeout" || reason === "lease_expired" ? "timeout" : "provider_error",
+    usage_source: "reserved_max_uncertain",
+    estimated_cost_usd: reservation.amounts.cost_usd,
+    actual_cost_usd: null,
+    billed_cost_usd: reservation.amounts.cost_usd,
+    actual_input_tokens: null,
+    actual_output_tokens: null,
+    actual_cached_tokens: null,
+  };
+  reservation.cached_result = uncertainResult(reservation, reason);
+  closeReservationLease(state, reservation, now);
+  freezeForUncertainty(state, reservation, reason, now);
+}
+
 function activeLeaseCount(state: LedgerState): number {
   let n = 0;
   for (const lease of Object.values(state.leases)) {
@@ -378,9 +454,16 @@ export function recoverExpired(state: LedgerState, now: number): number {
     if (!lease.reservation_key) continue;
     const reservation = state.reservations[lease.reservation_key];
     if (!reservation || reservation.status !== "reserved") continue;
-    state.reserved = applyDelta(state.reserved, reservation.amounts, -1);
-    reservation.status = "released";
-    reservation.released_at = now;
+    if (reservation.provider_started_at === null) {
+      state.reserved = applyDelta(state.reserved, reservation.amounts, -1);
+      reservation.status = "released";
+      reservation.released_at = now;
+      continue;
+    }
+    // Once the provider side effect starts, an expired lease is not evidence
+    // of zero usage. Charge the full reservation and freeze future work until
+    // an operator audits provider billing.
+    chargeUncertainReservation(state, reservation, "lease_expired", now);
   }
   return recovered;
 }
@@ -391,7 +474,12 @@ async function loadState(storage: BudgetStorage, now: number): Promise<LedgerSta
 }
 
 async function saveState(storage: BudgetStorage, state: LedgerState): Promise<void> {
-  await storage.put(STATE_KEY, state);
+  let nextAlarm: number | null = null;
+  for (const lease of Object.values(state.leases)) {
+    if (lease.released_at !== null) continue;
+    nextAlarm = nextAlarm === null ? lease.expires_at : Math.min(nextAlarm, lease.expires_at);
+  }
+  await storage.commit(STATE_KEY, state, nextAlarm);
 }
 
 function ensureCreated(state: LedgerState, now: number): boolean {
@@ -444,6 +532,30 @@ export async function reserveBudget(
   recoverExpired(state, now);
   ensureCreated(state, now);
 
+  const existing = state.reservations[key.idempotency_key];
+  if (existing) {
+    if (digest && existing.request_digest && existing.request_digest !== digest) {
+      await saveState(storage, state);
+      return { ok: false, error: "idempotency_digest_conflict" };
+    }
+    if (existing.status !== "released") {
+      const lease = existing.lease_id ? state.leases[existing.lease_id] ?? null : null;
+      await saveState(storage, state);
+      return {
+        ok: true,
+        reservation: structuredClone(existing),
+        lease,
+        existing: true,
+        budget_run_id: existing.reservation_id,
+      };
+    }
+    // A released reservation provably never crossed the provider marker, so a
+    // same-digest retry may obtain a fresh run. Provider-started work is never
+    // represented by the released status.
+  }
+
+  // A frozen ledger still serves terminal idempotent results above, but never
+  // authorizes a new provider side effect.
   if (state.frozen) {
     await saveState(storage, state);
     return {
@@ -453,25 +565,9 @@ export async function reserveBudget(
     };
   }
 
-  const existing = state.reservations[key.idempotency_key];
-  if (existing && existing.status !== "released") {
-    if (digest && existing.request_digest && existing.request_digest !== digest) {
-      await saveState(storage, state);
-      return { ok: false, error: "idempotency_digest_conflict" };
-    }
-    const lease = existing.lease_id ? state.leases[existing.lease_id] ?? null : null;
-    await saveState(storage, state);
-    return {
-      ok: true,
-      reservation: structuredClone(existing),
-      lease,
-      existing: true,
-      budget_run_id: existing.reservation_id,
-    };
-  }
-
   const over = insufficient(state, amounts);
   if (over) {
+    await saveState(storage, state);
     return {
       ok: false,
       error: "budget_exhausted",
@@ -483,6 +579,7 @@ export async function reserveBudget(
   if (input.acquire_lease) {
     const active = activeLeaseCount(state);
     if (active >= PILOT_BUDGET_CAPS.max_parallel_experiments) {
+      await saveState(storage, state);
       return {
         ok: false,
         error: "budget_exhausted",
@@ -515,6 +612,8 @@ export async function reserveBudget(
     cached_result: null,
     finalize_error: null,
     settlement: null,
+    provider_started_at: null,
+    uncertainty_reason: null,
   };
   state.reserved = applyDelta(state.reserved, reservation.amounts, 1);
   state.reservations[key.idempotency_key] = reservation;
@@ -528,6 +627,153 @@ export async function reserveBudget(
   };
 }
 
+export async function markProviderStarted(
+  storage: BudgetStorage,
+  input: { idempotency_key: string; lease_id: string },
+  now = Date.now(),
+): Promise<BudgetResult<{ reservation: Reservation; budget_run_id: string }>> {
+  const key = requireIdempotencyKey(input.idempotency_key);
+  if (!key.ok) return key;
+  const leaseId = typeof input.lease_id === "string" ? input.lease_id.trim() : "";
+  if (!leaseId) return { ok: false, error: "lease_id required" };
+
+  const state = await loadState(storage, now);
+  recoverExpired(state, now);
+  const reservation = state.reservations[key.idempotency_key];
+  if (!reservation) {
+    await saveState(storage, state);
+    return { ok: false, error: "reservation_not_found" };
+  }
+  if (reservation.status !== "reserved") {
+    await saveState(storage, state);
+    return { ok: false, error: `reservation_${reservation.status}` };
+  }
+  if (state.frozen && reservation.provider_started_at === null) {
+    await saveState(storage, state);
+    return {
+      ok: false,
+      error: "budget_frozen",
+      detail: state.frozen_reason || "provider usage audit required",
+    };
+  }
+  const lease = state.leases[leaseId];
+  if (
+    reservation.lease_id !== leaseId ||
+    !lease ||
+    lease.reservation_key !== key.idempotency_key ||
+    lease.released_at !== null
+  ) {
+    await saveState(storage, state);
+    return { ok: false, error: "lease_not_active" };
+  }
+  reservation.provider_started_at ??= now;
+  await saveState(storage, state);
+  return {
+    ok: true,
+    reservation: structuredClone(reservation),
+    budget_run_id: reservation.reservation_id,
+  };
+}
+
+export type UncertainProviderReason =
+  | "timeout"
+  | "provider_error"
+  | "usage_unavailable"
+  | "finalize_failed"
+  | "worker_interrupted"
+  | "lease_expired";
+
+const UNCERTAIN_PROVIDER_REASONS = new Set<UncertainProviderReason>([
+  "timeout",
+  "provider_error",
+  "usage_unavailable",
+  "finalize_failed",
+  "worker_interrupted",
+  "lease_expired",
+]);
+
+function uncertainResult(
+  reservation: Reservation,
+  reason: UncertainProviderReason,
+): CachedBudgetResult {
+  const httpStatus = reason === "timeout" ? 504 : reason === "provider_error" ? 502 : 500;
+  const error =
+    reason === "timeout"
+      ? "ai_run_timeout"
+      : reason === "provider_error"
+        ? "ai_run_failed"
+        : "budget_settlement_uncertain";
+  return {
+    http_status: httpStatus,
+    body: {
+      ok: false,
+      error,
+      budget_run_id: reservation.reservation_id,
+    },
+  };
+}
+
+/**
+ * Resolve a provider-started reservation when usage cannot be proven. The DO,
+ * never the caller, selects the charged amounts from the persisted reservation.
+ */
+export async function settleUncertainBudget(
+  storage: BudgetStorage,
+  input: { idempotency_key: string; reason: UncertainProviderReason },
+  now = Date.now(),
+): Promise<
+  BudgetResult<{
+    reservation: Reservation;
+    used: Counters;
+    frozen: boolean;
+    budget_run_id: string;
+  }>
+> {
+  const key = requireIdempotencyKey(input.idempotency_key);
+  if (!key.ok) return key;
+  if (!UNCERTAIN_PROVIDER_REASONS.has(input.reason)) {
+    return { ok: false, error: "uncertainty_reason invalid" };
+  }
+
+  const state = await loadState(storage, now);
+  recoverExpired(state, now);
+  const reservation = state.reservations[key.idempotency_key];
+  if (!reservation) {
+    await saveState(storage, state);
+    return { ok: false, error: "reservation_not_found" };
+  }
+  // An invalid/lost finalize response can arrive after the DO already committed
+  // exact usage. Never overwrite that terminal idempotent settlement.
+  if (reservation.status === "reconciled") {
+    await saveState(storage, state);
+    return {
+      ok: true,
+      reservation,
+      used: amountsFromCounters(state.used),
+      frozen: state.frozen,
+      budget_run_id: reservation.reservation_id,
+    };
+  }
+  if (reservation.status === "released") {
+    await saveState(storage, state);
+    return { ok: false, error: "reservation_released" };
+  }
+  if (reservation.provider_started_at === null) {
+    await saveState(storage, state);
+    return { ok: false, error: "provider_not_started" };
+  }
+
+  chargeUncertainReservation(state, reservation, input.reason, now);
+  await saveState(storage, state);
+  return {
+    ok: true,
+    reservation,
+    used: amountsFromCounters(state.used),
+    frozen: true,
+    budget_run_id: reservation.reservation_id,
+  };
+}
+
 function applyCachedResult(
   reservation: Reservation,
   result: CachedBudgetResult | undefined,
@@ -535,7 +781,7 @@ function applyCachedResult(
   if (!result) return;
   const status = Number(result.http_status);
   reservation.cached_result = {
-    http_status: Number.isInteger(status) && status > 0 ? status : 500,
+    http_status: Number.isInteger(status) && status >= 200 && status <= 599 ? status : 500,
     body: result.body,
   };
 }
@@ -680,11 +926,29 @@ export async function releaseBudget(
   if (!lease && !reservation) {
     return { ok: false, error: "lease_or_idempotency_key required" };
   }
+  if (
+    lease &&
+    reservation &&
+    (lease.reservation_key !== reservation.idempotency_key ||
+      reservation.lease_id !== lease.lease_id)
+  ) {
+    await saveState(storage, state);
+    return { ok: false, error: "lease_reservation_mismatch" };
+  }
 
   if (lease && lease.released_at === null) {
     lease.released_at = now;
   }
   if (reservation && reservation.status === "reserved") {
+    if (reservation.provider_started_at !== null) {
+      chargeUncertainReservation(state, reservation, "worker_interrupted", now);
+      await saveState(storage, state);
+      return {
+        ok: false,
+        error: "provider_usage_uncertain",
+        detail: "provider side effect was already started; reservation charged at maximum",
+      };
+    }
     state.reserved = applyDelta(state.reserved, reservation.amounts, -1);
     reservation.status = "released";
     reservation.released_at = now;

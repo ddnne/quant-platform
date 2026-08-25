@@ -5,7 +5,8 @@ import { authorized } from "./authorized";
 import {
   bindIdempotencyKey,
   CONTROL_PLANE_LEDGER_NAME,
-  PILOT_BUDGET_CAPS,
+  type BudgetSettlement,
+  type UncertainProviderReason,
 } from "./budget_do";
 import { BudgetLedger } from "./budget_http";
 import { json } from "./http_json";
@@ -14,10 +15,12 @@ import {
   decodeTypedArtifact,
   estimateCostUsd,
   parseModelJson,
+  providerInputBounds,
   type GatewayOk,
   type GatewayRequest,
 } from "./schema";
 import { sha256Hex } from "./sha256";
+import { AI_CALL_TIMEOUT_MS } from "./runtime_policy";
 
 export { authorized } from "./authorized";
 export { BudgetLedger };
@@ -25,8 +28,6 @@ export { BudgetLedger };
 export interface GatewayEnv {
   AI?: Ai;
   GATEWAY_TOKEN?: string;
-  /** Separate mass-eval secret. Never a GATEWAY_TOKEN substitute. */
-  MASS_EVAL_TOKEN?: string;
   BUDGET_LEDGER?: DurableObjectNamespace;
 }
 
@@ -37,30 +38,29 @@ export type GatewayServiceResult = {
 
 function extractModelValue(
   res: unknown,
-): { ok: true; value: unknown; rawForTokens: string } | { ok: false; error: string } {
+): { ok: true; value: unknown } | { ok: false; error: string } {
   if (typeof res === "string") {
     const parsed = parseModelJson(res);
     if (!parsed.ok) return parsed;
-    return { ok: true, value: parsed.value, rawForTokens: res };
+    return { ok: true, value: parsed.value };
   }
   if (res && typeof res === "object" && !Array.isArray(res)) {
     const rec = res as Record<string, unknown>;
     if (typeof rec.response === "string") {
       const parsed = parseModelJson(rec.response);
       if (!parsed.ok) return parsed;
-      return { ok: true, value: parsed.value, rawForTokens: rec.response };
+      return { ok: true, value: parsed.value };
     }
     if (rec.response && typeof rec.response === "object") {
       return {
         ok: true,
         value: rec.response,
-        rawForTokens: JSON.stringify(rec.response),
       };
     }
     if (typeof rec.text === "string") {
       const parsed = parseModelJson(rec.text);
       if (!parsed.ok) return parsed;
-      return { ok: true, value: parsed.value, rawForTokens: rec.text };
+      return { ok: true, value: parsed.value };
     }
   }
   return { ok: false, error: "model output is not JSON" };
@@ -84,7 +84,7 @@ function parseCachedResult(raw: unknown): CachedBudgetBody | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const rec = raw as Record<string, unknown>;
   const httpStatus = Number(rec.http_status);
-  if (!Number.isInteger(httpStatus) || httpStatus < 1) return null;
+  if (!Number.isInteger(httpStatus) || httpStatus < 200 || httpStatus > 599) return null;
   return { http_status: httpStatus, body: rec.body };
 }
 
@@ -92,23 +92,34 @@ async function budgetRpc(env: GatewayEnv, path: string, body: unknown): Promise<
   if (!env.BUDGET_LEDGER) {
     return { ok: false, status: 503, error: "budget_ledger_unbound" };
   }
-  const id = env.BUDGET_LEDGER.idFromName(CONTROL_PLANE_LEDGER_NAME);
-  const stub = env.BUDGET_LEDGER.get(id);
-  const res = await stub.fetch(
-    new Request(`https://budget${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-  );
+  let res: Response;
+  try {
+    const id = env.BUDGET_LEDGER.idFromName(CONTROL_PLANE_LEDGER_NAME);
+    const stub = env.BUDGET_LEDGER.get(id);
+    res = await stub.fetch(
+      new Request(`https://budget${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      status: 500,
+      error: "budget_rpc_failed",
+      detail: detail.slice(0, 180),
+    };
+  }
   let parsed: unknown;
   try {
     parsed = await res.json();
   } catch {
-    return { ok: false, status: res.status, error: "budget_rpc_invalid_json" };
+    return { ok: false, status: 500, error: "budget_rpc_invalid_json" };
   }
   if (!parsed || typeof parsed !== "object") {
-    return { ok: false, status: res.status, error: "budget_rpc_invalid_json" };
+    return { ok: false, status: 500, error: "budget_rpc_invalid_json" };
   }
   const rec = parsed as Record<string, unknown>;
   const lease =
@@ -122,7 +133,7 @@ async function budgetRpc(env: GatewayEnv, path: string, body: unknown): Promise<
     (typeof reservation.reservation_id === "string" && reservation.reservation_id) ||
     undefined;
   return {
-    ok: rec.ok === true,
+    ok: res.ok && rec.ok === true,
     status: res.status,
     error: typeof rec.error === "string" ? rec.error : undefined,
     detail: typeof rec.detail === "string" ? rec.detail : undefined,
@@ -141,6 +152,7 @@ function completeRequestDigestPayload(req: GatewayRequest): string {
     messages: req.messages,
     max_tokens: req.max_tokens,
     expected_schema: req.expected_schema ?? "",
+    budget_id: req.budget_id,
     prompt_digest: req.prompt_digest ?? "",
     experiment_id: req.experiment_id ?? "",
     ready_snapshot_id: req.ready_snapshot_id ?? "",
@@ -153,9 +165,7 @@ function cachedResponse(cached: CachedBudgetBody): Response {
 
 function tokenCount(
   res: unknown,
-  fallbackText: string,
-  prompt: string,
-): { input: number; output: number; cached: number; measured: boolean } {
+): { input: number; output: number; cached: number; actualCostUsd: number | null; measured: boolean } {
   const rec = res && typeof res === "object" ? (res as Record<string, unknown>) : {};
   const usage =
     rec.usage && typeof rec.usage === "object" ? (rec.usage as Record<string, unknown>) : {};
@@ -170,7 +180,7 @@ function tokenCount(
     for (const key of keys) {
       if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
       const value = Number(source[key]);
-      if (Number.isFinite(value) && value >= 0) return value;
+      if (Number.isSafeInteger(value) && value >= 0) return value;
     }
     return null;
   };
@@ -179,15 +189,17 @@ function tokenCount(
   const cached =
     measuredNumber(usage, ["cached_tokens"]) ??
     measuredNumber(inputDetails, ["cached_tokens"]);
+  const providerCost = ["cost_usd", "monetary_cost_usd"]
+    .map((key) => Number(usage[key]))
+    .find((value) => Number.isFinite(value) && value >= 0);
   return {
-    input: input ?? Math.ceil(prompt.length / 4),
-    output: output ?? Math.ceil(fallbackText.length / 4),
+    input: input ?? 0,
+    output: output ?? 0,
     cached: cached ?? 0,
-    measured: input !== null || output !== null || cached !== null,
+    actualCostUsd: providerCost ?? null,
+    measured: input !== null && output !== null,
   };
 }
-
-const AI_CALL_TIMEOUT_MS = 120_000;
 
 class GatewayProviderTimeout extends Error {
   constructor() {
@@ -237,15 +249,14 @@ async function handleGatewayRequest(
     if (!bound.ok) {
       return json({ ok: false, error: bound.error }, 400);
     }
-    const estimatedInput = Math.min(
-      PILOT_BUDGET_CAPS.max_input_tokens,
-      Math.max(64, Math.ceil(prompt.length / 2)),
-    );
+    const inputBounds = providerInputBounds(req.messages);
+    const estimatedInput = inputBounds.token_upper_bound;
     const estimatedCost = estimateCostUsd(req.model, estimatedInput, req.max_tokens);
     const reserveAmounts = {
       model_calls: 1,
       input_tokens: estimatedInput,
       output_tokens: req.max_tokens,
+      cached_tokens: estimatedInput,
       cost_usd: estimatedCost,
     };
     const reserved = await budgetRpc(env, "/reserve", {
@@ -255,8 +266,12 @@ async function handleGatewayRequest(
       amounts: reserveAmounts,
     });
     if (!reserved.ok) {
+      const publicDetail =
+        reserved.error === "budget_exhausted" || reserved.error === "budget_frozen"
+          ? reserved.detail
+          : undefined;
       return json(
-        { ok: false, error: reserved.error || "budget_exhausted", detail: reserved.detail },
+        { ok: false, error: reserved.error || "budget_exhausted", detail: publicDetail },
         reserved.status || 429,
       );
     }
@@ -274,6 +289,47 @@ async function handleGatewayRequest(
         409,
       );
     }
+    if (!budgetRunId || !reserved.lease_id) {
+      // The request key is enough to cancel a reserve that committed despite a
+      // malformed/lost response. No provider marker exists yet.
+      await budgetRpc(env, "/release", {
+        idempotency_key: bound.idempotency_key,
+      });
+      return json(
+        {
+          ok: false,
+          error: "budget_reserve_invalid_response",
+          budget_run_id: budgetRunId,
+        },
+        500,
+      );
+    }
+
+    // This durable marker is the recovery boundary. Workers AI is never called
+    // unless the ledger has persisted that provider usage may now exist.
+    const providerStarted = await budgetRpc(env, "/provider-started", {
+      idempotency_key: bound.idempotency_key,
+      lease_id: reserved.lease_id,
+    });
+    if (!providerStarted.ok) {
+      // No provider call was made. If the marker itself committed but its
+      // response was lost, /release conservatively charges and freezes because
+      // the durable record is intentionally indistinguishable from a crash at
+      // the provider boundary. Otherwise this is a zero-cost pre-provider
+      // release. The alarm remains the final recovery path if this RPC fails.
+      await budgetRpc(env, "/release", {
+        idempotency_key: bound.idempotency_key,
+        lease_id: reserved.lease_id,
+      });
+      return json(
+        {
+          ok: false,
+          error: "budget_provider_start_failed",
+          budget_run_id: budgetRunId,
+        },
+        500,
+      );
+    }
 
     let responseStatus = 502;
     let responseBody: Record<string, unknown> = {
@@ -283,29 +339,12 @@ async function handleGatewayRequest(
     let billed = {
       model_calls: 1,
       input_tokens: estimatedInput,
-      output_tokens: 0,
-      cost_usd: estimateCostUsd(req.model, estimatedInput, 0),
+      output_tokens: req.max_tokens,
+      cached_tokens: estimatedInput,
+      cost_usd: estimatedCost,
     };
-    let settlement: {
-      outcome: "success" | "schema_reject" | "provider_error" | "timeout";
-      usage_source: "provider" | "estimated_no_provider_usage";
-      estimated_cost_usd: number;
-      actual_cost_usd: number | null;
-      billed_cost_usd: number;
-      actual_input_tokens: number | null;
-      actual_output_tokens: number | null;
-      actual_cached_tokens: number | null;
-    } = {
-      outcome: "provider_error",
-      usage_source: "estimated_no_provider_usage",
-      estimated_cost_usd: estimatedCost,
-      actual_cost_usd: null,
-      billed_cost_usd: billed.cost_usd,
-      actual_input_tokens: null,
-      actual_output_tokens: null,
-      actual_cached_tokens: null,
-    };
-    let finalized: BudgetRpc | null = null;
+    let settlement: BudgetSettlement | null = null;
+    let uncertainReason: UncertainProviderReason | null = null;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
       const res = await Promise.race([
@@ -321,88 +360,130 @@ async function handleGatewayRequest(
         }),
       ]);
       const extracted = extractModelValue(res);
-      const tokens = tokenCount(
-        res,
-        extracted.ok ? extracted.rawForTokens : "",
-        prompt,
-      );
-      billed = {
-        model_calls: 1,
-        input_tokens: tokens.input,
-        output_tokens: tokens.output,
-        cost_usd: estimateCostUsd(req.model, tokens.input, tokens.output),
-      };
-      settlement = {
-        outcome: "schema_reject",
-        usage_source: tokens.measured ? "provider" : "estimated_no_provider_usage",
-        estimated_cost_usd: estimatedCost,
-        actual_cost_usd: tokens.measured ? billed.cost_usd : null,
-        billed_cost_usd: billed.cost_usd,
-        actual_input_tokens: tokens.measured ? tokens.input : null,
-        actual_output_tokens: tokens.measured ? tokens.output : null,
-        actual_cached_tokens: tokens.measured ? tokens.cached : null,
-      };
-      if (!extracted.ok) {
-        responseStatus = 400;
-        responseBody = { ok: false, error: extracted.error };
+      const tokens = tokenCount(res);
+      if (!tokens.measured) {
+        uncertainReason = "usage_unavailable";
+        responseStatus = 500;
+        responseBody = { ok: false, error: "provider_usage_unavailable" };
       } else {
-        const decoded = decodeTypedArtifact(extracted.value, req.expected_schema);
-        if (!decoded.ok) {
+        billed = {
+          model_calls: 1,
+          input_tokens: tokens.input,
+          output_tokens: tokens.output,
+          cached_tokens: tokens.cached,
+          cost_usd:
+            tokens.actualCostUsd ?? estimateCostUsd(req.model, tokens.input, tokens.output),
+        };
+        settlement = {
+          outcome: "schema_reject",
+          usage_source: "provider",
+          estimated_cost_usd: estimatedCost,
+          actual_cost_usd: tokens.actualCostUsd,
+          billed_cost_usd: billed.cost_usd,
+          actual_input_tokens: tokens.input,
+          actual_output_tokens: tokens.output,
+          actual_cached_tokens: tokens.cached,
+        };
+        if (!extracted.ok) {
           responseStatus = 400;
-          responseBody = { ok: false, error: decoded.error };
+          responseBody = { ok: false, error: extracted.error };
         } else {
-          const canonical = JSON.stringify(decoded.value.artifact);
-          const outputDigest = `sha256:${await sha256Hex(canonical)}`;
-          const payload: GatewayOk = {
-            ok: true,
-            schema: decoded.value.schema_name,
-            schema_version: decoded.value.schema_version,
-            artifact: decoded.value.artifact,
-            model: req.model,
-            input_tokens: tokens.input,
-            output_tokens: tokens.output,
-            monetary_cost_usd: billed.cost_usd,
-            prompt_digest: promptDigest,
-            output_digest: outputDigest,
-            ready_snapshot_id: req.ready_snapshot_id ?? null,
-            experiment_id: req.experiment_id ?? null,
-            budget_id: req.budget_id,
-            budget_run_id: budgetRunId || "",
-          };
-          settlement.outcome = "success";
-          responseStatus = 200;
-          responseBody = payload;
+          const decoded = decodeTypedArtifact(extracted.value, req.expected_schema);
+          if (!decoded.ok) {
+            responseStatus = 400;
+            responseBody = { ok: false, error: decoded.error };
+          } else {
+            const canonical = JSON.stringify(decoded.value.artifact);
+            const outputDigest = `sha256:${await sha256Hex(canonical)}`;
+            const payload: GatewayOk = {
+              ok: true,
+              schema: decoded.value.schema_name,
+              schema_version: decoded.value.schema_version,
+              artifact: decoded.value.artifact,
+              model: req.model,
+              input_tokens: tokens.input,
+              output_tokens: tokens.output,
+              cached_tokens: tokens.cached,
+              monetary_cost_usd: billed.cost_usd,
+              prompt_digest: promptDigest,
+              output_digest: outputDigest,
+              ready_snapshot_id: req.ready_snapshot_id ?? null,
+              experiment_id: req.experiment_id ?? null,
+              budget_id: req.budget_id,
+              budget_run_id: budgetRunId,
+            };
+            settlement.outcome = "success";
+            responseStatus = 200;
+            responseBody = payload;
+          }
         }
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
       const timedOut = e instanceof GatewayProviderTimeout;
-      settlement.outcome = timedOut ? "timeout" : "provider_error";
+      uncertainReason = timedOut ? "timeout" : "provider_error";
       responseStatus = timedOut ? 504 : 502;
       responseBody = {
         ok: false,
         error: timedOut ? "ai_run_timeout" : "ai_run_failed",
-        detail: msg.slice(0, 180),
       };
     } finally {
       if (timeoutId !== undefined) clearTimeout(timeoutId);
-      responseBody = { ...responseBody, budget_run_id: budgetRunId };
-      finalized = await budgetRpc(env, "/finalize", {
-        idempotency_key: bound.idempotency_key,
-        amounts: billed,
-        settlement,
-        result: { http_status: responseStatus, body: responseBody },
-      });
     }
-    if (!finalized || !finalized.ok) {
+    responseBody = { ...responseBody, budget_run_id: budgetRunId };
+
+    if (uncertainReason) {
+      const uncertain = await budgetRpc(env, "/settle-uncertain", {
+        idempotency_key: bound.idempotency_key,
+        reason: uncertainReason,
+      });
+      if (uncertain.ok && uncertain.cached_result) {
+        return cachedResponse(uncertain.cached_result);
+      }
       return json(
         {
           ok: false,
-          error: finalized?.error || "budget_finalize_failed",
-          detail: finalized?.detail,
+          error: "budget_settlement_recovery_pending",
           budget_run_id: budgetRunId,
         },
-        finalized?.status || 500,
+        500,
+      );
+    }
+
+    if (!settlement) {
+      // Defensive guard: provider success with known usage always creates an
+      // exact settlement above. The persisted provider-started marker and alarm
+      // still guarantee conservative recovery.
+      await budgetRpc(env, "/settle-uncertain", {
+        idempotency_key: bound.idempotency_key,
+        reason: "worker_interrupted",
+      });
+      return json(
+        { ok: false, error: "budget_settlement_missing", budget_run_id: budgetRunId },
+        500,
+      );
+    }
+
+    const finalized = await budgetRpc(env, "/finalize", {
+      idempotency_key: bound.idempotency_key,
+      amounts: billed,
+      settlement,
+      result: { http_status: responseStatus, body: responseBody },
+    });
+    if (!finalized.ok) {
+      // If /finalize committed but its response was lost or malformed, this is
+      // an idempotent no-op. Otherwise it immediately charges the reservation
+      // maximum; the lease alarm remains the final persistent recovery layer.
+      await budgetRpc(env, "/settle-uncertain", {
+        idempotency_key: bound.idempotency_key,
+        reason: "finalize_failed",
+      });
+      return json(
+        {
+          ok: false,
+          error: "budget_finalize_failed",
+          budget_run_id: budgetRunId,
+        },
+        500,
       );
     }
     return json(responseBody, responseStatus);

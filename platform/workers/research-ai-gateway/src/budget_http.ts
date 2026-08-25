@@ -1,13 +1,17 @@
 /** Budget HTTP dispatcher. Occupancy algebra stays in budget_do. Presence of budget_id is not a reserve. */
 
+import { DurableObject } from "cloudflare:workers";
+
 import {
   createBudget,
   finalizeBudget,
   heartbeatLease,
+  markProviderStarted,
   reconcileBudget,
   recoverExpiredLeases,
   releaseBudget,
   reserveBudget,
+  settleUncertainBudget,
   snapshotBudget,
   type BudgetResult,
   type BudgetStorage,
@@ -21,16 +25,15 @@ class DurableObjectBudgetStorage implements BudgetStorage {
     return this.storage.get<T>(key);
   }
 
-  put(key: string, value: unknown): Promise<void> {
-    return this.storage.put(key, value);
-  }
-
-  async delete(key: string): Promise<void> {
-    await this.storage.delete(key);
-  }
-
-  async list(prefix: string): Promise<Map<string, unknown>> {
-    return (await this.storage.list({ prefix })) as Map<string, unknown>;
+  async commit(key: string, value: unknown, nextAlarm: number | null): Promise<void> {
+    await this.storage.transaction(async (txn) => {
+      await txn.put(key, value);
+      if (nextAlarm === null) {
+        await txn.deleteAlarm();
+      } else {
+        await txn.setAlarm(nextAlarm);
+      }
+    });
   }
 }
 
@@ -39,8 +42,11 @@ function errorStatus(error: string): number {
   if (
     error === "reservation_not_found" ||
     error === "lease_not_active" ||
+    error === "lease_reservation_mismatch" ||
     error === "budget_frozen" ||
     error === "actual_exceeds_reserved" ||
+    error === "provider_usage_uncertain" ||
+    error === "provider_not_started" ||
     error === "idempotency_digest_conflict" ||
     error === "reservation_released"
   ) {
@@ -89,12 +95,32 @@ export async function handleBudgetRequest(
         now,
       );
       break;
+    case "/provider-started":
+      result = await markProviderStarted(
+        storage,
+        {
+          idempotency_key: String(rec.idempotency_key ?? ""),
+          lease_id: String(rec.lease_id ?? ""),
+        },
+        now,
+      );
+      break;
     case "/reconcile":
       result = await reconcileBudget(
         storage,
         {
           idempotency_key: String(rec.idempotency_key ?? ""),
           amounts: rec.amounts,
+        },
+        now,
+      );
+      break;
+    case "/settle-uncertain":
+      result = await settleUncertainBudget(
+        storage,
+        {
+          idempotency_key: String(rec.idempotency_key ?? ""),
+          reason: String(rec.reason ?? "") as import("./budget_do").UncertainProviderReason,
         },
         now,
       );
@@ -146,14 +172,24 @@ export async function handleBudgetRequest(
 }
 
 /** Wrangler Durable Object. Algebra lives in budget_do for unit tests. */
-export class BudgetLedger {
+export class BudgetLedger extends DurableObject<unknown> {
   private readonly storage: BudgetStorage;
 
   constructor(state: DurableObjectState, _env: unknown) {
+    super(state, _env);
     this.storage = new DurableObjectBudgetStorage(state.storage);
+    state.blockConcurrencyWhile(async () => {
+      // Reconstruct the recovery alarm after eviction/restart and settle any
+      // provider-started lease that expired while the instance was absent.
+      await recoverExpiredLeases(this.storage);
+    });
   }
 
   fetch(request: Request): Promise<Response> {
     return handleBudgetRequest(this.storage, request);
+  }
+
+  async alarm(): Promise<void> {
+    await recoverExpiredLeases(this.storage);
   }
 }

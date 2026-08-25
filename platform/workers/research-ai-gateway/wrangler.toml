@@ -6,10 +6,9 @@
 # Staging is not [env.staging] in this file (would share the production
 # Cloudflare account). See wrangler.staging.toml — HUMAN separate account.
 #
-# Secrets:
-#   npx wrangler secret put GATEWAY_TOKEN -c platform/workers/research-ai-gateway/wrangler.toml
-#
-# Fail-closed: missing GATEWAY_TOKEN refuses /v1/complete.
+# Mass uses the typed service-binding RPC and never receives a shared token.
+# GATEWAY_TOKEN is only defense in depth if an operator later attaches a closed
+# HTTP route; without it the HTTP /v1/complete surface fails closed.
 
 name = "quant-platform-research-ai-gateway"
 main = "src/index.ts"
