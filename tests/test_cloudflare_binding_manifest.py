@@ -35,6 +35,32 @@ def test_manifest_is_fail_closed_for_toolchain_drift() -> None:
         manifest_module.validate_manifest(drifted)
 
 
+def test_removed_observability_fails_closed() -> None:
+    drifted = copy.deepcopy(manifest_module.build_manifest())
+    drifted["workers"]["ingestion-jsda"]["production"]["observability"] = {
+        "enabled": False,
+        "head_sampling_rate": 1,
+    }
+    with pytest.raises(ValueError, match="observability.enabled must be true"):
+        manifest_module.validate_manifest(drifted)
+
+
+def test_sampling_drift_fails_closed() -> None:
+    drifted = copy.deepcopy(manifest_module.build_manifest())
+    drifted["workers"]["ingestion-premium"]["staging"]["observability"][
+        "head_sampling_rate"
+    ] = 0.1
+    with pytest.raises(ValueError, match="head_sampling_rate drifted"):
+        manifest_module.validate_manifest(drifted)
+
+
+def test_missing_version_metadata_binding_fails_closed() -> None:
+    drifted = copy.deepcopy(manifest_module.build_manifest())
+    drifted["workers"]["research-ai-gateway"]["base"]["version_metadata"] = {}
+    with pytest.raises(ValueError, match="version_metadata binding"):
+        manifest_module.validate_manifest(drifted)
+
+
 def test_staging_surfaces_are_private_and_have_no_production_secret_policy() -> None:
     manifest = manifest_module.build_manifest()
     for environments in manifest["workers"].values():

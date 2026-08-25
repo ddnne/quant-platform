@@ -67,6 +67,10 @@ crons = ["15 * * * *"]
 
 [observability]
 enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"
 
 [env.production]
 name = "quant-platform-ingestion-premium"
@@ -92,3 +96,10 @@ INGEST_CONCURRENCY = "6"
 [env.production.triggers]
 # Named environments do not inherit top-level triggers.
 crons = ["15 * * * *"]
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.production.version_metadata]
+binding = "CF_VERSION_METADATA"

@@ -19,6 +19,10 @@ preview_urls = false
 
 [observability]
 enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"
 
 [[ratelimits]]
 name = "PROXY_RATE_LIMITER"
@@ -40,3 +44,10 @@ namespace_id = "63101"
 [env.production.ratelimits.simple]
 limit = 60
 period = 60
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.production.version_metadata]
+binding = "CF_VERSION_METADATA"

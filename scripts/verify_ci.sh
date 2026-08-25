@@ -56,24 +56,15 @@ find_python_311_plus() {
   return 1
 }
 
-echo "==> secret/path scan (tracked .env / *.pem)"
-if git ls-files | grep -E '(^|/)\.env$|\.pem$'; then
-  echo "tracked secret path: .env or *.pem must not be in git ls-files" >&2
-  exit 1
-fi
-if git grep -nI -E -- \
-  '-----BEGIN (OPENSSH |EC |RSA )?PRIVATE KEY-----|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|sk-(proj-)?[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}' \
-  -- ':!uv.lock' ':!**/package-lock.json'; then
-  echo "tracked content matches a private-key or provider-token signature" >&2
-  exit 1
-fi
-
 host_py=""
 if ! host_py="$(find_python_311_plus)"; then
   echo "Python 3.11+ with working stdlib sqlite3 is required." >&2
   echo "do not silently use system python" >&2
   exit 1
 fi
+
+echo "==> secret/path scan"
+"$host_py" "$ROOT/scripts/verify_secret_paths.py"
 
 UV_VERSION="0.11.26"
 uv_cmd="$(command -v uv 2>/dev/null || true)"

@@ -62,7 +62,9 @@ def test_ci_shell_has_no_skip_or_live_deploy_command() -> None:
         assert "VERIFY_NPM" not in line
         if "wrangler deploy" in line:
             assert "--dry-run" in line
+        assert "git ls-files | grep -E" not in line
     assert "platform/workers/ci-aggregate" not in source
+    assert "scripts/verify_secret_paths.py" in source
 
 
 def test_workers_builds_wrapper_fails_closed_outside_cloudflare() -> None:

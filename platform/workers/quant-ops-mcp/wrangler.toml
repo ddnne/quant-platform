@@ -55,6 +55,10 @@ OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.work
 
 [observability]
 enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"
 
 # Production uses the same Worker name (no -production suffix) so existing
 # OAuth clients keep the workers.dev callback host.
@@ -88,3 +92,10 @@ bindings = [{ name = "MCP_OBJECT", class_name = "QuantOpsMcpAgent" }]
 ALLOWED_LOGIN = "ddnne"
 DAILY_ROW_QUOTA = "25000"
 OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.production.version_metadata]
+binding = "CF_VERSION_METADATA"

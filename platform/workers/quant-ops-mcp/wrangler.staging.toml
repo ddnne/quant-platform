@@ -36,5 +36,12 @@ new_sqlite_classes = ["QuantOpsMcpAgent"]
 [vars]
 ALLOWED_LOGIN = "ddnne"
 DAILY_ROW_QUOTA = "25000"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"
 # OAUTH_AUTHORIZATION_SERVER intentionally absent: fail closed until the
 # separate staging OAuth app exists.

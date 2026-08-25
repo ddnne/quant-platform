@@ -44,6 +44,7 @@ type AuditOutcome =
   | "not_found";
 
 function auditedResponse(
+  env: Env,
   request: Request,
   pathname: string,
   startedAt: number,
@@ -63,7 +64,15 @@ function auditedResponse(
       outcome,
       status: response.status,
       duration_ms: Math.max(0, Date.now() - startedAt),
-      ...(datasetPath === undefined ? {} : { dataset_path: datasetPath }),
+      run_id: null,
+      job_id: null,
+      segment_id: null,
+      dataset: datasetPath ?? null,
+      generation: null,
+      cursor: null,
+      deployment_version: env.CF_VERSION_METADATA?.id || env.CF_VERSION_METADATA?.tag || null,
+      result: outcome,
+      reason: null,
     }),
   );
   return response;
@@ -96,6 +105,7 @@ export default {
       datasetPath?: string,
     ): Response =>
       auditedResponse(
+        env,
         request,
         url.pathname,
         startedAt,

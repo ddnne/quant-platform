@@ -37,6 +37,10 @@
         "main": "src/index.ts",
         "migrations": [],
         "name": "quant-platform-ingestion-jsda",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [
           {
@@ -76,6 +80,9 @@
         },
         "vars": {
           "USER_AGENT": "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
         },
         "workers_dev": false
       },
@@ -99,6 +106,10 @@
         "main": "src/index.ts",
         "migrations": [],
         "name": "quant-platform-ingestion-jsda",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [
           {
@@ -139,6 +150,9 @@
         "vars": {
           "USER_AGENT": "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
         },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
         "workers_dev": false
       },
       "staging": {
@@ -159,6 +173,10 @@
         "main": "src/index.ts",
         "migrations": [],
         "name": "quant-platform-ingestion-jsda-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [
           {
@@ -197,6 +215,9 @@
         "vars": {
           "USER_AGENT": "quant-platform-staging-ingest/0.1"
         },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
         "workers_dev": false
       }
     },
@@ -221,6 +242,10 @@
         "main": "src/index.ts",
         "migrations": [],
         "name": "quant-platform-ingestion-premium",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -251,6 +276,9 @@
         },
         "vars": {
           "INGEST_CONCURRENCY": "6"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
         },
         "workers_dev": false
       },
@@ -274,6 +302,10 @@
         "main": "src/index.ts",
         "migrations": [],
         "name": "quant-platform-ingestion-premium",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -305,6 +337,9 @@
         "vars": {
           "INGEST_CONCURRENCY": "6"
         },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
         "workers_dev": false
       },
       "staging": {
@@ -327,6 +362,10 @@
         "main": "src/index.ts",
         "migrations": [],
         "name": "quant-platform-ingestion-premium-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -354,6 +393,9 @@
         "vars": {
           "INGEST_CONCURRENCY": "2"
         },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
         "workers_dev": false
       }
     },
@@ -370,6 +412,10 @@
         "main": "src/index.ts",
         "migrations": [],
         "name": "quant-platform-ingestion-secrets",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -398,6 +444,9 @@
           "wrangler": "4.125.0"
         },
         "vars": {},
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
         "workers_dev": true
       },
       "production": {
@@ -412,6 +461,10 @@
         "main": "src/index.ts",
         "migrations": [],
         "name": "quant-platform-ingestion-secrets",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -440,6 +493,9 @@
           "wrangler": "4.125.0"
         },
         "vars": {},
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
         "workers_dev": true
       },
       "staging": {
@@ -454,6 +510,10 @@
         "main": "src/index.ts",
         "migrations": [],
         "name": "quant-platform-ingestion-secrets-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -479,6 +539,9 @@
           "wrangler": "4.125.0"
         },
         "vars": {},
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
         "workers_dev": false
       }
     },
@@ -529,6 +592,10 @@
           }
         ],
         "name": "quant-platform-ops-read-mcp",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -552,6 +619,9 @@
           "ALLOWED_LOGIN": "ddnne",
           "DAILY_ROW_QUOTA": "25000",
           "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
         },
         "workers_dev": true
       },
@@ -601,6 +671,10 @@
           }
         ],
         "name": "quant-platform-ops-read-mcp",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -624,6 +698,9 @@
           "ALLOWED_LOGIN": "ddnne",
           "DAILY_ROW_QUOTA": "25000",
           "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
         },
         "workers_dev": true
       },
@@ -673,6 +750,10 @@
           }
         ],
         "name": "quant-platform-ops-read-mcp-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -691,6 +772,9 @@
         "vars": {
           "ALLOWED_LOGIN": "ddnne",
           "DAILY_ROW_QUOTA": "25000"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
         },
         "workers_dev": false
       }
@@ -722,6 +806,10 @@
           }
         ],
         "name": "quant-platform-research-ai-gateway",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -740,6 +828,9 @@
           "wrangler": "4.125.0"
         },
         "vars": {},
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
         "workers_dev": false
       },
       "production": {
@@ -768,6 +859,10 @@
           }
         ],
         "name": "quant-platform-research-ai-gateway",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -786,6 +881,9 @@
           "wrangler": "4.125.0"
         },
         "vars": {},
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
         "workers_dev": false
       },
       "staging": {
@@ -814,6 +912,10 @@
           }
         ],
         "name": "quant-platform-research-ai-gateway-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -830,6 +932,9 @@
           "wrangler": "4.125.0"
         },
         "vars": {},
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
         "workers_dev": false
       }
     },
@@ -846,6 +951,10 @@
         "main": "src/index.ts",
         "migrations": [],
         "name": "quant-platform-research-mass-eval",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -883,6 +992,9 @@
           "OPERATIONAL_GO": "false",
           "PHASE7": "OFF",
           "READY_DECLARED": "false"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
         },
         "workers_dev": false
       },
@@ -898,6 +1010,10 @@
         "main": "src/index.ts",
         "migrations": [],
         "name": "quant-platform-research-mass-eval",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -936,6 +1052,9 @@
           "PHASE7": "OFF",
           "READY_DECLARED": "false"
         },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
         "workers_dev": false
       },
       "staging": {
@@ -950,6 +1069,10 @@
         "main": "src/index.ts",
         "migrations": [],
         "name": "quant-platform-research-mass-eval-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
         "preview_urls": false,
         "queue_consumers": [],
         "queue_producers": [],
@@ -983,6 +1106,9 @@
           "OPERATIONAL_GO": "false",
           "PHASE7": "OFF",
           "READY_DECLARED": "false"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
         },
         "workers_dev": false
       }

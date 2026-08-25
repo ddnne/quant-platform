@@ -98,6 +98,9 @@ def test_typed_service_and_durable_object_refinements_are_required() -> None:
         'DurableObjectNamespace<import("./src/index").BudgetLedger>'
     )
     assert secrets["PROXY_RATE_LIMITER"] == "RateLimit"
+    assert expected_types("ingestion-jsda", "production")["CF_VERSION_METADATA"] == (
+        "WorkerVersionMetadata"
+    )
 
 
 def test_generic_fetcher_or_do_erasure_is_rejected(tmp_path: Path) -> None:

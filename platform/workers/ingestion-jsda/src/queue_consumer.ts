@@ -27,6 +27,7 @@ import {
 import { enqueueRegisteredJobs, sendContinuation } from "./queue_producer";
 import { putImmutableRaw, putQueueAuditReceipt } from "./raw_store";
 import { sha256Hex } from "./sha256";
+import { logOperationalEvent } from "./operational_event";
 import {
   PermanentAcquisitionError,
   TransientAcquisitionError,
@@ -43,8 +44,20 @@ const USER_AGENT =
 const LEASE_SECONDS = 15 * 60;
 const RETRY_DELAY_SECONDS = 60;
 
-function logError(event: string, fields: Record<string, unknown>): void {
-  console.error(JSON.stringify({ event, worker: "ingestion-jsda", ...fields }));
+function logError(
+  env: JsdaWorkerEnv,
+  event: string,
+  fields: {
+    run_id?: string | null;
+    job_id?: string | null;
+    segment_id?: string | null;
+    dataset?: string | null;
+    cursor?: number | null;
+    result?: string | null;
+    reason?: string | null;
+  },
+): void {
+  logOperationalEvent(env, event, fields);
 }
 
 function canonicalBodyJson(body: unknown): string {
@@ -421,10 +434,9 @@ export async function consumeQueueMessage(
       await persistRejectedDelivery(message, env, "invalid_job_schema");
       message.ack();
     } catch (error) {
-      logError("jsda_queue_reject_persist_failed", {
-        message_id: message.id,
-        attempt: message.attempts,
-        error: errorDetail(error),
+      logError(env, "jsda_queue_reject_persist_failed", {
+        job_id: message.id,
+        reason: errorDetail(error),
       });
       message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
     }
@@ -444,11 +456,11 @@ export async function consumeQueueMessage(
       );
       message.ack();
     } catch (error) {
-      logError("jsda_queue_contract_reject_persist_failed", {
-        message_id: message.id,
-        work_key: job.work_key,
-        attempt: message.attempts,
-        error: errorDetail(error),
+      logError(env, "jsda_queue_contract_reject_persist_failed", {
+        run_id: job.run_key,
+        job_id: job.work_key,
+        dataset: job.dataset,
+        reason: errorDetail(error),
       });
       message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
     }
@@ -459,10 +471,12 @@ export async function consumeQueueMessage(
   try {
     row = await registerJob(env.DB, job);
   } catch (error) {
-    logError("jsda_queue_register_failed", {
-      work_key: job.work_key,
-      attempt: message.attempts,
-      error: errorDetail(error),
+    logError(env, "jsda_queue_register_failed", {
+      run_id: job.run_key,
+      job_id: job.work_key,
+      dataset: job.dataset,
+      segment_id: job.segment_id,
+      reason: errorDetail(error),
     });
     message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
     return;
@@ -473,10 +487,11 @@ export async function consumeQueueMessage(
       await persistRejectedDelivery(message, env, "work_key_identity_mismatch");
       message.ack();
     } catch (error) {
-      logError("jsda_queue_identity_reject_persist_failed", {
-        work_key: job.work_key,
-        attempt: message.attempts,
-        error: errorDetail(error),
+      logError(env, "jsda_queue_identity_reject_persist_failed", {
+        run_id: job.run_key,
+        job_id: job.work_key,
+        dataset: job.dataset,
+        reason: errorDetail(error),
       });
       message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
     }
@@ -488,16 +503,23 @@ export async function consumeQueueMessage(
     try {
       durable = await terminalAuditIsDurable(env, row);
     } catch (error) {
-      logError("jsda_queue_terminal_audit_read_failed", {
-        work_key: row.work_key,
-        state: row.state,
-        error: errorDetail(error),
+      logError(env, "jsda_queue_terminal_audit_read_failed", {
+        run_id: row.run_key,
+        job_id: row.work_key,
+        dataset: row.dataset,
+        segment_id: row.segment_id,
+        result: row.state,
+        reason: errorDetail(error),
       });
     }
     if (!durable) {
-      logError("jsda_queue_terminal_state_without_audit", {
-        work_key: row.work_key,
-        state: row.state,
+      logError(env, "jsda_queue_terminal_state_without_audit", {
+        run_id: row.run_key,
+        job_id: row.work_key,
+        dataset: row.dataset,
+        segment_id: row.segment_id,
+        result: row.state,
+        reason: "terminal_audit_missing",
       });
       message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
       return;
@@ -512,10 +534,12 @@ export async function consumeQueueMessage(
   try {
     claimed = await claimJob(env.DB, row.work_key, now.toISOString(), leaseUntil);
   } catch (error) {
-    logError("jsda_queue_claim_failed", {
-      work_key: row.work_key,
-      attempt: message.attempts,
-      error: errorDetail(error),
+    logError(env, "jsda_queue_claim_failed", {
+      run_id: row.run_key,
+      job_id: row.work_key,
+      dataset: row.dataset,
+      segment_id: row.segment_id,
+      reason: errorDetail(error),
     });
     message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
     return;
@@ -532,9 +556,11 @@ export async function consumeQueueMessage(
         return;
       }
     } catch (error) {
-      logError("jsda_queue_claim_resolution_failed", {
-        work_key: row.work_key,
-        error: errorDetail(error),
+      logError(env, "jsda_queue_claim_resolution_failed", {
+        run_id: row.run_key,
+        job_id: row.work_key,
+        dataset: row.dataset,
+        reason: errorDetail(error),
       });
     }
     message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
@@ -556,12 +582,14 @@ export async function consumeQueueMessage(
         current.state !== "running" ||
         current.attempt !== claimed.attempt
       ) {
-        logError("jsda_queue_claim_fence_lost", {
-          work_key: claimed.work_key,
-          claimed_attempt: claimed.attempt,
-          current_attempt: current?.attempt ?? null,
-          current_state: current?.state ?? null,
-          error: errorDetail(error),
+        logError(env, "jsda_queue_claim_fence_lost", {
+          run_id: claimed.run_key,
+          job_id: claimed.work_key,
+          dataset: claimed.dataset,
+          segment_id: claimed.segment_id,
+          cursor: claimed.cursor,
+          result: current?.state ?? null,
+          reason: errorDetail(error),
         });
         message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
         return;
@@ -570,11 +598,13 @@ export async function consumeQueueMessage(
       if (outcome === "ack") message.ack();
       else message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
     } catch (persistError) {
-      logError("jsda_queue_failure_evidence_write_failed", {
-        work_key: claimed.work_key,
-        attempt: claimed.attempt,
-        original_error: errorDetail(error),
-        persistence_error: errorDetail(persistError),
+      logError(env, "jsda_queue_failure_evidence_write_failed", {
+        run_id: claimed.run_key,
+        job_id: claimed.work_key,
+        dataset: claimed.dataset,
+        segment_id: claimed.segment_id,
+        cursor: claimed.cursor,
+        reason: errorDetail(persistError),
       });
       // The claim may still be leased because its failure evidence could not be
       // written. Retry only after that lease can be reclaimed.

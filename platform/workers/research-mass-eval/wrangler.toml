@@ -58,6 +58,10 @@ NETS_ONLY = "deny"
 
 [observability]
 enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"
 
 [env.production]
 name = "quant-platform-research-mass-eval"
@@ -82,3 +86,10 @@ READY_DECLARED = "false"
 OPERATIONAL_GO = "false"
 CONTINUOUS_PAPER = "UNARMED"
 NETS_ONLY = "deny"
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.production.version_metadata]
+binding = "CF_VERSION_METADATA"

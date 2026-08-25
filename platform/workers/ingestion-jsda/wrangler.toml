@@ -48,6 +48,10 @@ crons = ["30 1 * * *"]
 
 [observability]
 enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"
 
 [env.production]
 name = "quant-platform-ingestion-jsda"
@@ -83,3 +87,10 @@ USER_AGENT = "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
 [env.production.triggers]
 # Named environments do not inherit top-level triggers.
 crons = ["30 1 * * *"]
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.production.version_metadata]
+binding = "CF_VERSION_METADATA"

@@ -60,6 +60,10 @@ def _load_toml(path: Path) -> dict[str, Any]:
         return tomllib.load(fh)
 
 
+REQUIRED_OBSERVABILITY = {"enabled": True, "head_sampling_rate": 1.0}
+VERSION_METADATA_BINDING = "CF_VERSION_METADATA"
+
+
 def _json_rows(value: Any) -> list[dict[str, Any]]:
     if not value:
         return []
@@ -104,6 +108,8 @@ def _effective_surface(
     package = json.loads((WORKER_ROOT / worker / "package.json").read_text(encoding="utf-8"))
     dev_dependencies = package.get("devDependencies") or {}
     pinned_toolchain = {name: dev_dependencies.get(name) for name in TOOLCHAIN}
+    observability = section.get("observability")
+    version_metadata = section.get("version_metadata")
 
     return {
         "config": str(config_path.relative_to(ROOT)),
@@ -128,6 +134,8 @@ def _effective_surface(
         "vars": dict(sorted((section.get("vars") or {}).items())),
         "secret_names": sorted(secrets),
         "toolchain": pinned_toolchain,
+        "observability": dict(sorted((observability or {}).items())),
+        "version_metadata": dict(sorted((version_metadata or {}).items())),
     }
 
 
@@ -176,6 +184,28 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         for environment, surface in environments.items():
             if surface["preview_urls"]:
                 raise ValueError(f"{worker}/{environment}: preview_urls must be false")
+            observability = surface.get("observability") or {}
+            if observability.get("enabled") is not True:
+                raise ValueError(
+                    f"{worker}/{environment}: observability.enabled must be true"
+                )
+            rate = observability.get("head_sampling_rate")
+            try:
+                sampled = float(rate)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"{worker}/{environment}: observability.head_sampling_rate drifted: {rate!r}"
+                ) from exc
+            if sampled != REQUIRED_OBSERVABILITY["head_sampling_rate"]:
+                raise ValueError(
+                    f"{worker}/{environment}: observability.head_sampling_rate drifted: {rate!r}"
+                )
+            version_binding = (surface.get("version_metadata") or {}).get("binding")
+            if version_binding != VERSION_METADATA_BINDING:
+                raise ValueError(
+                    f"{worker}/{environment}: version_metadata binding "
+                    f"{VERSION_METADATA_BINDING} is required"
+                )
             for package_name, expected in TOOLCHAIN.items():
                 actual = surface["toolchain"].get(package_name)
                 if actual != expected:
