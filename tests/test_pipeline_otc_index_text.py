@@ -72,7 +72,7 @@ def test_pipeline_otc_plan_with_fixture_html_lists_publication_days_not_weekend(
 
 def test_pipeline_persist_passes_index_text_into_plan() -> None:
     src = PIPELINE.read_text(encoding="utf-8")
-    assert "index_text = _index_text_for_plan(policy)" in src
+    assert "index_text = _index_text_for_plan(policy, None)" in src
     assert src.count("index_text=index_text") >= 2
     assert src.count("_plan_required_segments(") >= 3
     persist = src.split("def _persist(", 1)[1]

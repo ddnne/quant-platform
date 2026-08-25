@@ -263,6 +263,51 @@ def test_plan_and_queue_and_envelope():
     assert env["queued_general"] + env["queued_fins"] == len(queued)
 
 
+def test_plan_and_queue_passes_index_text_none(monkeypatch):
+    """plan_and_queue spies as planner.plan(index_text=None).
+
+    Fail-closed empty official-index set if OTC were ever included;
+    JSDA is skipped inside BackfillPlanner.plan already. Not a calendar
+    walk and not invented COMPLETE.
+    """
+    captured: dict = {"plan_calls": []}
+    V2_REQUIRED = 8784
+
+    class FakePlanner:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+
+        def plan(self, **kwargs):
+            captured["plan"] = kwargs
+            captured["plan_calls"].append(kwargs)
+            captured["index_text"] = kwargs.get("index_text", "MISSING_KEY")
+            return BackfillPlan(
+                plan_version="test",
+                coverage_policy_version="collection-coverage/v2",
+                contract_digest="sha256:test",
+                cutoff="2008-02-28",
+                created_at="2008-02-28T00:00:00+00:00",
+                jobs=[],
+            )
+
+    monkeypatch.setattr(
+        "ops.range_batch_scheduler.BackfillPlanner", FakePlanner
+    )
+    plan, queued = plan_and_queue(
+        cutoff=date(2008, 2, 28),
+        datasets=["indices_bars_daily_topix"],
+        max_jobs=3,
+    )
+    assert captured["plan_calls"]
+    assert "index_text" in captured["plan"]
+    assert captured["plan"]["index_text"] is None
+    assert captured["index_text"] is None
+    assert captured["plan"]["index_text"] != V2_REQUIRED
+    assert plan.jobs == []
+    assert queued == []
+    assert all(j.state != "COMPLETE" for j in plan.jobs)
+
+
 def test_measure_dispatch_rpm_from_timestamps():
     rows = [
         {

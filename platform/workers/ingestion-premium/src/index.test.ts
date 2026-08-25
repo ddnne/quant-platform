@@ -75,6 +75,75 @@ describe("ingestion-premium export auth", () => {
     expect(JSON.parse(body)).toEqual({ error: "unauthorized" });
     expect(body).not.toContain(EXPORT_TOKEN);
   });
+
+  it("rejects GET/POST /v1/export/changes with unbound DATA_EXPORT_TOKEN and does not prepare D1", async () => {
+    for (const method of ["GET", "POST"] as const) {
+      const inner = stubD1();
+      let prepareCalls = 0;
+      const db = {
+        prepare(sql: string) {
+          prepareCalls += 1;
+          return inner.prepare(sql);
+        },
+      } as unknown as D1Database;
+      const env: ExportEnv = { DB: db, DATA_EXPORT_TOKEN: undefined };
+      const res = await handleExportPaths(
+        new Request("https://ingestion-premium.test/v1/export/changes", {
+          method,
+          headers: { "X-Ingestion-Token": EXPORT_TOKEN },
+        }),
+        env,
+      );
+      expect(res).not.toBeNull();
+      expect(res!.status).toBe(401);
+      const body = await res!.text();
+      expect(JSON.parse(body)).toEqual({ error: "unauthorized" });
+      expect(body).not.toContain(EXPORT_TOKEN);
+      expect(prepareCalls).toBe(0);
+    }
+  });
+
+  it("rejects /v1/export/changes with bound token when after_seq is negative", async () => {
+    const inner = stubD1();
+    const db = {
+      prepare(sql: string) {
+        const stmt = inner.prepare(sql);
+        const wrapped = {
+          bind(...args: unknown[]) {
+            stmt.bind(...args);
+            return wrapped;
+          },
+          first: async () => READY_MIGRATION,
+          all: async () => stmt.all(),
+          run: async () => stmt.run(),
+        };
+        return wrapped;
+      },
+    } as unknown as D1Database;
+    const env: ExportEnv = { DB: db, DATA_EXPORT_TOKEN: EXPORT_TOKEN };
+    const res = await handleExportPaths(
+      new Request("https://ingestion-premium.test/v1/export/changes?after_seq=-1", {
+        headers: { "X-Ingestion-Token": EXPORT_TOKEN },
+      }),
+      env,
+    );
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(400);
+    const body = await res!.text();
+    expect(JSON.parse(body)).toEqual({
+      error: "after_seq must be a non-negative safe integer",
+    });
+    expect(body).not.toContain(EXPORT_TOKEN);
+  });
+
+  it("returns null for unknown /v1/export/nope", async () => {
+    const env: ExportEnv = { DB: stubD1(), DATA_EXPORT_TOKEN: EXPORT_TOKEN };
+    const res = await handleExportPaths(
+      new Request("https://ingestion-premium.test/v1/export/nope"),
+      env,
+    );
+    expect(res).toBeNull();
+  });
 });
 
 describe("ingestion-premium health", () => {
@@ -98,6 +167,37 @@ describe("ingestion-premium health", () => {
     expect(typeof json.datasets).toBe("number");
     expect(json.datasets).toBeGreaterThan(0);
     expect(json.ok).toBe(false);
+  });
+
+  it("rejects POST /health with 405 and does not leak secrets or COMPLETE", async () => {
+    const env = testEnv();
+    const res = await worker.fetch(
+      new Request("https://ingestion-premium.test/health", { method: "POST" }),
+      env,
+    );
+    expect(res.status).toBe(405);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "GET required" });
+    expect(body).not.toContain(EXPORT_TOKEN);
+    expect(body).not.toContain(API_KEY);
+    expect(body).not.toContain(env.INGESTION_RUN_TOKEN);
+    expect(body).not.toContain("COMPLETE");
+    expect(body).not.toMatch(/Coverage COMPLETE/);
+  });
+});
+
+describe("ingestion-premium unknown path", () => {
+  it("returns 404 not found for GET /nope", async () => {
+    const env = testEnv();
+    const res = await worker.fetch(
+      new Request("https://ingestion-premium.test/nope"),
+      env,
+    );
+    expect(res.status).toBe(404);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "not found" });
+    expect(body).not.toContain(EXPORT_TOKEN);
+    expect(body).not.toContain(API_KEY);
   });
 });
 
@@ -373,5 +473,63 @@ describe("ingestion-premium coverage-segment plan", () => {
     const receipts = receiptInserts(d1);
     expect(receipts).toHaveLength(1);
     expect(receipts[0]!.args[5]).toBe(1);
+  });
+});
+
+describe("ingestion-premium POST-only mutating routes", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function guardedEnv() {
+    const inner = stubD1();
+    let prepareCalls = 0;
+    const db = {
+      prepare(sql: string) {
+        prepareCalls += 1;
+        return inner.prepare(sql);
+      },
+    } as unknown as D1Database;
+    return { env: testEnv({ DB: db }), prepareCalls: () => prepareCalls };
+  }
+
+  it("rejects GET /v1/run with matching token as 405 and does not ingest", async () => {
+    let vendorCalls = 0;
+    globalThis.fetch = (async () => {
+      vendorCalls += 1;
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    }) as typeof fetch;
+    const { env, prepareCalls } = guardedEnv();
+    const res = await worker.fetch(
+      new Request("https://ingestion-premium.test/v1/run", {
+        method: "GET",
+        headers: { "X-Ingestion-Token": env.INGESTION_RUN_TOKEN! },
+      }),
+      env,
+    );
+    expect(res.status).toBe(405);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "POST required" });
+    expect(body).not.toContain("COMPLETE");
+    expect(prepareCalls()).toBe(0);
+    expect(vendorCalls).toBe(0);
+  });
+
+  it("rejects GET /v1/admin/rebuild-natural-keys-v2 with matching token as 405 and does not rebuild", async () => {
+    const { env, prepareCalls } = guardedEnv();
+    const res = await worker.fetch(
+      new Request("https://ingestion-premium.test/v1/admin/rebuild-natural-keys-v2", {
+        method: "GET",
+        headers: { "X-Ingestion-Token": env.INGESTION_RUN_TOKEN! },
+      }),
+      env,
+    );
+    expect(res.status).toBe(405);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "POST required" });
+    expect(body).not.toContain("COMPLETE");
+    expect(prepareCalls()).toBe(0);
   });
 });

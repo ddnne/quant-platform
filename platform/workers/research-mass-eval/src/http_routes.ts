@@ -26,7 +26,7 @@ export type MassEvalFetchHandlers = {
   ) => Promise<Record<string, unknown>>;
 };
 
-function parseRequest(body: unknown): { ok: true; value: MassEvalRequest } | { ok: false; error: string } {
+export function parseRequest(body: unknown): { ok: true; value: MassEvalRequest } | { ok: false; error: string } {
   if (!isObject(body)) return { ok: false, error: "body must be JSON object" };
 
   const jobId = String(body.job_id ?? "").trim();

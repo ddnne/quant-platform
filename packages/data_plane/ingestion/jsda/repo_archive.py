@@ -309,10 +309,12 @@ def run_tokyo_repo_backfill(
             report = TokyoRepoBackfillReport(
                 run_id, 0, 1, 0, 0, 0, 0, required
             )
+            # Tokyo repo is not official-archive-index. Explicit None is omit-honesty.
             refresh_coverage_ledger(
                 store._conn, store.path,  # noqa: SLF001
                 datasets=[TOKYO_REPO_DATASET],
                 today=required.segment_end,
+                index_text=None,
             )
             _finish_run(store, report)
             return report
@@ -437,10 +439,12 @@ def run_tokyo_repo_backfill(
                     parsed_rows, structured_rows, required
                 )
 
+        # Tokyo repo is not official-archive-index. Explicit None is omit-honesty.
         refresh_coverage_ledger(
             store._conn, store.path,  # noqa: SLF001
             datasets=[TOKYO_REPO_DATASET],
             today=required.segment_end,
+            index_text=None,
         )
         _finish_run(store, report)
         return report

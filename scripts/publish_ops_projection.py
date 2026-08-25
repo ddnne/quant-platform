@@ -39,6 +39,7 @@ from datetime import datetime, timezone
 
 ROOT = ensure_repo_root()
 
+from ingestion.jsda.official_index import read_local_index_text  # noqa: E402
 from scripts.export_ops_projection import render_projection_sql  # noqa: E402
 
 def _now() -> str:
@@ -47,15 +48,7 @@ def _now() -> str:
 
 def load_otc_index_text(path: Path | None) -> str | None:
     """Read official OTC index HTML. Missing path or file is None, not calendar."""
-    if path is None:
-        return None
-    try:
-        text = Path(path).read_text(encoding="utf-8")
-    except OSError:
-        return None
-    if not str(text).strip():
-        return None
-    return text
+    return read_local_index_text(path, missing_ok=True)
 
 
 def count_local_complete(db_path: Path) -> int:

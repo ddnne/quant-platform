@@ -597,6 +597,9 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
+      if (request.method !== "GET") {
+        return Response.json({ error: "GET required" }, { status: 405 });
+      }
       return Response.json({
         ok: true,
         worker: "ingestion-jsda",
@@ -607,6 +610,9 @@ export default {
       });
     }
     if (url.pathname === "/v1/run") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "POST required" }, { status: 405 });
+      }
       if (!(await authorized(request, env.INGESTION_RUN_TOKEN))) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   authorized,
+  freezePayload,
   putChildrenThenManifest,
   putImmutableJson,
   putJsonCreateOnly,
@@ -353,15 +354,6 @@ describe("index.ts write order pin", () => {
 });
 
 describe("http_routes.ts fetch dispatch", () => {
-  it("denies mass_screen and generation with 403", () => {
-    const here = dirname(fileURLToPath(import.meta.url));
-    const src = readFileSync(join(here, "http_routes.ts"), "utf8");
-    expect(src).toContain('capability: "mass_screen"');
-    expect(src).toContain('capability: "generation"');
-    expect(src).toContain("403");
-    expect(src).toContain("authorized");
-  });
-
   it("exposes POST /v1/children-then-manifest with X-Mass-Eval-Token", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(join(here, "http_routes.ts"), "utf8");
@@ -379,6 +371,148 @@ const noopHandlers = {
     throw new Error("daily-path must not run");
   },
 };
+
+function denyByDefaultEnv(bucket: R2Bucket): Env {
+  return {
+    STRUCTURED_BUCKET: bucket,
+    MASS_EVAL_TOKEN: "secret",
+    MASS_RESEARCH: "NO-GO",
+    PHASE7: "OFF",
+    READY_DECLARED: "false",
+    OPERATIONAL_GO: "false",
+    CONTINUOUS_PAPER: "UNARMED",
+  } as Env;
+}
+
+type CapabilityDenied = {
+  ok: boolean;
+  error: string;
+  capability: string;
+  go: boolean;
+  not_a_pass: boolean;
+};
+
+describe("POST /v1/propose-thesis", () => {
+  it("returns 403 generation under deny-by-default with matching token", async () => {
+    const mem = new MemR2();
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/propose-thesis", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Mass-Eval-Token": "secret",
+        },
+        body: "{}",
+      }),
+      denyByDefaultEnv(mem.asBucket()),
+      noopHandlers,
+    );
+    expect(res.status).toBe(403);
+    const payload = (await res.json()) as CapabilityDenied;
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toBe("capability_missing");
+    expect(payload.capability).toBe("generation");
+    expect(payload.go).toBe(false);
+    expect(payload.not_a_pass).toBe(true);
+    expect(mem.putOrder).toEqual([]);
+  });
+
+  it("rejects GET with 405", async () => {
+    const mem = new MemR2();
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/propose-thesis", { method: "GET" }),
+      denyByDefaultEnv(mem.asBucket()),
+      noopHandlers,
+    );
+    expect(res.status).toBe(405);
+  });
+
+  it("returns 401 when token header is missing and MASS_EVAL_TOKEN is bound", async () => {
+    const mem = new MemR2();
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/propose-thesis", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+      denyByDefaultEnv(mem.asBucket()),
+      noopHandlers,
+    );
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("POST /v1/mass-eval capability gate", () => {
+  it("returns 403 mass_screen under deny-by-default with matching token", async () => {
+    const mem = new MemR2();
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/mass-eval", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Mass-Eval-Token": "secret",
+        },
+        body: "{}",
+      }),
+      denyByDefaultEnv(mem.asBucket()),
+      noopHandlers,
+    );
+    expect(res.status).toBe(403);
+    const payload = (await res.json()) as CapabilityDenied;
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toBe("capability_missing");
+    expect(payload.capability).toBe("mass_screen");
+    expect(payload.go).toBe(false);
+    expect(payload.not_a_pass).toBe(true);
+    expect(mem.putOrder).toEqual([]);
+  });
+
+  it("rejects GET with 405", async () => {
+    const mem = new MemR2();
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/mass-eval", { method: "GET" }),
+      denyByDefaultEnv(mem.asBucket()),
+      noopHandlers,
+    );
+    expect(res.status).toBe(405);
+  });
+});
+
+describe("POST /v1/daily-path capability gate", () => {
+  it("returns 403 mass_screen under deny-by-default with matching token", async () => {
+    const mem = new MemR2();
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/daily-path", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Mass-Eval-Token": "secret",
+        },
+        body: "{}",
+      }),
+      denyByDefaultEnv(mem.asBucket()),
+      noopHandlers,
+    );
+    expect(res.status).toBe(403);
+    const payload = (await res.json()) as CapabilityDenied;
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toBe("capability_missing");
+    expect(payload.capability).toBe("mass_screen");
+    expect(payload.go).toBe(false);
+    expect(payload.not_a_pass).toBe(true);
+    expect(mem.putOrder).toEqual([]);
+  });
+
+  it("rejects GET with 405", async () => {
+    const mem = new MemR2();
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/daily-path", { method: "GET" }),
+      denyByDefaultEnv(mem.asBucket()),
+      noopHandlers,
+    );
+    expect(res.status).toBe(405);
+  });
+});
 
 describe("POST /v1/children-then-manifest", () => {
   it("denies when token missing", async () => {
@@ -401,6 +535,18 @@ describe("POST /v1/children-then-manifest", () => {
     );
     expect(res.status).toBe(401);
     expect(mem.putOrder).toEqual([]);
+  });
+
+  it("rejects GET with 405", async () => {
+    const mem = new MemR2();
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/children-then-manifest", {
+        method: "GET",
+      }),
+      denyByDefaultEnv(mem.asBucket()),
+      noopHandlers,
+    );
+    expect(res.status).toBe(405);
   });
 
   it("denies when token unbound", async () => {
@@ -463,5 +609,27 @@ describe("POST /v1/children-then-manifest", () => {
     expect(payload.go).toBe(false);
     expect(payload.manifest.created).toBe(true);
     expect(mem.putOrder).toEqual(["job/child.json", "job/manifest.json"]);
+  });
+});
+
+describe("freezePayload deny-by-default", () => {
+  const expected = {
+    mass_research: "NO-GO",
+    phase7: "OFF",
+    ready_declared: false,
+    operational_go: false,
+    continuous_paper: "UNARMED",
+    frozen_defaults_retuned: false,
+    connected_to_ready: false,
+    connected_to_mass: false,
+  };
+
+  it("returns frozen defaults for an empty env", () => {
+    expect(freezePayload({} as Env)).toEqual(expected);
+  });
+
+  it("returns frozen defaults for deny-by-default env", () => {
+    const mem = new MemR2();
+    expect(freezePayload(denyByDefaultEnv(mem.asBucket()))).toEqual(expected);
   });
 });

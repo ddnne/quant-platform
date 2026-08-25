@@ -38,4 +38,14 @@ describe("jobCandidateGrade", () => {
       jobCandidateGrade({ n_expected: 2, n_cells: 2, n_complete: 2 }),
     ).toBe(true);
   });
+
+  it("true is cell-complete, not product GO", () => {
+    const result = jobCandidateGrade({
+      n_expected: 2,
+      n_cells: 2,
+      n_complete: 2,
+    });
+    expect(result).toBe(true); // boolean only; not mass_research GO
+    expect(typeof result === "boolean").toBe(true); // no go field
+  });
 });

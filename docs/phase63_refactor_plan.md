@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `b5f6f2de`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `ad49ed96`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,13 +364,13 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD b5f6f2de)
+## 10. Current remaining extracts vs HOLD (HEAD ad49ed96)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
 section now. Size is not a split key. Live math is not waste.
 
-Measured at `b5f6f2de`: tracked paths **827**; catalog YAML
+Measured at `b1605c36`: tracked paths **838**; catalog YAML
 (`specs/research_logics/*.yaml`) **0**; remaining tracked YAML **1**
 (`specs/research_themes.yaml` — themes, not catalog logics); compiled
 n=**2254** (`migration.jsonl` 2254 lines);
@@ -382,9 +382,11 @@ Mass / READY / Phase 7: **NO-GO / not declared / OFF**.
 
 LOC via `wc -l` on named files at this HEAD (do not copy stale §2
 numbers). `daily_path.ts` is **1682** (was 1677 in §2).
-`ingestion-premium/src/index.ts` is **950** after
-`collection_receipts.ts`. `coverage_ledger.py` is **1454**.
-`snapshot.py` is **912**.
+`eval.ts` is **1806**. `eval_orchestrate.ts` is **235**.
+`persist_records.ts` is **362**. `ingestion-premium/src/index.ts` is **678**.
+`r2_io.py` is **431**. `cost_models.py` is **2210**.
+`coverage_ledger.py` is **1454**. `catalog_ids.ts` is **2327** GENERATED.
+`coverage.py` is **1627**. `snapshot.py` is **912**.
 
 ### 10.1 Waste already closed (do not re-open)
 
@@ -411,6 +413,9 @@ numbers). `daily_path.ts` is **1682** (was 1677 in §2).
 | Premium Worker units vs Python greps | **DONE**: catalog identity (`23a5cbb9`; `catalog.test.ts`); availability policy (`8fc13e24`; `availability.test.ts`); identity JST clocks (`5ac9cce1`; `identity.test.ts`); raw-page retain (`0383311f`; `index.test.ts`); coverage-segment plan (`0fee1b1e`; `index.test.ts` / `collection_receipts.test.ts`); NK rebuild (`8fc9fa30`; `natural_key_migration.test.ts`). Replaced Python greps. |
 | Premium write-path ids from catalog | **DONE** (`4f111320`): `PREMIUM_CORE_DATASET_IDS` from catalog JSON (`write_path_config.ts` / `write_path_config.test.ts`), not a second hardcoded list. |
 | Premium RateLimiter / R2 writer / export unbound tests | **DONE**: RateLimiter acquire and 429 cooldown (`5b4db591`; `rate_limit.test.ts`); R2 structured writer mock bucket (`0194c64a`; `r2_structured_writer.test.ts`); export unbound `DATA_EXPORT_TOKEN` 401 (`cfbaa58e`; `index.test.ts`). |
+| C12 addon guard ids from catalog | **DONE** (`de8f87bf`): `_ADDON_IDS = frozenset(list_datasets("addon"))`. Second id list closed. C12 still fails on addon leak; addons stay out of `PREMIUM_CORE_DATASETS`. Do not re-add a handwritten addon list. |
+| Premium ops fail-closed Worker units | **DONE**: cold-archive token/args (`9956ab51`; `ops_cold_archive.test.ts`); changelog prune unbound token 401 (`9b0582d4`; `ops_prune_changelog.test.ts`); parquet-manifest unbound token 401 (`359b2566`; `ops_parquet_manifest.test.ts`); artifacts-plan token fail-closed (`329f3959`; `ops_artifacts_plan.test.ts`). |
+| Premium master SCD2 write mock R2 unit | **DONE** (`ee167188`; `master_scd2/write.test.ts`): `payloadToMasterRecord` / `writeMasterScd2` against in-memory mock bucket. |
 
 File-count drop after YAML deletion is not a quality win without the
 digest pin (already pinned). Do not re-run digest lock.
@@ -432,7 +437,8 @@ Deleting or unifying them to shrink the tree is a rewrite.
 | `test_baseline_catalog.py` rejected S1–S5 | W65 rejected catalog. Mass/READY stay false. **Never delete** (named invariant). |
 | Combo AND +N freeze n=2254 | `CATALOG_AND_PLUS_N_STOPPED`. Expanding n is not a product. Compact family+template+parameter matrix is **optional** and **not done**; freeze n=2254 is **HOLD**. |
 | `eval.ts` family math (1806) | Orchestration already extracted. Do not family-slice formulas. |
-| `ingest_premium/coverage.py` C-checks (1626) | KEEP as evidence measurement. Do not per-check microfiles. |
+| `ingest_premium/coverage.py` C-checks (1627) | KEEP as evidence measurement. Do not per-check microfiles. |
+| `persist_records.ts` live upsert (362) | KEEP fetch/upsert together. Do not fake-split live upsert. Empty-row unit is agent-capable, not HOLD, and is **untested** at this SHA. |
 
 ### 10.3 Real remaining mixed authority (one authority per later commit)
 
@@ -446,12 +452,14 @@ CLI-put fence (`0b81eedb`), and job-artifact Worker put (`d6567268`;
 **DONE**. MCP presentation echo and JSDA refresh inventory replay stay
 **DONE**. Remaining mixed: `reconstitution_evidence` still `default_r2_put`
 (dry_run only); leftover occupancy **HOLD** — do not schedule leftover
-occupancy extract. Compact catalog is optional HOLD, not a required
-extract. `verify_all` vs `verify_ci` stay **HOLD** split.
-`GATEWAY_TOKEN` service-binding residual stays **HOLD** (P632B-03). Do
-not YAML +N. Do not declare Phase 7 GO. Python Evaluation IR codec
-emit **DONE** (`c9764ff4`; `evaluation_ir_codec.generated.py`). Python
-TypedDict generation **DONE** (`e20be4d9`; `evaluation_ir_types.generated.py`).
+occupancy extract. `UNIQUE22_PARK_REASONS`, `cost_models.py` live math,
+and factory `generation_enabled=False` stay **HOLD**. `persist_records.ts`
+live upsert is **HOLD** (do not fake-split). Compact catalog is optional
+HOLD, not a required extract. `verify_all` vs `verify_ci` stay **HOLD**
+split. `GATEWAY_TOKEN` service-binding residual stays **HOLD** (P632B-03).
+Do not YAML +N. Do not declare Phase 7 GO. Python Evaluation IR codec emit **DONE**
+(`c9764ff4`; `evaluation_ir_codec.generated.py`). Python TypedDict
+generation **DONE** (`e20be4d9`; `evaluation_ir_types.generated.py`).
 Codec emitters extract **DONE** (`54c1f472`; `evaluation_ir_emit.py`). Premium
 fetch/retry extract **DONE** (`a20d14d4`; `fetch_jq.ts`). BackfillPlanner
 `index_text` **DONE** (`2cbd894d`). Shared official-index reader **DONE**
@@ -460,7 +468,19 @@ units replaced catalog/availability/identity/raw-page/coverage-segment/NK
 Python greps **DONE** (`23a5cbb9`; `8fc13e24`; `5ac9cce1`; `0383311f`;
 `0fee1b1e`; `8fc9fa30`). Premium write-path ids from catalog **DONE**
 (`4f111320`). RateLimiter / R2 writer / export unbound Worker tests
-**DONE** (`5b4db591`; `0194c64a`; `cfbaa58e`).
+**DONE** (`5b4db591`; `0194c64a`; `cfbaa58e`). C12 addon guard ids from
+catalog **DONE** (`de8f87bf`). Premium ops cold-archive / prune_changelog /
+parquet_manifest / artifacts_plan fail-closed Worker units **DONE**
+(`9956ab51`; `9b0582d4`; `359b2566`; `329f3959`). Master SCD2 write mock
+R2 unit **DONE** (`ee167188`). After `63afd000`: persist empty-row,
+metrics, eval_orchestrate, panels defaultPeriods + missing R2/D1,
+propose-thesis HTTP 403 + window_tweak, ai_gateway unbound, parseRequest
+export, GET 405 / freezePayload /health / nets_only HTTP, json no-store,
+export D1/changes arg 400s, projection shared OTC reader, snapshot
+`index_text=None` — **LANDED**. Remaining HOLD: leftover occupancy,
+unique22, GATEWAY_TOKEN P632B-03, persist live upsert, compact catalog,
+`verify_all` vs `verify_ci` split. Do not schedule leftover occupancy
+extract. Do not YAML +N. Do not declare Phase 7 GO.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
@@ -498,6 +518,8 @@ family-slice remaining façade handlers.
 ✗ Merge verify_all.sh into verify_ci.sh (or the reverse)
 ✗ Treat git worktrees or historical review docs as code waste
 ✗ Treat compiled n=2254 expanded rows as a compact-catalog substitute
+✗ Fake-split persist_records live upsert
+✗ Claim mass-eval eval_orchestrate/metrics/ai_gateway_client/panels/propose-thesis HTTP tests or persist_records empty-row unit landed at b1605c36
 ```
 
 Success for a later extract commit: one authority moved, G0 green,
