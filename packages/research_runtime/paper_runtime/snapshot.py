@@ -102,7 +102,12 @@ class ReadySnapshot:
 
 
 def _connect_readonly(path: Path) -> sqlite3.Connection:
-    uri = "file:" + quote(str(path.resolve())) + "?mode=ro"
+    # Published snapshots are content-addressed immutable artifacts.  SQLite's
+    # ordinary read-only mode may still create ``-wal``/``-shm`` sidecars for
+    # a database whose header is in WAL mode, mutating an authority-owned
+    # publication directory.  ``immutable=1`` makes the no-write contract
+    # explicit and is safe here because callers verify the artifact digest.
+    uri = "file:" + quote(str(path.resolve())) + "?mode=ro&immutable=1"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     return conn

@@ -86,6 +86,27 @@ def test_snapshot_is_stable_for_unchanged_fixture_without_control_tables(tmp_pat
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", first)
 
 
+def test_snapshot_read_does_not_create_wal_or_shared_memory_sidecars(tmp_path):
+    db = tmp_path / "wal-fixture.sqlite"
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        conn.execute(
+            "CREATE TABLE facts (id INTEGER PRIMARY KEY, ingested_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO facts VALUES (1, '2025-04-01T15:30:00+09:00')"
+        )
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    (tmp_path / "wal-fixture.sqlite-wal").unlink(missing_ok=True)
+    (tmp_path / "wal-fixture.sqlite-shm").unlink(missing_ok=True)
+    data_snapshot_id(db)
+
+    assert not (tmp_path / "wal-fixture.sqlite-wal").exists()
+    assert not (tmp_path / "wal-fixture.sqlite-shm").exists()
+
+
 def test_fallback_snapshot_changes_when_fact_state_changes(tmp_path):
     db = tmp_path / "fixture.sqlite"
     _create_fallback_db(db)
