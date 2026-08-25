@@ -14,15 +14,22 @@ local-only (XLS/XLSX via xlrd/openpyxl; polite scraping).
   daily stable `discover_root` jobs.
 - Root discovery persists its frontier, then creates `discover_year` and
   `fetch_file` children. Fetch identity is a three-part contract: stable
-  `SourceObject` URL, run/freshness `Observation`, and content-addressed
-  `Artifact`. Dated archive URLs keep one observation; rolling current-year
-  URLs are re-observed per governed run. Each delivery advances at most 25
-  children and enqueues a continuation, so the archive converges without a
-  latest-year or file-count cap.
-- D1 is authoritative for job, source-object, observation, and artifact
-  state. A duplicate cron or Queue delivery cannot reacquire a completed
-  observation, and a completed rolling observation does not permanently
-  complete its URL.
+  `SourceObject` URL, D1-owned monotonic `Observation` sequence, and
+  content-addressed `Artifact` digest with a separate R2 location join.
+  Dated archive URLs keep one observation; rolling current-year URLs are
+  re-observed per governed run. `current_*` on a SourceObject advances only
+  by compare-and-set when the candidate sequence is strictly newer.
+- Each delivery advances at most 25 children and enqueues a continuation,
+  so the archive converges without a latest-year or file-count cap.
+  Exhausting a discovery frontier is `waiting_children`, not terminal
+  success. The parent and `jsda_run_closures` row become completed only
+  after every governed descendant is durably successful; a rejected
+  descendant fails the run. Cron re-enqueue repairs an incomplete ancestor
+  aggregate instead of skipping it.
+- D1 is authoritative for job, source-object, observation, artifact,
+  location, and run-closure state. A duplicate cron or Queue delivery cannot
+  reacquire a completed observation, and a completed rolling observation
+  does not permanently complete its URL.
 - Raw artifacts and Queue audit receipts are create-only, content-addressed R2
   objects. A delivery is acknowledged only after its audit receipt and D1/run
   evidence are durable.

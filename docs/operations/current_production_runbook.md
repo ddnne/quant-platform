@@ -107,9 +107,14 @@ curl -i "$QUANT_OPS_MCP_URL/mcp" \
 ## 5. JSDA rolling locators
 
 Current-year / current-file JSDA URLs are re-observed per governed run. Dated
-archive URLs stay one observation. Artifacts are content-addressed. Cron roots
-are daily-stable. Queue redelivery of a completed observation is idempotent and
-does not permanently complete a rolling URL.
+archive URLs stay one observation. Each observation gets a D1-owned monotonic
+sequence; `current_*` never regresses to an older completion. Artifacts are
+content-addressed and may be observed from more than one SourceObject.
+Discovery PASS is run-closure, not root-job completion: queued, running, or
+transient descendants keep the run nonterminal; a rejected descendant is never
+PASS. Cron roots are daily-stable. Queue redelivery of a completed observation
+is idempotent, repairs ancestor aggregates, and does not permanently complete a
+rolling URL.
 
 ```bash
 curl -fsS -X POST \

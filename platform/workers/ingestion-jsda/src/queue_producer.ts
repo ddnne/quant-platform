@@ -1,5 +1,12 @@
 import type { JsdaWorkerEnv } from "./env";
-import { markJobsQueued, registerJobs } from "./job_store";
+import {
+  loadJob,
+  loadPendingRunJobs,
+  markJobsQueued,
+  recomputeClosureAggregates,
+  registerJobs,
+  type JobRow,
+} from "./job_store";
 import {
   DATASET_IDS,
   JSDA_QUEUE_JOB_VERSION,
@@ -45,14 +52,36 @@ export async function enqueueRegisteredJobs(
   const eligible = rows
     .filter((row) => row.state === "pending" || row.state === "failed_transient")
     .map(persistedMessage);
-  if (eligible.length === 0) return [];
-  await env.JSDA_QUEUE.sendBatch(eligible.map(queueMessage));
-  await markJobsQueued(
-    env.DB,
-    eligible.map((job) => job.work_key),
-    new Date().toISOString(),
-  );
+  if (eligible.length > 0) {
+    await env.JSDA_QUEUE.sendBatch(eligible.map(queueMessage));
+    await markJobsQueued(
+      env.DB,
+      eligible.map((job) => job.work_key),
+      new Date().toISOString(),
+    );
+  }
+  await repairIncompleteRunAggregates(env, rows);
   return eligible;
+}
+
+async function repairIncompleteRunAggregates(
+  env: JsdaWorkerEnv,
+  rows: readonly JobRow[],
+): Promise<void> {
+  const now = new Date().toISOString();
+  const roots = rows.filter((row) => row.job_type === "discover_root");
+  for (const root of roots) {
+    const current = (await loadJob(env.DB, root.work_key)) ?? root;
+    await recomputeClosureAggregates(env.DB, current, now);
+    const pending = await loadPendingRunJobs(env.DB, current.run_key);
+    if (pending.length === 0) continue;
+    await env.JSDA_QUEUE.sendBatch(pending.map((row) => queueMessage(persistedMessage(row))));
+    await markJobsQueued(
+      env.DB,
+      pending.map((row) => row.work_key),
+      now,
+    );
+  }
 }
 
 export async function enqueueRoots(

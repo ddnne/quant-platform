@@ -15,6 +15,7 @@ import {
   claimJob,
   completeJob,
   loadJob,
+  loadRunClosure,
   registerJob,
   registerJobs,
 } from "../src/job_store";
@@ -22,12 +23,14 @@ import {
   continuationJob,
   descriptorForFile,
   descriptorForYear,
+  JSDA_QUEUE_JOB_VERSION,
   makeChildJob,
   makeRootJob,
   sourceObjectId,
   type ChildDescriptor,
   type JsdaQueueJob,
 } from "../src/queue_contract";
+import { enqueueRoots } from "../src/queue_producer";
 import { putQueueAuditReceipt } from "../src/raw_store";
 import { sha256Hex } from "../src/sha256";
 
@@ -258,7 +261,7 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
     ]);
   });
 
-  it("advances a 30-child frontier in bounded continuations and completes", async () => {
+  it("advances a 30-child frontier in bounded continuations then waits for descendants", async () => {
     const root = await makeRootJob(
       "jsda_otc_bond_reference_prices",
       "cron",
@@ -299,10 +302,23 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
     const secondBody: JsdaQueueJob = continuationJob(root, 25, 1);
     const second = await deliver(secondBody, "frontier-second");
     expect(second.explicitAcks).toEqual(["frontier-second"]);
-    const completed = await loadJob(runtimeEnv.DB, root.work_key);
-    expect(completed).toMatchObject({ state: "completed", cursor: 30 });
-    expect(completed?.audit_receipt_key).not.toBeNull();
-    expect(await runtimeEnv.RAW_BUCKET.head(completed?.audit_receipt_key ?? "missing")).not.toBeNull();
+    const waiting = await loadJob(runtimeEnv.DB, root.work_key);
+    expect(waiting).toMatchObject({ state: "waiting_children", cursor: 30 });
+    expect(waiting?.audit_receipt_key).not.toBeNull();
+    expect(await runtimeEnv.RAW_BUCKET.head(waiting?.audit_receipt_key ?? "missing")).not.toBeNull();
+    const runClosure = await loadRunClosure(runtimeEnv.DB, root.run_key);
+    expect(runClosure).toMatchObject({
+      closure_state: "waiting_children",
+      frontier_exhausted: 1,
+      descendant_total: 30,
+      descendant_nonterminal: 30,
+    });
+    const runLog = await runtimeEnv.DB.prepare(
+      `SELECT status FROM ingestion_run_log WHERE instr(detail, ?) > 0 ORDER BY id DESC LIMIT 1`,
+    )
+      .bind(root.work_key)
+      .first<{ status: string }>();
+    expect(runLog?.status).toBe("partial");
     const finalChildCount = await runtimeEnv.DB.prepare(
       "SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2 WHERE parent_work_key=?",
     )
@@ -436,34 +452,36 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       "2026-08-25T03:00:00.000Z",
     );
     await registerJob(runtimeEnv.DB, root);
+    const child = await makeChildJob(root, await descriptorForFile(ROLLING_URL));
+    await registerJobs(runtimeEnv.DB, [child]);
     const first = await claimJob(
       runtimeEnv.DB,
-      root.work_key,
+      child.work_key,
       "2026-08-25T03:00:01.000Z",
       "2026-08-25T03:00:02.000Z",
     );
     expect(first?.attempt).toBe(1);
     const second = await claimJob(
       runtimeEnv.DB,
-      root.work_key,
+      child.work_key,
       "2026-08-25T03:00:03.000Z",
       "2026-08-25T03:15:03.000Z",
     );
     expect(second?.attempt).toBe(2);
     const audit = await putQueueAuditReceipt(runtimeEnv.RAW_BUCKET, {
       event: "completed",
-      work_key: root.work_key,
-      run_key: root.run_key,
-      dataset: root.dataset,
-      job_type: root.job_type,
-      segment_id: root.segment_id,
-      target_url: root.target_url,
-      parent_work_key: null,
-      contract_digest: root.contract_digest,
+      work_key: child.work_key,
+      run_key: child.run_key,
+      dataset: child.dataset,
+      job_type: child.job_type,
+      segment_id: child.segment_id,
+      target_url: child.target_url,
+      parent_work_key: child.parent_work_key,
+      contract_digest: child.contract_digest,
       attempt: 1,
       cursor: 0,
       frontier_size: 0,
-      raw_key: "raw/jsda/stale/index.html",
+      raw_key: "raw/jsda/stale/file.xls",
       content_digest: "5".repeat(64),
       reason_code: null,
       detail: "stale claimant must not finalize",
@@ -472,20 +490,20 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
     await expect(
       completeJob(
         runtimeEnv.DB,
-        { ...first!, raw_key: "raw/jsda/stale/index.html", content_digest: "5".repeat(64) },
+        { ...first!, raw_key: "raw/jsda/stale/file.xls", content_digest: "5".repeat(64) },
         0,
         audit,
         "2026-08-25T03:00:04.000Z",
       ),
     ).rejects.toThrow("lost job claim");
-    expect(await loadJob(runtimeEnv.DB, root.work_key)).toMatchObject({
+    expect(await loadJob(runtimeEnv.DB, child.work_key)).toMatchObject({
       state: "running",
       attempt: 2,
     });
     const events = await runtimeEnv.DB.prepare(
       "SELECT COUNT(*) AS n FROM jsda_acquisition_events_v2 WHERE work_key=?",
     )
-      .bind(root.work_key)
+      .bind(child.work_key)
       .first<{ n: number }>();
     expect(events?.n).toBe(0);
   });
@@ -543,8 +561,9 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
     expect(digestByKey.get(workKeys[1])).toBe(digestB);
     expect(digestByKey.get(workKeys[2])).toBe(digestB);
     const artifacts = await runtimeEnv.DB.prepare(
-      `SELECT content_digest, raw_key
-         FROM jsda_artifacts WHERE source_object_id=?`,
+      `SELECT DISTINCT o.content_digest, o.raw_key
+         FROM jsda_observations o
+        WHERE o.source_object_id=? AND o.content_digest IS NOT NULL`,
     )
       .bind(objectId)
       .all<{ content_digest: string; raw_key: string }>();
@@ -552,6 +571,13 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       new Set([digestA, digestB]),
     );
     expect(new Set(artifacts.results.map((row) => row.raw_key)).size).toBe(2);
+    const digestRows = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM jsda_artifacts
+        WHERE content_digest IN (?, ?)`,
+    )
+      .bind(digestA, digestB)
+      .first<{ n: number }>();
+    expect(digestRows?.n).toBe(2);
     expect(
       await runtimeEnv.RAW_BUCKET.head(artifacts.results[0]?.raw_key ?? "missing"),
     ).not.toBeNull();
@@ -559,13 +585,18 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       await runtimeEnv.RAW_BUCKET.head(artifacts.results[1]?.raw_key ?? "missing"),
     ).not.toBeNull();
     const source = await runtimeEnv.DB.prepare(
-      `SELECT current_digest, current_observation_key
+      `SELECT current_digest, current_observation_key, current_observation_seq
          FROM jsda_source_objects WHERE source_object_id=?`,
     )
       .bind(objectId)
-      .first<{ current_digest: string; current_observation_key: string }>();
+      .first<{
+        current_digest: string;
+        current_observation_key: string;
+        current_observation_seq: number;
+      }>();
     expect(source?.current_digest).toBe(digestB);
     expect(source?.current_observation_key).toBe(workKeys[2]);
+    expect(source?.current_observation_seq).toBe(3);
   });
 
   it("acks rolling redelivery without a second observation or artifact", async () => {
@@ -592,7 +623,10 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
         .bind(objectId)
         .first<{ n: number }>();
       const artifacts = await runtimeEnv.DB.prepare(
-        "SELECT COUNT(*) AS n FROM jsda_artifacts WHERE source_object_id=?",
+        `SELECT COUNT(*) AS n FROM jsda_artifacts
+          WHERE content_digest IN (
+            SELECT content_digest FROM jsda_observations WHERE source_object_id=?
+          )`,
       )
         .bind(objectId)
         .first<{ n: number }>();
@@ -692,5 +726,531 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       .first<{ n: number }>();
     expect(archiveObs?.n).toBe(1);
     expect(rollingObs?.n).toBe(2);
+  });
+
+  it("keeps current on B when A is registered first but completes after B", async () => {
+    const bytesA = "delayed-older-A";
+    const bytesB = "newer-winner-B";
+    const digestA = await sha256Hex(new TextEncoder().encode(bytesA));
+    const digestB = await sha256Hex(new TextEncoder().encode(bytesB));
+    const rootA = await makeRootJob(
+      "jsda_tokyo_repo_rates",
+      "cron",
+      "2026-08-24T01:30:00.000Z",
+    );
+    const rootB = await makeRootJob(
+      "jsda_tokyo_repo_rates",
+      "cron",
+      "2026-08-25T01:30:00.000Z",
+    );
+    await registerJobs(runtimeEnv.DB, [rootA, rootB]);
+    const childA = await makeChildJob(rootA, await descriptorForFile(ROLLING_URL));
+    const childB = await makeChildJob(rootB, await descriptorForFile(ROLLING_URL));
+    await registerJobs(runtimeEnv.DB, [childA]);
+    await registerJobs(runtimeEnv.DB, [childB]);
+    const restoreB = mockOfficialFetch({ [ROLLING_URL]: bytesB });
+    try {
+      expect((await deliver(childB, "complete-B-first")).explicitAcks).toEqual([
+        "complete-B-first",
+      ]);
+    } finally {
+      restoreB();
+    }
+    const restoreA = mockOfficialFetch({ [ROLLING_URL]: bytesA });
+    try {
+      expect((await deliver(childA, "complete-A-late")).explicitAcks).toEqual([
+        "complete-A-late",
+      ]);
+    } finally {
+      restoreA();
+    }
+    const objectId = await sourceObjectId("jsda_tokyo_repo_rates", ROLLING_URL);
+    const source = await runtimeEnv.DB.prepare(
+      `SELECT current_digest, current_observation_key, current_observation_seq
+         FROM jsda_source_objects WHERE source_object_id=?`,
+    )
+      .bind(objectId)
+      .first<{
+        current_digest: string;
+        current_observation_key: string;
+        current_observation_seq: number;
+      }>();
+    expect(source?.current_digest).toBe(digestB);
+    expect(source?.current_observation_key).toBe(childB.work_key);
+    expect(source?.current_observation_seq).toBe(2);
+    const seq = await runtimeEnv.DB.prepare(
+      `SELECT observation_key, observation_seq, content_digest, state
+         FROM jsda_observations WHERE source_object_id=? ORDER BY observation_seq`,
+    )
+      .bind(objectId)
+      .all<{
+        observation_key: string;
+        observation_seq: number;
+        content_digest: string;
+        state: string;
+      }>();
+    expect(seq.results).toEqual([
+      {
+        observation_key: childA.work_key,
+        observation_seq: 1,
+        content_digest: digestA,
+        state: "completed",
+      },
+      {
+        observation_key: childB.work_key,
+        observation_seq: 2,
+        content_digest: digestB,
+        state: "completed",
+      },
+    ]);
+  });
+
+  it("treats an equal-sequence retry as idempotent and exact", async () => {
+    const body = "equal-retry-bytes";
+    const digest = await sha256Hex(new TextEncoder().encode(body));
+    const restore = mockOfficialFetch({ [ROLLING_URL]: body });
+    try {
+      const root = await makeRootJob(
+        "jsda_tokyo_repo_rates",
+        "cron",
+        "2026-08-25T01:30:00.000Z",
+      );
+      await registerJob(runtimeEnv.DB, root);
+      const child = await makeChildJob(root, await descriptorForFile(ROLLING_URL));
+      await registerJobs(runtimeEnv.DB, [child]);
+      expect((await deliver(child, "equal-first")).explicitAcks).toEqual(["equal-first"]);
+      expect((await deliver(child, "equal-retry")).explicitAcks).toEqual(["equal-retry"]);
+      const objectId = await sourceObjectId("jsda_tokyo_repo_rates", ROLLING_URL);
+      const source = await runtimeEnv.DB.prepare(
+        `SELECT current_digest, current_raw_key, current_observation_key,
+                current_observation_seq
+           FROM jsda_source_objects WHERE source_object_id=?`,
+      )
+        .bind(objectId)
+        .first<{
+          current_digest: string;
+          current_raw_key: string;
+          current_observation_key: string;
+          current_observation_seq: number;
+        }>();
+      const observation = await runtimeEnv.DB.prepare(
+        `SELECT raw_key, content_digest FROM jsda_observations WHERE observation_key=?`,
+      )
+        .bind(child.work_key)
+        .first<{ raw_key: string; content_digest: string }>();
+      expect(source).toMatchObject({
+        current_digest: digest,
+        current_raw_key: observation?.raw_key,
+        current_observation_key: child.work_key,
+        current_observation_seq: 1,
+      });
+      const count = await runtimeEnv.DB.prepare(
+        "SELECT COUNT(*) AS n FROM jsda_observations WHERE source_object_id=?",
+      )
+        .bind(objectId)
+        .first<{ n: number }>();
+      expect(count?.n).toBe(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not let a rejected older observation replace current", async () => {
+    const bytesB = "current-keeper-B";
+    const digestB = await sha256Hex(new TextEncoder().encode(bytesB));
+    const rootA = await makeRootJob(
+      "jsda_tokyo_repo_rates",
+      "cron",
+      "2026-08-24T01:30:00.000Z",
+    );
+    const rootB = await makeRootJob(
+      "jsda_tokyo_repo_rates",
+      "cron",
+      "2026-08-25T01:30:00.000Z",
+    );
+    await registerJobs(runtimeEnv.DB, [rootA, rootB]);
+    const childA = await makeChildJob(rootA, await descriptorForFile(ROLLING_URL));
+    const childB = await makeChildJob(rootB, await descriptorForFile(ROLLING_URL));
+    await registerJobs(runtimeEnv.DB, [childA]);
+    await registerJobs(runtimeEnv.DB, [childB]);
+    const restoreB = mockOfficialFetch({ [ROLLING_URL]: bytesB });
+    try {
+      expect((await deliver(childB, "reject-older-complete-B")).explicitAcks).toEqual([
+        "reject-older-complete-B",
+      ]);
+    } finally {
+      restoreB();
+    }
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response("gone", { status: 410 })) as typeof fetch;
+    try {
+      expect((await deliver(childA, "reject-older-A")).explicitAcks).toEqual([
+        "reject-older-A",
+      ]);
+    } finally {
+      globalThis.fetch = original;
+    }
+    const objectId = await sourceObjectId("jsda_tokyo_repo_rates", ROLLING_URL);
+    const source = await runtimeEnv.DB.prepare(
+      `SELECT current_digest, current_observation_key, current_observation_seq
+         FROM jsda_source_objects WHERE source_object_id=?`,
+    )
+      .bind(objectId)
+      .first<{
+        current_digest: string;
+        current_observation_key: string;
+        current_observation_seq: number;
+      }>();
+    expect(source).toMatchObject({
+      current_digest: digestB,
+      current_observation_key: childB.work_key,
+      current_observation_seq: 2,
+    });
+    expect((await loadJob(runtimeEnv.DB, childA.work_key))?.state).toBe("rejected");
+  });
+
+  it("keeps one digest row for identical bytes observed from two source objects", async () => {
+    const bytes = "shared-content-bytes";
+    const digest = await sha256Hex(new TextEncoder().encode(bytes));
+    const urlA = "https://market.jsda.or.jp/archive/data/otc-20020802.csv";
+    const urlB = "https://market.jsda.or.jp/archive/data/otc-20020805.csv";
+    const restore = mockOfficialFetch({ [urlA]: bytes, [urlB]: bytes });
+    try {
+      const root = await makeRootJob(
+        "jsda_otc_bond_reference_prices",
+        "cron",
+        "2026-08-25T01:30:00.000Z",
+      );
+      await registerJob(runtimeEnv.DB, root);
+      const childA = await makeChildJob(root, await descriptorForFile(urlA));
+      const childB = await makeChildJob(root, await descriptorForFile(urlB));
+      await registerJobs(runtimeEnv.DB, [childA, childB]);
+      expect((await deliver(childA, "shared-a")).explicitAcks).toEqual(["shared-a"]);
+      expect((await deliver(childB, "shared-b")).explicitAcks).toEqual(["shared-b"]);
+      const artifacts = await runtimeEnv.DB.prepare(
+        "SELECT COUNT(*) AS n FROM jsda_artifacts WHERE content_digest=?",
+      )
+        .bind(digest)
+        .first<{ n: number }>();
+      const locations = await runtimeEnv.DB.prepare(
+        "SELECT COUNT(*) AS n FROM jsda_artifact_locations WHERE content_digest=?",
+      )
+        .bind(digest)
+        .first<{ n: number }>();
+      const observations = await runtimeEnv.DB.prepare(
+        `SELECT COUNT(*) AS n FROM jsda_observations
+          WHERE content_digest=? AND state='completed'`,
+      )
+        .bind(digest)
+        .first<{ n: number }>();
+      expect(artifacts?.n).toBe(1);
+      expect(locations?.n).toBe(2);
+      expect(observations?.n).toBe(2);
+      const columns = await runtimeEnv.DB.prepare(
+        "PRAGMA table_info(jsda_artifacts)",
+      ).all<{ name: string }>();
+      expect(columns.results.map((row) => row.name)).toEqual([
+        "content_digest",
+        "first_seen_at",
+      ]);
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("JSDA descendant run closure", () => {
+  async function seedWaitingRoot(fileUrls: string[]) {
+    const root = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-25T01:30:00.000Z",
+    );
+    await registerJob(runtimeEnv.DB, root);
+    const frontier: ChildDescriptor[] = await Promise.all(
+      fileUrls.map((url) => descriptorForFile(url)),
+    );
+    await runtimeEnv.DB.prepare(
+      `UPDATE jsda_acquisition_jobs_v2
+       SET state='queued', frontier_json=?, raw_key=?, content_digest=?
+       WHERE work_key=?`,
+    )
+      .bind(
+        JSON.stringify(frontier),
+        "raw/jsda/test/closure-index.html",
+        "a".repeat(64),
+        root.work_key,
+      )
+      .run();
+    const result = await deliver(root, "seed-waiting-root");
+    expect(result.explicitAcks).toEqual(["seed-waiting-root"]);
+    const waiting = await loadJob(runtimeEnv.DB, root.work_key);
+    expect(waiting?.state).toBe("waiting_children");
+    const children = await runtimeEnv.DB.prepare(
+      `SELECT work_key, target_url FROM jsda_acquisition_jobs_v2
+        WHERE parent_work_key=? ORDER BY target_url`,
+    )
+      .bind(root.work_key)
+      .all<{ work_key: string; target_url: string }>();
+    return { root, children: children.results };
+  }
+
+  async function childJob(workKey: string): Promise<JsdaQueueJob> {
+    const row = await loadJob(runtimeEnv.DB, workKey);
+    if (row === null) throw new Error(`missing child ${workKey}`);
+    return {
+      version: JSDA_QUEUE_JOB_VERSION,
+      work_key: row.work_key,
+      run_key: row.run_key,
+      job_type: row.job_type,
+      dataset: row.dataset,
+      target_url: row.target_url,
+      segment_id: row.segment_id,
+      parent_work_key: row.parent_work_key,
+      cursor: row.cursor,
+      attempt: row.attempt,
+      requested_by: row.requested_by,
+      requested_at: row.requested_at,
+      contract_digest: row.contract_digest,
+    };
+  }
+
+  const FILE_A = "https://market.jsda.or.jp/archive/data/otc-20020802.csv";
+  const FILE_B = "https://market.jsda.or.jp/archive/data/otc-20020805.csv";
+
+  it("keeps a root nonterminal while a child is still queued", async () => {
+    const { root } = await seedWaitingRoot([FILE_A]);
+    const closure = await loadRunClosure(runtimeEnv.DB, root.run_key);
+    expect(closure).toMatchObject({
+      closure_state: "waiting_children",
+      descendant_total: 1,
+      descendant_completed: 0,
+      descendant_nonterminal: 1,
+    });
+    expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("waiting_children");
+  });
+
+  it("keeps a root nonterminal while a child is in transient retry", async () => {
+    const { root, children } = await seedWaitingRoot([FILE_A]);
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(null, { status: 500 })) as typeof fetch;
+    try {
+      const result = await deliver(await childJob(children[0].work_key), "child-500");
+      expect(result.explicitAcks).toEqual([]);
+      expect(result.retryMessages.map((message) => message.msgId)).toEqual(["child-500"]);
+    } finally {
+      globalThis.fetch = original;
+    }
+    expect((await loadJob(runtimeEnv.DB, children[0].work_key))?.state).toBe(
+      "failed_transient",
+    );
+    const closure = await loadRunClosure(runtimeEnv.DB, root.run_key);
+    expect(closure?.closure_state).toBe("waiting_children");
+    expect(closure?.descendant_failed_transient).toBe(1);
+    expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("waiting_children");
+  });
+
+  it("closes the root once after every child succeeds", async () => {
+    const { root, children } = await seedWaitingRoot([FILE_A, FILE_B]);
+    const restore = mockOfficialFetch({
+      [FILE_A]: "child-A-bytes",
+      [FILE_B]: "child-B-bytes",
+    });
+    try {
+      expect(
+        (await deliver(await childJob(children[0].work_key), "child-A")).explicitAcks,
+      ).toEqual(["child-A"]);
+      expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("waiting_children");
+      expect(
+        (await deliver(await childJob(children[1].work_key), "child-B")).explicitAcks,
+      ).toEqual(["child-B"]);
+    } finally {
+      restore();
+    }
+    expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("completed");
+    const closure = await loadRunClosure(runtimeEnv.DB, root.run_key);
+    expect(closure).toMatchObject({
+      closure_state: "completed",
+      descendant_total: 2,
+      descendant_completed: 2,
+      descendant_nonterminal: 0,
+    });
+    const completedEvents = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_events_v2
+        WHERE work_key=? AND result='completed'`,
+    )
+      .bind(root.work_key)
+      .first<{ n: number }>();
+    expect(completedEvents?.n).toBe(1);
+  });
+
+  it("closes the root once when delayed children finish out of order", async () => {
+    const { root, children } = await seedWaitingRoot([FILE_A, FILE_B]);
+    const restore = mockOfficialFetch({
+      [FILE_A]: "late-A",
+      [FILE_B]: "first-B",
+    });
+    try {
+      expect(
+        (await deliver(await childJob(children[1].work_key), "out-of-order-B")).explicitAcks,
+      ).toEqual(["out-of-order-B"]);
+      expect((await loadRunClosure(runtimeEnv.DB, root.run_key))?.closure_state).toBe(
+        "waiting_children",
+      );
+      expect(
+        (await deliver(await childJob(children[0].work_key), "out-of-order-A")).explicitAcks,
+      ).toEqual(["out-of-order-A"]);
+      expect(
+        (await deliver(await childJob(children[1].work_key), "out-of-order-B-retry"))
+          .explicitAcks,
+      ).toEqual(["out-of-order-B-retry"]);
+    } finally {
+      restore();
+    }
+    expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("completed");
+    const completedEvents = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_events_v2
+        WHERE work_key=? AND result='completed'`,
+    )
+      .bind(root.work_key)
+      .first<{ n: number }>();
+    expect(completedEvents?.n).toBe(1);
+  });
+
+  it("propagates a rejected descendant as run failure, never PASS", async () => {
+    const { root, children } = await seedWaitingRoot([FILE_A, FILE_B]);
+    const restore = mockOfficialFetch({ [FILE_A]: "ok-sibling" });
+    try {
+      expect(
+        (await deliver(await childJob(children[0].work_key), "reject-sibling-ok")).explicitAcks,
+      ).toEqual(["reject-sibling-ok"]);
+    } finally {
+      restore();
+    }
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response("gone", { status: 410 })) as typeof fetch;
+    try {
+      expect(
+        (await deliver(await childJob(children[1].work_key), "reject-child")).explicitAcks,
+      ).toEqual(["reject-child"]);
+    } finally {
+      globalThis.fetch = original;
+    }
+    expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("rejected");
+    const closure = await loadRunClosure(runtimeEnv.DB, root.run_key);
+    expect(closure?.closure_state).toBe("partial");
+    expect(closure?.failure_work_key).toBe(children[1].work_key);
+    expect(closure?.failure_reason_code).toBe("descendant_rejected");
+    const passLogs = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM ingestion_run_log
+        WHERE status='pass' AND instr(detail, ?) > 0`,
+    )
+      .bind(`"job_id":"${root.work_key}"`)
+      .first<{ n: number }>();
+    expect(passLogs?.n).toBe(0);
+  });
+
+  it("retries and converges when the D1 ancestor-update fails after the child completed", async () => {
+    const { root, children } = await seedWaitingRoot([FILE_A]);
+    const restore = mockOfficialFetch({ [FILE_A]: "closure-fail-bytes" });
+    try {
+      await runtimeEnv.DB.exec("DROP TABLE jsda_run_closures");
+      const first = await deliver(await childJob(children[0].work_key), "closure-write-fail");
+      expect(first.explicitAcks).toEqual([]);
+      expect(first.retryMessages.map((message) => message.msgId)).toEqual([
+        "closure-write-fail",
+      ]);
+      expect((await loadJob(runtimeEnv.DB, children[0].work_key))?.state).toBe(
+        "completed",
+      );
+      expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("waiting_children");
+      await runtimeEnv.DB.exec(
+        "CREATE TABLE jsda_run_closures (run_key TEXT PRIMARY KEY, root_work_key TEXT NOT NULL, dataset TEXT NOT NULL, closure_state TEXT NOT NULL, frontier_exhausted INTEGER NOT NULL DEFAULT 0, descendant_total INTEGER NOT NULL DEFAULT 0, descendant_completed INTEGER NOT NULL DEFAULT 0, descendant_rejected INTEGER NOT NULL DEFAULT 0, descendant_failed_transient INTEGER NOT NULL DEFAULT 0, descendant_nonterminal INTEGER NOT NULL DEFAULT 0, failure_work_key TEXT, failure_reason_code TEXT, failure_detail TEXT, closed_at TEXT, updated_at TEXT NOT NULL)",
+      );
+      await runtimeEnv.DB.prepare(
+        `INSERT INTO jsda_run_closures
+         (run_key, root_work_key, dataset, closure_state, frontier_exhausted, updated_at)
+         VALUES (?, ?, ?, 'waiting_children', 1, ?)`,
+      )
+        .bind(root.run_key, root.work_key, root.dataset, "2026-08-25T01:30:00.000Z")
+        .run();
+      const second = await deliver(
+        await childJob(children[0].work_key),
+        "closure-write-retry",
+      );
+      expect(second.explicitAcks).toEqual(["closure-write-retry"]);
+      expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("completed");
+      expect((await loadRunClosure(runtimeEnv.DB, root.run_key))?.closure_state).toBe(
+        "completed",
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("repairs a missing run aggregate on redelivery of a completed child", async () => {
+    const { root, children } = await seedWaitingRoot([FILE_A]);
+    const restore = mockOfficialFetch({ [FILE_A]: "repair-aggregate-bytes" });
+    try {
+      expect(
+        (await deliver(await childJob(children[0].work_key), "repair-complete")).explicitAcks,
+      ).toEqual(["repair-complete"]);
+      expect((await loadRunClosure(runtimeEnv.DB, root.run_key))?.closure_state).toBe(
+        "completed",
+      );
+      await runtimeEnv.DB.prepare(
+        `UPDATE jsda_run_closures
+            SET closure_state='waiting_children',
+                descendant_completed=0,
+                descendant_nonterminal=1,
+                closed_at=NULL
+          WHERE run_key=?`,
+      )
+        .bind(root.run_key)
+        .run();
+      expect((await loadRunClosure(runtimeEnv.DB, root.run_key))?.closure_state).toBe(
+        "waiting_children",
+      );
+      expect(
+        (await deliver(await childJob(children[0].work_key), "repair-redeliver")).explicitAcks,
+      ).toEqual(["repair-redeliver"]);
+      expect((await loadRunClosure(runtimeEnv.DB, root.run_key))?.closure_state).toBe(
+        "completed",
+      );
+      expect((await loadRunClosure(runtimeEnv.DB, root.run_key))?.descendant_completed).toBe(
+        1,
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("repairs an incomplete ancestor aggregate on cron re-enqueue instead of skipping it", async () => {
+    const { root, children } = await seedWaitingRoot([FILE_A]);
+    await runtimeEnv.DB.prepare(
+      `UPDATE jsda_run_closures
+          SET descendant_total=0, descendant_nonterminal=0
+        WHERE run_key=?`,
+    )
+      .bind(root.run_key)
+      .run();
+    const repaired = await enqueueRoots(
+      runtimeEnv,
+      "cron",
+      "jsda_otc_bond_reference_prices",
+      "2026-08-25T01:30:00.000Z",
+    );
+    expect(repaired.queued).toHaveLength(0);
+    const closure = await loadRunClosure(runtimeEnv.DB, root.run_key);
+    expect(closure).toMatchObject({
+      closure_state: "waiting_children",
+      descendant_total: 1,
+      descendant_nonterminal: 1,
+    });
+    expect((await loadJob(runtimeEnv.DB, children[0].work_key))?.state).toBe("queued");
+    expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("waiting_children");
   });
 });

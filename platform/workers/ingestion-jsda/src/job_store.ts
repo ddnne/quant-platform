@@ -12,9 +12,17 @@ export type JobState =
   | "pending"
   | "queued"
   | "running"
+  | "waiting_children"
   | "completed"
   | "failed_transient"
   | "rejected";
+
+export type ClosureState =
+  | "open"
+  | "waiting_children"
+  | "completed"
+  | "failed"
+  | "partial";
 
 export interface JobRow {
   work_key: string;
@@ -48,7 +56,12 @@ export interface AuditRef {
 }
 
 export interface RunEvent {
-  result: "continued" | "completed" | "failed_transient" | "rejected";
+  result:
+    | "continued"
+    | "frontier_exhausted"
+    | "completed"
+    | "failed_transient"
+    | "rejected";
   reasonCode: string | null;
   detail: string;
   cursor: number;
@@ -58,7 +71,64 @@ export interface RunEvent {
   occurredAt: string;
 }
 
-function detailJson(job: Pick<JobRow, "work_key" | "run_key" | "dataset" | "job_type" | "segment_id" | "attempt">, event: RunEvent): string {
+export interface JobClosureRow {
+  work_key: string;
+  run_key: string;
+  parent_work_key: string | null;
+  job_type: JobType;
+  closure_state: ClosureState;
+  frontier_exhausted: number;
+  descendant_total: number;
+  descendant_completed: number;
+  descendant_rejected: number;
+  descendant_failed_transient: number;
+  descendant_nonterminal: number;
+  failure_work_key: string | null;
+  failure_reason_code: string | null;
+  failure_detail: string | null;
+  closed_at: string | null;
+  updated_at: string;
+}
+
+export interface RunClosureRow {
+  run_key: string;
+  root_work_key: string;
+  dataset: DatasetId;
+  closure_state: ClosureState;
+  frontier_exhausted: number;
+  descendant_total: number;
+  descendant_completed: number;
+  descendant_rejected: number;
+  descendant_failed_transient: number;
+  descendant_nonterminal: number;
+  failure_work_key: string | null;
+  failure_reason_code: string | null;
+  failure_detail: string | null;
+  closed_at: string | null;
+  updated_at: string;
+}
+
+const JOB_SELECT = `work_key, run_key, dataset, job_type, target_url, segment_id,
+              parent_work_key, contract_digest, state, attempt, cursor,
+              frontier_json, last_error, content_digest, raw_key,
+              audit_receipt_key, audit_receipt_digest,
+              requested_by, requested_at, lease_until,
+              source_object_id, freshness, observation_epoch`;
+
+const CLOSURE_SELECT = `work_key, run_key, parent_work_key, job_type, closure_state,
+        frontier_exhausted, descendant_total, descendant_completed,
+        descendant_rejected, descendant_failed_transient, descendant_nonterminal,
+        failure_work_key, failure_reason_code, failure_detail, closed_at, updated_at`;
+
+const RUN_CLOSURE_SELECT = `run_key, root_work_key, dataset, closure_state,
+        frontier_exhausted, descendant_total, descendant_completed,
+        descendant_rejected, descendant_failed_transient, descendant_nonterminal,
+        failure_work_key, failure_reason_code, failure_detail, closed_at, updated_at`;
+
+function detailJson(
+  job: Pick<JobRow, "work_key" | "run_key" | "dataset" | "job_type" | "segment_id" | "attempt">,
+  event: RunEvent,
+): string {
   return JSON.stringify({
     mode: "cloudflare_queue_v2",
     run_id: job.run_key,
@@ -150,8 +220,8 @@ function insertSourceObjectStatement(
     .prepare(
       `INSERT OR IGNORE INTO jsda_source_objects
        (source_object_id, dataset, canonical_url, freshness,
-        first_seen_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+        next_observation_seq, first_seen_at, updated_at)
+       VALUES (?, ?, ?, ?, 1, ?, ?)`,
     )
     .bind(
       identity.sourceObjectId,
@@ -197,58 +267,99 @@ function insertJobStatement(
     );
 }
 
-function insertObservationStatement(
+function allocateObservationStatements(
   db: D1Database,
   job: JsdaQueueJob,
   identity: FileIdentity,
   now: string,
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        `UPDATE jsda_source_objects
+            SET next_observation_seq = next_observation_seq + 1, updated_at=?
+          WHERE source_object_id=?
+            AND NOT EXISTS (
+              SELECT 1 FROM jsda_observations WHERE observation_key=?
+            )`,
+      )
+      .bind(now, identity.sourceObjectId, job.work_key),
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO jsda_observations
+         (observation_key, source_object_id, work_key, run_key, dataset,
+          target_url, freshness, epoch, observation_seq, state,
+          first_seen_at, updated_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, so.next_observation_seq - 1, 'pending', ?, ?
+           FROM jsda_source_objects so
+          WHERE so.source_object_id=?`,
+      )
+      .bind(
+        job.work_key,
+        identity.sourceObjectId,
+        job.work_key,
+        job.run_key,
+        job.dataset,
+        job.target_url,
+        identity.freshness,
+        identity.epoch,
+        now,
+        now,
+        identity.sourceObjectId,
+      ),
+  ];
+}
+
+function insertArtifactStatements(
+  db: D1Database,
+  row: Pick<JobRow, "content_digest" | "raw_key" | "dataset">,
+  now: string,
+): D1PreparedStatement[] {
+  if (row.content_digest === null || row.raw_key === null) return [];
+  return [
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO jsda_artifacts (content_digest, first_seen_at)
+         VALUES (?, ?)`,
+      )
+      .bind(row.content_digest, now),
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO jsda_artifact_locations
+         (raw_key, content_digest, dataset, first_seen_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .bind(row.raw_key, row.content_digest, row.dataset, now),
+  ];
+}
+
+function insertRunClosureStatement(
+  db: D1Database,
+  job: JsdaQueueJob,
+  now: string,
 ): D1PreparedStatement {
   return db
     .prepare(
-      `INSERT OR IGNORE INTO jsda_observations
-       (observation_key, source_object_id, work_key, run_key, dataset,
-        target_url, freshness, epoch, state, first_seen_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+      `INSERT OR IGNORE INTO jsda_run_closures
+       (run_key, root_work_key, dataset, closure_state, updated_at)
+       VALUES (?, ?, ?, 'open', ?)`,
     )
-    .bind(
-      job.work_key,
-      identity.sourceObjectId,
-      job.work_key,
-      job.run_key,
-      job.dataset,
-      job.target_url,
-      identity.freshness,
-      identity.epoch,
-      now,
-      now,
-    );
+    .bind(job.run_key, job.run_key, job.dataset, now);
 }
 
-function insertArtifactStatement(
+function insertJobClosureStatement(
   db: D1Database,
-  row: Pick<JobRow, "content_digest" | "raw_key" | "dataset" | "source_object_id">,
+  job: JsdaQueueJob,
   now: string,
 ): D1PreparedStatement | null {
-  if (
-    row.content_digest === null ||
-    row.raw_key === null ||
-    row.source_object_id === null
-  ) {
-    return null;
-  }
+  if (job.job_type === "fetch_file") return null;
   return db
     .prepare(
-      `INSERT OR IGNORE INTO jsda_artifacts
-       (content_digest, raw_key, dataset, source_object_id, first_seen_at)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO jsda_job_closures
+       (work_key, run_key, parent_work_key, job_type, closure_state, updated_at)
+       VALUES (?, ?, ?, ?, 'open', ?)`,
     )
-    .bind(
-      row.content_digest,
-      row.raw_key,
-      row.dataset,
-      row.source_object_id,
-      now,
-    );
+    .bind(job.work_key, job.run_key, job.parent_work_key, job.job_type, now);
 }
 
 function updateObservationTerminalStatement(
@@ -284,7 +395,7 @@ function updateObservationTerminalStatement(
     );
 }
 
-function updateSourceObjectStatement(
+function casCurrentSourceObjectStatement(
   db: D1Database,
   row: JobRow,
   event: RunEvent,
@@ -292,23 +403,65 @@ function updateSourceObjectStatement(
   return db
     .prepare(
       `UPDATE jsda_source_objects
-       SET freshness=?, current_digest=?, current_raw_key=?,
-           current_observation_key=?, last_observed_at=?, updated_at=?
-       WHERE source_object_id=?
-         AND EXISTS (
-           SELECT 1 FROM jsda_acquisition_jobs_v2
-            WHERE work_key=? AND attempt=? AND state='completed'
-              AND audit_receipt_key=? AND audit_receipt_digest=?
-         )`,
+          SET current_digest = CASE
+                WHEN current_observation_seq IS NULL
+                  OR current_observation_seq < obs.observation_seq
+                THEN obs.content_digest ELSE current_digest
+              END,
+              current_raw_key = CASE
+                WHEN current_observation_seq IS NULL
+                  OR current_observation_seq < obs.observation_seq
+                THEN obs.raw_key ELSE current_raw_key
+              END,
+              current_observation_key = CASE
+                WHEN current_observation_seq IS NULL
+                  OR current_observation_seq < obs.observation_seq
+                THEN obs.observation_key ELSE current_observation_key
+              END,
+              current_observation_seq = CASE
+                WHEN current_observation_seq IS NULL
+                  OR current_observation_seq < obs.observation_seq
+                THEN obs.observation_seq ELSE current_observation_seq
+              END,
+              last_observed_at = CASE
+                WHEN current_observation_seq IS NULL
+                  OR current_observation_seq < obs.observation_seq
+                THEN ? ELSE last_observed_at
+              END,
+              updated_at=?
+         FROM jsda_observations AS obs
+        WHERE jsda_source_objects.source_object_id = obs.source_object_id
+          AND jsda_source_objects.source_object_id=?
+          AND obs.observation_key=?
+          AND obs.work_key=?
+          AND obs.state='completed'
+          AND obs.content_digest=?
+          AND obs.raw_key=?
+          AND EXISTS (
+            SELECT 1 FROM jsda_acquisition_jobs_v2
+             WHERE work_key=? AND attempt=? AND state='completed'
+               AND audit_receipt_key=? AND audit_receipt_digest=?
+          )
+          AND (
+            jsda_source_objects.current_observation_seq IS NULL
+            OR jsda_source_objects.current_observation_seq < obs.observation_seq
+            OR (
+              jsda_source_objects.current_observation_seq = obs.observation_seq
+              AND jsda_source_objects.current_digest = obs.content_digest
+              AND jsda_source_objects.current_raw_key = obs.raw_key
+              AND jsda_source_objects.current_observation_key = obs.observation_key
+            )
+            OR jsda_source_objects.current_observation_seq > obs.observation_seq
+          )`,
     )
     .bind(
-      row.freshness,
-      event.contentDigest,
-      event.rawKey,
-      row.work_key,
       event.occurredAt,
       event.occurredAt,
       row.source_object_id,
+      row.work_key,
+      row.work_key,
+      event.contentDigest,
+      event.rawKey,
       row.work_key,
       row.attempt,
       event.audit.key,
@@ -325,7 +478,7 @@ function insertRunLogStatement(
   const status =
     event.result === "completed"
       ? "pass"
-      : event.result === "continued"
+      : event.result === "continued" || event.result === "frontier_exhausted"
         ? "partial"
         : "fail";
   return db
@@ -348,6 +501,231 @@ function insertRunLogStatement(
       event.audit.key,
       event.audit.digest,
     );
+}
+
+function requireBatch(results: D1Result[], message: string): void {
+  if (results.some((result) => (result?.meta.changes ?? 0) !== 1)) {
+    throw new Error(message);
+  }
+}
+
+function recomputeJobClosureStatement(
+  db: D1Database,
+  parent: Pick<JobRow, "work_key">,
+  now: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE jsda_job_closures
+          SET descendant_total=(
+                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2 WHERE parent_work_key=?
+              ),
+              descendant_completed=(
+                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
+                 WHERE parent_work_key=? AND state='completed'
+                   AND audit_receipt_key IS NOT NULL AND audit_receipt_digest IS NOT NULL
+              ),
+              descendant_rejected=(
+                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
+                 WHERE parent_work_key=? AND state='rejected'
+              ),
+              descendant_failed_transient=(
+                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
+                 WHERE parent_work_key=? AND state='failed_transient'
+              ),
+              descendant_nonterminal=(
+                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
+                 WHERE parent_work_key=?
+                   AND state IN ('pending','queued','running','waiting_children')
+              ),
+              failure_work_key=(
+                SELECT work_key FROM jsda_acquisition_jobs_v2
+                 WHERE parent_work_key=? AND state='rejected'
+                 ORDER BY updated_at, work_key LIMIT 1
+              ),
+              failure_detail=(
+                SELECT last_error FROM jsda_acquisition_jobs_v2
+                 WHERE parent_work_key=? AND state='rejected'
+                 ORDER BY updated_at, work_key LIMIT 1
+              ),
+              failure_reason_code=CASE
+                WHEN (
+                  SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
+                   WHERE parent_work_key=? AND state='rejected'
+                ) > 0 THEN 'descendant_rejected'
+                ELSE failure_reason_code
+              END,
+              updated_at=?
+        WHERE work_key=?`,
+    )
+    .bind(
+      parent.work_key,
+      parent.work_key,
+      parent.work_key,
+      parent.work_key,
+      parent.work_key,
+      parent.work_key,
+      parent.work_key,
+      parent.work_key,
+      now,
+      parent.work_key,
+    );
+}
+
+function recomputeRunClosureStatement(
+  db: D1Database,
+  runKey: string,
+  rootWorkKey: string,
+  now: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE jsda_run_closures
+          SET descendant_total=(
+                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
+                 WHERE run_key=? AND work_key!=?
+              ),
+              descendant_completed=(
+                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
+                 WHERE run_key=? AND work_key!=? AND state='completed'
+                   AND audit_receipt_key IS NOT NULL AND audit_receipt_digest IS NOT NULL
+              ),
+              descendant_rejected=(
+                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
+                 WHERE run_key=? AND work_key!=? AND state='rejected'
+              ),
+              descendant_failed_transient=(
+                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
+                 WHERE run_key=? AND work_key!=? AND state='failed_transient'
+              ),
+              descendant_nonterminal=(
+                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
+                 WHERE run_key=? AND work_key!=?
+                   AND state IN ('pending','queued','running','waiting_children')
+              ),
+              frontier_exhausted=CASE
+                WHEN (
+                  SELECT state FROM jsda_acquisition_jobs_v2 WHERE work_key=?
+                ) IN ('waiting_children','completed','rejected') THEN 1
+                ELSE frontier_exhausted
+              END,
+              failure_work_key=(
+                SELECT work_key FROM jsda_acquisition_jobs_v2
+                 WHERE run_key=? AND work_key!=? AND state='rejected'
+                 ORDER BY updated_at, work_key LIMIT 1
+              ),
+              failure_detail=(
+                SELECT last_error FROM jsda_acquisition_jobs_v2
+                 WHERE run_key=? AND work_key!=? AND state='rejected'
+                 ORDER BY updated_at, work_key LIMIT 1
+              ),
+              failure_reason_code=CASE
+                WHEN (
+                  SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
+                   WHERE run_key=? AND work_key!=? AND state='rejected'
+                ) > 0 THEN 'descendant_rejected'
+                ELSE failure_reason_code
+              END,
+              updated_at=?
+        WHERE run_key=?`,
+    )
+    .bind(
+      runKey,
+      rootWorkKey,
+      runKey,
+      rootWorkKey,
+      runKey,
+      rootWorkKey,
+      runKey,
+      rootWorkKey,
+      runKey,
+      rootWorkKey,
+      rootWorkKey,
+      runKey,
+      rootWorkKey,
+      runKey,
+      rootWorkKey,
+      runKey,
+      rootWorkKey,
+      now,
+      runKey,
+    );
+}
+
+function applyRunClosureStateStatement(
+  db: D1Database,
+  runKey: string,
+  now: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE jsda_run_closures
+          SET closure_state=CASE
+                WHEN closure_state IN ('completed','failed','partial') THEN closure_state
+                WHEN descendant_rejected > 0 AND descendant_completed > 0 THEN 'partial'
+                WHEN descendant_rejected > 0 THEN 'failed'
+                WHEN frontier_exhausted=1
+                 AND descendant_total > 0
+                 AND descendant_completed = descendant_total
+                 AND descendant_rejected = 0
+                 AND descendant_failed_transient = 0
+                 AND descendant_nonterminal = 0 THEN 'completed'
+                WHEN frontier_exhausted=1 THEN 'waiting_children'
+                ELSE 'open'
+              END,
+              closed_at=CASE
+                WHEN closure_state IN ('completed','failed','partial') THEN closed_at
+                WHEN descendant_rejected > 0 THEN ?
+                WHEN frontier_exhausted=1
+                 AND descendant_total > 0
+                 AND descendant_completed = descendant_total
+                 AND descendant_rejected = 0
+                 AND descendant_failed_transient = 0
+                 AND descendant_nonterminal = 0 THEN ?
+                ELSE closed_at
+              END,
+              updated_at=?
+        WHERE run_key=?`,
+    )
+    .bind(now, now, now, runKey);
+}
+
+function applyJobClosureStateStatement(
+  db: D1Database,
+  workKey: string,
+  now: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE jsda_job_closures
+          SET closure_state=CASE
+                WHEN closure_state IN ('completed','failed','partial') THEN closure_state
+                WHEN descendant_rejected > 0 AND descendant_completed > 0 THEN 'partial'
+                WHEN descendant_rejected > 0 THEN 'failed'
+                WHEN frontier_exhausted=1
+                 AND descendant_total > 0
+                 AND descendant_completed = descendant_total
+                 AND descendant_rejected = 0
+                 AND descendant_failed_transient = 0
+                 AND descendant_nonterminal = 0 THEN 'completed'
+                WHEN frontier_exhausted=1 THEN 'waiting_children'
+                ELSE 'open'
+              END,
+              closed_at=CASE
+                WHEN closure_state IN ('completed','failed','partial') THEN closed_at
+                WHEN descendant_rejected > 0 THEN ?
+                WHEN frontier_exhausted=1
+                 AND descendant_total > 0
+                 AND descendant_completed = descendant_total
+                 AND descendant_rejected = 0
+                 AND descendant_failed_transient = 0
+                 AND descendant_nonterminal = 0 THEN ?
+                ELSE closed_at
+              END,
+              updated_at=?
+        WHERE work_key=?`,
+    )
+    .bind(now, now, now, workKey);
 }
 
 export async function registerJob(db: D1Database, job: JsdaQueueJob): Promise<JobRow> {
@@ -375,7 +753,7 @@ export async function registerJobs(
   jobs.forEach((job, index) => {
     const identity = identities[index];
     if (identity !== null) {
-      statements.push(insertObservationStatement(db, job, identity, now));
+      statements.push(...allocateObservationStatements(db, job, identity, now));
     }
   });
   for (const job of jobs) {
@@ -390,6 +768,13 @@ export async function registerJobs(
         .bind(job.parent_work_key, job.work_key, job.run_key, now),
     );
   }
+  for (const job of jobs) {
+    if (job.job_type === "discover_root") {
+      statements.push(insertRunClosureStatement(db, job, now));
+    }
+    const closure = insertJobClosureStatement(db, job, now);
+    if (closure !== null) statements.push(closure);
+  }
   await db.batch(statements);
   const rows: JobRow[] = [];
   for (const job of jobs) {
@@ -402,17 +787,45 @@ export async function registerJobs(
 
 export async function loadJob(db: D1Database, workKey: string): Promise<JobRow | null> {
   return db
-    .prepare(
-      `SELECT work_key, run_key, dataset, job_type, target_url, segment_id,
-              parent_work_key, contract_digest, state, attempt, cursor,
-              frontier_json, last_error, content_digest, raw_key,
-              audit_receipt_key, audit_receipt_digest,
-              requested_by, requested_at, lease_until,
-              source_object_id, freshness, observation_epoch
-       FROM jsda_acquisition_jobs_v2 WHERE work_key = ?`,
-    )
+    .prepare(`SELECT ${JOB_SELECT} FROM jsda_acquisition_jobs_v2 WHERE work_key = ?`)
     .bind(workKey)
     .first<JobRow>();
+}
+
+export async function loadJobClosure(
+  db: D1Database,
+  workKey: string,
+): Promise<JobClosureRow | null> {
+  return db
+    .prepare(`SELECT ${CLOSURE_SELECT} FROM jsda_job_closures WHERE work_key = ?`)
+    .bind(workKey)
+    .first<JobClosureRow>();
+}
+
+export async function loadRunClosure(
+  db: D1Database,
+  runKey: string,
+): Promise<RunClosureRow | null> {
+  return db
+    .prepare(`SELECT ${RUN_CLOSURE_SELECT} FROM jsda_run_closures WHERE run_key = ?`)
+    .bind(runKey)
+    .first<RunClosureRow>();
+}
+
+export async function loadPendingRunJobs(
+  db: D1Database,
+  runKey: string,
+): Promise<JobRow[]> {
+  const rows = await db
+    .prepare(
+      `SELECT ${JOB_SELECT}
+         FROM jsda_acquisition_jobs_v2
+        WHERE run_key=? AND state IN ('pending', 'failed_transient')
+        ORDER BY work_key`,
+    )
+    .bind(runKey)
+    .all<JobRow>();
+  return rows.results;
 }
 
 export async function markJobsQueued(
@@ -495,18 +908,12 @@ export async function persistFetchedArtifact(
          WHERE work_key=? AND state='running' AND attempt=?`,
       )
       .bind(rawKey, contentDigest, now, row.work_key, row.attempt),
+    ...insertArtifactStatements(
+      db,
+      { content_digest: contentDigest, raw_key: rawKey, dataset: row.dataset },
+      now,
+    ),
   ];
-  const artifact = insertArtifactStatement(
-    db,
-    {
-      content_digest: contentDigest,
-      raw_key: rawKey,
-      dataset: row.dataset,
-      source_object_id: row.source_object_id,
-    },
-    now,
-  );
-  if (artifact !== null) statements.push(artifact);
   if (row.source_object_id !== null) {
     statements.push(
       db
@@ -598,8 +1005,73 @@ export async function markContinuationQueued(
     insertEventStatement(db, row, event, "queued"),
     insertRunLogStatement(db, row, event, "queued"),
   ]);
-  if (results.some((result) => (result?.meta.changes ?? 0) !== 1)) {
-    throw new Error(`JSDA continuation finalize lost job claim: ${row.work_key}`);
+  requireBatch(results, `JSDA continuation finalize lost job claim: ${row.work_key}`);
+}
+
+export async function markFrontierExhausted(
+  db: D1Database,
+  row: JobRow,
+  cursor: number,
+  audit: AuditRef,
+  now: string,
+): Promise<void> {
+  const event: RunEvent = {
+    result: "frontier_exhausted",
+    reasonCode: null,
+    detail: "discovery frontier exhausted; waiting for governed descendants",
+    cursor,
+    rawKey: row.raw_key,
+    contentDigest: row.content_digest,
+    audit,
+    occurredAt: now,
+  };
+  const statements: D1PreparedStatement[] = [
+    db
+      .prepare(
+        `UPDATE jsda_acquisition_jobs_v2
+         SET state='waiting_children', cursor=?, lease_until=NULL, updated_at=?,
+             last_error=NULL, audit_receipt_key=?, audit_receipt_digest=?
+         WHERE work_key=? AND state='running' AND attempt=?`,
+      )
+      .bind(cursor, now, audit.key, audit.digest, row.work_key, row.attempt),
+    insertEventStatement(db, row, event, "waiting_children"),
+    insertRunLogStatement(db, row, event, "waiting_children"),
+    db
+      .prepare(
+        `UPDATE jsda_job_closures
+            SET frontier_exhausted=1,
+                closure_state='waiting_children',
+                updated_at=?
+          WHERE work_key=?`,
+      )
+      .bind(now, row.work_key),
+  ];
+  if (row.job_type === "discover_root") {
+    statements.push(
+      db
+        .prepare(
+          `UPDATE jsda_run_closures
+              SET frontier_exhausted=1,
+                  closure_state=CASE
+                    WHEN closure_state IN ('completed','failed','partial') THEN closure_state
+                    ELSE 'waiting_children'
+                  END,
+                  updated_at=?
+            WHERE run_key=?`,
+        )
+        .bind(now, row.run_key),
+    );
+  }
+  const results = await db.batch(statements);
+  requireBatch(
+    results.slice(0, 3),
+    `JSDA frontier exhaustion lost job claim: ${row.work_key}`,
+  );
+  if ((results[3]?.meta.changes ?? 0) !== 1) {
+    throw new Error(`JSDA job closure missing at frontier exhaustion: ${row.work_key}`);
+  }
+  if (row.job_type === "discover_root" && (results[4]?.meta.changes ?? 0) !== 1) {
+    throw new Error(`JSDA run closure missing at frontier exhaustion: ${row.run_key}`);
   }
 }
 
@@ -610,6 +1082,9 @@ export async function completeJob(
   audit: AuditRef,
   now: string,
 ): Promise<void> {
+  if (row.job_type !== "fetch_file") {
+    throw new Error(`JSDA completeJob is leaf-only: ${row.work_key}`);
+  }
   const event: RunEvent = {
     result: "completed",
     reasonCode: null,
@@ -631,13 +1106,12 @@ export async function completeJob(
       .bind(cursor, now, now, audit.key, audit.digest, row.work_key, row.attempt),
     insertEventStatement(db, row, event, "completed"),
     insertRunLogStatement(db, row, event, "completed"),
+    ...insertArtifactStatements(db, row, now),
   ];
-  const required = statements.length;
-  const artifact = insertArtifactStatement(db, row, now);
-  if (artifact !== null) statements.push(artifact);
+  const required = 3;
   if (row.source_object_id !== null) {
     statements.push(updateObservationTerminalStatement(db, row, event, "completed"));
-    statements.push(updateSourceObjectStatement(db, row, event));
+    statements.push(casCurrentSourceObjectStatement(db, row, event));
   }
   const results = await db.batch(statements);
   const requiredResults = results.slice(0, required);
@@ -736,9 +1210,7 @@ export async function recordTransientFailure(
     insertEventStatement(db, row, event, "failed_transient"),
     insertRunLogStatement(db, row, event, "failed_transient"),
   ]);
-  if (results.some((result) => (result?.meta.changes ?? 0) !== 1)) {
-    throw new Error(`JSDA transient failure lost job claim: ${row.work_key}`);
-  }
+  requireBatch(results, `JSDA transient failure lost job claim: ${row.work_key}`);
 }
 
 export async function recordRejectedMessage(
@@ -772,3 +1244,134 @@ export async function recordRejectedMessage(
     )
     .run();
 }
+
+export async function loadAncestorChain(db: D1Database, row: JobRow): Promise<JobRow[]> {
+  const chain: JobRow[] = [];
+  let parentKey = row.parent_work_key;
+  while (parentKey !== null) {
+    const parent = await loadJob(db, parentKey);
+    if (parent === null) {
+      throw new Error(`JSDA ancestor missing for ${row.work_key}: ${parentKey}`);
+    }
+    chain.push(parent);
+    parentKey = parent.parent_work_key;
+  }
+  return chain;
+}
+
+export async function recomputeClosureAggregates(
+  db: D1Database,
+  origin: JobRow,
+  now: string,
+): Promise<void> {
+  const chain: JobRow[] = [];
+  if (origin.job_type !== "fetch_file") chain.push(origin);
+  chain.push(...(await loadAncestorChain(db, origin)));
+  const statements: D1PreparedStatement[] = [];
+  for (const ancestor of chain) {
+    statements.push(recomputeJobClosureStatement(db, ancestor, now));
+    statements.push(applyJobClosureStateStatement(db, ancestor.work_key, now));
+  }
+  statements.push(recomputeRunClosureStatement(db, origin.run_key, origin.run_key, now));
+  statements.push(applyRunClosureStateStatement(db, origin.run_key, now));
+  const results = await db.batch(statements);
+  if (results.some((result) => (result?.meta.changes ?? 0) !== 1)) {
+    throw new Error(`JSDA closure aggregate update failed for ${origin.work_key}`);
+  }
+}
+
+export async function completeWaitingAncestor(
+  db: D1Database,
+  row: JobRow,
+  audit: AuditRef,
+  now: string,
+): Promise<boolean> {
+  const event: RunEvent = {
+    result: "completed",
+    reasonCode: null,
+    detail: "all governed descendants durably completed",
+    cursor: row.cursor,
+    rawKey: row.raw_key,
+    contentDigest: row.content_digest,
+    audit,
+    occurredAt: now,
+  };
+  const results = await db.batch([
+    db
+      .prepare(
+        `UPDATE jsda_acquisition_jobs_v2
+         SET state='completed', lease_until=NULL, completed_at=?, updated_at=?,
+             last_error=NULL, audit_receipt_key=?, audit_receipt_digest=?
+         WHERE work_key=? AND state='waiting_children'
+           AND EXISTS (
+             SELECT 1 FROM jsda_job_closures
+              WHERE work_key=?
+                AND frontier_exhausted=1
+                AND descendant_total > 0
+                AND descendant_completed = descendant_total
+                AND descendant_rejected = 0
+                AND descendant_failed_transient = 0
+                AND descendant_nonterminal = 0
+           )`,
+      )
+      .bind(now, now, audit.key, audit.digest, row.work_key, row.work_key),
+    insertEventStatement(db, row, event, "completed"),
+    insertRunLogStatement(db, row, event, "completed"),
+  ]);
+  const closed = (results[0]?.meta.changes ?? 0) === 1;
+  if (closed) {
+    requireBatch(results.slice(1), `JSDA ancestor close lost evidence: ${row.work_key}`);
+  }
+  return closed;
+}
+
+export async function failWaitingAncestor(
+  db: D1Database,
+  row: JobRow,
+  reasonCode: string,
+  detail: string,
+  audit: AuditRef,
+  now: string,
+): Promise<boolean> {
+  const event: RunEvent = {
+    result: "rejected",
+    reasonCode,
+    detail,
+    cursor: row.cursor,
+    rawKey: row.raw_key,
+    contentDigest: row.content_digest,
+    audit,
+    occurredAt: now,
+  };
+  const results = await db.batch([
+    db
+      .prepare(
+        `UPDATE jsda_acquisition_jobs_v2
+         SET state='rejected', lease_until=NULL, completed_at=?, updated_at=?,
+             last_error=?, audit_receipt_key=?, audit_receipt_digest=?
+         WHERE work_key=? AND state='waiting_children'
+           AND EXISTS (
+             SELECT 1 FROM jsda_job_closures
+              WHERE work_key=? AND descendant_rejected > 0
+           )`,
+      )
+      .bind(
+        now,
+        now,
+        detail.slice(0, 500),
+        audit.key,
+        audit.digest,
+        row.work_key,
+        row.work_key,
+      ),
+    insertEventStatement(db, row, event, "rejected"),
+    insertRunLogStatement(db, row, event, "rejected"),
+  ]);
+  const failed = (results[0]?.meta.changes ?? 0) === 1;
+  if (failed) {
+    requireBatch(results.slice(1), `JSDA ancestor fail lost evidence: ${row.work_key}`);
+  }
+  return failed;
+}
+
+

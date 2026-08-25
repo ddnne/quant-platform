@@ -97,6 +97,9 @@ const CONTRACT_CANONICAL = JSON.stringify({
     "archive-url-immutable-identity",
     "r2-create-only-raw-and-audit",
     "completed-observation-idempotent",
+    "monotonic-observation-sequence",
+    "cas-current-source-pointer",
+    "descendant-run-closure",
   ],
 });
 

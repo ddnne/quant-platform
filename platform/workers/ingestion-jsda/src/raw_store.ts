@@ -13,6 +13,7 @@ export interface ImmutableObjectRef {
 export interface QueueAuditInput {
   event:
     | "continued"
+    | "frontier_exhausted"
     | "completed"
     | "failed_transient"
     | "rejected_job"

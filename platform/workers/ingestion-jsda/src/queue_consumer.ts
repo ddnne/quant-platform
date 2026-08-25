@@ -2,15 +2,22 @@ import type { JsdaWorkerEnv } from "./env";
 import {
   claimJob,
   completeJob,
+  completeWaitingAncestor,
+  failWaitingAncestor,
   loadJob,
+  loadJobClosure,
+  loadAncestorChain,
   advanceContinuationCursor,
   markContinuationQueued,
+  markFrontierExhausted,
   persistFetchedArtifact,
   persistFrontier,
+  recomputeClosureAggregates,
   recordRejectedMessage,
   recordTransientFailure,
   registerJob,
   rejectJob,
+  type JobClosureRow,
   type JobRow,
 } from "./job_store";
 import {
@@ -238,6 +245,7 @@ function auditInput(
   row: JobRow,
   event:
     | "continued"
+    | "frontier_exhausted"
     | "completed"
     | "failed_transient"
     | "rejected_job",
@@ -333,20 +341,25 @@ async function processDiscovery(
     return;
   }
 
-  const completedAt = new Date().toISOString();
+  const exhaustedAt = new Date().toISOString();
   const audit = await putQueueAuditReceipt(
     env.RAW_BUCKET,
     auditInput(
       row,
-      "completed",
-      completedAt,
+      "frontier_exhausted",
+      exhaustedAt,
       null,
       `discovery frontier exhausted with ${frontier.length} children`,
       end,
       frontier.length,
     ),
   );
-  await completeJob(env.DB, row, end, audit, completedAt);
+  await markFrontierExhausted(env.DB, row, end, audit, exhaustedAt);
+  const waiting = await loadJob(env.DB, row.work_key);
+  if (waiting === null) {
+    throw new Error(`JSDA frontier exhaustion lost job: ${row.work_key}`);
+  }
+  await advanceAncestorClosures(env, waiting);
 }
 
 async function processFile(
@@ -396,6 +409,11 @@ async function processFile(
     ),
   );
   await completeJob(env.DB, row, row.cursor, audit, completedAt);
+  const completed = await loadJob(env.DB, row.work_key);
+  if (completed === null) {
+    throw new Error(`JSDA completion lost job: ${row.work_key}`);
+  }
+  await advanceAncestorClosures(env, completed);
 }
 
 async function handleFailure(
@@ -411,6 +429,11 @@ async function handleFailure(
       auditInput(row, "rejected_job", now, error.reasonCode, detail, row.cursor, null),
     );
     await rejectJob(env.DB, row, error.reasonCode, detail, audit, now);
+    const rejected = await loadJob(env.DB, row.work_key);
+    if (rejected === null) {
+      throw new Error(`JSDA rejection lost job: ${row.work_key}`);
+    }
+    await advanceAncestorClosures(env, rejected);
     return "ack";
   }
   const reasonCode =
@@ -422,7 +445,108 @@ async function handleFailure(
     auditInput(row, "failed_transient", now, reasonCode, detail, row.cursor, null),
   );
   await recordTransientFailure(env.DB, row, reasonCode, detail, audit, now);
+  const failed = await loadJob(env.DB, row.work_key);
+  if (failed === null) {
+    throw new Error(`JSDA transient failure lost job: ${row.work_key}`);
+  }
+  await recomputeClosureAggregates(env.DB, failed, now);
   return "retry";
+}
+
+function descendantFailureDetail(closure: JobClosureRow): string {
+  const identity = closure.failure_work_key ?? "unknown-descendant";
+  const reason = closure.failure_detail ?? "governed descendant rejected";
+  return `descendant ${identity}: ${reason}`.slice(0, 500);
+}
+
+async function advanceAncestorClosures(
+  env: JsdaWorkerEnv,
+  origin: JobRow,
+): Promise<void> {
+  const now = new Date().toISOString();
+  await recomputeClosureAggregates(env.DB, origin, now);
+  const chain = await loadAncestorChain(env.DB, origin);
+  for (const ancestor of chain) {
+    await recomputeClosureAggregates(env.DB, origin, now);
+    const latest = await loadJob(env.DB, ancestor.work_key);
+    if (latest === null) {
+      throw new Error(`JSDA ancestor disappeared: ${ancestor.work_key}`);
+    }
+    if (latest.state !== "waiting_children") continue;
+    const closure = await loadJobClosure(env.DB, latest.work_key);
+    if (closure === null) {
+      throw new Error(`JSDA job closure missing: ${latest.work_key}`);
+    }
+    if (closure.descendant_rejected > 0) {
+      const failedAt = new Date().toISOString();
+      const audit = await putQueueAuditReceipt(
+        env.RAW_BUCKET,
+        auditInput(
+          latest,
+          "rejected_job",
+          failedAt,
+          "descendant_rejected",
+          descendantFailureDetail(closure),
+          latest.cursor,
+          null,
+        ),
+      );
+      const failed = await failWaitingAncestor(
+        env.DB,
+        latest,
+        "descendant_rejected",
+        descendantFailureDetail(closure),
+        audit,
+        failedAt,
+      );
+      const after = await loadJob(env.DB, latest.work_key);
+      if (!failed && after?.state !== "rejected") {
+        throw new Error(`JSDA ancestor fail did not converge: ${latest.work_key}`);
+      }
+      continue;
+    }
+    if (
+      closure.frontier_exhausted === 1 &&
+      closure.descendant_total > 0 &&
+      closure.descendant_completed === closure.descendant_total &&
+      closure.descendant_rejected === 0 &&
+      closure.descendant_failed_transient === 0 &&
+      closure.descendant_nonterminal === 0
+    ) {
+      const closedAt = new Date().toISOString();
+      const audit = await putQueueAuditReceipt(
+        env.RAW_BUCKET,
+        auditInput(
+          latest,
+          "completed",
+          closedAt,
+          null,
+          "all governed descendants durably completed",
+          latest.cursor,
+          null,
+        ),
+      );
+      const closed = await completeWaitingAncestor(env.DB, latest, audit, closedAt);
+      const after = await loadJob(env.DB, latest.work_key);
+      if (!closed && after?.state === "waiting_children") {
+        continue;
+      }
+      if (!closed && after?.state !== "completed") {
+        throw new Error(`JSDA ancestor close did not converge: ${latest.work_key}`);
+      }
+    }
+  }
+  await recomputeClosureAggregates(env.DB, origin, now);
+}
+
+async function repairTerminalClosure(
+  env: JsdaWorkerEnv,
+  row: JobRow,
+): Promise<void> {
+  if (!(await terminalAuditIsDurable(env, row))) {
+    throw new Error("terminal_audit_missing");
+  }
+  await advanceAncestorClosures(env, row);
 }
 
 export async function consumeQueueMessage(
@@ -498,12 +622,16 @@ export async function consumeQueueMessage(
     return;
   }
 
-  if (row.state === "completed" || row.state === "rejected") {
-    let durable = false;
+  if (
+    row.state === "completed" ||
+    row.state === "rejected" ||
+    row.state === "waiting_children"
+  ) {
     try {
-      durable = await terminalAuditIsDurable(env, row);
+      await repairTerminalClosure(env, row);
+      message.ack();
     } catch (error) {
-      logError(env, "jsda_queue_terminal_audit_read_failed", {
+      logError(env, "jsda_queue_terminal_closure_repair_failed", {
         run_id: row.run_key,
         job_id: row.work_key,
         dataset: row.dataset,
@@ -511,20 +639,8 @@ export async function consumeQueueMessage(
         result: row.state,
         reason: errorDetail(error),
       });
-    }
-    if (!durable) {
-      logError(env, "jsda_queue_terminal_state_without_audit", {
-        run_id: row.run_key,
-        job_id: row.work_key,
-        dataset: row.dataset,
-        segment_id: row.segment_id,
-        result: row.state,
-        reason: "terminal_audit_missing",
-      });
       message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
-      return;
     }
-    message.ack();
     return;
   }
 
@@ -549,9 +665,11 @@ export async function consumeQueueMessage(
       const current = await loadJob(env.DB, row.work_key);
       if (
         current !== null &&
-        (current.state === "completed" || current.state === "rejected") &&
-        (await terminalAuditIsDurable(env, current))
+        (current.state === "completed" ||
+          current.state === "rejected" ||
+          current.state === "waiting_children")
       ) {
+        await repairTerminalClosure(env, current);
         message.ack();
         return;
       }
@@ -577,6 +695,24 @@ export async function consumeQueueMessage(
   } catch (error) {
     try {
       const current = await loadJob(env.DB, claimed.work_key);
+      if (
+        current !== null &&
+        (current.state === "completed" ||
+          current.state === "rejected" ||
+          current.state === "waiting_children")
+      ) {
+        logError(env, "jsda_queue_post_terminal_closure_failed", {
+          run_id: claimed.run_key,
+          job_id: claimed.work_key,
+          dataset: claimed.dataset,
+          segment_id: claimed.segment_id,
+          cursor: claimed.cursor,
+          result: current.state,
+          reason: errorDetail(error),
+        });
+        message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
+        return;
+      }
       if (
         current === null ||
         current.state !== "running" ||
