@@ -1,6 +1,6 @@
 {
   "schema_version": "phase631-finding-ledger/v1",
-  "updated_at": "2026-08-26T04:33:38+09:00",
+  "updated_at": "2026-08-26T04:45:57+09:00",
   "merge_policy": {
     "required_p0_status": "FIXED",
     "independent_review_unresolved_p0": 0,
@@ -20,6 +20,7 @@
     {"id":"R4","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Exact-four bindings were caller-overridable","closure":"Canonical four plan ids and exact digests only"},
     {"id":"R5","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Generic READY and a same-UID arbitrary READY signer remained reachable","closure":"Dedicated READY evidence authority, profile closure publication, explicit separate Mass policy; Mass disabled"},
     {"id":"R6","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Missing natural-key evidence could pass fixture compatibility","closure":"Production UNKNOWN or FAIL; private test-only compatibility"},
+    {"id":"R10","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Trader authorization remained a same-UID HOME-key signing oracle","closure":"Rotate current key; production verify-only; separately permissioned human-approval authority independently binds exact READY plan universe and gross limit"},
     {"id":"R7","area":"ready_plan_execution","severity":"P1","status":"OPEN","summary":"Snapshot publication swallowed a database exception","closure":"Abort publication and mint no READY authority"},
     {"id":"R8","area":"ready_plan_execution","severity":"P1","status":"FIXED","summary":"Controlled Paper shared a boolean fixture bypass","evidence":"ddc85178"},
     {"id":"R9","area":"ready_plan_execution","severity":"P1","status":"FIXED","summary":"Pilot and Mass readiness authority was not structurally separated","evidence":"ddc85178"},

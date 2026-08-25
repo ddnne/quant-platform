@@ -43,6 +43,7 @@ pass.
 | R4 | exact-four bindings were caller-overridable | OPEN | Only the canonical four plan ids and exact digests may reach Controlled Pilot |
 | R5 | Generic READY publication and a same-UID arbitrary READY signer remained reachable | OPEN | Dedicated READY authority independently rechecks the authenticated mirror, exact-four closure and immutable copy; Mass requires a separate explicit policy and stays disabled |
 | R6 | Missing natural-key ledger could pass through fixture compatibility | OPEN | Production missing evidence is UNKNOWN/FAIL; compatibility is private test-only policy |
+| R10 | Trader authorization remained a same-UID HOME-key signing oracle over caller-constructed approval decisions | OPEN | Rotate/tombstone the current key; production is verify-only; a separately permissioned human-approval authority independently reconstructs and signs the exact READY/plan/universe/gross-limit decision |
 
 ### P1
 
@@ -89,7 +90,7 @@ pass.
 |----|---------|--------|------------------------------|
 | A3 | Worker tests were almost entirely Node mocks | FIXED | `32a1ea7d`; focused workerd and `createTestHarness()` boundary tests |
 | A4 | Legacy 2,254-strategy catalog was imported by the product runtime | FIXED | `e5969f50`; immutable replay artifact only |
-| A5 | More than 70 Python tests inspect source text, AST, or implementation spelling | DEFERRED | Replace incrementally with type/capability/transaction invariants; do not increase this class |
+| A5 | Python tests still inspect source text, AST, or implementation spelling where a behavioral boundary should suffice | DEFERRED | Replace incrementally with type/capability/transaction invariants; do not increase this class or treat a coarse text-search count as authority |
 | A6 | Release evidence existed only at local absolute paths | OPEN | Publish a content-addressed non-secret manifest after production acceptance; backup body remains private/encrypted |
 
 ## Integration gate
