@@ -212,30 +212,28 @@ describe("budget ledger algebra", () => {
     }
   });
 
-  it("concurrent leases are capped at max_parallel_experiments=2", async () => {
+  it("atomically caps concurrent leases at max_parallel_experiments=2", async () => {
     const storage = new MemoryBudgetStorage();
-    const a = await reserveBudget(
-      storage,
-      leased("l1", { model_calls: 1 }),
-      T0,
+    const attempts = await Promise.all(
+      ["l1", "l2", "l3"].map((key) =>
+        reserveBudget(storage, leased(key, { model_calls: 1 }), T0),
+      ),
     );
-    const b = await reserveBudget(
-      storage,
-      leased("l2", { model_calls: 1 }),
-      T0,
-    );
-    const c = await reserveBudget(
-      storage,
-      leased("l3", { model_calls: 1 }),
-      T0,
-    );
-    expect(a.ok).toBe(true);
-    expect(b.ok).toBe(true);
-    expect(c.ok).toBe(false);
-    if (!c.ok) expect(c.detail).toContain("concurrent_experiments");
+    const accepted = attempts.filter((result) => result.ok);
+    const rejected = attempts.filter((result) => !result.ok);
+    expect(accepted).toHaveLength(2);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({
+      ok: false,
+      error: "budget_exhausted",
+      detail: expect.stringContaining("concurrent_experiments"),
+    });
     const snap = await snapshotBudget(storage, T0);
     expect(snap.ok).toBe(true);
-    if (snap.ok) expect(snap.active_leases).toBe(2);
+    if (snap.ok) {
+      expect(snap.active_leases).toBe(2);
+      expect(snap.reserved.model_calls).toBe(2);
+    }
   });
 
   it("heartbeat extends TTL by 1800s", async () => {
