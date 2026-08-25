@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   PILOT_BUDGET_CAPS,
   CONTROL_PLANE_LEDGER_NAME,
@@ -14,6 +14,8 @@ import {
   settleUncertainBudget,
   snapshotBudget,
   zeroCounters,
+  type PublicReservation,
+  type Reservation,
 } from "./budget_do";
 
 /** In-memory ledger algebra. Live Cloudflare Durable Object occupancy is unproven. */
@@ -510,6 +512,7 @@ describe("budget ledger algebra", () => {
         idempotency_key: "uncertain-idempotent",
         request_digest: "digest-uncertain",
         amounts: { model_calls: 1 },
+        acquire_lease: true,
       },
       T0 + 4,
     );
@@ -663,6 +666,7 @@ describe("budget ledger algebra", () => {
         idempotency_key: "k-dup",
         request_digest: "digest-a",
         amounts: { model_calls: 1 },
+        acquire_lease: true,
       },
       T0 + 1,
     );
@@ -672,6 +676,7 @@ describe("budget ledger algebra", () => {
         idempotency_key: "k-dup",
         request_digest: "digest-b",
         amounts: { model_calls: 1 },
+        acquire_lease: true,
       },
       T0 + 2,
     );
@@ -1066,8 +1071,9 @@ describe("budget ledger algebra", () => {
       T0 + 1,
     );
     if (!started.ok || !started.settlement_capability) throw new Error("cap");
-    expect(started.reservation.settlement_capability_secret).toBeNull();
-    expect(started.reservation.settlement_capability_hash).toBe("sha256:redacted");
+    expect(started.reservation).not.toHaveProperty("settlement_capability_secret");
+    expect(started.reservation).not.toHaveProperty("settlement_capability_hash");
+    expect(started.reservation).not.toHaveProperty("settlement_capability");
     expect(
       await finalizeBudget(
         storage,
@@ -1308,8 +1314,9 @@ describe("budget ledger algebra", () => {
     expect(replay.ok).toBe(true);
     if (!replay.ok) throw new Error("replay");
     expect(replay.existing).toBe(true);
-    expect(replay.reservation.settlement_capability_secret).toBeNull();
-    expect(replay.reservation.settlement_capability_hash).toBe("sha256:redacted");
+    expect(replay.reservation).not.toHaveProperty("settlement_capability_secret");
+    expect(replay.reservation).not.toHaveProperty("settlement_capability_hash");
+    expect(replay.reservation).not.toHaveProperty("settlement_capability");
     const encoded = JSON.stringify(replay);
     expect(encoded).not.toContain(secret);
     expect(encoded).not.toContain(hash as string);
@@ -1348,7 +1355,8 @@ describe("budget ledger algebra", () => {
     if (!first.ok || !retry.ok) throw new Error("start");
     expect(retry.settlement_capability).toBe(first.settlement_capability);
     expect(first.settlement_capability).toEqual(expect.any(String));
-    expect(first.reservation.settlement_capability_secret).toBeNull();
+    expect(first.reservation).not.toHaveProperty("settlement_capability_secret");
+    expect(first.reservation).not.toHaveProperty("settlement_capability_hash");
     const reserveReplay = await reserveBudget(
       storage,
       leased("mark-retry", { model_calls: 1 }, "digest-mark-retry"),
@@ -1418,5 +1426,671 @@ describe("budget ledger algebra", () => {
     const named = bindIdempotencyKey("k1", "abc");
     expect(named.ok).toBe(true);
     if (named.ok) expect(named.idempotency_key).toBe("k1");
+  });
+});
+
+function assertNoCapabilityLeak(payload: unknown, secret: string, hash: string): void {
+  const encoded = JSON.stringify(payload);
+  expect(encoded).not.toContain(secret);
+  expect(encoded).not.toContain(hash);
+  expect(encoded).not.toMatch(/settlement_capability_secret|settlement_capability_hash/);
+}
+
+describe("P0 terminal replay and capability isolation", () => {
+  it("public DTO has no sensitive capability fields", () => {
+    expectTypeOf<Reservation>().toHaveProperty("settlement_capability_secret");
+    expectTypeOf<Reservation>().toHaveProperty("settlement_capability_hash");
+    expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability");
+    expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability_secret");
+    expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability_hash");
+    type Sensitive = Extract<
+      keyof PublicReservation,
+      "settlement_capability" | "settlement_capability_secret" | "settlement_capability_hash"
+    >;
+    const publicDtoHasNoSensitive: Sensitive extends never ? true : never = true;
+    expect(publicDtoHasNoSensitive).toBe(true);
+  });
+
+  it("active and reconciled reserve replay with missing/false acquire_lease rejects", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("p0-lease", { model_calls: 1, input_tokens: 8 }, "digest-p0-lease"),
+      T0,
+    );
+    expect(reserved.ok).toBe(true);
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+
+    for (const [label, acquire] of [
+      ["active omitted", undefined],
+      ["active false", false],
+    ] as const) {
+      const denied = await reserveBudget(
+        storage,
+        {
+          idempotency_key: "p0-lease",
+          request_digest: "digest-p0-lease",
+          amounts: { model_calls: 1, input_tokens: 8 },
+          ...(acquire === false ? { acquire_lease: false } : {}),
+        },
+        T0 + 1,
+      );
+      expect(denied, label).toMatchObject({ ok: false, error: "lease_required" });
+      expect(denied).not.toHaveProperty("reservation");
+      expect(JSON.stringify(denied)).not.toMatch(/cached_result|settlement_capability/);
+    }
+
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "p0-lease",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-p0-lease",
+      },
+      T0 + 2,
+    );
+    if (!started.ok || !started.settlement_capability) throw new Error("cap");
+    const finalized = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "p0-lease",
+        request_digest: "digest-p0-lease",
+        lease_id: reserved.lease.lease_id,
+        settlement_capability: started.settlement_capability,
+        usage: { model_calls: 1, input_tokens: 3 },
+        terminal_result: { http_status: 200, body: { ok: true } },
+      },
+      T0 + 3,
+    );
+    expect(finalized.ok).toBe(true);
+
+    for (const acquire of [undefined, false] as const) {
+      const denied = await reserveBudget(
+        storage,
+        {
+          idempotency_key: "p0-lease",
+          request_digest: "digest-p0-lease",
+          amounts: { model_calls: 1, input_tokens: 8 },
+          ...(acquire === false ? { acquire_lease: false } : {}),
+        },
+        T0 + 4,
+      );
+      expect(denied).toMatchObject({ ok: false, error: "lease_required" });
+      expect(denied).not.toHaveProperty("reservation");
+      expect(JSON.stringify(denied)).not.toMatch(/cached_result|settlement_capability/);
+    }
+
+    const exactReplay = await reserveBudget(
+      storage,
+      leased("p0-lease", { model_calls: 1, input_tokens: 8 }, "digest-p0-lease"),
+      T0 + 5,
+    );
+    expect(exactReplay.ok).toBe(true);
+    if (!exactReplay.ok) throw new Error("replay");
+    expect(exactReplay.existing).toBe(true);
+    expect(exactReplay.budget_run_id).toBe(reserved.budget_run_id);
+    expect(exactReplay.reservation.cached_result?.http_status).toBe(200);
+    const snap = await snapshotBudget(storage, T0 + 6);
+    if (!snap.ok) throw new Error("snapshot");
+    expect(snap.used.model_calls).toBe(1);
+    expect(snap.reserved).toEqual(zeroCounters());
+    expect(snap.active_leases).toBe(0);
+  });
+
+  it("nested object and array bodies cannot persist or return capability material", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("p0-smuggle", { model_calls: 1, input_tokens: 8 }, "digest-p0-smuggle"),
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "p0-smuggle",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-p0-smuggle",
+      },
+      T0 + 1,
+    );
+    if (!started.ok || !started.settlement_capability) throw new Error("cap");
+    const secret = started.settlement_capability;
+    const ledger = await storage.get<{
+      reservations: Record<
+        string,
+        { settlement_capability_hash: string | null; cached_result: unknown }
+      >;
+    }>("ledger");
+    const hash = ledger?.reservations["p0-smuggle"].settlement_capability_hash;
+    expect(hash).toEqual(expect.any(String));
+
+    const nestedObject = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "p0-smuggle",
+        request_digest: "digest-p0-smuggle",
+        lease_id: reserved.lease.lease_id,
+        settlement_capability: secret,
+        usage: { model_calls: 1, input_tokens: 2 },
+        terminal_result: {
+          http_status: 200,
+          body: {
+            ok: true,
+            artifact: {
+              nested: {
+                settlement_capability: secret,
+                settlement_capability_secret: secret,
+                settlement_capability_hash: hash,
+              },
+            },
+          },
+        },
+      },
+      T0 + 2,
+    );
+    expect(nestedObject.ok).toBe(false);
+    if (!nestedObject.ok) {
+      expect(nestedObject.error).toMatch(/cached_result_capability_/);
+    }
+    expect(nestedObject).not.toHaveProperty("reservation");
+
+    const nestedArray = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "p0-smuggle",
+        request_digest: "digest-p0-smuggle",
+        lease_id: reserved.lease.lease_id,
+        settlement_capability: secret,
+        usage: { model_calls: 1, input_tokens: 2 },
+        terminal_result: {
+          http_status: 200,
+          body: {
+            ok: true,
+            artifact: [{ token: secret }, hash, { items: [hash, { k: secret }] }],
+          },
+        },
+      },
+      T0 + 3,
+    );
+    expect(nestedArray.ok).toBe(false);
+    if (!nestedArray.ok) {
+      expect(nestedArray.error).toMatch(/cached_result_capability_/);
+    }
+
+    const afterReject = await storage.get<{
+      reservations: Record<
+        string,
+        {
+          status: string;
+          cached_result: unknown;
+          settlement_capability_secret: string | null;
+          settlement_capability_consumed: boolean;
+        }
+      >;
+    }>("ledger");
+    expect(afterReject?.reservations["p0-smuggle"].status).toBe("reserved");
+    expect(afterReject?.reservations["p0-smuggle"].cached_result).toBeNull();
+    expect(afterReject?.reservations["p0-smuggle"].settlement_capability_secret).toBe(secret);
+    expect(afterReject?.reservations["p0-smuggle"].settlement_capability_consumed).toBe(false);
+
+    const reserveReplay = await reserveBudget(
+      storage,
+      leased("p0-smuggle", { model_calls: 1, input_tokens: 8 }, "digest-p0-smuggle"),
+      T0 + 4,
+    );
+    expect(reserveReplay.ok).toBe(true);
+    assertNoCapabilityLeak(reserveReplay, secret, hash as string);
+
+    const committed = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "p0-smuggle",
+        request_digest: "digest-p0-smuggle",
+        lease_id: reserved.lease.lease_id,
+        settlement_capability: secret,
+        usage: { model_calls: 1, input_tokens: 2 },
+        terminal_result: { http_status: 200, body: { ok: true, artifact: { summary: "safe" } } },
+      },
+      T0 + 6,
+    );
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) throw new Error("commit");
+    assertNoCapabilityLeak(committed, secret, hash as string);
+
+    const cachedReplay = await reserveBudget(
+      storage,
+      leased("p0-smuggle", { model_calls: 1, input_tokens: 8 }, "digest-p0-smuggle"),
+      T0 + 7,
+    );
+    expect(cachedReplay.ok).toBe(true);
+    if (!cachedReplay.ok) throw new Error("cached replay");
+    expect(cachedReplay.reservation.cached_result?.body).toMatchObject({
+      ok: true,
+      artifact: { summary: "safe" },
+    });
+    assertNoCapabilityLeak(cachedReplay, secret, hash as string);
+
+    const released = await releaseBudget(
+      storage,
+      { idempotency_key: "p0-smuggle", lease_id: reserved.lease.lease_id },
+      T0 + 8,
+    );
+    expect(released.ok).toBe(true);
+    assertNoCapabilityLeak(released, secret, hash as string);
+    const persisted = await storage.get<{
+      reservations: Record<string, { cached_result: { body: unknown } | null }>;
+    }>("ledger");
+    expect(JSON.stringify(persisted?.reservations["p0-smuggle"].cached_result)).not.toContain(
+      secret,
+    );
+    expect(JSON.stringify(persisted?.reservations["p0-smuggle"].cached_result)).not.toContain(
+      hash as string,
+    );
+  });
+
+  it("exact finalized retry succeeds; wrong or omitted digest/lease/cap fails", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("p0-finalize", { model_calls: 1, input_tokens: 10 }, "digest-p0-finalize"),
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const leaseId = reserved.lease.lease_id;
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "p0-finalize",
+        lease_id: leaseId,
+        request_digest: "digest-p0-finalize",
+      },
+      T0 + 1,
+    );
+    if (!started.ok || !started.settlement_capability) throw new Error("cap");
+    const cap = started.settlement_capability;
+    const first = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "p0-finalize",
+        request_digest: "digest-p0-finalize",
+        lease_id: leaseId,
+        settlement_capability: cap,
+        usage: { model_calls: 1, input_tokens: 4 },
+        terminal_result: { http_status: 200, body: { ok: true } },
+      },
+      T0 + 2,
+    );
+    expect(first.ok).toBe(true);
+
+    const attacks: Array<{ name: string; input: Parameters<typeof finalizeBudget>[1]; error: string }> =
+      [
+        {
+          name: "wrong digest",
+          input: {
+            idempotency_key: "p0-finalize",
+            request_digest: "digest-other",
+            lease_id: leaseId,
+            settlement_capability: cap,
+            usage: { model_calls: 1, input_tokens: 99 },
+          },
+          error: "request_digest_mismatch",
+        },
+        {
+          name: "omitted digest",
+          input: {
+            idempotency_key: "p0-finalize",
+            request_digest: "",
+            lease_id: leaseId,
+            settlement_capability: cap,
+            usage: { model_calls: 1, input_tokens: 99 },
+          },
+          error: "request_digest required",
+        },
+        {
+          name: "wrong lease",
+          input: {
+            idempotency_key: "p0-finalize",
+            request_digest: "digest-p0-finalize",
+            lease_id: "00000000-0000-4000-8000-000000000000",
+            settlement_capability: cap,
+            usage: { model_calls: 1, input_tokens: 99 },
+          },
+          error: "lease_mismatch",
+        },
+        {
+          name: "omitted lease",
+          input: {
+            idempotency_key: "p0-finalize",
+            request_digest: "digest-p0-finalize",
+            lease_id: "",
+            settlement_capability: cap,
+            usage: { model_calls: 1, input_tokens: 99 },
+          },
+          error: "lease_id required",
+        },
+        {
+          name: "wrong capability",
+          input: {
+            idempotency_key: "p0-finalize",
+            request_digest: "digest-p0-finalize",
+            lease_id: leaseId,
+            settlement_capability: "ff".repeat(32),
+            usage: { model_calls: 1, input_tokens: 99 },
+          },
+          error: "settlement_capability_invalid",
+        },
+        {
+          name: "omitted capability",
+          input: {
+            idempotency_key: "p0-finalize",
+            request_digest: "digest-p0-finalize",
+            lease_id: leaseId,
+            settlement_capability: "",
+            usage: { model_calls: 1, input_tokens: 99 },
+          },
+          error: "settlement_capability_required",
+        },
+      ];
+    for (const attack of attacks) {
+      const denied = await finalizeBudget(storage, attack.input, T0 + 3);
+      expect(denied, attack.name).toMatchObject({ ok: false, error: attack.error });
+      expect(denied).not.toHaveProperty("reservation");
+      expect(JSON.stringify(denied)).not.toMatch(/cached_result/);
+      expect(JSON.stringify(denied)).not.toContain(cap);
+    }
+
+    const retry = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "p0-finalize",
+        request_digest: "digest-p0-finalize",
+        lease_id: leaseId,
+        settlement_capability: cap,
+        usage: { model_calls: 1, input_tokens: 99 },
+        terminal_result: { http_status: 200, body: { ok: true } },
+      },
+      T0 + 4,
+    );
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) throw new Error("retry");
+    expect(retry.reservation.actual?.input_tokens).toBe(4);
+    expect(retry.used.input_tokens).toBe(4);
+    expect(retry.reservation.cached_result?.http_status).toBe(200);
+  });
+
+  it("exact uncertain retry is idempotent; wrong or omitted each field fails", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("p0-uncertain", { model_calls: 1, input_tokens: 12 }, "digest-p0-uncertain"),
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const leaseId = reserved.lease.lease_id;
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "p0-uncertain",
+        lease_id: leaseId,
+        request_digest: "digest-p0-uncertain",
+      },
+      T0 + 1,
+    );
+    if (!started.ok || !started.settlement_capability) throw new Error("cap");
+    const cap = started.settlement_capability;
+    const first = await settleUncertainBudget(
+      storage,
+      {
+        idempotency_key: "p0-uncertain",
+        reason: "timeout",
+        request_digest: "digest-p0-uncertain",
+        lease_id: leaseId,
+        settlement_capability: cap,
+      },
+      T0 + 2,
+    );
+    expect(first.ok).toBe(true);
+
+    const attacks: Array<{
+      name: string;
+      input: Parameters<typeof settleUncertainBudget>[1];
+      error: string;
+    }> = [
+      {
+        name: "wrong digest",
+        input: {
+          idempotency_key: "p0-uncertain",
+          reason: "timeout",
+          request_digest: "digest-other",
+          lease_id: leaseId,
+          settlement_capability: cap,
+        },
+        error: "request_digest_mismatch",
+      },
+      {
+        name: "omitted digest",
+        input: {
+          idempotency_key: "p0-uncertain",
+          reason: "timeout",
+          lease_id: leaseId,
+          settlement_capability: cap,
+        },
+        error: "request_digest required",
+      },
+      {
+        name: "wrong lease",
+        input: {
+          idempotency_key: "p0-uncertain",
+          reason: "timeout",
+          request_digest: "digest-p0-uncertain",
+          lease_id: "00000000-0000-4000-8000-000000000000",
+          settlement_capability: cap,
+        },
+        error: "lease_mismatch",
+      },
+      {
+        name: "omitted lease",
+        input: {
+          idempotency_key: "p0-uncertain",
+          reason: "timeout",
+          request_digest: "digest-p0-uncertain",
+          settlement_capability: cap,
+        },
+        error: "lease_id required",
+      },
+      {
+        name: "wrong capability",
+        input: {
+          idempotency_key: "p0-uncertain",
+          reason: "timeout",
+          request_digest: "digest-p0-uncertain",
+          lease_id: leaseId,
+          settlement_capability: "aa".repeat(32),
+        },
+        error: "settlement_capability_invalid",
+      },
+      {
+        name: "omitted capability",
+        input: {
+          idempotency_key: "p0-uncertain",
+          reason: "timeout",
+          request_digest: "digest-p0-uncertain",
+          lease_id: leaseId,
+        },
+        error: "settlement_capability_required",
+      },
+    ];
+    for (const attack of attacks) {
+      const denied = await settleUncertainBudget(storage, attack.input, T0 + 3);
+      expect(denied, attack.name).toMatchObject({ ok: false, error: attack.error });
+      expect(denied).not.toHaveProperty("reservation");
+      expect(JSON.stringify(denied)).not.toMatch(/cached_result/);
+      expect(JSON.stringify(denied)).not.toContain(cap);
+    }
+
+    const retry = await settleUncertainBudget(
+      storage,
+      {
+        idempotency_key: "p0-uncertain",
+        reason: "timeout",
+        request_digest: "digest-p0-uncertain",
+        lease_id: leaseId,
+        settlement_capability: cap,
+      },
+      T0 + 4,
+    );
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) throw new Error("retry");
+    expect(retry.reservation.cached_result?.http_status).toBe(504);
+    expect(retry.used.input_tokens).toBe(12);
+  });
+
+  it("terminal replay does not change counters, charge twice, reopen a lease, or expose secrets", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("p0-replay-state", { model_calls: 1, input_tokens: 9, cost_usd: 0.2 }, "digest-p0-replay-state"),
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const leaseId = reserved.lease.lease_id;
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "p0-replay-state",
+        lease_id: leaseId,
+        request_digest: "digest-p0-replay-state",
+      },
+      T0 + 1,
+    );
+    if (!started.ok || !started.settlement_capability) throw new Error("cap");
+    const secret = started.settlement_capability;
+    const hash = (
+      await storage.get<{
+        reservations: Record<string, { settlement_capability_hash: string | null }>;
+      }>("ledger")
+    )?.reservations["p0-replay-state"].settlement_capability_hash as string;
+
+    const first = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "p0-replay-state",
+        request_digest: "digest-p0-replay-state",
+        lease_id: leaseId,
+        settlement_capability: secret,
+        usage: { model_calls: 1, input_tokens: 5, cost_usd: 0.1 },
+        terminal_result: { http_status: 200, body: { ok: true } },
+      },
+      T0 + 2,
+    );
+    expect(first.ok).toBe(true);
+    const before = await snapshotBudget(storage, T0 + 3);
+    if (!before.ok) throw new Error("before");
+
+    const replay = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "p0-replay-state",
+        request_digest: "digest-p0-replay-state",
+        lease_id: leaseId,
+        settlement_capability: secret,
+        usage: { model_calls: 1, input_tokens: 99, cost_usd: 9 },
+        terminal_result: { http_status: 200, body: { ok: true } },
+      },
+      T0 + 4,
+    );
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) throw new Error("replay");
+    expect(replay.used).toEqual(before.used);
+    expect(replay.reservation.actual?.input_tokens).toBe(5);
+    expect(replay.reservation).not.toHaveProperty("settlement_capability_secret");
+    expect(replay.reservation).not.toHaveProperty("settlement_capability_hash");
+    assertNoCapabilityLeak(replay, secret, hash);
+
+    const after = await snapshotBudget(storage, T0 + 5);
+    if (!after.ok) throw new Error("after");
+    expect(after.used).toEqual(before.used);
+    expect(after.reserved).toEqual(zeroCounters());
+    expect(after.active_leases).toBe(0);
+    expect(JSON.stringify(after)).not.toContain(secret);
+    expect(JSON.stringify(after)).not.toContain(hash);
+
+    const heartbeat = await heartbeatLease(storage, leaseId, T0 + 6);
+    expect(heartbeat).toMatchObject({ ok: false, error: "lease_not_active" });
+  });
+
+  it("lost mark-start response recovers capability only through exact mark-start retry", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("p0-lost-start", { model_calls: 1, input_tokens: 7 }, "digest-p0-lost-start"),
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const leaseId = reserved.lease.lease_id;
+    const first = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "p0-lost-start",
+        lease_id: leaseId,
+        request_digest: "digest-p0-lost-start",
+      },
+      T0 + 1,
+    );
+    if (!first.ok || !first.settlement_capability) throw new Error("cap");
+    const secret = first.settlement_capability;
+
+    const viaReserve = await reserveBudget(
+      storage,
+      leased("p0-lost-start", { model_calls: 1, input_tokens: 7 }, "digest-p0-lost-start"),
+      T0 + 2,
+    );
+    expect(viaReserve.ok).toBe(true);
+    expect(viaReserve).not.toHaveProperty("settlement_capability");
+    expect(JSON.stringify(viaReserve)).not.toContain(secret);
+
+    const wrongDigest = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "p0-lost-start",
+        lease_id: leaseId,
+        request_digest: "digest-other",
+      },
+      T0 + 3,
+    );
+    expect(wrongDigest).toMatchObject({ ok: false, error: "request_digest_mismatch" });
+    expect(JSON.stringify(wrongDigest)).not.toContain(secret);
+
+    const retried = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "p0-lost-start",
+        lease_id: leaseId,
+        request_digest: "digest-p0-lost-start",
+      },
+      T0 + 4,
+    );
+    expect(retried.ok).toBe(true);
+    if (!retried.ok) throw new Error("retry start");
+    expect(retried.settlement_capability).toBe(secret);
+    expect(retried.reservation).not.toHaveProperty("settlement_capability_secret");
+
+    const finalized = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "p0-lost-start",
+        request_digest: "digest-p0-lost-start",
+        lease_id: leaseId,
+        settlement_capability: retried.settlement_capability as string,
+        usage: { model_calls: 1, input_tokens: 3 },
+        terminal_result: { http_status: 200, body: { ok: true } },
+      },
+      T0 + 5,
+    );
+    expect(finalized.ok).toBe(true);
+    if (!finalized.ok) throw new Error("finalize");
+    expect(finalized.used.input_tokens).toBe(3);
+    expect(JSON.stringify(finalized)).not.toContain(secret);
   });
 });

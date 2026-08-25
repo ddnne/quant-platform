@@ -16,15 +16,30 @@ Strict Workers AI gateway. The research mass-eval worker **must not** bind `AI`.
 
 `BudgetLedger` persists a lease, a `provider_started_at` recovery marker, and a
 retry-safe one-shot settlement capability before Workers AI is invoked. The
-capability is stored privately, redacted from snapshots, returned again if the
-provider-start RPC response is lost, and consumed atomically. The production
-Gateway path is the sole settlement coordinator: generic HTTP
+capability secret is stored privately until first consume; after settlement
+only the one-way hash remains, so retries can be verified without returning the
+secret. A lost provider-start RPC is recovered only by an exact
+`markProviderStarted` retry (same digest and lease). Public reservation DTOs
+omit settlement secret and hash fields entirely. Cached terminal bodies are
+canonicalized under the closed Gateway response schema and recursively rejected
+if they contain capability field names or the actual capability/hash at any
+object or array depth.
+
+The production Gateway path is the sole settlement coordinator: generic HTTP
 `/finalize`, `/reconcile`, `/provider-started`, and capability-mint routes are
-not settlement authority. Provider-start, exact finalize, and uncertain settle
-require an exact nonempty `request_digest` and `lease_id`. Exact usage is
-derived privately by Gateway from the provider response; the Durable Object
-derives uncertain settlement from the reserved maximum and ignores
-caller-authored receipt/result/settlement claims.
+not settlement authority. Reserve, including replay of an active or terminal
+idempotency key, requires the canonical lease (`acquire_lease: true`). Missing
+or false lease never returns a reservation, cached payload, or capability.
+Provider-start, exact finalize, and uncertain settle require an exact nonempty
+`request_digest` and `lease_id`. Terminal replay verifies digest, lease, and
+capability hash before returning the persisted result; it does not recharge,
+recompute, or reopen the lease. Wrong or omitted digest, lease, idempotency
+identity, or capability fails closed with no cached result. Cross-operation
+replay with that same identity returns the already persisted terminal state
+and cannot turn wrong authority into success. Exact usage is derived privately
+by Gateway from the provider response; the Durable Object derives uncertain
+settlement from the reserved maximum and ignores caller-authored
+receipt/result/settlement claims.
 A timeout, provider error without usage, lost/invalid finalize response, Worker
 interruption, or expired provider-started lease can never be treated as zero
 usage: the ledger charges the persisted reservation maximum, freezes new work,

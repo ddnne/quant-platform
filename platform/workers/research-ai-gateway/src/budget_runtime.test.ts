@@ -1,12 +1,17 @@
 import { env, exports as workerExports } from "cloudflare:workers";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 import {
   evictDurableObject,
   reset,
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
-import { CONTROL_PLANE_LEDGER_NAME, type LedgerState } from "./budget_do";
+import {
+  CONTROL_PLANE_LEDGER_NAME,
+  type LedgerState,
+  type PublicReservation,
+  type Reservation,
+} from "./budget_do";
 import { BudgetLedger } from "./budget_http";
 import type { GatewayEnv } from "./index";
 
@@ -77,8 +82,29 @@ type BudgetLedgerRpcStub = DurableObjectStub & {
   }): Promise<{
     ok: boolean;
     error?: string;
-    reservation?: { actual?: { input_tokens?: number } };
-    used?: { input_tokens?: number };
+    reservation?: Record<string, unknown> & { actual?: { input_tokens?: number } };
+    used?: { input_tokens?: number; model_calls?: number };
+    frozen?: boolean;
+  }>;
+  settleUncertain(input: {
+    idempotency_key: string;
+    reason: string;
+    request_digest?: string;
+    lease_id?: string;
+    settlement_capability?: string;
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    reservation?: Record<string, unknown>;
+    used?: { input_tokens?: number; model_calls?: number };
+  }>;
+  release(input: {
+    lease_id?: string;
+    idempotency_key?: string;
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    reservation?: Record<string, unknown> | null;
   }>;
 };
 
@@ -573,7 +599,8 @@ describe("BudgetLedger in the Workers runtime", () => {
     );
     expect(retriedStart.ok).toBe(true);
     expect(retriedStart.settlement_capability).toBe(secret);
-    expect(retriedStart.reservation?.settlement_capability_secret ?? null).toBeNull();
+    expect(retriedStart.reservation).not.toHaveProperty("settlement_capability_secret");
+    expect(retriedStart.reservation).not.toHaveProperty("settlement_capability_hash");
 
     let persistedHash = "";
     await runInDurableObject(stub, async (_instance: BudgetLedger, state) => {
@@ -600,7 +627,8 @@ describe("BudgetLedger in the Workers runtime", () => {
     const replayText = JSON.stringify(reserveReplay);
     expect(replayText).not.toContain(secret);
     expect(replayText).not.toContain(persistedHash);
-    expect(reserveReplay.reservation?.settlement_capability_secret ?? null).toBeNull();
+    expect(reserveReplay.reservation).not.toHaveProperty("settlement_capability_secret");
+    expect(reserveReplay.reservation).not.toHaveProperty("settlement_capability_hash");
     expect(reserveReplay).not.toHaveProperty("settlement_capability");
 
     const snapshot = await within("public snapshot after start", stub.fetch("https://budget/snapshot"));
@@ -653,5 +681,423 @@ describe("BudgetLedger in the Workers runtime", () => {
       );
       expect(active).toEqual([]);
     });
+  }, 15_000);
+
+  it("public DTO has no sensitive capability fields", () => {
+    expectTypeOf<Reservation>().toHaveProperty("settlement_capability_secret");
+    expectTypeOf<Reservation>().toHaveProperty("settlement_capability_hash");
+    expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability");
+    expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability_secret");
+    expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability_hash");
+  });
+
+  it("rejects missing/false acquire_lease on active and reconciled reserve replay", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
+    const rpc = stub as BudgetLedgerRpcStub;
+    const reserved = await within(
+      "p0 lease reserve",
+      rpc.reserve({
+        idempotency_key: "runtime-p0-lease",
+        request_digest: "digest-runtime-p0-lease",
+        amounts: { model_calls: 1, input_tokens: 8 },
+        acquire_lease: true,
+      }),
+    );
+    expect(reserved.ok).toBe(true);
+    const omitted = await within(
+      "p0 active omitted lease",
+      rpc.reserve({
+        idempotency_key: "runtime-p0-lease",
+        request_digest: "digest-runtime-p0-lease",
+        amounts: { model_calls: 1, input_tokens: 8 },
+      }),
+    );
+    const disabled = await within(
+      "p0 active false lease",
+      rpc.reserve({
+        idempotency_key: "runtime-p0-lease",
+        request_digest: "digest-runtime-p0-lease",
+        amounts: { model_calls: 1, input_tokens: 8 },
+        acquire_lease: false,
+      }),
+    );
+    expect(omitted).toMatchObject({ ok: false, error: "lease_required" });
+    expect(disabled).toMatchObject({ ok: false, error: "lease_required" });
+    expect(omitted.reservation).toBeUndefined();
+    expect(disabled.reservation).toBeUndefined();
+
+    const started = await rpc.markProviderStarted({
+      idempotency_key: "runtime-p0-lease",
+      lease_id: reserved.lease!.lease_id,
+      request_digest: "digest-runtime-p0-lease",
+    });
+    expect(started.ok).toBe(true);
+    const finalized = await rpc.finalizeExact({
+      idempotency_key: "runtime-p0-lease",
+      request_digest: "digest-runtime-p0-lease",
+      lease_id: reserved.lease!.lease_id,
+      settlement_capability: started.settlement_capability as string,
+      usage: { model_calls: 1, input_tokens: 3 },
+      terminal_result: { http_status: 200, body: { ok: true } },
+    });
+    expect(finalized.ok).toBe(true);
+    const reconciledOmitted = await rpc.reserve({
+      idempotency_key: "runtime-p0-lease",
+      request_digest: "digest-runtime-p0-lease",
+      amounts: { model_calls: 1, input_tokens: 8 },
+    });
+    const reconciledFalse = await rpc.reserve({
+      idempotency_key: "runtime-p0-lease",
+      request_digest: "digest-runtime-p0-lease",
+      amounts: { model_calls: 1, input_tokens: 8 },
+      acquire_lease: false,
+    });
+    expect(reconciledOmitted).toMatchObject({ ok: false, error: "lease_required" });
+    expect(reconciledFalse).toMatchObject({ ok: false, error: "lease_required" });
+    expect(JSON.stringify(reconciledOmitted)).not.toMatch(/cached_result|settlement_capability/);
+    const exact = await rpc.reserve({
+      idempotency_key: "runtime-p0-lease",
+      request_digest: "digest-runtime-p0-lease",
+      amounts: { model_calls: 1, input_tokens: 8 },
+      acquire_lease: true,
+    });
+    expect(exact.ok).toBe(true);
+    expect(exact.existing).toBe(true);
+  }, 15_000);
+
+  it("rejects nested capability smuggling and never returns secret/hash", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
+    const rpc = stub as BudgetLedgerRpcStub;
+    const reserved = await rpc.reserve({
+      idempotency_key: "runtime-p0-smuggle",
+      request_digest: "digest-runtime-p0-smuggle",
+      amounts: { model_calls: 1, input_tokens: 8 },
+      acquire_lease: true,
+    });
+    const started = await rpc.markProviderStarted({
+      idempotency_key: "runtime-p0-smuggle",
+      lease_id: reserved.lease!.lease_id,
+      request_digest: "digest-runtime-p0-smuggle",
+    });
+    const secret = started.settlement_capability as string;
+    let hash = "";
+    await runInDurableObject(stub, async (_instance: BudgetLedger, state) => {
+      const ledger = await state.storage.get<LedgerState>("ledger");
+      hash = ledger?.reservations["runtime-p0-smuggle"].settlement_capability_hash ?? "";
+    });
+    expect(hash).toEqual(expect.any(String));
+
+    const nestedObject = await rpc.finalizeExact({
+      idempotency_key: "runtime-p0-smuggle",
+      request_digest: "digest-runtime-p0-smuggle",
+      lease_id: reserved.lease!.lease_id,
+      settlement_capability: secret,
+      usage: { model_calls: 1, input_tokens: 2 },
+      terminal_result: {
+        http_status: 200,
+        body: {
+          ok: true,
+          artifact: {
+            nested: {
+              settlement_capability: secret,
+              settlement_capability_hash: hash,
+            },
+          },
+        },
+      },
+    });
+    expect(nestedObject.ok).toBe(false);
+    expect(nestedObject.error).toMatch(/cached_result_capability_/);
+    expect(nestedObject.reservation).toBeUndefined();
+
+    const nestedArray = await rpc.finalizeExact({
+      idempotency_key: "runtime-p0-smuggle",
+      request_digest: "digest-runtime-p0-smuggle",
+      lease_id: reserved.lease!.lease_id,
+      settlement_capability: secret,
+      usage: { model_calls: 1, input_tokens: 2 },
+      terminal_result: {
+        http_status: 200,
+        body: { ok: true, artifact: [secret, { items: [hash] }] },
+      },
+    });
+    expect(nestedArray.ok).toBe(false);
+    expect(nestedArray.error).toMatch(/cached_result_capability_/);
+
+    await runInDurableObject(stub, async (_instance: BudgetLedger, state) => {
+      const ledger = await state.storage.get<LedgerState>("ledger");
+      expect(ledger?.reservations["runtime-p0-smuggle"].cached_result).toBeNull();
+      expect(ledger?.reservations["runtime-p0-smuggle"].status).toBe("reserved");
+    });
+
+    const committed = await rpc.finalizeExact({
+      idempotency_key: "runtime-p0-smuggle",
+      request_digest: "digest-runtime-p0-smuggle",
+      lease_id: reserved.lease!.lease_id,
+      settlement_capability: secret,
+      usage: { model_calls: 1, input_tokens: 2 },
+      terminal_result: { http_status: 200, body: { ok: true, artifact: { summary: "safe" } } },
+    });
+    expect(committed.ok).toBe(true);
+    const replay = await rpc.reserve({
+      idempotency_key: "runtime-p0-smuggle",
+      request_digest: "digest-runtime-p0-smuggle",
+      amounts: { model_calls: 1, input_tokens: 8 },
+      acquire_lease: true,
+    });
+    const released = await rpc.release({
+      idempotency_key: "runtime-p0-smuggle",
+      lease_id: reserved.lease!.lease_id,
+    });
+    for (const payload of [nestedObject, nestedArray, committed, replay, released]) {
+      const encoded = JSON.stringify(payload);
+      expect(encoded).not.toContain(secret);
+      expect(encoded).not.toContain(hash);
+    }
+  }, 15_000);
+
+  it("terminal finalize and uncertain replay verify digest/lease/capability", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
+    const rpc = stub as BudgetLedgerRpcStub;
+
+    const reserved = await rpc.reserve({
+      idempotency_key: "runtime-p0-finalize",
+      request_digest: "digest-runtime-p0-finalize",
+      amounts: { model_calls: 1, input_tokens: 10 },
+      acquire_lease: true,
+    });
+    const started = await rpc.markProviderStarted({
+      idempotency_key: "runtime-p0-finalize",
+      lease_id: reserved.lease!.lease_id,
+      request_digest: "digest-runtime-p0-finalize",
+    });
+    const cap = started.settlement_capability as string;
+    const first = await rpc.finalizeExact({
+      idempotency_key: "runtime-p0-finalize",
+      request_digest: "digest-runtime-p0-finalize",
+      lease_id: reserved.lease!.lease_id,
+      settlement_capability: cap,
+      usage: { model_calls: 1, input_tokens: 4 },
+      terminal_result: { http_status: 200, body: { ok: true } },
+    });
+    expect(first.ok).toBe(true);
+    const snapBefore = await (await stub.fetch("https://budget/snapshot")).json() as {
+      used: { input_tokens: number; model_calls: number };
+      reserved: { model_calls: number };
+      active_leases: number;
+    };
+
+    expect(
+      await rpc.finalizeExact({
+        idempotency_key: "runtime-p0-finalize",
+        request_digest: "digest-other",
+        lease_id: reserved.lease!.lease_id,
+        settlement_capability: cap,
+        usage: { model_calls: 1, input_tokens: 99 },
+      }),
+    ).toMatchObject({ ok: false, error: "request_digest_mismatch" });
+    expect(
+      await rpc.finalizeExact({
+        idempotency_key: "runtime-p0-finalize",
+        request_digest: "",
+        lease_id: reserved.lease!.lease_id,
+        settlement_capability: cap,
+        usage: { model_calls: 1, input_tokens: 99 },
+      }),
+    ).toMatchObject({ ok: false, error: "request_digest required" });
+    expect(
+      await rpc.finalizeExact({
+        idempotency_key: "runtime-p0-finalize",
+        request_digest: "digest-runtime-p0-finalize",
+        lease_id: "00000000-0000-4000-8000-000000000000",
+        settlement_capability: cap,
+        usage: { model_calls: 1, input_tokens: 99 },
+      }),
+    ).toMatchObject({ ok: false, error: "lease_mismatch" });
+    expect(
+      await rpc.finalizeExact({
+        idempotency_key: "runtime-p0-finalize",
+        request_digest: "digest-runtime-p0-finalize",
+        lease_id: "",
+        settlement_capability: cap,
+        usage: { model_calls: 1, input_tokens: 99 },
+      }),
+    ).toMatchObject({ ok: false, error: "lease_id required" });
+    expect(
+      await rpc.finalizeExact({
+        idempotency_key: "runtime-p0-finalize",
+        request_digest: "digest-runtime-p0-finalize",
+        lease_id: reserved.lease!.lease_id,
+        settlement_capability: "ff".repeat(32),
+        usage: { model_calls: 1, input_tokens: 99 },
+      }),
+    ).toMatchObject({ ok: false, error: "settlement_capability_invalid" });
+    expect(
+      await rpc.finalizeExact({
+        idempotency_key: "runtime-p0-finalize",
+        request_digest: "digest-runtime-p0-finalize",
+        lease_id: reserved.lease!.lease_id,
+        settlement_capability: "",
+        usage: { model_calls: 1, input_tokens: 99 },
+      }),
+    ).toMatchObject({ ok: false, error: "settlement_capability_required" });
+
+    const retry = await rpc.finalizeExact({
+      idempotency_key: "runtime-p0-finalize",
+      request_digest: "digest-runtime-p0-finalize",
+      lease_id: reserved.lease!.lease_id,
+      settlement_capability: cap,
+      usage: { model_calls: 1, input_tokens: 99 },
+      terminal_result: { http_status: 200, body: { ok: true } },
+    });
+    expect(retry.ok).toBe(true);
+    expect(retry.used?.input_tokens).toBe(4);
+    expect(retry.reservation).not.toHaveProperty("settlement_capability_secret");
+    expect(retry.reservation).not.toHaveProperty("settlement_capability_hash");
+    const snapAfter = await (await stub.fetch("https://budget/snapshot")).json() as {
+      used: { input_tokens: number; model_calls: number };
+      reserved: { model_calls: number };
+      active_leases: number;
+    };
+    expect(snapAfter.used).toEqual(snapBefore.used);
+    expect(snapAfter.reserved.model_calls).toBe(0);
+    expect(snapAfter.active_leases).toBe(0);
+    expect(JSON.stringify(retry)).not.toContain(cap);
+
+    const uncertainReserved = await rpc.reserve({
+      idempotency_key: "runtime-p0-uncertain",
+      request_digest: "digest-runtime-p0-uncertain",
+      amounts: { model_calls: 1, input_tokens: 11 },
+      acquire_lease: true,
+    });
+    const uncertainStarted = await rpc.markProviderStarted({
+      idempotency_key: "runtime-p0-uncertain",
+      lease_id: uncertainReserved.lease!.lease_id,
+      request_digest: "digest-runtime-p0-uncertain",
+    });
+    const uncertainCap = uncertainStarted.settlement_capability as string;
+    const uncertainFirst = await rpc.settleUncertain({
+      idempotency_key: "runtime-p0-uncertain",
+      reason: "timeout",
+      request_digest: "digest-runtime-p0-uncertain",
+      lease_id: uncertainReserved.lease!.lease_id,
+      settlement_capability: uncertainCap,
+    });
+    expect(uncertainFirst.ok).toBe(true);
+    expect(
+      await rpc.settleUncertain({
+        idempotency_key: "runtime-p0-uncertain",
+        reason: "timeout",
+        request_digest: "digest-other",
+        lease_id: uncertainReserved.lease!.lease_id,
+        settlement_capability: uncertainCap,
+      }),
+    ).toMatchObject({ ok: false, error: "request_digest_mismatch" });
+    expect(
+      await rpc.settleUncertain({
+        idempotency_key: "runtime-p0-uncertain",
+        reason: "timeout",
+        lease_id: uncertainReserved.lease!.lease_id,
+        settlement_capability: uncertainCap,
+      }),
+    ).toMatchObject({ ok: false, error: "request_digest required" });
+    expect(
+      await rpc.settleUncertain({
+        idempotency_key: "runtime-p0-uncertain",
+        reason: "timeout",
+        request_digest: "digest-runtime-p0-uncertain",
+        lease_id: "00000000-0000-4000-8000-000000000000",
+        settlement_capability: uncertainCap,
+      }),
+    ).toMatchObject({ ok: false, error: "lease_mismatch" });
+    expect(
+      await rpc.settleUncertain({
+        idempotency_key: "runtime-p0-uncertain",
+        reason: "timeout",
+        request_digest: "digest-runtime-p0-uncertain",
+        settlement_capability: uncertainCap,
+      }),
+    ).toMatchObject({ ok: false, error: "lease_id required" });
+    expect(
+      await rpc.settleUncertain({
+        idempotency_key: "runtime-p0-uncertain",
+        reason: "timeout",
+        request_digest: "digest-runtime-p0-uncertain",
+        lease_id: uncertainReserved.lease!.lease_id,
+        settlement_capability: "aa".repeat(32),
+      }),
+    ).toMatchObject({ ok: false, error: "settlement_capability_invalid" });
+    expect(
+      await rpc.settleUncertain({
+        idempotency_key: "runtime-p0-uncertain",
+        reason: "timeout",
+        request_digest: "digest-runtime-p0-uncertain",
+        lease_id: uncertainReserved.lease!.lease_id,
+      }),
+    ).toMatchObject({ ok: false, error: "settlement_capability_required" });
+    const uncertainRetry = await rpc.settleUncertain({
+      idempotency_key: "runtime-p0-uncertain",
+      reason: "timeout",
+      request_digest: "digest-runtime-p0-uncertain",
+      lease_id: uncertainReserved.lease!.lease_id,
+      settlement_capability: uncertainCap,
+    });
+    expect(uncertainRetry.ok).toBe(true);
+    expect(
+      (uncertainRetry.reservation as { actual?: { input_tokens?: number } } | undefined)?.actual
+        ?.input_tokens,
+    ).toBe(11);
+    expect(uncertainRetry.used?.input_tokens).toBe(15);
+    expect(JSON.stringify(uncertainRetry)).not.toContain(uncertainCap);
+  }, 15_000);
+
+  it("lost mark-start recovers capability only through exact retry then finalize", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
+    const rpc = stub as BudgetLedgerRpcStub;
+    const reserved = await rpc.reserve({
+      idempotency_key: "runtime-p0-lost-start",
+      request_digest: "digest-runtime-p0-lost-start",
+      amounts: { model_calls: 1, input_tokens: 6 },
+      acquire_lease: true,
+    });
+    const started = await rpc.markProviderStarted({
+      idempotency_key: "runtime-p0-lost-start",
+      lease_id: reserved.lease!.lease_id,
+      request_digest: "digest-runtime-p0-lost-start",
+    });
+    const secret = started.settlement_capability as string;
+    await within("evict p0 lost-start", evictDurableObject(stub));
+    const viaReserve = await rpc.reserve({
+      idempotency_key: "runtime-p0-lost-start",
+      request_digest: "digest-runtime-p0-lost-start",
+      amounts: { model_calls: 1, input_tokens: 6 },
+      acquire_lease: true,
+    });
+    expect(viaReserve).not.toHaveProperty("settlement_capability");
+    expect(JSON.stringify(viaReserve)).not.toContain(secret);
+    const retried = await rpc.markProviderStarted({
+      idempotency_key: "runtime-p0-lost-start",
+      lease_id: reserved.lease!.lease_id,
+      request_digest: "digest-runtime-p0-lost-start",
+    });
+    expect(retried.settlement_capability).toBe(secret);
+    const finalized = await rpc.finalizeExact({
+      idempotency_key: "runtime-p0-lost-start",
+      request_digest: "digest-runtime-p0-lost-start",
+      lease_id: reserved.lease!.lease_id,
+      settlement_capability: retried.settlement_capability as string,
+      usage: { model_calls: 1, input_tokens: 2 },
+      terminal_result: { http_status: 200, body: { ok: true } },
+    });
+    expect(finalized.ok).toBe(true);
+    expect(finalized.used?.input_tokens).toBe(2);
   }, 15_000);
 });

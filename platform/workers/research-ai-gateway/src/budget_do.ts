@@ -87,9 +87,43 @@ export type Reservation = {
   /** SHA-256 of the one-shot settlement capability bound to this reservation. */
   settlement_capability_hash: string | null;
   settlement_capability_consumed: boolean;
-  /** Private one-shot secret. Redacted from snapshots and public RPC bodies. */
+  /** Private one-shot secret. Never present on PublicReservation. */
   settlement_capability_secret: string | null;
 };
+
+/**
+ * Closed public reservation DTO. Settlement secret/hash fields are absent, not
+ * redacted placeholders. Callers must not treat this as the sensitive Reservation.
+ */
+export type PublicReservation = {
+  idempotency_key: string;
+  reservation_id: string;
+  amounts: Counters;
+  actual: Counters | null;
+  status: ReservationStatus;
+  lease_id: string | null;
+  created_at: number;
+  reconciled_at: number | null;
+  released_at: number | null;
+  request_digest: string | null;
+  cached_result: CachedBudgetResult | null;
+  finalize_error: string | null;
+  settlement: BudgetSettlement | null;
+  provider_started_at: number | null;
+  uncertainty_reason: string | null;
+  settlement_capability_consumed: boolean;
+};
+
+type SensitiveCapabilityField =
+  | "settlement_capability"
+  | "settlement_capability_secret"
+  | "settlement_capability_hash";
+
+type PublicReservationSensitive = Extract<keyof PublicReservation, SensitiveCapabilityField>;
+const _publicReservationHasNoSensitiveFields: PublicReservationSensitive extends never
+  ? true
+  : never = true;
+void _publicReservationHasNoSensitiveFields;
 
 export type Lease = {
   lease_id: string;
@@ -443,6 +477,8 @@ function chargeUncertainReservation(
     actual_cached_tokens: null,
   };
   reservation.cached_result = uncertainResult(reservation, reason);
+  reservation.settlement_capability_secret = null;
+  reservation.settlement_capability_consumed = true;
   closeReservationLease(state, reservation, now);
   freezeForUncertainty(state, reservation, reason, now);
 }
@@ -523,7 +559,7 @@ export async function reserveBudget(
   now = Date.now(),
 ): Promise<
   BudgetResult<{
-    reservation: Reservation;
+    reservation: PublicReservation;
     lease: Lease | null;
     existing: boolean;
     budget_run_id: string;
@@ -541,6 +577,14 @@ export async function reserveBudget(
   const state = await loadState(storage, now);
   recoverExpired(state, now);
   ensureCreated(state, now);
+
+  // Production reserve always takes the canonical 1800s lease, including
+  // replay of an active or terminal idempotency key. Missing/false must not
+  // return a cached reservation, capability, or occupancy mutation.
+  if (input.acquire_lease !== true) {
+    await saveState(storage, state);
+    return { ok: false, error: "lease_required" };
+  }
 
   const existing = state.reservations[key.idempotency_key];
   if (existing) {
@@ -562,13 +606,6 @@ export async function reserveBudget(
     // A released reservation provably never crossed the provider marker, so a
     // same-digest retry may obtain a fresh run. Provider-started work is never
     // represented by the released status.
-  }
-
-  // Production reserve always takes the canonical 1800s lease. A no-lease
-  // reservation has no alarm and would persist as a phantom occupancy.
-  if (input.acquire_lease !== true) {
-    await saveState(storage, state);
-    return { ok: false, error: "lease_required" };
   }
 
   // A frozen ledger still serves terminal idempotent results above, but never
@@ -644,27 +681,162 @@ export async function reserveBudget(
   };
 }
 
-function publicCachedResult(cached: CachedBudgetResult | null): CachedBudgetResult | null {
-  if (!cached) return null;
-  const body = cached.body;
-  if (body && typeof body === "object" && !Array.isArray(body)) {
-    const clone = structuredClone(body) as Record<string, unknown>;
-    delete clone.settlement_capability_secret;
-    delete clone.settlement_capability_hash;
-    delete clone.settlement_capability;
-    return { http_status: cached.http_status, body: clone };
+const FORBIDDEN_CAPABILITY_KEYS = new Set<SensitiveCapabilityField>([
+  "settlement_capability",
+  "settlement_capability_secret",
+  "settlement_capability_hash",
+]);
+
+/** Closed Gateway success envelope. Nested artifact contents are still deep-scanned. */
+const PUBLIC_SUCCESS_BODY_KEYS = new Set([
+  "ok",
+  "schema",
+  "schema_version",
+  "artifact",
+  "model",
+  "input_tokens",
+  "output_tokens",
+  "cached_tokens",
+  "monetary_cost_usd",
+  "prompt_digest",
+  "output_digest",
+  "ready_snapshot_id",
+  "experiment_id",
+  "budget_id",
+  "budget_run_id",
+]);
+
+const PUBLIC_ERROR_BODY_KEYS = new Set(["ok", "error", "detail", "budget_run_id"]);
+
+function capabilityMaterialSet(
+  reservation: Reservation,
+  submittedCapability?: string,
+): Set<string> {
+  const material = new Set<string>();
+  if (reservation.settlement_capability_hash) {
+    material.add(reservation.settlement_capability_hash);
   }
-  return { http_status: cached.http_status, body };
+  if (reservation.settlement_capability_secret) {
+    material.add(reservation.settlement_capability_secret);
+  }
+  const submitted =
+    typeof submittedCapability === "string" ? submittedCapability.trim() : "";
+  if (submitted) material.add(submitted);
+  return material;
 }
 
-function publicReservation(reservation: Reservation): Reservation {
-  const clone = structuredClone(reservation);
-  clone.settlement_capability_hash = reservation.settlement_capability_hash
-    ? "sha256:redacted"
-    : null;
-  clone.settlement_capability_secret = null;
-  clone.cached_result = publicCachedResult(clone.cached_result);
-  return clone;
+function valueEqualsCapabilityMaterial(value: unknown, material: Set<string>): boolean {
+  return typeof value === "string" && value.length > 0 && material.has(value);
+}
+
+function rejectCapabilityMaterial(
+  value: unknown,
+  material: Set<string>,
+): BudgetErr | null {
+  if (valueEqualsCapabilityMaterial(value, material)) {
+    return { ok: false, error: "cached_result_capability_material" };
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const nested = rejectCapabilityMaterial(item, material);
+      if (nested) return nested;
+    }
+    return null;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+      if (FORBIDDEN_CAPABILITY_KEYS.has(key as SensitiveCapabilityField)) {
+        return { ok: false, error: "cached_result_capability_field" };
+      }
+      const nested = rejectCapabilityMaterial(nestedValue, material);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function canonicalizeCachedResult(
+  result: CachedBudgetResult | undefined,
+  material: Set<string>,
+): BudgetResult<{ value: CachedBudgetResult | undefined }> {
+  if (!result) return { ok: true, value: undefined };
+  const status = Number(result.http_status);
+  if (!Number.isInteger(status) || status < 200 || status > 599) {
+    return { ok: false, error: "cached_result_invalid" };
+  }
+  const body = result.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, error: "cached_result_invalid" };
+  }
+  const rec = body as Record<string, unknown>;
+  if (rec.ok === true) {
+    const extra = Object.keys(rec).filter((key) => !PUBLIC_SUCCESS_BODY_KEYS.has(key));
+    if (extra.length) return { ok: false, error: "cached_result_invalid" };
+  } else if (rec.ok === false) {
+    const extra = Object.keys(rec).filter((key) => !PUBLIC_ERROR_BODY_KEYS.has(key));
+    if (extra.length) return { ok: false, error: "cached_result_invalid" };
+    if (typeof rec.error !== "string" || !rec.error) {
+      return { ok: false, error: "cached_result_invalid" };
+    }
+  } else {
+    return { ok: false, error: "cached_result_invalid" };
+  }
+  const leaked = rejectCapabilityMaterial(rec, material);
+  if (leaked) return leaked;
+  return {
+    ok: true,
+    value: { http_status: status, body: structuredClone(rec) },
+  };
+}
+
+function scrubPublicValue(value: unknown, material: Set<string>): unknown {
+  if (valueEqualsCapabilityMaterial(value, material)) return null;
+  if (Array.isArray(value)) {
+    return value.map((item) => scrubPublicValue(item, material));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      if (FORBIDDEN_CAPABILITY_KEYS.has(key as SensitiveCapabilityField)) continue;
+      out[key] = scrubPublicValue(nested, material);
+    }
+    return out;
+  }
+  return value;
+}
+
+function publicCachedResult(
+  cached: CachedBudgetResult | null,
+  material: Set<string>,
+): CachedBudgetResult | null {
+  if (!cached) return null;
+  if (valueEqualsCapabilityMaterial(cached.body, material)) return null;
+  return {
+    http_status: cached.http_status,
+    body: scrubPublicValue(cached.body, material),
+  };
+}
+
+function publicReservation(reservation: Reservation): PublicReservation {
+  const material = capabilityMaterialSet(reservation);
+  return {
+    idempotency_key: reservation.idempotency_key,
+    reservation_id: reservation.reservation_id,
+    amounts: amountsFromCounters(reservation.amounts),
+    actual: reservation.actual ? amountsFromCounters(reservation.actual) : null,
+    status: reservation.status,
+    lease_id: reservation.lease_id,
+    created_at: reservation.created_at,
+    reconciled_at: reservation.reconciled_at,
+    released_at: reservation.released_at,
+    request_digest: reservation.request_digest,
+    cached_result: publicCachedResult(reservation.cached_result, material),
+    finalize_error: reservation.finalize_error,
+    settlement: reservation.settlement,
+    provider_started_at: reservation.provider_started_at,
+    uncertainty_reason: reservation.uncertainty_reason,
+    settlement_capability_consumed: reservation.settlement_capability_consumed === true,
+  };
 }
 
 function requireNonemptyRequestDigest(raw: unknown): BudgetResult<{ request_digest: string }> {
@@ -739,7 +911,7 @@ export async function markProviderStarted(
   now = Date.now(),
 ): Promise<
   BudgetResult<{
-    reservation: Reservation;
+    reservation: PublicReservation;
     budget_run_id: string;
     settlement_capability: string | null;
   }>
@@ -857,10 +1029,11 @@ function uncertainResult(
 }
 
 /**
- * Resolve a provider-started reservation when usage cannot be proven. The DO,
- * never the caller, selects the charged amounts from the persisted reservation.
+ * Exact identity/capability check used before first settle and before every
+ * terminal replay. The one-way hash remains valid after consume; the secret is
+ * never returned. Does not mutate reservation state.
  */
-async function consumeSettlementCapability(
+async function verifySettlementAuthority(
   reservation: Reservation,
   input: {
     settlement_capability?: string;
@@ -877,18 +1050,29 @@ async function consumeSettlementCapability(
   if (!capability || !reservation.settlement_capability_hash) {
     return { ok: false, error: "settlement_capability_required" };
   }
-  if (reservation.settlement_capability_consumed) {
-    return { ok: false, error: "settlement_capability_consumed" };
-  }
   const expected = await hashSettlementCapability(capability, reservation);
   if (expected !== reservation.settlement_capability_hash) {
     return { ok: false, error: "settlement_capability_invalid" };
   }
-  reservation.settlement_capability_consumed = true;
-  reservation.settlement_capability_secret = null;
   return null;
 }
 
+function consumeVerifiedCapability(reservation: Reservation): void {
+  reservation.settlement_capability_consumed = true;
+  reservation.settlement_capability_secret = null;
+}
+
+/**
+ * Exact idempotency for terminal settlement:
+ * - Digest, lease id, and capability hash are verified before every replay.
+ * - An exact retry after response loss returns the persisted terminal result
+ *   without recharging, recomputing, or reopening the lease.
+ * - Wrong or omitted digest, lease, idempotency identity, or capability fails
+ *   closed and returns no cached result or reservation.
+ * - Cross-operation replay (finalize vs uncertain) with the same identity
+ *   returns the already persisted terminal state and never turns wrong
+ *   authority into success.
+ */
 export async function settleUncertainBudget(
   storage: BudgetStorage,
   input: {
@@ -901,7 +1085,7 @@ export async function settleUncertainBudget(
   now = Date.now(),
 ): Promise<
   BudgetResult<{
-    reservation: Reservation;
+    reservation: PublicReservation;
     used: Counters;
     frozen: boolean;
     budget_run_id: string;
@@ -920,9 +1104,13 @@ export async function settleUncertainBudget(
     await saveState(storage, state);
     return { ok: false, error: "reservation_not_found" };
   }
-  // An invalid/lost finalize response can arrive after the DO already committed
-  // exact usage. Never overwrite that terminal idempotent settlement.
   if (reservation.status === "reconciled") {
+    const verified = await verifySettlementAuthority(reservation, input);
+    if (verified) {
+      await saveState(storage, state);
+      return verified;
+    }
+    reservation.settlement_capability_secret = null;
     await saveState(storage, state);
     return {
       ok: true,
@@ -940,12 +1128,16 @@ export async function settleUncertainBudget(
     await saveState(storage, state);
     return { ok: false, error: "provider_not_started" };
   }
-  const consumed = await consumeSettlementCapability(reservation, input);
-  if (consumed) {
+  const verified = await verifySettlementAuthority(reservation, input);
+  if (verified) {
     await saveState(storage, state);
-    return consumed;
+    return verified;
   }
-
+  if (reservation.settlement_capability_consumed) {
+    await saveState(storage, state);
+    return { ok: false, error: "settlement_capability_consumed" };
+  }
+  consumeVerifiedCapability(reservation);
   chargeUncertainReservation(state, reservation, input.reason, now);
   await saveState(storage, state);
   return {
@@ -962,11 +1154,7 @@ function applyCachedResult(
   result: CachedBudgetResult | undefined,
 ): void {
   if (!result) return;
-  const status = Number(result.http_status);
-  reservation.cached_result = {
-    http_status: Number.isInteger(status) && status >= 200 && status <= 599 ? status : 500,
-    body: result.body,
-  };
+  reservation.cached_result = result;
 }
 
 export async function reconcileBudget(
@@ -980,7 +1168,7 @@ export async function reconcileBudget(
     terminal_result?: CachedBudgetResult;
   },
   now = Date.now(),
-): Promise<BudgetResult<{ reservation: Reservation; used: Counters }>> {
+): Promise<BudgetResult<{ reservation: PublicReservation; used: Counters }>> {
   const finalized = await finalizeBudget(storage, input, now);
   if (!finalized.ok) return finalized;
   return { ok: true, reservation: finalized.reservation, used: finalized.used };
@@ -1024,7 +1212,7 @@ export async function finalizeBudget(
   now = Date.now(),
 ): Promise<
   BudgetResult<{
-    reservation: Reservation;
+    reservation: PublicReservation;
     used: Counters;
     frozen: boolean;
     budget_run_id: string;
@@ -1048,6 +1236,12 @@ export async function finalizeBudget(
   const reservation = state.reservations[key.idempotency_key];
   if (!reservation) return { ok: false, error: "reservation_not_found" };
   if (reservation.status === "reconciled") {
+    const verified = await verifySettlementAuthority(reservation, input);
+    if (verified) {
+      await saveState(storage, state);
+      return verified;
+    }
+    reservation.settlement_capability_secret = null;
     await saveState(storage, state);
     if (reservation.finalize_error) {
       return {
@@ -1071,11 +1265,24 @@ export async function finalizeBudget(
     await saveState(storage, state);
     return { ok: false, error: "provider_not_started" };
   }
-  const consumed = await consumeSettlementCapability(reservation, input);
-  if (consumed) {
+  const verified = await verifySettlementAuthority(reservation, input);
+  if (verified) {
     await saveState(storage, state);
-    return consumed;
+    return verified;
   }
+  const canonical = canonicalizeCachedResult(
+    input.terminal_result,
+    capabilityMaterialSet(reservation, input.settlement_capability),
+  );
+  if (!canonical.ok) {
+    await saveState(storage, state);
+    return canonical;
+  }
+  if (reservation.settlement_capability_consumed) {
+    await saveState(storage, state);
+    return { ok: false, error: "settlement_capability_consumed" };
+  }
+  consumeVerifiedCapability(reservation);
 
   const over = exceedsReserved(reservation.amounts, actual);
   state.reserved = applyDelta(state.reserved, reservation.amounts, -1);
@@ -1087,10 +1294,10 @@ export async function finalizeBudget(
   reservation.settlement = deriveExactSettlement(
     reservation,
     actual,
-    input.terminal_result,
+    canonical.value,
   );
   reservation.reconciled_at = now;
-  applyCachedResult(reservation, input.terminal_result);
+  applyCachedResult(reservation, canonical.value);
   closeReservationLease(state, reservation, now);
   if (over) {
     freezeForOverage(state, reservation, actual, now);
@@ -1137,7 +1344,9 @@ export async function releaseBudget(
   storage: BudgetStorage,
   input: { lease_id?: string; idempotency_key?: string },
   now = Date.now(),
-): Promise<BudgetResult<{ released: boolean; lease: Lease | null; reservation: Reservation | null }>> {
+): Promise<
+  BudgetResult<{ released: boolean; lease: Lease | null; reservation: PublicReservation | null }>
+> {
   const state = await loadState(storage, now);
   recoverExpired(state, now);
   let lease: Lease | null = null;
