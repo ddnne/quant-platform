@@ -1689,6 +1689,213 @@ describe("P0 terminal replay and capability isolation", () => {
     );
   });
 
+  it("nested strings cannot persist capability or hash as a substring", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("p0-substr", { model_calls: 1, input_tokens: 8 }, "digest-p0-substr"),
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const leaseId = reserved.lease.lease_id;
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "p0-substr",
+        lease_id: leaseId,
+        request_digest: "digest-p0-substr",
+      },
+      T0 + 1,
+    );
+    if (!started.ok || !started.settlement_capability) throw new Error("cap");
+    const secret = started.settlement_capability;
+    const beforeLedger = await storage.get<{
+      reservations: Record<
+        string,
+        {
+          status: string;
+          amounts: unknown;
+          lease_id: string | null;
+          cached_result: unknown;
+          settlement_capability_secret: string | null;
+          settlement_capability_consumed: boolean;
+          settlement_capability_hash: string | null;
+        }
+      >;
+    }>("ledger");
+    const hash = beforeLedger?.reservations["p0-substr"].settlement_capability_hash;
+    expect(hash).toEqual(expect.any(String));
+    const before = await snapshotBudget(storage, T0 + 2);
+    if (!before.ok) throw new Error("before");
+    const wraps: Array<{ name: string; wrap: (token: string) => string }> = [
+      { name: "prefix", wrap: (token) => `${token}=tail` },
+      { name: "suffix", wrap: (token) => `secret=${token}` },
+      { name: "wrapped", wrap: (token) => `pre-${token}-post` },
+    ];
+    const placements: Array<{ name: string; body: Record<string, unknown> }> = [];
+    for (const { name, wrap } of wraps) {
+      placements.push({
+        name: `${name} secret nested object`,
+        body: { ok: true, artifact: { nested: { note: wrap(secret) } } },
+      });
+      placements.push({
+        name: `${name} secret nested array`,
+        body: { ok: true, artifact: [{ items: [wrap(secret)] }] },
+      });
+      placements.push({
+        name: `${name} hash nested object`,
+        body: { ok: true, artifact: { nested: { digest: wrap(hash as string) } } },
+      });
+      placements.push({
+        name: `${name} hash nested array`,
+        body: { ok: true, artifact: [{ items: [wrap(hash as string)] }] },
+      });
+    }
+
+    let now = T0 + 3;
+    for (const placement of placements) {
+      const denied = await finalizeBudget(
+        storage,
+        {
+          idempotency_key: "p0-substr",
+          request_digest: "digest-p0-substr",
+          lease_id: leaseId,
+          settlement_capability: secret,
+          usage: { model_calls: 1, input_tokens: 2 },
+          terminal_result: { http_status: 200, body: placement.body },
+        },
+        now,
+      );
+      now += 1;
+      expect(denied.ok, placement.name).toBe(false);
+      if (!denied.ok) {
+        expect(denied.error, placement.name).toMatch(/cached_result_capability_/);
+      }
+      expect(denied).not.toHaveProperty("reservation");
+      assertNoCapabilityLeak(denied, secret, hash as string);
+
+      const snap = await snapshotBudget(storage, now);
+      now += 1;
+      expect(snap.ok).toBe(true);
+      if (snap.ok) {
+        expect(snap.used).toEqual(before.used);
+        expect(snap.reserved).toEqual(before.reserved);
+        expect(snap.active_leases).toBe(before.active_leases);
+        expect(snap.frozen).toBe(false);
+      }
+      assertNoCapabilityLeak(snap, secret, hash as string);
+
+      const afterReject = await storage.get<{
+        reservations: Record<
+          string,
+          {
+            status: string;
+            amounts: unknown;
+            lease_id: string | null;
+            cached_result: unknown;
+            settlement_capability_secret: string | null;
+            settlement_capability_consumed: boolean;
+          }
+        >;
+      }>("ledger");
+      const row = afterReject?.reservations["p0-substr"];
+      expect(row?.status, placement.name).toBe("reserved");
+      expect(row?.cached_result, placement.name).toBeNull();
+      expect(row?.settlement_capability_secret, placement.name).toBe(secret);
+      expect(row?.settlement_capability_consumed, placement.name).toBe(false);
+      expect(row?.lease_id, placement.name).toBe(leaseId);
+      expect(row?.amounts, placement.name).toEqual(
+        beforeLedger?.reservations["p0-substr"].amounts,
+      );
+    }
+
+    const benignBody = {
+      ok: true,
+      artifact: {
+        summary: "benign-note",
+        notes: ["unrelated-token", "plain-text"],
+        nested: { items: ["still-safe", { k: "unchanged" }] },
+      },
+      model: "safe-model",
+    };
+    const committed = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "p0-substr",
+        request_digest: "digest-p0-substr",
+        lease_id: leaseId,
+        settlement_capability: secret,
+        usage: { model_calls: 1, input_tokens: 2 },
+        terminal_result: { http_status: 200, body: benignBody },
+      },
+      now,
+    );
+    now += 1;
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) throw new Error("commit");
+    expect(committed.reservation.cached_result?.body).toEqual(benignBody);
+    assertNoCapabilityLeak(committed, secret, hash as string);
+
+    const retry = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "p0-substr",
+        request_digest: "digest-p0-substr",
+        lease_id: leaseId,
+        settlement_capability: secret,
+        usage: { model_calls: 1, input_tokens: 99 },
+        terminal_result: { http_status: 200, body: benignBody },
+      },
+      now,
+    );
+    now += 1;
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) throw new Error("retry");
+    expect(retry.reservation.cached_result?.body).toEqual(benignBody);
+    expect(retry.reservation.actual?.input_tokens).toBe(2);
+    assertNoCapabilityLeak(retry, secret, hash as string);
+
+    const cachedReplay = await reserveBudget(
+      storage,
+      leased("p0-substr", { model_calls: 1, input_tokens: 8 }, "digest-p0-substr"),
+      now,
+    );
+    now += 1;
+    expect(cachedReplay.ok).toBe(true);
+    if (!cachedReplay.ok) throw new Error("cached replay");
+    expect(cachedReplay.reservation.cached_result?.body).toEqual(benignBody);
+    assertNoCapabilityLeak(cachedReplay, secret, hash as string);
+
+    const released = await releaseBudget(
+      storage,
+      { idempotency_key: "p0-substr", lease_id: leaseId },
+      now,
+    );
+    now += 1;
+    expect(released.ok).toBe(true);
+    assertNoCapabilityLeak(released, secret, hash as string);
+
+    const snap = await snapshotBudget(storage, now);
+    expect(snap.ok).toBe(true);
+    if (snap.ok) {
+      expect(snap.used.model_calls).toBe(1);
+      expect(snap.reserved).toEqual(zeroCounters());
+      expect(snap.active_leases).toBe(0);
+    }
+    assertNoCapabilityLeak(snap, secret, hash as string);
+
+    const persisted = await storage.get<{
+      reservations: Record<string, { cached_result: { body: unknown } | null }>;
+    }>("ledger");
+    expect(persisted?.reservations["p0-substr"].cached_result?.body).toEqual(benignBody);
+    expect(JSON.stringify(persisted?.reservations["p0-substr"].cached_result)).not.toContain(
+      secret,
+    );
+    expect(JSON.stringify(persisted?.reservations["p0-substr"].cached_result)).not.toContain(
+      hash as string,
+    );
+  });
+
   it("exact finalized retry succeeds; wrong or omitted digest/lease/cap fails", async () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(

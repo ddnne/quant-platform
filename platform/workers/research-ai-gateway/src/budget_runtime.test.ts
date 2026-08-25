@@ -860,6 +860,161 @@ describe("BudgetLedger in the Workers runtime", () => {
     }
   }, 15_000);
 
+  it("rejects capability/hash substrings in nested object and array strings", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
+    const rpc = stub as BudgetLedgerRpcStub;
+    const reserved = await rpc.reserve({
+      idempotency_key: "runtime-p0-substr",
+      request_digest: "digest-runtime-p0-substr",
+      amounts: { model_calls: 1, input_tokens: 8 },
+      acquire_lease: true,
+    });
+    const started = await rpc.markProviderStarted({
+      idempotency_key: "runtime-p0-substr",
+      lease_id: reserved.lease!.lease_id,
+      request_digest: "digest-runtime-p0-substr",
+    });
+    const secret = started.settlement_capability as string;
+    let hash = "";
+    let beforeAmounts: unknown;
+    await runInDurableObject(stub, async (_instance: BudgetLedger, state) => {
+      const ledger = await state.storage.get<LedgerState>("ledger");
+      hash = ledger?.reservations["runtime-p0-substr"].settlement_capability_hash ?? "";
+      beforeAmounts = ledger?.reservations["runtime-p0-substr"].amounts;
+    });
+    expect(hash).toEqual(expect.any(String));
+    const snapBefore = (await (
+      await stub.fetch("https://budget/snapshot")
+    ).json()) as {
+      used: unknown;
+      reserved: unknown;
+      active_leases: number;
+      frozen: boolean;
+    };
+
+    const wraps: Array<(token: string) => string> = [
+      (token) => `${token}=tail`,
+      (token) => `secret=${token}`,
+      (token) => `pre-${token}-post`,
+    ];
+    const bodies: Array<Record<string, unknown>> = [];
+    for (const wrap of wraps) {
+      bodies.push({ ok: true, artifact: { nested: { note: wrap(secret) } } });
+      bodies.push({ ok: true, artifact: [{ items: [wrap(secret)] }] });
+      bodies.push({ ok: true, artifact: { nested: { digest: wrap(hash) } } });
+      bodies.push({ ok: true, artifact: [{ items: [wrap(hash)] }] });
+    }
+
+    const denials: unknown[] = [];
+    for (const body of bodies) {
+      const denied = await rpc.finalizeExact({
+        idempotency_key: "runtime-p0-substr",
+        request_digest: "digest-runtime-p0-substr",
+        lease_id: reserved.lease!.lease_id,
+        settlement_capability: secret,
+        usage: { model_calls: 1, input_tokens: 2 },
+        terminal_result: { http_status: 200, body },
+      });
+      expect(denied.ok).toBe(false);
+      expect(denied.error).toMatch(/cached_result_capability_/);
+      expect(denied.reservation).toBeUndefined();
+      denials.push(denied);
+
+      await runInDurableObject(stub, async (_instance: BudgetLedger, state) => {
+        const ledger = await state.storage.get<LedgerState>("ledger");
+        const row = ledger?.reservations["runtime-p0-substr"];
+        expect(row?.cached_result).toBeNull();
+        expect(row?.status).toBe("reserved");
+        expect(row?.settlement_capability_secret).toBe(secret);
+        expect(row?.settlement_capability_consumed).toBe(false);
+        expect(row?.lease_id).toBe(reserved.lease!.lease_id);
+        expect(row?.amounts).toEqual(beforeAmounts);
+      });
+    }
+
+    const snapAfterReject = (await (
+      await stub.fetch("https://budget/snapshot")
+    ).json()) as {
+      used: unknown;
+      reserved: unknown;
+      active_leases: number;
+      frozen: boolean;
+    };
+    expect(snapAfterReject.used).toEqual(snapBefore.used);
+    expect(snapAfterReject.reserved).toEqual(snapBefore.reserved);
+    expect(snapAfterReject.active_leases).toBe(snapBefore.active_leases);
+    expect(snapAfterReject.frozen).toBe(false);
+
+    const benignBody = {
+      ok: true,
+      artifact: {
+        summary: "benign-note",
+        notes: ["unrelated-token", "plain-text"],
+        nested: { items: ["still-safe", { k: "unchanged" }] },
+      },
+      model: "safe-model",
+    };
+    const committed = await rpc.finalizeExact({
+      idempotency_key: "runtime-p0-substr",
+      request_digest: "digest-runtime-p0-substr",
+      lease_id: reserved.lease!.lease_id,
+      settlement_capability: secret,
+      usage: { model_calls: 1, input_tokens: 2 },
+      terminal_result: { http_status: 200, body: benignBody },
+    });
+    expect(committed.ok).toBe(true);
+    expect(committed.reservation?.cached_result).toEqual({
+      http_status: 200,
+      body: benignBody,
+    });
+
+    const retry = await rpc.finalizeExact({
+      idempotency_key: "runtime-p0-substr",
+      request_digest: "digest-runtime-p0-substr",
+      lease_id: reserved.lease!.lease_id,
+      settlement_capability: secret,
+      usage: { model_calls: 1, input_tokens: 99 },
+      terminal_result: { http_status: 200, body: benignBody },
+    });
+    expect(retry.ok).toBe(true);
+    expect(retry.reservation?.actual?.input_tokens).toBe(2);
+    expect(retry.reservation?.cached_result).toEqual({
+      http_status: 200,
+      body: benignBody,
+    });
+
+    const replay = await rpc.reserve({
+      idempotency_key: "runtime-p0-substr",
+      request_digest: "digest-runtime-p0-substr",
+      amounts: { model_calls: 1, input_tokens: 8 },
+      acquire_lease: true,
+    });
+    expect(replay.ok).toBe(true);
+    expect(replay.reservation?.cached_result).toEqual({
+      http_status: 200,
+      body: benignBody,
+    });
+    const released = await rpc.release({
+      idempotency_key: "runtime-p0-substr",
+      lease_id: reserved.lease!.lease_id,
+    });
+    const snapAfter = await (await stub.fetch("https://budget/snapshot")).json();
+    await runInDurableObject(stub, async (_instance: BudgetLedger, state) => {
+      const ledger = await state.storage.get<LedgerState>("ledger");
+      expect(ledger?.reservations["runtime-p0-substr"].cached_result).toEqual({
+        http_status: 200,
+        body: benignBody,
+      });
+    });
+    for (const payload of [...denials, committed, retry, replay, released, snapAfter, snapAfterReject]) {
+      const encoded = JSON.stringify(payload);
+      expect(encoded).not.toContain(secret);
+      expect(encoded).not.toContain(hash);
+    }
+  }, 15_000);
+
   it("terminal finalize and uncertain replay verify digest/lease/capability", async () => {
     const namespace = runtimeEnv.BUDGET_LEDGER;
     if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");

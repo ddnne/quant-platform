@@ -22,8 +22,9 @@ secret. A lost provider-start RPC is recovered only by an exact
 `markProviderStarted` retry (same digest and lease). Public reservation DTOs
 omit settlement secret and hash fields entirely. Cached terminal bodies are
 canonicalized under the closed Gateway response schema and recursively rejected
-if they contain capability field names or the actual capability/hash at any
-object or array depth.
+if they contain capability field names or the current settlement capability or
+stored hash as a substring of any public JSON/string value at any object or
+array depth. Public projection never returns a containing string.
 
 The production Gateway path is the sole settlement coordinator: generic HTTP
 `/finalize`, `/reconcile`, `/provider-started`, and capability-mint routes are

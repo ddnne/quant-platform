@@ -725,15 +725,50 @@ function capabilityMaterialSet(
   return material;
 }
 
-function valueEqualsCapabilityMaterial(value: unknown, material: Set<string>): boolean {
-  return typeof value === "string" && value.length > 0 && material.has(value);
+function capabilityMaterialTokens(material: Set<string>): string[] {
+  return [...material].filter((token) => token.length > 0);
+}
+
+function publicJsonText(value: unknown): string | null {
+  try {
+    const encoded = JSON.stringify(value);
+    return typeof encoded === "string" ? encoded : null;
+  } catch {
+    return null;
+  }
+}
+
+function textContainsCapabilityMaterial(text: string, tokens: string[]): boolean {
+  for (const token of tokens) {
+    if (text.includes(token)) return true;
+  }
+  return false;
+}
+
+/**
+ * True when the current settlement capability or stored hash occurs in public
+ * JSON/string text. Tokens are hex-safe, but both the decoded string and its
+ * canonical JSON encoding are searched so prefix/suffix/wrapped values cannot
+ * persist or return.
+ */
+function valueContainsCapabilityMaterial(value: unknown, material: Set<string>): boolean {
+  const tokens = capabilityMaterialTokens(material);
+  if (!tokens.length) return false;
+  if (typeof value === "string") {
+    if (textContainsCapabilityMaterial(value, tokens)) return true;
+    const encoded = publicJsonText(value);
+    return encoded !== null && textContainsCapabilityMaterial(encoded, tokens);
+  }
+  const encoded = publicJsonText(value);
+  if (encoded === null) return true;
+  return textContainsCapabilityMaterial(encoded, tokens);
 }
 
 function rejectCapabilityMaterial(
   value: unknown,
   material: Set<string>,
 ): BudgetErr | null {
-  if (valueEqualsCapabilityMaterial(value, material)) {
+  if (typeof value === "string" && valueContainsCapabilityMaterial(value, material)) {
     return { ok: false, error: "cached_result_capability_material" };
   }
   if (Array.isArray(value)) {
@@ -747,6 +782,9 @@ function rejectCapabilityMaterial(
     for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
       if (FORBIDDEN_CAPABILITY_KEYS.has(key as SensitiveCapabilityField)) {
         return { ok: false, error: "cached_result_capability_field" };
+      }
+      if (valueContainsCapabilityMaterial(key, material)) {
+        return { ok: false, error: "cached_result_capability_material" };
       }
       const nested = rejectCapabilityMaterial(nestedValue, material);
       if (nested) return nested;
@@ -783,6 +821,9 @@ function canonicalizeCachedResult(
   }
   const leaked = rejectCapabilityMaterial(rec, material);
   if (leaked) return leaked;
+  if (valueContainsCapabilityMaterial(rec, material)) {
+    return { ok: false, error: "cached_result_capability_material" };
+  }
   return {
     ok: true,
     value: { http_status: status, body: structuredClone(rec) },
@@ -790,7 +831,9 @@ function canonicalizeCachedResult(
 }
 
 function scrubPublicValue(value: unknown, material: Set<string>): unknown {
-  if (valueEqualsCapabilityMaterial(value, material)) return null;
+  if (typeof value === "string") {
+    return valueContainsCapabilityMaterial(value, material) ? null : value;
+  }
   if (Array.isArray(value)) {
     return value.map((item) => scrubPublicValue(item, material));
   }
@@ -798,6 +841,7 @@ function scrubPublicValue(value: unknown, material: Set<string>): unknown {
     const out: Record<string, unknown> = {};
     for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
       if (FORBIDDEN_CAPABILITY_KEYS.has(key as SensitiveCapabilityField)) continue;
+      if (valueContainsCapabilityMaterial(key, material)) continue;
       out[key] = scrubPublicValue(nested, material);
     }
     return out;
@@ -810,10 +854,11 @@ function publicCachedResult(
   material: Set<string>,
 ): CachedBudgetResult | null {
   if (!cached) return null;
-  if (valueEqualsCapabilityMaterial(cached.body, material)) return null;
+  const body = scrubPublicValue(cached.body, material);
+  if (valueContainsCapabilityMaterial(body, material)) return null;
   return {
     http_status: cached.http_status,
-    body: scrubPublicValue(cached.body, material),
+    body,
   };
 }
 
