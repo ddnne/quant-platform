@@ -8,21 +8,31 @@ JSDA sources are **public HTTP** (no API key). They are not blocked from Cloudfl
 egress. What was missing was a Worker — Python `ingestion/jsda/` historically ran
 local-only (XLS/XLSX via xlrd/openpyxl; polite scraping).
 
-## v0 scope
+## v2 acquisition graph
 
 - Daily cron + manual `POST /v1/run` (auth: `INGESTION_RUN_TOKEN`) enqueue
-  closed, typed dataset jobs to Cloudflare Queues
-- A bounded Queue consumer resolves each dataset to an internal fixed JSDA URL;
-  messages cannot supply URLs or arbitrary acquisition payloads
-- Strictly successful discovery is acknowledged; partial, failed, capped, or
-  zero-row discovery is retried and eventually routed to the configured DLQ
-- Store index HTML + discovered data files to R2 `raw/jsda/{dataset}/...`
-- Log runs to D1 `ingestion_run_log` (`source=jsda`, `runtime=cloudflare`)
+  daily stable `discover_root` jobs.
+- Root discovery persists its frontier, then creates stable URL-identity
+  `discover_year` and `fetch_file` children. Each delivery advances at most 25
+  children and enqueues a continuation, so the archive converges without a
+  latest-year or file-count cap.
+- D1 `jsda_acquisition_jobs_v2` is authoritative for state, cumulative attempt,
+  cursor, frontier, parent/run keys, contract digest, last error, and content
+  digest. A duplicate cron or Queue delivery cannot reacquire completed work.
+- Raw artifacts and Queue audit receipts are create-only, content-addressed R2
+  objects. A delivery is acknowledged only after its audit receipt and D1/run
+  evidence are durable.
+- Invalid messages are written to both R2 audit and `jsda_queue_rejects_v2`
+  before acknowledgement. Evidence-write failures retry and eventually reach
+  the configured DLQ.
+- Initial URLs, discovered links, and every post-redirect URL are restricted to
+  the official JSDA HTTPS host allowlist.
 
 ## Not yet
 
 - Structured parse of `.xls`/`.xlsx` into D1 fact tables
-- Coverage V2 COMPLETE / READY proof for JSDA series
+- Coverage COMPLETE / READY proof issuance. Raw acquisition is evidence input;
+  it cannot mint research-readiness evidence.
 
 Until structured parse lands on CF (or a sync path from R2 raw → local/CF structured),
 governed JSDA completeness still depends on the Python pipeline reading raw (local or
@@ -33,11 +43,15 @@ exported from R2).
 ```bash
 cd platform/workers/ingestion-jsda
 npm install
+npm test
 npx wrangler queues create quant-jsda-ingestion
 npx wrangler queues create quant-jsda-ingestion-dlq
 printf '%s' "$INGESTION_RUN_TOKEN" | npx wrangler secret put INGESTION_RUN_TOKEN
 npx wrangler deploy
 ```
+
+Apply `ingestion-premium/migrations/0011_jsda_queue_v2.sql` through the canonical
+`quant-ingest` migration owner before deploying this Worker.
 
 Production uses `quant-jsda-ingestion` and `quant-jsda-ingestion-dlq`.
 Staging uses the distinct `quant-jsda-ingestion-staging` and

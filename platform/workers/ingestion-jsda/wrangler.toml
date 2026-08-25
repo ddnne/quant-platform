@@ -41,9 +41,6 @@ max_concurrency = 1
 
 [vars]
 USER_AGENT = "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
-# Cap data-file downloads per discovery run (0 = unlimited). Use 1 for min-segment evidence.
-MAX_DATA_FILES = "3"
-MAX_YEAR_PAGES = "1"
 
 [triggers]
 # Daily 01:30 UTC == 10:30 JST — after typical JSDA morning publication window.
@@ -82,5 +79,3 @@ max_concurrency = 1
 
 [env.production.vars]
 USER_AGENT = "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
-MAX_DATA_FILES = "3"
-MAX_YEAR_PAGES = "1"

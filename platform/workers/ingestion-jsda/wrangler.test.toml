@@ -1,0 +1,23 @@
+name = "quant-platform-ingestion-jsda-test"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+workers_dev = false
+preview_urls = false
+
+[[r2_buckets]]
+binding = "RAW_BUCKET"
+bucket_name = "quant-raw-jsda-test"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "quant-ingest-jsda-test"
+database_id = "00000000-0000-0000-0000-000000000011"
+migrations_dir = "../ingestion-premium/migrations"
+
+[[queues.producers]]
+binding = "JSDA_QUEUE"
+queue = "quant-jsda-ingestion-test"
+
+[vars]
+USER_AGENT = "quant-platform-jsda-runtime-test/0.1"
+INGESTION_RUN_TOKEN = "jsda-runtime-test-token"

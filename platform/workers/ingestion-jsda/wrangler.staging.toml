@@ -30,5 +30,3 @@ database_id = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
 
 [vars]
 USER_AGENT = "quant-platform-staging-ingest/0.1"
-MAX_DATA_FILES = "1"
-MAX_YEAR_PAGES = "1"

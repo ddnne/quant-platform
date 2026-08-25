@@ -1,16 +1,18 @@
 {
   "name": "quant-platform-ingestion-jsda",
   "private": true,
+  "type": "module",
   "version": "0.1.0",
   "scripts": {
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",
     "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
     "types": "wrangler types --include-runtime false"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.0.0",
     "@cloudflare/workers-types": "5.20260825.1",
     "typescript": "5.9.2",
     "vitest": "4.1.11",
