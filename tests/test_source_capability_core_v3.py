@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from data_contracts.canonical import (
+    CANONICAL_REGISTRY_PATH,
     canonical_dataset_for,
     validate_derived_metadata,
 )
@@ -184,12 +185,27 @@ def test_static_v3_contracts_mint_no_coverage_status() -> None:
             )
 
 
-def test_canonical_is_meta_index_with_validated_derived_projections() -> None:
+def test_canonical_is_meta_index_without_duplicate_authority_fields() -> None:
     validate_derived_metadata()
+    raw_rows = json.loads(
+        CANONICAL_REGISTRY_PATH.read_text(encoding="utf-8")
+    )["datasets"]
+    forbidden = {
+        "available_at",
+        "collection_window",
+        "coverage_segment_granularity",
+        "expected_frequency",
+        "historical_start",
+        "natural_key_fields",
+        "research_eligible",
+    }
+    assert all(forbidden.isdisjoint(row) for row in raw_rows)
     for dataset_id in _OFFICIAL_STARTS:
         canonical = canonical_dataset_for(dataset_id)
         coverage = coverage_contract_for(dataset_id)
         capability = source_capability_contract_for(dataset_id)
+        primary = contract_for(dataset_id)
+        assert canonical.natural_key_fields == primary.natural_key_fields
         assert canonical.historical_start == coverage.history_target_start
         assert (
             canonical.coverage_segment_granularity
@@ -199,3 +215,4 @@ def test_canonical_is_meta_index_with_validated_derived_projections() -> None:
         assert canonical.research_eligible == (
             capability.historical_research_eligible
         )
+        assert canonical.available_at == capability.available_at

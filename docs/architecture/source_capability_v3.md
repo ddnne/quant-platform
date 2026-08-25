@@ -6,10 +6,12 @@ projection, READY state, receipt, or JSDA collection queue.
 ## Authority split
 
 `canonical_datasets.json` is a meta-index. It owns dataset identity,
-membership, source, governance tier, natural keys, and links to owning
-contracts. Its legacy `historical_start`, `coverage_segment_granularity`,
-`expected_frequency`, and `research_eligible` fields are compatibility
-projections only. `canonical.validate_derived_metadata()` must reject drift.
+membership, source, governance tier, routing metadata, and links to owning
+contracts. Natural keys, `historical_start`, coverage grain/frequency,
+`available_at`, collection windows, and research eligibility are absent from
+the meta-index and mechanically derived from the primary PIT contract,
+CollectionCoverage, or SourceCapability. `canonical.validate_derived_metadata()`
+rejects any reintroduction of those duplicate authority fields.
 
 `SourceCapabilityContract` owns official availability, history mode, query
 shape, research eligibility, and the meaning of the required domain.

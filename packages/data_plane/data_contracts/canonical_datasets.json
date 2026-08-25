@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "registry_version": "v1",
-  "registry_description": "Canonical meta-index of endpoint identity, membership, ownership and contract links. History, coverage shape and V3 eligibility are compatibility projections validated against their owning contracts.",
+  "registry_description": "Canonical meta-index of endpoint identity, membership, routing and contract links. Natural keys, history, coverage shape, availability and research eligibility are derived from their owning contracts.",
   "datasets": [
     {
       "dataset_id": "equities_master",
@@ -13,15 +13,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code"
-      ],
-      "historical_start": "2008-05-07",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -39,16 +31,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "date"
-      ],
-      "historical_start": "2008-05-07",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -66,16 +49,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "date"
-      ],
-      "historical_start": "2024-01-04",
-      "coverage_segment_granularity": "same_trading_day_am_snapshot",
-      "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
-      "collection_window": "morning_session",
-      "research_eligible": false,
       "enabled": true,
       "sla": {
         "expected_after": "11:30",
@@ -96,16 +70,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "disclosure_date"
-      ],
-      "historical_start": "2008-07-07",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
-      "collection_window": "disclosure_event",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -123,17 +88,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "disclosure_date",
-        "item_code"
-      ],
-      "historical_start": "2009-01-13",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
-      "collection_window": "disclosure_event",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -151,16 +106,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "disclosure_date"
-      ],
-      "historical_start": "2013-02-20",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
-      "collection_window": "disclosure_event",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -178,16 +124,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "disclosure_date"
-      ],
-      "historical_start": "2014-09-01",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
-      "collection_window": "disclosure_event",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -205,16 +142,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "scheduled_date"
-      ],
-      "historical_start": "2010-01-04",
-      "coverage_segment_granularity": "collection_cutoff_snapshot",
-      "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
-      "collection_window": "disclosure_event",
-      "research_eligible": false,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -232,15 +160,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "date"
-      ],
-      "historical_start": "2008-01-01",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "calendar_day",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -258,16 +178,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "date",
-        "section"
-      ],
-      "historical_start": "2013-01-04",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "weekly",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -285,15 +196,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "date"
-      ],
-      "historical_start": "2008-05-01",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -311,16 +214,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "date"
-      ],
-      "historical_start": "2008-05-01",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -338,16 +232,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "date"
-      ],
-      "historical_start": "2013-01-04",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -365,16 +250,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "date"
-      ],
-      "historical_start": "2013-01-04",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -392,16 +268,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "date"
-      ],
-      "historical_start": "2013-01-04",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -419,16 +286,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "date"
-      ],
-      "historical_start": "2013-01-04",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "weekly",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -446,16 +304,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "date"
-      ],
-      "historical_start": "2013-01-04",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
-      "collection_window": "disclosure_event",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -473,16 +322,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "date",
-        "section"
-      ],
-      "historical_start": "2013-01-04",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "weekly",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -500,16 +340,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "date"
-      ],
-      "historical_start": "2013-11-01",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
-      "collection_window": "disclosure_event",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -527,16 +358,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "date"
-      ],
-      "historical_start": "2015-04-01",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -554,16 +376,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "filing_date"
-      ],
-      "historical_start": "2018-01-04",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
-      "collection_window": "disclosure_event",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -581,16 +394,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "filing_date"
-      ],
-      "historical_start": "2020-05-01",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
-      "collection_window": "disclosure_event",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -608,16 +412,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": [
-        "code",
-        "filing_date"
-      ],
-      "historical_start": "2021-07-01",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
-      "collection_window": "disclosure_event",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -635,18 +430,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "jsda_governed"
       },
-      "natural_key_fields": [
-        "source",
-        "publication_label_date",
-        "security_code",
-        "bond_name"
-      ],
-      "historical_start": "2002-08-02",
-      "coverage_segment_granularity": "official_archive_index_day",
-      "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -664,18 +448,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "jsda_governed"
       },
-      "natural_key_fields": [
-        "source",
-        "as_of_date",
-        "tenor",
-        "rate_type"
-      ],
-      "historical_start": "2012-10-29",
-      "coverage_segment_granularity": "source_time_series_file",
-      "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -693,19 +466,7 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "jsda_governed"
       },
-      "natural_key_fields": [
-        "source",
-        "publication_label_date",
-        "trade_date",
-        "security_code",
-        "source_record_id"
-      ],
-      "historical_start": "2015-11-04",
-      "coverage_segment_granularity": "official_archive_year",
-      "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
-      "collection_window": "disclosure_event",
-      "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": null,
@@ -719,25 +480,16 @@
       "source": "jquants_addon",
       "governance_tier": "experimental",
       "inventory_status": "EXPERIMENTAL",
-      "collection_window": "intraday",
       "path": "/v2/equities/bars/minute",
       "contracts": {
         "primary": "jquants_proxy_addons",
         "coverage": "none"
       },
-      "natural_key_fields": [
-        "code",
-        "datetime"
-      ],
-      "historical_start": "2015-01-01",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "intraday",
       "sla": {
         "expected_after": null,
         "usable_by": null,
         "freshness_policy": "intraday_best_effort"
       },
-      "research_eligible": false,
       "enabled": true,
       "entitlement": "jquants_addon_plan"
     },
@@ -747,26 +499,16 @@
       "source": "jquants_addon",
       "governance_tier": "experimental",
       "inventory_status": "UNVERIFIED_ENDPOINT",
-      "collection_window": "intraday",
       "path": "/v2/equities/trades",
       "contracts": {
         "primary": "jquants_proxy_addons",
         "coverage": "none"
       },
-      "natural_key_fields": [
-        "code",
-        "datetime",
-        "sequence"
-      ],
-      "historical_start": "2015-01-01",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven",
       "sla": {
         "expected_after": null,
         "usable_by": null,
         "freshness_policy": "intraday_best_effort"
       },
-      "research_eligible": false,
       "enabled": true,
       "entitlement": "jquants_addon_plan"
     },
@@ -776,26 +518,16 @@
       "source": "jquants_addon",
       "governance_tier": "experimental",
       "inventory_status": "EXPERIMENTAL",
-      "collection_window": "disclosure_event",
       "path": "/v2/td/list",
       "contracts": {
         "primary": "jquants_proxy_addons",
         "coverage": "none"
       },
-      "natural_key_fields": [
-        "code",
-        "disclosure_date",
-        "title"
-      ],
-      "historical_start": "2008-01-01",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven",
       "sla": {
         "expected_after": null,
         "usable_by": null,
         "freshness_policy": "event_publication"
       },
-      "research_eligible": false,
       "enabled": true,
       "entitlement": "jquants_addon_plan"
     },
@@ -805,24 +537,16 @@
       "source": "jquants_addon",
       "governance_tier": "experimental",
       "inventory_status": "EXPERIMENTAL",
-      "collection_window": "disclosure_event",
       "path": "/v2/td/files",
       "contracts": {
         "primary": "jquants_proxy_addons",
         "coverage": "none"
       },
-      "natural_key_fields": [
-        "file_id"
-      ],
-      "historical_start": "2008-01-01",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven",
       "sla": {
         "expected_after": null,
         "usable_by": null,
         "freshness_policy": "event_publication"
       },
-      "research_eligible": false,
       "enabled": true,
       "entitlement": "jquants_addon_plan"
     },
@@ -832,24 +556,16 @@
       "source": "jquants_addon",
       "governance_tier": "experimental",
       "inventory_status": "UNVERIFIED_ENDPOINT",
-      "collection_window": "archive_backfill",
       "path": "/v2/td/bulk",
       "contracts": {
         "primary": "jquants_proxy_addons",
         "coverage": "none"
       },
-      "natural_key_fields": [
-        "bulk_id"
-      ],
-      "historical_start": "2008-01-01",
-      "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "irregular",
       "sla": {
         "expected_after": null,
         "usable_by": null,
         "freshness_policy": "archive"
       },
-      "research_eligible": false,
       "enabled": true,
       "entitlement": "jquants_addon_plan"
     }

@@ -15,8 +15,11 @@ from typing import Any, Mapping
 from data_contracts.canonical import (
     CANONICAL_REGISTRY_PATH,
     all_canonical_datasets,
+    canonical_dataset_for,
     governed_datasets,
 )
+from data_contracts.coverage import coverage_contract_for
+from data_contracts.source_capability import source_capability_contract_or_none
 
 INVENTORY_STATUSES = frozenset(
     {
@@ -42,23 +45,56 @@ def source_inventory(*, as_of: str | None = None) -> dict[str, Any]:
     rows = _load_raw()
     items = []
     for row in rows:
+        dataset_id = str(row.get("dataset_id") or "")
+        canonical = canonical_dataset_for(dataset_id)
+        capability = source_capability_contract_or_none(dataset_id)
+        try:
+            coverage = coverage_contract_for(dataset_id)
+        except KeyError:
+            coverage = None
         status = str(row.get("inventory_status") or (
             "GOVERNED" if row.get("governance_tier") == "governed" else "EXPERIMENTAL"
         ))
         if status not in INVENTORY_STATUSES:
             status = "UNVERIFIED_ENDPOINT"
+        collection_window = None
+        available_at = None
+        if capability is not None:
+            collection_window = {
+                "grain": capability.collection_window.grain,
+                "open": capability.collection_window.open,
+                "close": capability.collection_window.close,
+            }
+            available_at = {
+                "policy": capability.available_at.policy,
+                "field": capability.available_at.field,
+                "known_publication_lag": (
+                    capability.available_at.known_publication_lag
+                ),
+            }
         items.append(
             {
-                "dataset": row.get("dataset_id"),
-                "source": row.get("source"),
-                "endpoint": row.get("path") or row.get("contracts", {}).get("primary"),
-                "tier": row.get("governance_tier"),
+                "dataset": canonical.dataset_id,
+                "source": canonical.source,
+                "endpoint": (
+                    capability.upstream_locator
+                    if capability is not None
+                    else row.get("path")
+                    or canonical.contracts.get("primary")
+                ),
+                "tier": canonical.governance_tier,
                 "inventory_status": status,
                 "enabled": bool(row.get("enabled", True)),
                 "entitlement": row.get("entitlement"),
-                "collection_window": row.get("collection_window"),
-                "history_target": row.get("historical_start"),
-                "research_eligible": bool(row.get("research_eligible", False)),
+                "collection_window": collection_window,
+                "history_target": (
+                    coverage.history_target_start if coverage is not None else None
+                ),
+                "research_eligible": bool(
+                    capability is not None
+                    and capability.historical_research_eligible
+                ),
+                "available_at": available_at,
                 "sla": row.get("sla") or {},
                 "reason": row.get("reason"),
             }
