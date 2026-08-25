@@ -116,7 +116,7 @@
     },
     "indices_bars_daily_topix": {
       "policy_version": "collection-coverage/v3",
-      "history_target_start": "2008-05-01",
+      "history_target_start": "2008-05-07",
       "history_mode": "bounded_history",
       "segment_granularity": "calendar_month",
       "required_domain_basis": "calendar_months_from_official_start",

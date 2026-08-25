@@ -93,10 +93,22 @@ def test_topix_v3_uses_verified_official_endpoint_and_history_start() -> None:
     assert contract is not None
     assert contract.upstream_locator == "/v2/indices/bars/daily/topix"
     assert contract.official_evidence_url == (
-        "https://jpx-jquants.com/en?lang=ja"
+        "https://jpx-jquants.com/en/spec/idx-bars-daily-topix"
     )
-    assert contract.earliest_official_availability == "2008-05-01"
-    assert coverage_contract_for(_TOPIX).policy_version == COLLECTION_COVERAGE_V3
+    assert contract.earliest_official_availability == "2008-05-07"
+    raw = json.loads(
+        (repo_root() / "specs/source_capability/indices_bars_daily_topix.json")
+        .read_text(encoding="utf-8")
+    )
+    assert raw["publication_calendar"]["official_history_evidence_url"] == (
+        "https://jpx-jquants.com/en/spec/data-spec"
+    )
+    assert "Since 2008/5/7" in raw["publication_calendar"][
+        "official_history_evidence_limit"
+    ]
+    coverage = coverage_contract_for(_TOPIX)
+    assert coverage.policy_version == COLLECTION_COVERAGE_V3
+    assert coverage.history_target_start == "2008-05-07"
 
 
 def test_missing_v3_overrides_stay_none() -> None:

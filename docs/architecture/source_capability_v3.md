@@ -35,6 +35,7 @@ cross-checked with the endpoint specifications linked below.
 | --- | --- | --- | --- | --- |
 | `equities_master` | 2008-05-07 ([endpoint](https://jpx-jquants.com/en/spec/eq-master)) | `bounded_history` | calendar months from official start | never completes an empty segment |
 | `equities_bars_daily` | 2008-05-07 ([endpoint](https://jpx-jquants.com/en/spec/eq-bars-daily)) | `bounded_history` | calendar months from official start | never completes an empty segment |
+| `indices_bars_daily_topix` | 2008-05-07 ([endpoint](https://jpx-jquants.com/en/spec/idx-bars-daily-topix), [data period](https://jpx-jquants.com/en/spec/data-spec)) | `bounded_history` | calendar months from official start | never completes an empty segment |
 | `equities_bars_daily_am` | current same-day AM issuance ([endpoint](https://jpx-jquants.com/en/spec/eq-bars-daily-am)) | `recent_snapshot` | issued same-trading-day snapshot | never completes an empty snapshot |
 | `fins_summary` | 2008-07-07 ([endpoint](https://jpx-jquants.com/en/spec/fin-summary)) | `event_stream` | publication windows from official start | only a trusted exhausted receipt may complete a genuine zero-event window |
 | `fins_details` | 2009-01-13 ([endpoint](https://jpx-jquants.com/en/spec/fin-details)) | `event_stream` | publication windows from official start | only a trusted exhausted receipt may complete a genuine zero-event window |

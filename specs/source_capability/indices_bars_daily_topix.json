@@ -3,28 +3,28 @@
   "dataset_id": "indices_bars_daily_topix",
   "source": "jquants_premium_core",
   "upstream_locator": "/v2/indices/bars/daily/topix",
-  "official_evidence_url": "https://jpx-jquants.com/en?lang=ja",
+  "official_evidence_url": "https://jpx-jquants.com/en/spec/idx-bars-daily-topix",
   "history_mode": "bounded_history",
-  "earliest_official_availability": "2008-05-01",
+  "earliest_official_availability": "2008-05-07",
   "historical_research_eligible": true,
   "tip_only_operational": false,
   "supported_query_parameters": ["from", "to", "pagination_key"],
   "publication_calendar": {
     "kind": "jpx_trading_day",
     "timezone": "Asia/Tokyo",
-    "official_history_evidence_url": "https://jpx-jquants.com/en?lang=ja",
-    "official_history_evidence_limit": "The official landing page confirms TOPIX/index daily history and Premium max 20 years but does not state an exact first date; preserve the existing 2008-05-01 contract floor.",
+    "official_history_evidence_url": "https://jpx-jquants.com/en/spec/data-spec",
+    "official_history_evidence_limit": "The official plan data-period table lists TOPIX Prices (OHLC) as Since 2008/5/7.",
     "official_update_around": "16:30"
   },
   "entitlement_semantics": {
     "clamp_before_earliest": true,
     "subscription_floor": null,
-    "official_data_provision_start": "2008-05-01",
+    "official_data_provision_start": "2008-05-07",
     "premium_history_limit": "20 years"
   },
   "collection_window": {
     "grain": "calendar_month",
-    "open": "2008-05-01",
+    "open": "2008-05-07",
     "close": "latest_published_before_collection_cutoff"
   },
   "freshness_sla": {
