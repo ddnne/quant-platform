@@ -183,20 +183,12 @@ def _http_get_json(client, url: str, token: str) -> dict:
     return resp.json()
 
 
-def _run_process(argv: list[str], **kwargs):
-    """Small injectable subprocess boundary used only for Wrangler export."""
-    return _private_export.run_process(argv, **kwargs)
-
-
 def _run_wrangler_d1_export(
     *,
     output_path: Path,
 ) -> None:
     """Delegate acquisition while retaining a monkeypatchable CLI boundary."""
-    _private_export.run_wrangler_d1_export(
-        output_path=output_path,
-        runner=_run_process if os.environ.get("PYTEST_CURRENT_TEST") else None,
-    )
+    _private_export.run_wrangler_d1_export(output_path=output_path)
 
 
 _materialize_d1_export = _private_export.materialize_d1_export

@@ -456,7 +456,7 @@ def test_wrangler_export_uses_argv_and_withholds_provider_output(
             stderr=f"provider error {secret}".encode(),
         )
 
-    monkeypatch.setattr(sync_module, "_run_process", failed_runner)
+    monkeypatch.setattr(sync_module._private_export.subprocess, "run", failed_runner)
     with pytest.raises(RuntimeError, match="provider output withheld") as caught:
         sync_module._run_wrangler_d1_export(
             output_path=tmp_path / "remote.sql",
@@ -472,6 +472,12 @@ def test_wrangler_export_uses_argv_and_withholds_provider_output(
     assert kwargs["stdout"] is not None
     assert kwargs["stderr"] is not None
     assert "shell" not in kwargs
+
+    with pytest.raises(TypeError, match="unexpected keyword argument 'runner'"):
+        sync_module._private_export.run_wrangler_d1_export(
+            output_path=tmp_path / "cannot-inject.sql",
+            runner=failed_runner,
+        )
 
 
 @pytest.mark.parametrize(

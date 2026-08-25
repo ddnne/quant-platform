@@ -16,7 +16,6 @@ import sqlite3
 import subprocess
 import tomllib
 from pathlib import Path
-from typing import Callable
 from urllib.parse import quote
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -38,17 +37,11 @@ GOVERNED_D1_ID = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 GOVERNED_WRANGLER_ENV = "production"
 
 
-def run_process(argv: list[str], **kwargs):
-    """Injectable subprocess boundary; production delegates to subprocess.run."""
-    return subprocess.run(argv, **kwargs)
-
-
 def _validated_governed_wrangler() -> tuple[str, Path]:
     """Return the repository-pinned executable/config after authority checks.
 
     Production acquisition deliberately has no executable, config, environment,
-    database-name, or database-id override.  A caller can inject only the
-    private process runner used by unit tests; it cannot change the command.
+    database-name, or database-id override.
     """
     executable = DEFAULT_WRANGLER_BIN.resolve()
     config = DEFAULT_WRANGLER_CONFIG.resolve()
@@ -85,7 +78,6 @@ def _validated_governed_wrangler() -> tuple[str, Path]:
 def run_wrangler_d1_export(
     *,
     output_path: Path,
-    runner: Callable[..., object] | None = None,
 ) -> None:
     """Acquire a private D1 SQL export with the current Wrangler credentials.
 
@@ -109,11 +101,8 @@ def run_wrangler_d1_export(
         GOVERNED_WRANGLER_ENV,
         "--skip-confirmation",
     ]
-    if runner is not None and not os.environ.get("PYTEST_CURRENT_TEST"):
-        raise RuntimeError("Wrangler runner injection is test-only")
-    invoke = runner or subprocess.run
     try:
-        completed = invoke(
+        completed = subprocess.run(
             command,
             cwd=str(config.parent),
             stdin=subprocess.DEVNULL,
