@@ -72,4 +72,7 @@ test("ops_status returns structured current-plane output without projection", as
   // Absent tables/projection → UNKNOWN-style payloads, never silent empty success
   // for governed catalog (exact shape is domain-defined).
   assert.ok(typeof value === "object");
+  assert.equal(value.raw_retention.acquired, 0);
+  // deprecated alias of acquired; not Dataset COMPLETE
+  assert.equal(value.raw_retention.complete, 0);
 });

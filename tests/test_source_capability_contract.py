@@ -17,7 +17,19 @@ from data_contracts.source_capability import (
     parse_source_capability_document,
     required_domain_subset_official,
     source_capability_contract_for,
+    source_capability_contract_or_none,
     specs_dir,
+)
+
+_NESTED_EVIDENCE_FIELDS = (
+    "publication_calendar",
+    "entitlement_semantics",
+    "collection_window",
+    "freshness_sla",
+    "event_time",
+    "available_at",
+    "revision_semantics",
+    "research_profile_eligibility",
 )
 
 
@@ -77,20 +89,44 @@ def test_policy_version_is_v3() -> None:
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     assert schema["$id"] == "source-capability/v3"
     assert set(schema["$defs"]["dataset"]["properties"]["history_mode"]["enum"]) == HISTORY_MODES
+    for name in _NESTED_EVIDENCE_FIELDS:
+        assert schema["$defs"][name].get("additionalProperties", True) is not False
+    assert schema["$defs"]["dataset"]["additionalProperties"] is False
+    assert schema["$defs"]["bundle"]["additionalProperties"] is False
 
 
-def test_unknown_field_rejected() -> None:
+def test_unknown_dataset_level_keys_fail() -> None:
     with pytest.raises(ValueError, match="unknown field"):
         SourceCapabilityContract.from_dict({**_payload(), "go": True})
     with pytest.raises(ValueError, match="unknown field"):
         SourceCapabilityContract.from_dict({**_payload(), "complete": True})
+    with pytest.raises(ValueError, match="unknown field"):
+        SourceCapabilityContract.from_dict({**_payload(), "invented_sot": True})
+
+
+def test_extra_nested_evidence_keys_do_not_fail_load() -> None:
     nested = _payload()
-    nested["publication_calendar"] = {
-        **nested["publication_calendar"],
-        "invented": "x",
-    }
-    # Nested official-evidence maps are open; dataset-level keys stay closed.
-    SourceCapabilityContract.from_dict(nested)
+    for field in _NESTED_EVIDENCE_FIELDS:
+        nested[field] = {**nested[field], "invented_evidence": "x"}
+    contract = SourceCapabilityContract.from_dict(nested)
+    assert contract.dataset_id == "equities_bars_daily"
+    assert contract.publication_calendar.kind == "trading_day"
+
+    # Existing on-disk rows include extra official-evidence notes.
+    loaded = load_source_capability_dir()
+    assert loaded["equities_master"].earliest_official_availability == "2008-05-07"
+    assert loaded["jsda_otc_bond_reference_prices"].history_mode == "official_archive_index"
+
+
+def test_missing_v3_file_is_none_not_invented() -> None:
+    assert source_capability_contract_or_none("fins_summary") is None
+    assert source_capability_contract_or_none("equities_bars_daily") is None
+    assert source_capability_contract_or_none("does_not_exist") is None
+    present = {contract.dataset_id for contract in all_source_capability_contracts()}
+    assert "fins_summary" not in present
+    assert "equities_bars_daily" not in present
+    with pytest.raises(KeyError, match="unknown SourceCapabilityContract"):
+        source_capability_contract_for("fins_summary")
 
 
 def test_missing_dataset_id_rejected() -> None:

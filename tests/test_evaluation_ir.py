@@ -8,13 +8,15 @@ from typing import Any, Mapping
 
 import pytest
 
+from research import evaluation_ir as ir_module
 from research.candidate_policy import job_candidate_grade
 from research.evaluation_ir import (
     ALLOWED_FIELDS,
-    CANONICAL_FIELDS,
     EVALUATION_IR_VERSION,
     SCHEMA_REL,
     assert_evaluation_ir_allowed_fields_ts_frozen,
+    assert_evaluation_ir_codec_ts_frozen,
+    assert_evaluation_ir_encode_keys_match_schema,
     candidate_from_job_artifact,
     decode_evaluation_ir,
     dumps_evaluation_ir_golden,
@@ -22,6 +24,11 @@ from research.evaluation_ir import (
     encode_evaluation_ir,
     evaluation_ir_allowed_fields_ts_path,
     evaluation_ir_allowed_fields_ts_source,
+    evaluation_ir_codec_ts_path,
+    evaluation_ir_codec_ts_source,
+    evaluation_ir_encode_keys,
+    evaluation_ir_ts_encode_keys,
+    evaluation_ir_ts_path,
     job_candidate_grade as ir_grade,
     load_evaluation_ir_schema,
     validate_evaluation_ir_schema,
@@ -54,16 +61,29 @@ def _counts(payload: Mapping[str, Any]) -> dict[str, int]:
 
 def test_canonical_fields_and_version() -> None:
     assert EVALUATION_IR_VERSION == "evaluation-ir/v1"
-    assert CANONICAL_FIELDS == (
-        "return",
-        "cost",
-        "turnover",
-        "coverage",
-        "collapsed",
-        "candidate",
-        "failure_reason",
-    )
     assert ir_grade is job_candidate_grade
+
+
+def test_encode_keys_match_schema_properties() -> None:
+    schema_keys = tuple(load_evaluation_ir_schema()["properties"])
+    assert evaluation_ir_encode_keys() == schema_keys
+    assert evaluation_ir_ts_encode_keys() == schema_keys
+    assert set(evaluation_ir_encode_keys()) == ALLOWED_FIELDS
+    assert_evaluation_ir_encode_keys_match_schema()
+    worker_src = evaluation_ir_ts_path().read_text(encoding="utf-8")
+    codec_src = evaluation_ir_codec_ts_path().read_text(encoding="utf-8")
+    assert "CANONICAL_FIELDS" not in worker_src
+    assert "CANONICAL_FIELDS" not in codec_src
+    assert not hasattr(ir_module, "CANONICAL_FIELDS")
+    assert "export function encodeEvaluationIR" not in worker_src
+    assert "export function decodeEvaluationIR" not in worker_src
+    drifted = codec_src.replace(
+        "failure_reason: reason,",
+        "failure_reason: reason,\n    extra_encode_key: true,",
+        1,
+    )
+    with pytest.raises(ValueError, match="encode keys drifted"):
+        assert_evaluation_ir_encode_keys_match_schema(ts_src=drifted)
 
 
 def test_schema_is_codec_sot() -> None:
@@ -86,6 +106,17 @@ def test_schema_is_codec_sot() -> None:
     assert "Do not edit by hand" in header
     assert "schema.json" in header
     assert_evaluation_ir_allowed_fields_ts_frozen()
+    codec_generated = evaluation_ir_codec_ts_source()
+    codec_path = evaluation_ir_codec_ts_path()
+    assert codec_path.is_file()
+    assert codec_path.read_text(encoding="utf-8") == codec_generated
+    codec_header = codec_generated.split("export const", 1)[0]
+    assert "Do not edit by hand" in codec_header
+    assert "schema.json" in codec_header
+    assert "jobCandidateGrade" in codec_generated
+    assert "export function encodeEvaluationIR" in codec_generated
+    assert "export function decodeEvaluationIR" in codec_generated
+    assert_evaluation_ir_codec_ts_frozen()
     worker = (
         Path(__file__).resolve().parents[1]
         / "platform"
@@ -96,6 +127,13 @@ def test_schema_is_codec_sot() -> None:
     )
     worker_src = worker.read_text(encoding="utf-8")
     assert 'from "./evaluation_ir_allowed_fields.generated"' in worker_src
+    assert 'from "./evaluation_ir_codec.generated"' in worker_src
+    assert "CANONICAL_FIELDS" not in worker_src
+    assert "export function encodeEvaluationIR" not in worker_src
+    assert "export function decodeEvaluationIR" not in worker_src
+    assert "jobCandidateGrade(" in codec_generated
+    assert evaluation_ir_ts_path() == worker
+    assert_evaluation_ir_encode_keys_match_schema()
     assert "const" not in schema["properties"]["candidate"]
     assert "if" not in schema
     assert "then" not in schema

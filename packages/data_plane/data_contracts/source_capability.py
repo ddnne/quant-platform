@@ -66,20 +66,6 @@ _DATASET_FIELDS = (
 )
 _DATASET_ALLOWED = frozenset(_DATASET_FIELDS) | frozenset({"policy_version"})
 _BUNDLE_ALLOWED = frozenset({"policy_version", "datasets", "schema_version"})
-_PUBLICATION_CALENDAR_ALLOWED = frozenset({"kind", "timezone", "index_url"})
-_ENTITLEMENT_ALLOWED = frozenset({"clamp_before_earliest", "subscription_floor"})
-_COLLECTION_WINDOW_ALLOWED = frozenset({"grain", "open", "close"})
-_FRESHNESS_SLA_ALLOWED = frozenset(
-    {"expected_after", "usable_by", "timezone", "rule"}
-)
-_EVENT_TIME_ALLOWED = frozenset({"policy", "fields"})
-_AVAILABLE_AT_ALLOWED = frozenset(
-    {"policy", "field", "known_publication_lag"}
-)
-_REVISION_ALLOWED = frozenset({"policy", "generation_on_revision"})
-_PROFILE_ELIGIBILITY_ALLOWED = frozenset(
-    {"include_in", "exclude_from", "exclusion_reason"}
-)
 
 
 def specs_dir() -> Path:
@@ -156,7 +142,7 @@ class PublicationCalendar:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "PublicationCalendar":
-        obj = _require_object(raw, label)
+        obj = _open_object(raw, label)
         if "kind" not in obj or "timezone" not in obj:
             raise ValueError(f"{label} missing kind/timezone")
         index_url = _optional_str(obj, "index_url", f"{label}.index_url")
@@ -176,7 +162,7 @@ class EntitlementSemantics:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "EntitlementSemantics":
-        obj = _require_object(raw, label)
+        obj = _open_object(raw, label)
         clamp = obj.get("clamp_before_earliest")
         if clamp is None:
             clamp = bool(obj.get("subscription_floor_is_not_historical_required_start"))
@@ -197,7 +183,7 @@ class CollectionWindow:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "CollectionWindow":
-        obj = _require_object(raw, label)
+        obj = _open_object(raw, label)
         if "grain" not in obj:
             raise ValueError(f"{label} missing grain")
         open_v = obj.get("open") or obj.get("required_domain_start") or obj.get("pit_history_start")
@@ -218,7 +204,7 @@ class FreshnessSla:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "FreshnessSla":
-        obj = _require_object(raw, label)
+        obj = _open_object(raw, label)
         tz = obj.get("timezone") or "UTC"
         rule = obj.get("rule") or obj.get("policy") or "unspecified"
         expected = obj.get("expected_after") or obj.get("next_business_day_after") or ""
@@ -238,7 +224,7 @@ class EventTimeSpec:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "EventTimeSpec":
-        obj = _require_object(raw, label)
+        obj = _open_object(raw, label)
         if "policy" not in obj:
             raise ValueError(f"{label} missing policy")
         fields = obj.get("fields") if isinstance(obj.get("fields"), list) else []
@@ -256,7 +242,7 @@ class AvailableAtSpec:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "AvailableAtSpec":
-        obj = _require_object(raw, label)
+        obj = _open_object(raw, label)
         if "policy" not in obj:
             raise ValueError(f"{label} missing policy")
         field = obj.get("field")
@@ -281,7 +267,7 @@ class RevisionSemantics:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "RevisionSemantics":
-        obj = _require_object(raw, label)
+        obj = _open_object(raw, label)
         policy = obj.get("policy") or obj.get("kind")
         if not policy:
             raise ValueError(f"{label} missing policy")
@@ -304,7 +290,7 @@ class ResearchProfileEligibility:
     def from_dict(
         cls, raw: Mapping[str, Any], label: str
     ) -> "ResearchProfileEligibility":
-        obj = _require_object(raw, label)
+        obj = _open_object(raw, label)
         include = obj.get("include_in") if isinstance(obj.get("include_in"), list) else []
         exclude = obj.get("exclude_from") if isinstance(obj.get("exclude_from"), list) else []
         reason = obj.get("exclusion_reason")

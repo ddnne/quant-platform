@@ -13,7 +13,7 @@ import pytest
 
 from data_contracts.coverage import coverage_contract_for
 from qp_paths import repo_root
-from storage.coverage_ledger import plan_required_segments
+from storage.coverage_ledger import evaluate_segment, plan_required_segments
 
 _REPO = repo_root()
 _CAPABILITY = _REPO / "specs" / "source_capability" / "equities_earnings_calendar.json"
@@ -187,3 +187,22 @@ def test_capability_validates_against_v3_loader_when_present() -> None:
     domain = required_domain_subset_official(contract)
     assert domain.admit_historical_required_segments is False
     assert domain.collection_window_grain == "collection_cutoff_snapshot"
+
+
+def test_empty_event_driven_receipt_is_partial_not_complete() -> None:
+    """Tip-snapshot earnings stays PARTIAL on empty even though event_driven."""
+    from tests.test_phase61_coverage_v2 import _receipt
+
+    policy = coverage_contract_for(DATASET)
+    assert policy.expected_frequency == "event_driven"
+    assert policy.history_mode == "next_business_day_snapshot"
+    assert policy.coverage_mode == "next_business_day_snapshot"
+    required = plan_required_segments(policy, V2_TARGET_END)[0]
+    assert required.expected_items is None
+    status, detail = evaluate_segment(
+        policy, required, _receipt(required, observed=0)
+    )
+    assert status == "PARTIAL"
+    assert status != "COMPLETE"
+    assert detail.get("event_zero") is not True
+    assert "empty" in detail["reason"]

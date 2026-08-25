@@ -1,7 +1,9 @@
 """Contract-driven BackfillPlanner (Phase 6.2.2 P0).
 
-Coverage Contract is the sole source of history targets. Dataset lists and
-history starts are never hand-written in driver scripts.
+Coverage Contract plus ``plan_required_segments`` is the sole source of
+history targets. Dataset lists and history starts are never hand-written
+in driver scripts. Missing SourceCapability V3 does not invent official
+domain or COMPLETE. The planner never emits COMPLETE status itself.
 """
 
 from __future__ import annotations
@@ -12,21 +14,14 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Literal, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
-from data_contracts.canonical import governed_datasets
 from data_contracts.coverage import (
     POLICY_VERSION as COVERAGE_POLICY_VERSION,
-    SNAPSHOT_SEGMENT_GRANULARITIES,
     CollectionCoverageContract,
     all_coverage_contracts,
-    coverage_contract_for,
 )
-from data_contracts.source_capability import (
-    TIP_SNAPSHOT_MODES,
-    SourceCapabilityContract,
-    source_capability_contract_for,
-)
+from data_contracts.source_capability import source_capability_contract_or_none
 from storage.coverage_ledger import plan_required_segments
 
 PLAN_VERSION = "backfill-plan/v1"
@@ -53,6 +48,7 @@ DATE_RANGE_BATCH_STANDARD = True
 # NOTE: this is entitlement clamp only — not a catalog COMPLETE invent floor.
 JQUANTS_SUBSCRIPTION_FLOOR = date(2006, 8, 19)
 
+# Job state is ops dispatch, not Coverage COMPLETE. COMPLETE is ledger-only.
 JobState = Literal[
     "pending",
     "running",
@@ -87,31 +83,6 @@ def _today_utc() -> date:
 
 def _parse_date(value: str) -> date:
     return date.fromisoformat(value[:10])
-
-
-def _month_chunks(start: date, end: date) -> list[tuple[date, date]]:
-    if start > end:
-        return []
-    out: list[tuple[date, date]] = []
-    y, m = start.year, start.month
-    while True:
-        first = date(y, m, 1)
-        if m == 12:
-            nxt = date(y + 1, 1, 1)
-        else:
-            nxt = date(y, m + 1, 1)
-        last = nxt - timedelta(days=1)
-        a = max(first, start)
-        b = min(last, end)
-        if a <= b:
-            out.append((a, b))
-        if (y, m) == (end.year, end.month):
-            break
-        m += 1
-        if m > 12:
-            m = 1
-            y += 1
-    return out
 
 
 def _week_chunks(start: date, end: date, days: int = 7) -> list[tuple[date, date]]:
@@ -349,38 +320,39 @@ def _read_complete_segments(
         return set()
 
 
-def _source_capability(dataset_id: str) -> SourceCapabilityContract | None:
-    try:
-        return source_capability_contract_for(dataset_id)
-    except KeyError:
-        return None
+# Official-domain fields that Coverage V3 may attach. Missing V3 must not
+# invent these as if SourceCapabilityContract existed.
+_OFFICIAL_DOMAIN_SCOPE_KEYS = frozenset(
+    {
+        "earliest_official_availability",
+        "official_domain",
+        "admit_historical_required_segments",
+    }
+)
 
 
-def _is_tip_snapshot_dataset(cov: CollectionCoverageContract) -> bool:
-    """Tip/recent snapshot datasets plan a current cutoff, not monthly history."""
-    cap = _source_capability(cov.dataset_id)
-    if cap is not None and cap.history_mode in TIP_SNAPSHOT_MODES:
-        return True
-    if cov.history_mode in TIP_SNAPSHOT_MODES:
-        return True
-    return cov.segment_granularity in SNAPSHOT_SEGMENT_GRANULARITIES
+def _invented_official_domain_without_v3(
+    dataset_id: str, scope: Mapping[str, Any]
+) -> bool:
+    """True when a required segment claims official domain without a V3 row.
 
-
-def _official_domain_start(dataset_id: str) -> date | None:
-    """Official provision start. Entitlement floor is not official domain."""
-    cap = _source_capability(dataset_id)
-    if cap is None or cap.history_mode in TIP_SNAPSHOT_MODES:
-        return None
-    return date.fromisoformat(cap.earliest_official_availability)
+    Missing SourceCapability V3 loads as None. Coverage JSON month inventory
+    is still the ops job for bars/fins; it is not official availability.
+    """
+    if source_capability_contract_or_none(dataset_id) is not None:
+        return False
+    return any(key in scope for key in _OFFICIAL_DOMAIN_SCOPE_KEYS)
 
 
 class BackfillPlanner:
     """Plan backfill jobs from Coverage Contract + endpoint capabilities.
 
-    Date-range batch is standard: each job is dataset × inclusive
-    ``requested_from``/``requested_to`` (typically one calendar month).
-    Rate pools (general vs fins) are assigned at schedule time — see
-    :mod:`ops.range_batch_scheduler`.
+    Required inventory is ``plan_required_segments``. Date-range batch is
+    standard: each job is dataset × inclusive ``requested_from`` /
+    ``requested_to`` (calendar_month for bars/fins; one cutoff for tip
+    snapshots). Missing SourceCapability V3 does not invent official domain
+    or COMPLETE. Rate pools (general vs fins) are assigned at schedule time
+    — see :mod:`ops.range_batch_scheduler`.
     """
 
     def __init__(
@@ -401,6 +373,33 @@ class BackfillPlanner:
         self.prefer_month_chunks_for_today = prefer_month_chunks_for_today
         self.endpoints = load_premium_endpoint_capabilities()
 
+    def _unplannable_job(
+        self,
+        cov: CollectionCoverageContract,
+        *,
+        contract_digest: str,
+        endpoint_query_mode: str,
+        reason_code: ReasonCode,
+        detail: str,
+        expected_evidence: str,
+        requested_from: str | None = None,
+        requested_to: str | None = None,
+    ) -> BackfillJob:
+        return BackfillJob(
+            dataset=cov.dataset_id,
+            source="jquants",
+            segment_id="UNPLANNABLE",
+            requested_from=requested_from or cov.history_target_start,
+            requested_to=requested_to or self.cutoff.isoformat(),
+            endpoint_query_mode=endpoint_query_mode,
+            priority=_PRIORITY.get(cov.dataset_id, 500),
+            state="fail",
+            expected_evidence=expected_evidence,
+            contract_digest=contract_digest,
+            reason_code=reason_code,
+            detail=detail,
+        )
+
     def _jobs_from_required_segments(
         self,
         cov: CollectionCoverageContract,
@@ -411,43 +410,88 @@ class BackfillPlanner:
         filter_from: date | None,
         filter_to: date | None,
     ) -> list[BackfillJob]:
-        """Emit at most Coverage V3 required segments (typically one cutoff snapshot)."""
+        """Emit jobs from ``plan_required_segments`` (months for bars/fins; one tip).
+
+        Missing V3 does not invent official domain. Jobs are pending/fail,
+        never COMPLETE.
+        """
         try:
             required = plan_required_segments(
                 cov, self.cutoff.isoformat(), source="jquants"
             )
         except ValueError:
             return []
+        if any(
+            _invented_official_domain_without_v3(
+                cov.dataset_id, seg.expected_scope or {}
+            )
+            for seg in required
+        ):
+            return [
+                self._unplannable_job(
+                    cov,
+                    contract_digest=contract_digest,
+                    endpoint_query_mode=ep.date_mode,
+                    reason_code="entitlement",
+                    detail=(
+                        "missing SourceCapability V3; "
+                        "refusing invented official domain"
+                    ),
+                    expected_evidence="source_capability_v3",
+                )
+            ]
         jobs: list[BackfillJob] = []
         for seg in required:
             if seg.segment_id in complete:
                 continue
             a = _parse_date(seg.segment_start)
             b = _parse_date(seg.segment_end)
+            if filter_from is not None and filter_from > a:
+                a = filter_from
+            if filter_to is not None and filter_to < b:
+                b = filter_to
+            if a > b:
+                continue
             if b < JQUANTS_SUBSCRIPTION_FLOOR:
                 continue
             if a < JQUANTS_SUBSCRIPTION_FLOOR:
                 a = JQUANTS_SUBSCRIPTION_FLOOR
             if a > b:
                 continue
-            if filter_from is not None and b < filter_from:
-                continue
-            if filter_to is not None and a > filter_to:
-                continue
-            jobs.append(
-                BackfillJob(
-                    dataset=cov.dataset_id,
-                    source="jquants",
-                    segment_id=seg.segment_id,
-                    requested_from=a.isoformat(),
-                    requested_to=b.isoformat(),
-                    endpoint_query_mode=ep.date_mode,
-                    priority=_PRIORITY.get(cov.dataset_id, 200),
-                    contract_digest=contract_digest,
-                    expected_evidence="raw_plus_structured_then_receipt",
-                    state="pending",
+            grain = (seg.expected_scope or {}).get("segment_granularity")
+            if not grain:
+                grain = cov.segment_granularity
+            # Ops dispatch may subdivide today-mode months; coverage id stays
+            # the required segment (YYYY-MM). Tip snapshots are not subdivided.
+            if (
+                not self.prefer_month_chunks_for_today
+                and ep.date_mode not in {"range", "none"}
+                and grain == "calendar_month"
+            ):
+                chunks = _week_chunks(a, b, self.chunk_days)
+            else:
+                chunks = [(a, b)]
+            for ca, cb in chunks:
+                if cb < JQUANTS_SUBSCRIPTION_FLOOR:
+                    continue
+                if ca < JQUANTS_SUBSCRIPTION_FLOOR:
+                    ca = JQUANTS_SUBSCRIPTION_FLOOR
+                if ca > cb:
+                    continue
+                jobs.append(
+                    BackfillJob(
+                        dataset=cov.dataset_id,
+                        source="jquants",
+                        segment_id=seg.segment_id,
+                        requested_from=ca.isoformat(),
+                        requested_to=cb.isoformat(),
+                        endpoint_query_mode=ep.date_mode,
+                        priority=_PRIORITY.get(cov.dataset_id, 200),
+                        contract_digest=contract_digest,
+                        expected_evidence="raw_plus_structured_then_receipt",
+                        state="pending",
+                    )
                 )
-            )
         return jobs
 
     def plan(
@@ -486,114 +530,27 @@ class BackfillPlanner:
                 if ep is None:
                     # Governed JQ without endpoint capability is a hard inventory gap.
                     jobs.append(
-                        BackfillJob(
-                            dataset=cov.dataset_id,
-                            source="jquants",
-                            segment_id="UNPLANNABLE",
-                            requested_from=cov.history_target_start,
-                            requested_to=self.cutoff.isoformat(),
-                            endpoint_query_mode="missing",
-                            priority=_PRIORITY.get(cov.dataset_id, 500),
-                            state="fail",
-                            expected_evidence="endpoint_capability",
+                        self._unplannable_job(
+                            cov,
                             contract_digest=contract_digest,
+                            endpoint_query_mode="missing",
                             reason_code="entitlement",
                             detail="missing premium endpoint capability",
+                            expected_evidence="endpoint_capability",
                         )
                     )
                     continue
                 complete = _read_complete_segments(conn, cov.dataset_id)
-                if _is_tip_snapshot_dataset(cov):
-                    jobs.extend(
-                        self._jobs_from_required_segments(
-                            cov,
-                            ep,
-                            contract_digest=contract_digest,
-                            complete=complete,
-                            filter_from=filter_from,
-                            filter_to=filter_to,
-                        )
+                jobs.extend(
+                    self._jobs_from_required_segments(
+                        cov,
+                        ep,
+                        contract_digest=contract_digest,
+                        complete=complete,
+                        filter_from=filter_from,
+                        filter_to=filter_to,
                     )
-                    continue
-                start = _parse_date(cov.history_target_start)
-                official = _official_domain_start(cov.dataset_id)
-                if official is not None and start < official:
-                    start = official
-                end = self.cutoff
-                if filter_from is not None and filter_from > start:
-                    start = filter_from
-                if filter_to is not None and filter_to < end:
-                    end = filter_to
-                # Clamp to subscription floor so OOS dates never reach /v1/run.
-                # Floor is entitlement only — not official domain (master 2008-05-07).
-                if start < JQUANTS_SUBSCRIPTION_FLOOR:
-                    start = JQUANTS_SUBSCRIPTION_FLOOR
-                if official is not None and start < official:
-                    start = official
-                if start > end:
-                    continue
-                mode = ep.date_mode
-                if mode == "range":
-                    # One range job per month segment (aligns with calendar_month granularity).
-                    chunks = _month_chunks(start, end)
-                elif mode == "none":
-                    chunks = [(start, end)]
-                else:
-                    # today-mode: default is calendar_month-aligned ranges (Track A).
-                    # Full-month dispatch for high-volume series (equities_bars_daily)
-                    # can exceed CF Worker resource limits (error 1102). Set
-                    # prefer_month_chunks_for_today=False to subdivide into week/
-                    # N-day ranges; segment_id stays YYYY-MM for coverage identity.
-                    if self.prefer_month_chunks_for_today:
-                        chunks = _month_chunks(start, end)
-                    else:
-                        chunks = _week_chunks(start, end, self.chunk_days)
-                for a, b in chunks:
-                    # Per-chunk floor clamp (week/N-day paths that start mid-month).
-                    if b < JQUANTS_SUBSCRIPTION_FLOOR:
-                        continue
-                    if a < JQUANTS_SUBSCRIPTION_FLOOR:
-                        a = JQUANTS_SUBSCRIPTION_FLOOR
-                    if official is not None and b < official:
-                        continue
-                    if official is not None and a < official:
-                        a = official
-                    if a > b:
-                        continue
-                    # Canonical segment ID must match Coverage Contract identity
-                    # (calendar_month → YYYY-MM; never date_date form).
-                    if cov.segment_granularity == "calendar_month":
-                        segment_id = a.strftime("%Y-%m")
-                    elif cov.segment_granularity in {
-                        "official_archive_day",
-                        "source_time_series_file",
-                        "official_archive_year",
-                    }:
-                        segment_id = a.strftime("%Y-%m")
-                    else:
-                        segment_id = a.strftime("%Y-%m")
-                    if segment_id in complete:
-                        continue
-                    # Optional job-level range filter (partial month overlap keep).
-                    if filter_from is not None and b < filter_from:
-                        continue
-                    if filter_to is not None and a > filter_to:
-                        continue
-                    jobs.append(
-                        BackfillJob(
-                            dataset=cov.dataset_id,
-                            source="jquants",
-                            segment_id=segment_id,
-                            requested_from=a.isoformat(),
-                            requested_to=b.isoformat(),
-                            endpoint_query_mode=mode,
-                            priority=_PRIORITY.get(cov.dataset_id, 200),
-                            contract_digest=contract_digest,
-                            # Honest: worker pass is not Coverage COMPLETE.
-                            expected_evidence="raw_plus_structured_then_receipt",
-                            state="pending",
-                        )
-                    )
+                )
             # Ensure every governed JQ dataset appears at least once in inventory
             # even when all segments are complete (empty job list still inventories).
             jobs.sort(key=lambda j: (j.priority, j.dataset, j.requested_from))

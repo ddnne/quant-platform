@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Parallel signed-receipt issuance. Never invent COMPLETE without raw."""
+"""Parallel signed-receipt issuance. Never invent COMPLETE without raw.
+
+Optional --index-text PATH is local official-index HTML. Omitted:
+index_text is None so OTC required set is fail-closed empty, not
+calendar COMPLETE. Does not fetch live JSDA HTML.
+"""
 
 from __future__ import annotations
 
@@ -441,7 +446,7 @@ def _parse_datasets(raw: str | None, multi: Sequence[str]) -> list[str]:
     return ordered
 
 
-def main(argv: list[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db", default=str(ROOT / "data/structured/ingestion.sqlite"))
     ap.add_argument("--data-dir", default=str(ROOT / "data"))
@@ -492,11 +497,35 @@ def main(argv: list[str] | None = None) -> int:
         help="Issue receipts but skip ledger refresh.",
     )
     ap.add_argument(
+        "--index-text",
+        default=None,
+        metavar="PATH",
+        help=(
+            "local official-archive index HTML. Omitted: index_text is None "
+            "so OTC required set is fail-closed empty, not a calendar replay. "
+            "Does not fetch live JSDA HTML."
+        ),
+    )
+    ap.add_argument(
         "--json-summary",
         action="store_true",
         help="Print JSON summary on stdout (last line).",
     )
-    args = ap.parse_args(argv)
+    return ap
+
+
+def _read_index_text(path: str | None) -> str | None:
+    """Load local index HTML. Missing path is None (fail-closed empty)."""
+    if path is None:
+        return None
+    index_path = Path(path)
+    if not index_path.is_file():
+        raise FileNotFoundError(f"index HTML not found: {index_path}")
+    return index_path.read_text(encoding="utf-8")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
 
     datasets = _parse_datasets(args.datasets, args.dataset)
     if not datasets:
@@ -507,6 +536,12 @@ def main(argv: list[str] | None = None) -> int:
     if not db.is_file():
         print(f"db missing: {db}", file=sys.stderr)
         return 2
+
+    try:
+        index_text = _read_index_text(args.index_text)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
     if not args.dry_run:
         try:
@@ -595,7 +630,9 @@ def main(argv: list[str] | None = None) -> int:
 
         if issued_rows and not args.no_refresh:
             touched = sorted({r["dataset"] for r in issued_rows})
-            refresh_coverage_ledger(conn, db, datasets=touched)
+            refresh_coverage_ledger(
+                conn, db, datasets=touched, index_text=index_text
+            )
             conn.commit()
             for ds in touched:
                 complete = conn.execute(

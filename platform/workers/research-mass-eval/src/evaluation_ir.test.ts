@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { jobCandidateGrade } from "./candidate";
 import {
   ALLOWED_FIELDS,
-  CANONICAL_FIELDS,
   EVALUATION_IR_VERSION,
   GOLDEN_REL,
   SCHEMA_REL,
@@ -75,17 +74,8 @@ function countsGrade(payload: {
 }
 
 describe("Evaluation IR golden vectors", () => {
-  it("canonical fields, version, and jobCandidateGrade identity", () => {
+  it("version and jobCandidateGrade identity", () => {
     expect(EVALUATION_IR_VERSION).toBe("evaluation-ir/v1");
-    expect(CANONICAL_FIELDS).toEqual([
-      "return",
-      "cost",
-      "turnover",
-      "coverage",
-      "collapsed",
-      "candidate",
-      "failure_reason",
-    ]);
     expect(irGrade).toBe(jobCandidateGrade);
   });
 
@@ -241,12 +231,32 @@ describe("Evaluation IR golden vectors", () => {
     expect([...ALLOWED_FIELDS].sort()).toEqual(
       Object.keys(SCHEMA.properties ?? {}).sort(),
     );
+    const encodedKeys = Object.keys(
+      encodeEvaluationIR({ n_expected: 1, n_cells: 1, n_complete: 1 }),
+    ).sort();
+    expect(encodedKeys).toEqual(Object.keys(SCHEMA.properties ?? {}).sort());
+    expect(encodedKeys).toEqual([...ALLOWED_FIELDS].sort());
     const generated = readFileSync(
       join(SRC_DIR, "evaluation_ir_allowed_fields.generated.ts"),
       "utf8",
     );
     expect(generated).toMatch(/Do not edit by hand/);
     expect(generated).toContain("schema.json");
+    const generatedCodec = readFileSync(
+      join(SRC_DIR, "evaluation_ir_codec.generated.ts"),
+      "utf8",
+    );
+    expect(generatedCodec).toMatch(/Do not edit by hand/);
+    expect(generatedCodec).toContain("schema.json");
+    expect(generatedCodec).toContain("jobCandidateGrade(");
+    expect(generatedCodec).toContain("export function encodeEvaluationIR");
+    expect(generatedCodec).toContain("export function decodeEvaluationIR");
+    const codec = readFileSync(join(SRC_DIR, "evaluation_ir.ts"), "utf8");
+    expect(codec).not.toMatch(/CANONICAL_FIELDS/);
+    expect(codec).toContain("jobCandidateGrade");
+    expect(codec).toContain("evaluation_ir_codec.generated");
+    expect(codec).not.toContain("export function encodeEvaluationIR");
+    expect(codec).not.toContain("export function decodeEvaluationIR");
   });
 
   it.each(GOLDEN_ROWS)("golden $id ($op) encode/decode match", (row) => {

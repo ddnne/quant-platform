@@ -71,6 +71,83 @@ def _is_usable_raw(raw: bytes) -> bool:
     return True
 
 
+def _build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--db", default=str(ROOT / "data/structured/ingestion.sqlite"))
+    ap.add_argument("--data-dir", default=str(ROOT / "data"))
+    ap.add_argument(
+        "--dataset",
+        default="markets_calendar",
+        help="Single dataset id (or use --datasets for multi).",
+    )
+    ap.add_argument(
+        "--datasets",
+        default="",
+        help="Comma-separated datasets. When set, overrides --dataset.",
+    )
+    ap.add_argument("--segment-id", default="", help="optional single segment e.g. 2024-01")
+    ap.add_argument("--limit", type=int, default=12)
+    ap.add_argument("--min-structured", type=int, default=1)
+    ap.add_argument(
+        "--include-complete",
+        action="store_true",
+        help="Also re-issue for segments already COMPLETE.",
+    )
+    ap.add_argument(
+        "--order",
+        choices=("asc", "desc"),
+        default="desc",
+        help="Scan order by segment_start.",
+    )
+    ap.add_argument(
+        "--index-text",
+        default=None,
+        metavar="PATH",
+        help=(
+            "local official-archive index HTML. Omitted: index_text is None "
+            "so OTC required set is fail-closed empty, not a calendar replay. "
+            "Does not fetch live JSDA HTML."
+        ),
+    )
+    return ap
+
+
+def _read_index_text(path: str | Path | None) -> str | None:
+    """Load local official-index HTML.
+
+    Omitted/blank → None (fail-closed empty). Missing PATH raises.
+    Never downloads the index. Never walks a calendar.
+    """
+    if path is None:
+        return None
+    raw = str(path).strip()
+    if not raw:
+        return None
+    file_path = Path(raw)
+    if not file_path.is_file():
+        raise FileNotFoundError(f"index HTML not found: {file_path}")
+    text = file_path.read_text(encoding="utf-8")
+    if not text.strip():
+        return None
+    return text
+
+
+def _refresh_issued_coverage(
+    conn: sqlite3.Connection,
+    db_path: str | Path,
+    datasets: list[str],
+    *,
+    index_text: str | None,
+):
+    """Always pass index_text. Missing text is fail-closed empty, not COMPLETE."""
+    return refresh_coverage_ledger(
+        conn,
+        db_path,
+        datasets=datasets,
+        index_text=index_text,
+    )
+
+
 def _find_raw_bytes(
     data_dir: Path,
     dataset: str,
@@ -140,35 +217,14 @@ def _find_raw_bytes(
             return raw
     return None
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--db", default=str(ROOT / "data/structured/ingestion.sqlite"))
-    ap.add_argument("--data-dir", default=str(ROOT / "data"))
-    ap.add_argument(
-        "--dataset",
-        default="markets_calendar",
-        help="Single dataset id (or use --datasets for multi).",
-    )
-    ap.add_argument(
-        "--datasets",
-        default="",
-        help="Comma-separated datasets. When set, overrides --dataset.",
-    )
-    ap.add_argument("--segment-id", default="", help="optional single segment e.g. 2024-01")
-    ap.add_argument("--limit", type=int, default=12)
-    ap.add_argument("--min-structured", type=int, default=1)
-    ap.add_argument(
-        "--include-complete",
-        action="store_true",
-        help="Also re-issue for segments already COMPLETE.",
-    )
-    ap.add_argument(
-        "--order",
-        choices=("asc", "desc"),
-        default="desc",
-        help="Scan order by segment_start.",
-    )
-    args = ap.parse_args()
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    try:
+        index_text = _read_index_text(args.index_text)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
     db = Path(args.db)
     if not db.is_file():
@@ -285,7 +341,9 @@ def main() -> int:
     print(f"summary issued={issued} skipped={skipped}")
     if issued:
         ds_list = sorted(issued_datasets)
-        rows = refresh_coverage_ledger(conn, db, datasets=ds_list)
+        rows = _refresh_issued_coverage(
+            conn, db, ds_list, index_text=index_text
+        )
         conn.commit()
         for ds in ds_list:
             complete = conn.execute(

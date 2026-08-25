@@ -79,6 +79,40 @@ def _fresh_ok_proposal() -> dict:
     raise AssertionError("no fresh review-ok 3-AND remains")
 
 
+def test_review_sidecar_uses_worker_put(monkeypatch) -> None:
+    from research.cf_propose_thesis import _attach_reviews
+
+    seen: list[str] = []
+
+    def _fake_put(bucket, key, body, **kwargs):
+        assert kwargs.get("dry_run") is not True
+        seen.append(key)
+        return {"status": "put_ok"}
+
+    monkeypatch.setattr("research.r2_io.put_research_artifact", _fake_put)
+    out = _attach_reviews(
+        {
+            "proposals": [
+                {
+                    "thesis": "STUB",
+                    "status": "stub_not_catalog",
+                    "signal_definition": "x",
+                    "position_rule": "y",
+                }
+            ]
+        },
+        write_sidecar=True,
+        job_id="eval-cf-propose-test24em",
+    )
+    assert out["auto_inject"] is False
+    assert out["catalog_written"] is False
+    assert out["go"] is False
+    assert out["review_r2_key"] == (
+        "research/eval/job=eval-cf-propose-test24em/review.json"
+    )
+    assert seen == ["research/eval/job=eval-cf-propose-test24em/review.json"]
+
+
 def test_propose_eval_pack_never_writes_catalog() -> None:
     from research.cf_propose_thesis import propose_eval_pack
 

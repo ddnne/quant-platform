@@ -1,5 +1,7 @@
 # Phase 6.2 / 6.3 residual status
 
+> **Live residual SoT.** Feature HEAD `5103b26b` vs `origin/main` `b5c326a`. Live MCP: Projection **STALE**, READY **null**, B0 **UNKNOWN**, `applied_cursor` **null**. Mass **NO-GO**. Phase 7 **OFF**. Do not treat 22 COMPLETE as live V3.
+
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).
 
 This file holds **live flags only**. Experiment scores and wave essays are

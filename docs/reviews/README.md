@@ -1,6 +1,6 @@
 # Phase 6.3.1 review findings
 
-> **Live vs freeze.** Feature HEAD `67fcbd7c` vs `origin/main` `b5c326a`. PR #1 is **BLOCKED** until `ci-aggregate` posts. Live MCP: Projection **STALE**, READY **null**. Historical A01 / A07 / A11 files are remaining-audit **freezes** at `03cd1b1`, not live SoT. `f224e7e` / `40d1aa90` review files stay earlier freezes, not live HEAD.
+> **Live vs freeze.** Feature HEAD `5103b26b` vs `origin/main` `b5c326a`. PR #1 is **BLOCKED** until `ci-aggregate` posts. Live MCP: Projection **STALE**, READY **null**. Historical A01 / A07 / A11 files are remaining-audit **freezes** at `03cd1b1`, not live SoT. `f224e7e` / `40d1aa90` / `67fcbd7c` / `ed94d504` review files stay earlier freezes, not live HEAD.
 
 Starting remote HEAD at first wave: `069913c`. Remaining-audit freeze: **`03cd1b1`**. Current `origin/main` is **`b5c326a`**.
 Review SHA named in the original brief (`96264f0`) is **not** the freeze.
@@ -29,7 +29,7 @@ IR `golden.jsonl` (`7f2dc12`).
 
 ## Phase 6.3.2 (feature `grok/phase63-ci-source-closure`)
 
-**This HEAD:** `67fcbd7c`. **`origin/main`:** `b5c326a` (not merged). PR #1 **BLOCKED** until `ci-aggregate` posts. Live MCP: Projection **STALE**, READY **null**. Historical 6.3.1 files above (A01 / A07 / A11 included) are not live OPEN/CLOSED or live SoT for 6.3.2. `f224e7e` / `40d1aa90` review files stay earlier freezes, not live HEAD. See:
+**This HEAD:** `5103b26b`. **`origin/main`:** `b5c326a` (not merged). PR #1 **BLOCKED** until `ci-aggregate` posts. Live MCP: Projection **STALE**, READY **null**. Historical 6.3.1 files above (A01 / A07 / A11 included) are not live OPEN/CLOSED or live SoT for 6.3.2. `f224e7e` / `40d1aa90` / `67fcbd7c` / `ed94d504` review files stay earlier freezes, not live HEAD. See:
 
 - [`P632_wave0_live.md`](P632_wave0_live.md) — fetch remeasure
 - [`P632_brief_leaks.md`](P632_brief_leaks.md) — A–S vs feature branch

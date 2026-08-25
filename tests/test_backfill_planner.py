@@ -56,6 +56,21 @@ def test_worker_summary_partial_not_pass():
     job2.apply_worker_summary({"status": "pass"}, http_status=429)
     assert job2.state == "retry"
     assert job2.reason_code == "http_429"
+    job3 = BackfillJob(
+        dataset="equities_bars_daily",
+        source="jquants",
+        segment_id="2008-05",
+        requested_from="2008-05-01",
+        requested_to="2008-05-31",
+        endpoint_query_mode="today",
+        priority=30,
+    )
+    job3.apply_worker_summary(
+        {"status": "pass", "passed": 1, "failed": 0, "rowsInserted": 1},
+        http_status=200,
+    )
+    assert job3.state == "pass"
+    assert job3.state != "COMPLETE"
 
 
 def test_planner_dataset_and_range_filter():
@@ -203,6 +218,56 @@ def test_planner_master_jobs_exclude_pre_official_months():
     assert "2008-05" in months
     assert "2008-06" in months
     assert all(j.requested_from >= "2008-05-07" for j in plan.jobs)
+    may = next(j for j in plan.jobs if j.segment_id == "2008-05")
+    assert may.requested_from == "2008-05-07"
+    assert may.requested_from != "2006-08-13"
+    assert all(j.state != "COMPLETE" for j in plan.jobs)
+
+
+def test_planner_fins_summary_without_v3_uses_coverage_json_not_invented_domain():
+    """No-V3 governed datasets keep official domain None; start is coverage JSON.
+
+    Missing SourceCapability V3 is not an invented official domain.
+    plan_required_segments and BackfillPlanner both start at
+    collection_coverage.json history_target_start. evaluate_segment
+    without a receipt is PARTIAL, not COMPLETE.
+    """
+    from datetime import date
+
+    from data_contracts.coverage import coverage_contract_for
+    from data_contracts.source_capability import source_capability_contract_or_none
+    from storage.coverage_ledger import evaluate_segment, plan_required_segments
+
+    dataset = "fins_summary"
+    assert source_capability_contract_or_none(dataset) is None
+
+    policy = coverage_contract_for(dataset)
+    assert policy.history_target_start == "2008-07-01"
+    assert policy.earliest_official_availability is None
+
+    cutoff = date(2008, 8, 31)
+    planned = plan_required_segments(policy, cutoff.isoformat())
+    assert [segment.segment_id for segment in planned] == ["2008-07", "2008-08"]
+    assert planned[0].segment_start == policy.history_target_start
+    for segment in planned:
+        assert segment.expected_scope["coverage_mode"] == policy.coverage_mode
+        assert "earliest_official_availability" not in segment.expected_scope
+        assert "history_mode" not in segment.expected_scope
+
+    status, detail = evaluate_segment(policy, planned[0], None)
+    assert status == "PARTIAL"
+    assert status != "COMPLETE"
+    assert detail["reason"] == "missing collection receipt"
+
+    plan = BackfillPlanner(cutoff=cutoff).plan(datasets=[dataset])
+    assert [job.segment_id for job in plan.jobs] == ["2008-07", "2008-08"]
+    assert plan.jobs[0].requested_from == policy.history_target_start
+    assert all(
+        job.requested_from >= policy.history_target_start for job in plan.jobs
+    )
+    assert not any(
+        job.segment_id in {"2006-08", "2008-05", "2008-06"} for job in plan.jobs
+    )
 
 
 def test_planner_skips_complete_tip_snapshot_segment(tmp_path):
@@ -226,3 +291,129 @@ def test_planner_skips_complete_tip_snapshot_segment(tmp_path):
         datasets=["equities_bars_daily_am"],
     )
     assert plan.jobs == []
+    assert all(j.state != "COMPLETE" for j in plan.jobs)
+
+
+def test_planner_never_emits_complete_status():
+    """Ops job state is not Coverage COMPLETE; planner does not mint it."""
+    from datetime import date
+    from typing import get_args
+
+    from ops.backfill_planner import JobState
+
+    assert "COMPLETE" not in get_args(JobState)
+    plan = BackfillPlanner(cutoff=date(2008, 7, 31)).plan(
+        datasets=["equities_master", "equities_bars_daily", "fins_summary"],
+    )
+    assert plan.jobs
+    states = {j.state for j in plan.jobs}
+    assert "COMPLETE" not in states
+    assert states <= {"pending", "running", "pass", "partial", "fail", "retry"}
+    assert all(j.expected_evidence != "COMPLETE" for j in plan.jobs)
+
+
+def test_planner_bars_and_fins_month_chunks_match_required_segments():
+    """Bounded-history bars/fins stay calendar_month jobs via required segments."""
+    from datetime import date
+
+    from data_contracts.coverage import coverage_contract_for
+    from data_contracts.source_capability import source_capability_contract_or_none
+    from storage.coverage_ledger import plan_required_segments
+
+    cutoff = date(2008, 7, 31)
+    for dataset, expected_ids in (
+        ("equities_bars_daily", {"2008-05", "2008-06", "2008-07"}),
+        ("fins_summary", {"2008-07"}),
+    ):
+        assert source_capability_contract_or_none(dataset) is None
+        required = plan_required_segments(
+            coverage_contract_for(dataset), cutoff.isoformat()
+        )
+        plan = BackfillPlanner(cutoff=cutoff).plan(datasets=[dataset])
+        assert [j.segment_id for j in plan.jobs] == [s.segment_id for s in required]
+        assert [j.requested_from for j in plan.jobs] == [
+            s.segment_start for s in required
+        ]
+        assert [j.requested_to for j in plan.jobs] == [s.segment_end for s in required]
+        assert {j.segment_id for j in plan.jobs} == expected_ids
+        assert all(j.state == "pending" for j in plan.jobs)
+        assert all(j.state != "COMPLETE" for j in plan.jobs)
+
+
+def test_planner_empty_missing_v3_does_not_mint_complete(tmp_path):
+    """Empty ledger + no V3 row still month-chunks; never COMPLETE."""
+    import sqlite3
+    from datetime import date
+
+    from data_contracts.source_capability import source_capability_contract_or_none
+    from ops.backfill_planner import backfill_status_rows
+
+    assert source_capability_contract_or_none("fins_summary") is None
+    db = tmp_path / "coverage.sqlite"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE coverage_segments (dataset TEXT, segment_id TEXT, status TEXT)"
+    )
+    conn.commit()
+    conn.close()
+    plan = BackfillPlanner(cutoff=date(2008, 8, 31), db_path=db).plan(
+        datasets=["fins_summary"],
+    )
+    assert plan.jobs
+    assert {j.segment_id for j in plan.jobs} == {"2008-07", "2008-08"}
+    assert all(j.state == "pending" for j in plan.jobs)
+    assert all(j.state != "COMPLETE" for j in plan.jobs)
+    assert all(j.expected_evidence != "COMPLETE" for j in plan.jobs)
+
+    rows = backfill_status_rows(db_path=db)
+    fins = next(row for row in rows if row["dataset"] == "fins_summary")
+    assert fins["complete_segments"] == 0
+    assert fins["state"] != "COVERAGE_COMPLETE"
+    assert fins["state"] != "COMPLETE"
+
+
+def test_planner_missing_v3_invented_official_domain_is_fail_closed(monkeypatch):
+    """A no-V3 dataset must not treat invented official domain as required."""
+    from datetime import date
+
+    from data_contracts.source_capability import source_capability_contract_or_none
+    from ops.backfill_planner import _invented_official_domain_without_v3
+    from storage.coverage_ledger import RequiredCoverageSegment
+
+    assert source_capability_contract_or_none("fins_summary") is None
+    invented = {"earliest_official_availability": "2008-07-01"}
+    assert _invented_official_domain_without_v3("fins_summary", invented) is True
+    assert _invented_official_domain_without_v3("fins_summary", {}) is False
+    assert (
+        _invented_official_domain_without_v3(
+            "equities_master", {"earliest_official_availability": "2008-05-07"}
+        )
+        is False
+    )
+
+    def _invent(_policy, _end, **_kwargs):
+        return (
+            RequiredCoverageSegment(
+                source="jquants",
+                dataset="fins_summary",
+                segment_id="2008-07",
+                segment_start="2008-07-01",
+                segment_end="2008-07-31",
+                expected_scope={
+                    "coverage_mode": "event_reconciled",
+                    "segment_granularity": "calendar_month",
+                    "earliest_official_availability": "2008-07-01",
+                },
+                expected_items=1,
+            ),
+        )
+
+    monkeypatch.setattr("ops.backfill_planner.plan_required_segments", _invent)
+    plan = BackfillPlanner(cutoff=date(2008, 7, 31)).plan(
+        datasets=["fins_summary"],
+    )
+    assert plan.jobs
+    assert all(j.segment_id == "UNPLANNABLE" for j in plan.jobs)
+    assert all(j.state == "fail" for j in plan.jobs)
+    assert all(j.state != "COMPLETE" for j in plan.jobs)
+    assert all("invented official domain" in j.detail for j in plan.jobs)

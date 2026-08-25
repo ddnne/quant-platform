@@ -10,6 +10,8 @@ import {
   sha256Hex,
   verifyManifestChildDigest,
 } from "./http";
+import { dispatchMassEvalFetch } from "./http_routes";
+import type { Env } from "./types";
 
 function req(headers: Record<string, string>): Request {
   return new Request("https://example.test/v1/daily-path", { method: "POST", headers });
@@ -358,5 +360,108 @@ describe("http_routes.ts fetch dispatch", () => {
     expect(src).toContain('capability: "generation"');
     expect(src).toContain("403");
     expect(src).toContain("authorized");
+  });
+
+  it("exposes POST /v1/children-then-manifest with X-Mass-Eval-Token", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(join(here, "http_routes.ts"), "utf8");
+    expect(src).toContain('url.pathname === "/v1/children-then-manifest"');
+    expect(src).toContain("putChildrenThenManifest");
+    expect(src).toContain("authorized(request, env.MASS_EVAL_TOKEN)");
+  });
+});
+
+const noopHandlers = {
+  runMassEval: async () => {
+    throw new Error("mass-eval must not run");
+  },
+  runDailyPath: async () => {
+    throw new Error("daily-path must not run");
+  },
+};
+
+describe("POST /v1/children-then-manifest", () => {
+  it("denies when token missing", async () => {
+    const mem = new MemR2();
+    const env = {
+      STRUCTURED_BUCKET: mem.asBucket(),
+      MASS_EVAL_TOKEN: "secret",
+    } as Env;
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/children-then-manifest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          children: [{ key: "job/child.json", data: { n: 1 } }],
+          manifest: { key: "job/manifest.json", data: { n: 1 } },
+        }),
+      }),
+      env,
+      noopHandlers,
+    );
+    expect(res.status).toBe(401);
+    expect(mem.putOrder).toEqual([]);
+  });
+
+  it("denies when token unbound", async () => {
+    const mem = new MemR2();
+    const env = {
+      STRUCTURED_BUCKET: mem.asBucket(),
+    } as Env;
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/children-then-manifest", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Mass-Eval-Token": "secret",
+        },
+        body: JSON.stringify({
+          children: [{ key: "job/child.json", data: { n: 1 } }],
+          manifest: { key: "job/manifest.json", data: { n: 1 } },
+        }),
+      }),
+      env,
+      noopHandlers,
+    );
+    expect(res.status).toBe(503);
+    expect(mem.putOrder).toEqual([]);
+  });
+
+  it("puts children then manifest when authorized", async () => {
+    const mem = new MemR2();
+    const env = {
+      STRUCTURED_BUCKET: mem.asBucket(),
+      MASS_EVAL_TOKEN: "secret",
+    } as Env;
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/children-then-manifest", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Mass-Eval-Token": "secret",
+        },
+        body: JSON.stringify({
+          children: [{ key: "job/child.json", data: { n: 1 } }],
+          manifest: {
+            key: "job/manifest.json",
+            data: { artifact_key: "job/child.json" },
+          },
+        }),
+      }),
+      env,
+      noopHandlers,
+    );
+    expect(res.status).toBe(200);
+    const payload = (await res.json()) as {
+      ok: boolean;
+      conflict: boolean;
+      go: boolean;
+      manifest: { created: boolean; key: string };
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.conflict).toBe(false);
+    expect(payload.go).toBe(false);
+    expect(payload.manifest.created).toBe(true);
+    expect(mem.putOrder).toEqual(["job/child.json", "job/manifest.json"]);
   });
 });

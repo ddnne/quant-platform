@@ -33,11 +33,19 @@ from tests.test_phase61_coverage_v2 import _signed_digests
 
 
 def _jquants_coverage_contracts():
+    """JQ Premium-core only. index_text omitted; OTC would be empty, not weekend COMPLETE."""
     canonical = {contract.dataset_id for contract in all_contracts()}
-    return tuple(
+    policies = tuple(
         policy for policy in all_coverage_contracts()
         if policy.dataset_id in canonical
     )
+    assert all(
+        policy.segment_granularity != "official_archive_index_day"
+        and "official_archive_index" not in (policy.coverage_mode or "")
+        and policy.history_mode != "official_archive_index"
+        for policy in policies
+    ), "JQ READY fixture must not plan OTC; missing index_text is empty, not weekend COMPLETE"
+    return policies
 
 
 def _generic_row(dataset: str, key: str, date: str, **payload):
@@ -156,6 +164,8 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
         observed = 0 if (
             policy.expected_frequency == "event_driven" and not tip_snapshot
         ) else 1
+        # JQ-only (see _jquants_coverage_contracts). index_text omitted:
+        # OTC would be empty required set, never invented weekend COMPLETE.
         planned = tuple(
             segment
             if policy.expected_frequency == "event_driven" and not tip_snapshot

@@ -20,7 +20,7 @@ from research.eval_loaders import (
 from research.eval_universe import select_eval_universe
 from research.eval_windows import DEFAULT_REAL_MULTIYEAR_PERIODS
 from research.complete21 import COMPLETE_21_DATASETS
-from research.r2_io import default_r2_put
+from research.r2_io import put_research_artifact
 
 RESEARCH_ARTIFACT_BUCKET: str = "quant-structured"
 RESEARCH_ARTIFACT_PREFIX: str = "research/mass_eval"
@@ -194,7 +194,7 @@ def stage_real_panels_to_r2(
     ]
     prefix = panels_prefix or f"{RESEARCH_ARTIFACT_PREFIX}/job={jid}/panels"
     put_fn = r2_put or (
-        lambda bucket, key, body: default_r2_put(
+        lambda bucket, key, body: put_research_artifact(
             bucket,
             key,
             body,

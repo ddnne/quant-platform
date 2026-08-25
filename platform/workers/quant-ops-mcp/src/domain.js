@@ -119,6 +119,22 @@ function isRawCaptured(completeness) {
   return completeness === "ACQUIRED" || completeness === "COMPLETE";
 }
 
+/**
+ * ops_status.raw_retention counts. acquired is the canonical SUM of
+ * ACQUIRED|legacy completeness=COMPLETE. complete is a deprecated alias of
+ * that sum so live MCP readers of .complete are not Dataset COMPLETE.
+ */
+function rawRetentionOpsCounts(raw) {
+  const manifests = Number(raw?.manifests || 0);
+  const acquired = Number(raw?.acquired || 0);
+  return {
+    manifests,
+    acquired,
+    // Deprecated alias of acquired. Not dataset Coverage COMPLETE.
+    complete: acquired,
+  };
+}
+
 /** Raw acquisition ≠ dataset Coverage COMPLETE. */
 export function classifyRawAcquisition(row) {
   const completeness = String(row?.completeness || "");
@@ -1068,7 +1084,7 @@ export async function callOpsTool(db, name, rawArguments) {
     coverage_status: coverage.length ? "AVAILABLE" : "UNKNOWN",
     coverage_status_counts: coverage,
     governed_dataset_count: GOVERNED_DATASETS.length,
-    raw_retention: raw || { manifests: 0, acquired: 0 },
+    raw_retention: rawRetentionOpsCounts(raw),
     research_note: "Current Ops status is not evidence that a research READY snapshot contains the same state.",
   };
 }

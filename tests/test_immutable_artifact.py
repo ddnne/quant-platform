@@ -1,8 +1,8 @@
 """Create-if-absent: local digest store and default R2 put. Not GO."""
 
 import inspect
+import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -11,10 +11,12 @@ from research.r2_io import (
     PYTHON_R2_PUT_ENV,
     R2IOError,
     WORKER_CHILDREN_THEN_MANIFEST_ERROR,
+    WORKER_CHILDREN_THEN_MANIFEST_PATH,
     WORKER_PUT_TOKEN_ENV,
     WORKER_PUT_URL_ENV,
     default_r2_put,
     put_children_then_manifest_via_worker,
+    put_research_artifact,
     python_r2_put_allowed,
 )
 from storage.immutable_artifact import ImmutableArtifactStore, content_digest
@@ -106,10 +108,11 @@ def test_remote_r2_put_fail_closed_without_env(tmp_path: Path, monkeypatch) -> N
     cfg.write_text("")
 
     def boom(*_a, **_k):
-        raise AssertionError("remote put must not run without env")
+        raise AssertionError("remote put must not CLI-put")
 
     monkeypatch.setattr(r2_io.subprocess, "run", boom)
-    with pytest.raises(R2IOError, match=rf"{PYTHON_R2_PUT_ENV}=1"):
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", boom)
+    with pytest.raises(R2IOError, match="use Worker children-then-manifest"):
         default_r2_put(
             "quant-structured",
             "research/eval/job=x/daily_path.json",
@@ -118,7 +121,7 @@ def test_remote_r2_put_fail_closed_without_env(tmp_path: Path, monkeypatch) -> N
             config=cfg,
         )
     monkeypatch.setenv(PYTHON_R2_PUT_ENV, "true")
-    with pytest.raises(R2IOError, match="not artifact authority"):
+    with pytest.raises(R2IOError, match="use Worker children-then-manifest"):
         default_r2_put(
             "quant-structured",
             "research/eval/job=x/daily_path.json",
@@ -128,59 +131,38 @@ def test_remote_r2_put_fail_closed_without_env(tmp_path: Path, monkeypatch) -> N
         )
 
 
-def test_create_only_head_success_skips_put(tmp_path: Path, monkeypatch) -> None:
+def test_remote_r2_put_does_not_cli_put_with_overlay(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
     wr = tmp_path / "wrangler"
     wr.write_text("")
     cfg = tmp_path / "wrangler.toml"
     cfg.write_text("")
-    seen: list[list[str]] = []
 
-    def fake_run(cmd, **_k):
-        seen.append(list(cmd))
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    def boom(*_a, **_k):
+        raise AssertionError("overlay must not resurrect CLI TOCTOU put")
 
-    monkeypatch.setattr(r2_io.subprocess, "run", fake_run)
-    got = default_r2_put(
-        "quant-structured",
-        "research/eval/job=x/daily_path.json",
-        b"{}",
-        wrangler=wr,
-        config=cfg,
-    )
-    assert got["status"] == "exists"
-    assert got["created"] is False
-    assert len(seen) == 1
-    assert "head" in seen[0]
-    assert "put" not in seen[0]
+    monkeypatch.setattr(r2_io.subprocess, "run", boom)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", boom)
+    with pytest.raises(R2IOError, match="use Worker children-then-manifest"):
+        default_r2_put(
+            "quant-structured",
+            "research/eval/job=x/daily_path.json",
+            b"{}",
+            wrangler=wr,
+            config=cfg,
+        )
 
 
-def test_create_only_head_miss_calls_put(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
-    wr = tmp_path / "wrangler"
-    wr.write_text("")
-    cfg = tmp_path / "wrangler.toml"
-    cfg.write_text("")
-    seen: list[list[str]] = []
-
-    def fake_run(cmd, **_k):
-        seen.append(list(cmd))
-        if "head" in cmd:
-            return SimpleNamespace(returncode=1, stdout="", stderr="not found")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(r2_io.subprocess, "run", fake_run)
-    got = default_r2_put(
-        "quant-structured",
-        "research/eval/job=x/daily_path.json",
-        b"{}",
-        wrangler=wr,
-        config=cfg,
-    )
-    assert got["status"] == "put_ok"
-    assert got["created"] is True
-    assert any("head" in c for c in seen)
-    assert any("put" in c for c in seen)
+def test_default_r2_put_source_is_not_cli_put() -> None:
+    src = inspect.getsource(default_r2_put)
+    assert "subprocess" not in src
+    assert "put_children_then_manifest_via_worker" in src
+    assert PYTHON_R2_PUT_ENV in src
+    assert "does not resurrect TOCTOU" in src
+    assert "WORKER_CHILDREN_THEN_MANIFEST_ERROR" in src
+    assert "never runs that CLI sequence" in src
 
 
 def _children_then_manifest_payload() -> tuple[list[dict], dict]:
@@ -195,9 +177,14 @@ def _children_then_manifest_payload() -> tuple[list[dict], dict]:
 def test_worker_put_env_names_are_mass_eval() -> None:
     assert WORKER_PUT_URL_ENV == "MASS_EVAL_WORKER_URL"
     assert WORKER_PUT_TOKEN_ENV == "MASS_EVAL_TOKEN"
+    assert WORKER_CHILDREN_THEN_MANIFEST_PATH == "/v1/children-then-manifest"
     assert WORKER_CHILDREN_THEN_MANIFEST_ERROR == (
         "python must use Worker children-then-manifest; CLI put is not authority"
     )
+
+
+def _boom_remote(*_a, **_k):
+    raise AssertionError("must not call remote")
 
 
 def test_dry_run_children_then_manifest_is_local_only(
@@ -206,10 +193,8 @@ def test_dry_run_children_then_manifest_is_local_only(
     monkeypatch.delenv(WORKER_PUT_URL_ENV, raising=False)
     monkeypatch.delenv(WORKER_PUT_TOKEN_ENV, raising=False)
 
-    def boom(*_a, **_k):
-        raise AssertionError("dry_run must not call remote")
-
-    monkeypatch.setattr(r2_io.subprocess, "run", boom)
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
     children, manifest = _children_then_manifest_payload()
     got = put_children_then_manifest_via_worker(
         children, manifest, dry_run=True, staging_dir=tmp_path
@@ -232,42 +217,276 @@ def test_remote_children_then_manifest_fail_closed_unbound(monkeypatch) -> None:
     monkeypatch.delenv(WORKER_PUT_URL_ENV, raising=False)
     monkeypatch.delenv(WORKER_PUT_TOKEN_ENV, raising=False)
 
-    def boom(*_a, **_k):
-        raise AssertionError("must not fall back to CLI put")
-
-    monkeypatch.setattr(r2_io.subprocess, "run", boom)
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
     children, manifest = _children_then_manifest_payload()
     with pytest.raises(R2IOError, match="python must use Worker children-then-manifest"):
         put_children_then_manifest_via_worker(children, manifest)
 
 
-def test_remote_children_then_manifest_raises_even_when_bound(monkeypatch) -> None:
+def test_remote_children_then_manifest_url_only_fail_closed(monkeypatch) -> None:
+    monkeypatch.setenv(WORKER_PUT_URL_ENV, "https://example.invalid/worker")
+    monkeypatch.delenv(WORKER_PUT_TOKEN_ENV, raising=False)
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
+    children, manifest = _children_then_manifest_payload()
+    with pytest.raises(R2IOError, match="python must use Worker children-then-manifest"):
+        put_children_then_manifest_via_worker(children, manifest)
+
+
+def test_remote_children_then_manifest_posts_when_bound(monkeypatch) -> None:
     monkeypatch.setenv(WORKER_PUT_URL_ENV, "https://example.invalid/worker")
     monkeypatch.setenv(WORKER_PUT_TOKEN_ENV, "tok")
     monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
+    seen: dict = {}
 
-    def boom(*_a, **_k):
-        raise AssertionError("must not fall back to CLI put")
+    def fake_post(*, url, body, headers):
+        seen["url"] = url
+        seen["body"] = json.loads(body)
+        seen["headers"] = headers
+        return {
+            "ok": True,
+            "conflict": False,
+            "verified": True,
+            "go": False,
+            "children": [
+                {
+                    "key": "research/eval/job=x/child.json",
+                    "created": True,
+                    "digest": "sha256:from-worker",
+                }
+            ],
+            "manifest": {
+                "key": "research/eval/job=x/manifest.json",
+                "created": True,
+                "digest": "sha256:from-worker-manifest",
+            },
+        }
 
-    monkeypatch.setattr(r2_io.subprocess, "run", boom)
     children, manifest = _children_then_manifest_payload()
-    with pytest.raises(
-        R2IOError,
-        match="python must use Worker children-then-manifest; CLI put is not authority",
-    ):
+    got = put_children_then_manifest_via_worker(
+        children, manifest, http_post=fake_post
+    )
+    assert seen["url"] == "https://example.invalid/worker/v1/children-then-manifest"
+    assert seen["headers"]["X-Mass-Eval-Token"] == "tok"
+    assert seen["headers"]["Content-Type"] == "application/json"
+    assert seen["body"] == {
+        "children": [
+            {"key": "research/eval/job=x/child.json", "data": {"n": 1}}
+        ],
+        "manifest": {
+            "key": "research/eval/job=x/manifest.json",
+            "data": {"artifact_key": "research/eval/job=x/child.json"},
+        },
+    }
+    assert "digest" not in seen["body"]
+    assert "expected_child_digest" not in seen["body"]
+    assert got["status"] == "put_ok"
+    assert got["ok"] is True
+    assert got["created"] is True
+    assert got["manifest_key"] == "research/eval/job=x/manifest.json"
+    assert "digest" not in got
+
+
+def test_remote_children_then_manifest_stdlib_http_stub(monkeypatch) -> None:
+    monkeypatch.setenv(WORKER_PUT_URL_ENV, "https://example.invalid/worker")
+    monkeypatch.setenv(WORKER_PUT_TOKEN_ENV, "tok")
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    seen: dict = {}
+
+    class _Resp:
+        status = 200
+
+        def read(self):
+            return json.dumps(
+                {
+                    "ok": True,
+                    "conflict": False,
+                    "verified": True,
+                    "go": False,
+                    "manifest": {
+                        "key": "research/eval/job=x/manifest.json",
+                        "created": True,
+                    },
+                }
+            ).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["method"] = req.get_method()
+        seen["data"] = json.loads(req.data.decode("utf-8"))
+        seen["headers"] = {k.lower(): v for k, v in req.header_items()}
+        seen["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", fake_urlopen)
+    children, manifest = _children_then_manifest_payload()
+    got = put_children_then_manifest_via_worker(children, manifest)
+    assert seen["url"].endswith("/v1/children-then-manifest")
+    assert seen["method"] == "POST"
+    assert seen["headers"].get("x-mass-eval-token") == "tok"
+    assert seen["data"]["children"][0]["data"] == {"n": 1}
+    assert "digest" not in seen["data"]
+    assert got["ok"] is True
+    assert got["status"] == "put_ok"
+
+
+def test_remote_children_then_manifest_conflict_fail_closed(monkeypatch) -> None:
+    monkeypatch.setenv(WORKER_PUT_URL_ENV, "https://example.invalid/worker")
+    monkeypatch.setenv(WORKER_PUT_TOKEN_ENV, "tok")
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
+    children, manifest = _children_then_manifest_payload()
+
+    def fake_post(*, url, body, headers):
+        return {"ok": False, "error": "artifact_conflict", "conflict": True}
+
+    with pytest.raises(R2IOError, match="artifact_conflict"):
+        put_children_then_manifest_via_worker(
+            children, manifest, http_post=fake_post
+        )
+
+
+def test_remote_children_then_manifest_non_json_body_fail_closed(monkeypatch) -> None:
+    monkeypatch.setenv(WORKER_PUT_URL_ENV, "https://example.invalid/worker")
+    monkeypatch.setenv(WORKER_PUT_TOKEN_ENV, "tok")
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
+    children = [{"key": "research/eval/job=x/child.json", "body": b"not-json"}]
+    manifest = {
+        "key": "research/eval/job=x/manifest.json",
+        "data": {"artifact_key": "research/eval/job=x/child.json"},
+    }
+    with pytest.raises(R2IOError, match="not JSON"):
         put_children_then_manifest_via_worker(children, manifest)
 
 
 def test_children_then_manifest_source_is_not_cli_or_digest_forge() -> None:
     src = inspect.getsource(put_children_then_manifest_via_worker)
-    assert "default_r2_put" not in src
-    assert "subprocess" not in src
-    assert "hashlib" not in src
-    assert "sha256" not in src
-    assert "urllib" not in src
-    assert "httpx" not in src
+    helper = inspect.getsource(r2_io._post_worker_children_then_manifest)
+    combined = f"{src}\n{helper}\n{inspect.getsource(r2_io._item_json_data)}"
+    assert "default_r2_put" not in combined
+    assert "subprocess" not in combined
+    assert "hashlib" not in combined
+    assert "sha256" not in combined
+    assert "httpx" not in combined
+    assert "wrangler" not in combined
     assert "WORKER_CHILDREN_THEN_MANIFEST_ERROR" in src
+    assert "WORKER_CHILDREN_THEN_MANIFEST_PATH" in src
+    assert "X-Mass-Eval-Token" in helper
     doc = put_children_then_manifest_via_worker.__doc__ or ""
     assert "CLI put is not authority" in doc
     assert "no digest forge" in doc
     assert "dry_run" in doc
+
+
+def test_put_research_artifact_dry_run_is_local_default_r2_put(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
+    got = put_research_artifact(
+        "quant-structured",
+        "research/eval/job=x/cost_verify.json",
+        b'{"n": 1}',
+        dry_run=True,
+        staging_dir=tmp_path,
+    )
+    assert got["status"] == "dry_run"
+    assert got.get("created") is not True
+    staged = Path(got["staged_path"])
+    assert staged.read_bytes() == b'{"n": 1}'
+
+
+def test_put_research_artifact_remote_posts_worker_not_cli(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(WORKER_PUT_URL_ENV, "https://example.invalid/worker")
+    monkeypatch.setenv(WORKER_PUT_TOKEN_ENV, "tok")
+    monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
+    seen: dict = {}
+
+    def fake_post(*, url, body, headers):
+        seen["url"] = url
+        seen["body"] = json.loads(body)
+        seen["headers"] = headers
+        return {
+            "ok": True,
+            "conflict": False,
+            "verified": True,
+            "go": False,
+            "manifest": {
+                "key": "research/eval/job=x/cost_verify.json",
+                "created": True,
+            },
+        }
+
+    got = put_research_artifact(
+        "quant-structured",
+        "research/eval/job=x/cost_verify.json",
+        b'{"n": 1}',
+        http_post=fake_post,
+    )
+    assert seen["url"].endswith("/v1/children-then-manifest")
+    assert seen["headers"]["X-Mass-Eval-Token"] == "tok"
+    assert seen["body"] == {
+        "children": [],
+        "manifest": {
+            "key": "research/eval/job=x/cost_verify.json",
+            "data": {"n": 1},
+        },
+    }
+    assert got["status"] == "put_ok"
+    assert got["ok"] is True
+    assert got.get("created") is True
+
+
+def test_put_research_artifact_remote_unbound_fail_closed(monkeypatch) -> None:
+    monkeypatch.delenv(WORKER_PUT_URL_ENV, raising=False)
+    monkeypatch.delenv(WORKER_PUT_TOKEN_ENV, raising=False)
+    monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
+    with pytest.raises(R2IOError, match="python must use Worker children-then-manifest"):
+        put_research_artifact(
+            "quant-structured",
+            "research/eval/job=x/cost_verify.json",
+            b'{"n": 1}',
+        )
+
+
+def test_research_job_callers_use_worker_put_not_cli() -> None:
+    root = Path(__file__).resolve().parents[1] / "packages" / "product" / "research"
+    remote_callers = (
+        "cf_mass_eval_job.py",
+        "cf_mass_eval_stage.py",
+        "occupancy_audit.py",
+        "cf_propose_thesis.py",
+        "cf_cost_verify.py",
+    )
+    for name in remote_callers:
+        src = (root / name).read_text(encoding="utf-8")
+        assert "put_research_artifact" in src
+        assert "QP_ALLOW_PYTHON_R2_PUT" not in src
+        if name == "cf_mass_eval_stage.py":
+            assert "default_r2_put" not in src
+        else:
+            assert "default_r2_put(" not in src
+    recon = (root / "reconstitution_evidence.py").read_text(encoding="utf-8")
+    assert "default_r2_put(" in recon
+    assert "dry_run=True" in recon
+    assert "QP_ALLOW_PYTHON_R2_PUT" not in recon
+    helper = inspect.getsource(put_research_artifact)
+    assert "put_children_then_manifest_via_worker" in helper
+    assert "default_r2_put" in helper
+    assert "does not grant CLI put" in (put_research_artifact.__doc__ or "")

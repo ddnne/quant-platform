@@ -335,6 +335,11 @@ def _empty_observed_forbids_complete(policy: CollectionCoverageContract) -> bool
     (collection_cutoff / same_trading_day), or official_archive_index stay
     PARTIAL even when expected_frequency is still event_driven.
     """
+    domain = _official_domain_for(_source_capability_for(policy.dataset_id))
+    if _is_tip_snapshot_policy(policy, domain):
+        return True
+    if _uses_official_archive_index(policy, domain):
+        return True
     mode = policy.coverage_mode
     grain = policy.segment_granularity
     history_mode = policy.history_mode or ""
