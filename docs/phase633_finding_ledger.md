@@ -37,7 +37,7 @@ pass.
 
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
-| R1 | exact-four closure required TOPIX but `indices_bars_daily_topix` had no V3 SourceCapability | OPEN | Add official capability and prove the full exact-four closure |
+| R1 | exact-four closure required TOPIX but `indices_bars_daily_topix` had no V3 SourceCapability | FIXED | `eb21e84a`; official 2008-05-07 boundary and exact-five-dataset closure independently verified |
 | R2 | READY/coherence paths hard-coded one global V2 policy and rejected valid per-dataset V3 evidence | OPEN | Bind signed policy id/version/digest per dataset and fail on unknown/missing evidence |
 | R3 | ExperimentPlan embedded `ready_snapshot_id=not-declared`, making later immutable snapshot equality circular | OPEN | Remove the placeholder from plan identity; bind snapshot at signed execution authorization |
 | R4 | exact-four bindings were caller-overridable | OPEN | Only the canonical four plan ids and exact digests may reach Controlled Pilot |
@@ -97,7 +97,7 @@ pass.
 ## Integration gate
 
 The latest independent adversarial review rejected the Coverage/READY candidate
-with P0 rows D2, D3, R1-R6, R10-R11, C4, C9, C10 and A2 unresolved. Remediation is in
+with P0 rows D2, D3, R2-R6, R10-R11, C4, C9, C10 and A2 unresolved. Remediation is in
 progress. After those rows are closed, run a fresh independent review against
 one immutable SHA, then run the full native CI-equivalent suite. Only that
 reviewed SHA may be pushed for the release PR.

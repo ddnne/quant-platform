@@ -1,6 +1,6 @@
 {
   "schema_version": "phase631-finding-ledger/v1",
-  "updated_at": "2026-08-26T05:09:04+09:00",
+  "updated_at": "2026-08-26T06:58:53+09:00",
   "merge_policy": {
     "required_p0_status": "FIXED",
     "independent_review_unresolved_p0": 0,
@@ -14,7 +14,7 @@
     {"id":"D5","area":"data_pit_receipt","severity":"P1","status":"HOLD","summary":"Existing COMPLETE receipts predate final trusted path","closure":"Trusted reproof before COMPLETE eligibility"},
     {"id":"D6","area":"data_pit_receipt","severity":"P1","status":"FIXED","summary":"Canonical Registry duplicated PIT and Coverage semantics","evidence":"2bd96d69"},
 
-    {"id":"R1","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"TOPIX exact-four dependency lacked V3 SourceCapability","closure":"Official capability and complete exact-four dependency proof"},
+    {"id":"R1","area":"ready_plan_execution","severity":"P0","status":"FIXED","summary":"TOPIX exact-four dependency lacked V3 SourceCapability","evidence":"eb21e84a; independent exact-four SourceCapability review"},
     {"id":"R2","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"READY assumed one global V2 policy","closure":"Signed per-dataset policy id, version, and digest"},
     {"id":"R3","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"ExperimentPlan snapshot placeholder made identity circular","closure":"Snapshot binding only in signed execution authorization"},
     {"id":"R4","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Exact-four bindings were caller-overridable","closure":"Canonical four plan ids and exact digests only"},
