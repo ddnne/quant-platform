@@ -1,18 +1,8 @@
-export interface Env {
-  STRUCTURED_BUCKET: R2Bucket;
-  /** Typed Service Binding RPC. Direct Workers AI and shared tokens are forbidden. */
-  AI_GATEWAY?: AiGatewayService;
+/** Generated bindings with typed Gateway RPC; secrets stay string-only. */
+export type Env = Omit<Cloudflare.Env, "AI_GATEWAY"> & {
+  AI_GATEWAY: AiGatewayService;
   MASS_EVAL_TOKEN?: string;
-  MASS_EVAL_VERSION?: string;
-  MASS_EVAL_WAVE?: string;
-  MASS_RESEARCH?: string;
-  PHASE7?: string;
-  READY_DECLARED?: string;
-  OPERATIONAL_GO?: string;
-  CONTINUOUS_PAPER?: string;
-  /** nets_only is deny-by-default; only the exact value "allow" opts in. */
-  NETS_ONLY?: string;
-}
+};
 
 export interface AiGatewayService {
   complete(

@@ -32,6 +32,8 @@ TOOLCHAIN = {
     "wrangler": "4.125.0",
     "@cloudflare/workers-types": "5.20260825.1",
     "typescript": "5.9.2",
+    "vitest": "4.1.11",
+    "@cloudflare/vitest-plugin": "1.0.0",
 }
 
 # Names are policy. Values remain exclusively in Cloudflare Secrets.

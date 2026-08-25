@@ -11,11 +11,11 @@ import addonProxyContract from "../../../../packages/data_plane/data_contracts/j
 import { authorized } from "./authorized";
 import { json } from "./http_json";
 
-export interface Env {
+/** Generated bindings plus secret refinements only. */
+export type Env = Cloudflare.Env & {
   JQUANTS_API_KEY: string;
   JQUANTS_PROXY_TOKEN?: string;
-  PROXY_RATE_LIMITER?: RateLimit;
-}
+};
 
 const JQ_BASE = "https://api.jquants.com";
 const JQUANTS_PROXY_PATHS: ReadonlySet<string> = new Set(

@@ -16,12 +16,10 @@ import { exponentialBackoffFullJitterMs, sleepMs } from "./retry_jitter";
 
 export type { MasterScd2UniverseEvidence };
 
-export interface PersistEnv {
-  DB: D1Database;
-  STRUCTURED_BUCKET: R2Bucket;
+export type PersistEnv = Pick<Cloudflare.Env, "DB" | "STRUCTURED_BUCKET"> & {
   MASTER_SCD2_ONLY?: string;
   ALLOW_D1_STRUCTURED_DATASETS?: string;
-}
+};
 
 const RETRY_COUNT = 3;
 const RETRY_BASE_DELAY_MS = 500;

@@ -27,11 +27,10 @@ import {
 
 export { BudgetLedger };
 
-export interface GatewayEnv {
-  AI?: Ai;
+/** Generated bindings plus the HTTP-defense secret. */
+export type GatewayEnv = Cloudflare.Env & {
   GATEWAY_TOKEN?: string;
-  BUDGET_LEDGER?: DurableObjectNamespace;
-}
+};
 
 export type GatewayServiceResult = {
   http_status: number;

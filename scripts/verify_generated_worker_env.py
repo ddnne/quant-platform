@@ -11,13 +11,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "specs" / "cloudflare" / "active_worker_bindings.json"
 WORKER_ROOT = ROOT / "platform" / "workers"
+ENVIRONMENTS = ("base", "production", "staging")
+_TS_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_GENERIC_ERASURE = (
+    "any",
+    "unknown",
+    "object",
+    "Record<string, unknown>",
+    "DurableObjectNamespace<any>",
+    "DurableObjectNamespace",
+)
 
 
 def _property_name(value: Any) -> str:
@@ -37,6 +48,41 @@ def _literal_type(value: Any) -> str:
     raise ValueError(f"unsupported Wrangler var type: {type(value).__name__}")
 
 
+def active_worker_environments() -> list[tuple[str, str]]:
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    workers = manifest.get("workers") or {}
+    rows: list[tuple[str, str]] = []
+    for worker, environments in workers.items():
+        if tuple(environments) != ENVIRONMENTS:
+            raise ValueError(f"{worker}: environment set drift")
+        for environment in ENVIRONMENTS:
+            rows.append((str(worker), environment))
+    if not rows:
+        raise ValueError("active Worker Env inventory is empty")
+    return rows
+
+
+def _reject_generic_erasure(worker: str, environment: str, name: str, type_name: str) -> None:
+    collapsed = type_name.replace(" ", "")
+    if (
+        type_name in _GENERIC_ERASURE
+        or collapsed in {"DurableObjectNamespace<any>", "DurableObjectNamespace"}
+        or type_name.endswith("<any>")
+    ):
+        raise ValueError(
+            f"{worker}/{environment}:{name}: generic Env erasure {type_name}"
+        )
+
+
+def _durable_object_type(worker: str, environment: str, row: Mapping[str, Any]) -> str:
+    class_name = str(row.get("class_name") or "")
+    if not _TS_IDENT.fullmatch(class_name):
+        raise ValueError(
+            f"{worker}/{environment}: Durable Object class_name is not a typed identifier"
+        )
+    return f'DurableObjectNamespace<import("./src/index").{class_name}>'
+
+
 def expected_types(worker: str, environment: str) -> dict[str, str]:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     try:
@@ -52,6 +98,7 @@ def expected_types(worker: str, environment: str) -> dict[str, str]:
             raise ValueError(f"{worker}/{environment}: empty binding name")
         if key in expected:
             raise ValueError(f"{worker}/{environment}: duplicate Env binding {key}")
+        _reject_generic_erasure(worker, environment, key, type_name)
         expected[key] = type_name
 
     for row in surface["d1_databases"]:
@@ -63,9 +110,17 @@ def expected_types(worker: str, environment: str) -> dict[str, str]:
     for row in surface["queue_producers"]:
         add(row.get("binding"), "Queue")
     for row in surface["durable_objects"]:
-        add(row.get("name"), "DurableObjectNamespace<any>")
+        add(row.get("name"), _durable_object_type(worker, environment, row))
     for row in surface["services"]:
-        add(row.get("binding"), "Fetcher")
+        entrypoint = row.get("entrypoint")
+        if entrypoint:
+            if not _TS_IDENT.fullmatch(str(entrypoint)):
+                raise ValueError(
+                    f"{worker}/{environment}: service entrypoint is not a typed identifier"
+                )
+            add(row.get("binding"), "Service")
+        else:
+            add(row.get("binding"), "Fetcher")
     for row in surface["ratelimits"]:
         add(row.get("name"), "RateLimit")
     ai = surface.get("ai") or {}
@@ -113,6 +168,13 @@ def write_check(
     raw = generated_types.read_text(encoding="utf-8")
     if "interface __BaseEnv_Env {" not in raw or "interface Env extends __BaseEnv_Env" not in raw:
         raise ValueError("Wrangler declaration does not contain a generated Env surface")
+    if "DurableObjectNamespace<any>" in raw.replace(" ", ""):
+        raise ValueError("generated Env erased a Durable Object class parameter")
+    expected = expected_types(worker, environment)
+    if any(type_name == "Service" for type_name in expected.values()) and re.search(
+        r":\s*Fetcher\b", raw
+    ):
+        raise ValueError("generated Env erased a typed Service binding to Fetcher")
 
     assertion.write_text(render_assertion(worker, environment), encoding="utf-8")
     config = {
@@ -144,7 +206,7 @@ def write_check(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--worker", required=True)
-    parser.add_argument("--environment", choices=("production", "staging"), required=True)
+    parser.add_argument("--environment", choices=ENVIRONMENTS, required=True)
     parser.add_argument("--generated-types", type=Path, required=True)
     parser.add_argument("--assertion", type=Path, required=True)
     parser.add_argument("--tsconfig", type=Path, required=True)

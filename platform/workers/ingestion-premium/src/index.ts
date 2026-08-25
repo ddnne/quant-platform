@@ -42,18 +42,14 @@ import { fetchDataset } from "./fetch_jq";
 import { todayJst, toJstIso } from "./identity";
 import { sha256HexFromString } from "./sha256";
 
-export interface Env {
+/** Generated bindings plus secret/optional var refinements only. */
+export type Env = Cloudflare.Env & {
   JQUANTS_API_KEY: string;
   INGESTION_RUN_TOKEN?: string;
   DATA_EXPORT_TOKEN?: string;
-  /** Optional concurrency cap (1–8). Default 6 (near Premium ceiling). */
-  INGEST_CONCURRENCY?: string;
-  /** When "1", equities_master structured skips full-history D1 (R2 only). */
   MASTER_SCD2_ONLY?: string;
-  RAW_BUCKET: R2Bucket;
-  STRUCTURED_BUCKET: R2Bucket;
-  DB: D1Database;
-}
+  ALLOW_D1_STRUCTURED_DATASETS?: string;
+};
 
 // P0-4 parallel ingest knobs — drive near Premium ~500/min ceiling.
 const DEFAULT_CONCURRENCY = 6;
