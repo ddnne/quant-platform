@@ -119,6 +119,7 @@ def _effective_surface(
         "queue_consumers": _json_rows(queues.get("consumers")),
         "durable_objects": _json_rows(durable_objects.get("bindings")),
         "services": _json_rows(section.get("services")),
+        "ratelimits": _json_rows(section.get("ratelimits")),
         "ai": dict(sorted((section.get("ai") or {}).items())),
         "migrations": _json_rows(migrations),
         "crons": sorted(((section.get("triggers") or {}).get("crons") or [])),
@@ -209,6 +210,47 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         }
     ]:
         raise ValueError("mass-eval must use the typed GatewayService binding")
+
+    expected_ops_databases = {
+        "base": {
+            ("OPS_PROJECTION_DB", "quant-ops-projection", "migrations/projection"),
+            ("QUOTA_DB", "quant-ops-quota", "migrations/quota"),
+        },
+        "production": {
+            ("OPS_PROJECTION_DB", "quant-ops-projection", "migrations/projection"),
+            ("QUOTA_DB", "quant-ops-quota", "migrations/quota"),
+        },
+        "staging": {
+            (
+                "OPS_PROJECTION_DB",
+                "quant-ops-projection-staging",
+                "migrations/projection",
+            ),
+            ("QUOTA_DB", "quant-ops-quota-staging", "migrations/quota"),
+        },
+    }
+    for environment, expected in expected_ops_databases.items():
+        databases = workers["quant-ops-mcp"][environment]["d1_databases"]
+        actual = {
+            (
+                str(row.get("binding")),
+                str(row.get("database_name")),
+                str(row.get("migrations_dir")),
+            )
+            for row in databases
+        }
+        if actual != expected:
+            raise ValueError(
+                f"quant-ops-mcp/{environment}: dedicated projection/quota "
+                f"bindings drifted: {sorted(actual)}"
+            )
+
+    for environment in ("base", "production"):
+        ratelimits = workers["ingestion-secrets"][environment]["ratelimits"]
+        if {row.get("name") for row in ratelimits} != {"PROXY_RATE_LIMITER"}:
+            raise ValueError(
+                f"ingestion-secrets/{environment}: PROXY_RATE_LIMITER binding required"
+            )
 
 
 def _render(manifest: dict[str, Any]) -> str:

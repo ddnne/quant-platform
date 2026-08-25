@@ -36,6 +36,10 @@ PRODUCTION_KV_ID = "cbbfc9439c3e4a789fa103777d38f39e"
 PRODUCTION_BUCKETS = frozenset({"quant-raw", "quant-structured"})
 PRODUCTION_BINDING_IDS = frozenset({PRODUCTION_D1_ID, PRODUCTION_KV_ID}) | PRODUCTION_BUCKETS
 STAGING_D1_ID = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
+OPS_PROJECTION_D1_ID = "1b497e8a-5c69-4e19-ae2e-89a8f3185272"
+OPS_QUOTA_D1_ID = "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6"
+OPS_PROJECTION_STAGING_D1_ID = "68ee96d5-766c-4832-836b-54c079bd6265"
+OPS_QUOTA_STAGING_D1_ID = "a27f8ce9-82cb-4eec-abac-9c3385ce40e1"
 STAGING_KV_ID = "4402f398df93412ebe6774d1bc603142"
 STAGING_BUCKETS = frozenset({"quant-raw-staging", "quant-structured-staging"})
 
@@ -137,7 +141,7 @@ def test_staging_uses_distinct_names_and_resources() -> None:
         env = staging.get("env") or {}
         assert "production" not in env, name
 
-    for name in ("ingestion-jsda", "ingestion-premium", "quant-ops-mcp", "research-mass-eval"):
+    for name in ("ingestion-jsda", "ingestion-premium"):
         staging = _load(_staging_toml(name))
         databases = staging.get("d1_databases") or []
         assert {row["database_id"] for row in databases} == {STAGING_D1_ID}, name
@@ -154,6 +158,20 @@ def test_staging_uses_distinct_names_and_resources() -> None:
 
     ops = _load(_staging_toml("quant-ops-mcp"))
     assert {row["id"] for row in ops["kv_namespaces"]} == {STAGING_KV_ID}
+    assert {row["database_id"] for row in ops["d1_databases"]} == {
+        OPS_PROJECTION_STAGING_D1_ID,
+        OPS_QUOTA_STAGING_D1_ID,
+    }
+    assert {row["database_name"] for row in ops["d1_databases"]} == {
+        "quant-ops-projection-staging",
+        "quant-ops-quota-staging",
+    }
+    production_ops = _load(_worker_toml("quant-ops-mcp"))
+    assert {row["database_id"] for row in production_ops["d1_databases"]} == {
+        OPS_PROJECTION_D1_ID,
+        OPS_QUOTA_D1_ID,
+    }
+    assert PRODUCTION_D1_ID not in _strings(production_ops["d1_databases"])
     secrets = _load(_staging_toml("ingestion-secrets"))
     assert secrets.get("workers_dev") is False
     assert secrets.get("preview_urls") is False

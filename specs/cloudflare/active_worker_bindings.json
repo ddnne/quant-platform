@@ -59,6 +59,7 @@
             "bucket_name": "quant-raw"
           }
         ],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [
           "INGESTION_RUN_TOKEN"
@@ -70,8 +71,6 @@
           "wrangler": "4.125.0"
         },
         "vars": {
-          "MAX_DATA_FILES": "3",
-          "MAX_YEAR_PAGES": "1",
           "USER_AGENT": "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
         },
         "workers_dev": false
@@ -118,6 +117,7 @@
             "bucket_name": "quant-raw"
           }
         ],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [
           "INGESTION_RUN_TOKEN"
@@ -129,8 +129,6 @@
           "wrangler": "4.125.0"
         },
         "vars": {
-          "MAX_DATA_FILES": "3",
-          "MAX_YEAR_PAGES": "1",
           "USER_AGENT": "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
         },
         "workers_dev": false
@@ -177,6 +175,7 @@
             "bucket_name": "quant-raw-staging"
           }
         ],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [],
         "services": [],
@@ -186,8 +185,6 @@
           "wrangler": "4.125.0"
         },
         "vars": {
-          "MAX_DATA_FILES": "1",
-          "MAX_YEAR_PAGES": "1",
           "USER_AGENT": "quant-platform-staging-ingest/0.1"
         },
         "workers_dev": false
@@ -227,6 +224,7 @@
             "bucket_name": "quant-structured"
           }
         ],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [
           "DATA_EXPORT_TOKEN",
@@ -275,6 +273,7 @@
             "bucket_name": "quant-structured"
           }
         ],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [
           "DATA_EXPORT_TOKEN",
@@ -325,6 +324,7 @@
             "bucket_name": "quant-structured-staging"
           }
         ],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [],
         "services": [],
@@ -356,6 +356,16 @@
         "queue_consumers": [],
         "queue_producers": [],
         "r2_buckets": [],
+        "ratelimits": [
+          {
+            "name": "PROXY_RATE_LIMITER",
+            "namespace_id": "63101",
+            "simple": {
+              "limit": 60,
+              "period": 60
+            }
+          }
+        ],
         "routes": [],
         "secret_names": [
           "JQUANTS_API_KEY",
@@ -386,6 +396,16 @@
         "queue_consumers": [],
         "queue_producers": [],
         "r2_buckets": [],
+        "ratelimits": [
+          {
+            "name": "PROXY_RATE_LIMITER",
+            "namespace_id": "63101",
+            "simple": {
+              "limit": 60,
+              "period": 60
+            }
+          }
+        ],
         "routes": [],
         "secret_names": [
           "JQUANTS_API_KEY",
@@ -416,6 +436,16 @@
         "queue_consumers": [],
         "queue_producers": [],
         "r2_buckets": [],
+        "ratelimits": [
+          {
+            "name": "PROXY_RATE_LIMITER",
+            "namespace_id": "63102",
+            "simple": {
+              "limit": 60,
+              "period": 60
+            }
+          }
+        ],
         "routes": [],
         "secret_names": [],
         "services": [],
@@ -439,9 +469,18 @@
         "crons": [],
         "d1_databases": [
           {
-            "binding": "OPS_DB",
-            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
-            "database_name": "quant-ingest"
+            "binding": "OPS_PROJECTION_DB",
+            "database_id": "1b497e8a-5c69-4e19-ae2e-89a8f3185272",
+            "database_name": "quant-ops-projection",
+            "migrations_dir": "migrations/projection",
+            "migrations_table": "d1_migrations_ops_projection"
+          },
+          {
+            "binding": "QUOTA_DB",
+            "database_id": "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6",
+            "database_name": "quant-ops-quota",
+            "migrations_dir": "migrations/quota",
+            "migrations_table": "d1_migrations_ops_quota"
           }
         ],
         "durable_objects": [
@@ -470,6 +509,7 @@
         "queue_consumers": [],
         "queue_producers": [],
         "r2_buckets": [],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [
           "GITHUB_CLIENT_ID",
@@ -485,7 +525,8 @@
         "vars": {
           "ALLOWED_LOGIN": "ddnne",
           "DAILY_ROW_QUOTA": "25000",
-          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
+          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev",
+          "OPS_PROJECTION_VERIFY_KEYS_JSON": "{\"schema_version\":1,\"keys\":[]}"
         },
         "workers_dev": true
       },
@@ -499,9 +540,18 @@
         "crons": [],
         "d1_databases": [
           {
-            "binding": "OPS_DB",
-            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
-            "database_name": "quant-ingest"
+            "binding": "OPS_PROJECTION_DB",
+            "database_id": "1b497e8a-5c69-4e19-ae2e-89a8f3185272",
+            "database_name": "quant-ops-projection",
+            "migrations_dir": "migrations/projection",
+            "migrations_table": "d1_migrations_ops_projection"
+          },
+          {
+            "binding": "QUOTA_DB",
+            "database_id": "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6",
+            "database_name": "quant-ops-quota",
+            "migrations_dir": "migrations/quota",
+            "migrations_table": "d1_migrations_ops_quota"
           }
         ],
         "durable_objects": [
@@ -530,6 +580,7 @@
         "queue_consumers": [],
         "queue_producers": [],
         "r2_buckets": [],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [
           "GITHUB_CLIENT_ID",
@@ -545,7 +596,8 @@
         "vars": {
           "ALLOWED_LOGIN": "ddnne",
           "DAILY_ROW_QUOTA": "25000",
-          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
+          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev",
+          "OPS_PROJECTION_VERIFY_KEYS_JSON": "{\"schema_version\":1,\"keys\":[]}"
         },
         "workers_dev": true
       },
@@ -559,11 +611,18 @@
         "crons": [],
         "d1_databases": [
           {
-            "binding": "OPS_DB",
-            "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
-            "database_name": "quant-ingest-staging",
-            "migrations_dir": "migrations",
-            "migrations_table": "d1_migrations_ops"
+            "binding": "OPS_PROJECTION_DB",
+            "database_id": "68ee96d5-766c-4832-836b-54c079bd6265",
+            "database_name": "quant-ops-projection-staging",
+            "migrations_dir": "migrations/projection",
+            "migrations_table": "d1_migrations_ops_projection"
+          },
+          {
+            "binding": "QUOTA_DB",
+            "database_id": "a27f8ce9-82cb-4eec-abac-9c3385ce40e1",
+            "database_name": "quant-ops-quota-staging",
+            "migrations_dir": "migrations/quota",
+            "migrations_table": "d1_migrations_ops_quota"
           }
         ],
         "durable_objects": [
@@ -592,6 +651,7 @@
         "queue_consumers": [],
         "queue_producers": [],
         "r2_buckets": [],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [],
         "services": [],
@@ -602,7 +662,8 @@
         },
         "vars": {
           "ALLOWED_LOGIN": "ddnne",
-          "DAILY_ROW_QUOTA": "25000"
+          "DAILY_ROW_QUOTA": "25000",
+          "OPS_PROJECTION_VERIFY_KEYS_JSON": "{\"schema_version\":1,\"keys\":[]}"
         },
         "workers_dev": false
       }
@@ -638,6 +699,7 @@
         "queue_consumers": [],
         "queue_producers": [],
         "r2_buckets": [],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [
           "GATEWAY_TOKEN"
@@ -681,6 +743,7 @@
         "queue_consumers": [],
         "queue_producers": [],
         "r2_buckets": [],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [
           "GATEWAY_TOKEN"
@@ -724,6 +787,7 @@
         "queue_consumers": [],
         "queue_producers": [],
         "r2_buckets": [],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [],
         "services": [],
@@ -743,13 +807,7 @@
         "compatibility_flags": [],
         "config": "platform/workers/research-mass-eval/wrangler.toml",
         "crons": [],
-        "d1_databases": [
-          {
-            "binding": "DB",
-            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
-            "database_name": "quant-ingest"
-          }
-        ],
+        "d1_databases": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -764,6 +822,7 @@
             "bucket_name": "quant-structured"
           }
         ],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [
           "MASS_EVAL_TOKEN"
@@ -798,13 +857,7 @@
         "compatibility_flags": [],
         "config": "platform/workers/research-mass-eval/wrangler.toml",
         "crons": [],
-        "d1_databases": [
-          {
-            "binding": "DB",
-            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
-            "database_name": "quant-ingest"
-          }
-        ],
+        "d1_databases": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -819,6 +872,7 @@
             "bucket_name": "quant-structured"
           }
         ],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [
           "MASS_EVAL_TOKEN"
@@ -853,13 +907,7 @@
         "compatibility_flags": [],
         "config": "platform/workers/research-mass-eval/wrangler.staging.toml",
         "crons": [],
-        "d1_databases": [
-          {
-            "binding": "DB",
-            "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
-            "database_name": "quant-ingest-staging"
-          }
-        ],
+        "d1_databases": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -874,6 +922,7 @@
             "bucket_name": "quant-structured-staging"
           }
         ],
+        "ratelimits": [],
         "routes": [],
         "secret_names": [],
         "services": [
