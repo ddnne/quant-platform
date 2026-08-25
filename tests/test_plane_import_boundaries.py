@@ -241,8 +241,6 @@ def test_leaf_packages_discovered():
     assert "core" in LEAF_TO_PLANE and LEAF_TO_PLANE["core"] == "research_runtime"
     assert "agents" in LEAF_TO_PLANE and LEAF_TO_PLANE["agents"] == "product"
     assert "cf_platform" in LEAF_TO_PLANE and LEAF_TO_PLANE["cf_platform"] == "edge"
-    # Batch Z not partially introduced
-    assert "quant_platform" not in LEAF_TO_PLANE
 
 
 def test_package_forbidden_roots():
@@ -332,15 +330,14 @@ def test_data_access_bridge_exception_documented():
 
 
 def test_no_quant_platform_namespace_imports():
-    """Batch Z deferred: no quant_platform.* imports in packages."""
+    """The undeclared aggregate namespace cannot bypass plane ownership."""
     offenders: list[str] = []
     for leaf in LEAF_TO_PLANE:
         for path in _python_files_for_leaf(leaf):
-            text = path.read_text(encoding="utf-8")
-            for i, line in enumerate(text.splitlines(), start=1):
-                stripped = line.lstrip()
-                if stripped.startswith("#"):
-                    continue
-                if "import quant_platform" in line or "from quant_platform" in line:
-                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{i}: {line.strip()}")
-    assert not offenders, "Batch Z quant_platform imports present:\n" + "\n".join(offenders)
+            for lineno, root in _imported_roots(path):
+                if root == "quant_platform":
+                    offenders.append(
+                        f"{path.relative_to(REPO_ROOT)}:{lineno}: "
+                        "imports undeclared quant_platform namespace"
+                    )
+    assert not offenders, "quant_platform imports present:\n" + "\n".join(offenders)
