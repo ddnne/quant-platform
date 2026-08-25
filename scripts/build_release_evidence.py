@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 from typing import Any, Mapping
 
@@ -37,6 +37,21 @@ REQUIRED_FIELDS = (
 )
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_UUID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+_REQUIRED_CHECK_CONTEXT = "Workers Builds: quant-platform-ci-aggregate-staging"
+_REQUIRED_CHECK_APP_ID = 85455
+_ACTIVE_WORKERS = frozenset(
+    {
+        "quant-platform-ingestion-secrets",
+        "quant-platform-ingestion-premium",
+        "quant-platform-ingestion-jsda",
+        "quant-platform-ops-read-mcp",
+        "quant-platform-research-ai-gateway",
+        "quant-platform-research-mass-eval",
+    }
+)
 _SENSITIVE_KEY = re.compile(
     r"(?:^|_)(?:secret|token|password|private_key|api_key|credential)(?:$|_)",
     re.IGNORECASE,
@@ -84,10 +99,101 @@ def _walk(value: Any, path: tuple[str, ...] = ()) -> None:
         )
     # Evidence must be portable.  URLs and repository-relative paths are fine;
     # host-specific absolute paths are not.
-    if value.startswith(("/Users/", "/home/", "C:\\Users\\")):
+    if (
+        value.startswith(("~/", "~\\", "file://"))
+        or PurePosixPath(value).is_absolute()
+        or PureWindowsPath(value).is_absolute()
+    ):
         raise ValueError(
             f"release evidence contains a local absolute path at {'.'.join(path)}"
         )
+
+
+def _require_mapping(value: Any, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be an object")
+    return value
+
+
+def _validate_remote_acceptance(payload: Mapping[str, Any]) -> None:
+    required = _require_mapping(payload["required_check"], "required_check")
+    if (
+        required.get("context") != _REQUIRED_CHECK_CONTEXT
+        or required.get("app_id") != _REQUIRED_CHECK_APP_ID
+        or required.get("app_slug") != "cloudflare-workers-and-pages"
+        or required.get("strict") is not True
+        or str(required.get("conclusion") or "").lower() != "success"
+    ):
+        raise ValueError("required_check is not the authoritative Cloudflare App success")
+
+    build = _require_mapping(payload["cloudflare_build"], "cloudflare_build")
+    if (
+        not _UUID.fullmatch(str(build.get("build_id") or ""))
+        or str(build.get("conclusion") or "").lower() != "success"
+        or build.get("source_sha") != payload["source_sha"]
+    ):
+        raise ValueError("cloudflare_build must be a successful build of source_sha")
+
+    deployments = _require_mapping(payload["deployments"], "deployments")
+    if set(deployments) != _ACTIVE_WORKERS:
+        raise ValueError("deployments must contain exactly the six active Workers")
+    for worker, raw in deployments.items():
+        environments = _require_mapping(raw, f"deployments.{worker}")
+        if set(environments) != {"staging", "production"}:
+            raise ValueError(f"deployments.{worker} must contain staging and production")
+        for environment, observed in environments.items():
+            row = _require_mapping(
+                observed, f"deployments.{worker}.{environment}"
+            )
+            if (
+                not _UUID.fullmatch(str(row.get("version_id") or ""))
+                or row.get("source_sha") != payload["source_sha"]
+                or not _DIGEST.fullmatch(
+                    str(row.get("effective_bindings_digest") or "")
+                )
+            ):
+                raise ValueError(
+                    f"deployments.{worker}.{environment} is not pinned to source/bindings"
+                )
+
+    migrations = _require_mapping(payload["migrations"], "migrations")
+    if set(migrations) != {"staging", "production"}:
+        raise ValueError("migrations must contain staging and production")
+    for environment, targets_raw in migrations.items():
+        targets = _require_mapping(targets_raw, f"migrations.{environment}")
+        if not targets:
+            raise ValueError(f"migrations.{environment} must not be empty")
+        for target, observed in targets.items():
+            row = _require_mapping(observed, f"migrations.{environment}.{target}")
+            if row.get("pending") != 0 or row.get("status") != "APPLIED":
+                raise ValueError(
+                    f"migrations.{environment}.{target} has unapplied migrations"
+                )
+
+    smoke = _require_mapping(payload["smoke"], "smoke")
+    if set(smoke) != {"staging", "production"}:
+        raise ValueError("smoke must contain staging and production")
+    for environment, workers_raw in smoke.items():
+        workers = _require_mapping(workers_raw, f"smoke.{environment}")
+        if set(workers) != _ACTIVE_WORKERS or any(
+            result != "PASS" for result in workers.values()
+        ):
+            raise ValueError(
+                f"smoke.{environment} must PASS for exactly the six active Workers"
+            )
+
+    mcp = _require_mapping(payload["quant_mcp"], "quant_mcp")
+    tools = mcp.get("tools")
+    if (
+        mcp.get("tool_count") != 17
+        or mcp.get("expected_tool_count") != 17
+        or not isinstance(tools, list)
+        or len(tools) != 17
+        or len(set(tools)) != 17
+        or not _DIGEST.fullmatch(str(mcp.get("schema_digest") or ""))
+        or mcp.get("schema_digest") != mcp.get("expected_schema_digest")
+    ):
+        raise ValueError("quant_mcp must prove 17 unique tools and accepted schema digest")
 
 
 def validate_payload(payload: Mapping[str, Any]) -> None:
@@ -97,15 +203,17 @@ def validate_payload(payload: Mapping[str, Any]) -> None:
         raise ValueError(
             f"release evidence field order/membership drift: missing={missing}, extra={extra}"
         )
+    # Reject secret material and host-local paths before structural validation
+    # so a malformed payload can never use an earlier error to mask leakage.
+    _walk(payload)
     for field in ("source_sha", "origin_main_sha"):
         if not _SHA.fullmatch(str(payload[field])):
             raise ValueError(f"{field} must be a full lowercase Git SHA")
     if payload["source_sha"] != payload["origin_main_sha"]:
         raise ValueError("release source SHA must equal observed origin/main SHA")
-    if not isinstance(payload["deployments"], Mapping) or not payload["deployments"]:
-        raise ValueError("deployments must record at least one active Worker")
-    if not isinstance(payload["migrations"], Mapping) or not payload["migrations"]:
-        raise ValueError("migrations must record remote post-apply state")
+    if payload["open_prs"] != []:
+        raise ValueError("release evidence requires zero open PRs")
+    _validate_remote_acceptance(payload)
     backup = payload["backup"]
     if not isinstance(backup, Mapping):
         raise ValueError("backup must be an object")
@@ -119,7 +227,6 @@ def validate_payload(payload: Mapping[str, Any]) -> None:
         raise ValueError("controlled_pilot must be GO or NO-GO")
     if payload["mass_research"] != "NO-GO":
         raise ValueError("Phase 6.3.1 release evidence must keep Mass Research NO-GO")
-    _walk(payload)
 
 
 def build_envelope(payload: Mapping[str, Any]) -> dict[str, Any]:

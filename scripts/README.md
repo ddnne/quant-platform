@@ -22,9 +22,10 @@ Phase 6 hardening utilities:
 
 - `ops_status.py --json` — offline READY snapshot, coverage, B0 and validation status.
 - `encrypt_d1_backup.py` — encrypt a fresh D1 SQL export with AES-256-GCM,
-  verify it by streaming decryption, and optionally remove only that verified
-  plaintext export. The raw 32-byte key stays outside the repository with
-  mode `0600`; the command never prints it.
+  verify it by streaming decryption, then remove only that verified plaintext
+  export by default. Retention requires the explicit unsafe `--keep-source`
+  opt-in. The raw 32-byte key stays outside the repository with mode `0600`;
+  the command never prints it.
 - `build_release_evidence.py` — validate observed post-deploy facts and emit a
   content-addressed, read-only, non-secret JSON manifest suitable for a GitHub
   Release. Local absolute paths, secret-shaped fields, unencrypted backup

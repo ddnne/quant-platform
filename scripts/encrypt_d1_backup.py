@@ -132,7 +132,7 @@ def encrypt_backup(
     target: Path,
     key_path: Path,
     *,
-    delete_source: bool = False,
+    delete_source: bool = True,
 ) -> dict[str, object]:
     _resolved_distinct(source, target, key_path)
     if not source.is_file() or source.is_symlink():
@@ -153,14 +153,18 @@ def encrypt_backup(
             source_digest, source_bytes = _encrypt_stream(source_handle, target_handle, key)
             target_handle.flush()
             os.fsync(target_handle.fileno())
-        os.replace(temporary, target)
-        _fsync_directory(target.parent)
-        observed = verify_encrypted(target, key_path)
+        # Authenticate the complete temporary ciphertext before it becomes the
+        # durable target.  A verification failure leaves both the plaintext
+        # source and target pathname untouched, so a retry cannot be blocked by
+        # a corrupt artifact.
+        observed = verify_encrypted(temporary, key_path)
         if (
             observed["plaintext_digest"] != source_digest
             or observed["plaintext_bytes"] != source_bytes
         ):
             raise ValueError("encrypted backup verification did not reproduce the source")
+        os.replace(temporary, target)
+        _fsync_directory(target.parent)
         if delete_source:
             source.unlink()
             _fsync_directory(source.parent)
@@ -181,7 +185,11 @@ def main(argv: list[str] | None = None) -> int:
     encrypt.add_argument("source", type=Path)
     encrypt.add_argument("target", type=Path)
     encrypt.add_argument("--key", type=Path, required=True)
-    encrypt.add_argument("--delete-source", action="store_true")
+    encrypt.add_argument(
+        "--keep-source",
+        action="store_true",
+        help="retain the plaintext after verified encryption (unsafe opt-in)",
+    )
 
     verify = subparsers.add_parser("verify")
     verify.add_argument("encrypted", type=Path)
@@ -197,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
             args.source,
             args.target,
             args.key,
-            delete_source=args.delete_source,
+            delete_source=not args.keep_source,
         )
     else:
         result = verify_encrypted(args.encrypted, args.key)
