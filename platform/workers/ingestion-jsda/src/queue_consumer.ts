@@ -13,10 +13,10 @@ import {
   markFrontierExhausted,
   persistFetchedArtifact,
   persistFrontier,
+  propagateTerminalAdoptedMemberships,
   recomputeClosureAggregates,
   recordRejectedMessage,
   recordTransientFailure,
-  registerJob,
   rejectFromDeadLetter,
   rejectJob,
   type JobClosureRow,
@@ -34,7 +34,11 @@ import {
   type JsdaQueueJob,
 } from "./queue_contract";
 import { enqueueRegisteredJobs, sendContinuation } from "./queue_producer";
-import { putImmutableRaw, putQueueAuditReceipt } from "./raw_store";
+import {
+  immutableObjectMatchesDigest,
+  putImmutableRaw,
+  putQueueAuditReceipt,
+} from "./raw_store";
 import { sha256Hex } from "./sha256";
 import { logOperationalEvent } from "./operational_event";
 import {
@@ -147,20 +151,21 @@ async function terminalEvidenceIsDurable(
     return false;
   }
   if ((row.raw_key === null) !== (row.content_digest === null)) return false;
-  const [audit, raw] = await Promise.all([
-    env.RAW_BUCKET.head(row.audit_receipt_key),
-    row.raw_key === null ? Promise.resolve(null) : env.RAW_BUCKET.head(row.raw_key),
+  const [auditMatches, rawMatches] = await Promise.all([
+    immutableObjectMatchesDigest(
+      env.RAW_BUCKET,
+      row.audit_receipt_key,
+      row.audit_receipt_digest,
+    ),
+    row.raw_key === null
+      ? Promise.resolve(true)
+      : immutableObjectMatchesDigest(
+          env.RAW_BUCKET,
+          row.raw_key,
+          row.content_digest!,
+        ),
   ]);
-  if (
-    audit === null ||
-    audit.customMetadata?.sha256 !== row.audit_receipt_digest
-  ) {
-    return false;
-  }
-  return (
-    row.raw_key === null ||
-    (raw !== null && raw.customMetadata?.sha256 === row.content_digest)
-  );
+  return auditMatches && rawMatches;
 }
 
 async function persistRejectedDelivery(
@@ -426,7 +431,7 @@ async function processFile(
   if (completed === null) {
     throw new Error(`JSDA completion lost job: ${row.work_key}`);
   }
-  await advanceAncestorClosures(env, completed);
+  await repairTerminalClosure(env, completed);
 }
 
 async function handleFailure(
@@ -446,7 +451,7 @@ async function handleFailure(
     if (rejected === null) {
       throw new Error(`JSDA rejection lost job: ${row.work_key}`);
     }
-    await advanceAncestorClosures(env, rejected);
+    await repairTerminalClosure(env, rejected);
     return "ack";
   }
   const reasonCode =
@@ -571,7 +576,24 @@ async function repairTerminalClosure(
   if (!(await terminalEvidenceIsDurable(env, row))) {
     throw new Error("terminal_evidence_missing");
   }
+  const adopted = await propagateTerminalAdoptedMemberships(
+    env.DB,
+    row,
+    new Date().toISOString(),
+  );
   await advanceAncestorClosures(env, row);
+  const advancedParents = new Set<string>();
+  for (const membership of adopted) {
+    if (advancedParents.has(membership.parent_work_key)) continue;
+    advancedParents.add(membership.parent_work_key);
+    const parent = await loadJob(env.DB, membership.parent_work_key);
+    if (parent === null || parent.run_key !== membership.run_key) {
+      throw new Error(
+        `JSDA adopted membership parent missing: ${membership.run_key}/${membership.parent_work_key}`,
+      );
+    }
+    await advanceAncestorClosures(env, parent);
+  }
 }
 
 export async function consumeDlqMessage(
@@ -600,7 +622,12 @@ export async function consumeDlqMessage(
       return;
     }
 
-    const row = await registerJob(env.DB, job);
+    const row = await loadJob(env.DB, job.work_key);
+    if (row === null) {
+      await persistRejectedDelivery(message, env, "dead_letter_unregistered_job");
+      message.ack();
+      return;
+    }
     if (!rowMatchesMessage(row, job)) {
       await persistRejectedDelivery(message, env, "dead_letter_work_key_identity_mismatch");
       message.ack();
@@ -635,7 +662,7 @@ export async function consumeDlqMessage(
     if (!rejected && latest.state !== "rejected") {
       throw new Error(`JSDA DLQ did not terminalize: ${row.work_key}`);
     }
-    await advanceAncestorClosures(env, latest);
+    await repairTerminalClosure(env, latest);
     message.ack();
   } catch (error) {
     logError(env, "jsda_queue_dlq_persist_failed", {
@@ -689,11 +716,11 @@ export async function consumeQueueMessage(
     return;
   }
 
-  let row: JobRow;
+  let row: JobRow | null;
   try {
-    row = await registerJob(env.DB, job);
+    row = await loadJob(env.DB, job.work_key);
   } catch (error) {
-    logError(env, "jsda_queue_register_failed", {
+    logError(env, "jsda_queue_load_failed", {
       run_id: job.run_key,
       job_id: job.work_key,
       dataset: job.dataset,
@@ -701,6 +728,22 @@ export async function consumeQueueMessage(
       reason: errorDetail(error),
     });
     message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
+    return;
+  }
+
+  if (row === null) {
+    try {
+      await persistRejectedDelivery(message, env, "unregistered_job");
+      message.ack();
+    } catch (error) {
+      logError(env, "jsda_queue_unregistered_reject_persist_failed", {
+        run_id: job.run_key,
+        job_id: job.work_key,
+        dataset: job.dataset,
+        reason: errorDetail(error),
+      });
+      message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
+    }
     return;
   }
 

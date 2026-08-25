@@ -385,7 +385,9 @@ SELECT
          AND child.content_digest IS NOT NULL
          AND child.raw_key IS NOT NULL
             THEN 'completed'
-        ELSE 'rejected'
+        WHEN child.state = 'rejected' THEN 'rejected'
+        WHEN child.state = 'completed' THEN 'rejected'
+        ELSE child.state
     END,
     CASE
         WHEN child.run_key = d.run_key THEN child.content_digest
@@ -439,7 +441,7 @@ SELECT
             THEN NULL
         WHEN child.run_key != d.run_key AND child.state = 'rejected'
             THEN 'rejected'
-        WHEN child.run_key != d.run_key
+        WHEN child.run_key != d.run_key AND child.state = 'completed'
             THEN 'insufficient_legacy_evidence'
         ELSE NULL
     END,
@@ -455,7 +457,7 @@ SELECT
             THEN NULL
         WHEN child.run_key != d.run_key AND child.state = 'rejected'
             THEN child.last_error
-        WHEN child.run_key != d.run_key
+        WHEN child.run_key != d.run_key AND child.state = 'completed'
             THEN 'adopted child lacks authoritative artifact/audit evidence'
         ELSE NULL
     END,

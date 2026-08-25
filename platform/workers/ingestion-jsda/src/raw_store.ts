@@ -37,6 +37,20 @@ export interface QueueAuditInput {
   recorded_at: string;
 }
 
+export async function immutableObjectMatchesDigest(
+  bucket: R2Bucket,
+  key: string,
+  expectedDigest: string,
+): Promise<boolean> {
+  const existing = await bucket.get(key);
+  if (existing === null) return false;
+  const bodyDigest = await sha256Hex(await existing.arrayBuffer());
+  return (
+    existing.customMetadata?.sha256 === expectedDigest &&
+    bodyDigest === expectedDigest
+  );
+}
+
 async function createOnly(
   bucket: R2Bucket,
   key: string,
@@ -50,11 +64,7 @@ async function createOnly(
     customMetadata: metadata,
   });
   if (created !== null) return;
-  const existing = await bucket.head(key);
-  if (
-    existing === null ||
-    existing.customMetadata?.sha256 !== metadata.sha256
-  ) {
+  if (!(await immutableObjectMatchesDigest(bucket, key, metadata.sha256))) {
     throw new Error(`immutable R2 collision or unverifiable object: ${key}`);
   }
 }

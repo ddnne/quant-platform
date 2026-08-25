@@ -113,7 +113,7 @@
         {
           "migration_id": "quant-ingest:0012_jsda_observation_identity",
           "path": "platform/workers/ingestion-premium/migrations/0012_jsda_observation_identity.sql",
-          "checksum": "sha256:44373650a2dda3c3d17dff6b92ceb88cfb1b8f361a4c8424b16e0e83b995a59e",
+          "checksum": "sha256:cc92a9bf059367bace006b2e756d3d7840dd365fcfbb9d9a4c7a4b6391eb04c1",
           "order": 12,
           "depends_on": "quant-ingest:0011_jsda_queue_v2"
         }

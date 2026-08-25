@@ -23,6 +23,7 @@ import {
   type ChildDescriptor,
   type JsdaQueueJob,
 } from "../src/queue_contract";
+import { sha256Hex } from "../src/sha256";
 
 const runtimeEnv = env as JsdaWorkerEnv;
 const migrations = inject<Array<{ name: string; queries: string[] }>>(
@@ -102,6 +103,8 @@ async function seedWaitingRoot(
   const frontier: ChildDescriptor[] = await Promise.all(
     fileUrls.map((url) => descriptorForFile(url)),
   );
+  const discoveryBody = new TextEncoder().encode("discovery fixture");
+  const discoveryDigest = await sha256Hex(discoveryBody);
   await runtimeEnv.DB.prepare(
     `UPDATE jsda_acquisition_jobs_v2
      SET state='queued', frontier_json=?, raw_key=?, content_digest=?
@@ -110,14 +113,14 @@ async function seedWaitingRoot(
     .bind(
       JSON.stringify(frontier),
       `raw/jsda/test/${messageId}.html`,
-      "a".repeat(64),
+      discoveryDigest,
       root.work_key,
     )
     .run();
   await runtimeEnv.RAW_BUCKET.put(
     `raw/jsda/test/${messageId}.html`,
-    "discovery fixture",
-    { customMetadata: { sha256: "a".repeat(64) } },
+    discoveryBody,
+    { customMetadata: { sha256: discoveryDigest } },
   );
   const result = await deliver(root, messageId);
   expect(result.explicitAcks).toEqual([messageId]);
@@ -224,6 +227,41 @@ describe("JSDA run-scoped membership and archive adoption", () => {
         "failed",
       );
       expect(await passLogCount(second.root.run_key)).toBe(0);
+    } finally {
+      restore();
+    }
+  });
+
+  it("rejects adopted evidence when R2 metadata masks a forged body", async () => {
+    const restore = mockOfficialFetch({ [ARCHIVE_A]: "archive-authentic-body" });
+    try {
+      const first = await seedWaitingRoot(
+        "2026-08-24T01:30:00.000Z",
+        [ARCHIVE_A],
+        "forged-adopt-first-root",
+      );
+      const childKey = first.membership[0].child_work_key;
+      await deliver(await childJob(childKey), "forged-adopt-first-child");
+      const stored = await loadJob(runtimeEnv.DB, childKey);
+      expect(stored?.raw_key).toBeTruthy();
+      expect(stored?.content_digest).toBeTruthy();
+      await runtimeEnv.RAW_BUCKET.put(stored!.raw_key!, "forged-body", {
+        customMetadata: { sha256: stored!.content_digest! },
+      });
+
+      const second = await seedWaitingRoot(
+        "2026-08-25T01:30:00.000Z",
+        [ARCHIVE_A],
+        "forged-adopt-second-root",
+      );
+      expect(second.membership[0]).toMatchObject({
+        membership_kind: "adopted",
+        terminal_state: "rejected",
+        failure_reason_code: "adopted_evidence_missing",
+      });
+      expect((await loadRunClosure(runtimeEnv.DB, second.root.run_key))?.closure_state).toBe(
+        "failed",
+      );
     } finally {
       restore();
     }
@@ -364,6 +402,129 @@ describe("JSDA run-scoped membership and archive adoption", () => {
       const repaired = await loadJob(runtimeEnv.DB, childKey);
       expect(repaired?.source_object_id).not.toBeNull();
       expect(second.membership[0].membership_kind).toBe("adopted");
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not mutate a different run before rejecting a work-key identity mismatch", async () => {
+    const rootA = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-24T01:30:00.000Z",
+    );
+    const rootB = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-25T01:30:00.000Z",
+    );
+    await registerJob(runtimeEnv.DB, rootA);
+    await registerJob(runtimeEnv.DB, rootB);
+    const childA = await makeChildJob(rootA, await descriptorForFile(ARCHIVE_A));
+    await registerJob(runtimeEnv.DB, childA);
+
+    const mismatched = {
+      ...childA,
+      run_key: rootB.run_key,
+      parent_work_key: rootB.work_key,
+    } satisfies JsdaQueueJob;
+    const result = await deliver(mismatched, "identity-mismatch-side-effect");
+    expect(result.explicitAcks).toEqual(["identity-mismatch-side-effect"]);
+
+    expect(await loadRunMembership(runtimeEnv.DB, rootB.run_key)).toEqual([]);
+  });
+
+  it("keeps an overlapping run nonterminal while an archive observation is in flight", async () => {
+    const rootA = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-24T01:30:00.000Z",
+    );
+    const rootB = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-25T01:30:00.000Z",
+    );
+    await registerJob(runtimeEnv.DB, rootA);
+    await registerJob(runtimeEnv.DB, rootB);
+    const descriptor = await descriptorForFile(ARCHIVE_B);
+    const childA = await makeChildJob(rootA, descriptor);
+    const childB = await makeChildJob(rootB, descriptor);
+    expect(childA.work_key).toBe(childB.work_key);
+    await registerJob(runtimeEnv.DB, childA);
+    await registerJob(runtimeEnv.DB, childB);
+
+    expect(await loadRunMembership(runtimeEnv.DB, rootB.run_key)).toMatchObject([
+      {
+        child_work_key: childB.work_key,
+        membership_kind: "adopted",
+        terminal_state: "pending",
+        failure_reason_code: null,
+      },
+    ]);
+  });
+
+  it("propagates a terminal archive into every overlapping run and advances closure", async () => {
+    const restore = mockOfficialFetch({ [ARCHIVE_B]: "overlap-archive-bytes" });
+    try {
+      const first = await seedWaitingRoot(
+        "2026-08-24T01:30:00.000Z",
+        [ARCHIVE_B],
+        "overlap-first-root",
+      );
+      const second = await seedWaitingRoot(
+        "2026-08-25T01:30:00.000Z",
+        [ARCHIVE_B],
+        "overlap-second-root",
+      );
+      expect(second.membership).toMatchObject([
+        {
+          child_work_key: first.membership[0].child_work_key,
+          membership_kind: "adopted",
+          terminal_state: "queued",
+          failure_reason_code: null,
+        },
+      ]);
+      expect((await loadJob(runtimeEnv.DB, second.root.work_key))?.state).toBe(
+        "waiting_children",
+      );
+
+      const completed = await deliver(
+        await childJob(first.membership[0].child_work_key),
+        "overlap-shared-child",
+      );
+      expect(completed.explicitAcks).toEqual(["overlap-shared-child"]);
+      expect(await loadRunMembership(runtimeEnv.DB, second.root.run_key)).toMatchObject([
+        {
+          membership_kind: "adopted",
+          terminal_state: "completed",
+          failure_reason_code: null,
+        },
+      ]);
+      for (const run of [first.root.run_key, second.root.run_key]) {
+        expect((await loadRunClosure(runtimeEnv.DB, run))?.closure_state).toBe(
+          "completed",
+        );
+        expect(await passLogCount(run)).toBe(1);
+      }
+
+      await runtimeEnv.DB.prepare(
+        `UPDATE jsda_run_closures
+            SET closure_state='waiting_children', descendant_completed=0,
+                descendant_nonterminal=1, closed_at=NULL
+          WHERE run_key=?`,
+      )
+        .bind(second.root.run_key)
+        .run();
+      const repaired = await deliver(
+        await childJob(first.membership[0].child_work_key),
+        "overlap-terminal-redelivery",
+      );
+      expect(repaired.explicitAcks).toEqual(["overlap-terminal-redelivery"]);
+      expect((await loadRunClosure(runtimeEnv.DB, second.root.run_key))?.closure_state).toBe(
+        "completed",
+      );
+      expect(await passLogCount(second.root.run_key)).toBe(1);
     } finally {
       restore();
     }

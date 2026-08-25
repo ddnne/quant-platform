@@ -509,4 +509,98 @@ describe("0012 populated JSDA migration semantics and FK preservation", () => {
       .first<{ closure_state: string }>();
     expect(closure?.closure_state).toBe("waiting_children");
   });
+
+  it("migrates an in-flight cross-run archive adoption as nonterminal", async () => {
+    await applyD1Migrations(runtimeEnv.DB, before0012);
+    const rootA = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-24T01:30:00.000Z",
+    );
+    const rootB = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-25T01:30:00.000Z",
+    );
+    const childA = await makeChildJob(
+      rootA,
+      await descriptorForFile(
+        "https://market.jsda.or.jp/archive/data/otc-20020802.csv",
+      ),
+    );
+    const now = "2026-08-25T01:31:00.000Z";
+
+    for (const root of [rootA, rootB]) {
+      await runtimeEnv.DB.prepare(
+        `INSERT INTO jsda_acquisition_jobs_v2 (
+           work_key, run_key, dataset, job_type, target_url, segment_id,
+           parent_work_key, contract_digest, state, attempt, cursor,
+           requested_by, requested_at, first_seen_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'pending', 0, 0, ?, ?, ?, ?)`,
+      )
+        .bind(
+          root.work_key,
+          root.run_key,
+          root.dataset,
+          root.job_type,
+          root.target_url,
+          root.segment_id,
+          root.contract_digest,
+          root.requested_by,
+          root.requested_at,
+          now,
+          now,
+        )
+        .run();
+    }
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO jsda_acquisition_jobs_v2 (
+         work_key, run_key, dataset, job_type, target_url, segment_id,
+         parent_work_key, contract_digest, state, attempt, cursor,
+         requested_by, requested_at, first_seen_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, 0, ?, ?, ?, ?)`,
+    )
+      .bind(
+        childA.work_key,
+        childA.run_key,
+        childA.dataset,
+        childA.job_type,
+        childA.target_url,
+        childA.segment_id,
+        childA.parent_work_key,
+        childA.contract_digest,
+        childA.requested_by,
+        childA.requested_at,
+        now,
+        now,
+      )
+      .run();
+    for (const parent of [rootA, rootB]) {
+      await runtimeEnv.DB.prepare(
+        `INSERT INTO jsda_acquisition_discoveries_v2
+         (parent_work_key, child_work_key, run_key, discovered_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+        .bind(parent.work_key, childA.work_key, parent.run_key, now)
+        .run();
+    }
+
+    await applyD1Migrations(runtimeEnv.DB, only0012);
+    const adopted = await runtimeEnv.DB.prepare(
+      `SELECT membership_kind, terminal_state, failure_reason_code
+         FROM jsda_run_membership
+        WHERE run_key=? AND parent_work_key=? AND child_work_key=?`,
+    )
+      .bind(rootB.run_key, rootB.work_key, childA.work_key)
+      .first<{
+        membership_kind: string;
+        terminal_state: string;
+        failure_reason_code: string | null;
+      }>();
+    expect(adopted).toEqual({
+      membership_kind: "adopted",
+      terminal_state: "queued",
+      failure_reason_code: null,
+    });
+  });
 });

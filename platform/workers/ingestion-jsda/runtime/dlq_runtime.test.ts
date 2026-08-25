@@ -227,4 +227,27 @@ describe("JSDA DLQ terminal convergence", () => {
       .first<{ reason_code: string }>();
     expect(rejected?.reason_code).toBe("dead_letter_invalid_job_schema");
   });
+
+  it("rejects an unregistered DLQ job without creating acquisition state", async () => {
+    const root = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "manual",
+      "2026-08-25T05:00:00.000Z",
+    );
+    const result = await deliverOn(
+      "quant-jsda-ingestion-dlq-test",
+      root,
+      "dlq-unregistered",
+      4,
+    );
+    expect(result.explicitAcks).toEqual(["dlq-unregistered"]);
+    expect(await loadJob(runtimeEnv.DB, root.work_key)).toBeNull();
+    expect(await loadRunClosure(runtimeEnv.DB, root.run_key)).toBeNull();
+    const rejected = await runtimeEnv.DB.prepare(
+      "SELECT reason_code FROM jsda_queue_rejects_v2 WHERE message_id=?",
+    )
+      .bind("dlq-unregistered")
+      .first<{ reason_code: string }>();
+    expect(rejected?.reason_code).toBe("dead_letter_unregistered_job");
+  });
 });

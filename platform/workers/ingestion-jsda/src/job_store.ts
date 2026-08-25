@@ -455,7 +455,9 @@ function insertMembershipStatement(
               CASE
                 WHEN child.run_key=? THEN child.state
                 WHEN ${evidence} THEN 'completed'
-                ELSE 'rejected'
+                WHEN child.state='rejected' THEN 'rejected'
+                WHEN child.state='completed' THEN 'rejected'
+                ELSE child.state
               END,
               CASE
                 WHEN child.run_key=? THEN child.content_digest
@@ -481,14 +483,16 @@ function insertMembershipStatement(
                 WHEN child.run_key=? AND child.state='rejected' THEN 'rejected'
                 WHEN child.run_key!=? AND ${evidence} THEN NULL
                 WHEN child.run_key!=? AND child.state='rejected' THEN 'rejected'
-                WHEN child.run_key!=? THEN 'insufficient_legacy_evidence'
+                WHEN child.run_key!=? AND child.state='completed'
+                  THEN 'insufficient_legacy_evidence'
                 ELSE NULL
               END,
               CASE
                 WHEN child.run_key=? AND child.state='rejected' THEN child.last_error
                 WHEN child.run_key!=? AND ${evidence} THEN NULL
                 WHEN child.run_key!=? AND child.state='rejected' THEN child.last_error
-                WHEN child.run_key!=? THEN 'adopted child lacks authoritative artifact/audit evidence'
+                WHEN child.run_key!=? AND child.state='completed'
+                  THEN 'adopted child lacks authoritative artifact/audit evidence'
                 ELSE NULL
               END,
               CASE WHEN child.run_key!=? THEN ? ELSE NULL END,
@@ -1074,6 +1078,105 @@ export async function loadRunMembership(
     .bind(runKey)
     .all<RunMembershipRow>();
   return rows.results;
+}
+
+export async function propagateTerminalAdoptedMemberships(
+  db: D1Database,
+  row: JobRow,
+  now: string,
+): Promise<RunMembershipRow[]> {
+  if (row.state !== "completed" && row.state !== "rejected") return [];
+  if (row.audit_receipt_key === null || row.audit_receipt_digest === null) {
+    throw new Error(`JSDA terminal adoption missing audit evidence: ${row.work_key}`);
+  }
+  if (
+    row.state === "completed" &&
+    (row.content_digest === null || row.raw_key === null)
+  ) {
+    throw new Error(`JSDA completed adoption missing raw evidence: ${row.work_key}`);
+  }
+
+  const affected = await db
+    .prepare(
+      `SELECT ${MEMBERSHIP_SELECT}
+         FROM jsda_run_membership
+        WHERE child_work_key=? AND membership_kind='adopted'
+          AND (
+            terminal_state=? OR terminal_state IN
+              ('pending','queued','running','waiting_children','failed_transient')
+          )
+        ORDER BY run_key, parent_work_key`,
+    )
+    .bind(row.work_key, row.state)
+    .all<RunMembershipRow>();
+  if (affected.results.length === 0) return [];
+
+  await db
+    .prepare(
+      `UPDATE jsda_run_membership
+          SET terminal_state=?,
+              content_digest=?,
+              raw_key=?,
+              audit_receipt_key=?,
+              audit_receipt_digest=?,
+              failure_reason_code=?,
+              failure_detail=?,
+              updated_at=?
+        WHERE child_work_key=? AND membership_kind='adopted'
+          AND terminal_state IN
+            ('pending','queued','running','waiting_children','failed_transient')`,
+    )
+    .bind(
+      row.state,
+      row.content_digest,
+      row.raw_key,
+      row.audit_receipt_key,
+      row.audit_receipt_digest,
+      row.state === "rejected" ? "rejected" : null,
+      row.state === "rejected" ? row.last_error : null,
+      now,
+      row.work_key,
+    )
+    .run();
+
+  const expected = row.state;
+  for (const membership of affected.results) {
+    const current = await db
+      .prepare(
+        `SELECT terminal_state, content_digest, raw_key,
+                audit_receipt_key, audit_receipt_digest
+           FROM jsda_run_membership
+          WHERE run_key=? AND parent_work_key=? AND child_work_key=?`,
+      )
+      .bind(
+        membership.run_key,
+        membership.parent_work_key,
+        membership.child_work_key,
+      )
+      .first<
+        Pick<
+          RunMembershipRow,
+          | "terminal_state"
+          | "content_digest"
+          | "raw_key"
+          | "audit_receipt_key"
+          | "audit_receipt_digest"
+        >
+      >();
+    if (
+      current?.terminal_state !== expected ||
+      current.audit_receipt_key !== row.audit_receipt_key ||
+      current.audit_receipt_digest !== row.audit_receipt_digest ||
+      (expected === "completed" &&
+        (current.content_digest !== row.content_digest ||
+          current.raw_key !== row.raw_key))
+    ) {
+      throw new Error(
+        `JSDA adopted membership did not converge: ${membership.run_key}/${row.work_key}`,
+      );
+    }
+  }
+  return affected.results;
 }
 
 export async function rejectAdoptedMembership(

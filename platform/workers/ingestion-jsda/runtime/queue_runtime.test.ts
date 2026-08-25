@@ -31,7 +31,7 @@ import {
   type JsdaQueueJob,
 } from "../src/queue_contract";
 import { enqueueRoots } from "../src/queue_producer";
-import { putQueueAuditReceipt } from "../src/raw_store";
+import { putImmutableRaw, putQueueAuditReceipt } from "../src/raw_store";
 import { sha256Hex } from "../src/sha256";
 
 const runtimeEnv = env as JsdaWorkerEnv;
@@ -150,6 +150,34 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
     ).toBe(first.digest);
   });
 
+  it("rejects an existing R2 object whose metadata digest hides a different body", async () => {
+    const body = new TextEncoder().encode("authoritative-jsda-body").buffer;
+    const first = await putImmutableRaw(
+      runtimeEnv.RAW_BUCKET,
+      "jsda_otc_bond_reference_prices",
+      "metadata-collision",
+      "csv",
+      body,
+      "text/csv",
+      { kind: "data" },
+    );
+    await runtimeEnv.RAW_BUCKET.put(first.key, "forged-body", {
+      customMetadata: { sha256: first.digest },
+    });
+
+    await expect(
+      putImmutableRaw(
+        runtimeEnv.RAW_BUCKET,
+        "jsda_otc_bond_reference_prices",
+        "metadata-collision",
+        "csv",
+        body,
+        "text/csv",
+        { kind: "data" },
+      ),
+    ).rejects.toThrow("immutable R2 collision or unverifiable object");
+  });
+
   it("deduplicates repeated same-day root submissions in D1", async () => {
     const request = () =>
       new Request(
@@ -230,6 +258,24 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
     expect(rejected?.body_json).not.toContain("evil.test");
     expect(rejected?.audit_receipt_digest).toMatch(/^[0-9a-f]{64}$/);
     expect(await runtimeEnv.RAW_BUCKET.head(rejected?.audit_receipt_key ?? "missing")).not.toBeNull();
+  });
+
+  it("rejects a schema-valid unregistered delivery without creating graph rows", async () => {
+    const root = await makeRootJob(
+      "jsda_tokyo_repo_rates",
+      "manual",
+      "2026-08-25T04:00:00.000Z",
+    );
+    const result = await deliver(root, "unregistered-runtime-message");
+    expect(result.explicitAcks).toEqual(["unregistered-runtime-message"]);
+    expect(await loadJob(runtimeEnv.DB, root.work_key)).toBeNull();
+    expect(await loadRunClosure(runtimeEnv.DB, root.run_key)).toBeNull();
+    const rejected = await runtimeEnv.DB.prepare(
+      "SELECT reason_code FROM jsda_queue_rejects_v2 WHERE message_id=?",
+    )
+      .bind("unregistered-runtime-message")
+      .first<{ reason_code: string }>();
+    expect(rejected?.reason_code).toBe("unregistered_job");
   });
 
   it("stores only an invalid-body shape summary, never caller values", async () => {
@@ -348,6 +394,8 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       ),
     );
     await registerJob(runtimeEnv.DB, terminal);
+    const terminalBody = new TextEncoder().encode("terminal fixture");
+    const terminalDigest = await sha256Hex(terminalBody);
     const audit = await putQueueAuditReceipt(runtimeEnv.RAW_BUCKET, {
       event: "completed",
       work_key: terminal.work_key,
@@ -362,15 +410,15 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       cursor: 0,
       frontier_size: 1,
       raw_key: "raw/jsda/already-complete.html",
-      content_digest: "2".repeat(64),
+      content_digest: terminalDigest,
       reason_code: null,
       detail: "runtime terminal fixture",
       recorded_at: "2026-08-25T01:31:00.000Z",
     });
     await runtimeEnv.RAW_BUCKET.put(
       "raw/jsda/already-complete.html",
-      "terminal fixture",
-      { customMetadata: { sha256: "2".repeat(64) } },
+      terminalBody,
+      { customMetadata: { sha256: terminalDigest } },
     );
     await runtimeEnv.DB.prepare(
       `UPDATE jsda_acquisition_jobs_v2
@@ -382,7 +430,7 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
         "2026-08-25T01:31:00.000Z",
         audit.key,
         audit.digest,
-        "2".repeat(64),
+        terminalDigest,
         "raw/jsda/already-complete.html",
         terminal.work_key,
       )
@@ -984,6 +1032,8 @@ describe("JSDA descendant run closure", () => {
     const frontier: ChildDescriptor[] = await Promise.all(
       fileUrls.map((url) => descriptorForFile(url)),
     );
+    const discoveryBody = new TextEncoder().encode("closure discovery fixture");
+    const discoveryDigest = await sha256Hex(discoveryBody);
     await runtimeEnv.DB.prepare(
       `UPDATE jsda_acquisition_jobs_v2
        SET state='queued', frontier_json=?, raw_key=?, content_digest=?
@@ -992,14 +1042,14 @@ describe("JSDA descendant run closure", () => {
       .bind(
         JSON.stringify(frontier),
         "raw/jsda/test/closure-index.html",
-        "a".repeat(64),
+        discoveryDigest,
         root.work_key,
       )
       .run();
     await runtimeEnv.RAW_BUCKET.put(
       "raw/jsda/test/closure-index.html",
-      "closure discovery fixture",
-      { customMetadata: { sha256: "a".repeat(64) } },
+      discoveryBody,
+      { customMetadata: { sha256: discoveryDigest } },
     );
     const result = await deliver(root, "seed-waiting-root");
     expect(result.explicitAcks).toEqual(["seed-waiting-root"]);

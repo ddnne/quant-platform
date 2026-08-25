@@ -16,7 +16,10 @@ import {
   type JsdaQueueJob,
   type RequestedBy,
 } from "./queue_contract";
-import { putQueueAuditReceipt } from "./raw_store";
+import {
+  immutableObjectMatchesDigest,
+  putQueueAuditReceipt,
+} from "./raw_store";
 
 function queueMessage(job: JsdaQueueJob): MessageSendRequest<JsdaQueueJob> {
   return { body: job, contentType: "json" };
@@ -81,17 +84,21 @@ async function validateAdoptedEvidence(
       row.audit_receipt_digest !== null &&
       row.raw_key !== null &&
       row.content_digest !== null;
-    const [auditObject, rawObject] = completeRef
+    const [auditMatches, rawMatches] = completeRef
       ? await Promise.all([
-          env.RAW_BUCKET.head(row.audit_receipt_key!),
-          env.RAW_BUCKET.head(row.raw_key!),
+          immutableObjectMatchesDigest(
+            env.RAW_BUCKET,
+            row.audit_receipt_key!,
+            row.audit_receipt_digest!,
+          ),
+          immutableObjectMatchesDigest(
+            env.RAW_BUCKET,
+            row.raw_key!,
+            row.content_digest!,
+          ),
         ])
-      : [null, null];
-    if (
-      completeRef &&
-      auditObject?.customMetadata?.sha256 === row.audit_receipt_digest &&
-      rawObject?.customMetadata?.sha256 === row.content_digest
-    ) {
+      : [false, false];
+    if (completeRef && auditMatches && rawMatches) {
       continue;
     }
     const now = new Date().toISOString();
