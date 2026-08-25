@@ -14,10 +14,13 @@ import pytest
 from cf_platform.ingest_premium import matrix
 from cf_platform.ingest_premium.coverage import (
     CheckResult,
+    _ADDON_IDS,
     has_failures,
     run_coverage,
     summarize,
 )
+from cf_platform.ingest_premium.validate import PREMIUM_CORE_DATASETS
+from ingestion.jquants.catalog import list_datasets
 from ingestion.jquants.normalize import (
     normalize_daily_bars,
     normalize_generic,
@@ -71,6 +74,22 @@ def test_daily_runner_emits_per_dataset_for_C1_C5(matrix_db):
 # ---------------------------------------------------------------------------
 # C12 — addon leak detection
 # ---------------------------------------------------------------------------
+# Catalog addon group (minute / tick / TDnet). Freeze so C12 cannot silently
+# diverge from ingestion.jquants.catalog — same pattern as DATEMODE_EXPECTED.
+C12_ADDON_EXPECTED = frozenset({
+    "equities_bars_minute", "equities_trades",
+    "td_list", "td_files", "td_bulk",
+})
+
+
+def test_C12_guarded_ids_match_catalog_addon_group():
+    """C12 addon ids are the catalog addon group, not a second hardcoded list."""
+    catalog_addons = frozenset(list_datasets("addon"))
+    assert catalog_addons == C12_ADDON_EXPECTED
+    assert _ADDON_IDS == catalog_addons
+    assert not catalog_addons & set(PREMIUM_CORE_DATASETS)
+
+
 def test_C12_passes_when_no_addon_present(specialized_db):
     out = run_coverage(specialized_db, tier="daily")
     c12 = _results_by_id(out, "C12")

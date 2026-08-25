@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `242c2484`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `b5f6f2de`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,13 +364,13 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD 242c2484)
+## 10. Current remaining extracts vs HOLD (HEAD b5f6f2de)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
 section now. Size is not a split key. Live math is not waste.
 
-Measured at `242c2484`: tracked paths **793**; catalog YAML
+Measured at `b5f6f2de`: tracked paths **827**; catalog YAML
 (`specs/research_logics/*.yaml`) **0**; remaining tracked YAML **1**
 (`specs/research_themes.yaml` — themes, not catalog logics); compiled
 n=**2254** (`migration.jsonl` 2254 lines);
@@ -404,9 +404,13 @@ numbers). `daily_path.ts` is **1682** (was 1677 in §2).
 | Worker children-then-manifest POST | **DONE** (`5103b26b`): `put_children_then_manifest_via_worker` POSTs `/v1/children-then-manifest` with `X-Mass-Eval-Token`. No CLI put fallback. Unbound URL/token fail closed. |
 | Remote Python CLI-put fence | **DONE** (`0b81eedb`): remote `default_r2_put` never CLI-puts; `QP_ALLOW_PYTHON_R2_PUT=1` does not resurrect TOCTOU. dry_run stays local. |
 | Python job-artifact Worker put | **DONE** after `3b64bdfc`: `put_research_artifact` (`d6567268`); `cf_daily_path_job` (`017a43c6`); `cf_mass_eval_run` (`0a8ced34`). Named remaining callers after wave-7 are gone. `reconstitution_evidence` still `default_r2_put` (dry_run only). |
-| Evaluation IR encode/decode | **DONE** (`4661fb14`): `evaluation_ir_codec.generated.ts` emitted from `schema.json`. `evaluation_ir.ts` is façade. `ALLOWED_FIELDS` generated (`d882119`). Python encode/decode still hand-written (no generated Python codec). |
+| Evaluation IR encode/decode | **DONE** (`4661fb14`): `evaluation_ir_codec.generated.ts` emitted from `schema.json`. `evaluation_ir.ts` is façade. `ALLOWED_FIELDS` generated (`d882119`). Python codec body generated **DONE** (`c9764ff4`; `evaluation_ir_codec.generated.py`). Python TypedDicts generated **DONE** (`e20be4d9`; `evaluation_ir_types.generated.py`). Codec emitters extract **DONE** (`54c1f472`; `evaluation_ir_emit.py`). |
 | DO `budget_id` pin | **DONE** (`89415105`): create is not a reserve; string `budget_id` is not occupancy authority. In-memory algebra; live Edge occupancy unproven. |
 | BackfillPlanner JQ required segments | **DONE** (`bcd52f47`): all JQ jobs come from `plan_required_segments`. Bars/fins stay calendar_month jobs. Missing V3 does not invent official domain or COMPLETE. |
+| Shared official-index local HTML reader | **DONE** (`2323f6a5`): `ingestion.jsda.official_index.read_local_index_text`. CLIs use it. `cf_premium_backfill` uses it (`2b82ec7d`). Missing/blank stays fail-closed empty, not calendar inventory. |
+| Premium Worker units vs Python greps | **DONE**: catalog identity (`23a5cbb9`; `catalog.test.ts`); availability policy (`8fc13e24`; `availability.test.ts`); identity JST clocks (`5ac9cce1`; `identity.test.ts`); raw-page retain (`0383311f`; `index.test.ts`); coverage-segment plan (`0fee1b1e`; `index.test.ts` / `collection_receipts.test.ts`); NK rebuild (`8fc9fa30`; `natural_key_migration.test.ts`). Replaced Python greps. |
+| Premium write-path ids from catalog | **DONE** (`4f111320`): `PREMIUM_CORE_DATASET_IDS` from catalog JSON (`write_path_config.ts` / `write_path_config.test.ts`), not a second hardcoded list. |
+| Premium RateLimiter / R2 writer / export unbound tests | **DONE**: RateLimiter acquire and 429 cooldown (`5b4db591`; `rate_limit.test.ts`); R2 structured writer mock bucket (`0194c64a`; `r2_structured_writer.test.ts`); export unbound `DATA_EXPORT_TOKEN` 401 (`cfbaa58e`; `index.test.ts`). |
 
 File-count drop after YAML deletion is not a quality win without the
 digest pin (already pinned). Do not re-run digest lock.
@@ -446,15 +450,23 @@ occupancy extract. Compact catalog is optional HOLD, not a required
 extract. `verify_all` vs `verify_ci` stay **HOLD** split.
 `GATEWAY_TOKEN` service-binding residual stays **HOLD** (P632B-03). Do
 not YAML +N. Do not declare Phase 7 GO. Python Evaluation IR codec
-emit **DONE** (`c9764ff4`; `evaluation_ir_codec.generated.py`). Premium
+emit **DONE** (`c9764ff4`; `evaluation_ir_codec.generated.py`). Python
+TypedDict generation **DONE** (`e20be4d9`; `evaluation_ir_types.generated.py`).
+Codec emitters extract **DONE** (`54c1f472`; `evaluation_ir_emit.py`). Premium
 fetch/retry extract **DONE** (`a20d14d4`; `fetch_jq.ts`). BackfillPlanner
-`index_text` **DONE** (`2cbd894d`).
+`index_text` **DONE** (`2cbd894d`). Shared official-index reader **DONE**
+(`2323f6a5`; `cf_premium_backfill` uses it at `2b82ec7d`). Premium Worker
+units replaced catalog/availability/identity/raw-page/coverage-segment/NK
+Python greps **DONE** (`23a5cbb9`; `8fc13e24`; `5ac9cce1`; `0383311f`;
+`0fee1b1e`; `8fc9fa30`). Premium write-path ids from catalog **DONE**
+(`4f111320`). RateLimiter / R2 writer / export unbound Worker tests
+**DONE** (`5b4db591`; `0194c64a`; `cfbaa58e`).
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
-| 1 | `BackfillPlanner` (`ops/backfill_planner.py`, 666) vs `plan_required_segments` (`coverage_ledger.py`) | **ops product** inventory planner. Tip-snapshot wire **DONE** (`792ae2b`): AM bars / earnings calendar call `plan_required_segments` (no month-chunk). JSDA refresh inventory replay **DONE** (`40d1aa90`). OTC JSON grain **DONE** (`26a6ca5e`): `segment_granularity=official_archive_index_day`. index_text CLIs **DONE**: `refresh_coverage_ledger --index-text` (`34dc85df`); `write_collection_receipts --index-text` (`db569fc7`); ops projection `--otc-index-html` (`9524dab7`); ingest passes fetched year-index HTML (`ddc40ae9`). Bounded-history JQ month chunks **DONE** (`bcd52f47`): all JQ jobs come from `plan_required_segments` (bars/fins stay calendar_month jobs; missing V3 does not invent official domain or COMPLETE). | Invent COMPLETE; calendar-walk OTC; delete one planner without a dated ops brief |
+| 1 | `BackfillPlanner` (`ops/backfill_planner.py`, 666) vs `plan_required_segments` (`coverage_ledger.py`) | **ops product** inventory planner. Tip-snapshot wire **DONE** (`792ae2b`): AM bars / earnings calendar call `plan_required_segments` (no month-chunk). JSDA refresh inventory replay **DONE** (`40d1aa90`). OTC JSON grain **DONE** (`26a6ca5e`): `segment_granularity=official_archive_index_day`. index_text CLIs **DONE**: `refresh_coverage_ledger --index-text` (`34dc85df`); `write_collection_receipts --index-text` (`db569fc7`); ops projection `--otc-index-html` (`9524dab7`); ingest passes fetched year-index HTML (`ddc40ae9`). Bounded-history JQ month chunks **DONE** (`bcd52f47`): all JQ jobs come from `plan_required_segments` (bars/fins stay calendar_month jobs; missing V3 does not invent official domain or COMPLETE). BackfillPlanner `index_text` **DONE** (`2cbd894d`). Shared official-index local HTML reader **DONE** (`2323f6a5`; `cf_premium_backfill` uses it at `2b82ec7d`). | Invent COMPLETE; calendar-walk OTC; delete one planner without a dated ops brief |
 | 2 | Python `r2_io.py` (431) vs Worker children-then-manifest (`http.ts` `putChildrenThenManifest`; digest mismatch **409**) | Worker is immutable authority. Python stays **non-authority** (`python_cli_put_is_not_immutable_authority`; `authoritative=True` refused). Remote `default_r2_put` never CLI-puts (`0b81eedb`; `QP_ALLOW_PYTHON_R2_PUT=1` does not resurrect TOCTOU). Worker POST **DONE** (`5103b26b`). `put_research_artifact` **DONE** (`d6567268`). After `3b64bdfc`: `cf_daily_path_job` **DONE** (`017a43c6`); `cf_mass_eval_run` **DONE** (`0a8ced34`). Remaining `default_r2_put` caller: `reconstitution_evidence` dry_run only. | Treat “TOCTOU recorded in tests” as done; make Python CLI the SoT |
-| 3 | `evaluation_ir.ts` (39) façade vs generated `evaluation_ir_codec.generated.ts` (239) vs `evaluation_ir_codec.generated.py` vs `specs/evaluation_ir/schema.json` (67) | Schema is codec SoT. `ALLOWED_FIELDS` generated **DONE** (`d882119`). Encode/decode TS body generated **DONE** (`4661fb14`). Python codec body generated **DONE** (`c9764ff4`). Façades remain. Grade predicate is already shared (`job_candidate_grade` / `jobCandidateGrade`). TypedDict generation not done. | Second grade policy; delete schema; dual-edit field lists forever |
+| 3 | `evaluation_ir.ts` (39) façade vs generated `evaluation_ir_codec.generated.ts` (239) vs `evaluation_ir_codec.generated.py` vs `specs/evaluation_ir/schema.json` (67) | Schema is codec SoT. `ALLOWED_FIELDS` generated **DONE** (`d882119`). Encode/decode TS body generated **DONE** (`4661fb14`). Python codec body generated **DONE** (`c9764ff4`). TypedDict generation **DONE** (`e20be4d9`; `evaluation_ir_types.generated.py`). Emit extract **DONE** (`54c1f472`; `evaluation_ir_emit.py`). Façades remain. Grade predicate is already shared (`job_candidate_grade` / `jobCandidateGrade`). | Second grade policy; delete schema; dual-edit field lists forever |
 | 4 | MCP `OPS_TOOLS` strings vs stored `policy_version` (`dataset_coverage.policy_version`; live `collection-coverage/v2`) | Presentation echo **DONE** (Worker `27ff7e62`, Python `3d3e68ab`): both echo stored `policy_version`, not frozen “Coverage V2”. Remaining mixed: live projection is still `collection-coverage/v2` STALE — not unpublished V3 completeness. Do not schedule a second string rewrite. | Unify strings to mint FRESH / COMPLETE 23 |
 | 5 | `scripts/verify_all.sh` skippable helper vs `scripts/verify_ci.sh` authority | **Keep both. Do not merge.** Helper: 3 research workers, `VERIFY_*` skips. Authority: pytest + catalog freeze + IR schema + 7 workers (`ci-aggregate` included), no skips. Merge gate is `verify_ci` plus authenticated `ci-aggregate`. | Fold `verify_ci` into `verify_all`; add GitHub Actions |
 

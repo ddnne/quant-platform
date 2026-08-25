@@ -4,37 +4,15 @@
  * D1 keeps control-plane + optional tiny hot allowlist only.
  */
 
+import { PREMIUM_CORE_DATASETS } from "./catalog";
+
 /** Full Premium core set (23) — all default to R2 structured path. */
-export const PREMIUM_CORE_DATASET_IDS = [
-  "equities_master",
-  "equities_bars_daily",
-  "equities_bars_daily_am",
-  "fins_summary",
-  "fins_details",
-  "fins_dividend",
-  "fins_earnings_date",
-  "equities_earnings_calendar",
-  "markets_calendar",
-  "equities_investor_types",
-  "indices_bars_daily_topix",
-  "indices_bars_daily",
-  "derivatives_bars_daily_options_225",
-  "derivatives_bars_daily_futures",
-  "derivatives_bars_daily_options",
-  "markets_margin_interest",
-  "markets_margin_alert",
-  "markets_short_ratio",
-  "markets_short_sale_report",
-  "markets_breakdown",
-  "edinet_major_shareholders",
-  "edinet_cross_shareholdings",
-  "edinet_large_volume_shareholders",
-] as const;
+export const PREMIUM_CORE_DATASET_IDS = PREMIUM_CORE_DATASETS.map(
+  (spec) => spec.id,
+);
 
 /** High-volume / history-heavy (R2-only structured always). */
-export const HIGH_VOLUME_DATASETS = new Set<string>([
-  ...PREMIUM_CORE_DATASET_IDS,
-]);
+export const HIGH_VOLUME_DATASETS = new Set<string>(PREMIUM_CORE_DATASET_IDS);
 
 /**
  * Tiny datasets that may still dual-write D1 for MCP hot lookups.

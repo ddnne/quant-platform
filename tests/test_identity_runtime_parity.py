@@ -1,4 +1,9 @@
-"""Strong invariants for Python/Worker identity and the D1 v2 rebuild."""
+"""Strong invariants for Python/Worker identity and the D1 v2 rebuild.
+
+Worker rebuild (canonical ``naturalKey``, atomic swap, post-publish READY
+audit, ``requireNaturalKeysV2Ready``) is executed in
+``platform/workers/ingestion-premium/src/natural_key_migration.test.ts``.
+"""
 
 from __future__ import annotations
 
@@ -147,16 +152,3 @@ def test_d1_0005_defers_identity_to_application_rebuild_without_mutating_live_ro
         "jquants_records_nk_v2_revisions_stage",
         "ingestion_change_log_nk_v2_stage",
     }
-
-
-def test_worker_rebuild_uses_canonical_fn_atomic_swap_and_post_publish_audit():
-    source = (WORKER / "src/natural_key_migration.ts").read_text(encoding="utf-8")
-    worker_index = (WORKER / "src/index.ts").read_text(encoding="utf-8")
-
-    assert "await canonicalFor(row)" in source
-    assert "return naturalKey(payloadObject(row.payload), spec)" in source
-    assert "await db.batch([" in source
-    assert "state='VALIDATING'" in source
-    assert 'const state: NaturalKeyMigrationState = liveAudit.mismatches === 0 ? "READY"' in source
-    assert "await requireNaturalKeysV2Ready(env.DB)" in worker_index
-    assert 'typeof row["available_at"]' not in worker_index

@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from ingestion.jquants.catalog import list_datasets
+
 from . import matrix
 from .validate import PREMIUM_CORE_DATASETS
 
@@ -57,10 +59,9 @@ _SPECIALIZED: dict[str, str] = {
     "markets_calendar": "jquants_market_calendar",
 }
 
-_ADDON_IDS: frozenset[str] = frozenset({
-    "equities_bars_minute", "equities_trades",
-    "td_list", "td_files", "td_bulk",
-})
+# Catalog group==addon (minute / tick / TDnet). C12 fails if any of these
+# are present; they must not join PREMIUM_CORE_DATASETS.
+_ADDON_IDS: frozenset[str] = frozenset(list_datasets("addon"))
 
 _DEFAULT_FRESHNESS_DAYS = 7
 
