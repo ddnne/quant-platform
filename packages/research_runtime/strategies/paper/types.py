@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from core import BacktestResult
 from price_basis import RAW, require_supported_price_basis
@@ -48,7 +48,7 @@ class PaperRunConfig:
     start: str
     end: str
     db_path: str | Path | None = None
-    universe: tuple[str, ...] | list[str] | None = None
+    universe: tuple[str, ...] | list[str] | Mapping[str, Any] | None = None
     execution_mode: str = "next_close"
     cost_bps: float = 5.0
     starting_capital: float = 1_000_000.0
@@ -56,11 +56,6 @@ class PaperRunConfig:
     price_basis: str = RAW
     lifecycle: Lifecycle | str = Lifecycle.PAPER
     calendar_as_of: str | None = None
-    # Phase 7: pin paper to an immutable READY snapshot when non-empty.
-    ready_snapshot_id: str = ""
-    ready_manifest_digest: str = ""
-    # When True, empty ready_snapshot_id is refused (default False keeps unit tests).
-    require_ready_snapshot: bool = False
     # W85 / w0816t — short-leg financing = f(repo[t] + fixed spread).
     # Default **off** preserves long-only / legacy paper numerics. Enable
     # for CS L-S paper trials (short notional × (repo+spread)/days).
@@ -113,12 +108,22 @@ class PaperRunConfig:
             self, "price_basis", require_supported_price_basis(self.price_basis)
         )
         if self.universe is not None:
-            normalized = tuple(
-                sorted({str(code).strip() for code in self.universe if str(code).strip()})
-            )
-            if not normalized:
-                raise ValueError("universe cannot be empty when supplied")
-            object.__setattr__(self, "universe", normalized)
+            if getattr(self.universe, "membership_proof", None):
+                if not tuple(self.universe):
+                    raise ValueError("PIT-proven universe cannot be empty")
+            else:
+                normalized = tuple(
+                    sorted(
+                        {
+                            str(code).strip()
+                            for code in self.universe
+                            if str(code).strip()
+                        }
+                    )
+                )
+                if not normalized:
+                    raise ValueError("universe cannot be empty when supplied")
+                object.__setattr__(self, "universe", normalized)
 
 
 @dataclass(frozen=True)

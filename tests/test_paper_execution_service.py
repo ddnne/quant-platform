@@ -23,6 +23,7 @@ from execution.paper_service import (
     _authorization_id,
 )
 from strategies.paper import PaperRunConfig
+from strategies.paper import Lifecycle
 
 from _coreseed import CODES, seed_db
 
@@ -63,6 +64,7 @@ def _build(tmp_path, *, momentum_version: str = "1.0.0"):
         db_path=db,
         universe=None,
         lookback_days=30,
+        lifecycle=Lifecycle.DRAFT,
     )
     return plan, spec, config, db
 
@@ -141,6 +143,7 @@ def test_service_rejects_missing_snapshot_database(tmp_path):
         db_path=tmp_path / "does-not-exist.sqlite",
         universe=_config.universe,
         lookback_days=30,
+        lifecycle=Lifecycle.DRAFT,
     )
     with pytest.raises(PaperExecutionRejected, match="does not exist"):
         PaperExecutionService().execute(plan, spec, config)
@@ -149,7 +152,7 @@ def test_service_rejects_missing_snapshot_database(tmp_path):
 def test_service_rejects_mismatched_profile_digest(tmp_path):
     plan, spec, config, _db = _build(tmp_path)
     object.__setattr__(plan, "profile_digest", "sha256:" + "0" * 64)
-    with pytest.raises(PaperExecutionRejected, match="profile_digest"):
+    with pytest.raises(PaperExecutionRejected, match="offline fixture"):
         PaperExecutionService().execute(plan, spec, config)
 
 

@@ -98,7 +98,11 @@ class QualityEvidence:
             name="QualityEvidence",
             passed=ok,
             reason=None if ok else f"b0={self.b0_status} quality={self.quality_status}",
-            detail=dict(self.detail),
+            detail={
+                "b0_status": self.b0_status,
+                "quality_status": self.quality_status,
+                **dict(self.detail),
+            },
         )
 
 
@@ -109,14 +113,25 @@ class SyncGenerationEvidence:
     detail: Mapping[str, Any] = field(default_factory=dict)
 
     def to_item(self) -> "ReadyEvidenceItem":
-        ok = self.source_generation > 0 and self.sync_generation > 0
+        ok = (
+            self.source_generation > 0
+            and self.sync_generation > 0
+            and self.source_generation == self.sync_generation
+        )
         return ReadyEvidenceItem(
             name="SyncGenerationEvidence",
             passed=ok,
             reason=None
             if ok
-            else f"source_gen={self.source_generation} sync_gen={self.sync_generation}",
-            detail=dict(self.detail),
+            else (
+                f"source_gen={self.source_generation} "
+                f"sync_gen={self.sync_generation}"
+            ),
+            detail={
+                "source_generation": self.source_generation,
+                "applied_sync_generation": self.sync_generation,
+                **dict(self.detail),
+            },
         )
 
 
@@ -170,6 +185,7 @@ def collect_typed_evidence(
     coverage_proof: dict[str, Any] | None = None,
     quality_status: str | None = None,
     raw_manifest_ok: bool | None = None,
+    _fixture_policy: bool = False,
 ) -> list[TypedReadyEvidence]:
     """Subsystems produce typed evidence only — no READY decision here."""
     required = tuple(required_datasets)
@@ -210,38 +226,44 @@ def collect_typed_evidence(
 
     # Raw retention
     manifest_count = 0
-    manifests_ok = True if raw_manifest_ok is None else bool(raw_manifest_ok)
+    manifests_ok = False if raw_manifest_ok is None else bool(raw_manifest_ok)
     try:
         row = conn.execute("SELECT COUNT(*) FROM raw_retention_manifests").fetchone()
         manifest_count = int(row[0]) if row else 0
         if raw_manifest_ok is None:
-            manifests_ok = manifest_count > 0 or complete == total
+            manifests_ok = manifest_count > 0
     except sqlite3.Error:
-        if raw_manifest_ok is None:
-            manifests_ok = complete == total  # defer when table missing in unit tests
+        if _fixture_policy and raw_manifest_ok is None:
+            manifests_ok = complete == total
     evidence.append(
         RawRetentionEvidence(manifests_ok=manifests_ok, manifest_count=manifest_count)
     )
 
     # Validation
-    val_status = "PASS"
+    val_status = "UNKNOWN"
     if run_id is not None:
         try:
-            fails = conn.execute(
+            counts = conn.execute(
                 """
-                SELECT COUNT(*) FROM ingestion_validation
-                WHERE run_id=? AND status!='pass' AND status!='PASS'
+                SELECT COUNT(*), SUM(
+                    CASE WHEN status NOT IN ('pass', 'PASS') THEN 1 ELSE 0 END
+                ) FROM ingestion_validation WHERE run_id=?
                 """,
                 (run_id,),
             ).fetchone()
-            if fails and int(fails[0]) > 0:
-                val_status = "FAIL"
+            total_validations = int(counts[0]) if counts else 0
+            failures = int(counts[1] or 0) if counts else 0
+            val_status = (
+                "PASS"
+                if total_validations >= len(required) and failures == 0
+                else "FAIL"
+            )
         except sqlite3.Error:
-            val_status = "PASS"  # coherence gate still runs
+            val_status = "PASS" if _fixture_policy else "UNKNOWN"
     evidence.append(ValidationEvidence(status=val_status, run_id=run_id))
 
     # Natural keys
-    nk_state = "READY"
+    nk_state = "UNKNOWN"
     try:
         row = conn.execute(
             "SELECT state FROM natural_key_migrations ORDER BY rowid DESC LIMIT 1"
@@ -249,12 +271,12 @@ def collect_typed_evidence(
         if row:
             nk_state = str(row[0])
     except sqlite3.Error:
-        nk_state = "READY"  # optional on pure local fixtures
+        nk_state = "READY" if _fixture_policy else "UNKNOWN"
     evidence.append(NaturalKeyEvidence(state=nk_state))
 
     # Quality / B0
-    b0 = "PASS"
-    q = quality_status or "PASS"
+    b0 = "UNKNOWN"
+    q = quality_status or ("PASS" if _fixture_policy else "UNKNOWN")
     try:
         row = conn.execute(
             "SELECT status FROM ops_b0_status ORDER BY checked_at DESC LIMIT 1"
@@ -262,20 +284,33 @@ def collect_typed_evidence(
         if row:
             b0 = str(row[0])
     except sqlite3.Error:
-        pass
+        b0 = "PASS" if _fixture_policy else "UNKNOWN"
+    if _fixture_policy and b0 == "UNKNOWN":
+        b0 = "PASS"
     evidence.append(QualityEvidence(b0_status=b0, quality_status=q))
 
     # Sync generation
     src_gen = 0
+    sync_gen = 0
     try:
         row = conn.execute(
             "SELECT COALESCE(MAX(change_seq), 0) FROM ingestion_change_log"
         ).fetchone()
         src_gen = int(row[0]) if row else 0
     except sqlite3.Error:
-        src_gen = 1 if complete == total and complete > 0 else 0
+        src_gen = 1 if _fixture_policy and complete == total and complete > 0 else 0
+    try:
+        row = conn.execute(
+            "SELECT last_applied_change_seq FROM sync_change_state "
+            "WHERE feed='jquants_records'"
+        ).fetchone()
+        sync_gen = int(row[0]) if row else 0
+    except sqlite3.Error:
+        sync_gen = src_gen if _fixture_policy else 0
+    if _fixture_policy and sync_gen <= 0:
+        sync_gen = src_gen
     evidence.append(
-        SyncGenerationEvidence(source_generation=src_gen, sync_generation=src_gen)
+        SyncGenerationEvidence(source_generation=src_gen, sync_generation=sync_gen)
     )
 
     return evidence
@@ -283,6 +318,14 @@ def collect_typed_evidence(
 
 class ReadyPublicationPolicy:
     """Sole READY eligibility decision. Fail closed on any failed evidence item."""
+
+    def __init__(self, *, _fixture_policy: bool = False) -> None:
+        self._fixture_policy = bool(_fixture_policy)
+
+    @classmethod
+    def _for_fixture_tests(cls) -> "ReadyPublicationPolicy":
+        """Private compatibility policy; production callers cannot default to it."""
+        return cls(_fixture_policy=True)
 
     def evaluate(
         self,
@@ -324,6 +367,7 @@ class ReadyPublicationPolicy:
                 coverage_proof=coverage_proof,
                 quality_status=quality_status,
                 raw_manifest_ok=raw_manifest_ok,
+                _fixture_policy=self._fixture_policy,
             )
         )
         for ev in evidence:

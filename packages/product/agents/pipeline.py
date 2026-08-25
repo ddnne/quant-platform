@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping
 
-from execution.paper_service import PaperExecutionService
+from execution.paper_service import OfflineFixturePaperService
 from risk import JsonRiskStore
 from strategies.paper import JsonPaperStore, PaperRunConfig, PaperRunResult
 from strategies.spec import StrategySpec
@@ -114,20 +114,10 @@ class AgentPaperPipeline:
         composed = self.composer.compose(memos)
         spec = self.strategist.propose(composed)
         decision = self.pm.review(spec)
-        # Propagate READY snapshot pins into the authorization so
-        # PaperExecutionService can bind exact snapshot identity (fail-closed
-        # when config.require_ready_snapshot and pin is empty).
-        ready_id = str(getattr(config, "ready_snapshot_id", "") or "")
-        ready_digest = str(getattr(config, "ready_manifest_digest", "") or "")
-        if getattr(config, "require_ready_snapshot", False) and not ready_id.strip():
-            raise ValueError(
-                "paper pipeline requires ready_snapshot_id when "
-                "require_ready_snapshot=True (no READY pin → refuse execution)"
-            )
+        # This pipeline is the offline fixture entry. Controlled Pilot has a
+        # separate service and cannot be selected with a boolean on this DTO.
         plan = self.trader.prepare(
             decision,
-            ready_snapshot_id=ready_id,
-            ready_manifest_digest=ready_digest,
             universe=universe,
             period_start=str(config.start),
             period_end=str(config.end),
@@ -140,8 +130,9 @@ class AgentPaperPipeline:
         # FeatureRef versions, and delegates to strategies.paper.run_paper.
         # config.db_path is passed only to that trusted service; none of the
         # role-agent method calls above receives it.
-        paper_result = PaperExecutionService(self.paper_store).execute(
-            plan, spec, config
+        offline_config = replace(config, lifecycle="Draft")
+        paper_result = OfflineFixturePaperService(self.paper_store).execute(
+            plan, spec, offline_config
         )
         paper_path = self.paper_store.result_path(paper_result)
         # Audit the immutable persisted artifact rather than privileged engine

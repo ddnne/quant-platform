@@ -11,6 +11,20 @@ governed registry, and only then delegates to :func:`strategies.paper.run_paper`
 Nothing else in the agent path may call ``run_paper`` directly.
 """
 
-from .paper_service import PaperExecutionRejected, PaperExecutionService
+from .paper_service import (
+    ControlledPilotExecutionService,
+    ControlledPilotRunConfig,
+    ImmutableSnapshotHandle,
+    OfflineFixturePaperService,
+    PaperExecutionRejected,
+    PaperExecutionService,
+)
 
-__all__ = ["PaperExecutionService", "PaperExecutionRejected"]
+__all__ = [
+    "ControlledPilotExecutionService",
+    "ControlledPilotRunConfig",
+    "ImmutableSnapshotHandle",
+    "OfflineFixturePaperService",
+    "PaperExecutionRejected",
+    "PaperExecutionService",
+]

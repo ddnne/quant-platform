@@ -134,6 +134,32 @@ def test_publish_ops_flag_default_off(sync_module):
     assert "--apply-remote" in help_text or "apply-remote" in help_text
 
 
+def test_unsigned_pilot_ready_json_is_rejected(
+    tmp_path, sync_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class OfflineClient:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(sync_module, "_new_http_client", OfflineClient)
+    monkeypatch.setattr(
+        sync_module,
+        "_sync_table",
+        lambda *_args, **_kwargs: (1, 0, 0, 0, None),
+    )
+    rc = sync_module.main(
+        [
+            "--db",
+            str(tmp_path / "local.sqlite"),
+            "--url",
+            "https://offline.invalid",
+            "--pilot-ready-evidence",
+            str(tmp_path / "unsigned.json"),
+        ]
+    )
+    assert rc == 1
+
+
 @pytest.mark.live
 def test_sync_live_requires_worker_url(tmp_path, sync_module):
     """Live smoke. Skipped unless ``QP_LIVE=1`` and a worker URL is set.

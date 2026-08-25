@@ -15,7 +15,8 @@ from research.hypothesis_classes import (
 )
 from research.readiness import (
     MassResearchDisabledError,
-    VerifiedResearchReadiness,
+    ReadinessPublicKeyRegistry,
+    VerifiedMassReadiness,
     require_mass_research_start,
 )
 from selection.budget_ledger import (
@@ -76,8 +77,8 @@ class ExperimentScheduler:
         self,
         *,
         plan: ExperimentPlan,
-        readiness: VerifiedResearchReadiness | None = None,
-        lease_ttl_seconds: int = 3600,
+        readiness: VerifiedMassReadiness | None = None,
+        verifier: ReadinessPublicKeyRegistry | None = None,
         hypothesis_class: str | None = None,
         explicit_opt_in: Sequence[str] | None = None,
     ) -> ScheduledExperiment:
@@ -97,9 +98,15 @@ class ExperimentScheduler:
             budget=self._budget,
             readiness=readiness,
             expected_snapshot_id=plan.ready_snapshot_id,
+            verifier=verifier,
         )
-        att.require_valid(expected_snapshot_id=plan.ready_snapshot_id)
-        lease = cap.acquire_slot(ttl_seconds=lease_ttl_seconds)
+        att.require_valid(
+            expected_snapshot_id=plan.ready_snapshot_id,
+            verifier=verifier,
+        )
+        # The capability owns the canonical policy-bound TTL (currently 1800s).
+        # A scheduler caller cannot extend the lease ad hoc.
+        lease = cap.acquire_slot()
         try:
             cap.consume(generations=1)
         except Exception:

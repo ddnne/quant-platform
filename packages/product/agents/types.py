@@ -184,6 +184,10 @@ class AuthorizedPaperExecutionRequest:
     instructions: tuple[str, ...]
     ready_snapshot_id: str = ""
     ready_manifest_digest: str = ""
+    readiness_attestation_id: str = ""
+    profile_digest: str = ""
+    plan_set_digest: str = ""
+    dependency_closure_digest: str = ""
     universe: tuple[str, ...] = ()
     period_start: str = ""
     period_end: str = ""

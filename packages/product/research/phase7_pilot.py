@@ -1,15 +1,19 @@
-"""Phase 7 pilot scheduler — construct-gated, not enabled.
+"""Scope-separated Phase 7 schedulers; both execution loops remain disabled.
 
-MassResearchScheduler cannot be constructed without the required
-capabilities. It does not arm Phase 7, Mass, READY, or a 2000-catalog eval.
-Agent code cannot mint operator_override.
+The controlled-pilot boundary accepts only ``VerifiedPilotReadiness`` while
+the Mass boundary accepts only ``VerifiedMassReadiness``. Neither class arms
+READY, promotion, a next generation, or the legacy 2,000-catalog evaluation.
 """
 from __future__ import annotations
 
 from typing import Sequence
 
 from research.artifacts import ExperimentPlan
-from research.readiness import VerifiedResearchReadiness
+from research.readiness import (
+    ReadinessPublicKeyRegistry,
+    VerifiedMassReadiness,
+    VerifiedPilotReadiness,
+)
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
 from storage.immutable_artifact import ImmutableArtifactStore
 
@@ -20,12 +24,17 @@ MASS_CATALOG_EVAL_SIZE: int = 2000
 _BIND_TOKEN = object()
 
 _DIGEST_ATTRS = (
+    "plan_set_digest",
+    "dependency_closure_digest",
     "ready_manifest_digest",
     "immutable_db_digest",
     "coverage_proof_digest",
     "governed_membership_digest",
     "raw_proof_digest",
+    "receipt_proof_digest",
+    "validation_proof_digest",
     "b0_quality_proof_digest",
+    "b4_quality_proof_digest",
     "evidence_digest",
 )
 
@@ -76,12 +85,16 @@ def _require_signed_readiness(
     readiness: object | None,
     *,
     expected_snapshot_id: str,
-) -> VerifiedResearchReadiness:
-    if not isinstance(readiness, VerifiedResearchReadiness):
+    verifier: ReadinessPublicKeyRegistry | None,
+) -> VerifiedPilotReadiness:
+    if not isinstance(readiness, VerifiedPilotReadiness):
         raise MassResearchDisabledError(
-            "VerifiedResearchReadiness required (type check)"
+            "VerifiedPilotReadiness required (type check)"
         )
-    readiness.require_valid(expected_snapshot_id=expected_snapshot_id)
+    readiness.require_valid(
+        expected_snapshot_id=expected_snapshot_id,
+        verifier=verifier,
+    )
     if str(readiness.snapshot_id) != expected_snapshot_id:
         raise MassResearchDisabledError(
             "plan.ready_snapshot_id must match readiness.snapshot_id"
@@ -100,13 +113,14 @@ def _require_signed_readiness(
     return readiness
 
 
-class MassResearchScheduler:
-    """Pilot-only scheduler. Fail-closed at construct. Phase 7 stays OFF."""
+class ControlledPilotScheduler:
+    """Exact pilot scheduler. Fail-closed at construct. Execution stays OFF."""
 
     def __init__(
         self,
         *,
-        readiness: VerifiedResearchReadiness | None = None,
+        readiness: VerifiedPilotReadiness | None = None,
+        verifier: ReadinessPublicKeyRegistry | None = None,
         budget: ResearchBudgetCapability | None = None,
         plan: ExperimentPlan | None = None,
         authorized_evaluation_service: AuthorizedEvaluationService | None = None,
@@ -126,7 +140,9 @@ class MassResearchScheduler:
         if not str(plan.ready_snapshot_id or "").strip():
             raise MassResearchDisabledError("plan.ready_snapshot_id required")
         self._readiness = _require_signed_readiness(
-            readiness, expected_snapshot_id=str(plan.ready_snapshot_id)
+            readiness,
+            expected_snapshot_id=str(plan.ready_snapshot_id),
+            verifier=verifier,
         )
         self._budget = budget
         self._plan = plan
@@ -167,8 +183,32 @@ class MassResearchScheduler:
         )
 
 
+class MassResearchScheduler:
+    """Mass-only scheduler boundary; pilot capability is structurally rejected."""
+
+    def __init__(
+        self,
+        *,
+        readiness: VerifiedMassReadiness | None = None,
+        verifier: ReadinessPublicKeyRegistry | None = None,
+    ) -> None:
+        if not isinstance(readiness, VerifiedMassReadiness):
+            raise MassResearchDisabledError(
+                "VerifiedMassReadiness required; VerifiedPilotReadiness cannot "
+                "authorize Mass"
+            )
+        readiness.require_valid(verifier=verifier)
+        self._readiness = readiness
+
+    def start_mass_catalog_eval(self, n: int = MASS_CATALOG_EVAL_SIZE) -> None:
+        raise MassResearchDisabledError(
+            "mass 2000-catalog eval is not enabled; Mass remains NO-GO"
+        )
+
+
 __all__ = [
     "AuthorizedEvaluationService",
+    "ControlledPilotScheduler",
     "MASS_CATALOG_EVAL_SIZE",
     "MassResearchDisabledError",
     "MassResearchScheduler",

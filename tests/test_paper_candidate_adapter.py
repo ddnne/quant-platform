@@ -128,7 +128,7 @@ def test_adapter_strips_hostile_arm_live_go_flags():
     assert body["paper_run_hints"]["scheduler_armed"] is False
     assert body["paper_run_hints"]["run_now"] is False
     assert body["paper_run_hints"]["continuous"] is False
-    assert body["paper_run_hints"]["require_ready_snapshot"] is False
+    assert "require_ready_snapshot" not in body["paper_run_hints"]
     assert_unarmed(body)
 
 

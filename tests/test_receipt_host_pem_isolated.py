@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 import pytest
 
-from research.readiness import _attestation_secret
+from research.readiness import (
+    READINESS_PRIVATE_KEY_ENV,
+    ReadinessAttestationPublisher,
+)
 from selection.budget_ledger import MassResearchDisabledError
 from storage.receipt_crypto import generate_keypair, load_signing_key
 
@@ -24,7 +26,7 @@ def _plant_host_pem(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Pa
     monkeypatch.setattr(rc, "CONFIG_DIR", pem_path.parent)
     monkeypatch.setattr(Path, "home", lambda *args, **kwargs: fake_home)
     monkeypatch.delenv("QUANT_RECEIPT_SIGNING_KEY_PEM", raising=False)
-    monkeypatch.delenv("QUANT_READINESS_HMAC_SECRET", raising=False)
+    monkeypatch.delenv(READINESS_PRIVATE_KEY_ENV, raising=False)
     return pem_path, priv_pem
 
 
@@ -52,20 +54,25 @@ def test_load_signing_key_explicit_inject_still_works(
     assert by_env is not None
 
 
-def test_attestation_secret_ignores_host_pem_under_pytest(
+def test_readiness_publisher_never_falls_back_to_receipt_pem(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _plant_host_pem(tmp_path, monkeypatch)
-    with pytest.raises(MassResearchDisabledError, match="HMAC secret not configured"):
-        _attestation_secret()
+    with pytest.raises(MassResearchDisabledError, match="dedicated readiness"):
+        ReadinessAttestationPublisher.from_config(key_id="readiness-v1")
 
 
-def test_attestation_secret_env_still_works(
+def test_explicit_dedicated_readiness_key_file_works(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _plant_host_pem(tmp_path, monkeypatch)
-    monkeypatch.setenv("QUANT_READINESS_HMAC_SECRET", "isolated-hmac")
-    assert _attestation_secret() == b"isolated-hmac"
+    _pem_path, receipt_private_pem = _plant_host_pem(tmp_path, monkeypatch)
+    readiness_private_pem, _, _ = generate_keypair(key_id="readiness-v1")
+    assert readiness_private_pem != receipt_private_pem
+    readiness_path = tmp_path / "readiness_signing_key.pem"
+    readiness_path.write_bytes(readiness_private_pem)
+    monkeypatch.setenv(READINESS_PRIVATE_KEY_ENV, str(readiness_path))
+    publisher = ReadinessAttestationPublisher.from_config(key_id="readiness-v1")
+    assert publisher.key_id == "readiness-v1"
 
 
 def test_host_pem_used_when_not_under_pytest(
@@ -80,5 +87,5 @@ def test_host_pem_used_when_not_under_pytest(
     assert key is not None
     assert pem_path.is_file()
 
-    secret = _attestation_secret()
-    assert secret == hashlib.sha256(priv_pem + b"|readiness-v2").digest()
+    with pytest.raises(MassResearchDisabledError, match="dedicated readiness"):
+        ReadinessAttestationPublisher.from_config(key_id="readiness-v1")

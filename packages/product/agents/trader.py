@@ -21,6 +21,10 @@ class TraderAgent:
         *,
         ready_snapshot_id: str = "",
         ready_manifest_digest: str = "",
+        readiness_attestation_id: str = "",
+        profile_digest: str = "",
+        plan_set_digest: str = "",
+        dependency_closure_digest: str = "",
         universe: Sequence[str] = (),
         period_start: str = "",
         period_end: str = "",
@@ -43,6 +47,10 @@ class TraderAgent:
             "max_gross_weight": decision.max_gross_weight,
             "ready_snapshot_id": ready_snapshot_id or "",
             "ready_manifest_digest": ready_manifest_digest or "",
+            "readiness_attestation_id": readiness_attestation_id or "",
+            "profile_digest": profile_digest or "",
+            "plan_set_digest": plan_set_digest or "",
+            "dependency_closure_digest": dependency_closure_digest or "",
             "universe": list(universe),
             "period_start": period_start or "",
             "period_end": period_end or "",
@@ -56,6 +64,11 @@ class TraderAgent:
         expires = (
             datetime.now(timezone.utc) + timedelta(seconds=max(60, ttl_seconds))
         ).isoformat()
+        authority_instruction = (
+            "consume exact READY snapshot only"
+            if str(ready_snapshot_id or "").strip()
+            else "offline fixture DRAFT only; no promotion authority"
+        )
         return AuthorizedPaperExecutionRequest(
             mode="paper",
             authorization_id=authorization_id,
@@ -66,10 +79,14 @@ class TraderAgent:
                 "interpret the reviewed StrategySpec",
                 "run through strategies.paper.run_paper",
                 "do not contact a broker",
-                "consume exact READY snapshot only",
+                authority_instruction,
             ),
             ready_snapshot_id=str(ready_snapshot_id or ""),
             ready_manifest_digest=str(ready_manifest_digest or ""),
+            readiness_attestation_id=str(readiness_attestation_id or ""),
+            profile_digest=str(profile_digest or ""),
+            plan_set_digest=str(plan_set_digest or ""),
+            dependency_closure_digest=str(dependency_closure_digest or ""),
             universe=tuple(str(u) for u in universe),
             period_start=str(period_start or ""),
             period_end=str(period_end or ""),

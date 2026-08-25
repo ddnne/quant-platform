@@ -475,6 +475,26 @@ def _research_manifest_id(manifest: dict[str, Any]) -> str:
     # ReadyManifest binds to snapshot_id and is therefore appended after the
     # non-circular research snapshot identity has been calculated.
     identity.pop("ready_manifest", None)
+    # A repeated validation of the same immutable source state must resolve to
+    # the same content address. Keep the retained observation time in the full
+    # manifest, but exclude that volatile clock reading from snapshot identity.
+    ready_evidence = identity.get("ready_evidence")
+    if isinstance(ready_evidence, Mapping):
+        stable_evidence = dict(ready_evidence)
+        stable_items: list[Any] = []
+        for raw_item in ready_evidence.get("items", []):
+            if not isinstance(raw_item, Mapping):
+                stable_items.append(raw_item)
+                continue
+            item = dict(raw_item)
+            detail = item.get("detail")
+            if isinstance(detail, Mapping):
+                stable_detail = dict(detail)
+                stable_detail.pop("evaluated_at", None)
+                item["detail"] = stable_detail
+            stable_items.append(item)
+        stable_evidence["items"] = stable_items
+        identity["ready_evidence"] = stable_evidence
     return _canonical_digest(identity)
 
 
@@ -539,6 +559,7 @@ def publish_ready_snapshot(
     _ready_manifest_builder: (
         Callable[[Mapping[str, Any]], Mapping[str, Any]] | None
     ) = None,
+    _fixture_policy: bool = False,
 ) -> ReadySnapshot:
     """Gate a staging DB and atomically publish a read-only snapshot.
 
@@ -546,6 +567,10 @@ def publish_ready_snapshot(
     a closed ReadyManifest builder. Both must be present together.
     """
     staging_path = Path(staging_db).resolve()
+    if _fixture_policy and not os.environ.get("PYTEST_CURRENT_TEST"):
+        raise SnapshotRejected(
+            "fixture READY policy is test-only and unavailable in production"
+        )
     if not staging_path.is_file():
         raise FileNotFoundError(f"staging database does not exist: {staging_path}")
     required = tuple(sorted(set(str(item) for item in required_datasets)))
@@ -605,9 +630,13 @@ def publish_ready_snapshot(
             (
                 run_id, run_detail, validations, coverage_rows,
                 quality_summary, quality_failures, raw_manifests,
-                coverage_proof,
+                coverage_proof, ready_evidence,
             ) = evaluate_ready_publication(
-                conn, staging_path, build_id=build_id, required=required
+                conn,
+                staging_path,
+                build_id=build_id,
+                required=required,
+                _fixture_policy=_fixture_policy,
             )
             watermarks = _watermarks_for(conn, required, coverage_rows)
             if READY_MANIFEST_SCHEMA.get("$id") != "ready-manifest/v1":
@@ -625,11 +654,40 @@ def publish_ready_snapshot(
                 raise
             raise SnapshotRejected(reason) from exc
 
-        change = conn.execute(
-            "SELECT last_applied_change_seq FROM sync_change_state "
-            "WHERE feed='jquants_records'"
+        sync_items = [
+            item
+            for item in ready_evidence.get("items", [])
+            if isinstance(item, Mapping)
+            and item.get("name") == "SyncGenerationEvidence"
+        ]
+        if len(sync_items) != 1 or not isinstance(
+            sync_items[0].get("detail"), Mapping
+        ):
+            raise SnapshotRejected("production READY sync evidence is missing")
+        try:
+            change_seq = int(
+                sync_items[0]["detail"]["applied_sync_generation"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SnapshotRejected(
+                "production READY applied generation is malformed"
+            ) from exc
+        if change_seq <= 0:
+            raise SnapshotRejected("production READY applied generation is null")
+        quality_row = conn.execute(
+            "SELECT results_json FROM snapshot_quality_results WHERE build_id=?",
+            (build_id,),
         ).fetchone()
-        change_seq = int(change[0]) if change is not None else 0
+        if quality_row is None:
+            raise SnapshotRejected("production READY quality result ledger is missing")
+        try:
+            quality_results = json.loads(str(quality_row[0]))
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise SnapshotRejected(
+                "production READY quality result ledger is malformed"
+            ) from exc
+        if not isinstance(quality_results, list) or not quality_results:
+            raise SnapshotRejected("production READY quality results are empty")
         committed_at = datetime.now(timezone.utc).isoformat()
         manifest: dict[str, Any] = {
             "format": RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
@@ -667,7 +725,9 @@ def publish_ready_snapshot(
                 "status": "PASS",
                 "summary": quality_summary,
                 "failures": quality_failures,
+                "results": quality_results,
             },
+            "ready_evidence": ready_evidence,
             "raw_manifests": raw_manifests,
             "validations": validations,
             "created_at": created_at,

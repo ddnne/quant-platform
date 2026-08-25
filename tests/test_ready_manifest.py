@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from paper_runtime.snapshot import READY_MANIFEST_SCHEMA as PUBLISH_SCHEMA
 from paper_runtime.snapshot_publish_policy import READY_MANIFEST_SCHEMA as POLICY_SCHEMA
@@ -26,10 +27,10 @@ from research.ready_manifest import (
     require_core_profile_deps_subseteq_source_capability_registry,
     serialize_ready_manifest,
 )
+from research.readiness import ReadinessAttestationPublisher
 from research.research_data_profile import load_core_profile
 from selection.budget_ledger import MassResearchDisabledError
 
-_TEST_HMAC = "ready-manifest-offline-e2e-hmac"
 _SNAPSHOT_PY = (
     repo_root()
     / "packages"
@@ -46,9 +47,12 @@ _POLICY_PY = (
 )
 
 
-@pytest.fixture(autouse=True)
-def _hmac_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("QUANT_READINESS_HMAC_SECRET", _TEST_HMAC)
+@pytest.fixture
+def readiness_publisher() -> ReadinessAttestationPublisher:
+    return ReadinessAttestationPublisher(
+        key_id="test-readiness-v1",
+        private_key=Ed25519PrivateKey.generate(),
+    )
 
 
 def _digest(label: str) -> str:
@@ -60,16 +64,30 @@ def _complete_manifest(**overrides: object) -> ReadyManifest:
     profile = load_core_profile()
     payload = {
         "snapshot_id": digest,
+        "publication_scope": "MASS",
         "profile_id": profile.profile_id,
         "profile_version": profile.profile_version,
         "profile_digest": profile.profile_digest,
+        "plan_ids": (f"mass-profile:{profile.profile_id}",),
+        "plan_set_digest": canonical_digest({"mass_profile": profile.to_dict()}),
+        "dependency_closure_digest": canonical_digest(
+            {
+                "mass_profile_digest": profile.profile_digest,
+                "required_datasets": list(profile.required_datasets),
+                "contract_versions": dict(profile.contract_versions),
+            }
+        ),
         "dataset_ids": profile.required_datasets,
         "coverage_proof_digest": _digest("coverage"),
         "raw_proof_digest": _digest("raw"),
+        "receipt_proof_digest": _digest("receipt"),
         "validation_proof_digest": _digest("validation"),
         "b0_proof_digest": _digest("b0"),
+        "b4_proof_digest": _digest("b4"),
         "source_generation": "1",
         "applied_sync_generation": "1",
+        "export_cursor": "1",
+        "applied_cursor": "1",
         "pit_contract_digests": {"pit_api": _digest("pit")},
         "feature_generation": _digest("feature"),
         "catalog_generation": _digest("catalog"),
@@ -148,10 +166,10 @@ def test_unknown_fields_and_missing_proofs_are_not_pass() -> None:
         )
 
 
-def test_ready_manifest_offline_e2e_serialize_reload_mint(tmp_path: Path) -> None:
+def test_ready_manifest_offline_e2e_serialize_reload_mint(
+    tmp_path: Path, readiness_publisher: ReadinessAttestationPublisher
+) -> None:
     """Publisher helpers → serialize → reload → mint. No live R2. Not production READY."""
-    artifact = tmp_path / "offline-artifact.sqlite"
-    artifact.write_bytes(b"offline-ready-manifest-not-r2")
     built = _complete_manifest()
     path = tmp_path / "ready_manifest.json"
     serialize_ready_manifest(built, path)
@@ -159,16 +177,35 @@ def test_ready_manifest_offline_e2e_serialize_reload_mint(tmp_path: Path) -> Non
     assert reloaded.to_canonical_dict() == built.to_canonical_dict()
     assert reloaded.manifest_digest == built.manifest_digest
     assert reloaded.published_at == "2026-08-24T00:01:00+00:00"
-    readiness = mint_verified_research_readiness(reloaded, db_path=artifact)
+    readiness = mint_verified_research_readiness(
+        reloaded,
+        immutable_db_digest=_digest("offline-fixture-db"),
+        publisher=readiness_publisher,
+    )
     assert readiness.snapshot_id == built.snapshot_id
     assert readiness.ready_manifest_digest == built.manifest_digest
     assert readiness.coverage_proof_digest == built.coverage_proof_digest
     assert readiness.b0_quality_proof_digest.startswith("sha256:")
-    assert readiness.require_valid(expected_snapshot_id=built.snapshot_id) is readiness
+    assert readiness.require_valid(
+        expected_snapshot_id=built.snapshot_id,
+        verifier=readiness_publisher.public_registry(),
+    ) is readiness
     dumped = path.read_text(encoding="utf-8")
     assert "r2://" not in dumped
     assert "production READY" not in dumped
     assert json.loads(dumped)["published_at"] == "2026-08-24T00:01:00+00:00"
+
+
+def test_production_mint_cannot_accept_caller_supplied_artifact_digest(
+    monkeypatch: pytest.MonkeyPatch,
+    readiness_publisher: ReadinessAttestationPublisher,
+) -> None:
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    with pytest.raises(MassResearchDisabledError, match="test-only"):
+        readiness_publisher.mint_mass(
+            _complete_manifest(),
+            immutable_db_digest=_digest("caller-asserted-db"),
+        )
 
 
 @pytest.mark.parametrize(
@@ -183,10 +220,14 @@ def test_ready_manifest_offline_e2e_serialize_reload_mint(tmp_path: Path) -> Non
         ({"created_at": MISSING}, "created_at"),
         ({"coverage_proof_digest": MISSING}, "coverage_proof_digest"),
         ({"raw_proof_digest": MISSING}, "raw_proof_digest"),
+        ({"receipt_proof_digest": MISSING}, "receipt_proof_digest"),
         ({"validation_proof_digest": MISSING}, "validation_proof_digest"),
         ({"b0_proof_digest": MISSING}, "b0_proof_digest"),
+        ({"b4_proof_digest": MISSING}, "b4_proof_digest"),
         ({"source_generation": MISSING}, "source_generation"),
         ({"applied_sync_generation": MISSING}, "applied_sync_generation"),
+        ({"export_cursor": MISSING}, "export_cursor"),
+        ({"applied_cursor": MISSING}, "applied_cursor"),
         ({"pit_contract_digests": {"pit_api": MISSING}}, "pit_contract_digests"),
         (
             {"source_generation": "source-2", "applied_sync_generation": "source-1"},
@@ -241,11 +282,5 @@ def test_core_profile_deps_subseteq_source_capability_registry() -> None:
         assert dataset_id in required
         cap = repo_root() / "specs" / "source_capability" / f"{dataset_id}.json"
         assert not cap.is_file()
-    with pytest.raises(AssertionError, match="missing SourceCapability files") as exc:
-        require_core_profile_deps_subseteq_source_capability_registry()
-    listed = str(exc.value)
-    for dataset_id in missing:
-        assert dataset_id in listed
-    # Subset does not currently hold. Missing is UNKNOWN, not default PASS.
-    # This lane does not invent V3 JSON for the other 22 datasets.
-    assert missing, listed
+    require_core_profile_deps_subseteq_source_capability_registry()
+    assert missing == ()

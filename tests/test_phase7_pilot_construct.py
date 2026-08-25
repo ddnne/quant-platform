@@ -1,74 +1,92 @@
-"""MassResearchScheduler construct is fail-closed without each required dep."""
+"""Pilot and Mass scheduler readiness scopes are nominally separated."""
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from research.artifacts import ExperimentPlan
 from research.experiment_plans import load_experiment_plans
 from research.phase7_pilot import (
     PILOT_MAX_HYPOTHESES,
     AuthorizedEvaluationService,
+    ControlledPilotScheduler,
     MassResearchScheduler,
     bind_authorized_evaluation_service,
 )
 from research.readiness import (
-    VerifiedResearchReadiness,
-    _attestation_secret,
-    _sign_attestation,
+    ReadinessAttestationPublisher,
+    VerifiedPilotReadiness,
 )
-from research.research_data_profile import load_core_profile
+from research.ready_manifest import build_ready_manifest, load_exact_four_pilot_ready_binding
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
 from selection.screen import ExperimentBudget
 from storage.immutable_artifact import ImmutableArtifactStore
 
-_TEST_HMAC_SECRET = b"phase7-pilot-construct-test-hmac"
+_SNAPSHOT_ID = "sha256:" + ("12" * 32)
 
 
-@pytest.fixture(autouse=True)
-def _hmac_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("QUANT_READINESS_HMAC_SECRET", _TEST_HMAC_SECRET.decode())
+def _publisher() -> ReadinessAttestationPublisher:
+    return ReadinessAttestationPublisher(
+        key_id="phase7-pilot-test",
+        private_key=Ed25519PrivateKey.generate(),
+    )
 
 
 def _readiness(
+    publisher: ReadinessAttestationPublisher,
     *,
-    snapshot_id: str = "snap-1",
+    snapshot_id: str = _SNAPSHOT_ID,
     expires_at: str = "2099-01-01T00:00:00+00:00",
     signature: str | None = None,
     **field_overrides: object,
-) -> VerifiedResearchReadiness:
+) -> VerifiedPilotReadiness:
     digest = "sha256:" + ("ab" * 32)
-    profile = load_core_profile()
-    kwargs: dict[str, object] = {
-        "attestation_id": "att-1",
-        "snapshot_id": snapshot_id,
-        "profile_id": profile.profile_id,
-        "profile_version": profile.profile_version,
-        "profile_digest": profile.profile_digest,
-        "dataset_ids": profile.required_datasets,
-        "ready_state": "READY",
-        "ready_manifest_digest": digest,
-        "immutable_db_digest": digest,
-        "coverage_policy_version": "v1",
-        "coverage_proof_digest": digest,
-        "governed_membership_digest": digest,
-        "raw_proof_digest": digest,
-        "b0_quality_proof_digest": digest,
-        "source_generation": "g1",
-        "applied_sync_generation": "g1",
-        "verified_at": "2026-01-01T00:00:00+00:00",
-        "expires_at": expires_at,
-        "evidence_digest": digest,
-        "signature": "hmac-sha256:pending",
-    }
-    kwargs.update(field_overrides)
-    pending = VerifiedResearchReadiness(**kwargs)  # type: ignore[arg-type]
-    if signature is None:
-        signature = _sign_attestation(pending.to_canonical_body(), _attestation_secret())
-    return replace(pending, signature=signature)
+    binding = load_exact_four_pilot_ready_binding()
+    manifest = build_ready_manifest(
+        snapshot_id=snapshot_id,
+        publication_scope="PILOT",
+        profile_id=binding.profile_id,
+        profile_version=binding.profile_version,
+        profile_digest=binding.profile_digest,
+        plan_ids=binding.plan_ids,
+        plan_set_digest=binding.plan_set_digest,
+        dependency_closure_digest=binding.closure_set_digest,
+        dataset_ids=binding.required_datasets,
+        coverage_proof_digest=digest,
+        raw_proof_digest=digest,
+        receipt_proof_digest=digest,
+        validation_proof_digest=digest,
+        b0_proof_digest=digest,
+        b4_proof_digest=digest,
+        source_generation="g1",
+        applied_sync_generation="g1",
+        export_cursor="g1",
+        applied_cursor="g1",
+        pit_contract_digests={"pit_api": digest},
+        feature_generation=digest,
+        catalog_generation=digest,
+        created_at="2026-01-01T00:00:00+00:00",
+        published_at="2026-01-01T00:01:00+00:00",
+    )
+    expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    baseline = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    mint_now = baseline if expiry > baseline else expiry - timedelta(seconds=60)
+    pending = publisher.mint_pilot(
+        manifest,
+        immutable_db_digest=digest,
+        now=mint_now,
+        ttl_seconds=max(60, int((expiry - mint_now).total_seconds())),
+    )
+    if field_overrides:
+        pending = replace(pending, **field_overrides)
+    if signature is not None:
+        pending = replace(pending, signature=signature)
+    return pending
 
 
 def _budget(tmp_path: Path) -> ResearchBudgetCapability:
@@ -79,7 +97,7 @@ def _budget(tmp_path: Path) -> ResearchBudgetCapability:
     )
 
 
-def _plan(*, snapshot_id: str = "snap-1") -> ExperimentPlan:
+def _plan(*, snapshot_id: str = _SNAPSHOT_ID) -> ExperimentPlan:
     return replace(load_experiment_plans()[0], ready_snapshot_id=snapshot_id)
 
 
@@ -91,22 +109,28 @@ def _store(tmp_path: Path) -> ImmutableArtifactStore:
     return ImmutableArtifactStore(tmp_path / "artifacts")
 
 
-def _construct(tmp_path: Path, **overrides: object) -> MassResearchScheduler:
+def _construct(
+    tmp_path: Path,
+    publisher: ReadinessAttestationPublisher | None = None,
+    **overrides: object,
+) -> ControlledPilotScheduler:
+    publisher = publisher or _publisher()
     kwargs: dict[str, object] = {
-        "readiness": _readiness(),
+        "readiness": _readiness(publisher),
+        "verifier": publisher.public_registry(),
         "budget": _budget(tmp_path),
         "plan": _plan(),
         "authorized_evaluation_service": _eval_service(),
         "immutable_artifact_store": _store(tmp_path),
     }
     kwargs.update(overrides)
-    return MassResearchScheduler(**kwargs)  # type: ignore[arg-type]
+    return ControlledPilotScheduler(**kwargs)  # type: ignore[arg-type]
 
 
 def test_construct_fails_without_readiness(tmp_path: Path) -> None:
-    with pytest.raises(MassResearchDisabledError, match="VerifiedResearchReadiness"):
+    with pytest.raises(MassResearchDisabledError, match="VerifiedPilotReadiness"):
         _construct(tmp_path, readiness=None)
-    with pytest.raises(MassResearchDisabledError, match="VerifiedResearchReadiness"):
+    with pytest.raises(MassResearchDisabledError, match="VerifiedPilotReadiness"):
         _construct(tmp_path, readiness={"snapshot_id": "snap-1"})
 
 
@@ -159,12 +183,13 @@ def test_construct_rejects_operator_override(tmp_path: Path) -> None:
 
 
 def test_construct_refuses_expired_or_bad_signature(tmp_path: Path) -> None:
-    expired = _readiness(expires_at="2000-01-01T00:00:00+00:00")
+    pub = _publisher()
+    expired = _readiness(pub, expires_at="2000-01-01T00:00:00+00:00")
     with pytest.raises(MassResearchDisabledError, match="invalid, expired"):
-        _construct(tmp_path, readiness=expired)
-    bad_sig = _readiness(signature="hmac-sha256:not-a-real-mac")
+        _construct(tmp_path, publisher=pub, readiness=expired)
+    bad_sig = _readiness(pub, signature="ed25519:not-a-real-signature")
     with pytest.raises(MassResearchDisabledError, match="invalid, expired"):
-        _construct(tmp_path, readiness=bad_sig)
+        _construct(tmp_path, publisher=pub, readiness=bad_sig)
 
 
 def test_construct_refuses_snapshot_mismatch(tmp_path: Path) -> None:
@@ -173,14 +198,15 @@ def test_construct_refuses_snapshot_mismatch(tmp_path: Path) -> None:
 
 
 def test_construct_refuses_empty_digest(tmp_path: Path) -> None:
-    empty = _readiness(b0_quality_proof_digest="")
-    with pytest.raises(MassResearchDisabledError, match="non-empty digest"):
-        _construct(tmp_path, readiness=empty)
+    pub = _publisher()
+    empty = _readiness(pub, b0_quality_proof_digest="")
+    with pytest.raises(MassResearchDisabledError, match="invalid, expired"):
+        _construct(tmp_path, publisher=pub, readiness=empty)
 
 
 def test_construct_succeeds_with_all_deps(tmp_path: Path) -> None:
     sched = _construct(tmp_path)
-    assert isinstance(sched, MassResearchScheduler)
+    assert isinstance(sched, ControlledPilotScheduler)
     with pytest.raises(MassResearchDisabledError, match="cannot mint"):
         sched.mint_operator_override(reason="no")
 
@@ -204,3 +230,13 @@ def test_mass_2000_catalog_eval_is_not_started(tmp_path: Path) -> None:
         sched.start_mass_catalog_eval()
     with pytest.raises(MassResearchDisabledError, match="2000-catalog"):
         sched.start_mass_catalog_eval(n=2000)
+
+
+def test_mass_scheduler_rejects_pilot_readiness(tmp_path: Path) -> None:
+    pub = _publisher()
+    pilot = _readiness(pub)
+    with pytest.raises(MassResearchDisabledError, match="VerifiedMassReadiness"):
+        MassResearchScheduler(
+            readiness=pilot,  # type: ignore[arg-type]
+            verifier=pub.public_registry(),
+        )

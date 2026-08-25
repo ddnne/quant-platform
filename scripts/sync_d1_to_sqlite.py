@@ -7,11 +7,16 @@ and upserts them into local SQLite matching `storage/schema.py`.
 No `--url` / ``INGESTION_PREMIUM_URL`` → exit 2, no network.
 ``--incremental`` applies ``change_seq > last_applied_change_seq`` after each
 durable page. Full table export is bootstrap.
+
+Sync never mints READY from caller assertions. It can invoke the exact-four
+publisher only with an Ed25519-verified Ops Projection envelope; otherwise it
+finishes the apply and leaves snapshot publication closed.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sqlite3
 import sys
@@ -31,11 +36,9 @@ from _bootstrap import ensure_repo_root  # noqa: E402
 
 ensure_repo_root()
 
-from data_contracts import all_coverage_contracts  # noqa: E402
 from paper_runtime import (  # noqa: E402
     begin_snapshot_sync,
     fail_snapshot_sync,
-    publish_ready_snapshot,
 )
 from storage.sqlite_store import SqliteStore  # noqa: E402
 
@@ -66,13 +69,6 @@ _CHANGE_FEED_SKIP_TABLES = frozenset({
     "jquants_records_r2",
     "equities_master_scd2",
 })
-GOVERNED_READY_DATASETS = tuple(
-    contract.dataset_id
-    for contract in all_coverage_contracts()
-    if contract.governance_tier == "governed"
-)
-
-
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Sync CF D1 → local SQLite (PIT)")
     p.add_argument(
@@ -106,6 +102,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--snapshot-dir",
         default=None,
         help="READY artifact directory (default: <db-parent>/snapshots).",
+    )
+    p.add_argument(
+        "--pilot-ready-evidence",
+        default=None,
+        help=(
+            "Signed exact-four Ops Projection evidence envelope. Unsigned or "
+            "untrusted JSON is rejected and cannot publish READY."
+        ),
     )
     p.add_argument(
         "--page-limit",
@@ -684,24 +688,43 @@ def main(argv=None) -> int:
                 "targeted sync completed, but a full required-dataset sync "
                 "is required before paper research",
             )
-        else:
+        elif args.pilot_ready_evidence:
             try:
-                ready = publish_ready_snapshot(
-                    Path(args.db),
+                from ops.projection_signing import OpsProjectionPublicKeyRegistry
+                from research.ready_manifest import (
+                    publish_exact_four_pilot_ready_snapshot,
+                )
+
+                signed_document = json.loads(
+                    Path(args.pilot_ready_evidence).read_text(encoding="utf-8")
+                )
+                snapshot_dir = (
                     Path(args.snapshot_dir)
                     if args.snapshot_dir
-                    else Path(args.db).resolve().parent / "snapshots",
-                    required_datasets=GOVERNED_READY_DATASETS,
+                    else Path(args.db).resolve().parent / "snapshots"
                 )
-                print(
-                    f"[sync] committed snapshot={ready.snapshot_id} "
-                    f"artifact={ready.db_path}"
+                ready = publish_exact_four_pilot_ready_snapshot(
+                    args.db,
+                    snapshot_dir,
+                    signed_projection_document=signed_document,
+                    projection_verifier=OpsProjectionPublicKeyRegistry.load(),
                 )
-            except Exception as exc:  # noqa: BLE001
-                message = f"snapshot: {exc}"
+                print(f"[sync] READY published snapshot_id={ready.snapshot_id}")
+            except Exception as exc:  # noqa: BLE001 - CLI fail-closed boundary
+                message = f"snapshot: signed pilot READY publication failed: {exc}"
                 failures.append(message)
                 fail_snapshot_sync(store._conn, message)  # noqa: SLF001
-                print(f"[sync] snapshot FAILED: {exc}", file=sys.stderr)
+                print(f"[sync] snapshot FAILED: {message}", file=sys.stderr)
+        else:
+            fail_snapshot_sync(  # noqa: SLF001
+                store._conn,
+                "sync applied; exact-four profile/plan/closure READY evidence "
+                "was not supplied",
+            )
+            print(
+                "[sync] data applied; READY not published (missing "
+                "--pilot-ready-evidence)"
+            )
     finally:
         try:
             client.close()
