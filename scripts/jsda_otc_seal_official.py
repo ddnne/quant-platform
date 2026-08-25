@@ -32,6 +32,7 @@ from _bootstrap import ensure_repo_root  # noqa: E402
 ROOT = ensure_repo_root()
 
 from ingestion.jsda.normalize import normalize_otc_reference_prices  # noqa: E402
+from ingestion.jsda.archive import resolve_quote_effective_dates  # noqa: E402
 from ingestion.jsda.official_index import (  # noqa: E402
     read_local_index_text as _read_index_text,
 )
@@ -214,7 +215,11 @@ def _xls_cell(sh, r, c, wb):
     return str(cell.value)
 
 
-def _parse_otc_xls(raw: bytes, day: str):
+def _parse_otc_xls(
+    raw: bytes,
+    publication_label_date: str,
+    quote_effective_date: str,
+):
     import xlrd
     from ingestion.jsda.parse import _date, _num  # type: ignore
 
@@ -245,8 +250,8 @@ def _parse_otc_xls(raw: bytes, day: str):
         avg_y = avg_y_c if avg_y_c and avg_y_c not in {"―――", "-----", "--"} else avg_y_s
         out.append(
             {
-                "publication_label_date": day,
-                "quote_effective_date": day,
+                "publication_label_date": publication_label_date,
+                "quote_effective_date": quote_effective_date,
                 "security_code": code,
                 "bond_name": name,
                 "coupon_rate": _num(coupon_s),
@@ -266,14 +271,20 @@ def _parse_otc_xls(raw: bytes, day: str):
     return out
 
 
-def parse_raw(path: Path, day: str):
+def parse_raw(
+    path: Path,
+    publication_label_date: str,
+    quote_effective_date: str,
+):
     raw = path.read_bytes()
     suffix = path.suffix.lower()
     if suffix == ".csv":
         return (
             raw,
             parse_otc_reference_csv(
-                raw, publication_label_date=day, quote_effective_date=day
+                raw,
+                publication_label_date=publication_label_date,
+                quote_effective_date=quote_effective_date,
             ),
             "csv",
         )
@@ -281,12 +292,18 @@ def parse_raw(path: Path, day: str):
         return (
             raw,
             parse_otc_reference_xlsx(
-                raw, publication_label_date=day, quote_effective_date=day
+                raw,
+                publication_label_date=publication_label_date,
+                quote_effective_date=quote_effective_date,
             ),
             "xlsx",
         )
     if suffix == ".xls":
-        return raw, _parse_otc_xls(raw, day), "xls"
+        return (
+            raw,
+            _parse_otc_xls(raw, publication_label_date, quote_effective_date),
+            "xls",
+        )
     return raw, [], suffix.lstrip(".")
 
 
@@ -335,10 +352,27 @@ def bulk_insert_day(conn: sqlite3.Connection, day: str, rows: list[dict]) -> int
     return len(rows)
 
 
-def seal_day(store, day, path, source_url, receipt_service):
+def seal_day(
+    store,
+    day,
+    path,
+    source_url,
+    receipt_service,
+    *,
+    quote_effective_date,
+):
     t0 = time.time()
     conn = None if store is None else store._conn  # noqa: SLF001
-    raw, parsed, fmt = parse_raw(path, day)
+    if (
+        not isinstance(quote_effective_date, str)
+        or not quote_effective_date
+        or quote_effective_date >= day
+    ):
+        return {
+            "segment_id": day,
+            "status": "QUOTE_EFFECTIVE_DATE_UNRESOLVED",
+        }
+    raw, parsed, fmt = parse_raw(path, day, quote_effective_date)
     if len(raw) <= FULL_OK_MIN:
         return {"segment_id": day, "status": "NOT_FULL_OK_SIZE", "size": len(raw)}
     head = raw[:200].lstrip().lower()
@@ -369,7 +403,7 @@ def seal_day(store, day, path, source_url, receipt_service):
         parsed,
         ingested_at=now,
         publication_label_date=day,
-        quote_effective_date=day,
+        quote_effective_date=quote_effective_date,
         source_url=source_url,
         raw_digest=digest,
         segment_id=day,
@@ -451,6 +485,7 @@ def seal_day(store, day, path, source_url, receipt_service):
         "path": str(path),
         "size": len(raw),
         "fmt": fmt,
+        "quote_effective_date": quote_effective_date,
         "secs": round(time.time() - t0, 2),
     }
 
@@ -503,6 +538,18 @@ def main(argv: list[str] | None = None) -> int:
         "SELECT COUNT(*) FROM coverage_segments "
         "WHERE dataset='jsda_otc_bond_reference_prices' AND status='COMPLETE'"
     ).fetchone()[0]
+    stored_labels = [
+        str(row[0])
+        for row in conn.execute(
+            "SELECT DISTINCT publication_label_date "
+            "FROM jsda_otc_bond_reference_prices"
+        ).fetchall()
+    ]
+    effective_dates = resolve_quote_effective_dates(
+        (),
+        stored_labels=tuple(stored_labels)
+        + tuple(str(item["day"]) for item in ITEMS),
+    )
     print("PRE OTC COMPLETE", pre, flush=True)
 
     print("drop snapshot triggers...", flush=True)
@@ -531,7 +578,14 @@ def main(argv: list[str] | None = None) -> int:
                 results.append({"segment_id": day, "status": "RAW_MISS", "code": code})
                 print(results[-1], flush=True)
                 continue
-            r = seal_day(store, day, path, url, receipt_service)
+            r = seal_day(
+                store,
+                day,
+                path,
+                url,
+                receipt_service,
+                quote_effective_date=effective_dates.get(day),
+            )
             results.append(r)
             if r.get("status") == "SEALED":
                 sealed_n += 1

@@ -242,7 +242,7 @@ def _record(
     )
 
 
-def _quote_effective_dates(
+def resolve_quote_effective_dates(
     segments: Sequence[JsdaArchiveSegment],
     *,
     stored_labels: Sequence[str] = (),
@@ -377,7 +377,7 @@ def run_otc_reference_backfill(
         prior_receipts = _receipt_objects(read_collection_receipts(
             store.path, dataset=OTC_REFERENCE_DATASET
         ))
-        effective_dates = _quote_effective_dates(
+        effective_dates = resolve_quote_effective_dates(
             all_discovered,
             stored_labels=_stored_publication_labels(store),
         )

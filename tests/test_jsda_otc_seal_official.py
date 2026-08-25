@@ -163,7 +163,15 @@ def test_seal_day_parser_capable_stays_unsealed_without_trusted_reproof(
     path = tmp_path / "S020802.csv"
     path.write_bytes(raw)
     for day in EARLY_LAYOUT_REPROOF_DAYS:
-        result = seal.seal_day(None, day, path, "", None)
+        quote_day = "2002-08-01" if day == "2002-08-02" else "2002-08-02"
+        result = seal.seal_day(
+            None,
+            day,
+            path,
+            "",
+            None,
+            quote_effective_date=quote_day,
+        )
         assert result["status"] == "REPROOF_REQUIRED"
         assert result["reason"] == "TRUSTED_RAW_RECONCILIATION_REQUIRED"
         assert result["status"] != "PARSE_ZERO"
@@ -172,6 +180,36 @@ def test_seal_day_parser_capable_stays_unsealed_without_trusted_reproof(
         assert result["segment_id"] == day
         assert int(result["raw"]) > 0
         assert str(result["digest"]).startswith("sha256:")
+
+
+def test_seal_day_rejects_publication_label_as_quote_day(
+    seal, tmp_path: Path,
+) -> None:
+    path = tmp_path / "S020802.csv"
+    path.write_bytes(b"x" * (seal.FULL_OK_MIN + 1))
+    result = seal.seal_day(
+        None,
+        "2002-08-02",
+        path,
+        "",
+        None,
+        quote_effective_date="2002-08-02",
+    )
+    assert result == {
+        "segment_id": "2002-08-02",
+        "status": "QUOTE_EFFECTIVE_DATE_UNRESOLVED",
+    }
+
+
+def test_official_publication_labels_resolve_to_prior_quote_day(seal) -> None:
+    resolved = seal.resolve_quote_effective_dates(
+        (), stored_labels=("2002-08-02", "2002-08-05", "2002-08-06")
+    )
+    assert resolved == {
+        "2002-08-02": "2002-08-01",
+        "2002-08-05": "2002-08-02",
+        "2002-08-06": "2002-08-05",
+    }
 
 
 def test_seal_source_does_not_fetch_live_html_or_invent_complete(seal) -> None:
