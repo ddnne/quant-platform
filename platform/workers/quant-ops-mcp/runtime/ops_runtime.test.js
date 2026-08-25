@@ -218,6 +218,33 @@ describe("GitHub OAuth boundary in the Workers runtime", () => {
     };
   }
 
+  it("fails closed without the dedicated OAuth state secret", async () => {
+    const runtimeEnv = handlerEnv({ STATE_SECRET: undefined });
+    const authorize = await githubHandler.fetch(
+      new Request("https://ops.test/authorize"),
+      runtimeEnv,
+      createExecutionContext(),
+    );
+    expect(authorize.status).toBe(500);
+    expect(await authorize.text()).toBe(
+      "server misconfigured: STATE_SECRET missing",
+    );
+    expect(runtimeEnv.OAUTH_PROVIDER.parseAuthRequest).not.toHaveBeenCalled();
+
+    const callback = await githubHandler.fetch(
+      new Request(
+        "https://ops.test/callback?code=github-code&state=legacy.invalid",
+      ),
+      runtimeEnv,
+      createExecutionContext(),
+    );
+    expect(callback.status).toBe(500);
+    expect(await callback.text()).toBe(
+      "server misconfigured: state secret unset",
+    );
+    expect(runtimeEnv.OAUTH_PROVIDER.completeAuthorization).not.toHaveBeenCalled();
+  });
+
   it("starts authorization with an integrity-bound state", async () => {
     const runtimeEnv = handlerEnv();
     const ctx = createExecutionContext();

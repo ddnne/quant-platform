@@ -52,7 +52,7 @@ OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.work
 # secrets (wrangler secret put):
 #   GITHUB_CLIENT_ID
 #   GITHUB_CLIENT_SECRET
-# optional STATE_SECRET (else GITHUB_CLIENT_SECRET is reused for HMAC state)
+#   STATE_SECRET (dedicated OAuth-state HMAC key; no provider-secret fallback)
 
 [observability]
 enabled = true

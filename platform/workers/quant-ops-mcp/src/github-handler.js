@@ -6,9 +6,10 @@ import { Hono } from "hono";
 
 const STATE_LABEL = "quant-ops-mcp.oauth-state.v1";
 
-/** @param {{ STATE_SECRET?: string, GITHUB_CLIENT_SECRET?: string }} env */
+/** @param {{ STATE_SECRET?: string }} env */
 function stateSecret(env) {
-  return env.STATE_SECRET || env.GITHUB_CLIENT_SECRET || "";
+  const value = env.STATE_SECRET;
+  return typeof value === "string" && value.trim() ? value : "";
 }
 
 /** @param {Uint8Array} bytes */
@@ -101,10 +102,7 @@ export const githubHandler = new Hono();
 githubHandler.get("/authorize", async (c) => {
   const secret = stateSecret(c.env);
   if (!secret) {
-    return c.text(
-      "server misconfigured: set GITHUB_CLIENT_SECRET (or STATE_SECRET)",
-      500,
-    );
+    return c.text("server misconfigured: STATE_SECRET missing", 500);
   }
   if (!c.env.GITHUB_CLIENT_ID) {
     return c.text("server misconfigured: GITHUB_CLIENT_ID missing", 500);

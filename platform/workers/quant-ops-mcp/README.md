@@ -101,3 +101,7 @@ Production MCP URL:
 
 The GitHub OAuth callback is the same origin plus `/callback`. Unauthenticated
 MCP calls must return `401`; `/health` and `/healthz` are liveness only.
+OAuth state is authenticated only with the dedicated `STATE_SECRET` Worker
+secret. `GITHUB_CLIENT_SECRET` is provider authentication material and is never
+reused as the state HMAC key; a missing or blank `STATE_SECRET` fails closed
+before authorization parsing or callback network I/O.
