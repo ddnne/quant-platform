@@ -383,6 +383,39 @@ describe("POST /v1/complete control-plane occupancy", () => {
     expect(snap.used.cached_tokens).toBe(snap.used.input_tokens);
   });
 
+  it("treats explicitly malformed provider token and cost fields as uncertain", async () => {
+    for (const usage of [
+      { prompt_tokens: false, completion_tokens: 3, cost_usd: 0.01 },
+      { prompt_tokens: 4, completion_tokens: null, cost_usd: 0.01 },
+      { prompt_tokens: "4", completion_tokens: 3, cost_usd: 0.01 },
+      { prompt_tokens: 4, completion_tokens: 3, cost_usd: false },
+      { prompt_tokens: 4, completion_tokens: 3, cost_usd: Number.NaN },
+    ]) {
+      const { BUDGET_LEDGER, storage } = memoryLedger();
+      const env: GatewayEnv = {
+        GATEWAY_TOKEN,
+        BUDGET_LEDGER,
+        AI: {
+          run: async () => ({ response: JSON.stringify(insightArtifact), usage }),
+        } as unknown as Ai,
+      };
+      const res = await worker.fetch(completeWithBudget(), env);
+      expect(res.status).toBe(500);
+      expect(await res.json()).toMatchObject({
+        ok: false,
+        error: "budget_settlement_uncertain",
+      });
+      const snap = await snapshotBudget(storage);
+      if (!snap.ok) throw new Error("snapshot");
+      expect(snap).toMatchObject({
+        frozen: true,
+        used: { model_calls: 1 },
+        reserved: { model_calls: 0 },
+        active_leases: 0,
+      });
+    }
+  });
+
   it("charges the maximum on timeout and ignores a late provider completion", async () => {
     vi.useFakeTimers();
     try {

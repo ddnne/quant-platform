@@ -1255,4 +1255,133 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(finalized.ok).toBe(true);
     expect(finalized.used?.input_tokens).toBe(2);
   }, 15_000);
+
+  it("atomically mints one capability per run and preserves two concurrent finalizations", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
+    const rpc = stub as BudgetLedgerRpcStub;
+    const keys = ["runtime-atomic-a", "runtime-atomic-b"];
+    const reservations = await Promise.all(keys.map((key, index) => rpc.reserve({
+      idempotency_key: key,
+      request_digest: `digest-${key}`,
+      amounts: { model_calls: 1, input_tokens: 20 + index },
+      acquire_lease: true,
+    })));
+    const starts = await Promise.all(reservations.flatMap((reservation, index) => [0, 1].map(() =>
+      rpc.markProviderStarted({
+        idempotency_key: keys[index],
+        request_digest: `digest-${keys[index]}`,
+        lease_id: reservation.lease!.lease_id,
+      }),
+    )));
+    expect(starts.every((result) => result.ok)).toBe(true);
+    expect(new Set(starts.slice(0, 2).map((result) => result.settlement_capability)).size).toBe(1);
+    expect(new Set(starts.slice(2).map((result) => result.settlement_capability)).size).toBe(1);
+
+    const finalized = await Promise.all(reservations.map((reservation, index) =>
+      rpc.finalizeExact({
+        idempotency_key: keys[index],
+        request_digest: `digest-${keys[index]}`,
+        lease_id: reservation.lease!.lease_id,
+        settlement_capability: starts[index * 2].settlement_capability as string,
+        usage: { model_calls: 1, input_tokens: 5 + index },
+        terminal_result: { http_status: 200, body: { ok: true } },
+      }),
+    ));
+    expect(finalized.every((result) => result.ok)).toBe(true);
+    expect(await (await stub.fetch("https://budget/snapshot")).json()).toMatchObject({
+      used: { model_calls: 2, input_tokens: 11 },
+      reserved: { model_calls: 0, input_tokens: 0 },
+      active_leases: 0,
+    });
+  }, 15_000);
+
+  it("serializes exact and uncertain settlement of the same provider call", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
+    const rpc = stub as BudgetLedgerRpcStub;
+    const key = "runtime-terminal-race";
+    const reserved = await rpc.reserve({
+      idempotency_key: key,
+      request_digest: `digest-${key}`,
+      amounts: { model_calls: 1, input_tokens: 40 },
+      acquire_lease: true,
+    });
+    const started = await rpc.markProviderStarted({
+      idempotency_key: key,
+      request_digest: `digest-${key}`,
+      lease_id: reserved.lease!.lease_id,
+    });
+    const authority = {
+      idempotency_key: key,
+      request_digest: `digest-${key}`,
+      lease_id: reserved.lease!.lease_id,
+      settlement_capability: started.settlement_capability as string,
+    };
+    const [exact, uncertain] = await Promise.all([
+      rpc.finalizeExact({
+        ...authority,
+        usage: { model_calls: 1, input_tokens: 7 },
+        terminal_result: { http_status: 200, body: { ok: true } },
+      }),
+      rpc.settleUncertain({ ...authority, reason: "timeout" }),
+    ]);
+    const snapshot = await (await stub.fetch("https://budget/snapshot")).json() as {
+      used: { input_tokens: number };
+      reserved: { input_tokens: number };
+      active_leases: number;
+      frozen: boolean;
+    };
+    expect(uncertain.ok).toBe(true);
+    expect(uncertain.used?.input_tokens).toBe(snapshot.used.input_tokens);
+    if (exact.ok) expect(exact.used?.input_tokens).toBe(snapshot.used.input_tokens);
+    else expect(exact.error).toBe("provider_usage_uncertain");
+    expect([7, 40]).toContain(snapshot.used.input_tokens);
+    expect(snapshot.reserved.input_tokens).toBe(0);
+    expect(snapshot.active_leases).toBe(0);
+    expect(snapshot.frozen).toBe(snapshot.used.input_tokens === 40);
+  }, 15_000);
+
+  it("charges the reserved maximum and freezes on non-numeric provider usage", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    for (const [label, malformed] of [
+      ["false", false],
+      ["null", null],
+      ["string", "3"],
+      ["nan", Number.NaN],
+      ["infinity", Number.POSITIVE_INFINITY],
+    ] as const) {
+      const stub = namespace.get(namespace.idFromName(`strict-usage-${label}`));
+      const rpc = stub as BudgetLedgerRpcStub;
+      const key = `strict-usage-${label}`;
+      const reserved = await rpc.reserve({
+        idempotency_key: key,
+        request_digest: `digest-${key}`,
+        amounts: { model_calls: 1, input_tokens: 10 },
+        acquire_lease: true,
+      });
+      const started = await rpc.markProviderStarted({
+        idempotency_key: key,
+        request_digest: `digest-${key}`,
+        lease_id: reserved.lease!.lease_id,
+      });
+      expect(await rpc.finalizeExact({
+        idempotency_key: key,
+        request_digest: `digest-${key}`,
+        lease_id: reserved.lease!.lease_id,
+        settlement_capability: started.settlement_capability as string,
+        usage: { model_calls: 1, input_tokens: malformed },
+        terminal_result: { http_status: 200, body: { ok: true } },
+      })).toMatchObject({ ok: false, error: "provider_usage_invalid" });
+      expect(await (await stub.fetch("https://budget/snapshot")).json()).toMatchObject({
+        used: { model_calls: 1, input_tokens: 10 },
+        reserved: { model_calls: 0, input_tokens: 0 },
+        active_leases: 0,
+        frozen: true,
+      });
+    }
+  }, 15_000);
 });

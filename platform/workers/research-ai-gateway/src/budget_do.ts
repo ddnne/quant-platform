@@ -152,10 +152,19 @@ export type BudgetErr = { ok: false; error: string; detail?: string };
 export type BudgetOk<T> = { ok: true } & T;
 export type BudgetResult<T> = BudgetOk<T> | BudgetErr;
 
-export interface BudgetStorage {
+export interface AtomicBudgetStorage {
   get<T>(key: string): Promise<T | undefined>;
   /** Atomically persist ledger state and its one recovery alarm. */
   commit(key: string, value: unknown, nextAlarm: number | null): Promise<void>;
+}
+
+export interface BudgetStorage extends AtomicBudgetStorage {
+  /**
+   * Run one read/transition/write cycle as a storage transaction. The callback
+   * may await storage operations only; randomness and WebCrypto must be
+   * completed before entering it.
+   */
+  runAtomic<T>(work: (storage: AtomicBudgetStorage) => Promise<T>): Promise<T>;
 }
 
 const STATE_KEY = "ledger";
@@ -211,8 +220,9 @@ export function emptyLedger(now: number): LedgerState {
 }
 
 export class MemoryBudgetStorage implements BudgetStorage {
-  private readonly data = new Map<string, unknown>();
+  private data = new Map<string, unknown>();
   private alarm: number | null = null;
+  private transactionTail: Promise<void> = Promise.resolve();
 
   async get<T>(key: string): Promise<T | undefined> {
     if (!this.data.has(key)) return undefined;
@@ -226,6 +236,35 @@ export class MemoryBudgetStorage implements BudgetStorage {
 
   async getAlarm(): Promise<number | null> {
     return this.alarm;
+  }
+
+  async runAtomic<T>(work: (storage: AtomicBudgetStorage) => Promise<T>): Promise<T> {
+    let unlock!: () => void;
+    const previous = this.transactionTail;
+    this.transactionTail = new Promise<void>((resolve) => {
+      unlock = resolve;
+    });
+    await previous;
+    const stagedData = structuredClone(this.data);
+    let stagedAlarm = this.alarm;
+    const transaction: AtomicBudgetStorage = {
+      get: async <V>(key: string) => {
+        if (!stagedData.has(key)) return undefined;
+        return structuredClone(stagedData.get(key)) as V;
+      },
+      commit: async (key: string, value: unknown, nextAlarm: number | null) => {
+        stagedData.set(key, structuredClone(value));
+        stagedAlarm = nextAlarm;
+      },
+    };
+    try {
+      const result = await work(transaction);
+      this.data = stagedData;
+      this.alarm = stagedAlarm;
+      return result;
+    } finally {
+      unlock();
+    }
   }
 
 }
@@ -272,17 +311,25 @@ export function parseAmounts(raw: unknown): BudgetResult<{ amounts: Counters }> 
   }
   const amounts = zeroCounters();
   for (const name of COUNTERS) {
-    if (obj[name] === undefined) continue;
-    const n = Number(obj[name]);
-    if (!Number.isFinite(n) || n < 0) {
+    if (!Object.prototype.hasOwnProperty.call(obj, name)) continue;
+    const rawValue = obj[name];
+    if (typeof rawValue !== "number" || !Number.isFinite(rawValue) || rawValue < 0) {
       return { ok: false, error: `${name} must be a finite number >= 0` };
     }
-    if (name !== "cost_usd" && (!Number.isInteger(n) || n !== Number(obj[name]))) {
+    if (name !== "cost_usd" && !Number.isSafeInteger(rawValue)) {
       return { ok: false, error: `${name} must be an integer >= 0` };
     }
-    amounts[name] = name === "cost_usd" ? usdMicros(n) / 1_000_000 : n;
+    amounts[name] =
+      name === "cost_usd" ? usdMicros(rawValue) / 1_000_000 : rawValue;
   }
   return { ok: true, amounts };
+}
+
+function parseActualUsage(raw: unknown): BudgetResult<{ amounts: Counters }> {
+  if (raw === null || raw === undefined) {
+    return { ok: false, error: "usage must be an object" };
+  }
+  return parseAmounts(raw);
 }
 
 function amountsFromCounters(c: Counters): Counters {
@@ -515,12 +562,12 @@ export function recoverExpired(state: LedgerState, now: number): number {
   return recovered;
 }
 
-async function loadState(storage: BudgetStorage, now: number): Promise<LedgerState> {
+async function loadState(storage: AtomicBudgetStorage, now: number): Promise<LedgerState> {
   const existing = await storage.get<LedgerState>(STATE_KEY);
   return existing ? coerceState(existing) : emptyLedger(now);
 }
 
-async function saveState(storage: BudgetStorage, state: LedgerState): Promise<void> {
+async function saveState(storage: AtomicBudgetStorage, state: LedgerState): Promise<void> {
   let nextAlarm: number | null = null;
   for (const lease of Object.values(state.leases)) {
     if (lease.released_at !== null) continue;
@@ -729,15 +776,6 @@ function capabilityMaterialTokens(material: Set<string>): string[] {
   return [...material].filter((token) => token.length > 0);
 }
 
-function publicJsonText(value: unknown): string | null {
-  try {
-    const encoded = JSON.stringify(value);
-    return typeof encoded === "string" ? encoded : null;
-  } catch {
-    return null;
-  }
-}
-
 function textContainsCapabilityMaterial(text: string, tokens: string[]): boolean {
   for (const token of tokens) {
     if (text.includes(token)) return true;
@@ -745,52 +783,118 @@ function textContainsCapabilityMaterial(text: string, tokens: string[]): boolean
   return false;
 }
 
-/**
- * True when the current settlement capability or stored hash occurs in public
- * JSON/string text. Tokens are hex-safe, but both the decoded string and its
- * canonical JSON encoding are searched so prefix/suffix/wrapped values cannot
- * persist or return.
- */
-function valueContainsCapabilityMaterial(value: unknown, material: Set<string>): boolean {
-  const tokens = capabilityMaterialTokens(material);
-  if (!tokens.length) return false;
-  if (typeof value === "string") {
-    if (textContainsCapabilityMaterial(value, tokens)) return true;
-    const encoded = publicJsonText(value);
-    return encoded !== null && textContainsCapabilityMaterial(encoded, tokens);
-  }
-  const encoded = publicJsonText(value);
-  if (encoded === null) return true;
-  return textContainsCapabilityMaterial(encoded, tokens);
-}
+const MAX_CACHED_RESULT_BYTES = 64 * 1024;
+const MAX_CACHED_RESULT_DEPTH = 32;
+const MAX_CACHED_RESULT_NODES = 4_096;
 
-function rejectCapabilityMaterial(
+type JsonCloneContext = {
+  readonly capabilityTokens: string[];
+  readonly ancestors: Set<object>;
+  nodes: number;
+};
+
+/**
+ * Copy only bounded JSON data. This deliberately rejects cycles, accessors,
+ * exotic prototypes, non-finite numbers, and structured-clone-only values so
+ * a terminal response can never throw while being persisted or replayed.
+ */
+function cloneBoundedPublicJson(
   value: unknown,
-  material: Set<string>,
-): BudgetErr | null {
-  if (typeof value === "string" && valueContainsCapabilityMaterial(value, material)) {
-    return { ok: false, error: "cached_result_capability_material" };
+  context: JsonCloneContext,
+  depth = 0,
+): BudgetResult<{ value: unknown }> {
+  context.nodes += 1;
+  if (context.nodes > MAX_CACHED_RESULT_NODES || depth > MAX_CACHED_RESULT_DEPTH) {
+    return { ok: false, error: "cached_result_invalid" };
   }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const nested = rejectCapabilityMaterial(item, material);
-      if (nested) return nested;
+  if (value === null || typeof value === "boolean") {
+    return { ok: true, value };
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value)
+      ? { ok: true, value }
+      : { ok: false, error: "cached_result_invalid" };
+  }
+  if (typeof value === "string") {
+    return textContainsCapabilityMaterial(value, context.capabilityTokens)
+      ? { ok: false, error: "cached_result_capability_material" }
+      : { ok: true, value };
+  }
+  if (typeof value !== "object") {
+    return { ok: false, error: "cached_result_invalid" };
+  }
+  if (context.ancestors.has(value)) {
+    return { ok: false, error: "cached_result_invalid" };
+  }
+
+  context.ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const out: unknown[] = [];
+      for (const item of value) {
+        const nested = cloneBoundedPublicJson(item, context, depth + 1);
+        if (!nested.ok) return nested;
+        out.push(nested.value);
+      }
+      return { ok: true, value: out };
     }
-    return null;
-  }
-  if (value && typeof value === "object") {
-    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return { ok: false, error: "cached_result_invalid" };
+    }
+    const ownKeys = Reflect.ownKeys(value);
+    if (ownKeys.some((key) => typeof key !== "string")) {
+      return { ok: false, error: "cached_result_invalid" };
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const out: Record<string, unknown> = {};
+    for (const key of ownKeys as string[]) {
+      const descriptor = descriptors[key];
+      if (!descriptor?.enumerable) continue;
+      if (!("value" in descriptor)) {
+        return { ok: false, error: "cached_result_invalid" };
+      }
       if (FORBIDDEN_CAPABILITY_KEYS.has(key as SensitiveCapabilityField)) {
         return { ok: false, error: "cached_result_capability_field" };
       }
-      if (valueContainsCapabilityMaterial(key, material)) {
+      if (textContainsCapabilityMaterial(key, context.capabilityTokens)) {
         return { ok: false, error: "cached_result_capability_material" };
       }
-      const nested = rejectCapabilityMaterial(nestedValue, material);
-      if (nested) return nested;
+      const nested = cloneBoundedPublicJson(descriptor.value, context, depth + 1);
+      if (!nested.ok) return nested;
+      out[key] = nested.value;
     }
+    return { ok: true, value: out };
+  } catch {
+    return { ok: false, error: "cached_result_invalid" };
+  } finally {
+    context.ancestors.delete(value);
   }
-  return null;
+}
+
+function boundedPublicJson(
+  value: unknown,
+  material: Set<string>,
+): BudgetResult<{ value: unknown }> {
+  const cloned = cloneBoundedPublicJson(value, {
+    capabilityTokens: capabilityMaterialTokens(material),
+    ancestors: new Set<object>(),
+    nodes: 0,
+  });
+  if (!cloned.ok) return cloned;
+  try {
+    const encoded = JSON.stringify(cloned.value);
+    if (
+      typeof encoded !== "string" ||
+      new TextEncoder().encode(encoded).byteLength > MAX_CACHED_RESULT_BYTES
+    ) {
+      return { ok: false, error: "cached_result_invalid" };
+    }
+  } catch {
+    return { ok: false, error: "cached_result_invalid" };
+  }
+  return cloned;
 }
 
 function canonicalizeCachedResult(
@@ -798,11 +902,13 @@ function canonicalizeCachedResult(
   material: Set<string>,
 ): BudgetResult<{ value: CachedBudgetResult | undefined }> {
   if (!result) return { ok: true, value: undefined };
-  const status = Number(result.http_status);
-  if (!Number.isInteger(status) || status < 200 || status > 599) {
+  const status = result.http_status;
+  if (typeof status !== "number" || !Number.isInteger(status) || status < 200 || status > 599) {
     return { ok: false, error: "cached_result_invalid" };
   }
-  const body = result.body;
+  const clonedBody = boundedPublicJson(result.body, material);
+  if (!clonedBody.ok) return clonedBody;
+  const body = clonedBody.value;
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { ok: false, error: "cached_result_invalid" };
   }
@@ -819,34 +925,10 @@ function canonicalizeCachedResult(
   } else {
     return { ok: false, error: "cached_result_invalid" };
   }
-  const leaked = rejectCapabilityMaterial(rec, material);
-  if (leaked) return leaked;
-  if (valueContainsCapabilityMaterial(rec, material)) {
-    return { ok: false, error: "cached_result_capability_material" };
-  }
   return {
     ok: true,
-    value: { http_status: status, body: structuredClone(rec) },
+    value: { http_status: status, body: rec },
   };
-}
-
-function scrubPublicValue(value: unknown, material: Set<string>): unknown {
-  if (typeof value === "string") {
-    return valueContainsCapabilityMaterial(value, material) ? null : value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => scrubPublicValue(item, material));
-  }
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-      if (FORBIDDEN_CAPABILITY_KEYS.has(key as SensitiveCapabilityField)) continue;
-      if (valueContainsCapabilityMaterial(key, material)) continue;
-      out[key] = scrubPublicValue(nested, material);
-    }
-    return out;
-  }
-  return value;
 }
 
 function publicCachedResult(
@@ -854,11 +936,11 @@ function publicCachedResult(
   material: Set<string>,
 ): CachedBudgetResult | null {
   if (!cached) return null;
-  const body = scrubPublicValue(cached.body, material);
-  if (valueContainsCapabilityMaterial(body, material)) return null;
+  const body = boundedPublicJson(cached.body, material);
+  if (!body.ok) return null;
   return {
     http_status: cached.http_status,
-    body,
+    body: body.value,
   };
 }
 
@@ -968,71 +1050,89 @@ export async function markProviderStarted(
   const digest = typeof input.request_digest === "string" ? input.request_digest.trim() : "";
   if (!digest) return { ok: false, error: "request_digest required" };
 
-  const state = await loadState(storage, now);
-  recoverExpired(state, now);
-  const reservation = state.reservations[key.idempotency_key];
-  if (!reservation) {
-    await saveState(storage, state);
-    return { ok: false, error: "reservation_not_found" };
-  }
-  if (reservation.status !== "reserved") {
-    await saveState(storage, state);
-    return { ok: false, error: `reservation_${reservation.status}` };
-  }
-  if (state.frozen && reservation.provider_started_at === null) {
-    await saveState(storage, state);
-    return {
-      ok: false,
-      error: "budget_frozen",
-      detail: state.frozen_reason || "provider usage audit required",
-    };
-  }
-  const bound = requireExactLeaseAndDigest(
-    { request_digest: digest, lease_id: leaseId },
-    reservation,
-  );
-  if (bound) {
-    await saveState(storage, state);
-    return bound;
-  }
-  const lease = state.leases[leaseId];
-  if (
-    reservation.lease_id !== leaseId ||
-    !lease ||
-    lease.reservation_key !== key.idempotency_key ||
-    lease.released_at !== null
-  ) {
-    await saveState(storage, state);
-    return { ok: false, error: "lease_not_active" };
-  }
-  if (reservation.provider_started_at !== null) {
-    const replayed =
-      !reservation.settlement_capability_consumed && reservation.settlement_capability_secret
-        ? reservation.settlement_capability_secret
-        : null;
-    await saveState(storage, state);
+  // Randomness and WebCrypto happen before the transaction. The transaction
+  // re-reads and validates the latest state, so concurrent calls can persist
+  // only one capability and exact retries recover that same secret.
+  const initialState = await loadState(storage, now);
+  const initialReservation = initialState.reservations[key.idempotency_key];
+  const candidateCapability = initialReservation?.provider_started_at === null
+    ? mintSettlementCapabilitySecret()
+    : null;
+  const candidateHash = candidateCapability && initialReservation
+    ? await hashSettlementCapability(candidateCapability, initialReservation)
+    : null;
+
+  return storage.runAtomic(async (transaction) => {
+    const state = await loadState(transaction, now);
+    recoverExpired(state, now);
+    const reservation = state.reservations[key.idempotency_key];
+    if (!reservation) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_not_found" };
+    }
+    if (reservation.status !== "reserved") {
+      await saveState(transaction, state);
+      return { ok: false, error: `reservation_${reservation.status}` };
+    }
+    if (state.frozen && reservation.provider_started_at === null) {
+      await saveState(transaction, state);
+      return {
+        ok: false,
+        error: "budget_frozen",
+        detail: state.frozen_reason || "provider usage audit required",
+      };
+    }
+    const bound = requireExactLeaseAndDigest(
+      { request_digest: digest, lease_id: leaseId },
+      reservation,
+    );
+    if (bound) {
+      await saveState(transaction, state);
+      return bound;
+    }
+    const lease = state.leases[leaseId];
+    if (
+      reservation.lease_id !== leaseId ||
+      !lease ||
+      lease.reservation_key !== key.idempotency_key ||
+      lease.released_at !== null
+    ) {
+      await saveState(transaction, state);
+      return { ok: false, error: "lease_not_active" };
+    }
+    if (reservation.provider_started_at !== null) {
+      const replayed =
+        !reservation.settlement_capability_consumed && reservation.settlement_capability_secret
+          ? reservation.settlement_capability_secret
+          : null;
+      await saveState(transaction, state);
+      return {
+        ok: true,
+        reservation: publicReservation(reservation),
+        budget_run_id: reservation.reservation_id,
+        settlement_capability: replayed,
+      };
+    }
+    if (
+      !candidateCapability ||
+      !candidateHash ||
+      initialReservation?.reservation_id !== reservation.reservation_id
+    ) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_changed_retry" };
+    }
+    reservation.provider_started_at = now;
+    reservation.settlement_capability_hash = candidateHash;
+    reservation.settlement_capability_consumed = false;
+    reservation.settlement_capability_secret = candidateCapability;
+    await saveState(transaction, state);
     return {
       ok: true,
       reservation: publicReservation(reservation),
       budget_run_id: reservation.reservation_id,
-      settlement_capability: replayed,
+      settlement_capability: candidateCapability,
     };
-  }
-  const capability = mintSettlementCapabilitySecret();
-  reservation.provider_started_at = now;
-  reservation.settlement_capability_hash = await hashSettlementCapability(
-    capability,
-    reservation,
-  );
-  reservation.settlement_capability_consumed = false;
-  reservation.settlement_capability_secret = capability;
-  await saveState(storage, state);
-  return {
-    ok: true,
-    reservation: publicReservation(reservation),
-    budget_run_id: reservation.reservation_id,
-    settlement_capability: capability,
-  };
+  });
 }
 
 export type UncertainProviderReason =
@@ -1078,14 +1178,15 @@ function uncertainResult(
  * terminal replay. The one-way hash remains valid after consume; the secret is
  * never returned. Does not mutate reservation state.
  */
-async function verifySettlementAuthority(
+function verifySettlementAuthority(
   reservation: Reservation,
   input: {
     settlement_capability?: string;
     request_digest?: string;
     lease_id?: string;
   },
-): Promise<BudgetErr | null> {
+  submittedCapabilityHash: string | null,
+): BudgetErr | null {
   const bound = requireExactLeaseAndDigest(input, reservation);
   if (bound) return bound;
   const capability =
@@ -1095,11 +1196,23 @@ async function verifySettlementAuthority(
   if (!capability || !reservation.settlement_capability_hash) {
     return { ok: false, error: "settlement_capability_required" };
   }
-  const expected = await hashSettlementCapability(capability, reservation);
-  if (expected !== reservation.settlement_capability_hash) {
+  if (!submittedCapabilityHash || submittedCapabilityHash !== reservation.settlement_capability_hash) {
     return { ok: false, error: "settlement_capability_invalid" };
   }
   return null;
+}
+
+async function prepareSettlementCapabilityHash(
+  storage: BudgetStorage,
+  idempotencyKey: string,
+  capability: unknown,
+  now: number,
+): Promise<string | null> {
+  const submitted = typeof capability === "string" ? capability.trim() : "";
+  if (!submitted) return null;
+  const state = await loadState(storage, now);
+  const reservation = state.reservations[idempotencyKey];
+  return reservation ? hashSettlementCapability(submitted, reservation) : null;
 }
 
 function consumeVerifiedCapability(reservation: Reservation): void {
@@ -1142,56 +1255,72 @@ export async function settleUncertainBudget(
     return { ok: false, error: "uncertainty_reason invalid" };
   }
 
-  const state = await loadState(storage, now);
-  recoverExpired(state, now);
-  const reservation = state.reservations[key.idempotency_key];
-  if (!reservation) {
-    await saveState(storage, state);
-    return { ok: false, error: "reservation_not_found" };
-  }
-  if (reservation.status === "reconciled") {
-    const verified = await verifySettlementAuthority(reservation, input);
+  const submittedCapabilityHash = await prepareSettlementCapabilityHash(
+    storage,
+    key.idempotency_key,
+    input.settlement_capability,
+    now,
+  );
+  return storage.runAtomic(async (transaction) => {
+    const state = await loadState(transaction, now);
+    recoverExpired(state, now);
+    const reservation = state.reservations[key.idempotency_key];
+    if (!reservation) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_not_found" };
+    }
+    if (reservation.status === "reconciled") {
+      const verified = verifySettlementAuthority(
+        reservation,
+        input,
+        submittedCapabilityHash,
+      );
+      if (verified) {
+        await saveState(transaction, state);
+        return verified;
+      }
+      reservation.settlement_capability_secret = null;
+      await saveState(transaction, state);
+      return {
+        ok: true,
+        reservation: publicReservation(reservation),
+        used: amountsFromCounters(state.used),
+        frozen: state.frozen,
+        budget_run_id: reservation.reservation_id,
+      };
+    }
+    if (reservation.status === "released") {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_released" };
+    }
+    if (reservation.provider_started_at === null) {
+      await saveState(transaction, state);
+      return { ok: false, error: "provider_not_started" };
+    }
+    const verified = verifySettlementAuthority(
+      reservation,
+      input,
+      submittedCapabilityHash,
+    );
     if (verified) {
-      await saveState(storage, state);
+      await saveState(transaction, state);
       return verified;
     }
-    reservation.settlement_capability_secret = null;
-    await saveState(storage, state);
+    if (reservation.settlement_capability_consumed) {
+      await saveState(transaction, state);
+      return { ok: false, error: "settlement_capability_consumed" };
+    }
+    consumeVerifiedCapability(reservation);
+    chargeUncertainReservation(state, reservation, input.reason, now);
+    await saveState(transaction, state);
     return {
       ok: true,
       reservation: publicReservation(reservation),
       used: amountsFromCounters(state.used),
-      frozen: state.frozen,
+      frozen: true,
       budget_run_id: reservation.reservation_id,
     };
-  }
-  if (reservation.status === "released") {
-    await saveState(storage, state);
-    return { ok: false, error: "reservation_released" };
-  }
-  if (reservation.provider_started_at === null) {
-    await saveState(storage, state);
-    return { ok: false, error: "provider_not_started" };
-  }
-  const verified = await verifySettlementAuthority(reservation, input);
-  if (verified) {
-    await saveState(storage, state);
-    return verified;
-  }
-  if (reservation.settlement_capability_consumed) {
-    await saveState(storage, state);
-    return { ok: false, error: "settlement_capability_consumed" };
-  }
-  consumeVerifiedCapability(reservation);
-  chargeUncertainReservation(state, reservation, input.reason, now);
-  await saveState(storage, state);
-  return {
-    ok: true,
-    reservation: publicReservation(reservation),
-    used: amountsFromCounters(state.used),
-    frozen: true,
-    budget_run_id: reservation.reservation_id,
-  };
+  });
 }
 
 function applyCachedResult(
@@ -1272,97 +1401,126 @@ export async function finalizeBudget(
   ) {
     return { ok: false, error: "caller_settlement_rejected" };
   }
-  const parsed = parseAmounts(input.usage);
-  if (!parsed.ok) return parsed;
-  const actual = parsed.amounts;
+  const parsed = parseActualUsage(input.usage);
+  const submittedCapabilityHash = await prepareSettlementCapabilityHash(
+    storage,
+    key.idempotency_key,
+    input.settlement_capability,
+    now,
+  );
 
-  const state = await loadState(storage, now);
-  recoverExpired(state, now);
-  const reservation = state.reservations[key.idempotency_key];
-  if (!reservation) return { ok: false, error: "reservation_not_found" };
-  if (reservation.status === "reconciled") {
-    const verified = await verifySettlementAuthority(reservation, input);
-    if (verified) {
-      await saveState(storage, state);
-      return verified;
+  return storage.runAtomic(async (transaction) => {
+    const state = await loadState(transaction, now);
+    recoverExpired(state, now);
+    const reservation = state.reservations[key.idempotency_key];
+    if (!reservation) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_not_found" };
     }
-    reservation.settlement_capability_secret = null;
-    await saveState(storage, state);
-    if (reservation.finalize_error) {
+    if (reservation.status === "reconciled") {
+      const verified = verifySettlementAuthority(
+        reservation,
+        input,
+        submittedCapabilityHash,
+      );
+      if (verified) {
+        await saveState(transaction, state);
+        return verified;
+      }
+      reservation.settlement_capability_secret = null;
+      await saveState(transaction, state);
+      if (reservation.finalize_error) {
+        return {
+          ok: false,
+          error: reservation.finalize_error,
+          detail: state.frozen_reason || undefined,
+        };
+      }
       return {
-        ok: false,
-        error: reservation.finalize_error,
-        detail: state.frozen_reason || undefined,
+        ok: true,
+        reservation: publicReservation(reservation),
+        used: amountsFromCounters(state.used),
+        frozen: state.frozen,
+        budget_run_id: reservation.reservation_id,
       };
     }
+    if (reservation.status === "released") {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_released" };
+    }
+    if (reservation.provider_started_at === null) {
+      await saveState(transaction, state);
+      return { ok: false, error: "provider_not_started" };
+    }
+    const verified = verifySettlementAuthority(
+      reservation,
+      input,
+      submittedCapabilityHash,
+    );
+    if (verified) {
+      await saveState(transaction, state);
+      return verified;
+    }
+    if (reservation.settlement_capability_consumed) {
+      await saveState(transaction, state);
+      return { ok: false, error: "settlement_capability_consumed" };
+    }
+    if (!parsed.ok) {
+      consumeVerifiedCapability(reservation);
+      chargeUncertainReservation(state, reservation, "usage_unavailable", now);
+      await saveState(transaction, state);
+      return {
+        ok: false,
+        error: "provider_usage_invalid",
+        detail: parsed.error,
+      };
+    }
+    const actual = parsed.amounts;
+    const canonical = canonicalizeCachedResult(
+      input.terminal_result,
+      capabilityMaterialSet(reservation, input.settlement_capability),
+    );
+    if (!canonical.ok) {
+      await saveState(transaction, state);
+      return canonical;
+    }
+    consumeVerifiedCapability(reservation);
+
+    const over = exceedsReserved(reservation.amounts, actual);
+    state.reserved = applyDelta(state.reserved, reservation.amounts, -1);
+    // Release the estimate in full, then record billed spend exactly. If the
+    // estimate was too low, freeze future work without clipping audit history.
+    state.used = applyDelta(state.used, actual, 1);
+    reservation.status = "reconciled";
+    reservation.actual = amountsFromCounters(actual);
+    reservation.settlement = deriveExactSettlement(
+      reservation,
+      actual,
+      canonical.value,
+    );
+    reservation.reconciled_at = now;
+    applyCachedResult(reservation, canonical.value);
+    closeReservationLease(state, reservation, now);
+    if (over) {
+      freezeForOverage(state, reservation, actual, now);
+      reservation.finalize_error = "actual_exceeds_reserved";
+      await saveState(transaction, state);
+      return {
+        ok: false,
+        error: "actual_exceeds_reserved",
+        detail: `${over.name}: actual=${over.actual} reserved=${over.reserved}`,
+      };
+    }
+    reservation.finalize_error = null;
+    await saveState(transaction, state);
     return {
       ok: true,
       reservation: publicReservation(reservation),
       used: amountsFromCounters(state.used),
-      frozen: state.frozen,
+      frozen: false,
       budget_run_id: reservation.reservation_id,
     };
-  }
-  if (reservation.status === "released") {
-    return { ok: false, error: "reservation_released" };
-  }
-  if (reservation.provider_started_at === null) {
-    await saveState(storage, state);
-    return { ok: false, error: "provider_not_started" };
-  }
-  const verified = await verifySettlementAuthority(reservation, input);
-  if (verified) {
-    await saveState(storage, state);
-    return verified;
-  }
-  const canonical = canonicalizeCachedResult(
-    input.terminal_result,
-    capabilityMaterialSet(reservation, input.settlement_capability),
-  );
-  if (!canonical.ok) {
-    await saveState(storage, state);
-    return canonical;
-  }
-  if (reservation.settlement_capability_consumed) {
-    await saveState(storage, state);
-    return { ok: false, error: "settlement_capability_consumed" };
-  }
-  consumeVerifiedCapability(reservation);
-
-  const over = exceedsReserved(reservation.amounts, actual);
-  state.reserved = applyDelta(state.reserved, reservation.amounts, -1);
-  // Release the estimate in full, then record billed spend exactly.  If the
-  // estimate was too low, freeze future work without clipping audit history.
-  state.used = applyDelta(state.used, actual, 1);
-  reservation.status = "reconciled";
-  reservation.actual = amountsFromCounters(actual);
-  reservation.settlement = deriveExactSettlement(
-    reservation,
-    actual,
-    canonical.value,
-  );
-  reservation.reconciled_at = now;
-  applyCachedResult(reservation, canonical.value);
-  closeReservationLease(state, reservation, now);
-  if (over) {
-    freezeForOverage(state, reservation, actual, now);
-    reservation.finalize_error = "actual_exceeds_reserved";
-    await saveState(storage, state);
-    return {
-      ok: false,
-      error: "actual_exceeds_reserved",
-      detail: `${over.name}: actual=${over.actual} reserved=${over.reserved}`,
-    };
-  }
-  reservation.finalize_error = null;
-  await saveState(storage, state);
-  return {
-    ok: true,
-    reservation: publicReservation(reservation),
-    used: amountsFromCounters(state.used),
-    frozen: false,
-    budget_run_id: reservation.reservation_id,
-  };
+  });
 }
 
 export async function heartbeatLease(
@@ -1452,10 +1610,12 @@ export async function recoverExpiredLeases(
   storage: BudgetStorage,
   now = Date.now(),
 ): Promise<BudgetResult<{ recovered: number }>> {
-  const state = await loadState(storage, now);
-  const recovered = recoverExpired(state, now);
-  await saveState(storage, state);
-  return { ok: true, recovered };
+  return storage.runAtomic(async (transaction) => {
+    const state = await loadState(transaction, now);
+    const recovered = recoverExpired(state, now);
+    await saveState(transaction, state);
+    return { ok: true, recovered };
+  });
 }
 
 export function createBudgetCoordinator(storage: BudgetStorage) {

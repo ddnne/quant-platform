@@ -2300,4 +2300,47 @@ describe("P0 terminal replay and capability isolation", () => {
     expect(finalized.used.input_tokens).toBe(3);
     expect(JSON.stringify(finalized)).not.toContain(secret);
   });
+
+  it("rejects cyclic and non-JSON terminal bodies without consuming settlement authority", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("bounded-body", { model_calls: 1, input_tokens: 8 }, "digest-bounded-body"),
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const started = await markProviderStarted(storage, {
+      idempotency_key: "bounded-body",
+      request_digest: "digest-bounded-body",
+      lease_id: reserved.lease.lease_id,
+    }, T0 + 1);
+    if (!started.ok || !started.settlement_capability) throw new Error("capability");
+    const cyclic: Record<string, unknown> = { ok: true };
+    cyclic.artifact = cyclic;
+
+    for (const body of [
+      cyclic,
+      { ok: true, artifact: { unsupported: () => 1 } },
+      { ok: true, artifact: { unsupported: 1n } },
+    ]) {
+      await expect(finalizeBudget(storage, {
+        idempotency_key: "bounded-body",
+        request_digest: "digest-bounded-body",
+        lease_id: reserved.lease.lease_id,
+        settlement_capability: started.settlement_capability,
+        usage: { model_calls: 1, input_tokens: 2 },
+        terminal_result: { http_status: 200, body },
+      }, T0 + 2)).resolves.toMatchObject({ ok: false, error: "cached_result_invalid" });
+    }
+
+    const committed = await finalizeBudget(storage, {
+      idempotency_key: "bounded-body",
+      request_digest: "digest-bounded-body",
+      lease_id: reserved.lease.lease_id,
+      settlement_capability: started.settlement_capability,
+      usage: { model_calls: 1, input_tokens: 2 },
+      terminal_result: { http_status: 200, body: { ok: true } },
+    }, T0 + 3);
+    expect(committed.ok).toBe(true);
+  });
 });

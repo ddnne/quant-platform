@@ -14,6 +14,7 @@ import {
   settleUncertainBudget,
   snapshotBudget,
   type BudgetResult,
+  type AtomicBudgetStorage,
   type BudgetStorage,
 } from "./budget_do";
 import { json } from "./http_json";
@@ -35,6 +36,23 @@ class DurableObjectBudgetStorage implements BudgetStorage {
       }
     });
   }
+
+  runAtomic<T>(work: (storage: AtomicBudgetStorage) => Promise<T>): Promise<T> {
+    return this.storage.transaction(async (transaction) => {
+      const atomicStorage: AtomicBudgetStorage = {
+        get: <V>(key: string) => transaction.get<V>(key),
+        commit: async (key: string, value: unknown, nextAlarm: number | null) => {
+          await transaction.put(key, value);
+          if (nextAlarm === null) {
+            await transaction.deleteAlarm();
+          } else {
+            await transaction.setAlarm(nextAlarm);
+          }
+        },
+      };
+      return work(atomicStorage);
+    });
+  }
 }
 
 function errorStatus(error: string): number {
@@ -54,7 +72,9 @@ function errorStatus(error: string): number {
     error === "settlement_capability_consumed" ||
     error === "request_digest_mismatch" ||
     error === "lease_mismatch" ||
-    error === "caller_settlement_rejected"
+    error === "caller_settlement_rejected" ||
+    error === "provider_usage_invalid" ||
+    error === "reservation_changed_retry"
   ) {
     return 409;
   }

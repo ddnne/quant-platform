@@ -199,19 +199,36 @@ function tokenCount(
 ): { input: number; output: number; cached: number; actualCostUsd: number | null; measured: boolean } {
   const rec = res && typeof res === "object" ? (res as Record<string, unknown>) : {};
   const usage =
-    rec.usage && typeof rec.usage === "object" ? (rec.usage as Record<string, unknown>) : {};
+    rec.usage && typeof rec.usage === "object" && !Array.isArray(rec.usage)
+      ? (rec.usage as Record<string, unknown>)
+      : {};
+  let malformed = Object.prototype.hasOwnProperty.call(rec, "usage") && usage !== rec.usage;
   const inputDetails =
-    usage.input_tokens_details && typeof usage.input_tokens_details === "object"
+    usage.input_tokens_details &&
+    typeof usage.input_tokens_details === "object" &&
+    !Array.isArray(usage.input_tokens_details)
       ? (usage.input_tokens_details as Record<string, unknown>)
       : {};
+  if (
+    Object.prototype.hasOwnProperty.call(usage, "input_tokens_details") &&
+    inputDetails !== usage.input_tokens_details
+  ) {
+    malformed = true;
+  }
   const measuredNumber = (
     source: Record<string, unknown>,
     keys: string[],
   ): number | null => {
     for (const key of keys) {
       if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
-      const value = Number(source[key]);
+      const value = source[key];
+      if (typeof value !== "number") {
+        malformed = true;
+        return null;
+      }
       if (Number.isSafeInteger(value) && value >= 0) return value;
+      malformed = true;
+      return null;
     }
     return null;
   };
@@ -220,15 +237,23 @@ function tokenCount(
   const cached =
     measuredNumber(usage, ["cached_tokens"]) ??
     measuredNumber(inputDetails, ["cached_tokens"]);
-  const providerCost = ["cost_usd", "monetary_cost_usd"]
-    .map((key) => Number(usage[key]))
-    .find((value) => Number.isFinite(value) && value >= 0);
+  let providerCost: number | null = null;
+  for (const key of ["cost_usd", "monetary_cost_usd"]) {
+    if (!Object.prototype.hasOwnProperty.call(usage, key)) continue;
+    const value = usage[key];
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      malformed = true;
+      break;
+    }
+    providerCost = value;
+    break;
+  }
   return {
     input: input ?? 0,
     output: output ?? 0,
     cached: cached ?? 0,
-    actualCostUsd: providerCost ?? null,
-    measured: input !== null && output !== null,
+    actualCostUsd: providerCost,
+    measured: !malformed && input !== null && output !== null,
   };
 }
 
