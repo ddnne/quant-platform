@@ -46,6 +46,14 @@ def test_mcp_surface_is_domain_read_only_and_pit_calls_require_as_of():
     assert len(datasets["datasets"]) >= 23
 
 
+def test_ops_coverage_tool_descriptions_echo_stored_policy_not_frozen_v2():
+    server = QuantDataMCPServer()
+    by_name = {tool["name"]: tool["description"] for tool in server.list_tools()}
+    for name in ("dataset_coverage", "coverage_gaps", "coverage_segments"):
+        assert "policy_version as stored on the generation" in by_name[name]
+        assert "Coverage V2" not in by_name[name]
+
+
 def test_query_dataset_uses_ready_snapshot_and_filters_future_facts(
     synced_cf_d1_db, monkeypatch
 ):

@@ -32,7 +32,7 @@ from data_contracts.coverage import (
     all_coverage_contracts,
 )
 
-def main(argv: list[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--db",
@@ -57,6 +57,16 @@ def main(argv: list[str] | None = None) -> int:
         help="freshness window in calendar days (default: 7)",
     )
     parser.add_argument(
+        "--index-text",
+        default=None,
+        metavar="PATH",
+        help=(
+            "local official-archive index HTML. Omitted: index_text is None "
+            "so OTC required set is fail-closed empty, not a calendar replay. "
+            "Does not fetch live JSDA HTML."
+        ),
+    )
+    parser.add_argument(
         "--summary-only",
         action="store_true",
         help="only print summary without full refresh",
@@ -66,7 +76,21 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="only print datasets with incomplete coverage",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def _read_index_text(path: str | None) -> str | None:
+    """Load local index HTML. Missing path is None (fail-closed empty)."""
+    if path is None:
+        return None
+    index_path = Path(path)
+    if not index_path.is_file():
+        raise FileNotFoundError(f"index HTML not found: {index_path}")
+    return index_path.read_text(encoding="utf-8")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
 
     db_path = Path(args.db).resolve()
     if not db_path.exists():
@@ -120,6 +144,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     try:
+        index_text = _read_index_text(args.index_text)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    try:
         conn = sqlite3.connect("file:" + quote(str(db_path)) + "?mode=rw", uri=True)
         results = refresh_coverage_ledger(
             conn,
@@ -127,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
             datasets=selected,
             today=args.today,
             freshness_days=args.freshness_days,
+            index_text=index_text,
         )
         print(f"Refreshed coverage for {len(results)} datasets:")
         for result in results:

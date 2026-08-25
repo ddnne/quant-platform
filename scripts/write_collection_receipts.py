@@ -36,6 +36,11 @@ Examples
   # List planned segment ids when more than one matches:
   python3 scripts/write_collection_receipts.py --db DB --dataset fins_summary --list-segments
 
+  # OTC: local official-index HTML only (never downloaded):
+  python3 scripts/write_collection_receipts.py --db DB \\
+      --dataset jsda_otc_bond_reference_prices --target-end 2002-08-06 \\
+      --index-text tests/fixtures/jsda_otc_official_index_tiny.html --list-segments
+
   # Synthetic fixture receipt (tests only):
   python3 scripts/write_collection_receipts.py --db fixture.sqlite \\
       --dataset fins_summary --target-end 2025-03-31 \\
@@ -59,6 +64,7 @@ from _bootstrap import ensure_repo_root  # noqa: E402
 
 import argparse
 import json
+import os
 import sqlite3
 
 from urllib.parse import quote
@@ -96,9 +102,41 @@ def _ensure_receipts_table(conn: sqlite3.Connection) -> None:
             "0007_collection_coverage_v2.sql)."
         )
 
-def _plan_segments(dataset: str, target_end: str, source: str) -> list[RequiredCoverageSegment]:
+def _read_index_text(path: str | Path | None) -> str | None:
+    """Read local official-index HTML. Missing/blank → None (fail-closed).
+
+    Never downloads the index. Never walks a calendar.
+    """
+    if path is None:
+        return None
+    raw = str(path).strip()
+    if not raw:
+        return None
+    file_path = Path(raw)
+    if not file_path.is_file():
+        return None
+    text = file_path.read_text(encoding="utf-8")
+    if not text.strip():
+        return None
+    return text
+
+def _index_text_from_cli(cli_path: str | None) -> str | None:
+    """Resolve --index-text, else env QP_INDEX_TEXT. Missing/blank is empty."""
+    path = cli_path if cli_path is not None else os.environ.get("QP_INDEX_TEXT")
+    return _read_index_text(path)
+
+def _plan_segments(
+    dataset: str,
+    target_end: str,
+    source: str,
+    index_text: str | None = None,
+) -> list[RequiredCoverageSegment]:
     policy = coverage_contract_for(dataset)
-    return list(plan_required_segments(policy, target_end, source=source))
+    return list(
+        plan_required_segments(
+            policy, target_end, source=source, index_text=index_text
+        )
+    )
 
 def _pick_segment(
     segments: list[RequiredCoverageSegment], segment_id: str | None
@@ -162,6 +200,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="plan segments up to this ISO date (default: today UTC)",
     )
     p.add_argument(
+        "--index-text",
+        default=None,
+        help=(
+            "local official-index HTML path (env QP_INDEX_TEXT). "
+            "Missing path or blank file is fail-closed empty required set. "
+            "Never downloaded."
+        ),
+    )
+    p.add_argument(
         "--source", default=None,
         help="receipt source (default: auto from dataset prefix)",
     )
@@ -221,9 +268,12 @@ def main(argv: list[str] | None = None) -> int:
 
     target_end = args.target_end or _today_utc()
     source = args.source or _coverage_source(args.dataset)
+    index_text = _index_text_from_cli(args.index_text)
 
     try:
-        segments = _plan_segments(args.dataset, target_end, source)
+        segments = _plan_segments(
+            args.dataset, target_end, source, index_text=index_text
+        )
     except KeyError:
         print(f"Error: Unknown dataset: {args.dataset}", file=sys.stderr)
         return 1

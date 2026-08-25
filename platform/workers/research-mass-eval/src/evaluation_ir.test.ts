@@ -241,6 +241,12 @@ describe("Evaluation IR golden vectors", () => {
     expect([...ALLOWED_FIELDS].sort()).toEqual(
       Object.keys(SCHEMA.properties ?? {}).sort(),
     );
+    const generated = readFileSync(
+      join(SRC_DIR, "evaluation_ir_allowed_fields.generated.ts"),
+      "utf8",
+    );
+    expect(generated).toMatch(/Do not edit by hand/);
+    expect(generated).toContain("schema.json");
   });
 
   it.each(GOLDEN_ROWS)("golden $id ($op) encode/decode match", (row) => {

@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `f224e7e`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `40d1aa90`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,13 +364,13 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD f224e7e)
+## 10. Current remaining extracts vs HOLD (HEAD 40d1aa90)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
 section now. Size is not a split key. Live math is not waste.
 
-Measured at `f224e7e`: tracked paths **741**; catalog YAML
+Measured at `40d1aa90`: tracked paths **748**; catalog YAML
 (`specs/research_logics/*.yaml`) **0**; remaining tracked YAML **1**
 (`specs/research_themes.yaml` — themes, not catalog logics); compiled
 n=**2254** (`migration.jsonl` 2254 lines);
@@ -383,7 +383,7 @@ Mass / READY / Phase 7: **NO-GO / not declared / OFF**.
 LOC via `wc -l` on named files at this HEAD (do not copy stale §2
 numbers). `daily_path.ts` is **1682** (was 1677 in §2).
 `ingestion-premium/src/index.ts` is **949** after
-`collection_receipts.ts`. `coverage_ledger.py` is **1430**.
+`collection_receipts.ts`. `coverage_ledger.py` is **1443**.
 `snapshot.py` is **912**.
 
 ### 10.1 Waste already closed (do not re-open)
@@ -424,23 +424,24 @@ Deleting or unifying them to shrink the tree is a rewrite.
 
 ### 10.3 Real remaining mixed authority (one authority per later commit)
 
-Schedule these. Do **not** bundle. Each later commit moves **one**
-authority. Python R2 writer stays **non-authority**. Compact catalog is
-optional HOLD, not a required extract.
+Schedule remaining mixed rows. Do **not** bundle. Each later commit
+moves **one** authority. Python R2 writer stays **non-authority**.
+MCP presentation echo and JSDA refresh inventory replay are **DONE**.
+Compact catalog is optional HOLD, not a required extract.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
-| 1 | `BackfillPlanner` (`ops/backfill_planner.py`, 709) vs `plan_required_segments` (`coverage_ledger.py`) | **ops product** inventory planner. Tip-snapshot wire **DONE** (`792ae2b`): AM bars / earnings calendar call `plan_required_segments` (no month-chunk). Remaining mixed authority: other bounded-history month chunks (do not invent COMPLETE). | Invent COMPLETE; calendar-walk OTC; delete one planner without a dated ops brief |
-| 2 | Python `r2_io.py` (211) head-then-put **TOCTOU** vs Worker children-then-manifest (`http.ts` `putChildrenThenManifest`; digest mismatch **409**) | Worker is immutable authority. Python stays **non-authority** (`python_cli_put_is_not_immutable_authority`; `authoritative=True` refused). | Treat “TOCTOU recorded in tests” as done; make Python CLI the SoT |
-| 3 | Hand-written `evaluation_ir.ts` (265) vs `specs/evaluation_ir/schema.json` (67) | Schema is codec SoT. Generated TS codec still **OPEN**. Grade predicate is already shared (`job_candidate_grade` / `jobCandidateGrade`). | Second grade policy; delete schema; dual-edit field lists forever |
-| 4 | MCP `OPS_TOOLS` strings (“Coverage V2”) vs stored `policy_version` (`dataset_coverage.policy_version`; live `collection-coverage/v2`, V3 overlay on some contracts) | Presentation tools must **echo stored** `policy_version`, not invent V3 completeness. Same split in `packages/edge/mcp_servers/quant_data/server.py`. | Unify strings to mint FRESH / COMPLETE 23 |
+| 1 | `BackfillPlanner` (`ops/backfill_planner.py`, 709) vs `plan_required_segments` (`coverage_ledger.py`) | **ops product** inventory planner. Tip-snapshot wire **DONE** (`792ae2b`): AM bars / earnings calendar call `plan_required_segments` (no month-chunk). JSDA refresh inventory replay **DONE** (`40d1aa90`): `refresh_coverage_ledger` official-archive-index uses `plan_required_segments` / official index days, not calendar inventory. Remaining mixed authority: other bounded-history month chunks (do not invent COMPLETE). | Invent COMPLETE; calendar-walk OTC; delete one planner without a dated ops brief |
+| 2 | Python `r2_io.py` (232) head-then-put **TOCTOU** vs Worker children-then-manifest (`http.ts` `putChildrenThenManifest`; digest mismatch **409**) | Worker is immutable authority. Python stays **non-authority** (`python_cli_put_is_not_immutable_authority`; `authoritative=True` refused). Remote put **fail-closed** unless `QP_ALLOW_PYTHON_R2_PUT=1` (`b65fa1d`). Remaining mixed: opt-in remote put is still head-then-put TOCTOU (not Worker-equivalent); dry_run staging stays allowed. | Treat “TOCTOU recorded in tests” as done; make Python CLI the SoT |
+| 3 | Hand-written `evaluation_ir.ts` (255) encode/decode vs `specs/evaluation_ir/schema.json` (67) | Schema is codec SoT. `ALLOWED_FIELDS` generated from schema **DONE** (`d882119`; `evaluation_ir_allowed_fields.generated.ts`). Hand-written encode/decode remains. Generated TS codec still **OPEN**. Grade predicate is already shared (`job_candidate_grade` / `jobCandidateGrade`). | Second grade policy; delete schema; dual-edit field lists forever |
+| 4 | MCP `OPS_TOOLS` strings vs stored `policy_version` (`dataset_coverage.policy_version`; live `collection-coverage/v2`) | Presentation echo **DONE** (Worker `27ff7e62`, Python `3d3e68ab`): both echo stored `policy_version`, not frozen “Coverage V2”. Remaining mixed: live projection is still `collection-coverage/v2` STALE — not unpublished V3 completeness. Do not schedule a second string rewrite. | Unify strings to mint FRESH / COMPLETE 23 |
 | 5 | `scripts/verify_all.sh` skippable helper vs `scripts/verify_ci.sh` authority | **Keep both. Do not merge.** Helper: 3 research workers, `VERIFY_*` skips. Authority: pytest + catalog freeze + IR schema + 7 workers (`ci-aggregate` included), no skips. Merge gate is `verify_ci` plus authenticated `ci-aggregate`. | Fold `verify_ci` into `verify_all`; add GitHub Actions |
 
 Not code extracts (environment / docs / optional freeze):
 
 | Surface | Status | Action |
 |---------|--------|--------|
-| ~150 leftover git worktrees | **Environment waste, not code waste.** Measured **131** `git worktree list` rows at this write (this isolation included); `/private/tmp/qp-*` dirs were **188**. | Prune the environment. Not a module extract. |
+| leftover git worktrees | **Environment waste, not code waste.** Measured **171** `git worktree list` rows at this write (this isolation included); `/private/tmp/qp-*` dirs were **232**. | Prune the environment. Not a module extract. |
 | Historical `docs/reviews/*.md` as live SoT | Freeze files stay historical (`HEAD at remaining-audit: 03cd1b1`; P632 re-diffs at named SHAs). | **Banners, not deletion.** Live flags: `phase62_residual_status.md` + MCP projection + this §10. |
 | Compact catalog family+template+parameter matrix | **NOT done.** `migration.jsonl` is still 2254 expanded rows. | Optional. Freeze n=2254 **HOLD**. Do not report 2254 as a product win. Do not YAML +N. |
 

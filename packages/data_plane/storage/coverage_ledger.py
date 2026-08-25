@@ -283,8 +283,12 @@ def plan_required_segments(
         # Current collection window only. Do not expand monthly history.
         _append(end.isoformat(), end, end)
         return tuple(segments)
-    if _uses_official_archive_index(policy, domain):
-        # Listed index days only. Missing index_text → empty, not weekends.
+    if (
+        _uses_official_archive_index(policy, domain)
+        or granularity == "official_archive_index_day"
+    ):
+        # Listed index days only. Grain is an alias, not a calendar walk.
+        # Missing index_text → empty, not weekends.
         for day_s in official_index_days(policy.dataset_id, index_text):
             day = date.fromisoformat(day_s)
             if start <= day <= end:
@@ -339,6 +343,8 @@ def _empty_observed_forbids_complete(policy: CollectionCoverageContract) -> bool
     if grain in SNAPSHOT_SEGMENT_GRANULARITIES:
         return True
     if grain.startswith(("collection_cutoff", "same_trading_day")):
+        return True
+    if grain == "official_archive_index_day":
         return True
     return "official_archive_index" in mode
 
@@ -792,8 +798,14 @@ def refresh_coverage_ledger(
     datasets: Iterable[str] | None = None,
     today: str | None = None,
     freshness_days: int = 7,
+    index_text: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Evaluate Coverage V2 segments and atomically refresh aggregate rows."""
+    """Evaluate Coverage V2 segments and atomically refresh aggregate rows.
+
+    Official-archive-index datasets take required days from
+    ``plan_required_segments`` / ``index_text``. Missing index text is
+    fail-closed empty, not a replay of calendar-day inventory.
+    """
     selected = tuple(datasets) if datasets is not None else tuple(
         policy.dataset_id for policy in all_coverage_contracts()
     )
@@ -891,9 +903,13 @@ def refresh_coverage_ledger(
             observed_start, observed_end = _merge_observed_window(
                 observed_start, observed_end, receipt_start, receipt_end,
             )
-        if policy.segment_granularity in {
-            "official_archive_day", "source_time_series_file"
-        }:
+        domain = _official_domain_for(_source_capability_for(dataset))
+        if (
+            policy.segment_granularity in {
+                "official_archive_day", "source_time_series_file"
+            }
+            and not _uses_official_archive_index(policy, domain)
+        ):
             # Keep inventory through target_end, plus already-COMPLETE days past UTC (JST can lead).
             required_segments = tuple(sorted(
                 (
@@ -908,7 +924,9 @@ def refresh_coverage_ledger(
                 key=lambda item: (item.segment_start, item.segment_id),
             ))
         else:
-            base_segments = plan_required_segments(policy, target_end, source=source)
+            base_segments = plan_required_segments(
+                policy, target_end, source=source, index_text=index_text,
+            )
             expected_items_by_segment: dict[str, int] = {}
             for segment in base_segments:
                 inventory = inventory_by_dataset[dataset].get(segment.segment_id)
@@ -929,6 +947,7 @@ def refresh_coverage_ledger(
                 target_end,
                 source=source,
                 expected_items_by_segment=expected_items_by_segment,
+                index_text=index_text,
             )
         segment_aggregate, segment_evaluations = evaluate_required_segments(
             policy, required_segments, receipts_by_dataset[dataset]

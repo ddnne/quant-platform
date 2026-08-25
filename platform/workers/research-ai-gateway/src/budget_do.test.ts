@@ -9,7 +9,10 @@ import {
   releaseBudget,
   reserveBudget,
   snapshotBudget,
+  zeroCounters,
 } from "./budget_do";
+
+/** In-memory ledger algebra. Live Cloudflare Durable Object occupancy is unproven. */
 
 const T0 = 1_700_000_000_000;
 
@@ -45,6 +48,32 @@ describe("budget ledger algebra", () => {
     const snap = await snapshotBudget(storage, T0);
     expect(snap.ok).toBe(true);
     if (snap.ok) expect(snap.auto_promotion).toBe(false);
+  });
+
+  it("created ledger has zero occupancy; budget_id presence is not a reserve", async () => {
+    const storage = new MemoryBudgetStorage();
+    const created = await createBudget(storage, T0);
+    expect(created.ok).toBe(true);
+    const before = await snapshotBudget(storage, T0);
+    expect(before.ok).toBe(true);
+    if (before.ok) {
+      expect(before.created).toBe(true);
+      expect(before.reserved).toEqual(zeroCounters());
+      expect(before.used).toEqual(zeroCounters());
+      expect(before.active_leases).toBe(0);
+    }
+    const reserved = await reserveBudget(
+      storage,
+      { idempotency_key: "k-create-not-grant", amounts: { model_calls: 1 } },
+      T0,
+    );
+    expect(reserved.ok).toBe(true);
+    const after = await snapshotBudget(storage, T0);
+    expect(after.ok).toBe(true);
+    if (after.ok) {
+      expect(after.reserved.model_calls).toBe(1);
+      expect(after.used.model_calls).toBe(0);
+    }
   });
 
   it("reserve fails closed when insufficient and does not mutate counters", async () => {

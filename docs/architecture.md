@@ -40,6 +40,10 @@ and packaging policy.
 
 ## Coverage V2 と READY
 
+> **Not live SoT.** Live MCP projection is **STALE** last-known-good under stored `policy_version`.  
+> Planner on `grok/phase63-ci-source-closure` is **V3-wired** for master / AM / earnings / OTC index.  
+> This section is historical Phase 6.1 contract language. READY is **null**. Do not treat 22 COMPLETE as live V3.
+
 `observed_start` / `observed_end` は診断値であり、完全性の証明ではない。
 Coverage V2 はデータセットごとに独立した必須 segment inventory と collection receipt を持つ。
 receipt は期待 scope/件数、raw page/row、structured row、pagination exhausted、digest、run、

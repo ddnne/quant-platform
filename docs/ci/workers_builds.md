@@ -14,6 +14,16 @@ This document is the operator map for:
 Mass / READY / GO stay unarmed. A green aggregate check is not production
 publication and is not a research API.
 
+## Operator steps
+
+live: Worker absent from account as of Independent B f224e7e/40d1aa90 — HUMAN create.
+
+1. First deploy of [`platform/workers/ci-aggregate`](../../platform/workers/ci-aggregate/) (`quant-platform-ci-aggregate`). Explicit operator deploy of this gate Worker. Do **not** auto-promote product workers.
+2. `npx wrangler secret put CI_LANE_TOKEN` and `npx wrangler secret put GITHUB_STATUS_TOKEN` on that Worker. Do not put values in git.
+3. Workers Builds connect for the six product lanes (same GitHub repo; root directory per table below).
+4. Prove a **fail** SHA is unmergeable and a **pass** SHA posts GitHub context `ci-aggregate`.
+5. Mandatory local CI remains [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh). Do not add `.github/workflows`.
+
 ## What Workers Builds is
 
 [Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/) connects

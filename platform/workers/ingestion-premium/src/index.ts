@@ -448,6 +448,7 @@ function collectionSegment(
   };
 }
 
+// Fetch/upsert stay together as the ingestion façade.
 async function ingestOne(
   env: Env,
   spec: DatasetSpec,

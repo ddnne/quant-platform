@@ -336,3 +336,42 @@ def test_feature_context_equity_master_pit_path_clamps_pre_official(tmp_path):
     empty = pre.get_equity_master(code="8697")
     assert list(empty) == []
     assert empty.metadata["pd_id"] == "PD-D2-MASTER"
+
+
+def test_feature_context_jquants_records_master_official_island(tmp_path):
+    """get_jquants_records(equities_master) shares get_equity_master island path."""
+    from features.runtime import FeatureContext
+
+    path = tmp_path / "ing.sqlite"
+    store = SqliteStore(path)
+    store.upsert(
+        "jquants_listed_info",
+        [
+            _master_row("2006-08-13", "2026-08-01T00:00:00+09:00", "misdate"),
+            _master_row(OFFICIAL_START, "2008-05-07T09:00:00+09:00", "official"),
+        ],
+    )
+    store.close()
+
+    post = FeatureContext(
+        as_of="2026-08-01T15:30:00+09:00",
+        _input_values={},
+        _pit_reader=lambda resource, kwargs: get_equity_master(
+            as_of="2026-08-01T15:30:00+09:00", db_path=path, **dict(kwargs)
+        ),
+    )
+    late = post.get_jquants_records(dataset="equities_master", code="8697")
+    assert {row["snapshot_date"] for row in late.rows} == {OFFICIAL_START}
+    assert all(row["available_at"] <= post.as_of for row in late.rows)
+
+    pre = FeatureContext(
+        as_of="2006-08-13T09:00:00+09:00",
+        _input_values={},
+        _pit_reader=lambda resource, kwargs: (_ for _ in ()).throw(
+            AssertionError("pre-official FeatureContext must not call PIT")
+        ),
+    )
+    empty = pre.get_jquants_records(dataset="equities_master", code="8697")
+    assert list(empty) == []
+    assert empty.metadata["pd_id"] == "PD-D2-MASTER"
+    assert empty.metadata["official_start"] == OFFICIAL_START
