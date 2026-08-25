@@ -21,15 +21,40 @@ only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual 
 Phase 6 hardening utilities:
 
 - `ops_status.py --json` — offline READY snapshot, coverage, B0 and validation status.
-- `encrypt_d1_backup.py` — encrypt a fresh D1 SQL export with AES-256-GCM,
-  verify it by streaming decryption, then remove only that verified plaintext
-  export by default. Retention requires the explicit unsafe `--keep-source`
-  opt-in. The raw 32-byte key stays outside the repository with mode `0600`;
-  the command never prints it.
-- `build_release_evidence.py` — validate observed post-deploy facts and emit a
-  content-addressed, read-only, non-secret JSON manifest suitable for a GitHub
-  Release. Local absolute paths, secret-shaped fields, unencrypted backup
-  references, and Mass `GO` are rejected.
+- `encrypt_d1_backup.py` — stream a fresh production D1 SQL export into a
+  temporary SQLite restore, run `integrity_check`, verify the fixed
+  `quant-ingest` database ID plus the canonical minimum schema and non-empty
+  production evidence, then encrypt with AES-256-GCM. Database/export/restore
+  evidence, format/cipher, nonce, and key fingerprint are authenticated in
+  the v2 header. Only a successfully decrypted
+  and re-verified artifact is atomically published; the plaintext is then
+  removed by default. Any restore/schema/encryption failure retains the source
+  and leaves the target unpublished. Retention requires the explicit unsafe
+  `--keep-source` opt-in. The raw 32-byte key stays outside the repository with
+  mode `0600`; neither SQL contents nor key material is logged.
+- `build_release_evidence.py` — validate normalized post-deploy observations
+  and emit a content-addressed, read-only, non-secret v2 manifest suitable for
+  a GitHub Release. Every check/build/deployment/migration/smoke/MCP observation
+  has a closed collector-provenance record (evidence ID, UTC timestamp, response
+  digest, source SHA). Nested extra fields, local paths, provider-token shapes,
+  unverified backup metadata, non-canonical migrations, unproven Pilot `GO`,
+  and Mass `GO` are rejected.
+
+Production backup example (timestamps and final SHA must be the observed values):
+
+```bash
+uv run python scripts/encrypt_d1_backup.py encrypt \
+  quant-ingest.sql quant-ingest.sql.enc \
+  --key /secure/private/d1_backup_aes256.key \
+  --database-name quant-ingest \
+  --database-id be6fdcf8-40be-41fc-9535-7facd1fc2ffc \
+  --exported-at 2026-08-25T06:00:00Z \
+  --release-source-sha 0123456789abcdef0123456789abcdef01234567
+```
+
+The successful JSON output is the exact closed `backup` object accepted by
+`build_release_evidence.py`; it intentionally contains no local path. Re-run
+`verify` against the encrypted artifact before publishing the release manifest.
 - Paper CLIs (`run_paper_once.py`, `run_agents_paper_once.py`, `rebuild_paper_index.py`) are **deleted**. Paper runtime stays in `packages/research_runtime/paper_runtime/`.
 - `python -m mcp_servers.quant_data --list-tools` — Quant Data Access MCP smoke.
 - `export_ops_projection.py` — verified local Coverage/READY/B0 metadataを bounded
