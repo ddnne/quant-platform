@@ -182,14 +182,17 @@ async function budgetRpc(
   };
 }
 
-function completeRequestDigestPayload(req: GatewayRequest): string {
+function completeRequestDigestPayload(
+  req: GatewayRequest,
+  promptDigest: string,
+): string {
   return JSON.stringify({
     model: req.model,
     messages: req.messages,
     max_tokens: req.max_tokens,
     expected_schema: req.expected_schema ?? "",
     budget_id: req.budget_id,
-    prompt_digest: req.prompt_digest ?? "",
+    prompt_digest: promptDigest,
     experiment_id: req.experiment_id ?? "",
     ready_snapshot_id: req.ready_snapshot_id ?? "",
   });
@@ -353,9 +356,18 @@ async function handleGatewayRequest(
     if (!env.AI) {
       return json({ ok: false, error: "ai_binding_unbound" }, 503);
     }
-    const prompt = req.messages.map((m) => `${m.role}:${m.content}`).join("\n");
-    const promptDigest = req.prompt_digest || `sha256:${await sha256Hex(prompt)}`;
-    const requestDigest = await sha256Hex(completeRequestDigestPayload(req));
+    // The Gateway, not its caller, is the prompt-digest authority. Hash the
+    // exact structured messages sent to Workers AI so embedded newlines or
+    // role-like text cannot create the collisions of a line-joined format.
+    const promptDigest = `sha256:${await sha256Hex(JSON.stringify(req.messages))}`;
+    if (req.prompt_digest !== undefined && req.prompt_digest !== promptDigest) {
+      return json({ ok: false, error: "prompt_digest mismatch" }, 400);
+    }
+    // Canonicalize the optional caller field to the measured digest. Supplying
+    // the correct digest or omitting it must identify the same provider call.
+    const requestDigest = await sha256Hex(
+      completeRequestDigestPayload(req, promptDigest),
+    );
     const bound = bindIdempotencyKey(request.headers.get("Idempotency-Key"), requestDigest);
     if (!bound.ok) {
       return json({ ok: false, error: bound.error }, 400);

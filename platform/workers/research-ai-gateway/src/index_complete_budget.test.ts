@@ -15,6 +15,7 @@ import {
   AI_GATEWAY_PRICING_POLICY_DIGEST,
   AI_GATEWAY_PRICING_POLICY_ID,
 } from "./pricing_policy";
+import { sha256Hex } from "./sha256";
 
 const GATEWAY_TOKEN = "gateway-secret";
 
@@ -157,6 +158,77 @@ function memoryLedger(): {
 }
 
 describe("POST /v1/complete control-plane occupancy", () => {
+  it("rejects a caller-forged prompt digest before ledger or provider access", async () => {
+    const calls: unknown[] = [];
+    const env: GatewayEnv = {
+      GATEWAY_TOKEN,
+      BUDGET_LEDGER: throwingLedger(),
+      AI: {
+        run: async (...args: unknown[]) => {
+          calls.push(args);
+          throw new Error("provider must not run");
+        },
+      } as unknown as Ai,
+    };
+    const res = await worker.fetch(
+      completeWithBudget({
+        body: {
+          ...insightBody,
+          prompt_digest: `sha256:${"0".repeat(64)}`,
+        },
+      }),
+      env,
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      ok: false,
+      error: "prompt_digest mismatch",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("canonicalizes an omitted or matching prompt digest to one idempotent call", async () => {
+    const { BUDGET_LEDGER } = memoryLedger();
+    const calls: unknown[] = [];
+    const env: GatewayEnv = {
+      GATEWAY_TOKEN,
+      BUDGET_LEDGER,
+      AI: {
+        run: async (...args: unknown[]) => {
+          calls.push(args);
+          return {
+            response: JSON.stringify(insightArtifact),
+            usage: { prompt_tokens: 4, completion_tokens: 3 },
+          };
+        },
+      } as unknown as Ai,
+    };
+    const measured = `sha256:${await sha256Hex(
+      JSON.stringify(insightBody.messages),
+    )}`;
+    const first = await worker.fetch(completeWithBudget(), env);
+    const second = await worker.fetch(
+      completeWithBudget({
+        body: { ...insightBody, prompt_digest: measured },
+      }),
+      env,
+    );
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const firstBody = (await first.json()) as {
+      prompt_digest?: string;
+      budget_run_id?: string;
+    };
+    const secondBody = (await second.json()) as {
+      prompt_digest?: string;
+      budget_run_id?: string;
+    };
+    expect(firstBody.prompt_digest).toBe(measured);
+    expect(secondBody.prompt_digest).toBe(measured);
+    expect(secondBody.budget_run_id).toBe(firstBody.budget_run_id);
+    expect(calls).toHaveLength(1);
+  });
+
   it("rejects hard request bounds before touching the ledger or provider", async () => {
     const calls: unknown[] = [];
     const env: GatewayEnv = {
