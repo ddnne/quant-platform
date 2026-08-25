@@ -531,13 +531,12 @@ export async function reserveBudget(
 > {
   const key = requireIdempotencyKey(input.idempotency_key);
   if (!key.ok) return key;
+  const boundDigest = requireNonemptyRequestDigest(input.request_digest);
+  if (!boundDigest.ok) return boundDigest;
+  const digest = boundDigest.request_digest;
   const parsed = parseAmounts(input.amounts);
   if (!parsed.ok) return parsed;
   const amounts = parsed.amounts;
-  const digest =
-    typeof input.request_digest === "string" && input.request_digest.trim()
-      ? input.request_digest.trim()
-      : null;
 
   const state = await loadState(storage, now);
   recoverExpired(state, now);
@@ -545,7 +544,7 @@ export async function reserveBudget(
 
   const existing = state.reservations[key.idempotency_key];
   if (existing) {
-    if (digest && existing.request_digest && existing.request_digest !== digest) {
+    if (existing.request_digest !== digest) {
       await saveState(storage, state);
       return { ok: false, error: "idempotency_digest_conflict" };
     }
@@ -554,7 +553,7 @@ export async function reserveBudget(
       await saveState(storage, state);
       return {
         ok: true,
-        reservation: structuredClone(existing),
+        reservation: publicReservation(existing),
         lease,
         existing: true,
         budget_run_id: existing.reservation_id,
@@ -563,6 +562,13 @@ export async function reserveBudget(
     // A released reservation provably never crossed the provider marker, so a
     // same-digest retry may obtain a fresh run. Provider-started work is never
     // represented by the released status.
+  }
+
+  // Production reserve always takes the canonical 1800s lease. A no-lease
+  // reservation has no alarm and would persist as a phantom occupancy.
+  if (input.acquire_lease !== true) {
+    await saveState(storage, state);
+    return { ok: false, error: "lease_required" };
   }
 
   // A frozen ledger still serves terminal idempotent results above, but never
@@ -586,28 +592,25 @@ export async function reserveBudget(
     };
   }
 
-  let lease: Lease | null = null;
-  if (input.acquire_lease) {
-    const active = activeLeaseCount(state);
-    if (active >= PILOT_BUDGET_CAPS.max_parallel_experiments) {
-      await saveState(storage, state);
-      return {
-        ok: false,
-        error: "budget_exhausted",
-        detail: `concurrent_experiments: active=${active} limit=${PILOT_BUDGET_CAPS.max_parallel_experiments}`,
-      };
-    }
-    const leaseId = crypto.randomUUID();
-    lease = {
-      lease_id: leaseId,
-      reservation_key: key.idempotency_key,
-      acquired_at: now,
-      expires_at: now + PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000,
-      last_heartbeat_at: now,
-      released_at: null,
+  const active = activeLeaseCount(state);
+  if (active >= PILOT_BUDGET_CAPS.max_parallel_experiments) {
+    await saveState(storage, state);
+    return {
+      ok: false,
+      error: "budget_exhausted",
+      detail: `concurrent_experiments: active=${active} limit=${PILOT_BUDGET_CAPS.max_parallel_experiments}`,
     };
-    state.leases[leaseId] = lease;
   }
+  const leaseId = crypto.randomUUID();
+  const lease: Lease = {
+    lease_id: leaseId,
+    reservation_key: key.idempotency_key,
+    acquired_at: now,
+    expires_at: now + PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000,
+    last_heartbeat_at: now,
+    released_at: null,
+  };
+  state.leases[leaseId] = lease;
 
   const reservation: Reservation = {
     idempotency_key: key.idempotency_key,
@@ -615,7 +618,7 @@ export async function reserveBudget(
     amounts: amountsFromCounters(amounts),
     actual: null,
     status: "reserved",
-    lease_id: lease?.lease_id ?? null,
+    lease_id: lease.lease_id,
     created_at: now,
     reconciled_at: null,
     released_at: null,
@@ -634,11 +637,24 @@ export async function reserveBudget(
   await saveState(storage, state);
   return {
     ok: true,
-    reservation,
+    reservation: publicReservation(reservation),
     lease,
     existing: false,
     budget_run_id: reservation.reservation_id,
   };
+}
+
+function publicCachedResult(cached: CachedBudgetResult | null): CachedBudgetResult | null {
+  if (!cached) return null;
+  const body = cached.body;
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    const clone = structuredClone(body) as Record<string, unknown>;
+    delete clone.settlement_capability_secret;
+    delete clone.settlement_capability_hash;
+    delete clone.settlement_capability;
+    return { http_status: cached.http_status, body: clone };
+  }
+  return { http_status: cached.http_status, body };
 }
 
 function publicReservation(reservation: Reservation): Reservation {
@@ -647,7 +663,15 @@ function publicReservation(reservation: Reservation): Reservation {
     ? "sha256:redacted"
     : null;
   clone.settlement_capability_secret = null;
+  clone.cached_result = publicCachedResult(clone.cached_result);
   return clone;
+}
+
+function requireNonemptyRequestDigest(raw: unknown): BudgetResult<{ request_digest: string }> {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return { ok: false, error: "request_digest required" };
+  }
+  return { ok: true, request_digest: raw.trim() };
 }
 
 function requireExactLeaseAndDigest(
@@ -1162,7 +1186,12 @@ export async function releaseBudget(
     reservation.released_at = now;
   }
   await saveState(storage, state);
-  return { ok: true, released: true, lease, reservation };
+  return {
+    ok: true,
+    released: true,
+    lease,
+    reservation: reservation ? publicReservation(reservation) : null,
+  };
 }
 
 export async function recoverExpiredLeases(

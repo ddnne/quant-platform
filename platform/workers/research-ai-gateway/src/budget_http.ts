@@ -105,7 +105,7 @@ export async function handleBudgetRequest(
         {
           idempotency_key: String(rec.idempotency_key ?? ""),
           amounts: rec.amounts,
-          acquire_lease: rec.acquire_lease === true,
+          acquire_lease: true,
           request_digest: typeof rec.request_digest === "string" ? rec.request_digest : undefined,
         },
         now,

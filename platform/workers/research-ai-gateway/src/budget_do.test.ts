@@ -20,6 +20,19 @@ import {
 
 const T0 = 1_700_000_000_000;
 
+function leased(
+  idempotency_key: string,
+  amounts: unknown,
+  request_digest = `digest-${idempotency_key}`,
+): {
+  idempotency_key: string;
+  request_digest: string;
+  amounts: unknown;
+  acquire_lease: true;
+} {
+  return { idempotency_key, request_digest, amounts, acquire_lease: true };
+}
+
 describe("PILOT_BUDGET_CAPS", () => {
   it("is the pilot hard cap set", () => {
     expect(PILOT_BUDGET_CAPS).toEqual({
@@ -69,7 +82,7 @@ describe("budget ledger algebra", () => {
     }
     const reserved = await reserveBudget(
       storage,
-      { idempotency_key: "k-create-not-grant", amounts: { model_calls: 1 } },
+      leased("k-create-not-grant", { model_calls: 1 }),
       T0,
     );
     expect(reserved.ok).toBe(true);
@@ -85,13 +98,13 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     const fill = await reserveBudget(
       storage,
-      { idempotency_key: "fill", amounts: { model_calls: 16 } },
+      leased("fill", { model_calls: 16 }),
       T0,
     );
     expect(fill.ok).toBe(true);
     const denied = await reserveBudget(
       storage,
-      { idempotency_key: "next", amounts: { model_calls: 1 } },
+      leased("next", { model_calls: 1 }),
       T0,
     );
     expect(denied.ok).toBe(false);
@@ -108,12 +121,12 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     const a = await reserveBudget(
       storage,
-      { idempotency_key: "k1", amounts: { model_calls: 1, input_tokens: 10 } },
+      leased("k1", { model_calls: 1, input_tokens: 10 }),
       T0,
     );
     const b = await reserveBudget(
       storage,
-      { idempotency_key: "k1", amounts: { model_calls: 1, input_tokens: 10 } },
+      leased("k1", { model_calls: 1, input_tokens: 10 }),
       T0 + 5,
     );
     expect(a.ok && b.ok).toBe(true);
@@ -190,17 +203,17 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     const a = await reserveBudget(
       storage,
-      { idempotency_key: "l1", amounts: { model_calls: 1 }, acquire_lease: true },
+      leased("l1", { model_calls: 1 }),
       T0,
     );
     const b = await reserveBudget(
       storage,
-      { idempotency_key: "l2", amounts: { model_calls: 1 }, acquire_lease: true },
+      leased("l2", { model_calls: 1 }),
       T0,
     );
     const c = await reserveBudget(
       storage,
-      { idempotency_key: "l3", amounts: { model_calls: 1 }, acquire_lease: true },
+      leased("l3", { model_calls: 1 }),
       T0,
     );
     expect(a.ok).toBe(true);
@@ -216,7 +229,7 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      { idempotency_key: "hb", amounts: { model_calls: 1 }, acquire_lease: true },
+      leased("hb", { model_calls: 1 }),
       T0,
     );
     expect(reserved.ok).toBe(true);
@@ -234,7 +247,7 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      { idempotency_key: "rel", amounts: { model_calls: 4 }, acquire_lease: true },
+      leased("rel", { model_calls: 4 }),
       T0,
     );
     expect(reserved.ok).toBe(true);
@@ -295,12 +308,12 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     const first = await reserveBudget(
       storage,
-      { idempotency_key: "mismatch-a", amounts: { model_calls: 1 }, acquire_lease: true },
+      leased("mismatch-a", { model_calls: 1 }),
       T0,
     );
     const second = await reserveBudget(
       storage,
-      { idempotency_key: "mismatch-b", amounts: { model_calls: 1 }, acquire_lease: true },
+      leased("mismatch-b", { model_calls: 1 }),
       T0,
     );
     if (!first.ok || !first.lease || !second.ok) throw new Error("leases");
@@ -320,7 +333,7 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     const first = await reserveBudget(
       storage,
-      { idempotency_key: "old", amounts: { model_calls: 8 }, acquire_lease: true },
+      leased("old", { model_calls: 8 }),
       T0,
     );
     expect(first.ok).toBe(true);
@@ -329,7 +342,7 @@ describe("budget ledger algebra", () => {
     if (recovered.ok) expect(recovered.recovered).toBe(1);
     const again = await reserveBudget(
       storage,
-      { idempotency_key: "new", amounts: { model_calls: 8 }, acquire_lease: true },
+      leased("new", { model_calls: 8 }),
       T0 + 1800 * 1000 + 2,
     );
     expect(again.ok).toBe(true);
@@ -585,17 +598,17 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     await reserveBudget(
       storage,
-      { idempotency_key: "a", amounts: { model_calls: 1 }, acquire_lease: true },
+      leased("a", { model_calls: 1 }),
       T0,
     );
     await reserveBudget(
       storage,
-      { idempotency_key: "b", amounts: { model_calls: 1 }, acquire_lease: true },
+      leased("b", { model_calls: 1 }),
       T0,
     );
     const third = await reserveBudget(
       storage,
-      { idempotency_key: "c", amounts: { model_calls: 1 }, acquire_lease: true },
+      leased("c", { model_calls: 1 }),
       T0 + 1800 * 1000 + 1,
     );
     expect(third.ok).toBe(true);
@@ -605,13 +618,13 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     const fill = await reserveBudget(
       storage,
-      { idempotency_key: "cost", amounts: { cost_usd: 20 } },
+      leased("cost", { cost_usd: 20 }),
       T0,
     );
     expect(fill.ok).toBe(true);
     const denied = await reserveBudget(
       storage,
-      { idempotency_key: "cost2", amounts: { cost_usd: 0.01 } },
+      leased("cost2", { cost_usd: 0.01 }),
       T0,
     );
     expect(denied.ok).toBe(false);
@@ -622,7 +635,7 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      { idempotency_key: "client-label", amounts: { model_calls: 1 } },
+      leased("client-label", { model_calls: 1 }),
       T0,
     );
     expect(reserved.ok).toBe(true);
@@ -640,6 +653,7 @@ describe("budget ledger algebra", () => {
         idempotency_key: "k-dup",
         request_digest: "digest-a",
         amounts: { model_calls: 1 },
+        acquire_lease: true,
       },
       T0,
     );
@@ -768,7 +782,7 @@ describe("budget ledger algebra", () => {
     }
     const next = await reserveBudget(
       storage,
-      { idempotency_key: "after-freeze", amounts: { model_calls: 1 } },
+      leased("after-freeze", { model_calls: 1 }),
       T0 + 2,
     );
     expect(next.ok).toBe(false);
@@ -1158,6 +1172,240 @@ describe("budget ledger algebra", () => {
       T0 + 4,
     );
     expect(afterConsume).toMatchObject({ ok: false, error: "reservation_reconciled" });
+  });
+
+  it("rejects a missing request_digest and creates no occupancy", async () => {
+    const storage = new MemoryBudgetStorage();
+    const omitted = await reserveBudget(
+      storage,
+      { idempotency_key: "missing-digest", amounts: { model_calls: 1 }, acquire_lease: true },
+      T0,
+    );
+    const blank = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "blank-digest",
+        request_digest: "   ",
+        amounts: { model_calls: 1 },
+        acquire_lease: true,
+      },
+      T0,
+    );
+    expect(omitted).toMatchObject({ ok: false, error: "request_digest required" });
+    expect(blank).toMatchObject({ ok: false, error: "request_digest required" });
+    expect(omitted).not.toHaveProperty("reservation");
+    expect(blank).not.toHaveProperty("reservation");
+    const snap = await snapshotBudget(storage, T0);
+    expect(snap.ok).toBe(true);
+    if (!snap.ok) throw new Error("snapshot");
+    expect(snap.reserved).toEqual(zeroCounters());
+    expect(snap.used).toEqual(zeroCounters());
+    expect(snap.active_leases).toBe(0);
+  });
+
+  it("rejects a no-lease reserve and leaves no phantom occupancy", async () => {
+    const storage = new MemoryBudgetStorage();
+    const omitted = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "no-lease",
+        request_digest: "digest-no-lease",
+        amounts: { model_calls: 1 },
+      },
+      T0,
+    );
+    const disabled = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "no-lease-false",
+        request_digest: "digest-no-lease-false",
+        amounts: { model_calls: 1 },
+        acquire_lease: false,
+      },
+      T0,
+    );
+    expect(omitted).toMatchObject({ ok: false, error: "lease_required" });
+    expect(disabled).toMatchObject({ ok: false, error: "lease_required" });
+    expect(omitted).not.toHaveProperty("reservation");
+    expect(disabled).not.toHaveProperty("reservation");
+    expect(await storage.getAlarm()).toBeNull();
+    const snap = await snapshotBudget(storage, T0);
+    expect(snap.ok).toBe(true);
+    if (!snap.ok) throw new Error("snapshot");
+    expect(snap.reserved).toEqual(zeroCounters());
+    expect(snap.active_leases).toBe(0);
+    const state = await storage.get<{ reservations: Record<string, unknown> }>("ledger");
+    expect(state?.reservations["no-lease"]).toBeUndefined();
+    expect(state?.reservations["no-lease-false"]).toBeUndefined();
+  });
+
+  it("replay requires exact digest equality and returns no reservation payload", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("replay-digest", { model_calls: 1 }, "digest-replay"),
+      T0,
+    );
+    expect(reserved.ok).toBe(true);
+    const omitted = await reserveBudget(
+      storage,
+      { idempotency_key: "replay-digest", amounts: { model_calls: 1 }, acquire_lease: true },
+      T0 + 1,
+    );
+    const wrong = await reserveBudget(
+      storage,
+      leased("replay-digest", { model_calls: 1 }, "digest-other"),
+      T0 + 2,
+    );
+    expect(omitted).toMatchObject({ ok: false, error: "request_digest required" });
+    expect(wrong).toMatchObject({ ok: false, error: "idempotency_digest_conflict" });
+    expect(omitted).not.toHaveProperty("reservation");
+    expect(wrong).not.toHaveProperty("reservation");
+    expect(JSON.stringify(omitted)).not.toMatch(/cached_result|settlement_capability/);
+    expect(JSON.stringify(wrong)).not.toMatch(/cached_result|settlement_capability/);
+    const snap = await snapshotBudget(storage, T0 + 3);
+    expect(snap.ok).toBe(true);
+    if (snap.ok) {
+      expect(snap.reserved.model_calls).toBe(1);
+      expect(snap.active_leases).toBe(1);
+    }
+  });
+
+  it("reserve replay after provider-start never includes the secret or hash", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("replay-secret", { model_calls: 1, input_tokens: 8 }, "digest-replay-secret"),
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "replay-secret",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-replay-secret",
+      },
+      T0 + 1,
+    );
+    if (!started.ok || !started.settlement_capability) throw new Error("cap");
+    const secret = started.settlement_capability;
+    const ledger = await storage.get<{
+      reservations: Record<
+        string,
+        { settlement_capability_hash: string | null; settlement_capability_secret: string | null }
+      >;
+    }>("ledger");
+    const hash = ledger?.reservations["replay-secret"].settlement_capability_hash;
+    expect(hash).toEqual(expect.any(String));
+    expect(ledger?.reservations["replay-secret"].settlement_capability_secret).toBe(secret);
+
+    const replay = await reserveBudget(
+      storage,
+      leased("replay-secret", { model_calls: 1, input_tokens: 8 }, "digest-replay-secret"),
+      T0 + 2,
+    );
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) throw new Error("replay");
+    expect(replay.existing).toBe(true);
+    expect(replay.reservation.settlement_capability_secret).toBeNull();
+    expect(replay.reservation.settlement_capability_hash).toBe("sha256:redacted");
+    const encoded = JSON.stringify(replay);
+    expect(encoded).not.toContain(secret);
+    expect(encoded).not.toContain(hash as string);
+    const snap = await snapshotBudget(storage, T0 + 3);
+    expect(JSON.stringify(snap)).not.toContain(secret);
+    expect(JSON.stringify(snap)).not.toContain(hash as string);
+  });
+
+  it("exact mark-start retry returns the same capability and never via reserve", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("mark-retry", { model_calls: 1 }, "digest-mark-retry"),
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const first = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "mark-retry",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-mark-retry",
+      },
+      T0 + 1,
+    );
+    const retry = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "mark-retry",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-mark-retry",
+      },
+      T0 + 2,
+    );
+    expect(first.ok && retry.ok).toBe(true);
+    if (!first.ok || !retry.ok) throw new Error("start");
+    expect(retry.settlement_capability).toBe(first.settlement_capability);
+    expect(first.settlement_capability).toEqual(expect.any(String));
+    expect(first.reservation.settlement_capability_secret).toBeNull();
+    const reserveReplay = await reserveBudget(
+      storage,
+      leased("mark-retry", { model_calls: 1 }, "digest-mark-retry"),
+      T0 + 3,
+    );
+    expect(reserveReplay.ok).toBe(true);
+    if (!reserveReplay.ok) throw new Error("reserve replay");
+    expect(JSON.stringify(reserveReplay)).not.toContain(first.settlement_capability);
+    expect(reserveReplay).not.toHaveProperty("settlement_capability");
+  });
+
+  it("expiry releases a pre-provider reservation and leaves no phantom occupancy", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      leased("pre-provider-expiry", { model_calls: 3, input_tokens: 30 }, "digest-pre-provider-expiry"),
+      T0,
+    );
+    expect(reserved.ok).toBe(true);
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    expect(await storage.getAlarm()).toBe(reserved.lease.expires_at);
+    const recovered = await recoverExpiredLeases(
+      storage,
+      T0 + PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000 + 1,
+    );
+    expect(recovered).toMatchObject({ ok: true, recovered: 1 });
+    expect(await storage.getAlarm()).toBeNull();
+    const snap = await snapshotBudget(
+      storage,
+      T0 + PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000 + 2,
+    );
+    expect(snap.ok).toBe(true);
+    if (!snap.ok) throw new Error("snapshot");
+    expect(snap.reserved).toEqual(zeroCounters());
+    expect(snap.used).toEqual(zeroCounters());
+    expect(snap.active_leases).toBe(0);
+    expect(snap.frozen).toBe(false);
+    const state = await storage.get<{
+      reservations: Record<string, { status: string; provider_started_at: number | null }>;
+      leases: Record<string, { released_at: number | null }>;
+    }>("ledger");
+    expect(state?.reservations["pre-provider-expiry"].status).toBe("released");
+    expect(state?.reservations["pre-provider-expiry"].provider_started_at).toBeNull();
+    expect(state?.leases[reserved.lease.lease_id].released_at).toEqual(expect.any(Number));
+    const retry = await reserveBudget(
+      storage,
+      leased("pre-provider-expiry", { model_calls: 3 }, "digest-pre-provider-expiry"),
+      T0 + PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000 + 3,
+    );
+    expect(retry.ok).toBe(true);
+    if (retry.ok) {
+      expect(retry.existing).toBe(false);
+      expect(retry.budget_run_id).not.toBe(reserved.budget_run_id);
+      expect(retry.lease?.expires_at).toBe(
+        T0 + PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000 + 3 + PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000,
+      );
+    }
   });
 
   it("bindIdempotencyKey uses digest when the client key is absent", () => {

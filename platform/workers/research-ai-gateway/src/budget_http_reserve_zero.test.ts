@@ -29,19 +29,24 @@ describe("handleBudgetRequest POST /reserve without amounts", () => {
     const storage = new MemoryBudgetStorage();
     const res = await dispatch(storage, "POST", "/reserve", {
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ idempotency_key: "k1" }),
+      body: JSON.stringify({
+        idempotency_key: "k1",
+        request_digest: "digest-k1",
+      }),
     });
     expect(res.status).not.toBe(429);
     expect(res.status).toBe(200);
     const payload = (await res.json()) as {
       ok?: boolean;
       error?: string;
-      lease?: unknown;
-      reservation?: { amounts?: Record<string, number> };
+      lease?: { lease_id?: string; expires_at?: number } | null;
+      reservation?: { amounts?: Record<string, number>; settlement_capability_secret?: unknown };
     };
     expect(payload.ok).toBe(true);
     expect(payload.error).not.toBe("budget_exhausted");
-    expect(payload.lease).toBeNull();
+    expect(payload.lease?.lease_id).toEqual(expect.any(String));
+    expect(payload.lease?.expires_at).toBe(T0 + 1800 * 1000);
+    expect(payload.reservation?.settlement_capability_secret ?? null).toBeNull();
     if (payload.reservation?.amounts !== undefined) {
       expect(payload.reservation.amounts).toEqual(zeroCounters());
     }
@@ -57,6 +62,25 @@ describe("handleBudgetRequest POST /reserve without amounts", () => {
     };
     expect(after.ok).toBe(true);
     expect(after.auto_promotion).toBe(false);
+    expect(after.used).toEqual(zeroCounters());
+    expect(after.reserved).toEqual(zeroCounters());
+    expect(after.active_leases).toBe(1);
+  });
+
+  it("POST /reserve without request_digest is 400 and creates no occupancy", async () => {
+    const storage = new MemoryBudgetStorage();
+    const res = await dispatch(storage, "POST", "/reserve", {
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idempotency_key: "k1" }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ ok: false, error: "request_digest required" });
+    const snap = await dispatch(storage, "GET", "/snapshot");
+    const after = (await snap.json()) as {
+      used?: Record<string, number>;
+      reserved?: Record<string, number>;
+      active_leases?: number;
+    };
     expect(after.used).toEqual(zeroCounters());
     expect(after.reserved).toEqual(zeroCounters());
     expect(after.active_leases).toBe(0);

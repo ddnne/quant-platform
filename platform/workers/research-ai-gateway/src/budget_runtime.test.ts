@@ -40,6 +40,19 @@ function post(stub: DurableObjectStub, path: string, body: unknown): Promise<Res
 }
 
 type BudgetLedgerRpcStub = DurableObjectStub & {
+  reserve(input: {
+    idempotency_key: string;
+    amounts: unknown;
+    acquire_lease?: boolean;
+    request_digest?: string;
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    existing?: boolean;
+    budget_run_id?: string;
+    reservation?: Record<string, unknown>;
+    lease?: { lease_id: string; expires_at: number } | null;
+  }>;
   markProviderStarted(input: {
     idempotency_key: string;
     lease_id: string;
@@ -48,6 +61,7 @@ type BudgetLedgerRpcStub = DurableObjectStub & {
     ok: boolean;
     error?: string;
     settlement_capability?: string | null;
+    reservation?: Record<string, unknown>;
     lease?: { lease_id: string };
   }>;
   finalizeExact(input: {
@@ -462,5 +476,182 @@ describe("BudgetLedger in the Workers runtime", () => {
     });
     expect(replay.ok).toBe(true);
     expect(replay.used?.input_tokens).toBe(6);
+  }, 15_000);
+
+  it("binds reserve to digest+lease and never leaks capability material", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
+    const rpc = stub as BudgetLedgerRpcStub;
+
+    const missingDigest = await within(
+      "missing digest reserve",
+      rpc.reserve({
+        idempotency_key: "runtime-missing-digest",
+        amounts: { model_calls: 1 },
+        acquire_lease: true,
+      }),
+    );
+    expect(missingDigest).toMatchObject({ ok: false, error: "request_digest required" });
+    expect(missingDigest.reservation).toBeUndefined();
+
+    const noLease = await within(
+      "no-lease reserve",
+      rpc.reserve({
+        idempotency_key: "runtime-no-lease",
+        request_digest: "digest-runtime-no-lease",
+        amounts: { model_calls: 1 },
+        acquire_lease: false,
+      }),
+    );
+    expect(noLease).toMatchObject({ ok: false, error: "lease_required" });
+    expect(noLease.reservation).toBeUndefined();
+    expect(noLease.lease ?? null).toBeNull();
+
+    const emptySnap = await within("empty after rejected reserves", stub.fetch("https://budget/snapshot"));
+    expect(await emptySnap.json()).toMatchObject({
+      reserved: { model_calls: 0 },
+      used: { model_calls: 0 },
+      active_leases: 0,
+      frozen: false,
+    });
+
+    const reserved = await within(
+      "bound reserve",
+      rpc.reserve({
+        idempotency_key: "runtime-bind-secret",
+        request_digest: "digest-runtime-bind-secret",
+        amounts: { model_calls: 1, input_tokens: 9 },
+        acquire_lease: true,
+      }),
+    );
+    expect(reserved.ok).toBe(true);
+    expect(reserved.lease?.lease_id).toEqual(expect.any(String));
+
+    const replayMissing = await within(
+      "replay missing digest",
+      rpc.reserve({
+        idempotency_key: "runtime-bind-secret",
+        amounts: { model_calls: 1 },
+        acquire_lease: true,
+      }),
+    );
+    const replayWrong = await within(
+      "replay wrong digest",
+      rpc.reserve({
+        idempotency_key: "runtime-bind-secret",
+        request_digest: "digest-other",
+        amounts: { model_calls: 1 },
+        acquire_lease: true,
+      }),
+    );
+    expect(replayMissing).toMatchObject({ ok: false, error: "request_digest required" });
+    expect(replayWrong).toMatchObject({ ok: false, error: "idempotency_digest_conflict" });
+    expect(replayMissing.reservation).toBeUndefined();
+    expect(replayWrong.reservation).toBeUndefined();
+    expect(JSON.stringify(replayMissing)).not.toMatch(/cached_result|settlement_capability/);
+    expect(JSON.stringify(replayWrong)).not.toMatch(/cached_result|settlement_capability/);
+
+    const started = await within(
+      "bind provider start",
+      rpc.markProviderStarted({
+        idempotency_key: "runtime-bind-secret",
+        lease_id: reserved.lease!.lease_id,
+        request_digest: "digest-runtime-bind-secret",
+      }),
+    );
+    expect(started.ok).toBe(true);
+    const secret = started.settlement_capability as string;
+    expect(secret).toEqual(expect.any(String));
+    const retriedStart = await within(
+      "bind mark-start retry",
+      rpc.markProviderStarted({
+        idempotency_key: "runtime-bind-secret",
+        lease_id: reserved.lease!.lease_id,
+        request_digest: "digest-runtime-bind-secret",
+      }),
+    );
+    expect(retriedStart.ok).toBe(true);
+    expect(retriedStart.settlement_capability).toBe(secret);
+    expect(retriedStart.reservation?.settlement_capability_secret ?? null).toBeNull();
+
+    let persistedHash = "";
+    await runInDurableObject(stub, async (_instance: BudgetLedger, state) => {
+      const ledger = await state.storage.get<LedgerState>("ledger");
+      persistedHash =
+        ledger?.reservations["runtime-bind-secret"].settlement_capability_hash ?? "";
+      expect(persistedHash).toEqual(expect.any(String));
+      expect(ledger?.reservations["runtime-bind-secret"].settlement_capability_secret).toBe(
+        secret,
+      );
+    });
+
+    const reserveReplay = await within(
+      "reserve replay after start",
+      rpc.reserve({
+        idempotency_key: "runtime-bind-secret",
+        request_digest: "digest-runtime-bind-secret",
+        amounts: { model_calls: 1, input_tokens: 9 },
+        acquire_lease: true,
+      }),
+    );
+    expect(reserveReplay.ok).toBe(true);
+    expect(reserveReplay.existing).toBe(true);
+    const replayText = JSON.stringify(reserveReplay);
+    expect(replayText).not.toContain(secret);
+    expect(replayText).not.toContain(persistedHash);
+    expect(reserveReplay.reservation?.settlement_capability_secret ?? null).toBeNull();
+    expect(reserveReplay).not.toHaveProperty("settlement_capability");
+
+    const snapshot = await within("public snapshot after start", stub.fetch("https://budget/snapshot"));
+    const snapshotText = JSON.stringify(await snapshot.json());
+    expect(snapshotText).not.toContain(secret);
+    expect(snapshotText).not.toContain(persistedHash);
+  }, 15_000);
+
+  it("alarm releases a pre-provider reservation with no phantom occupancy", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
+    const reservedResponse = await within(
+      "pre-provider reserve",
+      post(stub, "/reserve", {
+        idempotency_key: "runtime-pre-provider-expiry",
+        request_digest: "digest-runtime-pre-provider-expiry",
+        acquire_lease: true,
+        amounts: { model_calls: 2, input_tokens: 40 },
+      }),
+    );
+    expect(reservedResponse.status).toBe(200);
+    const reserved = (await reservedResponse.json()) as { lease: { lease_id: string } };
+
+    await within("seed pre-provider expiry", runInDurableObject(stub, async (_instance: BudgetLedger, state) => {
+      const ledger = await state.storage.get<LedgerState>("ledger");
+      if (!ledger) throw new Error("ledger state missing");
+      expect(ledger.reservations["runtime-pre-provider-expiry"].provider_started_at).toBeNull();
+      ledger.leases[reserved.lease.lease_id].expires_at = Date.now() - 1;
+      await Promise.all([
+        state.storage.put("ledger", ledger),
+        state.storage.setAlarm(Date.now()),
+      ]);
+    }));
+    await within("run pre-provider alarm", runDurableObjectAlarm(stub));
+
+    const snap = await within("snapshot after pre-provider alarm", stub.fetch("https://budget/snapshot"));
+    expect(await snap.json()).toMatchObject({
+      frozen: false,
+      used: { model_calls: 0, input_tokens: 0 },
+      reserved: { model_calls: 0, input_tokens: 0 },
+      active_leases: 0,
+    });
+    await runInDurableObject(stub, async (_instance: BudgetLedger, state) => {
+      const ledger = await state.storage.get<LedgerState>("ledger");
+      expect(ledger?.reservations["runtime-pre-provider-expiry"].status).toBe("released");
+      expect(ledger?.leases[reserved.lease.lease_id].released_at).toEqual(expect.any(Number));
+      const active = Object.values(ledger?.reservations ?? {}).filter(
+        (row) => row.status === "reserved",
+      );
+      expect(active).toEqual([]);
+    });
   }, 15_000);
 });
