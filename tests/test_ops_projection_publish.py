@@ -27,7 +27,9 @@ from ops.projection_signing import (
     load_ops_projection_signer,
 )
 from scripts import publish_ops_projection as publisher
+from scripts import sync_d1_to_sqlite as sync_script
 from scripts.export_ops_projection import (
+    _render_projection_bundle,
     _render_projection_bundle_for_test,
     _render_trusted_projection_bundle,
     render_projection_bundle,
@@ -214,6 +216,62 @@ def test_incomplete_generation_cannot_replace_active_pointer(tmp_path: Path) -> 
         "SELECT status FROM ops_projection_generation WHERE generation_id=?",
         ("projgen-incomplete",),
     ).fetchone() == ("OPEN",)
+    target.close()
+
+
+def test_signed_pointer_update_atomically_rejects_cursor_regression(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    signer = OpsProjectionSigningKey(
+        "ops-projection-test-v1", Ed25519PrivateKey.generate()
+    )
+
+    def set_cursor(value: int) -> None:
+        with sqlite3.connect(source) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO sync_change_state "
+                "(feed,last_applied_change_seq,updated_at) VALUES (?,?,?)",
+                ("jquants_records", value, "2026-08-25T00:00:00Z"),
+            )
+
+    cursor = 12
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_export_cursor_chain_from_conn",
+        lambda _conn: (cursor, cursor),
+    )
+    set_cursor(cursor)
+    first = _render_projection_bundle(
+        source,
+        source_cursor=cursor,
+        export_cursor=cursor,
+        projection_signer=signer,
+        generation_id="projgen-cursor-12",
+        producer_commit_sha="a" * 40,
+    )
+    target = _target()
+    target.executescript(first.sql)
+
+    cursor = 11
+    set_cursor(cursor)
+    replay = _render_projection_bundle(
+        source,
+        source_cursor=cursor,
+        export_cursor=cursor,
+        projection_signer=signer,
+        generation_id="projgen-cursor-11",
+        producer_commit_sha="b" * 40,
+    )
+    target.executescript(replay.sql)
+    assert target.execute(
+        "SELECT generation_id FROM ops_projection_active WHERE singleton=1"
+    ).fetchone() == ("projgen-cursor-12",)
+    assert target.execute(
+        "SELECT status FROM ops_projection_generation WHERE generation_id=?",
+        ("projgen-cursor-11",),
+    ).fetchone() == ("SEALED",)
     target.close()
 
 
@@ -424,7 +482,7 @@ def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
         registry.verify(tampered)
 
 
-def test_trusted_renderer_rejects_caller_cursor_without_sync_audit(
+def test_trusted_renderer_rejects_generic_sqlite_path_and_caller_claims(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "manual.sqlite"
@@ -432,15 +490,15 @@ def test_trusted_renderer_rejects_caller_cursor_without_sync_audit(
     signer = OpsProjectionSigningKey(
         "ops-projection-test-v1", Ed25519PrivateKey.generate()
     )
-    with pytest.raises(RuntimeError, match="authenticated local-sync audit"):
+    with pytest.raises(RuntimeError, match="authenticated applied mirror handle"):
         _render_trusted_projection_bundle(
             source,
-            source_cursor=99,
-            export_cursor=99,
             projection_signer=signer,
             generation_id="projgen-forged",
             producer_commit_sha="f" * 40,
         )
+    with pytest.raises(ValueError, match="authenticated current D1 export"):
+        sync_script.open_authenticated_applied_mirror(source)
 
 
 def test_remote_publish_requires_dedicated_ops_projection_signer(
@@ -509,6 +567,79 @@ def test_remote_probe_uses_pinned_ops_wrangler_and_withholds_output(
     assert argv[argv.index("--env") + 1] == "production"
     assert kwargs["cwd"] == str(publisher.OPS_WRANGLER_CWD)
     assert kwargs["capture_output"] is True
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        ({"active_count": 0}, 0),
+        (
+            {
+                "active_count": 1,
+                "source_cursor": 8,
+                "export_cursor": 8,
+                "applied_cursor": 8,
+            },
+            8,
+        ),
+        (
+            {
+                "active_count": 1,
+                "source_cursor": 8,
+                "export_cursor": 7,
+                "applied_cursor": 8,
+            },
+            None,
+        ),
+        (
+            {
+                "active_count": 1,
+                "source_cursor": None,
+                "export_cursor": None,
+                "applied_cursor": None,
+            },
+            None,
+        ),
+    ],
+)
+def test_remote_active_cursor_requires_exact_chain(
+    monkeypatch: pytest.MonkeyPatch, row: dict[str, object], expected: int | None
+) -> None:
+    monkeypatch.setattr(
+        publisher.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps([{"results": [row]}]),
+            stderr="",
+        ),
+    )
+    assert publisher.read_remote_active_cursor() == expected
+
+
+@pytest.mark.parametrize("remote_cursor", [None, 5])
+def test_remote_publish_rejects_unknown_or_regressing_active_cursor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    remote_cursor: int | None,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    monkeypatch.setattr(publisher, "GOVERNED_LOCAL_DB", source.resolve())
+    monkeypatch.setattr(
+        publisher, "_authenticated_export_cursor_chain", lambda _path: (4, 4)
+    )
+    monkeypatch.setattr(
+        publisher,
+        "load_ops_projection_signer",
+        lambda: OpsProjectionSigningKey(
+            "ops-projection-test-v1", Ed25519PrivateKey.generate()
+        ),
+    )
+    monkeypatch.setattr(
+        publisher, "read_remote_active_cursor", lambda: remote_cursor
+    )
+    assert publisher.main([f"--db={source}", "--apply-remote"]) == 7
 
 
 def test_receipt_and_ready_keys_never_mint_ops_projection(
@@ -622,6 +753,7 @@ def test_failed_refresh_never_publishes_fresh_or_applies(
     monkeypatch.setattr("storage.coverage_ledger.refresh_coverage_ledger", fail)
     monkeypatch.setattr(publisher, "count_local_complete", lambda _path: 0)
     monkeypatch.setattr(publisher, "count_remote_complete", lambda **_kwargs: 0)
+    monkeypatch.setattr(publisher, "read_remote_active_cursor", lambda: 1)
     monkeypatch.setattr(
         publisher,
         "load_ops_projection_signer",

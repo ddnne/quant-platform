@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+from weakref import WeakSet
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WRANGLER_CONFIG = (
@@ -37,10 +38,6 @@ PINNED_WRANGLER_VERSION = "4.125.0"
 GOVERNED_D1_NAME = "quant-ingest"
 GOVERNED_D1_ID = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 GOVERNED_WRANGLER_ENV = "production"
-
-_ACQUISITION_TOKEN = object()
-_AUTHENTICATED_TOKEN = object()
-
 
 def _validated_governed_wrangler() -> tuple[str, Path]:
     """Return the repository-pinned executable/config after authority checks.
@@ -256,8 +253,154 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     ).fetchone() is not None
 
 
+def _quoted_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _canonical_schema_sql(value: object) -> str | None:
+    """Collapse insignificant DDL whitespace without changing quoted text."""
+    if value is None:
+        return None
+    text = str(value)
+    rendered: list[str] = []
+    pending_space = False
+    quote_end: str | None = None
+    index = 0
+    while index < len(text):
+        character = text[index]
+        if quote_end is not None:
+            rendered.append(character)
+            if character == quote_end:
+                if quote_end != "]" and index + 1 < len(text) and text[index + 1] == quote_end:
+                    rendered.append(text[index + 1])
+                    index += 1
+                else:
+                    quote_end = None
+            index += 1
+            continue
+        if character.isspace():
+            pending_space = bool(rendered)
+            index += 1
+            continue
+        if pending_space:
+            rendered.append(" ")
+            pending_space = False
+        rendered.append(character)
+        if character in {"'", '"', "`"}:
+            quote_end = character
+        elif character == "[":
+            quote_end = "]"
+        index += 1
+    return "".join(rendered).strip()
+
+
+def _table_schema_manifest(
+    conn: sqlite3.Connection, table: str
+) -> dict[str, Any]:
+    """Return a deterministic manifest of SQLite structural semantics."""
+    table_identifier = _quoted_identifier(table)
+    xinfo = [
+        {
+            "cid": int(row[0]),
+            "name": str(row[1]),
+            "type": str(row[2] or ""),
+            "not_null": int(row[3]),
+            "default": row[4],
+            "primary_key_ordinal": int(row[5]),
+            "hidden": int(row[6]),
+        }
+        for row in conn.execute(f"PRAGMA table_xinfo({table_identifier})")
+    ]
+    if not xinfo:
+        raise ValueError(f"governed table has no columns: {table}")
+
+    master = [
+        {
+            "type": str(row[0]),
+            "name": str(row[1]),
+            "table_name": str(row[2]),
+            "sql": _canonical_schema_sql(row[3]),
+        }
+        for row in conn.execute(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master "
+            "WHERE (type='table' AND name=?) "
+            "OR (type IN ('index','trigger') AND tbl_name=?) "
+            "ORDER BY type,name",
+            (table, table),
+        )
+    ]
+
+    indexes: list[dict[str, Any]] = []
+    index_rows = list(conn.execute(f"PRAGMA index_list({table_identifier})"))
+    for row in sorted(index_rows, key=lambda candidate: str(candidate[1])):
+        name = str(row[1])
+        index_identifier = _quoted_identifier(name)
+        columns = [
+            {
+                "sequence": int(item[0]),
+                "column_id": int(item[1]),
+                "name": None if item[2] is None else str(item[2]),
+                "descending": int(item[3]),
+                "collation": None if item[4] is None else str(item[4]),
+                "key": int(item[5]),
+            }
+            for item in conn.execute(f"PRAGMA index_xinfo({index_identifier})")
+        ]
+        indexes.append(
+            {
+                "name": name,
+                "unique": int(row[2]),
+                "origin": str(row[3]),
+                "partial": int(row[4]),
+                "columns": columns,
+            }
+        )
+
+    foreign_keys = [
+        {
+            "id": int(row[0]),
+            "sequence": int(row[1]),
+            "target_table": str(row[2]),
+            "from": None if row[3] is None else str(row[3]),
+            "to": None if row[4] is None else str(row[4]),
+            "on_update": str(row[5]),
+            "on_delete": str(row[6]),
+            "match": str(row[7]),
+        }
+        for row in conn.execute(f"PRAGMA foreign_key_list({table_identifier})")
+    ]
+    return {
+        "table_xinfo": xinfo,
+        "sqlite_master": master,
+        "indexes": indexes,
+        "foreign_keys": foreign_keys,
+    }
+
+
+def _replicated_schema_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Remove only the local snapshot-invalidation capability from parity.
+
+    Those triggers are intentionally installed on the research mirror, not on
+    acquisition D1. Their full DDL still participates in the signed local
+    schema digest; every other table/index/trigger/FK object must match.
+    """
+    replicated = json.loads(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    )
+    replicated["sqlite_master"] = [
+        row
+        for row in replicated["sqlite_master"]
+        if not (
+            row["type"] == "trigger"
+            and row["name"].startswith("invalidate_snapshot_")
+        )
+    ]
+    return replicated
+
+
 def _table_columns(conn: sqlite3.Connection, table: str) -> tuple[str, ...]:
-    return tuple(str(row[1]) for row in conn.execute(f'PRAGMA table_xinfo("{table}")'))
+    manifest = _table_schema_manifest(conn, table)
+    return tuple(str(row["name"]) for row in manifest["table_xinfo"])
 
 
 def _fingerprint_value(column: str, value: Any) -> Any:
@@ -309,17 +452,19 @@ def governed_content_identity(
     """
 
     inventory: dict[str, dict[str, Any]] = {}
-    schema: dict[str, list[str]] = {}
+    schema: dict[str, dict[str, Any]] = {}
     counts: dict[str, int] = {}
     for table in tables:
         if not _table_exists(conn, table):
             raise ValueError(f"governed mirror is missing table: {table}")
-        columns = _table_columns(conn, table)
+        schema_manifest = _table_schema_manifest(conn, table)
+        columns = tuple(
+            str(column["name"]) for column in schema_manifest["table_xinfo"]
+        )
         count, digest = _table_fingerprint(conn, table, columns)
-        schema[table] = list(columns)
+        schema[table] = schema_manifest
         counts[table] = count
         inventory[table] = {
-            "columns": list(columns),
             "count": count,
             "digest": digest,
         }
@@ -340,19 +485,24 @@ def _exact_source_local_reconciliation(
     source: sqlite3.Connection,
     local: sqlite3.Connection,
     tables: tuple[str, ...],
-) -> tuple[str, str, dict[str, int]]:
+) -> tuple[str, str, str, dict[str, int]]:
     for table in tables:
         if not _table_exists(source, table):
             raise ValueError(f"D1 export is missing governed table: {table}")
         if not _table_exists(local, table):
             raise ValueError(f"local mirror is missing governed table: {table}")
-        source_columns = _table_columns(source, table)
-        local_columns = _table_columns(local, table)
-        if source_columns != local_columns:
+        source_schema = _table_schema_manifest(source, table)
+        local_schema = _table_schema_manifest(local, table)
+        if source_schema != _replicated_schema_manifest(local_schema):
             raise ValueError(
-                "authenticated D1 source/local schema mismatch for "
-                f"{table}: source={list(source_columns)} local={list(local_columns)}"
+                f"authenticated D1 source/local schema mismatch for {table}"
             )
+        source_columns = tuple(
+            str(column["name"]) for column in source_schema["table_xinfo"]
+        )
+        local_columns = tuple(
+            str(column["name"]) for column in local_schema["table_xinfo"]
+        )
         source_count, source_digest = _table_fingerprint(
             source, table, source_columns
         )
@@ -368,11 +518,10 @@ def _exact_source_local_reconciliation(
     local_identity, local_schema, local_counts = governed_content_identity(local, tables)
     if (
         source_identity != local_identity
-        or source_schema != local_schema
         or source_counts != local_counts
     ):
         raise ValueError("authenticated D1 governed inventory reconciliation failed")
-    return source_identity, source_schema, source_counts
+    return source_identity, source_schema, local_schema, source_counts
 
 
 def _change_seq(conn: sqlite3.Connection) -> int:
@@ -398,142 +547,152 @@ def _local_change_seq(conn: sqlite3.Connection) -> int:
     return value
 
 
-class _AuthenticatedWranglerExport:
-    """Opaque, single-use proof minted only after exact local reconciliation."""
+def _build_authenticated_export_authority():
+    """Close capability minting over process-private membership registries."""
+    acquired_exports = WeakSet()
+    authenticated_exports = WeakSet()
 
-    __slots__ = ("_document", "_audit_digest", "_consumed")
+    class _AuthenticatedWranglerExport:
+        """Opaque proof minted only after exact local reconciliation."""
 
-    def __init__(self, document: dict[str, Any], *, _token: object | None = None):
-        if _token is not _AUTHENTICATED_TOKEN:
-            raise RuntimeError("authenticated Wrangler export has no public constructor")
-        from ops.d1_sync_signing import d1_sync_digest
+        __slots__ = ("_facts_json", "_consumed", "__weakref__")
 
-        self._document = document
-        self._audit_digest = d1_sync_digest(document)
-        self._consumed = False
-
-    def _consume(self) -> tuple[str, str, str, dict[str, Any]]:
-        if self._consumed:
-            raise RuntimeError("authenticated Wrangler export was already consumed")
-        self._consumed = True
-        return (
-            self._audit_digest,
-            self._document["issuer_key_id"],
-            self._document["signature"],
-            dict(self._document),
-        )
-
-
-class _PinnedWranglerExport:
-    """Actual pinned remote export pending exact source/local reconciliation."""
-
-    __slots__ = (
-        "export_digest",
-        "artifact_size",
-        "artifact_format",
-        "_sqlite_path",
-        "_signer",
-        "_authenticated",
-    )
-
-    def __init__(
-        self,
-        *,
-        export_digest: str,
-        artifact_size: int,
-        artifact_format: str,
-        sqlite_path: Path,
-        signer: Any,
-        _token: object | None = None,
-    ) -> None:
-        if _token is not _ACQUISITION_TOKEN:
-            raise RuntimeError("pinned Wrangler export has no public constructor")
-        self.export_digest = export_digest
-        self.artifact_size = artifact_size
-        self.artifact_format = artifact_format
-        self._sqlite_path = sqlite_path
-        self._signer = signer
-        self._authenticated = False
-
-    def open_source(self) -> sqlite3.Connection:
-        return open_export_sqlite(self._sqlite_path)
-
-    def authenticate_local(
-        self,
-        local: sqlite3.Connection,
-        tables: tuple[str, ...],
-        *,
-        sync_kind: str,
-        prior_audit_digest: str | None,
-    ) -> _AuthenticatedWranglerExport:
-        if self._authenticated:
-            raise RuntimeError("pinned Wrangler export authentication is single-use")
-        with open_export_sqlite(self._sqlite_path) as source:
-            source_cursor = _change_seq(source)
-            local_cursor = _local_change_seq(local)
-            if source_cursor != local_cursor:
-                raise ValueError(
-                    "authenticated D1 source/local applied cursor mismatch"
-                )
-            content_digest, schema_digest, counts = (
-                _exact_source_local_reconciliation(source, local, tables)
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError(
+                "authenticated Wrangler export has no public constructor"
             )
-        from ops.d1_sync_signing import (
-            AUDIT_ENVELOPE_SCHEMA,
-            GOVERNED_AUTHORITY_ID,
-            d1_sync_digest,
+
+        def _consume_for_signing(self) -> dict[str, Any]:
+            return _consume_authenticated_export(self)
+
+    def _consume_authenticated_export(capability: object) -> dict[str, Any]:
+        if type(capability) is not _AuthenticatedWranglerExport:
+            raise RuntimeError(
+                "authenticated Wrangler export was already consumed"
+            )
+        if capability._consumed or capability not in authenticated_exports:
+            raise RuntimeError(
+                "authenticated Wrangler export was already consumed"
+            )
+        capability._consumed = True
+        authenticated_exports.discard(capability)
+        return json.loads(capability._facts_json)
+
+    class _PinnedWranglerExport:
+        """Actual pinned remote export pending exact reconciliation."""
+
+        __slots__ = (
+            "export_digest",
+            "artifact_size",
+            "artifact_format",
+            "_sqlite_path",
+            "_exported_at",
+            "_authenticated",
+            "__weakref__",
         )
 
-        registry_digest = self._signer._registry_digest  # noqa: SLF001
-        envelope = {
-            "schema_version": AUDIT_ENVELOPE_SCHEMA,
-            "authority_id": GOVERNED_AUTHORITY_ID,
-            "source_mode": "WRANGLER_REMOTE",
-            "d1_name": GOVERNED_D1_NAME,
-            "d1_id": GOVERNED_D1_ID,
-            "sync_kind": sync_kind,
-            "export_digest": self.export_digest,
-            "artifact_format": self.artifact_format,
-            "source_change_seq": source_cursor,
-            "applied_change_seq": local_cursor,
-            "source_content_digest": content_digest,
-            "local_content_digest": content_digest,
-            "schema_digest": schema_digest,
-            "table_counts": counts,
-            "prior_audit_digest": prior_audit_digest,
-            "registry_digest": registry_digest,
-            "issued_at": datetime.now(timezone.utc).isoformat(),
-        }
-        document = self._signer.sign(envelope)
-        # Ensure canonical serialization is possible before consuming the
-        # acquisition. This also makes the final audit digest deterministic.
-        d1_sync_digest(document)
-        self._authenticated = True
-        return _AuthenticatedWranglerExport(document, _token=_AUTHENTICATED_TOKEN)
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("pinned Wrangler export has no public constructor")
 
+        def _require_acquired(self) -> None:
+            if self not in acquired_exports:
+                raise RuntimeError(
+                    "pinned Wrangler export was not minted by governed acquisition"
+                )
 
-def acquire_pinned_wrangler_export(directory: Path) -> _PinnedWranglerExport:
-    """Acquire, materialize, and bind one governed remote D1 export.
+        def open_source(self) -> sqlite3.Connection:
+            self._require_acquired()
+            return open_export_sqlite(self._sqlite_path)
 
-    The production entrypoint has no executable/config/env/database/key
-    override. Tests simulate the provider by monkeypatching ``subprocess.run``
-    while still traversing every pinned validation and materialization step.
-    """
+        def authenticate_local(
+            self,
+            local: sqlite3.Connection,
+            tables: tuple[str, ...],
+            *,
+            sync_kind: str,
+            prior_audit_digest: str | None,
+        ) -> _AuthenticatedWranglerExport:
+            self._require_acquired()
+            if self._authenticated:
+                raise RuntimeError(
+                    "pinned Wrangler export authentication is single-use"
+                )
+            with open_export_sqlite(self._sqlite_path) as source:
+                source_cursor = _change_seq(source)
+                local_cursor = _local_change_seq(local)
+                if source_cursor != local_cursor:
+                    raise ValueError(
+                        "authenticated D1 source/local applied cursor mismatch"
+                    )
+                (
+                    content_digest,
+                    source_schema_digest,
+                    local_schema_digest,
+                    counts,
+                ) = _exact_source_local_reconciliation(source, local, tables)
+            facts = {
+                "sync_kind": sync_kind,
+                "export_digest": self.export_digest,
+                "artifact_format": self.artifact_format,
+                "source_change_seq": source_cursor,
+                "applied_change_seq": local_cursor,
+                "source_content_digest": content_digest,
+                "local_content_digest": content_digest,
+                "source_schema_digest": source_schema_digest,
+                "schema_digest": local_schema_digest,
+                "table_counts": counts,
+                "prior_audit_digest": prior_audit_digest,
+                "exported_at": self._exported_at,
+            }
+            authenticated = object.__new__(_AuthenticatedWranglerExport)
+            authenticated._facts_json = json.dumps(
+                facts, sort_keys=True, separators=(",", ":"), allow_nan=False
+            )
+            authenticated._consumed = False
+            authenticated_exports.add(authenticated)
+            self._authenticated = True
+            acquired_exports.discard(self)
+            return authenticated
 
-    from ops.d1_sync_signing import _load_pinned_d1_sync_signer
+    def acquire_pinned_wrangler_export(directory: Path) -> _PinnedWranglerExport:
+        """Acquire, materialize, and bind one governed remote D1 export."""
+        from ops.d1_sync_signing import (
+            _preflight_d1_sync_signing_authority,
+            _utc_now,
+        )
 
-    signer = _load_pinned_d1_sync_signer()
-    raw_artifact = directory / "remote-export.sql"
-    run_wrangler_d1_export(output_path=raw_artifact)
-    materialized = directory / "remote-export.sqlite"
-    export_digest, artifact_size, artifact_format = materialize_d1_export(
-        raw_artifact, materialized
+        _preflight_d1_sync_signing_authority()
+        raw_artifact = directory / "remote-export.sql"
+        run_wrangler_d1_export(output_path=raw_artifact)
+        materialized = directory / "remote-export.sqlite"
+        export_digest, artifact_size, artifact_format = materialize_d1_export(
+            raw_artifact, materialized
+        )
+        acquired = object.__new__(_PinnedWranglerExport)
+        acquired.export_digest = export_digest
+        acquired.artifact_size = artifact_size
+        acquired.artifact_format = artifact_format
+        acquired._sqlite_path = materialized
+        acquired._exported_at = _utc_now().isoformat()
+        acquired._authenticated = False
+        acquired_exports.add(acquired)
+        return acquired
+
+    from ops.d1_sync_signing import _bind_authenticated_export_authority
+
+    _bind_authenticated_export_authority(
+        _AuthenticatedWranglerExport, _consume_authenticated_export
     )
-    return _PinnedWranglerExport(
-        export_digest=export_digest,
-        artifact_size=artifact_size,
-        artifact_format=artifact_format,
-        sqlite_path=materialized,
-        signer=signer,
-        _token=_ACQUISITION_TOKEN,
+    return (
+        _AuthenticatedWranglerExport,
+        _PinnedWranglerExport,
+        acquire_pinned_wrangler_export,
     )
+
+
+(
+    _AuthenticatedWranglerExport,
+    _PinnedWranglerExport,
+    acquire_pinned_wrangler_export,
+) = _build_authenticated_export_authority()
+del _build_authenticated_export_authority

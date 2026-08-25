@@ -20,6 +20,7 @@ finishes the apply and leaves snapshot publication closed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
@@ -28,6 +29,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlencode
+from weakref import WeakSet
 
 _here = Path(__file__).resolve().parent
 for _d in (_here, _here.parent):
@@ -680,7 +682,7 @@ def _verify_source_local_parity(
 ) -> tuple[str, str, dict[str, int]]:
     """Verify exact source/local schema, row counts, and content digests."""
     local = store._conn  # noqa: SLF001
-    source_identity, _schema_digest, counts = (
+    source_identity, _source_schema, _local_schema, counts = (
         _private_export._exact_source_local_reconciliation(  # noqa: SLF001
             source, local, tuple(tables)
         )
@@ -937,14 +939,70 @@ def _mark_untrusted_export_sync(
 
 
 def _latest_export_sync_row(conn: sqlite3.Connection) -> dict[str, object] | None:
+    """Select current authority by signed issuance time.
+
+    Historical rows signed by retired keys are ignored for current
+    eligibility; they must not make a later active-key FULL import
+    impossible. Revoked or tampered rows never become current.
+    """
     cursor = conn.execute(
         "SELECT * FROM local_d1_export_sync_runs "
-        "ORDER BY updated_at DESC, rowid DESC LIMIT 1"
+        "WHERE status='COMPLETE' AND signed_evidence_json IS NOT NULL"
     )
-    row = cursor.fetchone()
-    if row is None:
+    columns = tuple(column[0] for column in cursor.description or ())
+    rows = [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+    if not rows:
         return None
-    return dict(zip((column[0] for column in cursor.description), row, strict=True))
+
+    current: list[tuple[datetime, dict[str, object], dict[str, object]]] = []
+    for row in rows:
+        try:
+            envelope = _verified_sync_envelope_from_row(
+                conn,
+                row,
+                recompute_local=False,
+                require_fresh=False,
+                eligibility="current",
+            )
+        except (
+            ValueError,
+            TypeError,
+            RuntimeError,
+            json.JSONDecodeError,
+            sqlite3.Error,
+        ):
+            continue
+        issued_at = datetime.fromisoformat(
+            str(envelope["issued_at"]).replace("Z", "+00:00")
+        ).astimezone(timezone.utc)
+        current.append((issued_at, row, envelope))
+    if not current:
+        return None
+    current.sort(key=lambda candidate: candidate[0])
+    if len(current) > 1 and current[-2][0] == current[-1][0]:
+        raise ValueError("signed D1 sync audit issuance order is ambiguous")
+
+    eligible: list[tuple[datetime, dict[str, object], dict[str, object]]] = []
+    seen_digests: set[object] = set()
+    previous_cursor = -1
+    for issued_at, row, envelope in current:
+        source_cursor = envelope["source_change_seq"]
+        if not isinstance(source_cursor, int) or source_cursor < previous_cursor:
+            continue
+        if envelope["sync_kind"] == "FULL":
+            eligible.append((issued_at, row, envelope))
+        elif (
+            envelope["sync_kind"] == "INCREMENTAL"
+            and envelope["prior_audit_digest"] in seen_digests
+        ):
+            eligible.append((issued_at, row, envelope))
+        else:
+            continue
+        previous_cursor = source_cursor
+        seen_digests.add(row["audit_digest"])
+    if not eligible:
+        return None
+    return eligible[-1][1]
 
 
 def _verified_sync_envelope_from_row(
@@ -952,18 +1010,22 @@ def _verified_sync_envelope_from_row(
     row: dict[str, object],
     *,
     recompute_local: bool,
+    require_fresh: bool = True,
+    eligibility: str = "current",
 ) -> dict[str, object]:
     from ops.d1_sync_signing import (
         GOVERNED_AUTHORITY_ID,
+        _verify_signed_d1_sync_audit,
         d1_sync_digest,
-        verify_signed_d1_sync_audit,
     )
 
     document_text = row.get("signed_evidence_json")
     if not isinstance(document_text, str):
         raise ValueError("latest D1 sync audit is unsigned")
     document = json.loads(document_text)
-    envelope = verify_signed_d1_sync_audit(document)
+    envelope = _verify_signed_d1_sync_audit(
+        document, require_fresh=require_fresh, eligibility=eligibility
+    )
     audit_digest = d1_sync_digest(document)
     expected_counts = envelope["table_counts"]
     if set(expected_counts) != set(DEFAULT_TABLES):
@@ -1022,10 +1084,17 @@ def _mark_authenticated_export_complete(
     authenticated_export,
 ) -> dict[str, object]:
     """Persist one single-use capability; there is no caller evidence input."""
-    from ops.d1_sync_signing import d1_sync_digest, verify_signed_d1_sync_audit
+    from ops.d1_sync_signing import (
+        _seal_authenticated_wrangler_export,
+        d1_sync_digest,
+        verify_signed_d1_sync_audit,
+    )
 
     _ensure_export_sync_audit(store)
-    audit_digest, issuer_key_id, signature, document = authenticated_export._consume()  # noqa: SLF001
+    sealed = _seal_authenticated_wrangler_export(authenticated_export)
+    audit_digest, issuer_key_id, signature, document = (
+        sealed._consume_for_persistence()  # noqa: SLF001
+    )
     envelope = verify_signed_d1_sync_audit(document)
     if audit_digest != d1_sync_digest(document):
         raise ValueError("authenticated D1 sync audit digest mismatch")
@@ -1041,6 +1110,44 @@ def _mark_authenticated_export_complete(
         or _last_change_seq(store) != envelope["applied_change_seq"]
     ):
         raise ValueError("authenticated D1 sync audit changed before persistence")
+    existing_cursor = store._conn.execute(  # noqa: SLF001
+        "SELECT * FROM local_d1_export_sync_runs WHERE export_digest=?",
+        (envelope["export_digest"],),
+    )
+    existing_tuple = existing_cursor.fetchone()
+    if existing_tuple is not None and envelope["sync_kind"] == "INCREMENTAL":
+        existing_row = dict(
+            zip(
+                (column[0] for column in existing_cursor.description),
+                existing_tuple,
+                strict=True,
+            )
+        )
+        existing_envelope = _verified_sync_envelope_from_row(
+            store._conn,  # noqa: SLF001
+            existing_row,
+            recompute_local=True,
+        )
+        unchanged_fields = (
+            "export_digest",
+            "artifact_format",
+            "source_change_seq",
+            "applied_change_seq",
+            "source_content_digest",
+            "local_content_digest",
+            "source_schema_digest",
+            "schema_digest",
+            "table_counts",
+        )
+        if (
+            envelope["prior_audit_digest"] == existing_row["audit_digest"]
+            and all(
+                envelope[field] == existing_envelope[field]
+                for field in unchanged_fields
+            )
+        ):
+            return existing_envelope
+        raise ValueError("incremental D1 export digest collision is not a no-op")
     now = datetime.now(timezone.utc).isoformat()
     store._conn.execute(  # noqa: SLF001
         """
@@ -1155,6 +1262,7 @@ def _run_private_export_sync(
     total_seen = total_registered = total_skipped = 0
     failures: list[str] = []
     _ensure_control_tables(store._conn)  # noqa: SLF001
+    _ensure_export_sync_audit(store)
     store._conn.commit()  # noqa: SLF001
     source_mode = (
         "WRANGLER_REMOTE" if authenticated_acquisition is not None else "LOCAL_ARTIFACT"
@@ -1176,6 +1284,7 @@ def _run_private_export_sync(
     local_content_digest: str | None = None
     table_counts: dict[str, int] | None = None
     prior_audit_digest: str | None = None
+    noop_trusted = False
     if needs_change_feed or needs_bootstrap_cursor:
         try:
             source_max = _source_change_seq(source)
@@ -1192,11 +1301,49 @@ def _run_private_export_sync(
                     "D1 export is older than the local applied cursor; "
                     "refusing stale apply"
                 )
+            if trusted_full_inventory:
+                current_trusted = _latest_trusted_sync_audit(store)
+                if current_trusted is not None:
+                    _current_row, current_envelope = current_trusted
+                    current_cursor = current_envelope["applied_change_seq"]
+                    if (
+                        isinstance(current_cursor, int)
+                        and source_max == current_cursor
+                    ):
+                        source_identity, source_schema, _source_counts = (
+                            _private_export.governed_content_identity(
+                                source, tuple(tables)
+                            )
+                        )
+                        if (
+                            source_identity
+                            == current_envelope["source_content_digest"]
+                            and source_schema
+                            == current_envelope["source_schema_digest"]
+                        ):
+                            noop_trusted = True
+                        else:
+                            raise ValueError(
+                                "D1 export cursor matches the current mirror "
+                                "with a different content digest"
+                            )
         except Exception as exc:  # noqa: BLE001
             failures.append(f"change_feed: {exc}")
+    if noop_trusted and not failures:
+        return total_seen, total_registered, total_skipped, failures
+    signed_digest_collision = store._conn.execute(  # noqa: SLF001
+        "SELECT 1 FROM local_d1_export_sync_runs "
+        "WHERE export_digest=? AND signed_evidence_json IS NOT NULL",
+        (export_digest,),
+    ).fetchone()
+    audit_export_digest = export_digest
+    if signed_digest_collision is not None:
+        audit_export_digest = "sha256:" + hashlib.sha256(
+            f"untrusted-attempt:{export_digest}".encode("utf-8")
+        ).hexdigest()
     _mark_untrusted_export_sync(
         store,
-        export_digest=export_digest,
+        export_digest=audit_export_digest,
         artifact_format=artifact_format,
         source_mode=source_mode,
         sync_kind=sync_kind,
@@ -1306,12 +1453,19 @@ def _run_private_export_sync(
                 prior_audit_digest=prior_audit_digest,
             )
             _mark_authenticated_export_complete(store, authenticated_export)
+            if audit_export_digest != export_digest:
+                store._conn.execute(  # noqa: SLF001
+                    "DELETE FROM local_d1_export_sync_runs "
+                    "WHERE export_digest=? AND signed_evidence_json IS NULL",
+                    (audit_export_digest,),
+                )
+                store._conn.commit()  # noqa: SLF001
         except Exception as exc:  # noqa: BLE001
             failures.append(f"source_local_reconciliation: {exc}")
     if failures or not trusted_full_inventory:
         _mark_untrusted_export_sync(
             store,
-            export_digest=export_digest,
+            export_digest=audit_export_digest,
             artifact_format=artifact_format,
             source_mode=source_mode,
             sync_kind=sync_kind,
@@ -1660,6 +1814,83 @@ def _authenticated_export_cursor_chain(
         return None, None
     finally:
         conn.close()
+
+
+def _build_applied_mirror_authority():
+    """Mint one-shot handles over a verified current applied mirror."""
+    live_mirrors = WeakSet()
+
+    class _AuthenticatedAppliedMirror:
+        __slots__ = (
+            "_db_path",
+            "_source_cursor",
+            "_export_cursor",
+            "_consumed",
+            "__weakref__",
+        )
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError(
+                "authenticated applied mirror has no public constructor"
+            )
+
+        def cursor_chain(self) -> tuple[int, int]:
+            if self not in live_mirrors or self._consumed:
+                raise RuntimeError("authenticated applied mirror is not live")
+            return self._source_cursor, self._export_cursor
+
+        def _consume_for_projection(self) -> dict[str, object]:
+            if self not in live_mirrors or self._consumed:
+                raise RuntimeError("authenticated applied mirror was already consumed")
+            self._consumed = True
+            live_mirrors.discard(self)
+            return {
+                "db_path": self._db_path,
+                "source_cursor": self._source_cursor,
+                "export_cursor": self._export_cursor,
+            }
+
+    def _consume_authenticated_applied_mirror(handle: object) -> dict[str, object]:
+        if type(handle) is not _AuthenticatedAppliedMirror:
+            raise RuntimeError(
+                "Ops projection requires an authenticated applied mirror handle"
+            )
+        return handle._consume_for_projection()
+
+    def open_authenticated_applied_mirror(
+        db_path: str | Path,
+    ) -> _AuthenticatedAppliedMirror:
+        path = Path(db_path).resolve()
+        source_cursor, export_cursor = _authenticated_export_cursor_chain(path)
+        if (
+            not isinstance(source_cursor, int)
+            or source_cursor <= 0
+            or export_cursor != source_cursor
+        ):
+            raise ValueError(
+                "applied mirror is not an authenticated current D1 export"
+            )
+        handle = object.__new__(_AuthenticatedAppliedMirror)
+        handle._db_path = path
+        handle._source_cursor = source_cursor
+        handle._export_cursor = export_cursor
+        handle._consumed = False
+        live_mirrors.add(handle)
+        return handle
+
+    return (
+        _AuthenticatedAppliedMirror,
+        open_authenticated_applied_mirror,
+        _consume_authenticated_applied_mirror,
+    )
+
+
+(
+    _AuthenticatedAppliedMirror,
+    open_authenticated_applied_mirror,
+    _consume_authenticated_applied_mirror,
+) = _build_applied_mirror_authority()
+del _build_applied_mirror_authority
 
 
 if __name__ == "__main__":

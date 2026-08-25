@@ -51,6 +51,7 @@ from scripts.export_ops_projection import (  # noqa: E402
 )
 from scripts.sync_d1_to_sqlite import (  # noqa: E402
     _authenticated_export_cursor_chain,
+    open_authenticated_applied_mirror,
 )
 
 OPS_PROJECTION_DATABASE = "quant-ops-projection"
@@ -241,6 +242,86 @@ def read_remote_active_generation(
     except (json.JSONDecodeError, KeyError, TypeError, IndexError):
         return None
 
+
+def read_remote_active_cursor(
+    *,
+    timeout_sec: int = 120,
+) -> int | None:
+    """Return the current trusted projection cursor, 0 if never activated.
+
+    ``None`` means the remote state or transport is unverifiable and therefore
+    blocks publication. A dangling pointer, missing metadata, null cursor, or
+    divergent source/export/applied chain is never treated as an empty D1.
+    """
+    try:
+        wrangler, config = _validated_ops_wrangler()
+    except RuntimeError:
+        return None
+    command = [
+        wrangler,
+        "d1",
+        "execute",
+        OPS_PROJECTION_DATABASE,
+        "--remote",
+        "--config",
+        str(config),
+        "--env",
+        "production",
+        "--yes",
+        "--json",
+        "--command",
+        "SELECT (SELECT COUNT(*) FROM ops_projection_active "
+        "WHERE singleton=1) AS active_count,"
+        "m.source_cursor,m.export_cursor,m.applied_cursor "
+        "FROM (SELECT 1) seed "
+        "LEFT JOIN ops_projection_active a ON a.singleton=1 "
+        "LEFT JOIN ops_projection_metadata m "
+        "ON m.projection_generation_id=a.generation_id",
+    ]
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=str(OPS_WRANGLER_CWD),
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    text = proc.stdout or ""
+    start = text.find("[")
+    if start < 0:
+        return None
+    try:
+        payload = json.loads(text[start:])
+        rows = payload[0].get("results") or []
+        if len(rows) != 1:
+            return None
+        row = rows[0]
+        active_count = row.get("active_count")
+        if active_count == 0:
+            return 0
+        if active_count != 1:
+            return None
+        cursors = (
+            row.get("source_cursor"),
+            row.get("export_cursor"),
+            row.get("applied_cursor"),
+        )
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in cursors
+        ):
+            return None
+        if len(set(cursors)) != 1:
+            return None
+        return cursors[0]
+    except (json.JSONDecodeError, KeyError, TypeError, IndexError):
+        return None
+
 def enforce_complete_count_guard(
     *,
     local_complete: int,
@@ -379,6 +460,23 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 6
 
+    if args.apply_remote and not args.dry_run:
+        remote_active_cursor = read_remote_active_cursor()
+        if remote_active_cursor is None:
+            print(
+                "ERROR: remote Ops active cursor is unverifiable; refusing replay",
+                file=sys.stderr,
+            )
+            return 7
+        local_cursor = trusted_cursor_chain[0]
+        if not isinstance(local_cursor, int) or local_cursor < remote_active_cursor:
+            print(
+                "ERROR: authenticated local cursor would regress the active "
+                "remote Ops projection",
+                file=sys.stderr,
+            )
+            return 7
+
     refresh_status = "skipped"
     refresh_error = None
     last_refresh_attempt_at = _now()
@@ -443,10 +541,16 @@ def main(argv: list[str] | None = None) -> int:
         "storage_hot_cutoff": args.storage_hot_cutoff,
     }
     if has_trusted_cursor_chain and projection_signer is not None:
+        try:
+            applied_mirror = open_authenticated_applied_mirror(db_path)
+        except (ValueError, TypeError, RuntimeError, json.JSONDecodeError, sqlite3.Error):
+            print(
+                "ERROR: Ops projection requires an authenticated applied mirror handle",
+                file=sys.stderr,
+            )
+            return 7
         bundle = _render_trusted_projection_bundle(
-            db_path,
-            source_cursor=trusted_cursor_chain[0],
-            export_cursor=trusted_cursor_chain[1],
+            applied_mirror,
             projection_signer=projection_signer,
             **render_kwargs,
         )

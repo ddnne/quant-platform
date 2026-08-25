@@ -38,6 +38,9 @@ from _bootstrap import ensure_repo_root  # noqa: E402
 ROOT = ensure_repo_root()
 
 from ops.projection_content import build_projection_content_manifest  # noqa: E402
+from scripts.sync_d1_to_sqlite import (  # noqa: E402
+    _consume_authenticated_applied_mirror as _CONSUME_AUTHENTICATED_APPLIED_MIRROR,
+)
 
 PROJECTION_VERSION = "ops_projection/v4"
 DEFAULT_MAX_AGE_SECONDS = 86_400
@@ -878,6 +881,17 @@ def _render_projection_bundle(
         watermarks = _read_watermarks(conn, gen)
         raw_segments = _read_authoritative_raw_segments(conn, gen)
         applied_cursor, applied_updated_at = _read_applied_cursor(conn)
+        if projection_signer is not None and not _test_authority:
+            if (
+                isinstance(source_cursor, bool)
+                or not isinstance(source_cursor, int)
+                or source_cursor < 0
+                or export_cursor != source_cursor
+                or applied_cursor != source_cursor
+            ):
+                raise RuntimeError(
+                    "trusted Ops projection requires an exact applied cursor chain"
+                )
         if source_cursor is None:
             source_cursor = coerce_applied_seq(
                 _safe_scalar(
@@ -1188,6 +1202,23 @@ def _render_projection_bundle(
         f"{_sql_literal(gen)})={row_counts[table]}"
         for table in required_counts
     )
+    cursor_guard = "1=1"
+    if projection_signer is not None and not _test_authority:
+        assert isinstance(source_cursor, int)
+        cursor_guard = (
+            "(NOT EXISTS (SELECT 1 FROM ops_projection_active current "
+            "WHERE current.singleton=1) OR EXISTS ("
+            "SELECT 1 FROM ops_projection_active current "
+            "JOIN ops_projection_metadata current_meta "
+            "ON current_meta.projection_generation_id=current.generation_id "
+            "WHERE current.singleton=1 "
+            "AND current_meta.source_cursor IS NOT NULL "
+            "AND current_meta.export_cursor IS NOT NULL "
+            "AND current_meta.applied_cursor IS NOT NULL "
+            "AND current_meta.source_cursor=current_meta.export_cursor "
+            "AND current_meta.export_cursor=current_meta.applied_cursor "
+            f"AND current_meta.applied_cursor<={source_cursor}))"
+        )
     statements.append(
         "UPDATE ops_projection_generation "
         f"SET status='SEALED',sealed_at={_sql_literal(generated)} "
@@ -1199,9 +1230,11 @@ def _render_projection_bundle(
         "INSERT INTO ops_projection_active (singleton,generation_id,activated_at) "
         f"SELECT 1,{_sql_literal(gen)},{_sql_literal(generated)} "
         "FROM ops_projection_generation "
-        f"WHERE generation_id={_sql_literal(gen)} AND status='SEALED' AND {guard} "
+        f"WHERE generation_id={_sql_literal(gen)} AND status='SEALED' "
+        f"AND {guard} AND {cursor_guard} "
         "ON CONFLICT(singleton) DO UPDATE SET "
-        "generation_id=excluded.generation_id,activated_at=excluded.activated_at;"
+        "generation_id=excluded.generation_id,activated_at=excluded.activated_at "
+        f"WHERE {cursor_guard};"
     )
     if use_sql_transaction:
         statements.append("COMMIT;")
@@ -1252,22 +1285,30 @@ def render_projection_bundle(
     )
 
 
-def _render_trusted_projection_bundle(
-    db_path: str | Path,
-    *,
-    source_cursor: int,
-    export_cursor: int,
-    projection_signer: Any,
-    **kwargs: Any,
-) -> ProjectionBundle:
-    """Private publisher seam; arguments come from trusted audit/key loaders."""
-    return _render_projection_bundle(
-        db_path,
-        source_cursor=source_cursor,
-        export_cursor=export_cursor,
-        projection_signer=projection_signer,
-        **kwargs,
-    )
+def _bind_trusted_projection_renderer(consume: Any):
+    def _render_trusted_projection_bundle(
+        applied_mirror: Any,
+        *,
+        projection_signer: Any,
+        **kwargs: Any,
+    ) -> ProjectionBundle:
+        """Private publisher seam; consumes one authenticated applied mirror handle."""
+        facts = consume(applied_mirror)
+        return _render_projection_bundle(
+            facts["db_path"],
+            source_cursor=facts["source_cursor"],
+            export_cursor=facts["export_cursor"],
+            projection_signer=projection_signer,
+            **kwargs,
+        )
+
+    return _render_trusted_projection_bundle
+
+
+_render_trusted_projection_bundle = _bind_trusted_projection_renderer(
+    _CONSUME_AUTHENTICATED_APPLIED_MIRROR
+)
+del _bind_trusted_projection_renderer
 
 
 def _render_projection_bundle_for_test(db_path: str | Path, **kwargs: Any) -> ProjectionBundle:
