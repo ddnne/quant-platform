@@ -37,6 +37,12 @@ from selection.budget_ledger import (
 READINESS_SIGNATURE_ALGORITHM = "Ed25519"
 READINESS_PRIVATE_KEY_ENV = "QUANT_READINESS_SIGNING_KEY_FILE"
 READINESS_PUBLIC_KEYS_ENV = "QUANT_READINESS_PUBLIC_KEY_REGISTRY"
+DEFAULT_READINESS_PUBLIC_KEYS_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "specs"
+    / "ready"
+    / "readiness_verify_public_keys.json"
+)
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
@@ -147,10 +153,7 @@ class ReadinessPublicKeyRegistry:
         path = (
             Path(configured)
             if configured
-            else Path.home()
-            / ".config"
-            / "quant-platform"
-            / "readiness_public_keys.json"
+            else DEFAULT_READINESS_PUBLIC_KEYS_PATH
         )
         return cls.from_file(path)
 

@@ -1,5 +1,12 @@
 {
   "schema_version": 1,
   "purpose": "ops_projection_verification",
-  "keys": []
+  "keys": [
+    {
+      "key_id": "ops-projection-20260825-v1",
+      "algorithm": "Ed25519",
+      "public_key_base64": "1fECBb/uNUSmIn9p0AXiwBkWaAXr/FHA557sGGNpA48=",
+      "status": "active"
+    }
+  ]
 }

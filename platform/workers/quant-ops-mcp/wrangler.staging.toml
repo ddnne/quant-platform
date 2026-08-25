@@ -36,6 +36,6 @@ new_sqlite_classes = ["QuantOpsMcpAgent"]
 [vars]
 ALLOWED_LOGIN = "ddnne"
 DAILY_ROW_QUOTA = "25000"
-OPS_PROJECTION_VERIFY_KEYS_JSON = '{"schema_version":1,"keys":[]}'
+OPS_PROJECTION_VERIFY_KEYS_JSON = '{"schema_version":1,"keys":[{"key_id":"ops-projection-20260825-v1","algorithm":"Ed25519","public_key_base64":"1fECBb/uNUSmIn9p0AXiwBkWaAXr/FHA557sGGNpA48=","status":"active"}]}'
 # OAUTH_AUTHORIZATION_SERVER intentionally absent: fail closed until the
 # separate staging OAuth app exists.

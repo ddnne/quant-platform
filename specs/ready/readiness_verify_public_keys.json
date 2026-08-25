@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "purpose": "readiness_attestation_verification",
+  "keys": [
+    {
+      "key_id": "readiness-20260825-v1",
+      "algorithm": "Ed25519",
+      "public_key_b64": "ZOse2JOo725wYTZbey1wcqnwjfGAPbs/BfddkY/8Pdg=",
+      "status": "active"
+    }
+  ]
+}

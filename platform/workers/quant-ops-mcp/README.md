@@ -33,9 +33,9 @@ aggregate and does not scan ingestion facts.
 
 The generation is accepted only after its
 `ops-projection-signed-envelope/v1` Ed25519 signature verifies against
-`OPS_PROJECTION_VERIFY_KEYS_JSON`. The committed empty registry is deliberate:
-until a production public key is provisioned, an otherwise active generation
-remains `NOT_PROJECTED`.
+`OPS_PROJECTION_VERIFY_KEYS_JSON`. The committed registry contains public
+verification material only. Its matching private key remains outside Git and
+is readable only by the projection publisher.
 
 ## Migrations
 
