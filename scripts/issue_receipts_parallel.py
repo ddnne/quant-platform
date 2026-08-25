@@ -31,6 +31,9 @@ from typing import Any, Sequence
 
 ROOT = ensure_repo_root()
 
+from ingestion.jsda.official_index import (  # noqa: E402
+    read_local_index_text as _read_index_text,
+)
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
     refresh_coverage_ledger,
@@ -512,16 +515,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print JSON summary on stdout (last line).",
     )
     return ap
-
-
-def _read_index_text(path: str | None) -> str | None:
-    """Load local index HTML. Missing path is None (fail-closed empty)."""
-    if path is None:
-        return None
-    index_path = Path(path)
-    if not index_path.is_file():
-        raise FileNotFoundError(f"index HTML not found: {index_path}")
-    return index_path.read_text(encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:

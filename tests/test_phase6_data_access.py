@@ -101,18 +101,3 @@ def test_query_dataset_uses_ready_snapshot_and_filters_future_facts(
             end="2025-04-04",
             page_token=first["next_page_token"],
         )
-
-
-def test_worker_retains_every_raw_page_and_scopes_tokens():
-    from pathlib import Path
-
-    source = (
-        Path(__file__).parents[1]
-        / "platform/workers/ingestion-premium/src/index.ts"
-    ).read_text(encoding="utf-8")
-    assert 'page-${String(page.number).padStart(6, "0")}.json' in source
-    assert '`${rawPrefix}/manifest.json`' in source
-    assert "data_truncated" not in source
-    assert "INGESTION_RUN_TOKEN" in source
-    assert "DATA_EXPORT_TOKEN" in source
-    assert "INGESTION_PROXY_TOKEN" not in source

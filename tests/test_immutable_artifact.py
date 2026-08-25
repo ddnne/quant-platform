@@ -470,9 +470,11 @@ def test_research_job_callers_use_worker_put_not_cli() -> None:
     remote_callers = (
         "cf_mass_eval_job.py",
         "cf_mass_eval_stage.py",
+        "cf_mass_eval_run.py",
         "occupancy_audit.py",
         "cf_propose_thesis.py",
         "cf_cost_verify.py",
+        "cf_daily_path_job.py",
     )
     for name in remote_callers:
         src = (root / name).read_text(encoding="utf-8")
@@ -490,3 +492,92 @@ def test_research_job_callers_use_worker_put_not_cli() -> None:
     assert "put_children_then_manifest_via_worker" in helper
     assert "default_r2_put" in helper
     assert "does not grant CLI put" in (put_research_artifact.__doc__ or "")
+
+
+def test_put_local_fallback_artifacts_default_remote_uses_worker_put(
+    monkeypatch,
+) -> None:
+    from research.cf_mass_eval_job import design_mass_factory_paths
+    from research.cf_mass_eval_run import put_local_fallback_artifacts
+
+    monkeypatch.setenv(WORKER_PUT_URL_ENV, "https://example.invalid/worker")
+    monkeypatch.setenv(WORKER_PUT_TOKEN_ENV, "tok")
+    monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    seen: list[dict] = []
+
+    class _Resp:
+        status = 200
+
+        def __init__(self, key: str) -> None:
+            self._key = key
+
+        def read(self):
+            return json.dumps(
+                {
+                    "ok": True,
+                    "conflict": False,
+                    "verified": True,
+                    "go": False,
+                    "manifest": {"key": self._key, "created": True},
+                }
+            ).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        payload = json.loads(req.data.decode("utf-8"))
+        seen.append(
+            {
+                "url": req.full_url,
+                "method": req.get_method(),
+                "data": payload,
+                "headers": {k.lower(): v for k, v in req.header_items()},
+            }
+        )
+        return _Resp(payload["manifest"]["key"])
+
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", fake_urlopen)
+    puts = put_local_fallback_artifacts(
+        {"job_id": "fallback-test"},
+        {"ok": True, "n_logics": 1},
+    )
+    assert seen
+    assert all(s["url"].endswith("/v1/children-then-manifest") for s in seen)
+    assert all(s["method"] == "POST" for s in seen)
+    assert all(s["headers"].get("x-mass-eval-token") == "tok" for s in seen)
+    assert all(s["data"]["children"] == [] for s in seen)
+    assert all("digest" not in s["data"] for s in seen)
+    keys = [s["data"]["manifest"]["key"] for s in seen]
+    expected = design_mass_factory_paths("fallback-test")
+    assert expected["manifest_r2_key"] in keys
+    assert expected["input_plan_r2_key"] in keys
+    assert expected["batch_summary_r2_key"] in keys
+    assert all(p.get("status") == "put_ok" for p in puts)
+
+    monkeypatch.delenv(WORKER_PUT_URL_ENV, raising=False)
+    monkeypatch.delenv(WORKER_PUT_TOKEN_ENV, raising=False)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
+    with pytest.raises(R2IOError, match="python must use Worker children-then-manifest"):
+        put_local_fallback_artifacts({"job_id": "unbound"}, {"ok": True})
+
+    injected: list[tuple[str, str]] = []
+
+    def _injected(bucket, key, body, **_kwargs):
+        injected.append((bucket, key))
+        return {"status": "put_ok", "key": key}
+
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
+    got = put_local_fallback_artifacts(
+        {"job_id": "injected"},
+        {"ok": True},
+        r2_put=_injected,
+    )
+    assert injected
+    assert all(bucket == "quant-structured" for bucket, _key in injected)
+    assert all(p.get("status") == "put_ok" for p in got)

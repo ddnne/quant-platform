@@ -37,7 +37,7 @@ from research.cf_mass_eval_stage import (
     stage_real_panels_to_r2,
 )
 from research.eval_windows import DEFAULT_REAL_MULTIYEAR_PERIODS
-from research.r2_io import default_r2_put
+from research.r2_io import put_research_artifact
 
 
 def invoke_cf_mass_eval_worker(
@@ -162,7 +162,7 @@ def put_local_fallback_artifacts(
 ) -> list[dict[str, Any]]:
     paths = design_mass_factory_paths(str(job_spec.get("job_id") or "unknown"))
     put_fn = r2_put or (
-        lambda bucket, key, body: default_r2_put(
+        lambda bucket, key, body: put_research_artifact(
             bucket,
             key,
             body,

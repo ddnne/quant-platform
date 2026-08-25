@@ -23,6 +23,7 @@ from urllib.parse import quote
 
 ensure_repo_root()
 
+from ingestion.jsda.official_index import read_local_index_text as _read_index_text
 from storage.coverage_ledger import (
     coverage_gaps,
     coverage_summary,
@@ -77,16 +78,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="only print datasets with incomplete coverage",
     )
     return parser
-
-
-def _read_index_text(path: str | None) -> str | None:
-    """Load local index HTML. Missing path is None (fail-closed empty)."""
-    if path is None:
-        return None
-    index_path = Path(path)
-    if not index_path.is_file():
-        raise FileNotFoundError(f"index HTML not found: {index_path}")
-    return index_path.read_text(encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:

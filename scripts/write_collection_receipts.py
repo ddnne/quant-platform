@@ -72,6 +72,7 @@ from urllib.parse import quote
 ROOT = ensure_repo_root()
 
 from data_contracts import coverage_contract_for  # noqa: E402
+from ingestion.jsda.official_index import read_local_index_text  # noqa: E402
 from storage.coverage_ledger import (  # noqa: E402
     SYNTHETIC_RECEIPT_MARKER,
     RequiredCoverageSegment,
@@ -103,22 +104,8 @@ def _ensure_receipts_table(conn: sqlite3.Connection) -> None:
         )
 
 def _read_index_text(path: str | Path | None) -> str | None:
-    """Read local official-index HTML. Missing/blank → None (fail-closed).
-
-    Never downloads the index. Never walks a calendar.
-    """
-    if path is None:
-        return None
-    raw = str(path).strip()
-    if not raw:
-        return None
-    file_path = Path(raw)
-    if not file_path.is_file():
-        return None
-    text = file_path.read_text(encoding="utf-8")
-    if not text.strip():
-        return None
-    return text
+    """CLI/env path may be absent; missing file is fail-closed empty."""
+    return read_local_index_text(path, missing_ok=True)
 
 def _index_text_from_cli(cli_path: str | None) -> str | None:
     """Resolve --index-text, else env QP_INDEX_TEXT. Missing/blank is empty."""

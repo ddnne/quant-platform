@@ -3,11 +3,13 @@
 The Premium-core JSON document is the policy authority for both Python and
 the Cloudflare Worker. Compatibility constants are derived views, not a
 second hand-maintained catalog.
+
+Worker wrapper policy (unknown dataset / missing contract field →
+ingest_time_conservative) is executed in
+``platform/workers/ingestion-premium/src/availability.test.ts``.
 """
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 
@@ -24,16 +26,9 @@ from cf_platform.ingest_premium.availability import (
 )
 from data_contracts.loader import (
     AVAILABLE_AT_POLICIES,
-    CONTRACT_PATH,
     all_contracts,
     contract_for,
 )
-
-
-ROOT = Path(__file__).resolve().parents[1]
-CATALOG_TS = ROOT / "platform/workers/ingestion-premium/src/catalog.ts"
-AVAILABILITY_TS = ROOT / "platform/workers/ingestion-premium/src/availability.ts"
-IDENTITY_TS = ROOT / "platform/workers/ingestion-premium/src/identity.ts"
 
 
 def test_session_close_honors_tse_cutoff_and_morning_session():
@@ -156,27 +151,3 @@ def test_compatibility_field_union_is_derived_not_a_priority_policy():
         )
     )
     assert EVENT_FIELD_CANDIDATES == expected
-
-
-def test_worker_catalog_imports_the_same_contract_document():
-    text = CATALOG_TS.read_text(encoding="utf-8")
-    assert CONTRACT_PATH.name == "jquants_premium_core.json"
-    assert (
-        'from "../../../../packages/data_plane/data_contracts/jquants_premium_core.json"'
-        in text
-    )
-    assert "contractDocument.datasets" in text
-    assert "PREMIUM_CORE_DATASETS: DatasetSpec[] = rawContracts.map" in text
-    # Dataset ids live in JSON, not in a second TypeScript literal catalog.
-    assert 'id: "equities_bars_daily"' not in text
-
-
-def test_worker_wrappers_delegate_contract_policy_and_identity_constants():
-    availability = AVAILABILITY_TS.read_text(encoding="utf-8")
-    identity = IDENTITY_TS.read_text(encoding="utf-8")
-    assert '?? "ingest_time_conservative"' in availability
-    assert "pickFromContract(row, spec, ingestedAt)" in availability
-    assert "2024-11-05" in identity
-    assert "15:30:00" in identity
-    assert "15:00:00" in identity
-    assert "11:30:00" in identity

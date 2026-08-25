@@ -9,14 +9,18 @@ from typing import Any, Mapping
 import pytest
 
 from research import evaluation_ir as ir_module
+from research import evaluation_ir_emit as emit_module
 from research.candidate_policy import job_candidate_grade
 from research.evaluation_ir import (
     ALLOWED_FIELDS,
+    ENCODE_KEYS,
     EVALUATION_IR_VERSION,
     SCHEMA_REL,
     assert_evaluation_ir_allowed_fields_ts_frozen,
+    assert_evaluation_ir_codec_py_frozen,
     assert_evaluation_ir_codec_ts_frozen,
     assert_evaluation_ir_encode_keys_match_schema,
+    assert_evaluation_ir_types_py_frozen,
     candidate_from_job_artifact,
     decode_evaluation_ir,
     dumps_evaluation_ir_golden,
@@ -24,11 +28,15 @@ from research.evaluation_ir import (
     encode_evaluation_ir,
     evaluation_ir_allowed_fields_ts_path,
     evaluation_ir_allowed_fields_ts_source,
+    evaluation_ir_codec_py_path,
+    evaluation_ir_codec_py_source,
     evaluation_ir_codec_ts_path,
     evaluation_ir_codec_ts_source,
     evaluation_ir_encode_keys,
     evaluation_ir_ts_encode_keys,
     evaluation_ir_ts_path,
+    evaluation_ir_types_py_path,
+    evaluation_ir_types_py_source,
     job_candidate_grade as ir_grade,
     load_evaluation_ir_schema,
     validate_evaluation_ir_schema,
@@ -69,6 +77,28 @@ def test_encode_keys_match_schema_properties() -> None:
     assert evaluation_ir_encode_keys() == schema_keys
     assert evaluation_ir_ts_encode_keys() == schema_keys
     assert set(evaluation_ir_encode_keys()) == ALLOWED_FIELDS
+    codec_py = evaluation_ir_codec_py_source()
+    assert "ENCODE_KEYS" in codec_py
+    for key in schema_keys:
+        assert json.dumps(key) in codec_py
+    assert ENCODE_KEYS == schema_keys
+    assert set(ENCODE_KEYS) == ALLOWED_FIELDS
+    gen = ir_module._CODEC_PY
+    assert ir_module.encode_evaluation_ir is gen.encode_evaluation_ir
+    assert ir_module.decode_evaluation_ir is gen.decode_evaluation_ir
+    assert ir_module.evaluation_ir_codec_ts_source is emit_module.evaluation_ir_codec_ts_source
+    assert ir_module.evaluation_ir_codec_py_source is emit_module.evaluation_ir_codec_py_source
+    assert (
+        ir_module.evaluation_ir_allowed_fields_ts_source
+        is emit_module.evaluation_ir_allowed_fields_ts_source
+    )
+    assert ir_module.assert_evaluation_ir_codec_ts_frozen is emit_module.assert_evaluation_ir_codec_ts_frozen
+    assert ir_module.assert_evaluation_ir_codec_py_frozen is emit_module.assert_evaluation_ir_codec_py_frozen
+    assert (
+        ir_module.assert_evaluation_ir_allowed_fields_ts_frozen
+        is emit_module.assert_evaluation_ir_allowed_fields_ts_frozen
+    )
+    assert tuple(gen.ENCODE_KEYS) == schema_keys
     assert_evaluation_ir_encode_keys_match_schema()
     worker_src = evaluation_ir_ts_path().read_text(encoding="utf-8")
     codec_src = evaluation_ir_codec_ts_path().read_text(encoding="utf-8")
@@ -117,6 +147,44 @@ def test_schema_is_codec_sot() -> None:
     assert "export function encodeEvaluationIR" in codec_generated
     assert "export function decodeEvaluationIR" in codec_generated
     assert_evaluation_ir_codec_ts_frozen()
+    codec_py_generated = evaluation_ir_codec_py_source()
+    codec_py_path = evaluation_ir_codec_py_path()
+    assert codec_py_path.is_file()
+    assert codec_py_path.read_text(encoding="utf-8") == codec_py_generated
+    codec_py_header = codec_py_generated.split("EVALUATION_IR_VERSION", 1)[0]
+    assert "Do not edit by hand" in codec_py_header
+    assert "schema.json" in codec_py_header
+    assert "job_candidate_grade" in codec_py_generated
+    assert "def encode_evaluation_ir" in codec_py_generated
+    assert "def decode_evaluation_ir" in codec_py_generated
+    assert ENCODE_KEYS == tuple(schema["properties"])
+    assert ALLOWED_FIELDS == frozenset(schema["properties"])
+    assert_evaluation_ir_codec_py_frozen()
+    types_py_generated = evaluation_ir_types_py_source()
+    types_py_path = evaluation_ir_types_py_path()
+    assert types_py_path.is_file()
+    assert types_py_path.read_text(encoding="utf-8") == types_py_generated
+    types_py_header = types_py_generated.split("EvaluationIRPayload", 1)[0]
+    assert "Do not edit by hand" in types_py_header
+    assert "schema.json" in types_py_header
+    assert "job_candidate_grade" in types_py_generated
+    assert "from research.candidate_policy" not in types_py_generated
+    assert "Literal[True]" not in types_py_generated
+    assert '"candidate": bool' in types_py_generated
+    assert f'Literal[{json.dumps(schema["properties"]["version"]["const"])}]' in (
+        types_py_generated
+    )
+    cursor = 0
+    for key in schema["properties"]:
+        token = json.dumps(key)
+        found = types_py_generated.find(token, cursor)
+        assert found >= 0, key
+        cursor = found + len(token)
+    assert "EvaluationIREncodeArgs" in types_py_generated
+    assert '"candidate"' not in types_py_generated.split(
+        "EvaluationIREncodeArgs", 1
+    )[1]
+    assert_evaluation_ir_types_py_frozen()
     worker = (
         Path(__file__).resolve().parents[1]
         / "platform"

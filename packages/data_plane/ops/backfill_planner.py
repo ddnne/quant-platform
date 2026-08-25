@@ -4,6 +4,9 @@ Coverage Contract plus ``plan_required_segments`` is the sole source of
 history targets. Dataset lists and history starts are never hand-written
 in driver scripts. Missing SourceCapability V3 does not invent official
 domain or COMPLETE. The planner never emits COMPLETE status itself.
+``index_text`` is forwarded into ``plan_required_segments``. Missing or
+blank text is a fail-closed empty official-index set, never a
+calendar-weekend walk or invented COMPLETE.
 """
 
 from __future__ import annotations
@@ -350,9 +353,11 @@ class BackfillPlanner:
     Required inventory is ``plan_required_segments``. Date-range batch is
     standard: each job is dataset × inclusive ``requested_from`` /
     ``requested_to`` (calendar_month for bars/fins; one cutoff for tip
-    snapshots). Missing SourceCapability V3 does not invent official domain
-    or COMPLETE. Rate pools (general vs fins) are assigned at schedule time
-    — see :mod:`ops.range_batch_scheduler`.
+    snapshots). ``index_text`` is forwarded into that planner; missing or
+    blank text is fail-closed empty for official-archive-index datasets,
+    not a calendar walk. Missing SourceCapability V3 does not invent
+    official domain or COMPLETE. Rate pools (general vs fins) are assigned
+    at schedule time — see :mod:`ops.range_batch_scheduler`.
     """
 
     def __init__(
@@ -409,15 +414,20 @@ class BackfillPlanner:
         complete: set[str],
         filter_from: date | None,
         filter_to: date | None,
+        index_text: str | None = None,
     ) -> list[BackfillJob]:
         """Emit jobs from ``plan_required_segments`` (months for bars/fins; one tip).
 
         Missing V3 does not invent official domain. Jobs are pending/fail,
-        never COMPLETE.
+        never COMPLETE. ``index_text`` is passed through; omitted/blank is
+        fail-closed empty official-index days, not a calendar-weekend walk.
         """
         try:
             required = plan_required_segments(
-                cov, self.cutoff.isoformat(), source="jquants"
+                cov,
+                self.cutoff.isoformat(),
+                source="jquants",
+                index_text=index_text,
             )
         except ValueError:
             return []
@@ -500,11 +510,15 @@ class BackfillPlanner:
         datasets: Sequence[str] | None = None,
         from_date: str | None = None,
         to_date: str | None = None,
+        index_text: str | None = None,
     ) -> BackfillPlan:
         """Build the full contract plan, optionally filtered to a range window.
 
         Filtering never invents segments outside the contract inventory; it
         only drops jobs outside ``datasets`` / ``[from_date, to_date]``.
+        ``index_text`` is forwarded into ``plan_required_segments``. Missing
+        or blank text is a fail-closed empty official-index set, never a
+        calendar-weekend walk or invented COMPLETE.
         """
         conn: sqlite3.Connection | None = None
         if self.db_path and self.db_path.is_file():
@@ -549,6 +563,7 @@ class BackfillPlanner:
                         complete=complete,
                         filter_from=filter_from,
                         filter_to=filter_to,
+                        index_text=index_text,
                     )
                 )
             # Ensure every governed JQ dataset appears at least once in inventory

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from .urls import (
     OTC_REFERENCE_DATASET,
     _PUBLICATION_DATE_RE,
@@ -9,6 +11,33 @@ from .urls import (
 )
 
 OFFICIAL_ARCHIVE_INDEX_DATASETS = frozenset({OTC_REFERENCE_DATASET})
+
+
+def read_local_index_text(
+    path: str | Path | None,
+    *,
+    missing_ok: bool = False,
+) -> str | None:
+    """Load local official-index HTML.
+
+    None/blank path and blank file contents are fail-closed empty.
+    Missing path-with-value raises FileNotFoundError unless ``missing_ok``.
+    Never invents COMPLETE. Never walks a calendar.
+    """
+    if path is None:
+        return None
+    raw = str(path).strip()
+    if not raw:
+        return None
+    file_path = Path(raw)
+    if not file_path.is_file():
+        if missing_ok:
+            return None
+        raise FileNotFoundError(f"index HTML not found: {file_path}")
+    text = file_path.read_text(encoding="utf-8")
+    if not text.strip():
+        return None
+    return text
 
 
 def parse_official_index_publication_days(
@@ -56,4 +85,5 @@ __all__ = [
     "OFFICIAL_ARCHIVE_INDEX_DATASETS",
     "official_index_days",
     "parse_official_index_publication_days",
+    "read_local_index_text",
 ]

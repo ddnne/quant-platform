@@ -54,6 +54,9 @@ from ops.range_batch_scheduler import (  # noqa: E402
     estimate_dispatch_envelope,
     measure_dispatch_rpm,
 )
+from ingestion.jsda.official_index import (  # noqa: E402
+    read_local_index_text as _read_index_text,
+)
 
 
 def _token() -> str:
@@ -205,6 +208,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--from-date", default="", help="Inclusive lower bound YYYY-MM-DD")
     ap.add_argument("--to-date", default="", help="Inclusive upper bound YYYY-MM-DD")
     ap.add_argument(
+        "--index-text",
+        default=None,
+        metavar="PATH",
+        help=(
+            "local official-archive index HTML. Omitted: index_text is None "
+            "so OTC required set is fail-closed empty, not a calendar replay. "
+            "Does not fetch live JSDA HTML."
+        ),
+    )
+    ap.add_argument(
         "--track-a",
         action="store_true",
         help=f"Filter to Track A datasets: {', '.join(TRACK_A_DATASETS)}",
@@ -240,6 +253,12 @@ def main(argv: list[str] | None = None) -> int:
     ds_filter = [d.strip() for d in args.datasets.split(",") if d.strip()] or None
     cutoff = date.fromisoformat(args.cutoff[:10]) if args.cutoff else None
 
+    try:
+        index_text = _read_index_text(args.index_text)
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}", flush=True)
+        return 1
+
     db_path = Path(args.db) if args.db else None
     planner = BackfillPlanner(
         cutoff=cutoff,
@@ -251,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
         datasets=ds_filter,
         from_date=args.from_date or None,
         to_date=args.to_date or None,
+        index_text=index_text,
     )
     plan_path = Path(args.plan_out)
     plan_path.parent.mkdir(parents=True, exist_ok=True)
