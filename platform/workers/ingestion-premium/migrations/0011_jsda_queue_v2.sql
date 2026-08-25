@@ -36,9 +36,11 @@ CREATE TABLE IF NOT EXISTS jsda_acquisition_jobs_v2 (
            (job_type != 'discover_root' AND parent_work_key IS NOT NULL))
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_jsda_jobs_v2_child_url
+DROP INDEX IF EXISTS ux_jsda_jobs_v2_child_url;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_jsda_jobs_v2_fetched_file_url
     ON jsda_acquisition_jobs_v2 (dataset, job_type, target_url)
-    WHERE job_type != 'discover_root';
+    WHERE job_type = 'fetch_file';
 
 CREATE INDEX IF NOT EXISTS ix_jsda_jobs_v2_state_updated
     ON jsda_acquisition_jobs_v2 (state, updated_at, work_key);

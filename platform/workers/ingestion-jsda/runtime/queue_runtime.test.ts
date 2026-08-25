@@ -16,10 +16,13 @@ import {
   completeJob,
   loadJob,
   registerJob,
+  registerJobs,
 } from "../src/job_store";
 import {
   continuationJob,
   descriptorForFile,
+  descriptorForYear,
+  makeChildJob,
   makeRootJob,
   type ChildDescriptor,
   type JsdaQueueJob,
@@ -141,6 +144,41 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
        WHERE dataset='jsda_tokyo_repo_rates' AND job_type='discover_root'`,
     ).first<{ n: number }>();
     expect(roots?.n).toBe(1);
+  });
+
+  it("revisits a year index in each run while preserving both discovery edges", async () => {
+    const firstRoot = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-24T01:30:00.000Z",
+    );
+    const secondRoot = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-25T01:30:00.000Z",
+    );
+    await registerJobs(runtimeEnv.DB, [firstRoot, secondRoot]);
+    const descriptor = await descriptorForYear(
+      "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/archive2026.html",
+    );
+    const firstYear = await makeChildJob(firstRoot, descriptor);
+    const secondYear = await makeChildJob(secondRoot, descriptor);
+    await registerJobs(runtimeEnv.DB, [firstYear]);
+    await registerJobs(runtimeEnv.DB, [secondYear]);
+    const years = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2
+        WHERE dataset=? AND job_type='discover_year' AND target_url=?`,
+    )
+      .bind(firstRoot.dataset, descriptor.target_url)
+      .first<{ n: number }>();
+    expect(years?.n).toBe(2);
+    const edges = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_discoveries_v2
+        WHERE child_work_key IN (?, ?)`,
+    )
+      .bind(firstYear.work_key, secondYear.work_key)
+      .first<{ n: number }>();
+    expect(edges?.n).toBe(2);
   });
 
   it("persists invalid delivery evidence in R2 and D1 before ack", async () => {
