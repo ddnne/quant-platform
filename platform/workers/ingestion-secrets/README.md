@@ -5,7 +5,8 @@ local ingestion runner a deliberately narrow proxy capability.
 
 ## Authority boundary
 
-- Public `GET /health` reports only whether the key binding exists.
+- Public `GET /health` reports liveness only; it never reports whether any
+  secret is bound.
 - `POST /v1/proxy/jquants` requires `X-Ingestion-Token` matching the
   `JQUANTS_PROXY_TOKEN` secret.
 - The envelope may request only upstream `GET`.
@@ -19,10 +20,19 @@ local ingestion runner a deliberately narrow proxy capability.
   denied until added to an explicit shared contract.
 - Query values must be strings. Caller headers and credentials are never
   forwarded; the Worker supplies only its bound `x-api-key` upstream.
+- Authenticated contract calls pass through a fail-closed Cloudflare Rate
+  Limiting binding before any upstream request. Workers Logs receive one
+  structured event containing route, outcome, status, and duration; request
+  bodies, query values, authorization headers, and secret state are excluded.
 
 The client-to-proxy request remains POST because it carries a JSON envelope;
 "GET-only" describes the credentialed J-Quants request made by the Worker.
 Responses stream through and are marked `no-store`.
+
+Production and preview URLs keep `preview_urls = false`. The production
+`workers.dev` hostname must be protected by Cloudflare Access before the
+legacy local proxy can be considered closed; enabling Access requires the
+account's one-time Zero Trust organization/auth-domain setup.
 
 ## Verify offline
 

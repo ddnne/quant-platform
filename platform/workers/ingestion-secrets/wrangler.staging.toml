@@ -8,3 +8,11 @@ preview_urls = false
 
 # No public route and no secret bindings until an internal service-binding
 # consumer is deployed.
+
+[[ratelimits]]
+name = "PROXY_RATE_LIMITER"
+namespace_id = "63102"
+
+[ratelimits.simple]
+limit = 60
+period = 60

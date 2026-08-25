@@ -8,6 +8,9 @@ const UPSTREAM_BODY = "upstream-streamed-body";
 const env: Env = {
   JQUANTS_API_KEY: API_KEY,
   JQUANTS_PROXY_TOKEN: PROXY_TOKEN,
+  PROXY_RATE_LIMITER: {
+    limit: vi.fn(async () => ({ success: true })),
+  },
 };
 
 const AUTH_HEADERS = { "X-Ingestion-Token": PROXY_TOKEN };
@@ -38,6 +41,7 @@ describe("ingestion-secrets boundary", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
+    vi.mocked(env.PROXY_RATE_LIMITER!.limit).mockResolvedValue({ success: true });
   });
 
   it("denies unauthenticated proxy requests", async () => {
@@ -148,7 +152,10 @@ describe("ingestion-secrets boundary", () => {
 
   it("denies proxy when JQUANTS_PROXY_TOKEN is unbound even if a header is sent", async () => {
     const fetchImpl = stubUpstream();
-    const unbound: Env = { JQUANTS_API_KEY: API_KEY };
+    const unbound: Env = {
+      JQUANTS_API_KEY: API_KEY,
+      PROXY_RATE_LIMITER: env.PROXY_RATE_LIMITER,
+    };
     const res = await worker.fetch(
       proxyRequest(AUTH_HEADERS, { path: PREMIUM_PATH, query: {} }),
       unbound,
@@ -158,6 +165,53 @@ describe("ingestion-secrets boundary", () => {
     expect(JSON.parse(body)).toEqual({ error: "unauthorized" });
     expect(body).not.toContain(API_KEY);
     expect(body).not.toContain(PROXY_TOKEN);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the rate-limit capability is not bound", async () => {
+    const fetchImpl = stubUpstream();
+    const unbound: Env = {
+      JQUANTS_API_KEY: API_KEY,
+      JQUANTS_PROXY_TOKEN: PROXY_TOKEN,
+    };
+    const res = await worker.fetch(
+      proxyRequest(AUTH_HEADERS, { path: PREMIUM_PATH, query: {} }),
+      unbound,
+    );
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "proxy unavailable" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rate-limits authenticated contract requests before upstream fetch", async () => {
+    const fetchImpl = stubUpstream();
+    vi.mocked(env.PROXY_RATE_LIMITER!.limit).mockResolvedValueOnce({
+      success: false,
+    });
+    const res = await worker.fetch(
+      proxyRequest(AUTH_HEADERS, { path: PREMIUM_PATH, query: {} }),
+      env,
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("60");
+    expect(await res.json()).toEqual({ error: "rate limit exceeded" });
+    expect(env.PROXY_RATE_LIMITER!.limit).toHaveBeenCalledWith({
+      key: "jquants-proxy-contract",
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the rate-limit service errors", async () => {
+    const fetchImpl = stubUpstream();
+    vi.mocked(env.PROXY_RATE_LIMITER!.limit).mockRejectedValueOnce(
+      new Error("rate limiter unavailable"),
+    );
+    const res = await worker.fetch(
+      proxyRequest(AUTH_HEADERS, { path: PREMIUM_PATH, query: {} }),
+      env,
+    );
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "proxy unavailable" });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

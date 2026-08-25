@@ -20,7 +20,23 @@ preview_urls = false
 [observability]
 enabled = true
 
+[[ratelimits]]
+name = "PROXY_RATE_LIMITER"
+namespace_id = "63101"
+
+[ratelimits.simple]
+limit = 60
+period = 60
+
 [env.production]
 name = "quant-platform-ingestion-secrets"
 workers_dev = true
 preview_urls = false
+
+[[env.production.ratelimits]]
+name = "PROXY_RATE_LIMITER"
+namespace_id = "63101"
+
+[env.production.ratelimits.simple]
+limit = 60
+period = 60
