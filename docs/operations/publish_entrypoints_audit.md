@@ -3,7 +3,11 @@
 **Live verified 2026-08-12.** Full apply uses `scripts/publish_ops_projection.py` which enforces
 `enforce_complete_count_guard` (refuse if local COMPLETE < remote COMPLETE).
 Remote apply also requires a dedicated signed Ops Projection envelope; Receipt
-and READY signing keys are never fallback authorities.
+and READY signing keys are never fallback authorities. Cursor pins are derived
+from the latest COMPLETE authenticated D1 sync audit; arbitrary DBs, cursor
+arguments, and signer path/id arguments cannot enter the production CLI. The
+private key must match an active key in the pinned public registry, which also
+derives the issuer id. The remote apply guard has no generic override.
 
 | Entry | Path | apply-remote? | Guard applies? |
 |-------|------|---------------|----------------|

@@ -204,8 +204,7 @@ raw evidence, natural-key state, and immutable manifest checks.
 
 ```bash
 .venv/bin/python scripts/sync_d1_to_sqlite.py \
-  --url "$INGESTION_PREMIUM_URL" \
-  --token "$DATA_EXPORT_TOKEN" \
+  --wrangler-remote \
   --db data/structured/ingestion.sqlite \
   --snapshot-dir data/research_snapshots
 
@@ -241,9 +240,6 @@ An empty/unknown registry keeps every generation `NOT_PROJECTED`.
 .venv/bin/python scripts/publish_ops_projection.py \
   --db data/structured/ingestion.sqlite \
   --snapshot-dir data/research_snapshots \
-  --source-cursor "$SOURCE_CURSOR" \
-  --export-cursor "$EXPORT_CURSOR" \
-  --projection-signing-key-id "$OPS_PROJECTION_KEY_ID" \
   --apply-remote
 
 cd platform/workers/quant-ops-mcp
@@ -252,6 +248,11 @@ npm run typecheck
 npx wrangler deploy --dry-run --env=production
 npx wrangler deploy --env=production
 ```
+
+The publisher does not accept cursor or signing-key overrides. It derives both
+cursor pins from the latest COMPLETE authenticated D1 sync audit, verifies the
+content identity and local applied cursor in one read transaction, and loads
+only the dedicated Ops signing configuration.
 
 Before deploy, replace the fail-closed public placeholders in `wrangler.toml`
 with the reviewed Access team domain, dedicated Ops application AUD, Managed

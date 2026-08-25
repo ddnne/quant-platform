@@ -44,16 +44,13 @@ if LOCAL_COMPLETE < REMOTE_COMPLETE:
 
 ## オーバーライド
 
-```bash
-publish_ops_projection --force-apply-remote
-```
-
-- remote probe 不明または COMPLETE 減少を明示的に上書きして publish を継続
-- ⚠️ 使用時はオーナー承認・事由を必ず記録すること
+汎用オーバーライドは提供しない。remote probe 不明または COMPLETE 減少は
+常に拒否する。V2→V3 など正当な契約変更は、旧証拠の失効理由と新しい契約
+digest を機械的に束縛する専用の signed transition workflow を別途用意する。
 
 ## Mass NO-GO
 
 一括評価時、対象 projection の **1件でも** `LOCAL_COMPLETE < REMOTE_COMPLETE` があれば **Mass NO-GO**。
 
 - 全 projection の publish を一括停止
-- 全件解消、または全件 `--force-apply-remote` 承認後のみ再開可能
+- 全件解消、または governed signed contract transition 完了後のみ再開可能
