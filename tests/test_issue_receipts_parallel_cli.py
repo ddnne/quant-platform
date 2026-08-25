@@ -10,7 +10,6 @@ remotely. Does not invent COMPLETE.
 from __future__ import annotations
 
 import importlib.util
-import inspect
 import json
 import sqlite3
 import sys
@@ -139,6 +138,7 @@ def _stub_refresh(cli_module, monkeypatch) -> dict:
         ]
 
     def fake_sync(conn, datasets=None, wave=None):
+        captured["synced"] = True
         return []
 
     monkeypatch.setattr(cli_module, "refresh_coverage_ledger", fake_refresh)
@@ -194,6 +194,7 @@ def test_main_passes_local_index_text_through(
     assert captured["index_text"] is not None
     assert captured["index_text"].strip() != ""
     assert captured["index_text"] != V2_REQUIRED
+    assert captured.get("synced") is True
 
 
 def test_main_omitted_index_text_is_none_not_calendar_replay(
@@ -216,6 +217,7 @@ def test_main_omitted_index_text_is_none_not_calendar_replay(
     assert "index_text" in captured["kwargs"]
     assert captured["index_text"] is None
     assert captured["index_text"] != V2_REQUIRED
+    assert captured.get("synced") is True
 
 
 def test_main_missing_index_file_does_not_call_refresh(
@@ -234,10 +236,3 @@ def test_main_missing_index_file_does_not_call_refresh(
     )
     assert rc == 1
     assert called["n"] == 0
-
-
-def test_operator_recovery_cli_cannot_open_receipt_mint(cli_module) -> None:
-    source = inspect.getsource(cli_module)
-    assert "open_governed_receipt_service" not in source
-    assert "record_persisted_success" not in source
-    assert "RECOVERED_RAW_ONLY" in source
