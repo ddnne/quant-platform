@@ -4,9 +4,10 @@
 import { authorized } from "./authorized";
 import type { JsdaWorkerEnv } from "./env";
 import { json } from "./http_json";
-import { consumeQueueMessage } from "./queue_consumer";
+import { consumeDlqMessage, consumeQueueMessage } from "./queue_consumer";
 import {
   isDatasetId,
+  isJsdaDlqQueue,
   type DatasetId,
   type JsdaQueueJob,
 } from "./queue_contract";
@@ -79,8 +80,10 @@ export default {
     env: JsdaWorkerEnv,
     _ctx: ExecutionContext,
   ): Promise<void> {
+    const dlq = isJsdaDlqQueue(batch.queue);
     for (const message of batch.messages) {
-      await consumeQueueMessage(message, env);
+      if (dlq) await consumeDlqMessage(message, env, batch.queue);
+      else await consumeQueueMessage(message, env);
     }
   },
 } satisfies ExportedHandler<JsdaWorkerEnv, JsdaQueueJob>;

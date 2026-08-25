@@ -18,6 +18,23 @@ migrations_dir = "../ingestion-premium/migrations"
 binding = "JSDA_QUEUE"
 queue = "quant-jsda-ingestion-test"
 
+[[queues.consumers]]
+queue = "quant-jsda-ingestion-test"
+max_batch_size = 3
+max_batch_timeout = 5
+max_retries = 3
+retry_delay = 60
+dead_letter_queue = "quant-jsda-ingestion-dlq-test"
+max_concurrency = 1
+
+[[queues.consumers]]
+queue = "quant-jsda-ingestion-dlq-test"
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 8
+retry_delay = 60
+max_concurrency = 1
+
 [vars]
 USER_AGENT = "quant-platform-jsda-runtime-test/0.1"
 INGESTION_RUN_TOKEN = "jsda-runtime-test-token"

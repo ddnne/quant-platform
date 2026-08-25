@@ -17,7 +17,8 @@ export interface QueueAuditInput {
     | "completed"
     | "failed_transient"
     | "rejected_job"
-    | "rejected_message";
+    | "rejected_message"
+    | "dead_lettered";
   work_key: string;
   run_key: string | null;
   dataset: DatasetId | null;

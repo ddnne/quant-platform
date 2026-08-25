@@ -17,6 +17,7 @@ import {
   recordRejectedMessage,
   recordTransientFailure,
   registerJob,
+  rejectFromDeadLetter,
   rejectJob,
   type JobClosureRow,
   type JobRow,
@@ -249,7 +250,8 @@ function auditInput(
     | "frontier_exhausted"
     | "completed"
     | "failed_transient"
-    | "rejected_job",
+    | "rejected_job"
+    | "dead_lettered",
   now: string,
   reasonCode: string | null,
   detail: string | null,
@@ -560,6 +562,79 @@ async function repairTerminalClosure(
     throw new Error("terminal_audit_missing");
   }
   await advanceAncestorClosures(env, row);
+}
+
+export async function consumeDlqMessage(
+  message: Message<unknown>,
+  env: JsdaWorkerEnv,
+  queueName: string,
+): Promise<void> {
+  try {
+    if (!isJsdaQueueJob(message.body)) {
+      await persistRejectedDelivery(message, env, "dead_letter_invalid_job_schema");
+      message.ack();
+      return;
+    }
+
+    const job = message.body;
+    const expectedContract = await queueContractDigest();
+    if (job.contract_digest !== expectedContract || !hostAllowed(job.target_url)) {
+      await persistRejectedDelivery(
+        message,
+        env,
+        job.contract_digest !== expectedContract
+          ? "dead_letter_contract_digest_mismatch"
+          : "dead_letter_host_not_allowlisted",
+      );
+      message.ack();
+      return;
+    }
+
+    const row = await registerJob(env.DB, job);
+    if (!rowMatchesMessage(row, job)) {
+      await persistRejectedDelivery(message, env, "dead_letter_work_key_identity_mismatch");
+      message.ack();
+      return;
+    }
+
+    if (row.state === "completed" || row.state === "rejected") {
+      await repairTerminalClosure(env, row);
+      message.ack();
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const detail =
+      `dead-lettered on ${queueName} after ${message.attempts} attempts`.slice(0, 500);
+    const audit = await putQueueAuditReceipt(
+      env.RAW_BUCKET,
+      auditInput(row, "dead_lettered", now, "dead_lettered", detail, row.cursor, null),
+    );
+    const rejected = await rejectFromDeadLetter(
+      env.DB,
+      row,
+      "dead_lettered",
+      detail,
+      audit,
+      now,
+    );
+    const latest = await loadJob(env.DB, row.work_key);
+    if (latest === null) {
+      throw new Error(`JSDA DLQ reject lost job: ${row.work_key}`);
+    }
+    if (!rejected && latest.state !== "rejected") {
+      throw new Error(`JSDA DLQ did not terminalize: ${row.work_key}`);
+    }
+    await advanceAncestorClosures(env, latest);
+    message.ack();
+  } catch (error) {
+    logError(env, "jsda_queue_dlq_persist_failed", {
+      job_id: isJsdaQueueJob(message.body) ? message.body.work_key : message.id,
+      run_id: isJsdaQueueJob(message.body) ? message.body.run_key : null,
+      reason: errorDetail(error),
+    });
+    message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
+  }
 }
 
 export async function consumeQueueMessage(

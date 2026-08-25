@@ -36,6 +36,10 @@ export const JSDA_QUEUE_JOB_VERSION = "jsda-acquisition-job/v2" as const;
 export const JSDA_QUEUE_AUDIT_VERSION = "jsda-queue-audit/v2" as const;
 export const CHILD_ENQUEUE_BATCH_SIZE = 25;
 
+export function isJsdaDlqQueue(queueName: string): boolean {
+  return /(?:^|-)dlq(?:-|$)/i.test(queueName);
+}
+
 export type JobType = "discover_root" | "discover_year" | "fetch_file";
 export type RequestedBy = "cron" | "manual";
 
@@ -102,6 +106,7 @@ const CONTRACT_CANONICAL = JSON.stringify({
     "descendant-run-closure",
     "run-scoped-membership-adoption",
     "run-pass-from-closure-only",
+    "dlq-terminal-convergence",
   ],
 });
 

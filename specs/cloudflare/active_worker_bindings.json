@@ -51,6 +51,14 @@
             "max_retries": 3,
             "queue": "quant-jsda-ingestion",
             "retry_delay": 60
+          },
+          {
+            "max_batch_size": 1,
+            "max_batch_timeout": 5,
+            "max_concurrency": 1,
+            "max_retries": 8,
+            "queue": "quant-jsda-ingestion-dlq",
+            "retry_delay": 60
           }
         ],
         "queue_producers": [
@@ -120,6 +128,14 @@
             "max_retries": 3,
             "queue": "quant-jsda-ingestion",
             "retry_delay": 60
+          },
+          {
+            "max_batch_size": 1,
+            "max_batch_timeout": 5,
+            "max_concurrency": 1,
+            "max_retries": 8,
+            "queue": "quant-jsda-ingestion-dlq",
+            "retry_delay": 60
           }
         ],
         "queue_producers": [
@@ -186,6 +202,14 @@
             "max_concurrency": 1,
             "max_retries": 3,
             "queue": "quant-jsda-ingestion-staging",
+            "retry_delay": 60
+          },
+          {
+            "max_batch_size": 1,
+            "max_batch_timeout": 5,
+            "max_concurrency": 1,
+            "max_retries": 8,
+            "queue": "quant-jsda-ingestion-dlq-staging",
             "retry_delay": 60
           }
         ],

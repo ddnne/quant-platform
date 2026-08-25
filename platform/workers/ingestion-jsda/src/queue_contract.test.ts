@@ -4,6 +4,7 @@ import {
   classifyFetchFreshness,
   descriptorForFile,
   descriptorForYear,
+  isJsdaDlqQueue,
   isJsdaQueueJob,
   makeChildJob,
   makeRootJob,
@@ -133,6 +134,14 @@ describe("JSDA Queue v2 contract", () => {
   it("uses a bounded continuation batch without an archive convergence cap", () => {
     expect(CHILD_ENQUEUE_BATCH_SIZE).toBeGreaterThan(0);
     expect(CHILD_ENQUEUE_BATCH_SIZE).toBeLessThanOrEqual(100);
+  });
+
+  it("identifies DLQ queues by name, not by attempt count", () => {
+    expect(isJsdaDlqQueue("quant-jsda-ingestion")).toBe(false);
+    expect(isJsdaDlqQueue("quant-jsda-ingestion-test")).toBe(false);
+    expect(isJsdaDlqQueue("quant-jsda-ingestion-dlq")).toBe(true);
+    expect(isJsdaDlqQueue("quant-jsda-ingestion-dlq-staging")).toBe(true);
+    expect(isJsdaDlqQueue("quant-jsda-ingestion-dlq-test")).toBe(true);
   });
 
   it("rejects unknown fields and a caller-selected contract digest", async () => {

@@ -36,6 +36,14 @@ retry_delay = 60
 dead_letter_queue = "quant-jsda-ingestion-dlq"
 max_concurrency = 1
 
+[[queues.consumers]]
+queue = "quant-jsda-ingestion-dlq"
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 8
+retry_delay = 60
+max_concurrency = 1
+
 # Secrets (optional):
 #   INGESTION_RUN_TOKEN — gates /v1/run (reuse premium run token recommended)
 
@@ -79,6 +87,14 @@ max_batch_timeout = 5
 max_retries = 3
 retry_delay = 60
 dead_letter_queue = "quant-jsda-ingestion-dlq"
+max_concurrency = 1
+
+[[env.production.queues.consumers]]
+queue = "quant-jsda-ingestion-dlq"
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 8
+retry_delay = 60
 max_concurrency = 1
 
 [env.production.vars]

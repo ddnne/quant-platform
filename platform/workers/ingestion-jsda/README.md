@@ -34,8 +34,9 @@ local-only (XLS/XLSX via xlrd/openpyxl; polite scraping).
   objects. A delivery is acknowledged only after its audit receipt and D1/run
   evidence are durable.
 - Invalid messages are written to both R2 audit and `jsda_queue_rejects_v2`
-  before acknowledgement. Evidence-write failures retry and eventually reach
-  the configured DLQ.
+  before acknowledgement. Evidence-write failures retry. After Queue
+  `max_retries`, the DLQ consumer writes immutable reject/DLQ audit evidence
+  and terminalizes the run-scoped descendant; it never publishes PASS.
 - Initial URLs, discovered links, and every post-redirect URL are restricted to
   the official JSDA HTTPS host allowlist.
 
@@ -67,5 +68,7 @@ the canonical `quant-ingest` migration owner before deploying this Worker.
 Production uses `quant-jsda-ingestion` and `quant-jsda-ingestion-dlq`.
 Staging uses the distinct `quant-jsda-ingestion-staging` and
 `quant-jsda-ingestion-dlq-staging` queues defined in `wrangler.staging.toml`.
-No Worker consumes the DLQ automatically: inspect and replay it operationally
-after correcting the underlying cause.
+The same Worker consumes `quant-jsda-ingestion-dlq` (staging:
+`quant-jsda-ingestion-dlq-staging`) as a terminal convergence path. D1
+failures retry on the DLQ consumer; messages are not re-enqueued onto the
+original queue.
