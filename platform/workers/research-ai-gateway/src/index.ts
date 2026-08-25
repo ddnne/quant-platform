@@ -7,12 +7,16 @@ import {
   parseModelJson,
   type GatewayOk,
 } from "./schema";
+import { BudgetLedger } from "./budget_http";
+
+export { BudgetLedger };
 
 export interface GatewayEnv {
   AI?: Ai;
   GATEWAY_TOKEN?: string;
   /** Separate mass-eval secret. Never a GATEWAY_TOKEN substitute. */
   MASS_EVAL_TOKEN?: string;
+  BUDGET_LEDGER?: DurableObjectNamespace;
 }
 
 function timingSafeEqualBytes(a: ArrayBuffer, b: ArrayBuffer): boolean {
