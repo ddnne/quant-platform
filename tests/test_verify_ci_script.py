@@ -71,6 +71,7 @@ def test_verify_ci_script_exists_executable_and_covers_required_steps() -> None:
     assert "npm run typecheck" in src
     assert "wrangler deploy --dry-run" in src
     assert "wrangler types --check" in src
+    assert "npm run types" in src
     assert "wrangler types" in src
     assert "git ls-files" in src
     assert ".env" in src

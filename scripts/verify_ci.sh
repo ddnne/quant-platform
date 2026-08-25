@@ -181,7 +181,8 @@ for dir in "${WORKERS[@]}"; do
   (cd "$dir" && npx wrangler deploy --dry-run)
   if [[ -n "$(npm_script_body "$py" "$dir/package.json" types)" ]]; then
     echo "==> wrangler types --check ($name)"
-    (cd "$dir" && npx wrangler types --check)
+    # Honor package-level generation flags such as --include-runtime false.
+    (cd "$dir" && npm run types -- --check)
   else
     echo "==> wrangler types ($name)"
     (cd "$dir" && npx wrangler types)
