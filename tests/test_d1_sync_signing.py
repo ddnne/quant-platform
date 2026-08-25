@@ -83,6 +83,15 @@ def _signed_document(
     }
 
 
+def test_committed_d1_registry_has_no_trusted_same_uid_authority() -> None:
+    registry = json.loads(
+        signing.DEFAULT_VERIFY_REGISTRY_PATH.read_text(encoding="utf-8")
+    )
+    assert registry["purpose"] == signing.REGISTRY_PURPOSE
+    assert [row for row in registry["keys"] if row["status"] == "active"] == []
+    assert all(row["status"] == "revoked" for row in registry["keys"])
+
+
 def test_same_uid_home_key_cannot_enable_preflight_or_sealing(
     tmp_path, monkeypatch
 ):
@@ -184,23 +193,24 @@ def test_d1_sync_registry_rejects_invalid_shape_or_multiple_active_keys(
         signing.verify_signed_d1_sync_audit(document)
 
 
-def test_zero_active_registry_preserves_history_but_rejects_current(
+def test_zero_active_revoked_registry_rejects_current_and_backdated_history(
     tmp_path, monkeypatch
 ):
     private, registry_path, registry = _install_external_key_registry(
         tmp_path, monkeypatch
     )
-    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2020, 1, 2, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(signing, "_utc_now", lambda: now)
     document = _signed_document(private, registry, issued_at=now)
-    registry["keys"][0]["status"] = "retired"
+    registry["keys"][0]["status"] = "revoked"
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
 
     with pytest.raises(signing.D1SyncAuditError, match="not active"):
         signing.verify_signed_d1_sync_audit(document)
-    assert signing._verify_signed_d1_sync_audit(
-        document, require_fresh=False, eligibility="historical"
-    )["source_change_seq"] == 7
+    with pytest.raises(signing.D1SyncAuditError, match="revoked"):
+        signing._verify_signed_d1_sync_audit(
+            document, require_fresh=False, eligibility="historical"
+        )
 
 
 def test_current_verifier_rejects_retired_and_revoked_keys_historical_does_not(

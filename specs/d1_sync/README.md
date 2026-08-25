@@ -4,8 +4,8 @@
 provenance. It is intentionally separate from Receipt, READY, and Ops
 Projection signing authorities.
 
-A `COMPLETE` audit is eligible for Ops publication only when the production
-sync path has completed this closed sequence:
+A future `COMPLETE` audit will be eligible for Ops publication only after a
+separately provisioned authority can complete this closed sequence:
 
 1. repository-pinned Wrangler 4.125.0 exports the governed production
    `quant-ingest` D1 binding;
@@ -14,28 +14,26 @@ sync path has completed this closed sequence:
    DDL, index/unique-key, foreign-key, and trigger parity (apart from the
    explicitly local snapshot-invalidation triggers), plus row-count/content
    parity, and the source/applied cursors are equal;
-4. a single-use reconciled-export capability is consumed by the dedicated
-   host authority, which constructs and signs every envelope claim internally;
-   the concrete export type and consume function are bound in a process-private
-   closure that ordinary imports and module-attribute replacement cannot
-   recreate; no generic mapping signer is exposed; and
+4. a single-use reconciled-export capability is consumed by a dedicated,
+   non-login authority principal, which constructs and signs every envelope
+   claim internally; no generic mapping signer is exposed; and
 5. the SQLite audit row, signature, current local cursor, signed source/local
    schema digests, content digest, and table counts all verify again in one
    publisher-owned read transaction.
+
+The authority is currently **not provisioned**. The production sync entry
+fails before Wrangler acquisition or local database creation, the committed
+registry has zero active keys, and sync state therefore remains `UNKNOWN`.
+The former same-UID HOME key is revoked; signatures from it are ineligible for
+both current and historical trust, including newly minted backdated documents.
+No production code loads D1 private material from HOME, environment variables,
+caller paths, PEM values, key ids, or registry overrides.
 
 Local artifacts, legacy HTTP transport, restricted-table syncs, interrupted
 applies, old unsigned audit rows, and caller-written `WRANGLER_REMOTE` fields
 remain apply-only and cannot provide a projection cursor. Ops publication
 consumes only an authenticated applied-mirror handle, never a generic local
-SQLite path or caller-supplied cursors. The private key is loaded only from
-`~/.config/quant-platform/d1_sync_signing_key.pem`; it must be an owner-only
-regular Ed25519 PEM and must match exactly one active key in this committed
-registry. There is no CLI, environment, path, PEM, key-id, or registry
-override. Signed issuance time, not mutable audit-row timestamps, selects the
-current audit. Current eligibility verifies the newest FULL/chained evidence
-with exactly that one active key. Historical rows signed by retired keys remain
-auditable and must not block a later active-key current import; revoked keys
-are neither current nor historically authoritative. Eligibility expires after
-30 minutes, rejects more than 60 seconds of future skew, requires a monotonic
-signed cursor/digest history among currently eligible rows, and remote Ops
-activation independently refuses a cursor below the already-active projection.
+SQLite path or caller-supplied cursors. Once an external authority and a new
+active public key are provisioned, current eligibility will additionally
+enforce a 30-minute age limit, at most 60 seconds of future skew, a monotonic
+signed cursor/digest history, and the remote Ops activation cursor floor.
