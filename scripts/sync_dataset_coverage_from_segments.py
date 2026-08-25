@@ -22,7 +22,6 @@ Post-seal checklist (preferred after a tip seal):
   --db data/structured/ingestion.sqlite --datasets fins_earnings_date
 .venv/bin/python scripts/publish_ops_projection.py \\
   --db data/structured/ingestion.sqlite --apply-remote
-.venv/bin/python scripts/ops_reeval_freshness.py
 ```
 
 Prefer one-dataset mode when only one dataset's segs flipped COMPLETE.

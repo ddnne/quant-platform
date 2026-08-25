@@ -30,10 +30,13 @@ Row counts, raw retention alone, or Cloudflare fetch success are **not** enough.
      segment plane itself is wrong.
    - `scripts/restore_local_complete_from_receipt.py` runs this sync for the
      sealed dataset automatically after a successful segment COMPLETE.
-10. **Ops projection** published so MCP shows COMPLETE:
-   - Prefer `scripts/ops_reeval_freshness.py` (targeted; never rewrites segments)
-   - Full `publish_ops_projection.py --apply-remote` only if local COMPLETE ≥ remote
-     (fail-closed guard refuses otherwise; see `docs/operations/projection_publish_guard.md`)
+10. **Ops projection** published so MCP shows the new evidence generation:
+   - `publish_ops_projection.py --apply-remote` is the only publication path.
+   - Remote apply requires the dedicated Ops Projection Ed25519 signer and a
+     matching consumer public-key registry; unsigned remains `NOT_PROJECTED`.
+   - It appends a dedicated read-model generation and flips the pointer last.
+   - The COMPLETE regression guard remains fail-closed; a refusal leaves the
+     prior generation active.
 
 ## Explicitly NOT COMPLETE
 

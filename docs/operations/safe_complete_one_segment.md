@@ -139,8 +139,8 @@ Notes:
 
 - `publish_ops_projection` is the only sanctioned path that writes remote D1
   projection tables.
-- If you only need to refresh `evaluated_at` and projection FRESH age
-  (no segment changes), use `scripts/ops_reeval_freshness.py` instead.
+- Projection freshness is never refreshed by mutating an active row. Publish a
+  newly reconciled immutable generation or keep the prior generation stale.
 
 ## 7. Publish guard
 
@@ -148,7 +148,9 @@ Before the publish step, the publish guard verifies:
 
 1. `coverage_segments` delta is `+1 COMPLETE` for the targeted dataset.
 2. No segments moved from `COMPLETE` to a non-COMPLETE state.
-3. `ops_projection_generation` only permits `STAGING | ACTIVE | RETIRED | FAILED`.
+3. `ops_projection_generation` is append-only and permits only immutable
+   `SEALED` rows; activation state lives exclusively in
+   `ops_projection_active`.
 4. `collection_receipts.status` for the segment is `SUCCESS`.
 
 If any check fails, the publish is aborted and **no remote mutation occurs**.

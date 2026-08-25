@@ -73,14 +73,23 @@ curl -fsS "$INGESTION_PREMIUM_URL/health"
 The health response must contain `natural_key_migration.state == "READY"`.
 Do not bypass this gate or rebuild natural keys with ad-hoc SQL.
 
-Apply the Ops MCP durable quota and bounded projection schemas:
+Apply the isolated Ops projection and quota schemas. The Ops Worker must never
+run a migration against `quant-ingest`; ingestion-premium is its sole owner:
+
+First verify the canonical owner/checksum inventory. Its source-controlled
+`applied_state` is deliberately `UNVERIFIED`; record actual remote state only in
+the immutable release evidence after each apply.
+
+```bash
+.venv/bin/python scripts/cloudflare_d1_migration_manifest.py
+```
 
 ```bash
 cd ../quant-ops-mcp
-npx wrangler d1 execute quant-ingest --remote \
-  --file=migrations/0001_remote_daily_quota.sql
-npx wrangler d1 execute quant-ingest --remote \
-  --file=migrations/0002_ops_projection.sql
+npx wrangler d1 migrations apply quant-ops-projection --remote \
+  --config=wrangler.toml
+npx wrangler d1 migrations apply quant-ops-quota --remote \
+  --config=wrangler.toml
 cd ../../..
 ```
 
@@ -217,21 +226,31 @@ A targeted `--table` sync intentionally cannot publish READY.
 
 ## 7. Project Ops metadata and deploy remote MCP
 
-The projection contains bounded coverage, segment, B0 and READY metadata. It
-does not grant the MCP a write tool or expose local paths/raw objects.
+The projection contains generation-scoped coverage, segment, B0, READY,
+authoritative raw-segment, sync-cursor, and materialized storage metadata. The
+Worker reads only the active immutable generation from `OPS_PROJECTION_DB`;
+quota writes go only to `QUOTA_DB`.
+
+Remote publication additionally requires a dedicated Ops Projection Ed25519
+private key and key id. Provision its public key in both
+`specs/ops_projection/verify_public_keys.json` and the Worker's
+`OPS_PROJECTION_VERIFY_KEYS_JSON`; Receipt and READY keys are not valid here.
+An empty/unknown registry keeps every generation `NOT_PROJECTED`.
 
 ```bash
-.venv/bin/python scripts/export_ops_projection.py \
+.venv/bin/python scripts/publish_ops_projection.py \
   --db data/structured/ingestion.sqlite \
   --snapshot-dir data/research_snapshots \
-  --output /tmp/quant-ops-projection.sql
+  --source-cursor "$SOURCE_CURSOR" \
+  --export-cursor "$EXPORT_CURSOR" \
+  --projection-signing-key-id "$OPS_PROJECTION_KEY_ID" \
+  --apply-remote
 
 cd platform/workers/quant-ops-mcp
-npx wrangler d1 execute quant-ingest --remote \
-  --file=/tmp/quant-ops-projection.sql
 npm test
 npm run typecheck
-npx wrangler deploy
+npx wrangler deploy --dry-run --env=production
+npx wrangler deploy --env=production
 ```
 
 Before deploy, replace the fail-closed public placeholders in `wrangler.toml`
@@ -252,7 +271,7 @@ curl -i "$QUANT_OPS_MCP_URL/mcp" \
 The unauthenticated response must be `401`. Through the configured
 Access/Managed OAuth flow, call `initialize`, `tools/list`, and `ops_status`;
 the authenticated smoke must succeed and charge the D1 daily quota. Confirm
-that `tools/list` contains exactly the 12 documented Ops reads and no write or
+that `tools/list` contains exactly the 17 documented Ops reads and no write or
 research-row tool. Add the same `/mcp` URL to ChatGPT remote connectors; local
 stdio is only the offline/dev adapter.
 
