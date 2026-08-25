@@ -161,7 +161,19 @@ export function extensionOf(raw: string): string {
 }
 
 function classifyHttpFailure(status: number, url: string): never {
-  if (status === 408 || status === 429 || status >= 500) {
+  // Official archive links can be published before the object has propagated,
+  // and the JSDA edge occasionally answers 403 while that publication is
+  // converging.  Treat those discovered, allowlisted URLs as retryable so a
+  // stable work key is not permanently poisoned before the file exists.
+  if (
+    status === 403 ||
+    status === 404 ||
+    status === 408 ||
+    status === 409 ||
+    status === 425 ||
+    status === 429 ||
+    status >= 500
+  ) {
     throw new TransientAcquisitionError(
       `http_${status}`,
       `transient JSDA HTTP ${status}: ${url}`,

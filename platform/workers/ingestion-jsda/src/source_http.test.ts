@@ -34,6 +34,39 @@ describe("JSDA outbound allowlist", () => {
     }
   });
 
+  it.each([403, 404, 408, 409, 425, 429, 500])(
+    "keeps a discovered official file retryable after HTTP %s",
+    async (status) => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async () => new Response(null, { status })) as typeof fetch;
+      try {
+        await expect(
+          fetchAllowed("https://www.jsda.or.jp/archive/new.csv", "test-agent"),
+        ).rejects.toMatchObject({
+          name: "TransientAcquisitionError",
+          reasonCode: `http_${status}`,
+        });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+
+  it("permanently rejects a non-retryable official-host request error", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(null, { status: 400 })) as typeof fetch;
+    try {
+      await expect(
+        fetchAllowed("https://www.jsda.or.jp/archive/bad.csv", "test-agent"),
+      ).rejects.toMatchObject({
+        name: "PermanentAcquisitionError",
+        reasonCode: "http_400",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("drops off-allowlist links before creating child jobs", () => {
     const base = "https://www.jsda.or.jp/archive/index.html";
     const links = extractLinks(
