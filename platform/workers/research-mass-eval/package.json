@@ -10,8 +10,7 @@
     "types": "wrangler types --include-runtime false",
     "test": "vitest run",
     "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
-    "tail": "wrangler tail",
-    "types": "wrangler types --include-runtime false"
+    "tail": "wrangler tail"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260820.1",

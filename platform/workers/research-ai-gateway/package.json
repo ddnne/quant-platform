@@ -8,8 +8,7 @@
     "typecheck": "tsc --noEmit",
     "types": "wrangler types --include-runtime false",
     "test": "vitest run",
-    "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
-    "types": "wrangler types --include-runtime false"
+    "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260820.1",
