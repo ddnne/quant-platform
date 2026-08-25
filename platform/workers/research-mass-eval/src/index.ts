@@ -27,8 +27,8 @@ async function runMassEval(
   req: MassEvalRequest,
 ): Promise<MassEvalJobResult> {
   const t0 = Date.now();
-  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v139-24em-plus56";
-  const wave = env.MASS_EVAL_WAVE || "research-mass-eval";
+  const version = env.MASS_EVAL_VERSION;
+  const wave = env.MASS_EVAL_WAVE;
   const mode = req.mode || "synthetic";
   const oneWay = req.one_way_cost ?? 0.001;
   const maxCodes = Math.max(2, Math.min(40, req.max_codes ?? 8));
@@ -207,7 +207,7 @@ async function runDailyPath(
   req: MassEvalRequest,
 ): Promise<Record<string, unknown>> {
   const t0 = Date.now();
-  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v139-24em-plus56";
+  const version = env.MASS_EVAL_VERSION;
   const mode = req.mode || "r2_panels";
   const oneWay = req.one_way_cost ?? 0.001;
   const maxCodes = Math.max(2, Math.min(40, req.max_codes ?? 8));
@@ -259,7 +259,7 @@ async function runDailyPath(
   });
   const payload: Record<string, unknown> = {
     version,
-    wave: env.MASS_EVAL_WAVE || "research-mass-eval",
+    wave: env.MASS_EVAL_WAVE,
     job_id: req.job_id,
     eval_kind: "daily_path",
     // Grade authority is jobCandidateGrade via encode; do not grade twice.

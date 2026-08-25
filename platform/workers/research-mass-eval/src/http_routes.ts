@@ -39,7 +39,7 @@ export async function dispatchMassEvalFetch(
     return json({
       ok: true,
       service: "quant-platform-research-mass-eval",
-      version: env.MASS_EVAL_VERSION || "research-mass-eval/v142-63-failclosed",
+      version: env.MASS_EVAL_VERSION,
     });
   }
 

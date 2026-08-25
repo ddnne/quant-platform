@@ -26,6 +26,8 @@ import {
 } from "./pricing_policy";
 
 export { BudgetLedger };
+export type { GatewayRpc } from "./gateway_rpc";
+import type { GatewayRpc } from "./gateway_rpc";
 
 /** Generated bindings plus the HTTP-defense secret. */
 export type GatewayEnv = Cloudflare.Env & {
@@ -620,7 +622,7 @@ async function handleGatewayRequest(
     return json(responseBody, responseStatus);
 }
 
-export class GatewayService extends WorkerEntrypoint<GatewayEnv> {
+export class GatewayService extends WorkerEntrypoint<GatewayEnv> implements GatewayRpc {
   async complete(
     body: unknown,
     options: { idempotency_key?: string } = {},

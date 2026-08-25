@@ -1,15 +1,10 @@
+import type { GatewayRpc } from "../../research-ai-gateway/src/gateway_rpc";
+
 /** Generated bindings with typed Gateway RPC; secrets stay string-only. */
 export type Env = Omit<Cloudflare.Env, "AI_GATEWAY"> & {
-  AI_GATEWAY: AiGatewayService;
+  AI_GATEWAY: GatewayRpc;
   MASS_EVAL_TOKEN?: string;
 };
-
-export interface AiGatewayService {
-  complete(
-    body: unknown,
-    options?: { idempotency_key?: string },
-  ): Promise<{ http_status: number; body: unknown }>;
-}
 
 export interface LogicSpec {
   logic_id: string;

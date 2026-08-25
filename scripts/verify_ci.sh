@@ -237,11 +237,15 @@ verify_worker() {
     echo "==> wrangler types ($name)"
     (cd "$dir" && npx --no-install wrangler types)
   fi
-  local type_dir production_types staging_types
+  local type_dir base_types production_types staging_types
   type_dir="$ci_log_dir/types-$name"
   mkdir -p "$type_dir"
+  base_types="$type_dir/base.d.ts"
   production_types="$type_dir/production.d.ts"
   staging_types="$type_dir/staging.d.ts"
+  echo "==> wrangler types --env=base ($name)"
+  (cd "$dir" && npx --no-install wrangler types "$base_types" \
+    --include-runtime=false)
   echo "==> wrangler types --env=production ($name)"
   (cd "$dir" && npx --no-install wrangler types "$production_types" \
     --env=production --include-runtime=false)
@@ -249,12 +253,14 @@ verify_worker() {
   (cd "$dir" && npx --no-install wrangler types "$staging_types" \
     --config=wrangler.staging.toml --include-runtime=false)
   local environment generated assertion env_tsconfig
-  for environment in production staging; do
-    if [[ "$environment" == "production" ]]; then
-      generated="$production_types"
-    else
-      generated="$staging_types"
-    fi
+  for environment in $("$py" "$ROOT/scripts/verify_generated_worker_env.py" \
+    --list-environments); do
+    case "$environment" in
+      base) generated="$base_types" ;;
+      production) generated="$production_types" ;;
+      staging) generated="$staging_types" ;;
+      *) echo "unknown Worker environment: $environment" >&2; exit 1 ;;
+    esac
     assertion="$type_dir/$environment.assert.ts"
     env_tsconfig="$type_dir/$environment.tsconfig.json"
     "$py" "$ROOT/scripts/verify_generated_worker_env.py" \

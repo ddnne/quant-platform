@@ -57,6 +57,8 @@ def test_check_generation_pins_exact_named_environment(tmp_path: Path) -> None:
     assert 'readonly "DB": D1Database;' in assertion_text
     assert 'readonly "RAW_BUCKET": R2Bucket;' in assertion_text
     assert "NoUnexpectedBindings" in assertion_text
+    assert 'import("./src/index")' not in assertion_text
+    assert "DurableObjectNamespace" not in assertion_text
     config = json.loads(tsconfig.read_text(encoding="utf-8"))
     assert config["compilerOptions"]["skipLibCheck"] is False
 
@@ -133,3 +135,27 @@ def test_generic_fetcher_or_do_erasure_is_rejected(tmp_path: Path) -> None:
             assertion=tmp_path / "assert.ts",
             tsconfig=tmp_path / "tsconfig.json",
         )
+
+
+def test_durable_object_import_is_relative_to_temp_assertion(tmp_path: Path) -> None:
+    generated = tmp_path / "types" / "env.d.ts"
+    assertion = tmp_path / "types" / "assert.ts"
+    tsconfig = tmp_path / "types" / "tsconfig.json"
+    generated.parent.mkdir()
+    generated.write_text(
+        "interface __BaseEnv_Env { MCP_OBJECT: DurableObjectNamespace<never>; }\n"
+        "declare namespace Cloudflare { interface Env extends __BaseEnv_Env {} }\n"
+        "interface Env extends __BaseEnv_Env {}\n",
+        encoding="utf-8",
+    )
+    write_check(
+        worker="quant-ops-mcp",
+        environment="production",
+        generated_types=generated,
+        assertion=assertion,
+        tsconfig=tsconfig,
+    )
+    text = assertion.read_text(encoding="utf-8")
+    assert 'import("./src/index")' not in text
+    assert 'DurableObjectNamespace<import("' in text
+    assert "platform/workers/quant-ops-mcp/src/index" in text

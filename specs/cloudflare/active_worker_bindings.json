@@ -53,6 +53,7 @@
             "retry_delay": 60
           },
           {
+            "dead_letter_queue": "quant-jsda-ingestion-rejects",
             "max_batch_size": 1,
             "max_batch_timeout": 5,
             "max_concurrency": 1,
@@ -87,6 +88,7 @@
           "wrangler": "4.125.0"
         },
         "vars": {
+          "JSDA_DLQ_QUEUE": "quant-jsda-ingestion-dlq",
           "USER_AGENT": "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
         },
         "version_metadata": {
@@ -130,6 +132,7 @@
             "retry_delay": 60
           },
           {
+            "dead_letter_queue": "quant-jsda-ingestion-rejects",
             "max_batch_size": 1,
             "max_batch_timeout": 5,
             "max_concurrency": 1,
@@ -164,6 +167,7 @@
           "wrangler": "4.125.0"
         },
         "vars": {
+          "JSDA_DLQ_QUEUE": "quant-jsda-ingestion-dlq",
           "USER_AGENT": "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
         },
         "version_metadata": {
@@ -205,6 +209,7 @@
             "retry_delay": 60
           },
           {
+            "dead_letter_queue": "quant-jsda-ingestion-rejects-staging",
             "max_batch_size": 1,
             "max_batch_timeout": 5,
             "max_concurrency": 1,
@@ -237,6 +242,7 @@
           "wrangler": "4.125.0"
         },
         "vars": {
+          "JSDA_DLQ_QUEUE": "quant-jsda-ingestion-dlq-staging",
           "USER_AGENT": "quant-platform-staging-ingest/0.1"
         },
         "version_metadata": {
@@ -1125,6 +1131,8 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
+          "MASS_EVAL_VERSION": "research-mass-eval/v142-63-failclosed",
+          "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
           "OPERATIONAL_GO": "false",

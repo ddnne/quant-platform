@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Mapping
@@ -74,16 +75,26 @@ def _reject_generic_erasure(worker: str, environment: str, name: str, type_name:
         )
 
 
-def _durable_object_type(worker: str, environment: str, row: Mapping[str, Any]) -> str:
+def _durable_object_type(
+    worker: str,
+    environment: str,
+    row: Mapping[str, Any],
+    source_import: str,
+) -> str:
     class_name = str(row.get("class_name") or "")
     if not _TS_IDENT.fullmatch(class_name):
         raise ValueError(
             f"{worker}/{environment}: Durable Object class_name is not a typed identifier"
         )
-    return f'DurableObjectNamespace<import("./src/index").{class_name}>'
+    return f'DurableObjectNamespace<import("{source_import}").{class_name}>'
 
 
-def expected_types(worker: str, environment: str) -> dict[str, str]:
+def expected_types(
+    worker: str,
+    environment: str,
+    *,
+    source_import: str = "./src/index",
+) -> dict[str, str]:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     try:
         surface = manifest["workers"][worker][environment]
@@ -110,7 +121,10 @@ def expected_types(worker: str, environment: str) -> dict[str, str]:
     for row in surface["queue_producers"]:
         add(row.get("binding"), "Queue")
     for row in surface["durable_objects"]:
-        add(row.get("name"), _durable_object_type(worker, environment, row))
+        add(
+            row.get("name"),
+            _durable_object_type(worker, environment, row, source_import),
+        )
     for row in surface["services"]:
         entrypoint = row.get("entrypoint")
         if entrypoint:
@@ -134,10 +148,17 @@ def expected_types(worker: str, environment: str) -> dict[str, str]:
     return dict(sorted(expected.items()))
 
 
-def render_assertion(worker: str, environment: str) -> str:
+def render_assertion(
+    worker: str,
+    environment: str,
+    *,
+    source_import: str = "./src/index",
+) -> str:
     properties = "\n".join(
         f"  readonly {_property_name(name)}: {type_name};"
-        for name, type_name in expected_types(worker, environment).items()
+        for name, type_name in expected_types(
+            worker, environment, source_import=source_import
+        ).items()
     )
     return f"""// Generated CI assertion; never deployed.
 type ExpectedWorkerEnv = {{
@@ -173,13 +194,24 @@ def write_check(
         raise ValueError("Wrangler declaration does not contain a generated Env surface")
     if "DurableObjectNamespace<any>" in raw.replace(" ", ""):
         raise ValueError("generated Env erased a Durable Object class parameter")
-    expected = expected_types(worker, environment)
+    relative_source = os.path.relpath(
+        worker_dir / "src" / "index", assertion.parent
+    ).replace(os.sep, "/")
+    source_import = (
+        relative_source if relative_source.startswith(".") else f"./{relative_source}"
+    )
+    expected = expected_types(
+        worker, environment, source_import=source_import
+    )
     if any(type_name == "Service" for type_name in expected.values()) and re.search(
         r":\s*Fetcher\b", raw
     ):
         raise ValueError("generated Env erased a typed Service binding to Fetcher")
 
-    assertion.write_text(render_assertion(worker, environment), encoding="utf-8")
+    assertion.write_text(
+        render_assertion(worker, environment, source_import=source_import),
+        encoding="utf-8",
+    )
     config = {
         "extends": str(base_tsconfig),
         "compilerOptions": {
@@ -208,12 +240,26 @@ def write_check(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--worker", required=True)
-    parser.add_argument("--environment", choices=ENVIRONMENTS, required=True)
-    parser.add_argument("--generated-types", type=Path, required=True)
-    parser.add_argument("--assertion", type=Path, required=True)
-    parser.add_argument("--tsconfig", type=Path, required=True)
+    parser.add_argument("--list-environments", action="store_true")
+    parser.add_argument("--worker")
+    parser.add_argument("--environment", choices=ENVIRONMENTS)
+    parser.add_argument("--generated-types", type=Path)
+    parser.add_argument("--assertion", type=Path)
+    parser.add_argument("--tsconfig", type=Path)
     args = parser.parse_args()
+    if args.list_environments:
+        print("\n".join(ENVIRONMENTS))
+        return 0
+    required = {
+        "worker": args.worker,
+        "environment": args.environment,
+        "generated_types": args.generated_types,
+        "assertion": args.assertion,
+        "tsconfig": args.tsconfig,
+    }
+    missing = [name for name, value in required.items() if value is None]
+    if missing:
+        parser.error("missing required arguments: " + ", ".join(missing))
     write_check(
         worker=args.worker,
         environment=args.environment,
