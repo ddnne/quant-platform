@@ -160,7 +160,7 @@ def test_pilot_readiness_sidecar_loader_is_strict_public_key_only(
         load_verified_pilot_readiness(sidecar)
 
 
-def test_readiness_registry_requires_explicit_status_and_exactly_one_active() -> None:
+def test_readiness_registry_requires_status_and_allows_zero_or_one_active() -> None:
     public_raw = Ed25519PrivateKey.generate().public_key().public_bytes(
         serialization.Encoding.Raw,
         serialization.PublicFormat.Raw,
@@ -175,7 +175,7 @@ def test_readiness_registry_requires_explicit_status_and_exactly_one_active() ->
         ReadinessPublicKeyRegistry.from_document(
             {"schema_version": 1, "keys": [row]}
         )
-    with pytest.raises(MassResearchDisabledError, match="exactly one active"):
+    with pytest.raises(MassResearchDisabledError, match="at most one active"):
         ReadinessPublicKeyRegistry.from_document(
             {
                 "schema_version": 1,
@@ -185,6 +185,17 @@ def test_readiness_registry_requires_explicit_status_and_exactly_one_active() ->
                 ],
             }
         )
+    pending = ReadinessPublicKeyRegistry.from_document(
+        {
+            "schema_version": 1,
+            "keys": [{**row, "status": "revoked"}],
+        }
+    )
+    assert not pending.verify(
+        key_id="readiness-a",
+        body={"status": "READY"},
+        signature="ed25519:" + base64.b64encode(b"invalid").decode("ascii"),
+    )
 
 
 def test_caller_environment_registry_cannot_self_root_pilot_readiness(

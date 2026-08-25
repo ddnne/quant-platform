@@ -182,7 +182,7 @@ def test_readiness_publisher_never_falls_back_to_receipt_pem(
         _load_pinned_ready_publication_signer()
 
 
-def test_explicit_dedicated_readiness_key_file_works(
+def test_same_uid_readiness_key_file_cannot_enable_production_signer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _pem_path, receipt_private_pem = _plant_host_pem(tmp_path, monkeypatch)
@@ -195,16 +195,8 @@ def test_explicit_dedicated_readiness_key_file_works(
     assert readiness_private_pem != receipt_private_pem
     readiness_path = _pem_path.with_name("readiness_signing_key.pem")
     readiness_path.write_bytes(readiness_private_pem)
-    registry = ReadinessPublicKeyRegistry(
-        {"readiness-v1": readiness_key.public_key()}
-    )
-    monkeypatch.setattr(
-        ReadinessPublicKeyRegistry,
-        "load_pinned",
-        classmethod(lambda cls: registry),
-    )
-    publisher = _load_pinned_ready_publication_signer()
-    assert publisher.key_id == "readiness-v1"
+    with pytest.raises(MassResearchDisabledError, match="not provisioned"):
+        _load_pinned_ready_publication_signer()
 
 
 def test_readiness_env_path_key_id_and_registry_cannot_self_root(
@@ -243,8 +235,8 @@ def test_readiness_env_path_key_id_and_registry_cannot_self_root(
     monkeypatch.setenv(
         "QUANT_READINESS_PUBLIC_KEY_REGISTRY", str(tmp_path / "attacker.json")
     )
-    publisher = _load_pinned_ready_publication_signer()
-    assert publisher.key_id == "pinned-readiness"
+    with pytest.raises(MassResearchDisabledError, match="not provisioned"):
+        _load_pinned_ready_publication_signer()
 
 
 def test_pytest_current_test_cannot_disable_host_pem(

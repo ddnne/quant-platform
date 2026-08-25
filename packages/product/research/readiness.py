@@ -86,8 +86,6 @@ class ReadinessPublicKeyRegistry:
     _keys: Mapping[str, Ed25519PublicKey]
 
     def __post_init__(self) -> None:
-        if not self._keys:
-            raise MassResearchDisabledError("readiness public key registry is empty")
         normalized: dict[str, Ed25519PublicKey] = {}
         for raw_key_id, key in self._keys.items():
             key_id = str(raw_key_id).strip()
@@ -137,9 +135,9 @@ class ReadinessPublicKeyRegistry:
             seen_ids.add(key_id)
             if status == "active":
                 keys[key_id] = key
-        if len(keys) != 1:
+        if len(keys) > 1:
             raise MassResearchDisabledError(
-                "readiness public key registry must have exactly one active key"
+                "readiness public key registry must have at most one active key"
             )
         return cls(keys)
 
@@ -639,31 +637,17 @@ class _ReadyPublicationSigner:
 
 
 def _load_pinned_ready_publication_signer() -> _ReadyPublicationSigner:
-    """Load the dedicated default key and derive identity from pinned trust."""
-    path = (
-        Path.home()
-        / ".config"
-        / "quant-platform"
-        / "readiness_signing_key.pem"
-    )
-    try:
-        private_pem = path.read_bytes()
-    except OSError as exc:
-        raise MassResearchDisabledError(
-            f"dedicated readiness signing key unavailable: {path}"
-        ) from exc
-    try:
-        key = serialization.load_pem_private_key(private_pem, password=None)
-    except (TypeError, ValueError) as exc:
-        raise MassResearchDisabledError("invalid readiness private key PEM") from exc
-    if not isinstance(key, Ed25519PrivateKey):
-        raise MassResearchDisabledError("readiness signing key must be Ed25519")
-    registry = ReadinessPublicKeyRegistry.load_pinned()
-    key_id = registry._key_id_for_public_key(key.public_key())
-    return _ReadyPublicationSigner(
-        key_id=key_id,
-        private_key=key,
-        _factory_token=_READY_PUBLICATION_SIGNER_TOKEN,
+    """Fail closed until a separately provisioned READY authority exists.
+
+    Production publication is verify-only in this process.  In particular it
+    never reads private material from HOME, environment variables, or a
+    caller-selected path.  Test fixtures construct an ephemeral signer
+    explicitly under ``tests`` and cannot activate the pinned production
+    registry.
+    """
+    raise MassResearchDisabledError(
+        "dedicated readiness publication authority is not provisioned; "
+        "readiness remains PENDING"
     )
 
 def _mint_bound_readiness(
