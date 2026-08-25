@@ -24,7 +24,7 @@ Live review findings: [`phase633_finding_ledger.md`](phase633_finding_ledger.md)
 | required | 8784 |
 | span | **2002-08-06…2026-08-20** |
 | remaining official 2003 | **0** |
-| remaining official 2002 | **2** PARSE_ZERO (`2002-08-02`, `2002-08-05`; not invented COMPLETE) |
+| remaining official 2002 | **2** early 21-column **REPROOF_REQUIRED** (`2002-08-02`, `2002-08-05`; not COMPLETE) |
 | remaining official 2004 | **0** |
 | projection | **STALE** (`projgen-ef18b4f86ee946048161d25e2a30a2a8`; last generated 2026-08-21) |
 | COMPLETE datasets | **22** held (last-known projected ledger under STALE projection, not a current FRESH seal) |
@@ -61,7 +61,7 @@ prose. Update the table after a published projection.
 | **candidate SoT** | `POST /v1/daily-path` (`daily_path_mtm_after_cost/v1`) → R2 `research/eval/job={id}/` |
 | CF period-net | bar-native **auxiliary** only; unique event/CS → `path_collapsed`; `n_survivors` is **not** a pass |
 | index | `research.eval_registry` → R2 + D1 |
-| catalog | `specs/research_catalog/` (compiled, n=2254, `yaml_still_present: false`); `specs/research_logics/` YAML removed at `5c9b962` |
+| legacy catalog | `artifacts/replay/legacy_strategy_catalog/` (immutable audit/replay only; never a Pilot/Mass input) |
 
 Completion of a research turn requires an R2 **daily_path** job, not local JSON.
 Do not paste cell scores into this file. Latest recorded job id belongs in D1.

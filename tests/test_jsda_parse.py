@@ -58,18 +58,27 @@ def _otc_raw_row_count(text: str) -> int:
     return sum(1 for row in csv.reader(io.StringIO(text)) if any(c.strip() for c in row))
 
 
-def test_otc_headerless_23col_maps_overlapping_positional_fields():
-    # Synthetic prefix of the 29-col fixture; not a live 2002-08-02 COMPLETE seal.
-    text = (_FIXTURES / "jsda_otc_reference_headerless_23col.csv").read_text(
+def _otc_headerless_prefix(width: int) -> str:
+    full = (_FIXTURES / "jsda_otc_reference_headerless.csv").read_text(
         encoding="utf-8"
     )
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    for row in csv.reader(io.StringIO(full)):
+        writer.writerow(row[:width])
+    return buffer.getvalue()
+
+
+def test_otc_headerless_21col_maps_documented_common_prefix():
+    # Synthetic 21-column prefix only; not live raw and never a COMPLETE seal.
+    text = _otc_headerless_prefix(21)
     raw_count = _otc_raw_row_count(text)
     records = parse_otc_reference_csv(
         text.encode("cp932"),
         publication_label_date="2002-08-02",
         quote_effective_date="2002-08-01",
     )
-    assert records, "23-col adapter must yield nz parse"
+    assert records, "official early 21-column adapter must yield nonzero parse"
     assert len(records) == raw_count == 2
     first = records[0]
     assert first["publication_label_date"] == "2002-08-02"
@@ -80,26 +89,26 @@ def test_otc_headerless_23col_maps_overlapping_positional_fields():
     assert first["coupon_rate"] == 1.5
     assert first["average_yield"] == 1.225
     assert first["average_price"] == 99.85
-    assert first["individual_investor_flag"] == "0"
     assert first["high_price"] == 100.0
     assert first["low_price"] == 99.5
-    assert first["high_yield"] == 1.1
+    # The early file ends at company count.  Compound high/low/median fields
+    # are absent; column 12 is not given the later individual-bond meaning.
+    assert first["individual_investor_flag"] is None
+    assert first["high_yield"] is None
     assert first["low_yield"] is None
     assert first["median_yield"] is None
     assert first["median_price"] is None
     assert first["source_row_number"] == 1
     assert records[1]["security_code"] == "987654321"
-    assert records[1]["individual_investor_flag"] == "1"
+    assert records[1]["individual_investor_flag"] is None
     for rec in records:
         assert rec.get("status") != "COMPLETE"
         assert "COMPLETE" not in rec.values()
 
 
-def test_otc_headerless_23col_overlapping_fields_match_29col_prefix():
+def test_otc_headerless_21col_common_fields_match_29col_layout():
     full = (_FIXTURES / "jsda_otc_reference_headerless.csv").read_text(encoding="utf-8")
-    early = (_FIXTURES / "jsda_otc_reference_headerless_23col.csv").read_text(
-        encoding="utf-8"
-    )
+    early = _otc_headerless_prefix(21)
     kwargs = {
         "publication_label_date": "2002-08-02",
         "quote_effective_date": "2002-08-01",
@@ -116,21 +125,25 @@ def test_otc_headerless_23col_overlapping_fields_match_29col_prefix():
         "average_price",
         "average_yield",
         "high_price",
-        "high_yield",
         "low_price",
-        "individual_investor_flag",
         "source_row_number",
     )
     assert len(full_records) == len(early_records) == 2
     for full_row, early_row in zip(full_records, early_records):
         for field in overlapping:
             assert early_row[field] == full_row[field]
-        for field in ("low_yield", "median_yield", "median_price"):
+        for field in (
+            "individual_investor_flag",
+            "high_yield",
+            "low_yield",
+            "median_yield",
+            "median_price",
+        ):
             assert early_row[field] is None
             assert full_row[field] is not None
 
 
-def test_otc_headerless_short_non_identity_stays_parse_zero():
+def test_otc_headerless_short_non_identity_is_rejected():
     text = "not-a-date,x,code,name,20020820,1.5,1.2,99.8\n"
     assert parse_otc_reference_csv(text) == []
 
@@ -146,27 +159,25 @@ def test_otc_headerless_undocumented_or_truncated_widths_are_rejected():
         )
     )
     assert len(full) >= 29
-    for width in (*range(4, 23), *range(24, 29)):
+    for width in (*range(4, 21), *range(22, 29)):
         assert parse_otc_reference_csv(",".join(full[:width]) + "\n") == []
 
 
-def test_otc_headerless_23col_nz_parse_is_not_coverage_complete():
-    text = (_FIXTURES / "jsda_otc_reference_headerless_23col.csv").read_text(
-        encoding="utf-8"
-    )
+def test_otc_headerless_21col_nz_parse_is_not_coverage_complete():
+    text = _otc_headerless_prefix(21)
     records = parse_otc_reference_csv(
         text.encode("cp932"),
         publication_label_date="2002-08-02",
         quote_effective_date="2002-08-01",
     )
-    assert records, "23-col adapter must yield nz parse"
+    assert records, "official early 21-column adapter must yield nonzero parse"
     assert len(records) == _otc_raw_row_count(text) == 2
     for rec in records:
         assert rec.get("status") != "COMPLETE"
         assert "COMPLETE" not in rec.values()
 
 
-def test_live_parse_zero_files_are_not_smuggled_in_as_fixtures():
+def test_live_reproof_files_are_not_smuggled_in_as_fixtures():
     # Actual official bytes and their trusted digest/count evidence must be
     # acquired and reconciled; synthetic fixtures cannot close these gaps.
     live_names = {

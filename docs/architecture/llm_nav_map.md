@@ -121,7 +121,7 @@ Details + exceptions: ADR §5.
 | LLM-friendly refactor | plane READMEs + `tests/test_plane_import_boundaries.py` | [ADR](./adr_llm_friendly_refactor.md) (**Accepted**); residual for live status |
 | New research hyp / daily_path_DD | `research.daily_path_eval` · `research.eval_registry` · `research.cf_mass_eval_job` | [ADR recording](./adr_research_recording.md) — **completion requires an R2 `research/eval/job={id}/` put**; no new `run_wNN` script |
 | Existing `run_w*` / wave proofs | **deleted** | [`wave_assets_deprecated.md`](./wave_assets_deprecated.md) |
-| Eval job index (D1/R2) | `research.eval_registry` · `platform/workers/quant-ops-mcp/migrations/0006_research_eval_jobs.sql` | recording ADR |
+| Legacy eval recording | `research.eval_registry` (offline/R2 artifact helper only) | the former Ops-D1 migration owner was removed; Mass remains NO-GO |
 | Test tiers (G0/G1/G2) | `tests/README.md` | this map §11 B1-d |
 
 ---
@@ -238,7 +238,7 @@ Test tiers: `tests/README.md` (G0/G1/G2; ADR §12 / B1-d).
 | Ingest | `run_ingestion_once.py`, `run_historical_backfill.py` | data_plane |
 | Coverage / receipts | `write_collection_receipts.py`, `refresh_coverage_ledger.py`, `issue_receipts_parallel.py`, `issue_signed_receipts_for_segments.py` | data_plane / edge (**empty-raw ban** incl. `{"data":[]}`; no COMPLETE without raw; sticky COMPLETE survives day-roll) |
 | Sync / D1 | `sync_d1_to_sqlite.py`, `report_d1_local_sync_lag.py`, `restore_local_complete_from_receipt.py` | ops |
-| Projection | `export_ops_projection.py`, `publish_ops_projection.py`, `ops_reeval_freshness.py`, `ops_reeval_observed_window.py`, `ops_status.py` | ops (**publish fail-closed**; observed_* re-eval does not rewrite segments) |
+| Projection | `export_ops_projection.py`, `publish_ops_projection.py`, `ops_status.py` | ops (**dedicated append-only generation; pointer-last activation**) |
 | Paper / agents | CLIs deleted; `paper_runtime` APIs + `agents/` | research / product |
 | Validation | `run_phase35_validation.py`, `run_phase4_accept.py` | edge / features |
 | Codegen | `generate_governed_js.py`, `verify_governed_js_drift.py` | contracts → Workers |

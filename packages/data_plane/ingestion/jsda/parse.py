@@ -189,12 +189,15 @@ _OTC_REFERENCE_ALIASES: dict[str, list[str]] = {
 }
 _OTC_HEADER_MARKERS = ("銘柄コード", "証券コード", "銘柄名", "債券名")
 
-# Official CSV is headerless (baisan_csv.pdf); 2015/2022 did not move columns.
-# 2002-08-02/05 use the documented 23-column layout, a prefix of this 29-column
-# map. Those are the only accepted headerless widths: exactly 23, or 29+.
-# Reject 4..22 and 24..28 rather than guessing that a truncated row is an early
-# layout. Parser rows are not Coverage COMPLETE; the sealer still requires
-# trusted reconciliation.
+# Official CSV is headerless.  The JSDA format document describes the common
+# columns 0..20 followed by eight derived high/low/median fields.  The official
+# 2002-08-02 and 2002-08-05 artifacts contain exactly that 21-column prefix;
+# the next official artifact (2002-08-06) contains all 29 columns.  Accept only
+# the observed early width (21) or the documented extended width (29+).  Reject
+# 4..20 and 22..28 rather than treating a truncated row as an early layout.
+# Parsing remains separate from Coverage COMPLETE: trusted raw persistence and
+# raw-to-structured reconciliation are still required before a receipt can be
+# issued.
 _OTC_POSITIONAL_COLUMNS: dict[str, int] = {
     "publication_label_date": 0,
     "security_code": 2,
@@ -212,12 +215,22 @@ _OTC_POSITIONAL_COLUMNS: dict[str, int] = {
     "median_price": 27,
 }
 _OTC_POSITIONAL_MIN_COLUMNS = 29
-_OTC_EARLY_LAYOUT_COLUMN_LIMIT = 23
+_OTC_EARLY_LAYOUT_COLUMN_COUNT = 21
 _OTC_EARLY_POSITIONAL_COLUMNS: dict[str, int] = {
-    field: index
-    for field, index in _OTC_POSITIONAL_COLUMNS.items()
-    if index < _OTC_EARLY_LAYOUT_COLUMN_LIMIT
+    "publication_label_date": 0,
+    "security_code": 2,
+    "bond_name": 3,
+    "maturity_date": 4,
+    "coupon_rate": 5,
+    "average_yield": 6,
+    "average_price": 7,
+    "high_price": 15,
+    "low_price": 17,
 }
+# Columns 16 and 18 are simple yields, while the canonical yield fields use the
+# compound-yield columns 21 and 23 in the extended layout.  Column 12 is not
+# interpreted as ``individual_investor_flag`` for 2002: JSDA documents that
+# meaning for the later format.  Missing canonical fields therefore stay None.
 _OTC_POSITIONAL_IDENTITY_MIN_COLUMNS = _OTC_POSITIONAL_COLUMNS["bond_name"] + 1
 
 
@@ -266,11 +279,11 @@ def _looks_like_otc_positional_row(row: List[str]) -> bool:
 
 
 def _positional_otc_column_map(row: List[str]) -> Optional[dict[str, int]]:
-    """Return only the documented 23-column or current 29+-column layout."""
+    """Return only the official early 21-column or extended 29+ layout."""
     width = len(row)
     if width >= _OTC_POSITIONAL_MIN_COLUMNS:
         return dict(_OTC_POSITIONAL_COLUMNS)
-    if width == _OTC_EARLY_LAYOUT_COLUMN_LIMIT:
+    if width == _OTC_EARLY_LAYOUT_COLUMN_COUNT:
         return dict(_OTC_EARLY_POSITIONAL_COLUMNS)
     return None
 

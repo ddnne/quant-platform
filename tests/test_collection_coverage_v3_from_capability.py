@@ -37,7 +37,7 @@ _EARNINGS = "equities_earnings_calendar"
 _OTC = "jsda_otc_bond_reference_prices"
 _NO_V3 = "indices_bars_daily_topix"
 _MASTER_START = "2008-05-07"
-_PARSE_ZERO = ("2002-08-02", "2002-08-05")
+_REPROOF_REQUIRED = ("2002-08-02", "2002-08-05")
 _WEEKEND = "2002-08-03"
 _LISTED_TINY = ("2002-08-02", "2002-08-05", "2002-08-06")
 
@@ -177,7 +177,7 @@ def test_otc_required_set_is_official_index_not_calendar() -> None:
     assert ids == list(_LISTED_TINY)
     assert _WEEKEND not in ids
     assert len(ids) != 8784
-    for day in _PARSE_ZERO:
+    for day in _REPROOF_REQUIRED:
         required = next(seg for seg in planned if seg.segment_id == day)
         status, _detail = evaluate_segment(policy, required, None)
         assert status == "PARTIAL"

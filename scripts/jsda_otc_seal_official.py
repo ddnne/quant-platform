@@ -3,7 +3,9 @@
 
 Coverage refresh takes local official-index HTML as index_text.
 Omitted/blank text is fail-closed empty, not calendar COMPLETE.
-PARSE_ZERO 2002-08-02/05 stay PARTIAL without in-repo digest+count.
+The parser supports the early 21-column 2002-08-02/05 artifacts, but this
+recovery sealer keeps them REPROOF_REQUIRED until a trusted digest/count is
+approved and raw-to-structured reconciliation succeeds.
 Does not fetch live JSDA HTML.
 """
 from __future__ import annotations
@@ -52,9 +54,11 @@ ITEMS: list = []
 LOGDIR = ROOT / "data" / "ops"
 OTC_DATASET = "jsda_otc_bond_reference_prices"
 OTC_GRAIN = "official_archive_index_day"
-PARSE_ZERO_DAYS = frozenset({"2002-08-02", "2002-08-05"})
-# In-repo digest+count required to seal PARSE_ZERO days. Empty = stay PARTIAL.
-PARSE_ZERO_SEAL_PROOF: dict[str, tuple[str, int]] = {}
+EARLY_LAYOUT_REPROOF_DAYS = frozenset({"2002-08-02", "2002-08-05"})
+# This recovery path must not treat remotely observed metadata as completion
+# authority.  A deliberate trusted-reconciliation release may pin a digest and
+# parser count here; empty means the two parser-capable days stay PARTIAL.
+EARLY_LAYOUT_RECONCILIATION_PROOF: dict[str, tuple[str, int]] = {}
 
 TRIGGERS_DROP = [
     "invalidate_snapshot_jsda_otc_reference_i",
@@ -119,11 +123,13 @@ def sha256_file(path: Path) -> str:
     return "sha256:" + h.hexdigest()
 
 
-def _parse_zero_unproven(day: str, digest: str | None, count: int) -> bool:
-    """True → 2002-08-02/05 stay PARSE_ZERO without in-repo digest+count."""
-    if day not in PARSE_ZERO_DAYS:
+def _early_layout_reproof_required(
+    day: str, digest: str | None, count: int
+) -> bool:
+    """Keep early parser output ineligible until trusted proof is approved."""
+    if day not in EARLY_LAYOUT_REPROOF_DAYS:
         return False
-    proof = PARSE_ZERO_SEAL_PROOF.get(day)
+    proof = EARLY_LAYOUT_RECONCILIATION_PROOF.get(day)
     if proof is None:
         return True
     expected_digest, expected_count = proof
@@ -343,12 +349,13 @@ def seal_day(store, day, path, source_url, receipt_service):
         # ~4200 rows). Zero parse ≠ empty source and must not become COMPLETE.
         return {"segment_id": day, "status": "PARSE_ZERO", "path": str(path), "fmt": fmt}
     digest = sha256_file(path)
-    if _parse_zero_unproven(day, digest, len(parsed)):
-        # 23-col nz parse is not Coverage COMPLETE. Stay PARTIAL without
-        # in-repo digest+count proof.
+    if _early_layout_reproof_required(day, digest, len(parsed)):
+        # Parser capability is not a receipt.  The recovery path stays PARTIAL
+        # until the approved artifact is persisted and independently reconciled.
         return {
             "segment_id": day,
-            "status": "PARSE_ZERO",
+            "status": "REPROOF_REQUIRED",
+            "reason": "TRUSTED_RAW_RECONCILIATION_REQUIRED",
             "path": str(path),
             "fmt": fmt,
             "raw": len(parsed),

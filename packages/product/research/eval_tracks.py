@@ -16,7 +16,6 @@ from typing import Any, Mapping
 
 from research.eval_flags import (
     CATALOG_AND_PLUS_N_STOPPED,
-    CATALOG_YAML_COUNT_AT_STOP,
     CURRENT_EVAL_WAVE,
     EVENT_THREE_AND_PLUS_N_STOPPED,
     RECONSTITUTION_APPLY,
@@ -144,9 +143,12 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "otc_parse_zero",
+        "id": "otc_early_layout_reproof_required",
         "track": EVAL_TRACK_MID_N,
-        "why": "jsda_otc remaining official 2002 PARSE_ZERO (2002-08-02, 2002-08-05)",
+        "why": (
+            "jsda_otc early 21-column rows require trusted raw reproof "
+            "(2002-08-02, 2002-08-05)"
+        ),
         "not_a_pass": True,
         "go": False,
     },

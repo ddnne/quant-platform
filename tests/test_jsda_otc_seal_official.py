@@ -1,14 +1,17 @@
-"""OTC sealer refresh takes local index_text; PARSE_ZERO stays PARTIAL.
+"""OTC sealer refresh takes local index_text; unproved raw stays PARTIAL.
 
 Missing --index-text is fail-closed empty, not calendar COMPLETE.
-PARSE_ZERO 2002-08-02/05 stay unsealed without in-repo digest+count.
+Early 21-column 2002-08-02/05 rows parse, but stay REPROOF_REQUIRED without
+trusted raw reconciliation.
 Does not fetch live JSDA HTML. Does not invent COMPLETE.
 """
 
 from __future__ import annotations
 
+import csv
 import importlib.util
 import inspect
+import io
 import sqlite3
 import sys
 from pathlib import Path
@@ -18,8 +21,8 @@ import pytest
 _REPO = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO / "scripts" / "jsda_otc_seal_official.py"
 _FIXTURE = _REPO / "tests" / "fixtures" / "jsda_otc_official_index_tiny.html"
-_CSV_23 = _REPO / "tests" / "fixtures" / "jsda_otc_reference_headerless_23col.csv"
-PARSE_ZERO_DAYS = ("2002-08-02", "2002-08-05")
+_CSV_FULL = _REPO / "tests" / "fixtures" / "jsda_otc_reference_headerless.csv"
+EARLY_LAYOUT_REPROOF_DAYS = ("2002-08-02", "2002-08-05")
 WEEKEND_IN_TINY_SPAN = "2002-08-03"
 V2_REQUIRED = 8784
 
@@ -105,14 +108,22 @@ def test_refresh_otc_coverage_always_passes_index_text(seal, monkeypatch) -> Non
     assert captured["kwargs"]["datasets"] == [seal.OTC_DATASET]
 
 
-def test_parse_zero_days_unproven_without_digest_count(seal) -> None:
-    assert seal.PARSE_ZERO_SEAL_PROOF == {}
-    assert set(PARSE_ZERO_DAYS) == set(seal.PARSE_ZERO_DAYS)
-    for day in PARSE_ZERO_DAYS:
-        assert seal._parse_zero_unproven(day, "sha256:" + "ab" * 32, 4200) is True
-        assert seal._parse_zero_unproven(day, None, 4200) is True
-        assert seal._parse_zero_unproven(day, "sha256:" + "ab" * 32, 0) is True
-    assert seal._parse_zero_unproven("2002-08-06", "sha256:" + "cd" * 32, 3167) is False
+def test_early_layout_requires_trusted_digest_count_release(seal) -> None:
+    assert seal.EARLY_LAYOUT_RECONCILIATION_PROOF == {}
+    assert set(EARLY_LAYOUT_REPROOF_DAYS) == set(
+        seal.EARLY_LAYOUT_REPROOF_DAYS
+    )
+    for day in EARLY_LAYOUT_REPROOF_DAYS:
+        assert seal._early_layout_reproof_required(
+            day, "sha256:" + "ab" * 32, 4200
+        ) is True
+        assert seal._early_layout_reproof_required(day, None, 4200) is True
+        assert seal._early_layout_reproof_required(
+            day, "sha256:" + "ab" * 32, 0
+        ) is True
+    assert seal._early_layout_reproof_required(
+        "2002-08-06", "sha256:" + "cd" * 32, 3167
+    ) is False
 
 
 def test_inventory_scope_defaults_official_archive_index_day(
@@ -133,19 +144,29 @@ def test_inventory_scope_defaults_official_archive_index_day(
     conn.close()
 
 
-def test_seal_day_parse_zero_stays_unsealed_without_proof(
+def _synthetic_early_layout_body() -> bytes:
+    source = _CSV_FULL.read_text(encoding="utf-8")
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    for row in csv.reader(io.StringIO(source)):
+        writer.writerow(row[:21])
+    return buffer.getvalue().encode("cp932")
+
+
+def test_seal_day_parser_capable_stays_unsealed_without_trusted_reproof(
     seal, tmp_path: Path,
 ) -> None:
-    lines = [ln for ln in _CSV_23.read_text(encoding="utf-8").splitlines() if ln.strip()]
-    body = (lines[0] + "\n" + lines[1] + "\n").encode("cp932")
+    body = _synthetic_early_layout_body()
     n = (seal.FULL_OK_MIN // len(body)) + 2
     raw = body * n
     assert len(raw) > seal.FULL_OK_MIN
     path = tmp_path / "S020802.csv"
     path.write_bytes(raw)
-    for day in PARSE_ZERO_DAYS:
+    for day in EARLY_LAYOUT_REPROOF_DAYS:
         result = seal.seal_day(None, day, path, "", None)
-        assert result["status"] == "PARSE_ZERO"
+        assert result["status"] == "REPROOF_REQUIRED"
+        assert result["reason"] == "TRUSTED_RAW_RECONCILIATION_REQUIRED"
+        assert result["status"] != "PARSE_ZERO"
         assert result["status"] != "SEALED"
         assert result["status"] != "COMPLETE"
         assert result["segment_id"] == day
@@ -157,10 +178,10 @@ def test_seal_source_does_not_fetch_live_html_or_invent_complete(seal) -> None:
     src = Path(inspect.getsourcefile(seal)).read_text(encoding="utf-8")
     assert "index_text=index_text" in src
     assert "def refresh_otc_coverage" in src
-    assert "_parse_zero_unproven" in inspect.getsource(seal.seal_day)
+    assert "_early_layout_reproof_required" in inspect.getsource(seal.seal_day)
     assert "urllib" not in src
     assert "requests." not in src
     assert "urlopen" not in src
     assert seal.OTC_GRAIN == "official_archive_index_day"
-    assert seal.PARSE_ZERO_SEAL_PROOF == {}
-    assert WEEKEND_IN_TINY_SPAN not in seal.PARSE_ZERO_DAYS
+    assert seal.EARLY_LAYOUT_RECONCILIATION_PROOF == {}
+    assert WEEKEND_IN_TINY_SPAN not in seal.EARLY_LAYOUT_REPROOF_DAYS

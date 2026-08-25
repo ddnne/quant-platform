@@ -1,6 +1,8 @@
 """Eval tracks / universe. ADV-ranked, never head-N. Not GO."""
 from __future__ import annotations
 
+import json
+
 
 def test_eval_universe_is_not_fifteen() -> None:
     from research.cf_mass_eval_job import DEFAULT_MAX_CODES
@@ -83,7 +85,7 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert "no_go_until_both_tracks" in qids
     assert "unique22_leftover_lids" in qids
     assert "month_start_leftover_hold" in qids
-    assert "otc_parse_zero" in qids
+    assert "otc_early_layout_reproof_required" in qids
     assert "cheap_pb_event_reuse" in qids
     assert "catalog_and_plus_n_stopped" in qids
     assert "known_thin_do_not_rewrite" in qids
@@ -138,12 +140,10 @@ def test_eval_flags_are_single_sot() -> None:
     assert baskets.RECONSTITUTION_APPLY is flags.RECONSTITUTION_APPLY
     assert tracks.CATALOG_AND_PLUS_N_STOPPED is flags.CATALOG_AND_PLUS_N_STOPPED
     assert tracks.CURRENT_EVAL_WAVE == flags.CURRENT_EVAL_WAVE
-    assert flags.CATALOG_YAML_COUNT_AT_STOP == 2254
 
 def test_catalog_and_plus_n_stopped_and_known_thin() -> None:
     from research.eval_flags import (
         CATALOG_AND_PLUS_N_STOPPED,
-        CATALOG_YAML_COUNT_AT_STOP,
         EVENT_THREE_AND_PLUS_N_STOPPED,
         RECONSTITUTION_APPLY,
     )
@@ -161,12 +161,11 @@ def test_catalog_and_plus_n_stopped_and_known_thin() -> None:
     assert RECONSTITUTION_APPLY is False
     freeze = assert_catalog_and_plus_n_stopped()
     assert freeze["ok"] is True
-    assert freeze["freeze"] == CATALOG_YAML_COUNT_AT_STOP
     assert freeze["yaml_still_present"] is False
-    if freeze["n"] > 0:
-        assert freeze["n"] == CATALOG_YAML_COUNT_AT_STOP
-    else:
-        assert freeze["n_compiled"] == CATALOG_YAML_COUNT_AT_STOP
+    assert freeze["n"] == 0
+    assert freeze["n_compiled"] == freeze["n_manifest"]
+    assert freeze["freeze"] == freeze["artifact_digest"]
+    assert freeze["artifact_digest"].startswith("sha256:")
     assert freeze["go"] is False
     thin = assert_known_thin_unused_absent()
     assert thin["ok"] is True
@@ -204,29 +203,45 @@ def test_catalog_and_plus_n_stopped_and_known_thin() -> None:
 
 def test_catalog_and_plus_n_stopped_yaml_n0_uses_compiled_n(monkeypatch, tmp_path) -> None:
     import research.occupancy_guards as guards
-    from research.eval_flags import CATALOG_YAML_COUNT_AT_STOP
     from research.occupancy_guards import (
         CatalogAndPlusNStoppedError,
         assert_catalog_and_plus_n_stopped,
     )
 
-    freeze_n = int(CATALOG_YAML_COUNT_AT_STOP)
     empty = tmp_path / "research_logics"
     empty.mkdir()
     drifted = tmp_path / "drifted"
     drifted.mkdir()
     (drifted / "only.yaml").write_text("logic_id: only\n", encoding="utf-8")
 
+    manifest_dir = tmp_path / "artifacts" / "replay" / "legacy_strategy_catalog"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "artifact_class": "immutable_legacy_replay",
+                "digest": "sha256:" + "a" * 64,
+                "go": False,
+                "n": 2,
+                "runtime_import_allowed": False,
+                "yaml_still_present": False,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(guards, "repo_root", lambda: tmp_path)
     monkeypatch.setattr(guards, "catalog_dir", lambda: empty)
     monkeypatch.setattr(
         guards,
         "compiled_migration_ids",
-        lambda: frozenset(f"id{i}" for i in range(freeze_n)),
+        lambda: frozenset({"id0", "id1"}),
     )
-    monkeypatch.setattr(guards, "_manifest_yaml_still_present", lambda: False)
     out = assert_catalog_and_plus_n_stopped()
     assert out["n"] == 0
-    assert out["n_compiled"] == freeze_n
+    assert out["n_compiled"] == 2
+    assert out["n_manifest"] == 2
     assert out["yaml_still_present"] is False
     assert out["ok"] is True
     assert out["go"] is False
@@ -236,16 +251,16 @@ def test_catalog_and_plus_n_stopped_yaml_n0_uses_compiled_n(monkeypatch, tmp_pat
         assert_catalog_and_plus_n_stopped()
         raise AssertionError("yaml n=0 compiled mismatch must fail")
     except CatalogAndPlusNStoppedError as exc:
-        assert "compiled n=1" in str(exc)
-        assert str(freeze_n) in str(exc)
+        assert "migration n=1" in str(exc)
+        assert "manifest n=2" in str(exc)
 
     monkeypatch.setattr(guards, "catalog_dir", lambda: drifted)
     try:
         assert_catalog_and_plus_n_stopped()
-        raise AssertionError("yaml n>0 != freeze must fail")
+        raise AssertionError("yaml n>0 must fail")
     except CatalogAndPlusNStoppedError as exc:
         assert "n=1" in str(exc)
-        assert "freeze" in str(exc)
+        assert "replay artifact" in str(exc)
 
 
 def test_manifest_yaml_still_present_defaults_fail_closed(
@@ -255,7 +270,7 @@ def test_manifest_yaml_still_present_defaults_fail_closed(
 
     monkeypatch.setattr(guards, "repo_root", lambda: tmp_path)
     assert guards._manifest_yaml_still_present() is True
-    man = tmp_path / "specs" / "research_catalog"
+    man = tmp_path / "artifacts" / "replay" / "legacy_strategy_catalog"
     man.mkdir(parents=True)
     (man / "manifest.json").write_text('{"n":0,"go":false}\n', encoding="utf-8")
     assert guards._manifest_yaml_still_present() is True
