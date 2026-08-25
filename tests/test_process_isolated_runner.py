@@ -265,11 +265,21 @@ def test_scrub_env_drops_secrets(monkeypatch: pytest.MonkeyPatch):
     assert not any("SECRET" in k or "TOKEN" in k or "KEY" in k for k in env)
 
 
-def test_runner_does_not_use_shell_true():
-    import inspect
-
+def test_runner_invokes_backend_without_shell(monkeypatch: pytest.MonkeyPatch):
     from agents import isolated_runner as mod
 
-    src = inspect.getsource(mod.ProcessIsolatedRunner.run)
-    assert "shell=True" not in src
-    assert "shell=False" in src
+    captured: dict[str, object] = {}
+
+    def fake_run(argv: list[str], **kwargs: object):
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return mod.subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    result = _offline_runner().run("true", capability=_cap())
+
+    assert result.returncode == 0
+    assert captured["argv"] == ["/usr/bin/true"]
+    assert captured["shell"] is False
+    assert captured["stdin"] is mod.subprocess.DEVNULL
+    assert captured["close_fds"] is True

@@ -15,6 +15,7 @@ not release authorities.
 | Profile/closure-bound READY | The dedicated publisher verifies the signed Ops evidence, exact plan closure, PIT availability, immutable DB digest, and dedicated READY key | `tests/test_ready_policy_fail_closed.py` and `tests/test_ready_manifest.py` |
 | Immutable snapshot/artifact | Snapshot handles verify read-only mode and content digest; Worker R2 create-only operations use conditional writes | `tests/test_phase6_snapshot_publication.py` and Worker R2 runtime tests |
 | Controlled Paper authorization | `OfflineFixturePaperService` and `ControlledPilotExecutionService` are distinct entrypoints; the controlled type requires verified readiness and an immutable snapshot | `tests/test_controlled_pilot_execution_service.py` |
+| Agent process isolation | Production refuses execution without an active OS sandbox; a closed tool map, issued capability, scrubbed environment, fixed argv, and `shell=False` are passed to the backend | behavioral cases in `tests/test_process_isolated_runner.py` |
 | Strict Gateway rejection | Closed request/output schemas are validated before an artifact is returned | `tests/test_gateway_fail_closed.py` and Gateway runtime tests |
 | Budget concurrency and settlement | BudgetLedger Durable Object serializes reservations and settles only through the Gateway coordinator bound to exact lease, digest, provider-start, and a retry-safe one-shot settlement capability | `platform/workers/research-ai-gateway/src/budget_runtime.test.ts` and `index_complete_budget.test.ts` |
 | OAuth boundary | The Ops MCP Worker requires OAuth while public metadata remains available | `platform/workers/quant-ops-mcp/runtime/ops_runtime.test.js` and `harness/oauth_harness.test.ts` |
@@ -30,6 +31,8 @@ not release authorities.
   already enforce the boundary.
 - Replaced R2 implementation-source assertions with calls through the public
   adapter and an observed pinned `wrangler r2 object get --remote` command.
+- Replaced the runner's `inspect.getsource`/string check for `shell=False` with
+  an intercepted invocation that asserts the actual subprocess contract.
 - Retained serialized fixture/schema/config reads only when the file itself is
   the governed input under test; those reads do not authorize READY or GO.
 
