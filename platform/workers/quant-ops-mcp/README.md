@@ -32,10 +32,11 @@ never fallback data. `storage_plane_status` reads a publisher-materialized JSON
 aggregate and does not scan ingestion facts.
 
 The generation is accepted only after three checks: its
-`ops-projection-signed-envelope/v1` Ed25519 signature verifies against
-`OPS_PROJECTION_VERIFY_KEYS_JSON`, the signed all-table content manifest hashes
-to the envelope `content_digest`, and every table used by the selected tool is
-rehashed from D1. A valid signature with mutated content returns
+`ops-projection-signed-envelope/v1` Ed25519 signature verifies against the
+digest-pinned committed `specs/ops_projection/verify_public_keys.json`, the
+signed all-table content manifest hashes to the envelope `content_digest`, and
+every table required by the selected tool is rehashed from D1. A valid
+signature with mutated required content returns
 `NOT_PROJECTED`. D1 triggers allow payload writes only while a generation is
 `OPEN`; the transition to `SEALED` freezes every payload row before the active
 pointer is changed. The committed registry contains public verification
@@ -89,8 +90,8 @@ mirror path. The publisher loads only the dedicated private key from
 issuer id is derived by matching that key to the pinned public-key registry;
 there are no CLI cursor, signer-path, signer-id, or generic remote-apply
 overrides. It never falls back to Receipt or READY keys. Public consumers use
-`specs/ops_projection/verify_public_keys.json`; the Worker receives the same
-registry as `OPS_PROJECTION_VERIFY_KEYS_JSON`.
+`specs/ops_projection/verify_public_keys.json`; the Worker bundles that registry
+directly and runtime vars cannot replace the verification root.
 
 No date is assumed for the storage hot window. A diagnostic render may supply a
 reviewed `--storage-hot-cutoff YYYY-MM-DD`; remote publication rejects this

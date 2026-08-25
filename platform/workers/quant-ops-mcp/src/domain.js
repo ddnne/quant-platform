@@ -8,7 +8,10 @@ import {
   syncDatasetState,
 } from "./domain_policy.js";
 import { verifyProjectedContent } from "./projection_content.js";
-import { verifyProjectionGeneration } from "./projection_signature.js";
+import {
+  verifyPinnedProjectionGeneration,
+  verifyProjectionGeneration,
+} from "./projection_signature.js";
 import { OPS_OUTPUT_SCHEMAS } from "./tool_output_schemas.js";
 
 const STRING = { type: "string" };
@@ -170,7 +173,7 @@ function generationFields(active) {
     projection_activated_at: active.activated_at,
     projection_content_digest: active.content_digest,
     projection_signature_verified: true,
-    projection_content_verified: true,
+    required_content_verified: true,
     projection_issuer_key_id: active.issuer_key_id,
   };
 }
@@ -189,9 +192,9 @@ function parseJson(value) {
  * @param {D1Database} db
  * @param {string} name
  * @param {unknown} rawArguments
- * @param {{projectionPublicKeyRegistry?:unknown}} options
+ * @param {(generation:Record<string,unknown>)=>Promise<{ok:boolean,reason:string|null,envelope:Record<string,unknown>|null}>} verifyGeneration
  */
-export async function callOpsTool(db, name, rawArguments, options = {}) {
+async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
   const args = objectArgs(rawArguments);
   if (!OPS_TOOLS.some((candidate) => candidate.name === name)) {
     throw new RangeError(`unknown Quant Ops Read tool: ${name}`);
@@ -200,10 +203,7 @@ export async function callOpsTool(db, name, rawArguments, options = {}) {
   if (!active) {
     return notProjected(null, "active Ops Projection generation is unavailable", name.startsWith("snapshot") || name === "latest_ready_snapshot" ? "research_ready" : "ops_current");
   }
-  const verified = await verifyProjectionGeneration(
-    active,
-    options.projectionPublicKeyRegistry,
-  );
+  const verified = await verifyGeneration(active);
   if (!verified.ok) {
     return notProjected(
       active,
@@ -230,7 +230,7 @@ export async function callOpsTool(db, name, rawArguments, options = {}) {
       ),
       projection_content_digest: active.content_digest,
       projection_signature_verified: true,
-      projection_content_verified: false,
+      required_content_verified: false,
       projection_issuer_key_id: active.issuer_key_id,
     };
   }
@@ -688,4 +688,37 @@ export async function callOpsTool(db, name, rawArguments, options = {}) {
     reason: coverage.length ? null : "Coverage summary is absent from the active generation",
     research_note: "Active Ops projection is not a research READY snapshot.",
   };
+}
+
+/**
+ * Production dispatch always loads the committed, digest-pinned verifier root.
+ * @param {D1Database} db
+ * @param {string} name
+ * @param {unknown} rawArguments
+ */
+export async function callOpsTool(db, name, rawArguments) {
+  return dispatchOpsTool(db, name, rawArguments, verifyPinnedProjectionGeneration);
+}
+
+/**
+ * Private test seam for ephemeral signature fixtures. It is not imported by
+ * the Worker entrypoint and cannot replace production verification authority.
+ *
+ * @param {D1Database} db
+ * @param {string} name
+ * @param {unknown} rawArguments
+ * @param {unknown} registry
+ */
+export async function _callOpsToolWithRegistryForTest(
+  db,
+  name,
+  rawArguments,
+  registry,
+) {
+  return dispatchOpsTool(
+    db,
+    name,
+    rawArguments,
+    (generation) => verifyProjectionGeneration(generation, registry),
+  );
 }

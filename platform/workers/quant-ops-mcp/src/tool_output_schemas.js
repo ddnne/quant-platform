@@ -14,7 +14,7 @@ const GENERATION_PROPERTIES = Object.freeze({
   projection_activated_at: STRING,
   projection_content_digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
   projection_signature_verified: BOOLEAN,
-  projection_content_verified: BOOLEAN,
+  required_content_verified: BOOLEAN,
   projection_issuer_key_id: STRING,
 });
 

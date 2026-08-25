@@ -18,7 +18,7 @@ function error(id, code, message) {
  * @param {unknown} payload
  * @param {D1Database} db
  * @param {{quota?:{charge:(principal:{subject:string,clientId:string}, units:number)=>Promise<unknown>},
- * principal?:{subject:string,clientId:string},projectionPublicKeyRegistry?:unknown}} context
+ * principal?:{subject:string,clientId:string}}} context
  */
 export async function handleJsonRpc(payload, db, context = {}) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -51,8 +51,8 @@ export async function handleJsonRpc(payload, db, context = {}) {
       return response(id, {
         protocolVersion: MCP_PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "quant-ops-read", version: "0.1.0" },
-        instructions: "Current mutable Ops status only. Research rows are not exposed by this server.",
+        serverInfo: { name: "quant-ops-read", version: "0.2.0" },
+        instructions: "Signed immutable Ops status only. Research rows are not exposed by this server.",
       });
     }
     if (request.method === "ping") return response(id, {});
@@ -72,9 +72,7 @@ export async function handleJsonRpc(payload, db, context = {}) {
       }
       const values = /** @type {Record<string, unknown>} */ (params);
       if (typeof values.name !== "string") return error(id, -32602, "tool name is required");
-      const value = await callOpsTool(db, values.name, values.arguments, {
-        projectionPublicKeyRegistry: context.projectionPublicKeyRegistry,
-      });
+      const value = await callOpsTool(db, values.name, values.arguments);
       const quota = context.quota && context.principal
         ? await context.quota.charge(context.principal, quotaCost(value))
         : null;
@@ -98,7 +96,7 @@ export async function handleJsonRpc(payload, db, context = {}) {
 /**
  * @param {Request} request @param {D1Database} db
  * @param {{quota?:{charge:(principal:{subject:string,clientId:string}, units:number)=>Promise<unknown>},
- * principal?:{subject:string,clientId:string},projectionPublicKeyRegistry?:unknown}} context
+ * principal?:{subject:string,clientId:string}}} context
  */
 export async function handleMcpHttp(request, db, context = {}) {
   if (request.method === "GET") {

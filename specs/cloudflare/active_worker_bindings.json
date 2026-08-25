@@ -529,8 +529,7 @@
         "vars": {
           "ALLOWED_LOGIN": "ddnne",
           "DAILY_ROW_QUOTA": "25000",
-          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev",
-          "OPS_PROJECTION_VERIFY_KEYS_JSON": "{\"schema_version\":1,\"keys\":[{\"key_id\":\"ops-projection-20260825-v1\",\"algorithm\":\"Ed25519\",\"public_key_base64\":\"1fECBb/uNUSmIn9p0AXiwBkWaAXr/FHA557sGGNpA48=\",\"status\":\"active\"}]}"
+          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
         },
         "workers_dev": true
       },
@@ -600,8 +599,7 @@
         "vars": {
           "ALLOWED_LOGIN": "ddnne",
           "DAILY_ROW_QUOTA": "25000",
-          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev",
-          "OPS_PROJECTION_VERIFY_KEYS_JSON": "{\"schema_version\":1,\"keys\":[{\"key_id\":\"ops-projection-20260825-v1\",\"algorithm\":\"Ed25519\",\"public_key_base64\":\"1fECBb/uNUSmIn9p0AXiwBkWaAXr/FHA557sGGNpA48=\",\"status\":\"active\"}]}"
+          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
         },
         "workers_dev": true
       },
@@ -666,8 +664,7 @@
         },
         "vars": {
           "ALLOWED_LOGIN": "ddnne",
-          "DAILY_ROW_QUOTA": "25000",
-          "OPS_PROJECTION_VERIFY_KEYS_JSON": "{\"schema_version\":1,\"keys\":[{\"key_id\":\"ops-projection-20260825-v1\",\"algorithm\":\"Ed25519\",\"public_key_base64\":\"1fECBb/uNUSmIn9p0AXiwBkWaAXr/FHA557sGGNpA48=\",\"status\":\"active\"}]}"
+          "DAILY_ROW_QUOTA": "25000"
         },
         "workers_dev": false
       }

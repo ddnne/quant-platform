@@ -33,5 +33,4 @@ new_sqlite_classes = ["QuantOpsMcpAgent"]
 [vars]
 ALLOWED_LOGIN = "ddnne"
 DAILY_ROW_QUOTA = "25000"
-OPS_PROJECTION_VERIFY_KEYS_JSON = '{"schema_version":1,"keys":[]}'
 OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.test"

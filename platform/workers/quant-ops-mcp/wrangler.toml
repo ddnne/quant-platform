@@ -45,7 +45,6 @@ new_sqlite_classes = ["QuantOpsMcpAgent"]
 # D14-style single-user gate (GitHub login).
 ALLOWED_LOGIN = "ddnne"
 DAILY_ROW_QUOTA = "25000"
-OPS_PROJECTION_VERIFY_KEYS_JSON = '{"schema_version":1,"keys":[{"key_id":"ops-projection-20260825-v1","algorithm":"Ed25519","public_key_base64":"1fECBb/uNUSmIn9p0AXiwBkWaAXr/FHA557sGGNpA48=","status":"active"}]}'
 # Authorization server is this Worker itself (same as news-mcp).
 OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
 
@@ -88,5 +87,4 @@ bindings = [{ name = "MCP_OBJECT", class_name = "QuantOpsMcpAgent" }]
 [env.production.vars]
 ALLOWED_LOGIN = "ddnne"
 DAILY_ROW_QUOTA = "25000"
-OPS_PROJECTION_VERIFY_KEYS_JSON = '{"schema_version":1,"keys":[{"key_id":"ops-projection-20260825-v1","algorithm":"Ed25519","public_key_base64":"1fECBb/uNUSmIn9p0AXiwBkWaAXr/FHA557sGGNpA48=","status":"active"}]}'
 OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"

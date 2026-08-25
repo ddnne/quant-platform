@@ -231,10 +231,10 @@ Worker reads only the active immutable generation from `OPS_PROJECTION_DB`;
 quota writes go only to `QUOTA_DB`.
 
 Remote publication additionally requires a dedicated Ops Projection Ed25519
-private key and key id. Provision its public key in both
-`specs/ops_projection/verify_public_keys.json` and the Worker's
-`OPS_PROJECTION_VERIFY_KEYS_JSON`; Receipt and READY keys are not valid here.
-An empty/unknown registry keeps every generation `NOT_PROJECTED`.
+private key. Its public key must be the exactly-one active entry in
+`specs/ops_projection/verify_public_keys.json`, which is purpose- and
+digest-pinned into the Worker bundle. Runtime vars cannot replace that root;
+Receipt and READY keys are not valid here.
 
 ```bash
 .venv/bin/python scripts/publish_ops_projection.py \

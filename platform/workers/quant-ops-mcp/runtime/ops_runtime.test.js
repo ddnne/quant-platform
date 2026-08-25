@@ -6,7 +6,7 @@ import {
 } from "cloudflare:test";
 import { beforeEach, describe, expect, inject, it, vi } from "vitest";
 
-import { callOpsTool } from "../src/domain.js";
+import { _callOpsToolWithRegistryForTest } from "../src/domain.js";
 import {
   githubHandler,
   signState,
@@ -53,6 +53,7 @@ async function projectionSigner() {
     keyId,
     registry: {
       schema_version: 1,
+      purpose: "ops_projection_verification",
       keys: [{
         key_id: keyId,
         algorithm: "Ed25519",
@@ -189,18 +190,18 @@ describe("Ops Projection in the Workers runtime", () => {
     await seedSignedGeneration(signer, "runtime-current", "9");
     await activate("runtime-current");
 
-    const value = await callOpsTool(
+    const value = await _callOpsToolWithRegistryForTest(
       env.OPS_PROJECTION_DB,
       "storage_plane_status",
       {},
-      { projectionPublicKeyRegistry: signer.registry },
+      signer.registry,
     );
     expect(value).toMatchObject({
       status: "AVAILABLE",
       mutable: false,
       projection_generation: "runtime-current",
       projection_signature_verified: true,
-      projection_content_verified: true,
+      required_content_verified: true,
       counts: { marker: "9" },
     });
   });
@@ -217,17 +218,17 @@ describe("Ops Projection in the Workers runtime", () => {
     });
     await activate("runtime-tampered");
 
-    const value = await callOpsTool(
+    const value = await _callOpsToolWithRegistryForTest(
       env.OPS_PROJECTION_DB,
       "storage_plane_status",
       {},
-      { projectionPublicKeyRegistry: signer.registry },
+      signer.registry,
     );
     expect(value).toMatchObject({
       status: "NOT_PROJECTED",
       projection_generation: "runtime-tampered",
       projection_signature_verified: true,
-      projection_content_verified: false,
+      required_content_verified: false,
     });
     expect(value.reason).toContain("content mismatch for ops_storage_plane_status");
   });

@@ -4,14 +4,24 @@ import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-import { callOpsTool, OPS_TOOLS } from "../src/domain.js";
+import {
+  _callOpsToolWithRegistryForTest,
+  callOpsTool,
+  OPS_TOOLS,
+} from "../src/domain.js";
 import { classifyRawAcquisition, honestProjectionStatus, syncDatasetState } from "../src/domain_policy.js";
 import {
   PROJECTED_CONTENT_TABLES,
   projectedManifestDigest,
   projectedTableContent,
 } from "../src/projection_content.js";
-import { canonicalProjectionBytes, projectionSha256 } from "../src/projection_signature.js";
+import {
+  canonicalProjectionBytes,
+  loadPinnedProjectionKeyRegistry,
+  parseProjectionKeyRegistry,
+  PINNED_OPS_PROJECTION_REGISTRY_DIGEST,
+  projectionSha256,
+} from "../src/projection_signature.js";
 import { DurableDailyQuota, QuotaExceeded } from "../src/quota.js";
 
 function d1(db) {
@@ -46,6 +56,7 @@ const projectionPublicJwk = projectionKeyPair.publicKey.export({ format: "jwk" }
 const projectionPublicRaw = Buffer.from(String(projectionPublicJwk.x), "base64url").toString("base64");
 const projectionRegistry = {
   schema_version: 1,
+  purpose: "ops_projection_verification",
   keys: [{
     key_id: projectionKeyId,
     algorithm: "Ed25519",
@@ -53,6 +64,34 @@ const projectionRegistry = {
     public_key_base64: projectionPublicRaw,
   }],
 };
+
+test("production projection verifier root is purpose-bound and digest-pinned", async () => {
+  const pinned = await loadPinnedProjectionKeyRegistry();
+  assert.equal(pinned.purpose, "ops_projection_verification");
+  assert.equal(pinned.keys.filter((row) => row.status === "active").length, 1);
+  assert.equal(await projectionSha256(pinned), PINNED_OPS_PROJECTION_REGISTRY_DIGEST);
+
+  for (const invalid of [
+    { ...projectionRegistry, purpose: "receipt_verification" },
+    {
+      ...projectionRegistry,
+      keys: projectionRegistry.keys.map(({ status: _status, ...row }) => row),
+    },
+    {
+      ...projectionRegistry,
+      keys: [projectionRegistry.keys[0], {
+        ...projectionRegistry.keys[0],
+        key_id: "ops-projection-test-v2",
+      }],
+    },
+    {
+      ...projectionRegistry,
+      keys: [projectionRegistry.keys[0], { ...projectionRegistry.keys[0] }],
+    },
+  ]) {
+    assert.equal(parseProjectionKeyRegistry(invalid), null);
+  }
+});
 
 function signedGeneration(generation, now, contentManifest, contentDigest) {
   const digest = (character) => `sha256:${character.repeat(64)}`;
@@ -100,9 +139,7 @@ function signedGeneration(generation, now, contentManifest, contentDigest) {
 }
 
 function opsCall(db, name, args) {
-  return callOpsTool(d1(db), name, args, {
-    projectionPublicKeyRegistry: projectionRegistry,
-  });
+  return _callOpsToolWithRegistryForTest(d1(db), name, args, projectionRegistry);
 }
 
 function projectionDb() {
@@ -306,11 +343,11 @@ test("a sealed generation cannot be read without the active pointer", async () =
   db.close();
 });
 
-test("an unsigned or untrusted active generation is NOT_PROJECTED", async () => {
+test("production ignores a caller registry and unsigned generations fail closed", async () => {
   const db = projectionDb();
   await seedGeneration(db, "projgen-untrusted");
   let result = await callOpsTool(d1(db), "ops_status", {}, {
-    projectionPublicKeyRegistry: { schema_version: 1, keys: [] },
+    projectionPublicKeyRegistry: projectionRegistry,
   });
   assert.equal(result.status, "NOT_PROJECTED");
   assert.equal(result.projection_generation, "projgen-untrusted");
@@ -344,7 +381,7 @@ test("signature-valid manifest with the wrong overall digest is NOT_PROJECTED", 
   const result = await opsCall(db, "storage_plane_status", {});
   assert.equal(result.status, "NOT_PROJECTED");
   assert.equal(result.projection_signature_verified, true);
-  assert.equal(result.projection_content_verified, false);
+  assert.equal(result.required_content_verified, false);
   assert.match(result.reason, /content digest does not bind its manifest/);
   db.close();
 });
@@ -361,7 +398,7 @@ test("signature-valid payload tampering is detected by table rehash", async () =
   const result = await opsCall(db, "storage_plane_status", {});
   assert.equal(result.status, "NOT_PROJECTED");
   assert.equal(result.projection_signature_verified, true);
-  assert.equal(result.projection_content_verified, false);
+  assert.equal(result.required_content_verified, false);
   assert.match(result.reason, /content mismatch for ops_storage_plane_status/);
   db.close();
 });
@@ -569,7 +606,7 @@ test("storage_plane_status reads the publisher aggregate without ingestion table
   assert.equal(result.counts.facts, 12);
   assert.equal(result.projection_generation, "projgen-storage");
   assert.equal(result.projection_signature_verified, true);
-  assert.equal(result.projection_content_verified, true);
+  assert.equal(result.required_content_verified, true);
   db.close();
 });
 

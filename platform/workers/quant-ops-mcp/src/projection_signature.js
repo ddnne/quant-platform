@@ -1,7 +1,12 @@
 /** Public-key-only verification for signed Ops Projection generation rows. */
 
+import pinnedRegistryDocument from "../../../../specs/ops_projection/verify_public_keys.json" with { type: "json" };
+
 const SIGNED_DOCUMENT_SCHEMA = "ops-projection-signed-envelope/v1";
 const ENVELOPE_SCHEMA = "ops-projection-envelope/v1";
+const REGISTRY_PURPOSE = "ops_projection_verification";
+export const PINNED_OPS_PROJECTION_REGISTRY_DIGEST =
+  "sha256:8b3f80342fca9cd446755133faab125c5cd69fde76c3f0128332613d7d8a4e39";
 
 /** @param {unknown} value @returns {unknown} */
 function canonicalize(value) {
@@ -56,8 +61,41 @@ export function parseProjectionKeyRegistry(value) {
   }
   if (!document || typeof document !== "object" || Array.isArray(document)) return null;
   const registry = /** @type {Record<string, unknown>} */ (document);
-  if (registry.schema_version !== 1 || !Array.isArray(registry.keys)) return null;
+  if (Object.keys(registry).sort().join("\0") !== "keys\0purpose\0schema_version" ||
+      registry.schema_version !== 1 || registry.purpose !== REGISTRY_PURPOSE ||
+      !Array.isArray(registry.keys) || registry.keys.length < 1 ||
+      registry.keys.length > 16) return null;
+  const keyIds = new Set();
+  let active = 0;
+  for (const candidate of registry.keys) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+    const row = /** @type {Record<string, unknown>} */ (candidate);
+    if (Object.keys(row).sort().join("\0") !==
+        "algorithm\0key_id\0public_key_base64\0status" ||
+        typeof row.key_id !== "string" || !row.key_id ||
+        row.algorithm !== "Ed25519" ||
+        !["active", "retired"].includes(String(row.status))) return null;
+    const publicKey = decodeBase64(String(row.public_key_base64 || ""));
+    if (!publicKey || publicKey.byteLength !== 32 || keyIds.has(row.key_id)) return null;
+    keyIds.add(row.key_id);
+    if (row.status === "active") active += 1;
+  }
+  if (active !== 1) return null;
   return registry;
+}
+
+/** Load the one production verification root compiled from the committed registry. */
+export async function loadPinnedProjectionKeyRegistry() {
+  const registry = parseProjectionKeyRegistry(pinnedRegistryDocument);
+  if (!registry || await projectionSha256(registry) !== PINNED_OPS_PROJECTION_REGISTRY_DIGEST) {
+    throw new Error("pinned Ops Projection public-key registry is invalid");
+  }
+  return registry;
+}
+
+/** @param {Record<string, unknown>} generation */
+export async function verifyPinnedProjectionGeneration(generation) {
+  return verifyProjectionGeneration(generation, await loadPinnedProjectionKeyRegistry());
 }
 
 /** @param {Record<string, unknown>} envelope */
@@ -176,7 +214,7 @@ export async function verifyProjectionGeneration(generation, rawRegistry) {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
     const row = /** @type {Record<string, unknown>} */ (candidate);
     return row.key_id === generation.issuer_key_id &&
-      row.algorithm === "Ed25519" && (row.status === undefined || row.status === "active");
+      row.algorithm === "Ed25519" && row.status === "active";
   });
   if (!keyRow || typeof keyRow !== "object" || Array.isArray(keyRow)) {
     return { ok: false, reason: "Ops Projection issuer is not trusted", envelope: null };

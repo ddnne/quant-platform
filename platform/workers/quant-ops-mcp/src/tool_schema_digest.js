@@ -4,7 +4,7 @@ import { projectionSha256 } from "./projection_signature.js";
 
 // Updated only after review of an intentional tools/list contract change.
 export const ACCEPTED_OPS_TOOL_SCHEMA_DIGEST =
-  "sha256:7a35e9920853afe22dca19fb12ff2fc3ed61c616cf663bd471b6c1257bd377da";
+  "sha256:dad7cd29ef002e76ee1f9802b8685a179f94fcbd0bb2e6df685858e41c1778d3";
 
 /**
  * @param {ReadonlyArray<{name:string,inputSchema:Record<string,unknown>,outputSchema:Record<string,unknown>}>} tools
