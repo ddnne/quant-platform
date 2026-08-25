@@ -49,6 +49,9 @@ not release authorities.
 - Removed the research harness's AST/function-name/environment-spelling freeze;
   Mass fail-closed behavior is already exercised through the public start gate
   and Worker scheduler/runtime tests.
+- Removed the dead W83-W86 three-pin freeze surface and smoke-universe count
+  guards. Exact-four plans now own their immutable strategy/feature parameters;
+  Mass and Paper remain disabled by their capability gates.
 - Replaced the runner's `inspect.getsource`/string check for `shell=False` with
   an intercepted invocation that asserts the actual subprocess contract.
 - Removed the JSDA recovery sealer's function-name/import spelling assertions;
