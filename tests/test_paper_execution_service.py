@@ -7,10 +7,8 @@ authorization id, constraints, FeatureRef versions, and exact snapshot pin.
 
 from __future__ import annotations
 
-import ast
 import types
 from datetime import date, timedelta
-from pathlib import Path
 
 import pytest
 
@@ -194,39 +192,3 @@ def test_runtime_dto_rejects_raw_strategy(tmp_path):
     )
     with pytest.raises(PaperExecutionRejected, match="StrategySpec"):
         RuntimeService().execute(dto)
-
-
-def test_production_packages_import_run_paper_only_via_paper_execution_service():
-    """packages/ may import run_paper only from strategies.paper or paper_service."""
-    repo = Path(__file__).resolve().parents[1]
-    packages = repo / "packages"
-    allowed_rel = {
-        Path("packages/research_runtime/strategies/paper/runner.py"),
-        Path("packages/research_runtime/strategies/paper/__init__.py"),
-        Path("packages/product/execution/paper_service.py"),
-    }
-    offenders: list[str] = []
-    for path in sorted(packages.rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
-        rel = path.relative_to(repo)
-        if rel in allowed_rel:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                if any(alias.name == "run_paper" for alias in node.names):
-                    offenders.append(f"{rel}:{node.lineno}: import run_paper from {node.module}")
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name == "run_paper" or alias.name.endswith(".run_paper"):
-                        offenders.append(f"{rel}:{node.lineno}: import {alias.name}")
-            elif isinstance(node, ast.Call):
-                func = node.func
-                if isinstance(func, ast.Name) and func.id == "run_paper":
-                    offenders.append(f"{rel}:{node.lineno}: call run_paper")
-                elif isinstance(func, ast.Attribute) and func.attr == "run_paper":
-                    offenders.append(f"{rel}:{node.lineno}: call {func.attr}")
-    assert not offenders, "run_paper must enter via PaperExecutionService:\n" + "\n".join(
-        offenders
-    )

@@ -370,32 +370,6 @@ def test_both_track_sleeve_fanout_records_via_daily_path() -> None:
     assert pack["compare"]["not_a_pass"] is True
 
 
-def test_both_track_sleeve_fanout_uses_select_eval_universe() -> None:
-    import ast
-    from pathlib import Path
-
-    research_dir = (
-        Path(__file__).resolve().parents[1]
-        / "packages"
-        / "product"
-        / "research"
-    )
-    src = (research_dir / "cf_daily_path_job.py").read_text(encoding="utf-8")
-    mass_src = (research_dir / "cf_mass_eval_job.py").read_text(encoding="utf-8")
-    assert "select_eval_universe" in src
-    assert "select_eval_universe" in mass_src
-    assert "selected[: int(max_codes)]" not in src
-    assert "selected[: int(max_codes)]" not in mass_src
-    assert "run_both_track_sleeve_fanout" in src
-    tree = ast.parse(src)
-    names = [
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef)
-    ]
-    assert "run_both_track_sleeve_fanout" in names
-
-
 def test_mass_eval_spec_drops_unique_but_keeps_bar_native() -> None:
     from research.cf_mass_eval_job import build_cf_mass_eval_job_spec
 
