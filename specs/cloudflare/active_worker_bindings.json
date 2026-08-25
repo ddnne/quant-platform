@@ -80,7 +80,9 @@
         "compatibility_date": "2026-08-01",
         "compatibility_flags": [],
         "config": "platform/workers/ingestion-jsda/wrangler.toml",
-        "crons": [],
+        "crons": [
+          "30 1 * * *"
+        ],
         "d1_databases": [
           {
             "binding": "DB",
@@ -247,7 +249,9 @@
         "compatibility_date": "2026-08-01",
         "compatibility_flags": [],
         "config": "platform/workers/ingestion-premium/wrangler.toml",
-        "crons": [],
+        "crons": [
+          "15 * * * *"
+        ],
         "d1_databases": [
           {
             "binding": "DB",

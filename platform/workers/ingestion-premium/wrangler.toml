@@ -88,3 +88,7 @@ database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
 [env.production.vars]
 INGEST_CONCURRENCY = "6"
+
+[env.production.triggers]
+# Named environments do not inherit top-level triggers.
+crons = ["15 * * * *"]

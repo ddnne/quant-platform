@@ -79,3 +79,7 @@ max_concurrency = 1
 
 [env.production.vars]
 USER_AGENT = "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
+
+[env.production.triggers]
+# Named environments do not inherit top-level triggers.
+crons = ["30 1 * * *"]
