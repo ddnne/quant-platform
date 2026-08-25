@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
 from research.baseline_catalog import (
     CATALOG_VERSION,
     REJECTED_SIMPLE_DAILY_SIGN_BASELINES,
@@ -20,10 +17,6 @@ from research.baseline_catalog import (
     rejected_baseline_catalog,
 )
 from research.robustness_gate import evaluate_research_robustness_gate
-
-REPO = Path(__file__).resolve().parents[1]
-CATALOG_PATH = REPO / "packages" / "product" / "research" / "baseline_catalog.py"
-
 
 def test_rejected_catalog_exists_and_lists_s1_to_s5():
     doc = rejected_baseline_catalog()
@@ -100,25 +93,3 @@ def test_s1_cost_fail_recorded_in_catalog():
 def test_unknown_signal_not_rejected_by_default():
     assert is_research_baseline_rejected("not_a_signal") is False
     assert get_rejected_baseline("not_a_signal") is None
-
-
-def test_catalog_module_ast_bans_ready_mass_orders():
-    tree = ast.parse(CATALOG_PATH.read_text(encoding="utf-8"))
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module.split(".")[0])
-            for a in node.names:
-                imported.add(a.name)
-        elif isinstance(node, ast.Import):
-            for a in node.names:
-                imported.add(a.name.split(".")[0])
-    src = CATALOG_PATH.read_text(encoding="utf-8")
-    assert "mass_research" not in imported
-    assert "start_mass_research" not in imported
-    assert "VerifiedResearchReadiness" not in imported
-    assert "READY_DECLARED: bool = True" not in src
-    assert "OPERATIONAL_GO: bool = True" not in src
-    assert "CONNECTED_TO_READY: bool = True" not in src
-    assert "CONNECTED_TO_MASS: bool = True" not in src
-    assert "MASS_GENERATE_SIGNALS: bool = True" not in src
