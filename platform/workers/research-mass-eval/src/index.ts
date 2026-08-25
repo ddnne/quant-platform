@@ -8,7 +8,6 @@ import {
 import {
   buildSyntheticPanels,
   defaultPeriodsFromRequest,
-  loadD1BarsPanels,
   loadR2Panels,
 } from "./panels";
 import type { Env, MassEvalJobResult, MassEvalRequest } from "./types";
@@ -52,28 +51,6 @@ async function runMassEval(
     );
     panels = loaded.panels;
     panelNotes = loaded.notes;
-  } else if (mode === "d1_bars") {
-    if (!env.DB) {
-      panelNotes = ["d1_not_bound"];
-      panels = periodSpecs.map((p) => ({
-        period_id: String(p.period_id),
-        year: Number(p.year ?? 0),
-        period_start: p.period_start || "",
-        period_end: p.period_end || "",
-        status: "data_missing" as const,
-        bars: {},
-        source: "d1_not_bound",
-      }));
-    } else {
-      const loaded = await loadD1BarsPanels(
-        env.DB,
-        periodSpecs,
-        maxCodes,
-        maxDays,
-      );
-      panels = loaded.panels;
-      panelNotes = loaded.notes;
-    }
   }
 
   const results = req.logics.map((logic, index) =>
@@ -249,15 +226,6 @@ async function runDailyPath(
       env.STRUCTURED_BUCKET,
       periodSpecs,
       panelsPrefix,
-    );
-    panels = loaded.panels;
-    panelNotes = loaded.notes;
-  } else if (mode === "d1_bars" && env.DB) {
-    const loaded = await loadD1BarsPanels(
-      env.DB,
-      periodSpecs,
-      maxCodes,
-      maxDays,
     );
     panels = loaded.panels;
     panelNotes = loaded.notes;

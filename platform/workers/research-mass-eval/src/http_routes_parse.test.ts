@@ -67,7 +67,7 @@ describe("parseRequest", () => {
     expect(parsed.ok).toBe(false);
     if (parsed.ok) return;
     expect(parsed.error).toBe(
-      "mode must be synthetic | r2_panels | d1_bars | nets_only",
+      "mode must be synthetic | r2_panels | nets_only",
     );
   });
 

@@ -1,7 +1,7 @@
 # Research multi-logic mass-eval on Cloudflare Workers (period-net screen).
 #
 # Purpose: batch-evaluate distinct economic logics with multi-period metrics
-# on real COMPLETE-backed panels (mode=r2_panels) or D1 tip (mode=d1_bars);
+# on immutable, readiness-bound R2 panels (mode=r2_panels);
 # write research artifacts to R2 quant-structured.
 #
 # Freezes (held):
@@ -12,7 +12,6 @@
 #
 # Resources:
 #   * R2 bucket quant-structured — research/mass_eval/job={id}/…
-#   * D1 quant-ingest (optional) — tip extract for mode=d1_bars
 #
 # Secrets (required for eval/propose; unbound token fail-closes authorized()):
 #   npx wrangler secret put MASS_EVAL_TOKEN -c platform/workers/research-mass-eval/wrangler.toml
@@ -38,12 +37,6 @@ preview_urls = false
 [[r2_buckets]]
 binding = "STRUCTURED_BUCKET"
 bucket_name = "quant-structured"
-
-# D1 — hot tip structured (mode=d1_bars only; multi-year history stays R2 panels).
-[[d1_databases]]
-binding = "DB"
-database_name = "quant-ingest"
-database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
 # Propose-thesis goes through AI Gateway. This worker must not bind Workers AI.
 [[services]]
@@ -74,11 +67,6 @@ preview_urls = false
 [[env.production.r2_buckets]]
 binding = "STRUCTURED_BUCKET"
 bucket_name = "quant-structured"
-
-[[env.production.d1_databases]]
-binding = "DB"
-database_name = "quant-ingest"
-database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
 [[env.production.services]]
 binding = "AI_GATEWAY"

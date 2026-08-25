@@ -1,6 +1,5 @@
 export interface Env {
   STRUCTURED_BUCKET: R2Bucket;
-  DB?: D1Database;
   /** Typed Service Binding RPC. Direct Workers AI and shared tokens are forbidden. */
   AI_GATEWAY?: AiGatewayService;
   MASS_EVAL_TOKEN?: string;
@@ -43,7 +42,7 @@ export interface MassEvalRequest {
   logics: LogicSpec[];
   periods?: PeriodSpec[];
   job_id: string;
-  mode?: "synthetic" | "r2_panels" | "d1_bars" | "nets_only";
+  mode?: "synthetic" | "r2_panels" | "nets_only";
   eval_kind?: "screen" | "daily_path";
   write_artifacts?: boolean;
   panels_prefix?: string;

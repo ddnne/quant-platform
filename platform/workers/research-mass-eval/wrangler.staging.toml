@@ -1,4 +1,4 @@
-# Staging uses distinct D1/R2 resources and the private staging gateway.
+# Staging uses a distinct R2 resource and the private staging gateway.
 # Freeze vars stay NO-GO / OFF / false.
 
 name = "quant-platform-research-mass-eval-staging"
@@ -18,11 +18,6 @@ NETS_ONLY = "deny"
 [[r2_buckets]]
 binding = "STRUCTURED_BUCKET"
 bucket_name = "quant-structured-staging"
-
-[[d1_databases]]
-binding = "DB"
-database_name = "quant-ingest-staging"
-database_id = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
 
 [[services]]
 binding = "AI_GATEWAY"
