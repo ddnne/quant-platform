@@ -84,6 +84,9 @@ export type Reservation = {
   /** Persisted before invoking Workers AI. Null proves no provider side effect was started. */
   provider_started_at: number | null;
   uncertainty_reason: string | null;
+  /** SHA-256 of the one-shot settlement capability bound to this reservation. */
+  settlement_capability_hash: string | null;
+  settlement_capability_consumed: boolean;
 };
 
 export type Lease = {
@@ -347,6 +350,8 @@ function coerceReservation(raw: Reservation): Reservation {
     settlement: raw.settlement ?? null,
     provider_started_at: raw.provider_started_at ?? null,
     uncertainty_reason: raw.uncertainty_reason ?? null,
+    settlement_capability_hash: raw.settlement_capability_hash ?? null,
+    settlement_capability_consumed: raw.settlement_capability_consumed === true,
   };
 }
 
@@ -614,6 +619,8 @@ export async function reserveBudget(
     settlement: null,
     provider_started_at: null,
     uncertainty_reason: null,
+    settlement_capability_hash: null,
+    settlement_capability_consumed: false,
   };
   state.reserved = applyDelta(state.reserved, reservation.amounts, 1);
   state.reservations[key.idempotency_key] = reservation;
@@ -627,15 +634,69 @@ export async function reserveBudget(
   };
 }
 
+function publicReservation(reservation: Reservation): Reservation {
+  const clone = structuredClone(reservation);
+  clone.settlement_capability_hash = reservation.settlement_capability_hash
+    ? "sha256:redacted"
+    : null;
+  return clone;
+}
+
+async function sha256HexUtf8(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text),
+  );
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function settlementCapabilityMaterial(
+  capability: string,
+  reservation: Reservation,
+): string {
+  return [
+    capability,
+    reservation.idempotency_key,
+    reservation.reservation_id,
+    reservation.lease_id ?? "",
+    reservation.request_digest ?? "",
+  ].join(":");
+}
+
+async function hashSettlementCapability(
+  capability: string,
+  reservation: Reservation,
+): Promise<string> {
+  return sha256HexUtf8(settlementCapabilityMaterial(capability, reservation));
+}
+
+function mintSettlementCapabilitySecret(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export async function markProviderStarted(
   storage: BudgetStorage,
-  input: { idempotency_key: string; lease_id: string },
+  input: { idempotency_key: string; lease_id: string; request_digest?: string },
   now = Date.now(),
-): Promise<BudgetResult<{ reservation: Reservation; budget_run_id: string }>> {
+): Promise<
+  BudgetResult<{
+    reservation: Reservation;
+    budget_run_id: string;
+    settlement_capability: string | null;
+  }>
+> {
   const key = requireIdempotencyKey(input.idempotency_key);
   if (!key.ok) return key;
   const leaseId = typeof input.lease_id === "string" ? input.lease_id.trim() : "";
   if (!leaseId) return { ok: false, error: "lease_id required" };
+  const digest =
+    typeof input.request_digest === "string" && input.request_digest.trim()
+      ? input.request_digest.trim()
+      : null;
 
   const state = await loadState(storage, now);
   recoverExpired(state, now);
@@ -656,6 +717,10 @@ export async function markProviderStarted(
       detail: state.frozen_reason || "provider usage audit required",
     };
   }
+  if (digest && reservation.request_digest && reservation.request_digest !== digest) {
+    await saveState(storage, state);
+    return { ok: false, error: "request_digest_mismatch" };
+  }
   const lease = state.leases[leaseId];
   if (
     reservation.lease_id !== leaseId ||
@@ -666,12 +731,28 @@ export async function markProviderStarted(
     await saveState(storage, state);
     return { ok: false, error: "lease_not_active" };
   }
-  reservation.provider_started_at ??= now;
+  if (reservation.provider_started_at !== null) {
+    await saveState(storage, state);
+    return {
+      ok: true,
+      reservation: publicReservation(reservation),
+      budget_run_id: reservation.reservation_id,
+      settlement_capability: null,
+    };
+  }
+  const capability = mintSettlementCapabilitySecret();
+  reservation.provider_started_at = now;
+  reservation.settlement_capability_hash = await hashSettlementCapability(
+    capability,
+    reservation,
+  );
+  reservation.settlement_capability_consumed = false;
   await saveState(storage, state);
   return {
     ok: true,
-    reservation: structuredClone(reservation),
+    reservation: publicReservation(reservation),
     budget_run_id: reservation.reservation_id,
+    settlement_capability: capability,
   };
 }
 
@@ -717,9 +798,52 @@ function uncertainResult(
  * Resolve a provider-started reservation when usage cannot be proven. The DO,
  * never the caller, selects the charged amounts from the persisted reservation.
  */
+async function consumeSettlementCapability(
+  reservation: Reservation,
+  input: {
+    settlement_capability?: string;
+    request_digest?: string;
+    lease_id?: string;
+  },
+): Promise<BudgetErr | null> {
+  const digest =
+    typeof input.request_digest === "string" && input.request_digest.trim()
+      ? input.request_digest.trim()
+      : "";
+  if (digest && reservation.request_digest && reservation.request_digest !== digest) {
+    return { ok: false, error: "request_digest_mismatch" };
+  }
+  const leaseId = typeof input.lease_id === "string" ? input.lease_id.trim() : "";
+  if (leaseId && reservation.lease_id && reservation.lease_id !== leaseId) {
+    return { ok: false, error: "lease_mismatch" };
+  }
+  const capability =
+    typeof input.settlement_capability === "string"
+      ? input.settlement_capability.trim()
+      : "";
+  if (!capability || !reservation.settlement_capability_hash) {
+    return { ok: false, error: "settlement_capability_required" };
+  }
+  if (reservation.settlement_capability_consumed) {
+    return { ok: false, error: "settlement_capability_consumed" };
+  }
+  const expected = await hashSettlementCapability(capability, reservation);
+  if (expected !== reservation.settlement_capability_hash) {
+    return { ok: false, error: "settlement_capability_invalid" };
+  }
+  reservation.settlement_capability_consumed = true;
+  return null;
+}
+
 export async function settleUncertainBudget(
   storage: BudgetStorage,
-  input: { idempotency_key: string; reason: UncertainProviderReason },
+  input: {
+    idempotency_key: string;
+    reason: UncertainProviderReason;
+    request_digest?: string;
+    lease_id?: string;
+    settlement_capability?: string;
+  },
   now = Date.now(),
 ): Promise<
   BudgetResult<{
@@ -748,7 +872,7 @@ export async function settleUncertainBudget(
     await saveState(storage, state);
     return {
       ok: true,
-      reservation,
+      reservation: publicReservation(reservation),
       used: amountsFromCounters(state.used),
       frozen: state.frozen,
       budget_run_id: reservation.reservation_id,
@@ -762,12 +886,17 @@ export async function settleUncertainBudget(
     await saveState(storage, state);
     return { ok: false, error: "provider_not_started" };
   }
+  const consumed = await consumeSettlementCapability(reservation, input);
+  if (consumed) {
+    await saveState(storage, state);
+    return consumed;
+  }
 
   chargeUncertainReservation(state, reservation, input.reason, now);
   await saveState(storage, state);
   return {
     ok: true,
-    reservation,
+    reservation: publicReservation(reservation),
     used: amountsFromCounters(state.used),
     frozen: true,
     budget_run_id: reservation.reservation_id,
@@ -788,26 +917,56 @@ function applyCachedResult(
 
 export async function reconcileBudget(
   storage: BudgetStorage,
-  input: { idempotency_key: string; amounts: unknown },
+  input: {
+    idempotency_key: string;
+    request_digest: string;
+    lease_id: string;
+    settlement_capability: string;
+    usage: unknown;
+    terminal_result?: CachedBudgetResult;
+  },
   now = Date.now(),
 ): Promise<BudgetResult<{ reservation: Reservation; used: Counters }>> {
-  const finalized = await finalizeBudget(
-    storage,
-    { idempotency_key: input.idempotency_key, amounts: input.amounts },
-    now,
-  );
+  const finalized = await finalizeBudget(storage, input, now);
   if (!finalized.ok) return finalized;
   return { ok: true, reservation: finalized.reservation, used: finalized.used };
+}
+
+function deriveExactSettlement(
+  reservation: Reservation,
+  usage: Counters,
+  terminalResult: CachedBudgetResult | undefined,
+): BudgetSettlement {
+  const httpStatus = Number(terminalResult?.http_status);
+  const outcome: BudgetSettlement["outcome"] =
+    httpStatus === 200 ? "success" : "schema_reject";
+  return {
+    outcome,
+    usage_source: "provider",
+    estimated_cost_usd: reservation.amounts.cost_usd,
+    actual_cost_usd: usage.cost_usd,
+    billed_cost_usd: usage.cost_usd,
+    actual_input_tokens: usage.input_tokens,
+    actual_output_tokens: usage.output_tokens,
+    actual_cached_tokens: usage.cached_tokens,
+  };
 }
 
 export async function finalizeBudget(
   storage: BudgetStorage,
   input: {
     idempotency_key: string;
-    amounts: unknown;
+    request_digest: string;
+    lease_id: string;
+    settlement_capability: string;
+    usage: unknown;
+    terminal_result?: CachedBudgetResult;
+    amounts?: unknown;
     result?: CachedBudgetResult;
     settlement?: BudgetSettlement;
   },
+  // amounts/result/settlement are accepted only so caller-authored claims can
+  // be rejected as non-authority instead of silently charging.
   now = Date.now(),
 ): Promise<
   BudgetResult<{
@@ -819,7 +978,14 @@ export async function finalizeBudget(
 > {
   const key = requireIdempotencyKey(input.idempotency_key);
   if (!key.ok) return key;
-  const parsed = parseAmounts(input.amounts);
+  if (
+    input.settlement !== undefined ||
+    input.amounts !== undefined ||
+    input.result !== undefined
+  ) {
+    return { ok: false, error: "caller_settlement_rejected" };
+  }
+  const parsed = parseAmounts(input.usage);
   if (!parsed.ok) return parsed;
   const actual = parsed.amounts;
 
@@ -828,7 +994,6 @@ export async function finalizeBudget(
   const reservation = state.reservations[key.idempotency_key];
   if (!reservation) return { ok: false, error: "reservation_not_found" };
   if (reservation.status === "reconciled") {
-    if (!reservation.cached_result) applyCachedResult(reservation, input.result);
     await saveState(storage, state);
     if (reservation.finalize_error) {
       return {
@@ -839,7 +1004,7 @@ export async function finalizeBudget(
     }
     return {
       ok: true,
-      reservation,
+      reservation: publicReservation(reservation),
       used: amountsFromCounters(state.used),
       frozen: state.frozen,
       budget_run_id: reservation.reservation_id,
@@ -847,6 +1012,15 @@ export async function finalizeBudget(
   }
   if (reservation.status === "released") {
     return { ok: false, error: "reservation_released" };
+  }
+  if (reservation.provider_started_at === null) {
+    await saveState(storage, state);
+    return { ok: false, error: "provider_not_started" };
+  }
+  const consumed = await consumeSettlementCapability(reservation, input);
+  if (consumed) {
+    await saveState(storage, state);
+    return consumed;
   }
 
   const over = exceedsReserved(reservation.amounts, actual);
@@ -856,9 +1030,13 @@ export async function finalizeBudget(
   state.used = applyDelta(state.used, actual, 1);
   reservation.status = "reconciled";
   reservation.actual = amountsFromCounters(actual);
-  reservation.settlement = input.settlement ?? null;
+  reservation.settlement = deriveExactSettlement(
+    reservation,
+    actual,
+    input.terminal_result,
+  );
   reservation.reconciled_at = now;
-  applyCachedResult(reservation, input.result);
+  applyCachedResult(reservation, input.terminal_result);
   closeReservationLease(state, reservation, now);
   if (over) {
     freezeForOverage(state, reservation, actual, now);
@@ -874,7 +1052,7 @@ export async function finalizeBudget(
   await saveState(storage, state);
   return {
     ok: true,
-    reservation,
+    reservation: publicReservation(reservation),
     used: amountsFromCounters(state.used),
     frozen: false,
     budget_run_id: reservation.reservation_id,
@@ -965,6 +1143,50 @@ export async function recoverExpiredLeases(
   const recovered = recoverExpired(state, now);
   await saveState(storage, state);
   return { ok: true, recovered };
+}
+
+export function createBudgetCoordinator(storage: BudgetStorage) {
+  return {
+    reserve(
+      input: Parameters<typeof reserveBudget>[1],
+      now?: number,
+    ): ReturnType<typeof reserveBudget> {
+      return reserveBudget(storage, input, now);
+    },
+    markProviderStarted(
+      input: Parameters<typeof markProviderStarted>[1],
+      now?: number,
+    ): ReturnType<typeof markProviderStarted> {
+      return markProviderStarted(storage, input, now);
+    },
+    finalizeExact(
+      input: Parameters<typeof finalizeBudget>[1],
+      now?: number,
+    ): ReturnType<typeof finalizeBudget> {
+      return finalizeBudget(storage, input, now);
+    },
+    settleUncertain(
+      input: Parameters<typeof settleUncertainBudget>[1],
+      now?: number,
+    ): ReturnType<typeof settleUncertainBudget> {
+      return settleUncertainBudget(storage, input, now);
+    },
+    release(
+      input: Parameters<typeof releaseBudget>[1],
+      now?: number,
+    ): ReturnType<typeof releaseBudget> {
+      return releaseBudget(storage, input, now);
+    },
+    heartbeat(
+      leaseId: string,
+      now?: number,
+    ): ReturnType<typeof heartbeatLease> {
+      return heartbeatLease(storage, leaseId, now);
+    },
+    snapshot(now?: number): ReturnType<typeof snapshotBudget> {
+      return snapshotBudget(storage, now);
+    },
+  };
 }
 
 export async function snapshotBudget(

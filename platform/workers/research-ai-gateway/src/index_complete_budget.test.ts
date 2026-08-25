@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CONTROL_PLANE_LEDGER_NAME,
+  createBudgetCoordinator,
   MemoryBudgetStorage,
   PILOT_BUDGET_CAPS,
   recoverExpiredLeases,
@@ -141,6 +142,7 @@ function memoryLedger(): {
     },
     get() {
       return {
+        ...createBudgetCoordinator(storage),
         fetch(request: Request) {
           return handleBudgetRequest(storage, request);
         },
@@ -445,13 +447,12 @@ describe("POST /v1/complete control-plane occupancy", () => {
           return { toString: () => name } as DurableObjectId;
         },
         get() {
+          const coordinator = createBudgetCoordinator(storage);
           return {
-            fetch: async (request: Request) => {
-              const url = new URL(request.url);
-              if (url.pathname === "/finalize") {
-                throw new Error("RPC transport interrupted after provider side effect");
-              }
-              return handleBudgetRequest(storage, request);
+            ...coordinator,
+            fetch: (request: Request) => handleBudgetRequest(storage, request),
+            finalizeExact: async () => {
+              throw new Error("RPC transport interrupted after provider side effect");
             },
           };
         },
@@ -487,13 +488,15 @@ describe("POST /v1/complete control-plane occupancy", () => {
           return { toString: () => name } as DurableObjectId;
         },
         get() {
+          const coordinator = createBudgetCoordinator(storage);
           return {
-            fetch: async (request: Request) => {
-              const path = new URL(request.url).pathname;
-              if (path === "/finalize" || path === "/settle-uncertain") {
-                throw new Error("ledger transport unavailable");
-              }
-              return handleBudgetRequest(storage, request);
+            ...coordinator,
+            fetch: (request: Request) => handleBudgetRequest(storage, request),
+            finalizeExact: async () => {
+              throw new Error("ledger transport unavailable");
+            },
+            settleUncertain: async () => {
+              throw new Error("ledger transport unavailable");
             },
           };
         },
@@ -539,14 +542,13 @@ describe("POST /v1/complete control-plane occupancy", () => {
           return { toString: () => name } as DurableObjectId;
         },
         get() {
+          const coordinator = createBudgetCoordinator(storage);
           return {
-            fetch: async (request: Request) => {
-              if (new URL(request.url).pathname !== "/finalize") {
-                return handleBudgetRequest(storage, request);
-              }
-              const committed = await handleBudgetRequest(storage, request);
-              await committed.arrayBuffer();
-              return new Response("not-json", { status: 200 });
+            ...coordinator,
+            fetch: (request: Request) => handleBudgetRequest(storage, request),
+            finalizeExact: async (input: Parameters<typeof coordinator.finalizeExact>[0]) => {
+              await coordinator.finalizeExact(input);
+              return "not-json";
             },
           };
         },

@@ -14,15 +14,19 @@ Strict Workers AI gateway. The research mass-eval worker **must not** bind `AI`.
 
 ## Durable budget settlement
 
-`BudgetLedger` persists a lease and a `provider_started_at` recovery marker
-before Workers AI is invoked. Exact provider usage settles input, output,
-cached-token, call, and cost counters. A timeout, provider error without usage,
-lost/invalid finalize response, Worker interruption, or expired provider-started
-lease can never be treated as zero usage: the ledger charges the persisted
-reservation maximum, freezes new work, records an audit entry, and caches a
-fail-closed response. A Durable Object alarm is written with the reservation
-and rebuilt on restart, so recovery does not depend on the request Worker
-remaining alive.
+`BudgetLedger` persists a lease, a `provider_started_at` recovery marker, and a
+one-shot settlement capability before Workers AI is invoked. The production
+Gateway path is the sole settlement coordinator: generic HTTP
+`/finalize`, `/reconcile`, `/provider-started`, and capability-mint routes are
+not settlement authority. Exact usage is derived privately by Gateway from the
+provider response; the Durable Object derives uncertain settlement from the
+reserved maximum and ignores caller-authored receipt/result/settlement claims.
+A timeout, provider error without usage, lost/invalid finalize response, Worker
+interruption, or expired provider-started lease can never be treated as zero
+usage: the ledger charges the persisted reservation maximum, freezes new work,
+records an audit entry, and caches a fail-closed response. A Durable Object
+alarm is written with the reservation and rebuilt on restart, so recovery does
+not depend on the request Worker remaining alive.
 
 Only a reservation that has not crossed the durable provider-start marker may
 be released at zero cost. Idempotent retries return the terminal cached result

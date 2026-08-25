@@ -5,7 +5,6 @@ import { authorized } from "./authorized";
 import {
   bindIdempotencyKey,
   CONTROL_PLANE_LEDGER_NAME,
-  type BudgetSettlement,
   type UncertainProviderReason,
 } from "./budget_do";
 import { BudgetLedger } from "./budget_http";
@@ -77,6 +76,15 @@ type BudgetRpc = {
   budget_run_id?: string;
   reservation_status?: string;
   cached_result?: CachedBudgetBody | null;
+  settlement_capability?: string | null;
+};
+
+type BudgetLedgerRpc = {
+  reserve(input: unknown): Promise<unknown>;
+  markProviderStarted(input: unknown): Promise<unknown>;
+  finalizeExact(input: unknown): Promise<unknown>;
+  settleUncertain(input: unknown): Promise<unknown>;
+  release(input: unknown): Promise<unknown>;
 };
 
 function parseCachedResult(raw: unknown): CachedBudgetBody | null {
@@ -87,21 +95,48 @@ function parseCachedResult(raw: unknown): CachedBudgetBody | null {
   return { http_status: httpStatus, body: rec.body };
 }
 
-async function budgetRpc(env: GatewayEnv, path: string, body: unknown): Promise<BudgetRpc> {
+function rpcStatus(error: string | undefined, ok: boolean): number {
+  if (ok) return 200;
+  if (error === "budget_exhausted") return 429;
+  if (
+    error === "reservation_not_found" ||
+    error === "lease_not_active" ||
+    error === "lease_reservation_mismatch" ||
+    error === "budget_frozen" ||
+    error === "actual_exceeds_reserved" ||
+    error === "provider_usage_uncertain" ||
+    error === "provider_not_started" ||
+    error === "idempotency_digest_conflict" ||
+    error === "reservation_released" ||
+    error === "settlement_capability_required" ||
+    error === "settlement_capability_invalid" ||
+    error === "settlement_capability_consumed" ||
+    error === "request_digest_mismatch" ||
+    error === "lease_mismatch" ||
+    error === "caller_settlement_rejected"
+  ) {
+    return 409;
+  }
+  return 400;
+}
+
+async function budgetRpc(
+  env: GatewayEnv,
+  method: keyof BudgetLedgerRpc,
+  body: unknown,
+): Promise<BudgetRpc> {
   if (!env.BUDGET_LEDGER) {
     return { ok: false, status: 503, error: "budget_ledger_unbound" };
   }
-  let res: Response;
+  let parsed: unknown;
   try {
     const id = env.BUDGET_LEDGER.idFromName(CONTROL_PLANE_LEDGER_NAME);
-    const stub = env.BUDGET_LEDGER.get(id);
-    res = await stub.fetch(
-      new Request(`https://budget${path}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      }),
-    );
+    const stub = env.BUDGET_LEDGER.get(id) as DurableObjectStub & BudgetLedgerRpc;
+    const fn = stub[method];
+    if (typeof fn !== "function") {
+      return { ok: false, status: 500, error: "budget_rpc_unavailable" };
+    }
+    parsed = await fn.call(stub, body);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return {
@@ -111,13 +146,7 @@ async function budgetRpc(env: GatewayEnv, path: string, body: unknown): Promise<
       detail: detail.slice(0, 180),
     };
   }
-  let parsed: unknown;
-  try {
-    parsed = await res.json();
-  } catch {
-    return { ok: false, status: 500, error: "budget_rpc_invalid_json" };
-  }
-  if (!parsed || typeof parsed !== "object") {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return { ok: false, status: 500, error: "budget_rpc_invalid_json" };
   }
   const rec = parsed as Record<string, unknown>;
@@ -131,9 +160,10 @@ async function budgetRpc(env: GatewayEnv, path: string, body: unknown): Promise<
     (typeof rec.budget_run_id === "string" && rec.budget_run_id) ||
     (typeof reservation.reservation_id === "string" && reservation.reservation_id) ||
     undefined;
+  const ok = rec.ok === true;
   return {
-    ok: res.ok && rec.ok === true,
-    status: res.status,
+    ok,
+    status: rpcStatus(typeof rec.error === "string" ? rec.error : undefined, ok),
     error: typeof rec.error === "string" ? rec.error : undefined,
     detail: typeof rec.detail === "string" ? rec.detail : undefined,
     lease_id: typeof lease.lease_id === "string" ? lease.lease_id : undefined,
@@ -142,6 +172,8 @@ async function budgetRpc(env: GatewayEnv, path: string, body: unknown): Promise<
     reservation_status:
       typeof reservation.status === "string" ? reservation.status : undefined,
     cached_result: parseCachedResult(reservation.cached_result),
+    settlement_capability:
+      typeof rec.settlement_capability === "string" ? rec.settlement_capability : null,
   };
 }
 
@@ -258,7 +290,7 @@ async function handleGatewayRequest(
       cached_tokens: estimatedInput,
       cost_usd: estimatedCost,
     };
-    const reserved = await budgetRpc(env, "/reserve", {
+    const reserved = await budgetRpc(env, "reserve", {
       idempotency_key: bound.idempotency_key,
       request_digest: bound.request_digest,
       acquire_lease: true,
@@ -291,7 +323,7 @@ async function handleGatewayRequest(
     if (!budgetRunId || !reserved.lease_id) {
       // The request key is enough to cancel a reserve that committed despite a
       // malformed/lost response. No provider marker exists yet.
-      await budgetRpc(env, "/release", {
+      await budgetRpc(env, "release", {
         idempotency_key: bound.idempotency_key,
       });
       return json(
@@ -306,17 +338,19 @@ async function handleGatewayRequest(
 
     // This durable marker is the recovery boundary. Workers AI is never called
     // unless the ledger has persisted that provider usage may now exist.
-    const providerStarted = await budgetRpc(env, "/provider-started", {
+    const providerStarted = await budgetRpc(env, "markProviderStarted", {
       idempotency_key: bound.idempotency_key,
       lease_id: reserved.lease_id,
+      request_digest: bound.request_digest,
     });
-    if (!providerStarted.ok) {
+    const settlementCapability = providerStarted.settlement_capability;
+    if (!providerStarted.ok || !settlementCapability) {
       // No provider call was made. If the marker itself committed but its
-      // response was lost, /release conservatively charges and freezes because
+      // response was lost, release conservatively charges and freezes because
       // the durable record is intentionally indistinguishable from a crash at
       // the provider boundary. Otherwise this is a zero-cost pre-provider
       // release. The alarm remains the final recovery path if this RPC fails.
-      await budgetRpc(env, "/release", {
+      await budgetRpc(env, "release", {
         idempotency_key: bound.idempotency_key,
         lease_id: reserved.lease_id,
       });
@@ -342,7 +376,13 @@ async function handleGatewayRequest(
       cached_tokens: estimatedInput,
       cost_usd: estimatedCost,
     };
-    let settlement: BudgetSettlement | null = null;
+    let measuredUsage: {
+      model_calls: number;
+      input_tokens: number;
+      output_tokens: number;
+      cached_tokens: number;
+      cost_usd: number;
+    } | null = null;
     let uncertainReason: UncertainProviderReason | null = null;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -373,16 +413,7 @@ async function handleGatewayRequest(
           cost_usd:
             tokens.actualCostUsd ?? estimateCostUsd(req.model, tokens.input, tokens.output),
         };
-        settlement = {
-          outcome: "schema_reject",
-          usage_source: "provider",
-          estimated_cost_usd: estimatedCost,
-          actual_cost_usd: tokens.actualCostUsd,
-          billed_cost_usd: billed.cost_usd,
-          actual_input_tokens: tokens.input,
-          actual_output_tokens: tokens.output,
-          actual_cached_tokens: tokens.cached,
-        };
+        measuredUsage = billed;
         if (!extracted.ok) {
           responseStatus = 400;
           responseBody = { ok: false, error: extracted.error };
@@ -411,7 +442,6 @@ async function handleGatewayRequest(
               budget_id: req.budget_id,
               budget_run_id: budgetRunId,
             };
-            settlement.outcome = "success";
             responseStatus = 200;
             responseBody = payload;
           }
@@ -431,8 +461,11 @@ async function handleGatewayRequest(
     responseBody = { ...responseBody, budget_run_id: budgetRunId };
 
     if (uncertainReason) {
-      const uncertain = await budgetRpc(env, "/settle-uncertain", {
+      const uncertain = await budgetRpc(env, "settleUncertain", {
         idempotency_key: bound.idempotency_key,
+        request_digest: bound.request_digest,
+        lease_id: reserved.lease_id,
+        settlement_capability: settlementCapability,
         reason: uncertainReason,
       });
       if (uncertain.ok && uncertain.cached_result) {
@@ -448,12 +481,15 @@ async function handleGatewayRequest(
       );
     }
 
-    if (!settlement) {
+    if (!measuredUsage) {
       // Defensive guard: provider success with known usage always creates an
       // exact settlement above. The persisted provider-started marker and alarm
       // still guarantee conservative recovery.
-      await budgetRpc(env, "/settle-uncertain", {
+      await budgetRpc(env, "settleUncertain", {
         idempotency_key: bound.idempotency_key,
+        request_digest: bound.request_digest,
+        lease_id: reserved.lease_id,
+        settlement_capability: settlementCapability,
         reason: "worker_interrupted",
       });
       return json(
@@ -462,18 +498,23 @@ async function handleGatewayRequest(
       );
     }
 
-    const finalized = await budgetRpc(env, "/finalize", {
+    const finalized = await budgetRpc(env, "finalizeExact", {
       idempotency_key: bound.idempotency_key,
-      amounts: billed,
-      settlement,
-      result: { http_status: responseStatus, body: responseBody },
+      request_digest: bound.request_digest,
+      lease_id: reserved.lease_id,
+      settlement_capability: settlementCapability,
+      usage: measuredUsage,
+      terminal_result: { http_status: responseStatus, body: responseBody },
     });
     if (!finalized.ok) {
-      // If /finalize committed but its response was lost or malformed, this is
+      // If finalize committed but its response was lost or malformed, this is
       // an idempotent no-op. Otherwise it immediately charges the reservation
       // maximum; the lease alarm remains the final persistent recovery layer.
-      await budgetRpc(env, "/settle-uncertain", {
+      await budgetRpc(env, "settleUncertain", {
         idempotency_key: bound.idempotency_key,
+        request_digest: bound.request_digest,
+        lease_id: reserved.lease_id,
+        settlement_capability: settlementCapability,
         reason: "finalize_failed",
       });
       return json(

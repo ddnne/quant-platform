@@ -21,15 +21,15 @@ function dispatch(
 }
 
 describe("handleBudgetRequest POST /reconcile", () => {
-  it("POST /reconcile JSON {} is 400 idempotency_key required and does not create occupancy", async () => {
+  it("POST /reconcile JSON {} is 404 and does not create occupancy", async () => {
     const storage = new MemoryBudgetStorage();
     const res = await dispatch(storage, "POST", "/reconcile", {
       headers: { "content-type": "application/json" },
       body: "{}",
     });
     expect(res.status).not.toBe(200);
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ ok: false, error: "idempotency_key required" });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ ok: false, error: "not found" });
 
     const snap = await dispatch(storage, "GET", "/snapshot");
     expect(snap.status).toBe(200);
@@ -47,20 +47,20 @@ describe("handleBudgetRequest POST /reconcile", () => {
     expect(payload.active_leases).toBe(0);
   });
 
-  it("GET /reconcile is 405 POST required", async () => {
+  it("GET /reconcile is 404 not found", async () => {
     const storage = new MemoryBudgetStorage();
     const res = await dispatch(storage, "GET", "/reconcile");
-    expect(res.status).toBe(405);
-    expect(await res.json()).toEqual({ ok: false, error: "POST required" });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ ok: false, error: "not found" });
   });
 
-  it("POST /reconcile invalid JSON is 400 invalid JSON body", async () => {
+  it("POST /reconcile invalid JSON is 404 not found", async () => {
     const storage = new MemoryBudgetStorage();
     const res = await dispatch(storage, "POST", "/reconcile", {
       headers: { "content-type": "application/json" },
       body: "{",
     });
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ ok: false, error: "invalid JSON body" });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ ok: false, error: "not found" });
   });
 });

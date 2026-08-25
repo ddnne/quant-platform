@@ -16,7 +16,7 @@ not release authorities.
 | Immutable snapshot/artifact | Snapshot handles verify read-only mode and content digest; Worker R2 create-only operations use conditional writes | `tests/test_phase6_snapshot_publication.py` and Worker R2 runtime tests |
 | Controlled Paper authorization | `OfflineFixturePaperService` and `ControlledPilotExecutionService` are distinct entrypoints; the controlled type requires verified readiness and an immutable snapshot | `tests/test_controlled_pilot_execution_service.py` |
 | Strict Gateway rejection | Closed request/output schemas are validated before an artifact is returned | `tests/test_gateway_fail_closed.py` and Gateway runtime tests |
-| Budget concurrency and settlement | BudgetLedger Durable Object serializes reservations and settles success, schema rejection, provider error, and timeout by idempotency key | `platform/workers/research-ai-gateway/src/budget_runtime.test.ts` and `index_complete_budget.test.ts` |
+| Budget concurrency and settlement | BudgetLedger Durable Object serializes reservations and settles only through the Gateway coordinator bound to lease, digest, provider-start, and a one-shot settlement capability | `platform/workers/research-ai-gateway/src/budget_runtime.test.ts` and `index_complete_budget.test.ts` |
 | OAuth boundary | The Ops MCP Worker requires OAuth while public metadata remains available | `platform/workers/quant-ops-mcp/runtime/ops_runtime.test.js` and `harness/oauth_harness.test.ts` |
 | Exact-four only | ExperimentPlan compilation resolves exactly four immutable strategy/feature/dataset closures; Mass accepts a distinct readiness type and remains disabled | `tests/test_experiment_plan_v2_dependency_closure.py` and `tests/test_phase7_pilot_construct.py` |
 
