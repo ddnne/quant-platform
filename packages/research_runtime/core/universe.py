@@ -12,11 +12,13 @@ forever through an older per-code row. Richer filters (sector, scale, explicit
 listing-status flags in the raw payload, liquidity screens) are deliberately
 out of scope for the minimal engine.
 
-A caller-injected fixed universe must be an :class:`EquityMasterMap` produced
-by :func:`load_master` / :func:`membership_at` (``pit_as_of`` /
-``membership_proof`` required). A raw code list is rejected unless
-``QP_ALLOW_FIXED_UNIVERSE=1``. That env is research-only; it is not a Mass,
-READY, or GO path.
+A caller-injected fixed universe is only a candidate allowlist.  It never
+proves membership: the engine intersects the candidates with
+:func:`load_master` at every decision instant.  An :class:`EquityMasterMap`
+produced by :func:`load_master` / :func:`membership_at` is the normal input.
+A raw code list is rejected unless ``QP_ALLOW_FIXED_UNIVERSE=1``.  That env
+only admits offline candidate codes; it cannot bypass the daily PIT gate and
+is not a Mass, READY, or GO path.
 """
 
 from __future__ import annotations
@@ -106,12 +108,14 @@ def _reject_raw() -> None:
 def resolve_injected_universe(
     universe: Any, *, db_path: Any = None
 ) -> tuple[str, ...] | None:
-    """Frozen codes for a caller-injected universe, or None for PIT-per-day.
+    """Candidate allowlist codes, or ``None`` for all PIT members per day.
 
     Accepts :class:`EquityMasterMap` (from :func:`load_master`) or a mapping /
     object that carries a non-empty ``pit_as_of`` / ``membership_proof``.
     A ``codes`` + ``pit_as_of`` payload is re-checked via :func:`membership_at`.
     Raw sequences of codes are rejected unless ``QP_ALLOW_FIXED_UNIVERSE=1``.
+    The returned codes are not a membership proof; callers must intersect
+    them with :func:`load_master` at the decision instant.
     """
     if universe is None:
         return None

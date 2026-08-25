@@ -30,8 +30,8 @@ from .result import BacktestResult
 from .strategy_protocol import Bar, BarContext, OrderIntent, Position
 from .universe import load_master, resolve_injected_universe
 
-# Result metadata. 0.6.2: W86 daily repo + leverage (repo only).
-CORE_ENGINE_VERSION = "0.6.2"
+# Result metadata. 0.6.3: fixed candidates are PIT-gated on every decision day.
+CORE_ENGINE_VERSION = "0.6.3"
 
 # J-Quants HolidayDivision: "1" == trading day (exchange open).
 _TRADING_HOLIDAY_DIVISION = "1"
@@ -445,17 +445,19 @@ def run_backtest(
     independent of ``lookback_days``. ``price_basis`` is RAW; ``PIT_ADJUSTED``
     fails closed.
 
-    ``universe`` is None (PIT master per decision day) or an
+    ``universe`` is None (PIT master per decision day) or a candidate
+    fixed allowlist supplied as an
     :class:`~core.universe.EquityMasterMap` from :func:`core.universe.load_master`
-    / :func:`core.universe.membership_at` carrying ``pit_as_of``. A raw code
-    list is rejected unless ``QP_ALLOW_FIXED_UNIVERSE=1`` (research-only; not
-    GO).
+    / :func:`core.universe.membership_at` carrying ``pit_as_of``.  Candidate
+    codes are intersected with the PIT master at every decision instant. A
+    raw code list is rejected unless ``QP_ALLOW_FIXED_UNIVERSE=1``
+    (research-only; not GO).
     """
     mode = get_mode(execution_mode)
     resolved_price_basis = require_supported_price_basis(price_basis)
     resolved_db_path = resolve_db_path(db_path)
     cost_model = cost_model or standard_cost()
-    fixed_universe = resolve_injected_universe(
+    fixed_allowlist = resolve_injected_universe(
         universe, db_path=resolved_db_path
     )
 
@@ -486,9 +488,17 @@ def run_backtest(
 
     for d in days:
         decision_as_of = mode.decision_as_of(d)
-        master_d = load_master(decision_as_of, db_path=resolved_db_path)
-        universe_d = fixed_universe if fixed_universe is not None else tuple(
-            sorted(master_d.keys())
+        master_all_d = load_master(decision_as_of, db_path=resolved_db_path)
+        universe_d = (
+            tuple(sorted(master_all_d.keys()))
+            if fixed_allowlist is None
+            else tuple(
+                code for code in fixed_allowlist if code in master_all_d
+            )
+        )
+        master_d = type(master_all_d)(
+            {code: master_all_d[code] for code in universe_d},
+            pit_as_of=master_all_d.pit_as_of,
         )
         held = set(shares) | set(universe_d)
 
@@ -509,8 +519,16 @@ def run_backtest(
             _update_marks(marks, fill_closes, d)
 
         if mode.fill_offset == 1 and pending is not None:
+            # A prior-day order cannot fill after its code leaves today's
+            # PIT membership.  Dropped targets are cancelled permanently;
+            # existing holdings remain subject to the stale-mark policy.
+            eligible_targets = {
+                code: target
+                for code, target in pending["targets"].items()
+                if code in master_d
+            }
             shares, cash, leftover = _apply_fills(
-                pending["targets"],
+                eligible_targets,
                 decision_date=pending["decision_date"],
                 fill_date=d,
                 closes=fill_closes,
@@ -669,9 +687,12 @@ def run_backtest(
         "leverage_financing_total_cost": lev_fin_total,
         "repo_financing_total_cost": short_fin_total + lev_fin_total,
         "universe_rule": (
-            "fixed: " + ",".join(fixed_universe)
-            if fixed_universe is not None
+            "fixed_allowlist_intersect_pit_equity_master_per_decision_day"
+            if fixed_allowlist is not None
             else "pit_equity_master_latest_as_of_per_decision_day"
+        ),
+        "fixed_allowlist": (
+            list(fixed_allowlist) if fixed_allowlist is not None else None
         ),
         "lookback_days": lookback_days,
         "signal_lookback_days": lookback_days,

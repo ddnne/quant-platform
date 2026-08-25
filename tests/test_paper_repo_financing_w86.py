@@ -110,7 +110,7 @@ class _LeveredLong:
 
 
 def test_wave_versions():
-    assert CORE_ENGINE_VERSION == "0.6.2"
+    assert CORE_ENGINE_VERSION == "0.6.3"
     assert PAPER_RUNNER_VERSION == "0.7.0"
     assert SHORT_BORROW_SPREAD_MID_BP == 50.0
     assert DEFAULT_SHORT_BORROW_SPREAD_BP == 50.0
