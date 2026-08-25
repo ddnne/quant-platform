@@ -10,8 +10,10 @@ Their collection_coverage.json rows must match ``derive_collection_coverage_v3``
 ``2008-05-07``). Missing V3 stays None. Tip/snapshot grains plan a current
 collection window, not hundreds of empty monthly COMPLETE shells. Official
 ``2008-05-07`` for equities_master is domain correction, not Dataset COMPLETE.
-Live MCP projection remains document-root collection-coverage/v2 until HUMAN
-refresh.
+The production ingestion Worker consumes the same mixed-version document and
+persists each dataset row's effective policy version. Publishing a V3 Ops
+generation is still a separate operational step and never relabels old V2
+evidence.
 """
 
 from __future__ import annotations

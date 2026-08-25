@@ -15,38 +15,18 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from data_contracts.coverage import coverage_contract_for
 from ingestion.jquants.catalog import list_datasets
 
 from . import matrix
 from .validate import PREMIUM_CORE_DATASETS
 
-# C6/C7 assumed Premium-start dates (conservative; not contractual).
+# C6/C7 use the governed Coverage/SourceCapability-derived starts. Keeping a
+# second table here previously left production validation on V2 observed floors
+# after the V3 contracts moved forward.
 EXPECTED_START: dict[str, str] = {
-    "equities_master": "2008-05-07",  # official listed-info domain; not 2006-08-13 entitlement
-    "equities_bars_daily": "2008-05-01",  # observed floor
-    # V3 tip/same-day snapshot — not an EXPECTED_START history floor; do not densify months.
-    "equities_bars_daily_am": "2024-01-04",
-    "fins_summary": "2008-07-01",
-    "fins_details": "2018-01-01",
-    "fins_dividend": "2013-02-01",
-    "fins_earnings_date": "2018-01-01",
-    # V3 tip snapshot — not an EXPECTED_START history floor; do not densify months.
-    "equities_earnings_calendar": "2010-01-04",
-    "markets_calendar": "2008-01-01",
-    "equities_investor_types": "2013-01-04",
-    "indices_bars_daily_topix": "2008-05-01",
-    "indices_bars_daily": "2008-05-01",
-    "derivatives_bars_daily_options_225": "2013-01-04",
-    "derivatives_bars_daily_futures": "2013-01-04",
-    "derivatives_bars_daily_options": "2013-01-04",
-    "markets_margin_interest": "2013-01-04",
-    "markets_margin_alert": "2013-01-04",
-    "markets_short_ratio": "2013-01-04",
-    "markets_short_sale_report": "2013-11-01",
-    "markets_breakdown": "2015-04-01",
-    "edinet_major_shareholders": "2018-01-04",
-    "edinet_cross_shareholdings": "2020-05-01",
-    "edinet_large_volume_shareholders": "2021-07-01",
+    dataset_id: coverage_contract_for(dataset_id).history_target_start
+    for dataset_id in PREMIUM_CORE_DATASETS
 }
 
 _C6_C7_PASS_RATE = 0.90

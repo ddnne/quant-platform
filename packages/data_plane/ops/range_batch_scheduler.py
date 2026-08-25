@@ -23,6 +23,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from data_contracts.coverage import coverage_contract_for
 from ingestion.common.rate_limit import RateLimiter
 from ops.backfill_planner import (
     BackfillJob,
@@ -66,16 +67,34 @@ TRACK_A_DATASETS: tuple[str, ...] = (
 # Preferred deep-history windows for Track A (inclusive). Planner still owns
 # segment inventory; these only filter the queue for acceleration runs.
 TRACK_A_FOCUS_RANGES: dict[str, tuple[str, str]] = {
-    # Proven observed floors (w0815ae/W38) through pre-FRESH history.
-    "equities_bars_daily": ("2008-05-01", "2023-12-31"),
+    # Starts come from Coverage/SourceCapability; the end bounds remain only
+    # acceleration filters and never mint COMPLETE evidence.
+    "equities_bars_daily": (
+        coverage_contract_for("equities_bars_daily").history_target_start,
+        "2023-12-31",
+    ),
     # Full TOPIX history is contract-driven; focus filter is wide open.
-    "indices_bars_daily_topix": ("2008-05-01", "2099-12-31"),
-    "markets_breakdown": ("2015-04-01", "2099-12-31"),
-    "fins_summary": ("2008-07-01", "2099-12-31"),
-    # Official listed-info domain 2008-05-07; 2006-08-13 is entitlement, not required start.
-    "equities_master": ("2008-05-07", "2099-12-31"),
+    "indices_bars_daily_topix": (
+        coverage_contract_for("indices_bars_daily_topix").history_target_start,
+        "2099-12-31",
+    ),
+    "markets_breakdown": (
+        coverage_contract_for("markets_breakdown").history_target_start,
+        "2099-12-31",
+    ),
+    "fins_summary": (
+        coverage_contract_for("fins_summary").history_target_start,
+        "2099-12-31",
+    ),
+    "equities_master": (
+        coverage_contract_for("equities_master").history_target_start,
+        "2099-12-31",
+    ),
     # Latest-only preference is applied via max_jobs / latest_only, not range.
-    "markets_margin_interest": ("2013-01-04", "2099-12-31"),
+    "markets_margin_interest": (
+        coverage_contract_for("markets_margin_interest").history_target_start,
+        "2099-12-31",
+    ),
 }
 
 SCHEDULER_CONFIG: dict[str, Any] = {

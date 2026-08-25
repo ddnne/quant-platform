@@ -64,7 +64,7 @@ describe("writeRequiredCoverageSegment", () => {
     expect(row.sql).not.toContain("COMPLETE");
     expect(row.args[0]).toBe("markets_calendar");
     expect(row.args[1]).toBe("2024-06");
-    expect(row.args[2]).toBe("collection-coverage/v2");
+    expect(row.args[2]).toBe("collection-coverage/v3");
     expect(row.args[3]).toBe("2024-06-01");
     expect(row.args[4]).toBe("2024-06-30");
     expect(row.args[6]).toBe(4);
@@ -97,6 +97,7 @@ describe("writeRequiredCoverageSegment", () => {
     expect(row.sql).toContain("'UNKNOWN'");
     expect(row.sql).not.toContain("COMPLETE");
     expect(row.args[0]).toBe("fins_summary");
+    expect(row.args[2]).toBe("collection-coverage/v3");
     expect(row.args[6]).toBeNull();
     const detail = JSON.parse(String(row.args[8])) as {
       expected_item_unit: string;
@@ -104,6 +105,14 @@ describe("writeRequiredCoverageSegment", () => {
     };
     expect(detail.expected_item_unit).toBe("source_event");
     expect(detail.query_units).toBeNull();
+  });
+
+  it("retains V2 only for datasets without a SourceCapability V3 row", async () => {
+    const spec = datasetById("equities_investor_types");
+    expect(spec).toBeDefined();
+    const { db, binds } = capturingD1();
+    await writeRequiredCoverageSegment({ DB: db }, spec!, june());
+    expect(binds[0]!.args[2]).toBe("collection-coverage/v2");
   });
 });
 

@@ -52,6 +52,7 @@ export interface DatasetSpec extends ContractJson {
 }
 
 export interface CollectionCoveragePolicy {
+  policy_version: "collection-coverage/v2" | "collection-coverage/v3";
   collection_scope: string;
   history_target_start: string;
   history_target_end_rule: string;
@@ -70,7 +71,10 @@ if (contractDocument.schema_version !== 2 || rawContracts.length !== 23) {
   throw new Error("invalid J-Quants Premium-core contract document");
 }
 
-const coverageDefaults = coverageDocument.defaults as CollectionCoveragePolicy;
+const coverageDefaults = coverageDocument.defaults as Omit<
+  CollectionCoveragePolicy,
+  "policy_version"
+>;
 const coverageRows = coverageDocument.datasets as Record<
   string, Partial<CollectionCoveragePolicy>
 >;
@@ -88,6 +92,17 @@ for (const contract of rawContracts) {
       `missing Coverage V2 row for Premium dataset ${contract.dataset_id}`,
     );
   }
+  const policyVersion =
+    coverageRows[contract.dataset_id]?.policy_version ??
+    coverageDocument.policy_version;
+  if (
+    policyVersion !== "collection-coverage/v2" &&
+    policyVersion !== "collection-coverage/v3"
+  ) {
+    throw new Error(
+      `unsupported Coverage policy for Premium dataset ${contract.dataset_id}`,
+    );
+  }
 }
 
 export const PREMIUM_CORE_DATASETS: DatasetSpec[] = rawContracts.map((contract) => ({
@@ -96,7 +111,13 @@ export const PREMIUM_CORE_DATASETS: DatasetSpec[] = rawContracts.map((contract) 
   dateMode: contract.date_mode,
   dayParam: contract.day_param,
   codeParam: contract.code_param,
-  coverage: { ...coverageDefaults, ...coverageRows[contract.dataset_id] },
+  coverage: {
+    ...coverageDefaults,
+    ...coverageRows[contract.dataset_id],
+    policy_version:
+      coverageRows[contract.dataset_id]?.policy_version ??
+      coverageDocument.policy_version as CollectionCoveragePolicy["policy_version"],
+  },
 }));
 
 const BY_ID: ReadonlyMap<string, DatasetSpec> = new Map(

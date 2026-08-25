@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from cf_platform.ingest_premium.coverage import EXPECTED_START
 from data_contracts.canonical import (
     CANONICAL_REGISTRY_PATH,
     canonical_dataset_for,
@@ -61,6 +62,14 @@ def test_core_v1_has_exact_official_source_capability_boundaries() -> None:
         assert capability.official_evidence_url.startswith(
             "https://jpx-jquants.com/en/spec/"
         )
+
+
+def test_production_validation_uses_governed_coverage_starts() -> None:
+    """C6/C7 cannot retain a second V2-era start-date authority."""
+    for dataset_id in EXPECTED_START:
+        assert EXPECTED_START[dataset_id] == coverage_contract_for(
+            dataset_id
+        ).history_target_start
 
 
 def test_earnings_date_uses_official_2014_start_not_observed_2018_floor() -> None:

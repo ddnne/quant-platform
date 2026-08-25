@@ -11,8 +11,8 @@ equities_master history_target_start 2008-05-07). Missing V3 stays None.
 
 ``storage.coverage_ledger.plan_required_segments`` MUST subset official
 domain via ``required_domain_subset_official``. That clip does not invent
-COMPLETE. Live MCP projection remains collection-coverage/v2 until HUMAN
-refresh.
+COMPLETE. The production ingestion Worker persists the effective per-dataset
+V2/V3 policy; a new Ops generation must be published before live V3 is current.
 
 JSON documents (optional) live at ``specs/source_capability/*.json``. An
 empty or missing directory is valid: the type and fail-closed loader still
