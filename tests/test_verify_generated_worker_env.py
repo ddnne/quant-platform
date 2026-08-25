@@ -20,7 +20,10 @@ def test_named_environment_binding_shapes_are_frozen() -> None:
         'DurableObjectNamespace<import("./src/index").QuantOpsMcpAgent>'
     )
     assert production["OAUTH_AUTHORIZATION_SERVER"].startswith('"https://')
+    assert production["GITHUB_CLIENT_SECRET"] == "string"
+    assert production["STATE_SECRET"] == "string"
     assert "OAUTH_AUTHORIZATION_SERVER" not in staging
+    assert "GITHUB_CLIENT_SECRET" not in staging
 
 
 def test_check_generation_rejects_non_wrangler_declaration(tmp_path: Path) -> None:
@@ -56,6 +59,7 @@ def test_check_generation_pins_exact_named_environment(tmp_path: Path) -> None:
     assertion_text = assertion.read_text(encoding="utf-8")
     assert 'readonly "DB": D1Database;' in assertion_text
     assert 'readonly "RAW_BUCKET": R2Bucket;' in assertion_text
+    assert 'readonly "JQUANTS_API_KEY": string;' in assertion_text
     assert "NoUnexpectedBindings" in assertion_text
     assert 'import("./src/index")' not in assertion_text
     assert "DurableObjectNamespace" not in assertion_text

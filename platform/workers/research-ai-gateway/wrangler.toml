@@ -16,6 +16,9 @@ compatibility_date = "2026-08-01"
 workers_dev = false
 preview_urls = false
 
+[secrets]
+required = ["GATEWAY_TOKEN"]
+
 [ai]
 binding = "AI"
 
@@ -38,6 +41,9 @@ binding = "CF_VERSION_METADATA"
 name = "quant-platform-research-ai-gateway"
 workers_dev = false
 preview_urls = false
+
+[env.production.secrets]
+required = ["GATEWAY_TOKEN"]
 
 [env.production.ai]
 binding = "AI"

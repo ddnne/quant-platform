@@ -32,9 +32,11 @@ def test_current_runbook_is_marked_and_links_machine_readable_authorities() -> N
     assert "specs/cloudflare/active_worker_bindings.json" in text
     assert "scripts/cloudflare_d1_migration_manifest.py" in text
     assert "scripts/cloudflare_binding_manifest.py" in text
+    assert "scripts/verify_cloudflare_deployment_acceptance.sh" in text
     assert "scripts/publish_ops_projection.py" in text
     assert "platform/workers/quant-ops-mcp/src/domain.js" in text
     assert "OPS_TOOLS" in text
+    assert "wrangler secret list --env" in text
     assert f"**{_ops_tool_count()}**" in text
     assert MIGRATION_MANIFEST.is_file()
     assert MANIFEST.is_file()

@@ -18,6 +18,12 @@ only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual 
 
 [`verify_all.sh`](verify_all.sh) is a skippable helper only. Merge authority is the live native GitHub check from the Cloudflare Workers & Pages GitHub App for the repository-root Build running `verify_ci.sh`. The caller-supplied receipt aggregator is removed. Do not add `.github/workflows`. See [`docs/ci/workers_builds.md`](../docs/ci/workers_builds.md).
 
+**Authenticated production acceptance:**
+[`verify_cloudflare_deployment_acceptance.sh`](verify_cloudflare_deployment_acceptance.sh)
+runs mandatory CI and then compares live production `wrangler secret list`
+names with the frozen manifest. It requires Cloudflare API token/account
+presence, requests names only, never prints values, and fails closed on drift.
+
 Phase 6 hardening utilities:
 
 - `ops_status.py --json` — offline READY snapshot, coverage, B0 and validation status.

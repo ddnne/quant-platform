@@ -143,6 +143,8 @@ def expected_types(
     version_binding = (surface.get("version_metadata") or {}).get("binding")
     if version_binding:
         add(version_binding, "WorkerVersionMetadata")
+    for name in surface.get("secret_names") or []:
+        add(name, "string")
     for name, value in (surface.get("vars") or {}).items():
         add(name, _literal_type(value))
     return dict(sorted(expected.items()))

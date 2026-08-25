@@ -16,6 +16,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "verify_ci.sh"
 WRAPPER = ROOT / "scripts" / "workers_builds_verify_ci.sh"
+DEPLOYMENT_ACCEPTANCE = (
+    ROOT / "scripts" / "verify_cloudflare_deployment_acceptance.sh"
+)
+SECRET_INVENTORY = ROOT / "scripts" / "verify_cloudflare_secret_inventory.py"
 ACTIVE_WORKERS = (
     "ingestion-jsda",
     "ingestion-premium",
@@ -37,7 +41,7 @@ def _bash_syntax(path: Path) -> subprocess.CompletedProcess[str]:
 
 
 def test_authoritative_ci_entrypoints_are_executable_shell() -> None:
-    for path in (SCRIPT, WRAPPER):
+    for path in (SCRIPT, WRAPPER, DEPLOYMENT_ACCEPTANCE):
         assert path.is_file()
         assert os.access(path, os.X_OK)
         checked = _bash_syntax(path)
@@ -65,6 +69,27 @@ def test_ci_shell_has_no_skip_or_live_deploy_command() -> None:
         assert "git ls-files | grep -E" not in line
     assert "platform/workers/ci-aggregate" not in source
     assert "scripts/verify_secret_paths.py" in source
+
+
+def test_deployment_acceptance_is_authenticated_read_only_and_fail_closed() -> None:
+    source = DEPLOYMENT_ACCEPTANCE.read_text(encoding="utf-8")
+    assert "verify_ci.sh" in source
+    assert "verify_cloudflare_secret_inventory.py" in source
+    assert "CLOUDFLARE_API_TOKEN" in source
+    assert "CLOUDFLARE_ACCOUNT_ID" in source
+    assert "wrangler deploy" not in source
+    assert SECRET_INVENTORY.is_file()
+    assert os.access(SECRET_INVENTORY, os.X_OK)
+    result = subprocess.run(
+        [str(DEPLOYMENT_ACCEPTANCE)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ.get("PATH", "")},
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "CLOUDFLARE_API_TOKEN is required" in result.stderr
 
 
 def test_workers_builds_wrapper_fails_closed_outside_cloudflare() -> None:

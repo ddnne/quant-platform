@@ -69,3 +69,16 @@ def test_staging_surfaces_are_private_and_have_no_production_secret_policy() -> 
         assert staging["preview_urls"] is False
         assert staging["secret_names"] == []
         assert staging["name"].endswith("-staging")
+
+
+def test_declared_production_secret_names_are_exact_policy() -> None:
+    manifest = manifest_module.build_manifest()
+    for worker, expected in manifest_module.PRODUCTION_SECRET_NAMES.items():
+        names = sorted(expected)
+        assert manifest["workers"][worker]["base"]["secret_names"] == names
+        assert manifest["workers"][worker]["production"]["secret_names"] == names
+
+    drifted = copy.deepcopy(manifest)
+    drifted["workers"]["ingestion-jsda"]["production"]["secret_names"] = []
+    with pytest.raises(ValueError, match="secrets.required drifted"):
+        manifest_module.validate_manifest(drifted)

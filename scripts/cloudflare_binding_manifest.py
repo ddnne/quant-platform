@@ -73,6 +73,21 @@ def _json_rows(value: Any) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: json.dumps(row, sort_keys=True))
 
 
+def _secret_names(value: Any) -> list[str]:
+    if not value:
+        return []
+    if not isinstance(value, dict):
+        raise ValueError("secrets must be a table")
+    required = value.get("required") or []
+    if (
+        not isinstance(required, list)
+        or not all(isinstance(name, str) and name for name in required)
+        or len(required) != len(set(required))
+    ):
+        raise ValueError("secrets.required must contain unique non-empty names")
+    return sorted(required)
+
+
 def _effective_surface(
     *,
     worker: str,
@@ -104,7 +119,6 @@ def _effective_surface(
         # Wrangler migration declarations are shared by named environments.
         migrations = data.get("migrations")
 
-    secrets = () if environment == "staging" else PRODUCTION_SECRET_NAMES[worker]
     package = json.loads((WORKER_ROOT / worker / "package.json").read_text(encoding="utf-8"))
     dev_dependencies = package.get("devDependencies") or {}
     pinned_toolchain = {name: dev_dependencies.get(name) for name in TOOLCHAIN}
@@ -132,7 +146,7 @@ def _effective_surface(
         "migrations": _json_rows(migrations),
         "crons": sorted(((section.get("triggers") or {}).get("crons") or [])),
         "vars": dict(sorted((section.get("vars") or {}).items())),
-        "secret_names": sorted(secrets),
+        "secret_names": _secret_names(section.get("secrets")),
         "toolchain": pinned_toolchain,
         "observability": dict(sorted((observability or {}).items())),
         "version_metadata": dict(sorted((version_metadata or {}).items())),
@@ -182,6 +196,16 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
 
     for worker, environments in workers.items():
         for environment, surface in environments.items():
+            expected_secrets = (
+                []
+                if environment == "staging"
+                else sorted(PRODUCTION_SECRET_NAMES[worker])
+            )
+            if surface["secret_names"] != expected_secrets:
+                raise ValueError(
+                    f"{worker}/{environment}: secrets.required drifted: "
+                    f"{surface['secret_names']!r}"
+                )
             if surface["preview_urls"]:
                 raise ValueError(f"{worker}/{environment}: preview_urls must be false")
             observability = surface.get("observability") or {}

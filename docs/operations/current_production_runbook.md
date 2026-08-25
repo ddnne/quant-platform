@@ -17,6 +17,7 @@ Do not print secret values. Check presence only.
 | Active Worker bindings, toolchain, observability | [`specs/cloudflare/active_worker_bindings.json`](../../specs/cloudflare/active_worker_bindings.json) | `.venv/bin/python scripts/cloudflare_binding_manifest.py` |
 | Ops read tool inventory | [`platform/workers/quant-ops-mcp/src/domain.js`](../../platform/workers/quant-ops-mcp/src/domain.js) `OPS_TOOLS` | count `tool("` entries in `OPS_TOOLS` |
 | Native CI | [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh) | `scripts/verify_ci.sh` |
+| Authenticated production acceptance | [`scripts/verify_cloudflare_deployment_acceptance.sh`](../../scripts/verify_cloudflare_deployment_acceptance.sh) | `scripts/verify_cloudflare_deployment_acceptance.sh` |
 
 `applied_state` in the migration manifest is `UNVERIFIED` on purpose. Record
 remote apply results only in immutable release evidence.
@@ -42,16 +43,20 @@ remote apply results only in immutable release evidence.
 test -n "${INGESTION_RUN_TOKEN:-}" && echo INGESTION_RUN_TOKEN=present
 test -n "${DATA_EXPORT_TOKEN:-}" && echo DATA_EXPORT_TOKEN=present
 test -n "${CLOUDFLARE_API_TOKEN:-}" && echo CLOUDFLARE_API_TOKEN=present
+test -n "${CLOUDFLARE_ACCOUNT_ID:-}" && echo CLOUDFLARE_ACCOUNT_ID=present
 npx wrangler whoami
-.venv/bin/python scripts/cloudflare_d1_migration_manifest.py
-.venv/bin/python scripts/cloudflare_binding_manifest.py
+scripts/verify_cloudflare_deployment_acceptance.sh
 ```
 
 Stop if production D1/R2/Queue names or IDs differ from
 `specs/cloudflare/active_worker_bindings.json`. Every active environment has
 `preview_urls = false`, `observability.enabled = true`,
 `head_sampling_rate = 1`, and `[version_metadata] binding = "CF_VERSION_METADATA"`.
-Wrangler is `4.125.0`.
+The authenticated acceptance gate also runs `wrangler secret list --env
+production --format json` for all six Workers and requires the exact frozen
+secret-name set. It reads names and binding kinds only; values are never
+requested or printed. Missing authentication, missing names, and unexpected
+names all fail closed. Wrangler is `4.125.0`.
 
 ## 2. Apply D1 migrations through canonical owners
 

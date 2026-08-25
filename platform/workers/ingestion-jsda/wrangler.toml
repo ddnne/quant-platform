@@ -14,6 +14,9 @@ compatibility_date = "2026-08-01"
 workers_dev = false
 preview_urls = false
 
+[secrets]
+required = ["INGESTION_RUN_TOKEN"]
+
 [[r2_buckets]]
 binding = "RAW_BUCKET"
 bucket_name = "quant-raw"
@@ -67,6 +70,9 @@ binding = "CF_VERSION_METADATA"
 name = "quant-platform-ingestion-jsda"
 workers_dev = false
 preview_urls = false
+
+[env.production.secrets]
+required = ["INGESTION_RUN_TOKEN"]
 
 [[env.production.r2_buckets]]
 binding = "RAW_BUCKET"
