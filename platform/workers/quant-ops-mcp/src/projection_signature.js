@@ -5,8 +5,13 @@ import pinnedRegistryDocument from "../../../../specs/ops_projection/verify_publ
 const SIGNED_DOCUMENT_SCHEMA = "ops-projection-signed-envelope/v1";
 const ENVELOPE_SCHEMA = "ops-projection-envelope/v1";
 const REGISTRY_PURPOSE = "ops_projection_verification";
-export const PINNED_OPS_PROJECTION_REGISTRY_DIGEST =
-  "sha256:8b3f80342fca9cd446755133faab125c5cd69fde76c3f0128332613d7d8a4e39";
+export const PINNED_OPS_PROJECTION_REGISTRY_GENERATION = 2;
+export const PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST =
+  "sha256:bb1dc1ae823784db8b53147891d425b027c02cbf022023a74affa2ce46909abe";
+export const PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST =
+  "sha256:7e27a111b0cd8f78e40c78011489fc8ce834e9d1c31487b2e5cd6237fa1ab1d6";
+export const PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST =
+  "sha256:44c55900ffd8e0eb97de298b40f2277f7ad767448c859cdbd46b037ca874064d";
 
 /** @param {unknown} value @returns {unknown} */
 function canonicalize(value) {
@@ -50,7 +55,7 @@ function decodeBase64(value) {
 }
 
 /** @param {unknown} value */
-export function parseProjectionKeyRegistry(value) {
+function parsePinnedProjectionKeyRegistry(value) {
   let document = value;
   if (typeof value === "string") {
     try {
@@ -61,8 +66,15 @@ export function parseProjectionKeyRegistry(value) {
   }
   if (!document || typeof document !== "object" || Array.isArray(document)) return null;
   const registry = /** @type {Record<string, unknown>} */ (document);
-  if (Object.keys(registry).sort().join("\0") !== "keys\0purpose\0schema_version" ||
-      registry.schema_version !== 1 || registry.purpose !== REGISTRY_PURPOSE ||
+  if (Object.keys(registry).sort().join("\0") !==
+      "authority_status\0generation\0keys\0prior_registry_digest\0purpose\0registry_digest\0schema_version" ||
+      registry.schema_version !== 2 || registry.purpose !== REGISTRY_PURPOSE ||
+      registry.generation !== PINNED_OPS_PROJECTION_REGISTRY_GENERATION ||
+      !["ACTIVE", "PENDING"].includes(String(registry.authority_status)) ||
+      registry.prior_registry_digest !== PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST ||
+      !/^sha256:[0-9a-f]{64}$/.test(String(registry.registry_digest || "")) ||
+      (registry.prior_registry_digest !== null &&
+       !/^sha256:[0-9a-f]{64}$/.test(String(registry.prior_registry_digest))) ||
       !Array.isArray(registry.keys) || registry.keys.length < 1 ||
       registry.keys.length > 16) return null;
   const keyIds = new Set();
@@ -74,28 +86,40 @@ export function parseProjectionKeyRegistry(value) {
         "algorithm\0key_id\0public_key_base64\0status" ||
         typeof row.key_id !== "string" || !row.key_id ||
         row.algorithm !== "Ed25519" ||
-        !["active", "retired"].includes(String(row.status))) return null;
+        !["active", "pending", "revoked"].includes(String(row.status))) return null;
     const publicKey = decodeBase64(String(row.public_key_base64 || ""));
     if (!publicKey || publicKey.byteLength !== 32 || keyIds.has(row.key_id)) return null;
     keyIds.add(row.key_id);
     if (row.status === "active") active += 1;
   }
-  if (active !== 1) return null;
+  const expectedActive = registry.authority_status === "ACTIVE" ? 1 : 0;
+  if (active !== expectedActive) return null;
   return registry;
 }
 
 /** Load the one production verification root compiled from the committed registry. */
-export async function loadPinnedProjectionKeyRegistry() {
-  const registry = parseProjectionKeyRegistry(pinnedRegistryDocument);
-  if (!registry || await projectionSha256(registry) !== PINNED_OPS_PROJECTION_REGISTRY_DIGEST) {
+async function loadPinnedProjectionKeyRegistry() {
+  const registry = parsePinnedProjectionKeyRegistry(pinnedRegistryDocument);
+  if (!registry ||
+      await projectionSha256(registry) !== PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST) {
     throw new Error("pinned Ops Projection public-key registry is invalid");
   }
-  return registry;
+  const registryBody = Object.fromEntries(
+    Object.entries(registry).filter(([key]) => key !== "registry_digest"),
+  );
+  if (registry.registry_digest !== PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST ||
+      await projectionSha256(registryBody) !== PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST) {
+    throw new Error("pinned Ops Projection public-key registry is invalid");
+  }
+  return structuredClone(registry);
 }
 
 /** @param {Record<string, unknown>} generation */
 export async function verifyPinnedProjectionGeneration(generation) {
-  return verifyProjectionGeneration(generation, await loadPinnedProjectionKeyRegistry());
+  return verifyProjectionGenerationWithPinnedRegistry(
+    generation,
+    await loadPinnedProjectionKeyRegistry(),
+  );
 }
 
 /** @param {Record<string, unknown>} envelope */
@@ -162,14 +186,10 @@ function validateEnvelope(envelope) {
 
 /**
  * @param {Record<string, unknown>} generation
- * @param {unknown} rawRegistry
+ * @param {Record<string, unknown>} registry
  * @returns {Promise<{ok:boolean, reason:string|null, envelope:Record<string, unknown>|null}>}
  */
-export async function verifyProjectionGeneration(generation, rawRegistry) {
-  const registry = parseProjectionKeyRegistry(rawRegistry);
-  if (!registry) {
-    return { ok: false, reason: "Ops Projection public key registry is unavailable", envelope: null };
-  }
+async function verifyProjectionGenerationWithPinnedRegistry(generation, registry) {
   if (typeof generation.signed_envelope_json !== "string" ||
       typeof generation.issuer_key_id !== "string" ||
       typeof generation.signature !== "string") {

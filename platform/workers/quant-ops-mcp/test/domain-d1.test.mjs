@@ -1,14 +1,8 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import test from "node:test";
-
-import {
-  _callOpsToolWithRegistryForTest,
-  callOpsTool,
-  OPS_TOOLS,
-} from "../src/domain.js";
+import test, { mock } from "node:test";
 import { classifyRawAcquisition, honestProjectionStatus, syncDatasetState } from "../src/domain_policy.js";
 import {
   PROJECTED_CONTENT_TABLES,
@@ -17,11 +11,14 @@ import {
 } from "../src/projection_content.js";
 import {
   canonicalProjectionBytes,
-  loadPinnedProjectionKeyRegistry,
-  parseProjectionKeyRegistry,
-  PINNED_OPS_PROJECTION_REGISTRY_DIGEST,
+  PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST,
+  PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST,
+  PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST,
+  PINNED_OPS_PROJECTION_REGISTRY_GENERATION,
   projectionSha256,
 } from "../src/projection_signature.js";
+import * as projectionSignature from "../src/projection_signature.js";
+import { makeTestProjectionVerifier } from "./support/projection_signature.js";
 import { DurableDailyQuota, QuotaExceeded } from "../src/quota.js";
 
 function d1(db) {
@@ -54,9 +51,12 @@ const projectionKeyPair = generateKeyPairSync("ed25519");
 const projectionKeyId = "ops-projection-test-v1";
 const projectionPublicJwk = projectionKeyPair.publicKey.export({ format: "jwk" });
 const projectionPublicRaw = Buffer.from(String(projectionPublicJwk.x), "base64url").toString("base64");
-const projectionRegistry = {
-  schema_version: 1,
+const projectionRegistryBody = {
+  schema_version: 2,
   purpose: "ops_projection_verification",
+  generation: 1,
+  authority_status: "ACTIVE",
+  prior_registry_digest: null,
   keys: [{
     key_id: projectionKeyId,
     algorithm: "Ed25519",
@@ -64,33 +64,57 @@ const projectionRegistry = {
     public_key_base64: projectionPublicRaw,
   }],
 };
+const projectionRegistry = {
+  ...projectionRegistryBody,
+  registry_digest: "sha256:" + createHash("sha256")
+    .update(canonicalProjectionBytes(projectionRegistryBody))
+    .digest("hex"),
+};
+
+let testProjectionVerifier = null;
+mock.module("../src/projection_signature.js", {
+  exports: {
+    ...projectionSignature,
+    verifyPinnedProjectionGeneration(generation) {
+      return testProjectionVerifier
+        ? testProjectionVerifier(generation)
+        : projectionSignature.verifyPinnedProjectionGeneration(generation);
+    },
+  },
+});
+const { callOpsTool, OPS_TOOLS } = await import("../src/domain.js");
 
 test("production projection verifier root is purpose-bound and digest-pinned", async () => {
-  const pinned = await loadPinnedProjectionKeyRegistry();
+  const pinned = JSON.parse(readFileSync(
+    new URL("../../../../specs/ops_projection/verify_public_keys.json", import.meta.url),
+    "utf8",
+  ));
   assert.equal(pinned.purpose, "ops_projection_verification");
-  assert.equal(pinned.keys.filter((row) => row.status === "active").length, 1);
-  assert.equal(await projectionSha256(pinned), PINNED_OPS_PROJECTION_REGISTRY_DIGEST);
+  assert.equal(pinned.authority_status, "PENDING");
+  assert.equal(pinned.generation, PINNED_OPS_PROJECTION_REGISTRY_GENERATION);
+  assert.equal(
+    pinned.prior_registry_digest,
+    PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST,
+  );
+  assert.equal(pinned.registry_digest, PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST);
+  assert.equal(pinned.keys.filter((row) => row.status === "active").length, 0);
+  assert.equal(pinned.keys[0].status, "revoked");
+  assert.equal(await projectionSha256(pinned), PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST);
+  const body = Object.fromEntries(
+    Object.entries(pinned).filter(([key]) => key !== "registry_digest"),
+  );
+  assert.equal(await projectionSha256(body), PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST);
+  assert.equal("parseProjectionKeyRegistry" in projectionSignature, false);
+  assert.equal("verifyProjectionGeneration" in projectionSignature, false);
+  assert.equal("loadPinnedProjectionKeyRegistry" in projectionSignature, false);
 
-  for (const invalid of [
-    { ...projectionRegistry, purpose: "receipt_verification" },
-    {
-      ...projectionRegistry,
-      keys: projectionRegistry.keys.map(({ status: _status, ...row }) => row),
-    },
-    {
-      ...projectionRegistry,
-      keys: [projectionRegistry.keys[0], {
-        ...projectionRegistry.keys[0],
-        key_id: "ops-projection-test-v2",
-      }],
-    },
-    {
-      ...projectionRegistry,
-      keys: [projectionRegistry.keys[0], { ...projectionRegistry.keys[0] }],
-    },
-  ]) {
-    assert.equal(parseProjectionKeyRegistry(invalid), null);
-  }
+  const audit = JSON.parse(readFileSync(
+    new URL("../../../../specs/ops_projection/verify_public_keys.generation-1.json", import.meta.url),
+    "utf8",
+  ));
+  assert.equal(audit.purpose, "ops_projection_registry_audit");
+  assert.equal(audit.authority_status, "REVOKED");
+  assert.equal(await projectionSha256(audit), PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST);
 });
 
 function signedGeneration(generation, now, contentManifest, contentDigest) {
@@ -138,8 +162,13 @@ function signedGeneration(generation, now, contentManifest, contentDigest) {
   return { envelope, document: { ...body, signature }, signature };
 }
 
-function opsCall(db, name, args) {
-  return _callOpsToolWithRegistryForTest(d1(db), name, args, projectionRegistry);
+async function opsCall(db, name, args) {
+  testProjectionVerifier = makeTestProjectionVerifier(projectionRegistry);
+  try {
+    return await callOpsTool(d1(db), name, args);
+  } finally {
+    testProjectionVerifier = null;
+  }
 }
 
 function projectionDb() {

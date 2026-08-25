@@ -1470,8 +1470,8 @@ def _verified_production_projection_evidence(
         coverage_policy_set_binding,
     )
     from ops.projection_signing import (
-        OpsProjectionPublicKeyRegistry,
         OpsProjectionSignatureError,
+        verified_pinned_ops_projection_dataset_evidence,
     )
     from ops.projection_meta import DEFAULT_MAX_AGE_SECONDS
 
@@ -1480,17 +1480,12 @@ def _verified_production_projection_evidence(
             "production READY requires a signed Ops Projection evidence envelope"
         )
     try:
-        # Production trust roots are loaded by the publication service.  A
-        # caller-provided registry would let the caller sign its own envelope
-        # and turn a syntactically valid document into READY authority.
-        registry = OpsProjectionPublicKeyRegistry.load_pinned()
-        if not isinstance(registry, OpsProjectionPublicKeyRegistry):
-            raise OpsProjectionSignatureError(
-                "Ops Projection public-key registry required"
-            )
-        envelope = registry.verify(signed_document)
-        evidence = registry.verified_dataset_evidence(
-            signed_document, tuple(str(item) for item in required_datasets)
+        # The production verifier has no registry/path argument.  The complete
+        # current registry document, body digest, generation and prior pointer
+        # are independently pinned in code.
+        envelope, evidence = verified_pinned_ops_projection_dataset_evidence(
+            signed_document,
+            tuple(str(item) for item in required_datasets),
         )
     except OpsProjectionSignatureError as exc:
         raise MassResearchDisabledError(

@@ -41,10 +41,7 @@ from datetime import datetime, timezone
 ROOT = ensure_repo_root()
 
 from ingestion.jsda.official_index import read_local_index_text  # noqa: E402
-from ops.projection_signing import (  # noqa: E402
-    OpsProjectionSignatureError,
-    load_ops_projection_signer,
-)
+from ops.projection_signing import open_ops_projection_signing_service  # noqa: E402
 from scripts.export_ops_projection import (  # noqa: E402
     _render_trusted_projection_bundle,
     render_projection_bundle,
@@ -443,19 +440,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 7
 
-    try:
-        projection_signer = load_ops_projection_signer()
-    except OpsProjectionSignatureError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 6
+    projection_signer = open_ops_projection_signing_service()
     if (
         args.apply_remote
-        and not args.dry_run
         and has_trusted_cursor_chain
         and projection_signer is None
     ):
         print(
-            "ERROR: dedicated Ops Projection signing key is unavailable",
+            "ERROR: dedicated Ops Projection signing authority is PENDING",
             file=sys.stderr,
         )
         return 6

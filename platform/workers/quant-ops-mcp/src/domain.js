@@ -8,10 +8,7 @@ import {
   syncDatasetState,
 } from "./domain_policy.js";
 import { verifyProjectedContent } from "./projection_content.js";
-import {
-  verifyPinnedProjectionGeneration,
-  verifyProjectionGeneration,
-} from "./projection_signature.js";
+import { verifyPinnedProjectionGeneration } from "./projection_signature.js";
 import { OPS_OUTPUT_SCHEMAS } from "./tool_output_schemas.js";
 
 const STRING = { type: "string" };
@@ -698,27 +695,4 @@ async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
  */
 export async function callOpsTool(db, name, rawArguments) {
   return dispatchOpsTool(db, name, rawArguments, verifyPinnedProjectionGeneration);
-}
-
-/**
- * Private test seam for ephemeral signature fixtures. It is not imported by
- * the Worker entrypoint and cannot replace production verification authority.
- *
- * @param {D1Database} db
- * @param {string} name
- * @param {unknown} rawArguments
- * @param {unknown} registry
- */
-export async function _callOpsToolWithRegistryForTest(
-  db,
-  name,
-  rawArguments,
-  registry,
-) {
-  return dispatchOpsTool(
-    db,
-    name,
-    rawArguments,
-    (generation) => verifyProjectionGeneration(generation, registry),
-  );
 }

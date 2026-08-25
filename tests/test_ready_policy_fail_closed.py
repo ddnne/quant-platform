@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from data_contracts.coverage import (
@@ -23,8 +21,6 @@ from ops.projection_content import (
 )
 from ops.projection_signing import (
     ENVELOPE_SCHEMA,
-    OpsProjectionPublicKeyRegistry,
-    OpsProjectionSigningKey,
 )
 from paper_runtime.ready_policy import (
     SyncGenerationEvidence,
@@ -52,6 +48,11 @@ from storage.coverage_ledger import (
 )
 from storage.sqlite_store import SqliteStore
 from tests.readiness_test_support import make_readiness_signer
+from tests.ops_projection_signing_support import (
+    TestOpsProjectionSigningKey,
+    TestOpsProjectionVerifier,
+    make_test_ops_projection_verifier,
+)
 from tests.receipt_test_support import (
     TestSignedReceiptAuthority as _TestSignedReceiptAuthority,
     reconcile_test_evidence,
@@ -80,27 +81,13 @@ def _signed_projection_evidence(
     corrupt_policy_dataset: str | None = None,
     key_id: str = "ops-projection-ready-test",
     registry_path=None,
-) -> tuple[dict[str, object], OpsProjectionPublicKeyRegistry]:
+) -> tuple[dict[str, object], TestOpsProjectionVerifier]:
     private_key = Ed25519PrivateKey.generate()
-    raw_public = private_key.public_key().public_bytes(
-        serialization.Encoding.Raw,
-        serialization.PublicFormat.Raw,
-    )
-    registry_document = {
-        "schema_version": 1,
-        "purpose": "ops_projection_verification",
-        "keys": [
-            {
-                "key_id": key_id,
-                "algorithm": "Ed25519",
-                "public_key_base64": base64.b64encode(raw_public).decode("ascii"),
-                "status": "active",
-            }
-        ],
-    }
-    registry = OpsProjectionPublicKeyRegistry.from_document(registry_document)
+    registry = make_test_ops_projection_verifier(private_key, key_id=key_id)
     if registry_path is not None:
-        registry_path.write_text(json.dumps(registry_document), encoding="utf-8")
+        registry_path.write_text(
+            json.dumps({"attacker_selected_key_id": key_id}), encoding="utf-8"
+        )
     digest = "sha256:" + ("ab" * 32)
     dataset_ids = tuple(dataset_ids)
     policy_set = coverage_policy_set_binding(list(dataset_ids))
@@ -154,18 +141,23 @@ def _signed_projection_evidence(
             table: row["row_count"] for table, row in content_manifest.items()
         },
     }
-    signed = OpsProjectionSigningKey(key_id, private_key).sign(envelope)
+    signed = TestOpsProjectionSigningKey(key_id, private_key).sign(envelope)
     return signed, registry
 
 
 def _configure_projection_registry_for_test(
     monkeypatch: pytest.MonkeyPatch,
-    registry: OpsProjectionPublicKeyRegistry,
+    registry: TestOpsProjectionVerifier,
 ) -> None:
+    def verify_and_derive(document, required_datasets):
+        envelope = registry.verify(document)
+        return envelope, registry.verified_dataset_evidence(
+            document, required_datasets
+        )
+
     monkeypatch.setattr(
-        OpsProjectionPublicKeyRegistry,
-        "load_pinned",
-        classmethod(lambda cls, path=None: registry),
+        "ops.projection_signing.verified_pinned_ops_projection_dataset_evidence",
+        verify_and_derive,
     )
 
 

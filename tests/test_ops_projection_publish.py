@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import base64
 import json
 from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
 
 import pytest
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from jsonschema import Draft202012Validator
 
@@ -21,20 +19,27 @@ from ops.projection_content import (
     build_projection_content_manifest,
 )
 from ops.projection_signing import (
-    OpsProjectionPublicKeyRegistry,
     OpsProjectionSignatureError,
-    OpsProjectionSigningKey,
-    load_ops_projection_signer,
+    PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST,
+    PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST,
+    PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST,
+    PINNED_OPS_PROJECTION_REGISTRY_GENERATION,
+    open_ops_projection_signing_service,
+    sha256_digest,
+    verify_pinned_ops_projection,
 )
 from scripts import publish_ops_projection as publisher
 from scripts import sync_d1_to_sqlite as sync_script
 from scripts.export_ops_projection import (
-    _render_projection_bundle,
     _render_projection_bundle_for_test,
     _render_trusted_projection_bundle,
     render_projection_bundle,
 )
 from storage.sqlite_store import SqliteStore
+from tests.ops_projection_signing_support import (
+    TestOpsProjectionSigningKey,
+    make_test_ops_projection_verifier,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "platform/workers/quant-ops-mcp/migrations/projection/0001_ops_projection.sql"
@@ -224,7 +229,7 @@ def test_signed_pointer_update_atomically_rejects_cursor_regression(
 ) -> None:
     source = tmp_path / "source.sqlite"
     _source(source)
-    signer = OpsProjectionSigningKey(
+    signer = TestOpsProjectionSigningKey(
         "ops-projection-test-v1", Ed25519PrivateKey.generate()
     )
 
@@ -243,26 +248,28 @@ def test_signed_pointer_update_atomically_rejects_cursor_regression(
         lambda _conn: (cursor, cursor),
     )
     set_cursor(cursor)
-    first = _render_projection_bundle(
+    first = _render_projection_bundle_for_test(
         source,
         source_cursor=cursor,
         export_cursor=cursor,
         projection_signer=signer,
         generation_id="projgen-cursor-12",
         producer_commit_sha="a" * 40,
+        _test_enforce_trusted_guards=True,
     )
     target = _target()
     target.executescript(first.sql)
 
     cursor = 11
     set_cursor(cursor)
-    replay = _render_projection_bundle(
+    replay = _render_projection_bundle_for_test(
         source,
         source_cursor=cursor,
         export_cursor=cursor,
         projection_signer=signer,
         generation_id="projgen-cursor-11",
         producer_commit_sha="b" * 40,
+        _test_enforce_trusted_guards=True,
     )
     target.executescript(replay.sql)
     assert target.execute(
@@ -415,7 +422,7 @@ def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
     source = tmp_path / "source.sqlite"
     _source(source)
     private = Ed25519PrivateKey.generate()
-    signer = OpsProjectionSigningKey("ops-projection-test-v1", private)
+    signer = TestOpsProjectionSigningKey("ops-projection-test-v1", private)
     bundle = _render_projection_bundle_for_test(
         source,
         generation_id="projgen-signed",
@@ -424,24 +431,7 @@ def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
         export_cursor=11,
         projection_signer=signer,
     )
-    public_raw = private.public_key().public_bytes(
-        serialization.Encoding.Raw,
-        serialization.PublicFormat.Raw,
-    )
-    import base64
-
-    registry = OpsProjectionPublicKeyRegistry.from_document(
-        {
-            "schema_version": 1,
-            "keys": [
-                {
-                    "key_id": "ops-projection-test-v1",
-                    "algorithm": "Ed25519",
-                    "public_key_base64": base64.b64encode(public_raw).decode("ascii"),
-                }
-            ],
-        }
-    )
+    registry = make_test_ops_projection_verifier(private)
     assert bundle.signed_envelope is not None
     schema = json.loads(
         (ROOT / "specs/ops_projection/signed_envelope.schema.json").read_text(
@@ -481,16 +471,21 @@ def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
     with pytest.raises(OpsProjectionSignatureError, match="signature is invalid"):
         registry.verify(tampered)
 
+    former = json.loads(json.dumps(bundle.signed_envelope))
+    former["issuer_key_id"] = "ops-projection-20260825-v1"
+    with pytest.raises(OpsProjectionSignatureError, match="issuer is not trusted"):
+        verify_pinned_ops_projection(former)
+
 
 def test_trusted_renderer_rejects_generic_sqlite_path_and_caller_claims(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "manual.sqlite"
     _source(source)
-    signer = OpsProjectionSigningKey(
+    signer = TestOpsProjectionSigningKey(
         "ops-projection-test-v1", Ed25519PrivateKey.generate()
     )
-    with pytest.raises(RuntimeError, match="authenticated applied mirror handle"):
+    with pytest.raises(RuntimeError, match="PENDING full-source authority"):
         _render_trusted_projection_bundle(
             source,
             projection_signer=signer,
@@ -501,20 +496,37 @@ def test_trusted_renderer_rejects_generic_sqlite_path_and_caller_claims(
         sync_script.open_authenticated_applied_mirror(source)
 
 
-def test_remote_publish_requires_dedicated_ops_projection_signer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_remote_publish_requires_dedicated_ops_projection_signer_before_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dry_run: bool,
 ) -> None:
     source = tmp_path / "source.sqlite"
     _source(source)
+    output = tmp_path / "projection.sql"
+    meta = tmp_path / "projection.json"
     monkeypatch.setattr(publisher, "GOVERNED_LOCAL_DB", source.resolve())
     monkeypatch.setattr(
         publisher, "_authenticated_export_cursor_chain", lambda _path: (1, 1)
     )
-    monkeypatch.delenv("QUANT_OPS_PROJECTION_SIGNING_KEY_PEM", raising=False)
     monkeypatch.setattr(
-        projection_signing, "DEFAULT_SIGNING_KEY_PATH", tmp_path / "missing.pem"
+        publisher,
+        "read_remote_active_cursor",
+        lambda: pytest.fail("remote probe happened before authority gate"),
     )
-    assert publisher.main([f"--db={source}", "--apply-remote"]) == 6
+    argv = [
+        f"--db={source}",
+        f"--output={output}",
+        f"--meta-output={meta}",
+        "--refresh-coverage",
+        "--apply-remote",
+    ]
+    if dry_run:
+        argv.append("--dry-run")
+    assert publisher.main(argv) == 6
+    assert not output.exists()
+    assert not meta.exists()
 
 
 def test_remote_publish_rejects_arbitrary_db_before_signing(
@@ -631,8 +643,8 @@ def test_remote_publish_rejects_unknown_or_regressing_active_cursor(
     )
     monkeypatch.setattr(
         publisher,
-        "load_ops_projection_signer",
-        lambda: OpsProjectionSigningKey(
+        "open_ops_projection_signing_service",
+        lambda: TestOpsProjectionSigningKey(
             "ops-projection-test-v1", Ed25519PrivateKey.generate()
         ),
     )
@@ -642,79 +654,68 @@ def test_remote_publish_rejects_unknown_or_regressing_active_cursor(
     assert publisher.main([f"--db={source}", "--apply-remote"]) == 7
 
 
-def test_receipt_and_ready_keys_never_mint_ops_projection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    private = Ed25519PrivateKey.generate()
-    pem = private.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    )
-    ready_path = tmp_path / "readiness.pem"
-    ready_path.write_bytes(pem)
-    monkeypatch.setenv("QUANT_RECEIPT_SIGNING_KEY_PEM", pem.decode("ascii"))
-    monkeypatch.setenv("QUANT_READINESS_SIGNING_KEY_FILE", str(ready_path))
-    monkeypatch.delenv("QUANT_OPS_PROJECTION_SIGNING_KEY_PEM", raising=False)
-    monkeypatch.setattr(
-        projection_signing, "DEFAULT_SIGNING_KEY_PATH", tmp_path / "missing.pem"
-    )
-    assert load_ops_projection_signer() is None
-
-
-def test_ops_signer_factory_derives_id_from_pinned_public_registry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    private = Ed25519PrivateKey.generate()
-    pem = private.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    )
-    public = private.public_key().public_bytes(
-        serialization.Encoding.Raw,
-        serialization.PublicFormat.Raw,
-    )
-    registry = tmp_path / "verify_public_keys.json"
-    registry.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "purpose": "ops_projection_verification",
-                "keys": [
-                    {
-                        "key_id": "registry-derived-id",
-                        "algorithm": "Ed25519",
-                        "public_key_base64": base64.b64encode(public).decode(),
-                        "status": "active",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("QUANT_OPS_PROJECTION_SIGNING_KEY_PEM", pem.decode("ascii"))
-    monkeypatch.setattr(projection_signing, "DEFAULT_VERIFY_REGISTRY_PATH", registry)
-
-    signer = load_ops_projection_signer()
-    assert signer is not None
-    assert signer.key_id == "registry-derived-id"
-    with pytest.raises(TypeError, match="unexpected keyword argument 'key_id'"):
-        load_ops_projection_signer(key_id="caller-asserted")
-
-
-def test_ops_signer_factory_rejects_unregistered_private_key(
+def test_production_projection_package_is_verify_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    private = Ed25519PrivateKey.generate()
-    pem = private.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
+    monkeypatch.setenv("QUANT_OPS_PROJECTION_SIGNING_KEY_PEM", "ignored")
+    monkeypatch.setenv("QUANT_RECEIPT_SIGNING_KEY_PEM", "ignored")
+    monkeypatch.setenv("QUANT_READINESS_SIGNING_KEY_FILE", "/tmp/ignored")
+    assert open_ops_projection_signing_service() is None
+    assert not hasattr(projection_signing, "OpsProjectionSigningKey")
+    assert not hasattr(projection_signing, "OpsProjectionPublicKeyRegistry")
+    assert not hasattr(projection_signing, "load_ops_projection_signer")
+    assert not hasattr(projection_signing, "DEFAULT_SIGNING_KEY_PATH")
+    assert not hasattr(projection_signing, "DEFAULT_VERIFY_REGISTRY_PATH")
+    assert not hasattr(projection_signing, "parse_projection_key_registry")
+    assert not hasattr(projection_signing, "verify_projection_with_registry")
+
+
+def test_pinned_registry_binds_full_document_body_generation_and_prior_audit() -> None:
+    current_path = ROOT / "specs/ops_projection/verify_public_keys.json"
+    audit_path = ROOT / "specs/ops_projection/verify_public_keys.generation-1.json"
+    current = json.loads(current_path.read_text(encoding="utf-8"))
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert current["generation"] == PINNED_OPS_PROJECTION_REGISTRY_GENERATION
+    assert current["prior_registry_digest"] == PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST
+    assert PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST == sha256_digest(audit)
+    assert current["registry_digest"] == PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST
+    assert PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST == sha256_digest(
+        {key: value for key, value in current.items() if key != "registry_digest"}
     )
-    monkeypatch.setenv("QUANT_OPS_PROJECTION_SIGNING_KEY_PEM", pem.decode("ascii"))
-    with pytest.raises(OpsProjectionSignatureError, match="pinned registry"):
-        load_ops_projection_signer()
+    assert sha256_digest(current) == PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST
+    assert audit["purpose"] == "ops_projection_registry_audit"
+    assert audit["authority_status"] == "REVOKED"
+    assert current["authority_status"] == "PENDING"
+    assert [row["status"] for row in current["keys"]] == ["revoked", "pending"]
+
+
+def test_generation_one_audit_and_attacker_registry_cannot_replace_pinned_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_path = ROOT / "specs/ops_projection/verify_public_keys.generation-1.json"
+    monkeypatch.setattr(
+        projection_signing, "_PINNED_VERIFY_REGISTRY_PATH", audit_path
+    )
+    with pytest.raises(OpsProjectionSignatureError, match="digest mismatch"):
+        verify_pinned_ops_projection({})
+
+    current = json.loads(
+        (ROOT / "specs/ops_projection/verify_public_keys.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    current["purpose"] = "attacker_selected_verification"
+    current["registry_digest"] = sha256_digest(
+        {key: value for key, value in current.items() if key != "registry_digest"}
+    )
+    attacker = tmp_path / "attacker-ops-registry.json"
+    attacker.write_text(json.dumps(current), encoding="utf-8")
+    monkeypatch.setattr(
+        projection_signing, "_PINNED_VERIFY_REGISTRY_PATH", attacker
+    )
+    with pytest.raises(OpsProjectionSignatureError, match="digest mismatch"):
+        verify_pinned_ops_projection({})
 
 
 @pytest.mark.parametrize(
@@ -756,8 +757,8 @@ def test_failed_refresh_never_publishes_fresh_or_applies(
     monkeypatch.setattr(publisher, "read_remote_active_cursor", lambda: 1)
     monkeypatch.setattr(
         publisher,
-        "load_ops_projection_signer",
-        lambda **_kwargs: OpsProjectionSigningKey(
+        "open_ops_projection_signing_service",
+        lambda **_kwargs: TestOpsProjectionSigningKey(
             "ops-projection-test-v1", Ed25519PrivateKey.generate()
         ),
     )

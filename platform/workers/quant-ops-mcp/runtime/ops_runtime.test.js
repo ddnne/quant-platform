@@ -6,12 +6,29 @@ import {
 } from "cloudflare:test";
 import { beforeEach, describe, expect, inject, it, vi } from "vitest";
 
-import { _callOpsToolWithRegistryForTest } from "../src/domain.js";
+const projectionVerifierState = vi.hoisted(() => ({ verifier: null }));
+vi.mock("../src/projection_signature.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    verifyPinnedProjectionGeneration(generation) {
+      return projectionVerifierState.verifier
+        ? projectionVerifierState.verifier(generation)
+        : actual.verifyPinnedProjectionGeneration(generation);
+    },
+  };
+});
+
+import { callOpsTool } from "../src/domain.js";
 import {
   githubHandler,
   verifyState,
 } from "../src/github-handler.js";
-import { canonicalProjectionBytes } from "../src/projection_signature.js";
+import {
+  canonicalProjectionBytes,
+  projectionSha256,
+} from "../src/projection_signature.js";
+import { makeTestProjectionVerifier } from "../test/support/projection_signature.js";
 import {
   PROJECTED_CONTENT_TABLES,
   projectedManifestDigest,
@@ -22,6 +39,7 @@ const projectionMigrations = inject("opsProjectionD1Migrations");
 const quotaMigrations = inject("opsQuotaD1Migrations");
 
 beforeEach(async () => {
+  projectionVerifierState.verifier = null;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   await reset();
@@ -47,18 +65,25 @@ async function projectionSigner() {
   );
   const keyId = "ops-runtime-ed25519-v1";
   const publicKey = await crypto.subtle.exportKey("raw", keys.publicKey);
+  const registryBody = {
+    schema_version: 2,
+    purpose: "ops_projection_verification",
+    generation: 1,
+    authority_status: "ACTIVE",
+    prior_registry_digest: null,
+    keys: [{
+      key_id: keyId,
+      algorithm: "Ed25519",
+      status: "active",
+      public_key_base64: base64(publicKey),
+    }],
+  };
   return {
     keys,
     keyId,
     registry: {
-      schema_version: 1,
-      purpose: "ops_projection_verification",
-      keys: [{
-        key_id: keyId,
-        algorithm: "Ed25519",
-        status: "active",
-        public_key_base64: base64(publicKey),
-      }],
+      ...registryBody,
+      registry_digest: await projectionSha256(registryBody),
     },
   };
 }
@@ -189,11 +214,9 @@ describe("Ops Projection in the Workers runtime", () => {
     await seedSignedGeneration(signer, "runtime-current", "9");
     await activate("runtime-current");
 
-    const value = await _callOpsToolWithRegistryForTest(
-      env.OPS_PROJECTION_DB,
-      "storage_plane_status",
-      {},
-      signer.registry,
+    projectionVerifierState.verifier = makeTestProjectionVerifier(signer.registry);
+    const value = await callOpsTool(
+      env.OPS_PROJECTION_DB, "storage_plane_status", {},
     );
     expect(value).toMatchObject({
       status: "AVAILABLE",
@@ -217,11 +240,9 @@ describe("Ops Projection in the Workers runtime", () => {
     });
     await activate("runtime-tampered");
 
-    const value = await _callOpsToolWithRegistryForTest(
-      env.OPS_PROJECTION_DB,
-      "storage_plane_status",
-      {},
-      signer.registry,
+    projectionVerifierState.verifier = makeTestProjectionVerifier(signer.registry);
+    const value = await callOpsTool(
+      env.OPS_PROJECTION_DB, "storage_plane_status", {},
     );
     expect(value).toMatchObject({
       status: "NOT_PROJECTED",

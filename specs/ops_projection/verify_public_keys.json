@@ -1,12 +1,22 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "purpose": "ops_projection_verification",
+  "generation": 2,
+  "authority_status": "PENDING",
+  "prior_registry_digest": "sha256:bb1dc1ae823784db8b53147891d425b027c02cbf022023a74affa2ce46909abe",
   "keys": [
     {
       "key_id": "ops-projection-20260825-v1",
       "algorithm": "Ed25519",
       "public_key_base64": "1fECBb/uNUSmIn9p0AXiwBkWaAXr/FHA557sGGNpA48=",
-      "status": "active"
+      "status": "revoked"
+    },
+    {
+      "key_id": "ops-projection-20260826-v2",
+      "algorithm": "Ed25519",
+      "public_key_base64": "TYEP0a2rGvyHGhgpXNexnTdptUgK41RU+H5N26FaKc0=",
+      "status": "pending"
     }
-  ]
+  ],
+  "registry_digest": "sha256:7e27a111b0cd8f78e40c78011489fc8ce834e9d1c31487b2e5cd6237fa1ab1d6"
 }
