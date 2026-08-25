@@ -1,104 +1,91 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "specs/receipts/signed_receipt_claims.schema.json",
-  "title": "SignedReceiptClaims",
-  "description": "Closed signed-body claims for a collection receipt. extra_digests is a separate namespace and cannot override standard claims.",
-  "$comment": "Unknown fields fail (additionalProperties: false). version is the const signed-receipt-claims/v1. extra_digests property names must not collide with standard claims or the signature envelope.",
+  "title": "SignedCollectionClosureClaimsV2",
+  "description": "Closed signed claims for a COMPLETE-eligible collection closure. Persisted CollectionReceipt columns are untrusted mirrors; every value used by coverage policy is signed here.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "version",
-    "dataset",
+    "coverage_policy_version",
     "source",
+    "dataset",
     "segment_id",
     "segment_start",
     "segment_end",
+    "expected_scope",
+    "expected_items",
+    "observed_items",
+    "raw_page_count",
+    "raw_count",
+    "structured_count",
+    "status",
+    "error",
+    "pagination_exhausted",
+    "discovery_exhausted",
     "source_request_digest",
     "raw_manifest_digest",
     "raw_digest",
-    "raw_count",
     "structured_digest",
-    "structured_count",
     "parser_normalizer_version",
     "structured_generation",
-    "pagination_exhausted",
-    "discovery_exhausted",
+    "scope_digest",
+    "observation_digest",
     "run_id",
     "issuer_id",
     "issued_at",
     "checked_at",
     "extra_digests"
   ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "nonempty": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nonnegative_integer": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
   "properties": {
-    "version": {
-      "type": "string",
-      "const": "signed-receipt-claims/v1"
+    "version": { "const": "signed-receipt-claims/v2" },
+    "coverage_policy_version": { "$ref": "#/$defs/nonempty" },
+    "source": { "$ref": "#/$defs/nonempty" },
+    "dataset": { "$ref": "#/$defs/nonempty" },
+    "segment_id": { "$ref": "#/$defs/nonempty" },
+    "segment_start": { "$ref": "#/$defs/nonempty" },
+    "segment_end": { "$ref": "#/$defs/nonempty" },
+    "expected_scope": { "type": "object" },
+    "expected_items": {
+      "oneOf": [
+        { "$ref": "#/$defs/nonnegative_integer" },
+        { "type": "null" }
+      ]
     },
-    "dataset": {
-      "type": "string",
-      "minLength": 1
-    },
-    "source": {
-      "type": "string",
-      "minLength": 1
-    },
-    "segment_id": {
-      "type": "string",
-      "minLength": 1
-    },
-    "segment_start": {
-      "type": ["string", "null"]
-    },
-    "segment_end": {
-      "type": ["string", "null"]
-    },
-    "source_request_digest": {
-      "type": ["string", "null"]
-    },
-    "raw_manifest_digest": {
-      "type": ["string", "null"]
-    },
-    "raw_digest": {
-      "type": "string",
-      "minLength": 1
-    },
-    "raw_count": {
-      "type": "integer"
-    },
-    "structured_digest": {
-      "type": ["string", "null"]
-    },
-    "structured_count": {
-      "type": "integer"
-    },
-    "parser_normalizer_version": {
-      "type": "string",
-      "minLength": 1
-    },
-    "structured_generation": {
-      "type": ["integer", "null"]
-    },
-    "pagination_exhausted": {
-      "type": "boolean"
-    },
-    "discovery_exhausted": {
-      "type": "boolean"
-    },
-    "run_id": {
-      "type": "integer"
-    },
-    "issuer_id": {
-      "type": "string",
-      "minLength": 1
-    },
-    "issued_at": {
-      "type": "string",
-      "minLength": 1
-    },
-    "checked_at": {
-      "type": "string",
-      "minLength": 1
-    },
+    "observed_items": { "$ref": "#/$defs/nonnegative_integer" },
+    "raw_page_count": { "$ref": "#/$defs/nonnegative_integer" },
+    "raw_count": { "$ref": "#/$defs/nonnegative_integer" },
+    "structured_count": { "$ref": "#/$defs/nonnegative_integer" },
+    "status": { "const": "SUCCESS" },
+    "error": { "type": "null" },
+    "pagination_exhausted": { "const": true },
+    "discovery_exhausted": { "const": true },
+    "source_request_digest": { "$ref": "#/$defs/digest" },
+    "raw_manifest_digest": { "$ref": "#/$defs/digest" },
+    "raw_digest": { "$ref": "#/$defs/digest" },
+    "structured_digest": { "$ref": "#/$defs/digest" },
+    "parser_normalizer_version": { "$ref": "#/$defs/nonempty" },
+    "structured_generation": { "$ref": "#/$defs/nonnegative_integer" },
+    "scope_digest": { "$ref": "#/$defs/digest" },
+    "observation_digest": { "$ref": "#/$defs/digest" },
+    "run_id": { "$ref": "#/$defs/nonnegative_integer" },
+    "issuer_id": { "$ref": "#/$defs/nonempty" },
+    "issued_at": { "$ref": "#/$defs/nonempty" },
+    "checked_at": { "$ref": "#/$defs/nonempty" },
     "extra_digests": {
       "type": "object",
       "additionalProperties": true,
@@ -107,21 +94,29 @@
           "enum": [
             "body_digest",
             "checked_at",
+            "coverage_policy_version",
             "dataset",
             "discovery_exhausted",
             "eligibility",
+            "error",
+            "expected_items",
+            "expected_scope",
             "extra_digests",
             "issued_at",
             "issuer_class",
             "issuer_id",
             "issuer_key_id",
+            "observation_digest",
+            "observed_items",
             "pagination_exhausted",
             "parser_normalizer_version",
             "raw",
             "raw_count",
             "raw_digest",
             "raw_manifest_digest",
+            "raw_page_count",
             "run_id",
+            "scope_digest",
             "segment_end",
             "segment_id",
             "segment_start",
@@ -129,6 +124,7 @@
             "signed_body_b64",
             "source",
             "source_request_digest",
+            "status",
             "structured_count",
             "structured_digest",
             "structured_generation",

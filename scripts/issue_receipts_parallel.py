@@ -34,10 +34,7 @@ ROOT = ensure_repo_root()
 from ingestion.jsda.official_index import (  # noqa: E402
     read_local_index_text as _read_index_text,
 )
-from ingestion.pipeline_receipts import (  # noqa: E402
-    count_raw_items,
-    observed_items_from_actual,
-)
+from ingestion.runtime_authority import reconcile_collection_evidence  # noqa: E402
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
     refresh_coverage_ledger,
@@ -75,6 +72,37 @@ def _count_structured(
         (dataset, start[:10], end[:10]),
     ).fetchone()
     return int(row[0]) if row else 0
+
+
+def _load_structured_records(
+    conn: sqlite3.Connection, dataset: str, start: str, end: str
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM jquants_records WHERE dataset=? "
+        "AND substr(event_time,1,10)>=? AND substr(event_time,1,10)<=? "
+        "ORDER BY event_time",
+        (dataset, start[:10], end[:10]),
+    ).fetchall()
+    columns = [str(item[0]) for item in (conn.execute(
+        "SELECT name FROM pragma_table_info('jquants_records') ORDER BY cid"
+    ).fetchall())]
+    return [dict(zip(columns, row, strict=True)) for row in rows]
+
+
+def _raw_records(raw: bytes) -> list[Any] | None:
+    """Return concrete JSON records; opaque/count-only raw is not signable."""
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+        return None
+    if isinstance(payload, list):
+        return list(payload)
+    if isinstance(payload, dict):
+        for key in ("data", "rows", "results", "records"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return list(value)
+    return None
 
 
 @dataclass(frozen=True)
@@ -232,8 +260,8 @@ class PreparedIssue:
     required: RequiredCoverageSegment
     structured: int
     raw: bytes
-    observed: int
-    raw_rows: int
+    raw_records: list[Any]
+    structured_records: list[dict[str, Any]]
 
 
 @dataclass
@@ -322,11 +350,12 @@ def prepare_one(
     uri = f"file:{db_path.resolve().as_posix()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     try:
-        structured = _count_structured(
+        structured_records = _load_structured_records(
             conn, job.dataset, job.segment_start, job.segment_end
         )
     finally:
         conn.close()
+    structured = len(structured_records)
 
     if structured < min_structured:
         return PrepareResult(job=job, skip_reason=f"no_struct structured={structured}")
@@ -340,6 +369,16 @@ def prepare_one(
     )
     if raw is None:
         return PrepareResult(job=job, skip_reason="no_raw")
+    raw_records = _raw_records(raw)
+    if raw_records is None or len(raw_records) != structured:
+        return PrepareResult(
+            job=job,
+            skip_reason=(
+                "unreconciled concrete raw/structured evidence "
+                f"raw={None if raw_records is None else len(raw_records)} "
+                f"structured={structured}"
+            ),
+        )
 
     scope = job.expected_scope
     unit = scope.get("expected_item_unit")
@@ -355,15 +394,13 @@ def prepare_one(
         expected_scope=scope,
         expected_items=expected_items,
     )
-    raw_count = count_raw_items(raw)
-    observed = observed_items_from_actual(unit=unit, raw_item_count=raw_count)
     prepared = PreparedIssue(
         job=job,
         required=required,
         structured=structured,
         raw=raw,
-        observed=observed,
-        raw_rows=raw_count,
+        raw_records=raw_records,
+        structured_records=structured_records,
     )
     return PrepareResult(job=job, prepared=prepared)
 
@@ -411,18 +448,16 @@ def issue_prepared(
     issued_rows: list[dict[str, Any]] = []
     next_run = start_run_id
     for prep in prepared_list:
-        receipt = authority.issue(
+        evidence = reconcile_collection_evidence(
             required=prep.required,
             run_id=next_run,
-            raw=prep.raw,
-            observed_items=prep.observed,
-            structured_row_count=prep.structured,
-            raw_row_count=prep.raw_rows,
+            raw_pages=(prep.raw,),
+            raw_records=prep.raw_records,
+            structured_records=prep.structured_records,
             pagination_exhausted=True,
-            structured_generation=prep.structured,
-            raw_manifest_digest=None,
-            source_request_digest=None,
+            discovery_exhausted=True,
         )
+        receipt = authority.issue(evidence)
         next_run += 1
         record_required_segments(conn, [prep.required])
         record_collection_receipt(conn, receipt)

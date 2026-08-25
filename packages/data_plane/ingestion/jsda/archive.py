@@ -209,14 +209,16 @@ def _record(
     checked_at: str,
     status: str,
     error: Optional[str],
-    observed_items: int,
-    raw_page_count: int,
-    raw_row_count: int,
-    structured_row_count: int,
+    observed_items: int | None = None,
+    raw_page_count: int | None = None,
+    raw_row_count: int | None = None,
+    structured_row_count: int | None = None,
     pagination_exhausted: bool,
     digests: Mapping[str, Any],
     authority=None,
-    raw: bytes = b"",
+    raw_pages: Sequence[bytes] = (),
+    raw_records: Sequence[Any] = (),
+    structured_records: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     record_governed_receipt(
         store,
@@ -232,7 +234,9 @@ def _record(
         pagination_exhausted=pagination_exhausted,
         digests=digests,
         authority=authority,
-        raw=raw,
+        raw_pages=raw_pages,
+        raw_records=raw_records,
+        structured_records=structured_records,
     )
 
 
@@ -476,10 +480,6 @@ def run_otc_reference_backfill(
                     checked_at=checked_at,
                     status="SUCCESS",
                     error=None,
-                    observed_items=1,
-                    raw_page_count=1,
-                    raw_row_count=raw_rows,
-                    structured_row_count=structured_rows,
                     pagination_exhausted=True,
                     digests={
                         "raw": raw_digest,
@@ -491,7 +491,9 @@ def run_otc_reference_backfill(
                         ),
                     },
                     authority=authority,
-                    raw=raw_bytes,
+                    raw_pages=(raw_bytes,),
+                    raw_records=records,
+                    structured_records=rows,
                 )
                 completed += 1
             except Exception as exc:  # noqa: BLE001
@@ -513,7 +515,7 @@ def run_otc_reference_backfill(
                         "fetched_at": checked_at,
                         "raw_path": None if raw_path is None else str(raw_path),
                     },
-                    raw=raw_bytes,
+                    raw_pages=(raw_bytes,) if raw_bytes else (),
                 )
                 failed += 1
 

@@ -1,67 +1,58 @@
-"""Sticky COMPLETE must survive segment_end day-roll when eligible SUCCESS exists."""
+"""Sticky COMPLETE is scope-bound and cannot survive an unsigned day-roll."""
 
 from __future__ import annotations
 
+from data_contracts import coverage_contract_for
+from ingestion.runtime_authority import reconcile_collection_evidence
 from storage.coverage_ledger import (
-    CollectionReceipt,
     RequiredCoverageSegment,
-    _latest_eligible_success_for_segment_id,
-    is_complete_eligible_receipt,
+    _latest_complete_receipt_for_required,
 )
+from storage.trusted_receipt import SignedReceiptAuthority
 
 
-def _signed_success(
-    *,
-    dataset: str,
-    segment_id: str,
-    start: str,
-    end: str,
-    run_id: int,
-) -> CollectionReceipt:
-    # Minimal shape; eligibility mocked via digests + monkeypatch if needed.
-    return CollectionReceipt(
+def test_segment_id_fallback_rejects_end_drift(receipt_ed25519_keys):
+    policy = coverage_contract_for("markets_calendar")
+    old_required = RequiredCoverageSegment(
         source="jquants",
-        dataset=dataset,
-        segment_id=segment_id,
-        segment_start=start,
-        segment_end=end,
-        expected_scope={"segment_start": start, "segment_end": end},
-        expected_items=1,
-        observed_items=1,
-        raw_page_count=1,
-        raw_row_count=1,
-        structured_row_count=1,
-        pagination_exhausted=True,
-        digests={
-            "eligibility": "TRUSTED_COLLECTION",
-            "raw": "sha256:dead",
-            "signature": "sig",
-            "public_key_id": "dev-receipt-v1",
+        dataset="markets_calendar",
+        segment_id="2026-08",
+        segment_start="2026-08-01",
+        segment_end="2026-08-11",
+        expected_scope={
+            "segment_start": "2026-08-01",
+            "segment_end": "2026-08-11",
+            "expected_item_unit": "source_query",
         },
-        run_id=run_id,
-        status="SUCCESS",
-        error=None,
+        expected_items=1,
+    )
+    record = {"Date": "2026-08-11", "HolidayDivision": "1"}
+    evidence = reconcile_collection_evidence(
+        required=old_required,
+        run_id=10,
+        raw_pages=(b'[{"Date":"2026-08-11","HolidayDivision":"1"}]',),
+        raw_records=(record,),
+        structured_records=(record,),
+        pagination_exhausted=True,
+        discovery_exhausted=True,
         checked_at="2026-08-12T00:00:00+00:00",
     )
-
-
-def test_segment_id_fallback_finds_eligible_despite_end_drift(monkeypatch):
-    from storage import coverage_ledger as cl
-
-    monkeypatch.setattr(cl, "is_complete_eligible_receipt", lambda r: r.status == "SUCCESS")
-    old = _signed_success(
-        dataset="markets_calendar",
-        segment_id="2026-08",
-        start="2026-08-01",
-        end="2026-08-11",
-        run_id=10,
+    old_receipt = SignedReceiptAuthority(
+        signing_key=receipt_ed25519_keys.signing_key
+    ).issue(evidence)
+    rolled_required = RequiredCoverageSegment(
+        source=old_required.source,
+        dataset=old_required.dataset,
+        segment_id=old_required.segment_id,
+        segment_start=old_required.segment_start,
+        segment_end="2026-08-12",
+        expected_scope={
+            **old_required.expected_scope,
+            "segment_end": "2026-08-12",
+        },
+        expected_items=old_required.expected_items,
     )
-    found = _latest_eligible_success_for_segment_id(
-        [old],
-        source="jquants",
-        dataset="markets_calendar",
-        segment_id="2026-08",
-    )
-    assert found is not None
-    assert found.run_id == 10
-    assert found.segment_end == "2026-08-11"
+
+    assert _latest_complete_receipt_for_required(
+        (old_receipt,), policy=policy, required=rolled_required
+    ) is None

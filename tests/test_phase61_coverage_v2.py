@@ -19,7 +19,10 @@ from storage import (
     record_collection_receipt,
 )
 from storage.coverage_ledger import EXPECTED_EMPTY_WITH_EVIDENCE
-from storage.receipt_crypto import build_signed_digest_fields
+from storage.receipt_crypto import (
+    build_signed_digest_fields,
+    canonical_evidence_digest,
+)
 from storage.sqlite_store import SqliteStore
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -64,6 +67,10 @@ def _receipt(
             segment_start=segment.segment_start,
             segment_end=segment.segment_end,
             checked_at=checked_at,
+            expected_scope=segment.expected_scope,
+            expected_items=segment.expected_items,
+            observed_items=observed,
+            raw_page_count=1,
             extra_digests=extra_digests,
         ),
         run_id=run_id,
@@ -104,29 +111,50 @@ def _signed_digests(
     raw_manifest_digest=None,
     structured_generation=None,
     extra_digests=None,
+    expected_scope=None,
+    expected_items=None,
+    observed_items=None,
+    raw_page_count=1,
 ):
     """Sign with the tmp Ed25519 registry from receipt_ed25519_keys."""
     assert _SIGNED_KEY is not None
-    signed = build_signed_digest_fields(
-        signing_key=_SIGNED_KEY,
-        dataset=dataset,
-        segment_id=segment_id,
-        source=source,
-        run_id=run_id,
-        raw_digest=raw_digest,
-        raw_count=raw_count,
-        structured_count=structured_count,
-        structured_digest=structured_digest,
-        pagination_exhausted=pagination_exhausted,
-        source_request_digest=source_request_digest,
-        raw_manifest_digest=raw_manifest_digest or raw_digest,
-        structured_generation=(
+    sha_empty = "sha256:" + "0" * 64
+    scope = {
+        "coverage_policy_version": coverage_contract_for(dataset).policy_version,
+        "dataset": dataset,
+        "segment_id": segment_id,
+        "source": source,
+        "segment_start": segment_start,
+        "segment_end": segment_end,
+        "expected_scope": dict(expected_scope or {}),
+        "expected_items": expected_items,
+    }
+    claims = {
+        **scope,
+        "observed_items": raw_count if observed_items is None else observed_items,
+        "raw_page_count": raw_page_count,
+        "raw_digest": raw_digest,
+        "raw_count": raw_count,
+        "structured_count": structured_count,
+        "structured_digest": structured_digest or sha_empty,
+        "pagination_exhausted": pagination_exhausted,
+        "discovery_exhausted": pagination_exhausted,
+        "status": "SUCCESS",
+        "error": None,
+        "source_request_digest": source_request_digest or sha_empty,
+        "raw_manifest_digest": raw_manifest_digest or raw_digest,
+        "structured_generation": (
             structured_generation if structured_generation is not None else run_id
         ),
-        segment_start=segment_start,
-        segment_end=segment_end,
-        checked_at=checked_at,
-        extra_digests=extra_digests,
+        "scope_digest": canonical_evidence_digest(scope),
+        "run_id": run_id,
+        "checked_at": checked_at,
+        "extra_digests": extra_digests or {},
+    }
+    claims["observation_digest"] = canonical_evidence_digest(claims)
+    signed = build_signed_digest_fields(
+        signing_key=_SIGNED_KEY,
+        closure_claims=claims,
     )
     signed["raw"] = raw_digest
     return signed
@@ -156,6 +184,29 @@ def test_missing_middle_segment_is_partial_even_with_early_and_late_receipts():
     assert status == "PARTIAL"
     assert [item[2] for item in evaluated] == ["COMPLETE", "PARTIAL", "COMPLETE"]
     assert evaluated[1][1] is None
+
+
+def test_sticky_complete_cannot_use_transplanted_outer_identity():
+    from storage.coverage_ledger import _latest_complete_receipt_for_required
+
+    policy = _short_event_policy()
+    required_a = plan_required_segments(policy, "2025-02-28")[0]
+    required_b = replace(
+        required_a,
+        segment_id="2025-02",
+        segment_start="2025-02-01",
+        segment_end="2025-02-28",
+    )
+    signed_a = _receipt(required_a)
+    transplanted = replace(
+        signed_a,
+        segment_id=required_b.segment_id,
+        segment_start=required_b.segment_start,
+        segment_end=required_b.segment_end,
+    )
+    assert _latest_complete_receipt_for_required(
+        (transplanted,), policy=policy, required=required_b
+    ) is None
 
 
 def test_event_zero_successful_exhausted_raw_receipt_is_complete():
@@ -301,7 +352,7 @@ def test_pagination_incomplete_is_not_complete():
     )
 
     assert status == "PARTIAL"
-    assert detail["reason"] == "pagination not exhausted"
+    assert "verified v2 collection closure" in detail["reason"]
 
 
 def test_raw_structured_mismatch_is_not_complete():
@@ -473,6 +524,15 @@ def test_receipt_observed_window_ignores_empty_success_shells():
     )
     assert merged_s == "2008-05-01"
     assert str(merged_e).startswith("2026-08-10")
+
+
+def test_receipt_observed_window_ignores_mutated_outer_receipt():
+    from storage.coverage_ledger import _receipt_observed_window
+
+    policy = _short_event_policy()
+    required = plan_required_segments(policy, "2025-01-31")[0]
+    mutated = replace(_receipt(required), raw_row_count=999)
+    assert _receipt_observed_window((mutated,)) == (None, None, 0)
 
 
 def test_merge_observed_window_preserves_hot_timestamp_when_same_day():

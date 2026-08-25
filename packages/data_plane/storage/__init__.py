@@ -30,6 +30,10 @@ from .coverage_ledger import (
     sync_dataset_coverage_from_segments,
 )
 from .trusted_receipt import SignedReceiptAuthority, TrustedReceiptIssuer
+from .verified_receipt import (
+    VerifiedCollectionClosure,
+    require_verified_collection_closure,
+)
 
 # build_synthetic_complete_receipt is intentionally NOT re-exported.
 
@@ -40,6 +44,7 @@ __all__ = [
     "SYNTHETIC_RECEIPT_MARKER",
     "SignedReceiptAuthority",
     "TrustedReceiptIssuer",
+    "VerifiedCollectionClosure",
     "aggregate_status_from_segment_counts",
     "build_collection_receipt",
     "build_surgical_reagg_detail",
@@ -57,6 +62,7 @@ __all__ = [
     "read_dataset_coverage",
     "record_collection_receipt",
     "record_required_segments",
+    "require_verified_collection_closure",
     "refresh_coverage_ledger",
     "sync_dataset_coverage_from_segments",
 ]

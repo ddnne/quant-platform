@@ -5,6 +5,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from data_contracts import coverage_contract_for
+from ingestion.runtime_authority import reconcile_collection_evidence
 from storage.coverage_ledger import (
     build_collection_receipt,
     evaluate_segment,
@@ -28,6 +29,19 @@ def _month_required():
 
 def _authority(keys: SimpleNamespace) -> SignedReceiptAuthority:
     return SignedReceiptAuthority(signing_key=keys.signing_key)
+
+
+def _issue(authority, required, raw, records):
+    evidence = reconcile_collection_evidence(
+        required=required,
+        run_id=1,
+        raw_pages=(raw,),
+        raw_records=records,
+        structured_records=records,
+        pagination_exhausted=True,
+        discovery_exhausted=True,
+    )
+    return authority.issue(evidence)
 
 
 def test_recovered_raw_only_cannot_complete():
@@ -74,14 +88,7 @@ def test_signed_receipt_can_complete(receipt_ed25519_keys: SimpleNamespace):
     policy, req = _month_required()
     raw = b'{"data":[{"Date":"2025-01-01"}]}'
     auth = _authority(receipt_ed25519_keys)
-    receipt = auth.issue(
-        required=req,
-        run_id=1,
-        raw=raw,
-        observed_items=1,
-        structured_row_count=1,
-        raw_row_count=1,
-    )
+    receipt = _issue(auth, req, raw, [{"Date": "2025-01-01"}])
     assert receipt.digests["signature"].startswith("ed25519:")
     status, detail = evaluate_segment(policy, req, receipt)
     assert status == "COMPLETE", detail
@@ -94,16 +101,7 @@ def test_signed_empty_data_envelope_is_not_complete(
     policy, req = _month_required()
     raw = b'{"data":[]}'
     auth = _authority(receipt_ed25519_keys)
-    receipt = auth.issue(
-        required=req,
-        run_id=1,
-        raw=raw,
-        observed_items=1,
-        structured_row_count=1,
-        raw_row_count=1,
-    )
-    assert receipt.status == "SUCCESS"
-    assert not is_complete_eligible_receipt(receipt)
-    status, detail = evaluate_segment(policy, req, receipt)
-    assert status == "PARTIAL", detail
-    assert status != "COMPLETE"
+    import pytest
+
+    with pytest.raises(ValueError, match="zero-row SUCCESS"):
+        _issue(auth, req, raw, [])

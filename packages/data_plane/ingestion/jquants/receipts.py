@@ -9,14 +9,14 @@ pipeline composition).
 from __future__ import annotations
 
 import sqlite3
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
+from ingestion.runtime_authority import reconcile_collection_evidence
 from storage.coverage_ledger import (
     CollectionReceipt,
     RequiredCoverageSegment,
     record_collection_receipt,
 )
-from storage.receipt_crypto import partition_extra_digests
 from storage.trusted_receipt import SignedReceiptAuthority
 
 
@@ -48,49 +48,40 @@ def emit_segment_receipt(
     *,
     required: RequiredCoverageSegment,
     run_id: int,
-    raw: bytes,
-    observed_items: int,
-    structured_row_count: int,
+    raw_pages: Sequence[bytes],
+    raw_records: Sequence[Any],
+    structured_records: Sequence[Mapping[str, Any]],
     authority: SignedReceiptAuthority,
-    raw_row_count: int | None = None,
     pagination_exhausted: bool = True,
-    status: str = "SUCCESS",
-    error: str | None = None,
+    discovery_exhausted: bool | None = None,
     checked_at: str | None = None,
-    extra_digests: Mapping[str, Any] | None = None,
-    source_request_digest: str | None = None,
-    raw_manifest_digest: str | None = None,
-    structured_generation: int | None = None,
-    structured_digest: str | None = None,
+    source_request: Mapping[str, Any] | None = None,
+    extra_evidence: Mapping[str, Any] | None = None,
     commit: bool = False,
 ) -> CollectionReceipt:
-    """Record a signed collection receipt for one planned J-Quants segment.
+    """Measure and record a signed SUCCESS closure for one J-Quants segment.
 
     ``authority`` is required (no None auto-mint). Default ``commit=False`` so
     the ingestion transaction commits structured rows + receipt together.
+    Counts and digests are deliberately absent from this API: the trusted
+    runtime derives them from the concrete artifacts supplied here.
     """
     authority = require_signed_receipt_authority(
         authority, open_if_missing=False
     )
-    if status == "SUCCESS" and error is None and not raw:
-        raise ValueError("empty-raw SUCCESS is forbidden")
-    receipt = authority.issue(
+    evidence = reconcile_collection_evidence(
         required=required,
         run_id=run_id,
-        raw=raw,
-        observed_items=observed_items,
-        structured_row_count=structured_row_count,
-        raw_row_count=raw_row_count,
+        raw_pages=raw_pages,
+        raw_records=raw_records,
+        structured_records=structured_records,
         pagination_exhausted=pagination_exhausted,
-        status=status,
-        error=error,
+        discovery_exhausted=discovery_exhausted,
         checked_at=checked_at,
-        source_request_digest=source_request_digest,
-        raw_manifest_digest=raw_manifest_digest,
-        structured_generation=structured_generation,
-        structured_digest=structured_digest,
-        extra_digests=partition_extra_digests(extra_digests),
+        source_request=source_request,
+        extra_evidence=extra_evidence,
     )
+    receipt = authority.issue(evidence)
     record_collection_receipt(conn, receipt)
     if commit:
         conn.commit()

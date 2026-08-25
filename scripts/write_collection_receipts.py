@@ -1,34 +1,30 @@
 #!/usr/bin/env python3
-"""Write real (or hard-gated synthetic) collection receipts. Lane H.
+"""Write recovery/audit (or hard-gated synthetic) collection receipts.
 
-This is the operational receipt-writing path that closes the J-Quants gap:
-the J-Quants catalog pipeline persists raw bytes and structured rows but does
-not emit ``collection_receipts`` rows, so every J-Quants governed dataset sits
-at PARTIAL/UNKNOWN with zero receipts. This script records a REAL receipt whose
-``raw`` digest is a SHA-256 over the actual persisted source bytes — so any
-COMPLETE verdict is backed by verifiable raw retention.
+This manual tool is deliberately outside the trusted ingestion authority. It
+can retain a digest of source bytes for audit and recovery, but caller-supplied
+counts are not reconciled evidence and can never mint a COMPLETE-eligible v2
+closure. Governed ingestion is the only production signing path.
 
 Two modes:
 
-* **REAL** (default): reads ``--raw-file`` bytes from disk, computes the real
-  digest, records one receipt for the chosen planned segment. Run
-  ``refresh_coverage_ledger.py`` afterwards to fold the receipt into coverage.
-  This never fakes a verdict — :func:`evaluate_segment` decides COMPLETE from
-  the policy gates.
+* **RECOVERY** (default): reads ``--raw-file`` bytes from disk, computes the
+  real digest, and records untrusted audit evidence. Manual counts cannot mint
+  a v2 closure and therefore never become Coverage COMPLETE. Use governed
+  ingestion to reparse, normalize, reconcile, and sign concrete artifacts.
 
 * **SYNTHETIC** (``--synthetic``): OFFLINE FIXTURE DATABASES ONLY. Requires the
-  explicit ``--allow-fixture-synthetic`` acknowledgement, embeds the
-  ``synthetic``/``origin: offline-test-fixture`` sentinel, and is intended for
-  generating test fixtures. It must never be run against a production database.
+  explicit ``--allow-fixture-synthetic`` acknowledgement and embeds the
+  ``synthetic``/``origin: offline-test-fixture`` sentinel. These rows are only
+  legacy COMPLETE-shaped fixtures; the v2 verifier always rejects them.
 
-The governed JSDA datasets already have live receipt writers
-(``ingestion/jsda/archive.py``, ``repo_archive.py``, ``corrections.py``); this
-script is the equivalent path for J-Quants governed datasets and a general
-operational tool for any planned segment.
+The governed J-Quants and JSDA ingestion pipelines remeasure raw pages, parsed
+records, and structured rows before signing. This script is only a manual
+recovery tool for already-planned segments.
 
 Examples
 --------
-  # Real receipt for one planned segment (event-driven dataset -> can COMPLETE):
+  # Recovery/audit receipt for one planned segment (never COMPLETE):
   python3 scripts/write_collection_receipts.py \\
       --db data/structured/ingestion.sqlite --dataset fins_summary \\
       --target-end 2025-03-31 --raw-file data/raw/jquants/2025/03/31/fins_summary.json
@@ -81,6 +77,7 @@ from storage.coverage_ledger import (  # noqa: E402
     plan_required_segments,
     record_collection_receipt,
 )
+from storage.receipt_crypto import partition_extra_digests  # noqa: E402
 
 def _coverage_source(dataset: str) -> str:
     return "jsda" if dataset.startswith("jsda_") else "jquants"
@@ -178,7 +175,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Lane H: receipt-writing path. REAL receipts only by default.",
+        epilog="Manual recovery receipts are audit-only and never COMPLETE.",
     )
     p.add_argument("--db", required=True, help="path to structured SQLite database")
     p.add_argument("--dataset", required=True, help="governed dataset id (e.g. fins_summary)")
@@ -208,7 +205,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--list-segments", action="store_true",
         help="print planned segment ids for --dataset/--target-end and exit",
     )
-    p.add_argument("--raw-file", default=None, help="path to the verbatim persisted raw bytes (REAL mode)")
+    p.add_argument(
+        "--raw-file",
+        default=None,
+        help="path to verbatim persisted raw bytes (RECOVERY mode)",
+    )
     p.add_argument(
         "--observed-items", type=int, default=None,
         help="observed item count (default: parsed from --raw-file JSON)",
@@ -232,7 +233,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--synthetic", action="store_true",
-        help="OFFLINE FIXTURE ONLY: emit synthetic COMPLETE receipts",
+        help="OFFLINE FIXTURE ONLY: emit legacy COMPLETE-shaped rows",
     )
     p.add_argument(
         "--allow-fixture-synthetic", action="store_true",
@@ -311,16 +312,16 @@ def main(argv: list[str] | None = None) -> int:
                 f"{required.segment_id} run_id={args.run_id} [{marker}]"
             )
         print(
-            "Wrote synthetic fixture receipts. These carry the synthetic "
-            "sentinel and must never be used in production.",
+            "Wrote synthetic fixture rows. The verifier rejects their synthetic "
+            "sentinel; they must never be used in production.",
             file=sys.stderr,
         )
         return 0
 
-    # REAL mode: digest over actual persisted bytes.
+    # RECOVERY mode: retain a digest of actual bytes, without signing authority.
     if args.raw_file is None:
         print(
-            "Error: REAL mode requires --raw-file (the verbatim persisted "
+            "Error: RECOVERY mode requires --raw-file (the verbatim persisted "
             "source bytes for the segment). Use --synthetic --allow-fixture-"
             "synthetic for offline fixture databases.",
             file=sys.stderr,
@@ -339,10 +340,7 @@ def main(argv: list[str] | None = None) -> int:
     structured_rows = args.structured_rows if args.structured_rows is not None else observed
     raw_rows = args.raw_rows if args.raw_rows is not None else structured_rows
 
-    from storage.trusted_receipt import open_signed_receipt_authority
-
-    issuer = open_signed_receipt_authority()
-    receipt = issuer.issue(
+    receipt = build_collection_receipt(
         required=required,
         run_id=args.run_id,
         raw=raw,
@@ -350,6 +348,10 @@ def main(argv: list[str] | None = None) -> int:
         structured_row_count=structured_rows,
         raw_row_count=raw_rows,
         pagination_exhausted=args.pagination_exhausted,
+        extra_digests=partition_extra_digests({
+            "eligibility": "RECOVERED_RAW_ONLY",
+            "origin": "manual-recovery-audit",
+        }),
     )
     conn = _connect(db_path)
     try:
@@ -360,13 +362,13 @@ def main(argv: list[str] | None = None) -> int:
         conn.close()
 
     print(
-        f"REAL receipt -> {receipt.dataset}/{receipt.segment_id} "
+        f"RECOVERY receipt -> {receipt.dataset}/{receipt.segment_id} "
         f"run_id={receipt.run_id} status={receipt.status} "
         f"observed={receipt.observed_items} raw_digest={receipt.digests['raw']}"
     )
     print(
-        "Run scripts/refresh_coverage_ledger.py to fold this receipt into "
-        "coverage_segments / dataset_coverage.",
+        "This receipt is audit-only and cannot make coverage COMPLETE. "
+        "Run the governed ingestion path to issue a verified v2 closure.",
     )
     return 0
 

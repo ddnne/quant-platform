@@ -95,9 +95,9 @@ def test_emit_segment_receipt_requires_authority(tmp_path: Path):
             store._conn,
             required=req,
             run_id=1,
-            raw=b'{"data":[1]}',
-            observed_items=1,
-            structured_row_count=1,
+            raw_pages=(b'[{"Date":"2026-08-11"}]',),
+            raw_records=({"Date": "2026-08-11"},),
+            structured_records=({"Date": "2026-08-11"},),
             authority=None,  # type: ignore[arg-type]
         )
     store.close()
@@ -110,7 +110,7 @@ def test_require_signed_receipt_authority_fails_closed_without_key(monkeypatch):
         "storage.trusted_receipt.load_signing_key",
         lambda **kwargs: None,
     )
-    with pytest.raises(RuntimeError, match="signing key not configured"):
+    with pytest.raises(RuntimeError, match="signing authority is not configured"):
         require_signed_receipt_authority()
 
 
@@ -123,14 +123,14 @@ def test_emit_segment_receipt_rejects_empty_raw_success(
     policy = coverage_contract_for("markets_calendar")
     req = list(plan_required_segments(policy, "2026-08-11", source="jquants"))[0]
     auth = _tmp_authority(receipt_ed25519_keys)
-    with pytest.raises(ValueError, match="empty-raw SUCCESS is forbidden"):
+    with pytest.raises(ValueError, match="non-empty raw pages"):
         emit_segment_receipt(
             store._conn,
             required=req,
             run_id=1,
-            raw=b"",
-            observed_items=1,
-            structured_row_count=1,
+            raw_pages=(b"",),
+            raw_records=({"Date": "2026-08-11"},),
+            structured_records=({"Date": "2026-08-11"},),
             authority=auth,
         )
     n = store._conn.execute("select count(*) from collection_receipts").fetchone()[0]
@@ -154,9 +154,9 @@ def test_emit_segment_receipt_records_verified_signature(
         store._conn,
         required=req,
         run_id=1,
-        raw=raw,
-        observed_items=1,
-        structured_row_count=1,
+        raw_pages=(raw,),
+        raw_records=({"Date": "2026-08-11"},),
+        structured_records=({"Date": "2026-08-11"},),
         authority=_tmp_authority(receipt_ed25519_keys),
         commit=True,
     )

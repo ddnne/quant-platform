@@ -389,7 +389,7 @@ def _run_jquants_catalog(
                         when=when,
                         raw_bytes=raw_bytes,
                         rows=rows,
-                        structured_row_count=n,
+                        structured_records=norm,
                         authority=authority,
                     )
                 except Exception as rec_exc:  # noqa: BLE001

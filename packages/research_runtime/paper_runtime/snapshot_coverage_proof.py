@@ -13,6 +13,61 @@ from typing import Any
 from data_contracts.coverage import POLICY_VERSION as COVERAGE_POLICY_VERSION
 
 
+def _required_segment_from_row(row: sqlite3.Row):
+    """Rebuild the trusted inventory value from the coverage-segment row."""
+    from storage.coverage_ledger import RequiredCoverageSegment
+
+    scope = json.loads(str(row["expected_scope"]))
+    if not isinstance(scope, dict):
+        raise ValueError("coverage segment expected_scope must be an object")
+    expected_items = row["expected_items"]
+    return RequiredCoverageSegment(
+        source=str(row["source"]),
+        dataset=str(row["dataset"]),
+        segment_id=str(row["segment_id"]),
+        segment_start=str(row["segment_start"]),
+        segment_end=str(row["segment_end"]),
+        expected_scope=scope,
+        expected_items=(
+            None if expected_items is None else int(expected_items)
+        ),
+    )
+
+
+def _untrusted_receipt_from_row(row: sqlite3.Row):
+    """Rebuild the persisted receipt DTO without granting it any trust."""
+    from storage.coverage_ledger import CollectionReceipt
+
+    scope = json.loads(str(row["receipt_scope"]))
+    digests = json.loads(str(row["digests_json"]))
+    if not isinstance(scope, dict):
+        raise ValueError("collection receipt expected_scope must be an object")
+    if not isinstance(digests, dict):
+        raise ValueError("collection receipt digests must be an object")
+    expected_items = row["receipt_expected_items"]
+    return CollectionReceipt(
+        source=str(row["receipt_source"]),
+        dataset=str(row["receipt_dataset"]),
+        segment_id=str(row["receipt_segment_id"]),
+        segment_start=str(row["receipt_start"]),
+        segment_end=str(row["receipt_end"]),
+        expected_scope=scope,
+        expected_items=(
+            None if expected_items is None else int(expected_items)
+        ),
+        observed_items=int(row["observed_items"]),
+        raw_page_count=int(row["raw_page_count"]),
+        raw_row_count=int(row["raw_row_count"]),
+        structured_row_count=int(row["structured_row_count"]),
+        pagination_exhausted=bool(row["pagination_exhausted"]),
+        digests=digests,
+        run_id=int(row["receipt_run_id"]),
+        status=str(row["receipt_status"]),
+        error=row["error"],
+        checked_at=str(row["checked_at"]),
+    )
+
+
 def _coverage_v2_proof(
     conn: sqlite3.Connection,
     required: tuple[str, ...],
@@ -24,12 +79,18 @@ def _coverage_v2_proof(
         _canonical_digest,
         all_coverage_contracts,
     )
+    from storage.receipt_crypto import load_verify_keys
+    from storage.verified_receipt import (
+        ReceiptVerificationError,
+        require_verified_collection_closure,
+    )
 
     if COVERAGE_POLICY_VERSION != "collection-coverage/v2":
         raise SnapshotRejected(
             "READY publication requires collection-coverage/v2"
         )
     policies = {policy.dataset_id: policy for policy in all_coverage_contracts()}
+    verify_keys = load_verify_keys()
     governed = tuple(
         dataset for dataset in required
         if policies[dataset].governance_tier == "governed"
@@ -53,7 +114,11 @@ def _coverage_v2_proof(
             s.source, s.dataset, s.segment_id, s.policy_version,
             s.segment_start, s.segment_end, s.expected_scope,
             s.expected_items, s.status AS segment_status,
-            s.receipt_run_id,
+            s.receipt_run_id AS selected_receipt_run_id,
+            r.source AS receipt_source,
+            r.dataset AS receipt_dataset,
+            r.segment_id AS receipt_segment_id,
+            r.run_id AS receipt_run_id,
             r.segment_start AS receipt_start,
             r.segment_end AS receipt_end,
             r.expected_scope AS receipt_scope,
@@ -83,74 +148,72 @@ def _coverage_v2_proof(
         dataset = str(row["dataset"])
         segments_by_dataset[dataset].append(row)
         reason: str | None = None
-        try:
-            expected_scope = json.loads(str(row["expected_scope"]))
-            receipt_scope = json.loads(str(row["receipt_scope"]))
-            digests = json.loads(str(row["digests_json"]))
-        except (TypeError, json.JSONDecodeError):
-            expected_scope, receipt_scope, digests = None, None, None
-            reason = "malformed receipt evidence"
         policy = policies[dataset]
         if row["segment_status"] != "COMPLETE":
             reason = "segment not COMPLETE"
-        elif row["receipt_run_id"] is None or row["receipt_status"] != "SUCCESS":
-            reason = "successful receipt missing"
-        elif row["error"] not in (None, ""):
-            reason = "receipt has error"
         elif (
-            row["receipt_start"] != row["segment_start"]
-            or row["receipt_end"] != row["segment_end"]
-            or receipt_scope != expected_scope
-            or row["receipt_expected_items"] != row["expected_items"]
+            row["selected_receipt_run_id"] is None
+            or row["receipt_run_id"] is None
         ):
-            reason = "receipt scope mismatch"
-        elif int(row["pagination_exhausted"] or 0) != 1:
+            reason = "successful receipt missing"
+        else:
+            try:
+                required_segment = _required_segment_from_row(row)
+                untrusted_receipt = _untrusted_receipt_from_row(row)
+                closure = require_verified_collection_closure(
+                    untrusted_receipt,
+                    required=required_segment,
+                    expected_policy_version=policy.policy_version,
+                    verify_keys=verify_keys,
+                )
+            except (
+                ReceiptVerificationError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as exc:
+                reason = f"receipt closure invalid: {exc}"
+
+        # From this point forward, no persisted receipt field is consulted.
+        # Every COMPLETE input and every proof field comes from the opaque,
+        # signature-bound v2 closure returned above.
+        if reason is None and (
+            closure.status != "SUCCESS" or closure.error is not None
+        ):
+            reason = "successful receipt missing"
+        elif reason is None and (
+            not closure.pagination_exhausted
+            or not closure.discovery_exhausted
+        ):
             reason = "pagination not exhausted"
-        elif (
+        elif reason is None and (
             policy.expected_frequency != "event_driven"
-            and row["expected_items"] is None
+            and closure.expected_items is None
         ):
             reason = "non-event expected items missing"
-        elif (
-            row["expected_items"] is not None
-            and int(row["observed_items"] or 0) != int(row["expected_items"])
+        elif reason is None and (
+            closure.expected_items is not None
+            and closure.observed_items != closure.expected_items
         ):
             reason = "expected scope incomplete"
-        elif int(row["raw_page_count"] or 0) < 1 or not isinstance(
-            digests, dict
-        ) or not isinstance(digests.get("raw"), str) or not digests.get("raw"):
+        elif reason is None and (
+            closure.raw_page_count < 1 or not closure.raw_digest
+        ):
             reason = "raw retention proof missing"
-        elif (
+        elif reason is None and (
             policy.structured_reconciliation_required
-            and int(row["raw_row_count"] or 0)
-            != int(row["structured_row_count"] or 0)
+            and closure.raw_row_count != closure.structured_row_count
         ):
             reason = "raw/structured mismatch"
-        elif (
+        elif reason is None and (
             policy.expected_frequency != "event_driven"
-            and int(row["observed_items"] or 0) == 0
+            and closure.observed_items == 0
         ):
             reason = "non-event receipt is empty"
         if reason is not None:
             invalid_segments.append((dataset, str(row["segment_id"]), reason))
             continue
-        proof_entries.append({
-            "source": row["source"],
-            "dataset": dataset,
-            "segment_id": row["segment_id"],
-            "segment_start": row["segment_start"],
-            "segment_end": row["segment_end"],
-            "expected_scope": expected_scope,
-            "expected_items": row["expected_items"],
-            "receipt_run_id": row["receipt_run_id"],
-            "observed_items": row["observed_items"],
-            "raw_page_count": row["raw_page_count"],
-            "raw_row_count": row["raw_row_count"],
-            "structured_row_count": row["structured_row_count"],
-            "pagination_exhausted": row["pagination_exhausted"],
-            "digests": digests,
-            "checked_at": row["checked_at"],
-        })
+        proof_entries.append(closure.to_proof_dict())
 
     missing_inventory = sorted(
         dataset for dataset, segments in segments_by_dataset.items()

@@ -34,13 +34,13 @@ from ingestion.jsda.official_index import (  # noqa: E402
     read_local_index_text as _read_index_text,
 )
 from ingestion.jsda.parse import parse_otc_reference_csv, parse_otc_reference_xlsx  # noqa: E402
+from ingestion.runtime_authority import reconcile_collection_evidence  # noqa: E402
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
     record_collection_receipt,
     record_required_segments,
     refresh_coverage_ledger,
 )
-from storage.receipt_crypto import partition_extra_digests  # noqa: E402
 from storage.trusted_receipt import open_signed_receipt_authority  # noqa: E402
 
 RAW_ROOT = ROOT / "data" / "raw" / "jsda" / "jsda_otc_bond_reference_prices"
@@ -385,7 +385,7 @@ def seal_day(conn, day, path, source_url, issuer):
     scope = dict(scope)
     scope.setdefault("coverage_mode", "official_archive_index_reconciled")
     scope.setdefault("expected_frequency", "trading_day")
-    scope.setdefault("expected_item_unit", "source_query")
+    scope["expected_item_unit"] = "official_archive_file"
     scope.setdefault("segment_granularity", OTC_GRAIN)
     scope.setdefault("universe_rule", "all_bonds_in_official_publication_file")
     scope["segment_start"] = seg_start
@@ -400,35 +400,34 @@ def seal_day(conn, day, path, source_url, issuer):
         segment_start=seg_start,
         segment_end=seg_end,
         expected_scope=scope,
-        expected_items=raw_count,
+        expected_items=1,
     )
     record_required_segments(conn, [required])
-    receipt = issuer.issue(
+    evidence = reconcile_collection_evidence(
         required=required,
         run_id=run_id,
-        raw=raw,
-        observed_items=raw_count,
-        structured_row_count=structured,
-        raw_row_count=raw_count,
+        raw_pages=(raw,),
+        raw_records=parsed,
+        structured_records=rows,
         pagination_exhausted=True,
-        raw_manifest_digest=digest,
-        extra_digests=partition_extra_digests(
-            {
-                "eligibility": "TRUSTED_COLLECTION",
-                "fetched_via": "cf_workers_fetch+local_raw",
-                "local_raw_path": str(path),
-                "r2_key_hint": f"raw/jsda/jsda_otc_bond_reference_prices/file_{path.name}/",
-                "source_url": source_url,
-                "parser_note": f"parse_otc_reference ({fmt}) + normalize_otc_reference_prices",
-                "wave": WAVE,
-                "full_ok": "http200_size_gt_100kb",
-                "policy": "W107_planned_official_historical_partial_backfill",
-                "gate": "historical_gt_100kb_or_tip_1_5mb",
-                "path_style": path.suffix,
-                "opt": "triggers_off_bulk",
-            }
-        ),
+        discovery_exhausted=True,
+        checked_at=now,
+        source_request={"source_url": source_url, "segment_id": day},
+        extra_evidence={
+            "fetched_via": "cf_workers_fetch+local_raw",
+            "local_raw_path": str(path),
+            "r2_key_hint": f"raw/jsda/jsda_otc_bond_reference_prices/file_{path.name}/",
+            "source_url": source_url,
+            "parser_note": f"parse_otc_reference ({fmt}) + normalize_otc_reference_prices",
+            "wave": WAVE,
+            "full_ok": "http200_size_gt_100kb",
+            "policy": "W107_planned_official_historical_partial_backfill",
+            "gate": "historical_gt_100kb_or_tip_1_5mb",
+            "path_style": path.suffix,
+            "opt": "triggers_off_bulk",
+        },
     )
+    receipt = issuer.issue(evidence)
     record_collection_receipt(conn, receipt)
     conn.commit()
     return {

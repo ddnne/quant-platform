@@ -13,6 +13,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -76,18 +77,24 @@ def _verify_keys_path(path: Path | None = None) -> Path:
     return PUBLIC_KEYS_PATH
 
 
-PARSER_NORMALIZER_VERSION = "coverage-receipt/v3-ed25519"
-SIGNED_RECEIPT_CLAIMS_VERSION = "signed-receipt-claims/v1"
+PARSER_NORMALIZER_VERSION = "coverage-receipt/v4-ed25519-closure"
+SIGNED_RECEIPT_CLAIMS_VERSION = "signed-receipt-claims/v2"
+LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION = "signed-receipt-claims/v1"
 
 # Closed claim names plus envelope aliases. extra_digests cannot occupy these.
 STANDARD_CLAIM_KEYS = frozenset(
     {
         "version",
+        "coverage_policy_version",
         "dataset",
         "source",
         "segment_id",
         "segment_start",
         "segment_end",
+        "expected_scope",
+        "expected_items",
+        "observed_items",
+        "raw_page_count",
         "source_request_digest",
         "raw_manifest_digest",
         "raw_digest",
@@ -98,6 +105,10 @@ STANDARD_CLAIM_KEYS = frozenset(
         "structured_generation",
         "pagination_exhausted",
         "discovery_exhausted",
+        "status",
+        "error",
+        "scope_digest",
+        "observation_digest",
         "run_id",
         "issuer_id",
         "issued_at",
@@ -121,12 +132,28 @@ def _now() -> str:
 def canonical_receipt_body(fields: Mapping[str, Any]) -> bytes:
     """Deterministic JSON bytes for signing (sorted keys, no whitespace)."""
     return json.dumps(
-        dict(fields), sort_keys=True, separators=(",", ":"), default=str
+        dict(fields),
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+        allow_nan=False,
     ).encode("utf-8")
 
 
 def body_digest(body: bytes) -> str:
     return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+def canonical_evidence_digest(payload: Any) -> str:
+    """Digest bytes verbatim or structured evidence as closed canonical JSON."""
+    raw = payload if isinstance(payload, bytes) else json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+        allow_nan=False,
+    ).encode("utf-8")
+    return body_digest(raw)
 
 
 @dataclass(frozen=True)
@@ -219,14 +246,14 @@ def load_signing_key(
     return ReceiptSigningKey(key_id=kid, _private=priv)
 
 
-def load_verify_keys(
-    *,
-    extra: Mapping[str, bytes] | None = None,
-    path: Path | None = None,
-) -> dict[str, ReceiptVerifyKey]:
-    """Load public keys for receipt verification."""
+@lru_cache(maxsize=8)
+def _load_verify_key_file(
+    path_text: str, mtime_ns: int, size: int
+) -> tuple[ReceiptVerifyKey, ...]:
+    """Parse one immutable registry generation; stat fields key the cache."""
+    del mtime_ns, size
+    keys_path = Path(path_text)
     out: dict[str, ReceiptVerifyKey] = {}
-    keys_path = _verify_keys_path(path)
     if keys_path.is_file():
         doc = json.loads(keys_path.read_text(encoding="utf-8"))
         for row in doc.get("keys") or []:
@@ -236,6 +263,24 @@ def load_verify_keys(
                 key_id=kid,
                 public_key=Ed25519PublicKey.from_public_bytes(raw),
             )
+    return tuple(out.values())
+
+
+def load_verify_keys(
+    *,
+    extra: Mapping[str, bytes] | None = None,
+    path: Path | None = None,
+) -> dict[str, ReceiptVerifyKey]:
+    """Load public keys for receipt verification, cached per file generation."""
+    keys_path = _verify_keys_path(path)
+    try:
+        stat = keys_path.stat()
+        rows = _load_verify_key_file(
+            str(keys_path.resolve()), stat.st_mtime_ns, stat.st_size
+        )
+    except OSError:
+        rows = ()
+    out = {row.key_id: row for row in rows}
     if extra:
         for kid, raw in extra.items():
             out[kid] = ReceiptVerifyKey(
@@ -285,54 +330,38 @@ def verify_receipt_signature(
 def build_signed_digest_fields(
     *,
     signing_key: ReceiptSigningKey,
-    dataset: str,
-    segment_id: str,
-    source: str,
-    run_id: int,
-    raw_digest: str,
-    raw_count: int,
-    structured_count: int,
-    structured_digest: str | None,
-    pagination_exhausted: bool,
-    source_request_digest: str | None,
-    raw_manifest_digest: str | None,
-    structured_generation: int | None,
+    closure_claims: Mapping[str, Any],
     issued_at: str | None = None,
-    checked_at: str | None = None,
-    segment_start: str | None = None,
-    segment_end: str | None = None,
-    discovery_exhausted: bool | None = None,
-    extra_digests: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build digests dict fragment with Ed25519 signature over closed claims."""
+    """Sign a pre-reconciled v2 closure.
+
+    This function deliberately accepts one closed claims object rather than
+    caller-supplied counts and digests.  Only the ingestion reconciliation
+    boundary builds that object; this layer adds issuer identity and signs it.
+    """
     issued = issued_at or _now()
-    checked = checked_at or issued
-    extras = partition_extra_digests(extra_digests)
-    exhausted = bool(pagination_exhausted)
-    discovered = exhausted if discovery_exhausted is None else bool(discovery_exhausted)
-    body_fields = {
-        "version": SIGNED_RECEIPT_CLAIMS_VERSION,
-        "dataset": dataset,
-        "source": source,
-        "segment_id": segment_id,
-        "segment_start": segment_start,
-        "segment_end": segment_end,
-        "source_request_digest": source_request_digest,
-        "raw_manifest_digest": raw_manifest_digest,
-        "raw_digest": raw_digest,
-        "raw_count": int(raw_count),
-        "structured_digest": structured_digest,
-        "structured_count": int(structured_count),
-        "parser_normalizer_version": PARSER_NORMALIZER_VERSION,
-        "structured_generation": structured_generation,
-        "pagination_exhausted": exhausted,
-        "discovery_exhausted": discovered,
-        "run_id": int(run_id),
-        "issuer_id": signing_key.key_id,
-        "issued_at": issued,
-        "checked_at": checked,
-        "extra_digests": extras,
+    body_fields = dict(closure_claims)
+    extras = partition_extra_digests(body_fields.get("extra_digests"))
+    body_fields.update(
+        {
+            "version": SIGNED_RECEIPT_CLAIMS_VERSION,
+            "parser_normalizer_version": PARSER_NORMALIZER_VERSION,
+            "issuer_id": signing_key.key_id,
+            "issued_at": issued,
+            "extra_digests": extras,
+        }
+    )
+    forbidden = {
+        "signature",
+        "signed_body_b64",
+        "body_digest",
+        "eligibility",
+        "issuer_class",
+        "issuer_key_id",
     }
+    overlap = sorted(forbidden & set(closure_claims))
+    if overlap:
+        raise ValueError(f"closure claims contain signature envelope fields: {overlap}")
     body = canonical_receipt_body(body_fields)
     signature = signing_key.sign(body)
     envelope = {
@@ -345,11 +374,14 @@ def build_signed_digest_fields(
         "signature": signature,
         "body_digest": body_digest(body),
         "issued_at": issued,
-        "checked_at": checked,
-        "source_request_digest": source_request_digest,
-        "raw_manifest_digest": raw_manifest_digest,
-        "structured_generation": structured_generation,
-        "structured_digest": structured_digest,
+        "checked_at": body_fields["checked_at"],
+        "source_request_digest": body_fields["source_request_digest"],
+        "raw_manifest_digest": body_fields["raw_manifest_digest"],
+        "raw": body_fields["raw_digest"],
+        "structured_generation": body_fields["structured_generation"],
+        "structured_digest": body_fields["structured_digest"],
+        "scope_digest": body_fields["scope_digest"],
+        "observation_digest": body_fields["observation_digest"],
         "extra_digests": extras,
     }
     envelope.update(extras)
@@ -358,11 +390,13 @@ def build_signed_digest_fields(
 
 __all__ = [
     "PARSER_NORMALIZER_VERSION",
+    "LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION",
     "SIGNED_RECEIPT_CLAIMS_VERSION",
     "STANDARD_CLAIM_KEYS",
     "ReceiptSigningKey",
     "ReceiptVerifyKey",
     "build_signed_digest_fields",
+    "canonical_evidence_digest",
     "canonical_receipt_body",
     "generate_keypair",
     "load_signing_key",

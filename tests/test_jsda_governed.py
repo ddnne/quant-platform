@@ -491,17 +491,15 @@ def test_governed_jsda_receipt_rejects_empty_raw_success(
             checked_at="2025-04-02T10:00:00+09:00",
             status="SUCCESS",
             error=None,
-            observed_items=1,
-            raw_page_count=0,
-            raw_row_count=0,
-            structured_row_count=0,
             pagination_exhausted=True,
             digests={"origin": "test"},
             authority=authority,
-            raw=b"",
+            raw_pages=(b"",),
+            raw_records=(),
+            structured_records=(),
         )
     except ValueError as exc:
-        assert "empty-raw" in str(exc)
+        assert "non-empty raw pages" in str(exc)
     else:
         raise AssertionError("empty-raw SUCCESS must be rejected")
     n = store._conn.execute("select count(*) from collection_receipts").fetchone()[0]

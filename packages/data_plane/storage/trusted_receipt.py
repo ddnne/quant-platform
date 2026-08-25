@@ -1,133 +1,270 @@
-"""Signed receipt authority — COMPLETE only with verified Ed25519 signature."""
+"""Receipt signing boundary for reconciled collection evidence.
+
+``CollectionReceipt`` is a persisted, untrusted transport document.  The
+signing authority never accepts loose counts or digests; it accepts only the
+opaque ``ReconciledCollectionEvidence`` produced by the ingestion runtime.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+import re
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Mapping
+from weakref import WeakSet
 
-from storage.coverage_ledger import (
-    CollectionReceipt,
-    RequiredCoverageSegment,
-    build_collection_receipt,
-    compute_raw_digest,
-)
+from storage.coverage_ledger import CollectionReceipt, RequiredCoverageSegment
 from storage.receipt_crypto import (
     PARSER_NORMALIZER_VERSION,
     ReceiptSigningKey,
     build_signed_digest_fields,
     load_signing_key,
-    partition_extra_digests,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+_RECONCILED = object()
+_RUNTIME_EVIDENCE: WeakSet[Any] = WeakSet()
+_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+
+
+def _deep_freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): _deep_freeze(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze(item) for item in value)
+    return value
+
+
+def _deep_thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _deep_thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_deep_thaw(item) for item in value]
+    return value
+
+
+@dataclass(frozen=True, eq=False)
+class ReconciledCollectionEvidence:
+    """Opaque, measured SUCCESS evidence accepted by the signer.
+
+    Construction is intentionally sealed.  The trusted ingestion runtime
+    measures raw pages and structured records, then calls the private factory
+    below.  Recovery, partial, and failed observations never obtain this type.
+    """
+
+    _seal: object
+    required: RequiredCoverageSegment
+    coverage_policy_version: str
+    run_id: int
+    observed_items: int
+    raw_page_count: int
+    raw_row_count: int
+    structured_row_count: int
+    pagination_exhausted: bool
+    discovery_exhausted: bool
+    source_request_digest: str
+    raw_manifest_digest: str
+    raw_digest: str
+    structured_digest: str
+    structured_generation: int
+    scope_digest: str
+    observation_digest: str
+    checked_at: str
+    extra_digests: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        if self._seal is not _RECONCILED:
+            raise TypeError(
+                "ReconciledCollectionEvidence is opaque; use the ingestion "
+                "reconciliation boundary"
+            )
+        counts = (
+            self.run_id,
+            self.observed_items,
+            self.raw_page_count,
+            self.raw_row_count,
+            self.structured_row_count,
+            self.structured_generation,
+        )
+        if any(int(value) < 0 for value in counts):
+            raise ValueError("reconciled collection counts must be non-negative")
+        if self.raw_page_count < 1:
+            raise ValueError("reconciled SUCCESS requires at least one measured raw page")
+        if not self.pagination_exhausted or not self.discovery_exhausted:
+            raise ValueError("non-exhausted collection evidence is not signable")
+        if not self.coverage_policy_version or not self.checked_at:
+            raise ValueError("coverage policy version and checked_at are required")
+        for name in (
+            "source_request_digest",
+            "raw_manifest_digest",
+            "raw_digest",
+            "structured_digest",
+            "scope_digest",
+            "observation_digest",
+        ):
+            if not _SHA256_RE.fullmatch(str(getattr(self, name))):
+                raise ValueError(f"{name} must be a sha256 digest")
+        object.__setattr__(
+            self,
+            "extra_digests",
+            _deep_freeze(self.extra_digests),
+        )
+
+    def to_closure_claims(self) -> dict[str, Any]:
+        required = self.required
+        return {
+            "coverage_policy_version": self.coverage_policy_version,
+            "source": required.source,
+            "dataset": required.dataset,
+            "segment_id": required.segment_id,
+            "segment_start": required.segment_start,
+            "segment_end": required.segment_end,
+            "expected_scope": _deep_thaw(required.expected_scope),
+            "expected_items": required.expected_items,
+            "observed_items": self.observed_items,
+            "raw_page_count": self.raw_page_count,
+            "raw_count": self.raw_row_count,
+            "structured_count": self.structured_row_count,
+            "status": "SUCCESS",
+            "error": None,
+            "pagination_exhausted": self.pagination_exhausted,
+            "discovery_exhausted": self.discovery_exhausted,
+            "source_request_digest": self.source_request_digest,
+            "raw_manifest_digest": self.raw_manifest_digest,
+            "raw_digest": self.raw_digest,
+            "structured_digest": self.structured_digest,
+            "structured_generation": self.structured_generation,
+            "scope_digest": self.scope_digest,
+            "observation_digest": self.observation_digest,
+            "run_id": self.run_id,
+            "checked_at": self.checked_at,
+            "extra_digests": _deep_thaw(self.extra_digests),
+        }
+
+
+def _make_reconciled_collection_evidence(
+    *,
+    required: RequiredCoverageSegment,
+    coverage_policy_version: str,
+    run_id: int,
+    observed_items: int,
+    raw_page_count: int,
+    raw_row_count: int,
+    structured_row_count: int,
+    pagination_exhausted: bool,
+    discovery_exhausted: bool,
+    source_request_digest: str,
+    raw_manifest_digest: str,
+    raw_digest: str,
+    structured_digest: str,
+    structured_generation: int,
+    scope_digest: str,
+    observation_digest: str,
+    checked_at: str,
+    extra_digests: Mapping[str, Any],
+) -> ReconciledCollectionEvidence:
+    """Private constructor used by ``ingestion.runtime_authority`` only."""
+    frozen_required = RequiredCoverageSegment(
+        source=required.source,
+        dataset=required.dataset,
+        segment_id=required.segment_id,
+        segment_start=required.segment_start,
+        segment_end=required.segment_end,
+        expected_scope=_deep_freeze(required.expected_scope),
+        expected_items=required.expected_items,
+    )
+    evidence = ReconciledCollectionEvidence(
+        _seal=_RECONCILED,
+        required=frozen_required,
+        coverage_policy_version=coverage_policy_version,
+        run_id=int(run_id),
+        observed_items=int(observed_items),
+        raw_page_count=int(raw_page_count),
+        raw_row_count=int(raw_row_count),
+        structured_row_count=int(structured_row_count),
+        pagination_exhausted=bool(pagination_exhausted),
+        discovery_exhausted=bool(discovery_exhausted),
+        source_request_digest=source_request_digest,
+        raw_manifest_digest=raw_manifest_digest,
+        raw_digest=raw_digest,
+        structured_digest=structured_digest,
+        structured_generation=int(structured_generation),
+        scope_digest=scope_digest,
+        observation_digest=observation_digest,
+        checked_at=checked_at,
+        extra_digests=extra_digests,
+    )
+    _RUNTIME_EVIDENCE.add(evidence)
+    return evidence
 
 
 @dataclass(frozen=True)
 class SignedReceiptAuthority:
-    """Non-forgeable issuer: holds private Ed25519 key material."""
+    """Private-key capability that signs only reconciled SUCCESS evidence."""
 
     signing_key: ReceiptSigningKey
     parser_normalizer_version: str = PARSER_NORMALIZER_VERSION
 
-    def issue(
-        self,
-        *,
-        required: RequiredCoverageSegment,
-        run_id: int,
-        raw: bytes,
-        observed_items: int,
-        structured_row_count: int,
-        raw_row_count: int | None = None,
-        pagination_exhausted: bool = True,
-        status: str = "SUCCESS",
-        error: str | None = None,
-        checked_at: str | None = None,
-        source_request_digest: str | None = None,
-        raw_manifest_digest: str | None = None,
-        structured_generation: int | None = None,
-        structured_digest: str | None = None,
-        extra_digests: Mapping[str, Any] | None = None,
-    ) -> CollectionReceipt:
-        extras = partition_extra_digests(extra_digests)
-        if status != "SUCCESS" or error:
-            # Failed collections are unsigned evidence only.
-            digests: dict[str, Any] = {
-                "eligibility": "RECOVERED_RAW_ONLY",
-                "origin": "failed-collection",
-                "extra_digests": extras,
-            }
-            digests.update(extras)
-            return build_collection_receipt(
-                required=required,
-                run_id=run_id,
-                raw=raw,
-                observed_items=observed_items,
-                structured_row_count=structured_row_count,
-                raw_row_count=raw_row_count,
-                pagination_exhausted=pagination_exhausted,
-                status=status,
-                error=error,
-                checked_at=checked_at,
-                extra_digests=digests,
+    def issue(self, evidence: ReconciledCollectionEvidence) -> CollectionReceipt:
+        if (
+            not isinstance(evidence, ReconciledCollectionEvidence)
+            or evidence not in _RUNTIME_EVIDENCE
+        ):
+            raise TypeError(
+                "SignedReceiptAuthority.issue requires "
+                "runtime-minted ReconciledCollectionEvidence"
             )
-
-        raw_digest = compute_raw_digest(raw)
-        raw_count = int(raw_row_count) if raw_row_count is not None else int(structured_row_count)
+        if self.parser_normalizer_version != PARSER_NORMALIZER_VERSION:
+            raise ValueError("receipt authority parser version is not current")
         signed = build_signed_digest_fields(
             signing_key=self.signing_key,
+            closure_claims=evidence.to_closure_claims(),
+        )
+        required = evidence.required
+        return CollectionReceipt(
+            source=required.source,
             dataset=required.dataset,
             segment_id=required.segment_id,
-            source=required.source,
-            run_id=run_id,
-            raw_digest=raw_digest,
-            raw_count=raw_count,
-            structured_count=int(structured_row_count),
-            structured_digest=structured_digest,
-            pagination_exhausted=pagination_exhausted,
-            source_request_digest=source_request_digest,
-            raw_manifest_digest=raw_manifest_digest or raw_digest,
-            structured_generation=structured_generation
-            if structured_generation is not None
-            else run_id,
-            checked_at=checked_at,
             segment_start=required.segment_start,
             segment_end=required.segment_end,
-            extra_digests=extras,
-        )
-        return build_collection_receipt(
-            required=required,
-            run_id=run_id,
-            raw=raw,
-            observed_items=observed_items,
-            structured_row_count=structured_row_count,
-            raw_row_count=raw_row_count,
-            pagination_exhausted=pagination_exhausted,
-            status=status,
-            error=error,
-            checked_at=signed.get("checked_at") or checked_at,
-            extra_digests=signed,
+            expected_scope=_deep_thaw(required.expected_scope),
+            expected_items=required.expected_items,
+            observed_items=evidence.observed_items,
+            raw_page_count=evidence.raw_page_count,
+            raw_row_count=evidence.raw_row_count,
+            structured_row_count=evidence.structured_row_count,
+            pagination_exhausted=evidence.pagination_exhausted,
+            digests=MappingProxyType(dict(signed)),
+            run_id=evidence.run_id,
+            status="SUCCESS",
+            error=None,
+            checked_at=evidence.checked_at,
         )
 
 
 def open_signed_receipt_authority(
     *,
     pem: bytes | str | None = None,
-    path: Any = None,
+    path: Path | None = None,
     key_id: str | None = None,
 ) -> SignedReceiptAuthority:
-    """Open signing authority from private key material. Raises if missing."""
+    """Open the ingestion signer. Missing authority remains fail-closed."""
     key = load_signing_key(pem=pem, path=path, key_id=key_id)
     if key is None:
-        raise RuntimeError(
-            "receipt signing key not configured "
-            "(QUANT_RECEIPT_SIGNING_KEY_PEM or ~/.config/quant-platform/receipt_signing_key.pem)"
-        )
+        raise RuntimeError("receipt signing authority is not configured")
     return SignedReceiptAuthority(signing_key=key)
 
 
-# Backward-compatible name used in older call sites — now signature-based only.
 TrustedReceiptIssuer = SignedReceiptAuthority
 
 
 __all__ = [
+    "ReconciledCollectionEvidence",
     "SignedReceiptAuthority",
     "TrustedReceiptIssuer",
     "open_signed_receipt_authority",

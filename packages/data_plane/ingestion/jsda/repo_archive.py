@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
 from data_contracts import coverage_contract_for, jsda_contract_for
@@ -195,14 +195,16 @@ def _record(
     checked_at: str,
     status: str,
     error: Optional[str],
-    observed_items: int,
-    raw_page_count: int,
-    raw_row_count: int,
-    structured_row_count: int,
+    observed_items: int | None = None,
+    raw_page_count: int | None = None,
+    raw_row_count: int | None = None,
+    structured_row_count: int | None = None,
     pagination_exhausted: bool,
     digests: Mapping[str, Any],
     authority=None,
-    raw: bytes = b"",
+    raw_pages: Sequence[bytes] = (),
+    raw_records: Sequence[Any] = (),
+    structured_records: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     record_governed_receipt(
         store,
@@ -218,7 +220,9 @@ def _record(
         pagination_exhausted=pagination_exhausted,
         digests=digests,
         authority=authority,
-        raw=raw,
+        raw_pages=raw_pages,
+        raw_records=raw_records,
+        structured_records=structured_records,
     )
 
 
@@ -390,10 +394,6 @@ def run_tokyo_repo_backfill(
                     checked_at=checked_at,
                     status="SUCCESS",
                     error=None,
-                    observed_items=1,
-                    raw_page_count=1,
-                    raw_row_count=parsed_rows,
-                    structured_row_count=structured_rows,
                     pagination_exhausted=True,
                     digests={
                         **base_evidence,
@@ -403,7 +403,9 @@ def run_tokyo_repo_backfill(
                         "source_parsed_rows": source_parsed_rows,
                     },
                     authority=authority,
-                    raw=raw_bytes,
+                    raw_pages=(raw_bytes,),
+                    raw_records=governed,
+                    structured_records=rows,
                 )
                 report = TokyoRepoBackfillReport(
                     run_id, 1, 0, 0, 0, parsed_rows, structured_rows, required
@@ -432,7 +434,7 @@ def run_tokyo_repo_backfill(
                             "DEFERRED_SOURCE_GAP" if deferred else "COLLECTION_FAILURE"
                         ),
                     },
-                    raw=raw_bytes,
+                    raw_pages=(raw_bytes,) if raw_bytes else (),
                 )
                 report = TokyoRepoBackfillReport(
                     run_id, 0, 0, int(deferred), int(not deferred),

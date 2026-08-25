@@ -26,6 +26,7 @@ ROOT = ensure_repo_root()
 from ingestion.jsda.official_index import (  # noqa: E402
     read_local_index_text as _read_index_text,
 )
+from ingestion.runtime_authority import reconcile_collection_evidence  # noqa: E402
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
     refresh_coverage_ledger,
@@ -57,6 +58,36 @@ def _count_structured(
         (dataset, start[:10], end[:10]),
     ).fetchone()
     return int(row[0]) if row else 0
+
+
+def _load_structured_records(
+    conn: sqlite3.Connection, dataset: str, start: str, end: str
+) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM jquants_records WHERE dataset=? "
+        "AND substr(event_time,1,10)>=? AND substr(event_time,1,10)<=? "
+        "ORDER BY event_time",
+        (dataset, start[:10], end[:10]),
+    ).fetchall()
+    columns = [str(row[0]) for row in conn.execute(
+        "SELECT name FROM pragma_table_info('jquants_records') ORDER BY cid"
+    ).fetchall()]
+    return [dict(zip(columns, row, strict=True)) for row in rows]
+
+
+def _raw_records(raw: bytes) -> list | None:
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+        return None
+    if isinstance(payload, list):
+        return list(payload)
+    if isinstance(payload, dict):
+        for key in ("data", "rows", "results", "records"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return list(value)
+    return None
 
 def _windows_overlap(a0: str, a1: str, b0: str, b1: str) -> bool:
     return a0[:10] <= b1[:10] and b0[:10] <= a1[:10]
@@ -253,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
 
     issued = 0
     issued_datasets: set[str] = set()
-    skipped = {"no_struct": 0, "no_raw": 0}
+    skipped = {"no_struct": 0, "no_raw": 0, "unreconciled": 0}
     for row in segments:
         scope = row["expected_scope"]
         if isinstance(scope, str):
@@ -275,9 +306,10 @@ def main(argv: list[str] | None = None) -> int:
             expected_scope=scope_dict,
             expected_items=expected_items,
         )
-        structured = _count_structured(
+        structured_records = _load_structured_records(
             conn, required.dataset, required.segment_start, required.segment_end
         )
+        structured = len(structured_records)
         if structured < args.min_structured:
             skipped["no_struct"] += 1
             print(
@@ -295,22 +327,24 @@ def main(argv: list[str] | None = None) -> int:
             skipped["no_raw"] += 1
             print(f"skip {required.segment_id}: no raw bytes for window")
             continue
-        observed = 1 if unit == "source_query" else structured
-        if required.expected_items is not None and unit == "source_query":
-            observed = int(required.expected_items)
-        raw_rows = structured
-        receipt = authority.issue(
+        raw_records = _raw_records(raw)
+        if raw_records is None or len(raw_records) != structured:
+            skipped["unreconciled"] += 1
+            print(
+                f"skip {required.segment_id}: concrete raw/structured "
+                f"evidence does not reconcile"
+            )
+            continue
+        evidence = reconcile_collection_evidence(
             required=required,
             run_id=next_run,
-            raw=raw,
-            observed_items=observed,
-            structured_row_count=structured,
-            raw_row_count=raw_rows,
+            raw_pages=(raw,),
+            raw_records=raw_records,
+            structured_records=structured_records,
             pagination_exhausted=True,
-            structured_generation=structured,
-            raw_manifest_digest=None,
-            source_request_digest=None,
+            discovery_exhausted=True,
         )
+        receipt = authority.issue(evidence)
         next_run += 1
         record_required_segments(conn, [required])
         record_collection_receipt(conn, receipt)

@@ -74,7 +74,11 @@ class RequiredCoverageSegment:
 
 @dataclass(frozen=True)
 class CollectionReceipt:
-    """Auditable result of collecting and structuring one source window."""
+    """Untrusted persisted transport for one collection observation.
+
+    No field in this DTO is COMPLETE-authoritative until the v2 verifier has
+    returned a ``VerifiedCollectionClosure``.
+    """
 
     source: str
     dataset: str
@@ -363,46 +367,29 @@ def evaluate_segment(
     """Evaluate one required segment without treating absent events as gaps."""
     if receipt is None:
         return "PARTIAL", {"reason": "missing collection receipt"}
-    identity_matches = (
-        receipt.source == required.source
-        and receipt.dataset == required.dataset
-        and receipt.segment_id == required.segment_id
-        and receipt.segment_start == required.segment_start
-        and receipt.segment_end == required.segment_end
-        and dict(receipt.expected_scope) == dict(required.expected_scope)
-        and receipt.expected_items == required.expected_items
-    )
-    if not identity_matches:
-        return "PARTIAL", {"reason": "receipt does not match required scope"}
-    # Trusted-path gate: VerifiedReceipt plus non-empty trusted raw (or expected-empty flag).
+    # Persisted CollectionReceipt is an untrusted transport DTO.  From this
+    # boundary onward COMPLETE policy may observe only the opaque closure.
     try:
         from storage.verified_receipt import (
             ReceiptVerificationError,
-            require_verified_receipt,
+            require_verified_collection_closure,
         )
 
-        require_verified_receipt(receipt, required=required)
+        closure = require_verified_collection_closure(
+            receipt,
+            required=required,
+            expected_policy_version=policy.policy_version,
+        )
     except ReceiptVerificationError:
         return "PARTIAL", {
-            "reason": "receipt not COMPLETE-eligible (valid Ed25519 signature required)",
-            "eligibility": receipt_eligibility(receipt),
-            "issuer_key_id": receipt.digests.get("issuer_key_id"),
-            "issuer_class": receipt.digests.get("issuer_class"),
+            "reason": "receipt does not provide a verified v2 collection closure",
+            "eligibility": "RECOVERED_RAW_ONLY",
         }
-    if receipt.status == "FAILED" and receipt.digests.get("failure_kind") in {
-        "MISSING_EXPECTED_SEGMENT", "DEFERRED_SOURCE_GAP"
-    }:
-        reason = (
-            "expected source segment is missing"
-            if receipt.digests.get("failure_kind") == "MISSING_EXPECTED_SEGMENT"
-            else "authoritative source gap explicitly deferred"
-        )
-        return "PARTIAL", {"reason": reason}
-    if receipt.status != "SUCCESS" or receipt.error:
-        return "FAILED", {"reason": receipt.error or "collection failed"}
-    if not receipt.pagination_exhausted:
-        return "PARTIAL", {"reason": "pagination not exhausted"}
-    if receipt.observed_items == 0 and _empty_observed_forbids_complete(policy):
+    if closure.status != "SUCCESS" or closure.error:
+        return "FAILED", {"reason": closure.error or "collection failed"}
+    if not closure.pagination_exhausted or not closure.discovery_exhausted:
+        return "PARTIAL", {"reason": "collection discovery is not exhausted"}
+    if closure.observed_items == 0 and _empty_observed_forbids_complete(policy):
         return "PARTIAL", {
             "reason": "empty tip-snapshot or archive-index receipt is not complete"
         }
@@ -413,38 +400,38 @@ def evaluate_segment(
         return "PARTIAL", {
             "reason": "non-event segment lacks explicit expected items"
         }
-    if receipt.expected_items is not None and (
-        receipt.observed_items != receipt.expected_items
+    if closure.expected_items is not None and (
+        closure.observed_items != closure.expected_items
     ):
         return "PARTIAL", {"reason": "expected scope not fully observed"}
     if (
         policy.expected_frequency != "event_driven"
-        and receipt.observed_items == 0
+        and closure.observed_items == 0
     ):
         return "PARTIAL", {
             "reason": "empty receipt is complete only for event-driven windows"
         }
-    raw_digest = receipt.digests.get("raw")
+    raw_digest = closure.raw_digest
     if policy.raw_retention_required and (
-        receipt.raw_page_count < 1
+        closure.raw_page_count < 1
         or not isinstance(raw_digest, str)
         or not raw_digest
     ):
         return "PARTIAL", {"reason": "raw pages/digest not retained"}
     if (
         policy.structured_reconciliation_required
-        and receipt.raw_row_count != receipt.structured_row_count
+        and closure.raw_row_count != closure.structured_row_count
     ):
         return "FAILED", {"reason": "raw/structured row mismatch"}
-    if not _has_nonempty_trusted_raw_evidence(receipt):
+    if not _has_nonempty_trusted_raw_evidence(closure):
         return "PARTIAL", {
             "reason": "empty raw is not COMPLETE-eligible without "
             "EXPECTED_EMPTY_WITH_EVIDENCE",
-            "raw_row_count": int(receipt.raw_row_count),
+            "raw_row_count": closure.raw_row_count,
         }
     return "COMPLETE", {
         "reason": "receipt reconciled",
-        "event_zero": receipt.observed_items == 0,
+        "event_zero": closure.observed_items == 0,
     }
 
 
@@ -472,18 +459,25 @@ def _date_prefix(value: str | None) -> str | None:
 def _receipt_observed_window(
     receipts: Sequence[CollectionReceipt],
 ) -> tuple[str | None, str | None, int]:
-    """Observed calendar span from SUCCESS receipts with ``raw_row_count > 0``."""
+    """Observed calendar span from verified v2 closures with retained rows."""
+    from storage.verified_receipt import (
+        ReceiptVerificationError,
+        require_verified_collection_closure,
+    )
+
     starts: list[str] = []
     ends: list[str] = []
     raw_total = 0
     for receipt in receipts:
-        if receipt.status != "SUCCESS":
+        try:
+            closure = require_verified_collection_closure(receipt)
+        except ReceiptVerificationError:
             continue
-        raw_n = int(receipt.raw_row_count or 0)
+        raw_n = closure.raw_row_count
         if raw_n <= 0:
             continue
-        start = _date_prefix(receipt.segment_start)
-        end = _date_prefix(receipt.segment_end)
+        start = _date_prefix(closure.segment_start)
+        end = _date_prefix(closure.segment_end)
         if start is None or end is None:
             continue
         starts.append(start)
@@ -767,26 +761,41 @@ def _latest_receipt_for(
     return max(exact, key=_rank_receipt_for_match)
 
 
-def _latest_eligible_success_for_segment_id(
+def _latest_complete_receipt_for_required(
     receipts: Sequence[CollectionReceipt],
     *,
-    source: str,
-    dataset: str,
-    segment_id: str,
-) -> CollectionReceipt | None:
-    """Best COMPLETE-eligible SUCCESS receipt for a segment_id (sticky fallback)."""
-    candidates = [
-        receipt
-        for receipt in receipts
-        if receipt.source == source
-        and receipt.dataset == dataset
-        and receipt.segment_id == segment_id
-        and receipt.status == "SUCCESS"
-        and is_complete_eligible_receipt(receipt)
-    ]
+    policy: CollectionCoverageContract,
+    required: RequiredCoverageSegment,
+) -> tuple[CollectionReceipt, Any] | None:
+    """Best receipt that independently evaluates COMPLETE for this scope."""
+    from storage.verified_receipt import (
+        ReceiptVerificationError,
+        require_verified_collection_closure,
+    )
+
+    candidates: list[tuple[CollectionReceipt, Any]] = []
+    for receipt in receipts:
+        if evaluate_segment(policy, required, receipt)[0] != "COMPLETE":
+            continue
+        try:
+            closure = require_verified_collection_closure(
+                receipt,
+                required=required,
+                expected_policy_version=policy.policy_version,
+            )
+        except ReceiptVerificationError:  # defensive; evaluate already verified
+            continue
+        candidates.append((receipt, closure))
     if not candidates:
         return None
-    return max(candidates, key=_rank_receipt_for_match)
+    return max(
+        candidates,
+        key=lambda item: (
+            item[1].structured_row_count,
+            item[1].checked_at,
+            item[1].run_id,
+        ),
+    )
 
 
 def evaluate_required_segments(
@@ -982,39 +991,40 @@ def refresh_coverage_ledger(
             prior_status = (
                 None if prior_inv is None else str(prior_inv.get("status") or "")
             )
-            sticky_receipt = receipt
-            if (
-                segment_status != "COMPLETE"
-                and prior_status == "COMPLETE"
-                and (
-                    sticky_receipt is None
-                    or sticky_receipt.status != "SUCCESS"
-                    or not is_complete_eligible_receipt(sticky_receipt)
-                )
-            ):
-                sticky_receipt = _latest_eligible_success_for_segment_id(
+            sticky = None
+            if segment_status != "COMPLETE" and prior_status == "COMPLETE":
+                sticky = _latest_complete_receipt_for_required(
                     receipts_by_dataset[dataset],
-                    source=required_segment.source,
-                    dataset=required_segment.dataset,
-                    segment_id=required_segment.segment_id,
+                    policy=policy,
+                    required=required_segment,
                 )
             if (
                 segment_status != "COMPLETE"
                 and prior_status == "COMPLETE"
-                and sticky_receipt is not None
-                and sticky_receipt.status == "SUCCESS"
-                and is_complete_eligible_receipt(sticky_receipt)
+                and sticky is not None
             ):
+                sticky_receipt, sticky_closure = sticky
                 segment_detail = {
                     **dict(segment_detail),
                     "sticky_complete": True,
                     "demotion_blocked": segment_detail.get("reason"),
                     "reason": "sticky COMPLETE: eligible SUCCESS receipt retained",
-                    "sticky_receipt_run_id": sticky_receipt.run_id,
+                    "sticky_receipt_run_id": sticky_closure.run_id,
                 }
                 segment_status = "COMPLETE"
                 receipt = sticky_receipt
             segment_statuses.append(segment_status)
+            selected_run_id = None if receipt is None else receipt.run_id
+            if segment_status == "COMPLETE":
+                from storage.verified_receipt import (
+                    require_verified_collection_closure,
+                )
+
+                selected_run_id = require_verified_collection_closure(
+                    receipt,
+                    required=required_segment,
+                    expected_policy_version=policy.policy_version,
+                ).run_id
             segment_rows.append({
                 "source": required_segment.source,
                 "dataset": required_segment.dataset,
@@ -1027,7 +1037,7 @@ def refresh_coverage_ledger(
                 ),
                 "expected_items": required_segment.expected_items,
                 "status": segment_status,
-                "receipt_run_id": None if receipt is None else receipt.run_id,
+                "receipt_run_id": selected_run_id,
                 "evaluated_at": evaluated_at,
                 "detail_json": _canonical_json(segment_detail),
             })
@@ -1415,47 +1425,41 @@ def is_synthetic_receipt(receipt: CollectionReceipt) -> bool:
 
 
 def receipt_eligibility(receipt: CollectionReceipt) -> str:
-    """TRUSTED_COLLECTION only with a VerifiedReceipt, never issuer strings."""
-    if is_synthetic_receipt(receipt) or receipt.digests.get("origin") in {
-        "offline-test-fixture",
-        "recovered-raw-only",
-        "parsed-staging-only",
-        "failed-collection",
-    }:
-        return "RECOVERED_RAW_ONLY"
-    from storage.verified_receipt import ReceiptVerificationError, require_verified_receipt
+    """TRUSTED_COLLECTION only with a v2 closure, never issuer strings."""
+    from storage.verified_receipt import (
+        ReceiptVerificationError,
+        require_verified_collection_closure,
+    )
 
     try:
-        require_verified_receipt(receipt)
+        require_verified_collection_closure(receipt)
     except ReceiptVerificationError:
         return "RECOVERED_RAW_ONLY"
     return "TRUSTED_COLLECTION"
 
 
-def _has_nonempty_trusted_raw_evidence(receipt: CollectionReceipt) -> bool:
+def _has_nonempty_trusted_raw_evidence(closure: Any) -> bool:
     """COMPLETE needs raw_count>0 or signed EXPECTED_EMPTY_WITH_EVIDENCE.
 
     Unsigned ``[]`` / ``{"data":[]}`` is not expected-empty evidence.
     """
-    if int(receipt.raw_row_count) > 0:
+    if closure.raw_row_count > 0:
         return True
-    extras = receipt.digests.get("extra_digests")
-    return isinstance(extras, dict) and bool(
-        extras.get(EXPECTED_EMPTY_WITH_EVIDENCE)
-    )
+    return bool(closure.extra_digests.get(EXPECTED_EMPTY_WITH_EVIDENCE))
 
 
 def is_complete_eligible_receipt(receipt: CollectionReceipt) -> bool:
-    """COMPLETE only with VerifiedReceipt and non-empty trusted raw evidence."""
-    if is_synthetic_receipt(receipt):
-        return False
-    from storage.verified_receipt import ReceiptVerificationError, require_verified_receipt
+    """COMPLETE only with a verified v2 closure and trusted raw evidence."""
+    from storage.verified_receipt import (
+        ReceiptVerificationError,
+        require_verified_collection_closure,
+    )
 
     try:
-        require_verified_receipt(receipt)
+        closure = require_verified_collection_closure(receipt)
     except ReceiptVerificationError:
         return False
-    return _has_nonempty_trusted_raw_evidence(receipt)
+    return _has_nonempty_trusted_raw_evidence(closure)
 
 
 __all__ = [

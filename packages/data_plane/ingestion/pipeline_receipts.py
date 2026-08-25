@@ -117,7 +117,7 @@ def emit_catalog_job_receipt(
     when: str,
     raw_bytes: bytes,
     rows: list,
-    structured_row_count: int,
+    structured_records: list[dict[str, Any]],
     authority,
 ) -> None:
     """Record required segments and a signed SUCCESS receipt for one catalog job.
@@ -184,18 +184,20 @@ def emit_catalog_job_receipt(
             "SELECT COALESCE(MAX(id), 0) FROM ingestion_run_log"
         ).fetchone()
         run_id = int(run_id_row[0]) if run_id_row else 0
-        raw_count = count_raw_items(rows)
-        obs = observed_items_from_actual(unit=unit, raw_item_count=raw_count)
         emit_segment_receipt(
             store._conn,
             required=req,
             run_id=run_id,
-            raw=raw_bytes,
-            observed_items=obs,
-            structured_row_count=structured_row_count,
-            raw_row_count=raw_count,
+            raw_pages=(raw_bytes,),
+            raw_records=rows,
+            structured_records=structured_records,
             pagination_exhausted=True,
-            status="SUCCESS",
+            discovery_exhausted=True,
+            source_request={
+                "dataset": str(job.dataset_id),
+                "params": params,
+                "target_end": target_end,
+            },
             authority=authority,
             commit=False,
         )
