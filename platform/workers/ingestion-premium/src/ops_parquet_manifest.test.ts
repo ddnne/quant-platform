@@ -74,4 +74,57 @@ describe("handleParquetManifest auth", () => {
     assertUnauthorized(body);
     expect(r2Ops).toEqual([]);
   });
+
+  it("POST with only matching query token and no header is 401 and does not list or put", async () => {
+    const { bucket, r2Ops } = touchingBucket();
+    const env: ParquetManifestEnv = {
+      STRUCTURED_BUCKET: bucket,
+      INGESTION_RUN_TOKEN: RUN_TOKEN,
+    };
+    const res = await handleParquetManifest(
+      new Request(
+        `https://ingestion-premium.test/v1/ops/jsonl-to-parquet-meta?token=${encodeURIComponent(RUN_TOKEN)}`,
+        { method: "POST" },
+      ),
+      env,
+    );
+    expect(res.status).toBe(401);
+    const body = await res.text();
+    assertUnauthorized(body);
+    expect(r2Ops).toEqual([]);
+  });
+});
+
+describe("handleParquetManifest method", () => {
+  it("GET with matching token is 405 and does not list or put", async () => {
+    const matching: Request[] = [
+      new Request(
+        "https://ingestion-premium.test/v1/ops/jsonl-to-parquet-meta",
+        {
+          method: "GET",
+          headers: { "X-Ingestion-Token": RUN_TOKEN },
+        },
+      ),
+      new Request(
+        `https://ingestion-premium.test/v1/ops/jsonl-to-parquet-meta?token=${encodeURIComponent(RUN_TOKEN)}`,
+        { method: "GET" },
+      ),
+    ];
+    for (const request of matching) {
+      const { bucket, r2Ops } = touchingBucket();
+      const env: ParquetManifestEnv = {
+        STRUCTURED_BUCKET: bucket,
+        INGESTION_RUN_TOKEN: RUN_TOKEN,
+      };
+      const res = await handleParquetManifest(request, env);
+      expect(res.status).toBe(405);
+      const body = await res.text();
+      expect(JSON.parse(body)).toEqual({ error: "POST required" });
+      expect(body).not.toContain(RUN_TOKEN);
+      expect(body).not.toMatch(/INGESTION_RUN_TOKEN/i);
+      expect(body).not.toContain("COMPLETE");
+      expect(body).not.toContain("READY");
+      expect(r2Ops).toEqual([]);
+    }
+  });
 });

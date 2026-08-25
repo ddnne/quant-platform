@@ -2,7 +2,13 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fullJitterMs, halfToFullJitterMs } from "./retry_jitter";
+import {
+  exponentialBackoffFullJitterMs,
+  exponentialBackoffHalfToFullJitterMs,
+  fullJitterMs,
+  halfToFullJitterMs,
+  sleepMs,
+} from "./retry_jitter";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const UINT32_MAX = 0xffff_ffff;
@@ -36,6 +42,36 @@ describe("retry jitter", () => {
     expect(halfToFullJitterMs(1_000)).toBe(999);
   });
 
+  it("exponential full jitter uses persist 500/8000 caps at unit 0", () => {
+    fillUint32(0);
+    expect(exponentialBackoffFullJitterMs(1, 500, 8_000)).toBe(0);
+    expect(exponentialBackoffFullJitterMs(5, 500, 8_000)).toBe(0);
+  });
+
+  it("exponential full jitter uses persist 500/8000 caps at unit ~1", () => {
+    fillUint32(UINT32_MAX);
+    expect(exponentialBackoffFullJitterMs(1, 500, 8_000)).toBe(499);
+    expect(exponentialBackoffFullJitterMs(2, 500, 8_000)).toBe(999);
+    expect(exponentialBackoffFullJitterMs(4, 500, 8_000)).toBe(3_999);
+    expect(exponentialBackoffFullJitterMs(5, 500, 8_000)).toBe(7_999);
+    expect(exponentialBackoffFullJitterMs(6, 500, 8_000)).toBe(7_999);
+  });
+
+  it("exponential half-to-full jitter uses 429 1000/3000 caps at unit 0", () => {
+    fillUint32(0);
+    expect(exponentialBackoffHalfToFullJitterMs(1, 1_000, 3_000)).toBe(500);
+    expect(exponentialBackoffHalfToFullJitterMs(2, 1_000, 3_000)).toBe(1_000);
+    expect(exponentialBackoffHalfToFullJitterMs(3, 1_000, 3_000)).toBe(1_500);
+    expect(exponentialBackoffHalfToFullJitterMs(4, 1_000, 3_000)).toBe(1_500);
+  });
+
+  it("exponential half-to-full jitter uses 429 1000/3000 caps at unit ~1", () => {
+    fillUint32(UINT32_MAX);
+    expect(exponentialBackoffHalfToFullJitterMs(1, 1_000, 3_000)).toBe(999);
+    expect(exponentialBackoffHalfToFullJitterMs(2, 1_000, 3_000)).toBe(1_999);
+    expect(exponentialBackoffHalfToFullJitterMs(3, 1_000, 3_000)).toBe(2_999);
+  });
+
   it("source of retry jitter does not contain Math.random", () => {
     for (const name of ["retry_jitter.ts", "fetch_jq.ts", "persist_records.ts", "index.ts"]) {
       const src = readFileSync(join(here, name), "utf8");
@@ -44,5 +80,9 @@ describe("retry jitter", () => {
     }
     const jitter = readFileSync(join(here, "retry_jitter.ts"), "utf8");
     expect(jitter).toContain("crypto.getRandomValues");
+  });
+
+  it("sleepMs resolves", async () => {
+    await expect(sleepMs(0)).resolves.toBeUndefined();
   });
 });

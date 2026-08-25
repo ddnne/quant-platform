@@ -1,3 +1,4 @@
+import { sha256HexFromBytes } from "./sha256";
 import { r2DatasetSegment, r2DateSegment } from "./write_path_config";
 
 export interface StructuredRecordLine {
@@ -17,16 +18,6 @@ export interface R2WriteResult {
   bytes: number;
   count: number;
   etag?: string;
-}
-
-async function sha256Hex(buf: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", buf);
-  const bytes = new Uint8Array(digest);
-  let hex = "";
-  for (let i = 0; i < bytes.length; i++) {
-    hex += bytes[i]!.toString(16).padStart(2, "0");
-  }
-  return hex;
 }
 
 function lineFor(r: StructuredRecordLine): string {
@@ -75,7 +66,7 @@ export async function writeJsonlToR2(
   }
   const body = records.length > 0 ? `${lines.join("\n")}\n` : "";
   const bytes = new TextEncoder().encode(body);
-  const sha256 = await sha256Hex(bytes);
+  const sha256 = await sha256HexFromBytes(bytes);
   const dateSeg = pickDate(records, options?.runDate ?? todayUtc());
   const key =
     `structured/jsonl/${r2DatasetSegment(dataset)}/dt=${dateSeg}/${runId}.jsonl`;

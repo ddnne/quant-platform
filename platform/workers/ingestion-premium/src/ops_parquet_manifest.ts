@@ -4,32 +4,22 @@
  * machine-readable manifest that a later converter/Artifacts job can consume.
  */
 
+import { ingestionTokenMatches } from "./ingestion_token";
+import { sha256HexFromString } from "./sha256";
+
 export interface ParquetManifestEnv {
   STRUCTURED_BUCKET: R2Bucket;
   INGESTION_RUN_TOKEN?: string;
-}
-
-function authorized(request: Request, expected: string | undefined): boolean {
-  if (!expected) return false;
-  const url = new URL(request.url);
-  const header = request.headers.get("X-Ingestion-Token") || "";
-  const query = url.searchParams.get("token") || "";
-  return header === expected || query === expected;
-}
-
-async function sha256Hex(text: string): Promise<string> {
-  const buf = new TextEncoder().encode(text);
-  const dig = await crypto.subtle.digest("SHA-256", buf);
-  return Array.from(new Uint8Array(dig))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 export async function handleParquetManifest(
   request: Request,
   env: ParquetManifestEnv,
 ): Promise<Response> {
-  if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
+  if (request.method !== "POST") {
+    return Response.json({ error: "POST required" }, { status: 405 });
+  }
+  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
   const url = new URL(request.url);
@@ -55,7 +45,7 @@ export async function handleParquetManifest(
     });
   }
 
-  const prefixHash = (await sha256Hex(prefix)).slice(0, 16);
+  const prefixHash = (await sha256HexFromString(prefix)).slice(0, 16);
   const truncated = Boolean(
     (listed as { truncated?: boolean }).truncated,
   );

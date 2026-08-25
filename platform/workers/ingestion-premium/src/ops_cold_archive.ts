@@ -7,6 +7,8 @@
  * Source: GLM_ARCHIVE_FIX_OK (import adjusted to named export).
  */
 
+import { ingestionTokenMatches } from "./ingestion_token";
+import { sha256HexFromBytes } from "./sha256";
 import { r2DatasetSegment } from "./write_path_config";
 
 export interface ArchiveEnv {
@@ -19,11 +21,13 @@ export async function handleArchiveCold(
   request: Request,
   env: ArchiveEnv,
 ): Promise<Response> {
+  if (request.method !== "POST") {
+    return Response.json({ error: "POST required" }, { status: 405 });
+  }
+
   const url = new URL(request.url);
 
-  const token =
-    request.headers.get("X-Ingestion-Token") || url.searchParams.get("token");
-  if (!env.INGESTION_RUN_TOKEN || !token || token !== env.INGESTION_RUN_TOKEN) {
+  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -145,12 +149,7 @@ export async function handleArchiveCold(
       )
       .join("\n") + "\n";
   const ndjsonBytes = new TextEncoder().encode(ndjson);
-
-  const digestBuf = await crypto.subtle.digest("SHA-256", ndjsonBytes);
-  const digestBytes = new Uint8Array(digestBuf);
-  const sha256 = Array.from(digestBytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const sha256 = await sha256HexFromBytes(ndjsonBytes);
 
   await env.STRUCTURED_BUCKET.put(r2Key, ndjsonBytes, {
     httpMetadata: { contentType: "application/x-ndjson" },

@@ -1,6 +1,7 @@
 /** Contract-driven natural key, event_time, available_at, and persist run identity. */
 
 import type { DatasetSpec } from "./catalog";
+import { sha256HexFromString } from "./sha256.ts";
 
 /** Persist/SCD2 run identity. crypto.randomUUID, not Math.random. */
 export function newRunId(prefix: string): string {
@@ -9,10 +10,31 @@ export function newRunId(prefix: string): string {
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+export function isYyyyMmDd(value: string): boolean {
+  return DATE_RE.test(value);
+}
+
 function validDate(value: string): boolean {
-  if (!DATE_RE.test(value)) return false;
+  if (!isYyyyMmDd(value)) return false;
   const date = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+export function toJstIso(d: Date): string {
+  const ms = d.getTime() + JST_OFFSET_MS;
+  const jst = new Date(ms);
+  return jst.toISOString().replace(/\.(\d+)Z$/, "+09:00");
+}
+
+export function todayJst(): string {
+  return toJstIso(new Date()).slice(0, 10);
+}
+
+export function daysAgoJst(n: number): string {
+  const t = new Date(Date.now() - n * 24 * 60 * 60 * 1000);
+  return toJstIso(t).slice(0, 10);
 }
 
 function jsonString(value: string): string {
@@ -51,12 +73,6 @@ function pick(row: Record<string, unknown>, spec: DatasetSpec, field: string): u
   return null;
 }
 
-async function sha256(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 export async function naturalKey(
   row: Record<string, unknown>,
   spec: DatasetSpec,
@@ -65,7 +81,7 @@ export async function naturalKey(
   for (const field of spec.natural_key_fields) {
     const value = pick(row, spec, field);
     if (value === null || value === "") {
-      return `hash:sha256:${await sha256(stableJson(row))}`;
+      return `hash:sha256:${await sha256HexFromString(stableJson(row))}`;
     }
     picked[field] = value;
   }

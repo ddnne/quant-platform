@@ -73,6 +73,48 @@ function assertNoArchiveSideEffects(sql: string[], r2Puts: string[]): void {
 }
 
 describe("handleArchiveCold fail-closed", () => {
+  it("GET with matching token and dataset+before is 405 with no D1 and no R2 put", async () => {
+    const { env, sql, r2Puts } = touchingEnv();
+    const url = new URL(ARCHIVE_PATH);
+    url.searchParams.set("dataset", "markets_calendar");
+    url.searchParams.set("before", "2024-01-01");
+    const res = await handleArchiveCold(
+      new Request(url, {
+        method: "GET",
+        headers: { "X-Ingestion-Token": RUN_TOKEN },
+      }),
+      env,
+    );
+    expect(res.status).toBe(405);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "POST required" });
+    expect(body).not.toContain("COMPLETE");
+    expect(body).not.toContain("READY");
+    expect(body).not.toContain(RUN_TOKEN);
+    assertNoCoverageInvention(body);
+    assertNoArchiveSideEffects(sql, r2Puts);
+  });
+
+  it("POST with matching query token and no header is 401 with no D1 and no R2 put", async () => {
+    const { env, sql, r2Puts } = touchingEnv();
+    const res = await handleArchiveCold(
+      archiveRequest({
+        dataset: "markets_calendar",
+        before: "2024-01-01",
+        token: RUN_TOKEN,
+      }),
+      env,
+    );
+    expect(res.status).toBe(401);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "unauthorized" });
+    expect(body).not.toContain("COMPLETE");
+    expect(body).not.toContain("READY");
+    expect(body).not.toContain(RUN_TOKEN);
+    assertNoCoverageInvention(body);
+    assertNoArchiveSideEffects(sql, r2Puts);
+  });
+
   it("missing or wrong INGESTION_RUN_TOKEN is 401 with no D1 DELETE and no R2 put", async () => {
     const missing = touchingEnv();
     const missingRes = await handleArchiveCold(

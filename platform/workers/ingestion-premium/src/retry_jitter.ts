@@ -15,3 +15,30 @@ export function fullJitterMs(base: number): number {
 export function halfToFullJitterMs(base: number): number {
   return Math.floor(base / 2 + unitInterval() * (base / 2));
 }
+
+function exponentialCapMs(attempt: number, baseMs: number, maxMs: number): number {
+  return Math.min(maxMs, baseMs * 2 ** (attempt - 1));
+}
+
+/** Exponential backoff + full jitter. Callers own baseMs/maxMs. */
+export function exponentialBackoffFullJitterMs(
+  attempt: number,
+  baseMs: number,
+  maxMs: number,
+): number {
+  return fullJitterMs(exponentialCapMs(attempt, baseMs, maxMs));
+}
+
+/** Exponential backoff + half-to-full jitter. Callers own baseMs/maxMs. */
+export function exponentialBackoffHalfToFullJitterMs(
+  attempt: number,
+  baseMs: number,
+  maxMs: number,
+): number {
+  return halfToFullJitterMs(exponentialCapMs(attempt, baseMs, maxMs));
+}
+
+/** Promise + setTimeout delay. Shared retry wait. */
+export function sleepMs(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}

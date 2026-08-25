@@ -2,25 +2,19 @@
  * Artifacts join plan (read-only). No Mass research. Returns R2 keys + D1 SQL.
  */
 
+import { ingestionTokenMatches } from "./ingestion_token";
+
 export interface ArtifactsPlanEnv {
   STRUCTURED_BUCKET: R2Bucket;
   DB: D1Database;
   INGESTION_RUN_TOKEN?: string;
 }
 
-function authorized(request: Request, expected: string | undefined): boolean {
-  if (!expected) return false;
-  const url = new URL(request.url);
-  const header = request.headers.get("X-Ingestion-Token") || "";
-  const query = url.searchParams.get("token") || "";
-  return header === expected || query === expected;
-}
-
 export async function handleArtifactsJoinPlan(
   request: Request,
   env: ArtifactsPlanEnv,
 ): Promise<Response> {
-  if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
+  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 

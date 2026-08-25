@@ -224,6 +224,68 @@ describe("POST /v1/receipts", () => {
     expect(body.ok).toBe(false);
     expect(posted.every((p) => p.state !== "success")).toBe(true);
   });
+
+  it("invalid JSON body is 400 and does not post GitHub", async () => {
+    const { posted, fetchImpl } = mockGithub();
+    const res = await handleRequest(
+      new Request("https://ci-aggregate.test/v1/receipts", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...LANE_HEADERS },
+        body: "{",
+      }),
+      BOUND_ENV,
+      fetchImpl,
+    );
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(res.status).toBe(400);
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("invalid JSON body");
+    expect(posted).toHaveLength(0);
+  });
+
+  it("matching query token without X-CI-Lane-Token is 401 and does not post GitHub", async () => {
+    const { posted, fetchImpl } = mockGithub();
+    const res = await handleRequest(
+      new Request(
+        `https://ci-aggregate.test/v1/receipts?token=${encodeURIComponent(LANE_TOKEN)}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ receipts: allPass(SHA_A) }),
+        },
+      ),
+      BOUND_ENV,
+      fetchImpl,
+    );
+    const raw = await res.text();
+    const body = JSON.parse(raw) as { ok: boolean; reason: string };
+    expect(res.status).toBe(401);
+    expect(body.ok).toBe(false);
+    expect(body.reason).toBe("unauthorized");
+    expect(raw).not.toContain(LANE_TOKEN);
+    expect(raw).not.toMatch(/CI_LANE_TOKEN/i);
+    expect(posted).toHaveLength(0);
+  });
+});
+
+describe("GET /v1/receipts", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("is 405 POST required and does not post GitHub", async () => {
+    const { posted, fetchImpl } = mockGithub();
+    const res = await handleRequest(
+      new Request("https://ci-aggregate.test/v1/receipts", { method: "GET" }),
+      BOUND_ENV,
+      fetchImpl,
+    );
+    const body = (await res.json()) as { error: string };
+    expect(res.status).toBe(405);
+    expect(body.error).toBe("POST required");
+    expect(posted).toHaveLength(0);
+  });
 });
 
 describe("GET /health", () => {

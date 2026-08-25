@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { newRunId, sessionCloseJst } from "./identity";
+import { daysAgoJst, newRunId, sessionCloseJst, todayJst, toJstIso } from "./identity";
 
 const UUID = "11111111-1111-4111-8111-111111111111";
 
@@ -28,5 +28,22 @@ describe("sessionCloseJst", () => {
     expect(sessionCloseJst("2025-04-01", "morning")).toBe(
       "2025-04-01T11:30:00+09:00",
     );
+  });
+});
+
+describe("JST now-clock helpers", () => {
+  it("toJstIso suffixes a known UTC Date with +09:00", () => {
+    const out = toJstIso(new Date("2024-01-15T00:00:00.123Z"));
+    expect(out).toBe("2024-01-15T09:00:00+09:00");
+    expect(out.endsWith("+09:00")).toBe(true);
+  });
+
+  it("todayJst is YYYY-MM-DD and daysAgoJst(1) is one helper-day before", () => {
+    const today = todayJst();
+    expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const prior = daysAgoJst(1);
+    expect(
+      Date.parse(`${today}T00:00:00Z`) - Date.parse(`${prior}T00:00:00Z`),
+    ).toBe(24 * 60 * 60 * 1000);
   });
 });

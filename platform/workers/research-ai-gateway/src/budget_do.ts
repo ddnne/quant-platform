@@ -1,5 +1,7 @@
 /** Durable Object hard budget. Presence of budget_id is not a reserve. */
 
+import { json } from "./http_json";
+
 export const PILOT_BUDGET_CAPS = {
   max_experiment_plans: 4,
   max_parallel_experiments: 2,
@@ -512,16 +514,6 @@ export async function snapshotBudget(
     caps: state.caps,
     auto_promotion: false,
   };
-}
-
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-    },
-  });
 }
 
 function errorStatus(error: string): number {

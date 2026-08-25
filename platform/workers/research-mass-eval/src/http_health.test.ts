@@ -29,6 +29,7 @@ type HealthBody = {
   version?: string;
   go?: boolean;
   status?: string;
+  error?: string;
 };
 
 function assertHealthNotGo(res: Response, payload: HealthBody, raw: string) {
@@ -69,12 +70,22 @@ describe("GET / deny-by-default", () => {
 });
 
 describe("POST /health", () => {
-  it("rejects with 405", async () => {
+  it("rejects with 405 and is not Coverage COMPLETE", async () => {
     const res = await dispatchMassEvalFetch(
       new Request("https://example.test/health", { method: "POST" }),
       denyByDefaultEnv(),
       noopHandlers,
     );
     expect(res.status).toBe(405);
+    const raw = await res.text();
+    const payload = JSON.parse(raw) as HealthBody;
+    expect(payload.error).toBe("GET required");
+    expect(payload.error).not.toBe("GO");
+    expect(payload.go).not.toBe(true);
+    expect(raw).not.toMatch(/"go"\s*:\s*true/);
+    expect(raw).not.toMatch(/\bREADY\b/);
+    expect(raw).not.toMatch(/Coverage COMPLETE/);
+    expect(payload.status).not.toBe("READY");
+    expect(payload.status).not.toBe("COMPLETE");
   });
 });

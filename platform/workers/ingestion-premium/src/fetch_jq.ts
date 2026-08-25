@@ -4,15 +4,19 @@
  */
 
 import type { DatasetSpec } from "./catalog";
+import { daysAgoJst, isYyyyMmDd, todayJst } from "./identity";
 import type { RateLimiter } from "./rate_limit";
-import { fullJitterMs, halfToFullJitterMs } from "./retry_jitter";
+import {
+  exponentialBackoffFullJitterMs,
+  exponentialBackoffHalfToFullJitterMs,
+  sleepMs,
+} from "./retry_jitter";
 
 export interface FetchEnv {
   JQUANTS_API_KEY: string;
 }
 
 const JQ_BASE = "https://api.jquants.com";
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 // Per-HTTP-request retries on 429/5xx (matches Python ingestion/common/retry).
 const RETRY_COUNT = 3;
@@ -22,29 +26,13 @@ const RETRY_MAX_DELAY_MS = 8_000;
 const RETRY_429_BASE_DELAY_MS = 1_000;
 const RETRY_429_MAX_DELAY_MS = 3_000;
 
-function toJstIso(d: Date): string {
-  const ms = d.getTime() + JST_OFFSET_MS;
-  const jst = new Date(ms);
-  return jst.toISOString().replace(/\.(\d+)Z$/, "+09:00");
-}
-
-function todayJst(): string {
-  return toJstIso(new Date()).slice(0, 10);
-}
-
 /** Last completed JST day — "today" before close often yields empty `data`. */
 function defaultMarketDayJst(): string {
   return daysAgoJst(1);
 }
 
-function daysAgoJst(n: number): string {
-  const t = new Date(Date.now() - n * 24 * 60 * 60 * 1000);
-  return toJstIso(t).slice(0, 10);
-}
-
 function inclusiveDates(from: string, to: string): string[] {
-  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
-  if (!datePattern.test(from) || !datePattern.test(to)) {
+  if (!isYyyyMmDd(from) || !isYyyyMmDd(to)) {
     throw new Error("from/to must be YYYY-MM-DD");
   }
   const start = new Date(`${from}T00:00:00Z`);
@@ -104,29 +92,6 @@ export interface FetchOutcome {
   retriesUsed: number;
 }
 
-/** Exponential backoff + full jitter for retry-after-transient (5xx / transport). */
-function backoffDelayMs(attempt: number): number {
-  const base = Math.min(
-    RETRY_MAX_DELAY_MS,
-    RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
-  );
-  return fullJitterMs(base);
-}
-
-/** Short 429-only backoff — recover to near-ceiling quickly (P0 rate accel). */
-function backoff429DelayMs(attempt: number): number {
-  const base = Math.min(
-    RETRY_429_MAX_DELAY_MS,
-    RETRY_429_BASE_DELAY_MS * 2 ** (attempt - 1),
-  );
-  // Half-to-full jitter so concurrent workers do not re-stampede together.
-  return halfToFullJitterMs(base);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
 export async function fetchOnePage(
   env: FetchEnv,
   url: string,
@@ -152,7 +117,13 @@ export async function fetchOnePage(
           retriesUsed: attempt,
         };
       }
-      await sleep(backoffDelayMs(attempt));
+      await sleepMs(
+        exponentialBackoffFullJitterMs(
+          attempt,
+          RETRY_BASE_DELAY_MS,
+          RETRY_MAX_DELAY_MS,
+        ),
+      );
       continue;
     }
     if (resp.status === 429) {
@@ -168,7 +139,13 @@ export async function fetchOnePage(
         };
       }
       try { await resp.text(); } catch { /* ignore */ }
-      await sleep(backoff429DelayMs(attempt));
+      await sleepMs(
+        exponentialBackoffHalfToFullJitterMs(
+          attempt,
+          RETRY_429_BASE_DELAY_MS,
+          RETRY_429_MAX_DELAY_MS,
+        ),
+      );
       continue;
     }
     if (resp.status >= 500 && resp.status < 600) {
@@ -183,7 +160,13 @@ export async function fetchOnePage(
       }
       // Drain so the connection can be reused before sleeping.
       try { await resp.text(); } catch { /* ignore */ }
-      await sleep(backoffDelayMs(attempt));
+      await sleepMs(
+        exponentialBackoffFullJitterMs(
+          attempt,
+          RETRY_BASE_DELAY_MS,
+          RETRY_MAX_DELAY_MS,
+        ),
+      );
       continue;
     }
     // Success path: decay any 429 penalty back toward the 120 ms floor.

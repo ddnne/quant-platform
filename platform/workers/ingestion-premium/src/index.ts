@@ -26,6 +26,8 @@ import { handlePruneChangelog } from "./ops_prune_changelog";
 import { handleParquetManifest } from "./ops_parquet_manifest";
 import { handleArtifactsJoinPlan } from "./ops_artifacts_plan";
 import { handleExportPaths } from "./http_export";
+import { json } from "./http_json";
+import { ingestionTokenMatches } from "./ingestion_token";
 import {
   writeCollectionReceipt,
   writeRequiredCoverageSegment,
@@ -33,6 +35,8 @@ import {
 } from "./collection_receipts";
 import { upsertRecords, upsertWatermark } from "./persist_records";
 import { fetchDataset } from "./fetch_jq";
+import { todayJst, toJstIso } from "./identity";
+import { sha256HexFromString } from "./sha256";
 
 export interface Env {
   JQUANTS_API_KEY: string;
@@ -47,25 +51,11 @@ export interface Env {
   DB: D1Database;
 }
 
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
-
 // P0-4 parallel ingest knobs — drive near Premium ~500/min ceiling.
 const DEFAULT_CONCURRENCY = 6;
 const MAX_CONCURRENCY = 8;
 // Premium budget ~500 req/min → 120 ms floor = exactly 500/min theoretical max.
 const RATE_LIMIT_INTERVAL_MS = 120;
-
-// time helpers (JST = UTC+9)
-
-function toJstIso(d: Date): string {
-  const ms = d.getTime() + JST_OFFSET_MS;
-  const jst = new Date(ms);
-  return jst.toISOString().replace(/\.(\d+)Z$/, "+09:00");
-}
-
-function todayJst(): string {
-  return toJstIso(new Date()).slice(0, 10);
-}
 
 // R2 raw: raw/{dataset}/{run_id}/page-NNNNNN.json + manifest.json
 
@@ -75,11 +65,7 @@ function rawRunPrefix(dataset: string, runId: number | null, when: Date): string
 }
 
 async function sha256(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return "sha256:" + [...new Uint8Array(digest)]
-    .map((item) => item.toString(16).padStart(2, "0"))
-    .join("");
+  return `sha256:${await sha256HexFromString(value)}`;
 }
 
 function latestEventDate(rows: Record<string, unknown>[]): string | null {
@@ -583,17 +569,6 @@ async function runWithConcurrency<T>(
   await Promise.all(runners);
 }
 
-
-function authorized(request: Request, expected: string | undefined): boolean {
-  if (!expected) return false;
-  const got = request.headers.get("X-Ingestion-Token") || "";
-  return got === expected;
-}
-
-function json(body: unknown, status = 200): Response {
-  return Response.json(body, { status });
-}
-
 async function handleHealth(env: Env): Promise<Response> {
   const last = await lastRunSummary(env);
   const hasKey = Boolean(env.JQUANTS_API_KEY);
@@ -619,7 +594,7 @@ async function handleNaturalKeyRebuild(env: Env, request: Request): Promise<Resp
   if (request.method !== "POST") {
     return json({ error: "POST required" }, 405);
   }
-  if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
+  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
     return json({ error: "unauthorized" }, 401);
   }
   try {
@@ -637,7 +612,7 @@ async function handleRun(
   if (request.method !== "POST") {
     return json({ error: "POST required" }, 405);
   }
-  if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
+  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
     return json({ error: "unauthorized" }, 401);
   }
   const url = new URL(request.url);

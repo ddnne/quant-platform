@@ -4,8 +4,8 @@
  */
 
 import type { DatasetSpec } from "./catalog";
+import { toJstIso } from "./identity";
 
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const COVERAGE_POLICY_VERSION = "collection-coverage/v2";
 
 export interface CollectionReceiptEnv {
@@ -19,12 +19,6 @@ export interface CollectionSegment {
   expectedScope: Record<string, string>;
   expectedItems: number | null;
   canonicalMonth: boolean;
-}
-
-function toJstIso(d: Date): string {
-  const ms = d.getTime() + JST_OFFSET_MS;
-  const jst = new Date(ms);
-  return jst.toISOString().replace(/\.(\d+)Z$/, "+09:00");
 }
 
 export async function writeRequiredCoverageSegment(

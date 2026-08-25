@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `ad49ed96`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `a7d1e93d`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,7 +364,7 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD ad49ed96)
+## 10. Current remaining extracts vs HOLD (HEAD a7d1e93d)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
@@ -477,10 +477,55 @@ metrics, eval_orchestrate, panels defaultPeriods + missing R2/D1,
 propose-thesis HTTP 403 + window_tweak, ai_gateway unbound, parseRequest
 export, GET 405 / freezePayload /health / nets_only HTTP, json no-store,
 export D1/changes arg 400s, projection shared OTC reader, snapshot
-`index_text=None` — **LANDED**. Remaining HOLD: leftover occupancy,
-unique22, GATEWAY_TOKEN P632B-03, persist live upsert, compact catalog,
-`verify_all` vs `verify_ci` split. Do not schedule leftover occupancy
-extract. Do not YAML +N. Do not declare Phase 7 GO.
+`index_text=None` — **LANDED**. After `ad49ed96`: JSDA/premium `/v1/run`
+POST-only (`121c4557`; `41878b82`); JSDA/premium `/health` GET-only
+(`8e8b8c56`; `81fecac8`); `index_text=None` explicit on pipeline /
+range_batch / tokyo-repo (`556cbecc`; `c95cec45`; `3a567e8e`);
+collection receipt SUCCESS is not Coverage COMPLETE (`0e67f719`);
+write-path r2 segments (`0f00ea16`); ci-aggregate health 405/404
+(`3500c1cc`); `jobCandidateGrade` true is not Mass GO (`7335c184`) —
+**LANDED**. After `81fecac8`: premium archive-cold / prune-changelog /
+parquet-manifest POST-only GET 405 (`e1d71a18`; `bff7e2e1`;
+`bb9e0c91`); artifacts-plan GET no mutate (`7d5dafd8`); ai-gateway
+fetch 404/405 (`1b20fe1f`); complete unbound 503 (`a4aaa9db`) —
+**LANDED**. After `1b20fe1f`: premium archive-cold / prune-changelog /
+parquet-manifest / artifacts-plan header-only tokens (`af85daf3`;
+`17025eb7`; `4c732e8b`; `2a98ef12`); budget HTTP dispatcher
+(`72c30726`); ops-mcp GET `/mcp` 405 (`83941c19`) —
+**LANDED**. After `03409ccd`: premium D1 export GET-only POST 405
+(`db217acf`); mass-eval wrangler deploy opt-in fail-closed
+(`d93ee610`); r2 get non-authority pins (`9e265280`; `3c212f7d`;
+`8a61a03d`; `e0a6fa44`; `06f5c640`); budget HTTP missing-field
+units (`539f95f4`; `7f4c0a6a`; `24f0e8d2`; `395e4676`;
+`e4517282`); query-token header-only (already before); ci-aggregate
+GET receipts (`bf0c0953`); JSDA/secrets/ops-mcp remaining HTTP
+(`4f9a7db4`; `94765c86`; `a5dd3765`); ops-mcp health extract
+(`d1028961`) — **LANDED**. After `d1028961`: budget POST `/reserve`
+without amounts zero occupancy (`248ba80d`); ai-gateway complete
+invalid JSON / unknown field / missing `budget_id` / CF-Worker 401
+(`2bd8a91c`; `d7462d4f`; `39b140a2`; `ff3e5601`); GET/POST health
+liveness not Coverage COMPLETE (`ae9be278`; `208bfedb`; `28c91d69`);
+retry backoff delay helpers live in `retry_jitter` (`ec960406`) —
+**LANDED**. After `ec960406`: premium retry sleep helper lives in
+`retry_jitter` (`d3bfb5e8`); canonical registry pins JSON id sets not
+magic 31/26 (`035e9306`); premium SHA-256 hex helper is one module
+(`98545741`) — **LANDED**. After `98545741`: premium JST now-clock helpers
+live in identity (`ca00ff6d`); premium ops token compare is timing-safe
+header-only (`67436ab7`); ai-gateway json response helper is one module
+(`7a0801a6`) — **LANDED**. After `7a0801a6`: premium ingest run token
+compare is timing-safe header-only (`b51c8812`); premium ingest run
+ignores query token (`a2e70c9f`) — **LANDED**. After `a2e70c9f`: premium
+json response helper is one module (`a1428a21`; `http_json.ts` is
+`Response.json` only, no Cache-Control; not gateway charset+no-store);
+premium export / JSDA / secrets / mass-eval / ai-gateway query-token
+pins (`809e45af`; `6be287db`; `7f97497d`; `6138b6ae`; `a7d1e93d`) —
+**LANDED**. Remaining mixed at this SHA: leftover occupancy, unique22,
+GATEWAY_TOKEN P632B-03, persist live upsert, compact catalog,
+`verify_all` vs `verify_ci` split (**HOLD**). Agent-capable fail-closed
+HTTP holes named at `03409ccd` remain **LANDED**. Ingest `authorized()`
+plaintext `===` is **LANDED** (closed). Premium `json()` two copies are
+**LANDED**. Do not schedule leftover occupancy extract. Do not YAML +N.
+Do not declare Phase 7 GO. Do not claim ci-aggregate Worker exists live.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
@@ -502,8 +547,12 @@ Not code extracts (environment / docs / optional freeze):
 `ingestion-premium/src/index.ts` (~678 after `a20d14d4`) is the ingest
 façade. Fetch/retry lives in `fetch_jq.ts`; persist in `persist_records.ts`;
 export HTTP in `http_export.ts`; receipts in `collection_receipts.ts`.
-Retry jitter is `retry_jitter.ts` (`crypto.getRandomValues`). Do not
-family-slice remaining façade handlers.
+Retry jitter is `retry_jitter.ts` (`crypto.getRandomValues`). Backoff
+delay helpers live there (`ec960406`). Sleep helper lives there
+(`d3bfb5e8`). SHA-256 hex is `sha256.ts` (`98545741`). JST now-clock
+helpers live in `identity.ts` (`ca00ff6d`). Premium json helper lives in
+`http_json.ts` (`a1428a21`). Do not family-slice remaining façade
+handlers.
 
 ### 10.4 Do not
 
@@ -520,6 +569,16 @@ family-slice remaining façade handlers.
 ✗ Treat compiled n=2254 expanded rows as a compact-catalog substitute
 ✗ Fake-split persist_records live upsert
 ✗ Claim mass-eval eval_orchestrate/metrics/ai_gateway_client/panels/propose-thesis HTTP tests or persist_records empty-row unit landed at b1605c36
+✗ Claim mutating premium ops archive-cold / prune-changelog / parquet-manifest are POST-only at 81fecac8
+✗ Claim query-string token on premium ops is closed / header-only token is operator contract at 1b20fe1f
+✗ Claim premium export POST does not dump D1 / deploy_cf_mass_eval_worker has opt-in env at 03409ccd
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at d1028961
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at ec960406
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 98545741
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 7a0801a6
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at a7d1e93d
+✗ Claim ingest authorized still plaintext === / premium json() still two copies at a7d1e93d
+✗ Claim ci-aggregate Worker exists live
 ```
 
 Success for a later extract commit: one authority moved, G0 green,

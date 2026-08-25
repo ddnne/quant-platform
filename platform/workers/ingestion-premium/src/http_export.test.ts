@@ -25,8 +25,9 @@ function exportEnv(db: D1Database, token: string | undefined): ExportEnv {
 function exportRequest(
   path: string,
   headers: HeadersInit = {},
+  method = "GET",
 ): Request {
-  return new Request(`https://ingestion-premium.test${path}`, { headers });
+  return new Request(`https://ingestion-premium.test${path}`, { method, headers });
 }
 
 async function assertClosed(
@@ -81,6 +82,15 @@ describe("handleExportD1 fail-closed args", () => {
       );
     }
   });
+
+  it("POST with matching X-Ingestion-Token is 405 and does not prepare", async () => {
+    const { db, prepared } = stubD1();
+    const res = await handleExportD1(
+      exportEnv(db, EXPORT_TOKEN),
+      exportRequest("/v1/export/d1", { "X-Ingestion-Token": EXPORT_TOKEN }, "POST"),
+    );
+    await assertClosed(res, 405, "GET required", prepared);
+  });
 });
 
 describe("handleExportChanges fail-closed args", () => {
@@ -109,5 +119,18 @@ describe("handleExportChanges fail-closed args", () => {
       "after_seq must be a non-negative safe integer",
       prepared,
     );
+  });
+
+  it("POST with matching X-Ingestion-Token is 405 and does not prepare", async () => {
+    const { db, prepared } = stubD1();
+    const res = await handleExportChanges(
+      exportEnv(db, EXPORT_TOKEN),
+      exportRequest(
+        "/v1/export/changes",
+        { "X-Ingestion-Token": EXPORT_TOKEN },
+        "POST",
+      ),
+    );
+    await assertClosed(res, 405, "GET required", prepared);
   });
 });
