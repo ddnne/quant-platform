@@ -33,7 +33,7 @@ def _fixture_run(tmp_path):
         start=days[0],
         end=days[-1],
         db_path=db,
-        universe=tuple(CODES),
+        universe=None,
         lifecycle=Lifecycle.PAPER,
     )
     return run_paper(Return1dFeatureStrategy(), config), db, config

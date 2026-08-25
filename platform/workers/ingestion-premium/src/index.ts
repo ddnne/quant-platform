@@ -111,6 +111,10 @@ function requestQueries(
   spec: DatasetSpec,
   opts: { from?: string; to?: string; today?: string },
 ): Record<string, string>[] {
+  // Vendor snapshot: AM is code+pagination_key; earnings is pagination_key. No date/from/to.
+  if (spec.id === "equities_bars_daily_am" || spec.id === "equities_earnings_calendar") {
+    return [{}];
+  }
   if (spec.dateMode === "none") return [{}];
 
   // Single-day key: most series use `date=`; short-sale uses `disc_date=`.
@@ -125,7 +129,7 @@ function requestQueries(
     return [{ [dayKey]: opts.today || defaultMarketDayJst() }];
   }
 
-  // range: calendar / topix / investor-types (bare from/to). Earnings calendar vendor is pagination_key snapshot.
+  // range: calendar / topix / investor-types (bare from/to).
   const from = opts.from || (opts.to ? opts.to : daysAgoJst(5));
   const to = opts.to || todayJst();
   if (from > to) throw new Error("from must be on or before to");
@@ -291,6 +295,12 @@ async function fetchDataset(
     let pagination: string | null = null;
     for (let page = 0; page < 200; page++) {
       const params = new URLSearchParams(baseQuery);
+      // AM/earnings vendor snapshot: never send date/from/to; pagination_key only on later pages.
+      if (spec.id === "equities_bars_daily_am" || spec.id === "equities_earnings_calendar") {
+        params.delete("date");
+        params.delete("from");
+        params.delete("to");
+      }
       if (pagination) params.set("pagination_key", pagination);
       const suffix = params.size > 0 ? `?${params.toString()}` : "";
       const url = JQ_BASE + path + suffix;
@@ -392,7 +402,12 @@ function collectionSegment(
     if (query[dayKey]) dates.push(query[dayKey]);
   }
   if (dates.length === 0) {
-    throw new Error(`collection window unavailable for ${spec.id}`);
+    // Vendor snapshot has no date/from/to query; collection window is ingest JST day.
+    if (spec.id === "equities_bars_daily_am" || spec.id === "equities_earnings_calendar") {
+      dates.push(todayJst());
+    } else {
+      throw new Error(`collection window unavailable for ${spec.id}`);
+    }
   }
   const start = [...dates].sort()[0];
   const end = [...dates].sort().at(-1)!;
@@ -499,6 +514,8 @@ async function ingestOne(
 
   const rawKey = `${rawPrefix}/manifest.json`;
   const complete = !outcome.error && outcome.paginationErrors === 0;
+  // Raw fetch only — never Coverage COMPLETE.
+  const rawAcquisition = complete ? "ACQUIRED" : "FAILED";
   const dataDigest = await sha256(rawPages.map((page) => page.digest).join("\n"));
   const rawManifest = {
     format: "jquants-raw-manifest/v1",
@@ -511,13 +528,17 @@ async function ingestOne(
     row_count: outcome.rowsSeen,
     raw_bytes: rawPages.reduce((total, page) => total + page.bytes, 0),
     data_digest: dataDigest,
-    completeness: complete ? "COMPLETE" : "FAILED",
+    raw_acquisition: rawAcquisition,
     complete,
     error: outcome.error || null,
     pages: rawPages,
   };
   await env.RAW_BUCKET.put(rawKey, JSON.stringify(rawManifest), {
-    customMetadata: { dataset: spec.id, run_id: String(runId ?? ""), completeness: String(complete) },
+    customMetadata: {
+      dataset: spec.id,
+      run_id: String(runId ?? ""),
+      raw_acquisition: rawAcquisition,
+    },
   });
   if (runId === null) {
     throw new Error("raw retention manifest requires a durable ingestion run id");
@@ -537,7 +558,7 @@ async function ingestOne(
        created_at=excluded.created_at`,
   ).bind(
     spec.id, runId, rawKey, rawManifest.page_count, rawManifest.row_count,
-    rawManifest.raw_bytes, rawManifest.data_digest, rawManifest.completeness,
+    rawManifest.raw_bytes, rawManifest.data_digest, rawManifest.raw_acquisition,
     rawManifest.fetched_at,
   ).run();
 

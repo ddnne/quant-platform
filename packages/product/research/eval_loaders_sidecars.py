@@ -401,11 +401,21 @@ def repo_history_plane_status(
 def load_repo_rows_from_sqlite(
     db_path: str | Path = DEFAULT_SQLITE,
     *,
+    as_of: str,
     start: str | None = None,
     end: str | None = None,
     tenor_contains: str | None = "overnight",
 ) -> list[dict[str, Any]]:
-    """Load jsda_repo_rates rows from local SQLite (not PIT)."""
+    """Load jsda_repo_rates rows from local SQLite with PIT available_at gate.
+
+    ``as_of`` is required (keyword-only). SQL always applies
+    ``available_at IS NOT NULL AND available_at <= as_of``.
+    ``start`` / ``end`` bound ``as_of_date`` only (additive range, not a PIT
+    substitute). Missing ``as_of`` / empty string raises.
+    """
+    as_of_s = str(as_of).strip() if as_of is not None else ""
+    if not as_of_s:
+        raise ValueError("as_of is required (PIT has no latest default)")
     db = Path(db_path)
     if not db.exists():
         return []
@@ -413,9 +423,10 @@ def load_repo_rows_from_sqlite(
     try:
         sql = (
             "SELECT as_of_date, tenor, rate_type, rate, available_at, event_time "
-            "FROM jsda_repo_rates WHERE rate IS NOT NULL"
+            "FROM jsda_repo_rates WHERE rate IS NOT NULL "
+            "AND available_at IS NOT NULL AND available_at <= ?"
         )
-        params: list[Any] = []
+        params: list[Any] = [as_of_s]
         if start:
             sql += " AND as_of_date >= ?"
             params.append(str(start)[:10])
@@ -448,12 +459,13 @@ def load_repo_rows_from_sqlite(
 def load_repo_rows_all_tenors_from_sqlite(
     db_path: str | Path = DEFAULT_SQLITE,
     *,
+    as_of: str,
     start: str | None = None,
     end: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Load all JSDA Tokyo repo tenors (for curve-shape proxy)."""
+    """Load all JSDA Tokyo repo tenors (for curve-shape proxy). PIT-gated on as_of."""
     return load_repo_rows_from_sqlite(
-        db_path, start=start, end=end, tenor_contains=None
+        db_path, as_of=as_of, start=start, end=end, tenor_contains=None
     )
 
 

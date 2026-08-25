@@ -7,16 +7,22 @@ import json
 
 import pytest
 
+from data_contracts import COVERAGE_POLICY_VERSION, coverage_contract_for
+from data_contracts.source_capability import source_capability_contract_or_none
 from research.research_data_profile import (
     CORE_PROFILE_ID,
     CORE_REQUIRED_DATASETS,
     CORE_TIP_ONLY_EXCLUSIONS,
+    COVERAGE_POLICY_DOCUMENT_ROOT,
+    COVERAGE_POLICY_V3,
+    COVERAGE_V3_DATASETS,
     PROFILE_VERSION,
     ResearchDataProfile,
     ResearchDataProfileError,
     TIP_ONLY_AM_DATASET,
     TIP_ONLY_EARNINGS_CALENDAR_DATASET,
     compute_digest,
+    default_contract_versions,
     load_core_profile,
     official_mode,
     profile_ready,
@@ -148,13 +154,30 @@ def test_profile_ready_false_when_required_dataset_is_partial() -> None:
     assert profile_ready(profile, missing) is False
 
 
+def test_profile_ready_rejects_string_complete_labels() -> None:
+    profile = load_core_profile()
+    assert profile_ready(profile, {"equities_bars_daily": "COMPLETE"}) is False
+    evidence = {
+        dataset: {"status": "COMPLETE", "coverage_mode": official_mode(dataset)}
+        for dataset in profile.required_datasets
+    }
+    evidence["equities_bars_daily"] = "COMPLETE"
+    assert profile_ready(profile, evidence) is False
+
+
 def test_profile_ready_true_only_when_every_required_is_complete_official() -> None:
+    # Combinatorics only: synthetic COMPLETE is not a live READY publish.
     profile = load_core_profile()
     evidence = {
         dataset: {"status": "COMPLETE", "coverage_mode": official_mode(dataset)}
         for dataset in profile.required_datasets
     }
-    assert profile_ready(profile, evidence) is True
+    missing_v3 = any(
+        source_capability_contract_or_none(dataset) is None
+        for dataset in profile.required_datasets
+    )
+    # Missing SourceCapability V3 is not official-complete.
+    assert profile_ready(profile, evidence) is (not missing_v3)
     wrong_mode = dict(evidence)
     wrong_mode["markets_calendar"] = {
         "status": "COMPLETE",
@@ -190,3 +213,69 @@ def test_core_json_round_trip_without_live_ready_publish() -> None:
     assert TIP_ONLY_AM_DATASET not in json.loads(dumped)["required_datasets"]
     assert "READY" not in dumped
     assert profile.required_coverage_mode == "official"
+    assert profile.contract_versions["coverage_policy"] == COVERAGE_POLICY_DOCUMENT_ROOT
+
+
+def test_core_coverage_policy_is_mixed_document_root_not_uniform_v3() -> None:
+    profile = load_core_profile()
+    assert COVERAGE_POLICY_VERSION == COVERAGE_POLICY_DOCUMENT_ROOT
+    assert profile.contract_versions["coverage_policy"] == COVERAGE_POLICY_DOCUMENT_ROOT
+    assert default_contract_versions()["coverage_policy"] == COVERAGE_POLICY_DOCUMENT_ROOT
+    assert profile.contract_versions["coverage_policy"] != COVERAGE_POLICY_V3
+
+    for dataset_id in COVERAGE_V3_DATASETS:
+        contract = coverage_contract_for(dataset_id)
+        assert contract.policy_version == COVERAGE_POLICY_V3
+        assert official_mode(dataset_id) == contract.coverage_mode
+    assert official_mode("equities_master") == "scd2_event_sourcing"
+    assert official_mode(TIP_ONLY_AM_DATASET) == "recent_snapshot"
+    assert official_mode(TIP_ONLY_EARNINGS_CALENDAR_DATASET) == (
+        "next_business_day_snapshot"
+    )
+
+    for dataset_id in CORE_REQUIRED_DATASETS:
+        contract = coverage_contract_for(dataset_id)
+        assert official_mode(dataset_id) == contract.coverage_mode
+        if dataset_id in COVERAGE_V3_DATASETS:
+            assert contract.policy_version == COVERAGE_POLICY_V3
+        else:
+            assert contract.policy_version == COVERAGE_POLICY_DOCUMENT_ROOT
+
+
+def test_profile_ready_false_on_stale_v2_live_evidence() -> None:
+    profile = load_core_profile()
+    # Live MCP: projection STALE, applied_cursor null, master PARTIAL under
+    # collection-coverage/v2 2006-08-13 floor (not local v3 2008-05-07).
+    evidence = {
+        dataset: {"status": "COMPLETE", "coverage_mode": official_mode(dataset)}
+        for dataset in profile.required_datasets
+    }
+    evidence["equities_master"] = {
+        "status": "PARTIAL",
+        "coverage_mode": official_mode("equities_master"),
+        "policy_version": "collection-coverage/v2",
+        "history_target_start": "2006-08-13",
+        "projection_status": "STALE",
+        "applied_cursor": None,
+    }
+    assert profile_ready(profile, evidence) is False
+
+    stale_complete = {
+        dataset: {
+            "status": "COMPLETE",
+            "coverage_mode": official_mode(dataset),
+            "projection_status": "STALE",
+            "applied_cursor": None,
+        }
+        for dataset in profile.required_datasets
+    }
+    assert profile_ready(profile, stale_complete) is False
+    unpinned = {
+        dataset: {
+            "status": "COMPLETE",
+            "coverage_mode": official_mode(dataset),
+            "applied_cursor": None,
+        }
+        for dataset in profile.required_datasets
+    }
+    assert profile_ready(profile, unpinned) is False

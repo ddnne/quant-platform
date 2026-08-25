@@ -7,7 +7,6 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 import json
 from pathlib import Path
-import re
 import sqlite3
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -25,7 +24,11 @@ from data_contracts.source_capability import (
     OfficialRequiredDomainSubset,
     SourceCapabilityContract,
     required_domain_subset_official,
-    source_capability_contract_for,
+    source_capability_contract_or_none,
+)
+from ingestion.jsda.official_index import (
+    OFFICIAL_ARCHIVE_INDEX_DATASETS as _OFFICIAL_ARCHIVE_INDEX_DATASETS,
+    official_index_days,
 )
 from storage.coverage_ledger_io import (
     persist_refreshed_coverage,
@@ -105,21 +108,12 @@ _OFFICIAL_ARCHIVE_INDEX_MODES = frozenset({
     "official_archive_index",
     "official_archive_index_reconciled",
 })
-_OFFICIAL_ARCHIVE_INDEX_DATASETS = frozenset({
-    "jsda_otc_bond_reference_prices",
-})
-_INDEX_PUBLICATION_DATE_RE = re.compile(
-    r"(?<!\d)(20\d{2})[./年]\s*(\d{1,2})[./月]\s*(\d{1,2})(?:日)?(?!\d)"
-)
 
 
 def _source_capability_for(
     dataset_id: str,
 ) -> SourceCapabilityContract | None:
-    try:
-        return source_capability_contract_for(dataset_id)
-    except KeyError:
-        return None
+    return source_capability_contract_or_none(dataset_id)
 
 
 def _official_domain_for(
@@ -199,39 +193,6 @@ def _uses_official_archive_index(
         domain.history_mode == "official_archive_index"
         or domain.publication_days_only
     )
-
-
-def official_index_days(
-    dataset: str,
-    index_text: str | None,
-) -> tuple[str, ...]:
-    """Official year-index listed publication days for ``dataset``.
-
-    Missing ``index_text`` is fail-closed: empty set, never a calendar walk.
-    """
-    if dataset not in _OFFICIAL_ARCHIVE_INDEX_DATASETS:
-        return ()
-    if index_text is None or not str(index_text).strip():
-        return ()
-    from ingestion.jsda.urls import discover_otc_reference_segments
-
-    text = str(index_text)
-    years = {
-        int(match.group(1))
-        for match in _INDEX_PUBLICATION_DATE_RE.finditer(text)
-    }
-    if not years:
-        return ()
-    seen: set[str] = set()
-    days: list[str] = []
-    for year in sorted(years):
-        for item in discover_otc_reference_segments(text, year=year):
-            if item.segment_id in seen:
-                continue
-            seen.add(item.segment_id)
-            days.append(item.segment_id)
-    days.sort()
-    return tuple(days)
 
 
 def plan_required_segments(
@@ -362,6 +323,26 @@ def plan_required_segments(
     return tuple(segments)
 
 
+def _empty_observed_forbids_complete(policy: CollectionCoverageContract) -> bool:
+    """Tip snapshots and official-archive-index never COMPLETE on empty receipts.
+
+    Event-zero COMPLETE stays only for genuine event_driven historical windows
+    (fins disclosures). coverage_mode containing snapshot, snapshot grains
+    (collection_cutoff / same_trading_day), or official_archive_index stay
+    PARTIAL even when expected_frequency is still event_driven.
+    """
+    mode = policy.coverage_mode
+    grain = policy.segment_granularity
+    history_mode = policy.history_mode or ""
+    if "snapshot" in mode or "snapshot" in history_mode:
+        return True
+    if grain in SNAPSHOT_SEGMENT_GRANULARITIES:
+        return True
+    if grain.startswith(("collection_cutoff", "same_trading_day")):
+        return True
+    return "official_archive_index" in mode
+
+
 def evaluate_segment(
     policy: CollectionCoverageContract,
     required: RequiredCoverageSegment,
@@ -402,6 +383,10 @@ def evaluate_segment(
         return "FAILED", {"reason": receipt.error or "collection failed"}
     if not receipt.pagination_exhausted:
         return "PARTIAL", {"reason": "pagination not exhausted"}
+    if receipt.observed_items == 0 and _empty_observed_forbids_complete(policy):
+        return "PARTIAL", {
+            "reason": "empty tip-snapshot or archive-index receipt is not complete"
+        }
     if (
         policy.expected_frequency != "event_driven"
         and required.expected_items is None

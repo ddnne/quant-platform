@@ -103,14 +103,17 @@ def _build_thicken_sidecars(
         }
 
     try:
+        as_of_s = str(p_end or "")[:10]
+        if not as_of_s:
+            raise ValueError("as_of is required (PIT has no latest default)")
         overnight = load_repo_rows_from_sqlite(
-            db, start=burn_start or None, end=p_end or None
+            db, as_of=as_of_s, start=burn_start or None, end=p_end or None
         )
         series = (
             load_repo_rate_series_from_rows(overnight) if overnight else None
         )
         all_tenors = load_repo_rows_all_tenors_from_sqlite(
-            db, start=burn_start or None, end=p_end or None
+            db, as_of=as_of_s, start=burn_start or None, end=p_end or None
         )
         curve = build_repo_curve_series(all_tenors) if all_tenors else {}
         rates_by_date = dict((series or {}).get("rates_by_date") or {})

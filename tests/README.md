@@ -5,10 +5,10 @@ default path. Live API paths (if any) are opt-in via env flags and are not part
 of the guard packs below.
 
 ```bash
-# Mandatory CI (fail-closed: pytest + catalog + IR + all workers npm ci/test/typecheck/dry-run)
+# Mandatory local CI (7 workers including ci-aggregate; no VERIFY_* skips)
 scripts/verify_ci.sh
 
-# Fast local helper (optional VERIFY_* skips; may skip missing node_modules)
+# Skippable helper only (optional VERIFY_* skips; may skip missing node_modules)
 scripts/verify_all.sh
 
 # Full offline suite (G2)
@@ -25,7 +25,7 @@ scripts/verify_all.sh
 
 Live residual COMPLETE / Mass status is **not** decided by tests — see
 [`docs/phase62_residual_status.md`](../docs/phase62_residual_status.md).
-Mandatory CI: [`scripts/verify_ci.sh`](../scripts/verify_ci.sh). Fast local helper: [`scripts/verify_all.sh`](../scripts/verify_all.sh).
+Mandatory local CI: [`scripts/verify_ci.sh`](../scripts/verify_ci.sh) (7 workers, no `VERIFY_*` skips). [`scripts/verify_all.sh`](../scripts/verify_all.sh) is skippable helper only. Merge gate is GitHub context `ci-aggregate` after authenticated receipts **and** `verify_ci`. Do not add `.github/workflows`.
 
 ---
 

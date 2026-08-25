@@ -133,6 +133,25 @@ def test_event_zero_successful_exhausted_raw_receipt_is_complete():
     assert detail["event_zero"] is True
 
 
+def test_tip_snapshot_empty_receipt_is_partial_not_complete():
+    """Earnings/AM tip snapshots stay PARTIAL on empty observed_items.
+
+    Event-zero COMPLETE is only for genuine event_driven historical windows
+    (fins_*). collection_cutoff / same_trading_day snapshots must not mint
+    COMPLETE from a trusted empty SUCCESS receipt.
+    """
+    for dataset_id in ("equities_earnings_calendar", "equities_bars_daily_am"):
+        policy = coverage_contract_for(dataset_id)
+        required = plan_required_segments(policy, "2026-08-14")[0]
+        status, detail = evaluate_segment(
+            policy, required, _receipt(required, observed=0)
+        )
+        assert status == "PARTIAL", dataset_id
+        assert status != "COMPLETE"
+        assert detail.get("event_zero") is not True
+        assert "empty" in detail["reason"]
+
+
 def test_pagination_incomplete_is_not_complete():
     policy = _short_event_policy()
     required = plan_required_segments(policy, "2025-01-31")[0]

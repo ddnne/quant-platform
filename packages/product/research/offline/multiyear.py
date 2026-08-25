@@ -160,7 +160,16 @@ def run_class_hyp_multi_year_eval(
         if h < 1:
             raise ValueError(f"hold_days must be >= 1, got {hold_days!r}")
 
-    repo_rows = load_repo_rows_from_sqlite(sqlite_path)
+    as_of_s = max(
+        (
+            str(p.get("period_end") or p.get("end") or "")[:10]
+            for p in period_list
+        ),
+        default="",
+    )
+    if not as_of_s:
+        raise ValueError("as_of is required (PIT has no latest default)")
+    repo_rows = load_repo_rows_from_sqlite(sqlite_path, as_of=as_of_s)
     repo_series = (
         load_repo_rate_series_from_rows(repo_rows) if repo_rows else None
     )
@@ -168,13 +177,15 @@ def run_class_hyp_multi_year_eval(
         "source": "local_sqlite_jsda_repo_rates",
         "path": str(sqlite_path),
         "n_rows": len(repo_rows),
+        "as_of": as_of_s,
         "series_n_dates": (
             len((repo_series or {}).get("rates_by_date") or {})
             if repo_series
             else 0
         ),
         "pit_disclosure": (
-            "Regime keyed by as_of_date, not bulk available_at. No invent fill."
+            "available_at IS NOT NULL AND available_at <= as_of. "
+            "as_of_date range is additive. No invent fill."
         ),
         "dataset": REPO_DATASET_ID,
     }

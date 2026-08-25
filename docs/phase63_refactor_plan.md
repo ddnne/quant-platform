@@ -10,6 +10,9 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
+**Live strategy at `f224e7e`:** §10 — remaining extracts vs HOLD. YAML
+file-count waste is closed. Size is not waste. Do not extract leftover
+occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
 
 This is a **refactor plan**, not a rewrite mandate. Later lanes extract
@@ -358,3 +361,109 @@ No Mass/READY/Phase 7 arming.
 
 Success for *later* extract lanes: one authority moved, G0 green, occupancy
 and COMPLETE predicates unchanged, generated files still generated.
+
+---
+
+## 10. Current remaining extracts vs HOLD (HEAD f224e7e)
+
+This is the **live** refactor strategy for “the code is full of waste.”
+§§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
+section now. Size is not a split key. Live math is not waste.
+
+Measured at `f224e7e`: tracked paths **741**; catalog YAML
+(`specs/research_logics/*.yaml`) **0**; remaining tracked YAML **1**
+(`specs/research_themes.yaml` — themes, not catalog logics); compiled
+n=**2254** (`migration.jsonl` 2254 lines);
+`yaml_still_present: false`; digest
+`sha256:6ad5ba57dfa41ed9a97e5895d9238040fbb5539b310a2ea4aa349172b6cb8c69`.
+`specs/research_catalog/` is catalog SoT. `CATALOG_AND_PLUS_N_STOPPED`.
+Mass / READY / Phase 7: **NO-GO / not declared / OFF**.
+`RECONSTITUTION_APPLY=False`.
+
+LOC via `wc -l` on named files at this HEAD (do not copy stale §2
+numbers). `daily_path.ts` is **1682** (was 1677 in §2).
+`ingestion-premium/src/index.ts` is **949** after
+`collection_receipts.ts`. `coverage_ledger.py` is **1430**.
+`snapshot.py` is **912**.
+
+### 10.1 Waste already closed (do not re-open)
+
+| Closed | Fact at `07b4435` |
+|--------|-------------------|
+| Catalog YAML 2254 files | Deleted (`5c9b962`). yaml n=0. Compiled n=**2254** is SoT. `yaml_still_present: false`. Do not add YAML. |
+| combo-gate policy | **DONE** `combo_gates.ts` (788) |
+| PIT entry | **DONE** `event_entry.ts` (30) |
+| r2 parse / normalize / `available_at` / io get / mirror | **DONE** `r2_feature_parse.py` (101), `r2_feature_normalize.py` (176), `r2_available_at.py` (113), `r2_io` get, `r2_feature_mirror.py` (201). `build_*_context` stays. |
+| coverage ledger persist / receipts | **DONE** `coverage_ledger_io.py` (295), `coverage_receipts.py` (147). COMPLETE predicates stay in `coverage_ledger.py`. |
+| snapshot publication split | **DONE** `snapshot_publish_policy.py` (190), `snapshot_coverage_proof.py` (219), `snapshot_persist.py` (124), `snapshot_read.py` (104) |
+| eval period orchestration | **DONE** `eval_orchestrate.ts` (235). Family formulas stay in `eval.ts`. |
+| ingestion collection receipts | **DONE** `collection_receipts.ts` (111). Fetch/upsert stay in `index.ts`. |
+| `catalog_ids.ts` emit | **DONE** compiler owns emit. **2327** GENERATED. Do not hand-edit. Digest lock **DONE**. |
+
+File-count drop after YAML deletion is not a quality win without the
+digest pin (already pinned). Do not re-run digest lock.
+
+### 10.2 Not waste (HOLD — do not delete/unify to “clean”)
+
+These look large or leftover. They are **policy / live math / freeze**.
+Deleting or unifying them to shrink the tree is a rewrite.
+
+| HOLD | Why it stays |
+|------|----------------|
+| Leftover occupancy in `daily_path.ts` (1682) | Unique-22 lid branches + leftover CS books. Do not drop without occupancy-equal re-eval. Unifying with `comboEventGateOk` **rewrites occupancy**. **Do not schedule leftover occupancy extract.** |
+| `UNIQUE22_PARK_REASONS` (17 parked) | Park is code in `unique_logic/worker_bodies.py`, not YAML. Occupancy-equal lifts already exist. Do not silent-unpark. |
+| `cost_models.py` (2210) / `options_225_vol_series.py` (1140) | **KEEP** live math. Size is not a split key. Fake-split numerator from denominator is a rewrite. **No extract lane.** |
+| Factory `generation_enabled=False` | Unique/combo stay ungenerated (`factory.py`, `factory_templates.py`). Intentional. Do not enable. |
+| 3 pins frozen | `FROZEN_PIN_SNAPSHOT`: `cross_section_hold_10` mom=5 **KEEP** · `cross_section_hold_10_mom3` mom=3 **PROMOTE** · `fundamentals_hold_10` **KEEP**. Not retuned. |
+| PARSE_ZERO 2 genuine gaps | OTC `2002-08-02`, `2002-08-05` (23-col vs 29-col parser) stay **PARTIAL**. Do not invent COMPLETE. 2898 PARTIAL ≠ 2 PARSE_ZERO. |
+| cheap_pb event vs CS non-unify | `CHEAP_PB_EVENT_VS_CS = event_bars_x_fins_not_csfundsnaps`. Event cheap_pb is bars×fins; CS uses `csFundSnaps`. `combo_gates.ts`: do not unify. Cap `CHEAP_PB_PRIMARY_GATE_CAP`. |
+| `test_baseline_catalog.py` rejected S1–S5 | W65 rejected catalog. Mass/READY stay false. **Never delete** (named invariant). |
+| Combo AND +N freeze n=2254 | `CATALOG_AND_PLUS_N_STOPPED`. Expanding n is not a product. Compact family+template+parameter matrix is **optional** and **not done**; freeze n=2254 is **HOLD**. |
+| `eval.ts` family math (1806) | Orchestration already extracted. Do not family-slice formulas. |
+| `ingest_premium/coverage.py` C-checks (1626) | KEEP as evidence measurement. Do not per-check microfiles. |
+
+### 10.3 Real remaining mixed authority (one authority per later commit)
+
+Schedule these. Do **not** bundle. Each later commit moves **one**
+authority. Python R2 writer stays **non-authority**. Compact catalog is
+optional HOLD, not a required extract.
+
+| Later | Mixed surface | Authority to pick | Must not |
+|------:|---------------|-------------------|----------|
+| 1 | `BackfillPlanner` (`ops/backfill_planner.py`, 709) vs `plan_required_segments` (`coverage_ledger.py`) | **ops product** inventory planner. Tip-snapshot wire **DONE** (`792ae2b`): AM bars / earnings calendar call `plan_required_segments` (no month-chunk). Remaining mixed authority: other bounded-history month chunks (do not invent COMPLETE). | Invent COMPLETE; calendar-walk OTC; delete one planner without a dated ops brief |
+| 2 | Python `r2_io.py` (211) head-then-put **TOCTOU** vs Worker children-then-manifest (`http.ts` `putChildrenThenManifest`; digest mismatch **409**) | Worker is immutable authority. Python stays **non-authority** (`python_cli_put_is_not_immutable_authority`; `authoritative=True` refused). | Treat “TOCTOU recorded in tests” as done; make Python CLI the SoT |
+| 3 | Hand-written `evaluation_ir.ts` (265) vs `specs/evaluation_ir/schema.json` (67) | Schema is codec SoT. Generated TS codec still **OPEN**. Grade predicate is already shared (`job_candidate_grade` / `jobCandidateGrade`). | Second grade policy; delete schema; dual-edit field lists forever |
+| 4 | MCP `OPS_TOOLS` strings (“Coverage V2”) vs stored `policy_version` (`dataset_coverage.policy_version`; live `collection-coverage/v2`, V3 overlay on some contracts) | Presentation tools must **echo stored** `policy_version`, not invent V3 completeness. Same split in `packages/edge/mcp_servers/quant_data/server.py`. | Unify strings to mint FRESH / COMPLETE 23 |
+| 5 | `scripts/verify_all.sh` skippable helper vs `scripts/verify_ci.sh` authority | **Keep both. Do not merge.** Helper: 3 research workers, `VERIFY_*` skips. Authority: pytest + catalog freeze + IR schema + 7 workers (`ci-aggregate` included), no skips. Merge gate is `verify_ci` plus authenticated `ci-aggregate`. | Fold `verify_ci` into `verify_all`; add GitHub Actions |
+
+Not code extracts (environment / docs / optional freeze):
+
+| Surface | Status | Action |
+|---------|--------|--------|
+| ~150 leftover git worktrees | **Environment waste, not code waste.** Measured **131** `git worktree list` rows at this write (this isolation included); `/private/tmp/qp-*` dirs were **188**. | Prune the environment. Not a module extract. |
+| Historical `docs/reviews/*.md` as live SoT | Freeze files stay historical (`HEAD at remaining-audit: 03cd1b1`; P632 re-diffs at named SHAs). | **Banners, not deletion.** Live flags: `phase62_residual_status.md` + MCP projection + this §10. |
+| Compact catalog family+template+parameter matrix | **NOT done.** `migration.jsonl` is still 2254 expanded rows. | Optional. Freeze n=2254 **HOLD**. Do not report 2254 as a product win. Do not YAML +N. |
+
+`ingestion-premium/src/index.ts` (949) still mixes fetch / upsert / HTTP
+after receipts **DONE**. Same-worker sibling extracts remain allowed
+(package path frozen). That is leftover mixed authority from §7 lane 10
+remainder, not a new product.
+
+### 10.4 Do not
+
+```text
+✗ Schedule leftover occupancy extract from daily_path.ts
+✗ Unify unique-22 leftover occupancy with comboEventGateOk
+✗ Recommend YAML +N / re-add specs/research_logics/*.yaml
+✗ Recommend Phase 7 GO / Mass ON / production READY
+✗ Fake-split cost_models / options_225 / eval family math for LOC
+✗ Hand-edit catalog_ids.ts / unpark UNIQUE22 without occupancy-equal re-eval
+✗ Invent PARSE_ZERO COMPLETE / retune 3 pins / enable factory generation
+✗ Merge verify_all.sh into verify_ci.sh (or the reverse)
+✗ Treat git worktrees or historical review docs as code waste
+✗ Treat compiled n=2254 expanded rows as a compact-catalog substitute
+```
+
+Success for a later extract commit: one authority moved, G0 green,
+occupancy and COMPLETE predicates unchanged, generated files still
+generated, Python R2 still non-authority.

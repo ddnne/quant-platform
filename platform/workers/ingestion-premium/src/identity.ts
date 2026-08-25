@@ -1,6 +1,11 @@
-/** Contract-driven natural key, event_time, and available_at normalization. */
+/** Contract-driven natural key, event_time, available_at, and persist run identity. */
 
 import type { DatasetSpec } from "./catalog";
+
+/** Persist/SCD2 run identity. crypto.randomUUID, not Math.random. */
+export function newRunId(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 

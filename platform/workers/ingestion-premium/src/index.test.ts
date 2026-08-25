@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { handleExportPaths, type ExportEnv } from "./http_export";
 import worker, { type Env } from "./index";
 
@@ -78,5 +78,134 @@ describe("ingestion-premium health", () => {
     expect(typeof json.datasets).toBe("number");
     expect(json.datasets).toBeGreaterThan(0);
     expect(json.ok).toBe(false);
+  });
+});
+
+const READY_MIGRATION = {
+  migration_id: "jquants-premium-natural-keys-v2",
+  state: "READY",
+  contract_schema_version: 2,
+  rows_primary: 0,
+  rows_revisions: 0,
+  rows_changes: 0,
+  audit_mismatches: 0,
+  detail: null,
+};
+
+function ingestD1(): { db: D1Database; binds: { sql: string; args: unknown[] }[] } {
+  const binds: { sql: string; args: unknown[] }[] = [];
+  const db = {
+    prepare(sql: string) {
+      const stmt = {
+        bind(...args: unknown[]) {
+          binds.push({ sql, args });
+          return stmt;
+        },
+        first: async () => READY_MIGRATION,
+        all: async () => ({ results: [], success: true, meta: {} }),
+        run: async () => ({ success: true, meta: { last_row_id: 42, changes: 0 } }),
+      };
+      return stmt;
+    },
+    batch: async () => [],
+  } as unknown as D1Database;
+  return { db, binds };
+}
+
+function capturingBucket(): {
+  bucket: R2Bucket;
+  puts: { key: string; body: string; metadata?: Record<string, string> }[];
+} {
+  const puts: { key: string; body: string; metadata?: Record<string, string> }[] = [];
+  const bucket = {
+    async put(key: string, value: unknown, options?: { customMetadata?: Record<string, string> }) {
+      const body = typeof value === "string" ? value : "";
+      puts.push({ key, body, metadata: options?.customMetadata });
+      return { key, etag: "test-etag" };
+    },
+  } as unknown as R2Bucket;
+  return { bucket, puts };
+}
+
+describe("ingestion-premium raw acquisition status", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function runEnv() {
+    const d1 = ingestD1();
+    const raw = capturingBucket();
+    const structured = capturingBucket();
+    return {
+      env: testEnv({
+        DB: d1.db,
+        RAW_BUCKET: raw.bucket,
+        STRUCTURED_BUCKET: structured.bucket,
+      }),
+      d1,
+      raw,
+    };
+  }
+
+  function retentionBind(d1: { binds: { sql: string; args: unknown[] }[] }) {
+    return d1.binds.find((row) => row.sql.includes("INSERT INTO raw_retention_manifests"));
+  }
+
+  it("writes raw_acquisition ACQUIRED on a successful fetch and never COMPLETE", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ data: [] }), { status: 200 })) as typeof fetch;
+    const { env, d1, raw } = runEnv();
+    const res = await worker.fetch(
+      new Request(
+        "https://ingestion-premium.test/v1/run?dataset=markets_calendar&from=2024-06-03&to=2024-06-03",
+        {
+          method: "POST",
+          headers: { "X-Ingestion-Token": env.INGESTION_RUN_TOKEN! },
+        },
+      ),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const manifests = raw.puts.filter((put) => put.key.endsWith("/manifest.json"));
+    expect(manifests).toHaveLength(1);
+    const body = JSON.parse(manifests[0]!.body) as Record<string, unknown>;
+    expect(body.raw_acquisition).toBe("ACQUIRED");
+    expect(body.complete).toBe(true);
+    expect(body).not.toHaveProperty("completeness");
+    expect(JSON.stringify(body)).not.toContain("COMPLETE");
+    expect(manifests[0]!.metadata?.raw_acquisition).toBe("ACQUIRED");
+    const retention = retentionBind(d1);
+    expect(retention?.args[7]).toBe("ACQUIRED");
+    expect(retention?.args).not.toContain("COMPLETE");
+  });
+
+  it("writes raw_acquisition FAILED when the vendor fetch fails and never COMPLETE", async () => {
+    globalThis.fetch = (async () =>
+      new Response("vendor error", { status: 400 })) as typeof fetch;
+    const { env, d1, raw } = runEnv();
+    const res = await worker.fetch(
+      new Request(
+        "https://ingestion-premium.test/v1/run?dataset=markets_calendar&from=2024-06-03&to=2024-06-03",
+        {
+          method: "POST",
+          headers: { "X-Ingestion-Token": env.INGESTION_RUN_TOKEN! },
+        },
+      ),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const manifests = raw.puts.filter((put) => put.key.endsWith("/manifest.json"));
+    expect(manifests).toHaveLength(1);
+    const body = JSON.parse(manifests[0]!.body) as Record<string, unknown>;
+    expect(body.raw_acquisition).toBe("FAILED");
+    expect(body.complete).toBe(false);
+    expect(body).not.toHaveProperty("completeness");
+    expect(JSON.stringify(body)).not.toContain("COMPLETE");
+    expect(manifests[0]!.metadata?.raw_acquisition).toBe("FAILED");
+    const retention = retentionBind(d1);
+    expect(retention?.args[7]).toBe("FAILED");
+    expect(retention?.args).not.toContain("COMPLETE");
   });
 });

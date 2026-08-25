@@ -59,7 +59,7 @@ def _build(tmp_path, *, momentum_version: str = "1.0.0"):
         start=days[0],
         end=days[-1],
         db_path=db,
-        universe=tuple(CODES),
+        universe=None,
         lookback_days=30,
     )
     return plan, spec, config, db

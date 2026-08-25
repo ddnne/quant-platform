@@ -5,6 +5,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 
 def _fins_sqlite(tmp_path: Path) -> Path:
     """Minimal jquants_records fins_summary with official TA / EqAR keys."""
@@ -88,6 +90,110 @@ def _fins_sqlite(tmp_path: Path) -> Path:
     finally:
         con.close()
     return db
+
+
+def _repo_sqlite(tmp_path: Path) -> Path:
+    """Minimal jsda_repo_rates with mixed available_at for PIT tests."""
+    db = tmp_path / "ingestion.sqlite"
+    con = sqlite3.connect(db)
+    try:
+        con.execute(
+            "CREATE TABLE jsda_repo_rates ("
+            "as_of_date TEXT, tenor TEXT, rate_type TEXT, rate REAL, "
+            "available_at TEXT, event_time TEXT)"
+        )
+        rows = (
+            (
+                "2020-01-06",
+                "overnight/翌日物/T+0",
+                "trr",
+                0.10,
+                "2020-01-06T15:00:00+09:00",
+                "2020-01-06T00:00:00+09:00",
+            ),
+            (
+                "2020-01-07",
+                "overnight/翌日物/T+0",
+                "trr",
+                0.20,
+                "2020-01-07T15:00:00+09:00",
+                "2020-01-07T00:00:00+09:00",
+            ),
+            (
+                "2020-01-08",
+                "overnight/翌日物/T+0",
+                "trr",
+                0.30,
+                None,
+                "2020-01-08T00:00:00+09:00",
+            ),
+            (
+                "2020-01-09",
+                "overnight/翌日物/T+0",
+                "trr",
+                0.40,
+                "2020-01-09T15:00:00+09:00",
+                "2020-01-09T00:00:00+09:00",
+            ),
+            (
+                "2020-01-06",
+                "1M/T+1",
+                "trr",
+                0.50,
+                "2020-01-06T15:00:00+09:00",
+                "2020-01-06T00:00:00+09:00",
+            ),
+        )
+        con.executemany(
+            "INSERT INTO jsda_repo_rates "
+            "(as_of_date, tenor, rate_type, rate, available_at, event_time) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        con.commit()
+    finally:
+        con.close()
+    return db
+
+
+def test_load_repo_rows_from_sqlite_requires_as_of(tmp_path: Path) -> None:
+    from research.eval_loaders import load_repo_rows_from_sqlite
+
+    db = _repo_sqlite(tmp_path)
+    with pytest.raises(TypeError):
+        load_repo_rows_from_sqlite(db)
+    with pytest.raises(ValueError, match="as_of is required"):
+        load_repo_rows_from_sqlite(db, as_of="")
+    with pytest.raises(ValueError, match="as_of is required"):
+        load_repo_rows_from_sqlite(db, as_of="   ")
+    with pytest.raises(ValueError, match="as_of is required"):
+        load_repo_rows_from_sqlite(db, as_of=None)  # type: ignore[arg-type]
+
+
+def test_load_repo_rows_from_sqlite_pit_available_at(tmp_path: Path) -> None:
+    from research.eval_loaders import (
+        load_repo_rows_all_tenors_from_sqlite,
+        load_repo_rows_from_sqlite,
+    )
+
+    db = _repo_sqlite(tmp_path)
+    as_of = "2020-01-07T15:00:00+09:00"
+    rows = load_repo_rows_from_sqlite(db, as_of=as_of)
+    dates = [r["as_of_date"] for r in rows]
+    assert dates == ["2020-01-06", "2020-01-07"]
+    assert all(r["available_at"] is not None for r in rows)
+    assert all(str(r["available_at"]) <= as_of for r in rows)
+
+    later = load_repo_rows_from_sqlite(db, as_of="2020-01-09T15:00:00+09:00")
+    later_dates = [r["as_of_date"] for r in later]
+    assert "2020-01-09" in later_dates
+    assert "2020-01-08" not in later_dates
+
+    all_tenors = load_repo_rows_all_tenors_from_sqlite(db, as_of=as_of)
+    tenors = {r["tenor"] for r in all_tenors}
+    assert any("overnight" in t.lower() for t in tenors)
+    assert any("1M" in t for t in tenors)
+    assert all(str(r["available_at"]) <= as_of for r in all_tenors)
 
 
 def test_repo_history_plane_status_discloses_sqlite_not_d1() -> None:

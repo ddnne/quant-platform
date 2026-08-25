@@ -75,11 +75,26 @@ def load_batch_data_context(
     mdir = Path(mirror_dir) if mirror_dir else DEFAULT_BARS_MIRROR_DIR
     db = Path(sqlite_path) if sqlite_path else DEFAULT_SQLITE
 
-    repo_rows = load_repo_rows_from_sqlite(db) if db.exists() else []
+    as_of_s = max(
+        (
+            str(p.get("period_end") or p.get("end") or "")[:10]
+            for p in period_list
+        ),
+        default="",
+    )
+    if db.exists() and not as_of_s:
+        raise ValueError("as_of is required (PIT has no latest default)")
+    repo_rows = (
+        load_repo_rows_from_sqlite(db, as_of=as_of_s) if db.exists() else []
+    )
     repo_series = (
         load_repo_rate_series_from_rows(repo_rows) if repo_rows else None
     )
-    repo_all = load_repo_rows_all_tenors_from_sqlite(db) if db.exists() else []
+    repo_all = (
+        load_repo_rows_all_tenors_from_sqlite(db, as_of=as_of_s)
+        if db.exists()
+        else []
+    )
     curve_series = build_repo_curve_series(repo_all) if repo_all else None
     nky_vol_series = (
         load_nky_vol_series_from_sqlite(

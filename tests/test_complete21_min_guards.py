@@ -69,8 +69,49 @@ def test_feature_context_jquants_records_rejects_defer():
     )
     with pytest.raises(PermanentDeferHistoryError, match="PD-D4-BARS-AM"):
         ctx.get_jquants_records(dataset="equities_bars_daily_am")
-    with pytest.raises(PermanentDeferHistoryError, match="PD-D2-MASTER"):
-        ctx.get_equity_master()
+    with pytest.raises(PermanentDeferHistoryError, match="PD-D4-EARN-CAL"):
+        ctx.get_jquants_records(dataset="equities_earnings_calendar")
+    with pytest.raises(PermanentDeferHistoryError, match="PD-D5-JSDA-OTC"):
+        ctx.get_jquants_records(dataset="jsda_otc_bond_reference_prices")
+
+
+def test_feature_context_equity_master_post_start_calls_pit():
+    """Official island is PIT-readable; PD-D2-MASTER is not Dataset COMPLETE."""
+    from features.dataset_guard import master_pit_history_start
+
+    assert master_pit_history_start() == "2008-05-07"
+    assert "equities_master" not in COMPLETE_21_DATASETS
+    assert "equities_master" in PERMANENT_DEFER_DATASETS
+    calls: list[tuple[str, dict]] = []
+
+    def _reader(resource, kwargs):
+        calls.append((resource, dict(kwargs)))
+        return SimpleNamespace(rows=[], count=0)
+
+    ctx = FeatureContext(
+        as_of="2008-05-07T15:30:00+09:00",
+        _input_values={},
+        _pit_reader=_reader,
+    )
+    ctx.get_equity_master(code="8697")
+    assert calls == [("equity_master", {"code": "8697"})]
+
+
+def test_feature_context_equity_master_pre_official_empty_no_pit():
+    def _never_read(resource, kwargs):
+        raise AssertionError(f"pre-official master must not load PIT: {resource} {kwargs}")
+
+    ctx = FeatureContext(
+        as_of="2008-05-06T15:30:00+09:00",
+        _input_values={},
+        _pit_reader=_never_read,
+    )
+    res = ctx.get_equity_master(code="8697")
+    assert list(res) == []
+    assert res.count == 0
+    assert res.metadata["as_of"] == "2008-05-06T15:30:00+09:00"
+    assert res.metadata["official_start"] == "2008-05-07"
+    assert res.metadata["pd_id"] == "PD-D2-MASTER"
 
 
 def test_feature_context_jquants_records_allows_complete_dataset():

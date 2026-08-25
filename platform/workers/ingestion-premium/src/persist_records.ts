@@ -5,7 +5,7 @@
 
 import type { DatasetSpec } from "./catalog";
 import { pickAvailableAt } from "./availability";
-import { naturalKey, pickEventTime, stableJson } from "./identity";
+import { naturalKey, newRunId, pickEventTime, stableJson } from "./identity";
 import { isR2Only, wantsSummaryChangeLog } from "./write_path_config";
 import { writeJsonlToR2 } from "./r2_structured_writer";
 import { writeMasterScd2 } from "./master_scd2/write";
@@ -176,8 +176,7 @@ export async function upsertRecords(
       return { inserted: scd2.inserted, revisions: scd2.revisions };
     }
 
-    const runId =
-      `r2-${spec.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const runId = newRunId(`r2-${spec.id}`);
     const r2Result = await writeJsonlToR2(
       env.STRUCTURED_BUCKET,
       spec.id,

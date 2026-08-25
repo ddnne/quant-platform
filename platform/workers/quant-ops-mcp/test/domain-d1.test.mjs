@@ -8,6 +8,7 @@ import {
   classifyRawAcquisition,
   honestProjectionStatus,
   JSDA_UPSTREAM_LOCATORS,
+  OPS_TOOLS,
   syncDatasetState,
 } from "../src/domain.js";
 import { GOVERNED_DATASETS } from "../src/governed.js";
@@ -49,9 +50,18 @@ const ingestionMigrations = [
   "0001_init.sql", "0002_watermarks.sql", "0003_change_feed.sql",
   "0004_revision_identity_v2.sql", "0005_natural_keys_v2.sql",
   "0006_raw_retention_manifests.sql", "0007_collection_coverage_v2.sql",
+  "0010_raw_acquisition_status.sql",
 ].map((name) => readFileSync(
   new URL(`../../ingestion-premium/migrations/${name}`, import.meta.url), "utf8",
 ));
+
+test("coverage tool descriptions report stored policy_version not frozen Coverage V2", () => {
+  const byName = Object.fromEntries(OPS_TOOLS.map((tool) => [tool.name, tool.description]));
+  for (const name of ["dataset_coverage", "coverage_gaps", "coverage_segments"]) {
+    assert.match(byName[name], /Coverage projection \(policy_version as stored on the generation\)/);
+    assert.doesNotMatch(byName[name], /Coverage V2/);
+  }
+});
 
 test("absent Coverage projection is UNKNOWN with all JQ and JSDA gaps", async () => {
   const db = new DatabaseSync(":memory:");
@@ -61,6 +71,24 @@ test("absent Coverage projection is UNKNOWN with all JQ and JSDA gaps", async ()
   assert.ok(result.gaps.some((row) => row.dataset === "jsda_otc_bond_reference_prices"));
   assert.ok(result.gaps.some((row) => row.dataset === "jsda_tokyo_repo_rates"));
   assert.ok(result.gaps.some((row) => row.dataset === "jsda_corporate_bond_transactions"));
+  assert.ok(result.gaps.every((row) =>
+    row.reason === "Coverage projection has not been populated"));
+  const coverage = await callOpsTool(d1(db), "dataset_coverage", {
+    dataset: "jsda_otc_bond_reference_prices",
+  });
+  assert.equal(coverage.status, "UNKNOWN");
+  assert.equal(coverage.reason, "Coverage projection has not been populated");
+  assert.doesNotMatch(coverage.reason, /Coverage V2/);
+  const segments = await callOpsTool(d1(db), "coverage_segments", {
+    dataset: "jsda_otc_bond_reference_prices",
+  });
+  assert.equal(segments.status, "UNKNOWN");
+  assert.equal(segments.reason, "Coverage projection has not been populated");
+  const endpoint = await callOpsTool(d1(db), "endpoint_status", {
+    dataset: "jsda_otc_bond_reference_prices",
+  });
+  assert.equal(endpoint.coverage.status, "UNKNOWN");
+  assert.equal(endpoint.coverage.reason, "Coverage projection has not been populated");
   db.close();
 });
 
@@ -105,10 +133,15 @@ test("real projection schema exposes bounded JSDA Coverage and READY metadata", 
   assert.equal(coverage.status, "UNKNOWN");
   assert.equal(coverage.coverage, null);
   assert.equal(coverage.last_known_good.status, "PARTIAL");
+  // Live projection remains collection-coverage/v2 (STALE). Do not pretend V3 is published.
+  assert.equal(coverage.last_known_good.policy_version, "collection-coverage/v2");
+  assert.match(coverage.reason, /policy_version collection-coverage\/v2/);
+  assert.doesNotMatch(coverage.reason, /Coverage V2/);
   const segments = await callOpsTool(d1(db), "coverage_segments", {
     dataset: "jsda_otc_bond_reference_prices", limit: 200,
   });
   assert.equal(segments.segments.length, 1);
+  assert.equal(segments.segments[0].policy_version, "collection-coverage/v2");
   const quality = await callOpsTool(d1(db), "snapshot_quality", { snapshot_id: snapshotId });
   assert.equal(quality.quality.status, "PASS");
   const b0 = await callOpsTool(d1(db), "b0_status", {});
@@ -304,7 +337,10 @@ test("COMPLETE coverage without active generation is UNKNOWN not COMPLETE", asyn
   assert.equal(coverage.status, "UNKNOWN");
   assert.equal(coverage.coverage, null);
   assert.equal(coverage.last_known_good.status, "COMPLETE");
+  assert.equal(coverage.last_known_good.policy_version, "collection-coverage/v2");
   assert.match(coverage.reason, /last-known-good is not current COMPLETE/);
+  assert.match(coverage.reason, /policy_version collection-coverage\/v2/);
+  assert.doesNotMatch(coverage.reason, /Coverage V2/);
 
   const gaps = await callOpsTool(d1(db), "coverage_gaps", {});
   assert.equal(gaps.status, "UNKNOWN");
@@ -312,12 +348,15 @@ test("COMPLETE coverage without active generation is UNKNOWN not COMPLETE", asyn
   assert.ok(gaps.gaps.every((row) => row.status !== "COMPLETE"));
   const otc = gaps.gaps.find((row) => row.dataset === "jsda_otc_bond_reference_prices");
   assert.equal(otc.status, "UNKNOWN");
+  assert.equal(otc.reason, "Coverage projection has not been populated");
 
   const endpoint = await callOpsTool(d1(db), "endpoint_status", {
     dataset: "jsda_otc_bond_reference_prices",
   });
   assert.equal(endpoint.coverage.status, "UNKNOWN");
   assert.equal(endpoint.coverage.last_known_good.status, "COMPLETE");
+  assert.equal(endpoint.coverage.last_known_good.policy_version, "collection-coverage/v2");
+  assert.match(endpoint.coverage.reason, /policy_version collection-coverage\/v2/);
   db.close();
 });
 
@@ -341,6 +380,7 @@ test("active generation COMPLETE is current coverage COMPLETE", async () => {
   });
   assert.equal(coverage.status, "COMPLETE");
   assert.equal(coverage.coverage.status, "COMPLETE");
+  assert.equal(coverage.coverage.policy_version, "collection-coverage/v2");
   assert.equal(coverage.active_generation, gen);
 
   const endpoint = await callOpsTool(d1(db), "endpoint_status", {

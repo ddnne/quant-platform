@@ -1,5 +1,7 @@
-"""Load unique_logic catalog. Compiled map is load SoT.
+"""Load unique_logic catalog. YAML files are gone; compiled catalog is SoT.
 
+yaml_* names (unique_family_ids_from_yaml, yaml_combo_rows) are kept aliases;
+unique_family_ids_from_catalog / combo_rows_from_catalog are the same objects.
 YAML overlay replaces the compiled map only when QP_ALLOW_YAML_OVERLAY=1.
 """
 from __future__ import annotations
@@ -330,7 +332,7 @@ def combo_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
     return _combo_row(raw)
 
 
-combo_row_from_spec = combo_row_from_yaml
+combo_row_from_spec = combo_row_from_yaml  # YAML gone; yaml_* name kept alias; compiled catalog is SoT
 
 
 @lru_cache(maxsize=8)
@@ -354,7 +356,7 @@ def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
     )
 
 
-combo_rows_from_catalog = yaml_combo_rows
+combo_rows_from_catalog = yaml_combo_rows  # YAML gone; yaml_* name kept alias; compiled catalog is SoT
 
 
 @lru_cache(maxsize=8)
@@ -540,7 +542,7 @@ def unique_family_ids_from_yaml(*, root: Path | None = None) -> dict[str, frozen
     return {k: frozenset(v) for k, v in buckets.items()}
 
 
-unique_family_ids_from_catalog = unique_family_ids_from_yaml
+unique_family_ids_from_catalog = unique_family_ids_from_yaml  # YAML gone; yaml_* name kept alias; compiled catalog is SoT
 
 
 def combo_thesis_ids_by_kind(*, root: Path | None = None) -> dict[str, frozenset[str]]:

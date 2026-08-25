@@ -12,6 +12,8 @@ from agents.strategist import StrategistAgent
 from risk import JsonRiskStore
 from strategies.paper import JsonPaperStore, PaperRunConfig
 
+from core.universe import FIXED_UNIVERSE_ENV
+
 from _coreseed import CODES, seed_db
 
 
@@ -25,7 +27,8 @@ def _weekdays(count: int) -> list[str]:
     return days
 
 
-def test_agents_spec_paper_risk_pipeline_runs_offline(tmp_path):
+def test_agents_spec_paper_risk_pipeline_runs_offline(tmp_path, monkeypatch):
+    monkeypatch.setenv(FIXED_UNIVERSE_ENV, "1")
     days = _weekdays(10)
     prices = {
         code: {
