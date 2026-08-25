@@ -115,7 +115,7 @@ def test_production_signer_derives_id_from_exact_pinned_public_key(
     assert signing_key.key_id == receipt_ed25519_keys.key_id
 
 
-def test_committed_receipt_registry_has_one_explicit_production_authority() -> None:
+def test_committed_receipt_registry_has_no_current_signing_authority() -> None:
     import storage.receipt_crypto as crypto
 
     committed_path = (
@@ -130,12 +130,38 @@ def test_committed_receipt_registry_has_one_explicit_production_authority() -> N
         for row in document["keys"]
     )
     active = [row for row in document["keys"] if row["status"] == "active"]
-    assert [row["key_id"] for row in active] == ["receipt-20260825-v1"]
+    assert active == []
     stat = committed_path.stat()
     loaded = crypto._load_verify_key_file(
         str(committed_path), stat.st_mtime_ns, stat.st_size
     )
-    assert [row.key_id for row in loaded] == ["receipt-20260825-v1"]
+    assert loaded == ()
+
+
+def test_revoked_same_uid_key_cannot_reactivate_receipt_minting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import storage.receipt_crypto as crypto
+
+    private_pem, public_raw, key_id = generate_test_receipt_keypair(
+        key_id="retired-same-uid"
+    )
+    registry_path = write_test_receipt_registry(
+        tmp_path / "retired-registry.json",
+        key_id=key_id,
+        public_raw=public_raw,
+    )
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["keys"][0]["status"] = "revoked"
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    monkeypatch.setattr(crypto, "_PINNED_VERIFY_KEYS_PATH", registry_path)
+    crypto._load_verify_key_file.cache_clear()
+    _plant_host_pem(tmp_path, monkeypatch, private_pem=private_pem)
+    monkeypatch.delenv("QUANT_RECEIPT_DISABLE_HOST_PEM", raising=False)
+
+    with pytest.raises(ReceiptKeyConfigurationError, match="exactly one active"):
+        load_signing_key()
+    assert load_verify_keys() == {}
 
 
 def test_receipt_registry_never_defaults_missing_status_to_active(

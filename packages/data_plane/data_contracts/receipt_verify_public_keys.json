@@ -6,8 +6,8 @@
       "key_id": "receipt-20260825-v1",
       "public_key_b64": "DCVwl1tFSnA7QoHV5QxppUsU9uqNo2Fasc8kakH3UBY=",
       "algorithm": "Ed25519",
-      "status": "active",
-      "note": "dedicated production receipt authority"
+      "status": "revoked",
+      "note": "same-UID bootstrap key retired pending a dedicated receipt authority"
     },
     {
       "key_id": "dev-receipt-v1",
