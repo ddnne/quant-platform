@@ -3,7 +3,7 @@ import {
   claimJob,
   completeJob,
   loadJob,
-  markContinuationPending,
+  advanceContinuationCursor,
   markContinuationQueued,
   persistFetchedArtifact,
   persistFrontier,
@@ -268,7 +268,7 @@ async function processDiscovery(
     const now = new Date().toISOString();
     await persistFrontier(
       env.DB,
-      row.work_key,
+      row,
       frontierJson,
       discovered.rawKey,
       discovered.contentDigest,
@@ -300,8 +300,8 @@ async function processDiscovery(
 
   if (end < frontier.length) {
     const pendingAt = new Date().toISOString();
-    await markContinuationPending(env.DB, row, end, pendingAt);
-    await sendContinuation(env, continuationJob(job, end, row.attempt));
+    await advanceContinuationCursor(env.DB, row, end, pendingAt);
+    row = { ...row, cursor: end };
     const auditAt = new Date().toISOString();
     const audit = await putQueueAuditReceipt(
       env.RAW_BUCKET,
@@ -310,11 +310,12 @@ async function processDiscovery(
         "continued",
         auditAt,
         null,
-        `enqueued children ${row.cursor}-${end - 1}`,
+        `enqueued children ${end - descriptors.length}-${end - 1}`,
         end,
         frontier.length,
       ),
     );
+    await sendContinuation(env, continuationJob(job, end, row.attempt));
     await markContinuationQueued(env.DB, row, end, audit, auditAt);
     return;
   }
@@ -361,7 +362,7 @@ async function processFile(
     const persistedAt = new Date().toISOString();
     await persistFetchedArtifact(
       env.DB,
-      row.work_key,
+      row,
       raw.key,
       raw.digest,
       persistedAt,
@@ -549,7 +550,22 @@ export async function consumeQueueMessage(
     message.ack();
   } catch (error) {
     try {
-      const current = (await loadJob(env.DB, claimed.work_key)) ?? claimed;
+      const current = await loadJob(env.DB, claimed.work_key);
+      if (
+        current === null ||
+        current.state !== "running" ||
+        current.attempt !== claimed.attempt
+      ) {
+        logError("jsda_queue_claim_fence_lost", {
+          work_key: claimed.work_key,
+          claimed_attempt: claimed.attempt,
+          current_attempt: current?.attempt ?? null,
+          current_state: current?.state ?? null,
+          error: errorDetail(error),
+        });
+        message.retry({ delaySeconds: RETRY_DELAY_SECONDS });
+        return;
+      }
       const outcome = await handleFailure(env, current, error);
       if (outcome === "ack") message.ack();
       else message.retry({ delaySeconds: RETRY_DELAY_SECONDS });

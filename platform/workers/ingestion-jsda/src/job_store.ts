@@ -70,6 +70,7 @@ function insertEventStatement(
   db: D1Database,
   job: Pick<JobRow, "work_key" | "run_key" | "dataset" | "job_type" | "segment_id" | "attempt">,
   event: RunEvent,
+  expectedState: JobState,
 ): D1PreparedStatement {
   return db
     .prepare(
@@ -77,7 +78,12 @@ function insertEventStatement(
        (work_key, run_key, dataset, job_type, segment_id, attempt, cursor,
         result, reason_code, detail, content_digest, raw_key,
         audit_receipt_key, audit_receipt_digest, occurred_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE EXISTS (
+         SELECT 1 FROM jsda_acquisition_jobs_v2
+          WHERE work_key=? AND attempt=? AND state=?
+            AND audit_receipt_key=? AND audit_receipt_digest=?
+       )`,
     )
     .bind(
       job.work_key,
@@ -95,6 +101,11 @@ function insertEventStatement(
       event.audit.key,
       event.audit.digest,
       event.occurredAt,
+      job.work_key,
+      job.attempt,
+      expectedState,
+      event.audit.key,
+      event.audit.digest,
     );
 }
 
@@ -102,6 +113,7 @@ function insertRunLogStatement(
   db: D1Database,
   job: Pick<JobRow, "work_key" | "run_key" | "dataset" | "job_type" | "segment_id" | "attempt">,
   event: RunEvent,
+  expectedState: JobState,
 ): D1PreparedStatement {
   const status =
     event.result === "completed"
@@ -112,9 +124,23 @@ function insertRunLogStatement(
   return db
     .prepare(
       `INSERT INTO ingestion_run_log (ran_at, source, runtime, status, detail)
-       VALUES (?, 'jsda', 'cloudflare_queue_v2', ?, ?)`,
+       SELECT ?, 'jsda', 'cloudflare_queue_v2', ?, ?
+       WHERE EXISTS (
+         SELECT 1 FROM jsda_acquisition_jobs_v2
+          WHERE work_key=? AND attempt=? AND state=?
+            AND audit_receipt_key=? AND audit_receipt_digest=?
+       )`,
     )
-    .bind(event.occurredAt, status, detailJson(job, event));
+    .bind(
+      event.occurredAt,
+      status,
+      detailJson(job, event),
+      job.work_key,
+      job.attempt,
+      expectedState,
+      event.audit.key,
+      event.audit.digest,
+    );
 }
 
 export async function registerJob(db: D1Database, job: JsdaQueueJob): Promise<JobRow> {
@@ -179,6 +205,23 @@ export async function registerJobs(
         ),
     ),
   );
+  const discoveries = jobs.filter(
+    (job): job is JsdaQueueJob & { parent_work_key: string } =>
+      job.parent_work_key !== null,
+  );
+  if (discoveries.length > 0) {
+    await db.batch(
+      discoveries.map((job) =>
+        db
+          .prepare(
+            `INSERT OR IGNORE INTO jsda_acquisition_discoveries_v2
+             (parent_work_key, child_work_key, run_key, discovered_at)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .bind(job.parent_work_key, job.work_key, job.run_key, now),
+      ),
+    );
+  }
   const rows: JobRow[] = [];
   for (const job of jobs) {
     const row = await loadJob(db, job.work_key);
@@ -245,7 +288,7 @@ export async function claimJob(
 
 export async function persistFrontier(
   db: D1Database,
-  workKey: string,
+  row: Pick<JobRow, "work_key" | "attempt">,
   frontierJson: string,
   rawKey: string,
   contentDigest: string,
@@ -255,18 +298,18 @@ export async function persistFrontier(
     .prepare(
       `UPDATE jsda_acquisition_jobs_v2
        SET frontier_json=?, raw_key=?, content_digest=?, updated_at=?
-       WHERE work_key=? AND state='running'`,
+       WHERE work_key=? AND state='running' AND attempt=?`,
     )
-    .bind(frontierJson, rawKey, contentDigest, now, workKey)
+    .bind(frontierJson, rawKey, contentDigest, now, row.work_key, row.attempt)
     .run();
   if ((result.meta.changes ?? 0) !== 1) {
-    throw new Error(`JSDA frontier update lost job claim: ${workKey}`);
+    throw new Error(`JSDA frontier update lost job claim: ${row.work_key}`);
   }
 }
 
 export async function persistFetchedArtifact(
   db: D1Database,
-  workKey: string,
+  row: Pick<JobRow, "work_key" | "attempt">,
   rawKey: string,
   contentDigest: string,
   now: string,
@@ -275,16 +318,16 @@ export async function persistFetchedArtifact(
     .prepare(
       `UPDATE jsda_acquisition_jobs_v2
        SET raw_key=?, content_digest=?, updated_at=?
-       WHERE work_key=? AND state='running'`,
+       WHERE work_key=? AND state='running' AND attempt=?`,
     )
-    .bind(rawKey, contentDigest, now, workKey)
+    .bind(rawKey, contentDigest, now, row.work_key, row.attempt)
     .run();
   if ((result.meta.changes ?? 0) !== 1) {
-    throw new Error(`JSDA artifact update lost job claim: ${workKey}`);
+    throw new Error(`JSDA artifact update lost job claim: ${row.work_key}`);
   }
 }
 
-export async function markContinuationPending(
+export async function advanceContinuationCursor(
   db: D1Database,
   row: JobRow,
   nextCursor: number,
@@ -293,10 +336,10 @@ export async function markContinuationPending(
   const result = await db
     .prepare(
       `UPDATE jsda_acquisition_jobs_v2
-       SET state='pending', cursor=?, lease_until=NULL, updated_at=?
-       WHERE work_key=? AND state='running'`,
+       SET cursor=?, updated_at=?
+       WHERE work_key=? AND state='running' AND attempt=?`,
     )
-    .bind(nextCursor, now, row.work_key)
+    .bind(nextCursor, now, row.work_key, row.attempt)
     .run();
   if ((result.meta.changes ?? 0) !== 1) {
     throw new Error(`JSDA continuation lost job claim: ${row.work_key}`);
@@ -326,13 +369,21 @@ export async function markContinuationQueued(
         `UPDATE jsda_acquisition_jobs_v2
          SET state='queued', cursor=?, enqueued_at=?, updated_at=?,
              audit_receipt_key=?, audit_receipt_digest=?
-         WHERE work_key=? AND state='pending'`,
+         WHERE work_key=? AND state='running' AND attempt=?`,
       )
-      .bind(nextCursor, now, now, audit.key, audit.digest, row.work_key),
-    insertEventStatement(db, row, event),
-    insertRunLogStatement(db, row, event),
+      .bind(
+        nextCursor,
+        now,
+        now,
+        audit.key,
+        audit.digest,
+        row.work_key,
+        row.attempt,
+      ),
+    insertEventStatement(db, row, event, "queued"),
+    insertRunLogStatement(db, row, event, "queued"),
   ]);
-  if ((results[0]?.meta.changes ?? 0) !== 1) {
+  if (results.some((result) => (result?.meta.changes ?? 0) !== 1)) {
     throw new Error(`JSDA continuation finalize lost job claim: ${row.work_key}`);
   }
 }
@@ -360,13 +411,13 @@ export async function completeJob(
         `UPDATE jsda_acquisition_jobs_v2
          SET state='completed', cursor=?, lease_until=NULL, completed_at=?, updated_at=?,
              last_error=NULL, audit_receipt_key=?, audit_receipt_digest=?
-         WHERE work_key=? AND state='running'`,
+         WHERE work_key=? AND state='running' AND attempt=?`,
       )
-      .bind(cursor, now, now, audit.key, audit.digest, row.work_key),
-    insertEventStatement(db, row, event),
-    insertRunLogStatement(db, row, event),
+      .bind(cursor, now, now, audit.key, audit.digest, row.work_key, row.attempt),
+    insertEventStatement(db, row, event, "completed"),
+    insertRunLogStatement(db, row, event, "completed"),
   ]);
-  if ((results[0]?.meta.changes ?? 0) !== 1) {
+  if (results.some((result) => (result?.meta.changes ?? 0) !== 1)) {
     throw new Error(`JSDA completion lost job claim: ${row.work_key}`);
   }
 }
@@ -395,13 +446,21 @@ export async function rejectJob(
         `UPDATE jsda_acquisition_jobs_v2
          SET state='rejected', lease_until=NULL, completed_at=?, updated_at=?,
              last_error=?, audit_receipt_key=?, audit_receipt_digest=?
-         WHERE work_key=? AND state='running'`,
+         WHERE work_key=? AND state='running' AND attempt=?`,
       )
-      .bind(now, now, detail.slice(0, 500), audit.key, audit.digest, row.work_key),
-    insertEventStatement(db, row, event),
-    insertRunLogStatement(db, row, event),
+      .bind(
+        now,
+        now,
+        detail.slice(0, 500),
+        audit.key,
+        audit.digest,
+        row.work_key,
+        row.attempt,
+      ),
+    insertEventStatement(db, row, event, "rejected"),
+    insertRunLogStatement(db, row, event, "rejected"),
   ]);
-  if ((results[0]?.meta.changes ?? 0) !== 1) {
+  if (results.some((result) => (result?.meta.changes ?? 0) !== 1)) {
     throw new Error(`JSDA rejection lost job claim: ${row.work_key}`);
   }
 }
@@ -430,13 +489,20 @@ export async function recordTransientFailure(
         `UPDATE jsda_acquisition_jobs_v2
          SET state='failed_transient', lease_until=NULL, updated_at=?, last_error=?,
              audit_receipt_key=?, audit_receipt_digest=?
-         WHERE work_key=? AND state='running'`,
+         WHERE work_key=? AND state='running' AND attempt=?`,
       )
-      .bind(now, detail.slice(0, 500), audit.key, audit.digest, row.work_key),
-    insertEventStatement(db, row, event),
-    insertRunLogStatement(db, row, event),
+      .bind(
+        now,
+        detail.slice(0, 500),
+        audit.key,
+        audit.digest,
+        row.work_key,
+        row.attempt,
+      ),
+    insertEventStatement(db, row, event, "failed_transient"),
+    insertRunLogStatement(db, row, event, "failed_transient"),
   ]);
-  if ((results[0]?.meta.changes ?? 0) !== 1) {
+  if (results.some((result) => (result?.meta.changes ?? 0) !== 1)) {
     throw new Error(`JSDA transient failure lost job claim: ${row.work_key}`);
   }
 }

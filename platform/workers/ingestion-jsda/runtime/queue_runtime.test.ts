@@ -11,7 +11,12 @@ import {
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import worker from "../src/index";
 import type { JsdaWorkerEnv } from "../src/env";
-import { loadJob, registerJob } from "../src/job_store";
+import {
+  claimJob,
+  completeJob,
+  loadJob,
+  registerJob,
+} from "../src/job_store";
 import {
   continuationJob,
   descriptorForFile,
@@ -243,6 +248,12 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       .bind(root.work_key)
       .first<{ n: number }>();
     expect(finalChildCount?.n).toBe(30);
+    const discoveryEdges = await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS n FROM jsda_acquisition_discoveries_v2 WHERE parent_work_key=?",
+    )
+      .bind(root.work_key)
+      .first<{ n: number }>();
+    expect(discoveryEdges?.n).toBe(30);
   });
 
   it("acks terminal work without fetching or duplicating it", async () => {
@@ -355,5 +366,66 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       "run-log-down",
     ]);
     expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("running");
+  });
+
+  it("fences a stale claimant from terminal state and event writes", async () => {
+    const root = await makeRootJob(
+      "jsda_tokyo_repo_rates",
+      "manual",
+      "2026-08-25T03:00:00.000Z",
+    );
+    await registerJob(runtimeEnv.DB, root);
+    const first = await claimJob(
+      runtimeEnv.DB,
+      root.work_key,
+      "2026-08-25T03:00:01.000Z",
+      "2026-08-25T03:00:02.000Z",
+    );
+    expect(first?.attempt).toBe(1);
+    const second = await claimJob(
+      runtimeEnv.DB,
+      root.work_key,
+      "2026-08-25T03:00:03.000Z",
+      "2026-08-25T03:15:03.000Z",
+    );
+    expect(second?.attempt).toBe(2);
+    const audit = await putQueueAuditReceipt(runtimeEnv.RAW_BUCKET, {
+      event: "completed",
+      work_key: root.work_key,
+      run_key: root.run_key,
+      dataset: root.dataset,
+      job_type: root.job_type,
+      segment_id: root.segment_id,
+      target_url: root.target_url,
+      parent_work_key: null,
+      contract_digest: root.contract_digest,
+      attempt: 1,
+      cursor: 0,
+      frontier_size: 0,
+      raw_key: "raw/jsda/stale/index.html",
+      content_digest: "5".repeat(64),
+      reason_code: null,
+      detail: "stale claimant must not finalize",
+      recorded_at: "2026-08-25T03:00:04.000Z",
+    });
+    await expect(
+      completeJob(
+        runtimeEnv.DB,
+        { ...first!, raw_key: "raw/jsda/stale/index.html", content_digest: "5".repeat(64) },
+        0,
+        audit,
+        "2026-08-25T03:00:04.000Z",
+      ),
+    ).rejects.toThrow("lost job claim");
+    expect(await loadJob(runtimeEnv.DB, root.work_key)).toMatchObject({
+      state: "running",
+      attempt: 2,
+    });
+    const events = await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS n FROM jsda_acquisition_events_v2 WHERE work_key=?",
+    )
+      .bind(root.work_key)
+      .first<{ n: number }>();
+    expect(events?.n).toBe(0);
   });
 });

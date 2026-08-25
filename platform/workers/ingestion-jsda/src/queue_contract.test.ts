@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CHILD_ENQUEUE_BATCH_SIZE,
   descriptorForFile,
+  descriptorForYear,
   isJsdaQueueJob,
   makeChildJob,
   makeRootJob,
@@ -48,6 +49,31 @@ describe("JSDA Queue v2 contract", () => {
     expect(first.work_key).toBe(second.work_key);
     expect(first.parent_work_key).not.toBe(second.parent_work_key);
     expect(first.target_url).not.toContain("#");
+  });
+
+  it("refreshes discovery pages per run while keeping fetched files stable", async () => {
+    const firstRoot = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-24T01:30:00.000Z",
+    );
+    const secondRoot = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-25T01:30:00.000Z",
+    );
+    const year = await descriptorForYear(
+      "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/archive2026.html",
+    );
+    const file = await descriptorForFile(
+      "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/S260825.csv",
+    );
+    expect((await makeChildJob(firstRoot, year)).work_key).not.toBe(
+      (await makeChildJob(secondRoot, year)).work_key,
+    );
+    expect((await makeChildJob(firstRoot, file)).work_key).toBe(
+      (await makeChildJob(secondRoot, file)).work_key,
+    );
   });
 
   it("uses a bounded continuation batch without an archive convergence cap", () => {

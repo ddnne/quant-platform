@@ -69,12 +69,15 @@ const CONTRACT_CANONICAL = JSON.stringify({
   hierarchy: ["discover_root", "discover_year", "fetch_file"],
   dataset_roots: DATASET_ROOTS,
   dataset_file_selection: "jsda-official-file-routing/v1",
-  work_key: "sha256(canonical child URL); daily stable root key",
+  work_key:
+    "daily stable root; run-scoped discovery URL; globally stable fetched-file URL",
   fields: [...JOB_KEYS].sort(),
   official_hosts: ["jsda.or.jp", "market.jsda.or.jp", "www.jsda.or.jp"],
   semantics: [
     "d1-authoritative-progress",
     "bounded-child-continuations",
+    "fenced-job-attempts",
+    "run-scoped-discovery-refresh",
     "r2-create-only-raw-and-audit",
     "completed-work-idempotent",
   ],
@@ -208,9 +211,13 @@ export async function makeChildJob(
 ): Promise<JsdaQueueJob> {
   const identity = await urlIdentity(descriptor.target_url);
   const kind = descriptor.job_type === "discover_year" ? "year" : "file";
+  const runIdentity =
+    descriptor.job_type === "discover_year"
+      ? `:${(await sha256Hex(encode(parent.run_key))).slice(0, 16)}`
+      : "";
   return {
     version: JSDA_QUEUE_JOB_VERSION,
-    work_key: `jsda:v2:${kind}:${parent.dataset}:${identity}`,
+    work_key: `jsda:v2:${kind}:${parent.dataset}:${identity}${runIdentity}`,
     run_key: parent.run_key,
     job_type: descriptor.job_type,
     dataset: parent.dataset,

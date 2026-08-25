@@ -46,6 +46,22 @@ CREATE INDEX IF NOT EXISTS ix_jsda_jobs_v2_state_updated
 CREATE INDEX IF NOT EXISTS ix_jsda_jobs_v2_run_parent
     ON jsda_acquisition_jobs_v2 (run_key, parent_work_key, job_type, state);
 
+-- A fetched file keeps one stable work row across runs, while every discovery
+-- records which current parent observed it. This preserves run closure without
+-- downloading an immutable file twice.
+CREATE TABLE IF NOT EXISTS jsda_acquisition_discoveries_v2 (
+    parent_work_key        TEXT NOT NULL,
+    child_work_key         TEXT NOT NULL,
+    run_key                TEXT NOT NULL,
+    discovered_at          TEXT NOT NULL,
+    PRIMARY KEY (parent_work_key, child_work_key),
+    FOREIGN KEY (parent_work_key) REFERENCES jsda_acquisition_jobs_v2(work_key),
+    FOREIGN KEY (child_work_key) REFERENCES jsda_acquisition_jobs_v2(work_key)
+);
+
+CREATE INDEX IF NOT EXISTS ix_jsda_discoveries_v2_run
+    ON jsda_acquisition_discoveries_v2 (run_key, parent_work_key, child_work_key);
+
 CREATE TABLE IF NOT EXISTS jsda_acquisition_events_v2 (
     event_id               INTEGER PRIMARY KEY AUTOINCREMENT,
     work_key               TEXT NOT NULL,
