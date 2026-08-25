@@ -78,7 +78,7 @@ digest）で dataset COMPLETE を判定する。READY は governed JQ/JSDA 全�
 slice しない。ブラウザ ChatGPT / mobile は Cloudflare Access/OAuth の Streamable HTTP
 **Ops Read MCP** を使い、local stdio MCP は offline/dev adapter に限定する。Remote Research は
 Cloudflare 上で immutable READY generation を pin できるまで公開しない。運用手順は
-[docs/phase61_production_runbook.md](docs/phase61_production_runbook.md)、接続境界は
+[docs/operations/current_production_runbook.md](docs/operations/current_production_runbook.md)、接続境界は
 [docs/quant_data_access.md](docs/quant_data_access.md)。
 
 > 開示系（EDINET 由来の大株主・持ち合い・大量保有）は独立した EDINET DB ではなく、**J-Quants の EDINET 系 API**（`/v2/edinet/major-shareholders`、`/v2/edinet/cross-shareholdings`、`/v2/edinet/large-volume-shareholders`、および `/v2/fins/...`）で統合する方針。Phase 1 では J-Quants 上記エンドポイント + JSDA が対象。

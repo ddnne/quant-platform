@@ -23,7 +23,7 @@
 | 2 | **This file** | Task routing + do-not list |
 | 3 | [`../phase62_residual_status.md`](../phase62_residual_status.md) | **Live residual SoT (sole)** — COMPLETE segs, raw_n, C8, tip, Phase7 OFF, Mass NO-GO |
 | 4 | [`../architecture.md`](../architecture.md) | PIT sole read path, Coverage V2, MCP planes (not residual counts) |
-| 5 | *One* domain doc for your task (table below) | Contract detail |
+| 5 | [`../operations/current_production_runbook.md`](../operations/current_production_runbook.md) | **Current executable production runbook** |
 
 **Refactor / layout / import policy work:** also read the [ADR](./adr_llm_friendly_refactor.md).  
 **Review / findings work:** also read [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md); update its machine-readable companion rather than creating a dated review snapshot.

@@ -1,0 +1,125 @@
+# Current production runbook
+
+<!-- CURRENT_PRODUCTION_RUNBOOK -->
+
+This is the **only executable production operations document**. Historical
+Phase 6.1 / 6.2 runbooks are non-executable. Live GO flags live in
+[`../phase62_residual_status.md`](../phase62_residual_status.md). Review findings
+live in [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md).
+
+Do not print secret values. Check presence only.
+
+## Canonical machine-readable authorities
+
+| Authority | Path | Check command |
+|-----------|------|----------------|
+| D1 migration owners, order, checksums | [`specs/cloudflare/d1_migration_manifest.json`](../../specs/cloudflare/d1_migration_manifest.json) | `.venv/bin/python scripts/cloudflare_d1_migration_manifest.py` |
+| Active Worker bindings, toolchain, observability | [`specs/cloudflare/active_worker_bindings.json`](../../specs/cloudflare/active_worker_bindings.json) | `.venv/bin/python scripts/cloudflare_binding_manifest.py` |
+| Ops read tool inventory | [`platform/workers/quant-ops-mcp/src/domain.js`](../../platform/workers/quant-ops-mcp/src/domain.js) `OPS_TOOLS` | count `tool("` entries in `OPS_TOOLS` |
+| Native CI | [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh) | `scripts/verify_ci.sh` |
+
+`applied_state` in the migration manifest is `UNVERIFIED` on purpose. Record
+remote apply results only in immutable release evidence.
+
+## Honest holds
+
+- **Cloudflare Access / Zero Trust:** `ingestion-secrets` workers.dev is not
+  Access-protected until a human initializes Zero Trust on the account. Header
+  token remains enabled. Do not treat that HOLD as closed.
+- **Controlled Pilot:** **NO-GO** until live evidence in
+  `docs/phase62_residual_status.md` passes. Green tests do not arm exact-four.
+- **Mass Research:** **NO-GO**. Mass talks to Gateway only through typed
+  Service Binding RPC `GatewayService`. `GATEWAY_TOKEN` is HTTP defense in
+  depth if a closed route is attached later; it is not a shared Mass
+  credential.
+- **AM history:** do not treat V2 monthly AM completeness as a current target.
+  V3 AM is tip-scoped. Residual PARTIAL rows are not permission to mint empty
+  COMPLETE receipts.
+
+## 1. Preconditions
+
+```bash
+test -n "${INGESTION_RUN_TOKEN:-}" && echo INGESTION_RUN_TOKEN=present
+test -n "${DATA_EXPORT_TOKEN:-}" && echo DATA_EXPORT_TOKEN=present
+test -n "${CLOUDFLARE_API_TOKEN:-}" && echo CLOUDFLARE_API_TOKEN=present
+npx wrangler whoami
+.venv/bin/python scripts/cloudflare_d1_migration_manifest.py
+.venv/bin/python scripts/cloudflare_binding_manifest.py
+```
+
+Stop if production D1/R2/Queue names or IDs differ from
+`specs/cloudflare/active_worker_bindings.json`. Every active environment has
+`preview_urls = false`, `observability.enabled = true`,
+`head_sampling_rate = 1`, and `[version_metadata] binding = "CF_VERSION_METADATA"`.
+Wrangler is `4.125.0`.
+
+## 2. Apply D1 migrations through canonical owners
+
+Do not hand-loop a subset of SQL files. Do not apply Ops projection SQL to
+`quant-ingest`. `ingestion-premium` owns `quant-ingest`; `quant-ops-mcp` owns
+`quant-ops-projection` and `quant-ops-quota`.
+
+```bash
+.venv/bin/python scripts/cloudflare_d1_migration_manifest.py
+
+cd platform/workers/ingestion-premium
+npx wrangler d1 migrations apply quant-ingest --remote --env production
+
+cd ../quant-ops-mcp
+npx wrangler d1 migrations apply quant-ops-projection --remote --env production
+npx wrangler d1 migrations apply quant-ops-quota --remote --env production
+cd ../../..
+```
+
+JSDA observation identity lives in
+`platform/workers/ingestion-premium/migrations/0012_jsda_observation_identity.sql`
+and is applied through the `quant-ingest` owner above.
+
+## 3. Publish the signed Ops projection
+
+Projection SQL is applied only to `quant-ops-projection`.
+
+```bash
+.venv/bin/python scripts/publish_ops_projection.py \
+  --db data/structured/ingestion.sqlite \
+  --snapshot-dir data/research_snapshots \
+  --apply-remote
+```
+
+The publisher refuses a COMPLETE-count regression and requires the dedicated
+Ops projection signing key. See
+[`projection_publish_guard.md`](projection_publish_guard.md).
+
+## 4. Remote Ops MCP
+
+The repository surface is the frozen `OPS_TOOLS` list in
+`platform/workers/quant-ops-mcp/src/domain.js` (**17** tools, including
+`storage_plane_status`). Live Cloudflare may lag; do not operate from a 16-tool
+memory. Unauthenticated `/mcp` must be `401`.
+
+```bash
+curl -i "$QUANT_OPS_MCP_URL/mcp" \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl-smoke","version":"1"}}}'
+```
+
+## 5. JSDA rolling locators
+
+Current-year / current-file JSDA URLs are re-observed per governed run. Dated
+archive URLs stay one observation. Artifacts are content-addressed. Cron roots
+are daily-stable. Queue redelivery of a completed observation is idempotent and
+does not permanently complete a rolling URL.
+
+```bash
+curl -fsS -X POST \
+  -H "X-Ingestion-Token: $INGESTION_RUN_TOKEN" \
+  "$INGESTION_JSDA_URL/v1/run"
+```
+
+## 6. Failure rules
+
+- Persist D1/R2 evidence before Queue ack. Evidence-write failure retries.
+- Invalid Queue bodies keep reject/DLQ audit evidence without caller values.
+- Controlled Pilot and Mass remain NO-GO until residual live evidence passes.
+- Access HOLD remains open until a human initializes Zero Trust.

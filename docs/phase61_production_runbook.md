@@ -1,5 +1,9 @@
 # Phase 6.1 production backfill, READY, and remote MCP runbook
 
+> **HISTORICAL / NON-EXECUTABLE.** Do not run commands from this document.
+> The current production runbook is
+> [`operations/current_production_runbook.md`](operations/current_production_runbook.md).
+>
 > **Live residual SoT:** [phase62_residual_status.md](phase62_residual_status.md)  
 > (COMPLETE / raw_n / Mass·READY / Phase7 — not this runbook.)  
 > **Agent nav:** [architecture/llm_nav_map.md](architecture/llm_nav_map.md)
