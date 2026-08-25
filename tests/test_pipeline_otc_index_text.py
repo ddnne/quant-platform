@@ -9,18 +9,17 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from data_contracts import coverage_contract_for
 from ingestion.pipeline import (
     _index_text_for_plan,
     _plan_required_segments,
 )
+from ingestion.pipeline_receipts import emit_catalog_job_receipt
+from storage.sqlite_store import SqliteStore
 
 REPO = Path(__file__).resolve().parents[1]
-PIPELINE = REPO / "packages" / "data_plane" / "ingestion" / "pipeline.py"
-RECEIPTS = (
-    REPO / "packages" / "data_plane" / "ingestion" / "pipeline_receipts.py"
-)
 FIXTURE = REPO / "tests" / "fixtures" / "jsda_otc_official_index_tiny.html"
 
 DATASET = "jsda_otc_bond_reference_prices"
@@ -73,16 +72,32 @@ def test_pipeline_otc_plan_with_fixture_html_lists_publication_days_not_weekend(
     assert all(seg.segment_id != "COMPLETE" for seg in planned)
 
 
-def test_pipeline_persist_passes_index_text_into_plan() -> None:
-    src = RECEIPTS.read_text(encoding="utf-8")
-    assert "index_text = _index_text_for_plan(policy, None)" in src
-    assert src.count("index_text=index_text") >= 2
-    assert src.count("_plan_required_segments(") >= 3
-    emit = src.split("def emit_catalog_job_receipt(", 1)[1]
-    assert "index_text=index_text" in emit
-    assert "Does not fetch live HTML" in src
-    assert "Collection SUCCESS is not Coverage COMPLETE" in src
-    pipeline_src = PIPELINE.read_text(encoding="utf-8")
-    persist = pipeline_src.split("def _persist(", 1)[1]
-    assert "emit_catalog_job_receipt(" in persist
-    assert "save_raw(" in persist
+def test_catalog_receipt_without_official_index_creates_no_required_state(
+    tmp_path: Path,
+) -> None:
+    store = SqliteStore(tmp_path / "otc-no-index.sqlite")
+    try:
+        emit_catalog_job_receipt(
+            store,
+            job=SimpleNamespace(
+                dataset_id=DATASET,
+                params={"from": "2002-08-02", "to": "2002-08-06"},
+            ),
+            collection_context=SimpleNamespace(
+                checked_at="2026-08-26T00:00:00+00:00"
+            ),
+            persisted_collection=object(),
+            receipt_service=object(),
+        )
+        segment_count = store._conn.execute(  # noqa: SLF001
+            "SELECT COUNT(*) FROM coverage_segments WHERE dataset=?",
+            (DATASET,),
+        ).fetchone()[0]
+        receipt_count = store._conn.execute(  # noqa: SLF001
+            "SELECT COUNT(*) FROM collection_receipts WHERE dataset=?",
+            (DATASET,),
+        ).fetchone()[0]
+    finally:
+        store.close()
+    assert segment_count == 0
+    assert receipt_count == 0
