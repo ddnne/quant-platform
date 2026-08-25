@@ -33,6 +33,9 @@ not release authorities.
   adapter and an observed pinned `wrangler r2 object get --remote` command.
 - Replaced the runner's `inspect.getsource`/string check for `shell=False` with
   an intercepted invocation that asserts the actual subprocess contract.
+- Removed the JSDA recovery sealer's function-name/import spelling assertions;
+  its local-index input and persisted `FAILED / RECOVERED_RAW_ONLY` evidence are
+  exercised directly, including a zero structured-row count and no COMPLETE.
 - Retained serialized fixture/schema/config reads only when the file itself is
   the governed input under test; those reads do not authorize READY or GO.
 

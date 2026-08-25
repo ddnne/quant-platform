@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import csv
 import importlib.util
-import inspect
 import io
 import json
 import sqlite3
@@ -209,23 +208,6 @@ def test_official_publication_labels_resolve_to_prior_quote_day(seal) -> None:
         "2002-08-05": "2002-08-02",
         "2002-08-06": "2002-08-05",
     }
-
-
-def test_seal_source_does_not_fetch_live_html_or_invent_complete(seal) -> None:
-    src = Path(inspect.getsourcefile(seal)).read_text(encoding="utf-8")
-    assert "index_text=index_text" in src
-    assert "def refresh_otc_coverage" in src
-    assert "_early_layout_reproof_required" in inspect.getsource(seal.seal_day)
-    assert "urllib" not in src
-    assert "requests." not in src
-    assert "urlopen" not in src
-    assert seal.OTC_GRAIN == "official_archive_index_day"
-    assert seal.EARLY_LAYOUT_RECONCILIATION_PROOF == {}
-    assert WEEKEND_IN_TINY_SPAN not in seal.EARLY_LAYOUT_REPROOF_DAYS
-    assert "open_governed_receipt_service" not in src
-    assert "record_persisted_success" not in src
-    assert "bulk_insert_day" not in src
-    assert "TRUSTED_COLLECTION" not in src
 
 
 def test_recovery_sealer_records_only_failed_reproof_evidence(
