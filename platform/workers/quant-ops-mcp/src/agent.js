@@ -67,12 +67,22 @@ export class QuantOpsMcpAgent extends McpAgent {
         shape.shape,
         async (args) => {
           try {
-            const db = this.env.OPS_DB;
-            const value = await callOpsTool(db, tool.name, args);
+            const value = await callOpsTool(
+              this.env.OPS_PROJECTION_DB,
+              tool.name,
+              args,
+              {
+                projectionPublicKeyRegistry:
+                  this.env.OPS_PROJECTION_VERIFY_KEYS_JSON,
+              },
+            );
             const login = typeof this.props?.login === "string" && this.props.login
               ? this.props.login
               : "unknown";
-            const quota = new DurableDailyQuota(db, this.env.DAILY_ROW_QUOTA);
+            const quota = new DurableDailyQuota(
+              this.env.QUOTA_DB,
+              this.env.DAILY_ROW_QUOTA,
+            );
             const charged = await quota.charge(
               { subject: `human:${login}`, clientId: login },
               quotaCost(value),

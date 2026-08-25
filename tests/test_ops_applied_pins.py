@@ -1,29 +1,22 @@
-"""Applied-pin projector: emit local sync_change_state without CURRENT-on-null."""
+"""Cursor projection invariants for the dedicated Ops read model."""
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 
+from scripts.export_ops_projection import render_projection_bundle, sync_dataset_state
 from storage.sqlite_store import SqliteStore
 
-_ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1]
+PROJECTION_MIGRATION = (
+    ROOT
+    / "platform/workers/quant-ops-mcp/migrations/projection/0001_ops_projection.sql"
+)
 
 
-def _load(name: str, rel: str):
-    spec = importlib.util.spec_from_file_location(name, _ROOT / rel)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-_EXPORT = _load("export_ops_projection", "scripts/export_ops_projection.py")
-_LAG = _load("report_d1_local_sync_lag", "scripts/report_d1_local_sync_lag.py")
-
-
-def _seed_coverage(store: SqliteStore) -> None:
+def _source_db(path: Path, *, applied: int | None) -> None:
+    store = SqliteStore(path)
     store._conn.execute(  # noqa: SLF001
         """INSERT INTO dataset_coverage
            (dataset,status,policy_version,collection_scope,
@@ -34,10 +27,10 @@ def _seed_coverage(store: SqliteStore) -> None:
             detail_json)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            "markets_calendar", "PARTIAL",
-            "collection-coverage/v2", "jquants", "2013-01-01", "current",
-            "official", "daily", "all", 1, 1, "governed", "2013-01-01",
-            "2013-01-01", 1, 1, "2026-08-11T00:00:00Z", "{}",
+            "markets_calendar", "PARTIAL", "collection-coverage/v3", "jquants",
+            "2008-01-01", "current", "official", "daily", "all", 1, 1,
+            "governed", "2008-01-01", "2008-01-01", 1, 1,
+            "2026-08-25T00:00:00Z", "{}",
         ),
     )
     store._conn.execute(  # noqa: SLF001
@@ -46,217 +39,91 @@ def _seed_coverage(store: SqliteStore) -> None:
             expected_scope,expected_items,status,receipt_run_id,evaluated_at,
             detail_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            "jquants", "markets_calendar", "2013-01",
-            "collection-coverage/v2", "2013-01-01", "2013-01-31", "{}",
-            1, "PARTIAL", 1, "2026-08-11T00:00:00Z", "{}",
+            "jquants", "markets_calendar", "2008-01",
+            "collection-coverage/v3", "2008-01-01", "2008-01-31", "{}", 1,
+            "PARTIAL", 1, "2026-08-25T00:00:00Z", "{}",
         ),
     )
-    store._conn.commit()  # noqa: SLF001
-
-
-def _apply_ops_migrations(conn: sqlite3.Connection) -> None:
-    mig = _ROOT / "platform/workers/quant-ops-mcp/migrations"
-    for name in (
-        "0002_ops_projection.sql",
-        "0003_endpoint_inventory_sla.sql",
-        "0004_projection_generation.sql",
-        "0005_endpoint_inventory_morning_session.sql",
-        "0007_ops_applied_pins.sql",
-    ):
-        conn.executescript((mig / name).read_text(encoding="utf-8"))
-
-
-def test_null_applied_never_current():
-    for exported in (None, 0, 10, 2859284):
-        for lag in (None, 0, 1, 5):
-            for n in (0, 1, 367):
-                state = _EXPORT.sync_dataset_state(
-                    exported=exported, applied=None, lag=lag, change_log_rows=n
-                )
-                assert state != "CURRENT", (exported, lag, n, state)
-                assert _LAG.sync_dataset_state(
-                    exported=exported, applied=None, lag=lag, change_log_rows=n
-                ) == state
-
-
-def test_lag_zero_unpinned_is_export_current_apply_unpinned():
-    assert (
-        _EXPORT.sync_dataset_state(
-            exported=10, applied=None, lag=0, change_log_rows=1
+    if applied is not None:
+        store._conn.execute(  # noqa: SLF001
+            """INSERT INTO sync_change_state
+               (feed,last_applied_change_seq,updated_at) VALUES (?,?,?)
+               ON CONFLICT(feed) DO UPDATE SET
+                 last_applied_change_seq=excluded.last_applied_change_seq,
+                 updated_at=excluded.updated_at""",
+            ("jquants_records", applied, "2026-08-25T00:02:00Z"),
         )
-        == "EXPORT_CURRENT_APPLY_UNPINNED"
-    )
-
-
-def test_matching_pin_can_be_current():
-    assert (
-        _EXPORT.sync_dataset_state(
-            exported=10, applied=10, lag=0, change_log_rows=1
-        )
-        == "CURRENT"
-    )
-    # 0 is a real pin, unlike missing.
-    assert (
-        _EXPORT.sync_dataset_state(
-            exported=0, applied=0, lag=0, change_log_rows=1
-        )
-        == "CURRENT"
-    )
-
-
-def test_missing_pin_projects_sql_null_not_zero(tmp_path):
-    db_path = tmp_path / "local.sqlite"
-    store = SqliteStore(db_path)
-    _seed_coverage(store)
-    store.close()
-
-    sql = _EXPORT.render_projection_sql(db_path, generation_id="projgen-unpinned")
-    pin_inserts = [
-        line for line in sql.splitlines() if "INSERT INTO ops_applied_pins" in line
-    ]
-    assert pin_inserts
-    assert all("CURRENT" not in line for line in pin_inserts)
-    assert "VALUES ('jquants_records',NULL," in sql
-
-    remote = sqlite3.connect(":memory:")
-    _apply_ops_migrations(remote)
-    remote.executescript(sql)
-    row = remote.execute(
-        "SELECT last_applied_change_seq, feed FROM ops_applied_pins "
-        "WHERE feed = 'jquants_records'"
-    ).fetchone()
-    assert row is not None
-    assert row[0] is None
-    assert row[1] == "jquants_records"
-    meta = remote.execute(
-        "SELECT detail_json FROM ops_projection_metadata"
-    ).fetchone()[0]
-    assert '"unpinned":true' in meta
-    assert '"last_applied_change_seq":null' in meta
-    remote.close()
-
-
-def test_present_pin_is_projected(tmp_path):
-    db_path = tmp_path / "local.sqlite"
-    store = SqliteStore(db_path)
-    _seed_coverage(store)
-    store._conn.execute(  # noqa: SLF001
-        "INSERT INTO sync_change_state "
-        "(feed, last_applied_change_seq, updated_at) VALUES (?, ?, ?)",
-        ("jquants_records", 2859284, "2026-08-12T00:00:00Z"),
-    )
     store._conn.commit()  # noqa: SLF001
     store.close()
 
-    sql = _EXPORT.render_projection_sql(db_path, generation_id="projgen-pinned")
-    remote = sqlite3.connect(":memory:")
-    _apply_ops_migrations(remote)
-    remote.executescript(sql)
-    row = remote.execute(
-        "SELECT last_applied_change_seq FROM ops_applied_pins "
-        "WHERE feed = 'jquants_records'"
-    ).fetchone()
-    assert row == (2859284,)
-    meta = remote.execute(
-        "SELECT detail_json FROM ops_projection_metadata"
-    ).fetchone()[0]
-    assert '"unpinned":false' in meta
-    assert "2859284" in meta
-    remote.close()
 
-    exported = 2859284
-    applied = 2859284
-    assert (
-        _EXPORT.sync_dataset_state(
-            exported=exported, applied=applied, lag=0, change_log_rows=1
-        )
-        == "CURRENT"
-    )
-
-
-def _ensure_watermarks(store: SqliteStore) -> None:
-    store._conn.execute(  # noqa: SLF001
-        """CREATE TABLE IF NOT EXISTS ingestion_watermarks (
-            dataset TEXT PRIMARY KEY,
-            last_event_date TEXT,
-            last_ingested_at TEXT NOT NULL,
-            last_export_cursor INTEGER
-        )"""
-    )
-
-
-def test_report_unpinned_is_not_current(tmp_path):
-    db_path = tmp_path / "local.sqlite"
-    store = SqliteStore(db_path)
-    _ensure_watermarks(store)
-    store._conn.execute(  # noqa: SLF001
-        "INSERT INTO ingestion_watermarks "
-        "(dataset, last_event_date, last_ingested_at, last_export_cursor) "
-        "VALUES (?, ?, ?, ?)",
-        ("markets_calendar", "2026-08-12", "2026-08-12T00:00:00Z", 10),
-    )
-    store._conn.commit()  # noqa: SLF001
-    store.close()
-
-    report = _LAG.collect(
-        db_path,
-        remote_max_seq=10,
-        remote_change_log_n=1,
-        focus=["markets_calendar"],
-    )
-    assert report["local"]["last_applied_change_seq"] is None
-    assert report["local"]["applied_pin_present"] is False
-    assert report["focus"][0]["sync_state"] == "EXPORT_CURRENT_APPLY_UNPINNED"
-    assert report["focus"][0]["sync_state"] != "CURRENT"
-
-
-def test_report_pinned_matching_can_be_current(tmp_path):
-    db_path = tmp_path / "local.sqlite"
-    store = SqliteStore(db_path)
-    _ensure_watermarks(store)
-    store._conn.execute(  # noqa: SLF001
-        "INSERT INTO ingestion_watermarks "
-        "(dataset, last_event_date, last_ingested_at, last_export_cursor) "
-        "VALUES (?, ?, ?, ?)",
-        ("markets_calendar", "2026-08-12", "2026-08-12T00:00:00Z", 10),
-    )
-    store._conn.execute(  # noqa: SLF001
-        "INSERT INTO sync_change_state "
-        "(feed, last_applied_change_seq, updated_at) VALUES (?, ?, ?)",
-        ("jquants_records", 10, "2026-08-12T00:00:00Z"),
-    )
-    store._conn.commit()  # noqa: SLF001
-    store.close()
-
-    report = _LAG.collect(
-        db_path,
-        remote_max_seq=10,
-        remote_change_log_n=1,
-        focus=["markets_calendar"],
-    )
-    assert report["local"]["applied_pin_present"] is True
-    assert report["local"]["last_applied_change_seq"] == 10
-    assert report["focus"][0]["sync_state"] == "CURRENT"
-
-
-def test_migration_0007_creates_nullable_seq():
+def _target() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
-    _apply_ops_migrations(conn)
-    info = {
-        row[1]: row
-        for row in conn.execute("PRAGMA table_info(ops_applied_pins)")
-    }
-    assert "last_applied_change_seq" in info
-    # notnull flag is 0 → NULL legal (unpinned).
-    assert info["last_applied_change_seq"][3] == 0
-    conn.execute(
-        "INSERT INTO ops_applied_pins "
-        "(feed, last_applied_change_seq, updated_at, projected_at) "
-        "VALUES ('jquants_records', NULL, NULL, '2026-08-23T00:00:00Z')"
+    conn.executescript(PROJECTION_MIGRATION.read_text(encoding="utf-8"))
+    return conn
+
+
+def test_null_applied_cursor_is_never_current() -> None:
+    for exported in (None, 0, 10):
+        for lag in (None, 0, 1):
+            assert sync_dataset_state(
+                exported=exported,
+                applied=None,
+                lag=lag,
+                change_log_rows=1,
+            ) != "CURRENT"
+
+
+def test_equal_non_null_cursors_are_current() -> None:
+    assert sync_dataset_state(
+        exported=10, applied=10, lag=0, change_log_rows=1
+    ) == "CURRENT"
+    assert sync_dataset_state(
+        exported=0, applied=0, lag=0, change_log_rows=1
+    ) == "CURRENT"
+
+
+def test_source_export_applied_cursors_are_projected_without_coercion(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "source.sqlite"
+    _source_db(path, applied=42)
+    bundle = render_projection_bundle(
+        path,
+        generation_id="projgen-cursors",
+        producer_commit_sha="a" * 40,
+        source_cursor=42,
+        export_cursor=42,
     )
-    conn.commit()
-    seq = conn.execute(
-        "SELECT last_applied_change_seq FROM ops_applied_pins"
-    ).fetchone()[0]
-    assert seq is None
-    conn.close()
+    target = _target()
+    target.executescript(bundle.sql)
+    assert target.execute(
+        "SELECT latest_source_change_seq,exported_cursor,applied_cursor "
+        "FROM ops_sync_feed WHERE projection_generation_id=?",
+        (bundle.generation_id,),
+    ).fetchone() == (42, 42, 42)
+    assert target.execute(
+        "SELECT source_cursor,export_cursor,applied_cursor "
+        "FROM ops_projection_metadata WHERE projection_generation_id=?",
+        (bundle.generation_id,),
+    ).fetchone() == (42, 42, 42)
+    target.close()
+
+
+def test_missing_applied_cursor_projects_sql_null_not_zero(tmp_path: Path) -> None:
+    path = tmp_path / "source.sqlite"
+    _source_db(path, applied=None)
+    bundle = render_projection_bundle(
+        path,
+        generation_id="projgen-unpinned",
+        producer_commit_sha="b" * 40,
+        source_cursor=10,
+        export_cursor=10,
+    )
+    target = _target()
+    target.executescript(bundle.sql)
+    assert target.execute(
+        "SELECT applied_cursor FROM ops_sync_feed WHERE projection_generation_id=?",
+        (bundle.generation_id,),
+    ).fetchone() == (None,)
+    target.close()

@@ -130,10 +130,7 @@ test("initialize and tools/list implement MCP 2025-06-18", async () => {
 test("ops_status returns structured current-plane output without projection", async () => {
   const value = await callOpsTool(mockDb(), "ops_status", {});
   assert.ok(value);
-  // Absent tables/projection → UNKNOWN-style payloads, never silent empty success
-  // for governed catalog (exact shape is domain-defined).
-  assert.ok(typeof value === "object");
-  assert.equal(value.raw_retention.acquired, 0);
-  // deprecated alias of acquired; not Dataset COMPLETE
-  assert.equal(value.raw_retention.complete, 0);
+  assert.equal(value.status, "NOT_PROJECTED");
+  assert.equal(value.projection_generation, null);
+  assert.match(value.reason, /active Ops Projection generation/);
 });

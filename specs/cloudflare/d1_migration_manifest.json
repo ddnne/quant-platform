@@ -1,0 +1,196 @@
+{
+  "schema_version": "cloudflare-d1-migration-manifest/v1",
+  "applied_state_policy": "UNVERIFIED is fail-closed source state; remote post-apply state belongs in immutable release evidence",
+  "targets": {
+    "quant-ingest": {
+      "target_role": "ingestion_source_of_truth",
+      "owner": "platform/workers/ingestion-premium",
+      "migration_dir": "platform/workers/ingestion-premium/migrations",
+      "environments": {
+        "base": {
+          "config": "platform/workers/ingestion-premium/wrangler.toml",
+          "binding": "DB",
+          "database_name": "quant-ingest",
+          "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+          "migrations_table": "d1_migrations",
+          "applied_state": "UNVERIFIED"
+        },
+        "production": {
+          "config": "platform/workers/ingestion-premium/wrangler.toml",
+          "binding": "DB",
+          "database_name": "quant-ingest",
+          "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+          "migrations_table": "d1_migrations",
+          "applied_state": "UNVERIFIED"
+        },
+        "staging": {
+          "config": "platform/workers/ingestion-premium/wrangler.staging.toml",
+          "binding": "DB",
+          "database_name": "quant-ingest-staging",
+          "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
+          "migrations_table": "d1_migrations_ingestion",
+          "applied_state": "UNVERIFIED"
+        }
+      },
+      "migrations": [
+        {
+          "migration_id": "quant-ingest:0001_init",
+          "path": "platform/workers/ingestion-premium/migrations/0001_init.sql",
+          "checksum": "sha256:91e1a1dbd52b1cde4d5dd59c0b86d533b79109c2476cbec3efac009e9df99233",
+          "order": 1,
+          "depends_on": null
+        },
+        {
+          "migration_id": "quant-ingest:0002_watermarks",
+          "path": "platform/workers/ingestion-premium/migrations/0002_watermarks.sql",
+          "checksum": "sha256:bd78ca4ed59a0b1701fd4bedcd19b3928c8862ac14a1d3279d5c6c659a319821",
+          "order": 2,
+          "depends_on": "quant-ingest:0001_init"
+        },
+        {
+          "migration_id": "quant-ingest:0003_change_feed",
+          "path": "platform/workers/ingestion-premium/migrations/0003_change_feed.sql",
+          "checksum": "sha256:4d774e4c51a081e648d61f1b43208132813e6f82d7f2b382c6ab3477f239b42c",
+          "order": 3,
+          "depends_on": "quant-ingest:0002_watermarks"
+        },
+        {
+          "migration_id": "quant-ingest:0004_revision_identity_v2",
+          "path": "platform/workers/ingestion-premium/migrations/0004_revision_identity_v2.sql",
+          "checksum": "sha256:ad027f255be9948655e000cec1cb1a103ff2bd7635195f77cfea6a9fb6284b3d",
+          "order": 4,
+          "depends_on": "quant-ingest:0003_change_feed"
+        },
+        {
+          "migration_id": "quant-ingest:0005_natural_keys_v2",
+          "path": "platform/workers/ingestion-premium/migrations/0005_natural_keys_v2.sql",
+          "checksum": "sha256:6d1b1c1fc5e0530719e1a76b0a07c96119efaf0154aae3b24a13379a19597455",
+          "order": 5,
+          "depends_on": "quant-ingest:0004_revision_identity_v2"
+        },
+        {
+          "migration_id": "quant-ingest:0006_raw_retention_manifests",
+          "path": "platform/workers/ingestion-premium/migrations/0006_raw_retention_manifests.sql",
+          "checksum": "sha256:ba5decc497a45bd5bac511ce0fa9e4c68c2727ffe042d4c9718e5379eb7eff5c",
+          "order": 6,
+          "depends_on": "quant-ingest:0005_natural_keys_v2"
+        },
+        {
+          "migration_id": "quant-ingest:0007_collection_coverage_v2",
+          "path": "platform/workers/ingestion-premium/migrations/0007_collection_coverage_v2.sql",
+          "checksum": "sha256:8cfc7245003650588429f7c0385bfd68c92536bdc31cf5b687361db80b21a8ab",
+          "order": 7,
+          "depends_on": "quant-ingest:0006_raw_retention_manifests"
+        },
+        {
+          "migration_id": "quant-ingest:0008_jsda_job_queue",
+          "path": "platform/workers/ingestion-premium/migrations/0008_jsda_job_queue.sql",
+          "checksum": "sha256:0336541f74fdfcc9799622f84615ba4dd09040b2833c02514d041dc80798eb1b",
+          "order": 8,
+          "depends_on": "quant-ingest:0007_collection_coverage_v2"
+        },
+        {
+          "migration_id": "quant-ingest:0009_jsda_fact_tables",
+          "path": "platform/workers/ingestion-premium/migrations/0009_jsda_fact_tables.sql",
+          "checksum": "sha256:c42610bcaa6eac39ea8d7dda9d5e3d4ad8a7aafd2aa909c6aeeed817e446e56b",
+          "order": 9,
+          "depends_on": "quant-ingest:0008_jsda_job_queue"
+        },
+        {
+          "migration_id": "quant-ingest:0010_raw_acquisition_status",
+          "path": "platform/workers/ingestion-premium/migrations/0010_raw_acquisition_status.sql",
+          "checksum": "sha256:9eb4636f540f56d2ffe3abde1fa67cc13149f08f2ae01ced02f1f363b82d89bd",
+          "order": 10,
+          "depends_on": "quant-ingest:0009_jsda_fact_tables"
+        },
+        {
+          "migration_id": "quant-ingest:0011_jsda_queue_v2",
+          "path": "platform/workers/ingestion-premium/migrations/0011_jsda_queue_v2.sql",
+          "checksum": "sha256:0346322b939f7a0eb248fea3b0bbc71cef20389cb52d72bcc1545f18c55cbce5",
+          "order": 11,
+          "depends_on": "quant-ingest:0010_raw_acquisition_status"
+        }
+      ]
+    },
+    "quant-ops-projection": {
+      "target_role": "ops_projection_read_model",
+      "owner": "platform/workers/quant-ops-mcp",
+      "migration_dir": "platform/workers/quant-ops-mcp/migrations/projection",
+      "environments": {
+        "base": {
+          "config": "platform/workers/quant-ops-mcp/wrangler.toml",
+          "binding": "OPS_PROJECTION_DB",
+          "database_name": "quant-ops-projection",
+          "database_id": "1b497e8a-5c69-4e19-ae2e-89a8f3185272",
+          "migrations_table": "d1_migrations_ops_projection",
+          "applied_state": "UNVERIFIED"
+        },
+        "production": {
+          "config": "platform/workers/quant-ops-mcp/wrangler.toml",
+          "binding": "OPS_PROJECTION_DB",
+          "database_name": "quant-ops-projection",
+          "database_id": "1b497e8a-5c69-4e19-ae2e-89a8f3185272",
+          "migrations_table": "d1_migrations_ops_projection",
+          "applied_state": "UNVERIFIED"
+        },
+        "staging": {
+          "config": "platform/workers/quant-ops-mcp/wrangler.staging.toml",
+          "binding": "OPS_PROJECTION_DB",
+          "database_name": "quant-ops-projection-staging",
+          "database_id": "68ee96d5-766c-4832-836b-54c079bd6265",
+          "migrations_table": "d1_migrations_ops_projection",
+          "applied_state": "UNVERIFIED"
+        }
+      },
+      "migrations": [
+        {
+          "migration_id": "quant-ops-projection:0001_ops_projection",
+          "path": "platform/workers/quant-ops-mcp/migrations/projection/0001_ops_projection.sql",
+          "checksum": "sha256:5268e798ee11330fccd86b958634ebc619067c89c0b32219624d0aaad7fdb895",
+          "order": 1,
+          "depends_on": null
+        }
+      ]
+    },
+    "quant-ops-quota": {
+      "target_role": "ops_mcp_quota",
+      "owner": "platform/workers/quant-ops-mcp",
+      "migration_dir": "platform/workers/quant-ops-mcp/migrations/quota",
+      "environments": {
+        "base": {
+          "config": "platform/workers/quant-ops-mcp/wrangler.toml",
+          "binding": "QUOTA_DB",
+          "database_name": "quant-ops-quota",
+          "database_id": "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6",
+          "migrations_table": "d1_migrations_ops_quota",
+          "applied_state": "UNVERIFIED"
+        },
+        "production": {
+          "config": "platform/workers/quant-ops-mcp/wrangler.toml",
+          "binding": "QUOTA_DB",
+          "database_name": "quant-ops-quota",
+          "database_id": "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6",
+          "migrations_table": "d1_migrations_ops_quota",
+          "applied_state": "UNVERIFIED"
+        },
+        "staging": {
+          "config": "platform/workers/quant-ops-mcp/wrangler.staging.toml",
+          "binding": "QUOTA_DB",
+          "database_name": "quant-ops-quota-staging",
+          "database_id": "a27f8ce9-82cb-4eec-abac-9c3385ce40e1",
+          "migrations_table": "d1_migrations_ops_quota",
+          "applied_state": "UNVERIFIED"
+        }
+      },
+      "migrations": [
+        {
+          "migration_id": "quant-ops-quota:0001_remote_daily_quota",
+          "path": "platform/workers/quant-ops-mcp/migrations/quota/0001_remote_daily_quota.sql",
+          "checksum": "sha256:39e16e144b6d67ec903d126fa24b6dfea981cc09a82544ad5fcb23c252b68d80",
+          "order": 1,
+          "depends_on": null
+        }
+      ]
+    }
+  }
+}

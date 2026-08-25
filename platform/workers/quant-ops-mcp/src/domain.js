@@ -1,17 +1,13 @@
-/** Quant Ops SQL presentation and tool dispatch. Projection/sync policy is domain_policy.js. */
+/** Quant Ops read-model dispatch. Every query is bound to one active generation. */
 
 import { GOVERNED_DATASETS, GOVERNED_DATASET_SET } from "./governed.js";
 import {
-  JSDA_UPSTREAM_LOCATORS,
   classifyRawAcquisition,
-  coverageProjectionMissingReason,
   honestProjectionStatus,
-  lastKnownGoodNotCurrentReason,
   overlayInventoryRow,
-  parseSla,
-  rawRetentionOpsCounts,
   syncDatasetState,
 } from "./domain_policy.js";
+import { verifyProjectionGeneration } from "./projection_signature.js";
 
 const STRING = { type: "string" };
 const OPTIONAL_DATASET = {
@@ -20,53 +16,33 @@ const OPTIONAL_DATASET = {
 
 /** @type {ReadonlyArray<{name:string, description:string, inputSchema:Record<string, unknown>}>} */
 export const OPS_TOOLS = Object.freeze([
-  tool("ops_status", "Current ingestion control-plane status; never a research-data query."),
-  tool("source_inventory", "Canonical endpoint inventory with all ~31 datasets and tier classification."),
-  tool("endpoint_status", "Per-endpoint status summary including governance tier, inventory status, and coverage state.", OPTIONAL_DATASET, ["dataset"]),
-  tool("projection_status", "Ops projection metadata including generated_at, source_generation, age, and status."),
-  tool("collection_sla_status", "Dataset SLA/freshness status with expected_after, usable_by, freshness_policy, and states.", OPTIONAL_DATASET),
-  tool("ingestion_last_run", "Latest current ingestion run and bounded summary."),
-  tool("dataset_coverage", "Current Coverage projection (policy_version as stored on the generation) for one governed dataset.", OPTIONAL_DATASET, ["dataset"]),
-  tool("coverage_gaps", "Current governed datasets whose Coverage projection (policy_version as stored on the generation) is not COMPLETE."),
-  tool("coverage_segments", "Bounded Coverage projection (policy_version as stored on the generation) segment evidence.", {
+  tool("ops_status", "Active immutable Ops projection summary; never a research-data query."),
+  tool("source_inventory", "Active canonical endpoint inventory and governance tier."),
+  tool("endpoint_status", "Active endpoint inventory and Coverage status.", OPTIONAL_DATASET, ["dataset"]),
+  tool("projection_status", "Active projection generation, freshness, and cursor metadata."),
+  tool("collection_sla_status", "Publisher-materialized active dataset SLA status.", OPTIONAL_DATASET),
+  tool("ingestion_last_run", "Latest run in the active immutable projection generation."),
+  tool("dataset_coverage", "Active Coverage projection (policy_version as stored on the generation) for one governed dataset.", OPTIONAL_DATASET, ["dataset"]),
+  tool("coverage_gaps", "Active governed datasets whose Coverage projection (policy_version as stored on the generation) is not COMPLETE."),
+  tool("coverage_segments", "Bounded active Coverage projection (policy_version as stored on the generation) segment evidence.", {
     ...OPTIONAL_DATASET,
     status: { type: "string", enum: ["COMPLETE", "PARTIAL", "FAILED", "UNKNOWN", "STALE"] },
     limit: { type: "integer", minimum: 1, maximum: 500 },
   }),
-  tool("backfill_status", "Current required-segment completion counts by dataset.", OPTIONAL_DATASET),
-  tool("validation_summary", "Latest ingestion validation summary and bounded failures."),
-  tool("b0_status", "Current B0 gate result when the production gate has been recorded."),
-  tool("latest_ready_snapshot", "Latest published immutable READY generation metadata; no research rows."),
-  tool("snapshot_quality", "Quality result attached to a published READY generation.", {
-    snapshot_id: STRING,
-  }),
-  tool("raw_retention_status", "Raw page retention attestations linked to collection runs.", OPTIONAL_DATASET),
-  tool("sync_status", "Current D1 change-feed and local-sync watermark status."),
-  tool(
-    "storage_plane_status",
-    "D1 light-path / hot-window / surplus-stage proof for CF-native P0. Counts only; no research rows.",
-  ),
+  tool("backfill_status", "Active required-segment completion counts by dataset.", OPTIONAL_DATASET),
+  tool("validation_summary", "Latest validation run in the active projection."),
+  tool("b0_status", "Active B0 gate evidence, including explicit UNKNOWN."),
+  tool("latest_ready_snapshot", "Active profile/plan/closure-bound immutable READY publication state."),
+  tool("snapshot_quality", "Quality result attached to an active READY snapshot.", { snapshot_id: STRING }),
+  tool("raw_retention_status", "Latest authoritative raw evidence per source segment.", OPTIONAL_DATASET),
+  tool("sync_status", "Active source/export/applied cursor projection."),
+  tool("storage_plane_status", "Publisher-materialized storage aggregate; never scans ingestion facts."),
 ]);
 
-/**
- * Raw-plane captured labels. ACQUIRED is the live write; COMPLETE is a
- * historical raw-captured label. Neither is dataset Coverage COMPLETE.
- */
-const RAW_CAPTURED_SQL = "completeness IN ('ACQUIRED', 'COMPLETE')";
-
-/**
- * @param {string} name
- * @param {string} description
- * @param {Record<string, unknown>} properties
- * @param {string[]} required
- */
+/** @param {string} name @param {string} description @param {Record<string, unknown>} properties @param {string[]} required */
 function tool(name, description, properties = {}, required = []) {
   /** @type {Record<string, unknown>} */
-  const inputSchema = {
-    type: "object",
-    properties,
-    additionalProperties: false,
-  };
+  const inputSchema = { type: "object", properties, additionalProperties: false };
   if (required.length) inputSchema.required = required;
   return { name, description, inputSchema };
 }
@@ -86,9 +62,7 @@ function datasetArg(value, options = {}) {
     throw new TypeError("dataset must be a non-empty string of at most 160 characters");
   }
   const dataset = value.trim();
-  const governedOnly = options.governedOnly !== false;
-  // Inventory/SLA tools may address experimental endpoints; coverage tools stay governed-only.
-  if (governedOnly && !GOVERNED_DATASET_SET.has(dataset)) {
+  if (options.governedOnly !== false && !GOVERNED_DATASET_SET.has(dataset)) {
     throw new RangeError("dataset is not in the governed Ops catalog");
   }
   return dataset;
@@ -111,7 +85,7 @@ function limitArg(value) {
   return result;
 }
 
-/** @param {D1Database} db @param {string} sql @param {unknown[]} binds @returns {Promise<Record<string, unknown>[]>} */
+/** @param {D1Database} db @param {string} sql @param {unknown[]} binds */
 async function all(db, sql, binds = []) {
   try {
     const result = await db.prepare(sql).bind(...binds).all();
@@ -122,7 +96,7 @@ async function all(db, sql, binds = []) {
   }
 }
 
-/** @param {D1Database} db @param {string} sql @param {unknown[]} binds @returns {Promise<Record<string, unknown> | null>} */
+/** @param {D1Database} db @param {string} sql @param {unknown[]} binds */
 async function first(db, sql, binds = []) {
   try {
     return await db.prepare(sql).bind(...binds).first();
@@ -134,177 +108,153 @@ async function first(db, sql, binds = []) {
 
 /** @param {D1Database} db */
 async function activeProjectionGeneration(db) {
-  const row = await first(db,
-    "SELECT generation_id, activated_at FROM ops_projection_active WHERE singleton = 1");
-  return row;
-}
-
-/**
- * Prefer active generation rows; if generation column missing or null-only legacy,
- * fall back to unfiltered (caller must still surface DEGRADED_MIXED when mixed).
- * @param {D1Database} db
- * @param {string} table
- * @param {string} selectSql without WHERE
- * @param {unknown[]} binds
- */
-async function allForActiveGeneration(db, table, selectSql, binds = []) {
-  const active = await activeProjectionGeneration(db);
-  if (!active?.generation_id) {
-    return { rows: await all(db, selectSql, binds), active: null, mixed: false };
-  }
-  const gen = String(active.generation_id);
-  // Inject generation filter before ORDER BY / LIMIT if present.
-  let sql = selectSql;
-  if (/\bWHERE\b/i.test(sql)) {
-    sql = sql.replace(/\bWHERE\b/i, `WHERE projection_generation_id = ? AND `);
-    binds = [gen, ...binds];
-  } else if (/\bORDER BY\b/i.test(sql)) {
-    sql = sql.replace(/\bORDER BY\b/i, `WHERE projection_generation_id = ? ORDER BY `);
-    binds = [gen, ...binds];
-  } else if (/\bLIMIT\b/i.test(sql)) {
-    sql = sql.replace(/\bLIMIT\b/i, `WHERE projection_generation_id = ? LIMIT `);
-    binds = [gen, ...binds];
-  } else {
-    sql = `${sql} WHERE projection_generation_id = ?`;
-    binds = [...binds, gen];
-  }
   try {
-    const rows = await all(db, sql, binds);
-    // Detect mixed gens if unfiltered has other gens
-    const other = await first(db,
-      `SELECT COUNT(*) AS n FROM ${table} WHERE projection_generation_id IS NOT NULL AND projection_generation_id != ?`,
-      [gen]);
-    const mixed = Number(other?.n || 0) > 0;
-    return { rows, active, mixed };
+    return await first(db, `
+      SELECT a.generation_id, a.activated_at, g.source_db_digest,g.content_digest,
+             g.producer_commit_sha, g.contract_digest, g.registry_digest,
+             g.coverage_policy_version,g.signed_envelope_json,g.issuer_key_id,
+             g.signature
+        FROM ops_projection_active a
+        JOIN ops_projection_generation g
+          ON g.generation_id=a.generation_id AND g.status='SEALED'
+       WHERE a.singleton=1
+       LIMIT 1`);
   } catch (error) {
-    // Column may not exist yet pre-migration — fall back.
-    if (/no such column|projection_generation_id/i.test(String(error))) {
-      return { rows: await all(db, selectSql, binds.slice(active ? 1 : 0)), active, mixed: false };
-    }
+    if (/no such column/i.test(String(error))) return null;
     throw error;
   }
 }
 
+/** @param {Record<string, unknown> | null} active @param {string} reason @param {string} plane */
+function notProjected(active, reason, plane = "ops_current") {
+  return {
+    plane,
+    mutable: false,
+    status: "NOT_PROJECTED",
+    projection_generation: active?.generation_id ?? null,
+    reason,
+  };
+}
+
+/** @param {Record<string, unknown>} active */
+function generationFields(active) {
+  return {
+    projection_generation: active.generation_id,
+    projection_activated_at: active.activated_at,
+    projection_content_digest: active.content_digest,
+    projection_signature_verified: true,
+    projection_issuer_key_id: active.issuer_key_id,
+  };
+}
+
+/** @param {unknown} value */
+function parseJson(value) {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * The result always identifies its plane. `ops_current` may change between
- * calls; `research_ready` identifies immutable publication metadata only.
  * @param {D1Database} db
  * @param {string} name
  * @param {unknown} rawArguments
+ * @param {{projectionPublicKeyRegistry?:unknown}} options
  */
-export async function callOpsTool(db, name, rawArguments) {
+export async function callOpsTool(db, name, rawArguments, options = {}) {
   const args = objectArgs(rawArguments);
-  const known = OPS_TOOLS.some((candidate) => candidate.name === name);
-  if (!known) throw new RangeError(`unknown Quant Ops Read tool: ${name}`);
+  if (!OPS_TOOLS.some((candidate) => candidate.name === name)) {
+    throw new RangeError(`unknown Quant Ops Read tool: ${name}`);
+  }
+  const active = await activeProjectionGeneration(db);
+  if (!active) {
+    return notProjected(null, "active Ops Projection generation is unavailable", name.startsWith("snapshot") || name === "latest_ready_snapshot" ? "research_ready" : "ops_current");
+  }
+  const verified = await verifyProjectionGeneration(
+    active,
+    options.projectionPublicKeyRegistry,
+  );
+  if (!verified.ok) {
+    return notProjected(
+      active,
+      verified.reason || "active Ops Projection signature is unverifiable",
+      name.startsWith("snapshot") || name === "latest_ready_snapshot"
+        ? "research_ready"
+        : "ops_current",
+    );
+  }
+  const generation = String(active.generation_id);
 
   if (name === "ingestion_last_run") {
-    const run = await first(db,
-      "SELECT id, ran_at, source, runtime, status, detail FROM ingestion_run_log ORDER BY id DESC LIMIT 1");
-    return { plane: "ops_current", mutable: true, run };
+    const run = await first(db, `
+      SELECT id,ran_at,source,runtime,status,detail
+        FROM ingestion_run_log
+       WHERE projection_generation_id=?
+       ORDER BY id DESC LIMIT 1`, [generation]);
+    return run
+      ? { plane: "ops_current", mutable: false, status: "AVAILABLE", ...generationFields(active), run }
+      : notProjected(active, "ingestion run was not included in the active generation");
   }
 
   if (name === "dataset_coverage") {
     const dataset = datasetArg(args.dataset);
-    const active = await activeProjectionGeneration(db);
-    let coverage = null;
-    if (active?.generation_id) {
-      coverage = await first(db,
-        `SELECT dataset, status, policy_version, collection_scope,
-                history_target_start, history_target_end_rule, coverage_mode,
-                expected_frequency, universe_rule, raw_retention_required,
-                structured_reconciliation_required, governance_tier,
-                observed_start, observed_end, row_count, source_run_id,
-                evaluated_at, detail_json, projection_generation_id
-           FROM dataset_coverage
-          WHERE dataset = ? AND projection_generation_id = ? LIMIT 1`,
-        [dataset, active.generation_id]);
-      if (!coverage) {
-        const lkg = await first(db,
-          `SELECT dataset, status, policy_version, collection_scope,
-                  history_target_start, history_target_end_rule, coverage_mode,
-                  expected_frequency, universe_rule, raw_retention_required,
-                  structured_reconciliation_required, governance_tier,
-                  observed_start, observed_end, row_count, source_run_id,
-                  evaluated_at, detail_json
-             FROM dataset_coverage WHERE dataset = ? LIMIT 1`, [dataset]);
-        return {
-          plane: "ops_current", mutable: true, dataset,
-          status: "UNKNOWN",
-          active_generation: active.generation_id,
-          coverage: null,
-          last_known_good: lkg || null,
-          reason: lkg
-            ? lastKnownGoodNotCurrentReason(lkg, { hasActive: true })
-            : coverageProjectionMissingReason(lkg),
-        };
-      }
-    } else {
-      const lkg = await first(db,
-        `SELECT dataset, status, policy_version, collection_scope,
-                history_target_start, history_target_end_rule, coverage_mode,
-                expected_frequency, universe_rule, raw_retention_required,
-                structured_reconciliation_required, governance_tier,
-                observed_start, observed_end, row_count, source_run_id,
-                evaluated_at, detail_json
-           FROM dataset_coverage WHERE dataset = ? LIMIT 1`, [dataset]);
-      return {
-        plane: "ops_current", mutable: true, dataset,
-        status: "UNKNOWN",
-        active_generation: null,
-        coverage: null,
-        last_known_good: lkg || null,
-        reason: lkg
-          ? lastKnownGoodNotCurrentReason(lkg, { hasActive: false })
-          : coverageProjectionMissingReason(lkg),
-      };
-    }
-    return {
-      plane: "ops_current", mutable: true, dataset,
-      status: coverage ? coverage.status : "UNKNOWN",
-      active_generation: active?.generation_id ?? null,
-      coverage,
-      ...(coverage ? {} : { reason: coverageProjectionMissingReason(coverage) }),
-    };
+    const coverage = await first(db, `
+      SELECT dataset,status,policy_version,collection_scope,
+             history_target_start,history_target_end_rule,coverage_mode,
+             expected_frequency,universe_rule,raw_retention_required,
+             structured_reconciliation_required,governance_tier,
+             observed_start,observed_end,row_count,source_run_id,
+             evaluated_at,detail_json
+        FROM dataset_coverage
+       WHERE projection_generation_id=? AND dataset=? LIMIT 1`,
+    [generation, dataset]);
+    return coverage
+      ? { plane: "ops_current", mutable: false, status: coverage.status, ...generationFields(active), dataset, coverage }
+      : { ...notProjected(active, "dataset Coverage row is absent from the active generation"), dataset, coverage: null };
   }
 
   if (name === "coverage_gaps") {
-    const active = await activeProjectionGeneration(db);
-    // Missing active generation: do not treat unfiltered COMPLETE as current.
-    const rows = active?.generation_id
-      ? await all(db,
-          `SELECT dataset, status, policy_version, collection_scope,
-                  history_target_start, history_target_end_rule, coverage_mode,
-                  expected_frequency, universe_rule, governance_tier,
-                  observed_start, observed_end, row_count, source_run_id, evaluated_at
-             FROM dataset_coverage
-            WHERE projection_generation_id = ?
-            ORDER BY governance_tier, dataset LIMIT 500`,
-          [active.generation_id])
-      : [];
+    const rows = await all(db, `
+      SELECT dataset,status,policy_version,collection_scope,
+             history_target_start,history_target_end_rule,coverage_mode,
+             expected_frequency,universe_rule,governance_tier,
+             observed_start,observed_end,row_count,source_run_id,evaluated_at
+        FROM dataset_coverage
+       WHERE projection_generation_id=?
+       ORDER BY governance_tier,dataset LIMIT 500`, [generation]);
     const present = new Map(rows.map((row) => [String(row.dataset), row]));
-    const gaps = GOVERNED_DATASETS.flatMap((dataset) => {
+    const gaps = [];
+    const notProjectedDatasets = [];
+    for (const dataset of GOVERNED_DATASETS) {
       const row = present.get(dataset);
       if (!row) {
-        return [{
-          dataset,
-          status: "UNKNOWN",
-          reason: coverageProjectionMissingReason(row),
-        }];
+        notProjectedDatasets.push(dataset);
+        gaps.push({ dataset, status: "NOT_PROJECTED", reason: "Coverage row absent from active generation" });
+      } else if (row.status !== "COMPLETE") {
+        gaps.push(row);
       }
-      return row.status === "COMPLETE" ? [] : [row];
-    });
+    }
+    const status = notProjectedDatasets.length
+      ? "NOT_PROJECTED"
+      : gaps.length ? "INCOMPLETE" : "COMPLETE";
     return {
-      plane: "ops_current", mutable: true,
-      status: rows.length ? (gaps.length ? "INCOMPLETE" : "COMPLETE") : "UNKNOWN",
-      governed_dataset_count: GOVERNED_DATASETS.length, gaps,
+      plane: "ops_current", mutable: false, status, ...generationFields(active),
+      governed_dataset_count: GOVERNED_DATASETS.length,
+      not_projected_datasets: notProjectedDatasets,
+      gaps,
+      reason: notProjectedDatasets.length
+        ? "one or more governed Coverage rows are absent from the active generation"
+        : null,
     };
   }
 
   if (name === "coverage_segments") {
-    const clauses = [];
-    const binds = [];
+    const clauses = ["projection_generation_id=?"];
+    const binds = [generation];
     if (args.dataset !== undefined) {
-      clauses.push("dataset = ?");
+      clauses.push("dataset=?");
       binds.push(datasetArg(args.dataset));
     }
     if (args.status !== undefined) {
@@ -312,635 +262,373 @@ export async function callOpsTool(db, name, rawArguments) {
       if (typeof args.status !== "string" || !allowed.has(args.status)) {
         throw new TypeError("invalid coverage segment status");
       }
-      clauses.push("status = ?");
+      clauses.push("status=?");
       binds.push(args.status);
     }
-    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
     const limit = limitArg(args.limit);
-    const segments = await all(db,
-      `SELECT source, dataset, segment_id, policy_version, segment_start,
-              segment_end, expected_scope, expected_items, status,
-              receipt_run_id, evaluated_at, detail_json
-         FROM coverage_segments${where}
-        ORDER BY dataset, segment_start, segment_id LIMIT ?`,
-      [...binds, limit]);
-    return {
-      plane: "ops_current", mutable: true,
-      status: segments.length ? "AVAILABLE" : "UNKNOWN",
-      ...(segments.length ? {} : { reason: coverageProjectionMissingReason() }),
-      segments, limit,
-    };
+    const segments = await all(db, `
+      SELECT source,dataset,segment_id,policy_version,segment_start,segment_end,
+             expected_scope,expected_items,status,receipt_run_id,evaluated_at,detail_json
+        FROM coverage_segments
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY dataset,segment_start,segment_id LIMIT ?`, [...binds, limit]);
+    return segments.length
+      ? { plane: "ops_current", mutable: false, status: "AVAILABLE", ...generationFields(active), segments, limit }
+      : { ...notProjected(active, "no matching Coverage segments are projected"), segments: [], limit };
   }
 
   if (name === "backfill_status") {
-    // Always return one row per governed dataset (26). Never drop JSDA rows.
-    const binds = [];
-    let where = "";
-    if (args.dataset !== undefined) {
-      where = " WHERE dataset = ?";
-      binds.push(datasetArg(args.dataset));
-    }
-    const grouped = await all(db,
-      `SELECT dataset, COUNT(*) AS required_segments,
-              SUM(CASE WHEN status = 'COMPLETE' THEN 1 ELSE 0 END) AS complete_segments,
-              SUM(CASE WHEN status <> 'COMPLETE' THEN 1 ELSE 0 END) AS remaining_segments
-         FROM coverage_segments${where} GROUP BY dataset ORDER BY dataset`, binds);
-    const byDataset = new Map(grouped.map((row) => [String(row.dataset), row]));
     const requested = args.dataset === undefined
       ? GOVERNED_DATASETS
       : [datasetArg(args.dataset)];
+    const rows = await all(db, `
+      SELECT dataset,COUNT(*) AS required_segments,
+             SUM(CASE WHEN status='COMPLETE' THEN 1 ELSE 0 END) AS complete_segments,
+             SUM(CASE WHEN status<>'COMPLETE' THEN 1 ELSE 0 END) AS remaining_segments
+        FROM coverage_segments
+       WHERE projection_generation_id=?
+       GROUP BY dataset ORDER BY dataset`, [generation]);
+    const byDataset = new Map(rows.map((row) => [String(row.dataset), row]));
     const datasets = requested.map((dataset) => {
       const row = byDataset.get(dataset);
       if (!row) {
-        const state = String(dataset).startsWith("jsda_")
-          ? "DISCOVERY_INCOMPLETE"
-          : "PLANNING_MISSING";
         return {
           dataset,
-          required_segments: 0,
-          complete_segments: 0,
-          remaining_segments: 0,
-          state,
+          status: "NOT_PROJECTED",
+          required_segments: null,
+          complete_segments: null,
+          remaining_segments: null,
+          reason: "segment plan absent from active generation",
         };
       }
-      const required = Number(row.required_segments || 0);
-      const complete = Number(row.complete_segments || 0);
-      let state = "PARTIAL";
-      if (required > 0 && complete === required) state = "COVERAGE_COMPLETE";
-      else if (required === 0) {
-        state = String(dataset).startsWith("jsda_")
-          ? "DISCOVERY_INCOMPLETE"
-          : "PLANNING_MISSING";
-      } else if (complete === 0) state = "DISCOVERY_INCOMPLETE";
+      const required = Number(row.required_segments);
+      const complete = Number(row.complete_segments);
       return {
         dataset,
+        status: required > 0 && complete === required ? "COVERAGE_COMPLETE" : "PARTIAL",
         required_segments: required,
         complete_segments: complete,
-        remaining_segments: Number(row.remaining_segments || 0),
-        state,
+        remaining_segments: Number(row.remaining_segments),
       };
     });
     return {
-      plane: "ops_current",
-      mutable: true,
-      status: datasets.some((d) => d.required_segments > 0) ? "AVAILABLE" : "UNKNOWN",
-      governed_dataset_count: GOVERNED_DATASETS.length,
-      datasets,
+      plane: "ops_current", mutable: false,
+      status: datasets.some((row) => row.status === "NOT_PROJECTED") ? "NOT_PROJECTED" : "AVAILABLE",
+      ...generationFields(active), datasets,
+      reason: datasets.some((row) => row.status === "NOT_PROJECTED")
+        ? "one or more segment plans are absent from the active generation"
+        : null,
     };
   }
 
   if (name === "validation_summary") {
-    const latest = await first(db, "SELECT MAX(run_id) AS run_id FROM ingestion_validation");
-    const runId = latest && latest.run_id;
-    const rows = runId === null || runId === undefined ? [] : await all(db,
-      "SELECT dataset, status, rows_seen, rows_inserted, rows_revisions, detail FROM ingestion_validation WHERE run_id = ? ORDER BY dataset LIMIT 500",
-      [runId]);
+    const latest = await first(db, `
+      SELECT MAX(run_id) AS run_id FROM ingestion_validation
+       WHERE projection_generation_id=?`, [generation]);
+    if (latest?.run_id === null || latest?.run_id === undefined) {
+      return notProjected(active, "validation rows are absent from the active generation");
+    }
+    const rows = await all(db, `
+      SELECT dataset,status,rows_seen,rows_inserted,rows_revisions,detail
+        FROM ingestion_validation
+       WHERE projection_generation_id=? AND run_id=?
+       ORDER BY dataset LIMIT 500`, [generation, latest.run_id]);
+    if (!rows.length) return notProjected(active, "validation rows are absent from the active generation");
     return {
-      plane: "ops_current", mutable: true, run_id: runId ?? null,
-      status: rows.length
-        ? (rows.every((row) => row.status === "pass") ? "PASS" : "FAIL")
-        : "UNKNOWN",
-      ...(rows.length ? {} : { reason: "validation projection is empty or unavailable" }),
-      failures: rows.filter((row) => row.status !== "pass"), dataset_count: rows.length,
+      plane: "ops_current", mutable: false,
+      status: rows.every((row) => row.status === "pass") ? "PASS" : "FAIL",
+      ...generationFields(active), run_id: latest.run_id,
+      failures: rows.filter((row) => row.status !== "pass"),
+      dataset_count: rows.length,
     };
   }
 
   if (name === "b0_status") {
-    const row = await first(db,
-      `SELECT status, policy_version, evaluated_at AS checked_at,
-              summary_json, source_build_id
-         FROM ops_b0_status WHERE singleton = 1 LIMIT 1`);
+    const row = await first(db, `
+      SELECT status,policy_version,evaluated_at AS checked_at,summary_json,
+             results_json,source_build_id
+        FROM ops_b0_status
+       WHERE projection_generation_id=? AND singleton=1 LIMIT 1`, [generation]);
     return row
-      ? { plane: "ops_current", mutable: true, ...row }
-      : { plane: "ops_current", mutable: true, status: "UNKNOWN", reason: "snapshot quality/B0 projection is unavailable" };
+      ? { plane: "ops_current", mutable: false, ...generationFields(active), ...row }
+      : notProjected(active, "B0 row is absent from the active generation");
   }
 
   if (name === "latest_ready_snapshot") {
-    const snapshot = await first(db,
-      `SELECT snapshot_id, state, committed_at, source_run_id, change_seq,
-              coverage_policy_version, quality_policy_version,
-              coverage_proof_digest
-         FROM ops_ready_snapshots WHERE state = 'READY'
-        ORDER BY committed_at DESC LIMIT 1`);
+    const state = await first(db, `
+      SELECT status,snapshot_id,reason,evaluated_at
+        FROM ops_ready_state WHERE projection_generation_id=? LIMIT 1`, [generation]);
+    if (!state) return notProjected(active, "READY publication state is absent", "research_ready");
+    if (state.status !== "READY") {
+      return {
+        plane: "research_ready", mutable: false, ...generationFields(active),
+        status: state.status, snapshot: null, reason: state.reason,
+      };
+    }
+    const snapshot = await first(db, `
+      SELECT snapshot_id,state,committed_at,source_run_id,change_seq,
+             coverage_policy_version,quality_policy_version,
+             coverage_proof_digest,manifest_json
+        FROM ops_ready_snapshots
+       WHERE projection_generation_id=? AND snapshot_id=? AND state='READY' LIMIT 1`,
+    [generation, state.snapshot_id]);
     return snapshot
-      ? { plane: "research_ready", mutable: false, snapshot }
-      : { plane: "research_ready", mutable: false, snapshot: null, reason: "no published READY generation is bound to this Worker" };
+      ? { plane: "research_ready", mutable: false, status: "READY", ...generationFields(active), snapshot }
+      : notProjected(active, "READY state points to a missing snapshot row", "research_ready");
   }
 
   if (name === "snapshot_quality") {
-    const snapshotId = args.snapshot_id === undefined ? null : snapshotArg(args.snapshot_id);
-    const snapshot = snapshotId
-      ? await first(db, "SELECT snapshot_id FROM ops_ready_snapshots WHERE snapshot_id = ? AND state = 'READY' LIMIT 1", [snapshotId])
-      : await first(db, "SELECT snapshot_id FROM ops_ready_snapshots WHERE state = 'READY' ORDER BY committed_at DESC LIMIT 1");
-    const quality = snapshot ? await first(db,
-      `SELECT snapshot_id, status, policy_version, evaluated_at, summary_json
-         FROM ops_snapshot_quality WHERE snapshot_id = ? LIMIT 1`, [snapshot.snapshot_id]) : null;
-    return {
-      plane: "research_ready", mutable: false,
-      snapshot_id: snapshot?.snapshot_id ?? null, quality,
-      ...((snapshot && quality) ? {} : { reason: "verified READY quality projection is unavailable" }),
-    };
+    let snapshotId = args.snapshot_id === undefined ? null : snapshotArg(args.snapshot_id);
+    if (!snapshotId) {
+      const state = await first(db, `
+        SELECT snapshot_id FROM ops_ready_state
+         WHERE projection_generation_id=? AND status='READY' LIMIT 1`, [generation]);
+      snapshotId = state?.snapshot_id ? String(state.snapshot_id) : null;
+    }
+    if (!snapshotId) return notProjected(active, "no active READY snapshot is available", "research_ready");
+    const quality = await first(db, `
+      SELECT snapshot_id,status,policy_version,evaluated_at,summary_json
+        FROM ops_snapshot_quality
+       WHERE projection_generation_id=? AND snapshot_id=? LIMIT 1`,
+    [generation, snapshotId]);
+    return quality
+      ? { plane: "research_ready", mutable: false, status: quality.status, ...generationFields(active), snapshot_id: snapshotId, quality }
+      : notProjected(active, "quality row is absent for the active READY snapshot", "research_ready");
   }
 
   if (name === "raw_retention_status") {
-    const binds = [];
-    let where = "";
+    const binds = [generation];
+    let filter = "";
     if (args.dataset !== undefined) {
-      where = " WHERE dataset = ?";
+      filter = " AND dataset=?";
       binds.push(datasetArg(args.dataset));
     }
-    const totals = await first(db,
-      `SELECT COUNT(*) AS total,
-              SUM(CASE WHEN ${RAW_CAPTURED_SQL} THEN 1 ELSE 0 END) AS acquired,
-              SUM(CASE WHEN completeness IS NULL OR NOT (${RAW_CAPTURED_SQL}) THEN 1 ELSE 0 END) AS incomplete,
-              SUM(CASE WHEN IFNULL(row_count, 0) = 0 OR IFNULL(raw_bytes, 0) = 0 THEN 1 ELSE 0 END) AS zero_byte_or_zero_row,
-              SUM(CASE WHEN completeness = 'FAILED' THEN 1 ELSE 0 END) AS failed
-         FROM raw_retention_manifests${where}`, binds);
-    const unresolvedPred = `completeness IS NULL OR NOT (${RAW_CAPTURED_SQL})`;
-    const oldestWhere = where ? `${where} AND (${unresolvedPred})` : ` WHERE ${unresolvedPred}`;
-    const oldest = await first(db,
-      `SELECT dataset, run_id, created_at, completeness, row_count, raw_bytes
-         FROM raw_retention_manifests${oldestWhere}
-        ORDER BY created_at ASC LIMIT 1`, binds);
-    const rows = await all(db,
-      `SELECT dataset, run_id, manifest_key, page_count, row_count, raw_bytes,
-              data_digest, completeness, created_at
-         FROM raw_retention_manifests${where}
-        ORDER BY run_id DESC, dataset LIMIT 500`, binds);
+    const rows = await all(db, `
+      SELECT source,dataset,segment_id,run_id,manifest_key,page_count,row_count,raw_bytes,
+             data_digest,completeness,created_at,reason
+        FROM raw_retention_manifests
+       WHERE projection_generation_id=?${filter}
+       ORDER BY dataset,segment_id LIMIT 500`, binds);
+    if (!rows.length) {
+      return { ...notProjected(active, "authoritative raw segment evidence is absent"), totals: null, attestations: [] };
+    }
+    const captured = new Set(["ACQUIRED", "COMPLETE"]);
+    const totals = {
+      total_segments: rows.length,
+      acquired_segments: rows.filter((row) => captured.has(String(row.completeness))).length,
+      failed_segments: rows.filter((row) => row.completeness === "FAILED").length,
+      not_captured_segments: rows.filter((row) => !captured.has(String(row.completeness))).length,
+    };
     return {
-      plane: "ops_current",
-      mutable: true,
-      totals: {
-        total: Number(totals?.total || 0),
-        acquired: Number(totals?.acquired || 0),
-        incomplete: Number(totals?.incomplete || 0),
-        zero_byte_or_zero_row: Number(totals?.zero_byte_or_zero_row || 0),
-        failed: Number(totals?.failed || 0),
-      },
-      oldest_unresolved: oldest || null,
-      attestations: (rows || []).map((row) => ({
-        ...row,
-        acquisition_state: classifyRawAcquisition(row),
-      })),
-      note: "raw ACQUIRED and legacy completeness=COMPLETE are raw-captured, not dataset Coverage COMPLETE",
+      plane: "ops_current", mutable: false, status: "AVAILABLE", ...generationFields(active),
+      totals,
+      attestations: rows.map((row) => ({ ...row, acquisition_state: classifyRawAcquisition(row) })),
+      note: "one latest authoritative row per source segment; superseded failed attempts are audit-only upstream",
     };
   }
 
   if (name === "source_inventory") {
-    const inventory = await all(db,
-      `SELECT dataset_id, display_name, source, governance_tier, inventory_status,
-              collection_window, expected_frequency, coverage_segment_granularity,
-              research_eligible, enabled, sla
-         FROM endpoint_inventory ORDER BY source, governance_tier, dataset_id LIMIT 500`);
-    const overlaid = (inventory || []).map(overlayInventoryRow);
+    const inventory = await all(db, `
+      SELECT dataset_id,display_name,source,governance_tier,inventory_status,
+             upstream_locator,collection_window,expected_frequency,
+             coverage_segment_granularity,research_eligible,enabled,sla,
+             historical_start,available_at_json
+        FROM endpoint_inventory
+       WHERE projection_generation_id=?
+       ORDER BY source,governance_tier,dataset_id LIMIT 500`, [generation]);
+    if (!inventory.length) return notProjected(active, "endpoint inventory is absent from the active generation");
+    const overlaid = inventory.map(overlayInventoryRow);
     return {
-      plane: "ops_current", mutable: true,
+      plane: "ops_current", mutable: false, status: "AVAILABLE", ...generationFields(active),
       inventory_count: overlaid.length,
-      governed_count: overlaid.filter((e) => e.governance_tier === "governed").length,
-      experimental_count: overlaid.filter((e) => e.governance_tier === "experimental").length,
+      governed_count: overlaid.filter((row) => row.governance_tier === "governed").length,
+      experimental_count: overlaid.filter((row) => row.governance_tier === "experimental").length,
       inventory: overlaid,
     };
   }
 
   if (name === "endpoint_status") {
     const dataset = datasetArg(args.dataset, { governedOnly: false });
-    const endpoint = await first(db,
-      `SELECT dataset_id, display_name, source, governance_tier, inventory_status,
-              collection_window, expected_frequency, coverage_segment_granularity,
-              research_eligible, enabled, sla, historical_start
-         FROM endpoint_inventory WHERE dataset_id = ? LIMIT 1`, [dataset]);
-    const active = await activeProjectionGeneration(db);
-    const coverageSelect = `SELECT dataset, status, policy_version, collection_scope,
-              observed_start, observed_end, row_count, source_run_id, evaluated_at
-         FROM dataset_coverage`;
-    let coverage = null;
-    if (active?.generation_id) {
-      coverage = await first(db,
-        `${coverageSelect} WHERE dataset = ? AND projection_generation_id = ? LIMIT 1`,
-        [dataset, active.generation_id]);
-    }
-    if (!coverage) {
-      const lkg = await first(db, `${coverageSelect} WHERE dataset = ? LIMIT 1`, [dataset]);
-      return {
-        plane: "ops_current", mutable: true, dataset,
-        endpoint: endpoint || { dataset, status: "UNKNOWN", reason: "Endpoint not found in inventory" },
-        coverage: {
-          dataset,
-          status: "UNKNOWN",
-          reason: lkg
-            ? lastKnownGoodNotCurrentReason(lkg, { hasActive: Boolean(active?.generation_id) })
-            : coverageProjectionMissingReason(lkg),
-          last_known_good: lkg || null,
-        },
-      };
-    }
+    const endpoint = await first(db, `
+      SELECT dataset_id,display_name,source,governance_tier,inventory_status,
+             upstream_locator,collection_window,expected_frequency,
+             coverage_segment_granularity,research_eligible,enabled,sla,
+             historical_start,available_at_json
+        FROM endpoint_inventory
+       WHERE projection_generation_id=? AND dataset_id=? LIMIT 1`, [generation, dataset]);
+    if (!endpoint) return { ...notProjected(active, "endpoint is absent from active inventory"), dataset };
+    const coverage = await first(db, `
+      SELECT dataset,status,policy_version,collection_scope,observed_start,
+             observed_end,row_count,source_run_id,evaluated_at
+        FROM dataset_coverage
+       WHERE projection_generation_id=? AND dataset=? LIMIT 1`, [generation, dataset]);
     return {
-      plane: "ops_current", mutable: true, dataset,
-      endpoint: endpoint || { dataset, status: "UNKNOWN", reason: "Endpoint not found in inventory" },
-      coverage,
+      plane: "ops_current", mutable: false,
+      status: coverage ? "AVAILABLE" : "NOT_PROJECTED",
+      ...generationFields(active), dataset, endpoint: overlayInventoryRow(endpoint),
+      reason: coverage ? null : "Coverage row is absent from active generation",
+      coverage: coverage || {
+        dataset, status: "NOT_PROJECTED",
+        reason: "Coverage row is absent from active generation",
+      },
     };
   }
 
   if (name === "projection_status") {
-    const active = await activeProjectionGeneration(db);
-    const metadata = await first(db,
-      `SELECT generated_at, source_generation, age_seconds, status, projection_version, detail_json,
-              projection_generation_id
-         FROM ops_projection_metadata ORDER BY generated_at DESC LIMIT 1`);
-    if (!metadata) {
-      return {
-        plane: "ops_current", mutable: true,
-        projection_status: "MISSING", stale: true,
-        reason: "projection metadata missing; run scripts/publish_ops_projection.py",
-      };
-    }
-    // Recompute age from request time (never trust stored age=0 forever).
-    // FRESH requires refresh_success (detail_json.refresh_status === "success").
+    const metadata = await first(db, `
+      SELECT generated_at,source_generation,source_cursor,export_cursor,
+             applied_cursor,age_seconds,status,projection_version,
+             refresh_attempt_at,refresh_success_at,refresh_error,detail_json
+        FROM ops_projection_metadata
+       WHERE projection_generation_id=? LIMIT 1`, [generation]);
+    if (!metadata) return notProjected(active, "projection metadata is absent from the active generation");
     const honest = honestProjectionStatus(metadata);
-    let status = honest.status;
-    const age = honest.age;
-    // Mixed generation detection across coverage table
-    const gens = await all(db,
-      `SELECT DISTINCT projection_generation_id AS g FROM dataset_coverage
-        WHERE projection_generation_id IS NOT NULL LIMIT 20`);
-    if (gens.length > 1) status = "DEGRADED_MIXED_GENERATION";
-    const stale =
-      status === "STALE"
-      || status === "DEGRADED_MIXED_GENERATION"
-      || status === "DEGRADED_REFRESH_FAILED";
-    const refreshSuccess = status === "FRESH" && honest.refreshOk && !stale;
+    const status = honest.status;
+    const stale = status !== "FRESH";
     return {
-      plane: "ops_current", mutable: true,
+      plane: "ops_current", mutable: false, status,
       projection_status: status,
       projection_generated_at: metadata.generated_at,
       projection_source_generation: metadata.source_generation,
-      projection_age_seconds: age,
-      active_generation: active?.generation_id ?? metadata.projection_generation_id ?? null,
-      activated_at: active?.activated_at ?? null,
-      distinct_projection_generations: gens.map((r) => r.g),
+      source_cursor: metadata.source_cursor,
+      export_cursor: metadata.export_cursor,
+      applied_cursor: metadata.applied_cursor,
+      projection_age_seconds: honest.age,
+      ...generationFields(active),
+      producer_commit_sha: active.producer_commit_sha,
+      source_db_digest: active.source_db_digest,
+      contract_digest: active.contract_digest,
+      registry_digest: active.registry_digest,
+      coverage_policy_version: active.coverage_policy_version,
       stale,
       projection_version: metadata.projection_version,
-      last_known_good: stale ? {
-        generated_at: metadata.generated_at,
-        source_generation: metadata.source_generation,
-        not_fresh: true,
-      } : null,
+      refresh_error: metadata.refresh_error,
       stages: {
         refresh_attempt: honest.refreshAttempt,
-        refresh_success: refreshSuccess,
-        projection_generated: Boolean(metadata.generated_at),
-        d1_applied: Boolean(active?.generation_id),
+        refresh_success: status === "FRESH" && honest.refreshOk,
+        projection_generated: true,
+        d1_applied: true,
         mcp_visible: true,
       },
     };
   }
 
   if (name === "collection_sla_status") {
-    const projMeta = await first(db,
-      `SELECT generated_at, status, detail_json FROM ops_projection_metadata ORDER BY generated_at DESC LIMIT 1`);
-    let projectionStale = true;
-    if (projMeta?.generated_at) {
-      const honest = honestProjectionStatus(projMeta);
-      projectionStale = honest.status !== "FRESH" || !honest.refreshOk;
-    }
-    /** @param {string} [datasetFilter] */
-    const projectFromInventory = async (datasetFilter) => {
-      /** @type {unknown[]} */
-      const binds = [];
-      let where = "";
-      if (datasetFilter) {
-        where = " WHERE dataset_id = ?";
-        binds.push(datasetFilter);
-      }
-      const inv = await all(db,
-        `SELECT dataset_id, sla FROM endpoint_inventory${where} ORDER BY dataset_id LIMIT 500`,
-        binds);
-      const marks = await all(db,
-        "SELECT dataset, last_event_date FROM ingestion_watermarks LIMIT 500");
-      const markMap = new Map((marks || []).map((m) => [String(m.dataset), m.last_event_date ?? null]));
-      return (inv || []).map((row) => {
-        const sla = parseSla(row.sla);
-        const datasetId = String(row.dataset_id ?? "");
-        const loc = JSDA_UPSTREAM_LOCATORS[datasetId];
-        if (loc && !sla.upstream_locator) sla.upstream_locator = loc;
-        let current_state = "UNKNOWN";
-        let state_reason = "sla_table_empty_projected_from_inventory";
-        if (projectionStale) {
-          current_state = "PROJECTION_STALE";
-          state_reason = "ops_projection_stale";
-        } else if (datasetId === "equities_bars_daily_am") {
-          current_state = "NOT_PUBLISHED";
-          state_reason = "am_publication_not_proven_for_session";
-        }
-        return {
-          dataset_id: row.dataset_id,
-          expected_after: sla.expected_after ?? null,
-          usable_by: sla.usable_by ?? null,
-          freshness_policy: sla.freshness_policy ?? null,
-          timezone: sla.timezone || "Asia/Tokyo",
-          upstream_locator: sla.upstream_locator ?? null,
-          current_state,
-          state_reason,
-          last_event_date: markMap.get(datasetId) ?? null,
-          last_checked_at: new Date().toISOString(),
-        };
-      });
-    };
+    const binds = [generation];
+    let filter = "";
     if (args.dataset !== undefined) {
-      const dataset = datasetArg(args.dataset, { governedOnly: false });
-      const sla = await first(db,
-        `SELECT dataset_id, expected_after, usable_by, freshness_policy, timezone,
-                current_state, state_reason, state_since, last_event_date, last_checked_at
-           FROM collection_sla_status WHERE dataset_id = ? LIMIT 1`, [dataset]);
-      if (sla) {
-        return { plane: "ops_current", mutable: true, dataset, sla };
-      }
-      const projected = await projectFromInventory(dataset);
+      filter = " AND dataset_id=?";
+      binds.push(datasetArg(args.dataset, { governedOnly: false }));
+    }
+    const rows = await all(db, `
+      SELECT dataset_id,expected_after,usable_by,freshness_policy,timezone,
+             current_state,state_reason,state_since,last_event_date,last_checked_at
+        FROM collection_sla_status
+       WHERE projection_generation_id=?${filter}
+       ORDER BY dataset_id LIMIT 500`, binds);
+    if (!rows.length) return notProjected(active, "SLA rows are absent from the active generation");
+    if (args.dataset !== undefined) {
       return {
-        plane: "ops_current", mutable: true, dataset,
-        sla: projected[0] || { dataset, current_state: "UNKNOWN", reason: "SLA status not projected" },
-        source: "inventory_projection",
+        plane: "ops_current", mutable: false, status: "AVAILABLE",
+        ...generationFields(active), dataset: rows[0].dataset_id, sla: rows[0],
       };
     }
-    const rows = await all(db,
-      `SELECT dataset_id, expected_after, usable_by, freshness_policy, timezone,
-              current_state, state_reason, state_since, last_event_date, last_checked_at
-         FROM collection_sla_status ORDER BY dataset_id LIMIT 500`);
-    if (rows.length) {
-      return {
-        plane: "ops_current", mutable: true,
-        status: "AVAILABLE",
-        datasets: rows,
-      };
-    }
-    const projected = await projectFromInventory();
-    return {
-      plane: "ops_current", mutable: true,
-      status: projected.length ? "PROJECTED_FROM_INVENTORY" : "UNKNOWN",
-      datasets: projected,
-      ...(projected.length ? {} : { reason: "collection_sla_status projection empty" }),
-    };
+    return { plane: "ops_current", mutable: false, status: "AVAILABLE", ...generationFields(active), datasets: rows };
   }
 
   if (name === "sync_status") {
-    const marks = await all(db,
-      "SELECT dataset, last_event_date, last_ingested_at, last_export_cursor FROM ingestion_watermarks ORDER BY dataset LIMIT 500");
-    const change = await first(db, "SELECT MAX(change_seq) AS latest_change_seq FROM ingestion_change_log");
-    const changeCount = await first(db, "SELECT COUNT(*) AS n FROM ingestion_change_log");
-    const latest = change?.latest_change_seq == null ? null : Number(change.latest_change_seq);
-    const changeLogRows = changeCount?.n == null ? 0 : Number(changeCount.n);
-    const pin = await first(db,
-      "SELECT last_applied_change_seq FROM ops_applied_pins WHERE feed = ? LIMIT 1",
-      ["jquants_records"]);
-    const appliedFeedRaw = pin?.last_applied_change_seq;
-    const appliedFeed =
-      appliedFeedRaw == null || appliedFeedRaw === ""
-        ? null
-        : Number(appliedFeedRaw);
-    const appliedFeedCursor = Number.isNaN(appliedFeed) ? null : appliedFeed;
-    // Per-dataset export cursor + lag vs latest change_seq (null cursor = not synced).
-    // applied_cursor is the feed-level pin (ops_applied_pins, feed=jquants_records).
-    // Missing table / null pin stays null — never CURRENT.
-    const datasets = (marks || []).map((row) => {
-      const cursorRaw = row.last_export_cursor;
-      const exported = cursorRaw == null || cursorRaw === "" ? null : Number(cursorRaw);
-      const lag =
-        latest == null || exported == null || Number.isNaN(exported)
-          ? null
-          : Math.max(0, latest - exported);
-      const applied = appliedFeedCursor;
-      const state = syncDatasetState({
-        exported: Number.isNaN(exported) ? null : exported,
-        applied,
-        lag,
-        changeLogRows,
-      });
+    const feed = await first(db, `
+      SELECT feed,latest_source_change_seq,change_log_row_count,exported_cursor,
+             applied_cursor,updated_at
+        FROM ops_sync_feed
+       WHERE projection_generation_id=? AND feed='jquants_records' LIMIT 1`, [generation]);
+    if (!feed) return notProjected(active, "sync feed row is absent from the active generation");
+    const marks = await all(db, `
+      SELECT dataset,last_event_date,last_ingested_at,last_export_cursor
+        FROM ingestion_watermarks
+       WHERE projection_generation_id=? ORDER BY dataset LIMIT 500`, [generation]);
+    const source = feed.latest_source_change_seq == null ? null : Number(feed.latest_source_change_seq);
+    const exported = feed.exported_cursor == null ? null : Number(feed.exported_cursor);
+    const applied = feed.applied_cursor == null ? null : Number(feed.applied_cursor);
+    const changeLogRows = feed.change_log_row_count == null
+      ? null
+      : Number(feed.change_log_row_count);
+    if (changeLogRows === null) {
       return {
-        dataset: row.dataset,
-        last_event_date: row.last_event_date ?? null,
-        last_ingested_at: row.last_ingested_at ?? null,
-        source_cursor: latest,
-        exported_cursor: Number.isNaN(exported) ? null : exported,
+        ...notProjected(active, "source change-log evidence is absent from the active generation"),
+        source_cursor: source,
+        export_cursor: exported,
         applied_cursor: applied,
-        ready_pinned_cursor: null,
-        lag,
-        state,
+        change_log_row_count: null,
+        watermarks: marks,
       };
-    });
-    const null_cursors = datasets.filter((d) => d.exported_cursor == null).length;
-    return {
-      plane: "ops_current",
-      mutable: true,
-      // latest_change_seq kept as stable alias; latest_source_change_seq is the explicit name.
-      latest_change_seq: latest,
-      latest_source_change_seq: latest,
-      change_log_row_count: changeLogRows,
-      bootstrapped: changeLogRows > 0 && null_cursors === 0,
-      applied_feed_cursor: appliedFeedCursor,
-      watermarks: marks,
-      datasets,
-      null_export_cursor_count: null_cursors,
-      research_note:
-        "Cloudflare ingestion progress ≠ local research apply. " +
-        "Null export cursors are honest when change_log is empty or watermark not advanced; " +
-        "applied_cursor is the feed-level pin; null pin is never CURRENT. Do not treat null as COMPLETE.",
-    };
-  }
-
-  // GLM_PATCH_OK skeleton + schema-corrected live tables (jquants_records SoT).
-  // Fact counts are plane-local; JSDA COMPLETE is receipt-owned (coverage ledger).
-  if (name === "storage_plane_status") {
-    const hotCutoff = "2026-07-01";
-    /** @param {string} sql @param {unknown[]} [binds] */
-    const n = async (sql, binds = []) => {
-      const row = await first(db, sql, binds);
-      const v = row?.n ?? row?.c ?? 0;
-      return Number(v) || 0;
-    };
-    const [
-      jquantsTotal,
-      barsHot,
-      barsCold,
-      masterHot,
+    }
+    const lag = source == null || exported == null ? null : Math.max(0, source - exported);
+    const state = syncDatasetState({
+      exported,
+      applied,
+      lag,
       changeLogRows,
-      completeSegs,
-      otcRows,
-      corpRows,
-      tokyoRepoRows,
-      legacyBars,
-      legacyListed,
-      legacyCal,
-      stagePrimary,
-      stageRev,
-      stageVer,
-      stageChg,
-      ingestionChangeLog,
-      jsdaCovRows,
-    ] = await Promise.all([
-      n("SELECT COUNT(*) AS n FROM jquants_records"),
-      n(
-        "SELECT COUNT(*) AS n FROM jquants_records WHERE dataset = 'equities_bars_daily' AND substr(event_time,1,10) >= ?",
-        [hotCutoff],
-      ),
-      n(
-        "SELECT COUNT(*) AS n FROM jquants_records WHERE dataset = 'equities_bars_daily' AND substr(event_time,1,10) < ?",
-        [hotCutoff],
-      ),
-      n(
-        "SELECT COUNT(*) AS n FROM jquants_records WHERE dataset = 'equities_master' AND substr(event_time,1,10) >= ?",
-        [hotCutoff],
-      ),
-      n("SELECT COUNT(*) AS n FROM ingestion_change_log"),
-      n("SELECT COUNT(*) AS n FROM coverage_segments WHERE status = 'COMPLETE'"),
-      n("SELECT COUNT(*) AS n FROM jsda_otc_bond_reference_prices"),
-      n("SELECT COUNT(*) AS n FROM jsda_corporate_bond_transactions"),
-      n("SELECT COUNT(*) AS n FROM jsda_repo_rates"),
-      n("SELECT COUNT(*) AS n FROM jquants_daily_bars"),
-      n("SELECT COUNT(*) AS n FROM jquants_listed_info"),
-      n("SELECT COUNT(*) AS n FROM jquants_market_calendar"),
-      n("SELECT COUNT(*) AS n FROM jquants_records_nk_v2_primary_stage"),
-      n("SELECT COUNT(*) AS n FROM jquants_records_nk_v2_revisions_stage"),
-      n("SELECT COUNT(*) AS n FROM jquants_records_nk_v2_versions_stage"),
-      n("SELECT COUNT(*) AS n FROM ingestion_change_log_nk_v2_stage"),
-      n("SELECT COUNT(*) AS n FROM ingestion_change_log"),
-      all(
-        db,
-        "SELECT dataset, status, row_count, observed_start, observed_end FROM dataset_coverage WHERE dataset LIKE 'jsda_%' ORDER BY dataset",
-      ).catch(() => []),
-    ]);
-    const emptyLegacy =
-      legacyBars === 0 && legacyListed === 0 && legacyCal === 0;
-    const coldCleared = barsCold === 0;
-    /** @type {Record<string, {status?: unknown, coverage_row_count: number, observed_start: unknown, observed_end: unknown}>} */
-    const jsdaCoverage = {};
-    for (const row of jsdaCovRows || []) {
-      const dataset = String(row?.dataset || "");
-      if (!dataset) continue;
-      jsdaCoverage[dataset] = {
-        status: row.status,
-        coverage_row_count: Number(row.row_count) || 0,
-        observed_start: row.observed_start ?? null,
-        observed_end: row.observed_end ?? null,
-      };
-    }
-    const factByDataset = {
-      jsda_otc_bond_reference_prices: otcRows,
-      jsda_corporate_bond_transactions: corpRows,
-      jsda_tokyo_repo_rates: tokyoRepoRows,
-    };
-    /** @type {Record<string, string>} */
-    const factTableByDataset = {
-      jsda_otc_bond_reference_prices: "jsda_otc_bond_reference_prices",
-      jsda_corporate_bond_transactions: "jsda_corporate_bond_transactions",
-      jsda_tokyo_repo_rates: "jsda_repo_rates",
-    };
-    const divergence = [];
-    for (const [ds, factN] of Object.entries(factByDataset)) {
-      const cov = jsdaCoverage[ds] || {};
-      const status = cov.status;
-      const covN = Number(cov.coverage_row_count) || 0;
-      if (status === "COMPLETE" && factN === 0 && covN > 0) {
-        divergence.push({
-          dataset: ds,
-          fact_table: factTableByDataset[ds],
-          coverage_status: status,
-          coverage_row_count: covN,
-          fact_rows: factN,
-          kind: "COMPLETE_WITHOUT_LOCAL_FACTS",
-          note:
-            "Receipt/coverage COMPLETE projected without this plane holding fact rows. " +
-            "Not automatic data loss — check local research DB / R2 structured SoT.",
-        });
-      } else if (
-        status === "COMPLETE" &&
-        factN > 0 &&
-        covN > 0 &&
-        factN !== covN
-      ) {
-        divergence.push({
-          dataset: ds,
-          fact_table: factTableByDataset[ds],
-          coverage_status: status,
-          coverage_row_count: covN,
-          fact_rows: factN,
-          kind: "FACT_VS_COVERAGE_COUNT_MISMATCH",
-          note:
-            "Plane fact count differs from coverage ledger row_count " +
-            "(often hot-tip D1 vs full local history).",
-        });
-      }
-    }
+    });
     return {
-      plane: "ops_current",
-      mutable: true,
-      hot_cutoff: hotCutoff,
-      d1_approx_via_counts: {
-        jquants_records_total: jquantsTotal,
-        bars_hot: barsHot,
-        bars_cold_before_hot_cutoff: barsCold,
-        master_hot: masterHot,
-        change_log_rows: changeLogRows,
-        ingestion_change_log_rows: ingestionChangeLog,
-      },
-      complete_segments: completeSegs,
-      jsda: {
-        otc_rows: otcRows,
-        corporate_rows: corpRows,
-        tokyo_repo_rows: tokyoRepoRows,
-        fact_table_map: {
-          jsda_otc_bond_reference_prices: "jsda_otc_bond_reference_prices",
-          jsda_corporate_bond_transactions: "jsda_corporate_bond_transactions",
-          jsda_tokyo_repo_rates: "jsda_repo_rates",
-        },
-        coverage: jsdaCoverage,
-        coverage_vs_fact_divergence: divergence,
-        definition:
-          "tokyo_repo_rows = COUNT(jsda_repo_rates) on this plane only. " +
-          "dataset COMPLETE for jsda_tokyo_repo_rates is owned by signed " +
-          "collection_receipts + coverage_segments (segment jsda-era-timeseries), " +
-          "not by D1 fact backfill. ops projection publishes coverage ledgers; " +
-          "full JSDA history lives on local research DB / R2 structured SoT.",
-      },
-      empty_legacy_tables: {
-        jquants_daily_bars: legacyBars === 0,
-        jquants_listed_info: legacyListed === 0,
-        jquants_market_calendar: legacyCal === 0,
-        all_empty: emptyLegacy,
-      },
-      stage_table_counts: {
-        jquants_records_nk_v2_primary_stage: stagePrimary,
-        jquants_records_nk_v2_revisions_stage: stageRev,
-        jquants_records_nk_v2_versions_stage: stageVer,
-        ingestion_change_log_nk_v2_stage: stageChg,
-      },
-      p0_claims: {
-        bars_cold_cleared: coldCleared ? "CONFIRMED" : "RESIDUAL_COLD",
-        legacy_empty: emptyLegacy ? "CONFIRMED_EMPTY" : "NOT_EMPTY",
-        high_volume_write_path_code: "R2_ONLY_DEFAULT_IN_write_path_config",
-        master_new_writes: "SCD2_R2_PATH_IN_master_scd2",
-        mass_research: "NO-GO",
-        ready: null,
-        honesty_note:
-          "Counts-only ops proof. Not READY. Not full Parquet materialization. " +
-          "Does not claim all historical COMPLETE. JSDA COMPLETE is receipt-owned; " +
-          "fact counts are plane-local (D1 may show tokyo_repo_rows=0 while coverage COMPLETE).",
-      },
-      research_note:
-        "storage_plane_status is control-plane proof only; never treat as Mass or READY.",
+      plane: "ops_current", mutable: false,
+      status: state === "CURRENT" ? "CURRENT" : "UNKNOWN",
+      ...generationFields(active),
+      feed: feed.feed,
+      source_cursor: source,
+      export_cursor: exported,
+      applied_cursor: applied,
+      change_log_row_count: changeLogRows,
+      lag,
+      state,
+      watermarks: marks,
+      reason: state === "CURRENT" ? null : "source/export/applied cursors are not all current and equal",
     };
   }
 
-  const [lastRun, coverage, raw] = await Promise.all([
-    first(db, "SELECT id, ran_at, source, runtime, status FROM ingestion_run_log ORDER BY id DESC LIMIT 1"),
-    all(db, "SELECT status, COUNT(*) AS count FROM dataset_coverage GROUP BY status ORDER BY status"),
-    first(db, `SELECT COUNT(*) AS manifests, SUM(CASE WHEN ${RAW_CAPTURED_SQL} THEN 1 ELSE 0 END) AS acquired FROM raw_retention_manifests`),
+  if (name === "storage_plane_status") {
+    const row = await first(db, `
+      SELECT materialized_at,payload_json
+        FROM ops_storage_plane_status
+       WHERE projection_generation_id=? LIMIT 1`, [generation]);
+    if (!row) return notProjected(active, "storage aggregate is absent from the active generation");
+    const payload = parseJson(row.payload_json);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return notProjected(active, "storage aggregate payload is invalid JSON");
+    }
+    return {
+      ...payload,
+      plane: "ops_current",
+      mutable: false,
+      status: "AVAILABLE",
+      ...generationFields(active),
+      materialized_at: row.materialized_at,
+      research_note: "publisher-materialized control-plane proof only; never READY or Mass authority",
+    };
+  }
+
+  // ops_status
+  const [lastRun, coverage, rawRows, alerts] = await Promise.all([
+    first(db, `SELECT id,ran_at,source,runtime,status FROM ingestion_run_log WHERE projection_generation_id=? ORDER BY id DESC LIMIT 1`, [generation]),
+    all(db, `SELECT status,COUNT(*) AS count FROM dataset_coverage WHERE projection_generation_id=? GROUP BY status ORDER BY status`, [generation]),
+    all(db, `SELECT completeness FROM raw_retention_manifests WHERE projection_generation_id=?`, [generation]),
+    all(db, `SELECT alert_key,severity,status,reason,observed_at FROM ops_alerts WHERE projection_generation_id=? ORDER BY severity,alert_key LIMIT 100`, [generation]),
   ]);
+  const captured = rawRows.length
+    ? rawRows.filter((row) => row.completeness === "ACQUIRED" || row.completeness === "COMPLETE").length
+    : null;
   return {
-    plane: "ops_current", mutable: true, last_run: lastRun,
-    coverage_status: coverage.length ? "AVAILABLE" : "UNKNOWN",
-    coverage_status_counts: coverage,
+    plane: "ops_current", mutable: false,
+    status: coverage.length ? "AVAILABLE" : "NOT_PROJECTED",
+    ...generationFields(active),
+    last_run: lastRun,
+    coverage_status_counts: coverage.length ? coverage : null,
     governed_dataset_count: GOVERNED_DATASETS.length,
-    raw_retention: rawRetentionOpsCounts(raw),
-    research_note: "Current Ops status is not evidence that a research READY snapshot contains the same state.",
+    raw_retention: rawRows.length
+      ? { authoritative_segments: rawRows.length, acquired_segments: captured }
+      : null,
+    alerts,
+    reason: coverage.length ? null : "Coverage summary is absent from the active generation",
+    research_note: "Active Ops projection is not a research READY snapshot.",
   };
 }

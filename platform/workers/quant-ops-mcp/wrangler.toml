@@ -21,9 +21,18 @@ binding = "OAUTH_KV"
 id = "cbbfc9439c3e4a789fa103777d38f39e" # title: quant-ops-mcp-oauth
 
 [[d1_databases]]
-binding = "OPS_DB"
-database_name = "quant-ingest"
-database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+binding = "OPS_PROJECTION_DB"
+database_name = "quant-ops-projection"
+database_id = "1b497e8a-5c69-4e19-ae2e-89a8f3185272"
+migrations_dir = "migrations/projection"
+migrations_table = "d1_migrations_ops_projection"
+
+[[d1_databases]]
+binding = "QUOTA_DB"
+database_name = "quant-ops-quota"
+database_id = "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6"
+migrations_dir = "migrations/quota"
+migrations_table = "d1_migrations_ops_quota"
 
 [durable_objects]
 bindings = [{ name = "MCP_OBJECT", class_name = "QuantOpsMcpAgent" }]
@@ -36,6 +45,7 @@ new_sqlite_classes = ["QuantOpsMcpAgent"]
 # D14-style single-user gate (GitHub login).
 ALLOWED_LOGIN = "ddnne"
 DAILY_ROW_QUOTA = "25000"
+OPS_PROJECTION_VERIFY_KEYS_JSON = '{"schema_version":1,"keys":[]}'
 # Authorization server is this Worker itself (same as news-mcp).
 OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
 
@@ -59,9 +69,18 @@ binding = "OAUTH_KV"
 id = "cbbfc9439c3e4a789fa103777d38f39e" # title: quant-ops-mcp-oauth
 
 [[env.production.d1_databases]]
-binding = "OPS_DB"
-database_name = "quant-ingest"
-database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+binding = "OPS_PROJECTION_DB"
+database_name = "quant-ops-projection"
+database_id = "1b497e8a-5c69-4e19-ae2e-89a8f3185272"
+migrations_dir = "migrations/projection"
+migrations_table = "d1_migrations_ops_projection"
+
+[[env.production.d1_databases]]
+binding = "QUOTA_DB"
+database_name = "quant-ops-quota"
+database_id = "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6"
+migrations_dir = "migrations/quota"
+migrations_table = "d1_migrations_ops_quota"
 
 [env.production.durable_objects]
 bindings = [{ name = "MCP_OBJECT", class_name = "QuantOpsMcpAgent" }]
@@ -69,4 +88,5 @@ bindings = [{ name = "MCP_OBJECT", class_name = "QuantOpsMcpAgent" }]
 [env.production.vars]
 ALLOWED_LOGIN = "ddnne"
 DAILY_ROW_QUOTA = "25000"
+OPS_PROJECTION_VERIFY_KEYS_JSON = '{"schema_version":1,"keys":[]}'
 OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"

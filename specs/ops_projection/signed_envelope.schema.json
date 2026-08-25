@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-platform.local/schemas/ops-projection-signed-envelope-v1.json",
+  "title": "Signed Ops Projection Envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "algorithm", "issuer_key_id", "envelope", "signature"],
+  "properties": {
+    "schema_version": { "const": "ops-projection-signed-envelope/v1" },
+    "algorithm": { "const": "Ed25519" },
+    "issuer_key_id": { "type": "string", "minLength": 1 },
+    "signature": { "type": "string", "pattern": "^ed25519:" },
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "generation_id", "content_digest", "source_db_digest",
+        "generated_at", "producer_commit_sha", "contract_digest", "registry_digest",
+        "coverage_policy_version", "projection_status", "source_generation",
+        "source_snapshot_generation", "source_cursor", "export_cursor", "applied_cursor",
+        "coverage_status_digest", "dataset_coverage", "b0_status", "b0_evidence_digest",
+        "b4_status", "b4_evidence_digest", "evidence_digests", "row_counts"
+      ],
+      "properties": {
+        "schema_version": { "const": "ops-projection-envelope/v1" },
+        "generation_id": { "type": "string", "minLength": 1 },
+        "content_digest": { "$ref": "#/$defs/sha256" },
+        "source_db_digest": { "$ref": "#/$defs/sha256" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "producer_commit_sha": { "type": "string", "minLength": 1 },
+        "contract_digest": { "$ref": "#/$defs/sha256" },
+        "registry_digest": { "$ref": "#/$defs/sha256" },
+        "coverage_policy_version": { "type": "string", "minLength": 1 },
+        "projection_status": { "enum": ["FRESH", "STALE", "FAILED", "UNKNOWN"] },
+        "source_generation": { "$ref": "#/$defs/cursor" },
+        "source_snapshot_generation": { "type": ["string", "integer", "null"] },
+        "source_cursor": { "$ref": "#/$defs/cursor" },
+        "export_cursor": { "$ref": "#/$defs/cursor" },
+        "applied_cursor": { "$ref": "#/$defs/cursor" },
+        "coverage_status_digest": { "$ref": "#/$defs/sha256" },
+        "dataset_coverage": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["status", "coverage_mode", "policy_version", "collection_scope", "observed_start", "observed_end"],
+            "properties": {
+              "status": { "type": "string" },
+              "coverage_mode": { "type": "string" },
+              "policy_version": { "type": "string" },
+              "collection_scope": { "type": "string" },
+              "observed_start": { "type": ["string", "null"] },
+              "observed_end": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "b0_status": { "enum": ["PASS", "FAIL", "UNKNOWN"] },
+        "b0_evidence_digest": { "$ref": "#/$defs/sha256" },
+        "b4_status": { "enum": ["PASS", "FAIL", "UNKNOWN"] },
+        "b4_evidence_digest": { "$ref": "#/$defs/sha256" },
+        "evidence_digests": { "type": "object", "additionalProperties": { "$ref": "#/$defs/sha256" } },
+        "row_counts": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "cursor": { "type": ["integer", "null"], "minimum": 0 }
+  }
+}

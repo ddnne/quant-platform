@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Automate Coverage refresh + Ops projection publish.
+"""Automate Coverage refresh + immutable Ops projection publication.
 
 Pipeline:
   1. Optional: refresh_coverage_ledger on local research DB
   2. export_ops_projection SQL
-  3. If --apply-remote: wrangler d1 execute quant-ingest --remote --file=...
+  3. If --apply-remote: append to dedicated quant-ops-projection D1
+  4. Verify that the expected immutable generation became active
 
 Removes the "human must remember export commands" sole path. Remote MCP still
 never gains write tools; this script is an out-of-band publisher.
 
-Fail-closed guard (GLM design):
-  - Before full --apply-remote (non dry-run), probe local + remote COMPLETE counts.
-  - If remote probe fails OR local < remote, refuse exit 3 unless --force-apply-remote.
-  - Targeted reevaluation path is unaffected (not a full publish).
+The publisher never deletes or updates a generation. An incomplete import may
+leave only unreferenced content rows; it cannot append a sealed generation or
+move the active pointer, so the Worker continues to read the prior generation.
 """
 
 from __future__ import annotations
@@ -40,7 +40,13 @@ from datetime import datetime, timezone
 ROOT = ensure_repo_root()
 
 from ingestion.jsda.official_index import read_local_index_text  # noqa: E402
-from scripts.export_ops_projection import render_projection_sql  # noqa: E402
+from ops.projection_signing import (  # noqa: E402
+    OpsProjectionSignatureError,
+    load_ops_projection_signer,
+)
+from scripts.export_ops_projection import render_projection_bundle  # noqa: E402
+
+OPS_PROJECTION_DATABASE = "quant-ops-projection"
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -68,7 +74,7 @@ def count_local_complete(db_path: Path) -> int:
 
 def count_remote_complete(
     *,
-    database: str = "quant-ingest",
+    database: str = OPS_PROJECTION_DATABASE,
     wrangler_cwd: Path | None = None,
     timeout_sec: int = 120,
 ) -> int | None:
@@ -77,8 +83,8 @@ def count_remote_complete(
     Returns None for any transport / parse / non-zero exit failure so that
     enforce_complete_count_guard can apply fail-closed semantics.
     """
-    # Probe the same D1 the Ops MCP reads (quant-ops-mcp wrangler.toml).
-    # ingestion-premium config can 7403 against this account even when MCP works.
+    # Probe the same dedicated read-model D1 the Ops MCP reads.  Never query
+    # quant-ingest through the Ops Worker configuration.
     cwd = wrangler_cwd or (ROOT / "platform" / "workers" / "quant-ops-mcp")
     wrangler_bin = cwd / "node_modules" / ".bin" / "wrangler"
     config = cwd / "wrangler.toml"
@@ -97,7 +103,10 @@ def count_remote_complete(
             f"--config={config}",
             "--json",
             "--command",
-            "SELECT COUNT(*) AS c FROM coverage_segments WHERE status='COMPLETE'",
+            "SELECT COUNT(*) AS c FROM coverage_segments s "
+            "JOIN ops_projection_active a "
+            "ON a.singleton=1 AND a.generation_id=s.projection_generation_id "
+            "WHERE s.status='COMPLETE'",
         ]
     )
     try:
@@ -135,6 +144,55 @@ def count_remote_complete(
         m = re.search(r'"c"\s*:\s*(\d+)', text)
         return int(m.group(1)) if m else None
 
+
+def read_remote_active_generation(
+    *,
+    database: str = OPS_PROJECTION_DATABASE,
+    wrangler_cwd: Path | None = None,
+    timeout_sec: int = 120,
+) -> str | None:
+    """Return the dedicated projection's active generation, or None."""
+    cwd = wrangler_cwd or (ROOT / "platform" / "workers" / "quant-ops-mcp")
+    wrangler_bin = cwd / "node_modules" / ".bin" / "wrangler"
+    config = cwd / "wrangler.toml"
+    command = [str(wrangler_bin)] if wrangler_bin.is_file() else ["npx", "wrangler"]
+    command.extend(
+        [
+            "d1",
+            "execute",
+            database,
+            "--remote",
+            f"--config={config}",
+            "--json",
+            "--command",
+            "SELECT generation_id FROM ops_projection_active WHERE singleton=1",
+        ]
+    )
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=str(cwd if wrangler_bin.is_file() else ROOT),
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    text = proc.stdout or ""
+    start = text.find("[")
+    if start < 0:
+        return None
+    try:
+        payload = json.loads(text[start:])
+        rows = payload[0].get("results") or []
+        value = rows[0].get("generation_id") if rows else None
+        return str(value) if value else None
+    except (json.JSONDecodeError, KeyError, TypeError, IndexError):
+        return None
+
 def enforce_complete_count_guard(
     *,
     local_complete: int,
@@ -157,8 +215,8 @@ def enforce_complete_count_guard(
         return (
             f"Refusing --apply-remote: local COMPLETE segments ({local_complete}) "
             f"fewer than remote ({remote_complete}). "
-            "Full projection publish would risk destroying remote COMPLETE evidence. "
-            "Use targeted reevaluation, or --force-apply-remote only after explicit review."
+            "Activating this generation would regress current COMPLETE evidence. "
+            "Use --force-apply-remote only after explicit evidence review."
         )
     return None
 
@@ -183,6 +241,37 @@ def main(argv: list[str] | None = None) -> int:
         "--meta-output",
         type=Path,
         default=ROOT / "data" / "ops" / "projection_meta.json",
+    )
+    parser.add_argument(
+        "--source-cursor",
+        type=int,
+        default=None,
+        help="Explicit remote source change cursor; omitted remains unknown.",
+    )
+    parser.add_argument(
+        "--export-cursor",
+        type=int,
+        default=None,
+        help="Explicit exported change cursor; omitted remains unknown.",
+    )
+    parser.add_argument(
+        "--storage-hot-cutoff",
+        default=None,
+        help="Optional reviewed ISO hot-window cutoff; never defaults to a date.",
+    )
+    parser.add_argument(
+        "--projection-signing-key",
+        type=Path,
+        default=None,
+        help=(
+            "Dedicated Ops Projection Ed25519 PEM path. If omitted, use only "
+            "QUANT_OPS_PROJECTION_SIGNING_KEY_PEM or the dedicated default path."
+        ),
+    )
+    parser.add_argument(
+        "--projection-signing-key-id",
+        default=None,
+        help="Dedicated Ops Projection issuer key id; no Receipt/READY fallback.",
     )
     parser.add_argument(
         "--refresh-coverage",
@@ -221,6 +310,16 @@ def main(argv: list[str] | None = None) -> int:
     if not args.db.exists():
         print(f"ERROR: local DB not found: {args.db}", file=sys.stderr)
         return 2
+
+    try:
+        projection_signer = load_ops_projection_signer(
+            path=args.projection_signing_key,
+            key_id=args.projection_signing_key_id,
+            required=bool(args.apply_remote and not args.dry_run),
+        )
+    except OpsProjectionSignatureError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 6
 
     refresh_status = "skipped"
     refresh_error = None
@@ -279,27 +378,37 @@ def main(argv: list[str] | None = None) -> int:
             f"force={bool(args.force_apply_remote)}"
         )
 
-    sql = render_projection_sql(
+    bundle = render_projection_bundle(
         args.db,
         snapshot_dir=args.snapshot_dir,
         refresh_status=refresh_status,
         refresh_error=refresh_error,
         last_refresh_attempt_at=last_refresh_attempt_at,
         last_success_at=last_success_at,
+        source_cursor=args.source_cursor,
+        export_cursor=args.export_cursor,
+        storage_hot_cutoff=args.storage_hot_cutoff,
+        projection_signer=projection_signer,
     )
-    from ops.projection_meta import build_projection_metadata
-
-    meta = build_projection_metadata(
-        args.db,
-        refresh_status=refresh_status,
-        refresh_error=refresh_error,
-        last_refresh_attempt_at=last_refresh_attempt_at,
-        last_success_at=last_success_at,
-        publisher="scripts/publish_ops_projection.py",
-    )
+    sql = bundle.sql
+    meta = dict(bundle.metadata)
+    meta["publisher"] = "scripts/publish_ops_projection.py"
+    meta["last_refresh_status"] = refresh_status
+    meta["last_refresh_error"] = refresh_error
     meta["local_db"] = str(args.db)
     meta["snapshot_dir"] = str(args.snapshot_dir)
     meta["sql_bytes"] = len(sql.encode("utf-8"))
+    meta["generation_id"] = bundle.generation_id
+    meta["source_db_digest"] = bundle.source_db_digest
+    meta["content_digest"] = bundle.content_digest
+    meta["row_counts"] = dict(bundle.row_counts)
+    meta["signature_status"] = "SIGNED" if bundle.signed_envelope else "UNSIGNED"
+    meta["issuer_key_id"] = (
+        bundle.signed_envelope.get("issuer_key_id")
+        if bundle.signed_envelope
+        else None
+    )
+    meta["signed_envelope"] = bundle.signed_envelope
     # Back-compat aliases for older readers
     meta["projection_status"] = meta["status"]
     meta["projection_generated_at"] = meta["generated_at"]
@@ -345,7 +454,7 @@ def main(argv: list[str] | None = None) -> int:
             "wrangler",
             "d1",
             "execute",
-            "quant-ingest",
+            OPS_PROJECTION_DATABASE,
             "--remote",
             f"--file={remote_path}",
         ]
@@ -356,7 +465,16 @@ def main(argv: list[str] | None = None) -> int:
         if proc.returncode != 0:
             print("ERROR: remote apply failed", file=sys.stderr)
             return proc.returncode
+        observed_generation = read_remote_active_generation()
+        if observed_generation != bundle.generation_id:
+            print(
+                "ERROR: projection import did not activate the expected generation "
+                f"expected={bundle.generation_id} observed={observed_generation}",
+                file=sys.stderr,
+            )
+            return 5
         meta["applied_at"] = _now()
+        meta["active_generation"] = observed_generation
         if meta.get("status") == "FRESH" and refresh_status != "success":
             meta["status"] = "STALE"
         meta["projection_status"] = meta["status"]

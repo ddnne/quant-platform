@@ -1,119 +1,33 @@
-"""Tests for ops projection publish automation."""
+"""Behavioral tests for immutable Ops Projection publication."""
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 import sqlite3
 
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from jsonschema import Draft202012Validator
+
 from ops.projection_meta import build_projection_metadata
+from ops.projection_signing import (
+    OpsProjectionPublicKeyRegistry,
+    OpsProjectionSignatureError,
+    OpsProjectionSigningKey,
+    load_ops_projection_signer,
+)
+from scripts import publish_ops_projection as publisher
+from scripts.export_ops_projection import render_projection_bundle
 from storage.sqlite_store import SqliteStore
 
-_ROOT = Path(__file__).resolve().parents[1]
-_SPEC = importlib.util.spec_from_file_location(
-    "publish_ops_projection", _ROOT / "scripts/publish_ops_projection.py"
-)
-assert _SPEC is not None and _SPEC.loader is not None
-_MODULE = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(_MODULE)
+ROOT = Path(__file__).resolve().parents[1]
+MIGRATION = ROOT / "platform/workers/quant-ops-mcp/migrations/projection/0001_ops_projection.sql"
 
 
-
-def _ensure_projection_generation_columns(conn):
-    """Align test remote DB with migration 0004_projection_generation.sql."""
-    cols = (
-        ("dataset_coverage", "projection_generation_id TEXT"),
-        ("coverage_segments", "projection_generation_id TEXT"),
-        ("ops_ready_snapshots", "projection_generation_id TEXT"),
-        ("ops_snapshot_quality", "projection_generation_id TEXT"),
-        ("ops_b0_status", "projection_generation_id TEXT"),
-        ("ops_projection_metadata", "projection_generation_id TEXT"),
-    )
-    for table, coldef in cols:
-        try:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {coldef}")
-        except Exception:
-            pass  # table may not exist yet or column already present
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS ops_projection_generation (
-            generation_id TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
-            source_db_digest TEXT,
-            generated_at TEXT NOT NULL,
-            producer_commit_sha TEXT,
-            contract_digest TEXT,
-            registry_digest TEXT,
-            coverage_policy_version TEXT,
-            activated_at TEXT,
-            detail_json TEXT NOT NULL DEFAULT '{}'
-        )"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS ops_projection_active (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            generation_id TEXT NOT NULL,
-            activated_at TEXT NOT NULL
-        )"""
-    )
-    conn.commit()
-
-
-def _setup_test_db(tmp_path: Path) -> Path:
-    """Create a minimal test DB with required tables."""
-    db_path = tmp_path / "test.sqlite"
-    store = SqliteStore(db_path)
-    # Create minimal required tables
-    store._conn.execute(  # noqa: SLF001
-        """CREATE TABLE IF NOT EXISTS dataset_coverage (
-            dataset TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
-            policy_version TEXT NOT NULL,
-            collection_scope TEXT NOT NULL,
-            history_target_start TEXT NOT NULL,
-            history_target_end_rule TEXT NOT NULL,
-            coverage_mode TEXT NOT NULL,
-            expected_frequency TEXT NOT NULL,
-            universe_rule TEXT NOT NULL,
-            raw_retention_required INTEGER NOT NULL,
-            structured_reconciliation_required INTEGER NOT NULL,
-            governance_tier TEXT NOT NULL,
-            observed_start TEXT,
-            observed_end TEXT,
-            row_count INTEGER NOT NULL,
-            source_run_id INTEGER,
-            evaluated_at TEXT NOT NULL,
-            detail_json TEXT NOT NULL
-        )"""
-    )
-    store._conn.execute(  # noqa: SLF001
-        """CREATE TABLE IF NOT EXISTS coverage_segments (
-            source TEXT NOT NULL,
-            dataset TEXT NOT NULL,
-            segment_id TEXT NOT NULL,
-            policy_version TEXT NOT NULL,
-            segment_start TEXT NOT NULL,
-            segment_end TEXT NOT NULL,
-            expected_scope TEXT NOT NULL,
-            expected_items INTEGER,
-            status TEXT NOT NULL,
-            receipt_run_id INTEGER,
-            evaluated_at TEXT NOT NULL,
-            detail_json TEXT NOT NULL,
-            PRIMARY KEY (source, dataset, segment_id, policy_version)
-        )"""
-    )
-    store._conn.execute(  # noqa: SLF001
-        """CREATE TABLE IF NOT EXISTS snapshot_quality_results (
-            build_id TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
-            policy_version TEXT NOT NULL,
-            evaluated_at TEXT NOT NULL,
-            summary_json TEXT NOT NULL,
-            results_json TEXT NOT NULL
-        )"""
-    )
-    # Insert minimal data
+def _source(path: Path) -> None:
+    store = SqliteStore(path)
     store._conn.execute(  # noqa: SLF001
         """INSERT INTO dataset_coverage
            (dataset,status,policy_version,collection_scope,
@@ -121,13 +35,12 @@ def _setup_test_db(tmp_path: Path) -> Path:
             expected_frequency,universe_rule,raw_retention_required,
             structured_reconciliation_required,governance_tier,
             observed_start,observed_end,row_count,source_run_id,evaluated_at,
-            detail_json)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            detail_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            "test_dataset", "COMPLETE",
-            "collection-coverage/v2", "test", "2020-01-01", "current",
-            "official", "daily", "all", 1, 1, "governed", "2020-01-01",
-            "2020-01-01", 1, 1, "2026-08-11T00:00:00Z", "{}",
+            "equities_bars_daily", "PARTIAL", "collection-coverage/v3", "jquants",
+            "2008-05-07", "current", "official", "daily", "all", 1, 1,
+            "governed", "2008-05-07", "2026-08-24", 10, 10,
+            "2026-08-25T00:00:00Z", "{}",
         ),
     )
     store._conn.execute(  # noqa: SLF001
@@ -136,397 +49,347 @@ def _setup_test_db(tmp_path: Path) -> Path:
             expected_scope,expected_items,status,receipt_run_id,evaluated_at,
             detail_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            "test", "test_dataset", "2020-01",
-            "collection-coverage/v2", "2020-01-01", "2020-01-31", "{}",
-            1, "COMPLETE", 1, "2026-08-11T00:00:00Z", "{}",
+            "jquants", "equities_bars_daily", "2008-05",
+            "collection-coverage/v3", "2008-05-07", "2008-05-31", "{}", 1,
+            "PARTIAL", 10, "2026-08-25T00:00:00Z", "{}",
         ),
     )
     store._conn.commit()  # noqa: SLF001
     store.close()
-    return db_path
 
 
-def test_publish_dry_run_prints_sql_preview_and_metadata(tmp_path, capsys):
-    """Test that --dry-run prints SQL preview and metadata without writing files."""
-    db_path = _setup_test_db(tmp_path)
-    output_dir = tmp_path / "ops"
-    output_file = output_dir / "projection.sql"
-    meta_file = output_dir / "projection_meta.json"
+def _target() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(MIGRATION.read_text(encoding="utf-8"))
+    return conn
 
-    # Ensure files don't exist
-    assert not output_file.exists()
-    assert not meta_file.exists()
 
-    # Run with --dry-run
-    import sys
-    old_argv = sys.argv
-    sys.argv = [
-        "publish_ops_projection.py",
-        f"--db={db_path}",
-        f"--output={output_file}",
-        f"--meta-output={meta_file}",
-        "--dry-run",
+def _bundle(path: Path, generation: str):
+    return render_projection_bundle(
+        path,
+        generation_id=generation,
+        producer_commit_sha="d" * 40,
+        refresh_status="success",
+        last_success_at="2026-08-25T00:01:00Z",
+    )
+
+
+def test_render_is_append_only_and_pointer_is_last(tmp_path: Path) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    sql = _bundle(source, "projgen-one").sql
+    assert "DELETE FROM" not in sql
+    assert "INSERT OR REPLACE" not in sql
+    assert "UPDATE ops_projection_generation" not in sql
+    statements = [line for line in sql.splitlines() if line and line != "COMMIT;"]
+    assert statements[-1].startswith("INSERT INTO ops_projection_active")
+
+
+def test_two_generations_preserve_prior_rows_and_flip_pointer(tmp_path: Path) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    first = _bundle(source, "projgen-first")
+    second = _bundle(source, "projgen-second")
+    target = _target()
+    target.executescript(first.sql)
+    target.executescript(second.sql)
+    assert target.execute("SELECT COUNT(*) FROM dataset_coverage").fetchone() == (2,)
+    assert target.execute(
+        "SELECT generation_id FROM ops_projection_active WHERE singleton=1"
+    ).fetchone() == ("projgen-second",)
+    assert target.execute(
+        "SELECT COUNT(*) FROM dataset_coverage WHERE projection_generation_id=?",
+        ("projgen-first",),
+    ).fetchone() == (1,)
+    target.close()
+
+
+def test_incomplete_generation_cannot_replace_active_pointer(tmp_path: Path) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    first = _bundle(source, "projgen-active")
+    incomplete = _bundle(source, "projgen-incomplete")
+    lines = [
+        line for line in incomplete.sql.splitlines()
+        if not line.startswith("INSERT INTO dataset_coverage ")
     ]
-    try:
-        result = _MODULE.main()
-        assert result == 0
-    finally:
-        sys.argv = old_argv
-
-    # Check that files were NOT written
-    assert not output_file.exists()
-    assert not meta_file.exists()
-
-    # Check stdout output
-    captured = capsys.readouterr()
-    output = captured.out
-
-    # Should contain SQL preview (first 2000 chars)
-    assert "BEGIN TRANSACTION;" in output
-    assert "DELETE FROM dataset_coverage;" in output
-    # Note: COMMIT may not be in first 2000 chars, so we don't check for it here
-
-    # Should contain metadata JSON. Export-only (no --refresh-coverage) is STALE.
-    assert "projection_status" in output
-    assert "STALE" in output
-    assert "publisher" in output
-    assert "scripts/publish_ops_projection.py" in output
+    target = _target()
+    target.executescript(first.sql)
+    target.executescript("\n".join(lines) + "\n")
+    assert target.execute(
+        "SELECT generation_id FROM ops_projection_active WHERE singleton=1"
+    ).fetchone() == ("projgen-active",)
+    assert target.execute(
+        "SELECT status FROM ops_projection_generation WHERE generation_id=?",
+        ("projgen-incomplete",),
+    ).fetchone() is None
+    target.close()
 
 
-def test_publish_writes_sql_and_metadata_files(tmp_path):
-    """Test that normal mode writes SQL and metadata files."""
-    db_path = _setup_test_db(tmp_path)
-    output_dir = tmp_path / "ops"
-    output_file = output_dir / "projection.sql"
-    meta_file = output_dir / "projection_meta.json"
-
-    # Run normal mode
-    import sys
-    old_argv = sys.argv
-    sys.argv = [
-        "publish_ops_projection.py",
-        f"--db={db_path}",
-        f"--output={output_file}",
-        f"--meta-output={meta_file}",
-    ]
-    try:
-        result = _MODULE.main()
-        assert result == 0
-    finally:
-        sys.argv = old_argv
-
-    # Check that files were written
-    assert output_file.exists()
-    assert meta_file.exists()
-
-    # Check SQL file content
-    sql_content = output_file.read_text(encoding="utf-8")
-    assert "BEGIN TRANSACTION;" in sql_content
-    assert "DELETE FROM dataset_coverage;" in sql_content
-    assert "INSERT INTO dataset_coverage" in sql_content
-    assert "COMMIT;" in sql_content
-
-    # Check metadata file content
-    meta_content = json.loads(meta_file.read_text(encoding="utf-8"))
-    assert meta_content["projection_status"] == "STALE"
-    assert meta_content["last_refresh_status"] == "skipped"
-    assert "projection_generated_at" in meta_content
-    assert meta_content["publisher"] == "scripts/publish_ops_projection.py"
-    assert meta_content["local_db"] == str(db_path)
-    assert "sql_bytes" in meta_content
-    assert meta_content["sql_bytes"] > 0
-
-
-def test_publish_metadata_includes_expected_fields(tmp_path):
-    """Test that published metadata contains all expected fields."""
-    db_path = _setup_test_db(tmp_path)
-    output_dir = tmp_path / "ops"
-    output_file = output_dir / "projection.sql"
-    meta_file = output_dir / "projection_meta.json"
-
-    # Run normal mode
-    import sys
-    old_argv = sys.argv
-    sys.argv = [
-        "publish_ops_projection.py",
-        f"--db={db_path}",
-        f"--output={output_file}",
-        f"--meta-output={meta_file}",
-    ]
-    try:
-        result = _MODULE.main()
-        assert result == 0
-    finally:
-        sys.argv = old_argv
-
-    # Check metadata fields
-    meta_content = json.loads(meta_file.read_text(encoding="utf-8"))
-    expected_fields = {
-        "projection_status",
-        "projection_generated_at",
-        "projection_source_generation",
-        "local_db",
-        "snapshot_dir",
-        "sql_bytes",
-        "publisher",
-    }
-    assert expected_fields <= set(meta_content.keys())
-
-
-def test_export_includes_projection_metadata_with_status_check(tmp_path):
-    """Test that exported SQL includes ops_projection_metadata with proper status fields."""
-    from scripts.export_ops_projection import render_projection_sql
-
-    db_path = _setup_test_db(tmp_path)
-
-    sql = render_projection_sql(db_path)
-
-    # Check that projection metadata is included
-    assert "INSERT INTO ops_projection_metadata" in sql
-    assert "generated_at" in sql
-    assert "source_generation" in sql
-    assert "age_seconds" in sql
-    assert "status" in sql
-
-    # Check that it includes valid status values
-    assert "FRESH" in sql or "STALE" in sql or "FAILED" in sql or "UNKNOWN" in sql
-
-    # Verify SQL can be executed against schema
-    remote = sqlite3.connect(":memory:")
-    _mig = _ROOT / "platform/workers/quant-ops-mcp/migrations"
-    for _name in (
-        "0002_ops_projection.sql",
-        "0003_endpoint_inventory_sla.sql",
-        "0004_projection_generation.sql",
-        "0005_endpoint_inventory_morning_session.sql",
-    ):
-        remote.executescript((_mig / _name).read_text(encoding="utf-8"))
-    _ensure_projection_generation_columns(remote)
-    remote.executescript(sql)
-
-    # Verify the metadata table has data
-    row = remote.execute(
-        "SELECT status, projection_version FROM ops_projection_metadata"
-    ).fetchone()
-    assert row is not None
-    status, version = row
-    assert status in ("FRESH", "STALE", "FAILED", "UNKNOWN")
-    assert status != "FRESH"  # skipped refresh cannot be FRESH
-    assert version == "ops_projection/v3"
-
-
-def test_export_includes_endpoint_inventory(tmp_path):
-    """Test that exported SQL includes endpoint_inventory table."""
-    from scripts.export_ops_projection import render_projection_sql
-
-    db_path = _setup_test_db(tmp_path)
-
-    sql = render_projection_sql(db_path)
-
-    # Check that endpoint inventory is included
-    assert "INSERT INTO endpoint_inventory" in sql
-
-    # Verify SQL can be executed against schema
-    remote = sqlite3.connect(":memory:")
-    _mig = _ROOT / "platform/workers/quant-ops-mcp/migrations"
-    for _name in (
-        "0002_ops_projection.sql",
-        "0003_endpoint_inventory_sla.sql",
-        "0004_projection_generation.sql",
-        "0005_endpoint_inventory_morning_session.sql",
-    ):
-        remote.executescript((_mig / _name).read_text(encoding="utf-8"))
-    _ensure_projection_generation_columns(remote)
-    remote.executescript(sql)
-
-    # Verify the endpoint_inventory table has data
-    row = remote.execute(
-        "SELECT COUNT(*) FROM endpoint_inventory"
-    ).fetchone()
-    assert row is not None
-    count = row[0]
-    assert count > 0
-
-
-def test_export_metadata_age_calculation(tmp_path):
-    """Test that projection metadata correctly calculates age and status."""
-    from scripts.export_ops_projection import render_projection_sql
-
-    db_path = _setup_test_db(tmp_path)
-
-    # Add a dataset_coverage entry with recent evaluated_at
-    store = SqliteStore(db_path)
+def test_latest_successful_receipt_supersedes_old_failed_attempt(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    store = SqliteStore(source)
+    receipt = """INSERT INTO collection_receipts
+      (source,dataset,segment_id,segment_start,segment_end,expected_scope,
+       expected_items,observed_items,raw_page_count,raw_row_count,
+       structured_row_count,pagination_exhausted,digests_json,run_id,status,
+       error,checked_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
     store._conn.execute(  # noqa: SLF001
-        """UPDATE dataset_coverage SET evaluated_at = ?""",
-        ("2026-08-11T00:00:00Z",)
+        receipt,
+        (
+            "jquants", "equities_bars_daily", "2008-05", "2008-05-07",
+            "2008-05-31", "{}", 1, 0, 0, 0, 0, 0, "{}", 10, "FAILED",
+            "timeout", "2026-08-24T00:00:00Z",
+        ),
+    )
+    store._conn.execute(  # noqa: SLF001
+        receipt,
+        (
+            "jquants", "equities_bars_daily", "2008-05", "2008-05-07",
+            "2008-05-31", "{}", 1, 10, 1, 10, 10, 1, "{}", 11, "SUCCESS",
+            None, "2026-08-25T00:00:00Z",
+        ),
+    )
+    store._conn.execute(  # noqa: SLF001
+        """INSERT INTO raw_retention_manifests
+           (dataset,run_id,manifest_key,page_count,row_count,raw_bytes,
+            data_digest,completeness,created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+        (
+            "equities_bars_daily", 11, "raw/success.json", 1, 10, 100,
+            "sha256:success", "ACQUIRED", "2026-08-25T00:00:00Z",
+        ),
     )
     store._conn.commit()  # noqa: SLF001
     store.close()
-
-    sql = render_projection_sql(db_path)
-
-    # Execute and check metadata
-    remote = sqlite3.connect(":memory:")
-    _mig = _ROOT / "platform/workers/quant-ops-mcp/migrations"
-    for _name in (
-        "0002_ops_projection.sql",
-        "0003_endpoint_inventory_sla.sql",
-        "0004_projection_generation.sql",
-        "0005_endpoint_inventory_morning_session.sql",
-    ):
-        remote.executescript((_mig / _name).read_text(encoding="utf-8"))
-    _ensure_projection_generation_columns(remote)
-    remote.executescript(sql)
-
-    # Get metadata row
-    row = remote.execute(
-        "SELECT age_seconds, status FROM ops_projection_metadata"
-    ).fetchone()
-    assert row is not None
-    age_seconds, status = row
-
-    # Age should be a number (could be None if source_generation is missing)
-    if age_seconds is not None:
-        assert isinstance(age_seconds, int)
-        assert age_seconds >= 0
-
-    # Status should be valid
-    assert status in ("FRESH", "STALE", "FAILED", "UNKNOWN")
-
-
-def test_missing_db_is_missing(tmp_path: Path):
-    meta = build_projection_metadata(tmp_path / "nope.sqlite")
-    assert meta["status"] == "MISSING"
-
-
-def test_failed_refresh_never_fresh(tmp_path: Path):
-    db = tmp_path / "empty.sqlite"
-    sqlite3.connect(db).close()
-    meta = build_projection_metadata(
-        db, refresh_status="failed", refresh_error="boom"
+    bundle = _bundle(source, "projgen-raw")
+    target = _target()
+    target.executescript(bundle.sql)
+    assert target.execute(
+        "SELECT source,run_id,completeness,reason FROM raw_retention_manifests "
+        "WHERE projection_generation_id=?",
+        (bundle.generation_id,),
+    ).fetchone() == (
+        "jquants", 11, "ACQUIRED", "latest authoritative segment receipt"
     )
-    assert meta["status"] == "DEGRADED_REFRESH_FAILED"
-    assert meta["last_refresh_error"] == "boom"
+    target.close()
 
 
-def test_skipped_refresh_never_fresh(tmp_path: Path):
-    db_path = _setup_test_db(tmp_path)
-    meta = build_projection_metadata(db_path, refresh_status="skipped")
-    assert meta["status"] != "FRESH"
-    assert meta["status"] == "STALE"
-    success = build_projection_metadata(db_path, refresh_status="success")
-    assert success["status"] == "FRESH"
+def test_storage_aggregate_has_no_default_cutoff(tmp_path: Path) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    target = _target()
+    bundle = _bundle(source, "projgen-storage")
+    target.executescript(bundle.sql)
+    payload = json.loads(
+        target.execute(
+            "SELECT payload_json FROM ops_storage_plane_status "
+            "WHERE projection_generation_id=?",
+            (bundle.generation_id,),
+        ).fetchone()[0]
+    )
+    assert payload["hot_window"] == {
+        "cutoff": None,
+        "reason": "publisher did not receive an explicit storage hot cutoff",
+        "status": "NOT_PROJECTED",
+    }
+    target.close()
 
 
-def test_publish_failed_refresh_refuses_apply_remote(tmp_path, monkeypatch):
-    db_path = _setup_test_db(tmp_path)
-    output_file = tmp_path / "ops" / "projection.sql"
-    meta_file = tmp_path / "ops" / "projection_meta.json"
+def test_explicit_hot_cutoff_is_materialized_at_publish_time(tmp_path: Path) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    store = SqliteStore(source)
+    store._conn.execute(  # noqa: SLF001
+        """INSERT INTO jquants_records
+           (source,dataset,natural_key,event_time,available_at,ingested_at,
+            payload,raw_payload) VALUES (?,?,?,?,?,?,?,?)""",
+        (
+            "jquants", "equities_bars_daily", '{"Code":"1"}', "2026-08-24",
+            "2026-08-24T15:30:00Z", "2026-08-25T00:00:00Z", "{}", "{}",
+        ),
+    )
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+    bundle = render_projection_bundle(
+        source,
+        generation_id="projgen-hot",
+        producer_commit_sha="e" * 40,
+        storage_hot_cutoff="2026-08-01",
+    )
+    target = _target()
+    target.executescript(bundle.sql)
+    payload = json.loads(
+        target.execute("SELECT payload_json FROM ops_storage_plane_status").fetchone()[0]
+    )
+    assert payload["hot_window"]["status"] == "MATERIALIZED"
+    assert payload["hot_window"]["cutoff"] == "2026-08-01"
+    assert payload["hot_window"]["bars_hot"] == 1
+    target.close()
 
-    def _boom(*_a, **_k):
-        raise RuntimeError("ledger boom")
 
+def test_publish_dry_run_does_not_write_artifacts(tmp_path: Path, capsys) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    output = tmp_path / "ops/projection.sql"
+    meta = tmp_path / "ops/projection.json"
+    assert publisher.main(
+        [f"--db={source}", f"--output={output}", f"--meta-output={meta}", "--dry-run"]
+    ) == 0
+    assert not output.exists()
+    assert not meta.exists()
+    rendered = capsys.readouterr().out
+    assert '"generation_id"' in rendered
+    assert '"source_db_digest"' in rendered
+
+
+def test_publish_writes_content_addressed_generation_metadata(tmp_path: Path) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    output = tmp_path / "ops/projection.sql"
+    meta = tmp_path / "ops/projection.json"
+    assert publisher.main(
+        [f"--db={source}", f"--output={output}", f"--meta-output={meta}"]
+    ) == 0
+    document = json.loads(meta.read_text(encoding="utf-8"))
+    assert document["generation_id"].startswith("projgen-")
+    assert document["source_db_digest"].startswith("sha256:")
+    assert document["row_counts"]["ops_projection_metadata"] == 1
+    assert "DELETE FROM" not in output.read_text(encoding="utf-8")
+
+
+def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    private = Ed25519PrivateKey.generate()
+    signer = OpsProjectionSigningKey("ops-projection-test-v1", private)
+    bundle = render_projection_bundle(
+        source,
+        generation_id="projgen-signed",
+        producer_commit_sha="f" * 40,
+        source_cursor=12,
+        export_cursor=11,
+        projection_signer=signer,
+    )
+    public_raw = private.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    import base64
+
+    registry = OpsProjectionPublicKeyRegistry.from_document(
+        {
+            "schema_version": 1,
+            "keys": [
+                {
+                    "key_id": "ops-projection-test-v1",
+                    "algorithm": "Ed25519",
+                    "public_key_base64": base64.b64encode(public_raw).decode("ascii"),
+                }
+            ],
+        }
+    )
+    assert bundle.signed_envelope is not None
+    schema = json.loads(
+        (ROOT / "specs/ops_projection/signed_envelope.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    Draft202012Validator(schema).validate(bundle.signed_envelope)
+    envelope = registry.verify(bundle.signed_envelope)
+    assert envelope["generation_id"] == "projgen-signed"
+    assert envelope["content_digest"] == bundle.content_digest
+    assert envelope["source_cursor"] == 12
+    assert envelope["export_cursor"] == 11
+    assert envelope["applied_cursor"] is None
+    assert envelope["coverage_status_digest"].startswith("sha256:")
+    assert envelope["projection_status"] in {"FRESH", "STALE"}
+    assert envelope["dataset_coverage"]["equities_bars_daily"]["status"] == "PARTIAL"
+    assert envelope["b0_status"] == "UNKNOWN"
+    assert envelope["b4_status"] == "UNKNOWN"
+    assert set(envelope["evidence_digests"]) == {
+        "coverage", "raw_retention", "ready", "storage", "sync", "validation"
+    }
+    derived = registry.verified_dataset_evidence(
+        bundle.signed_envelope, ["equities_bars_daily"]
+    )["equities_bars_daily"]
+    assert derived["status"] == "PARTIAL"
+    assert derived["coverage_mode"] == "official"
+    assert derived["source_generation"] == 12
+    assert derived["export_cursor"] == 11
+    assert derived["applied_cursor"] is None
+
+    tampered = json.loads(json.dumps(bundle.signed_envelope))
+    tampered["envelope"]["applied_cursor"] = 12
+    with pytest.raises(OpsProjectionSignatureError, match="signature is invalid"):
+        registry.verify(tampered)
+
+
+def test_remote_publish_requires_dedicated_ops_projection_signer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    monkeypatch.delenv("QUANT_OPS_PROJECTION_SIGNING_KEY_PEM", raising=False)
+    monkeypatch.delenv("QUANT_OPS_PROJECTION_SIGNING_KEY_ID", raising=False)
+    assert publisher.main([f"--db={source}", "--apply-remote"]) == 6
+
+
+def test_receipt_and_ready_keys_never_mint_ops_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = Ed25519PrivateKey.generate()
+    pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    ready_path = tmp_path / "readiness.pem"
+    ready_path.write_bytes(pem)
+    monkeypatch.setenv("QUANT_RECEIPT_SIGNING_KEY_PEM", pem.decode("ascii"))
+    monkeypatch.setenv("QUANT_READINESS_SIGNING_KEY_FILE", str(ready_path))
+    monkeypatch.delenv("QUANT_OPS_PROJECTION_SIGNING_KEY_PEM", raising=False)
+    monkeypatch.delenv("QUANT_OPS_PROJECTION_SIGNING_KEY_ID", raising=False)
+    assert load_ops_projection_signer() is None
+
+
+def test_failed_refresh_never_publishes_fresh_or_applies(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("ledger failure")
+
+    monkeypatch.setattr("storage.coverage_ledger.refresh_coverage_ledger", fail)
+    monkeypatch.setattr(publisher, "count_local_complete", lambda _path: 0)
+    monkeypatch.setattr(publisher, "count_remote_complete", lambda **_kwargs: 0)
     monkeypatch.setattr(
-        "storage.coverage_ledger.refresh_coverage_ledger", _boom
+        publisher,
+        "load_ops_projection_signer",
+        lambda **_kwargs: OpsProjectionSigningKey(
+            "ops-projection-test-v1", Ed25519PrivateKey.generate()
+        ),
     )
-    monkeypatch.setattr(_MODULE, "count_local_complete", lambda _db: 1)
-    monkeypatch.setattr(_MODULE, "count_remote_complete", lambda **_k: 1)
-    rc = _MODULE.main([
-        f"--db={db_path}",
-        f"--output={output_file}",
-        f"--meta-output={meta_file}",
-        "--refresh-coverage",
-        "--apply-remote",
-    ])
-    assert rc == 4
-    meta = json.loads(meta_file.read_text(encoding="utf-8"))
-    assert meta["status"] == "DEGRADED_REFRESH_FAILED"
-    insert = output_file.read_text(encoding="utf-8").split(
-        "INSERT INTO ops_projection_metadata", 1
-    )[1].split(";", 1)[0]
-    assert ",'FRESH'," not in insert
-    assert ",'FAILED'," in insert
+    output = tmp_path / "ops/projection.sql"
+    meta = tmp_path / "ops/projection.json"
+    assert publisher.main(
+        [
+            f"--db={source}", f"--output={output}", f"--meta-output={meta}",
+            "--refresh-coverage", "--apply-remote",
+        ]
+    ) == 4
+    document = json.loads(meta.read_text(encoding="utf-8"))
+    assert document["status"] == "FAILED"
 
 
-def test_publish_refresh_passes_index_text_when_html_path_provided(
-    tmp_path, monkeypatch,
-):
-    db_path = _setup_test_db(tmp_path)
-    html = "<html>listed publication days only</html>\n"
-    index_path = tmp_path / "otc_official_index.html"
-    index_path.write_text(html, encoding="utf-8")
-    captured: dict = {}
-
-    def _capture(*_a, **kwargs):
-        captured["kwargs"] = kwargs
-        return []
-
-    monkeypatch.setattr(
-        "storage.coverage_ledger.refresh_coverage_ledger", _capture
-    )
-    rc = _MODULE.main([
-        f"--db={db_path}",
-        f"--output={tmp_path / 'ops' / 'projection.sql'}",
-        f"--meta-output={tmp_path / 'ops' / 'projection_meta.json'}",
-        "--refresh-coverage",
-        f"--otc-index-html={index_path}",
-        "--dry-run",
-    ])
-    assert rc == 0
-    assert "index_text" in captured["kwargs"]
-    assert captured["kwargs"]["index_text"] == html
-
-
-def test_publish_refresh_index_text_none_when_html_path_omitted(
-    tmp_path, monkeypatch,
-):
-    db_path = _setup_test_db(tmp_path)
-    captured: dict = {}
-
-    def _capture(*_a, **kwargs):
-        captured["kwargs"] = kwargs
-        return []
-
-    monkeypatch.setattr(
-        "storage.coverage_ledger.refresh_coverage_ledger", _capture
-    )
-    rc = _MODULE.main([
-        f"--db={db_path}",
-        f"--output={tmp_path / 'ops' / 'projection.sql'}",
-        f"--meta-output={tmp_path / 'ops' / 'projection_meta.json'}",
-        "--refresh-coverage",
-        "--dry-run",
-    ])
-    assert rc == 0
-    assert "index_text" in captured["kwargs"]
-    assert captured["kwargs"]["index_text"] is None
-
-
-def test_publish_refresh_missing_html_is_fail_closed_empty_not_calendar(
-    tmp_path, monkeypatch,
-):
-    db_path = _setup_test_db(tmp_path)
-    missing = tmp_path / "no_such_otc_index.html"
-    assert not missing.exists()
-    captured: dict = {}
-
-    def _capture(*_a, **kwargs):
-        captured["kwargs"] = kwargs
-        return []
-
-    monkeypatch.setattr(
-        "storage.coverage_ledger.refresh_coverage_ledger", _capture
-    )
-    rc = _MODULE.main([
-        f"--db={db_path}",
-        f"--output={tmp_path / 'ops' / 'projection.sql'}",
-        f"--meta-output={tmp_path / 'ops' / 'projection_meta.json'}",
-        "--refresh-coverage",
-        f"--otc-index-html={missing}",
-        "--dry-run",
-    ])
-    assert rc == 0
-    assert "index_text" in captured["kwargs"]
-    assert captured["kwargs"]["index_text"] is None
-    assert _MODULE.load_otc_index_text(None) is None
-    assert _MODULE.load_otc_index_text(missing) is None
+def test_projection_metadata_requires_successful_refresh_for_fresh(tmp_path: Path) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    assert build_projection_metadata(source, refresh_status="skipped")["status"] == "STALE"
+    assert build_projection_metadata(source, refresh_status="success")["status"] == "FRESH"
