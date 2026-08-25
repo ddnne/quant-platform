@@ -20,7 +20,6 @@ finishes the apply and leaves snapshot publication closed.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sqlite3
@@ -76,12 +75,6 @@ _CHANGE_FEED_SKIP_TABLES = frozenset({
     "jquants_records_r2",
     "equities_master_scd2",
 })
-_DEFAULT_WRANGLER_CONFIG = _private_export.DEFAULT_WRANGLER_CONFIG
-_DEFAULT_WRANGLER_BIN = _private_export.DEFAULT_WRANGLER_BIN
-_GOVERNED_D1_NAME = _private_export.GOVERNED_D1_NAME
-_GOVERNED_D1_ID = _private_export.GOVERNED_D1_ID
-
-
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Sync CF D1 → local SQLite (PIT)")
     p.add_argument(
@@ -181,14 +174,6 @@ def _http_get_json(client, url: str, token: str) -> dict:
     resp = client.get(url, headers=headers)
     resp.raise_for_status()
     return resp.json()
-
-
-def _run_wrangler_d1_export(
-    *,
-    output_path: Path,
-) -> None:
-    """Delegate acquisition while retaining a monkeypatchable CLI boundary."""
-    _private_export.run_wrangler_d1_export(output_path=output_path)
 
 
 _materialize_d1_export = _private_export.materialize_d1_export
@@ -675,91 +660,17 @@ def _source_change_seq(conn: sqlite3.Connection) -> int:
     return value
 
 
-def _table_columns(conn: sqlite3.Connection, table: str) -> tuple[str, ...]:
-    return tuple(
-        str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')
-    )
-
-
-def _canonical_fingerprint_value(column: str, value):
-    if column == "available_at" and isinstance(value, str):
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return parsed.astimezone(timezone.utc).isoformat()
-        except ValueError:
-            return value
-    return value
-
-
-def _projected_table_fingerprint(
-    conn: sqlite3.Connection,
-    table: str,
-    columns: tuple[str, ...],
-    *,
-    source_side: bool,
-) -> tuple[int, str]:
-    """Hash an order-independent table projection without loading row payloads."""
-    if not columns:
-        raise ValueError(f"no comparable columns for governed table: {table}")
-    selected = ",".join(f'"{column}"' for column in columns)
-    row_digests: list[bytes] = []
-    count = 0
-    for row in conn.execute(f'SELECT {selected} FROM "{table}"'):
-        values = [row[index] for index in range(len(columns))]
-        if (
-            source_side
-            and table not in _NO_AVAILABLE_AT_TABLES
-            and "available_at" in columns
-            and not values[columns.index("available_at")]
-        ):
-            # Mirrors _sync_one's fail-closed omission of unusable PIT rows.
-            continue
-        canonical = [
-            _canonical_fingerprint_value(column, value)
-            for column, value in zip(columns, values, strict=True)
-        ]
-        encoded = json.dumps(
-            canonical,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
-        row_digests.append(hashlib.sha256(encoded).digest())
-        count += 1
-    digest = hashlib.sha256()
-    digest.update(str(count).encode("ascii"))
-    digest.update(b"\0")
-    for row_digest in sorted(row_digests):
-        digest.update(row_digest)
-    return count, "sha256:" + digest.hexdigest()
-
-
 def _governed_local_content_identity(
     store: SqliteStore | sqlite3.Connection,
     tables: tuple[str, ...] | None = None,
 ) -> tuple[str, dict[str, int]]:
     """Content-address all governed source-derived tables in the local mirror."""
-    inventory: dict[str, dict[str, object]] = {}
-    counts: dict[str, int] = {}
     conn = store if isinstance(store, sqlite3.Connection) else store._conn  # noqa: SLF001
     tables = tables or DEFAULT_TABLES
-    for table in tables:
-        if not _source_table_exists(conn, table):
-            raise ValueError(f"local mirror is missing governed table: {table}")
-        columns = _table_columns(conn, table)
-        count, digest = _projected_table_fingerprint(
-            conn, table, columns, source_side=False
-        )
-        counts[table] = count
-        inventory[table] = {
-            "columns": list(columns),
-            "count": count,
-            "digest": digest,
-        }
-    encoded = json.dumps(
-        inventory, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest(), counts
+    content_digest, _schema_digest, counts = _private_export.governed_content_identity(
+        conn, tables
+    )
+    return content_digest, counts
 
 
 def _verify_source_local_parity(
@@ -767,41 +678,14 @@ def _verify_source_local_parity(
     source: sqlite3.Connection,
     tables: list[str],
 ) -> tuple[str, str, dict[str, int]]:
-    """Verify exact source/local row counts and digests on shared columns."""
-    parity: dict[str, dict[str, object]] = {}
+    """Verify exact source/local schema, row counts, and content digests."""
     local = store._conn  # noqa: SLF001
-    for table in tables:
-        if not _source_table_exists(source, table):
-            raise ValueError(f"D1 export is missing required table: {table}")
-        if not _source_table_exists(local, table):
-            raise ValueError(f"local mirror is missing governed table: {table}")
-        source_columns = set(_table_columns(source, table))
-        local_columns = _table_columns(local, table)
-        columns = tuple(column for column in local_columns if column in source_columns)
-        source_count, source_digest = _projected_table_fingerprint(
-            source, table, columns, source_side=True
+    source_identity, _schema_digest, counts = (
+        _private_export._exact_source_local_reconciliation(  # noqa: SLF001
+            source, local, tuple(tables)
         )
-        local_count, local_digest = _projected_table_fingerprint(
-            local, table, columns, source_side=False
-        )
-        if source_count != local_count or source_digest != local_digest:
-            raise ValueError(
-                "authenticated D1 source/local reconciliation failed for "
-                f"{table}: source_count={source_count} local_count={local_count}"
-            )
-        parity[table] = {
-            "columns": list(columns),
-            "count": source_count,
-            "digest": source_digest,
-        }
-    source_encoded = json.dumps(
-        parity, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    source_identity = "sha256:" + hashlib.sha256(source_encoded).hexdigest()
-    local_identity, counts = _governed_local_content_identity(
-        store, tuple(tables)
     )
-    return source_identity, local_identity, counts
+    return source_identity, source_identity, counts
 
 
 def _reset_governed_local_tables(store: SqliteStore, tables: list[str]) -> None:
@@ -940,8 +824,14 @@ def _ensure_export_sync_audit(store: SqliteStore) -> None:
             applied_change_seq INTEGER NOT NULL,
             source_content_digest TEXT,
             local_content_digest TEXT,
+            schema_digest     TEXT,
             table_counts_json TEXT,
             authority_id      TEXT,
+            prior_audit_digest TEXT,
+            audit_digest      TEXT,
+            issuer_key_id     TEXT,
+            signature         TEXT,
+            signed_evidence_json TEXT,
             status            TEXT NOT NULL
                 CHECK (status IN ('APPLYING', 'COMPLETE', 'FAILED')),
             started_at        TEXT NOT NULL,
@@ -955,8 +845,14 @@ def _ensure_export_sync_audit(store: SqliteStore) -> None:
         "sync_kind": "TEXT NOT NULL DEFAULT 'UNTRUSTED'",
         "source_content_digest": "TEXT",
         "local_content_digest": "TEXT",
+        "schema_digest": "TEXT",
         "table_counts_json": "TEXT",
         "authority_id": "TEXT",
+        "prior_audit_digest": "TEXT",
+        "audit_digest": "TEXT",
+        "issuer_key_id": "TEXT",
+        "signature": "TEXT",
+        "signed_evidence_json": "TEXT",
     }
     for column, declaration in additions.items():
         if column not in columns:
@@ -966,7 +862,7 @@ def _ensure_export_sync_audit(store: SqliteStore) -> None:
     store._conn.commit()  # noqa: SLF001
 
 
-def _mark_export_sync(
+def _mark_untrusted_export_sync(
     store: SqliteStore,
     *,
     export_digest: str,
@@ -988,8 +884,10 @@ def _mark_export_sync(
             export_digest, artifact_format, source_mode, source_change_seq,
             applied_change_seq, status, started_at, updated_at, error,
             sync_kind, source_content_digest, local_content_digest,
-            table_counts_json, authority_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            table_counts_json, authority_id, schema_digest,
+            prior_audit_digest, audit_digest, issuer_key_id, signature,
+            signed_evidence_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(export_digest) DO UPDATE SET
             artifact_format=excluded.artifact_format,
             source_mode=excluded.source_mode,
@@ -1003,6 +901,12 @@ def _mark_export_sync(
             ,local_content_digest=excluded.local_content_digest
             ,table_counts_json=excluded.table_counts_json
             ,authority_id=excluded.authority_id
+            ,schema_digest=excluded.schema_digest
+            ,prior_audit_digest=excluded.prior_audit_digest
+            ,audit_digest=excluded.audit_digest
+            ,issuer_key_id=excluded.issuer_key_id
+            ,signature=excluded.signature
+            ,signed_evidence_json=excluded.signed_evidence_json
         """,
         (
             export_digest,
@@ -1020,33 +924,208 @@ def _mark_export_sync(
             json.dumps(table_counts, sort_keys=True, separators=(",", ":"))
             if table_counts is not None
             else None,
-            f"cloudflare-d1:{_GOVERNED_D1_ID}"
-            if source_mode == "WRANGLER_REMOTE"
-            else None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         ),
     )
     store._conn.commit()  # noqa: SLF001
 
 
-def _latest_trusted_sync_audit(store: SqliteStore) -> sqlite3.Row | None:
-    _ensure_export_sync_audit(store)
-    return store._conn.execute(  # noqa: SLF001
+def _latest_export_sync_row(conn: sqlite3.Connection) -> dict[str, object] | None:
+    cursor = conn.execute(
         "SELECT * FROM local_d1_export_sync_runs "
-        "WHERE source_mode='WRANGLER_REMOTE' AND status='COMPLETE' "
-        "AND sync_kind IN ('FULL','INCREMENTAL') "
-        "AND authority_id=? ORDER BY updated_at DESC LIMIT 1",
-        (f"cloudflare-d1:{_GOVERNED_D1_ID}",),
-    ).fetchone()
-
-
-def _require_trusted_incremental_base(store: SqliteStore) -> sqlite3.Row:
-    row = _latest_trusted_sync_audit(store)
+        "ORDER BY updated_at DESC, rowid DESC LIMIT 1"
+    )
+    row = cursor.fetchone()
     if row is None:
+        return None
+    return dict(zip((column[0] for column in cursor.description), row, strict=True))
+
+
+def _verified_sync_envelope_from_row(
+    conn: sqlite3.Connection,
+    row: dict[str, object],
+    *,
+    recompute_local: bool,
+) -> dict[str, object]:
+    from ops.d1_sync_signing import (
+        GOVERNED_AUTHORITY_ID,
+        d1_sync_digest,
+        verify_signed_d1_sync_audit,
+    )
+
+    document_text = row.get("signed_evidence_json")
+    if not isinstance(document_text, str):
+        raise ValueError("latest D1 sync audit is unsigned")
+    document = json.loads(document_text)
+    envelope = verify_signed_d1_sync_audit(document)
+    audit_digest = d1_sync_digest(document)
+    expected_counts = envelope["table_counts"]
+    if set(expected_counts) != set(DEFAULT_TABLES):
+        raise ValueError("signed D1 sync audit inventory membership drift")
+    row_counts = json.loads(str(row.get("table_counts_json") or "null"))
+    row_bindings = {
+        "export_digest": row.get("export_digest"),
+        "artifact_format": row.get("artifact_format"),
+        "source_mode": row.get("source_mode"),
+        "sync_kind": row.get("sync_kind"),
+        "source_change_seq": row.get("source_change_seq"),
+        "applied_change_seq": row.get("applied_change_seq"),
+        "source_content_digest": row.get("source_content_digest"),
+        "local_content_digest": row.get("local_content_digest"),
+        "schema_digest": row.get("schema_digest"),
+        "authority_id": row.get("authority_id"),
+        "prior_audit_digest": row.get("prior_audit_digest"),
+    }
+    if (
+        row.get("status") != "COMPLETE"
+        or row.get("audit_digest") != audit_digest
+        or row.get("issuer_key_id") != document["issuer_key_id"]
+        or row.get("signature") != document["signature"]
+        or row_counts != expected_counts
+        or row_bindings
+        != {
+            key: envelope[key]
+            for key in row_bindings
+        }
+        or envelope["authority_id"] != GOVERNED_AUTHORITY_ID
+    ):
+        raise ValueError("signed D1 sync audit does not bind its SQLite row")
+    if recompute_local:
+        observed_content, observed_schema, observed_counts = (
+            _private_export.governed_content_identity(conn, DEFAULT_TABLES)
+        )
+        current_cursor = conn.execute(
+            "SELECT last_applied_change_seq FROM sync_change_state "
+            "WHERE feed='jquants_records'"
+        ).fetchone()
+        applied = current_cursor[0] if current_cursor is not None else 0
+        if (
+            observed_content != envelope["local_content_digest"]
+            or observed_schema != envelope["schema_digest"]
+            or observed_counts != expected_counts
+            or applied != envelope["applied_change_seq"]
+        ):
+            raise ValueError(
+                "local governed mirror differs from the signed D1 sync audit"
+            )
+    return envelope
+
+
+def _mark_authenticated_export_complete(
+    store: SqliteStore,
+    authenticated_export,
+) -> dict[str, object]:
+    """Persist one single-use capability; there is no caller evidence input."""
+    from ops.d1_sync_signing import d1_sync_digest, verify_signed_d1_sync_audit
+
+    _ensure_export_sync_audit(store)
+    audit_digest, issuer_key_id, signature, document = authenticated_export._consume()  # noqa: SLF001
+    envelope = verify_signed_d1_sync_audit(document)
+    if audit_digest != d1_sync_digest(document):
+        raise ValueError("authenticated D1 sync audit digest mismatch")
+    if set(envelope["table_counts"]) != set(DEFAULT_TABLES):
+        raise ValueError("authenticated D1 sync audit inventory membership drift")
+    observed_content, observed_schema, observed_counts = (
+        _private_export.governed_content_identity(store._conn, DEFAULT_TABLES)  # noqa: SLF001
+    )
+    if (
+        observed_content != envelope["local_content_digest"]
+        or observed_schema != envelope["schema_digest"]
+        or observed_counts != envelope["table_counts"]
+        or _last_change_seq(store) != envelope["applied_change_seq"]
+    ):
+        raise ValueError("authenticated D1 sync audit changed before persistence")
+    now = datetime.now(timezone.utc).isoformat()
+    store._conn.execute(  # noqa: SLF001
+        """
+        INSERT INTO local_d1_export_sync_runs (
+            export_digest, artifact_format, source_mode, source_change_seq,
+            applied_change_seq, status, started_at, updated_at, error,
+            sync_kind, source_content_digest, local_content_digest,
+            table_counts_json, authority_id, schema_digest,
+            prior_audit_digest, audit_digest, issuer_key_id, signature,
+            signed_evidence_json
+        ) VALUES (?, ?, ?, ?, ?, 'COMPLETE', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(export_digest) DO UPDATE SET
+            artifact_format=excluded.artifact_format,
+            source_mode=excluded.source_mode,
+            source_change_seq=excluded.source_change_seq,
+            applied_change_seq=excluded.applied_change_seq,
+            status='COMPLETE',
+            updated_at=excluded.updated_at,
+            error=NULL,
+            sync_kind=excluded.sync_kind,
+            source_content_digest=excluded.source_content_digest,
+            local_content_digest=excluded.local_content_digest,
+            table_counts_json=excluded.table_counts_json,
+            authority_id=excluded.authority_id,
+            schema_digest=excluded.schema_digest,
+            prior_audit_digest=excluded.prior_audit_digest,
+            audit_digest=excluded.audit_digest,
+            issuer_key_id=excluded.issuer_key_id,
+            signature=excluded.signature,
+            signed_evidence_json=excluded.signed_evidence_json
+        """,
+        (
+            envelope["export_digest"],
+            envelope["artifact_format"],
+            envelope["source_mode"],
+            envelope["source_change_seq"],
+            envelope["applied_change_seq"],
+            envelope["issued_at"],
+            now,
+            envelope["sync_kind"],
+            envelope["source_content_digest"],
+            envelope["local_content_digest"],
+            json.dumps(
+                envelope["table_counts"], sort_keys=True, separators=(",", ":")
+            ),
+            envelope["authority_id"],
+            envelope["schema_digest"],
+            envelope["prior_audit_digest"],
+            audit_digest,
+            issuer_key_id,
+            signature,
+            json.dumps(document, sort_keys=True, separators=(",", ":")),
+        ),
+    )
+    store._conn.commit()  # noqa: SLF001
+    return envelope
+
+
+def _latest_trusted_sync_audit(
+    store: SqliteStore,
+) -> tuple[dict[str, object], dict[str, object]] | None:
+    _ensure_export_sync_audit(store)
+    row = _latest_export_sync_row(store._conn)  # noqa: SLF001
+    if row is None:
+        return None
+    try:
+        envelope = _verified_sync_envelope_from_row(
+            store._conn, row, recompute_local=True  # noqa: SLF001
+        )
+    except (ValueError, TypeError, RuntimeError, json.JSONDecodeError, sqlite3.Error):
+        return None
+    return row, envelope
+
+
+def _require_trusted_incremental_base(
+    store: SqliteStore,
+) -> tuple[dict[str, object], dict[str, object]]:
+    verified = _latest_trusted_sync_audit(store)
+    if verified is None:
         raise ValueError(
             "authenticated incremental apply requires a prior trusted full bootstrap"
         )
-    expected_cursor = row["applied_change_seq"]
-    expected_digest = row["local_content_digest"]
+    row, envelope = verified
+    expected_cursor = envelope["applied_change_seq"]
+    expected_digest = envelope["local_content_digest"]
     if (
         not isinstance(expected_cursor, int)
         or expected_cursor != _last_change_seq(store)
@@ -1060,7 +1139,7 @@ def _require_trusted_incremental_base(store: SqliteStore) -> sqlite3.Row:
             "local governed content changed after the trusted base; "
             "run a full authenticated bootstrap"
         )
-    return row
+    return row, envelope
 
 
 def _run_private_export_sync(
@@ -1071,15 +1150,16 @@ def _run_private_export_sync(
     *,
     export_digest: str,
     artifact_format: str,
-    source_mode: str,
+    authenticated_acquisition=None,
 ) -> tuple[int, int, int, list[str]]:
     total_seen = total_registered = total_skipped = 0
     failures: list[str] = []
     _ensure_control_tables(store._conn)  # noqa: SLF001
     store._conn.commit()  # noqa: SLF001
-    trusted_full_inventory = bool(
-        source_mode == "WRANGLER_REMOTE" and not args.table
+    source_mode = (
+        "WRANGLER_REMOTE" if authenticated_acquisition is not None else "LOCAL_ARTIFACT"
     )
+    trusted_full_inventory = bool(authenticated_acquisition is not None and not args.table)
     sync_kind = (
         "INCREMENTAL"
         if trusted_full_inventory and args.incremental
@@ -1095,15 +1175,16 @@ def _run_private_export_sync(
     source_content_digest: str | None = None
     local_content_digest: str | None = None
     table_counts: dict[str, int] | None = None
+    prior_audit_digest: str | None = None
     if needs_change_feed or needs_bootstrap_cursor:
         try:
             source_max = _source_change_seq(source)
             if trusted_full_inventory and args.incremental:
-                base = _require_trusted_incremental_base(store)
-                prior_cursor = base["applied_change_seq"]
+                base_row, base_envelope = _require_trusted_incremental_base(store)
+                prior_cursor = base_envelope["applied_change_seq"]
+                prior_audit_digest = str(base_row["audit_digest"])
             elif trusted_full_inventory:
-                base = _latest_trusted_sync_audit(store)
-                prior_cursor = base["applied_change_seq"] if base is not None else 0
+                prior_cursor = _last_change_seq(store)
             else:
                 prior_cursor = _last_change_seq(store)
             if not isinstance(prior_cursor, int) or source_max < prior_cursor:
@@ -1113,7 +1194,7 @@ def _run_private_export_sync(
                 )
         except Exception as exc:  # noqa: BLE001
             failures.append(f"change_feed: {exc}")
-    _mark_export_sync(
+    _mark_untrusted_export_sync(
         store,
         export_digest=export_digest,
         artifact_format=artifact_format,
@@ -1123,7 +1204,7 @@ def _run_private_export_sync(
         status="APPLYING",
     )
     if failures:
-        _mark_export_sync(
+        _mark_untrusted_export_sync(
             store,
             export_digest=export_digest,
             artifact_format=artifact_format,
@@ -1141,7 +1222,7 @@ def _run_private_export_sync(
         except Exception as exc:  # noqa: BLE001
             failures.append(f"bootstrap_reset: {exc}")
     if failures:
-        _mark_export_sync(
+        _mark_untrusted_export_sync(
             store,
             export_digest=export_digest,
             artifact_format=artifact_format,
@@ -1218,21 +1299,29 @@ def _run_private_export_sync(
                 local_content_digest,
                 table_counts,
             ) = _verify_source_local_parity(store, source, tables)
+            authenticated_export = authenticated_acquisition.authenticate_local(
+                store._conn,  # noqa: SLF001
+                tuple(tables),
+                sync_kind=sync_kind,
+                prior_audit_digest=prior_audit_digest,
+            )
+            _mark_authenticated_export_complete(store, authenticated_export)
         except Exception as exc:  # noqa: BLE001
             failures.append(f"source_local_reconciliation: {exc}")
-    _mark_export_sync(
-        store,
-        export_digest=export_digest,
-        artifact_format=artifact_format,
-        source_mode=source_mode,
-        sync_kind=sync_kind,
-        source_change_seq=source_max,
-        source_content_digest=source_content_digest,
-        local_content_digest=local_content_digest,
-        table_counts=table_counts,
-        status="FAILED" if failures else "COMPLETE",
-        error="; ".join(failures) if failures else None,
-    )
+    if failures or not trusted_full_inventory:
+        _mark_untrusted_export_sync(
+            store,
+            export_digest=export_digest,
+            artifact_format=artifact_format,
+            source_mode=source_mode,
+            sync_kind=sync_kind,
+            source_change_seq=source_max,
+            source_content_digest=source_content_digest,
+            local_content_digest=local_content_digest,
+            table_counts=table_counts,
+            status="FAILED" if failures else "COMPLETE",
+            error="; ".join(failures) if failures else None,
+        )
     return total_seen, total_registered, total_skipped, failures
 
 
@@ -1421,26 +1510,30 @@ def main(argv=None) -> int:
     export_digest = ""
     artifact_format = ""
     source_mode = "WORKER_HTTP"
+    authenticated_acquisition = None
     if private_mode:
         temporary = tempfile.TemporaryDirectory(prefix="quant-d1-sync-")
         temporary_path = Path(temporary.name)
         try:
             if args.wrangler_remote:
-                raw_artifact = temporary_path / "remote-export.sql"
-                _run_wrangler_d1_export(
-                    output_path=raw_artifact,
+                authenticated_acquisition = (
+                    _private_export.acquire_pinned_wrangler_export(temporary_path)
                 )
+                export_digest = authenticated_acquisition.export_digest
+                artifact_size = authenticated_acquisition.artifact_size
+                artifact_format = authenticated_acquisition.artifact_format
+                source_conn = authenticated_acquisition.open_source()
                 source_mode = "WRANGLER_REMOTE"
                 print("[sync] acquired private D1 export via authenticated Wrangler")
             else:
                 raw_artifact = Path(args.d1_export)
                 source_mode = "LOCAL_ARTIFACT"
-            materialized = temporary_path / "export.sqlite"
-            export_digest, artifact_size, artifact_format = _materialize_d1_export(
-                raw_artifact,
-                materialized,
-            )
-            source_conn = _open_export_sqlite(materialized)
+                materialized = temporary_path / "export.sqlite"
+                export_digest, artifact_size, artifact_format = _materialize_d1_export(
+                    raw_artifact,
+                    materialized,
+                )
+                source_conn = _open_export_sqlite(materialized)
             print(
                 f"[sync] private export verified format={artifact_format} "
                 f"bytes={artifact_size} digest={export_digest}"
@@ -1471,7 +1564,7 @@ def main(argv=None) -> int:
                 args,
                 export_digest=export_digest,
                 artifact_format=artifact_format,
-                source_mode=source_mode,
+                authenticated_acquisition=authenticated_acquisition,
             )
         else:
             (
@@ -1534,45 +1627,14 @@ def _authenticated_export_cursor_chain_from_conn(
     conn: sqlite3.Connection,
 ) -> tuple[int | None, int | None]:
     """Validate the trusted cursor/content chain in one caller-owned read view."""
-    row = conn.execute(
-            "SELECT r.source_mode,r.status,r.source_change_seq,"
-            "r.applied_change_seq,s.last_applied_change_seq,"
-            "r.sync_kind,r.local_content_digest,r.table_counts_json,"
-            "r.authority_id "
-            "FROM local_d1_export_sync_runs r "
-            "LEFT JOIN sync_change_state s ON s.feed='jquants_records' "
-            "ORDER BY r.updated_at DESC LIMIT 1"
-        ).fetchone()
-    if (
-        row is None
-        or row[0] != "WRANGLER_REMOTE"
-        or row[1] != "COMPLETE"
-        or row[5] not in {"FULL", "INCREMENTAL"}
-        or row[8] != f"cloudflare-d1:{_GOVERNED_D1_ID}"
-    ):
+    row = _latest_export_sync_row(conn)
+    if row is None:
         return None, None
-    source = row[2]
-    applied = row[3]
-    current_applied = row[4]
-    expected_content_digest = row[6]
-    expected_counts_json = row[7]
-    if (
-        not isinstance(source, int)
-        or not isinstance(applied, int)
-        or not isinstance(current_applied, int)
-        or source <= 0
-        or source != applied
-        or applied != current_applied
-        or not isinstance(expected_content_digest, str)
-        or not expected_content_digest.startswith("sha256:")
-    ):
-        return None, None
-    observed_content_digest, observed_counts = _governed_local_content_identity(conn)
-    expected_counts = json.loads(expected_counts_json)
-    if (
-        observed_content_digest != expected_content_digest
-        or expected_counts != observed_counts
-    ):
+    envelope = _verified_sync_envelope_from_row(
+        conn, row, recompute_local=True
+    )
+    source = envelope["source_change_seq"]
+    if not isinstance(source, int) or source <= 0:
         return None, None
     return source, source
 
@@ -1594,7 +1656,7 @@ def _authenticated_export_cursor_chain(
     try:
         conn.execute("BEGIN")
         return _authenticated_export_cursor_chain_from_conn(conn)
-    except (ValueError, TypeError, json.JSONDecodeError, sqlite3.Error):
+    except (ValueError, TypeError, RuntimeError, json.JSONDecodeError, sqlite3.Error):
         return None, None
     finally:
         conn.close()
