@@ -2,15 +2,13 @@
 
 > **Single current finding ledger.** Independent reviewers fill rows.
 > Live residual **flags** remain [`phase62_residual_status.md`](phase62_residual_status.md).
-> `docs/reviews/P632_wave*` and Independent A/B/C revisit files are **historical freezes**, not this ledger.
+> Historical review waves are available in Git history, not the active documentation tree.
 > Do **not** declare GO, Mass ON, production READY, Phase 7 ON, Projection FRESH, or invented COMPLETE from this file.
 
 Policy: [`architecture/adr_review_findings_sot.md`](architecture/adr_review_findings_sot.md).
-Index of freezes: [`reviews/README.md`](reviews/README.md) (keep; do not add a new wave).
-
 Status vocabulary: **OPEN** / **FIXED** / **DEFERRED** / **HOLD**. Empty sections are empty — not a pass.
 
-Independent reviews of `58133512` (full write-ups, not this table): `docs/phase633_findings_data_pit.md`, `docs/phase633_findings_cloudflare_ci.md`, `docs/phase633_findings_architecture_test.md`, `docs/phase633_findings_integration.md`. Code fixes on `grok/p633-authority-closure` `be84b6fb` are **tree** status; live Cloudflare/GitHub is unchanged until HUMAN.
+Prior independent review prose is retained in Git history. This ledger is the only active findings authority.
 
 Unresolved live P0 (merge gate) remains **>0**. Do not merge PR #1.
 
@@ -87,4 +85,4 @@ Unresolved live P0 (merge gate) remains **>0**. Do not merge PR #1.
 
 | ID | Finding | Status | Evidence | Notes |
 |----|---------|--------|----------|-------|
-| N6 | 89 `docs/reviews` files in PR #1 | HOLD | historical freezes | Do not add waves |
+| N6 | Dated review-document proliferation | FIXED (tree) | active review snapshots removed | Git history retains audit trail |

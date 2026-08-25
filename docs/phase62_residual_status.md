@@ -12,7 +12,7 @@ Query Cloudflare: R2 `quant-structured/research/eval/job={id}/` and D1
 [`architecture/adr_research_recording.md`](architecture/adr_research_recording.md).
 
 Do **not** add `scripts/run_wNN_*.py` or `docs/proof/w08*_wNN_*.md` scorecards.
-Live review findings: [`phase633_finding_ledger.md`](phase633_finding_ledger.md) (sole). Do not add `docs/reviews/P632_wave*` or Independent A/B/C revisit files.
+Live review findings: [`phase633_finding_ledger.md`](phase633_finding_ledger.md) (sole). Historical review waves live in Git history, not the active documentation tree.
 
 ## Live coverage (remote SoT / quant-mcp)
 

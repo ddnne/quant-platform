@@ -4,8 +4,7 @@
 **Paired ADR:** [`adr_llm_friendly_refactor.md`](./adr_llm_friendly_refactor.md) (**Accepted (Grok 2026-08-12)**).  
 **Live residual SoT (sole):** [`../phase62_residual_status.md`](../phase62_residual_status.md)  
 — **live flags only** (COMPLETE segs / Mass·READY / pins / DEFER). Experiment scores: R2 + D1.  
-**Live finding ledger (sole):** [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md)  
-— `docs/reviews/P632_wave*` / Independent A/B/C revisits are historical freezes, not live SoT. Do not add more.  
+**Live finding ledger (sole):** [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md). Historical review waves are available only through Git history.
 **This map never embeds live counts** (acq / residual agents own those numbers).  
 **Layout SoT:** [`repo_layout_migration.md`](./repo_layout_migration.md) (**DONE** Batches 0–E; Batch Z DEFER)  
 **Architecture hub:** [`../architecture.md`](../architecture.md) (PIT / Coverage V2 / MCP; not residual counts)
@@ -27,7 +26,7 @@
 | 5 | *One* domain doc for your task (table below) | Contract detail |
 
 **Refactor / layout / import policy work:** also read the [ADR](./adr_llm_friendly_refactor.md).  
-**Review / findings work:** also read [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md) (not a new `docs/reviews` wave).
+**Review / findings work:** also read [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md); update its machine-readable companion rather than creating a dated review snapshot.
 
 ---
 
@@ -42,8 +41,8 @@
 ✗ Call market HTTP outside packages/data_plane/ingestion
 ✗ Commit secrets, data/*.sqlite, .venv, egg-info, node_modules
 ✗ Treat docs/phase62*_status.md / final_report as current residual SoT
-✗ Treat docs/reviews wave / Independent A/B/C revisit files as live finding SoT
-✗ Create docs/reviews/P632_wave* or Independent A/B/C revisit files
+✗ Treat a historical Git review snapshot as live finding SoT
+✗ Reintroduce dated review-wave files into the active docs tree
 ✗ Weaken publish fail-closed guards or mass_research operator_override rejection
 ✗ Delete Python↔TS parity mirrors or governed.js codegen without replacement
 ✗ Create scripts/run_wNN_*.py or docs/proof/w08*_wNN_*.md as an eval warehouse
@@ -173,7 +172,7 @@ Full policy: ADR §5.2.
 | **1 Domain** | `pit_api`, `core_engine`, `features`, `paper`, `agents`, `quant_data_access`, `data_sources` | By task |
 | **2 Ops** | `docs/operations/*`, phase runbooks, worker READMEs | When operating live systems; not residual counts |
 | **3 Proof** | `docs/proof/*` | Cite evidence; do not invent status |
-| **4 Historical** | dated ops notes / proof; `docs/reviews/*` wave and Independent A/B/C freezes | Banner / archive; **not** residual SoT; **not** live finding SoT |
+| **4 Historical** | prior review waves and superseded status snapshots | Git history only; **not** residual SoT; **not** live finding SoT |
 
 ### 7.1 Phase / residual file index (maintenance)
 
@@ -181,8 +180,7 @@ Full policy: ADR §5.2.
 |------|-----|
 | `docs/phase62_residual_status.md` | **live residual SoT (sole)** — COMPLETE / raw_n / C8 / tip / Mass·READY / Phase7 |
 | `docs/phase633_finding_ledger.md` | **live finding ledger (sole)** — empty P0/P1 scaffold; reviewers fill |
-| `docs/architecture/adr_review_findings_sot.md` | **current** — review wave files are historical freezes; do not add more |
-| `docs/reviews/*` | **historical freezes** — keep; not live finding SoT |
+| `docs/architecture/adr_review_findings_sot.md` | **current** — one live ledger; historical reviews stay in Git history |
 | `docs/architecture.md` | **current architecture hub** (banner → residual; no live counts) |
 | `docs/architecture/llm_nav_map.md` | **current** agent entry map (this file; no live counts) |
 | `docs/architecture/repo_layout_migration.md` | **current layout SoT** |
@@ -200,7 +198,7 @@ Full policy: ADR §5.2.
 | `docs/proof/*` | dated evidence |
 | `docs/operations/*` | ops runbooks |
 
-Historical phase status / final_report / checklist / acceptance-plan / dated live-sync files carry a **Historical snapshot** banner pointing at [`phase62_residual_status.md`](../phase62_residual_status.md). **Never** treat them as live residual SoT. `docs/reviews/*` wave / Independent A/B/C files stay freezes — live findings: [`phase633_finding_ledger.md`](../phase633_finding_ledger.md).
+Historical phase status / final_report / checklist / acceptance-plan / dated live-sync files carry a **Historical snapshot** banner pointing at [`phase62_residual_status.md`](../phase62_residual_status.md). **Never** treat them as live residual SoT. Prior review waves are recoverable from Git history; live findings are in [`phase633_finding_ledger.md`](../phase633_finding_ledger.md).
 
 ---
 
