@@ -56,7 +56,7 @@ export default {
       }
       return json({
         ok: true,
-        has_jquants_key: Boolean(env.JQUANTS_API_KEY),
+        worker: "ingestion-secrets",
       });
     }
 

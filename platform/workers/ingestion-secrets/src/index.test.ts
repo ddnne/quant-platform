@@ -73,10 +73,14 @@ describe("ingestion-secrets boundary", () => {
     const body = await res.text();
     const payload = JSON.parse(body) as {
       ok?: boolean;
+      worker?: string;
       go?: boolean;
       status?: string;
     };
-    expect(payload.ok).toBe(true);
+    expect(payload).toEqual({
+      ok: true,
+      worker: "ingestion-secrets",
+    });
     expect(payload.go).not.toBe(true);
     expect(payload.status).not.toBe("READY");
     expect(payload.status).not.toBe("COMPLETE");
@@ -85,6 +89,7 @@ describe("ingestion-secrets boundary", () => {
     expect(body).not.toMatch(/"go"\s*:\s*true/);
     expect(body).not.toContain(API_KEY);
     expect(body).not.toContain(PROXY_TOKEN);
+    expect(body).not.toMatch(/has[_-].*key/i);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
