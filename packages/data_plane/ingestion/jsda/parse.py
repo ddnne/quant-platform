@@ -190,10 +190,11 @@ _OTC_REFERENCE_ALIASES: dict[str, list[str]] = {
 _OTC_HEADER_MARKERS = ("銘柄コード", "証券コード", "銘柄名", "債券名")
 
 # Official CSV is headerless (baisan_csv.pdf); 2015/2022 did not move columns.
-# 2002-08-02/05 are ~23 columns: a prefix of this 29-col map. Widths below 29
-# use only documented overlapping indexes (< 23). Do not invent later field
-# positions. Parser rows are not Coverage COMPLETE; the sealer still requires
-# nz parse, raw==structured, and digest match.
+# 2002-08-02/05 use the documented 23-column layout, a prefix of this 29-column
+# map. Those are the only accepted headerless widths: exactly 23, or 29+.
+# Reject 4..22 and 24..28 rather than guessing that a truncated row is an early
+# layout. Parser rows are not Coverage COMPLETE; the sealer still requires
+# trusted reconciliation.
 _OTC_POSITIONAL_COLUMNS: dict[str, int] = {
     "publication_label_date": 0,
     "security_code": 2,
@@ -265,13 +266,13 @@ def _looks_like_otc_positional_row(row: List[str]) -> bool:
 
 
 def _positional_otc_column_map(row: List[str]) -> Optional[dict[str, int]]:
-    """29-col map, or documented overlapping indexes when width < 29."""
+    """Return only the documented 23-column or current 29+-column layout."""
     width = len(row)
     if width >= _OTC_POSITIONAL_MIN_COLUMNS:
         return dict(_OTC_POSITIONAL_COLUMNS)
-    if width < _OTC_POSITIONAL_IDENTITY_MIN_COLUMNS:
-        return None
-    return dict(_OTC_EARLY_POSITIONAL_COLUMNS)
+    if width == _OTC_EARLY_LAYOUT_COLUMN_LIMIT:
+        return dict(_OTC_EARLY_POSITIONAL_COLUMNS)
+    return None
 
 
 def parse_otc_reference_csv(

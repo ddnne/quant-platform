@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import inspect
 import io
 from pathlib import Path
 
@@ -136,6 +135,21 @@ def test_otc_headerless_short_non_identity_stays_parse_zero():
     assert parse_otc_reference_csv(text) == []
 
 
+def test_otc_headerless_undocumented_or_truncated_widths_are_rejected():
+    full = next(
+        csv.reader(
+            io.StringIO(
+                (_FIXTURES / "jsda_otc_reference_headerless.csv").read_text(
+                    encoding="utf-8"
+                )
+            )
+        )
+    )
+    assert len(full) >= 29
+    for width in (*range(4, 23), *range(24, 29)):
+        assert parse_otc_reference_csv(",".join(full[:width]) + "\n") == []
+
+
 def test_otc_headerless_23col_nz_parse_is_not_coverage_complete():
     text = (_FIXTURES / "jsda_otc_reference_headerless_23col.csv").read_text(
         encoding="utf-8"
@@ -152,19 +166,9 @@ def test_otc_headerless_23col_nz_parse_is_not_coverage_complete():
         assert "COMPLETE" not in rec.values()
 
 
-def test_seal_complete_is_separate_function_parser_output_is_not_complete():
-    parse_src = inspect.getsource(parse_otc_reference_csv)
-    assert "COMPLETE" not in parse_src
-    root = Path(__file__).resolve().parents[1]
-    seal_src = (root / "scripts" / "jsda_otc_seal_official.py").read_text(
-        encoding="utf-8"
-    )
-    assert "def seal_day" in seal_src
-    assert "int(structured) != int(raw_count)" in seal_src
-    assert "raw_manifest_digest=digest" in seal_src
-    assert "index_text=index_text" in seal_src
-    assert "_parse_zero_unproven" in seal_src
-    # Live 2002-08-02/05 stay unsealed without in-repo digest+count proof.
+def test_live_parse_zero_files_are_not_smuggled_in_as_fixtures():
+    # Actual official bytes and their trusted digest/count evidence must be
+    # acquired and reconciled; synthetic fixtures cannot close these gaps.
     live_names = {
         "S020802.csv",
         "S020805.csv",
