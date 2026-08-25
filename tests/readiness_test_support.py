@@ -89,6 +89,8 @@ def mint_pilot_readiness(
         "plan_ids": tuple(manifest.plan_ids),
         "plan_set_digest": manifest.plan_set_digest,
         "dependency_closure_digest": manifest.dependency_closure_digest,
+        "universe_rule_digest": manifest.universe_rule_digest,
+        "resolved_universe_digest": manifest.resolved_universe_digest,
         "dataset_ids": tuple(manifest.dataset_ids),
         "ready_state": "READY",
         "ready_manifest_digest": manifest.to_dict()["manifest_digest"],

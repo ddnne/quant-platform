@@ -227,6 +227,8 @@ class _VerifiedReadiness:
     plan_ids: tuple[str, ...]
     plan_set_digest: str
     dependency_closure_digest: str
+    universe_rule_digest: str
+    resolved_universe_digest: str
     dataset_ids: tuple[str, ...]
     ready_state: str
     ready_manifest_digest: str
@@ -269,6 +271,8 @@ class _VerifiedReadiness:
             "plan_ids": list(self.plan_ids),
             "plan_set_digest": self.plan_set_digest,
             "dependency_closure_digest": self.dependency_closure_digest,
+            "universe_rule_digest": self.universe_rule_digest,
+            "resolved_universe_digest": self.resolved_universe_digest,
             "dataset_ids": list(self.dataset_ids),
             "ready_state": self.ready_state,
             "ready_manifest_digest": self.ready_manifest_digest,
@@ -323,6 +327,8 @@ class _VerifiedReadiness:
             self.profile_digest,
             self.plan_set_digest,
             self.dependency_closure_digest,
+            self.universe_rule_digest,
+            self.resolved_universe_digest,
             self.ready_manifest_digest,
             self.immutable_db_digest,
             self.coverage_policy_digest,
@@ -390,9 +396,12 @@ class VerifiedPilotReadiness(_VerifiedReadiness):
     EXPECTED_SCOPE = "PILOT"
 
     def _scope_fields_valid(self) -> bool:
+        from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
+
         return (
             self.profile_id == "controlled-pilot/exact-four"
             and len(self.plan_ids) == 4
+            and self.universe_rule_digest == EXACT_FOUR_UNIVERSE_RULE_DIGEST
         )
 
 
@@ -733,6 +742,8 @@ def _mint_bound_readiness(
         "plan_ids": tuple(manifest.plan_ids),
         "plan_set_digest": manifest.plan_set_digest,
         "dependency_closure_digest": manifest.dependency_closure_digest,
+        "universe_rule_digest": manifest.universe_rule_digest,
+        "resolved_universe_digest": manifest.resolved_universe_digest,
         "dataset_ids": tuple(manifest.dataset_ids),
         "ready_state": "READY",
         "ready_manifest_digest": manifest.to_dict()["manifest_digest"],

@@ -33,6 +33,7 @@ from research.ready_manifest import (
     require_core_profile_deps_subseteq_source_capability_registry,
     serialize_ready_manifest,
 )
+from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
 from research.readiness import (
     GovernedMassReadinessAuthority,
     ReadinessPublicKeyRegistry,
@@ -85,6 +86,8 @@ def _complete_manifest(**overrides: object) -> ReadyManifest:
         "plan_ids": binding.plan_ids,
         "plan_set_digest": binding.plan_set_digest,
         "dependency_closure_digest": binding.closure_set_digest,
+        "universe_rule_digest": EXACT_FOUR_UNIVERSE_RULE_DIGEST,
+        "resolved_universe_digest": _digest("resolved-universe"),
         "dataset_ids": binding.required_datasets,
         "coverage_proof_digest": _digest("coverage"),
         "raw_proof_digest": _digest("raw"),

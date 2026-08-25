@@ -37,6 +37,8 @@
     "plan_ids",
     "plan_set_digest",
     "dependency_closure_digest",
+    "universe_rule_digest",
+    "resolved_universe_digest",
     "dataset_ids",
     "dataset_membership_digest",
     "coverage_policy_version",
@@ -71,6 +73,8 @@
     },
     "plan_set_digest": { "$ref": "#/$defs/proof_digest" },
     "dependency_closure_digest": { "$ref": "#/$defs/proof_digest" },
+    "universe_rule_digest": { "$ref": "#/$defs/proof_digest" },
+    "resolved_universe_digest": { "$ref": "#/$defs/proof_digest" },
     "dataset_ids": {
       "type": "array",
       "uniqueItems": true,

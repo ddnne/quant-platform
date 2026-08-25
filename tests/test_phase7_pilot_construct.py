@@ -25,6 +25,7 @@ from research.readiness import (
     require_mass_research_start,
 )
 from research.ready_manifest import build_ready_manifest, load_exact_four_pilot_ready_binding
+from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
 from selection.screen import ExperimentBudget
 from storage.immutable_artifact import ImmutableArtifactStore
@@ -63,6 +64,8 @@ def _readiness(
         plan_ids=binding.plan_ids,
         plan_set_digest=binding.plan_set_digest,
         dependency_closure_digest=binding.closure_set_digest,
+        universe_rule_digest=EXACT_FOUR_UNIVERSE_RULE_DIGEST,
+        resolved_universe_digest=digest,
         dataset_ids=binding.required_datasets,
         coverage_proof_digest=digest,
         raw_proof_digest=digest,

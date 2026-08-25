@@ -5,7 +5,8 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -15,6 +16,7 @@ from data_contracts.coverage import (
     coverage_policy_binding,
     coverage_policy_set_binding,
 )
+from ingestion.jquants.normalize import normalize_generic
 from ops.projection_content import (
     PROJECTED_CONTENT_TABLES,
     build_projection_content_manifest,
@@ -42,8 +44,18 @@ from research.ready_manifest import (
     _verify_exact_four_pit_dependency_scope,
 )
 from research.research_data_profile import load_core_profile, official_mode
+from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
 from selection.budget_ledger import MassResearchDisabledError
+from storage.coverage_ledger import (
+    RequiredCoverageSegment,
+    record_collection_receipt,
+)
+from storage.sqlite_store import SqliteStore
 from tests.readiness_test_support import make_readiness_signer
+from tests.receipt_test_support import (
+    TestSignedReceiptAuthority as _TestSignedReceiptAuthority,
+    reconcile_test_evidence,
+)
 
 
 def _unsigned_projection_evidence(dataset_ids) -> dict[str, dict[str, str]]:
@@ -236,6 +248,8 @@ def test_signed_projection_is_the_only_production_pilot_input(
         plan_ids=binding.plan_ids,
         plan_set_digest=binding.plan_set_digest,
         dependency_closure_digest=binding.closure_set_digest,
+        universe_rule_digest=EXACT_FOUR_UNIVERSE_RULE_DIGEST,
+        resolved_universe_digest=proof,
         dataset_ids=binding.required_datasets,
         coverage_proof_digest=proof,
         raw_proof_digest=proof,
@@ -492,52 +506,244 @@ def test_signed_projection_cursor_must_equal_local_snapshot_generation() -> None
         )
 
 
-@pytest.mark.parametrize("victim", ("equities_master", "markets_calendar"))
-def test_pit_dependency_scope_rejects_history_refetched_after_plan_as_of(
-    tmp_path, victim: str,
-) -> None:
-    binding = load_exact_four_pilot_ready_binding()
-    db_path = tmp_path / "pit-scope.sqlite"
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "CREATE TABLE jquants_records ("
-        "dataset TEXT, event_time TEXT, available_at TEXT)"
+_SCOPE_DATASETS = (
+    "equities_bars_daily",
+    "equities_master",
+    "fins_summary",
+    "indices_bars_daily_topix",
+    "markets_calendar",
+)
+
+
+def _mini_exact_scope_binding() -> SimpleNamespace:
+    scope = {"required_lookback_trading_days": 2}
+    profile = SimpleNamespace(
+        period_start="2023-01-04",
+        period_end="2023-01-06",
+        dataset_scopes=tuple(scope for _ in _SCOPE_DATASETS),
     )
-    pre_dates = [f"2022-12-{day:02d}" for day in range(12, 32)]
-    for dataset_id in binding.required_datasets:
-        for event_date in pre_dates:
-            conn.execute(
-                "INSERT INTO jquants_records VALUES (?,?,?)",
-                (
-                    dataset_id,
-                    f"{event_date}T15:00:00+09:00",
-                    f"{event_date}T16:00:00+09:00",
+    return SimpleNamespace(
+        profiles=(profile,),
+        required_datasets=_SCOPE_DATASETS,
+        profile_digest=canonical_digest({"profile": "mini-exact-four"}),
+        plan_set_digest=canonical_digest({"plans": "mini-exact-four"}),
+        closure_set_digest=canonical_digest({"closure": "mini-exact-four"}),
+    )
+
+
+def _seed_exact_pit_scope(
+    tmp_path,
+    receipt_ed25519_keys,
+) -> tuple[object, object]:
+    """Five-day exact natural-key closure with governed v4 receipts."""
+    db_path = tmp_path / "pit-scope.sqlite"
+    calendar_dates: list[str] = []
+    cursor = date(2023, 1, 2)
+    while cursor <= date(2023, 1, 6):
+        calendar_dates.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    payloads: dict[str, list[dict[str, object]]] = {
+        "markets_calendar": [
+            {"Date": day, "HolidayDivision": "1"}
+            for day in calendar_dates
+        ],
+        "equities_master": [
+            {
+                "Code": "1332",
+                "Date": "2023-01-02",
+                "CompanyName": "Prime With Fins",
+                "MarketCode": "0111",
+            }
+        ],
+        "fins_summary": [
+            {
+                "Code": "1332",
+                "DiscDate": "2023-01-03",
+                "DiscTime": "08:00:00",
+                "DiscNo": "disc-1332",
+            }
+        ],
+        "equities_bars_daily": [
+            {
+                "Code": "1332",
+                "Date": day,
+                "Open": 100.0,
+                "High": 101.0,
+                "Low": 99.0,
+                "Close": 100.0,
+                "Volume": 1000.0,
+            }
+            for day in calendar_dates
+        ],
+        "indices_bars_daily_topix": [
+            {
+                "Date": day,
+                "Open": 1900.0,
+                "High": 1910.0,
+                "Low": 1890.0,
+                "Close": 1900.0,
+            }
+            for day in calendar_dates
+        ],
+    }
+    ingestion_clocks = {
+        "markets_calendar": "2022-12-01T00:00:00+09:00",
+        "equities_master": "2023-01-02T08:00:00+09:00",
+        "fins_summary": "2023-01-03T08:00:00+09:00",
+        "equities_bars_daily": "2023-01-06T16:00:00+09:00",
+        "indices_bars_daily_topix": "2023-01-06T16:00:00+09:00",
+    }
+    with SqliteStore(db_path) as store:
+        for dataset_id in _SCOPE_DATASETS:
+            store.upsert(
+                "jquants_records",
+                normalize_generic(
+                    payloads[dataset_id],
+                    dataset=dataset_id,
+                    ingested_at=ingestion_clocks[dataset_id],
                 ),
             )
-        conn.execute(
-            "INSERT INTO jquants_records VALUES (?,?,?)",
-            (
-                dataset_id,
-                "2023-01-05T15:00:00+09:00",
-                "2023-01-05T16:00:00+09:00",
-            ),
+        authority = _TestSignedReceiptAuthority(
+            signing_key=receipt_ed25519_keys.signing_key
         )
-    conn.commit()
-    conn.close()
+        for run_id, dataset_id in enumerate(_SCOPE_DATASETS, start=1):
+            structured = [
+                dict(row)
+                for row in store._conn.execute(  # noqa: SLF001
+                    "SELECT * FROM jquants_records "
+                    "WHERE source='jquants' AND dataset=? "
+                    "ORDER BY natural_key",
+                    (dataset_id,),
+                ).fetchall()
+            ]
+            required = RequiredCoverageSegment(
+                source="jquants",
+                dataset=dataset_id,
+                segment_id=f"mini-scope-{dataset_id}",
+                segment_start="2023-01-02",
+                segment_end="2023-01-06",
+                expected_scope={
+                    "period_start": "2023-01-02",
+                    "period_end": "2023-01-06",
+                    "expected_item_unit": "source_event",
+                },
+                expected_items=len(structured),
+            )
+            evidence = reconcile_test_evidence(
+                required=required,
+                run_id=run_id,
+                raw_pages=[
+                    json.dumps(
+                        {"data": payloads[dataset_id]},
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ],
+                raw_records=payloads[dataset_id],
+                structured_records=structured,
+                checked_at="2026-08-25T00:00:00+00:00",
+                source_request={"fixture": "exact-pit-scope"},
+            )
+            record_collection_receipt(store._conn, authority.issue(evidence))  # noqa: SLF001
+        store._conn.commit()  # noqa: SLF001
+    return db_path, _mini_exact_scope_binding()
 
+
+def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
+    tmp_path,
+    receipt_ed25519_keys,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(
+        tmp_path, receipt_ed25519_keys
+    )
     proof = _verify_exact_four_pit_dependency_scope(db_path, binding)
     assert proof["status"] == "PASS"
-    assert proof["proof_digest"].startswith("sha256:")
-
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "UPDATE jquants_records SET available_at='2026-08-25T00:00:00+09:00' "
-        "WHERE dataset=?",
-        (victim,),
+    assert proof["period_start"] == "2023-01-04"
+    assert proof["period_end"] == "2023-01-06"
+    assert proof["lookback_trading_days"] == 2
+    assert {row["dataset_id"] for row in proof["entries"]} == set(
+        _SCOPE_DATASETS
     )
-    conn.commit()
-    conn.close()
-    with pytest.raises(MassResearchDisabledError, match="PIT dependency scope"):
+    assert all(row["receipt_digests"] for row in proof["entries"])
+
+
+@pytest.mark.parametrize(
+    ("victim", "event_date"),
+    (
+        ("markets_calendar", "2023-01-05"),
+        ("equities_master", "2023-01-02"),
+        ("fins_summary", "2023-01-03"),
+        ("equities_bars_daily", "2023-01-05"),
+        ("indices_bars_daily_topix", "2023-01-05"),
+    ),
+)
+def test_exact_pit_dependency_scope_rejects_each_missing_or_late_dependency(
+    tmp_path,
+    receipt_ed25519_keys,
+    victim: str,
+    event_date: str,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(
+        tmp_path, receipt_ed25519_keys
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE jquants_records "
+            "SET available_at='2026-08-25T00:00:00+09:00' "
+            "WHERE dataset=? AND substr(event_time,1,10)=?",
+            (victim, event_date),
+        )
+    with pytest.raises(MassResearchDisabledError):
+        _verify_exact_four_pit_dependency_scope(db_path, binding)
+
+
+def test_exact_pit_dependency_scope_rejects_one_visible_row_and_late_rest(
+    tmp_path,
+    receipt_ed25519_keys,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(
+        tmp_path, receipt_ed25519_keys
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE jquants_records "
+            "SET available_at='2026-08-25T00:00:00+09:00' "
+            "WHERE dataset='equities_bars_daily' "
+            "AND substr(event_time,1,10) <> '2023-01-02'"
+        )
+    with pytest.raises(MassResearchDisabledError, match="closure missing/late"):
+        _verify_exact_four_pit_dependency_scope(db_path, binding)
+
+
+def test_exact_pit_dependency_scope_rejects_unreceipted_natural_keys(
+    tmp_path,
+    receipt_ed25519_keys,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(
+        tmp_path, receipt_ed25519_keys
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM collection_receipts "
+            "WHERE dataset='indices_bars_daily_topix'"
+        )
+    with pytest.raises(MassResearchDisabledError, match="signed receipt"):
+        _verify_exact_four_pit_dependency_scope(db_path, binding)
+
+
+def test_exact_pit_dependency_scope_rejects_noncanonical_natural_key(
+    tmp_path,
+    receipt_ed25519_keys,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(
+        tmp_path, receipt_ed25519_keys
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE jquants_records SET natural_key='caller-supplied' "
+            "WHERE dataset='equities_bars_daily' "
+            "AND substr(event_time,1,10)='2023-01-05'"
+        )
+    with pytest.raises(MassResearchDisabledError, match="natural key"):
         _verify_exact_four_pit_dependency_scope(db_path, binding)
 
 

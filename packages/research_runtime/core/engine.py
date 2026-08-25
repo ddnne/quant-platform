@@ -28,7 +28,7 @@ from .execution import close_as_of, get_mode
 from .metrics import compute_metrics
 from .result import BacktestResult
 from .strategy_protocol import Bar, BarContext, OrderIntent, Position
-from .universe import load_master, resolve_injected_universe
+from .universe import ResolvedDailyUniverse, load_master, resolve_injected_universe
 
 # Result metadata. 0.6.3: fixed candidates are PIT-gated on every decision day.
 CORE_ENGINE_VERSION = "0.6.3"
@@ -457,8 +457,16 @@ def run_backtest(
     resolved_price_basis = require_supported_price_basis(price_basis)
     resolved_db_path = resolve_db_path(db_path)
     cost_model = cost_model or standard_cost()
-    fixed_allowlist = resolve_injected_universe(
+    resolved_candidates = resolve_injected_universe(
         universe, db_path=resolved_db_path
+    )
+    daily_resolved = (
+        resolved_candidates
+        if isinstance(resolved_candidates, ResolvedDailyUniverse)
+        else None
+    )
+    fixed_allowlist = (
+        None if daily_resolved is not None else resolved_candidates
     )
 
     days = _trading_days(
@@ -489,13 +497,17 @@ def run_backtest(
     for d in days:
         decision_as_of = mode.decision_as_of(d)
         master_all_d = load_master(decision_as_of, db_path=resolved_db_path)
-        universe_d = (
-            tuple(sorted(master_all_d.keys()))
-            if fixed_allowlist is None
-            else tuple(
+        if daily_resolved is not None:
+            daily_candidates = daily_resolved.codes_for(d)
+            universe_d = tuple(
+                code for code in daily_candidates if code in master_all_d
+            )
+        elif fixed_allowlist is None:
+            universe_d = tuple(sorted(master_all_d.keys()))
+        else:
+            universe_d = tuple(
                 code for code in fixed_allowlist if code in master_all_d
             )
-        )
         master_d = type(master_all_d)(
             {code: master_all_d[code] for code in universe_d},
             pit_as_of=master_all_d.pit_as_of,
@@ -687,12 +699,24 @@ def run_backtest(
         "leverage_financing_total_cost": lev_fin_total,
         "repo_financing_total_cost": short_fin_total + lev_fin_total,
         "universe_rule": (
-            "fixed_allowlist_intersect_pit_equity_master_per_decision_day"
-            if fixed_allowlist is not None
-            else "pit_equity_master_latest_as_of_per_decision_day"
+            "resolved_daily_membership_intersect_pit_equity_master_per_decision_day"
+            if daily_resolved is not None
+            else (
+                "fixed_allowlist_intersect_pit_equity_master_per_decision_day"
+                if fixed_allowlist is not None
+                else "pit_equity_master_latest_as_of_per_decision_day"
+            )
         ),
         "fixed_allowlist": (
             list(fixed_allowlist) if fixed_allowlist is not None else None
+        ),
+        "universe_rule_digest": (
+            daily_resolved.rule_digest if daily_resolved is not None else None
+        ),
+        "resolved_universe_digest": (
+            daily_resolved.resolved_membership_digest
+            if daily_resolved is not None
+            else None
         ),
         "lookback_days": lookback_days,
         "signal_lookback_days": lookback_days,
