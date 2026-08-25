@@ -22,7 +22,6 @@ import {
 import { sha256Hex } from "./sha256";
 import { AI_CALL_TIMEOUT_MS } from "./runtime_policy";
 
-export { authorized } from "./authorized";
 export { BudgetLedger };
 
 export interface GatewayEnv {

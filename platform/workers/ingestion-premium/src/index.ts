@@ -702,7 +702,7 @@ export default {
   },
 
   async scheduled(
-    _event: ScheduledEvent, env: Env, ctx: ExecutionContext,
+    _controller: ScheduledController, env: Env, ctx: ExecutionContext,
   ): Promise<void> {
     ctx.waitUntil(runIngestion(env, {}, "cron", fetch));
   },

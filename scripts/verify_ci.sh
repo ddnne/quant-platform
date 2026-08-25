@@ -61,6 +61,12 @@ if git ls-files | grep -E '(^|/)\.env$|\.pem$'; then
   echo "tracked secret path: .env or *.pem must not be in git ls-files" >&2
   exit 1
 fi
+if git grep -nI -E -- \
+  '-----BEGIN (OPENSSH |EC |RSA )?PRIVATE KEY-----|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|sk-(proj-)?[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}' \
+  -- ':!uv.lock' ':!**/package-lock.json'; then
+  echo "tracked content matches a private-key or provider-token signature" >&2
+  exit 1
+fi
 
 host_py=""
 if ! host_py="$(find_python_311_plus)"; then
@@ -251,15 +257,24 @@ verify_worker() {
   echo "==> wrangler types --config=wrangler.staging.toml ($name)"
   (cd "$dir" && npx --no-install wrangler types "$staging_types" \
     --config=wrangler.staging.toml --include-runtime=false)
-  # Values and optional capabilities intentionally differ between environments
-  # (for example, staging OAuth is fail-closed).  The frozen binding manifest
-  # verifies those exact differences; here we require Wrangler to successfully
-  # materialize a non-empty Env surface for both deployment configurations.
-  if ! grep -q '^interface __BaseEnv_Env {' "$production_types" \
-    || ! grep -q '^interface __BaseEnv_Env {' "$staging_types"; then
-    echo "worker $name: missing generated production/staging Env surface" >&2
-    exit 1
-  fi
+  local environment generated assertion env_tsconfig
+  for environment in production staging; do
+    if [[ "$environment" == "production" ]]; then
+      generated="$production_types"
+    else
+      generated="$staging_types"
+    fi
+    assertion="$type_dir/$environment.assert.ts"
+    env_tsconfig="$type_dir/$environment.tsconfig.json"
+    "$py" "$ROOT/scripts/verify_generated_worker_env.py" \
+      --worker "$name" \
+      --environment "$environment" \
+      --generated-types "$generated" \
+      --assertion "$assertion" \
+      --tsconfig "$env_tsconfig"
+    echo "==> named Env typecheck --env=$environment ($name)"
+    (cd "$dir" && npx --no-install tsc --project "$env_tsconfig")
+  done
 }
 
 echo "==> active Worker lanes (parallel, fail-closed aggregation)"
