@@ -3,7 +3,10 @@ import {
   applyD1Migrations,
   createExecutionContext,
   createMessageBatch,
+  createScheduledController,
   getQueueResult,
+  reset,
+  waitOnExecutionContext,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import worker from "../src/index";
@@ -24,6 +27,7 @@ const migrations = inject<
 >("jsdaD1Migrations");
 
 beforeEach(async () => {
+  await reset();
   await applyD1Migrations(runtimeEnv.DB, migrations);
 });
 
@@ -42,6 +46,48 @@ async function deliver(body: unknown, id: string) {
 }
 
 describe("JSDA Queue v2 in the Workers runtime", () => {
+  it("dispatches Cron roots once per scheduled instant and persists all datasets", async () => {
+    const scheduledTime = new Date("2026-08-25T01:30:00.000Z");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const controller = createScheduledController({
+        cron: "30 1 * * *",
+        scheduledTime,
+      });
+      const ctx = createExecutionContext();
+      await worker.scheduled(controller, runtimeEnv, ctx);
+      await waitOnExecutionContext(ctx);
+    }
+
+    const rows = await runtimeEnv.DB.prepare(
+      `SELECT dataset, job_type, state, attempt, run_key
+         FROM jsda_acquisition_jobs_v2
+        WHERE run_key LIKE 'jsda:v2:root:%:cron:2026-08-25'
+        ORDER BY dataset`,
+    ).all<{
+      dataset: string;
+      job_type: string;
+      state: string;
+      attempt: number;
+      run_key: string;
+    }>();
+    expect(rows.results).toHaveLength(3);
+    expect(rows.results.map((row) => row.dataset)).toEqual([
+      "jsda_corporate_bond_transactions",
+      "jsda_otc_bond_reference_prices",
+      "jsda_tokyo_repo_rates",
+    ]);
+    for (const row of rows.results) {
+      expect(row).toMatchObject({
+        job_type: "discover_root",
+        state: "queued",
+        attempt: 0,
+      });
+      expect(row.run_key).toBe(
+        `jsda:v2:root:${row.dataset}:cron:2026-08-25`,
+      );
+    }
+  });
+
   it("treats an identical content-addressed audit retry as idempotent", async () => {
     const input = {
       event: "completed" as const,
