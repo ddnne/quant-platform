@@ -238,5 +238,6 @@ def receipt_ed25519_keys(
     return SimpleNamespace(
         path=keys_path,
         key_id=kid,
+        private_pem=priv_pem,
         signing_key=ReceiptSigningKey(key_id=kid, _private=priv),
     )
