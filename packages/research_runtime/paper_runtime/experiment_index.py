@@ -6,7 +6,78 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+from threading import Lock
+from time import monotonic, sleep
 from typing import Any, Iterator
+
+
+_CONNECTION_SETUP_LOCK = Lock()
+_SETUP_RETRY_TIMEOUT_SECONDS = 30.0
+_SETUP_ATTEMPT_TIMEOUT_SECONDS = 1.0
+_SETUP_RETRY_INITIAL_SECONDS = 0.01
+_SETUP_RETRY_MAX_SECONDS = 0.25
+_BUSY_TIMEOUT_MS = 30_000
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS paper_experiments (
+    experiment_id    TEXT NOT NULL,
+    run_id           TEXT NOT NULL,
+    strategy_id      TEXT NOT NULL,
+    lifecycle        TEXT NOT NULL,
+    data_snapshot_id TEXT,
+    start_date       TEXT,
+    end_date         TEXT,
+    total_return     REAL,
+    max_dd           REAL,
+    sharpe           REAL,
+    feature_ids_json TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    result_path      TEXT NOT NULL UNIQUE,
+    PRIMARY KEY (experiment_id, run_id)
+);
+CREATE INDEX IF NOT EXISTS ix_paper_experiments_strategy_created
+    ON paper_experiments (strategy_id, created_at DESC);
+"""
+
+
+def _open_initialized_connection(path: Path) -> sqlite3.Connection:
+    """Open and initialize ``path``, retrying only transient SQLite locks."""
+    deadline = monotonic() + _SETUP_RETRY_TIMEOUT_SECONDS
+    delay = _SETUP_RETRY_INITIAL_SECONDS
+    last_locked_error: sqlite3.OperationalError | None = None
+    while True:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            assert last_locked_error is not None
+            raise last_locked_error
+        attempt_timeout = max(
+            0.001, min(_SETUP_ATTEMPT_TIMEOUT_SECONDS, remaining)
+        )
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(path, timeout=attempt_timeout)
+            conn.row_factory = sqlite3.Row
+            attempt_busy_ms = max(1, int(attempt_timeout * 1000))
+            conn.execute(f"PRAGMA busy_timeout = {attempt_busy_ms}")
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = NORMAL")
+            conn.executescript(_SCHEMA_SQL)
+            conn.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+            return conn
+        except sqlite3.OperationalError as exc:
+            if conn is not None:
+                conn.close()
+            if "locked" not in str(exc).lower():
+                raise
+            last_locked_error = exc
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise
+            sleep(min(delay, remaining))
+            delay = min(delay * 2, _SETUP_RETRY_MAX_SECONDS)
+        except BaseException:
+            if conn is not None:
+                conn.close()
+            raise
 
 
 class ExperimentIndex:
@@ -18,34 +89,12 @@ class ExperimentIndex:
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.path, timeout=30.0)
-        conn.row_factory = sqlite3.Row
+        # WAL negotiation and schema DDL race when several stores open a fresh
+        # index concurrently. Serialize setup in-process; the bounded retry in
+        # _open_initialized_connection covers a writer in another process.
+        with _CONNECTION_SETUP_LOCK:
+            conn = _open_initialized_connection(self.path)
         try:
-            conn.execute("PRAGMA busy_timeout = 30000")
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA synchronous = NORMAL")
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS paper_experiments (
-                    experiment_id    TEXT NOT NULL,
-                    run_id           TEXT NOT NULL,
-                    strategy_id      TEXT NOT NULL,
-                    lifecycle        TEXT NOT NULL,
-                    data_snapshot_id TEXT,
-                    start_date       TEXT,
-                    end_date         TEXT,
-                    total_return     REAL,
-                    max_dd           REAL,
-                    sharpe           REAL,
-                    feature_ids_json TEXT NOT NULL,
-                    created_at       TEXT NOT NULL,
-                    result_path      TEXT NOT NULL UNIQUE,
-                    PRIMARY KEY (experiment_id, run_id)
-                );
-                CREATE INDEX IF NOT EXISTS ix_paper_experiments_strategy_created
-                    ON paper_experiments (strategy_id, created_at DESC);
-                """
-            )
             yield conn
         finally:
             conn.close()
