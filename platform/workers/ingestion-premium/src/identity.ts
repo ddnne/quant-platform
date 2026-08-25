@@ -1,7 +1,7 @@
 /** Contract-driven natural key, event_time, available_at, and persist run identity. */
 
 import type { DatasetSpec } from "./catalog";
-import { sha256HexFromString } from "./sha256";
+import { sha256HexFromString } from "./sha256.ts";
 
 /** Persist/SCD2 run identity. crypto.randomUUID, not Math.random. */
 export function newRunId(prefix: string): string {
