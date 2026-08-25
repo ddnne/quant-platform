@@ -324,14 +324,12 @@ def _validate_digest_chain(claims: Mapping[str, Any]) -> None:
 
 def audit_signed_receipt_claims(
     receipt: Any,
-    *,
-    verify_keys: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     """Decode a valid v1/v2 signature for audit without granting COMPLETE."""
     digests = receipt.digests if hasattr(receipt, "digests") else None
     if not isinstance(digests, Mapping):
         raise ReceiptVerificationError("receipt digests must be a mapping")
-    if not verify_receipt_signature(digests, verify_keys=verify_keys):
+    if not verify_receipt_signature(digests):
         raise ReceiptVerificationError("Ed25519 signature is invalid")
     claims, raw = _decode_signed_claims(digests)
     declared = digests.get("body_digest")
@@ -359,7 +357,6 @@ def verify_collection_closure(
     expected_policy_version: str | None = None,
     raw: bytes | None = None,
     structured_digest: str | None = None,
-    verify_keys: Mapping[str, Any] | None = None,
 ) -> VerifiedCollectionClosure:
     """Return an opaque v2 closure or fail without a partial trust result."""
     if receipt is None:
@@ -371,7 +368,7 @@ def verify_collection_closure(
         raise ReceiptVerificationError("synthetic receipts are not verifiable")
     if digests.get("eligibility") != "TRUSTED_COLLECTION":
         raise ReceiptVerificationError("receipt is not a trusted collection")
-    if not verify_receipt_signature(digests, verify_keys=verify_keys):
+    if not verify_receipt_signature(digests):
         raise ReceiptVerificationError("Ed25519 signature is invalid")
 
     claims, raw_body = _decode_signed_claims(digests)

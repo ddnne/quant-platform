@@ -155,13 +155,12 @@ def test_parse_repo_xls_uses_xlrd_and_excel_serial_dates(monkeypatch):
 
 def _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys):
     """Bind governed writes to the tmp Ed25519 fixture; never production keys."""
-    monkeypatch.setattr(
-        "ingestion.runtime_authority.load_signing_key",
-        lambda **kwargs: receipt_ed25519_keys.signing_key,
-    )
-    from ingestion.runtime_authority import _open_governed_receipt_service
+    del monkeypatch
+    from tests.receipt_test_support import open_test_receipt_service
 
-    return _open_governed_receipt_service()
+    return open_test_receipt_service(
+        signing_key=receipt_ed25519_keys.signing_key
+    )
 
 
 def test_tokyo_repo_runner_raw_receipt_coverage_and_resume(

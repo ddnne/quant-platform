@@ -250,13 +250,12 @@ class _ArchiveClient:
 
 def _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys):
     """Bind governed writes to the tmp Ed25519 fixture; never production keys."""
-    monkeypatch.setattr(
-        "ingestion.runtime_authority.load_signing_key",
-        lambda **kwargs: receipt_ed25519_keys.signing_key,
-    )
-    from ingestion.runtime_authority import _open_governed_receipt_service
+    del monkeypatch
+    from tests.receipt_test_support import open_test_receipt_service
 
-    return _open_governed_receipt_service()
+    return open_test_receipt_service(
+        signing_key=receipt_ed25519_keys.signing_key
+    )
 
 
 def test_otc_archive_backfill_receipts_raw_resume_and_missing_partial(
@@ -487,11 +486,11 @@ def test_governed_jsda_receipt_rejects_fake_local_raw_success(
     tmp_path, receipt_ed25519_keys
 ):
     from ingestion.jsda.receipts import record_governed_receipt
-    from ingestion.runtime_authority import _open_governed_receipt_service
     from storage.coverage_ledger import RequiredCoverageSegment
+    from tests.receipt_test_support import open_test_receipt_service
 
-    receipt_service = _open_governed_receipt_service(
-        pem=receipt_ed25519_keys.private_pem
+    receipt_service = open_test_receipt_service(
+        signing_key=receipt_ed25519_keys.signing_key
     )
     store = SqliteStore(tmp_path / "empty-raw.sqlite")
     required = RequiredCoverageSegment(

@@ -21,13 +21,15 @@ def _inject_tmp_receipt_authority(
 ):
     """Bind governed writes to the tmp Ed25519 fixture; never production keys."""
     import ingestion.runtime_authority as runtime
+    from tests.receipt_test_support import open_test_receipt_service
 
-    original = runtime._open_governed_receipt_service
     monkeypatch.setattr(runtime, "_direct_jquants_http", http_factory)
     monkeypatch.setattr(
         runtime,
         "_open_governed_receipt_service",
-        lambda **_kwargs: original(pem=receipt_ed25519_keys.private_pem),
+        lambda **_kwargs: open_test_receipt_service(
+            signing_key=receipt_ed25519_keys.signing_key
+        ),
     )
 
 

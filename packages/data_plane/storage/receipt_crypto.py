@@ -27,7 +27,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 CONFIG_DIR = Path.home() / ".config" / "quant-platform"
 PRIVATE_KEY_ENV = "QUANT_RECEIPT_SIGNING_KEY_PEM"
 PRIVATE_KEY_FILE = CONFIG_DIR / "receipt_signing_key.pem"
-VERIFY_KEYS_ENV = "QUANT_RECEIPT_VERIFY_KEYS"
 DISABLE_HOST_PEM_ENV = "QUANT_RECEIPT_DISABLE_HOST_PEM"
 
 
@@ -44,39 +43,15 @@ def _host_pem_disabled() -> bool:
     return os.environ.get(DISABLE_HOST_PEM_ENV, "").strip() == "1"
 
 
-def _contracts_dir() -> Path:
-    """Locate data_contracts on disk (import-stable; layout may be packages/*)."""
-    import importlib.util
-
-    spec = importlib.util.find_spec("data_contracts")
-    if spec is not None:
-        if spec.submodule_search_locations:
-            return Path(next(iter(spec.submodule_search_locations)))
-        if spec.origin:
-            return Path(spec.origin).resolve().parent
-    from qp_paths import repo_root
-
-    root = repo_root()
-    for candidate in (
-        root / "packages" / "data_plane" / "data_contracts",
-        root / "data_contracts",
-    ):
-        if candidate.is_dir():
-            return candidate
-    return root / "packages" / "data_plane" / "data_contracts"
+_PINNED_VERIFY_KEYS_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "data_contracts"
+    / "receipt_verify_public_keys.json"
+)
 
 
-PUBLIC_KEYS_PATH = _contracts_dir() / "receipt_verify_public_keys.json"
-
-
-def _verify_keys_path(path: Path | None = None) -> Path:
-    """Resolve public-key registry: explicit path, env override, then production default."""
-    if path is not None:
-        return path
-    override = os.environ.get(VERIFY_KEYS_ENV, "").strip()
-    if override:
-        return Path(override)
-    return PUBLIC_KEYS_PATH
+class ReceiptKeyConfigurationError(RuntimeError):
+    """Receipt signing/verification keys are absent, malformed, or unpinned."""
 
 
 PARSER_NORMALIZER_VERSION = "coverage-receipt/v4-ed25519-closure"
@@ -186,111 +161,124 @@ class ReceiptVerifyKey:
             return False
 
 
-def generate_keypair(*, key_id: str = "dev-receipt-v1") -> tuple[bytes, bytes, str]:
-    """Return (private_pem, public_raw, key_id) for bootstrap/tests."""
-    priv = Ed25519PrivateKey.generate()
-    priv_pem = priv.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
-    pub = priv.public_key().public_bytes(
+def load_signing_key() -> ReceiptSigningKey | None:
+    """Load the configured private key only when the pinned registry owns it.
+
+    Returns None if no private material is configured (production fail-closed
+    for signing).
+
+    When the explicit operator setting QUANT_RECEIPT_DISABLE_HOST_PEM=1 is
+    present, the host config file is not read. The production factory has no
+    PEM, path, key-id, or registry arguments. The issuer id is derived from an
+    exact public-key match in the committed registry; it is never supplied by
+    a caller or environment variable.
+    """
+    material: bytes | None = None
+    env = os.environ.get(PRIVATE_KEY_ENV, "").strip()
+    if env:
+        try:
+            material = (
+                env.encode("utf-8")
+                if "BEGIN" in env
+                else base64.b64decode(env, validate=True)
+            )
+        except (TypeError, ValueError) as exc:
+            raise ReceiptKeyConfigurationError(
+                "receipt signing key environment value is invalid"
+            ) from exc
+    elif not _host_pem_disabled() and PRIVATE_KEY_FILE.is_file():
+        material = PRIVATE_KEY_FILE.read_bytes()
+    if not material:
+        return None
+    try:
+        priv = serialization.load_pem_private_key(material, password=None)
+    except (TypeError, ValueError) as exc:
+        raise ReceiptKeyConfigurationError(
+            "receipt signing key PEM is invalid"
+        ) from exc
+    if not isinstance(priv, Ed25519PrivateKey):
+        raise ReceiptKeyConfigurationError("receipt signing key must be Ed25519")
+    public_raw = priv.public_key().public_bytes(
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
     )
-    return priv_pem, pub, key_id
-
-
-def load_signing_key(
-    *,
-    pem: bytes | str | None = None,
-    path: Path | None = None,
-    key_id: str | None = None,
-) -> ReceiptSigningKey | None:
-    """Load private key from explicit pem, path, env, or config file.
-
-    Returns None if no private material is configured (production fail-closed
-    for signing; tests inject keys explicitly).
-
-    When the explicit operator setting QUANT_RECEIPT_DISABLE_HOST_PEM=1 is
-    present, the host config file is not read. Explicit pem=, path=, and
-    QUANT_RECEIPT_SIGNING_KEY_PEM still apply. Test-runner environment
-    variables never alter production key resolution.
-    """
-    material: bytes | None = None
-    if pem is not None:
-        material = pem.encode("utf-8") if isinstance(pem, str) else pem
-    elif path is not None and path.is_file():
-        material = path.read_bytes()
-    else:
-        env = os.environ.get(PRIVATE_KEY_ENV, "").strip()
-        if env:
-            material = env.encode("utf-8") if "BEGIN" in env else base64.b64decode(env)
-        elif not _host_pem_disabled() and PRIVATE_KEY_FILE.is_file():
-            material = PRIVATE_KEY_FILE.read_bytes()
-    if not material:
-        return None
-    priv = serialization.load_pem_private_key(material, password=None)
-    if not isinstance(priv, Ed25519PrivateKey):
-        raise TypeError("receipt signing key must be Ed25519")
-    kid = key_id or os.environ.get("QUANT_RECEIPT_KEY_ID")
-    if not kid:
-        # Prefer key_id from committed public-key registry when present.
-        try:
-            keys_path = _verify_keys_path()
-            if keys_path.is_file():
-                doc = json.loads(keys_path.read_text(encoding="utf-8"))
-                rows = doc.get("keys") or []
-                if rows and rows[0].get("key_id"):
-                    kid = str(rows[0]["key_id"])
-        except (OSError, json.JSONDecodeError, TypeError, KeyError):
-            kid = None
-    kid = kid or "receipt-v1"
-    return ReceiptSigningKey(key_id=kid, _private=priv)
+    matching = [
+        key_id
+        for key_id, verify_key in load_verify_keys().items()
+        if verify_key.public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        == public_raw
+    ]
+    if len(matching) != 1:
+        raise ReceiptKeyConfigurationError(
+            "receipt signing key does not match exactly one active key in the "
+            "pinned registry"
+        )
+    return ReceiptSigningKey(key_id=matching[0], _private=priv)
 
 
 @lru_cache(maxsize=8)
 def _load_verify_key_file(
     path_text: str, mtime_ns: int, size: int
 ) -> tuple[ReceiptVerifyKey, ...]:
-    """Parse one immutable registry generation; stat fields key the cache."""
+    """Parse one committed registry generation; stat fields key the cache."""
     del mtime_ns, size
     keys_path = Path(path_text)
     out: dict[str, ReceiptVerifyKey] = {}
-    if keys_path.is_file():
+    try:
         doc = json.loads(keys_path.read_text(encoding="utf-8"))
-        for row in doc.get("keys") or []:
-            kid = str(row["key_id"])
-            raw = base64.b64decode(str(row["public_key_b64"]))
-            out[kid] = ReceiptVerifyKey(
-                key_id=kid,
-                public_key=Ed25519PublicKey.from_public_bytes(raw),
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ReceiptKeyConfigurationError(
+            "cannot load the pinned receipt public-key registry"
+        ) from exc
+    if (
+        not isinstance(doc, Mapping)
+        or doc.get("schema_version") != 1
+        or not isinstance(doc.get("keys"), list)
+    ):
+        raise ReceiptKeyConfigurationError(
+            "pinned receipt public-key registry is invalid"
+        )
+    for row in doc["keys"]:
+        if not isinstance(row, Mapping) or row.get("algorithm") != "Ed25519":
+            raise ReceiptKeyConfigurationError(
+                "pinned receipt registry requires Ed25519 entries"
             )
+        if row.get("status", "active") != "active":
+            continue
+        kid = str(row.get("key_id") or "").strip()
+        if not kid or kid in out:
+            raise ReceiptKeyConfigurationError(
+                "pinned receipt registry key ids must be non-empty and unique"
+            )
+        try:
+            raw = base64.b64decode(
+                str(row.get("public_key_b64") or ""), validate=True
+            )
+            public_key = Ed25519PublicKey.from_public_bytes(raw)
+        except (TypeError, ValueError) as exc:
+            raise ReceiptKeyConfigurationError(
+                f"invalid pinned receipt public key: {kid}"
+            ) from exc
+        out[kid] = ReceiptVerifyKey(key_id=kid, public_key=public_key)
     return tuple(out.values())
 
 
-def load_verify_keys(
-    *,
-    extra: Mapping[str, bytes] | None = None,
-    path: Path | None = None,
-) -> dict[str, ReceiptVerifyKey]:
-    """Load public keys for receipt verification, cached per file generation."""
-    keys_path = _verify_keys_path(path)
+def load_verify_keys() -> dict[str, ReceiptVerifyKey]:
+    """Load only the committed receipt verifier registry."""
+    keys_path = _PINNED_VERIFY_KEYS_PATH
     try:
         stat = keys_path.stat()
         rows = _load_verify_key_file(
             str(keys_path.resolve()), stat.st_mtime_ns, stat.st_size
         )
-    except OSError:
-        rows = ()
-    out = {row.key_id: row for row in rows}
-    if extra:
-        for kid, raw in extra.items():
-            out[kid] = ReceiptVerifyKey(
-                key_id=kid,
-                public_key=Ed25519PublicKey.from_public_bytes(raw),
-            )
-    return out
+    except OSError as exc:
+        raise ReceiptKeyConfigurationError(
+            "cannot stat the pinned receipt public-key registry"
+        ) from exc
+    return {row.key_id: row for row in rows}
 
 
 def partition_extra_digests(extra_digests: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -308,8 +296,6 @@ def partition_extra_digests(extra_digests: Mapping[str, Any] | None) -> dict[str
 
 def verify_receipt_signature(
     digests: Mapping[str, Any],
-    *,
-    verify_keys: Mapping[str, ReceiptVerifyKey] | None = None,
 ) -> bool:
     """True iff digests carry a valid Ed25519 signature over the body."""
     body_b64 = digests.get("signed_body_b64")
@@ -319,7 +305,7 @@ def verify_receipt_signature(
         return False
     if not isinstance(key_id, str) or not key_id:
         return False
-    keys = verify_keys if verify_keys is not None else load_verify_keys()
+    keys = load_verify_keys()
     vk = keys.get(key_id)
     if vk is None:
         return False
@@ -396,12 +382,12 @@ __all__ = [
     "LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION",
     "SIGNED_RECEIPT_CLAIMS_VERSION",
     "STANDARD_CLAIM_KEYS",
+    "ReceiptKeyConfigurationError",
     "ReceiptSigningKey",
     "ReceiptVerifyKey",
     "build_signed_digest_fields",
     "canonical_evidence_digest",
     "canonical_receipt_body",
-    "generate_keypair",
     "load_signing_key",
     "load_verify_keys",
     "partition_extra_digests",

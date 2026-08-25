@@ -523,14 +523,14 @@ class _GovernedReceiptService:
         return receipt
 
 
-def _open_governed_receipt_service(
-    *,
-    pem: bytes | str | None = None,
-    path: Path | None = None,
-    key_id: str | None = None,
-) -> _GovernedReceiptService:
-    """Open the only production capability that can persist signed SUCCESS."""
-    key = load_signing_key(pem=pem, path=path, key_id=key_id)
+def _open_governed_receipt_service() -> _GovernedReceiptService:
+    """Open the only production capability that can persist signed SUCCESS.
+
+    The factory is deliberately argument-free: private material comes only
+    from the dedicated runtime configuration, and ``load_signing_key`` derives
+    the issuer id by exact match against the committed verifier registry.
+    """
+    key = load_signing_key()
     if key is None:
         raise RuntimeError("receipt signing authority is not configured")
     service = _GovernedReceiptService(

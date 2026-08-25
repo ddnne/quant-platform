@@ -44,7 +44,7 @@ def test_source_query_empty_fetch_does_not_copy_expected_or_complete(
     raw_path = tmp_path / "empty.json"
     raw_bytes = b'{"data":[]}'
     from ingestion.common.http import HttpResponse
-    from ingestion.runtime_authority import _open_governed_receipt_service
+    from tests.receipt_test_support import open_test_receipt_service
 
     class _Http:
         name = "test"
@@ -57,8 +57,9 @@ def test_source_query_empty_fetch_does_not_copy_expected_or_complete(
         runtime, "_utc_now", lambda: "2026-08-11T00:00:00+09:00"
     )
     monkeypatch.setattr(runtime, "_direct_jquants_http", _Http)
-    receipt_service = _open_governed_receipt_service(
-        pem=receipt_ed25519_keys.private_pem,
+    receipt_service = open_test_receipt_service(
+        signing_key=receipt_ed25519_keys.signing_key,
+        clock=lambda: "2026-08-11T00:00:00+09:00",
     )
     fetch_result = receipt_service.open_jquants_client(
         api_key="test", via_cf_proxy=False

@@ -1,4 +1,4 @@
-"""Coverage V2 proof evidence for paper data snapshots.
+"""Per-dataset governed Coverage proof for paper data snapshots.
 
 READY stays fail-closed. Empty DB and PARTIAL coverage cannot publish READY.
 This module verifies receipts and bounded proof digests; it does not decide READY.
@@ -10,7 +10,10 @@ import json
 import sqlite3
 from typing import Any
 
-from data_contracts.coverage import POLICY_VERSION as COVERAGE_POLICY_VERSION
+from data_contracts.coverage import (
+    coverage_policy_binding,
+    coverage_policy_set_binding,
+)
 
 
 def _required_segment_from_row(row: sqlite3.Row):
@@ -68,7 +71,7 @@ def _untrusted_receipt_from_row(row: sqlite3.Row):
     )
 
 
-def _coverage_v2_proof(
+def _coverage_proof(
     conn: sqlite3.Connection,
     required: tuple[str, ...],
     coverage_rows: list[dict[str, Any]],
@@ -79,32 +82,28 @@ def _coverage_v2_proof(
         _canonical_digest,
         all_coverage_contracts,
     )
-    from storage.receipt_crypto import load_verify_keys
     from storage.verified_receipt import (
         ReceiptVerificationError,
         require_verified_collection_closure,
     )
 
-    if COVERAGE_POLICY_VERSION != "collection-coverage/v2":
-        raise SnapshotRejected(
-            "READY publication requires collection-coverage/v2"
-        )
     policies = {policy.dataset_id: policy for policy in all_coverage_contracts()}
-    verify_keys = load_verify_keys()
     governed = tuple(
         dataset for dataset in required
         if policies[dataset].governance_tier == "governed"
     )
     by_dataset = {str(row["dataset"]): row for row in coverage_rows}
     invalid_ledger = sorted(
-        dataset for dataset in governed
+        dataset
+        for dataset in governed
         if dataset not in by_dataset
-        or by_dataset[dataset].get("policy_version") != COVERAGE_POLICY_VERSION
+        or by_dataset[dataset].get("policy_version")
+        != coverage_policy_binding(dataset)["policy_version"]
         or by_dataset[dataset].get("status") != "COMPLETE"
     )
     if invalid_ledger:
         raise SnapshotRejected(
-            f"Coverage V2 aggregate proof incomplete={invalid_ledger}"
+            f"governed Coverage aggregate proof incomplete={invalid_ledger}"
         )
 
     placeholders = ",".join("?" for _ in governed)
@@ -133,11 +132,11 @@ def _coverage_v2_proof(
          AND r.dataset = s.dataset
          AND r.segment_id = s.segment_id
          AND r.run_id = s.receipt_run_id
-        WHERE s.policy_version = ?
-        """
-        + f" AND s.dataset IN ({placeholders})"
+        WHERE s.dataset IN ("""
+        + placeholders
+        + ")"
         + " ORDER BY s.dataset, s.segment_start, s.segment_id",
-        (COVERAGE_POLICY_VERSION, *governed),
+        governed,
     ).fetchall()
     segments_by_dataset: dict[str, list[sqlite3.Row]] = {
         dataset: [] for dataset in governed
@@ -146,6 +145,11 @@ def _coverage_v2_proof(
     invalid_segments: list[tuple[str, str, str]] = []
     for row in rows:
         dataset = str(row["dataset"])
+        expected_policy = coverage_policy_binding(dataset)
+        # Older policy rows remain immutable audit history. Only the currently
+        # governed per-dataset version is eligible for this proof.
+        if row["policy_version"] != expected_policy["policy_version"]:
+            continue
         segments_by_dataset[dataset].append(row)
         reason: str | None = None
         policy = policies[dataset]
@@ -163,8 +167,7 @@ def _coverage_v2_proof(
                 closure = require_verified_collection_closure(
                     untrusted_receipt,
                     required=required_segment,
-                    expected_policy_version=policy.policy_version,
-                    verify_keys=verify_keys,
+                    expected_policy_version=expected_policy["policy_version"],
                 )
             except (
                 ReceiptVerificationError,
@@ -221,13 +224,14 @@ def _coverage_v2_proof(
     )
     if missing_inventory or invalid_segments:
         raise SnapshotRejected(
-            "Coverage V2 segment proof rejected: "
+            "governed Coverage segment proof rejected: "
             f"missing_inventory={missing_inventory}, "
             f"invalid={invalid_segments[:20]}"
         )
     dataset_summary = [
         {
             "dataset": dataset,
+            **dict(coverage_policy_binding(dataset)),
             "required_segments": len(segments),
             "complete_segments": len(segments),
             "first_segment": str(segments[0]["segment_id"]),
@@ -235,10 +239,12 @@ def _coverage_v2_proof(
         }
         for dataset, segments in segments_by_dataset.items()
     ]
+    policy_set = coverage_policy_set_binding(list(governed))
     return {
-        "format": "coverage-v2-proof/v1",
+        "format": "coverage-proof/v1",
         "status": "COMPLETE",
-        "policy_version": COVERAGE_POLICY_VERSION,
+        "policy_version": policy_set["policy_version"],
+        "policy_digest": policy_set["policy_digest"],
         "dataset_count": len(governed),
         "segment_count": len(proof_entries),
         "receipt_count": len(proof_entries),
@@ -247,14 +253,12 @@ def _coverage_v2_proof(
     }
 
 
-def _verify_coverage_v2_manifest(
+def _verify_coverage_manifest(
     conn: sqlite3.Connection, manifest: dict[str, Any]
 ) -> None:
-    """Recompute the embedded Coverage V2 proof before accepting a READY DB."""
+    """Recompute the embedded governed Coverage proof before accepting READY."""
     from paper_runtime.snapshot import SnapshotRejected, all_coverage_contracts
 
-    if manifest.get("coverage_policy_version") != COVERAGE_POLICY_VERSION:
-        raise RuntimeError("READY snapshot does not use Coverage V2")
     required_raw = manifest.get("required_datasets")
     if not isinstance(required_raw, list) or not all(
         isinstance(item, str) for item in required_raw
@@ -268,7 +272,7 @@ def _verify_coverage_v2_manifest(
     }
     required_set = set(required)
     if not required_set <= set(policies):
-        raise RuntimeError("READY snapshot includes unknown Coverage V2 datasets")
+        raise RuntimeError("READY snapshot includes unknown Coverage datasets")
     if not governed <= required_set:
         # A profile-bound snapshot may intentionally be narrower than the
         # legacy all-governed set, but only when the publisher embedded a
@@ -284,7 +288,7 @@ def _verify_coverage_v2_manifest(
             or len(profile_manifest.get("dataset_ids") or ()) != len(required)
         ):
             raise RuntimeError(
-                "READY snapshot omits governed Coverage V2 datasets without "
+                "READY snapshot omits governed Coverage datasets without "
                 "an exact profile-bound ReadyManifest"
             )
     rows = [
@@ -294,8 +298,12 @@ def _verify_coverage_v2_manifest(
         if str(row["dataset"]) in required
     ]
     try:
-        computed = _coverage_v2_proof(conn, required, rows)
+        computed = _coverage_proof(conn, required, rows)
     except (SnapshotRejected, sqlite3.Error) as exc:
-        raise RuntimeError(f"READY Coverage V2 proof is invalid: {exc}") from exc
-    if manifest.get("coverage_v2_proof") != computed:
-        raise RuntimeError("READY Coverage V2 manifest proof mismatch")
+        raise RuntimeError(f"READY Coverage proof is invalid: {exc}") from exc
+    if manifest.get("coverage_policy_version") != computed["policy_version"]:
+        raise RuntimeError("READY Coverage policy-set version mismatch")
+    if manifest.get("coverage_policy_digest") != computed["policy_digest"]:
+        raise RuntimeError("READY Coverage policy-set digest mismatch")
+    if manifest.get("coverage_proof") != computed:
+        raise RuntimeError("READY Coverage manifest proof mismatch")

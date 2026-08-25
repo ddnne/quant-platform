@@ -100,16 +100,14 @@ def _tmp_service(
     clock=None,
 ):
     """Governed service bound to an ephemeral key; never production keys."""
-    from ingestion.runtime_authority import _open_governed_receipt_service
+    from tests.receipt_test_support import open_test_receipt_service
 
     del raw, response_url
-    import ingestion.runtime_authority as runtime
-
     test_clock = clock or (lambda: "2026-08-11T09:00:00+09:00")
-    with patch.object(runtime, "_utc_now", test_clock):
-        return _open_governed_receipt_service(
-            pem=receipt_ed25519_keys.private_pem,
-        )
+    return open_test_receipt_service(
+        signing_key=receipt_ed25519_keys.signing_key,
+        clock=test_clock,
+    )
 
 
 def _persisted_market_calendar_row(store: SqliteStore) -> dict:
@@ -620,16 +618,22 @@ def test_production_opener_rejects_clock_and_transport_injection_even_under_pyte
     from ingestion.runtime_authority import _open_governed_receipt_service
 
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "caller-controlled")
+    with pytest.raises(TypeError, match="unexpected keyword argument 'pem'"):
+        _open_governed_receipt_service(  # type: ignore[call-arg]
+            pem=receipt_ed25519_keys.private_pem
+        )
+    with pytest.raises(TypeError, match="unexpected keyword argument 'path'"):
+        _open_governed_receipt_service(path=Path("attacker.pem"))  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="unexpected keyword argument 'key_id'"):
+        _open_governed_receipt_service(key_id="attacker")  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="unexpected keyword argument '_clock'"):
         _open_governed_receipt_service(
-            pem=receipt_ed25519_keys.private_pem,
             _clock=lambda: "1900-01-01T00:00:00+00:00",  # type: ignore[call-arg]
         )
     with pytest.raises(
         TypeError, match="unexpected keyword argument '_test_jquants_http_factory'"
     ):
         _open_governed_receipt_service(
-            pem=receipt_ed25519_keys.private_pem,
             _test_jquants_http_factory=lambda: _RawHttp(  # type: ignore[call-arg]
                 b'{"data":[{"Date":"2026-08-11"}]}',
                 "https://api.jquants.com/v2/markets/calendar",
