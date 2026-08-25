@@ -39,8 +39,8 @@ pass.
 |----|---------|--------|------------------------------|
 | R1 | exact-four closure required TOPIX but `indices_bars_daily_topix` had no V3 SourceCapability | FIXED | `eb21e84a`; official 2008-05-07 boundary and exact-five-dataset closure independently verified |
 | R2 | READY/coherence paths hard-coded one global V2 policy and rejected valid per-dataset V3 evidence | OPEN | Bind signed policy id/version/digest per dataset and fail on unknown/missing evidence |
-| R3 | ExperimentPlan embedded `ready_snapshot_id=not-declared`, making later immutable snapshot equality circular | OPEN | Remove the placeholder from plan identity; bind snapshot at signed execution authorization |
-| R4 | exact-four bindings were caller-overridable | OPEN | Only the canonical four plan ids and exact digests may reach Controlled Pilot |
+| R3 | ExperimentPlan embedded `ready_snapshot_id=not-declared`, making later immutable snapshot equality circular | FIXED | `76240e89`; plan identity is snapshot-free and immutable snapshot binding occurs only in authorization; independent review passed |
+| R4 | exact-four bindings were caller-overridable | FIXED | `76240e89`; only the checked-in canonical four plans and exact plan/closure/profile digests reach the scheduler; independent attack tests passed |
 | R5 | Generic READY publication and a same-UID arbitrary READY signer remained reachable | OPEN | Dedicated READY authority independently rechecks the authenticated mirror, exact-four closure and immutable copy; Mass requires a separate explicit policy and stays disabled |
 | R6 | Missing natural-key ledger could pass through fixture compatibility | OPEN | Production missing evidence is UNKNOWN/FAIL; compatibility is private test-only policy |
 | R10 | Trader authorization remained a same-UID HOME-key signing oracle over caller-constructed approval decisions | OPEN | Rotate/tombstone the current key; production is verify-only; a separately permissioned human-approval authority independently reconstructs and signs the exact READY/plan/universe/gross-limit decision |
@@ -50,7 +50,7 @@ pass.
 
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
-| R7 | Snapshot publication swallowed a database publication exception | OPEN | Publication failure must abort and leave no READY authority |
+| R7 | Snapshot publication swallowed a database publication exception | FIXED | `4100f04e`; DB/pointer/marker/manifest post-replace failures remove discovery state and quarantine evidence; independent review passed |
 | R8 | Controlled and fixture Paper shared a boolean readiness bypass | FIXED | `ddc85178`; separate OfflineFixture and ControlledPilot services |
 | R9 | Pilot and Mass used nominally compatible readiness authority | FIXED | `ddc85178`; distinct verified types; Mass remains hard-disabled |
 
@@ -96,8 +96,10 @@ pass.
 
 ## Integration gate
 
-The latest independent adversarial review rejected the Coverage/READY candidate
-with P0 rows D2, D3, R2-R6, R10-R11, C4, C9, C10 and A2 unresolved. Remediation is in
-progress. After those rows are closed, run a fresh independent review against
-one immutable SHA, then run the full native CI-equivalent suite. Only that
-reviewed SHA may be pushed for the release PR.
+The latest independent adversarial reviews accepted R3, R4 and R7. The
+Coverage/READY candidate still has P0 rows D2, D3, R2, R5, R6, R10, R11, C4,
+C9, C10 and A2 unresolved. R7's authority-owned append-only history and
+sidecar-retention residuals remain tracked by R5/A2 rather than reopening the
+fail-closed publication row. After all P0 rows are closed, run a fresh
+independent review against one immutable SHA, then run the full native
+CI-equivalent suite. Only that reviewed SHA may be pushed for the release PR.
