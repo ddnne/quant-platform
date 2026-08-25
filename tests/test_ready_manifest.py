@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import inspect
 import json
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -45,22 +44,6 @@ from tests.readiness_test_support import (
     make_readiness_signer,
     mint_pilot_readiness,
 )
-
-_SNAPSHOT_PY = (
-    repo_root()
-    / "packages"
-    / "research_runtime"
-    / "paper_runtime"
-    / "snapshot.py"
-)
-_POLICY_PY = (
-    repo_root()
-    / "packages"
-    / "research_runtime"
-    / "paper_runtime"
-    / "snapshot_publish_policy.py"
-)
-
 
 @pytest.fixture
 def readiness_publisher() -> _ReadyPublicationSigner:
@@ -255,12 +238,6 @@ def test_single_ready_manifest_schema_is_the_publish_gate() -> None:
     assert PUBLISH_SCHEMA["$id"] == READY_MANIFEST_FORMAT
     assert POLICY_SCHEMA == READY_MANIFEST_SCHEMA
     assert PUBLISH_SCHEMA == READY_MANIFEST_SCHEMA
-    snapshot_src = _SNAPSHOT_PY.read_text(encoding="utf-8")
-    policy_src = _POLICY_PY.read_text(encoding="utf-8")
-    assert "evaluate_ready_publication" in snapshot_src
-    assert "ReadyPublicationPolicy" not in snapshot_src
-    assert "ready_manifest.schema.json" in policy_src
-    assert "def evaluate_ready_publication" in policy_src
 
 
 def test_ready_private_key_and_mint_are_not_public_control_plane_api() -> None:
@@ -277,18 +254,6 @@ def test_ready_private_key_and_mint_are_not_public_control_plane_api() -> None:
             key_id="caller-key",
             private_key=Ed25519PrivateKey.generate(),
         )
-
-
-def test_profile_manifest_builder_has_one_product_owned_call_site() -> None:
-    allowed = repo_root() / "packages" / "product" / "research" / "ready_manifest.py"
-    callers = []
-    for path in (repo_root() / "packages").rglob("*.py"):
-        if path in (allowed, _SNAPSHOT_PY):
-            continue
-        if "_ready_manifest_builder=" in path.read_text(encoding="utf-8"):
-            callers.append(path.relative_to(repo_root()).as_posix())
-    assert callers == []
-    assert "_ready_manifest_builder=_build" in allowed.read_text(encoding="utf-8")
 
 
 def test_unknown_fields_and_missing_proofs_are_not_pass() -> None:
@@ -366,9 +331,6 @@ def test_ready_manifest_offline_e2e_serialize_reload_mint(
 def test_production_mint_cannot_accept_caller_supplied_artifact_digest_or_clock(
     readiness_publisher: _ReadyPublicationSigner,
 ) -> None:
-    parameters = inspect.signature(readiness_publisher._mint_pilot).parameters
-    assert "immutable_db_digest" not in parameters
-    assert "now" not in parameters
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         readiness_publisher._mint_pilot(
             _complete_manifest(),

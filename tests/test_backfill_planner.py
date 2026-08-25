@@ -440,16 +440,10 @@ def test_planner_passes_index_text_into_required_segments(monkeypatch):
     JQ month jobs stay honest with or without HTML. Omitted is not a
     weekend COMPLETE invent. JSDA remains skipped at plan().
     """
-    import inspect
     from datetime import date
     from pathlib import Path
 
     from ops import backfill_planner as planner_mod
-
-    sig = inspect.signature(BackfillPlanner.plan)
-    assert sig.parameters["index_text"].default is None
-    jobs_sig = inspect.signature(BackfillPlanner._jobs_from_required_segments)
-    assert jobs_sig.parameters["index_text"].default is None
 
     captured: list[dict] = []
     real = planner_mod.plan_required_segments

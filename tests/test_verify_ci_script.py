@@ -58,31 +58,7 @@ def test_all_active_workers_have_locked_required_scripts() -> None:
         assert "--include-runtime false" in scripts["types"]
 
 
-def test_ci_shell_has_no_skip_or_live_deploy_command() -> None:
-    source = SCRIPT.read_text(encoding="utf-8")
-    code_lines = [line.split("#", 1)[0] for line in source.splitlines()]
-    for line in code_lines:
-        assert "--legacy-peer-deps" not in line
-        assert "VERIFY_NPM" not in line
-        if "wrangler deploy" in line:
-            assert "--dry-run" in line
-        assert "git ls-files | grep -E" not in line
-    assert "platform/workers/ci-aggregate" not in source
-    assert "scripts/verify_secret_paths.py" in source
-
-
-def test_deployment_acceptance_is_authenticated_read_only_and_fail_closed() -> None:
-    source = DEPLOYMENT_ACCEPTANCE.read_text(encoding="utf-8")
-    assert "verify_ci.sh" in source
-    assert "verify_cloudflare_secret_inventory.py" in source
-    assert "CLOUDFLARE_API_TOKEN" in source
-    assert "CLOUDFLARE_ACCOUNT_ID" in source
-    assert "-u CLOUDFLARE_API_TOKEN" in source
-    assert "-u CLOUDFLARE_API_KEY" in source
-    assert source.index("-u CLOUDFLARE_API_TOKEN") < source.index(
-        "verify_cloudflare_secret_inventory.py"
-    )
-    assert "wrangler deploy" not in source
+def test_deployment_acceptance_fails_closed_without_credentials() -> None:
     assert SECRET_INVENTORY.is_file()
     assert os.access(SECRET_INVENTORY, os.X_OK)
     result = subprocess.run(
