@@ -227,6 +227,18 @@ def load_legacy_experiment_plan(payload: Mapping[str, Any]) -> LegacyExperimentP
 class ExperimentPlan:
     """One versioned experiment declaration (not a runnable mass job)."""
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise TypeError("ExperimentPlan is final")
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "feature_refs", tuple(self.feature_refs))
+        object.__setattr__(self, "universe", tuple(self.universe))
+        object.__setattr__(
+            self,
+            "budget_allocation",
+            MappingProxyType(dict(sorted(self.budget_allocation.items()))),
+        )
+
     plan_id: str
     idea_id: str
     strategy_spec_id: str

@@ -269,6 +269,9 @@ def _contract(
 
 @dataclass(frozen=True, slots=True)
 class PlanDependencyClosure:
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise TypeError("PlanDependencyClosure is final")
+
     plan_id: str
     plan_digest: str
     strategy_spec_id: str
@@ -292,6 +295,13 @@ class PlanDependencyClosure:
             raise PlanDependencyClosureError(
                 f"unsupported closure version {self.version!r}"
             )
+        object.__setattr__(
+            self, "feature_dependencies", tuple(self.feature_dependencies)
+        )
+        object.__setattr__(
+            self, "universe_dependencies", tuple(self.universe_dependencies)
+        )
+        object.__setattr__(self, "dataset_scopes", tuple(self.dataset_scopes))
         object.__setattr__(
             self,
             "required_datasets",

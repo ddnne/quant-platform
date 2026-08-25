@@ -15,6 +15,7 @@ from research.artifacts import (
 )
 from research.dependency_closure import (
     PLAN_DEPENDENCY_CLOSURE_VERSION,
+    PlanDependencyClosure,
     PlanDependencyClosureError,
     build_plan_dependency_closure,
     experiment_plan_digest,
@@ -213,6 +214,34 @@ def test_canonical_plan_order_does_not_change_digest_and_tamper_fails() -> None:
     tampered = replace(closure, plan_digest="sha256:" + "0" * 64)
     with pytest.raises(PlanDependencyClosureError, match="mismatch"):
         verify_plan_dependency_closure(plan, tampered)
+
+
+def test_plan_and_dependency_closure_nominal_types_are_final() -> None:
+    with pytest.raises(TypeError, match="ExperimentPlan is final"):
+
+        class AlternateExperimentPlan(ExperimentPlan):
+            pass
+
+    with pytest.raises(TypeError, match="PlanDependencyClosure is final"):
+
+        class AlternatePlanDependencyClosure(PlanDependencyClosure):
+            pass
+
+    canonical = load_experiment_plans()[0]
+    feature_refs = list(canonical.feature_refs)
+    universe = list(canonical.universe)
+    budget = dict(canonical.budget_allocation)
+    rebound = replace(
+        canonical,
+        feature_refs=feature_refs,  # type: ignore[arg-type]
+        universe=universe,  # type: ignore[arg-type]
+        budget_allocation=budget,
+    )
+    expected = rebound.to_dict()
+    feature_refs.clear()
+    universe.clear()
+    budget.clear()
+    assert rebound.to_dict() == expected
 
 
 def test_builtin_feature_dataset_dependencies_are_immutable_and_digested() -> None:

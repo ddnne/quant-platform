@@ -403,6 +403,9 @@ def build_ready_manifest(
 class ExactFourPilotReadyBinding:
     """Canonical aggregate profile for the four controlled-pilot plans."""
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise TypeError("ExactFourPilotReadyBinding is final")
+
     plans: tuple[Any, ...]
     closures: tuple[Any, ...]
     profiles: tuple[Any, ...]
@@ -411,7 +414,11 @@ class ExactFourPilotReadyBinding:
     profile_version: str = "research-data-profile-set/v1"
 
     def __post_init__(self) -> None:
-        from research.dependency_closure import verify_plan_dependency_closure
+        from research.artifacts import ExperimentPlan
+        from research.dependency_closure import (
+            PlanDependencyClosure,
+            verify_plan_dependency_closure,
+        )
         from research.experiment_plans import (
             PILOT_EXPERIMENT_PLAN_IDS,
             PILOT_PLAN_COUNT,
@@ -419,6 +426,7 @@ class ExactFourPilotReadyBinding:
             load_experiment_plan_profiles,
             load_experiment_plans,
         )
+        from research.research_data_profile import ResearchDataProfile
 
         if (
             self.publication_scope != "PILOT"
@@ -436,6 +444,20 @@ class ExactFourPilotReadyBinding:
         ):
             raise MassResearchDisabledError(
                 f"controlled pilot READY requires exactly {PILOT_PLAN_COUNT} plans"
+            )
+        if any(type(plan) is not ExperimentPlan for plan in self.plans):
+            raise MassResearchDisabledError(
+                "controlled pilot READY requires exact ExperimentPlan artifacts"
+            )
+        if any(
+            type(closure) is not PlanDependencyClosure for closure in self.closures
+        ):
+            raise MassResearchDisabledError(
+                "controlled pilot READY requires exact PlanDependencyClosure artifacts"
+            )
+        if any(type(profile) is not ResearchDataProfile for profile in self.profiles):
+            raise MassResearchDisabledError(
+                "controlled pilot READY requires exact ResearchDataProfile artifacts"
             )
         plan_ids = tuple(plan.plan_id for plan in self.plans)
         if plan_ids != PILOT_EXPERIMENT_PLAN_IDS:
@@ -495,6 +517,12 @@ class ExactFourPilotReadyBinding:
             raise MassResearchDisabledError(
                 "controlled pilot profile digest chain is noncanonical"
             )
+        # Retain only compiler-owned immutable artifacts. Canonical equality
+        # must not retain a caller list or a directly constructed artifact
+        # whose nested mappings alias mutable state.
+        object.__setattr__(self, "plans", tuple(canonical_plans))
+        object.__setattr__(self, "closures", tuple(canonical_closures))
+        object.__setattr__(self, "profiles", tuple(canonical_profiles))
 
     @property
     def plan_ids(self) -> tuple[str, ...]:
@@ -541,7 +569,7 @@ class ExactFourPilotReadyBinding:
     def feature_dependencies(self) -> tuple[Mapping[str, Any], ...]:
         unique: dict[str, Mapping[str, Any]] = {}
         for profile in self.profiles:
-            for dependency in profile.feature_dependencies:
+            for dependency in profile.to_dict()["feature_dependencies"]:
                 digest = canonical_digest(dict(dependency))
                 unique[digest] = dict(dependency)
         return tuple(unique[key] for key in sorted(unique))
@@ -907,6 +935,16 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
             "generic/core Mass publication is disabled"
         )
 
+    profile_document = profile.to_dict()
+    feature_dependencies = profile_document.get("feature_dependencies")
+    if feature_dependencies is None:
+        feature_dependencies = [
+            dict(item) for item in profile.feature_dependencies
+        ]
+    contract_versions = profile_document.get("contract_versions")
+    if contract_versions is None:
+        contract_versions = dict(profile.contract_versions)
+
     return build_ready_manifest(
         snapshot_id=str(snapshot_id),
         publication_scope=publication_scope,
@@ -957,13 +995,13 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
         feature_generation=canonical_digest(
             {
                 "profile_digest": profile.profile_digest,
-                "feature_dependencies": profile.feature_dependencies,
+                "feature_dependencies": feature_dependencies,
             }
         ),
         catalog_generation=canonical_digest(
             {
                 "profile_digest": profile.profile_digest,
-                "contract_versions": profile.contract_versions,
+                "contract_versions": contract_versions,
                 "dataset_ids": profile.required_datasets,
             }
         ),

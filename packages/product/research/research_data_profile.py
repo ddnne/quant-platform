@@ -22,6 +22,7 @@ import json
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 from data_contracts import (
@@ -152,6 +153,24 @@ def compute_digest(payload: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): _freeze_json(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _thaw_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json(item) for item in value]
+    return value
+
+
 def resolve_deps(spec: Mapping[str, Any] | ResearchDataProfile) -> tuple[str, ...]:
     """Return Deps(P) dataset ids. Fail-closed if a required category is missing.
 
@@ -238,6 +257,26 @@ class ResearchDataProfile:
     required_lookback_trading_days: int = 0
     dataset_scopes: tuple[Mapping[str, Any], ...] = ()
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "required_datasets", tuple(self.required_datasets))
+        object.__setattr__(
+            self, "contract_versions", _freeze_json(self.contract_versions)
+        )
+        object.__setattr__(
+            self, "feature_dependencies", _freeze_json(self.feature_dependencies)
+        )
+        object.__setattr__(
+            self, "strategy_dependencies", _freeze_json(self.strategy_dependencies)
+        )
+        object.__setattr__(self, "risk_dependencies", tuple(self.risk_dependencies))
+        object.__setattr__(self, "permitted_universe", tuple(self.permitted_universe))
+        object.__setattr__(
+            self,
+            "excluded_datasets_and_reasons",
+            _freeze_json(self.excluded_datasets_and_reasons),
+        )
+        object.__setattr__(self, "dataset_scopes", _freeze_json(self.dataset_scopes))
+
     def to_dict(self) -> dict[str, Any]:
         body = {
             "profile_id": self.profile_id,
@@ -247,8 +286,12 @@ class ResearchDataProfile:
             "required_datasets": list(self.required_datasets),
             "required_coverage_mode": self.required_coverage_mode,
             "contract_versions": dict(self.contract_versions),
-            "feature_dependencies": [dict(item) for item in self.feature_dependencies],
-            "strategy_dependencies": [dict(item) for item in self.strategy_dependencies],
+            "feature_dependencies": [
+                _thaw_json(item) for item in self.feature_dependencies
+            ],
+            "strategy_dependencies": [
+                _thaw_json(item) for item in self.strategy_dependencies
+            ],
             "risk_dependencies": list(self.risk_dependencies),
             "snapshot_cutoff": self.snapshot_cutoff,
             "permitted_universe": list(self.permitted_universe),
@@ -265,7 +308,9 @@ class ResearchDataProfile:
                     "required_lookback_trading_days": (
                         self.required_lookback_trading_days
                     ),
-                    "dataset_scopes": [dict(item) for item in self.dataset_scopes],
+                    "dataset_scopes": [
+                        _thaw_json(item) for item in self.dataset_scopes
+                    ],
                 }
             )
         return body

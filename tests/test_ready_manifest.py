@@ -398,6 +398,78 @@ def test_exact_four_binding_rejects_self_consistent_caller_substitution() -> Non
         )
 
 
+def test_exact_four_binding_is_final_and_rejects_canonical_reordering() -> None:
+    canonical = load_exact_four_pilot_ready_binding()
+    with pytest.raises(TypeError, match="ExactFourPilotReadyBinding is final"):
+
+        class AlternateExactFourBinding(ExactFourPilotReadyBinding):
+            pass
+
+    with pytest.raises(MassResearchDisabledError, match="ids/order"):
+        ExactFourPilotReadyBinding(
+            plans=(canonical.plans[1], canonical.plans[0], *canonical.plans[2:]),
+            closures=(
+                canonical.closures[1],
+                canonical.closures[0],
+                *canonical.closures[2:],
+            ),
+            profiles=(
+                canonical.profiles[1],
+                canonical.profiles[0],
+                *canonical.profiles[2:],
+            ),
+        )
+
+
+def test_exact_four_loader_rejects_self_consistent_alternate_root(
+    tmp_path: Path,
+) -> None:
+    source = repo_root() / "specs" / "experiment_plans"
+    target = tmp_path / "specs" / "experiment_plans"
+    target.mkdir(parents=True)
+    for item in source.glob("*.json"):
+        target.joinpath(item.name).write_bytes(item.read_bytes())
+    alternate = target / "exp-mdh-hold10-momentum.json"
+    payload = json.loads(alternate.read_text(encoding="utf-8"))
+    payload["hypothesis"] = "caller-controlled alternate root"
+    alternate.write_text(
+        json.dumps(payload, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MassResearchDisabledError, match="noncanonical"):
+        load_exact_four_pilot_ready_binding(root=tmp_path)
+
+
+def test_exact_four_binding_discards_caller_mutable_sequence_aliases() -> None:
+    canonical = load_exact_four_pilot_ready_binding()
+    plans = list(canonical.plans)
+    closures = list(canonical.closures)
+    profiles = list(canonical.profiles)
+    rebound = ExactFourPilotReadyBinding(
+        plans=plans,  # type: ignore[arg-type]
+        closures=closures,  # type: ignore[arg-type]
+        profiles=profiles,  # type: ignore[arg-type]
+    )
+    expected = rebound.to_dict()
+
+    plans.reverse()
+    closures.clear()
+    profiles.clear()
+
+    assert rebound.to_dict() == expected
+    assert type(rebound.plans) is tuple
+    assert type(rebound.closures) is tuple
+    assert type(rebound.profiles) is tuple
+    profile = rebound.profiles[0]
+    with pytest.raises(TypeError):
+        profile.contract_versions["caller"] = "alternate"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        profile.feature_dependencies[0]["id"] = "alternate"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        profile.dataset_scopes[0]["period_end"] = "2099-12-31"  # type: ignore[index]
+
+
 def test_private_signer_cannot_mint_generic_caller_pilot_manifest(
     readiness_publisher: _ReadyPublicationSigner,
 ) -> None:

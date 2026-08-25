@@ -162,7 +162,7 @@ class ControlledPilotScheduler:
             )
         if not isinstance(budget, ResearchBudgetCapability):
             raise MassResearchDisabledError("ResearchBudgetCapability required")
-        if not isinstance(plan, ExperimentPlan):
+        if type(plan) is not ExperimentPlan:
             raise MassResearchDisabledError("ExperimentPlan required")
         from research.ready_manifest import load_exact_four_pilot_ready_binding
 
@@ -180,7 +180,7 @@ class ControlledPilotScheduler:
             verifier=ReadinessPublicKeyRegistry.load_pinned(),
         )
         self._budget = budget
-        self._plan = plan
+        self._plan = canonical_plan
         self._evaluation_service = _require_authorized_evaluation_service(
             authorized_evaluation_service
         )

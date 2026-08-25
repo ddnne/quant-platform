@@ -7,7 +7,11 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from research.artifacts import CORE_RESEARCH_DATA_PROFILE_ID, EXPERIMENT_PLAN_VERSION
+from research.artifacts import (
+    CORE_RESEARCH_DATA_PROFILE_ID,
+    EXPERIMENT_PLAN_VERSION,
+    ExperimentPlan,
+)
 from research.eval_flags import (
     CATALOG_AND_PLUS_N_STOPPED,
     EVENT_THREE_AND_PLUS_N_STOPPED,
@@ -72,6 +76,8 @@ def test_experiment_plan_schema_is_closed() -> None:
     circular["ready_snapshot_id"] = "not-declared"
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(circular, schema)
+    with pytest.raises(ValueError, match="unknown field"):
+        ExperimentPlan.from_dict(circular)
 
 
 def test_start_still_raises_mass_research_disabled() -> None:
