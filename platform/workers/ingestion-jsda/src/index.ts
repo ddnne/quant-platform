@@ -27,7 +27,7 @@ export default {
         hierarchy: ["discover_root", "discover_year", "fetch_file"],
         datasets: 3,
         allowlist: allowedHosts(),
-        note: "immutable R2 raw and audit evidence; D1-authoritative queue progress",
+        note: "source-object/observation/artifact identities; D1-authoritative queue progress",
       });
     }
 

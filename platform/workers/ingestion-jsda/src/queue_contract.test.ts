@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CHILD_ENQUEUE_BATCH_SIZE,
+  classifyFetchFreshness,
   descriptorForFile,
   descriptorForYear,
   isJsdaQueueJob,
@@ -30,6 +31,37 @@ describe("JSDA Queue v2 contract", () => {
     expect(isJsdaQueueJob(left)).toBe(true);
   });
 
+  it("classifies rolling current locators separately from dated archives", () => {
+    expect(
+      classifyFetchFreshness(
+        "jsda_tokyo_repo_rates",
+        "https://www.jsda.or.jp/shiryoshitsu/toukei/trr/files/trrts.xls",
+        "2026-08-25T01:30:00.000Z",
+      ),
+    ).toBe("rolling");
+    expect(
+      classifyFetchFreshness(
+        "jsda_corporate_bond_transactions",
+        "https://www.jsda.or.jp/shiryoshitsu/toukei/saiken_torihiki/TORIHIKI2026.csv",
+        "2026-08-25T01:30:00.000Z",
+      ),
+    ).toBe("rolling");
+    expect(
+      classifyFetchFreshness(
+        "jsda_corporate_bond_transactions",
+        "https://www.jsda.or.jp/shiryoshitsu/toukei/saiken_torihiki/TORIHIKI2025.csv",
+        "2026-08-25T01:30:00.000Z",
+      ),
+    ).toBe("archive");
+    expect(
+      classifyFetchFreshness(
+        "jsda_otc_bond_reference_prices",
+        "https://market.jsda.or.jp/archive/data/otc-20020802.csv",
+        "2026-08-25T01:30:00.000Z",
+      ),
+    ).toBe("archive");
+  });
+
   it("deduplicates a child by canonical URL across different daily roots", async () => {
     const firstRoot = await makeRootJob(
       "jsda_otc_bond_reference_prices",
@@ -49,6 +81,28 @@ describe("JSDA Queue v2 contract", () => {
     expect(first.work_key).toBe(second.work_key);
     expect(first.parent_work_key).not.toBe(second.parent_work_key);
     expect(first.target_url).not.toContain("#");
+  });
+
+  it("re-observes rolling locators per run while keeping dated archives stable", async () => {
+    const firstRoot = await makeRootJob(
+      "jsda_tokyo_repo_rates",
+      "cron",
+      "2026-08-24T01:30:00.000Z",
+    );
+    const secondRoot = await makeRootJob(
+      "jsda_tokyo_repo_rates",
+      "cron",
+      "2026-08-25T01:30:00.000Z",
+    );
+    const rolling = await descriptorForFile(
+      "https://www.jsda.or.jp/shiryoshitsu/toukei/trr/files/trrts.xls",
+    );
+    expect((await makeChildJob(firstRoot, rolling)).work_key).not.toBe(
+      (await makeChildJob(secondRoot, rolling)).work_key,
+    );
+    expect((await makeChildJob(firstRoot, rolling)).target_url).toBe(
+      (await makeChildJob(secondRoot, rolling)).target_url,
+    );
   });
 
   it("refreshes discovery pages per run while keeping fetched files stable", async () => {

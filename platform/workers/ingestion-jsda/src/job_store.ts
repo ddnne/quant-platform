@@ -1,4 +1,12 @@
-import type { JsdaQueueJob, JobType, DatasetId } from "./queue_contract";
+import {
+  classifyFetchFreshness,
+  observationEpoch,
+  sourceObjectId,
+  type DatasetId,
+  type FreshnessClass,
+  type JobType,
+  type JsdaQueueJob,
+} from "./queue_contract";
 
 export type JobState =
   | "pending"
@@ -29,6 +37,9 @@ export interface JobRow {
   requested_by: "cron" | "manual";
   requested_at: string;
   lease_until: string | null;
+  source_object_id: string | null;
+  freshness: FreshnessClass | null;
+  observation_epoch: string | null;
 }
 
 export interface AuditRef {
@@ -109,6 +120,202 @@ function insertEventStatement(
     );
 }
 
+interface FileIdentity {
+  sourceObjectId: string;
+  freshness: FreshnessClass;
+  epoch: string;
+}
+
+async function fileIdentity(job: JsdaQueueJob): Promise<FileIdentity | null> {
+  if (job.job_type !== "fetch_file") return null;
+  const freshness = classifyFetchFreshness(
+    job.dataset,
+    job.target_url,
+    job.requested_at,
+  );
+  return {
+    sourceObjectId: await sourceObjectId(job.dataset, job.target_url),
+    freshness,
+    epoch: observationEpoch(freshness, job.run_key),
+  };
+}
+
+function insertSourceObjectStatement(
+  db: D1Database,
+  job: JsdaQueueJob,
+  identity: FileIdentity,
+  now: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT OR IGNORE INTO jsda_source_objects
+       (source_object_id, dataset, canonical_url, freshness,
+        first_seen_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      identity.sourceObjectId,
+      job.dataset,
+      job.target_url,
+      identity.freshness,
+      now,
+      now,
+    );
+}
+
+function insertJobStatement(
+  db: D1Database,
+  job: JsdaQueueJob,
+  identity: FileIdentity | null,
+  now: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT OR IGNORE INTO jsda_acquisition_jobs_v2
+       (work_key, run_key, dataset, job_type, target_url, segment_id,
+        parent_work_key, contract_digest, state, attempt, cursor,
+        requested_by, requested_at, first_seen_at, updated_at,
+        source_object_id, freshness, observation_epoch)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 0, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      job.work_key,
+      job.run_key,
+      job.dataset,
+      job.job_type,
+      job.target_url,
+      job.segment_id,
+      job.parent_work_key,
+      job.contract_digest,
+      job.requested_by,
+      job.requested_at,
+      now,
+      now,
+      identity?.sourceObjectId ?? null,
+      identity?.freshness ?? null,
+      identity?.epoch ?? null,
+    );
+}
+
+function insertObservationStatement(
+  db: D1Database,
+  job: JsdaQueueJob,
+  identity: FileIdentity,
+  now: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT OR IGNORE INTO jsda_observations
+       (observation_key, source_object_id, work_key, run_key, dataset,
+        target_url, freshness, epoch, state, first_seen_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+    )
+    .bind(
+      job.work_key,
+      identity.sourceObjectId,
+      job.work_key,
+      job.run_key,
+      job.dataset,
+      job.target_url,
+      identity.freshness,
+      identity.epoch,
+      now,
+      now,
+    );
+}
+
+function insertArtifactStatement(
+  db: D1Database,
+  row: Pick<JobRow, "content_digest" | "raw_key" | "dataset" | "source_object_id">,
+  now: string,
+): D1PreparedStatement | null {
+  if (
+    row.content_digest === null ||
+    row.raw_key === null ||
+    row.source_object_id === null
+  ) {
+    return null;
+  }
+  return db
+    .prepare(
+      `INSERT OR IGNORE INTO jsda_artifacts
+       (content_digest, raw_key, dataset, source_object_id, first_seen_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      row.content_digest,
+      row.raw_key,
+      row.dataset,
+      row.source_object_id,
+      now,
+    );
+}
+
+function updateObservationTerminalStatement(
+  db: D1Database,
+  row: JobRow,
+  event: RunEvent,
+  expectedState: JobState,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE jsda_observations
+       SET state=?, content_digest=?, raw_key=?, observed_at=?, updated_at=?
+       WHERE observation_key=? AND work_key=?
+         AND EXISTS (
+           SELECT 1 FROM jsda_acquisition_jobs_v2
+            WHERE work_key=? AND attempt=? AND state=?
+              AND audit_receipt_key=? AND audit_receipt_digest=?
+         )`,
+    )
+    .bind(
+      expectedState,
+      event.contentDigest,
+      event.rawKey,
+      event.occurredAt,
+      event.occurredAt,
+      row.work_key,
+      row.work_key,
+      row.work_key,
+      row.attempt,
+      expectedState,
+      event.audit.key,
+      event.audit.digest,
+    );
+}
+
+function updateSourceObjectStatement(
+  db: D1Database,
+  row: JobRow,
+  event: RunEvent,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE jsda_source_objects
+       SET freshness=?, current_digest=?, current_raw_key=?,
+           current_observation_key=?, last_observed_at=?, updated_at=?
+       WHERE source_object_id=?
+         AND EXISTS (
+           SELECT 1 FROM jsda_acquisition_jobs_v2
+            WHERE work_key=? AND attempt=? AND state='completed'
+              AND audit_receipt_key=? AND audit_receipt_digest=?
+         )`,
+    )
+    .bind(
+      row.freshness,
+      event.contentDigest,
+      event.rawKey,
+      row.work_key,
+      event.occurredAt,
+      event.occurredAt,
+      row.source_object_id,
+      row.work_key,
+      row.attempt,
+      event.audit.key,
+      event.audit.digest,
+    );
+}
+
 function insertRunLogStatement(
   db: D1Database,
   job: Pick<JobRow, "work_key" | "run_key" | "dataset" | "job_type" | "segment_id" | "attempt">,
@@ -144,33 +351,8 @@ function insertRunLogStatement(
 }
 
 export async function registerJob(db: D1Database, job: JsdaQueueJob): Promise<JobRow> {
-  const now = new Date().toISOString();
-  await db
-    .prepare(
-      `INSERT OR IGNORE INTO jsda_acquisition_jobs_v2
-       (work_key, run_key, dataset, job_type, target_url, segment_id,
-        parent_work_key, contract_digest, state, attempt, cursor,
-        requested_by, requested_at, first_seen_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 0, ?, ?, ?, ?)`,
-    )
-    .bind(
-      job.work_key,
-      job.run_key,
-      job.dataset,
-      job.job_type,
-      job.target_url,
-      job.segment_id,
-      job.parent_work_key,
-      job.contract_digest,
-      job.requested_by,
-      job.requested_at,
-      now,
-      now,
-    )
-    .run();
-  const row = await loadJob(db, job.work_key);
-  if (row === null) throw new Error(`registered JSDA job cannot be loaded: ${job.work_key}`);
-  return row;
+  const rows = await registerJobs(db, [job]);
+  return rows[0];
 }
 
 export async function registerJobs(
@@ -179,49 +361,36 @@ export async function registerJobs(
 ): Promise<JobRow[]> {
   if (jobs.length === 0) return [];
   const now = new Date().toISOString();
-  await db.batch(
-    jobs.map((job) =>
+  const identities = await Promise.all(jobs.map((job) => fileIdentity(job)));
+  const statements: D1PreparedStatement[] = [];
+  jobs.forEach((job, index) => {
+    const identity = identities[index];
+    if (identity !== null) {
+      statements.push(insertSourceObjectStatement(db, job, identity, now));
+    }
+  });
+  jobs.forEach((job, index) => {
+    statements.push(insertJobStatement(db, job, identities[index], now));
+  });
+  jobs.forEach((job, index) => {
+    const identity = identities[index];
+    if (identity !== null) {
+      statements.push(insertObservationStatement(db, job, identity, now));
+    }
+  });
+  for (const job of jobs) {
+    if (job.parent_work_key === null) continue;
+    statements.push(
       db
         .prepare(
-          `INSERT OR IGNORE INTO jsda_acquisition_jobs_v2
-           (work_key, run_key, dataset, job_type, target_url, segment_id,
-            parent_work_key, contract_digest, state, attempt, cursor,
-            requested_by, requested_at, first_seen_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 0, ?, ?, ?, ?)`,
+          `INSERT OR IGNORE INTO jsda_acquisition_discoveries_v2
+           (parent_work_key, child_work_key, run_key, discovered_at)
+           VALUES (?, ?, ?, ?)`,
         )
-        .bind(
-          job.work_key,
-          job.run_key,
-          job.dataset,
-          job.job_type,
-          job.target_url,
-          job.segment_id,
-          job.parent_work_key,
-          job.contract_digest,
-          job.requested_by,
-          job.requested_at,
-          now,
-          now,
-        ),
-    ),
-  );
-  const discoveries = jobs.filter(
-    (job): job is JsdaQueueJob & { parent_work_key: string } =>
-      job.parent_work_key !== null,
-  );
-  if (discoveries.length > 0) {
-    await db.batch(
-      discoveries.map((job) =>
-        db
-          .prepare(
-            `INSERT OR IGNORE INTO jsda_acquisition_discoveries_v2
-             (parent_work_key, child_work_key, run_key, discovered_at)
-             VALUES (?, ?, ?, ?)`,
-          )
-          .bind(job.parent_work_key, job.work_key, job.run_key, now),
-      ),
+        .bind(job.parent_work_key, job.work_key, job.run_key, now),
     );
   }
+  await db.batch(statements);
   const rows: JobRow[] = [];
   for (const job of jobs) {
     const row = await loadJob(db, job.work_key);
@@ -238,7 +407,8 @@ export async function loadJob(db: D1Database, workKey: string): Promise<JobRow |
               parent_work_key, contract_digest, state, attempt, cursor,
               frontier_json, last_error, content_digest, raw_key,
               audit_receipt_key, audit_receipt_digest,
-              requested_by, requested_at, lease_until
+              requested_by, requested_at, lease_until,
+              source_object_id, freshness, observation_epoch
        FROM jsda_acquisition_jobs_v2 WHERE work_key = ?`,
     )
     .bind(workKey)
@@ -309,21 +479,66 @@ export async function persistFrontier(
 
 export async function persistFetchedArtifact(
   db: D1Database,
-  row: Pick<JobRow, "work_key" | "attempt">,
+  row: Pick<
+    JobRow,
+    "work_key" | "attempt" | "dataset" | "source_object_id"
+  >,
   rawKey: string,
   contentDigest: string,
   now: string,
 ): Promise<void> {
-  const result = await db
-    .prepare(
-      `UPDATE jsda_acquisition_jobs_v2
-       SET raw_key=?, content_digest=?, updated_at=?
-       WHERE work_key=? AND state='running' AND attempt=?`,
-    )
-    .bind(rawKey, contentDigest, now, row.work_key, row.attempt)
-    .run();
-  if ((result.meta.changes ?? 0) !== 1) {
+  const statements: D1PreparedStatement[] = [
+    db
+      .prepare(
+        `UPDATE jsda_acquisition_jobs_v2
+         SET raw_key=?, content_digest=?, updated_at=?
+         WHERE work_key=? AND state='running' AND attempt=?`,
+      )
+      .bind(rawKey, contentDigest, now, row.work_key, row.attempt),
+  ];
+  const artifact = insertArtifactStatement(
+    db,
+    {
+      content_digest: contentDigest,
+      raw_key: rawKey,
+      dataset: row.dataset,
+      source_object_id: row.source_object_id,
+    },
+    now,
+  );
+  if (artifact !== null) statements.push(artifact);
+  if (row.source_object_id !== null) {
+    statements.push(
+      db
+        .prepare(
+          `UPDATE jsda_observations
+           SET content_digest=?, raw_key=?, updated_at=?
+           WHERE observation_key=? AND work_key=?
+             AND EXISTS (
+               SELECT 1 FROM jsda_acquisition_jobs_v2
+                WHERE work_key=? AND state='running' AND attempt=?
+                  AND raw_key=? AND content_digest=?
+             )`,
+        )
+        .bind(
+          contentDigest,
+          rawKey,
+          now,
+          row.work_key,
+          row.work_key,
+          row.work_key,
+          row.attempt,
+          rawKey,
+          contentDigest,
+        ),
+    );
+  }
+  const results = await db.batch(statements);
+  if ((results[0]?.meta.changes ?? 0) !== 1) {
     throw new Error(`JSDA artifact update lost job claim: ${row.work_key}`);
+  }
+  if (row.source_object_id !== null && (results[results.length - 1]?.meta.changes ?? 0) !== 1) {
+    throw new Error(`JSDA observation artifact update lost job claim: ${row.work_key}`);
   }
 }
 
@@ -405,7 +620,7 @@ export async function completeJob(
     audit,
     occurredAt: now,
   };
-  const results = await db.batch([
+  const statements: D1PreparedStatement[] = [
     db
       .prepare(
         `UPDATE jsda_acquisition_jobs_v2
@@ -416,8 +631,23 @@ export async function completeJob(
       .bind(cursor, now, now, audit.key, audit.digest, row.work_key, row.attempt),
     insertEventStatement(db, row, event, "completed"),
     insertRunLogStatement(db, row, event, "completed"),
-  ]);
-  if (results.some((result) => (result?.meta.changes ?? 0) !== 1)) {
+  ];
+  const required = statements.length;
+  const artifact = insertArtifactStatement(db, row, now);
+  if (artifact !== null) statements.push(artifact);
+  if (row.source_object_id !== null) {
+    statements.push(updateObservationTerminalStatement(db, row, event, "completed"));
+    statements.push(updateSourceObjectStatement(db, row, event));
+  }
+  const results = await db.batch(statements);
+  const requiredResults = results.slice(0, required);
+  const observationResults =
+    row.source_object_id === null ? [] : results.slice(-2);
+  if (
+    [...requiredResults, ...observationResults].some(
+      (result) => (result?.meta.changes ?? 0) !== 1,
+    )
+  ) {
     throw new Error(`JSDA completion lost job claim: ${row.work_key}`);
   }
 }
@@ -440,7 +670,7 @@ export async function rejectJob(
     audit,
     occurredAt: now,
   };
-  const results = await db.batch([
+  const statements: D1PreparedStatement[] = [
     db
       .prepare(
         `UPDATE jsda_acquisition_jobs_v2
@@ -459,7 +689,11 @@ export async function rejectJob(
       ),
     insertEventStatement(db, row, event, "rejected"),
     insertRunLogStatement(db, row, event, "rejected"),
-  ]);
+  ];
+  if (row.source_object_id !== null) {
+    statements.push(updateObservationTerminalStatement(db, row, event, "rejected"));
+  }
+  const results = await db.batch(statements);
   if (results.some((result) => (result?.meta.changes ?? 0) !== 1)) {
     throw new Error(`JSDA rejection lost job claim: ${row.work_key}`);
   }

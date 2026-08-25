@@ -24,10 +24,12 @@ import {
   descriptorForYear,
   makeChildJob,
   makeRootJob,
+  sourceObjectId,
   type ChildDescriptor,
   type JsdaQueueJob,
 } from "../src/queue_contract";
 import { putQueueAuditReceipt } from "../src/raw_store";
+import { sha256Hex } from "../src/sha256";
 
 const runtimeEnv = env as JsdaWorkerEnv;
 const migrations = inject<
@@ -38,6 +40,27 @@ beforeEach(async () => {
   await reset();
   await applyD1Migrations(runtimeEnv.DB, migrations);
 });
+
+const ROLLING_URL =
+  "https://www.jsda.or.jp/shiryoshitsu/toukei/trr/files/trrts.xls";
+const ARCHIVE_URL =
+  "https://market.jsda.or.jp/archive/data/otc-20020802.csv";
+
+function mockOfficialFetch(bodies: Record<string, string>): () => void {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const body = bodies[url];
+    if (body === undefined) return new Response(null, { status: 404 });
+    return new Response(body, {
+      status: 200,
+      headers: { "content-type": "application/octet-stream" },
+    });
+  }) as typeof fetch;
+  return () => {
+    globalThis.fetch = original;
+  };
+}
 
 async function deliver(body: unknown, id: string) {
   const batch = createMessageBatch("quant-jsda-ingestion-test", [
@@ -465,5 +488,209 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       .bind(root.work_key)
       .first<{ n: number }>();
     expect(events?.n).toBe(0);
+  });
+
+  it("re-observes a rolling locator A then B then B across three runs", async () => {
+    const bytesA = "rolling-content-A";
+    const bytesB = "rolling-content-B";
+    const digestA = await sha256Hex(new TextEncoder().encode(bytesA));
+    const digestB = await sha256Hex(new TextEncoder().encode(bytesB));
+    const restore = mockOfficialFetch({ [ROLLING_URL]: bytesA });
+    const workKeys: string[] = [];
+    try {
+      for (const [day, body] of [
+        ["24", bytesA],
+        ["25", bytesB],
+        ["26", bytesB],
+      ] as const) {
+        restore();
+        mockOfficialFetch({ [ROLLING_URL]: body });
+        const root = await makeRootJob(
+          "jsda_tokyo_repo_rates",
+          "cron",
+          `2026-08-${day}T01:30:00.000Z`,
+        );
+        await registerJob(runtimeEnv.DB, root);
+        const child = await makeChildJob(
+          root,
+          await descriptorForFile(ROLLING_URL),
+        );
+        await registerJobs(runtimeEnv.DB, [child]);
+        workKeys.push(child.work_key);
+        const result = await deliver(child, `rolling-${day}`);
+        expect(result.explicitAcks).toEqual([`rolling-${day}`]);
+        expect(result.retryMessages).toEqual([]);
+      }
+    } finally {
+      restore();
+    }
+
+    expect(new Set(workKeys).size).toBe(3);
+    const objectId = await sourceObjectId("jsda_tokyo_repo_rates", ROLLING_URL);
+    const observations = await runtimeEnv.DB.prepare(
+      `SELECT observation_key, content_digest, state
+         FROM jsda_observations
+        WHERE source_object_id=?`,
+    )
+      .bind(objectId)
+      .all<{ observation_key: string; content_digest: string; state: string }>();
+    expect(observations.results).toHaveLength(3);
+    const digestByKey = new Map(
+      observations.results.map((row) => [row.observation_key, row.content_digest]),
+    );
+    expect(observations.results.every((row) => row.state === "completed")).toBe(true);
+    expect(digestByKey.get(workKeys[0])).toBe(digestA);
+    expect(digestByKey.get(workKeys[1])).toBe(digestB);
+    expect(digestByKey.get(workKeys[2])).toBe(digestB);
+    const artifacts = await runtimeEnv.DB.prepare(
+      `SELECT content_digest, raw_key
+         FROM jsda_artifacts WHERE source_object_id=?`,
+    )
+      .bind(objectId)
+      .all<{ content_digest: string; raw_key: string }>();
+    expect(new Set(artifacts.results.map((row) => row.content_digest))).toEqual(
+      new Set([digestA, digestB]),
+    );
+    expect(new Set(artifacts.results.map((row) => row.raw_key)).size).toBe(2);
+    expect(
+      await runtimeEnv.RAW_BUCKET.head(artifacts.results[0]?.raw_key ?? "missing"),
+    ).not.toBeNull();
+    expect(
+      await runtimeEnv.RAW_BUCKET.head(artifacts.results[1]?.raw_key ?? "missing"),
+    ).not.toBeNull();
+    const source = await runtimeEnv.DB.prepare(
+      `SELECT current_digest, current_observation_key
+         FROM jsda_source_objects WHERE source_object_id=?`,
+    )
+      .bind(objectId)
+      .first<{ current_digest: string; current_observation_key: string }>();
+    expect(source?.current_digest).toBe(digestB);
+    expect(source?.current_observation_key).toBe(workKeys[2]);
+  });
+
+  it("acks rolling redelivery without a second observation or artifact", async () => {
+    const body = "stable-rolling-bytes";
+    const restore = mockOfficialFetch({ [ROLLING_URL]: body });
+    try {
+      const root = await makeRootJob(
+        "jsda_tokyo_repo_rates",
+        "cron",
+        "2026-08-25T01:30:00.000Z",
+      );
+      await registerJob(runtimeEnv.DB, root);
+      const child = await makeChildJob(root, await descriptorForFile(ROLLING_URL));
+      await registerJobs(runtimeEnv.DB, [child]);
+      const first = await deliver(child, "rolling-first");
+      const second = await deliver(child, "rolling-redeliver");
+      expect(first.explicitAcks).toEqual(["rolling-first"]);
+      expect(second.explicitAcks).toEqual(["rolling-redeliver"]);
+      expect(second.retryMessages).toEqual([]);
+      const objectId = await sourceObjectId("jsda_tokyo_repo_rates", ROLLING_URL);
+      const observations = await runtimeEnv.DB.prepare(
+        "SELECT COUNT(*) AS n FROM jsda_observations WHERE source_object_id=?",
+      )
+        .bind(objectId)
+        .first<{ n: number }>();
+      const artifacts = await runtimeEnv.DB.prepare(
+        "SELECT COUNT(*) AS n FROM jsda_artifacts WHERE source_object_id=?",
+      )
+        .bind(objectId)
+        .first<{ n: number }>();
+      expect(observations?.n).toBe(1);
+      expect(artifacts?.n).toBe(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not ack a rolling fetch when observation evidence cannot be written", async () => {
+    const restore = mockOfficialFetch({ [ROLLING_URL]: "evidence-failure" });
+    try {
+      const root = await makeRootJob(
+        "jsda_tokyo_repo_rates",
+        "manual",
+        "2026-08-25T04:00:00.000Z",
+      );
+      await registerJob(runtimeEnv.DB, root);
+      const child = await makeChildJob(root, await descriptorForFile(ROLLING_URL));
+      await registerJobs(runtimeEnv.DB, [child]);
+      await runtimeEnv.DB.exec("DROP TABLE jsda_artifacts");
+      const result = await deliver(child, "rolling-evidence-down");
+      expect(result.explicitAcks).toEqual([]);
+      expect(result.retryMessages.map((message) => message.msgId)).toEqual([
+        "rolling-evidence-down",
+      ]);
+      expect((await loadJob(runtimeEnv.DB, child.work_key))?.state).not.toBe(
+        "completed",
+      );
+      const observation = await runtimeEnv.DB.prepare(
+        "SELECT state FROM jsda_observations WHERE observation_key=?",
+      )
+        .bind(child.work_key)
+        .first<{ state: string }>();
+      expect(observation?.state).not.toBe("completed");
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps archive files unique by URL while rolling files re-observe per run", async () => {
+    const firstOtc = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-24T01:30:00.000Z",
+    );
+    const secondOtc = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-25T01:30:00.000Z",
+    );
+    const firstRepo = await makeRootJob(
+      "jsda_tokyo_repo_rates",
+      "cron",
+      "2026-08-24T01:30:00.000Z",
+    );
+    const secondRepo = await makeRootJob(
+      "jsda_tokyo_repo_rates",
+      "cron",
+      "2026-08-25T01:30:00.000Z",
+    );
+    await registerJobs(runtimeEnv.DB, [firstOtc, secondOtc, firstRepo, secondRepo]);
+    const archive = await descriptorForFile(ARCHIVE_URL);
+    const rolling = await descriptorForFile(ROLLING_URL);
+    await registerJobs(runtimeEnv.DB, [
+      await makeChildJob(firstOtc, archive),
+      await makeChildJob(secondOtc, archive),
+      await makeChildJob(firstRepo, rolling),
+      await makeChildJob(secondRepo, rolling),
+    ]);
+    const archiveJobs = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2
+        WHERE dataset=? AND job_type='fetch_file' AND target_url=?`,
+    )
+      .bind(firstOtc.dataset, archive.target_url)
+      .first<{ n: number }>();
+    const rollingJobs = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2
+        WHERE dataset=? AND job_type='fetch_file' AND target_url=?`,
+    )
+      .bind(firstRepo.dataset, rolling.target_url)
+      .first<{ n: number }>();
+    expect(archiveJobs?.n).toBe(1);
+    expect(rollingJobs?.n).toBe(2);
+    const archiveObs = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM jsda_observations
+        WHERE dataset=? AND target_url=?`,
+    )
+      .bind(firstOtc.dataset, archive.target_url)
+      .first<{ n: number }>();
+    const rollingObs = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM jsda_observations
+        WHERE dataset=? AND target_url=?`,
+    )
+      .bind(firstRepo.dataset, rolling.target_url)
+      .first<{ n: number }>();
+    expect(archiveObs?.n).toBe(1);
+    expect(rollingObs?.n).toBe(2);
   });
 });

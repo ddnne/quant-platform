@@ -109,6 +109,13 @@
           "checksum": "sha256:4faab156820a85ef2d8b22ffd30984f50194b680a1c0df6b59af41e24a5d04ce",
           "order": 11,
           "depends_on": "quant-ingest:0010_raw_acquisition_status"
+        },
+        {
+          "migration_id": "quant-ingest:0012_jsda_observation_identity",
+          "path": "platform/workers/ingestion-premium/migrations/0012_jsda_observation_identity.sql",
+          "checksum": "sha256:382df93ba6f7cbef175cdc32a167a6fccbf1aae6979502882f5d92b7a3ff5383",
+          "order": 12,
+          "depends_on": "quant-ingest:0011_jsda_queue_v2"
         }
       ]
     },

@@ -1,4 +1,17 @@
+import {
+  classifyFetchFreshness,
+  FILE_ROUTING_VERSION,
+  observationEpoch,
+  type FreshnessClass,
+} from "./source_routing";
 import { sha256Hex } from "./sha256";
+
+export {
+  classifyFetchFreshness,
+  FILE_ROUTING_VERSION,
+  observationEpoch,
+  type FreshnessClass,
+} from "./source_routing";
 
 export type DatasetId =
   | "jsda_otc_bond_reference_prices"
@@ -68,9 +81,10 @@ const CONTRACT_CANONICAL = JSON.stringify({
   version: JSDA_QUEUE_JOB_VERSION,
   hierarchy: ["discover_root", "discover_year", "fetch_file"],
   dataset_roots: DATASET_ROOTS,
-  dataset_file_selection: "jsda-official-file-routing/v1",
+  dataset_file_selection: FILE_ROUTING_VERSION,
+  identities: ["source_object", "observation", "artifact"],
   work_key:
-    "daily stable root; run-scoped discovery URL; globally stable fetched-file URL",
+    "daily stable root; run-scoped discovery URL; archive fetched-file URL; rolling fetched-file URL per run epoch",
   fields: [...JOB_KEYS].sort(),
   official_hosts: ["jsda.or.jp", "market.jsda.or.jp", "www.jsda.or.jp"],
   semantics: [
@@ -78,8 +92,11 @@ const CONTRACT_CANONICAL = JSON.stringify({
     "bounded-child-continuations",
     "fenced-job-attempts",
     "run-scoped-discovery-refresh",
+    "source-object-observation-artifact",
+    "rolling-url-reobservation",
+    "archive-url-immutable-identity",
     "r2-create-only-raw-and-audit",
-    "completed-work-idempotent",
+    "completed-observation-idempotent",
   ],
 });
 
@@ -162,14 +179,43 @@ export function isJsdaQueueJob(value: unknown): value is JsdaQueueJob {
   );
 }
 
-function canonicalUrl(raw: string): string {
+export function canonicalUrl(raw: string): string {
   const url = new URL(raw);
   url.hash = "";
   return url.toString();
 }
 
-async function urlIdentity(raw: string): Promise<string> {
+export async function urlIdentity(raw: string): Promise<string> {
   return sha256Hex(encode(canonicalUrl(raw)));
+}
+
+export async function sourceObjectId(
+  dataset: DatasetId,
+  raw: string,
+): Promise<string> {
+  return `jsda:obj:${dataset}:${await urlIdentity(raw)}`;
+}
+
+export async function runEpochToken(runKey: string): Promise<string> {
+  return (await sha256Hex(encode(runKey))).slice(0, 16);
+}
+
+export async function fetchFileWorkKey(
+  dataset: DatasetId,
+  targetUrl: string,
+  runKey: string,
+  requestedAt: string,
+): Promise<{ workKey: string; freshness: FreshnessClass; epoch: string }> {
+  const identity = await urlIdentity(targetUrl);
+  const freshness = classifyFetchFreshness(dataset, targetUrl, requestedAt);
+  const epoch = observationEpoch(freshness, runKey);
+  const runIdentity =
+    freshness === "rolling" ? `:${await runEpochToken(runKey)}` : "";
+  return {
+    workKey: `jsda:v2:file:${dataset}:${identity}${runIdentity}`,
+    freshness,
+    epoch,
+  };
 }
 
 function safeBasename(raw: string): string {
@@ -210,14 +256,22 @@ export async function makeChildJob(
   descriptor: ChildDescriptor,
 ): Promise<JsdaQueueJob> {
   const identity = await urlIdentity(descriptor.target_url);
-  const kind = descriptor.job_type === "discover_year" ? "year" : "file";
-  const runIdentity =
-    descriptor.job_type === "discover_year"
-      ? `:${(await sha256Hex(encode(parent.run_key))).slice(0, 16)}`
-      : "";
+  let workKey: string;
+  if (descriptor.job_type === "discover_year") {
+    workKey = `jsda:v2:year:${parent.dataset}:${identity}:${await runEpochToken(parent.run_key)}`;
+  } else {
+    workKey = (
+      await fetchFileWorkKey(
+        parent.dataset,
+        descriptor.target_url,
+        parent.run_key,
+        parent.requested_at,
+      )
+    ).workKey;
+  }
   return {
     version: JSDA_QUEUE_JOB_VERSION,
-    work_key: `jsda:v2:${kind}:${parent.dataset}:${identity}${runIdentity}`,
+    work_key: workKey,
     run_key: parent.run_key,
     job_type: descriptor.job_type,
     dataset: parent.dataset,

@@ -39,9 +39,9 @@ export async function enqueueRegisteredJobs(
 ): Promise<JsdaQueueJob[]> {
   if (jobs.length === 0) return [];
   const rows = await registerJobs(env.DB, jobs);
-  // Reuse the persisted identity on recovery. A later root may rediscover the
-  // same URL under a different parent; only the first governed identity may be
-  // retried for that stable work key.
+  // Observation identity is stable under Queue redelivery. A completed
+  // archive observation keeps that URL complete; a completed rolling
+  // observation does not complete later runs of the same URL.
   const eligible = rows
     .filter((row) => row.state === "pending" || row.state === "failed_transient")
     .map(persistedMessage);

@@ -377,7 +377,7 @@ async function processFile(
       "completed",
       completedAt,
       null,
-      "official JSDA artifact stored create-only",
+      "official JSDA observation stored with immutable artifact",
       row.cursor,
       null,
     ),
