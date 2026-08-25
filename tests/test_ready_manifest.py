@@ -136,6 +136,7 @@ def test_pilot_readiness_sidecar_loader_is_strict_public_key_only(
                         "key_id": "sidecar-loader-test",
                         "algorithm": "Ed25519",
                         "public_key_b64": base64.b64encode(public_raw).decode("ascii"),
+                        "status": "active",
                     }
                 ],
             }
@@ -171,6 +172,33 @@ def test_pilot_readiness_sidecar_loader_is_strict_public_key_only(
     sidecar.write_text(json.dumps(expired.to_dict()), encoding="utf-8")
     with pytest.raises(MassResearchDisabledError, match="expired"):
         load_verified_pilot_readiness(sidecar)
+
+
+def test_readiness_registry_requires_explicit_status_and_exactly_one_active() -> None:
+    public_raw = Ed25519PrivateKey.generate().public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    encoded = base64.b64encode(public_raw).decode("ascii")
+    row = {
+        "key_id": "readiness-a",
+        "algorithm": "Ed25519",
+        "public_key_b64": encoded,
+    }
+    with pytest.raises(MassResearchDisabledError, match="explicit active/revoked"):
+        ReadinessPublicKeyRegistry.from_document(
+            {"schema_version": 1, "keys": [row]}
+        )
+    with pytest.raises(MassResearchDisabledError, match="exactly one active"):
+        ReadinessPublicKeyRegistry.from_document(
+            {
+                "schema_version": 1,
+                "keys": [
+                    {**row, "status": "active"},
+                    {**row, "key_id": "readiness-b", "status": "active"},
+                ],
+            }
+        )
 
 
 def test_caller_environment_registry_cannot_self_root_pilot_readiness(

@@ -108,6 +108,7 @@ class ReadinessPublicKeyRegistry:
         if not isinstance(rows, list) or not rows:
             raise MassResearchDisabledError("readiness public key registry keys missing")
         keys: dict[str, Ed25519PublicKey] = {}
+        seen_ids: set[str] = set()
         for row in rows:
             if not isinstance(row, Mapping):
                 raise MassResearchDisabledError("invalid readiness public key row")
@@ -115,8 +116,11 @@ class ReadinessPublicKeyRegistry:
                 raise MassResearchDisabledError(
                     "readiness public key algorithm must be Ed25519"
                 )
-            if row.get("status", "active") != "active":
-                continue
+            status = row.get("status")
+            if status not in {"active", "revoked"}:
+                raise MassResearchDisabledError(
+                    "readiness public key status must be explicit active/revoked"
+                )
             key_id = str(row.get("key_id") or "").strip()
             encoded = str(row.get("public_key_b64") or "").strip()
             try:
@@ -126,14 +130,16 @@ class ReadinessPublicKeyRegistry:
                 raise MassResearchDisabledError(
                     f"invalid readiness public key for {key_id!r}"
                 ) from exc
-            if not key_id or key_id in keys:
+            if not key_id or key_id in seen_ids:
                 raise MassResearchDisabledError(
                     "readiness public key ids must be non-empty and unique"
                 )
-            keys[key_id] = key
-        if not keys:
+            seen_ids.add(key_id)
+            if status == "active":
+                keys[key_id] = key
+        if len(keys) != 1:
             raise MassResearchDisabledError(
-                "readiness public key registry has no active keys"
+                "readiness public key registry must have exactly one active key"
             )
         return cls(keys)
 
