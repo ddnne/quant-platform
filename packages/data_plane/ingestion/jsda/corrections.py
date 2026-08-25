@@ -22,7 +22,7 @@ from ..pipeline import Registrar, RunReport, _stamped, save_raw
 from .fetch import JsdaFetcher
 from .normalize import normalize_otc_reference_prices
 from .parse import parse_otc_reference_csv, parse_otc_reference_xlsx
-from .receipts import record_governed_receipt, require_jsda_receipt_authority
+from .receipts import record_governed_receipt, require_jsda_receipt_service
 from .urls import (
     OTC_REFERENCE_DATASET,
     JsdaCorrectionArtifact,
@@ -209,10 +209,11 @@ def _record(
     structured_row_count: int | None = None,
     pagination_exhausted: bool,
     digests: Mapping[str, Any],
-    authority=None,
-    raw_pages: Sequence[bytes] = (),
+    receipt_service=None,
+    raw_artifact_paths: Sequence[Path | str] = (),
     raw_records: Sequence[Any] = (),
-    structured_records: Sequence[Mapping[str, Any]] = (),
+    structured_table: str = "",
+    normalized_records: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     record_governed_receipt(
         store,
@@ -227,10 +228,11 @@ def _record(
         structured_row_count=structured_row_count,
         pagination_exhausted=pagination_exhausted,
         digests=digests,
-        authority=authority,
-        raw_pages=raw_pages,
+        receipt_service=receipt_service,
+        raw_artifact_paths=raw_artifact_paths,
         raw_records=raw_records,
-        structured_records=structured_records,
+        structured_table=structured_table,
+        normalized_records=normalized_records,
     )
 
 
@@ -318,11 +320,11 @@ def run_otc_reference_corrections(
     fetcher = JsdaFetcher(http)
     registrar = Registrar(store)
     policy = coverage_contract_for(OTC_REFERENCE_DATASET)
-    authority = None
+    receipt_service = None
     authority_error: Optional[str] = None
     try:
         try:
-            authority = require_jsda_receipt_authority()
+            receipt_service = require_jsda_receipt_service()
         except RuntimeError as exc:
             authority_error = str(exc)
         correction_index_url = otc_reference_corrections_index_url()
@@ -372,7 +374,7 @@ def run_otc_reference_corrections(
             artifact_path: Optional[Path] = None
             artifact_digest: Optional[str] = None
             artifact_bytes = b""
-            source_raw_pages: list[bytes] = []
+            source_raw_paths: list[Path] = []
             changed_records: list[dict] = []
             changed_count = structured_count = 0
             normalized_rows: list[dict] = []
@@ -391,12 +393,12 @@ def run_otc_reference_corrections(
             try:
                 artifact = fetcher.fetch_file(item.source_url)
                 artifact_bytes = artifact
-                source_raw_pages.append(artifact)
                 artifact_name = Path(urlsplit(item.source_url).path).name
                 artifact_path = save_raw(
                     data_base, "jsda", _stamped(artifact_name, checked_at),
                     artifact, _fetch_day(checked_at),
                 )
+                source_raw_paths.append(artifact_path)
                 artifact_digest = _sha256(artifact)
                 evidence.update({
                     "raw": artifact_digest,
@@ -465,12 +467,12 @@ def run_otc_reference_corrections(
                             + segment.publication_label_date
                         )
                     daily_raw = fetcher.fetch_file(segment.source_url)
-                    source_raw_pages.append(daily_raw)
                     daily_name = Path(urlsplit(segment.source_url).path).name
                     daily_path = save_raw(
                         data_base, "jsda", _stamped(daily_name, checked_at),
                         daily_raw, _fetch_day(checked_at),
                     )
+                    source_raw_paths.append(daily_path)
                     daily_digest = _sha256(daily_raw)
                     parsed = _parse_daily(
                         segment, daily_raw, next(iter(effective_dates))
@@ -504,14 +506,16 @@ def run_otc_reference_corrections(
                     # Already at corrected values — resume, do not stamp empty SUCCESS.
                     resumed += 1
                     continue
-                if authority is None:
+                if receipt_service is None:
                     raise RuntimeError(
                         authority_error
                         or "receipt signing key not configured"
                     )
                 # Whole affected range in one transaction — no partial correction.
                 structured_count = registrar.register(
-                    "jsda_otc_bond_reference_prices", normalized_rows
+                    "jsda_otc_bond_reference_prices",
+                    normalized_rows,
+                    commit=False,
                 )
                 evidence.update({
                     "annual_indexes": annual_evidence,
@@ -525,10 +529,11 @@ def run_otc_reference_corrections(
                     store, required=required, run_id=run_id,
                     checked_at=checked_at, status="SUCCESS", error=None,
                     pagination_exhausted=True, digests=evidence,
-                    authority=authority,
-                    raw_pages=source_raw_pages,
+                    receipt_service=receipt_service,
+                    raw_artifact_paths=source_raw_paths,
                     raw_records=changed_records,
-                    structured_records=normalized_rows,
+                    structured_table="jsda_otc_bond_reference_prices",
+                    normalized_records=normalized_rows,
                 )
                 applied += 1
                 changed_total += changed_count
@@ -550,7 +555,6 @@ def run_otc_reference_corrections(
                     raw_row_count=changed_count,
                     structured_row_count=structured_count,
                     pagination_exhausted=False, digests=evidence,
-                    raw_pages=source_raw_pages,
                 )
                 deferred += int(is_deferred)
                 failed += int(not is_deferred)

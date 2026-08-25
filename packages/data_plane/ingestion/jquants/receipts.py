@@ -1,91 +1,72 @@
-"""JQ collection receipts — signed authority only inside ingestion transaction.
-
-Phase 6.2.3: no automatic mint_ingestion_issuer(). Caller must pass
-SignedReceiptAuthority from the trusted ingestion runtime. Receipt emit
-failure must fail the surrounding transaction (commit=False by default for
-pipeline composition).
-"""
+"""JQ collection receipts through the governed reconciliation service."""
 
 from __future__ import annotations
 
-import sqlite3
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from ingestion.runtime_authority import reconcile_collection_evidence
-from storage.coverage_ledger import (
-    CollectionReceipt,
-    RequiredCoverageSegment,
-    record_collection_receipt,
+from ingestion.runtime_authority import (
+    GovernedReceiptService,
+    open_governed_receipt_service,
 )
-from storage.trusted_receipt import SignedReceiptAuthority
+from storage.coverage_ledger import CollectionReceipt, RequiredCoverageSegment
+from storage.sqlite_store import SqliteStore
 
 
-def require_signed_receipt_authority(
-    authority: SignedReceiptAuthority | None = None,
+def require_governed_receipt_service(
+    service: GovernedReceiptService | None = None,
     *,
     open_if_missing: bool = True,
-) -> SignedReceiptAuthority:
-    """Verify issuer before governed structured mutation.
+) -> GovernedReceiptService:
+    """Open/verify the reconciliation capability before fact mutation.
 
-    Call this *before* ``Registrar.register`` / fact upsert. ``emit_segment_receipt``
-    still requires an explicit authority (no auto-mint).
+    The returned object never exposes its private-key issuer.
     """
-    if authority is None:
+    if service is None:
         if not open_if_missing:
             raise TypeError(
-                "SignedReceiptAuthority is required; automatic issuer mint is removed"
+                "GovernedReceiptService is required; implicit issue is removed"
             )
-        from ingestion.runtime_authority import open_ingestion_signing_authority
-
-        return open_ingestion_signing_authority()
-    if not isinstance(authority, SignedReceiptAuthority):
-        raise TypeError("authority must be SignedReceiptAuthority")
-    return authority
+        return open_governed_receipt_service()
+    if not isinstance(service, GovernedReceiptService):
+        raise TypeError("service must be GovernedReceiptService")
+    return service
 
 
 def emit_segment_receipt(
-    conn: sqlite3.Connection,
+    store: SqliteStore,
     *,
     required: RequiredCoverageSegment,
     run_id: int,
-    raw_pages: Sequence[bytes],
+    raw_artifact_paths: Sequence[Path | str],
     raw_records: Sequence[Any],
-    structured_records: Sequence[Mapping[str, Any]],
-    authority: SignedReceiptAuthority,
+    structured_table: str,
+    normalized_records: Sequence[Mapping[str, Any]],
+    service: GovernedReceiptService,
     pagination_exhausted: bool = True,
     discovery_exhausted: bool | None = None,
     checked_at: str | None = None,
     source_request: Mapping[str, Any] | None = None,
     extra_evidence: Mapping[str, Any] | None = None,
-    commit: bool = False,
 ) -> CollectionReceipt:
-    """Measure and record a signed SUCCESS closure for one J-Quants segment.
-
-    ``authority`` is required (no None auto-mint). Default ``commit=False`` so
-    the ingestion transaction commits structured rows + receipt together.
-    Counts and digests are deliberately absent from this API: the trusted
-    runtime derives them from the concrete artifacts supplied here.
-    """
-    authority = require_signed_receipt_authority(
-        authority, open_if_missing=False
+    """Re-read persisted raw/facts and record one signed SUCCESS closure."""
+    service = require_governed_receipt_service(
+        service, open_if_missing=False
     )
-    evidence = reconcile_collection_evidence(
+    return service.record_persisted_success(
+        store,
         required=required,
         run_id=run_id,
-        raw_pages=raw_pages,
+        raw_artifact_paths=raw_artifact_paths,
         raw_records=raw_records,
-        structured_records=structured_records,
+        structured_table=structured_table,
+        normalized_records=normalized_records,
         pagination_exhausted=pagination_exhausted,
         discovery_exhausted=discovery_exhausted,
         checked_at=checked_at,
         source_request=source_request,
         extra_evidence=extra_evidence,
     )
-    receipt = authority.issue(evidence)
-    record_collection_receipt(conn, receipt)
-    if commit:
-        conn.commit()
-    return receipt
 
 
-__all__ = ["emit_segment_receipt", "require_signed_receipt_authority"]
+__all__ = ["emit_segment_receipt", "require_governed_receipt_service"]

@@ -74,9 +74,19 @@ class SqliteStore:
         with self._conn:
             migrate_contract_keys_v2(self._conn, now_iso=now_iso())
 
-    def upsert(self, table: str, rows: Iterable[Mapping[str, Any]]) -> int:
+    def upsert(
+        self,
+        table: str,
+        rows: Iterable[Mapping[str, Any]],
+        *,
+        commit: bool = True,
+    ) -> int:
         """PIT-safe upsert on the natural key. Unchanged re-fetch keeps earliest
         ``available_at``; amendments archive the displaced row first.
+
+        Governed ingestion passes ``commit=False`` so the structured mutation
+        and its trusted receipt are committed in one transaction.  All legacy
+        callers retain the auto-commit default.
         """
         rows = [dict(r) for r in rows]
         if not rows:
@@ -152,11 +162,48 @@ class SqliteStore:
             if revisions_to_archive is not None:
                 self._archive_revisions(table, *revisions_to_archive)
             cur = self._conn.executemany(sql, payload)
-            self._conn.commit()
+            if commit:
+                self._conn.commit()
         except Exception:
             self._conn.rollback()
             raise
         return cur.rowcount if cur.rowcount and cur.rowcount > 0 else len(payload)
+
+    def fetch_exact_by_natural_keys(
+        self,
+        table: str,
+        expected_rows: Iterable[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Re-read exactly the governed natural keys from the active transaction.
+
+        This is the structured side of trusted receipt reconciliation.  The
+        caller supplies canonical normalized rows only to identify business
+        keys; returned payloads are independently read from SQLite.
+        """
+        key_cols = NATURAL_KEYS.get(table)
+        if not key_cols:
+            raise ValueError(f"no governed natural-key contract for table: {table}")
+        rows = [dict(row) for row in expected_rows]
+        if not rows:
+            return []
+        for index, row in enumerate(rows):
+            missing = [key for key in key_cols if row.get(key) is None]
+            if missing:
+                raise ValueError(
+                    f"{table}[{index}] missing natural-key fields: {missing}"
+                )
+        expected_keys = [tuple(row[key] for key in key_cols) for row in rows]
+        if len(expected_keys) != len(set(expected_keys)):
+            raise ValueError(f"{table} normalized rows contain duplicate natural keys")
+        found = self._existing_by_key(table, key_cols, rows)
+        missing_keys = sorted(set(expected_keys) - set(found))
+        extra_keys = sorted(set(found) - set(expected_keys))
+        if missing_keys or extra_keys:
+            raise ValueError(
+                f"{table} exact natural-key reconciliation failed: "
+                f"missing={missing_keys} extra={extra_keys}"
+            )
+        return [found[key] for key in sorted(expected_keys)]
 
     def _archive_revisions(
         self, table: str, key_cols: list[str], rows: list[Mapping[str, Any]]

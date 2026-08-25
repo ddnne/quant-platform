@@ -77,11 +77,26 @@ def test_record_receipt_into_db(tmp_path: Path):
     store.close()
 
 
-def _tmp_authority(receipt_ed25519_keys):
-    """Issuer bound to the session tmp Ed25519 registry; never production keys."""
-    from storage.trusted_receipt import SignedReceiptAuthority
+def _tmp_service(receipt_ed25519_keys):
+    """Governed service bound to an ephemeral key; never production keys."""
+    from ingestion.runtime_authority import open_governed_receipt_service
 
-    return SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
+    return open_governed_receipt_service(pem=receipt_ed25519_keys.private_pem)
+
+
+def _persisted_market_calendar_row(store: SqliteStore) -> dict:
+    row = {
+        "source": "jquants",
+        "dataset": "markets_calendar",
+        "natural_key": '{"Date":"2026-08-11"}',
+        "event_time": "2026-08-11T09:00:00+09:00",
+        "available_at": "2026-08-11T09:00:00+09:00",
+        "ingested_at": "2026-08-11T09:00:00+09:00",
+        "payload": '{"Date":"2026-08-11"}',
+        "raw_payload": '{"Date":"2026-08-11"}',
+    }
+    store.upsert("jquants_records", [row], commit=False)
+    return row
 
 
 def test_emit_segment_receipt_requires_authority(tmp_path: Path):
@@ -90,28 +105,33 @@ def test_emit_segment_receipt_requires_authority(tmp_path: Path):
     store = SqliteStore(tmp_path / "t.sqlite")
     policy = coverage_contract_for("markets_calendar")
     req = list(plan_required_segments(policy, "2026-08-11", source="jquants"))[0]
-    with pytest.raises(TypeError, match="SignedReceiptAuthority is required"):
+    raw_path = tmp_path / "raw.json"
+    raw_path.write_bytes(b'[{"Date":"2026-08-11"}]')
+    raw_path.chmod(0o444)
+    row = _persisted_market_calendar_row(store)
+    with pytest.raises(TypeError, match="GovernedReceiptService is required"):
         emit_segment_receipt(
-            store._conn,
+            store,
             required=req,
             run_id=1,
-            raw_pages=(b'[{"Date":"2026-08-11"}]',),
+            raw_artifact_paths=(raw_path,),
             raw_records=({"Date": "2026-08-11"},),
-            structured_records=({"Date": "2026-08-11"},),
-            authority=None,  # type: ignore[arg-type]
+            structured_table="jquants_records",
+            normalized_records=(row,),
+            service=None,  # type: ignore[arg-type]
         )
     store.close()
 
 
-def test_require_signed_receipt_authority_fails_closed_without_key(monkeypatch):
-    from ingestion.jquants.receipts import require_signed_receipt_authority
+def test_require_governed_receipt_service_fails_closed_without_key(monkeypatch):
+    from ingestion.jquants.receipts import require_governed_receipt_service
 
     monkeypatch.setattr(
         "storage.trusted_receipt.load_signing_key",
         lambda **kwargs: None,
     )
     with pytest.raises(RuntimeError, match="signing authority is not configured"):
-        require_signed_receipt_authority()
+        require_governed_receipt_service()
 
 
 def test_emit_segment_receipt_rejects_empty_raw_success(
@@ -122,16 +142,20 @@ def test_emit_segment_receipt_rejects_empty_raw_success(
     store = SqliteStore(tmp_path / "t.sqlite")
     policy = coverage_contract_for("markets_calendar")
     req = list(plan_required_segments(policy, "2026-08-11", source="jquants"))[0]
-    auth = _tmp_authority(receipt_ed25519_keys)
+    raw_path = tmp_path / "empty.json"
+    raw_path.write_bytes(b"")
+    raw_path.chmod(0o444)
+    row = _persisted_market_calendar_row(store)
     with pytest.raises(ValueError, match="non-empty raw pages"):
         emit_segment_receipt(
-            store._conn,
+            store,
             required=req,
             run_id=1,
-            raw_pages=(b"",),
+            raw_artifact_paths=(raw_path,),
             raw_records=({"Date": "2026-08-11"},),
-            structured_records=({"Date": "2026-08-11"},),
-            authority=auth,
+            structured_table="jquants_records",
+            normalized_records=(row,),
+            service=_tmp_service(receipt_ed25519_keys),
         )
     n = store._conn.execute("select count(*) from collection_receipts").fetchone()[0]
     assert n == 0
@@ -150,15 +174,19 @@ def test_emit_segment_receipt_records_verified_signature(
     req = list(plan_required_segments(policy, "2026-08-11", source="jquants"))[0]
     record_required_segments(store._conn, [req])
     raw = b'{"data":[{"Date":"2026-08-11"}]}'
+    raw_path = tmp_path / "market-calendar.json"
+    raw_path.write_bytes(raw)
+    raw_path.chmod(0o444)
+    row = _persisted_market_calendar_row(store)
     receipt = emit_segment_receipt(
-        store._conn,
+        store,
         required=req,
         run_id=1,
-        raw_pages=(raw,),
+        raw_artifact_paths=(raw_path,),
         raw_records=({"Date": "2026-08-11"},),
-        structured_records=({"Date": "2026-08-11"},),
-        authority=_tmp_authority(receipt_ed25519_keys),
-        commit=True,
+        structured_table="jquants_records",
+        normalized_records=(row,),
+        service=_tmp_service(receipt_ed25519_keys),
     )
     assert receipt.status == "SUCCESS"
     assert receipt.digests.get("eligibility") == "TRUSTED_COLLECTION"
@@ -167,4 +195,36 @@ def test_emit_segment_receipt_records_verified_signature(
     assert is_complete_eligible_receipt(receipt)
     n = store._conn.execute("select count(*) from collection_receipts").fetchone()[0]
     assert n == 1
+    store.close()
+
+
+def test_emit_segment_receipt_rejects_same_count_forged_raw_records(
+    tmp_path: Path, receipt_ed25519_keys
+):
+    """The signed raw digest must bind content, not merely caller row count."""
+    from ingestion.jquants.receipts import emit_segment_receipt
+
+    store = SqliteStore(tmp_path / "t.sqlite")
+    policy = coverage_contract_for("markets_calendar")
+    req = list(plan_required_segments(policy, "2026-08-11", source="jquants"))[0]
+    raw_path = tmp_path / "market-calendar.json"
+    raw_path.write_bytes(b'{"data":[{"Date":"2026-08-11"}]}')
+    raw_path.chmod(0o444)
+    row = _persisted_market_calendar_row(store)
+
+    with pytest.raises(ValueError, match="do not match content"):
+        emit_segment_receipt(
+            store,
+            required=req,
+            run_id=1,
+            raw_artifact_paths=(raw_path,),
+            raw_records=({"Date": "2099-01-01"},),
+            structured_table="jquants_records",
+            normalized_records=(row,),
+            service=_tmp_service(receipt_ed25519_keys),
+        )
+
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM collection_receipts"
+    ).fetchone()[0] == 0
     store.close()

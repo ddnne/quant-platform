@@ -467,11 +467,11 @@ def test_governed_jsda_receipt_rejects_empty_raw_success(
     tmp_path, receipt_ed25519_keys
 ):
     from ingestion.jsda.receipts import record_governed_receipt
+    from ingestion.runtime_authority import open_governed_receipt_service
     from storage.coverage_ledger import RequiredCoverageSegment
-    from storage.trusted_receipt import SignedReceiptAuthority
 
-    authority = SignedReceiptAuthority(
-        signing_key=receipt_ed25519_keys.signing_key
+    receipt_service = open_governed_receipt_service(
+        pem=receipt_ed25519_keys.private_pem
     )
     store = SqliteStore(tmp_path / "empty-raw.sqlite")
     required = RequiredCoverageSegment(
@@ -483,6 +483,9 @@ def test_governed_jsda_receipt_rejects_empty_raw_success(
         expected_scope={"coverage_mode": "official_archive_index_reconciled"},
         expected_items=1,
     )
+    raw_path = tmp_path / "empty.csv"
+    raw_path.write_bytes(b"")
+    raw_path.chmod(0o444)
     try:
         record_governed_receipt(
             store,
@@ -493,10 +496,11 @@ def test_governed_jsda_receipt_rejects_empty_raw_success(
             error=None,
             pagination_exhausted=True,
             digests={"origin": "test"},
-            authority=authority,
-            raw_pages=(b"",),
+            receipt_service=receipt_service,
+            raw_artifact_paths=(raw_path,),
             raw_records=(),
-            structured_records=(),
+            structured_table="jsda_otc_bond_reference_prices",
+            normalized_records=(),
         )
     except ValueError as exc:
         assert "non-empty raw pages" in str(exc)

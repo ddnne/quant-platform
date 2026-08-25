@@ -247,13 +247,13 @@ class SignedReceiptAuthority:
         )
 
 
-def open_signed_receipt_authority(
+def _open_signed_receipt_authority(
     *,
     pem: bytes | str | None = None,
     path: Path | None = None,
     key_id: str | None = None,
 ) -> SignedReceiptAuthority:
-    """Open the ingestion signer. Missing authority remains fail-closed."""
+    """Private key loader for :mod:`ingestion.runtime_authority` only."""
     key = load_signing_key(pem=pem, path=path, key_id=key_id)
     if key is None:
         raise RuntimeError("receipt signing authority is not configured")
@@ -267,5 +267,4 @@ __all__ = [
     "ReconciledCollectionEvidence",
     "SignedReceiptAuthority",
     "TrustedReceiptIssuer",
-    "open_signed_receipt_authority",
 ]

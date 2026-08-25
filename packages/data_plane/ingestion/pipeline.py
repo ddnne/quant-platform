@@ -19,7 +19,7 @@ from .pipeline_receipts import (
     _index_text_for_plan,
     _plan_required_segments,
     emit_catalog_job_receipt,
-    require_signed_receipt_authority,
+    require_governed_receipt_service,
     rollback_governed_catalog_write,
 )
 
@@ -91,14 +91,14 @@ class Registrar:
     def __init__(self, store) -> None:
         self._store = store
 
-    def register(self, table: str, rows) -> int:
+    def register(self, table: str, rows, *, commit: bool = True) -> int:
         # Persist canonical +09:00 available_at so lexicographic MIN is chronological.
         canonical = []
         for r in rows:
             r = dict(r)
             r["available_at"] = validate_available_at(r.get("available_at"))
             canonical.append(r)
-        return self._store.upsert(table, canonical)
+        return self._store.upsert(table, canonical, commit=commit)
 
 
 def _compact_stamp(iso_ts: str) -> str:
@@ -117,9 +117,24 @@ def _stamped(name: str, stamp: str) -> str:
 def save_raw(
     data_base: Path, source: str, filename: str, data: bytes, when
 ) -> Path:
+    """Persist verbatim raw bytes create-only and make the artifact read-only.
+
+    An idempotent retry may observe an identical artifact at the same path.
+    Different bytes at an existing identity are rejected instead of silently
+    overwriting the raw evidence used by a receipt.
+    """
     p = raw_path(data_base, source, when, filename)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(data)
+    payload = bytes(data)
+    try:
+        with p.open("xb") as handle:
+            handle.write(payload)
+    except FileExistsError:
+        if p.read_bytes() != payload:
+            raise FileExistsError(
+                f"immutable raw identity already contains different bytes: {p}"
+            )
+    p.chmod(0o444)
     return p
 
 
@@ -365,10 +380,10 @@ def _run_jquants_catalog(
                     raw_bytes,
                     when,
                 )
-                # Verify signing authority before structured mutation; upsert commits.
+                # Verify the reconciliation capability before structured mutation.
                 # Collection SUCCESS is not Coverage COMPLETE.
                 try:
-                    authority = require_signed_receipt_authority()
+                    receipt_service = require_governed_receipt_service()
                 except Exception as rec_exc:  # noqa: BLE001
                     return RunReport(
                         "jquants",
@@ -381,16 +396,16 @@ def _run_jquants_catalog(
                 norm = JN.normalize_generic(
                     rows, dataset=job.dataset_id, ingested_at=when
                 )
-                n = reg.register("jquants_records", norm)
+                n = reg.register("jquants_records", norm, commit=False)
                 try:
                     emit_catalog_job_receipt(
                         store,
                         job=job,
                         when=when,
-                        raw_bytes=raw_bytes,
+                        raw_path=rp,
                         rows=rows,
                         structured_records=norm,
-                        authority=authority,
+                        receipt_service=receipt_service,
                     )
                 except Exception as rec_exc:  # noqa: BLE001
                     rollback_governed_catalog_write(store)

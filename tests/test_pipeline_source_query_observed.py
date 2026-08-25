@@ -24,7 +24,6 @@ from storage.coverage_ledger import (
     read_collection_receipts,
 )
 from storage.sqlite_store import SqliteStore
-from storage.trusted_receipt import SignedReceiptAuthority
 
 
 def test_source_query_empty_fetch_does_not_copy_expected_or_complete(
@@ -41,16 +40,21 @@ def test_source_query_empty_fetch_does_not_copy_expected_or_complete(
         dataset_id="markets_calendar",
         params={"from": "2026-08-01", "to": "2026-08-11"},
     )
+    raw_path = tmp_path / "empty.json"
+    raw_path.write_bytes(b"[]")
+    raw_path.chmod(0o444)
+    from ingestion.runtime_authority import open_governed_receipt_service
+
     with pytest.raises(ValueError, match="zero-row SUCCESS"):
         emit_catalog_job_receipt(
             store,
             job=job,
             when="2026-08-11T00:00:00+09:00",
-            raw_bytes=b"[]",
+            raw_path=raw_path,
             rows=[],
             structured_records=[],
-            authority=SignedReceiptAuthority(
-                signing_key=receipt_ed25519_keys.signing_key
+            receipt_service=open_governed_receipt_service(
+                pem=receipt_ed25519_keys.private_pem
             ),
         )
     rows = read_collection_receipts(store.path, dataset="markets_calendar")

@@ -29,7 +29,6 @@ from .coverage_ledger import (
     refresh_coverage_ledger,
     sync_dataset_coverage_from_segments,
 )
-from .trusted_receipt import SignedReceiptAuthority, TrustedReceiptIssuer
 from .verified_receipt import (
     VerifiedCollectionClosure,
     require_verified_collection_closure,
@@ -42,8 +41,6 @@ __all__ = [
     "CollectionReceipt",
     "RequiredCoverageSegment",
     "SYNTHETIC_RECEIPT_MARKER",
-    "SignedReceiptAuthority",
-    "TrustedReceiptIssuer",
     "VerifiedCollectionClosure",
     "aggregate_status_from_segment_counts",
     "build_collection_receipt",

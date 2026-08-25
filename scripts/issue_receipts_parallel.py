@@ -34,15 +34,16 @@ ROOT = ensure_repo_root()
 from ingestion.jsda.official_index import (  # noqa: E402
     read_local_index_text as _read_index_text,
 )
-from ingestion.runtime_authority import reconcile_collection_evidence  # noqa: E402
+from ingestion.runtime_authority import (  # noqa: E402
+    open_governed_receipt_service,
+)
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
     refresh_coverage_ledger,
-    record_collection_receipt,
     record_required_segments,
     sync_dataset_coverage_from_segments,
 )
-from storage.trusted_receipt import open_signed_receipt_authority  # noqa: E402
+from storage.sqlite_store import SqliteStore  # noqa: E402
 
 _FROM_TO_RE = re.compile(
     r"from=(?P<fr>\d{4}-\d{2}-\d{2}).*?to=(?P<to>\d{4}-\d{2}-\d{2})",
@@ -193,8 +194,8 @@ def find_raw_bytes_indexed(
     segment_id: str,
     segment_start: str,
     segment_end: str,
-) -> bytes | None:
-    """Best non-empty raw file for a segment, or None."""
+) -> tuple[Path, bytes] | None:
+    """Best non-empty persisted raw artifact for a segment, or None."""
     prefix = f"{dataset}_"
     month = segment_id if len(segment_id) == 7 else segment_id[:7]
     ranked: list[tuple[int, int, Path]] = []
@@ -238,7 +239,7 @@ def find_raw_bytes_indexed(
         except OSError:
             continue
         if _is_usable_raw(raw):
-            return raw
+            return path, raw
     return None
 
 
@@ -259,6 +260,7 @@ class PreparedIssue:
     job: SegmentJob
     required: RequiredCoverageSegment
     structured: int
+    raw_path: Path
     raw: bytes
     raw_records: list[Any]
     structured_records: list[dict[str, Any]]
@@ -360,15 +362,18 @@ def prepare_one(
     if structured < min_structured:
         return PrepareResult(job=job, skip_reason=f"no_struct structured={structured}")
 
-    raw = find_raw_bytes_indexed(
+    raw_match = find_raw_bytes_indexed(
         raw_index,
         dataset=job.dataset,
         segment_id=job.segment_id,
         segment_start=job.segment_start,
         segment_end=job.segment_end,
     )
-    if raw is None:
+    if raw_match is None:
         return PrepareResult(job=job, skip_reason="no_raw")
+    raw_path, raw = raw_match
+    if raw_path.stat().st_mode & 0o222:
+        return PrepareResult(job=job, skip_reason="raw_not_immutable")
     raw_records = _raw_records(raw)
     if raw_records is None or len(raw_records) != structured:
         return PrepareResult(
@@ -398,6 +403,7 @@ def prepare_one(
         job=job,
         required=required,
         structured=structured,
+        raw_path=raw_path,
         raw=raw,
         raw_records=raw_records,
         structured_records=structured_records,
@@ -438,29 +444,30 @@ def prepare_parallel(
 
 
 def issue_prepared(
-    conn: sqlite3.Connection,
+    store: SqliteStore,
     prepared_list: Sequence[PreparedIssue],
     *,
-    authority: Any,
+    receipt_service: Any,
     start_run_id: int,
 ) -> list[dict[str, Any]]:
-    """Serial issue + DB record. Returns issued summary rows."""
+    """Serial persisted reconciliation + issue. Returns summary rows."""
+    conn = store._conn  # noqa: SLF001 - operator tool shares governed store
     issued_rows: list[dict[str, Any]] = []
     next_run = start_run_id
     for prep in prepared_list:
-        evidence = reconcile_collection_evidence(
+        record_required_segments(conn, [prep.required])
+        receipt = receipt_service.record_persisted_success(
+            store,
             required=prep.required,
             run_id=next_run,
-            raw_pages=(prep.raw,),
+            raw_artifact_paths=(prep.raw_path,),
             raw_records=prep.raw_records,
-            structured_records=prep.structured_records,
+            structured_table="jquants_records",
+            normalized_records=prep.structured_records,
             pagination_exhausted=True,
             discovery_exhausted=True,
         )
-        receipt = authority.issue(evidence)
         next_run += 1
-        record_required_segments(conn, [prep.required])
-        record_collection_receipt(conn, receipt)
         issued_rows.append(
             {
                 "dataset": prep.required.dataset,
@@ -576,15 +583,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.dry_run:
         try:
-            authority = open_signed_receipt_authority()
+            receipt_service = open_governed_receipt_service()
         except RuntimeError as exc:
             print(f"signing authority unavailable: {exc}", file=sys.stderr)
             return 2
     else:
-        authority = None
+        receipt_service = None
 
-    conn = sqlite3.connect(db)
-    conn.row_factory = sqlite3.Row
+    # A dry-run is deliberately read-only: opening ``SqliteStore`` would apply
+    # schema migrations and therefore make an operator preview mutate its input.
+    # The production path owns the governed store and its migrations.
+    store: SqliteStore | None
+    if args.dry_run:
+        store = None
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+    else:
+        store = SqliteStore(db)
+        conn = store._conn  # noqa: SLF001 - operator tool owns this store
     jobs = load_candidate_segments(
         conn,
         datasets=datasets,
@@ -596,7 +612,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not jobs:
         print("no segments found", file=sys.stderr)
-        conn.close()
+        if store is not None:
+            store.close()
+        else:
+            conn.close()
         return 1
 
     print(
@@ -641,14 +660,15 @@ def main(argv: list[str] | None = None) -> int:
     elif not ready:
         print(f"summary issued=0 skipped={skipped}")
     else:
+        assert store is not None and receipt_service is not None
         max_run = conn.execute(
             "SELECT COALESCE(MAX(run_id), 900000) FROM collection_receipts"
         ).fetchone()[0]
         start_run = int(max_run) + 1
         issued_rows = issue_prepared(
-            conn,
+            store,
             ready,
-            authority=authority,
+            receipt_service=receipt_service,
             start_run_id=start_run,
         )
         conn.commit()
@@ -699,7 +719,10 @@ def main(argv: list[str] | None = None) -> int:
     complete_after = conn.execute(
         "SELECT COUNT(*) FROM coverage_segments WHERE status='COMPLETE'"
     ).fetchone()[0]
-    conn.close()
+    if store is not None:
+        store.close()
+    else:
+        conn.close()
 
     summary = {
         "datasets": datasets,

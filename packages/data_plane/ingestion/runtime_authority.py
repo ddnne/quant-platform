@@ -1,26 +1,35 @@
 """Trusted ingestion runtime — sole holder of receipt signing keys.
 
-General library callers import storage.trusted_receipt.SignedReceiptAuthority
-but cannot obtain a signing key without runtime configuration. This module is
-the choke point for opening signing authority during governed ingestion.
+Production callers receive a :class:`GovernedReceiptService`, never the
+private-key issuer.  The service commits the structured transaction, rereads
+the exact canonical natural keys, rereads immutable raw artifacts, measures
+both sides, and only then gives opaque evidence to ``TrustedReceiptIssuer``.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from data_contracts import coverage_contract_for
-from storage.coverage_ledger import RequiredCoverageSegment
+from storage.coverage_ledger import (
+    CollectionReceipt,
+    RequiredCoverageSegment,
+    record_collection_receipt,
+)
 from storage.receipt_crypto import canonical_evidence_digest, partition_extra_digests
 from storage.trusted_receipt import (
     ReconciledCollectionEvidence,
     SignedReceiptAuthority,
     _make_reconciled_collection_evidence,
-    open_signed_receipt_authority,
+    _open_signed_receipt_authority,
 )
+
+if TYPE_CHECKING:
+    from storage.sqlite_store import SqliteStore
 
 # Run states for governed ingestion (Phase 6.2.3 §2).
 RUN_ACQUIRED = "ACQUIRED"
@@ -32,23 +41,139 @@ RUN_PARTIAL = "PARTIAL"
 RUN_FAILED = "FAILED"
 
 
-def open_ingestion_signing_authority(
+_SERVICE_SEAL = object()
+
+
+def _open_ingestion_signing_authority(
     *,
     pem: bytes | str | None = None,
     path: Path | None = None,
     key_id: str | None = None,
 ) -> SignedReceiptAuthority:
-    """Open signing authority for the current ingestion process only."""
-    return open_signed_receipt_authority(pem=pem, path=path, key_id=key_id)
+    """Private key capability; never returned to ingestion callers."""
+    return _open_signed_receipt_authority(pem=pem, path=path, key_id=key_id)
+
+
+@dataclass(frozen=True)
+class GovernedReceiptService:
+    """Positive capability for DB/raw reconciliation and receipt persistence."""
+
+    _seal: object
+    _issuer: SignedReceiptAuthority
+
+    def __post_init__(self) -> None:
+        if self._seal is not _SERVICE_SEAL:
+            raise TypeError("GovernedReceiptService must be opened by ingestion runtime")
+
+    def record_persisted_success(
+        self,
+        store: SqliteStore,
+        *,
+        required: RequiredCoverageSegment,
+        run_id: int,
+        raw_artifact_paths: Sequence[Path | str],
+        raw_records: Sequence[Any],
+        structured_table: str,
+        normalized_records: Sequence[Mapping[str, Any]],
+        pagination_exhausted: bool,
+        discovery_exhausted: bool | None = None,
+        checked_at: str | None = None,
+        source_request: Mapping[str, Any] | None = None,
+        extra_evidence: Mapping[str, Any] | None = None,
+    ) -> CollectionReceipt:
+        """Commit, independently remeasure persisted state, sign, and record.
+
+        Counts, digests, and exhaustion claims are never parameters.  Raw
+        bytes come from read-only persisted artifacts and structured payloads
+        come from an exact natural-key re-read after the fact transaction has
+        committed.  A signing or reconciliation failure leaves facts present
+        but cannot create COMPLETE-eligible evidence.
+        """
+        from storage.sqlite_store import SqliteStore
+
+        if not isinstance(store, SqliteStore):
+            raise TypeError("governed receipt service requires SqliteStore")
+        if not isinstance(required, RequiredCoverageSegment):
+            raise TypeError("required must be RequiredCoverageSegment")
+
+        candidates = tuple(Path(path).expanduser() for path in raw_artifact_paths)
+        if not candidates:
+            raise ValueError("persisted raw artifact path is required")
+        if any(path.is_symlink() for path in candidates):
+            raise ValueError("raw evidence symlinks are not trusted")
+        paths = tuple(path.resolve() for path in candidates)
+        for path in paths:
+            if not path.is_file():
+                raise ValueError(f"raw evidence must be a regular persisted file: {path}")
+            if path.stat().st_mode & 0o222:
+                raise ValueError(f"raw evidence artifact is writable: {path}")
+
+        # The fact mutation becomes externally visible before it can be
+        # claimed. A subsequent failure is PARTIAL evidence, never COMPLETE.
+        store._conn.commit()  # noqa: SLF001 - service owns this transaction boundary
+        raw_pages = tuple(path.read_bytes() for path in paths)
+        structured_rows = store.fetch_exact_by_natural_keys(
+            structured_table, normalized_records
+        )
+        for row in structured_rows:
+            if str(row.get("source") or "") != required.source:
+                raise ValueError("structured source differs from required segment")
+            if "dataset" in row and str(row.get("dataset") or "") != required.dataset:
+                raise ValueError("structured dataset differs from required segment")
+            if "segment_id" in row and str(row.get("segment_id") or "") != required.segment_id:
+                raise ValueError("structured row escaped the exact required segment")
+
+        evidence = reconcile_collection_evidence(
+            required=required,
+            run_id=run_id,
+            raw_pages=raw_pages,
+            raw_records=raw_records,
+            structured_records=structured_rows,
+            pagination_exhausted=pagination_exhausted,
+            discovery_exhausted=discovery_exhausted,
+            checked_at=checked_at,
+            source_request=source_request,
+            extra_evidence=extra_evidence,
+        )
+        receipt = self._issuer.issue(evidence)
+        try:
+            record_collection_receipt(store._conn, receipt)  # noqa: SLF001
+            store._conn.commit()  # noqa: SLF001
+        except Exception:
+            store._conn.rollback()  # noqa: SLF001
+            raise
+        return receipt
+
+
+def open_governed_receipt_service(
+    *,
+    pem: bytes | str | None = None,
+    path: Path | None = None,
+    key_id: str | None = None,
+) -> GovernedReceiptService:
+    """Open the only production capability that can persist signed SUCCESS."""
+    return GovernedReceiptService(
+        _seal=_SERVICE_SEAL,
+        _issuer=_open_ingestion_signing_authority(
+            pem=pem,
+            path=path,
+            key_id=key_id,
+        ),
+    )
 
 
 def _digest(payload: Any) -> str:
     return canonical_evidence_digest(payload)
 
 
-def _json_record_count(raw_pages: Sequence[bytes]) -> int | None:
-    """Return the measured JSON record count, or None for non-JSON artifacts."""
-    measured = 0
+def _json_records_from_pages(raw_pages: Sequence[bytes]) -> tuple[Any, ...] | None:
+    """Return records decoded from JSON artifacts, or ``None`` for binary raw.
+
+    Returning the records rather than only a count prevents a caller from
+    substituting same-sized parsed content while asking the runtime to sign
+    the genuine raw artifact digest.
+    """
+    measured: list[Any] = []
     saw_json = False
     for raw in raw_pages:
         try:
@@ -57,7 +182,7 @@ def _json_record_count(raw_pages: Sequence[bytes]) -> int | None:
             continue
         saw_json = True
         if isinstance(payload, list):
-            measured += len(payload)
+            measured.extend(payload)
             continue
         if isinstance(payload, dict):
             rows = next(
@@ -68,8 +193,8 @@ def _json_record_count(raw_pages: Sequence[bytes]) -> int | None:
                 ),
                 None,
             )
-            measured += len(rows or ())
-    return measured if saw_json else None
+            measured.extend(rows or ())
+    return tuple(measured) if saw_json else None
 
 
 def reconcile_collection_evidence(
@@ -99,10 +224,12 @@ def reconcile_collection_evidence(
         raise ValueError("reconciled SUCCESS requires non-empty raw pages")
     raw_rows = tuple(raw_records)
     structured_rows = tuple(dict(row) for row in structured_records)
-    measured_json = _json_record_count(pages)
-    if measured_json is not None and measured_json != len(raw_rows):
+    measured_json = _json_records_from_pages(pages)
+    if measured_json is not None and _digest(list(measured_json)) != _digest(
+        list(raw_rows)
+    ):
         raise ValueError(
-            "raw_records do not match records measured from the raw JSON envelope"
+            "raw_records do not match content measured from the raw JSON envelope"
         )
 
     extras = partition_extra_digests(extra_evidence)
@@ -210,6 +337,7 @@ __all__ = [
     "RUN_RAW_STORED",
     "RUN_RECEIPT_VERIFIED",
     "RUN_STRUCTURED_COMMITTED",
-    "open_ingestion_signing_authority",
+    "GovernedReceiptService",
+    "open_governed_receipt_service",
     "reconcile_collection_evidence",
 ]

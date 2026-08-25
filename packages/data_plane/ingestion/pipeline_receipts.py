@@ -12,7 +12,7 @@ from typing import Any
 
 from .jquants.receipts import (
     emit_segment_receipt,
-    require_signed_receipt_authority,
+    require_governed_receipt_service,
 )
 
 
@@ -115,10 +115,10 @@ def emit_catalog_job_receipt(
     *,
     job: Any,
     when: str,
-    raw_bytes: bytes,
+    raw_path,
     rows: list,
     structured_records: list[dict[str, Any]],
-    authority,
+    receipt_service,
 ) -> None:
     """Record required segments and a signed SUCCESS receipt for one catalog job.
 
@@ -185,12 +185,13 @@ def emit_catalog_job_receipt(
         ).fetchone()
         run_id = int(run_id_row[0]) if run_id_row else 0
         emit_segment_receipt(
-            store._conn,
+            store,
             required=req,
             run_id=run_id,
-            raw_pages=(raw_bytes,),
+            raw_artifact_paths=(raw_path,),
             raw_records=rows,
-            structured_records=structured_records,
+            structured_table="jquants_records",
+            normalized_records=structured_records,
             pagination_exhausted=True,
             discovery_exhausted=True,
             source_request={
@@ -198,10 +199,8 @@ def emit_catalog_job_receipt(
                 "params": params,
                 "target_end": target_end,
             },
-            authority=authority,
-            commit=False,
+            service=receipt_service,
         )
-        commit_governed_catalog_receipt(store)
 
 
 __all__ = [
@@ -211,6 +210,6 @@ __all__ = [
     "count_raw_items",
     "emit_catalog_job_receipt",
     "observed_items_from_actual",
-    "require_signed_receipt_authority",
+    "require_governed_receipt_service",
     "rollback_governed_catalog_write",
 ]

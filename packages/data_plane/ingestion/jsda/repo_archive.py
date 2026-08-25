@@ -24,7 +24,7 @@ from ..pipeline import Registrar, RunReport, _stamped, save_raw
 from .fetch import JsdaFetcher
 from .normalize import normalize_repo_rates
 from .parse import parse_repo_csv, parse_repo_xls, parse_repo_xlsx
-from .receipts import record_governed_receipt, require_jsda_receipt_authority
+from .receipts import record_governed_receipt, require_jsda_receipt_service
 from .urls import (
     TOKYO_REPO_DATASET,
     TOKYO_REPO_JSDA_START,
@@ -201,10 +201,11 @@ def _record(
     structured_row_count: int | None = None,
     pagination_exhausted: bool,
     digests: Mapping[str, Any],
-    authority=None,
-    raw_pages: Sequence[bytes] = (),
+    receipt_service=None,
+    raw_artifact_paths: Sequence[Path | str] = (),
     raw_records: Sequence[Any] = (),
-    structured_records: Sequence[Mapping[str, Any]] = (),
+    structured_table: str = "",
+    normalized_records: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     record_governed_receipt(
         store,
@@ -219,10 +220,11 @@ def _record(
         structured_row_count=structured_row_count,
         pagination_exhausted=pagination_exhausted,
         digests=digests,
-        authority=authority,
-        raw_pages=raw_pages,
+        receipt_service=receipt_service,
+        raw_artifact_paths=raw_artifact_paths,
         raw_records=raw_records,
-        structured_records=structured_records,
+        structured_table=structured_table,
+        normalized_records=normalized_records,
     )
 
 
@@ -285,12 +287,12 @@ def run_tokyo_repo_backfill(
     fetcher = JsdaFetcher(http)
     registrar = Registrar(store)
     run_id = _start_run(store, checked_at)
-    authority = None
+    receipt_service = None
     authority_error: Optional[str] = None
 
     try:
         try:
-            authority = require_jsda_receipt_authority()
+            receipt_service = require_jsda_receipt_service()
         except RuntimeError as exc:
             authority_error = str(exc)
         index_url = repo_index_url()
@@ -380,13 +382,15 @@ def run_tokyo_repo_backfill(
                     all_records, discovery.latest_publication_date
                 )
                 parsed_rows = len(governed)
-                if authority is None:
+                if receipt_service is None:
                     raise RuntimeError(
                         authority_error
                         or "receipt signing key not configured"
                     )
                 rows = normalize_repo_rates(governed, ingested_at=checked_at)
-                structured_rows = registrar.register("jsda_repo_rates", rows)
+                structured_rows = registrar.register(
+                    "jsda_repo_rates", rows, commit=False
+                )
                 _record(
                     store,
                     required=required,
@@ -402,10 +406,11 @@ def run_tokyo_repo_backfill(
                         "fetched_at": checked_at,
                         "source_parsed_rows": source_parsed_rows,
                     },
-                    authority=authority,
-                    raw_pages=(raw_bytes,),
+                    receipt_service=receipt_service,
+                    raw_artifact_paths=(raw_path,),
                     raw_records=governed,
-                    structured_records=rows,
+                    structured_table="jsda_repo_rates",
+                    normalized_records=rows,
                 )
                 report = TokyoRepoBackfillReport(
                     run_id, 1, 0, 0, 0, parsed_rows, structured_rows, required
@@ -434,7 +439,6 @@ def run_tokyo_repo_backfill(
                             "DEFERRED_SOURCE_GAP" if deferred else "COLLECTION_FAILURE"
                         ),
                     },
-                    raw_pages=(raw_bytes,) if raw_bytes else (),
                 )
                 report = TokyoRepoBackfillReport(
                     run_id, 0, 0, int(deferred), int(not deferred),

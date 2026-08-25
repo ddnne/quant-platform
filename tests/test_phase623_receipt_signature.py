@@ -50,9 +50,8 @@ def test_storage_package_hides_synthetic() -> None:
     import storage
 
     assert not hasattr(storage, "build_synthetic_complete_receipt")
-    assert hasattr(storage, "SignedReceiptAuthority") or hasattr(
-        storage, "TrustedReceiptIssuer"
-    )
+    assert not hasattr(storage, "SignedReceiptAuthority")
+    assert not hasattr(storage, "TrustedReceiptIssuer")
 
 
 def test_reconciled_evidence_constructor_and_replace_are_not_capabilities(

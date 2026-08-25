@@ -26,15 +26,16 @@ ROOT = ensure_repo_root()
 from ingestion.jsda.official_index import (  # noqa: E402
     read_local_index_text as _read_index_text,
 )
-from ingestion.runtime_authority import reconcile_collection_evidence  # noqa: E402
+from ingestion.runtime_authority import (  # noqa: E402
+    open_governed_receipt_service,
+)
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
     refresh_coverage_ledger,
-    record_collection_receipt,
     record_required_segments,
     sync_dataset_coverage_from_segments,
 )
-from storage.trusted_receipt import open_signed_receipt_authority  # noqa: E402
+from storage.sqlite_store import SqliteStore  # noqa: E402
 
 _FROM_TO_RE = re.compile(
     r"from=(?P<fr>\d{4}-\d{2}-\d{2}).*?to=(?P<to>\d{4}-\d{2}-\d{2})",
@@ -162,15 +163,15 @@ def _refresh_issued_coverage(
     )
 
 
-def _find_raw_bytes(
+def _find_raw_artifact(
     data_dir: Path,
     dataset: str,
     segment_id: str,
     *,
     segment_start: str,
     segment_end: str,
-) -> bytes | None:
-    """Locate raw JSON whose filename/path is consistent with the segment window."""
+) -> tuple[Path, bytes] | None:
+    """Locate persisted raw JSON consistent with the segment window."""
     base = data_dir / "raw" / "jquants"
     if not base.is_dir():
         return None
@@ -228,7 +229,7 @@ def _find_raw_bytes(
         except OSError:
             continue
         if _is_usable_raw(raw):
-            return raw
+            return path, raw
     return None
 
 
@@ -245,13 +246,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"db missing: {db}", file=sys.stderr)
         return 2
     try:
-        authority = open_signed_receipt_authority()
+        receipt_service = open_governed_receipt_service()
     except RuntimeError as exc:
         print(f"signing authority unavailable: {exc}", file=sys.stderr)
         return 2
 
-    conn = sqlite3.connect(db)
-    conn.row_factory = sqlite3.Row
+    store = SqliteStore(db)
+    conn = store._conn  # noqa: SLF001 - operator tool owns this store
     dataset_list = [d.strip() for d in args.datasets.split(",") if d.strip()]
     if not dataset_list:
         dataset_list = [args.dataset]
@@ -316,16 +317,21 @@ def main(argv: list[str] | None = None) -> int:
                 f"skip {required.segment_id}: structured={structured} < {args.min_structured}"
             )
             continue
-        raw = _find_raw_bytes(
+        raw_match = _find_raw_artifact(
             Path(args.data_dir),
             required.dataset,
             required.segment_id,
             segment_start=required.segment_start,
             segment_end=required.segment_end,
         )
-        if raw is None:
+        if raw_match is None:
             skipped["no_raw"] += 1
             print(f"skip {required.segment_id}: no raw bytes for window")
+            continue
+        raw_path, raw = raw_match
+        if raw_path.stat().st_mode & 0o222:
+            skipped["unreconciled"] += 1
+            print(f"skip {required.segment_id}: raw artifact is not immutable")
             continue
         raw_records = _raw_records(raw)
         if raw_records is None or len(raw_records) != structured:
@@ -335,19 +341,19 @@ def main(argv: list[str] | None = None) -> int:
                 f"evidence does not reconcile"
             )
             continue
-        evidence = reconcile_collection_evidence(
+        record_required_segments(conn, [required])
+        receipt = receipt_service.record_persisted_success(
+            store,
             required=required,
             run_id=next_run,
-            raw_pages=(raw,),
+            raw_artifact_paths=(raw_path,),
             raw_records=raw_records,
-            structured_records=structured_records,
+            structured_table="jquants_records",
+            normalized_records=structured_records,
             pagination_exhausted=True,
             discovery_exhausted=True,
         )
-        receipt = authority.issue(evidence)
         next_run += 1
-        record_required_segments(conn, [required])
-        record_collection_receipt(conn, receipt)
         issued += 1
         issued_datasets.add(required.dataset)
         print(
@@ -396,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
             )
     else:
         print("no receipts issued")
-    conn.close()
+    store.close()
     return 0 if issued else 1
 
 if __name__ == "__main__":

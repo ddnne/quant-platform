@@ -34,14 +34,15 @@ from ingestion.jsda.official_index import (  # noqa: E402
     read_local_index_text as _read_index_text,
 )
 from ingestion.jsda.parse import parse_otc_reference_csv, parse_otc_reference_xlsx  # noqa: E402
-from ingestion.runtime_authority import reconcile_collection_evidence  # noqa: E402
+from ingestion.runtime_authority import (  # noqa: E402
+    open_governed_receipt_service,
+)
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
-    record_collection_receipt,
     record_required_segments,
     refresh_coverage_ledger,
 )
-from storage.trusted_receipt import open_signed_receipt_authority  # noqa: E402
+from storage.sqlite_store import SqliteStore  # noqa: E402
 
 RAW_ROOT = ROOT / "data" / "raw" / "jsda" / "jsda_otc_bond_reference_prices"
 DB = ROOT / "data" / "structured" / "ingestion.sqlite"
@@ -306,7 +307,7 @@ def restore_triggers(conn: sqlite3.Connection) -> None:
 
 
 def bulk_insert_day(conn: sqlite3.Connection, day: str, rows: list[dict]) -> int:
-    """Replace the day's jsda facts, then bulk INSERT. Triggers must be off."""
+    """Replace one day inside the governed transaction. Triggers must be off."""
     exists = conn.execute(
         "SELECT 1 FROM jsda_otc_bond_reference_prices "
         "WHERE source='jsda' AND publication_label_date=? LIMIT 1",
@@ -325,12 +326,12 @@ def bulk_insert_day(conn: sqlite3.Connection, day: str, rows: list[dict]) -> int
         f"INSERT INTO jsda_otc_bond_reference_prices ({colsql}) VALUES ({placeholders})",
         [tuple(r.get(c) for c in cols) for r in rows],
     )
-    conn.commit()
     return len(rows)
 
 
-def seal_day(conn, day, path, source_url, issuer):
+def seal_day(store, day, path, source_url, receipt_service):
     t0 = time.time()
+    conn = None if store is None else store._conn  # noqa: SLF001
     raw, parsed, fmt = parse_raw(path, day)
     if len(raw) <= FULL_OK_MIN:
         return {"segment_id": day, "status": "NOT_FULL_OK_SIZE", "size": len(raw)}
@@ -353,6 +354,9 @@ def seal_day(conn, day, path, source_url, issuer):
             "raw": len(parsed),
             "digest": digest,
         }
+    if path.is_symlink():
+        return {"segment_id": day, "status": "RAW_SYMLINK_REJECTED"}
+    path.chmod(0o444)
     now = datetime.now(timezone.utc).isoformat()
     rows = normalize_otc_reference_prices(
         parsed,
@@ -403,12 +407,14 @@ def seal_day(conn, day, path, source_url, issuer):
         expected_items=1,
     )
     record_required_segments(conn, [required])
-    evidence = reconcile_collection_evidence(
+    receipt_service.record_persisted_success(
+        store,
         required=required,
         run_id=run_id,
-        raw_pages=(raw,),
+        raw_artifact_paths=(path,),
         raw_records=parsed,
-        structured_records=rows,
+        structured_table="jsda_otc_bond_reference_prices",
+        normalized_records=rows,
         pagination_exhausted=True,
         discovery_exhausted=True,
         checked_at=now,
@@ -427,9 +433,6 @@ def seal_day(conn, day, path, source_url, issuer):
             "opt": "triggers_off_bulk",
         },
     )
-    receipt = issuer.issue(evidence)
-    record_collection_receipt(conn, receipt)
-    conn.commit()
     return {
         "dataset": OTC_DATASET,
         "segment_id": day,
@@ -481,7 +484,8 @@ def main(argv: list[str] | None = None) -> int:
         f"span={ITEMS[0]['day'] if ITEMS else None}..{ITEMS[-1]['day'] if ITEMS else None}",
         flush=True,
     )
-    conn = sqlite3.connect(DB, timeout=600)
+    store = SqliteStore(DB)
+    conn = store._conn  # noqa: SLF001
     conn.execute("PRAGMA busy_timeout=600000")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
@@ -497,7 +501,7 @@ def main(argv: list[str] | None = None) -> int:
     print("drop snapshot triggers...", flush=True)
     drop_triggers(conn)
 
-    issuer = open_signed_receipt_authority()
+    receipt_service = open_governed_receipt_service()
     results = []
     sealed_n = 0
     t_all = time.time()
@@ -520,7 +524,7 @@ def main(argv: list[str] | None = None) -> int:
                 results.append({"segment_id": day, "status": "RAW_MISS", "code": code})
                 print(results[-1], flush=True)
                 continue
-            r = seal_day(conn, day, path, url, issuer)
+            r = seal_day(store, day, path, url, receipt_service)
             results.append(r)
             if r.get("status") == "SEALED":
                 sealed_n += 1
@@ -550,6 +554,7 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps({"results": results, "sealed_n": sealed_n}, indent=2, default=str)
         )
         print("PARTIAL_SEAL_DONE", sealed_n, flush=True)
+        store.close()
         return 0
     print("refresh_coverage_ledger (OTC)...", flush=True)
     t_ref = time.time()
@@ -623,7 +628,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     print("sealed_n", len(sealed), "COMPLETE", pre, "->", len(post_ids), "span", summary["complete_span"])
-    conn.close()
+    store.close()
     return 0
 
 
