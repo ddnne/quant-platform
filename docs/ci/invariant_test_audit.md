@@ -29,8 +29,12 @@ not release authorities.
 - Removed repeated AST/import/comment/function-name assertions where public
   behavior, closed schemas, capabilities, runtime bindings, or OS sandbox tests
   already enforce the boundary.
-- Replaced R2 implementation-source assertions with calls through the public
-  adapter and an observed pinned `wrangler r2 object get --remote` command.
+- Removed `tests/test_research_default_r2_put_callers.py`, whose glob and
+  implementation-string assertions duplicated the stronger R2 boundary.
+  Acceptance now calls the public adapter: Python remote writes fail closed,
+  local dry runs only stage bytes, and immutable remote writes use the Worker
+  children-then-manifest operation. Read acceptance observes the pinned
+  `wrangler r2 object get --remote` invocation.
 - Replaced the runner's `inspect.getsource`/string check for `shell=False` with
   an intercepted invocation that asserts the actual subprocess contract.
 - Removed the JSDA recovery sealer's function-name/import spelling assertions;
