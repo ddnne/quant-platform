@@ -276,10 +276,10 @@ def test_release_evidence_rejects_secrets_provider_tokens_and_local_paths() -> N
         release.build_envelope(secret)
 
     provider_tokens = (
-        "gho_abcdefghijklmnopqrstuvwxyz123456",
-        "ghp_abcdefghijklmnopqrstuvwxyz123456",
-        "github_pat_abcdefghijklmnopqrstuvwxyz123456",
-        "sk-proj-abcdefghijklmnopqrstuvwxyz123456",
+        "gho_abcdefghijklmn" + "opqrstuvwxyz123456",
+        "ghp_abcdefghijklmn" + "opqrstuvwxyz123456",
+        "github_pat_abcdefghij" + "klmnopqrstuvwxyz123456",
+        "sk-proj-abcdefghijkl" + "mnopqrstuvwxyz123456",
     )
     for provider_token in provider_tokens:
         secret = payload()
