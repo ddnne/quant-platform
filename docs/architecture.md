@@ -39,23 +39,42 @@ and packaging policy.
   唯一の読み出し経路（sole read path for facts）** であり、look-ahead を構造で防ぐ。
   詳細は [pit_api.md](pit_api.md) を参照。
 
-## Coverage V2 と READY
+## Coverage V3、Trusted Receipt、READY
 
-> **Not live SoT.** Live MCP projection is **STALE** last-known-good under stored `policy_version`.  
-> Planner on `grok/phase63-ci-source-closure` is **V3-wired** for master / AM / earnings / OTC index.  
-> This section is historical Phase 6.1 contract language. READY is **null**. Do not treat 22 COMPLETE as live V3.
+> **Not live SoT.** The live MCP projection remains the last observed generation
+> recorded in [phase62_residual_status.md](phase62_residual_status.md). A code
+> contract or a green test does not upgrade that live generation and does not
+> create READY.
 
 `observed_start` / `observed_end` は診断値であり、完全性の証明ではない。
-Coverage V2 はデータセットごとに独立した必須 segment inventory と collection receipt を持つ。
-receipt は期待 scope/件数、raw page/row、structured row、pagination exhausted、digest、run、
-error を記録し、各 segment を個別に評価する。
+Coverage はデータセットごとの SourceCapability と有効な policy
+id/version/digest から required domain を導出する。AM、Earnings Calendar、
+Master、JSDA OTC のV3 domain correctionは、旧V2の偽gapを空COMPLETEで埋めない。
+
+COMPLETEに使えるreceiptは、governed ingestion transactionが次の順で生成した
+`TRUSTED_COLLECTION`だけである。
+
+`source fetch → immutable raw persist → canonical parse/normalize → structured
+write → exact segment natural-key reread → pagination/discovery exhaustion →
+Ed25519 receipt → transaction commit`
+
+件数、digest、pagination状態、期待empty、table/parser、取得時刻をcallerから
+受け取って署名してはならない。after-the-fact recovery CLIは
+`RECOVERED_RAW_ONLY`またはFAILEDを記録できるだけで、COMPLETEを発行しない。
+receipt claims/parser versionが現行trusted pathと一致しない旧署名は監査履歴に
+残るが、COMPLETE eligibilityを持たない。
 
 - trading-day / calendar / periodic は契約が要求する日・期間・universe の全 segment を必要とする。
-- event-driven は対象 window の query 成功、pagination 完走、raw 保持、structured reconcile を要求する。
-  この証明が揃えば 0 event でも COMPLETE だが、古い 1 行だけでは COMPLETE にならない。
+- event-driven は対象windowのquery集合、pagination完走、raw保持、structured
+  reconcileを要求する。zero-eventを許す場合もcaller flagではなく契約とtrusted
+  acquisition evidenceからissuerが導出する。
 - dataset は全 required segment が COMPLETE のときだけ COMPLETE になる。途中の欠落は PARTIAL。
-- READY publication は governed dataset 全件について Coverage V2 proof を再検証し、proof digest を
-  immutable manifest と content address に含める。
+- READY publication はgeneric/global publisherを持たない。canonical exact-fourの
+  ExperimentPlan → StrategySpec/FeatureRef → PlanDependencyClosure →
+  ResearchDataProfileで必要なdatasetだけを解決し、signed Ops projectionの
+  per-dataset policy proof、B0/B4、source/export/applied cursorを再検証する。
+- PilotとMassは別のnominal capabilityである。Pilot READYはMass schedulerへ渡せず、
+  Mass READY mint/schedulerはPhase 6.3.1でhard-disabledのまま。
 
 Mutable staging DB は研究入力ではない。研究は content-addressed READY SQLite generation を
 `mode=ro&immutable=1` で PIT API から読む。この Phase 6 の境界は変更しない。
@@ -71,7 +90,7 @@ read domain は明示的に 2 plane に分離する。
 
 ブラウザ ChatGPT / mobile の人向け標準経路は OAuth/Cloudflare Access で保護した
 Streamable HTTP MCP である。`mcp_servers.quant_data` の stdio は offline test と local development
-専用であり、本番の接続方式ではない。Remote Ops は domain-level の 12 read tool のみを公開し、
+専用であり、本番の接続方式ではない。Remote Ops は schema-digest固定済みの17 read toolのみを公開し、
 SQL、D1/R2 handle、secret、shell、任意 URL fetch、ingest/delete/publish、feature approve、broker
 を公開しない。詳細は [quant_data_access.md](quant_data_access.md) と
 [`quant-ops-mcp` README](../platform/workers/quant-ops-mcp/README.md) を参照。

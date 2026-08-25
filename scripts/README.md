@@ -21,6 +21,14 @@ only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual 
 Phase 6 hardening utilities:
 
 - `ops_status.py --json` — offline READY snapshot, coverage, B0 and validation status.
+- `encrypt_d1_backup.py` — encrypt a fresh D1 SQL export with AES-256-GCM,
+  verify it by streaming decryption, and optionally remove only that verified
+  plaintext export. The raw 32-byte key stays outside the repository with
+  mode `0600`; the command never prints it.
+- `build_release_evidence.py` — validate observed post-deploy facts and emit a
+  content-addressed, read-only, non-secret JSON manifest suitable for a GitHub
+  Release. Local absolute paths, secret-shaped fields, unencrypted backup
+  references, and Mass `GO` are rejected.
 - Paper CLIs (`run_paper_once.py`, `run_agents_paper_once.py`, `rebuild_paper_index.py`) are **deleted**. Paper runtime stays in `packages/research_runtime/paper_runtime/`.
 - `python -m mcp_servers.quant_data --list-tools` — Quant Data Access MCP smoke.
 - `export_ops_projection.py` — verified local Coverage/READY/B0 metadataを bounded
@@ -46,13 +54,17 @@ See [`docs/architecture/adr_research_recording.md`](../docs/architecture/adr_res
 and [`docs/architecture/wave_assets_deprecated.md`](../docs/architecture/wave_assets_deprecated.md).
 Guard: `tests/test_wave_script_freeze.py`.
 
-Official OTC archive backfill (not wave-named):
+Official OTC archive recovery (not a COMPLETE issuer):
 
 ```bash
 uv run python scripts/jsda_otc_official_backfill.py --year 2003 --n 100 --log-dir data/ops/otc_official_backfill --fetch
 uv run python scripts/jsda_otc_seal_official.py --log-dir data/ops/otc_official_backfill
-uv run python scripts/publish_ops_projection.py --apply-remote
 ```
+
+The second command records `FAILED/REPROOF_REQUIRED` plus
+`RECOVERED_RAW_ONLY`. It deliberately does not mutate structured facts, sign a
+trusted receipt, refresh COMPLETE, or publish an Ops projection. Reprocess the
+persisted raw through the governed acquisition/reconciliation service instead.
 
 ## run_ingestion_once.py（Phase 1）
 
