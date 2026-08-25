@@ -607,11 +607,11 @@ class ControlledPilotExecutionService:
     def __init__(
         self,
         *,
-        verifier: Any,
         paper_store: JsonPaperStore | None = None,
     ) -> None:
         from research.readiness import ReadinessPublicKeyRegistry
 
+        verifier = ReadinessPublicKeyRegistry.load_pinned()
         if not isinstance(verifier, ReadinessPublicKeyRegistry):
             raise PaperExecutionRejected(
                 "controlled pilot requires a public-key-only readiness verifier"
@@ -685,12 +685,9 @@ class ControlledPilotExecutionService:
         )
         manifest_digest = ready_manifest.to_dict()["manifest_digest"]
         artifact = config.snapshot.verify()
-        if (
-            experiment_plan.ready_snapshot_id != ready_manifest.snapshot_id
-            or config.snapshot.snapshot_id != ready_manifest.snapshot_id
-        ):
+        if config.snapshot.snapshot_id != ready_manifest.snapshot_id:
             raise PaperExecutionRejected(
-                "ExperimentPlan/ReadyManifest/immutable snapshot id mismatch"
+                "ReadyManifest/immutable snapshot id mismatch"
             )
         if ready_manifest.plan_set_digest != plan_set_binding.plan_set_digest:
             raise PaperExecutionRejected("ReadyManifest plan-set digest mismatch")

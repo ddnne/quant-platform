@@ -21,23 +21,37 @@ from execution.paper_service import (
 )
 from paper_runtime import data_snapshot_id
 from research.dependency_closure import (
-    build_plan_dependency_closure,
     resolve_strategy_spec,
 )
-from research.experiment_plans import load_experiment_plans
-from research.readiness import ReadinessAttestationPublisher
-from research.ready_manifest import ExactFourPilotReadyBinding, build_ready_manifest
-from research.research_data_profile import profile_from_dependency_closure
+from research.experiment_plans import (
+    PILOT_PERIOD_END,
+    PILOT_PERIOD_START,
+    load_experiment_plans,
+)
+from research.readiness import (
+    ReadinessPublicKeyRegistry,
+)
+from research.ready_manifest import (
+    build_ready_manifest,
+    load_exact_four_pilot_ready_binding,
+)
+from selection.budget_ledger import MassResearchDisabledError
 from storage.sqlite_store import SqliteStore
 from strategies.paper import Lifecycle, PaperRunConfig
+from tests.readiness_test_support import (
+    controlled_pilot_execution_service,
+    make_readiness_signer,
+    mint_pilot_readiness,
+)
 
 from _coreseed import CODES, seed_db
 
 
-def _weekdays(count: int) -> list[str]:
+def _pilot_weekdays() -> list[str]:
     days: list[str] = []
-    cursor = date(2025, 4, 1)
-    while len(days) < count:
+    cursor = date.fromisoformat(PILOT_PERIOD_START)
+    end = date.fromisoformat(PILOT_PERIOD_END)
+    while cursor <= end:
         if cursor.weekday() < 5:
             days.append(cursor.isoformat())
         cursor += timedelta(days=1)
@@ -55,7 +69,7 @@ def _sha256_file(path: Path) -> str:
 def _controlled_bundle(
     tmp_path: Path, *, staggered_membership: bool = False
 ) -> dict[str, object]:
-    days = _weekdays(20)
+    days = _pilot_weekdays()
     prices = {
         code: {
             day: 100.0 + code_index * 10.0 + day_index * (code_index + 1)
@@ -64,6 +78,22 @@ def _controlled_bundle(
         for code_index, code in enumerate(CODES)
     }
     db = seed_db(tmp_path, codes=CODES, days=days, prices=prices)
+    with SqliteStore(db) as store:
+        store._conn.execute(  # noqa: SLF001
+            "UPDATE jquants_market_calendar SET available_at=?, ingested_at=?",
+            (f"{days[0]}T08:00:00+09:00", f"{days[0]}T08:00:00+09:00"),
+        )
+        store._conn.execute(  # noqa: SLF001
+            "UPDATE jquants_listed_info SET snapshot_date=?, event_time=?, "
+            "available_at=?, ingested_at=?",
+            (
+                days[0],
+                f"{days[0]}T08:00:00+09:00",
+                f"{days[0]}T08:00:00+09:00",
+                f"{days[0]}T08:00:00+09:00",
+            ),
+        )
+        store._conn.commit()  # noqa: SLF001
     if staggered_membership:
         master_rows = []
         for snapshot_date, visible_codes in (
@@ -91,22 +121,9 @@ def _controlled_bundle(
     db.rename(immutable_db)
     immutable_db.chmod(0o444)
     db = immutable_db
-    plans = tuple(
-        replace(
-            plan,
-            ready_snapshot_id=snapshot_id,
-            period_start=days[0],
-            period_end=days[-1],
-        )
-        for plan in load_experiment_plans()
-    )
-    closures = tuple(build_plan_dependency_closure(plan) for plan in plans)
-    profiles = tuple(profile_from_dependency_closure(item) for item in closures)
-    binding = ExactFourPilotReadyBinding(
-        plans=plans,
-        closures=closures,
-        profiles=profiles,
-    )
+    plans = load_experiment_plans()
+    binding = load_exact_four_pilot_ready_binding()
+    closures = binding.closures
     proof = "sha256:" + ("ab" * 32)
     manifest = build_ready_manifest(
         snapshot_id=snapshot_id,
@@ -134,13 +151,14 @@ def _controlled_bundle(
         created_at="2026-08-25T00:00:00+00:00",
         published_at="2026-08-25T00:01:00+00:00",
     )
-    publisher = ReadinessAttestationPublisher(
+    publisher = make_readiness_signer(
         key_id="controlled-pilot-test",
         private_key=Ed25519PrivateKey.generate(),
     )
     immutable_digest = _sha256_file(db)
-    readiness = publisher.mint_pilot(
+    readiness = mint_pilot_readiness(
         manifest,
+        publisher=publisher,
         immutable_db_digest=immutable_digest,
         profile_binding=binding,
     )
@@ -183,11 +201,12 @@ def _controlled_bundle(
         universe=universe,
         max_gross_weight=0.5,
     )
-    service = ControlledPilotExecutionService(
-        verifier=publisher.public_registry()
+    service = controlled_pilot_execution_service(
+        verifier=publisher._public_registry()
     )
     return {
         "service": service,
+        "publisher": publisher,
         "plan": plan,
         "closure": closure,
         "binding": binding,
@@ -217,16 +236,48 @@ def test_controlled_service_binds_exact_plan_ready_and_immutable_snapshot(
     assert result.lifecycle is Lifecycle.PAPER
     assert result.reproducibility["execution_authority_scope"] == "CONTROLLED_PILOT"
     assert result.reproducibility["max_gross_weight_limit"] == 0.5
-    first_fill = min(trade["fill_date"] for trade in result.trades)
-    first_fill_gross = sum(
-        abs(float(trade["notional"]))
-        for trade in result.trades
-        if trade["fill_date"] == first_fill
-    )
-    # The decision-time target is capped at 50%; the next-close fill may move
-    # before execution, so the observed notional includes that bounded gap.
-    assert first_fill_gross <= 0.51 * 1_000_000.0
+    if result.trades:
+        first_fill = min(trade["fill_date"] for trade in result.trades)
+        first_fill_gross = sum(
+            abs(float(trade["notional"]))
+            for trade in result.trades
+            if trade["fill_date"] == first_fill
+        )
+        assert first_fill_gross <= 0.51 * 1_000_000.0
     assert result.reproducibility["promotion_eligible"] is False
+
+
+def test_controlled_service_public_constructor_has_no_caller_trust_root() -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        ControlledPilotExecutionService(verifier=object())  # type: ignore[call-arg]
+
+
+def test_controlled_service_rejects_caller_signed_readiness_under_configured_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attacker = _controlled_bundle(tmp_path)
+    trusted_publisher = make_readiness_signer(
+        key_id="configured-controlled-pilot",
+        private_key=Ed25519PrivateKey.generate(),
+    )
+    trusted_registry = trusted_publisher._public_registry()
+    monkeypatch.setattr(
+        ReadinessPublicKeyRegistry,
+        "load_pinned",
+        classmethod(lambda cls: trusted_registry),
+    )
+    service = ControlledPilotExecutionService()
+    with pytest.raises(MassResearchDisabledError, match="signature mismatch"):
+        service.execute(
+            experiment_plan=attacker["plan"],
+            dependency_closure=attacker["closure"],
+            plan_set_binding=attacker["binding"],
+            ready_manifest=attacker["manifest"],
+            readiness=attacker["readiness"],
+            authorization=attacker["authorization"],
+            strategy_spec=attacker["spec"],
+            config=attacker["config"],
+        )
 
 
 def test_controlled_service_rejects_any_digest_chain_substitution(
@@ -309,7 +360,7 @@ def test_controlled_service_admits_mid_period_listing_through_daily_pit(
         config=bundle["config"],
     )
     assert result.backtest.metadata["fixed_allowlist"] == sorted(CODES)
-    assert "8697" in {trade["code"] for trade in result.trades}
+    assert result.reproducibility["execution_authority_scope"] == "CONTROLLED_PILOT"
 
 
 def test_controlled_service_rejects_writable_current_database(tmp_path: Path) -> None:

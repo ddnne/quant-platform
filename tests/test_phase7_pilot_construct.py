@@ -19,26 +19,33 @@ from research.phase7_pilot import (
     bind_authorized_evaluation_service,
 )
 from research.readiness import (
-    ReadinessAttestationPublisher,
+    VerifiedMassReadiness,
     VerifiedPilotReadiness,
+    _ReadyPublicationSigner,
+    require_mass_research_start,
 )
 from research.ready_manifest import build_ready_manifest, load_exact_four_pilot_ready_binding
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
 from selection.screen import ExperimentBudget
 from storage.immutable_artifact import ImmutableArtifactStore
+from tests.readiness_test_support import (
+    controlled_pilot_scheduler,
+    make_readiness_signer,
+    mint_pilot_readiness,
+)
 
 _SNAPSHOT_ID = "sha256:" + ("12" * 32)
 
 
-def _publisher() -> ReadinessAttestationPublisher:
-    return ReadinessAttestationPublisher(
+def _publisher() -> _ReadyPublicationSigner:
+    return make_readiness_signer(
         key_id="phase7-pilot-test",
         private_key=Ed25519PrivateKey.generate(),
     )
 
 
 def _readiness(
-    publisher: ReadinessAttestationPublisher,
+    publisher: _ReadyPublicationSigner,
     *,
     snapshot_id: str = _SNAPSHOT_ID,
     expires_at: str = "2099-01-01T00:00:00+00:00",
@@ -76,8 +83,9 @@ def _readiness(
     expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
     baseline = datetime(2026, 1, 1, tzinfo=timezone.utc)
     mint_now = baseline if expiry > baseline else expiry - timedelta(seconds=60)
-    pending = publisher.mint_pilot(
+    pending = mint_pilot_readiness(
         manifest,
+        publisher=publisher,
         immutable_db_digest=digest,
         now=mint_now,
         ttl_seconds=max(60, int((expiry - mint_now).total_seconds())),
@@ -97,8 +105,8 @@ def _budget(tmp_path: Path) -> ResearchBudgetCapability:
     )
 
 
-def _plan(*, snapshot_id: str = _SNAPSHOT_ID) -> ExperimentPlan:
-    return replace(load_experiment_plans()[0], ready_snapshot_id=snapshot_id)
+def _plan() -> ExperimentPlan:
+    return load_experiment_plans()[0]
 
 
 def _eval_service() -> AuthorizedEvaluationService:
@@ -111,20 +119,27 @@ def _store(tmp_path: Path) -> ImmutableArtifactStore:
 
 def _construct(
     tmp_path: Path,
-    publisher: ReadinessAttestationPublisher | None = None,
+    publisher: _ReadyPublicationSigner | None = None,
     **overrides: object,
 ) -> ControlledPilotScheduler:
     publisher = publisher or _publisher()
     kwargs: dict[str, object] = {
         "readiness": _readiness(publisher),
-        "verifier": publisher.public_registry(),
         "budget": _budget(tmp_path),
         "plan": _plan(),
         "authorized_evaluation_service": _eval_service(),
         "immutable_artifact_store": _store(tmp_path),
     }
     kwargs.update(overrides)
-    return ControlledPilotScheduler(**kwargs)  # type: ignore[arg-type]
+    return controlled_pilot_scheduler(
+        verifier=publisher._public_registry(),
+        **kwargs,
+    )
+
+
+def test_pilot_scheduler_public_constructor_has_no_caller_trust_root() -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        ControlledPilotScheduler(verifier=object())  # type: ignore[call-arg]
 
 
 def test_construct_fails_without_readiness(tmp_path: Path) -> None:
@@ -144,10 +159,13 @@ def test_construct_fails_without_plan(tmp_path: Path) -> None:
         _construct(tmp_path, plan=None)
 
 
-def test_construct_fails_without_ready_snapshot_id(tmp_path: Path) -> None:
-    plan = replace(_plan(), ready_snapshot_id="")
-    with pytest.raises(MassResearchDisabledError, match="ready_snapshot_id"):
-        _construct(tmp_path, plan=plan)
+def test_experiment_plan_has_no_prepublication_snapshot_field(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    assert not hasattr(plan, "ready_snapshot_id")
+    assert "ready_snapshot_id" not in plan.to_dict()
+    assert isinstance(_construct(tmp_path, plan=plan), ControlledPilotScheduler)
 
 
 def test_construct_fails_without_bound_evaluation_service(tmp_path: Path) -> None:
@@ -192,9 +210,12 @@ def test_construct_refuses_expired_or_bad_signature(tmp_path: Path) -> None:
         _construct(tmp_path, publisher=pub, readiness=bad_sig)
 
 
-def test_construct_refuses_snapshot_mismatch(tmp_path: Path) -> None:
-    with pytest.raises(MassResearchDisabledError, match="invalid, expired"):
-        _construct(tmp_path, plan=_plan(snapshot_id="other-snap"))
+def test_construct_refuses_noncanonical_plan_instead_of_mutating_snapshot(
+    tmp_path: Path,
+) -> None:
+    plan = replace(_plan(), hypothesis="caller-substituted hypothesis")
+    with pytest.raises(MassResearchDisabledError, match="canonical exact-four"):
+        _construct(tmp_path, plan=plan)
 
 
 def test_construct_refuses_empty_digest(tmp_path: Path) -> None:
@@ -238,5 +259,27 @@ def test_mass_scheduler_rejects_pilot_readiness(tmp_path: Path) -> None:
     with pytest.raises(MassResearchDisabledError, match="VerifiedMassReadiness"):
         MassResearchScheduler(
             readiness=pilot,  # type: ignore[arg-type]
-            verifier=pub.public_registry(),
+        )
+
+
+def test_mass_scheduler_and_start_are_hard_disabled_even_for_mass_nominal_type(
+    tmp_path: Path,
+) -> None:
+    pub = _publisher()
+    pilot = _readiness(pub)
+    mass_like = VerifiedMassReadiness(
+        **{
+            **pilot.__dict__,
+            "readiness_scope": "MASS",
+            "profile_id": "mass/governed-v1",
+        }
+    )
+    with pytest.raises(MassResearchDisabledError, match="hard-disabled"):
+        MassResearchScheduler(
+            readiness=mass_like,
+        )
+    with pytest.raises(MassResearchDisabledError, match="remains disabled"):
+        require_mass_research_start(
+            budget=_budget(tmp_path),
+            readiness=mass_like,
         )

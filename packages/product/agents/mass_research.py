@@ -11,7 +11,6 @@ from selection.budget_ledger import (
     ResearchBudgetCapability,
 )
 from research.readiness import (
-    ReadinessPublicKeyRegistry,
     VerifiedMassReadiness,
     require_mass_research_start,
 )
@@ -22,7 +21,6 @@ def start_mass_research(
     budget: ResearchBudgetCapability | None,
     readiness: VerifiedMassReadiness | None = None,
     expected_snapshot_id: str | None = None,
-    verifier: ReadinessPublicKeyRegistry | None = None,
     # Explicitly reject legacy / unsafe kwargs.
     operator_override: object | None = None,
     ready_count: int | None = None,
@@ -46,7 +44,6 @@ def start_mass_research(
         budget=budget,
         readiness=readiness,
         expected_snapshot_id=expected_snapshot_id,
-        verifier=verifier,
     )
 
 

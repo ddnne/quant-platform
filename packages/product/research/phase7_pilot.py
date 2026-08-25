@@ -28,6 +28,7 @@ _DIGEST_ATTRS = (
     "dependency_closure_digest",
     "ready_manifest_digest",
     "immutable_db_digest",
+    "coverage_policy_digest",
     "coverage_proof_digest",
     "governed_membership_digest",
     "raw_proof_digest",
@@ -84,7 +85,7 @@ def _require_artifact_store(store: object | None) -> ImmutableArtifactStore:
 def _require_signed_readiness(
     readiness: object | None,
     *,
-    expected_snapshot_id: str,
+    binding: object,
     verifier: ReadinessPublicKeyRegistry | None,
 ) -> VerifiedPilotReadiness:
     if not isinstance(readiness, VerifiedPilotReadiness):
@@ -92,12 +93,18 @@ def _require_signed_readiness(
             "VerifiedPilotReadiness required (type check)"
         )
     readiness.require_valid(
-        expected_snapshot_id=expected_snapshot_id,
+        expected_plan_set_digest=str(getattr(binding, "plan_set_digest", "")),
+        expected_closure_digest=str(getattr(binding, "closure_set_digest", "")),
         verifier=verifier,
     )
-    if str(readiness.snapshot_id) != expected_snapshot_id:
+    if (
+        tuple(readiness.plan_ids) != tuple(getattr(binding, "plan_ids", ()))
+        or readiness.profile_digest != getattr(binding, "profile_digest", None)
+        or tuple(readiness.dataset_ids)
+        != tuple(getattr(binding, "required_datasets", ()))
+    ):
         raise MassResearchDisabledError(
-            "plan.ready_snapshot_id must match readiness.snapshot_id"
+            "VerifiedPilotReadiness does not match the canonical exact-four binding"
         )
     ready_state = getattr(readiness, "ready_state", None)
     if ready_state is not None and ready_state != "READY":
@@ -120,13 +127,33 @@ class ControlledPilotScheduler:
         self,
         *,
         readiness: VerifiedPilotReadiness | None = None,
-        verifier: ReadinessPublicKeyRegistry | None = None,
         budget: ResearchBudgetCapability | None = None,
         plan: ExperimentPlan | None = None,
         authorized_evaluation_service: AuthorizedEvaluationService | None = None,
         immutable_artifact_store: ImmutableArtifactStore | None = None,
         operator_override: object | None = None,
         n_hypotheses: int | None = None,
+    ) -> None:
+        self._initialize(
+            readiness=readiness,
+            budget=budget,
+            plan=plan,
+            authorized_evaluation_service=authorized_evaluation_service,
+            immutable_artifact_store=immutable_artifact_store,
+            operator_override=operator_override,
+            n_hypotheses=n_hypotheses,
+        )
+
+    def _initialize(
+        self,
+        *,
+        readiness: VerifiedPilotReadiness | None,
+        budget: ResearchBudgetCapability | None,
+        plan: ExperimentPlan | None,
+        authorized_evaluation_service: AuthorizedEvaluationService | None,
+        immutable_artifact_store: ImmutableArtifactStore | None,
+        operator_override: object | None,
+        n_hypotheses: int | None,
     ) -> None:
         if operator_override is not None:
             raise MassResearchDisabledError(
@@ -137,12 +164,20 @@ class ControlledPilotScheduler:
             raise MassResearchDisabledError("ResearchBudgetCapability required")
         if not isinstance(plan, ExperimentPlan):
             raise MassResearchDisabledError("ExperimentPlan required")
-        if not str(plan.ready_snapshot_id or "").strip():
-            raise MassResearchDisabledError("plan.ready_snapshot_id required")
+        from research.ready_manifest import load_exact_four_pilot_ready_binding
+
+        binding = load_exact_four_pilot_ready_binding()
+        canonical_plan = next(
+            (item for item in binding.plans if item.plan_id == plan.plan_id), None
+        )
+        if canonical_plan is None or canonical_plan.to_dict() != plan.to_dict():
+            raise MassResearchDisabledError(
+                "ControlledPilotScheduler requires a canonical exact-four ExperimentPlan"
+            )
         self._readiness = _require_signed_readiness(
             readiness,
-            expected_snapshot_id=str(plan.ready_snapshot_id),
-            verifier=verifier,
+            binding=binding,
+            verifier=ReadinessPublicKeyRegistry.load_pinned(),
         )
         self._budget = budget
         self._plan = plan
@@ -190,15 +225,15 @@ class MassResearchScheduler:
         self,
         *,
         readiness: VerifiedMassReadiness | None = None,
-        verifier: ReadinessPublicKeyRegistry | None = None,
     ) -> None:
         if not isinstance(readiness, VerifiedMassReadiness):
             raise MassResearchDisabledError(
                 "VerifiedMassReadiness required; VerifiedPilotReadiness cannot "
                 "authorize Mass"
             )
-        readiness.require_valid(verifier=verifier)
-        self._readiness = readiness
+        raise MassResearchDisabledError(
+            "Mass scheduler is hard-disabled in Phase 6.3.1"
+        )
 
     def start_mass_catalog_eval(self, n: int = MASS_CATALOG_EVAL_SIZE) -> None:
         raise MassResearchDisabledError(
