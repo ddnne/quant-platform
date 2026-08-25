@@ -212,6 +212,30 @@ describe("JSDA DLQ terminal convergence", () => {
     expect((await loadJob(runtimeEnv.DB, childKey))?.state).not.toBe("completed");
   });
 
+  it("does not terminalize or ack a DLQ leaf whose observation is missing", async () => {
+    const { root, childKey } = await seedWaitingChild();
+    await runtimeEnv.DB.prepare(
+      "DELETE FROM jsda_observations WHERE observation_key=?",
+    )
+      .bind(childKey)
+      .run();
+    const result = await deliverOn(
+      "quant-jsda-ingestion-dlq-test",
+      await childJob(childKey),
+      "dlq-observation-missing",
+      4,
+    );
+    expect(result.explicitAcks).toEqual([]);
+    expect(result.retryMessages.map((message) => message.msgId)).toEqual([
+      "dlq-observation-missing",
+    ]);
+    expect((await loadJob(runtimeEnv.DB, childKey))?.state).toBe("queued");
+    expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe(
+      "waiting_children",
+    );
+    expect(await passCount(root.run_key)).toBe(0);
+  });
+
   it("records invalid DLQ deliveries as reject evidence before ack", async () => {
     const result = await deliverOn(
       "quant-jsda-ingestion-dlq-test",

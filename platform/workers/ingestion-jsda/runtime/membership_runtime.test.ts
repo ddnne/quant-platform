@@ -516,6 +516,17 @@ describe("JSDA run-scoped membership and archive adoption", () => {
       )
         .bind(second.root.run_key)
         .run();
+      await runtimeEnv.DB.prepare(
+        `UPDATE jsda_run_membership
+            SET audit_receipt_digest=?
+          WHERE run_key=? AND child_work_key=? AND membership_kind='adopted'`,
+      )
+        .bind(
+          "0".repeat(64),
+          second.root.run_key,
+          first.membership[0].child_work_key,
+        )
+        .run();
       const repaired = await deliver(
         await childJob(first.membership[0].child_work_key),
         "overlap-terminal-redelivery",
@@ -524,6 +535,13 @@ describe("JSDA run-scoped membership and archive adoption", () => {
       expect((await loadRunClosure(runtimeEnv.DB, second.root.run_key))?.closure_state).toBe(
         "completed",
       );
+      expect(await loadRunMembership(runtimeEnv.DB, second.root.run_key)).toMatchObject([
+        {
+          membership_kind: "adopted",
+          terminal_state: "completed",
+          audit_receipt_digest: expect.not.stringMatching(/^0+$/),
+        },
+      ]);
       expect(await passLogCount(second.root.run_key)).toBe(1);
     } finally {
       restore();

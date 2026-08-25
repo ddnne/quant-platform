@@ -435,6 +435,20 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
         terminal.work_key,
       )
       .run();
+    await runtimeEnv.DB.prepare(
+      `UPDATE jsda_observations
+          SET state='completed', content_digest=?, raw_key=?, observed_at=?, updated_at=?
+        WHERE observation_key=? AND work_key=?`,
+    )
+      .bind(
+        terminalDigest,
+        "raw/jsda/already-complete.html",
+        "2026-08-25T01:31:00.000Z",
+        "2026-08-25T01:31:00.000Z",
+        terminal.work_key,
+        terminal.work_key,
+      )
+      .run();
     const result = await deliver(terminal, "completed-duplicate");
     expect(result.explicitAcks).toEqual(["completed-duplicate"]);
     expect(result.retryMessages).toEqual([]);
@@ -1184,6 +1198,50 @@ describe("JSDA descendant run closure", () => {
       .bind(root.run_key)
       .first<{ n: number }>();
     expect(passLogs?.n).toBe(1);
+  });
+
+  it("does not PASS until the discovery artifact is durably revalidated", async () => {
+    const { root, children } = await seedWaitingRoot([FILE_A]);
+    const rootRow = await loadJob(runtimeEnv.DB, root.work_key);
+    expect(rootRow?.raw_key).toBe("raw/jsda/test/closure-index.html");
+    await runtimeEnv.RAW_BUCKET.delete(rootRow!.raw_key!);
+
+    const restoreFetch = mockOfficialFetch({ [FILE_A]: "child-before-root-repair" });
+    try {
+      const first = await deliver(
+        await childJob(children[0].work_key),
+        "root-evidence-missing",
+      );
+      expect(first.explicitAcks).toEqual([]);
+      expect(first.retryMessages.map((message) => message.msgId)).toEqual([
+        "root-evidence-missing",
+      ]);
+    } finally {
+      restoreFetch();
+    }
+    expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe(
+      "waiting_children",
+    );
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM ingestion_run_log
+        WHERE status='pass' AND json_extract(detail, '$.run_id')=?`,
+    ).bind(root.run_key).first<{ n: number }>()).toMatchObject({ n: 0 });
+
+    const discoveryBody = new TextEncoder().encode("closure discovery fixture");
+    const discoveryDigest = await sha256Hex(discoveryBody);
+    await runtimeEnv.RAW_BUCKET.put(rootRow!.raw_key!, discoveryBody, {
+      customMetadata: { sha256: discoveryDigest },
+    });
+    const repaired = await deliver(
+      await childJob(children[0].work_key),
+      "root-evidence-repaired",
+    );
+    expect(repaired.explicitAcks).toEqual(["root-evidence-repaired"]);
+    expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("completed");
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM ingestion_run_log
+        WHERE status='pass' AND json_extract(detail, '$.run_id')=?`,
+    ).bind(root.run_key).first<{ n: number }>()).toMatchObject({ n: 1 });
   });
 
   it("closes the root once when delayed children finish out of order", async () => {

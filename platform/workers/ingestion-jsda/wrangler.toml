@@ -48,7 +48,7 @@ retry_delay = 60
 dead_letter_queue = "quant-jsda-ingestion-rejects"
 max_concurrency = 1
 
-# Secrets (optional):
+# Required secret:
 #   INGESTION_RUN_TOKEN — gates /v1/run (reuse premium run token recommended)
 
 [vars]

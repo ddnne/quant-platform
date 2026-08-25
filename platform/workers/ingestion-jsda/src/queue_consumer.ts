@@ -150,6 +150,12 @@ async function terminalEvidenceIsDurable(
   if (row.audit_receipt_key === null || row.audit_receipt_digest === null) {
     return false;
   }
+  if (
+    (row.state === "completed" || row.state === "waiting_children") &&
+    (row.raw_key === null || row.content_digest === null)
+  ) {
+    return false;
+  }
   if ((row.raw_key === null) !== (row.content_digest === null)) return false;
   const [auditMatches, rawMatches] = await Promise.all([
     immutableObjectMatchesDigest(
@@ -166,6 +172,40 @@ async function terminalEvidenceIsDurable(
         ),
   ]);
   return auditMatches && rawMatches;
+}
+
+async function terminalObservationIsAuthoritative(
+  env: JsdaWorkerEnv,
+  row: JobRow,
+): Promise<boolean> {
+  if (row.job_type !== "fetch_file") return true;
+  if (row.source_object_id === null) return false;
+  const observation = await env.DB.prepare(
+    `SELECT source_object_id, state, content_digest, raw_key, observed_at
+       FROM jsda_observations
+      WHERE observation_key=? AND work_key=?`,
+  )
+    .bind(row.work_key, row.work_key)
+    .first<{
+      source_object_id: string;
+      state: string;
+      content_digest: string | null;
+      raw_key: string | null;
+      observed_at: string | null;
+    }>();
+  if (
+    observation === null ||
+    observation.source_object_id !== row.source_object_id ||
+    observation.state !== row.state ||
+    observation.observed_at === null
+  ) {
+    return false;
+  }
+  return (
+    row.state !== "completed" ||
+    (observation.content_digest === row.content_digest &&
+      observation.raw_key === row.raw_key)
+  );
 }
 
 async function persistRejectedDelivery(
@@ -537,6 +577,9 @@ async function advanceAncestorClosures(
       closure.descendant_failed_transient === 0 &&
       closure.descendant_nonterminal === 0
     ) {
+      if (!(await terminalEvidenceIsDurable(env, latest))) {
+        throw new Error(`JSDA ancestor evidence is not durable: ${latest.work_key}`);
+      }
       const closedAt = new Date().toISOString();
       const audit = await putQueueAuditReceipt(
         env.RAW_BUCKET,
@@ -575,6 +618,9 @@ async function repairTerminalClosure(
 ): Promise<void> {
   if (!(await terminalEvidenceIsDurable(env, row))) {
     throw new Error("terminal_evidence_missing");
+  }
+  if (!(await terminalObservationIsAuthoritative(env, row))) {
+    throw new Error("terminal_observation_missing");
   }
   const adopted = await propagateTerminalAdoptedMemberships(
     env.DB,

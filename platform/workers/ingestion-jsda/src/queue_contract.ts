@@ -111,6 +111,8 @@ const CONTRACT_CANONICAL = JSON.stringify({
     "descendant-run-closure",
     "run-scoped-membership-adoption",
     "inflight-adoption-propagation",
+    "terminal-observation-authority",
+    "ancestor-r2-evidence-before-run-pass",
     "run-pass-from-closure-only",
     "dlq-terminal-convergence",
   ],

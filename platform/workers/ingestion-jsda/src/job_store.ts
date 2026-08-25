@@ -1123,8 +1123,10 @@ export async function propagateTerminalAdoptedMemberships(
               failure_detail=?,
               updated_at=?
         WHERE child_work_key=? AND membership_kind='adopted'
-          AND terminal_state IN
-            ('pending','queued','running','waiting_children','failed_transient')`,
+          AND (
+            terminal_state=? OR terminal_state IN
+              ('pending','queued','running','waiting_children','failed_transient')
+          )`,
     )
     .bind(
       row.state,
@@ -1136,6 +1138,7 @@ export async function propagateTerminalAdoptedMemberships(
       row.state === "rejected" ? row.last_error : null,
       now,
       row.work_key,
+      row.state,
     )
     .run();
 
@@ -1518,7 +1521,16 @@ export async function completeJob(
              last_error=NULL, content_digest=?, raw_key=?,
              audit_receipt_key=?, audit_receipt_digest=?
          WHERE work_key=? AND state='running' AND attempt=?
-           AND content_digest IS NOT NULL AND raw_key IS NOT NULL`,
+           AND content_digest IS NOT NULL AND raw_key IS NOT NULL
+           AND (
+             source_object_id IS NOT NULL AND EXISTS (
+               SELECT 1 FROM jsda_observations AS observation
+                WHERE observation.observation_key=jsda_acquisition_jobs_v2.work_key
+                  AND observation.work_key=jsda_acquisition_jobs_v2.work_key
+                  AND observation.source_object_id=
+                      jsda_acquisition_jobs_v2.source_object_id
+             )
+           )`,
       )
       .bind(
         cursor,
@@ -1576,7 +1588,18 @@ export async function rejectJob(
         `UPDATE jsda_acquisition_jobs_v2
          SET state='rejected', lease_until=NULL, completed_at=?, updated_at=?,
              last_error=?, audit_receipt_key=?, audit_receipt_digest=?
-         WHERE work_key=? AND state='running' AND attempt=?`,
+         WHERE work_key=? AND state='running' AND attempt=?
+           AND (
+             job_type != 'fetch_file' OR (
+               source_object_id IS NOT NULL AND EXISTS (
+                 SELECT 1 FROM jsda_observations AS observation
+                  WHERE observation.observation_key=jsda_acquisition_jobs_v2.work_key
+                    AND observation.work_key=jsda_acquisition_jobs_v2.work_key
+                    AND observation.source_object_id=
+                        jsda_acquisition_jobs_v2.source_object_id
+               )
+             )
+           )`,
       )
       .bind(
         now,
@@ -1886,7 +1909,18 @@ export async function rejectFromDeadLetter(
          SET state='rejected', lease_until=NULL, completed_at=?, updated_at=?,
              last_error=?, audit_receipt_key=?, audit_receipt_digest=?
          WHERE work_key=? AND state IN
-           ('pending', 'queued', 'running', 'waiting_children', 'failed_transient')`,
+           ('pending', 'queued', 'running', 'waiting_children', 'failed_transient')
+           AND (
+             job_type != 'fetch_file' OR (
+               source_object_id IS NOT NULL AND EXISTS (
+                 SELECT 1 FROM jsda_observations AS observation
+                  WHERE observation.observation_key=jsda_acquisition_jobs_v2.work_key
+                    AND observation.work_key=jsda_acquisition_jobs_v2.work_key
+                    AND observation.source_object_id=
+                        jsda_acquisition_jobs_v2.source_object_id
+               )
+             )
+           )`,
       )
       .bind(
         now,
@@ -1905,6 +1939,13 @@ export async function rejectFromDeadLetter(
   const rejected = (results[0]?.meta.changes ?? 0) >= 1;
   if (rejected && (results[1]?.meta.changes ?? 0) < 1) {
     throw new Error(`JSDA DLQ reject lost evidence: ${row.work_key}`);
+  }
+  if (
+    rejected &&
+    row.source_object_id !== null &&
+    (results[2]?.meta.changes ?? 0) < 1
+  ) {
+    throw new Error(`JSDA DLQ reject lost observation: ${row.work_key}`);
   }
   return rejected;
 }
