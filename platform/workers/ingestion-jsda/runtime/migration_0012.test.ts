@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { applyD1Migrations, reset } from "cloudflare:test";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { JsdaWorkerEnv } from "../src/env";
+import { registerJob } from "../src/job_store";
 import { makeChildJob, makeRootJob } from "../src/queue_contract";
 import { descriptorForFile } from "../src/queue_contract";
 
@@ -23,6 +24,92 @@ async function pragma(sql: string): Promise<Record<string, unknown>[]> {
 }
 
 describe("0012 populated JSDA migration semantics and FK preservation", () => {
+  it("keeps a legacy rolling locator eligible for a later governed run", async () => {
+    await applyD1Migrations(runtimeEnv.DB, before0012);
+    const rootA = await makeRootJob(
+      "jsda_tokyo_repo_rates",
+      "cron",
+      "2026-08-24T01:30:00.000Z",
+    );
+    const rootB = await makeRootJob(
+      "jsda_tokyo_repo_rates",
+      "cron",
+      "2026-08-25T01:30:00.000Z",
+    );
+    const locator = await descriptorForFile(
+      "https://www.jsda.or.jp/shiryoshitsu/toukei/trr/files/trrts.xls",
+    );
+    const oldObservation = await makeChildJob(rootA, locator);
+    const laterObservation = await makeChildJob(rootB, locator);
+    const now = "2026-08-24T02:00:00.000Z";
+
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO jsda_acquisition_jobs_v2 (
+         work_key, run_key, dataset, job_type, target_url, segment_id,
+         parent_work_key, contract_digest, state, attempt, cursor,
+         requested_by, requested_at, first_seen_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'pending', 0, 0, ?, ?, ?, ?)`,
+    )
+      .bind(
+        rootA.work_key,
+        rootA.run_key,
+        rootA.dataset,
+        rootA.job_type,
+        rootA.target_url,
+        rootA.segment_id,
+        rootA.contract_digest,
+        rootA.requested_by,
+        rootA.requested_at,
+        now,
+        now,
+      )
+      .run();
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO jsda_acquisition_jobs_v2 (
+         work_key, run_key, dataset, job_type, target_url, segment_id,
+         parent_work_key, contract_digest, state, attempt, cursor,
+         requested_by, requested_at, first_seen_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 0, ?, ?, ?, ?)`,
+    )
+      .bind(
+        oldObservation.work_key,
+        oldObservation.run_key,
+        oldObservation.dataset,
+        oldObservation.job_type,
+        oldObservation.target_url,
+        oldObservation.segment_id,
+        oldObservation.parent_work_key,
+        oldObservation.contract_digest,
+        oldObservation.requested_by,
+        oldObservation.requested_at,
+        now,
+        now,
+      )
+      .run();
+
+    await applyD1Migrations(runtimeEnv.DB, only0012);
+    const migrated = await runtimeEnv.DB.prepare(
+      `SELECT freshness, observation_epoch
+         FROM jsda_acquisition_jobs_v2 WHERE work_key=?`,
+    )
+      .bind(oldObservation.work_key)
+      .first<{ freshness: string; observation_epoch: string }>();
+    expect(migrated).toEqual({
+      freshness: "rolling",
+      observation_epoch: rootA.run_key,
+    });
+
+    await registerJob(runtimeEnv.DB, rootB);
+    await registerJob(runtimeEnv.DB, laterObservation);
+    const observations = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2
+        WHERE dataset=? AND job_type='fetch_file' AND target_url=?`,
+    )
+      .bind(rootA.dataset, locator.target_url)
+      .first<{ n: number }>();
+    expect(observations?.n).toBe(2);
+  });
+
   it("keeps populated rows, repairs false-complete roots, and preserves FKs", async () => {
     expect(only0012).toHaveLength(1);
     await applyD1Migrations(runtimeEnv.DB, before0012);

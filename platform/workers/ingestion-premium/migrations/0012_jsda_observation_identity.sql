@@ -133,11 +133,57 @@ DROP TABLE jsda_acquisition_discoveries_v2_next;
 CREATE INDEX IF NOT EXISTS ix_jsda_discoveries_v2_run
     ON jsda_acquisition_discoveries_v2 (run_key, parent_work_key, child_work_key);
 
+-- Backfill the same table-driven locator policy used by the Worker. Treating
+-- every legacy URL as an archive would put an already-seen rolling locator
+-- under the URL-unique archive index and prevent every later run-scoped
+-- observation from being registered.
 UPDATE jsda_acquisition_jobs_v2
-   SET freshness = 'archive',
-       observation_epoch = 'archive'
+   SET freshness = CASE
+         WHEN dataset = 'jsda_tokyo_repo_rates' THEN 'rolling'
+         WHEN dataset = 'jsda_corporate_bond_transactions'
+          AND instr(lower(target_url), '/torihiki') > 0
+          AND substr(
+                lower(target_url),
+                instr(lower(target_url), '/torihiki') + 9,
+                4
+              ) GLOB '[0-9][0-9][0-9][0-9]'
+          AND substr(
+                lower(target_url),
+                instr(lower(target_url), '/torihiki') + 9,
+                4
+              ) = substr(requested_at, 1, 4)
+          AND substr(
+                lower(target_url),
+                instr(lower(target_url), '/torihiki') + 13,
+                1
+              ) = '.'
+          AND substr(
+                lower(target_url),
+                instr(lower(target_url), '/torihiki') + 14,
+                1
+              ) GLOB '[a-z0-9]'
+           THEN 'rolling'
+         WHEN dataset = 'jsda_corporate_bond_transactions' THEN 'archive'
+         WHEN dataset = 'jsda_otc_bond_reference_prices'
+          AND (
+            lower(target_url) GLOB
+              '*[^0-9]20[0-9][0-9][0-9][0-9][0-9][0-9][^0-9]*'
+            OR lower(target_url) GLOB
+              '*/s[0-9][0-9][0-9][0-9][0-9][0-9].*'
+          )
+           THEN 'archive'
+         ELSE 'rolling'
+       END
  WHERE job_type = 'fetch_file'
    AND freshness IS NULL;
+
+UPDATE jsda_acquisition_jobs_v2
+   SET observation_epoch = CASE
+         WHEN freshness = 'rolling' THEN run_key
+         ELSE 'archive'
+       END
+ WHERE job_type = 'fetch_file'
+   AND observation_epoch IS NULL;
 
 DROP INDEX IF EXISTS ux_jsda_jobs_v2_fetched_file_url;
 
