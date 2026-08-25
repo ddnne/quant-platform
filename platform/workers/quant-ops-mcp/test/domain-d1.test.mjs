@@ -5,12 +5,14 @@ import test from "node:test";
 
 import {
   callOpsTool,
+  OPS_TOOLS,
+} from "../src/domain.js";
+import {
   classifyRawAcquisition,
   honestProjectionStatus,
   JSDA_UPSTREAM_LOCATORS,
-  OPS_TOOLS,
   syncDatasetState,
-} from "../src/domain.js";
+} from "../src/domain_policy.js";
 import { GOVERNED_DATASETS } from "../src/governed.js";
 import { DurableDailyQuota, QuotaExceeded } from "../src/quota.js";
 

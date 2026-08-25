@@ -2,6 +2,7 @@
  * Artifacts join plan (read-only). No Mass research. Returns R2 keys + D1 SQL.
  */
 
+import { json } from "./http_json";
 import { ingestionTokenMatches } from "./ingestion_token";
 
 export interface ArtifactsPlanEnv {
@@ -15,7 +16,7 @@ export async function handleArtifactsJoinPlan(
   env: ArtifactsPlanEnv,
 ): Promise<Response> {
   if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
-    return Response.json({ error: "unauthorized" }, { status: 401 });
+    return json({ error: "unauthorized" }, 401);
   }
 
   const url = new URL(request.url);
@@ -25,10 +26,7 @@ export async function handleArtifactsJoinPlan(
     .map((s) => s.trim())
     .filter(Boolean);
   if (datasets.length === 0) {
-    return Response.json(
-      { error: "datasets required (comma-separated)" },
-      { status: 400 },
-    );
+    return json({ error: "datasets required (comma-separated)" }, 400);
   }
   const from = url.searchParams.get("from") || "1970-01-01";
   const to = url.searchParams.get("to") || "9999-12-31";
@@ -84,7 +82,7 @@ export async function handleArtifactsJoinPlan(
     };
   }
 
-  return Response.json({
+  return json({
     schema: "artifacts-join-plan/v1",
     mass_research: "NO-GO",
     from,

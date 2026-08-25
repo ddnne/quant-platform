@@ -4,6 +4,7 @@
  * machine-readable manifest that a later converter/Artifacts job can consume.
  */
 
+import { json } from "./http_json";
 import { ingestionTokenMatches } from "./ingestion_token";
 import { sha256HexFromString } from "./sha256";
 
@@ -17,10 +18,10 @@ export async function handleParquetManifest(
   env: ParquetManifestEnv,
 ): Promise<Response> {
   if (request.method !== "POST") {
-    return Response.json({ error: "POST required" }, { status: 405 });
+    return json({ error: "POST required" }, 405);
   }
   if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
-    return Response.json({ error: "unauthorized" }, { status: 401 });
+    return json({ error: "unauthorized" }, 401);
   }
   const url = new URL(request.url);
   const prefix = url.searchParams.get("prefix") || "structured/jsonl/";
@@ -80,7 +81,7 @@ export async function handleParquetManifest(
     },
   );
 
-  return Response.json({
+  return json({
     ok: true,
     manifest_key: manifestKey,
     object_count: objects.length,

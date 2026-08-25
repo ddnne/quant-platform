@@ -1,13 +1,9 @@
-import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   writeJsonlToR2,
   type StructuredRecordLine,
 } from "./r2_structured_writer";
-
-function sha256Hex(body: string): string {
-  return createHash("sha256").update(body, "utf8").digest("hex");
-}
+import { sha256HexFromString } from "./sha256";
 
 function memoryBucket(): {
   bucket: R2Bucket;
@@ -100,7 +96,7 @@ describe("writeJsonlToR2", () => {
     expect(JSON.stringify(put.metadata)).not.toContain("COMPLETE");
     expect(JSON.stringify(result)).not.toContain("COMPLETE");
 
-    const expectedSha = sha256Hex(put.body);
+    const expectedSha = await sha256HexFromString(put.body);
     expect(result.sha256).toBe(expectedSha);
     expect(put.metadata?.sha256).toBe(expectedSha);
     expect(put.metadata?.count).toBe(String(records.length));
@@ -124,7 +120,7 @@ describe("writeJsonlToR2", () => {
     expect(puts).toHaveLength(1);
     expect(puts[0]!.body).toBe("");
     expect(result.count).toBe(0);
-    expect(result.sha256).toBe(sha256Hex(""));
+    expect(result.sha256).toBe(await sha256HexFromString(""));
     expect(result.bytes).toBe(0);
     expect(puts[0]!.metadata?.count).toBe("0");
     expect(puts[0]!.metadata?.sha256).toBe(result.sha256);

@@ -170,6 +170,24 @@ describe("ingestion-secrets boundary", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("rejects authenticated invalid json without calling upstream", async () => {
+    const fetchImpl = stubUpstream();
+    const res = await worker.fetch(
+      new Request("https://ingestion-secrets.test/v1/proxy/jquants", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...AUTH_HEADERS },
+        body: "{",
+      }),
+      env,
+    );
+    expect(res.status).toBe(400);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "invalid json" });
+    expect(body).not.toContain(API_KEY);
+    expect(body).not.toContain(PROXY_TOKEN);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("rejects authenticated body.method POST/PUT without calling upstream", async () => {
     const fetchImpl = stubUpstream();
     for (const method of ["POST", "PUT"]) {

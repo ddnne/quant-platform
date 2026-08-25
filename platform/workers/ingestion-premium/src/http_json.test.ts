@@ -31,11 +31,34 @@ describe("premium json helper", () => {
   });
 
   it("callers import from http_json and do not declare local json()", () => {
-    for (const name of ["index.ts", "http_export.ts"]) {
+    const callers = [
+      "index.ts",
+      "http_export.ts",
+      "ops_cold_archive.ts",
+      "ops_prune_changelog.ts",
+      "ops_parquet_manifest.ts",
+      "ops_artifacts_plan.ts",
+    ];
+    for (const name of callers) {
       const src = readFileSync(join(here, name), "utf8");
       expect(src, name).toContain('from "./http_json"');
       expect(src, name).not.toContain("function json(");
     }
+    const noInline = [
+      "http_export.ts",
+      "ops_cold_archive.ts",
+      "ops_prune_changelog.ts",
+      "ops_parquet_manifest.ts",
+      "ops_artifacts_plan.ts",
+    ];
+    for (const name of noInline) {
+      expect(readFileSync(join(here, name), "utf8"), name).not.toContain(
+        "Response.json",
+      );
+    }
+    expect(readFileSync(join(here, "http_json.ts"), "utf8")).toContain(
+      "Response.json",
+    );
   });
 
   it("http_json uses Response.json without gateway cache/charset headers", () => {

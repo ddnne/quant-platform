@@ -16,22 +16,12 @@ const INTEGER_COUNTERS = [
 ] as const;
 
 describe("parseAmounts", () => {
-  it("undefined is ok with zero counters, not a consume", () => {
-    const got = parseAmounts(undefined);
-    expect(got.ok).toBe(true);
-    if (got.ok) expect(got.amounts).toEqual(zeroCounters());
-  });
-
-  it("null is ok with zero counters, not a consume", () => {
-    const got = parseAmounts(null);
-    expect(got.ok).toBe(true);
-    if (got.ok) expect(got.amounts).toEqual(zeroCounters());
-  });
-
-  it("empty object is ok with zero counters, not a consume", () => {
-    const got = parseAmounts({});
-    expect(got.ok).toBe(true);
-    if (got.ok) expect(got.amounts).toEqual(zeroCounters());
+  it("missing or empty amounts is zero counters, not a consume", () => {
+    for (const raw of [undefined, null, {}]) {
+      const got = parseAmounts(raw);
+      expect(got.ok).toBe(true);
+      if (got.ok) expect(got.amounts).toEqual(zeroCounters());
+    }
   });
 
   it.each([
@@ -50,16 +40,20 @@ describe("parseAmounts", () => {
     if (!got.ok) expect(got.error).toBe("unknown amount: tokens");
   });
 
-  it.each(INTEGER_COUNTERS)("%s negative fails closed", (name) => {
-    const got = parseAmounts({ [name]: -1 });
-    expect(got.ok).toBe(false);
-    if (!got.ok) expect(got.error).toBe(`${name} must be a finite number >= 0`);
+  it("negative integer counters fail closed", () => {
+    for (const name of INTEGER_COUNTERS) {
+      const got = parseAmounts({ [name]: -1 });
+      expect(got.ok).toBe(false);
+      if (!got.ok) expect(got.error).toBe(`${name} must be a finite number >= 0`);
+    }
   });
 
-  it.each(INTEGER_COUNTERS)("%s non-integer fails closed", (name) => {
-    const got = parseAmounts({ [name]: 1.5 });
-    expect(got.ok).toBe(false);
-    if (!got.ok) expect(got.error).toBe(`${name} must be an integer >= 0`);
+  it("non-integer counters fail closed", () => {
+    for (const name of INTEGER_COUNTERS) {
+      const got = parseAmounts({ [name]: 1.5 });
+      expect(got.ok).toBe(false);
+      if (!got.ok) expect(got.error).toBe(`${name} must be an integer >= 0`);
+    }
   });
 
   it("negative cost_usd fails closed", () => {

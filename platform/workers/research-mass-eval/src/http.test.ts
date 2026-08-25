@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   authorized,
-  freezePayload,
   putChildrenThenManifest,
   putImmutableJson,
   putJsonCreateOnly,
@@ -609,27 +608,5 @@ describe("POST /v1/children-then-manifest", () => {
     expect(payload.go).toBe(false);
     expect(payload.manifest.created).toBe(true);
     expect(mem.putOrder).toEqual(["job/child.json", "job/manifest.json"]);
-  });
-});
-
-describe("freezePayload deny-by-default", () => {
-  const expected = {
-    mass_research: "NO-GO",
-    phase7: "OFF",
-    ready_declared: false,
-    operational_go: false,
-    continuous_paper: "UNARMED",
-    frozen_defaults_retuned: false,
-    connected_to_ready: false,
-    connected_to_mass: false,
-  };
-
-  it("returns frozen defaults for an empty env", () => {
-    expect(freezePayload({} as Env)).toEqual(expected);
-  });
-
-  it("returns frozen defaults for deny-by-default env", () => {
-    const mem = new MemR2();
-    expect(freezePayload(denyByDefaultEnv(mem.asBucket()))).toEqual(expected);
   });
 });

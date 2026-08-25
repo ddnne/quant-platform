@@ -20,6 +20,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from ingestion.jquants.catalog import PREMIUM_CORE_DATASETS
+
 # Category codes from the doc legend (H/G/U/P/X).
 Category = Literal["H", "G", "U", "P", "X"]
 Tier = Literal["daily", "weekly"]
@@ -44,34 +46,8 @@ class CheckDef:
 # ---------------------------------------------------------------------------
 # Common checks (C1–C12) — apply to every Premium core dataset.
 # ---------------------------------------------------------------------------
-# The 23 Premium-core datasets (mirrors ingestion.jquants.catalog's
-# PREMIUM_CORE_DATASETS). Hard-coded here so importing this module never
-# transitively imports the catalog (kept self-contained for tests).
-_PREMIUM_CORE: tuple[str, ...] = (
-    "equities_master",
-    "equities_bars_daily",
-    "equities_bars_daily_am",
-    "fins_summary",
-    "fins_details",
-    "fins_dividend",
-    "fins_earnings_date",
-    "equities_earnings_calendar",
-    "markets_calendar",
-    "equities_investor_types",
-    "indices_bars_daily_topix",
-    "indices_bars_daily",
-    "derivatives_bars_daily_options_225",
-    "derivatives_bars_daily_futures",
-    "derivatives_bars_daily_options",
-    "markets_margin_interest",
-    "markets_margin_alert",
-    "markets_short_ratio",
-    "markets_short_sale_report",
-    "markets_breakdown",
-    "edinet_major_shareholders",
-    "edinet_cross_shareholdings",
-    "edinet_large_volume_shareholders",
-)
+# Catalog SoT (core ∪ edinet). CheckDef rows keep using this alias.
+_PREMIUM_CORE: tuple[str, ...] = PREMIUM_CORE_DATASETS
 
 
 _COMMON: tuple[CheckDef, ...] = (
@@ -267,10 +243,8 @@ def get_check(check_id: str) -> CheckDef:
 
 
 def premium_core_datasets() -> tuple[str, ...]:
-    """The 23 Premium-core dataset ids this matrix applies to.
+    """The Premium-core dataset ids this matrix applies to.
 
-    Mirrors ``ingestion.jquants.catalog.PREMIUM_CORE_DATASETS`` (kept
-    inlined here so :mod:`cf_platform.ingest_premium.matrix` has no
-    dependency on the ingestion package — it's pure data).
+    Same identity as ``ingestion.jquants.catalog.PREMIUM_CORE_DATASETS``.
     """
     return _PREMIUM_CORE

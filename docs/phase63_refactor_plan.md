@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `a7d1e93d`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `cb9916e0`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,7 +364,7 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD a7d1e93d)
+## 10. Current remaining extracts vs HOLD (HEAD cb9916e0)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
@@ -405,7 +405,7 @@ numbers). `daily_path.ts` is **1682** (was 1677 in §2).
 | Worker R2 stub | **DONE** (`61c14a0d`): `put_children_then_manifest_via_worker` requires Worker URL+token; no CLI put fallback. Remote CLI put later fenced (`0b81eedb`). |
 | Worker children-then-manifest POST | **DONE** (`5103b26b`): `put_children_then_manifest_via_worker` POSTs `/v1/children-then-manifest` with `X-Mass-Eval-Token`. No CLI put fallback. Unbound URL/token fail closed. |
 | Remote Python CLI-put fence | **DONE** (`0b81eedb`): remote `default_r2_put` never CLI-puts; `QP_ALLOW_PYTHON_R2_PUT=1` does not resurrect TOCTOU. dry_run stays local. |
-| Python job-artifact Worker put | **DONE** after `3b64bdfc`: `put_research_artifact` (`d6567268`); `cf_daily_path_job` (`017a43c6`); `cf_mass_eval_run` (`0a8ced34`). Named remaining callers after wave-7 are gone. `reconstitution_evidence` still `default_r2_put` (dry_run only). |
+| Python job-artifact Worker put | **DONE** after `3b64bdfc`: `put_research_artifact` (`d6567268`); `cf_daily_path_job` (`017a43c6`); `cf_mass_eval_run` (`0a8ced34`). Named remaining callers after wave-7 are gone. `reconstitution_evidence` dry-run uses `put_research_artifact` (`cb613667`). Direct `default_r2_put(` callers outside `r2_io.py` are gone (glob pin `8299ad84`). |
 | Evaluation IR encode/decode | **DONE** (`4661fb14`): `evaluation_ir_codec.generated.ts` emitted from `schema.json`. `evaluation_ir.ts` is façade. `ALLOWED_FIELDS` generated (`d882119`). Python codec body generated **DONE** (`c9764ff4`; `evaluation_ir_codec.generated.py`). Python TypedDicts generated **DONE** (`e20be4d9`; `evaluation_ir_types.generated.py`). Codec emitters extract **DONE** (`54c1f472`; `evaluation_ir_emit.py`). |
 | DO `budget_id` pin | **DONE** (`89415105`): create is not a reserve; string `budget_id` is not occupancy authority. In-memory algebra; live Edge occupancy unproven. |
 | BackfillPlanner JQ required segments | **DONE** (`bcd52f47`): all JQ jobs come from `plan_required_segments`. Bars/fins stay calendar_month jobs. Missing V3 does not invent official domain or COMPLETE. |
@@ -450,8 +450,7 @@ index_text CLIs, OTC grain, Worker R2 stub, Worker POST
 CLI-put fence (`0b81eedb`), and job-artifact Worker put (`d6567268`;
 `017a43c6` `cf_daily_path_job`; `0a8ced34` `cf_mass_eval_run`) are
 **DONE**. MCP presentation echo and JSDA refresh inventory replay stay
-**DONE**. Remaining mixed: `reconstitution_evidence` still `default_r2_put`
-(dry_run only); leftover occupancy **HOLD** — do not schedule leftover
+**DONE**. Remaining mixed: leftover occupancy **HOLD** — do not schedule leftover
 occupancy extract. `UNIQUE22_PARK_REASONS`, `cost_models.py` live math,
 and factory `generation_enabled=False` stay **HOLD**. `persist_records.ts`
 live upsert is **HOLD** (do not fake-split). Compact catalog is optional
@@ -519,18 +518,52 @@ json response helper is one module (`a1428a21`; `http_json.ts` is
 `Response.json` only, no Cache-Control; not gateway charset+no-store);
 premium export / JSDA / secrets / mass-eval / ai-gateway query-token
 pins (`809e45af`; `6be287db`; `7f97497d`; `6138b6ae`; `a7d1e93d`) —
-**LANDED**. Remaining mixed at this SHA: leftover occupancy, unique22,
-GATEWAY_TOKEN P632B-03, persist live upsert, compact catalog,
-`verify_all` vs `verify_ci` split (**HOLD**). Agent-capable fail-closed
-HTTP holes named at `03409ccd` remain **LANDED**. Ingest `authorized()`
-plaintext `===` is **LANDED** (closed). Premium `json()` two copies are
-**LANDED**. Do not schedule leftover occupancy extract. Do not YAML +N.
-Do not declare Phase 7 GO. Do not claim ci-aggregate Worker exists live.
+**LANDED**. After `a7d1e93d`: reconstitution evidence dry-run uses
+`put_research_artifact` (`cb613667`; last production `default_r2_put(`
+caller outside `r2_io.py` closed; still never live-puts); premium
+export success uses json helper (`c0b07935`); R2 writer digest pin
+uses sha256 helper (`accbb9d9`); ops unpublished policy_version echo
+pin (`159d8975`); ops-mcp OAuth bearer header-only (`f34b9dcc`) —
+**LANDED**. After `f34b9dcc`: ci-aggregate json helper is one module
+(`7dfed713`; charset + no-store, not premium); premium ops JSON
+responses use json helper (`77505a8f`); research `default_r2_put(`
+callers glob stays in `r2_io.py` (`8299ad84`) — **LANDED**. After
+`8299ad84`: JSDA json helper (`adddbb87`); secrets json helper
+(`61a55e96`; proxy stream stays no-store); mass-eval json helper
+(`8a0475f7`; http.ts re-exports); ci-aggregate token compare
+(`e91d5f41`); ai-gateway token compare (`88564075`; GATEWAY_TOKEN
+service-binding HOLD unchanged) — **LANDED**. After `88564075`: JSDA
+token compare (`9befdbc4`); secrets token compare (`7fb8e188`; WebCrypto
+timingSafeEqual); mass-eval SHA-256 hex (`c126261f`); ai-gateway SHA-256
+hex (`b8696205`) — **LANDED**. After `b8696205`: JSDA SHA-256 hex
+(`9136dc53`); mass-eval token compare (`70d7c8bd`) — **LANDED**. After
+`70d7c8bd`: mass-eval freezePayload (`7fa38828`); extracted json/token/sha256
+glob (`31f9a99b`) — **LANDED**. After `31f9a99b`: freezePayload glob
+(`cafc3fc0`); secrets proxy invalid JSON fail-closed (`bad3ab77`); residual
+last_run 14324 (`7fb6924b`) — **LANDED**. After `7fb6924b`: validate addon
+default from catalog (`94dac1fa`); matrix premium-core ids from catalog
+(`773bab04`); propose review policy (`810d23e9`; `cf_propose_policy.py`);
+occupancy-track run (`08b121b0`; `occupancy_audit_run.py`); pipeline receipt
+evidence (`830a215b`; `pipeline_receipts.py`); catalog YAML overlay parse
+(`f0e3c570`; `catalog_yaml_parse.py`); factory eval screen (`ae06f9fa`;
+`factory_eval_screen.py`); daily-path DD gate (`5e6d36a7`;
+`stats_metrics_gates.py`); ops-mcp 415/406/protocol/callback pins
+(`3c73ca74`; `800ced41`; `a8daa996`; `3eb7bf04`); children[] required
+(`3712b8c7`); secrets-proxy / jquants-catalog / budget-amount paraphrase
+shrinks (`fb6bb56a`; `d348c93f`; `f008a4f3`); mass-eval parseRequest
+(`70bfbefe`; `parse_request.ts`); ci-aggregate receipts gate (`aa503996`;
+`receipts_gate.ts`); ops-mcp domain policy (`2cde56ac`; `domain_policy.js`);
+budget HTTP dispatcher (`cb9916e0`; `budget_http.ts`) — **LANDED**. Remaining
+mixed HOLD: leftover occupancy, unique22, GATEWAY_TOKEN P632B-03, persist
+live upsert, compact catalog, `verify_all` vs `verify_ci`. putJson persist
+stays in http.ts (do not fake-split). Do not schedule leftover occupancy.
+Do not YAML +N. Do not declare Phase 7 GO. Do not claim ci-aggregate
+Worker exists live. Do not treat CF-Worker as auth.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
 | 1 | `BackfillPlanner` (`ops/backfill_planner.py`, 666) vs `plan_required_segments` (`coverage_ledger.py`) | **ops product** inventory planner. Tip-snapshot wire **DONE** (`792ae2b`): AM bars / earnings calendar call `plan_required_segments` (no month-chunk). JSDA refresh inventory replay **DONE** (`40d1aa90`). OTC JSON grain **DONE** (`26a6ca5e`): `segment_granularity=official_archive_index_day`. index_text CLIs **DONE**: `refresh_coverage_ledger --index-text` (`34dc85df`); `write_collection_receipts --index-text` (`db569fc7`); ops projection `--otc-index-html` (`9524dab7`); ingest passes fetched year-index HTML (`ddc40ae9`). Bounded-history JQ month chunks **DONE** (`bcd52f47`): all JQ jobs come from `plan_required_segments` (bars/fins stay calendar_month jobs; missing V3 does not invent official domain or COMPLETE). BackfillPlanner `index_text` **DONE** (`2cbd894d`). Shared official-index local HTML reader **DONE** (`2323f6a5`; `cf_premium_backfill` uses it at `2b82ec7d`). | Invent COMPLETE; calendar-walk OTC; delete one planner without a dated ops brief |
-| 2 | Python `r2_io.py` (431) vs Worker children-then-manifest (`http.ts` `putChildrenThenManifest`; digest mismatch **409**) | Worker is immutable authority. Python stays **non-authority** (`python_cli_put_is_not_immutable_authority`; `authoritative=True` refused). Remote `default_r2_put` never CLI-puts (`0b81eedb`; `QP_ALLOW_PYTHON_R2_PUT=1` does not resurrect TOCTOU). Worker POST **DONE** (`5103b26b`). `put_research_artifact` **DONE** (`d6567268`). After `3b64bdfc`: `cf_daily_path_job` **DONE** (`017a43c6`); `cf_mass_eval_run` **DONE** (`0a8ced34`). Remaining `default_r2_put` caller: `reconstitution_evidence` dry_run only. | Treat “TOCTOU recorded in tests” as done; make Python CLI the SoT |
+| 2 | Python `r2_io.py` (431) vs Worker children-then-manifest (`http.ts` `putChildrenThenManifest`; digest mismatch **409**) | Worker is immutable authority. Python stays **non-authority** (`python_cli_put_is_not_immutable_authority`; `authoritative=True` refused). Remote `default_r2_put` never CLI-puts (`0b81eedb`; `QP_ALLOW_PYTHON_R2_PUT=1` does not resurrect TOCTOU). Worker POST **DONE** (`5103b26b`). `put_research_artifact` **DONE** (`d6567268`). After `3b64bdfc`: `cf_daily_path_job` **DONE** (`017a43c6`); `cf_mass_eval_run` **DONE** (`0a8ced34`). Remaining `default_r2_put` caller reconstitution_evidence dry_run **DONE** via `put_research_artifact` dry_run (`cb613667`). Still never live-put. Python still non-authority. | Treat “TOCTOU recorded in tests” as done; make Python CLI the SoT |
 | 3 | `evaluation_ir.ts` (39) façade vs generated `evaluation_ir_codec.generated.ts` (239) vs `evaluation_ir_codec.generated.py` vs `specs/evaluation_ir/schema.json` (67) | Schema is codec SoT. `ALLOWED_FIELDS` generated **DONE** (`d882119`). Encode/decode TS body generated **DONE** (`4661fb14`). Python codec body generated **DONE** (`c9764ff4`). TypedDict generation **DONE** (`e20be4d9`; `evaluation_ir_types.generated.py`). Emit extract **DONE** (`54c1f472`; `evaluation_ir_emit.py`). Façades remain. Grade predicate is already shared (`job_candidate_grade` / `jobCandidateGrade`). | Second grade policy; delete schema; dual-edit field lists forever |
 | 4 | MCP `OPS_TOOLS` strings vs stored `policy_version` (`dataset_coverage.policy_version`; live `collection-coverage/v2`) | Presentation echo **DONE** (Worker `27ff7e62`, Python `3d3e68ab`): both echo stored `policy_version`, not frozen “Coverage V2”. Remaining mixed: live projection is still `collection-coverage/v2` STALE — not unpublished V3 completeness. Do not schedule a second string rewrite. | Unify strings to mint FRESH / COMPLETE 23 |
 | 5 | `scripts/verify_all.sh` skippable helper vs `scripts/verify_ci.sh` authority | **Keep both. Do not merge.** Helper: 3 research workers, `VERIFY_*` skips. Authority: pytest + catalog freeze + IR schema + 7 workers (`ci-aggregate` included), no skips. Merge gate is `verify_ci` plus authenticated `ci-aggregate`. | Fold `verify_ci` into `verify_all`; add GitHub Actions |
@@ -551,8 +584,16 @@ Retry jitter is `retry_jitter.ts` (`crypto.getRandomValues`). Backoff
 delay helpers live there (`ec960406`). Sleep helper lives there
 (`d3bfb5e8`). SHA-256 hex is `sha256.ts` (`98545741`). JST now-clock
 helpers live in `identity.ts` (`ca00ff6d`). Premium json helper lives in
-`http_json.ts` (`a1428a21`). Do not family-slice remaining façade
-handlers.
+`http_json.ts` (`a1428a21`). Premium ops also import `http_json.ts`
+(`77505a8f`). ci-aggregate json lives in its own `http_json.ts`
+(`7dfed713`). JSDA/secrets json live in their `http_json.ts`.
+mass-eval json lives in `http_json.ts` re-exported from `http.ts`.
+ci-aggregate token compare lives in `authorized.ts`. gateway token
+compare lives in `authorized.ts`. JSDA/secrets token compare live in
+their `authorized.ts`. JSDA/mass-eval/gateway SHA-256 hex live in their
+`sha256.ts`. mass-eval authorized lives in `authorized.ts` re-exported
+from `http.ts`. mass-eval `freeze.ts` re-exported from `http.ts`.
+Do not family-slice remaining façade handlers.
 
 ### 10.4 Do not
 
@@ -578,6 +619,20 @@ handlers.
 ✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 7a0801a6
 ✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at a7d1e93d
 ✗ Claim ingest authorized still plaintext === / premium json() still two copies at a7d1e93d
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at f34b9dcc
+✗ Claim reconstitution_evidence still calls default_r2_put at f34b9dcc
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 8299ad84
+✗ Claim ci-aggregate Worker exists live at 8299ad84
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 88564075
+✗ Claim ci-aggregate Worker exists live / CF-Worker is auth at 88564075
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at b8696205
+✗ Claim ci-aggregate Worker exists live / CF-Worker is auth at b8696205
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 70d7c8bd
+✗ Claim ci-aggregate Worker exists live / CF-Worker is auth at 70d7c8bd
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 31f9a99b
+✗ Claim ci-aggregate Worker exists live / CF-Worker is auth at 31f9a99b
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 7fb6924b
+✗ Claim ci-aggregate Worker exists live / CF-Worker is auth at 7fb6924b
 ✗ Claim ci-aggregate Worker exists live
 ```
 

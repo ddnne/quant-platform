@@ -59,7 +59,7 @@ export async function handleExportD1(
     delete clean.__export_cursor;
     return clean;
   });
-  return Response.json({
+  return json({
     table,
     rows,
     cursor: cursorRaw,

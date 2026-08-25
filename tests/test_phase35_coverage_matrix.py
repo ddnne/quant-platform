@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from cf_platform.ingest_premium import matrix
+from ingestion.jquants.catalog import PREMIUM_CORE_DATASETS, list_datasets
 
 _REPO = Path(__file__).resolve().parents[1]
 MATRIX_DOC = _REPO / "docs" / "phase35_validation_matrix.md"
@@ -110,5 +111,9 @@ def test_get_check_known_and_unknown():
         matrix.get_check("ZZ9")
 
 
-def test_premium_core_datasets_count():
-    assert len(matrix.premium_core_datasets()) == 23
+def test_premium_core_datasets_match_catalog_sot():
+    """Matrix core ids are the catalog SoT, not a second handwritten list."""
+    core_ids = matrix.premium_core_datasets()
+    assert core_ids == PREMIUM_CORE_DATASETS
+    assert core_ids == tuple(list_datasets("core")) + tuple(list_datasets("edinet"))
+    assert len(core_ids) == 23

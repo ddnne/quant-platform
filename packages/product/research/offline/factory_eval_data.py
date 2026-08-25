@@ -1,7 +1,8 @@
 """Cached factory batch panels (not GO / READY).
 
-``BatchDataContext`` / loaders for fail-fast eval. Eval and screen stay in
-``research.offline.factory_eval``. Unique/combo generation_enabled stays False.
+``BatchDataContext`` / loaders for fail-fast eval. Eval stays in
+``research.offline.factory_eval``; screen policy in
+``research.offline.factory_eval_screen``. Unique/combo generation_enabled stays False.
 """
 
 from __future__ import annotations

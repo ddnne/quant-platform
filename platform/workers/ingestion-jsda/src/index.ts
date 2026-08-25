@@ -8,6 +8,10 @@
  * - Structured XLS/XLSX parse stays trusted Python downstream (not TS)
  */
 
+import { authorized } from "./authorized";
+import { json } from "./http_json";
+import { sha256Hex } from "./sha256";
+
 export interface Env {
   RAW_BUCKET: R2Bucket;
   DB: D1Database;
@@ -43,30 +47,6 @@ type DatasetId =
   | "jsda_otc_bond_reference_prices"
   | "jsda_tokyo_repo_rates"
   | "jsda_corporate_bond_transactions";
-
-function timingSafeEqualBytes(a: ArrayBuffer, b: ArrayBuffer): boolean {
-  const x = new Uint8Array(a);
-  const y = new Uint8Array(b);
-  if (x.length !== y.length) return false;
-  let diff = 0;
-  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
-  return diff === 0;
-}
-
-async function tokenMatches(provided: string, expected: string): Promise<boolean> {
-  const enc = new TextEncoder();
-  const [a, b] = await Promise.all([
-    crypto.subtle.digest("SHA-256", enc.encode(provided)),
-    crypto.subtle.digest("SHA-256", enc.encode(expected)),
-  ]);
-  return timingSafeEqualBytes(a, b);
-}
-
-async function authorized(request: Request, expected?: string): Promise<boolean> {
-  if (!expected) return false;
-  const got = request.headers.get("X-Ingestion-Token") || "";
-  return tokenMatches(got, expected);
-}
 
 const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024; // 32 MiB hard cap per artifact
 
@@ -119,11 +99,6 @@ function extractLinks(html: string, base: string): string[] {
     if (abs) out.push(abs);
   }
   return [...new Set(out)];
-}
-
-async function sha256Hex(buf: BufferSource): Promise<string> {
-  const dig = await crypto.subtle.digest("SHA-256", buf);
-  return [...new Uint8Array(dig)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function fetchAllowed(
@@ -598,9 +573,9 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
       if (request.method !== "GET") {
-        return Response.json({ error: "GET required" }, { status: 405 });
+        return json({ error: "GET required" }, 405);
       }
-      return Response.json({
+      return json({
         ok: true,
         worker: "ingestion-jsda",
         datasets: 3,
@@ -611,10 +586,10 @@ export default {
     }
     if (url.pathname === "/v1/run") {
       if (request.method !== "POST") {
-        return Response.json({ error: "POST required" }, { status: 405 });
+        return json({ error: "POST required" }, 405);
       }
       if (!(await authorized(request, env.INGESTION_RUN_TOKEN))) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
+        return json({ error: "unauthorized" }, 401);
       }
       const ds = url.searchParams.get("dataset") || "";
       const allowed: DatasetId[] = [
@@ -625,9 +600,9 @@ export default {
       const only =
         ds && (allowed as string[]).includes(ds) ? (ds as DatasetId) : undefined;
       const summary = await runAll(env, "manual", only);
-      return Response.json({ ok: summary.status === "pass", summary });
+      return json({ ok: summary.status === "pass", summary });
     }
-    return Response.json({ error: "not found" }, { status: 404 });
+    return json({ error: "not found" }, 404);
   },
 
   async scheduled(
