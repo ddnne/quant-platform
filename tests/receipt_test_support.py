@@ -101,7 +101,7 @@ def configure_test_receipt_authority(
     )
     monkeypatch.setattr(crypto, "_PINNED_VERIFY_KEYS_PATH", registry_path)
     crypto._load_verify_key_file.cache_clear()
-    monkeypatch.delenv(crypto.PRIVATE_KEY_ENV, raising=False)
+    monkeypatch.delenv("QUANT_RECEIPT_SIGNING_KEY_PEM", raising=False)
     monkeypatch.delenv("QUANT_RECEIPT_VERIFY_KEYS", raising=False)
     monkeypatch.delenv("QUANT_RECEIPT_KEY_ID", raising=False)
     private = serialization.load_pem_private_key(private_pem, password=None)

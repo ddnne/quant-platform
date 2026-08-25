@@ -32,8 +32,6 @@ def _plant_host_pem(
     *,
     private_pem: bytes | None = None,
 ) -> tuple[Path, bytes]:
-    import storage.receipt_crypto as rc
-
     priv_pem = private_pem or generate_test_receipt_keypair(
         key_id="host-operator-v1"
     )[0]
@@ -41,8 +39,6 @@ def _plant_host_pem(
     pem_path = fake_home / ".config" / "quant-platform" / "receipt_signing_key.pem"
     pem_path.parent.mkdir(parents=True)
     pem_path.write_bytes(priv_pem)
-    monkeypatch.setattr(rc, "PRIVATE_KEY_FILE", pem_path)
-    monkeypatch.setattr(rc, "CONFIG_DIR", pem_path.parent)
     monkeypatch.setattr(Path, "home", lambda *args, **kwargs: fake_home)
     monkeypatch.delenv("QUANT_RECEIPT_SIGNING_KEY_PEM", raising=False)
     return pem_path, priv_pem
@@ -71,8 +67,7 @@ def test_production_signer_factory_is_argless_and_rejects_foreign_key(
         load_signing_key(key_id="attacker")  # type: ignore[call-arg]
 
     monkeypatch.setenv("QUANT_RECEIPT_SIGNING_KEY_PEM", priv_pem.decode("ascii"))
-    with pytest.raises(ReceiptKeyConfigurationError, match="exactly one active"):
-        load_signing_key()
+    assert load_signing_key() is None
 
 
 def test_verify_registry_env_and_loader_arguments_cannot_self_root(
@@ -90,8 +85,7 @@ def test_verify_registry_env_and_loader_arguments_cannot_self_root(
     monkeypatch.setenv("QUANT_RECEIPT_KEY_ID", key_id)
     monkeypatch.setenv("QUANT_RECEIPT_SIGNING_KEY_PEM", private_pem.decode("ascii"))
 
-    with pytest.raises(ReceiptKeyConfigurationError, match="exactly one active"):
-        load_signing_key()
+    assert load_signing_key() is None
     with pytest.raises(TypeError, match="unexpected keyword argument 'path'"):
         load_verify_keys(path=attacker_registry)  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="unexpected keyword argument 'extra'"):
@@ -102,7 +96,7 @@ def test_verify_registry_env_and_loader_arguments_cannot_self_root(
         )
 
 
-def test_production_signer_derives_id_from_exact_pinned_public_key(
+def test_matching_pinned_test_key_still_cannot_enable_production_signer(
     monkeypatch: pytest.MonkeyPatch, receipt_ed25519_keys
 ) -> None:
     monkeypatch.setenv(
@@ -110,9 +104,7 @@ def test_production_signer_derives_id_from_exact_pinned_public_key(
         receipt_ed25519_keys.private_pem.decode("ascii"),
     )
     monkeypatch.setenv("QUANT_RECEIPT_KEY_ID", "attacker-asserted-id")
-    signing_key = load_signing_key()
-    assert signing_key is not None
-    assert signing_key.key_id == receipt_ed25519_keys.key_id
+    assert load_signing_key() is None
 
 
 def test_committed_receipt_registry_has_no_current_signing_authority() -> None:
@@ -159,8 +151,7 @@ def test_revoked_same_uid_key_cannot_reactivate_receipt_minting(
     _plant_host_pem(tmp_path, monkeypatch, private_pem=private_pem)
     monkeypatch.delenv("QUANT_RECEIPT_DISABLE_HOST_PEM", raising=False)
 
-    with pytest.raises(ReceiptKeyConfigurationError, match="exactly one active"):
-        load_signing_key()
+    assert load_signing_key() is None
     assert load_verify_keys() == {}
 
 
@@ -268,8 +259,7 @@ def test_pytest_current_test_cannot_disable_host_pem(
     monkeypatch.delenv("QUANT_RECEIPT_DISABLE_HOST_PEM", raising=False)
     monkeypatch.delenv("QUANT_READINESS_DISABLE_HOST_PEM", raising=False)
 
-    key = load_signing_key()
-    assert key is not None
+    assert load_signing_key() is None
     assert pem_path.is_file()
 
     with pytest.raises(MassResearchDisabledError, match="dedicated readiness"):

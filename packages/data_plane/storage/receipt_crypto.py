@@ -10,7 +10,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -18,31 +17,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
-
-CONFIG_DIR = Path.home() / ".config" / "quant-platform"
-PRIVATE_KEY_ENV = "QUANT_RECEIPT_SIGNING_KEY_PEM"
-PRIVATE_KEY_FILE = CONFIG_DIR / "receipt_signing_key.pem"
-DISABLE_HOST_PEM_ENV = "QUANT_RECEIPT_DISABLE_HOST_PEM"
-
-
-def _host_pem_disabled() -> bool:
-    """Return the explicit operator policy for disabling the host key file.
-
-    The dedicated environment PEM is unaffected. Missing keys stay
-    fail-closed (None); the production factory accepts no caller-supplied key
-    or registry arguments.
-
-    Test-runner environment variables deliberately have no effect here.  A
-    caller can set those variables in production, so they are not a security
-    boundary.  Tests inject an ephemeral key explicitly instead.
-    """
-    return os.environ.get(DISABLE_HOST_PEM_ENV, "").strip() == "1"
-
 
 _PINNED_VERIFY_KEYS_PATH = (
     Path(__file__).resolve().parents[1]
@@ -163,61 +141,15 @@ class ReceiptVerifyKey:
 
 
 def load_signing_key() -> ReceiptSigningKey | None:
-    """Load the configured private key only when the pinned registry owns it.
+    """Return no signer until a separately provisioned authority exists.
 
-    Returns None if no private material is configured (production fail-closed
-    for signing).
-
-    When the explicit operator setting QUANT_RECEIPT_DISABLE_HOST_PEM=1 is
-    present, the host config file is not read. The production factory has no
-    PEM, path, key-id, or registry arguments. The issuer id is derived from an
-    exact public-key match in the committed registry; it is never supplied by
-    a caller or environment variable.
+    Production code is verify-only: it never reads private material from
+    HOME, environment variables, or caller-selected paths.  The compatibility
+    factory remains argument-free so governed ingestion fails closed while
+    the external receipt authority is unprovisioned.
     """
-    material: bytes | None = None
-    env = os.environ.get(PRIVATE_KEY_ENV, "").strip()
-    if env:
-        try:
-            material = (
-                env.encode("utf-8")
-                if "BEGIN" in env
-                else base64.b64decode(env, validate=True)
-            )
-        except (TypeError, ValueError) as exc:
-            raise ReceiptKeyConfigurationError(
-                "receipt signing key environment value is invalid"
-            ) from exc
-    elif not _host_pem_disabled() and PRIVATE_KEY_FILE.is_file():
-        material = PRIVATE_KEY_FILE.read_bytes()
-    if not material:
-        return None
-    try:
-        priv = serialization.load_pem_private_key(material, password=None)
-    except (TypeError, ValueError) as exc:
-        raise ReceiptKeyConfigurationError(
-            "receipt signing key PEM is invalid"
-        ) from exc
-    if not isinstance(priv, Ed25519PrivateKey):
-        raise ReceiptKeyConfigurationError("receipt signing key must be Ed25519")
-    public_raw = priv.public_key().public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
-    )
-    matching = [
-        key_id
-        for key_id, verify_key in load_verify_keys().items()
-        if verify_key.public_key.public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
-        )
-        == public_raw
-    ]
-    if len(matching) != 1:
-        raise ReceiptKeyConfigurationError(
-            "receipt signing key does not match exactly one active key in the "
-            "pinned registry"
-        )
-    return ReceiptSigningKey(key_id=matching[0], _private=priv)
+
+    return None
 
 
 @lru_cache(maxsize=8)
