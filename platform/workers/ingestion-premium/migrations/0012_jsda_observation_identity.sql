@@ -229,6 +229,384 @@ CREATE INDEX IF NOT EXISTS ix_jsda_observations_source_time
 CREATE INDEX IF NOT EXISTS ix_jsda_observations_artifact
     ON jsda_observations (content_digest, raw_key, source_object_id);
 
+-- Canonical run-scoped descendant/adoption relation. Closure aggregates this
+-- table, never the child's original immutable run_key/parent_work_key.
+-- Adopted rows snapshot revalidated evidence; they do not rewrite old jobs.
+CREATE TABLE IF NOT EXISTS jsda_run_membership (
+    run_key                    TEXT NOT NULL,
+    root_work_key              TEXT NOT NULL,
+    parent_work_key            TEXT NOT NULL,
+    child_work_key             TEXT NOT NULL,
+    membership_kind            TEXT NOT NULL CHECK
+        (membership_kind IN ('enqueued', 'adopted')),
+    child_job_type             TEXT NOT NULL CHECK
+        (child_job_type IN ('discover_year', 'fetch_file')),
+    terminal_state             TEXT NOT NULL CHECK (
+        terminal_state IN (
+            'pending',
+            'queued',
+            'running',
+            'waiting_children',
+            'completed',
+            'failed_transient',
+            'rejected'
+        )
+    ),
+    content_digest             TEXT,
+    raw_key                    TEXT,
+    audit_receipt_key          TEXT,
+    audit_receipt_digest       TEXT,
+    failure_reason_code        TEXT,
+    failure_detail             TEXT,
+    adopted_at                 TEXT,
+    updated_at                 TEXT NOT NULL,
+    PRIMARY KEY (run_key, parent_work_key, child_work_key),
+    FOREIGN KEY (root_work_key) REFERENCES jsda_acquisition_jobs_v2(work_key),
+    FOREIGN KEY (parent_work_key) REFERENCES jsda_acquisition_jobs_v2(work_key),
+    FOREIGN KEY (child_work_key) REFERENCES jsda_acquisition_jobs_v2(work_key),
+    CHECK (
+        membership_kind = 'enqueued'
+        OR adopted_at IS NOT NULL
+    ),
+    CHECK (
+        terminal_state != 'completed'
+        OR (
+            audit_receipt_key IS NOT NULL
+            AND audit_receipt_digest IS NOT NULL
+            AND content_digest IS NOT NULL
+            AND raw_key IS NOT NULL
+        )
+    ),
+    CHECK (
+        terminal_state != 'rejected'
+        OR failure_reason_code IS NOT NULL
+    )
+);
+
+CREATE INDEX IF NOT EXISTS ix_jsda_run_membership_run_child
+    ON jsda_run_membership (run_key, child_work_key, terminal_state);
+
+CREATE INDEX IF NOT EXISTS ix_jsda_run_membership_parent
+    ON jsda_run_membership (parent_work_key, run_key, terminal_state);
+
+-- Years first, then roots: a newly rejected year must fail its completed root.
+UPDATE jsda_acquisition_jobs_v2
+   SET state = 'rejected',
+       last_error = COALESCE(
+         (
+           SELECT child.last_error
+             FROM jsda_acquisition_jobs_v2 AS child
+            WHERE child.parent_work_key = jsda_acquisition_jobs_v2.work_key
+              AND child.state = 'rejected'
+            ORDER BY child.updated_at, child.work_key
+            LIMIT 1
+         ),
+         'descendant_rejected'
+       )
+ WHERE job_type = 'discover_year'
+   AND state = 'completed'
+   AND audit_receipt_key IS NOT NULL
+   AND audit_receipt_digest IS NOT NULL
+   AND EXISTS (
+     SELECT 1
+       FROM jsda_acquisition_jobs_v2 AS child
+      WHERE child.parent_work_key = jsda_acquisition_jobs_v2.work_key
+        AND child.state = 'rejected'
+   );
+
+UPDATE jsda_acquisition_jobs_v2
+   SET state = 'rejected',
+       last_error = COALESCE(
+         (
+           SELECT child.last_error
+             FROM jsda_acquisition_jobs_v2 AS child
+            WHERE child.parent_work_key = jsda_acquisition_jobs_v2.work_key
+              AND child.state = 'rejected'
+            ORDER BY child.updated_at, child.work_key
+            LIMIT 1
+         ),
+         'descendant_rejected'
+       )
+ WHERE job_type = 'discover_root'
+   AND state = 'completed'
+   AND audit_receipt_key IS NOT NULL
+   AND audit_receipt_digest IS NOT NULL
+   AND EXISTS (
+     SELECT 1
+       FROM jsda_acquisition_jobs_v2 AS child
+      WHERE child.parent_work_key = jsda_acquisition_jobs_v2.work_key
+        AND child.state = 'rejected'
+   );
+
+UPDATE jsda_acquisition_jobs_v2
+   SET state = 'waiting_children'
+ WHERE job_type = 'discover_year'
+   AND state = 'completed'
+   AND audit_receipt_key IS NOT NULL
+   AND audit_receipt_digest IS NOT NULL
+   AND EXISTS (
+     SELECT 1
+       FROM jsda_acquisition_jobs_v2 AS child
+      WHERE child.parent_work_key = jsda_acquisition_jobs_v2.work_key
+        AND child.state NOT IN ('completed', 'rejected')
+   );
+
+UPDATE jsda_acquisition_jobs_v2
+   SET state = 'waiting_children'
+ WHERE job_type = 'discover_root'
+   AND state = 'completed'
+   AND audit_receipt_key IS NOT NULL
+   AND audit_receipt_digest IS NOT NULL
+   AND EXISTS (
+     SELECT 1
+       FROM jsda_acquisition_jobs_v2 AS child
+      WHERE child.parent_work_key = jsda_acquisition_jobs_v2.work_key
+        AND child.state NOT IN ('completed', 'rejected')
+   );
+
+INSERT OR IGNORE INTO jsda_run_membership (
+    run_key, root_work_key, parent_work_key, child_work_key,
+    membership_kind, child_job_type, terminal_state,
+    content_digest, raw_key, audit_receipt_key, audit_receipt_digest,
+    failure_reason_code, failure_detail, adopted_at, updated_at
+)
+SELECT
+    d.run_key,
+    d.run_key,
+    d.parent_work_key,
+    d.child_work_key,
+    CASE WHEN child.run_key = d.run_key THEN 'enqueued' ELSE 'adopted' END,
+    child.job_type,
+    CASE
+        WHEN child.run_key = d.run_key THEN child.state
+        WHEN child.state = 'completed'
+         AND child.audit_receipt_key IS NOT NULL
+         AND child.audit_receipt_digest IS NOT NULL
+         AND child.content_digest IS NOT NULL
+         AND child.raw_key IS NOT NULL
+            THEN 'completed'
+        ELSE 'rejected'
+    END,
+    CASE
+        WHEN child.run_key = d.run_key THEN child.content_digest
+        WHEN child.state = 'completed'
+         AND child.audit_receipt_key IS NOT NULL
+         AND child.audit_receipt_digest IS NOT NULL
+         AND child.content_digest IS NOT NULL
+         AND child.raw_key IS NOT NULL
+            THEN child.content_digest
+        ELSE NULL
+    END,
+    CASE
+        WHEN child.run_key = d.run_key THEN child.raw_key
+        WHEN child.state = 'completed'
+         AND child.audit_receipt_key IS NOT NULL
+         AND child.audit_receipt_digest IS NOT NULL
+         AND child.content_digest IS NOT NULL
+         AND child.raw_key IS NOT NULL
+            THEN child.raw_key
+        ELSE NULL
+    END,
+    CASE
+        WHEN child.run_key = d.run_key THEN child.audit_receipt_key
+        WHEN child.state = 'completed'
+         AND child.audit_receipt_key IS NOT NULL
+         AND child.audit_receipt_digest IS NOT NULL
+         AND child.content_digest IS NOT NULL
+         AND child.raw_key IS NOT NULL
+            THEN child.audit_receipt_key
+        ELSE NULL
+    END,
+    CASE
+        WHEN child.run_key = d.run_key THEN child.audit_receipt_digest
+        WHEN child.state = 'completed'
+         AND child.audit_receipt_key IS NOT NULL
+         AND child.audit_receipt_digest IS NOT NULL
+         AND child.content_digest IS NOT NULL
+         AND child.raw_key IS NOT NULL
+            THEN child.audit_receipt_digest
+        ELSE NULL
+    END,
+    CASE
+        WHEN child.run_key = d.run_key AND child.state = 'rejected'
+            THEN 'rejected'
+        WHEN child.run_key != d.run_key
+         AND child.state = 'completed'
+         AND child.audit_receipt_key IS NOT NULL
+         AND child.audit_receipt_digest IS NOT NULL
+         AND child.content_digest IS NOT NULL
+         AND child.raw_key IS NOT NULL
+            THEN NULL
+        WHEN child.run_key != d.run_key AND child.state = 'rejected'
+            THEN 'rejected'
+        WHEN child.run_key != d.run_key
+            THEN 'insufficient_legacy_evidence'
+        ELSE NULL
+    END,
+    CASE
+        WHEN child.run_key = d.run_key AND child.state = 'rejected'
+            THEN child.last_error
+        WHEN child.run_key != d.run_key
+         AND child.state = 'completed'
+         AND child.audit_receipt_key IS NOT NULL
+         AND child.audit_receipt_digest IS NOT NULL
+         AND child.content_digest IS NOT NULL
+         AND child.raw_key IS NOT NULL
+            THEN NULL
+        WHEN child.run_key != d.run_key AND child.state = 'rejected'
+            THEN child.last_error
+        WHEN child.run_key != d.run_key
+            THEN 'adopted child lacks authoritative artifact/audit evidence'
+        ELSE NULL
+    END,
+    CASE WHEN child.run_key != d.run_key THEN d.discovered_at ELSE NULL END,
+    d.discovered_at
+  FROM jsda_acquisition_discoveries_v2 AS d
+  JOIN jsda_acquisition_jobs_v2 AS child
+    ON child.work_key = d.child_work_key;
+
+UPDATE jsda_acquisition_jobs_v2
+   SET state = 'rejected',
+       last_error = COALESCE(
+         (
+           SELECT failure_detail FROM jsda_run_membership
+            WHERE parent_work_key = jsda_acquisition_jobs_v2.work_key
+              AND run_key = jsda_acquisition_jobs_v2.run_key
+              AND terminal_state = 'rejected'
+            ORDER BY updated_at, child_work_key
+            LIMIT 1
+         ),
+         last_error,
+         'descendant_rejected'
+       )
+ WHERE job_type = 'discover_year'
+   AND state IN ('completed', 'waiting_children')
+   AND audit_receipt_key IS NOT NULL
+   AND audit_receipt_digest IS NOT NULL
+   AND EXISTS (
+     SELECT 1 FROM jsda_run_membership
+      WHERE parent_work_key = jsda_acquisition_jobs_v2.work_key
+        AND run_key = jsda_acquisition_jobs_v2.run_key
+        AND terminal_state = 'rejected'
+   );
+
+UPDATE jsda_acquisition_jobs_v2
+   SET state = 'rejected',
+       last_error = COALESCE(
+         (
+           SELECT failure_detail FROM jsda_run_membership
+            WHERE parent_work_key = jsda_acquisition_jobs_v2.work_key
+              AND run_key = jsda_acquisition_jobs_v2.run_key
+              AND terminal_state = 'rejected'
+            ORDER BY updated_at, child_work_key
+            LIMIT 1
+         ),
+         last_error,
+         'descendant_rejected'
+       )
+ WHERE job_type = 'discover_root'
+   AND state IN ('completed', 'waiting_children')
+   AND audit_receipt_key IS NOT NULL
+   AND audit_receipt_digest IS NOT NULL
+   AND EXISTS (
+     SELECT 1 FROM jsda_run_membership
+      WHERE parent_work_key = jsda_acquisition_jobs_v2.work_key
+        AND run_key = jsda_acquisition_jobs_v2.run_key
+        AND terminal_state = 'rejected'
+   );
+
+UPDATE jsda_acquisition_jobs_v2
+   SET state = 'waiting_children'
+ WHERE job_type = 'discover_year'
+   AND state = 'completed'
+   AND audit_receipt_key IS NOT NULL
+   AND audit_receipt_digest IS NOT NULL
+   AND EXISTS (
+     SELECT 1 FROM jsda_run_membership
+      WHERE parent_work_key = jsda_acquisition_jobs_v2.work_key
+        AND run_key = jsda_acquisition_jobs_v2.run_key
+        AND terminal_state IN ('pending', 'queued', 'running', 'waiting_children', 'failed_transient')
+   );
+
+UPDATE jsda_acquisition_jobs_v2
+   SET state = 'waiting_children'
+ WHERE job_type = 'discover_root'
+   AND state = 'completed'
+   AND audit_receipt_key IS NOT NULL
+   AND audit_receipt_digest IS NOT NULL
+   AND EXISTS (
+     SELECT 1 FROM jsda_run_membership
+      WHERE parent_work_key = jsda_acquisition_jobs_v2.work_key
+        AND run_key = jsda_acquisition_jobs_v2.run_key
+        AND terminal_state IN ('pending', 'queued', 'running', 'waiting_children', 'failed_transient')
+   );
+
+CREATE TRIGGER IF NOT EXISTS jsda_run_membership_enqueued_insert
+AFTER INSERT ON jsda_acquisition_jobs_v2
+WHEN NEW.parent_work_key IS NOT NULL
+BEGIN
+    INSERT OR IGNORE INTO jsda_run_membership (
+        run_key, root_work_key, parent_work_key, child_work_key,
+        membership_kind, child_job_type, terminal_state,
+        content_digest, raw_key, audit_receipt_key, audit_receipt_digest,
+        failure_reason_code, failure_detail, adopted_at, updated_at
+    )
+    VALUES (
+        NEW.run_key,
+        NEW.run_key,
+        NEW.parent_work_key,
+        NEW.work_key,
+        'enqueued',
+        NEW.job_type,
+        NEW.state,
+        NEW.content_digest,
+        NEW.raw_key,
+        NEW.audit_receipt_key,
+        NEW.audit_receipt_digest,
+        CASE WHEN NEW.state = 'rejected' THEN 'rejected' ELSE NULL END,
+        NEW.last_error,
+        NULL,
+        NEW.updated_at
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_run_membership_enqueued_sync
+AFTER UPDATE OF state, content_digest, raw_key, audit_receipt_key,
+                audit_receipt_digest, last_error
+ON jsda_acquisition_jobs_v2
+WHEN NEW.parent_work_key IS NOT NULL
+ AND (
+   NEW.state != 'completed'
+   OR (
+     NEW.audit_receipt_key IS NOT NULL
+     AND NEW.audit_receipt_digest IS NOT NULL
+     AND NEW.content_digest IS NOT NULL
+     AND NEW.raw_key IS NOT NULL
+   )
+ )
+BEGIN
+    UPDATE jsda_run_membership
+       SET terminal_state = NEW.state,
+           content_digest = NEW.content_digest,
+           raw_key = NEW.raw_key,
+           audit_receipt_key = NEW.audit_receipt_key,
+           audit_receipt_digest = NEW.audit_receipt_digest,
+           failure_reason_code = CASE
+             WHEN NEW.state = 'rejected' THEN COALESCE(
+               failure_reason_code, 'rejected'
+             )
+             ELSE failure_reason_code
+           END,
+           failure_detail = CASE
+             WHEN NEW.state = 'rejected' THEN NEW.last_error
+             ELSE failure_detail
+           END,
+           updated_at = NEW.updated_at
+     WHERE child_work_key = NEW.work_key
+       AND run_key = NEW.run_key
+       AND membership_kind = 'enqueued';
+END;
+
 CREATE TABLE IF NOT EXISTS jsda_job_closures (
     work_key                     TEXT PRIMARY KEY,
     run_key                      TEXT NOT NULL,
@@ -304,17 +682,197 @@ SELECT work_key, run_key, parent_work_key, job_type, 'open', updated_at
   FROM jsda_acquisition_jobs_v2
  WHERE job_type IN ('discover_root', 'discover_year');
 
--- Discovery rows that already look completed while children are still open
--- were frontier-exhausted under the previous false PASS. Reopen them.
-UPDATE jsda_acquisition_jobs_v2
-   SET state = 'waiting_children'
- WHERE job_type IN ('discover_root', 'discover_year')
-   AND state = 'completed'
-   AND audit_receipt_key IS NOT NULL
-   AND audit_receipt_digest IS NOT NULL
-   AND EXISTS (
-     SELECT 1
-       FROM jsda_acquisition_jobs_v2 AS child
-      WHERE child.parent_work_key = jsda_acquisition_jobs_v2.work_key
-        AND child.state NOT IN ('completed', 'rejected')
-   );
+UPDATE jsda_job_closures
+   SET descendant_total = (
+         SELECT COUNT(*) FROM jsda_run_membership
+          WHERE parent_work_key = jsda_job_closures.work_key
+            AND run_key = jsda_job_closures.run_key
+       ),
+       descendant_completed = (
+         SELECT COUNT(*) FROM jsda_run_membership
+          WHERE parent_work_key = jsda_job_closures.work_key
+            AND run_key = jsda_job_closures.run_key
+            AND terminal_state = 'completed'
+            AND audit_receipt_key IS NOT NULL
+            AND audit_receipt_digest IS NOT NULL
+            AND content_digest IS NOT NULL
+            AND raw_key IS NOT NULL
+       ),
+       descendant_rejected = (
+         SELECT COUNT(*) FROM jsda_run_membership
+          WHERE parent_work_key = jsda_job_closures.work_key
+            AND run_key = jsda_job_closures.run_key
+            AND terminal_state = 'rejected'
+       ),
+       descendant_failed_transient = (
+         SELECT COUNT(*) FROM jsda_run_membership
+          WHERE parent_work_key = jsda_job_closures.work_key
+            AND run_key = jsda_job_closures.run_key
+            AND terminal_state = 'failed_transient'
+       ),
+       descendant_nonterminal = (
+         SELECT COUNT(*) FROM jsda_run_membership
+          WHERE parent_work_key = jsda_job_closures.work_key
+            AND run_key = jsda_job_closures.run_key
+            AND terminal_state IN
+                ('pending', 'queued', 'running', 'waiting_children')
+       ),
+       frontier_exhausted = CASE
+         WHEN (
+           SELECT state FROM jsda_acquisition_jobs_v2
+            WHERE work_key = jsda_job_closures.work_key
+         ) IN ('waiting_children', 'completed', 'rejected') THEN 1
+         ELSE frontier_exhausted
+       END,
+       failure_work_key = (
+         SELECT child_work_key FROM jsda_run_membership
+          WHERE parent_work_key = jsda_job_closures.work_key
+            AND run_key = jsda_job_closures.run_key
+            AND terminal_state = 'rejected'
+          ORDER BY updated_at, child_work_key
+          LIMIT 1
+       ),
+       failure_reason_code = CASE
+         WHEN (
+           SELECT COUNT(*) FROM jsda_run_membership
+            WHERE parent_work_key = jsda_job_closures.work_key
+              AND run_key = jsda_job_closures.run_key
+              AND terminal_state = 'rejected'
+         ) > 0 THEN COALESCE(
+           (
+             SELECT failure_reason_code FROM jsda_run_membership
+              WHERE parent_work_key = jsda_job_closures.work_key
+                AND run_key = jsda_job_closures.run_key
+                AND terminal_state = 'rejected'
+              ORDER BY updated_at, child_work_key
+              LIMIT 1
+           ),
+           'descendant_rejected'
+         )
+         ELSE failure_reason_code
+       END,
+       failure_detail = (
+         SELECT failure_detail FROM jsda_run_membership
+          WHERE parent_work_key = jsda_job_closures.work_key
+            AND run_key = jsda_job_closures.run_key
+            AND terminal_state = 'rejected'
+          ORDER BY updated_at, child_work_key
+          LIMIT 1
+       );
+
+UPDATE jsda_run_closures
+   SET descendant_total = (
+         SELECT COUNT(DISTINCT child_work_key) FROM jsda_run_membership
+          WHERE run_key = jsda_run_closures.run_key
+       ),
+       descendant_completed = (
+         SELECT COUNT(DISTINCT child_work_key) FROM jsda_run_membership
+          WHERE run_key = jsda_run_closures.run_key
+            AND terminal_state = 'completed'
+            AND audit_receipt_key IS NOT NULL
+            AND audit_receipt_digest IS NOT NULL
+            AND content_digest IS NOT NULL
+            AND raw_key IS NOT NULL
+       ),
+       descendant_rejected = (
+         SELECT COUNT(DISTINCT child_work_key) FROM jsda_run_membership
+          WHERE run_key = jsda_run_closures.run_key
+            AND terminal_state = 'rejected'
+       ),
+       descendant_failed_transient = (
+         SELECT COUNT(DISTINCT child_work_key) FROM jsda_run_membership
+          WHERE run_key = jsda_run_closures.run_key
+            AND terminal_state = 'failed_transient'
+       ),
+       descendant_nonterminal = (
+         SELECT COUNT(DISTINCT child_work_key) FROM jsda_run_membership
+          WHERE run_key = jsda_run_closures.run_key
+            AND terminal_state IN
+                ('pending', 'queued', 'running', 'waiting_children')
+       ),
+       frontier_exhausted = CASE
+         WHEN (
+           SELECT state FROM jsda_acquisition_jobs_v2
+            WHERE work_key = jsda_run_closures.root_work_key
+         ) IN ('waiting_children', 'completed', 'rejected') THEN 1
+         ELSE frontier_exhausted
+       END,
+       failure_work_key = (
+         SELECT child_work_key FROM jsda_run_membership
+          WHERE run_key = jsda_run_closures.run_key
+            AND terminal_state = 'rejected'
+          ORDER BY updated_at, child_work_key
+          LIMIT 1
+       ),
+       failure_reason_code = CASE
+         WHEN (
+           SELECT COUNT(DISTINCT child_work_key) FROM jsda_run_membership
+            WHERE run_key = jsda_run_closures.run_key
+              AND terminal_state = 'rejected'
+         ) > 0 THEN COALESCE(
+           (
+             SELECT failure_reason_code FROM jsda_run_membership
+              WHERE run_key = jsda_run_closures.run_key
+                AND terminal_state = 'rejected'
+              ORDER BY updated_at, child_work_key
+              LIMIT 1
+           ),
+           'descendant_rejected'
+         )
+         ELSE failure_reason_code
+       END,
+       failure_detail = (
+         SELECT failure_detail FROM jsda_run_membership
+          WHERE run_key = jsda_run_closures.run_key
+            AND terminal_state = 'rejected'
+          ORDER BY updated_at, child_work_key
+          LIMIT 1
+       );
+
+UPDATE jsda_job_closures
+   SET closure_state = CASE
+         WHEN descendant_rejected > 0 AND descendant_completed > 0 THEN 'partial'
+         WHEN descendant_rejected > 0 THEN 'failed'
+         WHEN frontier_exhausted = 1
+          AND descendant_total > 0
+          AND descendant_completed = descendant_total
+          AND descendant_rejected = 0
+          AND descendant_failed_transient = 0
+          AND descendant_nonterminal = 0 THEN 'completed'
+         WHEN frontier_exhausted = 1 THEN 'waiting_children'
+         ELSE 'open'
+       END,
+       closed_at = CASE
+         WHEN descendant_rejected > 0 THEN updated_at
+         WHEN frontier_exhausted = 1
+          AND descendant_total > 0
+          AND descendant_completed = descendant_total
+          AND descendant_rejected = 0
+          AND descendant_failed_transient = 0
+          AND descendant_nonterminal = 0 THEN updated_at
+         ELSE NULL
+       END;
+
+UPDATE jsda_run_closures
+   SET closure_state = CASE
+         WHEN descendant_rejected > 0 AND descendant_completed > 0 THEN 'partial'
+         WHEN descendant_rejected > 0 THEN 'failed'
+         WHEN frontier_exhausted = 1
+          AND descendant_total > 0
+          AND descendant_completed = descendant_total
+          AND descendant_rejected = 0
+          AND descendant_failed_transient = 0
+          AND descendant_nonterminal = 0 THEN 'completed'
+         WHEN frontier_exhausted = 1 THEN 'waiting_children'
+         ELSE 'open'
+       END,
+       closed_at = CASE
+         WHEN descendant_rejected > 0 THEN updated_at
+         WHEN frontier_exhausted = 1
+          AND descendant_total > 0
+          AND descendant_completed = descendant_total
+          AND descendant_rejected = 0
+          AND descendant_failed_transient = 0
+          AND descendant_nonterminal = 0 THEN updated_at
+         ELSE NULL
+       END;

@@ -314,11 +314,12 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       descendant_nonterminal: 30,
     });
     const runLog = await runtimeEnv.DB.prepare(
-      `SELECT status FROM ingestion_run_log WHERE instr(detail, ?) > 0 ORDER BY id DESC LIMIT 1`,
+      `SELECT COUNT(*) AS n FROM ingestion_run_log
+        WHERE status='pass' AND json_extract(detail, '$.run_id')=?`,
     )
-      .bind(root.work_key)
-      .first<{ status: string }>();
-    expect(runLog?.status).toBe("partial");
+      .bind(root.run_key)
+      .first<{ n: number }>();
+    expect(runLog?.n).toBe(0);
     const finalChildCount = await runtimeEnv.DB.prepare(
       "SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2 WHERE parent_work_key=?",
     )
@@ -435,7 +436,7 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
         root.work_key,
       )
       .run();
-    await runtimeEnv.DB.exec("DROP TABLE ingestion_run_log");
+    await runtimeEnv.DB.exec("DROP TABLE jsda_acquisition_events_v2");
 
     const result = await deliver(root, "run-log-down");
     expect(result.explicitAcks).toEqual([]);
@@ -1031,6 +1032,31 @@ describe("JSDA descendant run closure", () => {
     expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("waiting_children");
   });
 
+  it("does not publish run PASS when a leaf succeeds while a sibling is queued", async () => {
+    const { root, children } = await seedWaitingRoot([FILE_A, FILE_B]);
+    const restore = mockOfficialFetch({ [FILE_A]: "leaf-only" });
+    try {
+      expect(
+        (await deliver(await childJob(children[0].work_key), "leaf-only")).explicitAcks,
+      ).toEqual(["leaf-only"]);
+    } finally {
+      restore();
+    }
+    expect((await loadJob(runtimeEnv.DB, children[0].work_key))?.state).toBe("completed");
+    expect((await loadJob(runtimeEnv.DB, children[1].work_key))?.state).toBe("queued");
+    expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("waiting_children");
+    expect((await loadRunClosure(runtimeEnv.DB, root.run_key))?.closure_state).toBe(
+      "waiting_children",
+    );
+    const passLogs = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM ingestion_run_log
+        WHERE status='pass' AND json_extract(detail, '$.run_id')=?`,
+    )
+      .bind(root.run_key)
+      .first<{ n: number }>();
+    expect(passLogs?.n).toBe(0);
+  });
+
   it("keeps a root nonterminal while a child is in transient retry", async () => {
     const { root, children } = await seedWaitingRoot([FILE_A]);
     const original = globalThis.fetch;
@@ -1084,6 +1110,13 @@ describe("JSDA descendant run closure", () => {
       .bind(root.work_key)
       .first<{ n: number }>();
     expect(completedEvents?.n).toBe(1);
+    const passLogs = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM ingestion_run_log
+        WHERE status='pass' AND json_extract(detail, '$.run_id')=?`,
+    )
+      .bind(root.run_key)
+      .first<{ n: number }>();
+    expect(passLogs?.n).toBe(1);
   });
 
   it("closes the root once when delayed children finish out of order", async () => {
@@ -1252,5 +1285,40 @@ describe("JSDA descendant run closure", () => {
     });
     expect((await loadJob(runtimeEnv.DB, children[0].work_key))?.state).toBe("queued");
     expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("waiting_children");
+  });
+
+  it("closes a waiting_children origin on redelivery, not only its ancestors", async () => {
+    const { root, children } = await seedWaitingRoot([FILE_A]);
+    const restore = mockOfficialFetch({ [FILE_A]: "origin-close-bytes" });
+    try {
+      expect(
+        (await deliver(await childJob(children[0].work_key), "origin-child")).explicitAcks,
+      ).toEqual(["origin-child"]);
+    } finally {
+      restore();
+    }
+    expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("completed");
+    await runtimeEnv.DB.prepare(
+      `UPDATE jsda_acquisition_jobs_v2
+          SET state='waiting_children', completed_at=NULL
+        WHERE work_key=?`,
+    )
+      .bind(root.work_key)
+      .run();
+    await runtimeEnv.DB.prepare(
+      `UPDATE jsda_run_closures
+          SET closure_state='waiting_children', closed_at=NULL
+        WHERE run_key=?`,
+    )
+      .bind(root.run_key)
+      .run();
+    expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("waiting_children");
+    expect(
+      (await deliver(root, "waiting-origin-redeliver")).explicitAcks,
+    ).toEqual(["waiting-origin-redeliver"]);
+    expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("completed");
+    expect((await loadRunClosure(runtimeEnv.DB, root.run_key))?.closure_state).toBe(
+      "completed",
+    );
   });
 });

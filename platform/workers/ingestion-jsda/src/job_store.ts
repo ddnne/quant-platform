@@ -108,6 +108,26 @@ export interface RunClosureRow {
   updated_at: string;
 }
 
+export type MembershipKind = "enqueued" | "adopted";
+
+export interface RunMembershipRow {
+  run_key: string;
+  root_work_key: string;
+  parent_work_key: string;
+  child_work_key: string;
+  membership_kind: MembershipKind;
+  child_job_type: Exclude<JobType, "discover_root">;
+  terminal_state: JobState;
+  content_digest: string | null;
+  raw_key: string | null;
+  audit_receipt_key: string | null;
+  audit_receipt_digest: string | null;
+  failure_reason_code: string | null;
+  failure_detail: string | null;
+  adopted_at: string | null;
+  updated_at: string;
+}
+
 const JOB_SELECT = `work_key, run_key, dataset, job_type, target_url, segment_id,
               parent_work_key, contract_digest, state, attempt, cursor,
               frontier_json, last_error, content_digest, raw_key,
@@ -124,6 +144,15 @@ const RUN_CLOSURE_SELECT = `run_key, root_work_key, dataset, closure_state,
         frontier_exhausted, descendant_total, descendant_completed,
         descendant_rejected, descendant_failed_transient, descendant_nonterminal,
         failure_work_key, failure_reason_code, failure_detail, closed_at, updated_at`;
+
+const MEMBERSHIP_SELECT = `run_key, root_work_key, parent_work_key, child_work_key,
+        membership_kind, child_job_type, terminal_state, content_digest, raw_key,
+        audit_receipt_key, audit_receipt_digest, failure_reason_code,
+        failure_detail, adopted_at, updated_at`;
+
+const MEMBERSHIP_COMPLETED = `terminal_state='completed'
+         AND audit_receipt_key IS NOT NULL AND audit_receipt_digest IS NOT NULL
+         AND content_digest IS NOT NULL AND raw_key IS NOT NULL`;
 
 function detailJson(
   job: Pick<JobRow, "work_key" | "run_key" | "dataset" | "job_type" | "segment_id" | "attempt">,
@@ -281,9 +310,13 @@ function allocateObservationStatements(
           WHERE source_object_id=?
             AND NOT EXISTS (
               SELECT 1 FROM jsda_observations WHERE observation_key=?
+            )
+            AND EXISTS (
+              SELECT 1 FROM jsda_acquisition_jobs_v2
+               WHERE work_key=? AND state='pending'
             )`,
       )
-      .bind(now, identity.sourceObjectId, job.work_key),
+      .bind(now, identity.sourceObjectId, job.work_key, job.work_key),
     db
       .prepare(
         `INSERT OR IGNORE INTO jsda_observations
@@ -292,7 +325,11 @@ function allocateObservationStatements(
           first_seen_at, updated_at)
          SELECT ?, ?, ?, ?, ?, ?, ?, ?, so.next_observation_seq - 1, 'pending', ?, ?
            FROM jsda_source_objects so
-          WHERE so.source_object_id=?`,
+          WHERE so.source_object_id=?
+            AND EXISTS (
+              SELECT 1 FROM jsda_acquisition_jobs_v2
+               WHERE work_key=? AND state='pending'
+            )`,
       )
       .bind(
         job.work_key,
@@ -306,8 +343,181 @@ function allocateObservationStatements(
         now,
         now,
         identity.sourceObjectId,
+        job.work_key,
       ),
   ];
+}
+
+function backfillIdentityStatement(
+  db: D1Database,
+  job: JsdaQueueJob,
+  identity: FileIdentity,
+  now: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE jsda_acquisition_jobs_v2
+          SET source_object_id=COALESCE(source_object_id, ?),
+              freshness=COALESCE(freshness, ?),
+              observation_epoch=COALESCE(observation_epoch, ?),
+              updated_at=?
+        WHERE work_key=?`,
+    )
+    .bind(
+      identity.sourceObjectId,
+      identity.freshness,
+      identity.epoch,
+      now,
+      job.work_key,
+    );
+}
+
+function backfillCompletedObservationStatements(
+  db: D1Database,
+  job: JsdaQueueJob,
+  identity: FileIdentity,
+  now: string,
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        `UPDATE jsda_source_objects
+            SET next_observation_seq = next_observation_seq + 1, updated_at=?
+          WHERE source_object_id=?
+            AND NOT EXISTS (
+              SELECT 1 FROM jsda_observations WHERE observation_key=?
+            )
+            AND EXISTS (
+              SELECT 1 FROM jsda_acquisition_jobs_v2
+               WHERE work_key=? AND state='completed'
+                 AND audit_receipt_key IS NOT NULL
+                 AND audit_receipt_digest IS NOT NULL
+                 AND content_digest IS NOT NULL
+                 AND raw_key IS NOT NULL
+            )`,
+      )
+      .bind(now, identity.sourceObjectId, job.work_key, job.work_key),
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO jsda_observations
+         (observation_key, source_object_id, work_key, run_key, dataset,
+          target_url, freshness, epoch, observation_seq, state,
+          content_digest, raw_key, observed_at, first_seen_at, updated_at)
+         SELECT ?, ?, j.work_key, j.run_key, j.dataset, j.target_url, ?, ?,
+                so.next_observation_seq - 1, 'completed',
+                j.content_digest, j.raw_key, COALESCE(j.completed_at, ?), ?, ?
+           FROM jsda_acquisition_jobs_v2 AS j
+           JOIN jsda_source_objects AS so
+             ON so.source_object_id=?
+          WHERE j.work_key=?
+            AND j.state='completed'
+            AND j.audit_receipt_key IS NOT NULL
+            AND j.audit_receipt_digest IS NOT NULL
+            AND j.content_digest IS NOT NULL
+            AND j.raw_key IS NOT NULL`,
+      )
+      .bind(
+        job.work_key,
+        identity.sourceObjectId,
+        identity.freshness,
+        identity.epoch,
+        now,
+        now,
+        now,
+        identity.sourceObjectId,
+        job.work_key,
+      ),
+  ];
+}
+
+function insertMembershipStatement(
+  db: D1Database,
+  job: JsdaQueueJob,
+  now: string,
+): D1PreparedStatement | null {
+  if (job.parent_work_key === null) return null;
+  const evidence = `child.state='completed'
+         AND child.audit_receipt_key IS NOT NULL
+         AND child.audit_receipt_digest IS NOT NULL
+         AND child.content_digest IS NOT NULL
+         AND child.raw_key IS NOT NULL`;
+  return db
+    .prepare(
+      `INSERT OR IGNORE INTO jsda_run_membership
+       (run_key, root_work_key, parent_work_key, child_work_key,
+        membership_kind, child_job_type, terminal_state,
+        content_digest, raw_key, audit_receipt_key, audit_receipt_digest,
+        failure_reason_code, failure_detail, adopted_at, updated_at)
+       SELECT ?, ?, ?, child.work_key,
+              CASE WHEN child.run_key=? THEN 'enqueued' ELSE 'adopted' END,
+              child.job_type,
+              CASE
+                WHEN child.run_key=? THEN child.state
+                WHEN ${evidence} THEN 'completed'
+                ELSE 'rejected'
+              END,
+              CASE
+                WHEN child.run_key=? THEN child.content_digest
+                WHEN ${evidence} THEN child.content_digest
+                ELSE NULL
+              END,
+              CASE
+                WHEN child.run_key=? THEN child.raw_key
+                WHEN ${evidence} THEN child.raw_key
+                ELSE NULL
+              END,
+              CASE
+                WHEN child.run_key=? THEN child.audit_receipt_key
+                WHEN ${evidence} THEN child.audit_receipt_key
+                ELSE NULL
+              END,
+              CASE
+                WHEN child.run_key=? THEN child.audit_receipt_digest
+                WHEN ${evidence} THEN child.audit_receipt_digest
+                ELSE NULL
+              END,
+              CASE
+                WHEN child.run_key=? AND child.state='rejected' THEN 'rejected'
+                WHEN child.run_key!=? AND ${evidence} THEN NULL
+                WHEN child.run_key!=? AND child.state='rejected' THEN 'rejected'
+                WHEN child.run_key!=? THEN 'insufficient_legacy_evidence'
+                ELSE NULL
+              END,
+              CASE
+                WHEN child.run_key=? AND child.state='rejected' THEN child.last_error
+                WHEN child.run_key!=? AND ${evidence} THEN NULL
+                WHEN child.run_key!=? AND child.state='rejected' THEN child.last_error
+                WHEN child.run_key!=? THEN 'adopted child lacks authoritative artifact/audit evidence'
+                ELSE NULL
+              END,
+              CASE WHEN child.run_key!=? THEN ? ELSE NULL END,
+              ?
+         FROM jsda_acquisition_jobs_v2 AS child
+        WHERE child.work_key=?`,
+    )
+    .bind(
+      job.run_key,
+      job.run_key,
+      job.parent_work_key,
+      job.run_key,
+      job.run_key,
+      job.run_key,
+      job.run_key,
+      job.run_key,
+      job.run_key,
+      job.run_key,
+      job.run_key,
+      job.run_key,
+      job.run_key,
+      job.run_key,
+      job.run_key,
+      job.run_key,
+      job.run_key,
+      job.run_key,
+      now,
+      now,
+      job.work_key,
+    );
 }
 
 function insertArtifactStatements(
@@ -469,89 +679,118 @@ function casCurrentSourceObjectStatement(
     );
 }
 
-function insertRunLogStatement(
+function insertRunTerminalLogStatement(
   db: D1Database,
   job: Pick<JobRow, "work_key" | "run_key" | "dataset" | "job_type" | "segment_id" | "attempt">,
   event: RunEvent,
   expectedState: JobState,
 ): D1PreparedStatement {
-  const status =
-    event.result === "completed"
-      ? "pass"
-      : event.result === "continued" || event.result === "frontier_exhausted"
-        ? "partial"
-        : "fail";
   return db
     .prepare(
       `INSERT INTO ingestion_run_log (ran_at, source, runtime, status, detail)
-       SELECT ?, 'jsda', 'cloudflare_queue_v2', ?, ?
-       WHERE EXISTS (
-         SELECT 1 FROM jsda_acquisition_jobs_v2
-          WHERE work_key=? AND attempt=? AND state=?
-            AND audit_receipt_key=? AND audit_receipt_digest=?
-       )`,
+       SELECT ?, 'jsda', 'cloudflare_queue_v2',
+              CASE rc.closure_state
+                WHEN 'completed' THEN 'pass'
+                WHEN 'partial' THEN 'partial'
+                ELSE 'fail'
+              END,
+              ?
+         FROM jsda_run_closures AS rc
+        WHERE rc.run_key=?
+          AND rc.closure_state IN ('completed', 'failed', 'partial')
+          AND EXISTS (
+            SELECT 1 FROM jsda_acquisition_jobs_v2
+             WHERE work_key=? AND attempt=? AND state=? AND job_type='discover_root'
+               AND audit_receipt_key=? AND audit_receipt_digest=?
+          )
+          AND (
+            (rc.closure_state='completed'
+             AND rc.frontier_exhausted=1
+             AND rc.descendant_total > 0
+             AND rc.descendant_completed = rc.descendant_total
+             AND rc.descendant_rejected = 0
+             AND rc.descendant_failed_transient = 0
+             AND rc.descendant_nonterminal = 0)
+            OR rc.descendant_rejected > 0
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM ingestion_run_log
+             WHERE source='jsda'
+               AND runtime='cloudflare_queue_v2'
+               AND json_extract(detail, '$.run_id') = ?
+               AND json_extract(detail, '$.result') IN ('completed', 'rejected')
+          )`,
     )
     .bind(
       event.occurredAt,
-      status,
       detailJson(job, event),
+      job.run_key,
       job.work_key,
       job.attempt,
       expectedState,
       event.audit.key,
       event.audit.digest,
+      job.run_key,
     );
 }
 
 function requireBatch(results: D1Result[], message: string): void {
-  if (results.some((result) => (result?.meta.changes ?? 0) !== 1)) {
+  // D1 includes rows written by triggers in meta.changes, so a fenced job
+  // UPDATE that syncs run membership can report more than one change.
+  if (results.some((result) => (result?.meta.changes ?? 0) < 1)) {
     throw new Error(message);
   }
 }
 
 function recomputeJobClosureStatement(
   db: D1Database,
-  parent: Pick<JobRow, "work_key">,
+  parent: Pick<JobRow, "work_key" | "run_key">,
   now: string,
 ): D1PreparedStatement {
   return db
     .prepare(
       `UPDATE jsda_job_closures
           SET descendant_total=(
-                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2 WHERE parent_work_key=?
+                SELECT COUNT(*) FROM jsda_run_membership
+                 WHERE parent_work_key=? AND run_key=?
               ),
               descendant_completed=(
-                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
-                 WHERE parent_work_key=? AND state='completed'
-                   AND audit_receipt_key IS NOT NULL AND audit_receipt_digest IS NOT NULL
+                SELECT COUNT(*) FROM jsda_run_membership
+                 WHERE parent_work_key=? AND run_key=?
+                   AND ${MEMBERSHIP_COMPLETED}
               ),
               descendant_rejected=(
-                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
-                 WHERE parent_work_key=? AND state='rejected'
+                SELECT COUNT(*) FROM jsda_run_membership
+                 WHERE parent_work_key=? AND run_key=?
+                   AND terminal_state='rejected'
               ),
               descendant_failed_transient=(
-                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
-                 WHERE parent_work_key=? AND state='failed_transient'
+                SELECT COUNT(*) FROM jsda_run_membership
+                 WHERE parent_work_key=? AND run_key=?
+                   AND terminal_state='failed_transient'
               ),
               descendant_nonterminal=(
-                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
-                 WHERE parent_work_key=?
-                   AND state IN ('pending','queued','running','waiting_children')
+                SELECT COUNT(*) FROM jsda_run_membership
+                 WHERE parent_work_key=? AND run_key=?
+                   AND terminal_state IN ('pending','queued','running','waiting_children')
               ),
               failure_work_key=(
-                SELECT work_key FROM jsda_acquisition_jobs_v2
-                 WHERE parent_work_key=? AND state='rejected'
-                 ORDER BY updated_at, work_key LIMIT 1
+                SELECT child_work_key FROM jsda_run_membership
+                 WHERE parent_work_key=? AND run_key=?
+                   AND terminal_state='rejected'
+                 ORDER BY updated_at, child_work_key LIMIT 1
               ),
               failure_detail=(
-                SELECT last_error FROM jsda_acquisition_jobs_v2
-                 WHERE parent_work_key=? AND state='rejected'
-                 ORDER BY updated_at, work_key LIMIT 1
+                SELECT failure_detail FROM jsda_run_membership
+                 WHERE parent_work_key=? AND run_key=?
+                   AND terminal_state='rejected'
+                 ORDER BY updated_at, child_work_key LIMIT 1
               ),
               failure_reason_code=CASE
                 WHEN (
-                  SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
-                   WHERE parent_work_key=? AND state='rejected'
+                  SELECT COUNT(*) FROM jsda_run_membership
+                   WHERE parent_work_key=? AND run_key=?
+                     AND terminal_state='rejected'
                 ) > 0 THEN 'descendant_rejected'
                 ELSE failure_reason_code
               END,
@@ -560,13 +799,21 @@ function recomputeJobClosureStatement(
     )
     .bind(
       parent.work_key,
+      parent.run_key,
       parent.work_key,
+      parent.run_key,
       parent.work_key,
+      parent.run_key,
       parent.work_key,
+      parent.run_key,
       parent.work_key,
+      parent.run_key,
       parent.work_key,
+      parent.run_key,
       parent.work_key,
+      parent.run_key,
       parent.work_key,
+      parent.run_key,
       now,
       parent.work_key,
     );
@@ -582,26 +829,25 @@ function recomputeRunClosureStatement(
     .prepare(
       `UPDATE jsda_run_closures
           SET descendant_total=(
-                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
-                 WHERE run_key=? AND work_key!=?
+                SELECT COUNT(DISTINCT child_work_key) FROM jsda_run_membership
+                 WHERE run_key=?
               ),
               descendant_completed=(
-                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
-                 WHERE run_key=? AND work_key!=? AND state='completed'
-                   AND audit_receipt_key IS NOT NULL AND audit_receipt_digest IS NOT NULL
+                SELECT COUNT(DISTINCT child_work_key) FROM jsda_run_membership
+                 WHERE run_key=? AND ${MEMBERSHIP_COMPLETED}
               ),
               descendant_rejected=(
-                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
-                 WHERE run_key=? AND work_key!=? AND state='rejected'
+                SELECT COUNT(DISTINCT child_work_key) FROM jsda_run_membership
+                 WHERE run_key=? AND terminal_state='rejected'
               ),
               descendant_failed_transient=(
-                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
-                 WHERE run_key=? AND work_key!=? AND state='failed_transient'
+                SELECT COUNT(DISTINCT child_work_key) FROM jsda_run_membership
+                 WHERE run_key=? AND terminal_state='failed_transient'
               ),
               descendant_nonterminal=(
-                SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
-                 WHERE run_key=? AND work_key!=?
-                   AND state IN ('pending','queued','running','waiting_children')
+                SELECT COUNT(DISTINCT child_work_key) FROM jsda_run_membership
+                 WHERE run_key=?
+                   AND terminal_state IN ('pending','queued','running','waiting_children')
               ),
               frontier_exhausted=CASE
                 WHEN (
@@ -610,19 +856,19 @@ function recomputeRunClosureStatement(
                 ELSE frontier_exhausted
               END,
               failure_work_key=(
-                SELECT work_key FROM jsda_acquisition_jobs_v2
-                 WHERE run_key=? AND work_key!=? AND state='rejected'
-                 ORDER BY updated_at, work_key LIMIT 1
+                SELECT child_work_key FROM jsda_run_membership
+                 WHERE run_key=? AND terminal_state='rejected'
+                 ORDER BY updated_at, child_work_key LIMIT 1
               ),
               failure_detail=(
-                SELECT last_error FROM jsda_acquisition_jobs_v2
-                 WHERE run_key=? AND work_key!=? AND state='rejected'
-                 ORDER BY updated_at, work_key LIMIT 1
+                SELECT failure_detail FROM jsda_run_membership
+                 WHERE run_key=? AND terminal_state='rejected'
+                 ORDER BY updated_at, child_work_key LIMIT 1
               ),
               failure_reason_code=CASE
                 WHEN (
-                  SELECT COUNT(*) FROM jsda_acquisition_jobs_v2
-                   WHERE run_key=? AND work_key!=? AND state='rejected'
+                  SELECT COUNT(DISTINCT child_work_key) FROM jsda_run_membership
+                   WHERE run_key=? AND terminal_state='rejected'
                 ) > 0 THEN 'descendant_rejected'
                 ELSE failure_reason_code
               END,
@@ -631,22 +877,14 @@ function recomputeRunClosureStatement(
     )
     .bind(
       runKey,
-      rootWorkKey,
+      runKey,
+      runKey,
+      runKey,
       runKey,
       rootWorkKey,
       runKey,
-      rootWorkKey,
       runKey,
-      rootWorkKey,
       runKey,
-      rootWorkKey,
-      rootWorkKey,
-      runKey,
-      rootWorkKey,
-      runKey,
-      rootWorkKey,
-      runKey,
-      rootWorkKey,
       now,
       runKey,
     );
@@ -661,9 +899,9 @@ function applyRunClosureStateStatement(
     .prepare(
       `UPDATE jsda_run_closures
           SET closure_state=CASE
-                WHEN closure_state IN ('completed','failed','partial') THEN closure_state
                 WHEN descendant_rejected > 0 AND descendant_completed > 0 THEN 'partial'
                 WHEN descendant_rejected > 0 THEN 'failed'
+                WHEN closure_state IN ('failed','partial') THEN closure_state
                 WHEN frontier_exhausted=1
                  AND descendant_total > 0
                  AND descendant_completed = descendant_total
@@ -674,14 +912,14 @@ function applyRunClosureStateStatement(
                 ELSE 'open'
               END,
               closed_at=CASE
-                WHEN closure_state IN ('completed','failed','partial') THEN closed_at
-                WHEN descendant_rejected > 0 THEN ?
+                WHEN descendant_rejected > 0 THEN COALESCE(closed_at, ?)
+                WHEN closure_state IN ('failed','partial') THEN closed_at
                 WHEN frontier_exhausted=1
                  AND descendant_total > 0
                  AND descendant_completed = descendant_total
                  AND descendant_rejected = 0
                  AND descendant_failed_transient = 0
-                 AND descendant_nonterminal = 0 THEN ?
+                 AND descendant_nonterminal = 0 THEN COALESCE(closed_at, ?)
                 ELSE closed_at
               END,
               updated_at=?
@@ -699,9 +937,9 @@ function applyJobClosureStateStatement(
     .prepare(
       `UPDATE jsda_job_closures
           SET closure_state=CASE
-                WHEN closure_state IN ('completed','failed','partial') THEN closure_state
                 WHEN descendant_rejected > 0 AND descendant_completed > 0 THEN 'partial'
                 WHEN descendant_rejected > 0 THEN 'failed'
+                WHEN closure_state IN ('failed','partial') THEN closure_state
                 WHEN frontier_exhausted=1
                  AND descendant_total > 0
                  AND descendant_completed = descendant_total
@@ -712,14 +950,14 @@ function applyJobClosureStateStatement(
                 ELSE 'open'
               END,
               closed_at=CASE
-                WHEN closure_state IN ('completed','failed','partial') THEN closed_at
-                WHEN descendant_rejected > 0 THEN ?
+                WHEN descendant_rejected > 0 THEN COALESCE(closed_at, ?)
+                WHEN closure_state IN ('failed','partial') THEN closed_at
                 WHEN frontier_exhausted=1
                  AND descendant_total > 0
                  AND descendant_completed = descendant_total
                  AND descendant_rejected = 0
                  AND descendant_failed_transient = 0
-                 AND descendant_nonterminal = 0 THEN ?
+                 AND descendant_nonterminal = 0 THEN COALESCE(closed_at, ?)
                 ELSE closed_at
               END,
               updated_at=?
@@ -753,7 +991,9 @@ export async function registerJobs(
   jobs.forEach((job, index) => {
     const identity = identities[index];
     if (identity !== null) {
+      statements.push(backfillIdentityStatement(db, job, identity, now));
       statements.push(...allocateObservationStatements(db, job, identity, now));
+      statements.push(...backfillCompletedObservationStatements(db, job, identity, now));
     }
   });
   for (const job of jobs) {
@@ -767,6 +1007,8 @@ export async function registerJobs(
         )
         .bind(job.parent_work_key, job.work_key, job.run_key, now),
     );
+    const membership = insertMembershipStatement(db, job, now);
+    if (membership !== null) statements.push(membership);
   }
   for (const job of jobs) {
     if (job.job_type === "discover_root") {
@@ -810,6 +1052,22 @@ export async function loadRunClosure(
     .prepare(`SELECT ${RUN_CLOSURE_SELECT} FROM jsda_run_closures WHERE run_key = ?`)
     .bind(runKey)
     .first<RunClosureRow>();
+}
+
+export async function loadRunMembership(
+  db: D1Database,
+  runKey: string,
+): Promise<RunMembershipRow[]> {
+  const rows = await db
+    .prepare(
+      `SELECT ${MEMBERSHIP_SELECT}
+         FROM jsda_run_membership
+        WHERE run_key=?
+        ORDER BY parent_work_key, child_work_key`,
+    )
+    .bind(runKey)
+    .all<RunMembershipRow>();
+  return rows.results;
 }
 
 export async function loadPendingRunJobs(
@@ -885,7 +1143,7 @@ export async function persistFrontier(
     )
     .bind(frontierJson, rawKey, contentDigest, now, row.work_key, row.attempt)
     .run();
-  if ((result.meta.changes ?? 0) !== 1) {
+  if ((result.meta.changes ?? 0) < 1) {
     throw new Error(`JSDA frontier update lost job claim: ${row.work_key}`);
   }
 }
@@ -941,10 +1199,10 @@ export async function persistFetchedArtifact(
     );
   }
   const results = await db.batch(statements);
-  if ((results[0]?.meta.changes ?? 0) !== 1) {
+  if ((results[0]?.meta.changes ?? 0) < 1) {
     throw new Error(`JSDA artifact update lost job claim: ${row.work_key}`);
   }
-  if (row.source_object_id !== null && (results[results.length - 1]?.meta.changes ?? 0) !== 1) {
+  if (row.source_object_id !== null && (results[results.length - 1]?.meta.changes ?? 0) < 1) {
     throw new Error(`JSDA observation artifact update lost job claim: ${row.work_key}`);
   }
 }
@@ -963,7 +1221,7 @@ export async function advanceContinuationCursor(
     )
     .bind(nextCursor, now, row.work_key, row.attempt)
     .run();
-  if ((result.meta.changes ?? 0) !== 1) {
+  if ((result.meta.changes ?? 0) < 1) {
     throw new Error(`JSDA continuation lost job claim: ${row.work_key}`);
   }
 }
@@ -1003,7 +1261,6 @@ export async function markContinuationQueued(
         row.attempt,
       ),
     insertEventStatement(db, row, event, "queued"),
-    insertRunLogStatement(db, row, event, "queued"),
   ]);
   requireBatch(results, `JSDA continuation finalize lost job claim: ${row.work_key}`);
 }
@@ -1035,7 +1292,6 @@ export async function markFrontierExhausted(
       )
       .bind(cursor, now, audit.key, audit.digest, row.work_key, row.attempt),
     insertEventStatement(db, row, event, "waiting_children"),
-    insertRunLogStatement(db, row, event, "waiting_children"),
     db
       .prepare(
         `UPDATE jsda_job_closures
@@ -1064,13 +1320,13 @@ export async function markFrontierExhausted(
   }
   const results = await db.batch(statements);
   requireBatch(
-    results.slice(0, 3),
+    results.slice(0, 2),
     `JSDA frontier exhaustion lost job claim: ${row.work_key}`,
   );
-  if ((results[3]?.meta.changes ?? 0) !== 1) {
+  if ((results[2]?.meta.changes ?? 0) < 1) {
     throw new Error(`JSDA job closure missing at frontier exhaustion: ${row.work_key}`);
   }
-  if (row.job_type === "discover_root" && (results[4]?.meta.changes ?? 0) !== 1) {
+  if (row.job_type === "discover_root" && (results[3]?.meta.changes ?? 0) < 1) {
     throw new Error(`JSDA run closure missing at frontier exhaustion: ${row.run_key}`);
   }
 }
@@ -1100,15 +1356,26 @@ export async function completeJob(
       .prepare(
         `UPDATE jsda_acquisition_jobs_v2
          SET state='completed', cursor=?, lease_until=NULL, completed_at=?, updated_at=?,
-             last_error=NULL, audit_receipt_key=?, audit_receipt_digest=?
-         WHERE work_key=? AND state='running' AND attempt=?`,
+             last_error=NULL, content_digest=?, raw_key=?,
+             audit_receipt_key=?, audit_receipt_digest=?
+         WHERE work_key=? AND state='running' AND attempt=?
+           AND content_digest IS NOT NULL AND raw_key IS NOT NULL`,
       )
-      .bind(cursor, now, now, audit.key, audit.digest, row.work_key, row.attempt),
+      .bind(
+        cursor,
+        now,
+        now,
+        row.content_digest,
+        row.raw_key,
+        audit.key,
+        audit.digest,
+        row.work_key,
+        row.attempt,
+      ),
     insertEventStatement(db, row, event, "completed"),
-    insertRunLogStatement(db, row, event, "completed"),
     ...insertArtifactStatements(db, row, now),
   ];
-  const required = 3;
+  const required = 2;
   if (row.source_object_id !== null) {
     statements.push(updateObservationTerminalStatement(db, row, event, "completed"));
     statements.push(casCurrentSourceObjectStatement(db, row, event));
@@ -1119,7 +1386,7 @@ export async function completeJob(
     row.source_object_id === null ? [] : results.slice(-2);
   if (
     [...requiredResults, ...observationResults].some(
-      (result) => (result?.meta.changes ?? 0) !== 1,
+      (result) => (result?.meta.changes ?? 0) < 1,
     )
   ) {
     throw new Error(`JSDA completion lost job claim: ${row.work_key}`);
@@ -1162,13 +1429,12 @@ export async function rejectJob(
         row.attempt,
       ),
     insertEventStatement(db, row, event, "rejected"),
-    insertRunLogStatement(db, row, event, "rejected"),
   ];
   if (row.source_object_id !== null) {
     statements.push(updateObservationTerminalStatement(db, row, event, "rejected"));
   }
   const results = await db.batch(statements);
-  if (results.some((result) => (result?.meta.changes ?? 0) !== 1)) {
+  if (results.some((result) => (result?.meta.changes ?? 0) < 1)) {
     throw new Error(`JSDA rejection lost job claim: ${row.work_key}`);
   }
 }
@@ -1208,7 +1474,6 @@ export async function recordTransientFailure(
         row.attempt,
       ),
     insertEventStatement(db, row, event, "failed_transient"),
-    insertRunLogStatement(db, row, event, "failed_transient"),
   ]);
   requireBatch(results, `JSDA transient failure lost job claim: ${row.work_key}`);
 }
@@ -1275,7 +1540,7 @@ export async function recomputeClosureAggregates(
   statements.push(recomputeRunClosureStatement(db, origin.run_key, origin.run_key, now));
   statements.push(applyRunClosureStateStatement(db, origin.run_key, now));
   const results = await db.batch(statements);
-  if (results.some((result) => (result?.meta.changes ?? 0) !== 1)) {
+  if (results.some((result) => (result?.meta.changes ?? 0) < 1)) {
     throw new Error(`JSDA closure aggregate update failed for ${origin.work_key}`);
   }
 }
@@ -1296,7 +1561,7 @@ export async function completeWaitingAncestor(
     audit,
     occurredAt: now,
   };
-  const results = await db.batch([
+  const statements: D1PreparedStatement[] = [
     db
       .prepare(
         `UPDATE jsda_acquisition_jobs_v2
@@ -1316,11 +1581,18 @@ export async function completeWaitingAncestor(
       )
       .bind(now, now, audit.key, audit.digest, row.work_key, row.work_key),
     insertEventStatement(db, row, event, "completed"),
-    insertRunLogStatement(db, row, event, "completed"),
-  ]);
-  const closed = (results[0]?.meta.changes ?? 0) === 1;
+    recomputeJobClosureStatement(db, row, now),
+    applyJobClosureStateStatement(db, row.work_key, now),
+  ];
+  if (row.job_type === "discover_root") {
+    statements.push(recomputeRunClosureStatement(db, row.run_key, row.run_key, now));
+    statements.push(applyRunClosureStateStatement(db, row.run_key, now));
+    statements.push(insertRunTerminalLogStatement(db, row, event, "completed"));
+  }
+  const results = await db.batch(statements);
+  const closed = (results[0]?.meta.changes ?? 0) >= 1;
   if (closed) {
-    requireBatch(results.slice(1), `JSDA ancestor close lost evidence: ${row.work_key}`);
+    requireBatch(results.slice(1, 2), `JSDA ancestor close lost evidence: ${row.work_key}`);
   }
   return closed;
 }
@@ -1343,13 +1615,13 @@ export async function failWaitingAncestor(
     audit,
     occurredAt: now,
   };
-  const results = await db.batch([
+  const statements: D1PreparedStatement[] = [
     db
       .prepare(
         `UPDATE jsda_acquisition_jobs_v2
          SET state='rejected', lease_until=NULL, completed_at=?, updated_at=?,
              last_error=?, audit_receipt_key=?, audit_receipt_digest=?
-         WHERE work_key=? AND state='waiting_children'
+         WHERE work_key=? AND state IN ('waiting_children', 'completed')
            AND EXISTS (
              SELECT 1 FROM jsda_job_closures
               WHERE work_key=? AND descendant_rejected > 0
@@ -1365,13 +1637,97 @@ export async function failWaitingAncestor(
         row.work_key,
       ),
     insertEventStatement(db, row, event, "rejected"),
-    insertRunLogStatement(db, row, event, "rejected"),
-  ]);
-  const failed = (results[0]?.meta.changes ?? 0) === 1;
+    recomputeJobClosureStatement(db, row, now),
+    applyJobClosureStateStatement(db, row.work_key, now),
+  ];
+  if (row.job_type === "discover_root") {
+    statements.push(recomputeRunClosureStatement(db, row.run_key, row.run_key, now));
+    statements.push(applyRunClosureStateStatement(db, row.run_key, now));
+    statements.push(insertRunTerminalLogStatement(db, row, event, "rejected"));
+  }
+  const results = await db.batch(statements);
+  const failed = (results[0]?.meta.changes ?? 0) >= 1;
   if (failed) {
-    requireBatch(results.slice(1), `JSDA ancestor fail lost evidence: ${row.work_key}`);
+    requireBatch(results.slice(1, 2), `JSDA ancestor fail lost evidence: ${row.work_key}`);
   }
   return failed;
+}
+
+export async function ensureRunTerminalLog(
+  db: D1Database,
+  row: JobRow,
+  now: string,
+): Promise<void> {
+  if (row.job_type !== "discover_root") return;
+  if (row.state !== "completed" && row.state !== "rejected") return;
+  if (row.audit_receipt_key === null || row.audit_receipt_digest === null) {
+    throw new Error(`JSDA root terminal log missing audit: ${row.work_key}`);
+  }
+  const event: RunEvent = {
+    result: row.state === "rejected" ? "rejected" : "completed",
+    reasonCode: row.state === "rejected" ? "descendant_rejected" : null,
+    detail:
+      row.state === "rejected"
+        ? (row.last_error ?? "governed run rejected")
+        : "all governed descendants durably completed",
+    cursor: row.cursor,
+    rawKey: row.raw_key,
+    contentDigest: row.content_digest,
+    audit: { key: row.audit_receipt_key, digest: row.audit_receipt_digest },
+    occurredAt: now,
+  };
+  const result = await insertRunTerminalLogStatement(db, row, event, row.state).run();
+  if ((result.meta.changes ?? 0) < 0) {
+    throw new Error(`JSDA run terminal log write failed: ${row.work_key}`);
+  }
+}
+
+export async function rejectFromDeadLetter(
+  db: D1Database,
+  row: JobRow,
+  reasonCode: string,
+  detail: string,
+  audit: AuditRef,
+  now: string,
+): Promise<boolean> {
+  const event: RunEvent = {
+    result: "rejected",
+    reasonCode,
+    detail,
+    cursor: row.cursor,
+    rawKey: row.raw_key,
+    contentDigest: row.content_digest,
+    audit,
+    occurredAt: now,
+  };
+  const statements: D1PreparedStatement[] = [
+    db
+      .prepare(
+        `UPDATE jsda_acquisition_jobs_v2
+         SET state='rejected', lease_until=NULL, completed_at=?, updated_at=?,
+             last_error=?, audit_receipt_key=?, audit_receipt_digest=?
+         WHERE work_key=? AND state IN
+           ('pending', 'queued', 'running', 'waiting_children', 'failed_transient')`,
+      )
+      .bind(
+        now,
+        now,
+        detail.slice(0, 500),
+        audit.key,
+        audit.digest,
+        row.work_key,
+      ),
+    insertEventStatement(db, { ...row, attempt: row.attempt }, event, "rejected"),
+  ];
+  if (row.source_object_id !== null) {
+    statements.push(updateObservationTerminalStatement(db, { ...row, state: "rejected" }, event, "rejected"));
+  }
+  const results = await db.batch(statements);
+  const rejected = (results[0]?.meta.changes ?? 0) >= 1;
+  if (rejected && (results[1]?.meta.changes ?? 0) < 1) {
+    throw new Error(`JSDA DLQ reject lost evidence: ${row.work_key}`);
+  }
+  return rejected;
 }
 
 

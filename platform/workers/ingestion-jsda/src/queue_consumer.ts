@@ -3,6 +3,7 @@ import {
   claimJob,
   completeJob,
   completeWaitingAncestor,
+  ensureRunTerminalLog,
   failWaitingAncestor,
   loadJob,
   loadJobClosure,
@@ -465,19 +466,24 @@ async function advanceAncestorClosures(
 ): Promise<void> {
   const now = new Date().toISOString();
   await recomputeClosureAggregates(env.DB, origin, now);
-  const chain = await loadAncestorChain(env.DB, origin);
+  const chain: JobRow[] = [];
+  if (origin.job_type !== "fetch_file") chain.push(origin);
+  chain.push(...(await loadAncestorChain(env.DB, origin)));
   for (const ancestor of chain) {
     await recomputeClosureAggregates(env.DB, origin, now);
     const latest = await loadJob(env.DB, ancestor.work_key);
     if (latest === null) {
       throw new Error(`JSDA ancestor disappeared: ${ancestor.work_key}`);
     }
-    if (latest.state !== "waiting_children") continue;
+    if (latest.job_type === "fetch_file") continue;
     const closure = await loadJobClosure(env.DB, latest.work_key);
     if (closure === null) {
       throw new Error(`JSDA job closure missing: ${latest.work_key}`);
     }
-    if (closure.descendant_rejected > 0) {
+    const rejectedOpen =
+      (latest.state === "waiting_children" || latest.state === "completed") &&
+      closure.descendant_rejected > 0;
+    if (rejectedOpen) {
       const failedAt = new Date().toISOString();
       const audit = await putQueueAuditReceipt(
         env.RAW_BUCKET,
@@ -505,6 +511,7 @@ async function advanceAncestorClosures(
       }
       continue;
     }
+    if (latest.state !== "waiting_children") continue;
     if (
       closure.frontier_exhausted === 1 &&
       closure.descendant_total > 0 &&
@@ -537,6 +544,12 @@ async function advanceAncestorClosures(
     }
   }
   await recomputeClosureAggregates(env.DB, origin, now);
+  const rootKey =
+    origin.job_type === "discover_root" ? origin.work_key : origin.run_key;
+  const root = await loadJob(env.DB, rootKey);
+  if (root !== null && root.job_type === "discover_root") {
+    await ensureRunTerminalLog(env.DB, root, new Date().toISOString());
+  }
 }
 
 async function repairTerminalClosure(

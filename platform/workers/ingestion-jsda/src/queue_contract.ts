@@ -100,6 +100,8 @@ const CONTRACT_CANONICAL = JSON.stringify({
     "monotonic-observation-sequence",
     "cas-current-source-pointer",
     "descendant-run-closure",
+    "run-scoped-membership-adoption",
+    "run-pass-from-closure-only",
   ],
 });
 
