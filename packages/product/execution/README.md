@@ -1,14 +1,22 @@
 # execution
 
-Authorized paper execution service — sole positive capability that reaches trusted paper runtime from agents.
+Offline DRAFT execution plus a fail-closed Controlled Pilot boundary.
 
 ## Public entry
 
 ```python
-from execution import PaperExecutionService, PaperExecutionRejected
+from execution import (
+    ControlledPilotExecutionService,
+    ControlledPilotPending,
+    OfflineFixturePaperService,
+)
 ```
 
-Re-derives authorization fields, verifies pinned snapshot and research-data-profile digest, resolves FeatureRefs, then may call `strategies.paper.run_paper`. Nothing else on the agent path may call `run_paper` directly. `paper_runtime.execution` is a DTO adapter that delegates here.
+`OfflineFixturePaperService` may execute and persist DRAFT experiments. The
+importable runtime rejects `Lifecycle.PAPER`. `ControlledPilotExecutionService`
+has a zero-argument, no-I/O surface and reports
+`PENDING: CONTROLLED_AUTHORITY_UNPROVISIONED` until a separately permissioned
+authority and pinned protocol are implemented.
 
 ## Allowed imports
 
@@ -18,6 +26,7 @@ Re-derives authorization fields, verifies pinned snapshot and research-data-prof
 
 - Market HTTP (`ingestion`)
 - Broker / live order paths
-- Bypassing snapshot / FeatureRef checks
+- Local creation or persistence of controlled PAPER evidence
+- Caller-supplied Controlled paths, stores, verifiers, sockets, or transports
 
 Known cycle: `agents` ↔ `execution` (intentional).

@@ -31,8 +31,8 @@ test-fixture-only.
 - `cf_platform` (**documented exception** — coverage / B0 measurement reuse)
 - `execution` / `agents` (**documented exception** — `paper_runtime.execution`
   DTO adapter only; imports agents first so the agents↔execution cycle can
-  finish, then delegates to `execution.paper_service.PaperExecutionService`;
-  does not call `run_paper`)
+  finish, then delegates to the offline DRAFT service in
+  `execution.paper_service`; does not call `run_paper` or arm controlled PAPER)
 
 ## Forbidden
 

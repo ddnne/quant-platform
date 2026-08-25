@@ -1,16 +1,15 @@
 """Paper-runtime DTO adapter — ADR §8.2 name-collision twin.
 
-This is **not** the authorized paper choke point. The live path is
-``execution.paper_service.PaperExecutionService``. ``paper_runtime`` does
-not re-export this module.
+This is an offline DRAFT compatibility adapter. ``paper_runtime`` does not
+re-export this module, and it is not a controlled PAPER authority.
 
 ``PaperExecutionService.execute`` here is a DTO adapter only: it translates
 :class:`AuthorizedPaperExecutionRequest` and delegates to the strong
-service. It never imports or calls ``strategies.paper.run_paper``.
+offline service. It never imports or calls ``strategies.paper.run_paper``.
 
 Importing this module does not arm continuous paper, declare READY, or
 Mass GO. Keep all three ``execution`` modules (core fill timing / this
-helper / authorized paper service). See ADR §8.2.
+helper / offline paper service). See ADR §8.2.
 """
 from __future__ import annotations
 
@@ -55,7 +54,12 @@ class PaperStore(Protocol):
 
 
 class PaperExecutionService:
-    """DTO adapter; authority remains ``execution.paper_service``."""
+    """DTO adapter for the offline service in ``execution.paper_service``."""
+
+    __slots__ = ("_store",)
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise TypeError("paper_runtime PaperExecutionService is final")
 
     def __init__(self, store: Any = None) -> None:
         self._store = store

@@ -140,13 +140,13 @@ def test_momentum_example_runs_and_pins_its_feature_version(paper_fixture):
     assert result.metadata["feature_versions"]["momentum_n"]
 
 
-def test_direct_paper_lifecycle_requires_controlled_capability(paper_fixture):
+def test_local_runtime_rejects_paper_lifecycle(paper_fixture):
     db, days = paper_fixture
     paper = _config(db, days, lifecycle=Lifecycle.PAPER)
 
     with pytest.raises(
         PermissionError,
-        match="opaque controlled execution capability",
+        match="DRAFT-only.*CONTROLLED_AUTHORITY_UNPROVISIONED",
     ):
         run_paper(Return1dFeatureStrategy(), paper)
 

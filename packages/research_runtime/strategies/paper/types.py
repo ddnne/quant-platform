@@ -35,7 +35,7 @@ class Lifecycle(str, Enum):
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PaperRunConfig:
     """Inputs to one backtest-backed paper run.
 
@@ -44,6 +44,9 @@ class PaperRunConfig:
     context feature accessor; strategies never receive a path, SQL connection,
     or PIT handle.
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise TypeError("PaperRunConfig is final")
 
     start: str
     end: str
@@ -54,9 +57,10 @@ class PaperRunConfig:
     starting_capital: float = 1_000_000.0
     lookback_days: int = 30
     price_basis: str = RAW
-    # The low-level runtime is an offline fixture/backtest surface.  A PAPER
-    # lifecycle is available only to ControlledPilotExecutionService, which
-    # supplies an opaque one-shot capability after all READY gates pass.
+    # The importable low-level runtime is an offline fixture/backtest surface.
+    # ``Lifecycle.PAPER`` remains a stable serialization label, but run_paper
+    # and JsonPaperStore reject it.  Only a future OS-isolated authority may
+    # issue controlled PAPER artifacts.
     lifecycle: Lifecycle | str = Lifecycle.DRAFT
     calendar_as_of: str | None = None
     # W85 / w0816t — short-leg financing = f(repo[t] + fixed spread).
@@ -132,9 +136,12 @@ class PaperRunConfig:
                 object.__setattr__(self, "universe", normalized)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PaperRunResult:
     """One completed paper result plus its reproduction manifest."""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise TypeError("PaperRunResult is final")
 
     experiment_id: str
     run_id: str

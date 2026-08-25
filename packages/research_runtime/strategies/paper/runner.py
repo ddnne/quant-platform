@@ -32,42 +32,6 @@ from .types import Lifecycle, PaperRunConfig, PaperRunResult
 # 0.6.1 — W85 optional short financing via PaperRunConfig
 # 0.7.0 — W86 daily repo auto-load + leverage financing (mid + repo default)
 PAPER_RUNNER_VERSION = "0.7.0"
-_CONTROLLED_PAPER_SEAL = object()
-
-
-class _ControlledPaperCapability:
-    """One-shot authority minted only after the product gate succeeds."""
-
-    __slots__ = ("_config_identity", "_consumed", "_seal")
-
-    def __init__(
-        self, config: PaperRunConfig, *, _seal: object | None = None
-    ) -> None:
-        if _seal is not _CONTROLLED_PAPER_SEAL:
-            raise TypeError("controlled PAPER capability is authority-minted")
-        if config.lifecycle is not Lifecycle.PAPER:
-            raise ValueError("controlled PAPER capability requires PAPER config")
-        self._config_identity = id(config)
-        self._consumed = False
-        self._seal = _seal
-
-    def consume(self, config: PaperRunConfig) -> None:
-        if (
-            self._seal is not _CONTROLLED_PAPER_SEAL
-            or self._consumed
-            or self._config_identity != id(config)
-        ):
-            raise PermissionError(
-                "controlled PAPER capability is invalid, reused, or config-mismatched"
-            )
-        self._consumed = True
-
-
-def _mint_controlled_paper_capability(
-    config: PaperRunConfig,
-) -> _ControlledPaperCapability:
-    """Internal bridge used by ``ControlledPilotExecutionService`` only."""
-    return _ControlledPaperCapability(config, _seal=_CONTROLLED_PAPER_SEAL)
 
 
 def fingerprint_db(db_path: str | Path) -> str:
@@ -346,9 +310,8 @@ def run_paper(
     config: PaperRunConfig,
     *,
     store: JsonPaperStore | None = None,
-    _controlled_capability: _ControlledPaperCapability | None = None,
 ) -> PaperRunResult:
-    """Run ``strategy`` through ``core.run_backtest`` and optionally persist it.
+    """Run an offline DRAFT through ``core.run_backtest`` and optionally persist it.
 
     A cheap control-plane snapshot id is computed before and after the run. A
     concurrent mutation fails closed rather than emitting reproduction
@@ -359,15 +322,18 @@ def run_paper(
     series auto-loaded from the paper DB when present; leverage financing
     uses the same repo without re-applying short spread.
     """
-    if config.lifecycle is Lifecycle.PAPER:
-        if not isinstance(_controlled_capability, _ControlledPaperCapability):
-            raise PermissionError(
-                "Lifecycle.PAPER requires an opaque controlled execution capability"
-            )
-        _controlled_capability.consume(config)
-    elif _controlled_capability is not None:
+    # This importable runtime is deliberately incapable of producing a
+    # controlled PAPER result.  The separately permissioned authority is not
+    # provisioned yet; Python object identity or a private-looking symbol must
+    # never substitute for that OS boundary.  Keep this check before every DB,
+    # feature, engine, or store access.
+    if type(config) is not PaperRunConfig:
+        raise TypeError("local paper runtime requires exact PaperRunConfig")
+    lifecycle = config.lifecycle
+    if lifecycle is not Lifecycle.DRAFT:
         raise PermissionError(
-            "controlled execution capability cannot be used for DRAFT"
+            "local paper runtime is DRAFT-only; controlled execution is "
+            "PENDING: CONTROLLED_AUTHORITY_UNPROVISIONED"
         )
     configured_path = Path(config.db_path or "data/structured/ingestion.sqlite")
     feature_versions = _feature_versions(strategy)
@@ -417,7 +383,10 @@ def run_paper(
     result = PaperRunResult(
         experiment_id=experiment_id,
         run_id=experiment_id,
-        lifecycle=config.lifecycle,
+        # This importable runner has no PAPER minting authority.  Do not read
+        # caller state again after the entry gate; the only possible local
+        # result label is the literal DRAFT enum.
+        lifecycle=Lifecycle.DRAFT,
         backtest=backtest,
         reproducibility=reproduction,
     )

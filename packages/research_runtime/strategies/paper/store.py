@@ -17,7 +17,7 @@ from typing import Any
 
 from paper_runtime import ExperimentIndex
 
-from .types import PaperRunResult
+from .types import Lifecycle, PaperRunResult
 
 
 DEFAULT_PAPER_ROOT = Path("data/paper")
@@ -64,10 +64,24 @@ class JsonPaperStore:
         JSON is rejected: experiment metadata must never silently rewrite its
         immutable evidence record.
         """
-        path = self.result_path(result)
+        if type(result) is not PaperRunResult:
+            raise TypeError("JsonPaperStore requires exact PaperRunResult")
+        if result.lifecycle is not Lifecycle.DRAFT:
+            raise ValueError(
+                "JsonPaperStore is an offline DRAFT-only store; controlled "
+                "PAPER artifacts require the unprovisioned external authority"
+            )
+        # Never dispatch through a caller-replaced instance serializer after
+        # the lifecycle gate.  Normalize one exact DTO from the product-owned
+        # unbound serializer and pin the only locally writable label to the
+        # literal DRAFT value before creating any filesystem path.
+        payload = PaperRunResult.to_dict(result)
+        payload["lifecycle"] = Lifecycle.DRAFT.value
+        normalized = PaperRunResult.from_dict(payload)
+        path = self.result_path(normalized)
         path.parent.mkdir(parents=True, exist_ok=True)
         serialized = json.dumps(
-            result.to_dict(),
+            payload,
             ensure_ascii=False,
             indent=2,
             sort_keys=True,
@@ -95,7 +109,7 @@ class JsonPaperStore:
                 )
         finally:
             temporary.unlink(missing_ok=True)
-        self._upsert_index(result, path)
+        self._upsert_index(normalized, path)
         return path
 
     def _read_index(self) -> list[dict[str, Any]]:

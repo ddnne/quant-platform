@@ -89,12 +89,38 @@ def test_save_rejects_different_json_at_existing_run_path(tmp_path):
     store = JsonPaperStore(root=tmp_path / "paper")
     path = store.save(result)
     original = path.read_bytes()
+    different = replace(
+        result,
+        reproducibility={**result.reproducibility, "tampered": True},
+    )
 
     with pytest.raises(FileExistsError, match="immutable paper result"):
-        store.save(replace(result, lifecycle=Lifecycle.PAPER))
+        store.save(different)
 
     assert path.read_bytes() == original
     assert store.load_by_experiment_id(result.experiment_id).lifecycle is Lifecycle.DRAFT
+
+
+def test_store_rejects_paper_before_filesystem_mutation(tmp_path):
+    result, _, _ = _fixture_run(tmp_path)
+    root = tmp_path / "controlled-output"
+    store = JsonPaperStore(root=root)
+
+    with pytest.raises(ValueError, match="DRAFT-only"):
+        store.save(replace(result, lifecycle=Lifecycle.PAPER))
+
+    assert not root.exists()
+
+
+def test_result_cannot_replace_product_owned_store_serialization(tmp_path):
+    result, _, _ = _fixture_run(tmp_path)
+
+    with pytest.raises((AttributeError, TypeError)):
+        object.__setattr__(
+            result,
+            "to_dict",
+            lambda: {"lifecycle": Lifecycle.PAPER.value},
+        )
 
 
 def test_parallel_identical_saves_share_one_index_record(tmp_path):
@@ -147,4 +173,3 @@ def test_run_paper_persists_when_store_is_supplied(tmp_path):
 
 def test_json_store_default_root_is_data_paper():
     assert Path(JsonPaperStore().root).parts[-2:] == ("data", "paper")
-
