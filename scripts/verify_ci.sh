@@ -240,6 +240,26 @@ verify_worker() {
     echo "==> wrangler types ($name)"
     (cd "$dir" && npx --no-install wrangler types)
   fi
+  local type_dir production_types staging_types
+  type_dir="$ci_log_dir/types-$name"
+  mkdir -p "$type_dir"
+  production_types="$type_dir/production.d.ts"
+  staging_types="$type_dir/staging.d.ts"
+  echo "==> wrangler types --env=production ($name)"
+  (cd "$dir" && npx --no-install wrangler types "$production_types" \
+    --env=production --include-runtime=false)
+  echo "==> wrangler types --config=wrangler.staging.toml ($name)"
+  (cd "$dir" && npx --no-install wrangler types "$staging_types" \
+    --config=wrangler.staging.toml --include-runtime=false)
+  # Values and optional capabilities intentionally differ between environments
+  # (for example, staging OAuth is fail-closed).  The frozen binding manifest
+  # verifies those exact differences; here we require Wrangler to successfully
+  # materialize a non-empty Env surface for both deployment configurations.
+  if ! grep -q '^interface __BaseEnv_Env {' "$production_types" \
+    || ! grep -q '^interface __BaseEnv_Env {' "$staging_types"; then
+    echo "worker $name: missing generated production/staging Env surface" >&2
+    exit 1
+  fi
 }
 
 echo "==> active Worker lanes (parallel, fail-closed aggregation)"
