@@ -347,6 +347,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "uncertain-expiry",
+        request_digest: "digest-uncertain-expiry",
         amounts: {
           model_calls: 1,
           input_tokens: 200,
@@ -366,6 +367,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "uncertain-expiry",
         lease_id: reserved.lease.lease_id,
+        request_digest: "digest-uncertain-expiry",
       },
       T0 + 1,
     );
@@ -410,6 +412,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "no-zero-release",
+        request_digest: "digest-no-zero-release",
         amounts: { model_calls: 1, input_tokens: 100, output_tokens: 10 },
         acquire_lease: true,
       },
@@ -418,7 +421,11 @@ describe("budget ledger algebra", () => {
     if (!reserved.ok || !reserved.lease) throw new Error("lease");
     await markProviderStarted(
       storage,
-      { idempotency_key: "no-zero-release", lease_id: reserved.lease.lease_id },
+      {
+        idempotency_key: "no-zero-release",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-no-zero-release",
+      },
       T0 + 1,
     );
     const released = await releaseBudget(
@@ -511,6 +518,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "freeze-first",
+        request_digest: "digest-freeze-first",
         amounts: { model_calls: 1, input_tokens: 10 },
         acquire_lease: true,
       },
@@ -520,6 +528,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "freeze-second",
+        request_digest: "digest-freeze-second",
         amounts: { model_calls: 1, input_tokens: 10 },
         acquire_lease: true,
       },
@@ -530,7 +539,11 @@ describe("budget ledger algebra", () => {
     }
     const started = await markProviderStarted(
       storage,
-      { idempotency_key: "freeze-first", lease_id: first.lease.lease_id },
+      {
+        idempotency_key: "freeze-first",
+        lease_id: first.lease.lease_id,
+        request_digest: "digest-freeze-first",
+      },
       T0 + 1,
     );
     if (!started.ok || !started.settlement_capability) throw new Error("cap");
@@ -539,6 +552,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "freeze-first",
         reason: "provider_error",
+        request_digest: "digest-freeze-first",
         lease_id: first.lease.lease_id,
         settlement_capability: started.settlement_capability,
       },
@@ -546,7 +560,11 @@ describe("budget ledger algebra", () => {
     );
     const denied = await markProviderStarted(
       storage,
-      { idempotency_key: "freeze-second", lease_id: second.lease.lease_id },
+      {
+        idempotency_key: "freeze-second",
+        lease_id: second.lease.lease_id,
+        request_digest: "digest-freeze-second",
+      },
       T0 + 3,
     );
     expect(denied).toMatchObject({ ok: false, error: "budget_frozen" });
@@ -980,6 +998,166 @@ describe("budget ledger algebra", () => {
       expect(snap.reserved.model_calls).toBe(1);
       expect(snap.frozen).toBe(false);
     }
+  });
+
+  it("omitted request_digest or lease_id cannot skip provider-start or settlement comparison", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "binding-required",
+        request_digest: "digest-binding",
+        amounts: { model_calls: 1, input_tokens: 8 },
+        acquire_lease: true,
+      },
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    expect(
+      await markProviderStarted(
+        storage,
+        { idempotency_key: "binding-required", lease_id: reserved.lease.lease_id },
+        T0 + 1,
+      ),
+    ).toMatchObject({ ok: false, error: "request_digest required" });
+    expect(
+      await markProviderStarted(
+        storage,
+        {
+          idempotency_key: "binding-required",
+          lease_id: reserved.lease.lease_id,
+          request_digest: "   ",
+        },
+        T0 + 1,
+      ),
+    ).toMatchObject({ ok: false, error: "request_digest required" });
+    expect(
+      await markProviderStarted(
+        storage,
+        {
+          idempotency_key: "binding-required",
+          lease_id: "",
+          request_digest: "digest-binding",
+        },
+        T0 + 1,
+      ),
+    ).toMatchObject({ ok: false, error: "lease_id required" });
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "binding-required",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-binding",
+      },
+      T0 + 1,
+    );
+    if (!started.ok || !started.settlement_capability) throw new Error("cap");
+    expect(started.reservation.settlement_capability_secret).toBeNull();
+    expect(started.reservation.settlement_capability_hash).toBe("sha256:redacted");
+    expect(
+      await finalizeBudget(
+        storage,
+        {
+          idempotency_key: "binding-required",
+          request_digest: "",
+          lease_id: reserved.lease.lease_id,
+          settlement_capability: started.settlement_capability,
+          usage: { model_calls: 1, input_tokens: 2 },
+        },
+        T0 + 2,
+      ),
+    ).toMatchObject({ ok: false, error: "request_digest required" });
+    expect(
+      await settleUncertainBudget(
+        storage,
+        {
+          idempotency_key: "binding-required",
+          reason: "timeout",
+          lease_id: reserved.lease.lease_id,
+          settlement_capability: started.settlement_capability,
+        },
+        T0 + 2,
+      ),
+    ).toMatchObject({ ok: false, error: "request_digest required" });
+    expect(
+      await settleUncertainBudget(
+        storage,
+        {
+          idempotency_key: "binding-required",
+          reason: "timeout",
+          request_digest: "digest-binding",
+          settlement_capability: started.settlement_capability,
+        },
+        T0 + 2,
+      ),
+    ).toMatchObject({ ok: false, error: "lease_id required" });
+    const snap = await snapshotBudget(storage, T0 + 3);
+    expect(snap.ok).toBe(true);
+    if (snap.ok) {
+      expect(snap.used).toEqual(zeroCounters());
+      expect(snap.reserved.model_calls).toBe(1);
+      expect(JSON.stringify(snap)).not.toContain(started.settlement_capability);
+    }
+  });
+
+  it("provider-start retry returns the same one-shot capability until consumed", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "start-retry",
+        request_digest: "digest-start-retry",
+        amounts: { model_calls: 1, input_tokens: 6 },
+        acquire_lease: true,
+      },
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const first = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "start-retry",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-start-retry",
+      },
+      T0 + 1,
+    );
+    const lostResponseRetry = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "start-retry",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-start-retry",
+      },
+      T0 + 2,
+    );
+    expect(first.ok && lostResponseRetry.ok).toBe(true);
+    if (!first.ok || !lostResponseRetry.ok) throw new Error("start");
+    expect(lostResponseRetry.settlement_capability).toBe(first.settlement_capability);
+    expect(first.settlement_capability).toEqual(expect.any(String));
+    const committed = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "start-retry",
+        request_digest: "digest-start-retry",
+        lease_id: reserved.lease.lease_id,
+        settlement_capability: lostResponseRetry.settlement_capability as string,
+        usage: { model_calls: 1, input_tokens: 3 },
+        terminal_result: { http_status: 200, body: { ok: true } },
+      },
+      T0 + 3,
+    );
+    expect(committed.ok).toBe(true);
+    const afterConsume = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "start-retry",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-start-retry",
+      },
+      T0 + 4,
+    );
+    expect(afterConsume).toMatchObject({ ok: false, error: "reservation_reconciled" });
   });
 
   it("bindIdempotencyKey uses digest when the client key is absent", () => {

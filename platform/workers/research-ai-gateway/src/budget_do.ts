@@ -87,6 +87,8 @@ export type Reservation = {
   /** SHA-256 of the one-shot settlement capability bound to this reservation. */
   settlement_capability_hash: string | null;
   settlement_capability_consumed: boolean;
+  /** Private one-shot secret. Redacted from snapshots and public RPC bodies. */
+  settlement_capability_secret: string | null;
 };
 
 export type Lease = {
@@ -352,6 +354,10 @@ function coerceReservation(raw: Reservation): Reservation {
     uncertainty_reason: raw.uncertainty_reason ?? null,
     settlement_capability_hash: raw.settlement_capability_hash ?? null,
     settlement_capability_consumed: raw.settlement_capability_consumed === true,
+    settlement_capability_secret:
+      typeof raw.settlement_capability_secret === "string" && raw.settlement_capability_secret
+        ? raw.settlement_capability_secret
+        : null,
   };
 }
 
@@ -621,6 +627,7 @@ export async function reserveBudget(
     uncertainty_reason: null,
     settlement_capability_hash: null,
     settlement_capability_consumed: false,
+    settlement_capability_secret: null,
   };
   state.reserved = applyDelta(state.reserved, reservation.amounts, 1);
   state.reservations[key.idempotency_key] = reservation;
@@ -639,7 +646,31 @@ function publicReservation(reservation: Reservation): Reservation {
   clone.settlement_capability_hash = reservation.settlement_capability_hash
     ? "sha256:redacted"
     : null;
+  clone.settlement_capability_secret = null;
   return clone;
+}
+
+function requireExactLeaseAndDigest(
+  input: { request_digest?: string; lease_id?: string },
+  reservation: Reservation,
+): BudgetErr | null {
+  const digest = typeof input.request_digest === "string" ? input.request_digest.trim() : "";
+  if (!digest) return { ok: false, error: "request_digest required" };
+  if (typeof reservation.request_digest !== "string" || !reservation.request_digest.trim()) {
+    return { ok: false, error: "request_digest required" };
+  }
+  if (reservation.request_digest !== digest) {
+    return { ok: false, error: "request_digest_mismatch" };
+  }
+  const leaseId = typeof input.lease_id === "string" ? input.lease_id.trim() : "";
+  if (!leaseId) return { ok: false, error: "lease_id required" };
+  if (typeof reservation.lease_id !== "string" || !reservation.lease_id.trim()) {
+    return { ok: false, error: "lease_id required" };
+  }
+  if (reservation.lease_id !== leaseId) {
+    return { ok: false, error: "lease_mismatch" };
+  }
+  return null;
 }
 
 async function sha256HexUtf8(text: string): Promise<string> {
@@ -693,10 +724,8 @@ export async function markProviderStarted(
   if (!key.ok) return key;
   const leaseId = typeof input.lease_id === "string" ? input.lease_id.trim() : "";
   if (!leaseId) return { ok: false, error: "lease_id required" };
-  const digest =
-    typeof input.request_digest === "string" && input.request_digest.trim()
-      ? input.request_digest.trim()
-      : null;
+  const digest = typeof input.request_digest === "string" ? input.request_digest.trim() : "";
+  if (!digest) return { ok: false, error: "request_digest required" };
 
   const state = await loadState(storage, now);
   recoverExpired(state, now);
@@ -717,9 +746,13 @@ export async function markProviderStarted(
       detail: state.frozen_reason || "provider usage audit required",
     };
   }
-  if (digest && reservation.request_digest && reservation.request_digest !== digest) {
+  const bound = requireExactLeaseAndDigest(
+    { request_digest: digest, lease_id: leaseId },
+    reservation,
+  );
+  if (bound) {
     await saveState(storage, state);
-    return { ok: false, error: "request_digest_mismatch" };
+    return bound;
   }
   const lease = state.leases[leaseId];
   if (
@@ -732,12 +765,16 @@ export async function markProviderStarted(
     return { ok: false, error: "lease_not_active" };
   }
   if (reservation.provider_started_at !== null) {
+    const replayed =
+      !reservation.settlement_capability_consumed && reservation.settlement_capability_secret
+        ? reservation.settlement_capability_secret
+        : null;
     await saveState(storage, state);
     return {
       ok: true,
       reservation: publicReservation(reservation),
       budget_run_id: reservation.reservation_id,
-      settlement_capability: null,
+      settlement_capability: replayed,
     };
   }
   const capability = mintSettlementCapabilitySecret();
@@ -747,6 +784,7 @@ export async function markProviderStarted(
     reservation,
   );
   reservation.settlement_capability_consumed = false;
+  reservation.settlement_capability_secret = capability;
   await saveState(storage, state);
   return {
     ok: true,
@@ -806,17 +844,8 @@ async function consumeSettlementCapability(
     lease_id?: string;
   },
 ): Promise<BudgetErr | null> {
-  const digest =
-    typeof input.request_digest === "string" && input.request_digest.trim()
-      ? input.request_digest.trim()
-      : "";
-  if (digest && reservation.request_digest && reservation.request_digest !== digest) {
-    return { ok: false, error: "request_digest_mismatch" };
-  }
-  const leaseId = typeof input.lease_id === "string" ? input.lease_id.trim() : "";
-  if (leaseId && reservation.lease_id && reservation.lease_id !== leaseId) {
-    return { ok: false, error: "lease_mismatch" };
-  }
+  const bound = requireExactLeaseAndDigest(input, reservation);
+  if (bound) return bound;
   const capability =
     typeof input.settlement_capability === "string"
       ? input.settlement_capability.trim()
@@ -832,6 +861,7 @@ async function consumeSettlementCapability(
     return { ok: false, error: "settlement_capability_invalid" };
   }
   reservation.settlement_capability_consumed = true;
+  reservation.settlement_capability_secret = null;
   return null;
 }
 

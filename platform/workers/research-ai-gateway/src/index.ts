@@ -338,18 +338,22 @@ async function handleGatewayRequest(
 
     // This durable marker is the recovery boundary. Workers AI is never called
     // unless the ledger has persisted that provider usage may now exist.
-    const providerStarted = await budgetRpc(env, "markProviderStarted", {
+    const startInput = {
       idempotency_key: bound.idempotency_key,
       lease_id: reserved.lease_id,
       request_digest: bound.request_digest,
-    });
+    };
+    let providerStarted = await budgetRpc(env, "markProviderStarted", startInput);
+    if (!providerStarted.ok || !providerStarted.settlement_capability) {
+      // Lost RPC response / eviction: the DO may already have minted. Retry
+      // recovers the same one-shot capability instead of creating a phantom.
+      providerStarted = await budgetRpc(env, "markProviderStarted", startInput);
+    }
     const settlementCapability = providerStarted.settlement_capability;
     if (!providerStarted.ok || !settlementCapability) {
       // No provider call was made. If the marker itself committed but its
-      // response was lost, release conservatively charges and freezes because
-      // the durable record is intentionally indistinguishable from a crash at
-      // the provider boundary. Otherwise this is a zero-cost pre-provider
-      // release. The alarm remains the final recovery path if this RPC fails.
+      // capability cannot be recovered, release conservatively charges and
+      // freezes. The alarm remains the final recovery path if this RPC fails.
       await budgetRpc(env, "release", {
         idempotency_key: bound.idempotency_key,
         lease_id: reserved.lease_id,

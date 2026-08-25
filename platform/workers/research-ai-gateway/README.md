@@ -15,12 +15,16 @@ Strict Workers AI gateway. The research mass-eval worker **must not** bind `AI`.
 ## Durable budget settlement
 
 `BudgetLedger` persists a lease, a `provider_started_at` recovery marker, and a
-one-shot settlement capability before Workers AI is invoked. The production
+retry-safe one-shot settlement capability before Workers AI is invoked. The
+capability is stored privately, redacted from snapshots, returned again if the
+provider-start RPC response is lost, and consumed atomically. The production
 Gateway path is the sole settlement coordinator: generic HTTP
 `/finalize`, `/reconcile`, `/provider-started`, and capability-mint routes are
-not settlement authority. Exact usage is derived privately by Gateway from the
-provider response; the Durable Object derives uncertain settlement from the
-reserved maximum and ignores caller-authored receipt/result/settlement claims.
+not settlement authority. Provider-start, exact finalize, and uncertain settle
+require an exact nonempty `request_digest` and `lease_id`. Exact usage is
+derived privately by Gateway from the provider response; the Durable Object
+derives uncertain settlement from the reserved maximum and ignores
+caller-authored receipt/result/settlement claims.
 A timeout, provider error without usage, lost/invalid finalize response, Worker
 interruption, or expired provider-started lease can never be treated as zero
 usage: the ledger charges the persisted reservation maximum, freezes new work,

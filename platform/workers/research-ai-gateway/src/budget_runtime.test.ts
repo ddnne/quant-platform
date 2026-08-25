@@ -269,7 +269,79 @@ describe("BudgetLedger in the Workers runtime", () => {
       expect(
         ledger?.reservations["runtime-restart-uncertain"].settlement_capability_hash,
       ).toEqual(expect.any(String));
+      expect(
+        ledger?.reservations["runtime-restart-uncertain"].settlement_capability_secret,
+      ).toEqual(expect.any(String));
     });
+  }, 15_000);
+
+  it("retries a lost provider-start response after eviction with the same capability", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
+    const rpc = stub as BudgetLedgerRpcStub;
+    const reservedResponse = await within(
+      "lost-start reserve",
+      post(stub, "/reserve", {
+        idempotency_key: "runtime-lost-start",
+        request_digest: "digest-runtime-lost-start",
+        acquire_lease: true,
+        amounts: { model_calls: 1, input_tokens: 12, output_tokens: 3 },
+      }),
+    );
+    const reserved = (await reservedResponse.json()) as { lease: { lease_id: string } };
+    const started = await within(
+      "lost-start first mint",
+      rpc.markProviderStarted({
+        idempotency_key: "runtime-lost-start",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-runtime-lost-start",
+      }),
+    );
+    expect(started.ok).toBe(true);
+    expect(started.settlement_capability).toEqual(expect.any(String));
+    const snapshot = await within(
+      "lost-start public snapshot",
+      stub.fetch("https://budget/snapshot"),
+    );
+    expect(JSON.stringify(await snapshot.json())).not.toContain(
+      started.settlement_capability,
+    );
+
+    await within("evict lost-start", evictDurableObject(stub));
+    const retried = await within(
+      "lost-start retry",
+      rpc.markProviderStarted({
+        idempotency_key: "runtime-lost-start",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-runtime-lost-start",
+      }),
+    );
+    expect(retried.ok).toBe(true);
+    expect(retried.settlement_capability).toBe(started.settlement_capability);
+
+    const omitted = await within(
+      "lost-start omitted digest",
+      rpc.markProviderStarted({
+        idempotency_key: "runtime-lost-start",
+        lease_id: reserved.lease.lease_id,
+      }),
+    );
+    expect(omitted).toMatchObject({ ok: false, error: "request_digest required" });
+
+    const committed = await within(
+      "lost-start exact settle",
+      rpc.finalizeExact({
+        idempotency_key: "runtime-lost-start",
+        request_digest: "digest-runtime-lost-start",
+        lease_id: reserved.lease.lease_id,
+        settlement_capability: retried.settlement_capability as string,
+        usage: { model_calls: 1, input_tokens: 4, output_tokens: 2 },
+        terminal_result: { http_status: 200, body: { ok: true } },
+      }),
+    );
+    expect(committed.ok).toBe(true);
+    expect(committed.used?.input_tokens).toBe(4);
   }, 15_000);
 
   it("direct HTTP finalize, reconcile, provider-start, and mint are not settlement authority", async () => {
