@@ -32,6 +32,9 @@ from storage.coverage_ledger import (
 )
 from storage.sqlite_store import SqliteStore
 from tests.ready_snapshot_test_support import (
+    latest_ready_snapshot_fixture,
+    list_ready_snapshots_fixture,
+    open_ready_snapshot_fixture,
     publish_core_profile_ready_fixture,
     publish_ready_snapshot_fixture,
 )
@@ -385,6 +388,19 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(
     ready = publish_ready_snapshot_fixture(
         path, snapshot_dir, required_datasets=required
     )
+    publication_path = ready.db_path.with_suffix(".publication.json")
+    assert publication_path.is_file()
+    publication = json.loads(publication_path.read_text(encoding="utf-8"))
+    assert publication["format"] == "research-snapshot-publication/v1"
+    assert publication["snapshot_id"] == ready.snapshot_id
+    assert publication["manifest_digest"] == ready.manifest["manifest_digest"]
+    assert publication["change_seq"] == ready.manifest["change_seq"]
+    assert publication["artifact_digest"].startswith("sha256:")
+    assert publication["publication_scope"] == "FIXTURE"
+    assert publication["readiness_attestation"] is None
+    assert publication["readiness_attestation_digest"] is None
+    assert publication_path.stat().st_mode & 0o222 == 0
+    assert (snapshot_dir / "latest-ready.json").stat().st_mode & 0o222 == 0
     assert ready.snapshot_id == ready.manifest["snapshot_id"]
     assert ready.manifest["state"] == "READY"
     assert ready.manifest["quality"]["status"] == "PASS"
@@ -400,7 +416,15 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(
     assert len(proof["proof_digest"]) == 71
     assert len(proof["datasets"]) == len(required)
     assert set(ready.manifest["raw_manifests"]) == set(required)
-    assert latest_ready_snapshot(snapshot_dir).snapshot_id == ready.snapshot_id
+    # Fixture publications remain usable only through tests-owned readers;
+    # the product READY surface rejects the unsigned scope.
+    assert (
+        latest_ready_snapshot_fixture(snapshot_dir).snapshot_id
+        == ready.snapshot_id
+    )
+    assert list_ready_snapshots(snapshot_dir) == []
+    with pytest.raises(RuntimeError, match="publication marker is invalid"):
+        latest_ready_snapshot(snapshot_dir)
     assert data_snapshot_id(ready.db_path) == ready.snapshot_id
     with pytest.raises(RuntimeError, match="not committed"):
         data_snapshot_id(path)
@@ -418,7 +442,7 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(
         db_path=ready.db_path,
     ).rows
 
-    with open_ready_snapshot(snapshot_dir) as conn:
+    with open_ready_snapshot_fixture(snapshot_dir) as conn:
         assert conn.execute(
             "SELECT COUNT(*) FROM dataset_coverage WHERE status='COMPLETE'"
         ).fetchone()[0] == len(required)
@@ -432,10 +456,70 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(
         path, snapshot_dir, required_datasets=required
     )
     assert repeated.snapshot_id == ready.snapshot_id
-    assert len(list_ready_snapshots(snapshot_dir)) == 1
+    assert len(list_ready_snapshots_fixture(snapshot_dir)) == 1
 
 
-def test_pointer_finalization_failure_is_reported_and_retains_recoverable_artifact(
+def test_latest_pointer_cannot_roll_back_to_an_older_valid_generation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
+    )
+    snapshot_dir = tmp_path / "snapshots"
+    first_db = tmp_path / "first.sqlite"
+    required = _seed_publishable_db(first_db)
+    first = publish_ready_snapshot_fixture(
+        first_db, snapshot_dir, required_datasets=required
+    )
+
+    second_db = tmp_path / "second.sqlite"
+    _seed_publishable_db(second_db)
+    with sqlite3.connect(second_db) as conn:
+        conn.execute(
+            "CREATE TABLE ingestion_change_log (change_seq INTEGER NOT NULL)"
+        )
+        conn.execute("INSERT INTO ingestion_change_log VALUES (2)")
+        conn.execute(
+            "UPDATE sync_change_state SET last_applied_change_seq=2 "
+            "WHERE feed='jquants_records'"
+        )
+        conn.commit()
+    second = publish_ready_snapshot_fixture(
+        second_db, snapshot_dir, required_datasets=required
+    )
+    assert second.snapshot_id != first.snapshot_id
+    assert second.manifest["change_seq"] == 2
+    assert latest_ready_snapshot_fixture(snapshot_dir).snapshot_id == second.snapshot_id
+
+    first_publication = json.loads(
+        first.db_path.with_suffix(".publication.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    snapshot_module._atomic_json(
+        snapshot_dir / "latest-ready.json",
+        {
+            "format": "research-snapshot-pointer/v1",
+            "snapshot_id": first.snapshot_id,
+            "manifest": first.manifest_path.name,
+            "committed_at": first.committed_at,
+            "change_seq": first.manifest["change_seq"],
+            "publication_digest": first_publication["publication_digest"],
+        },
+        mode=0o444,
+    )
+    with pytest.raises(RuntimeError, match="not the newest committed generation"):
+        latest_ready_snapshot_fixture(snapshot_dir)
+
+    second.db_path.chmod(0o644)
+    with second.db_path.open("ab") as handle:
+        handle.write(b"tamper-newest")
+    second.db_path.chmod(0o444)
+    with pytest.raises(RuntimeError, match="invalid or scope-mismatched"):
+        latest_ready_snapshot_fixture(snapshot_dir)
+
+
+def test_pointer_finalization_failure_quarantines_rejected_evidence(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(
@@ -454,7 +538,7 @@ def test_pointer_finalization_failure_is_reported_and_retains_recoverable_artifa
     monkeypatch.setattr(snapshot_module, "_atomic_json", fail_latest_pointer)
     with pytest.raises(
         SnapshotRejected,
-        match="finalization failed; recoverable immutable artifact retained",
+        match="rejected immutable evidence quarantined",
     ):
         publish_ready_snapshot_fixture(
             path,
@@ -462,16 +546,33 @@ def test_pointer_finalization_failure_is_reported_and_retains_recoverable_artifa
             required_datasets=required,
         )
 
-    assert list(snapshot_dir.glob("sha256_*.sqlite"))
-    assert list(snapshot_dir.glob("sha256_*.manifest.json"))
+    assert not list(snapshot_dir.glob("sha256_*.sqlite"))
+    assert not list(snapshot_dir.glob("sha256_*.manifest.json"))
+    assert not list(snapshot_dir.glob("sha256_*.publication.json"))
     assert not (snapshot_dir / "latest-ready.json").exists()
+    assert list_ready_snapshots(snapshot_dir) == []
+    with pytest.raises(FileNotFoundError, match="no READY"):
+        latest_ready_snapshot(snapshot_dir)
+    with pytest.raises(FileNotFoundError, match="no READY"):
+        open_ready_snapshot(snapshot_dir)
+    rejected = list((snapshot_dir / "rejected").glob("build-*"))
+    assert len(rejected) == 1
+    assert len(list(rejected[0].glob("sha256_*.sqlite"))) == 1
+    assert len(list(rejected[0].glob("sha256_*.manifest.json"))) == 1
+    rejected_manifest = json.loads(
+        next(rejected[0].glob("sha256_*.manifest.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    with pytest.raises(FileNotFoundError, match="publication marker"):
+        open_ready_snapshot(snapshot_dir, rejected_manifest["snapshot_id"])
     conn = sqlite3.connect(path)
     state, reason = conn.execute(
         "SELECT state,rejection_reason FROM snapshot_publications "
         "ORDER BY created_at DESC LIMIT 1"
     ).fetchone()
     assert state == "REJECTED"
-    assert "recoverable immutable artifact retained" in reason
+    assert "rejected immutable evidence quarantined" in reason
     policy = conn.execute(
         "SELECT snapshot_ready,publication_state,active_snapshot_id "
         "FROM local_snapshot_policy WHERE singleton=1"

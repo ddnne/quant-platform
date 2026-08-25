@@ -16,6 +16,12 @@ from paper_runtime.snapshot import (
     SnapshotRejected,
     _publish_ready_snapshot_impl,
 )
+from paper_runtime.snapshot_read import (
+    _describe_fixture_snapshot,
+    _latest_fixture_snapshot,
+    _list_fixture_snapshots,
+    _open_fixture_snapshot,
+)
 from paper_runtime.coherence import check_ready_coherence
 from paper_runtime.ready_policy import (
     ReadyEvidenceBundle,
@@ -128,6 +134,27 @@ def publish_ready_snapshot_fixture(
         publication_gate=_evaluate_ready_publication_fixture,
         fixture_compatibility=True,
     )
+
+
+def describe_ready_snapshot_fixture(
+    snapshot_dir: str | Path, snapshot_id: str
+) -> ReadySnapshot:
+    """Read a tests-only fixture without entering the product READY surface."""
+    return _describe_fixture_snapshot(snapshot_dir, snapshot_id)
+
+
+def latest_ready_snapshot_fixture(snapshot_dir: str | Path) -> ReadySnapshot:
+    return _latest_fixture_snapshot(snapshot_dir)
+
+
+def list_ready_snapshots_fixture(snapshot_dir: str | Path) -> list[ReadySnapshot]:
+    return _list_fixture_snapshots(snapshot_dir)
+
+
+def open_ready_snapshot_fixture(
+    snapshot_dir: str | Path, snapshot_id: str | None = None
+):
+    return _open_fixture_snapshot(snapshot_dir, snapshot_id)
 
 
 def publish_core_profile_ready_fixture(

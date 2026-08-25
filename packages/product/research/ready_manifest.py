@@ -1672,14 +1672,16 @@ def _publish_exact_four_pilot_ready_snapshot_impl(
                 f"required={required_start}..{required_end}"
             )
 
+    # The dependency proof is part of the outer immutable snapshot identity,
+    # not only the nested ReadyManifest.  Compute it before publication so the
+    # runtime embeds the exact same document before deriving ``snapshot_id``.
+    scope_proof = _verify_exact_four_pit_dependency_scope(
+        staging_db, governed
+    )
+
     def _build(document: Mapping[str, Any]) -> Mapping[str, Any]:
-        scope_proof = _verify_exact_four_pit_dependency_scope(
-            staging_db, governed
-        )
-        enriched = dict(document)
-        enriched["dependency_scope_evidence"] = scope_proof
         return build_profile_bound_ready_manifest_from_snapshot_document(
-            enriched, profile=governed
+            document, profile=governed
         ).to_dict()
 
     published_attestation: dict[str, Any] = {}
@@ -1727,6 +1729,7 @@ def _publish_exact_four_pilot_ready_snapshot_impl(
         snapshot_dir,
         required_datasets=governed.required_datasets,
         _profile_coverage_evidence=evidence,
+        _dependency_scope_evidence=scope_proof,
         _ready_manifest_builder=_build,
         _ready_attestation_builder=_attest,
     )

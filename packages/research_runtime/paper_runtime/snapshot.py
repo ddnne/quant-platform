@@ -40,6 +40,7 @@ from paper_runtime.snapshot_publish_policy import (
     _transition_policy,
 )
 from paper_runtime.snapshot_read import (
+    _describe_fixture_snapshot,
     describe_snapshot,
     latest_ready_snapshot,
     list_ready_snapshots,
@@ -50,6 +51,7 @@ from paper_runtime.snapshot_read import (
 DATA_SNAPSHOT_FORMAT = "paper-data-snapshot/v1"
 LOCAL_SNAPSHOT_MANIFEST_FORMAT = "local-snapshot-manifest/v1"
 RESEARCH_SNAPSHOT_MANIFEST_FORMAT = "research-snapshot-manifest/v2"
+RESEARCH_SNAPSHOT_PUBLICATION_FORMAT = "research-snapshot-publication/v1"
 QUALITY_POLICY_VERSION = "b0+phase35-daily+coverage-set/v1"
 SNAPSHOT_STATES = frozenset(
     {"BUILDING", "SYNCED", "VALIDATING", "READY", "REJECTED"}
@@ -306,6 +308,14 @@ def _canonical_digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
 def fail_snapshot_sync(conn: sqlite3.Connection, error: str) -> None:
     """Keep a partial local DB unavailable to paper research."""
     conn.execute(
@@ -556,6 +566,7 @@ def _publish_ready_snapshot(
     *,
     required_datasets: Iterable[str],
     _profile_coverage_evidence: Mapping[str, Any] | None = None,
+    _dependency_scope_evidence: Mapping[str, Any] | None = None,
     _ready_manifest_builder: (
         Callable[[Mapping[str, Any]], Mapping[str, Any]] | None
     ) = None,
@@ -567,6 +578,7 @@ def _publish_ready_snapshot(
         snapshot_dir,
         required_datasets=required_datasets,
         _profile_coverage_evidence=_profile_coverage_evidence,
+        _dependency_scope_evidence=_dependency_scope_evidence,
         _ready_manifest_builder=_ready_manifest_builder,
         _ready_attestation_builder=_ready_attestation_builder,
         publication_gate=evaluate_ready_publication,
@@ -580,6 +592,7 @@ def _publish_ready_snapshot_impl(
     *,
     required_datasets: Iterable[str],
     _profile_coverage_evidence: Mapping[str, Any] | None = None,
+    _dependency_scope_evidence: Mapping[str, Any] | None = None,
     _ready_manifest_builder: (
         Callable[[Mapping[str, Any]], Mapping[str, Any]] | None
     ) = None,
@@ -613,6 +626,10 @@ def _publish_ready_snapshot_impl(
         raise SnapshotRejected(
             "READY attestation builder requires a profile-bound ReadyManifest"
         )
+    if _dependency_scope_evidence is not None and not profile_bound:
+        raise SnapshotRejected(
+            "dependency scope evidence requires a profile-bound ReadyManifest"
+        )
     if not profile_bound and not fixture_compatibility:
         raise SnapshotRejected(
             "production READY requires a profile/plan-bound ReadyManifest publisher"
@@ -624,6 +641,14 @@ def _publish_ready_snapshot_impl(
     ):
         raise SnapshotRejected(
             "production READY requires an atomic signed readiness attestation"
+        )
+    if (
+        profile_bound
+        and not fixture_compatibility
+        and not isinstance(_dependency_scope_evidence, Mapping)
+    ):
+        raise SnapshotRejected(
+            "production READY requires publisher-owned dependency scope evidence"
         )
     if not profile_bound and (
         not governed <= required_set or not required_set <= set(policies)
@@ -651,9 +676,14 @@ def _publish_ready_snapshot_impl(
     coverage_policy_version = str(coverage_policy["policy_version"])
     coverage_policy_digest = str(coverage_policy["policy_digest"])
     quality_policy_version = QUALITY_POLICY_VERSION
-    published_ready: ReadySnapshot | None = None
-    recoverable_artifact_path: Path | None = None
     readiness_sidecar_path: Path | None = None
+    artifact_path: Path | None = None
+    manifest_path: Path | None = None
+    publication_marker_path: Path | None = None
+    artifact_created = False
+    manifest_attempted = False
+    pointer_attempted = False
+    publication_marker_attempted = False
     try:
         _persist_building_publication(
             conn,
@@ -785,6 +815,10 @@ def _publish_ready_snapshot_impl(
                 str(dataset_id): dict(row)
                 for dataset_id, row in _profile_coverage_evidence.items()
             }
+        if _dependency_scope_evidence is not None:
+            manifest["dependency_scope_evidence"] = dict(
+                _dependency_scope_evidence
+            )
         snapshot_id = _research_manifest_id(manifest)
         manifest["snapshot_id"] = snapshot_id
         if profile_bound:
@@ -795,6 +829,7 @@ def _publish_ready_snapshot_impl(
         stem = _artifact_stem(snapshot_id)
         artifact_path = destination / f"{stem}.sqlite"
         manifest_path = destination / f"{stem}.manifest.json"
+        publication_marker_path = destination / f"{stem}.publication.json"
         manifest["artifact"] = artifact_path.name
         manifest["manifest_digest"] = _research_manifest_digest(manifest)
 
@@ -849,8 +884,11 @@ def _publish_ready_snapshot_impl(
                 embedded.close()
             os.chmod(temp_db, 0o444)
             if artifact_path.exists():
-                recoverable_artifact_path = artifact_path
-                existing = describe_snapshot(destination, snapshot_id)
+                existing = (
+                    _describe_fixture_snapshot(destination, snapshot_id)
+                    if fixture_compatibility
+                    else describe_snapshot(destination, snapshot_id)
+                )
                 temp_db.unlink(missing_ok=True)
                 ready = existing
                 manifest = existing.manifest
@@ -859,12 +897,12 @@ def _publish_ready_snapshot_impl(
                 committed_at = existing.committed_at
             else:
                 os.replace(temp_db, artifact_path)
-                recoverable_artifact_path = artifact_path
+                artifact_created = True
+                manifest_attempted = True
                 _atomic_json(manifest_path, manifest, mode=0o444)
                 ready = ReadySnapshot(
                     snapshot_id, artifact_path, manifest_path, manifest
                 )
-            published_ready = ready
         except Exception:
             temp_db.unlink(missing_ok=True)
             raise
@@ -895,6 +933,43 @@ def _publish_ready_snapshot_impl(
         # removed by the rejection handler below before control escapes.
         if _ready_attestation_builder is not None:
             readiness_sidecar_path = _ready_attestation_builder(ready)
+            if (
+                readiness_sidecar_path is None
+                or not readiness_sidecar_path.is_file()
+            ):
+                raise SnapshotRejected(
+                    "READY attestation builder did not publish an artifact"
+                )
+        artifact_digest = _file_sha256(artifact_path)
+        publication_body: dict[str, Any] = {
+            "format": RESEARCH_SNAPSHOT_PUBLICATION_FORMAT,
+            "snapshot_id": snapshot_id,
+            "manifest_digest": manifest["manifest_digest"],
+            "committed_at": committed_at,
+            "change_seq": change_seq,
+            "artifact_digest": artifact_digest,
+            "publication_scope": (
+                "FIXTURE" if fixture_compatibility else "PRODUCTION"
+            ),
+            "readiness_attestation": (
+                readiness_sidecar_path.name
+                if readiness_sidecar_path is not None
+                else None
+            ),
+            "readiness_attestation_digest": (
+                _file_sha256(readiness_sidecar_path)
+                if readiness_sidecar_path is not None
+                else None
+            ),
+        }
+        publication = {
+            **publication_body,
+            "publication_digest": _canonical_digest(publication_body),
+        }
+        # The mutable convenience pointer binds the complete marker and its
+        # monotonic source generation.  The marker is written last, so a
+        # pointer failure cannot leave a directly discoverable publication.
+        pointer_attempted = True
         _atomic_json(
             destination / "latest-ready.json",
             {
@@ -902,12 +977,30 @@ def _publish_ready_snapshot_impl(
                 "snapshot_id": snapshot_id,
                 "manifest": manifest_path.name,
                 "committed_at": committed_at,
+                "change_seq": change_seq,
+                "publication_digest": publication["publication_digest"],
             },
-            mode=0o644,
+            mode=0o444,
         )
+        publication_marker_attempted = True
+        _atomic_json(publication_marker_path, publication, mode=0o444)
         return ready
     except Exception as exc:
         original_exc = exc
+        # A replace-last helper can be wrapped by a filesystem layer that
+        # reports failure after the destination appeared.  Remove discovery
+        # documents for every attempted finalization before cleaning signed
+        # sidecars or quarantining immutable evidence.
+        if publication_marker_attempted and publication_marker_path is not None:
+            try:
+                publication_marker_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if pointer_attempted:
+            try:
+                (destination / "latest-ready.json").unlink(missing_ok=True)
+            except OSError:
+                pass
         if readiness_sidecar_path is not None:
             try:
                 readiness_sidecar_path.unlink(missing_ok=True)
@@ -919,16 +1012,32 @@ def _publish_ready_snapshot_impl(
                     "READY publication rejected but readiness sidecar cleanup "
                     f"failed: {readiness_sidecar_path}"
                 )
-        retained_path = (
-            published_ready.db_path
-            if published_ready is not None
-            else recoverable_artifact_path
-        )
-        if retained_path is not None and retained_path.is_file():
-            exc = SnapshotRejected(
-                "READY publication finalization failed; recoverable immutable "
-                f"artifact retained at {retained_path}: {exc}"
+        created_paths = [
+            path
+            for path, created in (
+                (artifact_path, artifact_created),
+                (manifest_path, manifest_attempted),
             )
+            if created and path is not None and path.exists()
+        ]
+        if created_paths:
+            quarantine_path = destination / "rejected" / build_id
+            try:
+                quarantine_path.mkdir(parents=True, exist_ok=False)
+                for path in created_paths:
+                    os.replace(path, quarantine_path / path.name)
+                exc = SnapshotRejected(
+                    "READY publication finalization failed; rejected immutable "
+                    f"evidence quarantined at {quarantine_path}: {exc}"
+                )
+            except OSError as cleanup_exc:
+                # No publication marker exists, so even a failed quarantine is
+                # outside every public READY read path. Surface the cleanup
+                # problem for an operator rather than treating it as success.
+                exc = SnapshotRejected(
+                    "READY publication failed and rejected evidence quarantine "
+                    f"failed: {cleanup_exc}; original error: {exc}"
+                )
         try:
             conn.rollback()
             conn.execute(
