@@ -326,10 +326,71 @@ export function parseAmounts(raw: unknown): BudgetResult<{ amounts: Counters }> 
 }
 
 function parseActualUsage(raw: unknown): BudgetResult<{ amounts: Counters }> {
-  if (raw === null || raw === undefined) {
-    return { ok: false, error: "usage must be an object" };
+  const required = [
+    "model_calls",
+    "input_tokens",
+    "output_tokens",
+    "cached_tokens",
+    "cost_usd",
+  ] as const;
+  let values: Record<string, unknown>;
+  try {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      return { ok: false, error: "usage must be a closed object" };
+    }
+    const prototype = Object.getPrototypeOf(raw);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return { ok: false, error: "usage must be a closed object" };
+    }
+    const ownKeys = Reflect.ownKeys(raw);
+    if (ownKeys.some((key) => typeof key !== "string")) {
+      return { ok: false, error: "usage contains an unknown field" };
+    }
+    const stringKeys = ownKeys as string[];
+    const unknown = stringKeys.find(
+      (key) => !required.includes(key as (typeof required)[number]),
+    );
+    if (unknown) return { ok: false, error: `unknown usage field: ${unknown}` };
+    const missing = required.find((key) => !stringKeys.includes(key));
+    if (missing) return { ok: false, error: `missing usage field: ${missing}` };
+    const descriptors = Object.getOwnPropertyDescriptors(raw);
+    values = {};
+    for (const key of required) {
+      const descriptor = descriptors[key];
+      if (!descriptor?.enumerable || !("value" in descriptor)) {
+        return { ok: false, error: `usage field must be plain data: ${key}` };
+      }
+      values[key] = descriptor.value;
+    }
+  } catch {
+    return { ok: false, error: "usage must be a closed object" };
   }
-  return parseAmounts(raw);
+
+  if (values.model_calls !== 1) {
+    return { ok: false, error: "model_calls must equal 1" };
+  }
+  for (const name of ["input_tokens", "output_tokens", "cached_tokens"] as const) {
+    const value = values[name];
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+      return { ok: false, error: `${name} must be an integer >= 0` };
+    }
+  }
+  const cost = values.cost_usd;
+  if (
+    typeof cost !== "number" ||
+    !Number.isFinite(cost) ||
+    cost < 0 ||
+    !Number.isSafeInteger(usdMicros(cost))
+  ) {
+    return { ok: false, error: "cost_usd must be a finite number >= 0" };
+  }
+  const amounts = zeroCounters();
+  amounts.model_calls = 1;
+  amounts.input_tokens = values.input_tokens as number;
+  amounts.output_tokens = values.output_tokens as number;
+  amounts.cached_tokens = values.cached_tokens as number;
+  amounts.cost_usd = usdMicros(cost) / 1_000_000;
+  return { ok: true, amounts };
 }
 
 function amountsFromCounters(c: Counters): Counters {
@@ -901,14 +962,30 @@ function canonicalizeCachedResult(
   result: CachedBudgetResult | undefined,
   material: Set<string>,
 ): BudgetResult<{ value: CachedBudgetResult | undefined }> {
-  if (!result) return { ok: true, value: undefined };
-  const status = result.http_status;
+  if (result === undefined) return { ok: true, value: undefined };
+  const clonedEnvelope = boundedPublicJson(result, material);
+  if (!clonedEnvelope.ok) return clonedEnvelope;
+  if (
+    !clonedEnvelope.value ||
+    typeof clonedEnvelope.value !== "object" ||
+    Array.isArray(clonedEnvelope.value)
+  ) {
+    return { ok: false, error: "cached_result_invalid" };
+  }
+  const envelope = clonedEnvelope.value as Record<string, unknown>;
+  const envelopeKeys = Object.keys(envelope);
+  if (
+    envelopeKeys.length !== 2 ||
+    !Object.prototype.hasOwnProperty.call(envelope, "http_status") ||
+    !Object.prototype.hasOwnProperty.call(envelope, "body")
+  ) {
+    return { ok: false, error: "cached_result_invalid" };
+  }
+  const status = envelope.http_status;
   if (typeof status !== "number" || !Number.isInteger(status) || status < 200 || status > 599) {
     return { ok: false, error: "cached_result_invalid" };
   }
-  const clonedBody = boundedPublicJson(result.body, material);
-  if (!clonedBody.ok) return clonedBody;
-  const body = clonedBody.value;
+  const body = envelope.body;
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { ok: false, error: "cached_result_invalid" };
   }

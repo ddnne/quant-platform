@@ -194,66 +194,116 @@ function cachedResponse(cached: CachedBudgetBody): Response {
   return json(cached.body, cached.http_status);
 }
 
+function plainDataRecord(value: unknown): Record<string, unknown> | null {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return null;
+    const ownKeys = Reflect.ownKeys(value);
+    if (ownKeys.some((key) => typeof key !== "string")) return null;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const record: Record<string, unknown> = {};
+    for (const key of ownKeys as string[]) {
+      const descriptor = descriptors[key];
+      if (!descriptor?.enumerable || !("value" in descriptor)) return null;
+      record[key] = descriptor.value;
+    }
+    return record;
+  } catch {
+    return null;
+  }
+}
+
+function finiteTokenCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
 function tokenCount(
   res: unknown,
 ): { input: number; output: number; cached: number; actualCostUsd: number | null; measured: boolean } {
-  const rec = res && typeof res === "object" ? (res as Record<string, unknown>) : {};
-  const usage =
-    rec.usage && typeof rec.usage === "object" && !Array.isArray(rec.usage)
-      ? (rec.usage as Record<string, unknown>)
-      : {};
-  let malformed = Object.prototype.hasOwnProperty.call(rec, "usage") && usage !== rec.usage;
-  const inputDetails =
-    usage.input_tokens_details &&
-    typeof usage.input_tokens_details === "object" &&
-    !Array.isArray(usage.input_tokens_details)
-      ? (usage.input_tokens_details as Record<string, unknown>)
-      : {};
-  if (
-    Object.prototype.hasOwnProperty.call(usage, "input_tokens_details") &&
-    inputDetails !== usage.input_tokens_details
-  ) {
-    malformed = true;
-  }
-  const measuredNumber = (
-    source: Record<string, unknown>,
-    keys: string[],
-  ): number | null => {
-    for (const key of keys) {
-      if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
-      const value = source[key];
-      if (typeof value !== "number") {
-        malformed = true;
-        return null;
-      }
-      if (Number.isSafeInteger(value) && value >= 0) return value;
-      malformed = true;
-      return null;
-    }
-    return null;
+  const rec = plainDataRecord(res);
+  const usage = rec && Object.prototype.hasOwnProperty.call(rec, "usage")
+    ? plainDataRecord(rec.usage)
+    : null;
+  const invalid = {
+    input: 0,
+    output: 0,
+    cached: 0,
+    actualCostUsd: null,
+    measured: false,
+  } as const;
+  if (!usage) return invalid;
+
+  const allowedUsageKeys = new Set([
+    "prompt_tokens",
+    "input_tokens",
+    "completion_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cached_tokens",
+    "input_tokens_details",
+    "prompt_tokens_details",
+    "cost_usd",
+    "monetary_cost_usd",
+  ]);
+  if (Object.keys(usage).some((key) => !allowedUsageKeys.has(key))) return invalid;
+
+  const oneAlias = (aliases: readonly string[]): number | null => {
+    const present = aliases.filter((key) => Object.prototype.hasOwnProperty.call(usage, key));
+    if (present.length !== 1) return null;
+    return finiteTokenCount(usage[present[0]]);
   };
-  const input = measuredNumber(usage, ["prompt_tokens", "input_tokens"]);
-  const output = measuredNumber(usage, ["completion_tokens", "output_tokens"]);
-  const cached =
-    measuredNumber(usage, ["cached_tokens"]) ??
-    measuredNumber(inputDetails, ["cached_tokens"]);
+  const input = oneAlias(["prompt_tokens", "input_tokens"]);
+  const output = oneAlias(["completion_tokens", "output_tokens"]);
+  if (input === null || output === null) return invalid;
+
+  if (Object.prototype.hasOwnProperty.call(usage, "total_tokens")) {
+    const total = finiteTokenCount(usage.total_tokens);
+    if (total === null || total !== input + output) return invalid;
+  }
+
+  const detailAliases = ["input_tokens_details", "prompt_tokens_details"].filter((key) =>
+    Object.prototype.hasOwnProperty.call(usage, key),
+  );
+  if (detailAliases.length > 1) return invalid;
+  let detailCached: number | null = null;
+  if (detailAliases.length === 1) {
+    const details = plainDataRecord(usage[detailAliases[0]]);
+    if (
+      !details ||
+      Object.keys(details).length !== 1 ||
+      !Object.prototype.hasOwnProperty.call(details, "cached_tokens")
+    ) {
+      return invalid;
+    }
+    detailCached = finiteTokenCount(details.cached_tokens);
+    if (detailCached === null) return invalid;
+  }
+  const hasTopCached = Object.prototype.hasOwnProperty.call(usage, "cached_tokens");
+  if (hasTopCached && detailCached !== null) return invalid;
+  const cached = hasTopCached ? finiteTokenCount(usage.cached_tokens) : detailCached ?? 0;
+  if (cached === null) return invalid;
+
+  const costAliases = ["cost_usd", "monetary_cost_usd"].filter((key) =>
+    Object.prototype.hasOwnProperty.call(usage, key),
+  );
+  if (costAliases.length > 1) return invalid;
   let providerCost: number | null = null;
-  for (const key of ["cost_usd", "monetary_cost_usd"]) {
-    if (!Object.prototype.hasOwnProperty.call(usage, key)) continue;
-    const value = usage[key];
+  if (costAliases.length === 1) {
+    const value = usage[costAliases[0]];
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-      malformed = true;
-      break;
+      return invalid;
     }
     providerCost = value;
-    break;
   }
   return {
-    input: input ?? 0,
-    output: output ?? 0,
-    cached: cached ?? 0,
+    input,
+    output,
+    cached,
     actualCostUsd: providerCost,
-    measured: !malformed && input !== null && output !== null,
+    measured: true,
   };
 }
 

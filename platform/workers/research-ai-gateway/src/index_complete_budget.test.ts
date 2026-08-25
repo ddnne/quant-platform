@@ -390,6 +390,23 @@ describe("POST /v1/complete control-plane occupancy", () => {
       { prompt_tokens: "4", completion_tokens: 3, cost_usd: 0.01 },
       { prompt_tokens: 4, completion_tokens: 3, cost_usd: false },
       { prompt_tokens: 4, completion_tokens: 3, cost_usd: Number.NaN },
+      {
+        prompt_tokens: 0,
+        input_tokens: false,
+        completion_tokens: 0,
+        output_tokens: false,
+        cost_usd: 0,
+        monetary_cost_usd: false,
+      },
+      { prompt_tokens: 4, completion_tokens: 3, total_tokens: 99 },
+      { prompt_tokens: 4, completion_tokens: 3, unexpected: 1 },
+      { prompt_tokens: 4, cost_usd: 0.01 },
+      {
+        prompt_tokens: 4,
+        completion_tokens: 3,
+        cached_tokens: 1,
+        prompt_tokens_details: { cached_tokens: 1 },
+      },
     ]) {
       const { BUDGET_LEDGER, storage } = memoryLedger();
       const env: GatewayEnv = {
@@ -414,6 +431,40 @@ describe("POST /v1/complete control-plane occupancy", () => {
         active_leases: 0,
       });
     }
+  });
+
+  it("accepts one complete provider alias set and validates total/cached details", async () => {
+    const { BUDGET_LEDGER, storage } = memoryLedger();
+    const env: GatewayEnv = {
+      GATEWAY_TOKEN,
+      BUDGET_LEDGER,
+      AI: {
+        run: async () => ({
+          response: JSON.stringify(insightArtifact),
+          usage: {
+            prompt_tokens: 4,
+            completion_tokens: 3,
+            total_tokens: 7,
+            prompt_tokens_details: { cached_tokens: 2 },
+          },
+        }),
+      } as unknown as Ai,
+    };
+    const res = await worker.fetch(completeWithBudget(), env);
+    expect(res.status).toBe(200);
+    const snap = await snapshotBudget(storage);
+    expect(snap).toMatchObject({
+      ok: true,
+      frozen: false,
+      used: {
+        model_calls: 1,
+        input_tokens: 4,
+        output_tokens: 3,
+        cached_tokens: 2,
+      },
+      reserved: { model_calls: 0 },
+      active_leases: 0,
+    });
   });
 
   it("charges the maximum on timeout and ignores a late provider completion", async () => {

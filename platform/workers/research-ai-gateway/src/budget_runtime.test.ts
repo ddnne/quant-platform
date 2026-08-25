@@ -44,6 +44,17 @@ function post(stub: DurableObjectStub, path: string, body: unknown): Promise<Res
   );
 }
 
+function actualUsage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    model_calls: 1,
+    input_tokens: 0,
+    output_tokens: 0,
+    cached_tokens: 0,
+    cost_usd: 0,
+    ...overrides,
+  };
+}
+
 type BudgetLedgerRpcStub = DurableObjectStub & {
   reserve(input: {
     idempotency_key: string;
@@ -185,7 +196,7 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: `digest-${row.idempotencyKey}`,
         lease_id: row.leaseId,
         settlement_capability: started.settlement_capability as string,
-        usage: { model_calls: 1, input_tokens: 7, output_tokens: 3 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 7, output_tokens: 3 }),
         terminal_result: { http_status: 200, body: { ok: true } },
       });
       expect(finalized.ok).toBe(true);
@@ -376,7 +387,7 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: "digest-runtime-lost-start",
         lease_id: reserved.lease.lease_id,
         settlement_capability: retried.settlement_capability as string,
-        usage: { model_calls: 1, input_tokens: 4, output_tokens: 2 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 4, output_tokens: 2 }),
         terminal_result: { http_status: 200, body: { ok: true } },
       }),
     );
@@ -439,7 +450,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       request_digest: "digest-runtime-rpc-auth",
       lease_id: reserved.lease.lease_id,
       settlement_capability: "aa".repeat(32),
-      usage: { model_calls: 0, input_tokens: 0 },
+      usage: actualUsage({ model_calls: 0, input_tokens: 0 }),
     });
     expect(unstarted).toMatchObject({ ok: false, error: "provider_not_started" });
 
@@ -457,7 +468,7 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: "digest-runtime-rpc-auth",
         lease_id: reserved.lease.lease_id,
         settlement_capability: "ff".repeat(32),
-        usage: { model_calls: 1, input_tokens: 4 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
       }),
     ).toMatchObject({ ok: false, error: "settlement_capability_invalid" });
 
@@ -467,7 +478,7 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: "digest-other",
         lease_id: reserved.lease.lease_id,
         settlement_capability: cap,
-        usage: { model_calls: 1, input_tokens: 4 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
       }),
     ).toMatchObject({ ok: false, error: "request_digest_mismatch" });
 
@@ -477,7 +488,7 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: "digest-runtime-rpc-auth",
         lease_id: reserved.lease.lease_id,
         settlement_capability: cap,
-        usage: { model_calls: 1, input_tokens: 4 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
         amounts: { model_calls: 0 },
         result: { http_status: 200, body: { ok: true } },
         settlement: { outcome: "success" },
@@ -489,7 +500,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       request_digest: "digest-runtime-rpc-auth",
       lease_id: reserved.lease.lease_id,
       settlement_capability: cap,
-      usage: { model_calls: 1, input_tokens: 6 },
+      usage: actualUsage({ model_calls: 1, input_tokens: 6 }),
       terminal_result: { http_status: 200, body: { ok: true } },
     });
     expect(committed.ok).toBe(true);
@@ -498,7 +509,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       request_digest: "digest-runtime-rpc-auth",
       lease_id: reserved.lease.lease_id,
       settlement_capability: cap,
-      usage: { model_calls: 1, input_tokens: 99 },
+      usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
     });
     expect(replay.ok).toBe(true);
     expect(replay.used?.input_tokens).toBe(6);
@@ -739,7 +750,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       request_digest: "digest-runtime-p0-lease",
       lease_id: reserved.lease!.lease_id,
       settlement_capability: started.settlement_capability as string,
-      usage: { model_calls: 1, input_tokens: 3 },
+      usage: actualUsage({ model_calls: 1, input_tokens: 3 }),
       terminal_result: { http_status: 200, body: { ok: true } },
     });
     expect(finalized.ok).toBe(true);
@@ -796,7 +807,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       request_digest: "digest-runtime-p0-smuggle",
       lease_id: reserved.lease!.lease_id,
       settlement_capability: secret,
-      usage: { model_calls: 1, input_tokens: 2 },
+      usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
       terminal_result: {
         http_status: 200,
         body: {
@@ -819,7 +830,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       request_digest: "digest-runtime-p0-smuggle",
       lease_id: reserved.lease!.lease_id,
       settlement_capability: secret,
-      usage: { model_calls: 1, input_tokens: 2 },
+      usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
       terminal_result: {
         http_status: 200,
         body: { ok: true, artifact: [secret, { items: [hash] }] },
@@ -839,7 +850,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       request_digest: "digest-runtime-p0-smuggle",
       lease_id: reserved.lease!.lease_id,
       settlement_capability: secret,
-      usage: { model_calls: 1, input_tokens: 2 },
+      usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
       terminal_result: { http_status: 200, body: { ok: true, artifact: { summary: "safe" } } },
     });
     expect(committed.ok).toBe(true);
@@ -914,7 +925,7 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: "digest-runtime-p0-substr",
         lease_id: reserved.lease!.lease_id,
         settlement_capability: secret,
-        usage: { model_calls: 1, input_tokens: 2 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
         terminal_result: { http_status: 200, body },
       });
       expect(denied.ok).toBe(false);
@@ -961,7 +972,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       request_digest: "digest-runtime-p0-substr",
       lease_id: reserved.lease!.lease_id,
       settlement_capability: secret,
-      usage: { model_calls: 1, input_tokens: 2 },
+      usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
       terminal_result: { http_status: 200, body: benignBody },
     });
     expect(committed.ok).toBe(true);
@@ -975,7 +986,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       request_digest: "digest-runtime-p0-substr",
       lease_id: reserved.lease!.lease_id,
       settlement_capability: secret,
-      usage: { model_calls: 1, input_tokens: 99 },
+      usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
       terminal_result: { http_status: 200, body: benignBody },
     });
     expect(retry.ok).toBe(true);
@@ -1038,7 +1049,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       request_digest: "digest-runtime-p0-finalize",
       lease_id: reserved.lease!.lease_id,
       settlement_capability: cap,
-      usage: { model_calls: 1, input_tokens: 4 },
+      usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
       terminal_result: { http_status: 200, body: { ok: true } },
     });
     expect(first.ok).toBe(true);
@@ -1054,7 +1065,7 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: "digest-other",
         lease_id: reserved.lease!.lease_id,
         settlement_capability: cap,
-        usage: { model_calls: 1, input_tokens: 99 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
       }),
     ).toMatchObject({ ok: false, error: "request_digest_mismatch" });
     expect(
@@ -1063,7 +1074,7 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: "",
         lease_id: reserved.lease!.lease_id,
         settlement_capability: cap,
-        usage: { model_calls: 1, input_tokens: 99 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
       }),
     ).toMatchObject({ ok: false, error: "request_digest required" });
     expect(
@@ -1072,7 +1083,7 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: "digest-runtime-p0-finalize",
         lease_id: "00000000-0000-4000-8000-000000000000",
         settlement_capability: cap,
-        usage: { model_calls: 1, input_tokens: 99 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
       }),
     ).toMatchObject({ ok: false, error: "lease_mismatch" });
     expect(
@@ -1081,7 +1092,7 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: "digest-runtime-p0-finalize",
         lease_id: "",
         settlement_capability: cap,
-        usage: { model_calls: 1, input_tokens: 99 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
       }),
     ).toMatchObject({ ok: false, error: "lease_id required" });
     expect(
@@ -1090,7 +1101,7 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: "digest-runtime-p0-finalize",
         lease_id: reserved.lease!.lease_id,
         settlement_capability: "ff".repeat(32),
-        usage: { model_calls: 1, input_tokens: 99 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
       }),
     ).toMatchObject({ ok: false, error: "settlement_capability_invalid" });
     expect(
@@ -1099,7 +1110,7 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: "digest-runtime-p0-finalize",
         lease_id: reserved.lease!.lease_id,
         settlement_capability: "",
-        usage: { model_calls: 1, input_tokens: 99 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
       }),
     ).toMatchObject({ ok: false, error: "settlement_capability_required" });
 
@@ -1108,7 +1119,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       request_digest: "digest-runtime-p0-finalize",
       lease_id: reserved.lease!.lease_id,
       settlement_capability: cap,
-      usage: { model_calls: 1, input_tokens: 99 },
+      usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
       terminal_result: { http_status: 200, body: { ok: true } },
     });
     expect(retry.ok).toBe(true);
@@ -1249,7 +1260,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       request_digest: "digest-runtime-p0-lost-start",
       lease_id: reserved.lease!.lease_id,
       settlement_capability: retried.settlement_capability as string,
-      usage: { model_calls: 1, input_tokens: 2 },
+      usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
       terminal_result: { http_status: 200, body: { ok: true } },
     });
     expect(finalized.ok).toBe(true);
@@ -1285,7 +1296,7 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: `digest-${keys[index]}`,
         lease_id: reservation.lease!.lease_id,
         settlement_capability: starts[index * 2].settlement_capability as string,
-        usage: { model_calls: 1, input_tokens: 5 + index },
+        usage: actualUsage({ model_calls: 1, input_tokens: 5 + index }),
         terminal_result: { http_status: 200, body: { ok: true } },
       }),
     ));
@@ -1323,7 +1334,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     const [exact, uncertain] = await Promise.all([
       rpc.finalizeExact({
         ...authority,
-        usage: { model_calls: 1, input_tokens: 7 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 7 }),
         terminal_result: { http_status: 200, body: { ok: true } },
       }),
       rpc.settleUncertain({ ...authority, reason: "timeout" }),
@@ -1373,12 +1384,80 @@ describe("BudgetLedger in the Workers runtime", () => {
         request_digest: `digest-${key}`,
         lease_id: reserved.lease!.lease_id,
         settlement_capability: started.settlement_capability as string,
-        usage: { model_calls: 1, input_tokens: malformed },
+        usage: actualUsage({ model_calls: 1, input_tokens: malformed }),
         terminal_result: { http_status: 200, body: { ok: true } },
       })).toMatchObject({ ok: false, error: "provider_usage_invalid" });
       expect(await (await stub.fetch("https://budget/snapshot")).json()).toMatchObject({
         used: { model_calls: 1, input_tokens: 10 },
         reserved: { model_calls: 0, input_tokens: 0 },
+        active_leases: 0,
+        frozen: true,
+      });
+    }
+  }, 15_000);
+
+  it("charges the reserved maximum for missing, unknown, or non-unit actual usage", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    const variants: Array<[string, Record<string, unknown>]> = [
+      ["empty", {}],
+      [
+        "missing-cost",
+        {
+          model_calls: 1,
+          input_tokens: 1,
+          output_tokens: 1,
+          cached_tokens: 0,
+        },
+      ],
+      ["unknown", actualUsage({ unexpected: 1 })],
+      ["model-calls-zero", actualUsage({ model_calls: 0 })],
+      ["model-calls-two", actualUsage({ model_calls: 2 })],
+    ];
+    for (const [label, usage] of variants) {
+      const stub = namespace.get(namespace.idFromName(`closed-usage-${label}`));
+      const rpc = stub as BudgetLedgerRpcStub;
+      const key = `closed-usage-${label}`;
+      const reserved = await rpc.reserve({
+        idempotency_key: key,
+        request_digest: `digest-${key}`,
+        amounts: {
+          model_calls: 1,
+          input_tokens: 10,
+          output_tokens: 4,
+          cached_tokens: 10,
+          cost_usd: 0.5,
+        },
+        acquire_lease: true,
+      });
+      const started = await rpc.markProviderStarted({
+        idempotency_key: key,
+        request_digest: `digest-${key}`,
+        lease_id: reserved.lease!.lease_id,
+      });
+      expect(await rpc.finalizeExact({
+        idempotency_key: key,
+        request_digest: `digest-${key}`,
+        lease_id: reserved.lease!.lease_id,
+        settlement_capability: started.settlement_capability as string,
+        usage,
+        terminal_result: { http_status: 200, body: { ok: true } },
+      })).toMatchObject({ ok: false, error: "provider_usage_invalid" });
+      expect(await (await stub.fetch("https://budget/snapshot")).json()).toMatchObject({
+        used: {
+          model_calls: 1,
+          input_tokens: 10,
+          output_tokens: 4,
+          cached_tokens: 10,
+          cost_usd: 0.5,
+        },
+        reserved: {
+          model_calls: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          cached_tokens: 0,
+          cost_usd: 0,
+        },
         active_leases: 0,
         frozen: true,
       });

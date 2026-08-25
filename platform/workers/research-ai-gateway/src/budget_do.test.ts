@@ -35,6 +35,17 @@ function leased(
   return { idempotency_key, request_digest, amounts, acquire_lease: true };
 }
 
+function actualUsage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    model_calls: 1,
+    input_tokens: 0,
+    output_tokens: 0,
+    cached_tokens: 0,
+    cost_usd: 0,
+    ...overrides,
+  };
+}
+
 describe("PILOT_BUDGET_CAPS", () => {
   it("is the pilot hard cap set", () => {
     expect(PILOT_BUDGET_CAPS).toEqual({
@@ -173,7 +184,7 @@ describe("budget ledger algebra", () => {
         request_digest: "digest-k1",
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
-        usage: { model_calls: 1, input_tokens: 12, output_tokens: 7 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 12, output_tokens: 7 }),
         terminal_result: { http_status: 200, body: { ok: true } },
       },
       T0 + 2,
@@ -185,7 +196,7 @@ describe("budget ledger algebra", () => {
         request_digest: "digest-k1",
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
-        usage: { model_calls: 1, input_tokens: 99, output_tokens: 99 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 99, output_tokens: 99 }),
         terminal_result: { http_status: 200, body: { ok: true } },
       },
       T0 + 3,
@@ -723,7 +734,7 @@ describe("budget ledger algebra", () => {
         request_digest: "digest-schema-reject",
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
-        usage: { model_calls: 1, input_tokens: 12, output_tokens: 4 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 12, output_tokens: 4 }),
         terminal_result: { http_status: 400, body: { ok: false, error: "Insight.unknown field" } },
       },
       T0 + 2,
@@ -771,7 +782,7 @@ describe("budget ledger algebra", () => {
         request_digest: "digest-over",
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
-        usage: { model_calls: 1, input_tokens: 11 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 11 }),
       },
       T0 + 2,
     );
@@ -814,7 +825,7 @@ describe("budget ledger algebra", () => {
         request_digest: "digest-unstarted",
         lease_id: reserved.lease.lease_id,
         settlement_capability: "0".repeat(64),
-        usage: { model_calls: 0, cost_usd: 0 },
+        usage: actualUsage({ model_calls: 0, cost_usd: 0 }),
         terminal_result: { http_status: 200, body: { ok: true } },
       },
       T0 + 1,
@@ -884,7 +895,7 @@ describe("budget ledger algebra", () => {
           request_digest: "digest-a",
           lease_id: first.lease.lease_id,
           settlement_capability: "ff".repeat(32),
-          usage: { model_calls: 1, input_tokens: 4 },
+          usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
         },
         T0 + 2,
       ),
@@ -898,7 +909,7 @@ describe("budget ledger algebra", () => {
           request_digest: "digest-b",
           lease_id: first.lease.lease_id,
           settlement_capability: startedA.settlement_capability,
-          usage: { model_calls: 1, input_tokens: 4 },
+          usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
         },
         T0 + 2,
       ),
@@ -912,7 +923,7 @@ describe("budget ledger algebra", () => {
           request_digest: "digest-a",
           lease_id: second.lease.lease_id,
           settlement_capability: startedA.settlement_capability,
-          usage: { model_calls: 1, input_tokens: 4 },
+          usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
         },
         T0 + 2,
       ),
@@ -926,7 +937,7 @@ describe("budget ledger algebra", () => {
           request_digest: "digest-a",
           lease_id: first.lease.lease_id,
           settlement_capability: startedB.settlement_capability,
-          usage: { model_calls: 1, input_tokens: 4 },
+          usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
         },
         T0 + 2,
       ),
@@ -939,7 +950,7 @@ describe("budget ledger algebra", () => {
         request_digest: "digest-a",
         lease_id: first.lease.lease_id,
         settlement_capability: startedA.settlement_capability,
-        usage: { model_calls: 1, input_tokens: 4 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
         terminal_result: { http_status: 200, body: { ok: true, artifact: "kept" } },
       },
       T0 + 3,
@@ -952,7 +963,7 @@ describe("budget ledger algebra", () => {
         request_digest: "digest-a",
         lease_id: first.lease.lease_id,
         settlement_capability: startedA.settlement_capability,
-        usage: { model_calls: 1, input_tokens: 99 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
       },
       T0 + 4,
     );
@@ -993,7 +1004,7 @@ describe("budget ledger algebra", () => {
         request_digest: "digest-inject",
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
-        usage: { model_calls: 1, input_tokens: 8, cost_usd: 0.2 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 8, cost_usd: 0.2 }),
         amounts: { model_calls: 0, cost_usd: 0 },
         result: { http_status: 200, body: { ok: true, smuggled: true } },
         settlement: {
@@ -1082,7 +1093,7 @@ describe("budget ledger algebra", () => {
           request_digest: "",
           lease_id: reserved.lease.lease_id,
           settlement_capability: started.settlement_capability,
-          usage: { model_calls: 1, input_tokens: 2 },
+          usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
         },
         T0 + 2,
       ),
@@ -1162,7 +1173,7 @@ describe("budget ledger algebra", () => {
         request_digest: "digest-start-retry",
         lease_id: reserved.lease.lease_id,
         settlement_capability: lostResponseRetry.settlement_capability as string,
-        usage: { model_calls: 1, input_tokens: 3 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 3 }),
         terminal_result: { http_status: 200, body: { ok: true } },
       },
       T0 + 3,
@@ -1497,7 +1508,7 @@ describe("P0 terminal replay and capability isolation", () => {
         request_digest: "digest-p0-lease",
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
-        usage: { model_calls: 1, input_tokens: 3 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 3 }),
         terminal_result: { http_status: 200, body: { ok: true } },
       },
       T0 + 3,
@@ -1572,7 +1583,7 @@ describe("P0 terminal replay and capability isolation", () => {
         request_digest: "digest-p0-smuggle",
         lease_id: reserved.lease.lease_id,
         settlement_capability: secret,
-        usage: { model_calls: 1, input_tokens: 2 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
         terminal_result: {
           http_status: 200,
           body: {
@@ -1602,7 +1613,7 @@ describe("P0 terminal replay and capability isolation", () => {
         request_digest: "digest-p0-smuggle",
         lease_id: reserved.lease.lease_id,
         settlement_capability: secret,
-        usage: { model_calls: 1, input_tokens: 2 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
         terminal_result: {
           http_status: 200,
           body: {
@@ -1649,7 +1660,7 @@ describe("P0 terminal replay and capability isolation", () => {
         request_digest: "digest-p0-smuggle",
         lease_id: reserved.lease.lease_id,
         settlement_capability: secret,
-        usage: { model_calls: 1, input_tokens: 2 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
         terminal_result: { http_status: 200, body: { ok: true, artifact: { summary: "safe" } } },
       },
       T0 + 6,
@@ -1761,7 +1772,7 @@ describe("P0 terminal replay and capability isolation", () => {
           request_digest: "digest-p0-substr",
           lease_id: leaseId,
           settlement_capability: secret,
-          usage: { model_calls: 1, input_tokens: 2 },
+          usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
           terminal_result: { http_status: 200, body: placement.body },
         },
         now,
@@ -1825,7 +1836,7 @@ describe("P0 terminal replay and capability isolation", () => {
         request_digest: "digest-p0-substr",
         lease_id: leaseId,
         settlement_capability: secret,
-        usage: { model_calls: 1, input_tokens: 2 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
         terminal_result: { http_status: 200, body: benignBody },
       },
       now,
@@ -1843,7 +1854,7 @@ describe("P0 terminal replay and capability isolation", () => {
         request_digest: "digest-p0-substr",
         lease_id: leaseId,
         settlement_capability: secret,
-        usage: { model_calls: 1, input_tokens: 99 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
         terminal_result: { http_status: 200, body: benignBody },
       },
       now,
@@ -1923,7 +1934,7 @@ describe("P0 terminal replay and capability isolation", () => {
         request_digest: "digest-p0-finalize",
         lease_id: leaseId,
         settlement_capability: cap,
-        usage: { model_calls: 1, input_tokens: 4 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
         terminal_result: { http_status: 200, body: { ok: true } },
       },
       T0 + 2,
@@ -1939,7 +1950,7 @@ describe("P0 terminal replay and capability isolation", () => {
             request_digest: "digest-other",
             lease_id: leaseId,
             settlement_capability: cap,
-            usage: { model_calls: 1, input_tokens: 99 },
+            usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
           },
           error: "request_digest_mismatch",
         },
@@ -1950,7 +1961,7 @@ describe("P0 terminal replay and capability isolation", () => {
             request_digest: "",
             lease_id: leaseId,
             settlement_capability: cap,
-            usage: { model_calls: 1, input_tokens: 99 },
+            usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
           },
           error: "request_digest required",
         },
@@ -1961,7 +1972,7 @@ describe("P0 terminal replay and capability isolation", () => {
             request_digest: "digest-p0-finalize",
             lease_id: "00000000-0000-4000-8000-000000000000",
             settlement_capability: cap,
-            usage: { model_calls: 1, input_tokens: 99 },
+            usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
           },
           error: "lease_mismatch",
         },
@@ -1972,7 +1983,7 @@ describe("P0 terminal replay and capability isolation", () => {
             request_digest: "digest-p0-finalize",
             lease_id: "",
             settlement_capability: cap,
-            usage: { model_calls: 1, input_tokens: 99 },
+            usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
           },
           error: "lease_id required",
         },
@@ -1983,7 +1994,7 @@ describe("P0 terminal replay and capability isolation", () => {
             request_digest: "digest-p0-finalize",
             lease_id: leaseId,
             settlement_capability: "ff".repeat(32),
-            usage: { model_calls: 1, input_tokens: 99 },
+            usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
           },
           error: "settlement_capability_invalid",
         },
@@ -1994,7 +2005,7 @@ describe("P0 terminal replay and capability isolation", () => {
             request_digest: "digest-p0-finalize",
             lease_id: leaseId,
             settlement_capability: "",
-            usage: { model_calls: 1, input_tokens: 99 },
+            usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
           },
           error: "settlement_capability_required",
         },
@@ -2014,7 +2025,7 @@ describe("P0 terminal replay and capability isolation", () => {
         request_digest: "digest-p0-finalize",
         lease_id: leaseId,
         settlement_capability: cap,
-        usage: { model_calls: 1, input_tokens: 99 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
         terminal_result: { http_status: 200, body: { ok: true } },
       },
       T0 + 4,
@@ -2186,7 +2197,7 @@ describe("P0 terminal replay and capability isolation", () => {
         request_digest: "digest-p0-replay-state",
         lease_id: leaseId,
         settlement_capability: secret,
-        usage: { model_calls: 1, input_tokens: 5, cost_usd: 0.1 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 5, cost_usd: 0.1 }),
         terminal_result: { http_status: 200, body: { ok: true } },
       },
       T0 + 2,
@@ -2202,7 +2213,7 @@ describe("P0 terminal replay and capability isolation", () => {
         request_digest: "digest-p0-replay-state",
         lease_id: leaseId,
         settlement_capability: secret,
-        usage: { model_calls: 1, input_tokens: 99, cost_usd: 9 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 99, cost_usd: 9 }),
         terminal_result: { http_status: 200, body: { ok: true } },
       },
       T0 + 4,
@@ -2290,7 +2301,7 @@ describe("P0 terminal replay and capability isolation", () => {
         request_digest: "digest-p0-lost-start",
         lease_id: leaseId,
         settlement_capability: retried.settlement_capability as string,
-        usage: { model_calls: 1, input_tokens: 3 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 3 }),
         terminal_result: { http_status: 200, body: { ok: true } },
       },
       T0 + 5,
@@ -2328,7 +2339,7 @@ describe("P0 terminal replay and capability isolation", () => {
         request_digest: "digest-bounded-body",
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
-        usage: { model_calls: 1, input_tokens: 2 },
+        usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
         terminal_result: { http_status: 200, body },
       }, T0 + 2)).resolves.toMatchObject({ ok: false, error: "cached_result_invalid" });
     }
@@ -2338,9 +2349,73 @@ describe("P0 terminal replay and capability isolation", () => {
       request_digest: "digest-bounded-body",
       lease_id: reserved.lease.lease_id,
       settlement_capability: started.settlement_capability,
-      usage: { model_calls: 1, input_tokens: 2 },
+      usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
       terminal_result: { http_status: 200, body: { ok: true } },
     }, T0 + 3);
     expect(committed.ok).toBe(true);
+  });
+
+  it("rejects terminal envelope accessors and hostile proxies without throwing", async () => {
+    const envelopeFactories: Array<[string, () => unknown]> = [
+      [
+        "status-getter",
+        () => Object.defineProperty({}, "http_status", {
+          enumerable: true,
+          get() {
+            throw new Error("status getter must not run");
+          },
+        }),
+      ],
+      [
+        "body-getter",
+        () => Object.defineProperties({}, {
+          http_status: { enumerable: true, value: 200 },
+          body: {
+            enumerable: true,
+            get() {
+              throw new Error("body getter must not run");
+            },
+          },
+        }),
+      ],
+      [
+        "hostile-proxy",
+        () => new Proxy(
+          { http_status: 200, body: { ok: true } },
+          {
+            getPrototypeOf() {
+              throw new Error("proxy trap must be contained");
+            },
+          },
+        ),
+      ],
+    ];
+    for (const [label, makeEnvelope] of envelopeFactories) {
+      const storage = new MemoryBudgetStorage();
+      const key = `terminal-${label}`;
+      const reserved = await reserveBudget(
+        storage,
+        leased(key, { model_calls: 1, input_tokens: 8 }, `digest-${key}`),
+        T0,
+      );
+      if (!reserved.ok || !reserved.lease) throw new Error("lease");
+      const started = await markProviderStarted(storage, {
+        idempotency_key: key,
+        request_digest: `digest-${key}`,
+        lease_id: reserved.lease.lease_id,
+      }, T0 + 1);
+      if (!started.ok || !started.settlement_capability) throw new Error("capability");
+      await expect(finalizeBudget(storage, {
+        idempotency_key: key,
+        request_digest: `digest-${key}`,
+        lease_id: reserved.lease.lease_id,
+        settlement_capability: started.settlement_capability,
+        usage: actualUsage({ input_tokens: 2 }),
+        terminal_result: makeEnvelope() as never,
+      }, T0 + 2), label).resolves.toMatchObject({
+        ok: false,
+        error: "cached_result_invalid",
+      });
+    }
   });
 });
