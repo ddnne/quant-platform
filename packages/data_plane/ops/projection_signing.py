@@ -24,7 +24,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 SIGNED_DOCUMENT_SCHEMA = "ops-projection-signed-envelope/v1"
 ENVELOPE_SCHEMA = "ops-projection-envelope/v1"
 SIGNING_KEY_ENV = "QUANT_OPS_PROJECTION_SIGNING_KEY_PEM"
-SIGNING_KEY_ID_ENV = "QUANT_OPS_PROJECTION_SIGNING_KEY_ID"
 VERIFY_REGISTRY_ENV = "QUANT_OPS_PROJECTION_VERIFY_REGISTRY"
 DEFAULT_SIGNING_KEY_PATH = (
     Path.home() / ".config" / "quant-platform" / "ops_projection_signing_key.pem"
@@ -146,43 +145,76 @@ class OpsProjectionSigningKey:
         }
 
 
-def load_ops_projection_signer(
-    *,
-    pem: bytes | str | None = None,
-    path: str | Path | None = None,
-    key_id: str | None = None,
-    required: bool = False,
-) -> OpsProjectionSigningKey | None:
-    """Load only the dedicated Ops key; never consult Receipt/READY settings."""
+def load_ops_projection_signer() -> OpsProjectionSigningKey | None:
+    """Load the dedicated key only when it matches the pinned public registry.
 
-    resolved_key_id = str(key_id or os.environ.get(SIGNING_KEY_ID_ENV) or "").strip()
+    The production factory deliberately has no material, path, key-id, registry,
+    or ``required`` arguments.  Tests that need an ephemeral signer construct
+    :class:`OpsProjectionSigningKey` directly.  The issuer id is derived by
+    matching the private key's public bytes to an active key in the committed
+    Ops registry; it is never an operator assertion.
+    """
+
     material: bytes | None
-    if pem is not None:
-        material = pem.encode("utf-8") if isinstance(pem, str) else pem
-    elif os.environ.get(SIGNING_KEY_ENV):
+    if os.environ.get(SIGNING_KEY_ENV):
         material = os.environ[SIGNING_KEY_ENV].encode("utf-8")
     else:
-        selected = Path(path).expanduser() if path is not None else DEFAULT_SIGNING_KEY_PATH
-        # Tests never inherit an operator's host mint key unless explicitly injected.
-        if path is None and os.environ.get("PYTEST_CURRENT_TEST"):
-            material = None
-        else:
-            material = selected.read_bytes() if selected.is_file() else None
+        material = (
+            DEFAULT_SIGNING_KEY_PATH.read_bytes()
+            if DEFAULT_SIGNING_KEY_PATH.is_file()
+            else None
+        )
     if material is None:
-        if required:
-            raise OpsProjectionSignatureError(
-                "dedicated Ops Projection signing key is unavailable"
-            )
         return None
-    if not resolved_key_id:
-        raise OpsProjectionSignatureError("Ops Projection signing key id is required")
     try:
         private_key = serialization.load_pem_private_key(material, password=None)
     except (TypeError, ValueError) as exc:
         raise OpsProjectionSignatureError("invalid Ops Projection private key PEM") from exc
     if not isinstance(private_key, Ed25519PrivateKey):
         raise OpsProjectionSignatureError("Ops Projection signing key must be Ed25519")
-    return OpsProjectionSigningKey(resolved_key_id, private_key)
+
+    try:
+        registry_document = json.loads(
+            DEFAULT_VERIFY_REGISTRY_PATH.read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise OpsProjectionSignatureError(
+            "cannot load the pinned Ops Projection key registry"
+        ) from exc
+    if (
+        not isinstance(registry_document, Mapping)
+        or registry_document.get("schema_version") != 1
+        or registry_document.get("purpose") != "ops_projection_verification"
+        or not isinstance(registry_document.get("keys"), list)
+    ):
+        raise OpsProjectionSignatureError("pinned Ops Projection registry is invalid")
+    public_bytes = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    matching_key_ids: list[str] = []
+    for row in registry_document["keys"]:
+        if (
+            not isinstance(row, Mapping)
+            or row.get("status", "active") != "active"
+            or row.get("algorithm") != "Ed25519"
+        ):
+            continue
+        try:
+            registered = base64.b64decode(
+                str(row.get("public_key_base64") or ""), validate=True
+            )
+        except (TypeError, ValueError):
+            continue
+        key_id = str(row.get("key_id") or "").strip()
+        if key_id and registered == public_bytes:
+            matching_key_ids.append(key_id)
+    if len(matching_key_ids) != 1:
+        raise OpsProjectionSignatureError(
+            "dedicated Ops Projection key does not match exactly one active "
+            "key in the pinned registry"
+        )
+    return OpsProjectionSigningKey(matching_key_ids[0], private_key)
 
 
 @dataclass(frozen=True)
@@ -302,7 +334,6 @@ __all__ = [
     "OpsProjectionSigningKey",
     "SIGNED_DOCUMENT_SCHEMA",
     "SIGNING_KEY_ENV",
-    "SIGNING_KEY_ID_ENV",
     "VERIFY_REGISTRY_ENV",
     "canonical_json_bytes",
     "load_ops_projection_signer",
