@@ -52,7 +52,8 @@ New research:
 
 See [`docs/architecture/adr_research_recording.md`](../docs/architecture/adr_research_recording.md)
 and [`docs/architecture/wave_assets_deprecated.md`](../docs/architecture/wave_assets_deprecated.md).
-Guard: `tests/test_wave_script_freeze.py`.
+The exact-four runtime and replay-isolation tests enforce the operational
+boundary; filenames are not used as a security or release boundary.
 
 Official OTC archive recovery (not a COMPLETE issuer):
 

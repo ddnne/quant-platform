@@ -42,4 +42,6 @@ Unreferenced W91–W107 wave scorecards under `docs/proof/w0818*` / `w0819*` /
 - `w0819c_w100_daily_path_dd_gate_20260819.md`
 - older checklist / cost / defer proofs still named from packages
 
-Guard: `tests/test_wave_script_freeze.py` (`ALLOWED_RUN_W` empty).
+This naming policy is recorded here for review. Runtime and release gates validate
+the active exact-four entrypoints and replay isolation instead of inspecting
+source filenames.
