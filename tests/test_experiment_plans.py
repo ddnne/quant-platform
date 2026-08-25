@@ -1,4 +1,4 @@
-"""Exactly four typed ExperimentPlans. start() stays off. AND+N freeze holds."""
+"""Exactly four typed ExperimentPlans, independent of the replay catalog."""
 from __future__ import annotations
 
 import json
@@ -31,21 +31,13 @@ from selection.budget_ledger import MassResearchDisabledError
 
 
 def test_typed_experiment_plans_are_exactly_four() -> None:
-    from research.catalog_active import active_logic_ids, pilot_candidates
-
     schema = load_experiment_plan_schema()
     plans = load_experiment_plans()
     assert len(plans) == PILOT_PLAN_COUNT == 4
     assert len(plans) == len(PILOT_EXPERIMENT_PLAN_IDS)
     assert tuple(p.plan_id for p in plans) == PILOT_EXPERIMENT_PLAN_IDS
     assert PILOT_EXECUTION_ENABLED is False
-    n_active = len(active_logic_ids())
-    assert n_active > 4
-    assert set(PILOT_EXPERIMENT_PLAN_IDS).isdisjoint(active_logic_ids())
-    assert len(pilot_candidates()) == PILOT_PLAN_COUNT == 4
-    assert len(pilot_candidates()) != n_active
-    assert pilot_candidates() == frozenset(p.strategy_spec_id for p in plans)
-    assert len(plans) != n_active
+    assert len({plan.strategy_spec_id for plan in plans}) == PILOT_PLAN_COUNT
     for plan in plans:
         payload = plan.to_dict()
         jsonschema.validate(payload, schema)
@@ -89,16 +81,10 @@ def test_start_still_raises_mass_research_disabled() -> None:
         pilot_start()
 
 
-def test_and_plus_n_freeze_still_true() -> None:
-    from research.occupancy_guards import assert_catalog_and_plus_n_stopped
-
+def test_pilot_freezes_stay_closed_without_loading_catalog_inventory() -> None:
     assert CATALOG_AND_PLUS_N_STOPPED is True
     assert EVENT_THREE_AND_PLUS_N_STOPPED is True
     assert RECONSTITUTION_APPLY is False
-    freeze = assert_catalog_and_plus_n_stopped()
-    assert freeze["ok"] is True
-    assert freeze["freeze"] == 2254
-    assert freeze["yaml_still_present"] is False
     assert len(FROZEN_PIN_SNAPSHOT) == 3
     xs = next(p for p in load_experiment_plans() if p.plan_id == "exp-xs-hold10-mom5")
     assert xs.strategy_spec_id == "cross_section_hold_10"

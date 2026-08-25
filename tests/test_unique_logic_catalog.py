@@ -414,99 +414,6 @@ def test_mf_value_mom_rate_is_unique_not_alias() -> None:
 
 
 
-def test_factory_unique_eval_uses_package_dispatch() -> None:
-    import inspect
-
-    from research.unique_logic import dispatch as dispatch_mod
-    from research.unique_logic.dispatch import evaluate_logic_daily_mtm
-
-    src = inspect.getsource(evaluate_logic_daily_mtm)
-    src += inspect.getsource(dispatch_mod._dispatch_body)
-    assert "evaluate_logic_daily_mtm" in src
-    assert "scripts.run_w" not in src
-    assert evaluate_logic_daily_mtm.__module__ == "research.unique_logic.dispatch"
-
-
-def test_yaml_dispatch_worker_event_ids_align() -> None:
-    import inspect
-
-    from research.cf_daily_path_job import CF_EVENT_DAILY_PATH_IDS
-    from research.unique_logic.catalog import load_catalog_specs
-    from research.unique_logic.constants import (
-        CF_EVENT_DAILY_PATH_IDS as CONST_EVENT,
-    )
-    from research.unique_logic.dispatch import evaluate_logic_daily_mtm
-
-    yaml_ids = {s["logic_id"] for s in load_catalog_specs()}
-    assert set(CF_EVENT_DAILY_PATH_IDS) == set(CONST_EVENT)
-    assert set(CF_EVENT_DAILY_PATH_IDS) <= yaml_ids
-    src = inspect.getsource(evaluate_logic_daily_mtm)
-    from research.unique_logic import dispatch as dispatch_mod
-    from research.unique_logic.event_combos import COMBO_LOGIC_IDS
-
-    src += inspect.getsource(dispatch_mod._dispatch_body)
-    missing = [
-        lid
-        for lid in sorted(yaml_ids)
-        if f'lid == "{lid}"' not in src and lid not in COMBO_LOGIC_IDS
-    ]
-    assert missing == []
-    assert "COMBO_LOGIC_IDS" in src
-    from research.unique_logic.constants import CF_NEW_THESIS_IDS
-
-    assert "event_skip_monday" in yaml_ids
-    assert "cs_not_month_end" in yaml_ids
-    assert "event_skip_monday" in CF_NEW_THESIS_IDS
-    from research.unique_logic.constants import (
-        ALWAYS_ON_CS_STICKY,
-        WORKER_ISOLATE_LIMIT_IDS,
-        WORKER_ISOLATE_LIMIT_REASONS,
-        WORKER_ISOLATE_LINEARIZED_OK,
-        is_ungated_name_level_cs,
-    )
-    from research.unique_logic.event_combos import NEW_COMBO_LOGIC, spec_by_id
-
-    ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
-    assert "event_skip_monday" in ids
-    parked = [s for s in NEW_COMBO_LOGIC if s["logic_id"] in WORKER_ISOLATE_LIMIT_IDS]
-    assert parked == []
-    assert set(WORKER_ISOLATE_LIMIT_REASONS) == set(WORKER_ISOLATE_LIMIT_IDS)
-    assert WORKER_ISOLATE_LIMIT_IDS.isdisjoint(WORKER_ISOLATE_LINEARIZED_OK)
-    assert WORKER_ISOLATE_LINEARIZED_OK
-    for lid in WORKER_ISOLATE_LINEARIZED_OK:
-        row = spec_by_id(lid)
-        assert row.get("worker_isolate_limit") is False
-    for spec in NEW_COMBO_LOGIC:
-        if str(spec.get("kind") or "") == "cs":
-            continue
-        lid = str(spec["logic_id"])
-        if lid in ALWAYS_ON_CS_STICKY:
-            continue
-        assert spec.get("always_on_cs_sticky") is False
-        assert is_ungated_name_level_cs(
-            kind=str(spec.get("kind") or ""),
-            cs_gate=str(spec.get("cs_gate") or ""),
-            logic_id=lid,
-        ) is False
-
-
-
-def test_sync_cf_new_thesis_ids_check() -> None:
-    import subprocess
-    import sys
-    from pathlib import Path
-
-    repo = Path(__file__).resolve().parents[1]
-    r = subprocess.run(
-        [sys.executable, str(repo / "scripts" / "sync_cf_new_thesis_ids.py"), "--check"],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert r.returncode == 0, r.stdout + r.stderr
-
-
 def test_unique_logic_cli_is_retired() -> None:
     import subprocess
     import sys
@@ -521,6 +428,5 @@ def test_unique_logic_cli_is_retired() -> None:
     blob = (r.stderr or "") + (r.stdout or "")
     assert "retired" in blob
     assert "Does not GO" in blob
-
 
 

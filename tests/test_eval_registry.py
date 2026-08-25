@@ -353,7 +353,7 @@ def test_near_empty_and_term_ratio_are_not_candidates() -> None:
     assert summary["simple_strategies_kept_for_combinations"] is True
 
 
-def test_modest_t_gated_thesis_stays_candidate() -> None:
+def test_retired_gated_thesis_stays_out_of_candidate_pool() -> None:
 
     cells = _eval_complete_year_cells(
         "event_skip_monday",
@@ -364,14 +364,15 @@ def test_modest_t_gated_thesis_stays_candidate() -> None:
     )
     summary = summarize_daily_path_cells(cells, job_id="eval-test-modest")
     row = summary["logics"][0]
-    assert row["candidate"] is True
-    assert row["main_pool"] is True
+    assert row["candidate"] is False
+    assert row["main_pool"] is False
     assert row["go"] is False
     assert row["promote_as_main"] is False
-    assert summary["n_candidate_logics"] == 1
+    assert summary["n_candidate_logics"] == 0
     assert summary["strong_t_floor"] is None
     assert "path_broken" not in row["flags"]
     assert "always_on" not in row["flags"]
+    assert "worker_body_missing" in row["flags"]
 
 
 def test_partial_windows_are_not_candidate() -> None:

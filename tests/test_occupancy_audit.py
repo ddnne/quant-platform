@@ -324,7 +324,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
         ["event_eqar_high_liq_high", "event_p10_pb_rising"]
     )
     assert "thin_sleeve_member" in thin_reasons
-    assert "event_p10_pb_rising" in countable_thesis_ids()
+    assert countable_thesis_ids() == frozenset()
     assert "near_empty_parked" in CANDIDATE_POLICY["exclude"]
     occ = {lid: 0.20 for lid in ("a", "b", "c")}
     ok = assert_new_batch_occupancy_not_near_empty(occ)
@@ -332,7 +332,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     assert ok["n_near_empty"] == 0
 
 
-def test_usable_inventory_excludes_thin_park_and_unclassified() -> None:
+def test_retired_catalog_has_no_usable_runtime_inventory() -> None:
     from research.unique_logic.constants import (
         NEAR_EMPTY_PARK_IDS,
         THIN_SLEEVE_EXCLUDE_IDS,
@@ -352,11 +352,12 @@ def test_usable_inventory_excludes_thin_park_and_unclassified() -> None:
     assert pack["go"] is False
     assert pack["not_a_pass"] is True
     assert pack["usable_occupancy_min"] == USABLE_OCCUPANCY_MIN
-    assert lid in pack["usable_ids"]
+    assert pack["usable_ids"] == []
+    assert pack["n_countable"] == 0
     assert thin not in pack["usable_ids"]
     assert park not in pack["usable_ids"]
-    assert pack["n_usable"] >= 1
-    assert "event" in pack["family"]
+    assert pack["n_usable"] == 0
+    assert pack["family"] == {}
 
 
 def test_classify_occupancy_pair_bands() -> None:

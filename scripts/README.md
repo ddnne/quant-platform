@@ -14,7 +14,7 @@ Candidate eval is `POST /v1/daily-path`, not `python -m research.unique_logic`
 (that CLI is a retired fail-closed stub). Live counts / GO gates: [docs/phase62_residual_status.md](../docs/phase62_residual_status.md)
 only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual prose alone.
 
-**Mandatory local CI:** [`verify_ci.sh`](verify_ci.sh) (six active Worker lanes in parallel; no `VERIFY_*` skips). It pins `uv 0.11.26`, runs `uv sync --frozen --extra dev`, `pytest tests/`, catalog and Evaluation IR freezes, verifies the machine-readable Cloudflare binding manifest, then runs each Worker through `npm ci`, tests, typecheck, base/production/staging Wrangler dry-runs, and generated-types checks. Wrangler, TypeScript, and Workers types are exact-versioned. Never `--legacy-peer-deps`; never skip missing dependencies; never live `wrangler deploy`.
+**Mandatory local CI:** [`verify_ci.sh`](verify_ci.sh) (active Worker lanes in parallel; no `VERIFY_*` skips). It pins `uv 0.11.26`, runs `uv sync --frozen --extra dev`, `pytest tests/`, the Evaluation IR freeze, verifies the machine-readable Cloudflare binding manifest, then runs each Worker through `npm ci`, tests, typecheck, base/production/staging Wrangler dry-runs, and generated-types checks. The legacy catalog is not compiled into CI or Worker source. Wrangler, TypeScript, and Workers types are exact-versioned. Never `--legacy-peer-deps`; never skip missing dependencies; never live `wrangler deploy`.
 
 [`verify_all.sh`](verify_all.sh) is a skippable helper only. Merge authority is the live native GitHub check from the Cloudflare Workers & Pages GitHub App for the repository-root Build running `verify_ci.sh`. The caller-supplied receipt aggregator is removed. Do not add `.github/workflows`. See [`docs/ci/workers_builds.md`](../docs/ci/workers_builds.md).
 
@@ -36,8 +36,8 @@ Wave eval runners (`run_w*.py`) are **gone**. Do **not** add new
 
 New research:
 
-- catalog: `specs/research_catalog/` (compiled map; `specs/research_logics/` YAML is empty — do not add YAML)
-- candidate SoT: `POST /v1/daily-path` (`research.cf_daily_path_job`)
+- legacy catalog: `artifacts/replay/legacy_strategy_catalog/` (immutable replay only; `specs/research_logics/` YAML is empty)
+- bounded daily path: exact-four only; legacy catalog IDs fail closed
 - local unique CLI (`python -m research.unique_logic`): retired fail-closed stub, not candidate SoT
 - CF screen (auxiliary): `research.cf_mass_eval_job.run_cf_mass_eval_job`
 - record: `research.occupancy_audit.run_eval_wave` (R2 `research/eval/job={id}/`; no `run_wNN`)

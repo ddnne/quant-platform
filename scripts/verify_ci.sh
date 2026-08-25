@@ -93,11 +93,11 @@ fi
 echo "==> Cloudflare active-worker binding manifest"
 "$py" scripts/cloudflare_binding_manifest.py
 
+echo "==> Cloudflare canonical D1 migration manifest"
+"$py" scripts/cloudflare_d1_migration_manifest.py
+
 echo "==> python pytest"
 "$py" -m pytest tests/
-
-echo "==> catalog compile + catalog_ids freeze"
-"$py" -c "from research.catalog_compiler import compile_catalog, assert_catalog_ids_emit_frozen; compile_catalog(); assert_catalog_ids_emit_frozen()"
 
 echo "==> Evaluation IR schema + golden (jsonschema + codec roundtrip)"
 golden="$ROOT/specs/evaluation_ir/golden.jsonl"

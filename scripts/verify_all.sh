@@ -64,13 +64,6 @@ else
   exit 1
 fi
 
-echo "==> catalog compile + freeze"
-if [[ -x "$ROOT/.venv/bin/python" ]]; then
-  "$ROOT/.venv/bin/python" -c "from research.catalog_compiler import compile_catalog, assert_catalog_ids_emit_frozen; compile_catalog(); assert_catalog_ids_emit_frozen()"
-else
-  echo "catalog: skip — .venv missing (clean venv is required)" >&2
-fi
-
 for dir in "${WORKERS[@]}"; do
   name="$(basename "$dir")"
   if [[ ! -f "$dir/package.json" ]]; then

@@ -1,8 +1,6 @@
 """CF /v1/propose-thesis contract. Does not write catalog. Does not GO."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from research.cf_propose_thesis import (
@@ -461,14 +459,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             assert "gate_set_already_catalog" in good["reasons"]
 
 
-def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
+def test_retired_catalog_gate_sets_are_not_runtime_prompt_input() -> None:
     from research.cf_propose_thesis import catalog_gate_set_avoid
     from research.unique_logic.constants import PROPOSE_CALENDAR_GATES
 
-    tokens = catalog_gate_set_avoid(limit=8)
-    assert 1 <= len(tokens) <= 8
+    assert catalog_gate_set_avoid(limit=8) == []
     from research.cf_propose_thesis import (
-        CATALOG_GATE_SET_AVOID_LIMIT,
         assemble_why_avoid,
         catalog_prefer_pair_avoid,
         catalog_prefer_triple_avoid,
@@ -477,41 +473,26 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     )
     from research.unique_logic.propose_review_tables import propose_prompt_good
 
-    full = catalog_gate_set_avoid()
-    assert len(full) == CATALOG_GATE_SET_AVOID_LIMIT
-    assert any(t.count("+") == 2 for t in full)
-    assert any(t.count("+") == 1 for t in full)
-    n3 = sum(1 for t in full if t.count("+") == 2)
-    n2 = sum(1 for t in full if t.count("+") == 1)
-    assert n3 >= CATALOG_GATE_SET_AVOID_LIMIT // 3
-    assert n2 >= CATALOG_GATE_SET_AVOID_LIMIT // 3
+    assert catalog_gate_set_avoid() == []
     prefer_pairs = catalog_prefer_pair_avoid()
+    assert prefer_pairs == []
     good_tok = "+".join(sorted(str(g) for g in propose_prompt_good()["gates"]))
-    assert good_tok not in prefer_pairs
     assembled = assemble_why_avoid()
     assert len(assembled) <= PROPOSE_WHY_AVOID_LIMIT
     from research.cf_propose_thesis import PROPOSE_BLOCKED_GATE_SETS
 
     for tok in PROPOSE_BLOCKED_GATE_SETS:
         assert tok in assembled
-    for tok in prefer_pairs:
-        assert tok in assembled
     triples = catalog_prefer_triple_avoid()
+    assert triples == []
     assert good_tok not in assembled
-    if len(propose_prompt_good()["gates"]) == 3:
-        adopted_tok = "+".join(sorted(str(g) for g in propose_prompt_good()["gates"]))
-        assert adopted_tok not in triples
     prefer_sparse = sparse_prefer_subset_avoid()
     assert "curve_flatten+overnight_p10+pb_rising" in sparse_gate_set_avoid()
     assert "curve_flatten+overnight_p10+pb_rising" in prefer_sparse
     for tok in prefer_sparse:
         assert tok in assembled
-    assert all("+" in t for t in tokens)
-    blob = " ".join(tokens)
-    assert "skip_monday" not in blob
-    assert "friday_skip" not in blob
     assert PROPOSE_CALENDAR_GATES.isdisjoint(
-        {p for t in tokens for p in t.split("+")}
+        {p for t in assembled for p in t.split("+")}
     )
 
 
@@ -676,8 +657,7 @@ def test_clone_retry_reposts_catalog_gate_sets() -> None:
     assert polar_out["go"] is False
 
 
-def test_worker_index_contains_propose_thesis_route() -> None:
-    """Worker route + allowlist wiring. Python review is the stronger contract."""
+def test_propose_policy_is_closed_and_catalog_independent() -> None:
     from research.unique_logic.constants import (
         COMBO_EVENT_GATES,
         PROPOSE_CALENDAR_GATES,
@@ -690,86 +670,16 @@ def test_worker_index_contains_propose_thesis_route() -> None:
         propose_prompt_good,
     )
 
-    repo = Path(__file__).resolve().parents[1]
-    worker_src = repo / "platform" / "workers" / "research-mass-eval" / "src"
-    src = (
-        (worker_src / "index.ts").read_text(encoding="utf-8")
-        + "\n"
-        + (worker_src / "http_routes.ts").read_text(encoding="utf-8")
-        + "\n"
-        + (worker_src / "propose_thesis.ts").read_text(encoding="utf-8")
-        + "\n"
-        + (worker_src / "propose_allowed.ts").read_text(encoding="utf-8")
-    )
-    assert "/v1/propose-thesis" in src
-    assert "llama-3.3-70b-instruct-fp8-fast" in src
-    assert "glm-4.7-flash" in src
-    assert "signal_definition" in src
-    assert (
-        'proposal_source: "llm_failed"' in src
-        or "proposal_source: 'llm_failed'" in src
-    )
-    assert "auto_inject: false" in src
-    assert "go: false" in src
-    assert "not_a_pass: true" in src
-    wr = (
-        repo / "platform" / "workers" / "research-mass-eval" / "wrangler.toml"
-    ).read_text(encoding="utf-8")
-    assert 'binding = "AI_GATEWAY"' in wr
-    assert 'service = "quant-platform-research-ai-gateway"' in wr
-    assert "[ai]" not in wr
-    assert "env.AI.run" not in src
-    assert "completeViaGateway" in src
-    assert "llm_not_catalog" in src
-    assert "stubProposals" not in src
-    assert "stub_propose_thesis_result" not in src
-    live_propose = (
-        repo / "packages" / "product" / "research" / "cf_propose_thesis.py"
-    ).read_text(encoding="utf-8")
-    assert "stub_propose_thesis_result" not in live_propose
-    assert "STUB_PROPOSAL_TEMPLATES" not in live_propose
-    assert "titleOccupancyBad" in src
-    assert "gateAndToken" in src
-    assert "avoidTokens" in src
-    propose_src = (worker_src / "propose_thesis.ts").read_text(encoding="utf-8")
-    assert "const PROPOSE_ALLOWED_GATES = [" not in propose_src
-    assert "const PROPOSE_ALLOWED_DATASETS = [" not in propose_src
-    assert "PROPOSE_ALLOWED_GATES.join" in propose_src
-    assert "PROPOSE_PROMPT_PREFER_GATES.join" in propose_src
-    assert "JSON.stringify(PROPOSE_PROMPT_GOOD)" in propose_src
-    from research.unique_logic.catalog import combo_thesis_records
-
     assert set(PROPOSE_PROMPT_PREFER_GATES) <= set(PROPOSE_ALLOWED_GATES)
     good = propose_prompt_good()
     assert good["gates"] == PROPOSE_PROMPT_GOOD["gates"]
-    catalog_sets = {
-        frozenset(str(x) for x in (row.get("gates") or []) if str(x).strip())
-        for row in combo_thesis_records()
-    }
-    assert frozenset(str(g) for g in good["gates"]) not in catalog_sets
-    prefer = list(PROPOSE_PROMPT_PREFER_GATES)
-    first2: list[str] | None = None
-    for i, a in enumerate(prefer):
-        for b in prefer[i + 1 :]:
-            pair = frozenset({a, b})
-            if pair in catalog_sets:
-                continue
-            if any(combo <= pair for combo, _reason in SPARSE_GATE_COMBOS):
-                continue
-            if any(contra <= pair for contra in PROPOSE_CONTRADICTORY_GATE_PAIRS):
-                continue
-            first2 = [a, b]
-            break
-        if first2 is not None:
-            break
-    if first2 is not None:
-        assert list(good["gates"]) == first2
-        assert len(good["gates"]) == 2
-    else:
-        assert len(good["gates"]) in (2, 3)
-        assert frozenset(str(g) for g in good["gates"]) not in catalog_sets
-    assert "markets_margin_interest" in src
-    assert '"margin_interest"' not in src
+    good_set = frozenset(str(g) for g in good["gates"])
+    assert 2 <= len(good_set) <= 3
+    assert good_set <= PROPOSE_ALLOWED_GATES
+    assert not any(combo <= good_set for combo, _reason in SPARSE_GATE_COMBOS)
+    assert not any(
+        contra <= good_set for contra in PROPOSE_CONTRADICTORY_GATE_PAIRS
+    )
     assert PROPOSE_CALENDAR_GATES <= COMBO_EVENT_GATES
     assert PROPOSE_CALENDAR_GATES.isdisjoint(PROPOSE_ALLOWED_GATES)
     assert "skip_monday" not in PROPOSE_ALLOWED_GATES

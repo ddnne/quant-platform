@@ -1,48 +1,22 @@
-"""Active catalog vs legacy identity registry. Does not delete IDs. Not GO.
+"""Retired catalog identity registry. Does not delete replay IDs. Not GO.
 
-Active = countable Worker theses in the compiled map, minus unique-22 park
-and generation_enabled-False clones with no Worker body. Legacy is the
-compiled remainder (replay/lineage only). Does not add YAML. n_active is
-not a quality metric.
+The product runtime has no active catalog IDs.  Every compiled row is legacy
+replay/lineage, while the exact-four Pilot IDs come from ExperimentPlans.
 """
 from __future__ import annotations
 
 from functools import lru_cache
 from typing import Any, Literal
 
-from research.unique_logic.catalog import compiled_migration_ids, load_catalog_specs
-from research.unique_logic.worker_bodies import (
-    countable_thesis_ids,
-    unique22_occupancy_park,
-    worker_implemented_logic_ids,
-)
+from research.unique_logic.catalog import compiled_migration_ids
 
 CatalogKind = Literal["active", "legacy"]
 
 
-def _generation_disabled_no_worker_body_ids() -> frozenset[str]:
-    """Factory / catalog clones with generation_enabled False and no Worker body."""
-    implemented = worker_implemented_logic_ids()
-    out: set[str] = set()
-    for spec in load_catalog_specs():
-        lid = str(spec.get("logic_id") or "").strip()
-        if not lid:
-            continue
-        if bool(spec.get("generation_enabled")):
-            continue
-        if lid not in implemented:
-            out.add(lid)
-    return frozenset(out)
-
-
 @lru_cache(maxsize=1)
 def active_logic_ids() -> frozenset[str]:
-    """Countable theses ∩ compiled IDs, minus unique-22 park and no-body clones."""
-    compiled = compiled_migration_ids()
-    countable = countable_thesis_ids()
-    parked = unique22_occupancy_park()
-    clones = _generation_disabled_no_worker_body_ids()
-    return frozenset((countable & compiled) - parked - clones)
+    """Product-runtime catalog IDs: intentionally empty."""
+    return frozenset()
 
 
 @lru_cache(maxsize=1)
@@ -62,7 +36,7 @@ def catalog_kind(logic_id: str) -> CatalogKind:
 
 @lru_cache(maxsize=1)
 def pilot_candidates() -> frozenset[str]:
-    """Four ExperimentPlan strategy_spec_ids. Not the 2092 active remainder.
+    """Four ExperimentPlan strategy_spec_ids, separate from replay identity.
 
     Does not alias active_logic_ids(). Those AND rows are inventory, not
     a selection. start() stays off. Not GO.
