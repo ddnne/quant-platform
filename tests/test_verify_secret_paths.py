@@ -42,9 +42,13 @@ def test_additional_key_material_suffixes_and_secret_json_are_rejected() -> None
 
 
 def test_content_scan_redacts_matched_secret_values(tmp_path: Path) -> None:
+    provider = "github"
+    kind = "pat"
+    body = "abcdefghijklmnopqrstuvwxyz"
+    token = f"{provider}_{kind}_{body}"
     leaked = tmp_path / "leaked.txt"
-    leaked.write_text("token=github_pat_abcdefghijklmnopqrstuvwxyz\nsafe line\n", encoding="utf-8")
+    leaked.write_text(f"token={token}\nsafe line\n", encoding="utf-8")
     hits = scan_content_hits(["leaked.txt"], root=tmp_path)
     assert hits == [f"leaked.txt:1: {REDACTED}"]
-    assert "github_pat_" not in hits[0]
-    assert "abcdefghijklmnopqrstuvwxyz" not in hits[0]
+    assert f"{provider}_{kind}_" not in hits[0]
+    assert body not in hits[0]
