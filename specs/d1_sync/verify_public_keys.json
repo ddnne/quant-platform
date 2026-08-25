@@ -6,7 +6,7 @@
       "key_id": "d1-sync-20260825-v1",
       "algorithm": "Ed25519",
       "public_key_base64": "B/ExGrrNmA+JpMvyre3Cr9CKJJKvCn9gKQvuIq+a5dA=",
-      "status": "active"
+      "status": "retired"
     }
   ]
 }

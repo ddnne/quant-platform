@@ -6,21 +6,15 @@ touch the network; live HTTP smokes are ``@pytest.mark.live``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import os
-import shutil
 import sqlite3
-import sys
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 import pit
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from storage.sqlite_store import SqliteStore
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -96,73 +90,15 @@ def _write_private_d1_export(
             )
 
 
-def _configure_test_d1_sync_signer(tmp_path, monkeypatch):
-    """Install ephemeral material behind the fixed production loaders."""
-    from ops import d1_sync_signing
-
-    private = Ed25519PrivateKey.generate()
-    key_path = tmp_path / "d1-sync-test.pem"
-    key_path.write_bytes(
-        private.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
-    )
-    key_path.chmod(0o600)
-    public = private.public_key().public_bytes(
-        serialization.Encoding.Raw,
-        serialization.PublicFormat.Raw,
-    )
-    import base64
-
-    registry_path = tmp_path / "d1-sync-registry.json"
-    registry_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "purpose": "d1_sync_audit_verification",
-                "keys": [
-                    {
-                        "key_id": "d1-sync-test-v1",
-                        "algorithm": "Ed25519",
-                        "public_key_base64": base64.b64encode(public).decode("ascii"),
-                        "status": "active",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(d1_sync_signing, "DEFAULT_SIGNING_KEY_PATH", key_path)
-    monkeypatch.setattr(
-        d1_sync_signing, "DEFAULT_VERIFY_REGISTRY_PATH", registry_path
-    )
-
-
-def _fake_authenticated_remote(
-    sync_module, tmp_path, monkeypatch, remote: Path
-) -> None:
-    _configure_test_d1_sync_signer(tmp_path, monkeypatch)
-
-    def fake_wrangler(argv, **_kwargs):
-        output = Path(argv[argv.index("--output") + 1])
-        shutil.copyfile(remote, output)
-        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr(sync_module._private_export.subprocess, "run", fake_wrangler)
-
-
 def test_sync_script_exists():
     assert _SYNC.exists()
 
 
-def test_sync_defaults_to_pinned_private_d1_not_url_env(
+def test_sync_defaults_fail_before_provider_acquisition(
     tmp_path, sync_module, monkeypatch
 ):
     db = tmp_path / "x.sqlite"
     monkeypatch.setenv("INGESTION_PREMIUM_URL", "https://must-not-be-used.invalid")
-    _configure_test_d1_sync_signer(tmp_path, monkeypatch)
     called = []
 
     def fail_private(argv, **_kwargs):
@@ -173,7 +109,7 @@ def test_sync_defaults_to_pinned_private_d1_not_url_env(
 
     rc = sync_module.main(["--db", str(db)])
     assert rc == 1
-    assert len(called) == 1
+    assert called == []
     assert not db.exists()
 
 
@@ -319,8 +255,6 @@ def test_caller_supplied_remote_audit_fields_cannot_bind_projection_cursor(
         status="COMPLETE",
     )
     store.close()
-
-    store.close()
     assert sync_module._authenticated_export_cursor_chain(local) == (None, None)
     with sqlite3.connect(local) as conn:
         assert conn.execute(
@@ -329,303 +263,65 @@ def test_caller_supplied_remote_audit_fields_cannot_bind_projection_cursor(
         ).fetchone() == (None, None, None, None)
 
 
-def test_trusted_cursor_chain_rejects_post_audit_content_mutation(
-    tmp_path, sync_module, monkeypatch
+def test_unprovisioned_authority_cannot_persist_signed_complete(
+    tmp_path, sync_module
 ):
-    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
-    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
-    remote = tmp_path / "authenticated.sqlite"
-    _write_private_d1_export(
-        remote,
-        current_rows=(row,),
-        change_rows=(
-            {
-                "change_seq": 1,
-                "table_name": "jquants_records",
-                **row,
-                "changed_at": row["ingested_at"],
-            },
-        ),
+    from ops import d1_sync_signing
+
+    consumed = []
+
+    class CallerCapability:
+        def _consume_for_signing(self):
+            consumed.append(True)
+            return {"source_change_seq": 999}
+
+    d1_sync_signing._bind_authenticated_export_authority(
+        CallerCapability,
+        CallerCapability._consume_for_signing,
     )
-    _fake_authenticated_remote(sync_module, tmp_path, monkeypatch, remote)
-    local = tmp_path / "local.sqlite"
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 0
-    assert sync_module._authenticated_export_cursor_chain(local) == (1, 1)
-    store = SqliteStore(local)
-    store.upsert(
-        "jquants_records",
-        [_record(777, ingested_at="2025-04-02T03:00:00+09:00")],
+    store = SqliteStore(tmp_path / "local.sqlite")
+    with pytest.raises(
+        d1_sync_signing.D1SyncAuditError,
+        match="full-source authority is not provisioned",
+    ):
+        sync_module._mark_authenticated_export_complete(
+            store,
+            CallerCapability(),
+        )
+
+    assert consumed == []
+    assert (
+        store._conn.execute(
+            "SELECT COUNT(*) FROM local_d1_export_sync_runs"
+        ).fetchone()[0]
+        == 0
     )
     store.close()
-    assert sync_module._authenticated_export_cursor_chain(local) == (None, None)
 
 
-def test_authenticated_export_capability_is_consumed_once(
-    tmp_path, sync_module, monkeypatch
+def test_unsigned_mirror_cannot_open_authenticated_handle(
+    tmp_path, sync_module
 ):
-    from ops import d1_sync_signing
-
-    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
+    export = tmp_path / "d1-export.sqlite"
     row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
-    remote = tmp_path / "authenticated.sqlite"
-    _write_private_d1_export(
-        remote,
-        current_rows=(row,),
-        change_rows=(
-            {
-                "change_seq": 1,
-                "table_name": "jquants_records",
-                **row,
-                "changed_at": row["ingested_at"],
-            },
-        ),
-    )
-    _fake_authenticated_remote(sync_module, tmp_path, monkeypatch, remote)
-    observed = []
-    real_seal = d1_sync_signing._seal_authenticated_wrangler_export
-
-    def capture_and_seal(capability):
-        observed.append(capability)
-        return real_seal(capability)
-
-    monkeypatch.setattr(
-        d1_sync_signing,
-        "_seal_authenticated_wrangler_export",
-        capture_and_seal,
-    )
+    _write_private_d1_export(export, current_rows=(row,))
     local = tmp_path / "local.sqlite"
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 0
-    assert len(observed) == 1
-    with pytest.raises(RuntimeError, match="already consumed"):
-        real_seal(observed[0])
-
-    capability_type = sync_module._private_export._AuthenticatedWranglerExport
-    assert not hasattr(sync_module._private_export, "_AUTHENTICATED_TOKEN")
-    assert not hasattr(sync_module._private_export, "_ACQUISITION_TOKEN")
-    with pytest.raises(RuntimeError, match="no public constructor"):
-        capability_type({"source_change_seq": 999})
-    forged = object.__new__(capability_type)
-    forged._facts_json = json.dumps({"source_change_seq": 999})  # noqa: SLF001
-    forged._consumed = False  # noqa: SLF001
-    with pytest.raises(RuntimeError, match="already consumed"):
-        real_seal(forged)
-
-
-def _attacker_facts() -> dict[str, object]:
-    digest = "sha256:" + "a" * 64
-    return {
-        "sync_kind": "FULL",
-        "export_digest": "sha256:" + "b" * 64,
-        "artifact_format": "sql",
-        "source_change_seq": 7,
-        "applied_change_seq": 7,
-        "source_content_digest": digest,
-        "local_content_digest": digest,
-        "source_schema_digest": "sha256:" + "e" * 64,
-        "schema_digest": "sha256:" + "c" * 64,
-        "table_counts": {"jquants_records": 1},
-        "prior_audit_digest": None,
-        "exported_at": datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc).isoformat(),
-    }
-
-
-def test_module_attribute_replacement_cannot_rebind_export_capability(
-    tmp_path, sync_module, monkeypatch
-):
-    from ops import d1_sync_signing
-
-    _configure_test_d1_sync_signer(tmp_path, monkeypatch)
-    private_export = sync_module._private_export
-    original_type = private_export._AuthenticatedWranglerExport
-
-    class Attacker:
-        def _consume_for_signing(self):
-            return _attacker_facts()
-
-    private_export._AuthenticatedWranglerExport = Attacker
-    sys.modules[private_export.__name__]._AuthenticatedWranglerExport = Attacker
-    with pytest.raises(
-        d1_sync_signing.D1SyncAuditError,
-        match="authenticated Wrangler export capability",
-    ):
-        d1_sync_signing._seal_authenticated_wrangler_export(Attacker())
-
-    class Subclassed(original_type):
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def _consume_for_signing(self):
-            return _attacker_facts()
-
-    with pytest.raises(
-        d1_sync_signing.D1SyncAuditError,
-        match="authenticated Wrangler export capability",
-    ):
-        d1_sync_signing._seal_authenticated_wrangler_export(
-            object.__new__(Subclassed)
-        )
-
-
-def test_duck_types_copied_objects_and_raw_paths_cannot_seal(
-    tmp_path, sync_module, monkeypatch
-):
-    from ops import d1_sync_signing
-
-    _configure_test_d1_sync_signer(tmp_path, monkeypatch)
-
-    class Duck:
-        def _consume_for_signing(self):
-            return _attacker_facts()
-
-    @dataclass
-    class Copied:
-        _facts_json: str
-        _consumed: bool = False
-
-        def _consume_for_signing(self):
-            return json.loads(self._facts_json)
-
-    for forged in (
-        Duck(),
-        Copied(_facts_json=json.dumps(_attacker_facts())),
-        tmp_path / "export.sqlite",
-        str(tmp_path / "export.sql"),
-        {"export_digest": "sha256:" + "b" * 64},
-    ):
-        with pytest.raises(
-            d1_sync_signing.D1SyncAuditError,
-            match="authenticated Wrangler export capability",
-        ):
-            d1_sync_signing._seal_authenticated_wrangler_export(forged)
-
-
-def test_authenticated_applied_mirror_handle_is_one_shot(
-    tmp_path, sync_module, monkeypatch
-):
-    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
-    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
-    remote = tmp_path / "authenticated.sqlite"
-    _write_private_d1_export(
-        remote,
-        current_rows=(row,),
-        change_rows=(
-            {
-                "change_seq": 1,
-                "table_name": "jquants_records",
-                **row,
-                "changed_at": row["ingested_at"],
-            },
-        ),
-    )
-    _fake_authenticated_remote(sync_module, tmp_path, monkeypatch, remote)
-    local = tmp_path / "local.sqlite"
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 0
-    handle = sync_module.open_authenticated_applied_mirror(local)
-    assert handle.cursor_chain() == (1, 1)
-    facts = sync_module._consume_authenticated_applied_mirror(handle)
-    assert facts["source_cursor"] == facts["export_cursor"] == 1
-    assert Path(facts["db_path"]) == local.resolve()
-    with pytest.raises(RuntimeError, match="already consumed"):
-        sync_module._consume_authenticated_applied_mirror(handle)
-    with pytest.raises(RuntimeError, match="authenticated applied mirror handle"):
-        sync_module._consume_authenticated_applied_mirror(local)
-
-
-def test_signed_issuance_not_mutable_updated_at_selects_latest_audit(
-    tmp_path, sync_module, monkeypatch
-):
-    from ops import d1_sync_signing
-
-    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
-    first = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
-    second = _record(101, ingested_at="2025-04-02T02:00:00+09:00")
-    remote_one = tmp_path / "remote-one.sqlite"
-    remote_two = tmp_path / "remote-two.sqlite"
-    _write_private_d1_export(
-        remote_one,
-        current_rows=(first,),
-        change_rows=(
-            {
-                "change_seq": 1,
-                "table_name": "jquants_records",
-                **first,
-                "changed_at": first["ingested_at"],
-            },
-        ),
-    )
-    _write_private_d1_export(
-        remote_two,
-        current_rows=(second,),
-        change_rows=(
-            {
-                "change_seq": 2,
-                "table_name": "jquants_records",
-                **second,
-                "changed_at": second["ingested_at"],
-            },
-        ),
-    )
-    _configure_test_d1_sync_signer(tmp_path, monkeypatch)
-    selected = [remote_one]
-
-    def fake_wrangler(argv, **_kwargs):
-        output = Path(argv[argv.index("--output") + 1])
-        shutil.copyfile(selected[0], output)
-        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr(sync_module._private_export.subprocess, "run", fake_wrangler)
-    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(d1_sync_signing, "_utc_now", lambda: now)
-    local = tmp_path / "local.sqlite"
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 0
-    selected[0] = remote_two
-    now += timedelta(seconds=1)
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 0
-
-    with sqlite3.connect(local) as conn:
-        conn.execute(
-            "UPDATE local_d1_export_sync_runs SET updated_at="
-            "CASE source_change_seq WHEN 1 THEN '9999-01-01T00:00:00Z' "
-            "ELSE '2000-01-01T00:00:00Z' END"
-        )
-        conn.commit()
-    assert sync_module._authenticated_export_cursor_chain(local) == (2, 2)
-
-
-def test_authenticated_noop_incremental_preserves_trusted_base_audit(
-    tmp_path, sync_module, monkeypatch
-):
-    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
-    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
-    remote = tmp_path / "authenticated.sqlite"
-    _write_private_d1_export(
-        remote,
-        current_rows=(row,),
-        change_rows=(
-            {
-                "change_seq": 1,
-                "table_name": "jquants_records",
-                **row,
-                "changed_at": row["ingested_at"],
-            },
-        ),
-    )
-    _fake_authenticated_remote(sync_module, tmp_path, monkeypatch, remote)
-    local = tmp_path / "local.sqlite"
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 0
-    with sqlite3.connect(local) as conn:
-        original_digest = conn.execute(
-            "SELECT audit_digest FROM local_d1_export_sync_runs"
-        ).fetchone()[0]
-
     assert sync_module.main(
-        ["--db", str(local), "--wrangler-remote", "--incremental"]
+        [
+            "--db",
+            str(local),
+            "--d1-export",
+            str(export),
+            "--table",
+            "jquants_records",
+        ]
     ) == 0
-    assert sync_module._authenticated_export_cursor_chain(local) == (1, 1)
-    with sqlite3.connect(local) as conn:
-        assert conn.execute(
-            "SELECT sync_kind,audit_digest FROM local_d1_export_sync_runs"
-        ).fetchone() == ("FULL", original_digest)
+
+    with pytest.raises(
+        ValueError,
+        match="not an authenticated current D1 export",
+    ):
+        sync_module.open_authenticated_applied_mirror(local)
 
 
 def test_structural_schema_manifest_rejects_relaxed_pk_and_unique_constraints(
@@ -895,485 +591,6 @@ database_id = "00000000-0000-0000-0000-000000000000"
         sync_module._private_export.run_wrangler_d1_export(
             output_path=tmp_path / "remote.sql"
         )
-
-
-def test_manual_poison_is_removed_by_authenticated_full_reconciliation(
-    tmp_path, sync_module, monkeypatch
-):
-    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
-    poison = _record(999, ingested_at="2025-04-02T01:00:00+09:00")
-    poison["natural_key"] = '{"Code":"POISON","Date":"2025-04-01"}'
-    poison_payload = json.loads(poison["payload"])
-    poison_payload["Code"] = "POISON"
-    poison["payload"] = json.dumps(
-        poison_payload, sort_keys=True, separators=(",", ":")
-    )
-    manual = tmp_path / "manual.sqlite"
-    _write_private_d1_export(
-        manual,
-        current_rows=(poison,),
-        change_rows=(
-            {
-                "change_seq": 1,
-                "table_name": "jquants_records",
-                **poison,
-                "changed_at": poison["ingested_at"],
-            },
-        ),
-    )
-    local = tmp_path / "local.sqlite"
-    assert sync_module.main(
-        ["--db", str(local), "--d1-export", str(manual)]
-    ) == 0
-
-    clean = _record(100, ingested_at="2025-04-02T02:00:00+09:00")
-    remote = tmp_path / "authenticated.sqlite"
-    _write_private_d1_export(
-        remote,
-        current_rows=(clean,),
-        change_rows=(
-            {
-                "change_seq": 1,
-                "table_name": "jquants_records",
-                **clean,
-                "changed_at": clean["ingested_at"],
-            },
-        ),
-    )
-
-    _fake_authenticated_remote(sync_module, tmp_path, monkeypatch, remote)
-    assert sync_module.main(
-        ["--db", str(local), "--wrangler-remote"]
-    ) == 0
-
-    with sqlite3.connect(local) as conn:
-        assert conn.execute(
-            "SELECT natural_key FROM jquants_records"
-        ).fetchall() == [('{"Code":"8697","Date":"2025-04-01"}',)]
-        audit = conn.execute(
-            "SELECT source_mode,sync_kind,status,source_content_digest,"
-            "local_content_digest,table_counts_json,audit_digest,issuer_key_id,"
-            "signature,signed_evidence_json FROM local_d1_export_sync_runs "
-            "ORDER BY updated_at DESC LIMIT 1"
-        ).fetchone()
-        assert audit[:3] == ("WRANGLER_REMOTE", "FULL", "COMPLETE")
-        assert audit[3].startswith("sha256:")
-        assert audit[4].startswith("sha256:")
-        assert json.loads(audit[5]) == {"jquants_records": 1}
-        assert audit[6].startswith("sha256:")
-        assert audit[7] == "d1-sync-test-v1"
-        assert audit[8].startswith("ed25519:")
-        assert json.loads(audit[9])["envelope"]["source_change_seq"] == 1
-    assert sync_module._authenticated_export_cursor_chain(local) == (1, 1)
-
-
-def test_authenticated_full_inventory_exact_reconciles_all_governed_tables(
-    tmp_path, sync_module, monkeypatch
-):
-    remote = tmp_path / "authenticated-full.sqlite"
-    source_store = SqliteStore(remote)
-    sync_module._ensure_control_tables(source_store._conn)
-    source_store._conn.execute(
-        """CREATE TABLE ingestion_change_log (
-             change_seq INTEGER PRIMARY KEY, table_name TEXT NOT NULL,
-             source TEXT NOT NULL, dataset TEXT NOT NULL, natural_key TEXT NOT NULL,
-             event_time TEXT NOT NULL, available_at TEXT NOT NULL,
-             ingested_at TEXT NOT NULL, payload TEXT NOT NULL, raw_payload TEXT,
-             changed_at TEXT NOT NULL)"""
-    )
-    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
-    source_store.upsert("jquants_records", [row])
-    source_store._conn.execute(
-        "INSERT INTO ingestion_change_log VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            1,
-            "jquants_records",
-            *(row[column] for column in row),
-            row["ingested_at"],
-        ),
-    )
-    for (trigger_name,) in source_store._conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='trigger' "
-        "AND name LIKE 'invalidate_snapshot_%'"
-    ).fetchall():
-        source_store._conn.execute(f'DROP TRIGGER "{trigger_name}"')
-    source_store._conn.commit()
-    source_store.close()
-
-    _fake_authenticated_remote(sync_module, tmp_path, monkeypatch, remote)
-    local = tmp_path / "local.sqlite"
-    assert sync_module.main(
-        ["--db", str(local), "--wrangler-remote"]
-    ) == 0
-    assert sync_module._authenticated_export_cursor_chain(local) == (1, 1)
-    with sqlite3.connect(local) as conn:
-        counts = json.loads(
-            conn.execute(
-                "SELECT table_counts_json FROM local_d1_export_sync_runs"
-            ).fetchone()[0]
-        )
-    assert set(counts) == set(sync_module.DEFAULT_TABLES)
-    assert counts["jquants_records"] == 1
-
-
-def test_interrupted_remote_reset_cannot_publish_trusted_cursor(
-    tmp_path, sync_module, monkeypatch
-):
-    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
-    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
-    remote = tmp_path / "authenticated.sqlite"
-    _write_private_d1_export(
-        remote,
-        current_rows=(row,),
-        change_rows=(
-            {
-                "change_seq": 1,
-                "table_name": "jquants_records",
-                **row,
-                "changed_at": row["ingested_at"],
-            },
-        ),
-    )
-
-    real_sync_table = sync_module._sync_export_table
-
-    def interrupt_after_partial_apply(*args, **kwargs):
-        real_sync_table(*args, **kwargs)
-        raise RuntimeError("simulated interruption after reset")
-
-    _fake_authenticated_remote(sync_module, tmp_path, monkeypatch, remote)
-    monkeypatch.setattr(
-        sync_module, "_sync_export_table", interrupt_after_partial_apply
-    )
-    local = tmp_path / "local.sqlite"
-    assert sync_module.main(
-        ["--db", str(local), "--wrangler-remote"]
-    ) == 1
-    with sqlite3.connect(local) as conn:
-        assert conn.execute(
-            "SELECT status FROM local_d1_export_sync_runs"
-        ).fetchone() == ("FAILED",)
-        assert conn.execute(
-            "SELECT snapshot_ready,publication_state FROM local_snapshot_policy "
-            "WHERE singleton=1"
-        ).fetchone() == (0, "REJECTED")
-    assert sync_module._authenticated_export_cursor_chain(local) == (None, None)
-
-
-def test_key_rotation_retired_history_does_not_block_new_current_full(
-    tmp_path, sync_module, monkeypatch
-):
-    from ops import d1_sync_signing
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    import base64
-
-    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
-    first = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
-    second = _record(101, ingested_at="2025-04-02T02:00:00+09:00")
-    remote_one = tmp_path / "remote-v1.sqlite"
-    remote_two = tmp_path / "remote-v2.sqlite"
-    _write_private_d1_export(
-        remote_one,
-        current_rows=(first,),
-        change_rows=(
-            {
-                "change_seq": 1,
-                "table_name": "jquants_records",
-                **first,
-                "changed_at": first["ingested_at"],
-            },
-        ),
-    )
-    _write_private_d1_export(
-        remote_two,
-        current_rows=(second,),
-        change_rows=(
-            {
-                "change_seq": 2,
-                "table_name": "jquants_records",
-                **second,
-                "changed_at": second["ingested_at"],
-            },
-        ),
-    )
-
-    first_key = Ed25519PrivateKey.generate()
-    second_key = Ed25519PrivateKey.generate()
-    key_path = tmp_path / "d1-sync-test.pem"
-    registry_path = tmp_path / "d1-sync-registry.json"
-
-    def install(private, *, retired=None, revoked=None, active_id="d1-sync-test-v1"):
-        key_path.write_bytes(
-            private.private_bytes(
-                serialization.Encoding.PEM,
-                serialization.PrivateFormat.PKCS8,
-                serialization.NoEncryption(),
-            )
-        )
-        key_path.chmod(0o600)
-        keys = []
-        if retired is not None:
-            keys.append(
-                {
-                    "key_id": "d1-sync-test-v1",
-                    "algorithm": "Ed25519",
-                    "public_key_base64": base64.b64encode(
-                        retired.public_key().public_bytes(
-                            serialization.Encoding.Raw,
-                            serialization.PublicFormat.Raw,
-                        )
-                    ).decode("ascii"),
-                    "status": "retired",
-                }
-            )
-        if revoked is not None:
-            keys.append(
-                {
-                    "key_id": "d1-sync-revoked",
-                    "algorithm": "Ed25519",
-                    "public_key_base64": base64.b64encode(
-                        revoked.public_key().public_bytes(
-                            serialization.Encoding.Raw,
-                            serialization.PublicFormat.Raw,
-                        )
-                    ).decode("ascii"),
-                    "status": "revoked",
-                }
-            )
-        keys.append(
-            {
-                "key_id": active_id,
-                "algorithm": "Ed25519",
-                "public_key_base64": base64.b64encode(
-                    private.public_key().public_bytes(
-                        serialization.Encoding.Raw,
-                        serialization.PublicFormat.Raw,
-                    )
-                ).decode("ascii"),
-                "status": "active",
-            }
-        )
-        registry_path.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "purpose": "d1_sync_audit_verification",
-                    "keys": keys,
-                }
-            ),
-            encoding="utf-8",
-        )
-        monkeypatch.setattr(d1_sync_signing, "DEFAULT_SIGNING_KEY_PATH", key_path)
-        monkeypatch.setattr(
-            d1_sync_signing, "DEFAULT_VERIFY_REGISTRY_PATH", registry_path
-        )
-
-    install(first_key)
-    selected = [remote_one]
-
-    def fake_wrangler(argv, **_kwargs):
-        output = Path(argv[argv.index("--output") + 1])
-        shutil.copyfile(selected[0], output)
-        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr(sync_module._private_export.subprocess, "run", fake_wrangler)
-    local = tmp_path / "local.sqlite"
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 0
-    assert sync_module._authenticated_export_cursor_chain(local) == (1, 1)
-
-    install(second_key, retired=first_key, active_id="d1-sync-test-v2")
-    assert sync_module._authenticated_export_cursor_chain(local) == (None, None)
-
-    selected[0] = remote_two
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 0
-    assert sync_module._authenticated_export_cursor_chain(local) == (2, 2)
-    with sqlite3.connect(local) as conn:
-        kinds = [
-            row[0]
-            for row in conn.execute(
-                "SELECT issuer_key_id FROM local_d1_export_sync_runs "
-                "WHERE signed_evidence_json IS NOT NULL ORDER BY source_change_seq"
-            ).fetchall()
-        ]
-    assert kinds == ["d1-sync-test-v1", "d1-sync-test-v2"]
-
-    install(second_key, revoked=first_key, active_id="d1-sync-test-v2")
-    assert sync_module._authenticated_export_cursor_chain(local) == (2, 2)
-
-
-def test_same_cursor_different_digest_is_rejected_same_digest_is_noop(
-    tmp_path, sync_module, monkeypatch
-):
-    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
-    first = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
-    forked = _record(777, ingested_at="2025-04-02T01:00:00+09:00")
-    remote = tmp_path / "authenticated.sqlite"
-    fork = tmp_path / "fork.sqlite"
-    change = {
-        "change_seq": 1,
-        "table_name": "jquants_records",
-        **first,
-        "changed_at": first["ingested_at"],
-    }
-    _write_private_d1_export(remote, current_rows=(first,), change_rows=(change,))
-    _write_private_d1_export(
-        fork,
-        current_rows=(forked,),
-        change_rows=({**change, **forked, "changed_at": forked["ingested_at"]},),
-    )
-    _configure_test_d1_sync_signer(tmp_path, monkeypatch)
-    selected = [remote]
-
-    def fake_wrangler(argv, **_kwargs):
-        output = Path(argv[argv.index("--output") + 1])
-        shutil.copyfile(selected[0], output)
-        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr(sync_module._private_export.subprocess, "run", fake_wrangler)
-    local = tmp_path / "local.sqlite"
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 0
-    with sqlite3.connect(local) as conn:
-        original = conn.execute(
-            "SELECT audit_digest, local_content_digest FROM local_d1_export_sync_runs "
-            "WHERE status='COMPLETE'"
-        ).fetchone()
-
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 0
-    with sqlite3.connect(local) as conn:
-        replayed = conn.execute(
-            "SELECT audit_digest, local_content_digest FROM local_d1_export_sync_runs "
-            "WHERE status='COMPLETE'"
-        ).fetchone()
-        assert replayed == original
-
-    selected[0] = fork
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 1
-    assert sync_module._authenticated_export_cursor_chain(local) == (1, 1)
-    with sqlite3.connect(local) as conn:
-        payload = conn.execute("SELECT payload FROM jquants_records").fetchone()[0]
-        assert json.loads(payload)["Close"] == 100
-        error = conn.execute(
-            "SELECT error FROM local_d1_export_sync_runs WHERE status='FAILED' "
-            "ORDER BY rowid DESC LIMIT 1"
-        ).fetchone()[0]
-    assert "different content digest" in error
-
-
-def test_authenticated_incremental_rejects_missing_trusted_base(
-    tmp_path, sync_module, monkeypatch
-):
-    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
-    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
-    remote = tmp_path / "authenticated.sqlite"
-    _write_private_d1_export(
-        remote,
-        current_rows=(row,),
-        change_rows=(
-            {
-                "change_seq": 1,
-                "table_name": "jquants_records",
-                **row,
-                "changed_at": row["ingested_at"],
-            },
-        ),
-    )
-
-    _fake_authenticated_remote(sync_module, tmp_path, monkeypatch, remote)
-    local = tmp_path / "local.sqlite"
-    assert sync_module.main(
-        ["--db", str(local), "--wrangler-remote", "--incremental"]
-    ) == 1
-    with sqlite3.connect(local) as conn:
-        assert conn.execute(
-            "SELECT status,error FROM local_d1_export_sync_runs"
-        ).fetchone() == (
-            "FAILED",
-            "change_feed: authenticated incremental apply requires a prior "
-            "trusted full bootstrap",
-        )
-
-
-def test_signed_remote_audit_row_tampering_is_not_publishable(
-    tmp_path, sync_module, monkeypatch
-):
-    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("jquants_records",))
-    row = _record(100, ingested_at="2025-04-02T01:00:00+09:00")
-    remote = tmp_path / "authenticated.sqlite"
-    _write_private_d1_export(
-        remote,
-        current_rows=(row,),
-        change_rows=(
-            {
-                "change_seq": 1,
-                "table_name": "jquants_records",
-                **row,
-                "changed_at": row["ingested_at"],
-            },
-        ),
-    )
-    _fake_authenticated_remote(sync_module, tmp_path, monkeypatch, remote)
-    local = tmp_path / "local.sqlite"
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 0
-    assert sync_module._authenticated_export_cursor_chain(local) == (1, 1)
-    with sqlite3.connect(local) as conn:
-        conn.execute(
-            "UPDATE local_d1_export_sync_runs SET source_change_seq=2"
-        )
-        conn.commit()
-    assert sync_module._authenticated_export_cursor_chain(local) == (None, None)
-
-
-def test_authenticated_export_rejects_source_only_schema_drift(
-    tmp_path, sync_module, monkeypatch
-):
-    monkeypatch.setattr(sync_module, "DEFAULT_TABLES", ("ingestion_run_log",))
-    remote = tmp_path / "schema-drift.sqlite"
-    _write_private_d1_export(remote)
-    with sqlite3.connect(remote) as conn:
-        conn.execute(
-            """CREATE TABLE ingestion_run_log (
-                id INTEGER PRIMARY KEY, ran_at TEXT, source TEXT, runtime TEXT,
-                status TEXT, detail TEXT, caller_assertion TEXT)"""
-        )
-        conn.execute(
-            "INSERT INTO ingestion_run_log VALUES (1,'2025-01-01Z','jquants',"
-            "'worker','PASS','{}','forged')"
-        )
-        conn.execute(
-            "INSERT INTO ingestion_change_log VALUES "
-            "(1,'jquants_records','jquants','equities_bars_daily','{}',"
-            "'2025-01-01Z','2025-01-01Z','2025-01-01Z','{}',NULL,'2025-01-01Z')"
-        )
-    _fake_authenticated_remote(sync_module, tmp_path, monkeypatch, remote)
-    local = tmp_path / "local.sqlite"
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 1
-    assert sync_module._authenticated_export_cursor_chain(local) == (None, None)
-    with sqlite3.connect(local) as conn:
-        status, error = conn.execute(
-            "SELECT status,error FROM local_d1_export_sync_runs"
-        ).fetchone()
-    assert status == "FAILED"
-    assert "schema mismatch" in error
-
-
-def test_remote_sync_missing_dedicated_signer_fails_before_provider_call(
-    tmp_path, sync_module, monkeypatch
-):
-    from ops import d1_sync_signing
-
-    missing = tmp_path / "missing-d1-sync-key.pem"
-    monkeypatch.setattr(d1_sync_signing, "DEFAULT_SIGNING_KEY_PATH", missing)
-    called = []
-    monkeypatch.setattr(
-        sync_module._private_export.subprocess,
-        "run",
-        lambda *args, **kwargs: called.append((args, kwargs)),
-    )
-    local = tmp_path / "local.sqlite"
-    assert sync_module.main(["--db", str(local), "--wrangler-remote"]) == 1
-    assert called == []
-    assert not local.exists()
 
 
 def test_ops_projection_failure_propagates_nonzero(

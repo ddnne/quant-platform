@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-import inspect
 import json
 
 import pytest
@@ -13,17 +12,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from ops import d1_sync_signing as signing
 
 
-def _install_key_registry(tmp_path, monkeypatch):
+def _install_external_key_registry(tmp_path, monkeypatch):
+    """Install public verification material; keep the private key test-local."""
     private = Ed25519PrivateKey.generate()
-    key_path = tmp_path / "d1-sync.pem"
-    key_path.write_bytes(
-        private.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
-    )
-    key_path.chmod(0o600)
     public = private.public_key().public_bytes(
         serialization.Encoding.Raw,
         serialization.PublicFormat.Raw,
@@ -42,9 +33,8 @@ def _install_key_registry(tmp_path, monkeypatch):
     }
     registry_path = tmp_path / "registry.json"
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
-    monkeypatch.setattr(signing, "DEFAULT_SIGNING_KEY_PATH", key_path)
     monkeypatch.setattr(signing, "DEFAULT_VERIFY_REGISTRY_PATH", registry_path)
-    return private, key_path, registry_path, registry
+    return private, registry_path, registry
 
 
 def _envelope(registry: dict, *, issued_at: datetime) -> dict:
@@ -93,20 +83,35 @@ def _signed_document(
     }
 
 
-def test_d1_sync_authority_exposes_no_generic_mapping_signer(
+def test_same_uid_home_key_cannot_enable_preflight_or_sealing(
     tmp_path, monkeypatch
 ):
-    _private, _key_path, _registry_path, _registry = _install_key_registry(
+    private, _registry_path, _registry = _install_external_key_registry(
         tmp_path, monkeypatch
     )
-    assert tuple(
-        inspect.signature(signing._preflight_d1_sync_signing_authority).parameters
-    ) == ()
-    assert signing._preflight_d1_sync_signing_authority() is None
-    assert not hasattr(signing, "_load_pinned_d1_sync_signer")
+    fake_home = tmp_path / "home"
+    old_key_path = (
+        fake_home / ".config" / "quant-platform" / "d1_sync_signing_key.pem"
+    )
+    old_key_path.parent.mkdir(parents=True)
+    old_key_path.write_bytes(
+        private.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    old_key_path.chmod(0o600)
+    monkeypatch.setenv("HOME", str(fake_home))
+
     with pytest.raises(
         signing.D1SyncAuditError,
-        match="authenticated Wrangler export capability",
+        match="full-source authority is not provisioned",
+    ):
+        signing._preflight_d1_sync_signing_authority()
+    with pytest.raises(
+        signing.D1SyncAuditError,
+        match="full-source authority is not provisioned",
     ):
         signing._seal_authenticated_wrangler_export(
             {"authority_id": signing.GOVERNED_AUTHORITY_ID}
@@ -116,7 +121,7 @@ def test_d1_sync_authority_exposes_no_generic_mapping_signer(
 def test_pinned_verifier_accepts_current_closed_audit_and_rejects_tampering(
     tmp_path, monkeypatch
 ):
-    private, _key_path, _registry_path, registry = _install_key_registry(
+    private, _registry_path, registry = _install_external_key_registry(
         tmp_path, monkeypatch
     )
     now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
@@ -142,7 +147,7 @@ def test_pinned_verifier_accepts_current_closed_audit_and_rejects_tampering(
 def test_pinned_verifier_rejects_old_or_future_signed_audit(
     tmp_path, monkeypatch, offset, message
 ):
-    private, _key_path, _registry_path, registry = _install_key_registry(
+    private, _registry_path, registry = _install_external_key_registry(
         tmp_path, monkeypatch
     )
     now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
@@ -157,12 +162,15 @@ def test_pinned_verifier_rejects_old_or_future_signed_audit(
 
 
 @pytest.mark.parametrize("mutation", ["missing_status", "wrong_purpose", "two_active"])
-def test_d1_sync_registry_requires_purpose_status_and_exactly_one_active(
+def test_d1_sync_registry_rejects_invalid_shape_or_multiple_active_keys(
     tmp_path, monkeypatch, mutation
 ):
-    _private, _key_path, registry_path, registry = _install_key_registry(
+    private, registry_path, registry = _install_external_key_registry(
         tmp_path, monkeypatch
     )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(private, registry, issued_at=now)
     if mutation == "missing_status":
         registry["keys"][0].pop("status")
     elif mutation == "wrong_purpose":
@@ -173,22 +181,32 @@ def test_d1_sync_registry_requires_purpose_status_and_exactly_one_active(
         )
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
     with pytest.raises(signing.D1SyncAuditError, match="registry"):
-        signing._preflight_d1_sync_signing_authority()
+        signing.verify_signed_d1_sync_audit(document)
 
 
-def test_d1_sync_private_key_permissions_fail_closed(tmp_path, monkeypatch):
-    _private, key_path, _registry_path, _registry = _install_key_registry(
+def test_zero_active_registry_preserves_history_but_rejects_current(
+    tmp_path, monkeypatch
+):
+    private, registry_path, registry = _install_external_key_registry(
         tmp_path, monkeypatch
     )
-    key_path.chmod(0o644)
-    with pytest.raises(signing.D1SyncAuditError, match="permissions"):
-        signing._preflight_d1_sync_signing_authority()
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(private, registry, issued_at=now)
+    registry["keys"][0]["status"] = "retired"
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    with pytest.raises(signing.D1SyncAuditError, match="not active"):
+        signing.verify_signed_d1_sync_audit(document)
+    assert signing._verify_signed_d1_sync_audit(
+        document, require_fresh=False, eligibility="historical"
+    )["source_change_seq"] == 7
 
 
 def test_current_verifier_rejects_retired_and_revoked_keys_historical_does_not(
     tmp_path, monkeypatch
 ):
-    private, _key_path, registry_path, registry = _install_key_registry(
+    private, registry_path, registry = _install_external_key_registry(
         tmp_path, monkeypatch
     )
     now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
