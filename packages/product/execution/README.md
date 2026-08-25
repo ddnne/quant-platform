@@ -8,7 +8,7 @@ Authorized paper execution service — sole positive capability that reaches tru
 from execution import PaperExecutionService, PaperExecutionRejected
 ```
 
-Re-derives authorization fields, verifies pinned snapshot, resolves FeatureRefs, then may call `strategies.paper.run_paper`. Nothing else on the agent path may call `run_paper` directly.
+Re-derives authorization fields, verifies pinned snapshot and research-data-profile digest, resolves FeatureRefs, then may call `strategies.paper.run_paper`. Nothing else on the agent path may call `run_paper` directly. `paper_runtime.execution` is a DTO adapter that delegates here.
 
 ## Allowed imports
 

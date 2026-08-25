@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { computeVersionHash, MASTER_EVENT_TYPES } from "./types";
-import { payloadToMasterRecord, writeMasterScd2 } from "./write";
+import {
+  CurrentParseError,
+  payloadToMasterRecord,
+  writeMasterScd2,
+} from "./write";
 
 const CURRENT_KEY = "structured/scd2/equities_master/CURRENT.json";
 const WHEN = new Date("2025-04-01T00:00:00.000Z");
@@ -21,6 +25,7 @@ function memoryBucket(): {
     metadata?: Record<string, string>;
   }[] = [];
   const objects = new Map<string, string>();
+  const etags = new Map<string, string>();
   const bucket = {
     async get(key: string) {
       const body = objects.get(key);
@@ -28,17 +33,34 @@ function memoryBucket(): {
       return {
         json: async () => JSON.parse(body),
         text: async () => body,
+        etag: etags.get(key),
       };
     },
     async put(
       key: string,
       value: unknown,
-      options?: { customMetadata?: Record<string, string> },
+      options?: {
+        customMetadata?: Record<string, string>;
+        onlyIf?: { etagMatches?: string; etagDoesNotMatch?: string };
+      },
     ) {
       const body = typeof value === "string" ? value : "";
+      const exists = objects.has(key);
+      const existingEtag = etags.get(key);
+      if (options?.onlyIf?.etagDoesNotMatch === "*" && exists) {
+        return null;
+      }
+      if (
+        options?.onlyIf?.etagMatches &&
+        (!exists || existingEtag !== options.onlyIf.etagMatches)
+      ) {
+        return null;
+      }
+      const etag = `mem-${puts.length + 1}`;
       objects.set(key, body);
+      etags.set(key, etag);
       puts.push({ key, body, metadata: options?.customMetadata });
-      return { key, etag: `mem-${puts.length}` };
+      return { key, etag };
     },
   } as unknown as R2Bucket;
   return { bucket, puts };
@@ -63,7 +85,11 @@ function listedPayload(
 }
 
 function input(payload: Record<string, unknown>) {
-  return { naturalKey: "8697", payload };
+  return { naturalKey: String(payload.Code ?? "8697"), payload };
+}
+
+function listedInput(code: string, name = `Name ${code}`) {
+  return input(listedPayload({ Code: code, CompanyName: name }));
 }
 
 function parseCurrent(body: string): {
@@ -259,5 +285,276 @@ describe("writeMasterScd2", () => {
     assertNoCoverageComplete(current.metadata);
     assertNoCoverageComplete(rows);
     assertNoCoverageComplete(second);
+  });
+
+  it("CURRENT parse failure quarantines the body and does not write an empty snapshot", async () => {
+    const { bucket, puts } = memoryBucket();
+    const corrupt = "{not-json";
+    await bucket.put(CURRENT_KEY, corrupt);
+    const afterSeed = puts.length;
+
+    await expect(
+      writeMasterScd2(
+        { STRUCTURED_BUCKET: bucket },
+        [input(listedPayload())],
+        WHEN,
+      ),
+    ).rejects.toBeInstanceOf(CurrentParseError);
+
+    expect(puts.slice(afterSeed).some((put) => put.key === CURRENT_KEY)).toBe(
+      false,
+    );
+    expect(currentPut(puts).body).toBe(corrupt);
+
+    const quarantines = puts
+      .slice(afterSeed)
+      .filter((put) =>
+        put.key.startsWith("structured/scd2/equities_master/quarantine/"),
+      );
+    expect(quarantines).toHaveLength(1);
+    expect(quarantines[0]!.body).toBe(corrupt);
+    expect(quarantines[0]!.metadata?.reason).toBe("parse_failure");
+    expect(quarantines[0]!.key).not.toContain("COMPLETE");
+    assertNoCoverageComplete(quarantines);
+    assertNoCoverageComplete(puts.slice(afterSeed).map((put) => put.key));
+  });
+
+  it("CURRENT schema or by_code failure quarantines and leaves CURRENT in place", async () => {
+    const { bucket, puts } = memoryBucket();
+    const invalid = JSON.stringify({
+      schema: "not-a-current-schema",
+      updated_at: UPDATED_AT,
+      count: 0,
+    });
+    await bucket.put(CURRENT_KEY, invalid);
+    const afterSeed = puts.length;
+
+    const err = await writeMasterScd2(
+      { STRUCTURED_BUCKET: bucket },
+      [input(listedPayload())],
+      WHEN,
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CurrentParseError);
+    expect((err as CurrentParseError).quarantineKey).toMatch(
+      /^structured\/scd2\/equities_master\/quarantine\/[0-9a-f]{64}\.json$/,
+    );
+    expect(puts.slice(afterSeed).some((put) => put.key === CURRENT_KEY)).toBe(
+      false,
+    );
+    expect(currentPut(puts).body).toBe(invalid);
+    expect(JSON.stringify(err)).not.toContain("COMPLETE");
+    assertNoCoverageComplete(puts.slice(afterSeed));
+  });
+
+  it("partial page without trusted universe evidence preserves prior codes and emits no DELISTED", async () => {
+    const { bucket, puts } = memoryBucket();
+    const env = { STRUCTURED_BUCKET: bucket };
+    await writeMasterScd2(
+      env,
+      [listedInput("8697"), listedInput("7203"), listedInput("6758")],
+      WHEN,
+    );
+    const afterFirst = puts.length;
+
+    const later = new Date("2025-04-02T00:00:00.000Z");
+    const second = await writeMasterScd2(
+      env,
+      [listedInput("8697"), listedInput("7203")],
+      later,
+    );
+
+    const snap = parseCurrent(currentPut(puts, afterFirst).body);
+    expect(snap.count).toBe(3);
+    expect(Object.keys(snap.by_code).sort()).toEqual(["6758", "7203", "8697"]);
+    const events = eventPuts(puts, afterFirst);
+    expect(events).toHaveLength(0);
+    expect(second.events_key).toBeNull();
+    expect(second.inserted).toBe(0);
+    assertNoCoverageComplete(snap);
+    assertNoCoverageComplete(second);
+  });
+
+  it("DELISTED only with paginationExhausted and fullUniverse evidence", async () => {
+    const { bucket, puts } = memoryBucket();
+    const env = { STRUCTURED_BUCKET: bucket };
+    await writeMasterScd2(
+      env,
+      [listedInput("8697"), listedInput("7203"), listedInput("6758")],
+      WHEN,
+    );
+    const afterFirst = puts.length;
+    const prevHash = parseCurrent(currentPut(puts).body).by_code["6758"]!
+      .version_hash;
+
+    const later = new Date("2025-04-02T00:00:00.000Z");
+    const exhaustedOnly = await writeMasterScd2(
+      env,
+      [listedInput("8697"), listedInput("7203")],
+      later,
+      { paginationExhausted: true, fullUniverse: false },
+    );
+    expect(parseCurrent(currentPut(puts, afterFirst).body).count).toBe(3);
+    expect(exhaustedOnly.events_key).toBeNull();
+    const afterPartial = puts.length;
+
+    const trusted = await writeMasterScd2(
+      env,
+      [listedInput("8697"), listedInput("7203")],
+      later,
+      { paginationExhausted: true, fullUniverse: true },
+    );
+    const snap = parseCurrent(currentPut(puts, afterPartial).body);
+    expect(snap.count).toBe(2);
+    expect(snap.by_code["6758"]).toBeUndefined();
+    expect(Object.keys(snap.by_code).sort()).toEqual(["7203", "8697"]);
+
+    const events = eventPuts(puts, afterPartial);
+    expect(events).toHaveLength(1);
+    const rows = events[0]!.body
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      event_type: MASTER_EVENT_TYPES.DELISTED,
+      effective_date: "2025-04-02",
+      local_code: "6758",
+      prev_hash: prevHash,
+      new_hash: null,
+      attrs: null,
+    });
+    expect(trusted.inserted).toBe(1);
+    expect(trusted.events_key).toBe(events[0]!.key);
+    assertNoCoverageComplete(snap);
+    assertNoCoverageComplete(rows);
+    assertNoCoverageComplete(trusted);
+  });
+
+  it("writes immutable snapshot and events before CAS CURRENT pointer", async () => {
+    const { bucket, puts } = memoryBucket();
+    const result = await writeMasterScd2(
+      { STRUCTURED_BUCKET: bucket },
+      [input(listedPayload())],
+      WHEN,
+    );
+    const keys = puts.map((put) => put.key);
+    const snapIdx = keys.findIndex((key) => key.includes("/snapshots/"));
+    const eventIdx = keys.findIndex((key) => key.includes("/events/"));
+    const currentIdx = keys.lastIndexOf(CURRENT_KEY);
+    expect(snapIdx).toBeGreaterThanOrEqual(0);
+    expect(eventIdx).toBeGreaterThan(snapIdx);
+    expect(currentIdx).toBeGreaterThan(eventIdx);
+    const snap = parseCurrent(currentPut(puts).body);
+    expect(snap.by_code["8697"]).toBeDefined();
+    expect(result.events_key).toBe(puts[eventIdx]!.key);
+    expect(JSON.stringify(puts.map((put) => put.key))).not.toContain("COMPLETE");
+  });
+
+  it("CURRENT CAS failure leaves the pointer unchanged after immutable writes", async () => {
+    const { bucket, puts } = memoryBucket();
+    const env = { STRUCTURED_BUCKET: bucket };
+    await writeMasterScd2(env, [input(listedPayload())], WHEN);
+    const firstCurrent = currentPut(puts).body;
+    const innerPut = bucket.put.bind(bucket);
+    bucket.put = (async (
+      key: string,
+      value: unknown,
+      options?: unknown,
+    ) => {
+      if (key === CURRENT_KEY) return null;
+      return innerPut(key, value, options as never);
+    }) as typeof bucket.put;
+
+    await expect(
+      writeMasterScd2(
+        env,
+        [input(listedPayload({ CompanyName: "JPX Group, Inc." }))],
+        new Date("2025-04-02T00:00:00.000Z"),
+      ),
+    ).rejects.toThrow(/CURRENT pointer CAS failed/);
+
+    expect(currentPut(puts).body).toBe(firstCurrent);
+    expect(puts.some((put) => put.key.includes("/snapshots/"))).toBe(true);
+    expect(puts.filter((put) => put.key === CURRENT_KEY)).toHaveLength(1);
+  });
+
+  it("refuses to move CURRENT pointer backward in updated_at", async () => {
+    const { bucket, puts } = memoryBucket();
+    const env = { STRUCTURED_BUCKET: bucket };
+    await writeMasterScd2(env, [input(listedPayload())], WHEN);
+    const firstCurrent = currentPut(puts).body;
+    const afterFirst = puts.length;
+
+    await expect(
+      writeMasterScd2(
+        env,
+        [input(listedPayload())],
+        new Date("2025-03-31T00:00:00.000Z"),
+      ),
+    ).rejects.toThrow(/monotonic/);
+
+    expect(currentPut(puts).body).toBe(firstCurrent);
+    expect(puts.slice(afterFirst)).toHaveLength(0);
+  });
+
+  it("commits evidence before CURRENT and refuses COMPLETE in the watermark", async () => {
+    const { bucket, puts } = memoryBucket();
+    await writeMasterScd2(
+      { STRUCTURED_BUCKET: bucket },
+      [input(listedPayload())],
+      WHEN,
+    );
+    const keys = puts.map((put) => put.key);
+    const evidenceIdx = keys.findIndex((key) => key.includes("/evidence/"));
+    const currentIdx = keys.lastIndexOf(CURRENT_KEY);
+    expect(evidenceIdx).toBeGreaterThanOrEqual(0);
+    expect(evidenceIdx).toBeLessThan(currentIdx);
+    const evidence = JSON.parse(puts[evidenceIdx]!.body) as Record<string, unknown>;
+    expect(evidence.schema).toBe("equities_master_scd2_evidence/v1");
+    expect(evidence.as_of).toBe(AS_OF);
+    expect(evidence.snapshot_key).toBe(
+      puts.find((put) => put.key.includes("/snapshots/"))!.key,
+    );
+    expect(evidence.events_key).toBe(
+      puts.find((put) => put.key.includes("/events/"))!.key,
+    );
+    expect(evidence.pagination_exhausted).toBe(false);
+    expect(evidence.full_universe).toBe(false);
+    const pointer = parseCurrent(currentPut(puts).body) as Record<string, unknown>;
+    expect(pointer.evidence_key).toBe(puts[evidenceIdx]!.key);
+    assertNoCoverageComplete(evidence);
+    assertNoCoverageComplete(pointer);
+    assertNoCoverageComplete(puts[evidenceIdx]!.metadata);
+  });
+
+  it("evidence commit failure is not a run pass and does not move CURRENT", async () => {
+    const { bucket, puts } = memoryBucket();
+    const env = { STRUCTURED_BUCKET: bucket };
+    await writeMasterScd2(env, [input(listedPayload())], WHEN);
+    const firstCurrent = currentPut(puts).body;
+    const innerPut = bucket.put.bind(bucket);
+    bucket.put = (async (
+      key: string,
+      value: unknown,
+      options?: unknown,
+    ) => {
+      if (key.includes("/evidence/")) return null;
+      return innerPut(key, value, options as never);
+    }) as typeof bucket.put;
+
+    await expect(
+      writeMasterScd2(
+        env,
+        [input(listedPayload({ CompanyName: "JPX Group, Inc." }))],
+        new Date("2025-04-02T00:00:00.000Z"),
+      ),
+    ).rejects.toThrow(/evidence commit failed/);
+
+    expect(currentPut(puts).body).toBe(firstCurrent);
+    expect(puts.filter((put) => put.key === CURRENT_KEY)).toHaveLength(1);
+    expect(JSON.stringify(puts.map((put) => put.key))).not.toContain("COMPLETE");
   });
 });

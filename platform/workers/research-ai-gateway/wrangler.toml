@@ -1,8 +1,10 @@
 # Strict AI Gateway. Research mass-eval must not bind Workers AI directly.
 #
-# Public surface: service binding only. Not a public research API.
+# Public surface: none. Service binding only. Not a public research API.
 # wrangler 4.125.0 still deploys with workers_dev=false (no route required).
-# Production has no workers.dev hostname. preview_urls are version-only.
+# preview_urls=false: version preview URLs are not a research API.
+# Staging is not [env.staging] in this file (would share the production
+# Cloudflare account). See wrangler.staging.toml — HUMAN separate account.
 #
 # Secrets:
 #   npx wrangler secret put GATEWAY_TOKEN -c platform/workers/research-ai-gateway/wrangler.toml
@@ -13,7 +15,7 @@ name = "quant-platform-research-ai-gateway"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 workers_dev = false
-preview_urls = true
+preview_urls = false
 
 [ai]
 binding = "AI"
@@ -32,7 +34,7 @@ enabled = true
 [env.production]
 name = "quant-platform-research-ai-gateway"
 workers_dev = false
-preview_urls = true
+preview_urls = false
 
 [env.production.ai]
 binding = "AI"

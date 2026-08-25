@@ -1,7 +1,9 @@
-# Internal CI aggregate gate. Not a research API (no PIT, eval, ingest, or MCP).
+# Internal CI aggregate gate. Not a public research API (no PIT, eval, ingest,
+# or MCP). Lane G will abolish this Worker; this lane does not delete it.
 #
 # workers_dev is true only so Workers Builds lanes can POST receipts without a
 # custom zone route. Do not treat the workers.dev host as a product surface.
+# Staging is not [env.staging] in this file. See wrangler.staging.toml.
 #
 # Secrets (never in this file):
 #   npx wrangler secret put GITHUB_STATUS_TOKEN -c platform/workers/ci-aggregate/wrangler.toml

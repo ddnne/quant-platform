@@ -33,6 +33,20 @@ python_is_311_plus() {
   "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'
 }
 
+# Host interpreter is only for `python -m venv`. Never run pytest with it.
+# Prefer python3.11; accept python3 only when it is 3.11+. Do not use system 3.9.
+find_python_311_plus() {
+  local cand path
+  for cand in python3.11 python3; do
+    path="$(command -v "$cand" 2>/dev/null || true)"
+    if [[ -n "$path" ]] && python_is_311_plus "$path"; then
+      printf '%s' "$path"
+      return 0
+    fi
+  done
+  return 1
+}
+
 echo "==> secret/path scan (tracked .env / *.pem)"
 if git ls-files | grep -E '(^|/)\.env$|\.pem$'; then
   echo "tracked secret path: .env or *.pem must not be in git ls-files" >&2
@@ -41,12 +55,22 @@ fi
 
 venv_py="$ROOT/.venv/bin/python"
 if [[ ! -x "$venv_py" ]]; then
-  echo "clean venv is required: create .venv with Python 3.11+ (e.g. python3.11 -m venv .venv && .venv/bin/python -m pip install -e '.[dev]')" >&2
-  echo "do not silently use system python" >&2
-  exit 1
+  echo "==> bootstrap .venv (Python 3.11+)"
+  host_py=""
+  if ! host_py="$(find_python_311_plus)"; then
+    echo "Python 3.11+ is required to create .venv (python3.11 or python3 >= 3.11)." >&2
+    echo "do not silently use system python" >&2
+    exit 1
+  fi
+  "$host_py" -m venv "$ROOT/.venv"
+  if [[ ! -x "$venv_py" ]]; then
+    echo "failed to create .venv/bin/python with $host_py" >&2
+    exit 1
+  fi
 fi
 if ! python_is_311_plus "$venv_py"; then
   echo ".venv must be Python 3.11+ (got $($venv_py -V 2>&1)); recreate: python3.11 -m venv .venv && .venv/bin/python -m pip install -e '.[dev]'" >&2
+  echo "do not silently use system python" >&2
   exit 1
 fi
 py="$venv_py"

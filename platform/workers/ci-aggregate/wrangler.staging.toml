@@ -1,0 +1,20 @@
+# STAGING STUB — not a production config. Do not wrangler deploy this file
+# against the production Cloudflare account.
+#
+# Internal CI aggregate gate. Not a public research API.
+# Lane G will abolish this Worker; this lane does not delete it.
+#
+# HUMAN: create a physically separate Cloudflare account and Worker name
+# if staging CI is needed. Do not copy production secrets.
+
+name = "quant-platform-ci-aggregate-staging"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+workers_dev = true
+
+[vars]
+GITHUB_REPOSITORY = "ddnne/quant-platform"
+GITHUB_STATUS_CONTEXT = "ci-aggregate-staging"
+
+# No production secret values. After HUMAN creates staging resources:
+# wrangler secret put CI_LANE_TOKEN / GITHUB_STATUS_TOKEN on this Worker only.

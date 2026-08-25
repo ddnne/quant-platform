@@ -4,11 +4,14 @@ The policy distinguishes calendar/periodic series from irregular event feeds
 and SourceCapabilityContract V3 snapshot grains. Event feeds never acquire
 invented daily row-count expectations.
 
-V3 official-domain datasets (``equities_master``,
-``equities_earnings_calendar``, ``equities_bars_daily_am``) derive required
-inventory from SourceCapabilityContract. Tip/snapshot grains plan a current
+V3 official-domain datasets are those with a SourceCapability JSON row.
+Their collection_coverage.json rows must match ``derive_collection_coverage_v3``
+(policy_version collection-coverage/v3; master history_target_start
+``2008-05-07``). Missing V3 stays None. Tip/snapshot grains plan a current
 collection window, not hundreds of empty monthly COMPLETE shells. Official
 ``2008-05-07`` for equities_master is domain correction, not Dataset COMPLETE.
+Live MCP projection remains document-root collection-coverage/v2 until HUMAN
+refresh.
 """
 
 from __future__ import annotations

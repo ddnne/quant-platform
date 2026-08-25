@@ -1,6 +1,6 @@
 # Phase 6.2 / 6.3 residual status
 
-> **Live residual SoT.** Feature HEAD `cb9916e0` vs `origin/main` `b5c326a`. Live MCP: Projection **STALE** (`refresh_success=false`), READY **null**, B0 **UNKNOWN**, `applied_cursor` **null**. Mass **NO-GO**. Phase 7 **OFF**. `RECONSTITUTION_APPLY` **False**. Coverage last-known **22/4 PARTIAL** V2 under STALE (not FRESH, not COMPLETE 23). last_run id **14324** (cron, 2026-08-24T06:15:01+09:00 — not READY). `ci-aggregate` Worker **absent**. PR #1 check-runs **0**. Do not treat 22 COMPLETE as live V3.
+> **Live residual SoT.** Feature HEAD `cb9916e0` vs `origin/main` `b5c326a`. Live MCP: Projection **STALE** (`refresh_success=false`), READY **null**, B0 **UNKNOWN**, `applied_cursor` **null**. Mass **NO-GO**. Phase 7 **OFF**. `RECONSTITUTION_APPLY` **False**. Coverage last-known **22/4 PARTIAL** V2 under STALE (not FRESH, not COMPLETE 23). last_run id **14339** (cron PASS, 2026-08-24T20:15:01+09:00 — not READY). `ci-aggregate` Worker **absent**. PR #1 check-runs **0**. Do not treat 22 COMPLETE as live V3.
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).
 
@@ -12,6 +12,7 @@ Query Cloudflare: R2 `quant-structured/research/eval/job={id}/` and D1
 [`architecture/adr_research_recording.md`](architecture/adr_research_recording.md).
 
 Do **not** add `scripts/run_wNN_*.py` or `docs/proof/w08*_wNN_*.md` scorecards.
+Live review findings: [`phase633_finding_ledger.md`](phase633_finding_ledger.md) (sole). Do not add `docs/reviews/P632_wave*` or Independent A/B/C revisit files.
 
 ## Live coverage (remote SoT / quant-mcp)
 

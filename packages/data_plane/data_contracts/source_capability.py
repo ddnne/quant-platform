@@ -5,9 +5,14 @@ backfill planning, Ops MCP, and READY profiles must derive from this
 contract. They must not independently define a history start or coverage
 mode that exceeds official provision.
 
+``derive_collection_coverage_v3`` is the collection_coverage.json overlay
+for datasets that have a V3 JSON row (policy_version collection-coverage/v3;
+equities_master history_target_start 2008-05-07). Missing V3 stays None.
+
 ``storage.coverage_ledger.plan_required_segments`` MUST subset official
 domain via ``required_domain_subset_official``. That clip does not invent
-COMPLETE.
+COMPLETE. Live MCP projection remains collection-coverage/v2 until HUMAN
+refresh.
 
 JSON documents (optional) live at ``specs/source_capability/*.json``. An
 empty or missing directory is valid: the type and fail-closed loader still
@@ -28,6 +33,7 @@ from typing import Any, Mapping
 from qp_paths import repo_root
 
 POLICY_VERSION = "source-capability/v3"
+COLLECTION_COVERAGE_V3 = "collection-coverage/v3"
 SCHEMA_VERSION = 3
 SCHEMA_PATH = Path(__file__).with_name("source_capability.schema.json")
 
@@ -453,6 +459,26 @@ def required_domain_subset_official(
     )
 
 
+def derive_collection_coverage_v3(
+    contract: SourceCapabilityContract,
+) -> dict[str, str]:
+    """collection_coverage.json SoT fields for one SourceCapability row.
+
+    Does not invent COMPLETE. Does not rewrite live MCP projection.
+    Missing V3 is ``collection_coverage_v3_overrides`` → None.
+    """
+    if not isinstance(contract, SourceCapabilityContract):
+        raise TypeError(
+            "derive_collection_coverage_v3 requires SourceCapabilityContract"
+        )
+    return {
+        "policy_version": COLLECTION_COVERAGE_V3,
+        "history_target_start": contract.earliest_official_availability,
+        "history_mode": contract.history_mode,
+        "segment_granularity": contract.collection_window.grain,
+    }
+
+
 def _parse_policy_version(value: Any) -> str:
     version = _nonempty(value, "policy_version")
     if version != POLICY_VERSION:
@@ -541,6 +567,19 @@ def source_capability_contract_for(dataset_id: str) -> SourceCapabilityContract:
     return contract
 
 
+def collection_coverage_v3_overrides(dataset_id: str) -> dict[str, str] | None:
+    """Derive V3 coverage overlays, or None when no SourceCapability JSON exists."""
+    contract = source_capability_contract_or_none(dataset_id)
+    if contract is None:
+        return None
+    return derive_collection_coverage_v3(contract)
+
+
+def coverage_v3_dataset_ids() -> frozenset[str]:
+    """Dataset ids that have a SourceCapability V3 JSON row. Not COMPLETE 23."""
+    return frozenset(_CONTRACTS)
+
+
 def _earliest_official_availability(
     contract: SourceCapabilityContract | Mapping[str, Any],
 ) -> str:
@@ -574,6 +613,7 @@ def apply_official_query_clamp(
 
 
 __all__ = [
+    "COLLECTION_COVERAGE_V3",
     "HISTORY_MODES",
     "POLICY_VERSION",
     "SCHEMA_PATH",
@@ -591,6 +631,9 @@ __all__ = [
     "SourceCapabilityContract",
     "all_source_capability_contracts",
     "apply_official_query_clamp",
+    "collection_coverage_v3_overrides",
+    "coverage_v3_dataset_ids",
+    "derive_collection_coverage_v3",
     "load_source_capability_dir",
     "parse_source_capability_document",
     "required_domain_subset_official",

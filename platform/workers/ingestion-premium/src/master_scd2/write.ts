@@ -4,6 +4,7 @@
  */
 
 import { newRunId } from "../identity";
+import { sha256HexFromString } from "../sha256";
 import {
   MASTER_EVENT_TYPES,
   computeVersionHash,
@@ -12,6 +13,17 @@ import {
 } from "./types";
 
 const CURRENT_KEY = "structured/scd2/equities_master/CURRENT.json";
+const CURRENT_SCHEMA = "equities_master_scd2_current/v1" as const;
+const EVIDENCE_SCHEMA = "equities_master_scd2_evidence/v1" as const;
+
+export class CurrentParseError extends Error {
+  readonly quarantineKey: string | null;
+  constructor(message: string, quarantineKey: string | null) {
+    super(message);
+    this.name = "CurrentParseError";
+    this.quarantineKey = quarantineKey;
+  }
+}
 
 export interface Scd2Env {
   STRUCTURED_BUCKET: R2Bucket;
@@ -25,7 +37,7 @@ interface CurrentEntry {
 }
 
 interface CurrentSnapshot {
-  schema: "equities_master_scd2_current/v1";
+  schema: typeof CURRENT_SCHEMA;
   updated_at: string;
   count: number;
   by_code: Record<string, CurrentEntry>;
@@ -123,27 +135,124 @@ function strOrUndef(v: unknown): string | undefined {
   return String(v);
 }
 
-async function loadCurrent(bucket: R2Bucket): Promise<CurrentSnapshot> {
-  const obj = await bucket.get(CURRENT_KEY);
-  if (!obj) {
-    return {
-      schema: "equities_master_scd2_current/v1",
-      updated_at: "",
-      count: 0,
-      by_code: {},
-    };
-  }
+function emptyCurrent(): CurrentSnapshot {
+  return {
+    schema: CURRENT_SCHEMA,
+    updated_at: "",
+    count: 0,
+    by_code: {},
+  };
+}
+
+function parseCurrentSnapshot(raw: string): CurrentSnapshot {
+  let parsed: unknown;
   try {
-    const parsed = (await obj.json()) as CurrentSnapshot;
-    if (!parsed.by_code) parsed.by_code = {};
-    return parsed;
+    parsed = JSON.parse(raw);
   } catch {
-    return {
-      schema: "equities_master_scd2_current/v1",
-      updated_at: "",
-      count: 0,
-      by_code: {},
-    };
+    throw new Error("CURRENT snapshot JSON parse failed");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("CURRENT snapshot is not an object");
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (obj.schema !== CURRENT_SCHEMA) {
+    throw new Error("CURRENT snapshot schema mismatch");
+  }
+  if (
+    !obj.by_code ||
+    typeof obj.by_code !== "object" ||
+    Array.isArray(obj.by_code)
+  ) {
+    throw new Error("CURRENT snapshot by_code missing or invalid");
+  }
+  return {
+    schema: CURRENT_SCHEMA,
+    updated_at: typeof obj.updated_at === "string" ? obj.updated_at : "",
+    count:
+      typeof obj.count === "number"
+        ? obj.count
+        : Object.keys(obj.by_code as object).length,
+    by_code: obj.by_code as Record<string, CurrentEntry>,
+  };
+}
+
+async function quarantineCurrent(
+  bucket: R2Bucket,
+  raw: string,
+): Promise<string> {
+  const digest = await sha256HexFromString(raw);
+  const key = `structured/scd2/equities_master/quarantine/${digest}.json`;
+  await bucket.put(key, raw, {
+    httpMetadata: { contentType: "application/json" },
+    customMetadata: {
+      source_key: CURRENT_KEY,
+      reason: "parse_failure",
+    },
+  });
+  return key;
+}
+
+interface LoadedCurrent {
+  snap: CurrentSnapshot;
+  etag: string | null;
+}
+
+async function loadCurrent(bucket: R2Bucket): Promise<LoadedCurrent> {
+  const obj = await bucket.get(CURRENT_KEY);
+  if (!obj) return { snap: emptyCurrent(), etag: null };
+  const raw = await obj.text();
+  try {
+    return { snap: parseCurrentSnapshot(raw), etag: obj.etag ?? null };
+  } catch (e) {
+    let quarantineKey: string | null = null;
+    try {
+      quarantineKey = await quarantineCurrent(bucket, raw);
+    } catch {
+      /* still fail closed; never replace CURRENT with an empty snapshot */
+    }
+    const detail = (e as Error).message || String(e);
+    throw new CurrentParseError(
+      `CURRENT snapshot unreadable; refusing empty replacement${
+        quarantineKey ? `; quarantined ${quarantineKey}` : ""
+      }: ${detail}`,
+      quarantineKey,
+    );
+  }
+}
+
+async function putImmutable(
+  bucket: R2Bucket,
+  key: string,
+  body: string,
+  contentType: string,
+  metadata: Record<string, string>,
+): Promise<void> {
+  const put = await bucket.put(key, body, {
+    httpMetadata: { contentType },
+    customMetadata: metadata,
+    onlyIf: { etagDoesNotMatch: "*" },
+  });
+  if (put === null) {
+    throw new Error(`immutable object already exists: ${key}`);
+  }
+}
+
+async function putCurrentPointer(
+  bucket: R2Bucket,
+  body: string,
+  metadata: Record<string, string>,
+  etag: string | null,
+): Promise<void> {
+  const onlyIf = etag
+    ? { etagMatches: etag }
+    : { etagDoesNotMatch: "*" };
+  const put = await bucket.put(CURRENT_KEY, body, {
+    httpMetadata: { contentType: "application/json" },
+    customMetadata: metadata,
+    onlyIf,
+  });
+  if (put === null) {
+    throw new Error("CURRENT pointer CAS failed");
   }
 }
 
@@ -152,14 +261,22 @@ export interface MasterScd2InputRecord {
   payload: unknown;
 }
 
+/** Trusted full-universe evidence required before DELISTED events. */
+export interface MasterScd2UniverseEvidence {
+  paginationExhausted: boolean;
+  fullUniverse: boolean;
+}
+
 export async function writeMasterScd2(
   env: Scd2Env,
   records: MasterScd2InputRecord[],
   when: Date,
+  evidence?: MasterScd2UniverseEvidence,
 ): Promise<{ inserted: number; revisions: number; events_key: string | null }> {
   const runId = newRunId("scd2");
   const asOf = jstDate(when);
-  const prev = await loadCurrent(env.STRUCTURED_BUCKET);
+  const loaded = await loadCurrent(env.STRUCTURED_BUCKET);
+  const prev = loaded.snap;
   const nextByCode: Record<string, CurrentEntry> = {};
   const events: Scd2Event[] = [];
   const incomingCodes = new Set<string>();
@@ -199,13 +316,12 @@ export async function writeMasterScd2(
     }
   }
 
-  // Delistings: only when we have a full-universe snapshot (many codes).
-  // Avoid false delists on partial pages: require incoming >= 50% of previous.
+  // Delist only with trusted pagination-exhausted / full-universe evidence.
+  // Size heuristics (incoming vs previous) are not evidence.
   const prevCodes = Object.keys(prev.by_code);
-  if (
-    prevCodes.length > 0 &&
-    incomingCodes.size >= Math.max(100, Math.floor(prevCodes.length * 0.5))
-  ) {
+  const trustedFullUniverse =
+    evidence?.paginationExhausted === true && evidence?.fullUniverse === true;
+  if (prevCodes.length > 0 && trustedFullUniverse) {
     for (const code of prevCodes) {
       if (!incomingCodes.has(code)) {
         const old = prev.by_code[code]!;
@@ -228,23 +344,31 @@ export async function writeMasterScd2(
     }
   }
 
+  const nextUpdatedAt = jstIso(when);
+  if (prev.updated_at && nextUpdatedAt < prev.updated_at) {
+    throw new Error(
+      `CURRENT pointer is monotonic; refusing ${nextUpdatedAt} after ${prev.updated_at}`,
+    );
+  }
+
   const nextSnap: CurrentSnapshot = {
-    schema: "equities_master_scd2_current/v1",
-    updated_at: jstIso(when),
+    schema: CURRENT_SCHEMA,
+    updated_at: nextUpdatedAt,
     count: Object.keys(nextByCode).length,
     by_code: nextByCode,
   };
 
-  await env.STRUCTURED_BUCKET.put(
-    CURRENT_KEY,
+  const snapshotKey =
+    `structured/scd2/equities_master/snapshots/dt=${asOf}/${runId}.json`;
+  await putImmutable(
+    env.STRUCTURED_BUCKET,
+    snapshotKey,
     JSON.stringify(nextSnap),
+    "application/json",
     {
-      httpMetadata: { contentType: "application/json" },
-      customMetadata: {
-        schema: nextSnap.schema,
-        count: String(nextSnap.count),
-        run_id: runId,
-      },
+      schema: nextSnap.schema,
+      count: String(nextSnap.count),
+      run_id: runId,
     },
   );
 
@@ -253,15 +377,71 @@ export async function writeMasterScd2(
     eventsKey =
       `structured/scd2/equities_master/events/dt=${asOf}/${runId}.ndjson`;
     const body = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
-    await env.STRUCTURED_BUCKET.put(eventsKey, body, {
-      httpMetadata: { contentType: "application/x-ndjson" },
-      customMetadata: {
+    await putImmutable(
+      env.STRUCTURED_BUCKET,
+      eventsKey,
+      body,
+      "application/x-ndjson",
+      {
         count: String(events.length),
         run_id: runId,
         date: asOf,
       },
-    });
+    );
   }
+
+  const evidenceKey =
+    `structured/scd2/equities_master/evidence/dt=${asOf}/${runId}.json`;
+  const evidenceBody = JSON.stringify({
+    schema: EVIDENCE_SCHEMA,
+    run_id: runId,
+    as_of: asOf,
+    snapshot_key: snapshotKey,
+    events_key: eventsKey,
+    count: nextSnap.count,
+    event_count: events.length,
+    pagination_exhausted: evidence?.paginationExhausted === true,
+    full_universe: evidence?.fullUniverse === true,
+    updated_at: nextUpdatedAt,
+  });
+  try {
+    await putImmutable(
+      env.STRUCTURED_BUCKET,
+      evidenceKey,
+      evidenceBody,
+      "application/json",
+      {
+        schema: EVIDENCE_SCHEMA,
+        run_id: runId,
+        snapshot_key: snapshotKey,
+      },
+    );
+  } catch (e) {
+    throw new Error(
+      `SCD2 evidence commit failed; CURRENT pointer not advanced: ${
+        (e as Error).message || String(e)
+      }`,
+    );
+  }
+
+  const pointer = {
+    ...nextSnap,
+    snapshot_key: snapshotKey,
+    events_key: eventsKey,
+    evidence_key: evidenceKey,
+  };
+  await putCurrentPointer(
+    env.STRUCTURED_BUCKET,
+    JSON.stringify(pointer),
+    {
+      schema: nextSnap.schema,
+      count: String(nextSnap.count),
+      run_id: runId,
+      snapshot_key: snapshotKey,
+      evidence_key: evidenceKey,
+    },
+    loaded.etag,
+  );
 
   return { inserted: events.length, revisions: 0, events_key: eventsKey };
 }

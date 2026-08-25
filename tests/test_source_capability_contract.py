@@ -8,11 +8,14 @@ from pathlib import Path
 import pytest
 
 from data_contracts.source_capability import (
+    COLLECTION_COVERAGE_V3,
     HISTORY_MODES,
     POLICY_VERSION,
     SCHEMA_PATH,
     SourceCapabilityContract,
     all_source_capability_contracts,
+    collection_coverage_v3_overrides,
+    derive_collection_coverage_v3,
     load_source_capability_dir,
     parse_source_capability_document,
     required_domain_subset_official,
@@ -214,6 +217,18 @@ def test_required_domain_subset_official() -> None:
     index_domain = required_domain_subset_official(index)
     assert index_domain.publication_days_only is True
     assert index_domain.admit_historical_required_segments is True
+
+
+def test_derive_collection_coverage_v3_from_capability() -> None:
+    bounded = SourceCapabilityContract.from_dict(_payload())
+    derived = derive_collection_coverage_v3(bounded)
+    assert derived["policy_version"] == COLLECTION_COVERAGE_V3
+    assert derived["history_target_start"] == "2008-05-01"
+    assert derived["history_mode"] == "bounded_history"
+    assert derived["segment_granularity"] == "calendar_month"
+    with pytest.raises(TypeError, match="requires SourceCapabilityContract"):
+        derive_collection_coverage_v3({"dataset_id": "equities_bars_daily"})
+    assert collection_coverage_v3_overrides("fins_summary") is None
 
 
 def test_module_docstring_states_planner_authority() -> None:
