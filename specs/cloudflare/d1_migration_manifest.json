@@ -189,6 +189,13 @@
           "checksum": "sha256:39e16e144b6d67ec903d126fa24b6dfea981cc09a82544ad5fcb23c252b68d80",
           "order": 1,
           "depends_on": null
+        },
+        {
+          "migration_id": "quant-ops-quota:0002_oauth_state_nonce",
+          "path": "platform/workers/quant-ops-mcp/migrations/quota/0002_oauth_state_nonce.sql",
+          "checksum": "sha256:c98c87c3f7db690880d8665adb910be7dc8536b613c318102f52a575e70e3162",
+          "order": 2,
+          "depends_on": "quant-ops-quota:0001_remote_daily_quota"
         }
       ]
     }

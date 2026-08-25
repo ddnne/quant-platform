@@ -4,7 +4,8 @@ The Ops Worker no longer owns migrations for `quant-ingest`.
 
 - `migrations/projection/` owns only the dedicated `quant-ops-projection`
   read-model database.
-- `migrations/quota/` owns only the dedicated `quant-ops-quota` database.
+- `migrations/quota/` owns only the dedicated `quant-ops-quota` database,
+  including remote read quota and one-shot OAuth state nonce tables.
 - `platform/workers/ingestion-premium/migrations/` is the sole migration owner
   for `quant-ingest`.
 

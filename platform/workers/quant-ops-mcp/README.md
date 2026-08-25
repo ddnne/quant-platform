@@ -7,7 +7,7 @@ ingestion database binding and no write/admin/research-row tool.
 OAuth client
    -> QuantOpsMcpAgent
       -> OPS_PROJECTION_DB (immutable generation read model)
-      -> QUOTA_DB          (daily per-subject quota only)
+      -> QUOTA_DB          (daily quota + one-shot OAuth state nonce)
 
 quant-ingest -> dedicated Ed25519 publisher -> OPS_PROJECTION_DB
 ```
@@ -116,6 +116,9 @@ Production MCP URL:
 The GitHub OAuth callback is the same origin plus `/callback`. Unauthenticated
 MCP calls must return `401`; `/health` and `/healthz` are liveness only.
 OAuth state is authenticated only with the dedicated `STATE_SECRET` Worker
-secret. `GITHUB_CLIENT_SECRET` is provider authentication material and is never
-reused as the state HMAC key; a missing or blank `STATE_SECRET` fails closed
-before authorization parsing or callback network I/O.
+secret. Each signed state has a closed five-minute `issued_at`/`expires_at`
+window and a random nonce recorded in `QUOTA_DB`; callback atomically deletes
+that nonce before any GitHub request, so expiry and replay fail closed.
+`GITHUB_CLIENT_SECRET` is provider authentication material and is never reused
+as the state HMAC key. A missing state secret or nonce store fails before
+authorization issuance or callback network I/O.

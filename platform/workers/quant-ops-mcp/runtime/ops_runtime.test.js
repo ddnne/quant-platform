@@ -9,7 +9,6 @@ import { beforeEach, describe, expect, inject, it, vi } from "vitest";
 import { _callOpsToolWithRegistryForTest } from "../src/domain.js";
 import {
   githubHandler,
-  signState,
   verifyState,
 } from "../src/github-handler.js";
 import { canonicalProjectionBytes } from "../src/projection_signature.js";
@@ -262,6 +261,7 @@ describe("GitHub OAuth boundary in the Workers runtime", () => {
       GITHUB_CLIENT_SECRET: "runtime-github-secret",
       STATE_SECRET: "runtime-state-secret",
       ALLOWED_LOGIN: "ddnne",
+      QUOTA_DB: env.QUOTA_DB,
       OAUTH_PROVIDER: {
         parseAuthRequest: vi.fn(async () => oauthRequest),
         completeAuthorization: vi.fn(async () => ({
@@ -320,14 +320,20 @@ describe("GitHub OAuth boundary in the Workers runtime", () => {
         redirect.searchParams.get("state"),
         "runtime-state-secret",
       ),
-    ).resolves.toEqual(oauthRequest);
+    ).resolves.toMatchObject({ request: oauthRequest, version: 2 });
   });
 
   it("rejects a tampered callback state before provider or network I/O", async () => {
     const runtimeEnv = handlerEnv();
     const network = vi.fn();
     vi.stubGlobal("fetch", network);
-    const state = await signState(oauthRequest, "runtime-state-secret");
+    const authorization = await githubHandler.fetch(
+      new Request("https://ops.test/authorize"),
+      runtimeEnv,
+      createExecutionContext(),
+    );
+    const state = new URL(authorization.headers.get("location"))
+      .searchParams.get("state");
     const tampered = `${state.slice(0, -4)}xxxx`;
     const response = await githubHandler.fetch(
       new Request(
@@ -344,12 +350,20 @@ describe("GitHub OAuth boundary in the Workers runtime", () => {
 
   it("grants the closed scope only to the configured GitHub login", async () => {
     const runtimeEnv = handlerEnv();
-    vi.stubGlobal("fetch", vi.fn()
+    const network = vi.fn()
       .mockResolvedValueOnce(Response.json({ access_token: "github-token" }))
-      .mockResolvedValueOnce(Response.json({ login: "ddnne", name: "Taku" })));
-    const state = await signState(oauthRequest, "runtime-state-secret");
+      .mockResolvedValueOnce(Response.json({ login: "ddnne", name: "Taku" }));
+    vi.stubGlobal("fetch", network);
+    const authorization = await githubHandler.fetch(
+      new Request("https://ops.test/authorize"),
+      runtimeEnv,
+      createExecutionContext(),
+    );
+    const state = new URL(authorization.headers.get("location"))
+      .searchParams.get("state");
+    const callback = `https://ops.test/callback?code=github-code&state=${state}`;
     const response = await githubHandler.fetch(
-      new Request(`https://ops.test/callback?code=github-code&state=${state}`),
+      new Request(callback),
       runtimeEnv,
       createExecutionContext(),
     );
@@ -364,6 +378,14 @@ describe("GitHub OAuth boundary in the Workers runtime", () => {
       scope: ["quant.read.ops"],
       props: { login: "ddnne", name: "Taku" },
     });
+    const replay = await githubHandler.fetch(
+      new Request(callback),
+      runtimeEnv,
+      createExecutionContext(),
+    );
+    expect(replay.status).toBe(400);
+    expect(await replay.text()).toBe("invalid state");
+    expect(network).toHaveBeenCalledTimes(2);
   });
 
   it("denies a valid GitHub callback for every other login", async () => {
@@ -371,7 +393,13 @@ describe("GitHub OAuth boundary in the Workers runtime", () => {
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(Response.json({ access_token: "github-token" }))
       .mockResolvedValueOnce(Response.json({ login: "intruder" })));
-    const state = await signState(oauthRequest, "runtime-state-secret");
+    const authorization = await githubHandler.fetch(
+      new Request("https://ops.test/authorize"),
+      runtimeEnv,
+      createExecutionContext(),
+    );
+    const state = new URL(authorization.headers.get("location"))
+      .searchParams.get("state");
     const response = await githubHandler.fetch(
       new Request(`https://ops.test/callback?code=github-code&state=${state}`),
       runtimeEnv,
