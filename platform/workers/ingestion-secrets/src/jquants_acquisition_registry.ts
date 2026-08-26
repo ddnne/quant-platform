@@ -332,6 +332,48 @@ function resolveClosedSegment(
   return { start, end };
 }
 
+/**
+ * Build the only initial request shape accepted by the governed target.
+ *
+ * Receipt callers choose only a reviewed dataset and a closed calendar month.
+ * Contract digests and the official partial first-month boundary are derived
+ * from the target registry that is bundled into both sides of the binding.
+ */
+export async function buildGovernedInitialRequest(input: {
+  environment: AcquisitionEnvironment;
+  datasetId: string;
+  segmentId: string;
+  acquisitionNonce: string;
+  now: Date;
+}): Promise<JquantsAcquisitionRequestV2> {
+  const route = await resolveRoute(input.datasetId);
+  const first = `${input.segmentId}-01`;
+  const candidate: JquantsAcquisitionRequestV2 = {
+    schema_version: "jquants-acquisition-rpc-request/v2",
+    environment: input.environment,
+    operation: "fetch_governed_page",
+    dataset_id: input.datasetId,
+    segment_id: input.segmentId,
+    segment_start: first < route.earliestOfficialAvailability
+      ? route.earliestOfficialAvailability
+      : first,
+    segment_end: monthEnd(input.segmentId),
+    acquisition_nonce: input.acquisitionNonce,
+    source_capability_digest: route.sourceCapabilityDigest,
+    dataset_contract_digest: route.datasetContractDigest,
+    coverage_policy_digest: route.coveragePolicyDigest,
+    query_contract_digest: route.queryContractDigest,
+    target_registry_digest: route.registryDigest,
+    continuation_token: null,
+  };
+  const resolved = await resolveGovernedRequest(
+    candidate,
+    input.environment,
+    input.now,
+  );
+  return resolved.request;
+}
+
 export async function resolveGovernedRequest(
   raw: unknown,
   targetEnvironment: AcquisitionEnvironment,

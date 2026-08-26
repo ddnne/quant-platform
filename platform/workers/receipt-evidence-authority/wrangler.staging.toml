@@ -1,0 +1,47 @@
+name = "quant-platform-receipt-evidence-authority-staging"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+workers_dev = false
+preview_urls = false
+
+[secrets]
+required = ["RECEIPT_KEY_WRAP_KEY"]
+
+[vars]
+ENVIRONMENT = "staging"
+AUTHORITY_MODE = "PENDING"
+RECEIPT_KEY_GENERATION = "1"
+
+[[r2_buckets]]
+binding = "RAW_BUCKET"
+bucket_name = "quant-raw-staging"
+
+[[r2_buckets]]
+binding = "STRUCTURED_BUCKET"
+bucket_name = "quant-structured-staging"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "quant-ingest-staging"
+database_id = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
+migrations_dir = "../ingestion-premium/migrations"
+migrations_table = "d1_migrations_ingestion"
+
+[[durable_objects.bindings]]
+name = "RECEIPT_EVIDENCE_AUTHORITY_DO"
+class_name = "ReceiptEvidenceAuthority"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ReceiptEvidenceAuthority"]
+
+[[services]]
+binding = "JQUANTS_ACQUISITION"
+service = "quant-platform-ingestion-secrets-staging"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"

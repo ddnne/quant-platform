@@ -35,6 +35,7 @@ credentials.json
 
 # Cloudflare / wrangler local
 .wrangler/
+.wrangler-dry-run/
 .dev.vars
 
 # Data dumps (local only)
