@@ -1,6 +1,6 @@
 {
   "schema_version": "phase631-finding-ledger/v1",
-  "updated_at": "2026-08-26T12:06:16+09:00",
+  "updated_at": "2026-08-26T12:08:52+09:00",
   "merge_policy": {
     "required_p0_status": "FIXED",
     "independent_review_unresolved_p0": 0,
@@ -8,8 +8,8 @@
   },
   "findings": [
     {"id":"D1","area":"data_pit_receipt","severity":"P0","status":"FIXED","summary":"Fixed allowlist was not intersected with daily PIT master","evidence":"d99083f4"},
-    {"id":"D2","area":"data_pit_receipt","severity":"P0","status":"OPEN","summary":"COMPLETE issuer accepted caller-originated collection claims","closure":"Rotate current key; canonical immutable-raw reparse, exact structured reread, exhaustion proof, adversarial rejection"},
-    {"id":"D3","area":"data_pit_receipt","severity":"P0","status":"OPEN","summary":"Same-UID receipt signing oracle remained importable","closure":"Dedicated evidence authority accepts only opaque governed reconciliation handles; public packages verify only"},
+    {"id":"D2","area":"data_pit_receipt","severity":"P0","status":"OPEN","summary":"COMPLETE issuer accepted caller-originated collection claims","evidence":"3ced05dc; product minting contained behind one-shot reconciled evidence","closure":"Dedicated authority principal reparses immutable raw, normalizes canonically, rereads exact natural keys, proves exhaustion, rotates the key and reproves eligible datasets"},
+    {"id":"D3","area":"data_pit_receipt","severity":"P0","status":"OPEN","summary":"Same-UID receipt signing oracle remained importable","evidence":"3ced05dc; product receipt crypto verify-only and HOME or env private-key fallback removed","closure":"Dedicated evidence-authority principal owns a fresh key and accepts only governed reconciliation handles; recovery remains non-COMPLETE"},
     {"id":"D4","area":"data_pit_receipt","severity":"P0","status":"FIXED","summary":"JSDA publication label was used as quote-effective date","evidence":"56d4fcf9"},
     {"id":"D5","area":"data_pit_receipt","severity":"P1","status":"HOLD","summary":"Existing COMPLETE receipts predate final trusted path","closure":"Trusted reproof before COMPLETE eligibility"},
     {"id":"D6","area":"data_pit_receipt","severity":"P1","status":"FIXED","summary":"Canonical Registry duplicated PIT and Coverage semantics","evidence":"2bd96d69"},
@@ -29,7 +29,7 @@
     {"id":"C1","area":"cloudflare_ops_ci","severity":"P0","status":"FIXED","summary":"Ops MCP bound production ingestion D1 directly","evidence":"dbd5dc74,ca9c4410"},
     {"id":"C2","area":"cloudflare_ops_ci","severity":"P0","status":"FIXED","summary":"Mass-to-Gateway used a shared bearer secret","evidence":"de7915d1"},
     {"id":"C3","area":"cloudflare_ops_ci","severity":"P0","status":"FIXED","summary":"Caller receipts could impersonate the required CI gate","evidence":"6421d89b"},
-    {"id":"C4","area":"cloudflare_ops_ci","severity":"P0","status":"OPEN","summary":"Ops Projection signer accepted publisher-authored evidence envelopes","closure":"Dedicated authority consumes authenticated source FD or opaque export handle and independently recomputes all evidence"},
+    {"id":"C4","area":"cloudflare_ops_ci","severity":"P0","status":"OPEN","summary":"Ops Projection signer accepted publisher-authored evidence envelopes","evidence":"5fb40304; signer injection removed and one-shot read-only source handle bound to path inode schema count digest and cursor identity","closure":"Dedicated renderer and signing principal independently recomputes the full projection from the authenticated source handle"},
     {"id":"C9","area":"cloudflare_ops_ci","severity":"P0","status":"FIXED","summary":"Coverage V3 could mark an omitted required-segment subset COMPLETE","evidence":"18c2595d; exact-five V3 inventory and every selected signed receipt bound to the authoritative build cutoff; generic refresh and sync cannot mint first COMPLETE; independent adversarial review P0/P1=0"},
     {"id":"C10","area":"cloudflare_ops_ci","severity":"P0","status":"OPEN","summary":"Production Coverage transition authority was absent","closure":"Domain-separated authority verifies both states and persists one-shot CAS transition evidence"},
     {"id":"C5","area":"cloudflare_ops_ci","severity":"P1","status":"OPEN","summary":"MCP tools lacked closed output-schema digest acceptance","closure":"Closed input and output schemas for all 17 tools with aggregate parity"},

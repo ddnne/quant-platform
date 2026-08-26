@@ -20,8 +20,8 @@ pass.
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
 | D1 | Fixed allowlists were intersected with PIT master only on the first day | FIXED | `d99083f4`; daily listing/delisting invariant tests |
-| D2 | COMPLETE issuer accepted caller-originated parsed rows, counts, digests, and exhaustion state | OPEN | Rotate the current key, then independently reparse immutable raw, normalize canonically, reread exact natural keys, prove exhaustion, and reject an unrelated same-count row |
-| D3 | A same-UID importable signing oracle could mint signed SUCCESS outside governed ingestion | OPEN | Remove public PEM/sign APIs; a dedicated evidence authority accepts only an opaque governed reconciliation handle; recovery remains non-COMPLETE |
+| D2 | COMPLETE issuer accepted caller-originated parsed rows, counts, digests, and exhaustion state | OPEN | `3ced05dc` contains product minting behind a one-shot reconciled-evidence handle, but a separately privileged authority must still reparse immutable raw, normalize canonically, reread exact natural keys, prove exhaustion, rotate the key, and reprove eligible datasets |
+| D3 | A same-UID importable signing oracle could mint signed SUCCESS outside governed ingestion | OPEN | `3ced05dc` makes product receipt crypto verify-only and removes HOME/env private-key fallback; closure still requires a dedicated evidence-authority principal with a fresh key and a non-COMPLETE recovery path |
 | D4 | JSDA publication labels were used as quote-effective dates | FIXED | `56d4fcf9`; `2002-08-02 -> 2002-08-01`, `2002-08-05 -> 2002-08-02` |
 
 ### P1
@@ -63,7 +63,7 @@ pass.
 | C1 | Ops MCP was bound directly to production ingestion D1 | FIXED | `dbd5dc74`, `ca9c4410`; dedicated signed projection and quota D1 bindings |
 | C2 | Mass-to-Gateway authorization copied a shared bearer secret | FIXED | `de7915d1`; typed Service Binding RPC capability |
 | C3 | Caller-supplied CI receipts could impersonate the required gate | FIXED | `6421d89b`; native Cloudflare required check is authoritative |
-| C4 | Ops Projection signer accepted a publisher-authored evidence envelope | OPEN | Dedicated authority must consume an authenticated full-source FD/opaque export handle and independently recompute tables, Coverage, B0/B4 and cursors before signing |
+| C4 | Ops Projection signer accepted a publisher-authored evidence envelope | OPEN | `5fb40304` removes product signer injection and binds a one-shot read-only source handle to path/inode/schema/count/digest/cursor identity; a dedicated principal must still own the renderer/signing authority and independently recompute the full projection |
 | C9 | Coverage V3 transition could omit required or failed segments and mark the remaining subset COMPLETE | FIXED | `18c2595d`; exact-five V3 inventory is regenerated at the authoritative build cutoff, every expected segment must bind one selected signed receipt, generic refresh/sync cannot mint first COMPLETE, and independent adversarial review reported P0/P1=0 |
 | C10 | Domain-separated production Coverage transition authority was not provisioned or callable | OPEN | Authority independently verifies active and target states, signs the transition domain, and records a durable one-shot CAS tombstone |
 
@@ -98,8 +98,10 @@ pass.
 
 The latest independent adversarial reviews accepted R3, R4, R6, R7 and C9.
 The Coverage/READY candidate still has P0 rows D2, D3, R5, R10, R11, C4,
-C10 and A2 unresolved. C9 does not close the separately provisioned transition
-authority required by C10. R7's authority-owned append-only history and
+C10 and A2 unresolved. Receipt and Ops Projection code containment does not
+substitute for the dedicated principals required by D2/D3/C4/A2; C9 likewise
+does not close the separately provisioned transition authority required by C10.
+R7's authority-owned append-only history and
 sidecar-retention residuals remain tracked by R5/A2 rather than reopening the
 fail-closed publication row. After all P0 rows are closed, run a fresh
 independent review against one immutable SHA, then run the full native
