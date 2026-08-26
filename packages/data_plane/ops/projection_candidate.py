@@ -4,16 +4,21 @@ This module deliberately contains no signing or publication capability.  A
 candidate is the immutable output of rendering one authenticated SQLite read
 snapshot.  C4 remains PENDING until a separately provisioned authority can
 verify, sign, append, and activate one of these documents.
+
+The checked-in JSON Schema and authority-protocol digest for this pre-signing
+document are intentionally PENDING signer integration.  Until that protocol is
+frozen, the candidate is code-closed and content-addressed but is not eligible
+for signing, publication, or activation.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-import json
-import math
 from types import MappingProxyType
 from typing import Any, Mapping
+
+from ops.d1_sync_signing import D1SyncAuditError, canonical_d1_sync_bytes
 
 
 UNSIGNED_CANDIDATE_SCHEMA = "ops-projection-unsigned-candidate/v1"
@@ -26,40 +31,15 @@ class OpsProjectionCandidateError(RuntimeError):
     """The renderer did not produce one exact, content-addressed candidate."""
 
 
-def _copy_exact_json(value: Any, *, field: str) -> Any:
-    if type(value) is dict:
-        copied: dict[str, Any] = {}
-        for key, item in dict.items(value):
-            if type(key) is not str or key in copied:
-                raise OpsProjectionCandidateError(
-                    f"{field} keys must be unique exact strings"
-                )
-            copied[key] = _copy_exact_json(item, field=f"{field}.{key}")
-        return copied
-    if type(value) is list:
-        return [
-            _copy_exact_json(item, field=f"{field}[{index}]")
-            for index, item in enumerate(value)
-        ]
-    if type(value) in {str, int, bool, type(None)}:
-        return value
-    if type(value) is float and math.isfinite(value):
-        return value
-    raise OpsProjectionCandidateError(
-        f"{field} must contain only exact finite JSON built-in values"
-    )
-
-
 def _canonical_json_bytes(value: dict[str, Any]) -> bytes:
-    copied = _copy_exact_json(value, field="Ops Projection candidate")
-    assert type(copied) is dict
-    return json.dumps(
-        copied,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
+    """Reuse the authenticated D1 sync canonical UTF-8 JSON boundary."""
+
+    try:
+        return canonical_d1_sync_bytes(value)
+    except (D1SyncAuditError, TypeError) as exc:
+        raise OpsProjectionCandidateError(
+            "Ops Projection candidate is not exact finite JSON"
+        ) from exc
 
 
 def _sha256_bytes(value: bytes) -> str:

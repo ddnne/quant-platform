@@ -41,6 +41,7 @@ from _bootstrap import ensure_repo_root  # noqa: E402
 ROOT = ensure_repo_root()
 
 from ops.projection_content import build_projection_content_manifest  # noqa: E402
+from ops.d1_sync_signing import d1_sync_digest  # noqa: E402
 from ops.projection_candidate import (  # noqa: E402
     UNSIGNED_CANDIDATE_SCHEMA,
     UnsignedOpsProjectionCandidate,
@@ -869,13 +870,25 @@ def _render_projection_bundle(
         conn = source
         if type(conn) is not sqlite3.Connection:
             raise TypeError("projection source must be one exact SQLite connection")
+        if not conn.in_transaction:
+            raise RuntimeError(
+                "caller-owned projection connection requires an active snapshot"
+            )
     original_row_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
+    started_transaction = False
     try:
         # Freeze every source query (coverage, receipts, cursors, READY and
         # evidence digests) to one SQLite read snapshot.
-        if not conn.in_transaction:
+        if owns_connection:
             conn.execute("BEGIN")
+            started_transaction = True
+        else:
+            query_only = conn.execute("PRAGMA query_only").fetchone()
+            if query_only is None or tuple(query_only) != (1,):
+                raise RuntimeError(
+                    "caller-owned projection connection must already be read-only"
+                )
         coverage = _rows(
             conn,
             "dataset_coverage",
@@ -995,7 +1008,7 @@ def _render_projection_bundle(
         )
     finally:
         if owns_connection:
-            if conn.in_transaction:
+            if started_transaction and conn.in_transaction:
                 conn.rollback()
             conn.close()
         else:
@@ -1448,7 +1461,7 @@ def _render_projection_candidate_from_connection(
     initial_snapshot = _measure_connection_snapshot(conn)
     frozen_sync_identity = _freeze_authenticated_sync_identity(sync_identity)
     generated_at = _now()
-    generation_id = "projgen-candidate-" + _content_digest(
+    generation_id = "projgen-candidate-" + d1_sync_digest(
         {
             "sync_identity": frozen_sync_identity,
             "generated_at": generated_at,
@@ -1486,7 +1499,7 @@ def _render_projection_candidate_from_connection(
     envelope = dict(bundle.envelope)
     metadata = dict(bundle.metadata)
     row_counts = dict(bundle.row_counts)
-    sync_identity_digest = _content_digest(frozen_sync_identity)
+    sync_identity_digest = d1_sync_digest(frozen_sync_identity)
     candidate_document = {
         "schema_version": UNSIGNED_CANDIDATE_SCHEMA,
         "authority_status": "PENDING",

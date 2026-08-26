@@ -16,6 +16,7 @@ from ops.projection_candidate import (
     UNSIGNED_CANDIDATE_SCHEMA,
     UnsignedOpsProjectionCandidate,
 )
+from ops.d1_sync_signing import d1_sync_digest
 from ops.projection_signing import (
     _load_pinned_active_keys,
     open_ops_projection_signing_service,
@@ -64,6 +65,33 @@ def _frozen_test_identity(conn: sqlite3.Connection) -> MappingProxyType:
     identity = _test_mirror_identity()(conn)
     identity["table_counts"] = MappingProxyType(identity["table_counts"])
     return MappingProxyType(identity)
+
+
+def _tuple_row_factory(
+    _cursor: sqlite3.Cursor,
+    row: tuple[object, ...],
+) -> tuple[object, ...]:
+    return tuple(row)
+
+
+def _assert_exclusive_writer_blocked(path: Path) -> None:
+    writer = sqlite3.connect(path, timeout=0)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            writer.execute("BEGIN EXCLUSIVE")
+    finally:
+        writer.rollback()
+        writer.close()
+
+
+def _assert_exclusive_writer_available(path: Path) -> None:
+    writer = sqlite3.connect(path, timeout=0)
+    try:
+        writer.execute("BEGIN EXCLUSIVE")
+        assert writer.in_transaction
+    finally:
+        writer.rollback()
+        writer.close()
 
 
 def test_connection_candidate_matches_canonical_renderer_and_is_addressed(
@@ -155,6 +183,115 @@ def test_candidate_renderer_restores_the_authority_connection_row_factory(
     assert exporter._render_trusted_projection_candidate(handle).candidate_bytes
     assert len(observed_row_factories) >= 4
     assert all(row_factory is None for row_factory in observed_row_factories)
+
+
+def test_caller_owned_renderer_requires_an_existing_snapshot(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _projection_source(source)
+    conn = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    conn.execute("PRAGMA query_only=ON")
+    conn.row_factory = _tuple_row_factory
+    try:
+        with pytest.raises(RuntimeError, match="requires an active snapshot"):
+            exporter._render_projection_bundle(conn)
+        assert conn.in_transaction is False
+        assert conn.row_factory is _tuple_row_factory
+        _assert_exclusive_writer_available(source)
+    finally:
+        conn.close()
+
+
+def test_caller_owned_renderer_preserves_snapshot_and_restores_factory(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _projection_source(source)
+    conn = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    conn.execute("PRAGMA query_only=ON")
+    conn.row_factory = _tuple_row_factory
+    conn.execute("BEGIN")
+    try:
+        bundle = exporter._render_projection_bundle(
+            conn,
+            generation_id="caller-snapshot-normal",
+            producer_commit_sha="a" * 40,
+            source_cursor=7,
+            export_cursor=7,
+            _generated_at=FIXED_NOW,
+            _seal_and_activate=False,
+        )
+        assert bundle.content_digest.startswith("sha256:")
+        assert conn.in_transaction is True
+        assert conn.row_factory is _tuple_row_factory
+        _assert_exclusive_writer_blocked(source)
+    finally:
+        conn.rollback()
+        conn.close()
+    _assert_exclusive_writer_available(source)
+
+
+def test_caller_owned_renderer_exception_preserves_snapshot_and_factory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _projection_source(source)
+    conn = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    conn.execute("PRAGMA query_only=ON")
+    conn.row_factory = _tuple_row_factory
+    conn.execute("BEGIN")
+
+    def fail_inventory() -> list[dict[str, object]]:
+        raise LookupError("forced renderer failure")
+
+    monkeypatch.setattr(exporter, "_source_inventory", fail_inventory)
+    try:
+        with pytest.raises(LookupError, match="forced renderer failure"):
+            exporter._render_projection_bundle(conn)
+        assert conn.in_transaction is True
+        assert conn.row_factory is _tuple_row_factory
+        _assert_exclusive_writer_blocked(source)
+    finally:
+        conn.rollback()
+        conn.close()
+    _assert_exclusive_writer_available(source)
+
+
+def test_non_ascii_sync_identity_uses_one_canonical_utf8_serialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _projection_source(source)
+    base = _test_mirror_identity()
+
+    def unicode_identity(conn: sqlite3.Connection) -> dict[str, object]:
+        identity = base(conn)
+        identity["issuer_key_id"] = "同期鍵-日本"
+        return identity
+
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        unicode_identity,
+    )
+    monkeypatch.setattr(exporter, "_now", lambda: FIXED_NOW)
+    first = exporter._render_trusted_projection_candidate(
+        sync_script.open_authenticated_applied_mirror(source)
+    )
+    second = exporter._render_trusted_projection_candidate(
+        sync_script.open_authenticated_applied_mirror(source)
+    )
+    document = json.loads(first.candidate_bytes)
+    assert document["sync_identity"]["issuer_key_id"] == "同期鍵-日本"
+    assert document["sync_identity_digest"] == d1_sync_digest(
+        document["sync_identity"]
+    )
+    assert "同期鍵-日本".encode("utf-8") in first.candidate_bytes
+    assert first.candidate_bytes == second.candidate_bytes
+    assert first.identity_bytes == second.identity_bytes
 
 
 @pytest.mark.parametrize(
