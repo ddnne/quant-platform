@@ -56,6 +56,15 @@ GENERATION_PIN_FIELDS: tuple[str, ...] = (
 _SCHEMA: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _VerifiedProductionProjectionEvidence:
+    """Deep-immutable result owned by one successful Ops verification."""
+
+    rows: Mapping[str, Mapping[str, Any]]
+    signed_document_digest: str
+    issuer_key_id: str
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -1491,8 +1500,8 @@ def _verify_exact_four_pit_dependency_scope(
 
 def _verified_production_projection_evidence(
     signed_document: dict[str, Any] | bytes | str | None,
-    required_datasets: Sequence[str],
-) -> dict[str, dict[str, Any]]:
+    required_datasets: tuple[str, ...] | list[str],
+) -> _VerifiedProductionProjectionEvidence:
     """Verify one signed Ops envelope and derive the bounded READY input.
 
     Raw ``OPS_PROJECTION_DB`` rows and caller-created JSON mappings are never
@@ -1513,13 +1522,26 @@ def _verified_production_projection_evidence(
         raise MassResearchDisabledError(
             "production READY requires a signed Ops Projection evidence envelope"
         )
+    if (
+        type(required_datasets) not in {tuple, list}
+        or not required_datasets
+        or any(
+            type(dataset_id) is not str or not dataset_id
+            for dataset_id in required_datasets
+        )
+        or len(set(required_datasets)) != len(required_datasets)
+    ):
+        raise MassResearchDisabledError(
+            "production READY requires exact unique dataset identifiers"
+        )
+    selected_datasets = tuple(required_datasets)
     try:
         # The production verifier has no registry/path argument.  The complete
         # current registry document, body digest, generation and prior pointer
         # are independently pinned in code.
         envelope, evidence = verified_pinned_ops_projection_dataset_evidence(
             signed_document,
-            tuple(str(item) for item in required_datasets),
+            selected_datasets,
         )
     except OpsProjectionSignatureError as exc:
         raise MassResearchDisabledError(
@@ -1579,7 +1601,8 @@ def _verified_production_projection_evidence(
             "signed Ops Projection source/export/applied cursor is null or not current"
         )
 
-    owned_evidence: dict[str, dict[str, Any]] = {}
+    document_digests: set[str] = set()
+    issuer_key_ids: set[str] = set()
     for dataset_id, row in evidence.items():
         expected_policy = coverage_policy_binding(dataset_id)
         if any(
@@ -1597,7 +1620,12 @@ def _verified_production_projection_evidence(
             raise MassResearchDisabledError(
                 "signed Ops Projection verified document identity is missing"
             )
-        owned_evidence[dataset_id] = dict(row)
+        document_digests.add(document_digest)
+        issuer_key_ids.add(issuer_key_id)
+    if len(document_digests) != 1 or len(issuer_key_ids) != 1:
+        raise MassResearchDisabledError(
+            "signed Ops Projection verified document identity is inconsistent"
+        )
     try:
         age_seconds = (_now() - generated_at).total_seconds()
     except (TypeError, ValueError) as exc:
@@ -1608,7 +1636,11 @@ def _verified_production_projection_evidence(
         raise MassResearchDisabledError(
             "signed Ops Projection evidence is outside the freshness SLA"
         )
-    return owned_evidence
+    return _VerifiedProductionProjectionEvidence(
+        rows=evidence,
+        signed_document_digest=next(iter(document_digests)),
+        issuer_key_id=next(iter(issuer_key_ids)),
+    )
 
 
 def _publish_exact_four_pilot_ready_snapshot_impl(

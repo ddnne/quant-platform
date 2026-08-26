@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -47,6 +47,7 @@ from research.ready_manifest import (
 )
 from research.research_data_profile import load_core_profile, official_mode
 from selection.budget_ledger import MassResearchDisabledError
+from scripts import sync_d1_to_sqlite as sync_script
 from storage.coverage_ledger import (
     RequiredCoverageSegment,
     record_collection_receipt,
@@ -587,16 +588,112 @@ def test_signed_projection_verifier_derives_only_exact_closure_evidence(
     evidence = _verified_production_projection_evidence(
         signed, binding.required_datasets
     )
-    assert set(evidence) == set(binding.required_datasets)
+    assert set(evidence.rows) == set(binding.required_datasets)
+    assert isinstance(evidence.rows, MappingProxyType)
     assert all(
         row["signed_projection_document_digest"].startswith("sha256:")
         and row["signed_projection_issuer_key_id"]
         == "ops-projection-ready-test"
         and row["source_generation"] == row["export_cursor"]
         and row["export_cursor"] == row["applied_cursor"]
-        and type(row) is dict
-        for row in evidence.values()
+        and isinstance(row, MappingProxyType)
+        for row in evidence.rows.values()
     )
+    with pytest.raises(TypeError):
+        evidence.rows[binding.required_datasets[0]] = {}  # type: ignore[index]
+
+
+def test_ready_rejects_dataset_identifier_coercion_and_container_subclasses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = load_exact_four_pilot_ready_binding()
+    signed, registry = _signed_projection_evidence(binding.required_datasets)
+    _configure_projection_registry_for_test(monkeypatch, registry)
+
+    class DatasetId(str):
+        pass
+
+    class DatasetList(list):
+        pass
+
+    with pytest.raises(MassResearchDisabledError, match="exact unique"):
+        _verified_production_projection_evidence(
+            signed,
+            [DatasetId(binding.required_datasets[0]), *binding.required_datasets[1:]],
+        )
+    with pytest.raises(MassResearchDisabledError, match="exact unique"):
+        _verified_production_projection_evidence(
+            signed, DatasetList(binding.required_datasets)
+        )
+
+
+@pytest.mark.parametrize(
+    ("attack", "message"),
+    [(None, None), ("duplicate", "duplicate key"), ("nonfinite", "non-finite")],
+)
+def test_pilot_evidence_file_uses_real_strict_ops_decoder(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    attack: str | None,
+    message: str | None,
+) -> None:
+    binding = load_exact_four_pilot_ready_binding()
+    signed, registry = _signed_projection_evidence(binding.required_datasets)
+    _configure_projection_registry_for_test(monkeypatch, registry)
+    raw = json.dumps(signed, separators=(",", ":"))
+    if attack == "duplicate":
+        raw = raw.replace(
+            "{",
+            '{"schema_version":"attacker",',
+            1,
+        )
+    elif attack == "nonfinite":
+        raw = raw.replace(
+            '"schema_version"',
+            '"unsigned_probe":NaN,"schema_version"',
+            1,
+        )
+    evidence_path = tmp_path / f"pilot-{attack or 'valid'}.json"
+    evidence_path.write_text(raw, encoding="utf-8")
+    observed: list[object] = []
+
+    def verify_then_publish(
+        _db, _snapshot_dir, *, signed_projection_document
+    ):
+        observed.append(signed_projection_document)
+        verified = _verified_production_projection_evidence(
+            signed_projection_document, binding.required_datasets
+        )
+        assert isinstance(verified.rows, MappingProxyType)
+        return SimpleNamespace(snapshot_id="strict-file-test")
+
+    monkeypatch.setattr(
+        ready_module,
+        "publish_exact_four_pilot_ready_snapshot",
+        verify_then_publish,
+    )
+    store = SqliteStore(tmp_path / f"pilot-{attack or 'valid'}.sqlite")
+    failures: list[str] = []
+    args = SimpleNamespace(
+        table=[],
+        pilot_ready_evidence=str(evidence_path),
+        snapshot_dir=str(tmp_path / "snapshots"),
+        db=str(tmp_path / "mirror.sqlite"),
+    )
+    try:
+        sync_script._finalize_sync_policy(
+            store, args, failures, source_mode="WRANGLER_REMOTE"
+        )
+    finally:
+        store.close()
+
+    assert len(observed) == 1
+    assert type(observed[0]) is bytes
+    if message is None:
+        assert failures == []
+    else:
+        assert len(failures) == 1
+        assert message in failures[0]
 
 
 def test_ready_uses_verified_projection_identity_after_caller_mutation(
@@ -622,11 +719,13 @@ def test_ready_uses_verified_projection_identity_after_caller_mutation(
     )
 
     assert signed["issuer_key_id"] == "unsigned-B-issuer"
+    assert evidence.signed_document_digest == expected_digest
+    assert evidence.issuer_key_id == expected_issuer
     assert all(
         row["signed_projection_document_digest"] == expected_digest
         and row["signed_projection_issuer_key_id"] == expected_issuer
         and row["projection_generation"] == "projection-generation-7"
-        for row in evidence.values()
+        for row in evidence.rows.values()
     )
 
 
