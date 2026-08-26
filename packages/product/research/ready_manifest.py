@@ -22,7 +22,6 @@ from selection.budget_ledger import MassResearchDisabledError
 READY_MANIFEST_FORMAT: str = "ready-manifest/v1"
 SCHEMA_REL: Path = Path("specs") / "ready" / "ready_manifest.schema.json"
 CORE_PROFILE_REL: Path = Path("specs") / "research_profiles" / "core_v1.json"
-SOURCE_CAPABILITY_REL: Path = Path("specs") / "source_capability"
 MISSING: str = "MISSING"
 UNKNOWN: str = "UNKNOWN"
 ABSENT_PROOFS: frozenset[str] = frozenset({MISSING, UNKNOWN, ""})
@@ -2017,7 +2016,7 @@ def validate_ready_manifest_profile_binding(
 
 
 def core_profile_source_capability_gaps(*, root: Path | None = None) -> tuple[str, ...]:
-    """Core required dataset ids with no SourceCapability file.
+    """Core required dataset ids with no package-owned SourceCapability file.
 
     Missing ids are UNKNOWN, not invented PASS. Does not write V3 JSON.
     """
@@ -2027,7 +2026,9 @@ def core_profile_source_capability_gaps(*, root: Path | None = None) -> tuple[st
     required = raw.get("required_datasets")
     if not isinstance(required, list) or not required:
         raise MassResearchDisabledError("core profile required_datasets missing")
-    cap_dir = base / SOURCE_CAPABILITY_REL
+    from data_contracts.source_capability import specs_dir as capability_dir
+
+    cap_dir = capability_dir()
     missing = [
         str(dataset_id)
         for dataset_id in required

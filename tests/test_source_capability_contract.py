@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import data_contracts.source_capability as source_capability_module
 from data_contracts.source_capability import (
     COLLECTION_COVERAGE_V3,
     EMPTY_SUCCESS_POLICIES,
@@ -258,11 +259,31 @@ def test_empty_specs_dir_loads_empty(tmp_path: Path) -> None:
     assert dict(loaded) == {}
     missing = load_source_capability_dir(tmp_path / "absent")
     assert dict(missing) == {}
-    assert specs_dir() == Path(__file__).resolve().parents[1] / "specs" / "source_capability"
+    assert specs_dir() == (
+        Path(__file__).resolve().parents[1]
+        / "packages"
+        / "data_plane"
+        / "data_contracts"
+        / "source_capability_contracts"
+    )
     # Repo dir may be empty; import-time registry must still exist.
     all_source_capability_contracts()
     with pytest.raises(KeyError, match="unknown SourceCapabilityContract"):
         source_capability_contract_for("does_not_exist")
+
+
+@pytest.mark.parametrize("create_empty", [False, True])
+def test_bundled_authority_missing_or_empty_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    create_empty: bool,
+) -> None:
+    bundled = tmp_path / "installed" / "data_contracts" / "source_capability_contracts"
+    if create_empty:
+        bundled.mkdir(parents=True)
+    monkeypatch.setattr(source_capability_module, "specs_dir", lambda: bundled)
+    with pytest.raises(RuntimeError, match="bundled SourceCapability authority"):
+        source_capability_module.load_source_capability_dir()
 
 
 def test_loader_reads_json_and_skips_schema(tmp_path: Path) -> None:

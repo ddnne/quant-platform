@@ -20,6 +20,7 @@ from data_contracts.permanent_defer import (
 from data_contracts.source_capability import (
     apply_official_query_clamp,
     source_capability_contract_for,
+    specs_dir,
 )
 from ops.range_batch_scheduler import TRACK_A_FOCUS_RANGES
 from pit import get_equity_master
@@ -27,7 +28,7 @@ from storage.coverage_ledger import plan_required_segments
 from storage.sqlite_store import SqliteStore
 
 _REPO = Path(__file__).resolve().parents[1]
-_CAPABILITY = _REPO / "specs" / "source_capability" / "equities_master.json"
+_CAPABILITY = specs_dir() / "equities_master.json"
 _MIGRATION = _REPO / "specs" / "coverage_v3" / "equities_master_migration.json"
 
 OFFICIAL_START = "2008-05-07"

@@ -1175,7 +1175,7 @@
   "maximum_redirects": 0,
   "maximum_segment_pages": 8192,
   "official_origin": "https://api.jquants.com",
-  "registry_digest": "sha256:ea10852c556546f79df8d2d38e9593be0918159938c4121c7d7e7dbf00c17ee2",
+  "registry_digest": "sha256:a781ee4cf6e000b692fe40f41d4ab809f3de80e16f6d09034252a6f12d172a35",
   "rpc_surface": {
     "request_fields": [
       "schema_version",
@@ -1277,6 +1277,6 @@
     "jquants_acquisition_rpc_schema_digest": "sha256:01eb2c7583294d381330c2683f18a7d41e21b93435c9b3aea188f93fd4ca0807",
     "official_client_revision": "e38614ea3d66c4420597ff148c4848693692d6d9",
     "premium_contract": "packages/data_plane/data_contracts/jquants_premium_core.json",
-    "source_capability_directory": "specs/source_capability"
+    "source_capability_directory": "packages/data_plane/data_contracts/source_capability_contracts"
   }
 }

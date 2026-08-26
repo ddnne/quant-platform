@@ -1,6 +1,6 @@
 """collection_coverage.json V3 rows compile from SourceCapability JSON.
 
-One SoT: specs/source_capability/*.json. Missing V3 stays None. Does not
+One SoT: data_contracts/source_capability_contracts/*.json. Missing V3 stays None. Does not
 invent COMPLETE 23, calendar-walk OTC, or claim live MCP FRESH.
 """
 
@@ -24,6 +24,7 @@ from data_contracts.source_capability import (
     derive_collection_coverage_v3,
     required_domain_subset_official,
     source_capability_contract_or_none,
+    specs_dir,
 )
 from qp_paths import repo_root
 from storage.coverage_ledger import evaluate_segment, plan_required_segments
@@ -97,8 +98,9 @@ def test_topix_v3_uses_verified_official_endpoint_and_history_start() -> None:
     )
     assert contract.earliest_official_availability == "2008-05-07"
     raw = json.loads(
-        (repo_root() / "specs/source_capability/indices_bars_daily_topix.json")
-        .read_text(encoding="utf-8")
+        (specs_dir() / "indices_bars_daily_topix.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert raw["publication_calendar"]["official_history_evidence_url"] == (
         "https://jpx-jquants.com/en/spec/data-spec"

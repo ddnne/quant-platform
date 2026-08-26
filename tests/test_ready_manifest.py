@@ -12,6 +12,8 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
+from data_contracts.source_capability import specs_dir
+
 from paper_runtime.snapshot import READY_MANIFEST_SCHEMA as PUBLISH_SCHEMA
 from paper_runtime.snapshot_publish_policy import READY_MANIFEST_SCHEMA as POLICY_SCHEMA
 from qp_paths import repo_root
@@ -558,7 +560,7 @@ def test_core_profile_deps_subseteq_source_capability_registry() -> None:
     missing = core_profile_source_capability_gaps()
     for dataset_id in missing:
         assert dataset_id in required
-        cap = repo_root() / "specs" / "source_capability" / f"{dataset_id}.json"
+        cap = specs_dir() / f"{dataset_id}.json"
         assert not cap.is_file()
     require_core_profile_deps_subseteq_source_capability_registry()
     assert missing == ()

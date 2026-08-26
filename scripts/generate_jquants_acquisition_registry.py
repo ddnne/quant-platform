@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_DATASETS = ROOT / "packages/data_plane/data_contracts/canonical_datasets.json"
 PREMIUM_CONTRACT = ROOT / "packages/data_plane/data_contracts/jquants_premium_core.json"
 COLLECTION_COVERAGE = ROOT / "packages/data_plane/data_contracts/collection_coverage.json"
-SOURCE_CAPABILITY_DIR = ROOT / "specs/source_capability"
+SOURCE_CAPABILITY_DIR = (
+    ROOT / "packages/data_plane/data_contracts/source_capability_contracts"
+)
 JQUANTS_ACQUISITION_RPC_SCHEMA = (
     ROOT / "specs/authorities/jquants_acquisition_rpc.schema.json"
 )

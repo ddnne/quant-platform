@@ -21,6 +21,7 @@ from data_contracts.source_capability import (
     SourceCapabilityContract,
     required_domain_subset_official,
     source_capability_contract_for,
+    specs_dir,
 )
 from ingestion.jsda.official_index import (
     official_index_days as sot_official_index_days,
@@ -41,7 +42,7 @@ from storage.coverage_ledger import (
 from storage.sqlite_store import SqliteStore
 
 _REPO = repo_root()
-_CAPABILITY = _REPO / "specs" / "source_capability" / "jsda_otc_bond_reference_prices.json"
+_CAPABILITY = specs_dir() / "jsda_otc_bond_reference_prices.json"
 _MIGRATION = _REPO / "specs" / "coverage_v3" / "jsda_otc_official_index_migration.json"
 _FIXTURE = _REPO / "tests" / "fixtures" / "jsda_otc_official_index_tiny.html"
 

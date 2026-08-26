@@ -244,7 +244,7 @@ def _contract_digests() -> tuple[str, str]:
     contract = _digest_files(
         (
             package / "collection_coverage.json",
-            *sorted((ROOT / "specs" / "source_capability").glob("*.json")),
+            *sorted((package / "source_capability_contracts").glob("*.json")),
             ROOT / "specs" / "receipts" / "signed_receipt_claims.schema.json",
             ROOT / "specs" / "ops_projection" / "signed_envelope.schema.json",
         )

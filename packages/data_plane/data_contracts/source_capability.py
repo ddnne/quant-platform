@@ -14,9 +14,11 @@ domain via ``required_domain_subset_official``. That clip does not invent
 COMPLETE. The production ingestion Worker persists the effective per-dataset
 V2/V3 policy; a new Ops generation must be published before live V3 is current.
 
-JSON documents (optional) live at ``specs/source_capability/*.json``. An
-empty or missing directory is valid: the type and fail-closed loader still
-export. Missing dataset rows are not invented; they load as ``None``.
+The authoritative JSON documents ship beside this module under
+``source_capability_contracts/*.json``.  The default loader fails closed when
+that bundled authority is missing or incomplete.  Explicit custom directories
+remain useful for validation fixtures: a custom empty or missing directory
+loads as an empty mapping and never invents dataset rows.
 
 Nested evidence maps remain open; dataset-level keys are closed.
 """
@@ -30,12 +32,29 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from qp_paths import repo_root
-
 POLICY_VERSION = "source-capability/v3"
 COLLECTION_COVERAGE_V3 = "collection-coverage/v3"
 SCHEMA_VERSION = 3
 SCHEMA_PATH = Path(__file__).with_name("source_capability.schema.json")
+SOURCE_CAPABILITY_CONTRACTS_DIR = Path(__file__).with_name(
+    "source_capability_contracts"
+)
+
+_BUNDLED_CONTRACT_FILES = frozenset(
+    {
+        "equities_bars_daily.json",
+        "equities_bars_daily_am.json",
+        "equities_earnings_calendar.json",
+        "equities_master.json",
+        "fins_details.json",
+        "fins_dividend.json",
+        "fins_earnings_date.json",
+        "fins_summary.json",
+        "indices_bars_daily_topix.json",
+        "jsda_otc_bond_reference_prices.json",
+        "markets_calendar.json",
+    }
+)
 
 HISTORY_MODES = frozenset(
     {
@@ -92,8 +111,8 @@ _BUNDLE_ALLOWED = frozenset({"policy_version", "datasets", "schema_version"})
 
 
 def specs_dir() -> Path:
-    """Directory of optional per-dataset / bundle JSON documents."""
-    return repo_root() / "specs" / "source_capability"
+    """Compatibility alias for the package-owned contract directory."""
+    return SOURCE_CAPABILITY_CONTRACTS_DIR
 
 
 def _reject_unknown(raw: Mapping[str, Any], allowed: frozenset[str], label: str) -> None:
@@ -654,16 +673,34 @@ def parse_source_capability_document(
 def load_source_capability_dir(
     directory: Path | None = None,
 ) -> Mapping[str, SourceCapabilityContract]:
-    """Load and validate ``*.json`` under ``specs/source_capability``.
+    """Load and validate SourceCapability JSON documents.
 
-    Missing or empty directory → empty mapping. Unknown fields fail closed.
-    ``schema.json`` is skipped so a schema document can live beside rows.
+    The default package-owned authority must contain the exact governed file
+    inventory.  A missing or incomplete wheel therefore fails closed instead
+    of silently exporting an empty registry.  For an explicit custom
+    ``directory``, missing or empty still returns an empty mapping.  Unknown
+    fields fail closed.  ``schema.json`` is skipped so a schema document can
+    live beside custom fixture rows.
     """
-    root = specs_dir() if directory is None else Path(directory)
+    bundled = directory is None
+    root = specs_dir() if bundled else Path(directory)
     if not root.is_dir():
+        if bundled:
+            raise RuntimeError(
+                f"bundled SourceCapability authority missing: {root}"
+            )
         return MappingProxyType({})
+    paths = tuple(sorted(root.glob("*.json")))
+    if bundled:
+        actual_files = {path.name for path in paths}
+        if actual_files != _BUNDLED_CONTRACT_FILES:
+            raise RuntimeError(
+                "bundled SourceCapability authority inventory mismatch: "
+                f"missing={sorted(_BUNDLED_CONTRACT_FILES - actual_files)}, "
+                f"extra={sorted(actual_files - _BUNDLED_CONTRACT_FILES)}"
+            )
     contracts: dict[str, SourceCapabilityContract] = {}
-    for path in sorted(root.glob("*.json")):
+    for path in paths:
         if path.name == "schema.json":
             continue
         document = json.loads(path.read_text(encoding="utf-8"))
@@ -756,6 +793,7 @@ __all__ = [
     "POLICY_VERSION",
     "SCHEMA_PATH",
     "SCHEMA_VERSION",
+    "SOURCE_CAPABILITY_CONTRACTS_DIR",
     "TIP_SNAPSHOT_MODES",
     "REQUIRED_DOMAIN_BASES",
     "AvailableAtSpec",
