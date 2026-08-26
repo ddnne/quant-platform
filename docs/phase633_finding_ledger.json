@@ -1,6 +1,6 @@
 {
   "schema_version": "phase631-finding-ledger/v1",
-  "updated_at": "2026-08-26T10:06:48+09:00",
+  "updated_at": "2026-08-26T12:06:16+09:00",
   "merge_policy": {
     "required_p0_status": "FIXED",
     "independent_review_unresolved_p0": 0,
@@ -30,7 +30,7 @@
     {"id":"C2","area":"cloudflare_ops_ci","severity":"P0","status":"FIXED","summary":"Mass-to-Gateway used a shared bearer secret","evidence":"de7915d1"},
     {"id":"C3","area":"cloudflare_ops_ci","severity":"P0","status":"FIXED","summary":"Caller receipts could impersonate the required CI gate","evidence":"6421d89b"},
     {"id":"C4","area":"cloudflare_ops_ci","severity":"P0","status":"OPEN","summary":"Ops Projection signer accepted publisher-authored evidence envelopes","closure":"Dedicated authority consumes authenticated source FD or opaque export handle and independently recomputes all evidence"},
-    {"id":"C9","area":"cloudflare_ops_ci","severity":"P0","status":"OPEN","summary":"Coverage V3 could mark an omitted required-segment subset COMPLETE","closure":"Exact canonical and issued inventory equality; reject omitted duplicate and unexpected identities"},
+    {"id":"C9","area":"cloudflare_ops_ci","severity":"P0","status":"FIXED","summary":"Coverage V3 could mark an omitted required-segment subset COMPLETE","evidence":"18c2595d; exact-five V3 inventory and every selected signed receipt bound to the authoritative build cutoff; generic refresh and sync cannot mint first COMPLETE; independent adversarial review P0/P1=0"},
     {"id":"C10","area":"cloudflare_ops_ci","severity":"P0","status":"OPEN","summary":"Production Coverage transition authority was absent","closure":"Domain-separated authority verifies both states and persists one-shot CAS transition evidence"},
     {"id":"C5","area":"cloudflare_ops_ci","severity":"P1","status":"OPEN","summary":"MCP tools lacked closed output-schema digest acceptance","closure":"Closed input and output schemas for all 17 tools with aggregate parity"},
     {"id":"C6","area":"cloudflare_ops_ci","severity":"P1","status":"FIXED","summary":"Production Cron triggers were omitted from named environments","evidence":"6a37f61f"},

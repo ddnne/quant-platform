@@ -64,7 +64,7 @@ pass.
 | C2 | Mass-to-Gateway authorization copied a shared bearer secret | FIXED | `de7915d1`; typed Service Binding RPC capability |
 | C3 | Caller-supplied CI receipts could impersonate the required gate | FIXED | `6421d89b`; native Cloudflare required check is authoritative |
 | C4 | Ops Projection signer accepted a publisher-authored evidence envelope | OPEN | Dedicated authority must consume an authenticated full-source FD/opaque export handle and independently recompute tables, Coverage, B0/B4 and cursors before signing |
-| C9 | Coverage V3 transition could omit required or failed segments and mark the remaining subset COMPLETE | OPEN | Exact equality with canonical bounded-history and authority-issued tip/index inventory; reject omitted, duplicate and unexpected identities |
+| C9 | Coverage V3 transition could omit required or failed segments and mark the remaining subset COMPLETE | FIXED | `18c2595d`; exact-five V3 inventory is regenerated at the authoritative build cutoff, every expected segment must bind one selected signed receipt, generic refresh/sync cannot mint first COMPLETE, and independent adversarial review reported P0/P1=0 |
 | C10 | Domain-separated production Coverage transition authority was not provisioned or callable | OPEN | Authority independently verifies active and target states, signs the transition domain, and records a durable one-shot CAS tombstone |
 
 ### P1
@@ -96,9 +96,10 @@ pass.
 
 ## Integration gate
 
-The latest independent adversarial reviews accepted R3, R4, R6 and R7. The
-Coverage/READY candidate still has P0 rows D2, D3, R5, R10, R11, C4, C9,
-C10 and A2 unresolved. R7's authority-owned append-only history and
+The latest independent adversarial reviews accepted R3, R4, R6, R7 and C9.
+The Coverage/READY candidate still has P0 rows D2, D3, R5, R10, R11, C4,
+C10 and A2 unresolved. C9 does not close the separately provisioned transition
+authority required by C10. R7's authority-owned append-only history and
 sidecar-retention residuals remain tracked by R5/A2 rather than reopening the
 fail-closed publication row. After all P0 rows are closed, run a fresh
 independent review against one immutable SHA, then run the full native
