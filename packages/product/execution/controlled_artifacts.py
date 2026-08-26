@@ -19,7 +19,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, NoReturn
@@ -43,6 +43,7 @@ CONTROLLED_ARTIFACT_ALGORITHM = "Ed25519"
 CONTROLLED_ARTIFACT_AUTHORITY_UNPROVISIONED = (
     "CONTROLLED_ARTIFACT_AUTHORITY_UNPROVISIONED"
 )
+CONTROLLED_ARTIFACT_CLOCK_TOLERANCE = timedelta(minutes=5)
 PINNED_CONTROLLED_ARTIFACT_REGISTRY_DIGEST = (
     "sha256:eca16d3efe6aec0644111cdce093011c756c87dd2de846d15dcfb096e2ef20eb"
 )
@@ -75,6 +76,8 @@ _BUNDLE_FIELDS = frozenset(
         "ready_snapshot_id",
         "ready_manifest_digest",
         "readiness_attestation_id",
+        "authorization_issued_at",
+        "authorization_expires_at",
         "profile_digest",
         "plan_set_digest",
         "dependency_closure_digest",
@@ -346,14 +349,35 @@ class ControlledArtifactPublicKeyRegistry:
 
 
 class VerifiedControlledExecutionArtifacts:
-    """Deep-frozen result returned only after both authority signatures pass."""
+    """Deep-frozen, evidence-only verification result.
 
-    __slots__ = ("_document", "_artifacts")
+    This value retains the exact four content byte strings whose signed
+    digests were checked.  It is not an execution or promotion capability;
+    repeated loading is only idempotent evidence verification.
+    """
+
+    __slots__ = ("_document", "_artifacts", "_contents")
+
+    verification_scope = "EVIDENCE_ONLY"
+    authorizes_execution = False
+    authorizes_promotion = False
 
     def __init_subclass__(cls, **kwargs: Any) -> NoReturn:
         raise TypeError("VerifiedControlledExecutionArtifacts is final")
 
-    def __init__(self, document: dict[str, Any], *, _token: object = None) -> None:
+    def __setattr__(self, name: str, value: Any) -> NoReturn:
+        raise AttributeError("VerifiedControlledExecutionArtifacts is immutable")
+
+    def __delattr__(self, name: str) -> NoReturn:
+        raise AttributeError("VerifiedControlledExecutionArtifacts is immutable")
+
+    def __init__(
+        self,
+        document: dict[str, Any],
+        contents: dict[str, bytes],
+        *,
+        _token: object = None,
+    ) -> None:
         if _token is not _VERIFIED_BUNDLE_TOKEN:
             raise ControlledArtifactVerificationError(
                 "verified controlled artifacts require the pinned loader"
@@ -361,6 +385,7 @@ class VerifiedControlledExecutionArtifacts:
         frozen = _freeze_json(document)
         object.__setattr__(self, "_document", frozen)
         object.__setattr__(self, "_artifacts", frozen["artifacts"])
+        object.__setattr__(self, "_contents", MappingProxyType(dict(contents)))
 
     @property
     def bundle_id(self) -> str:
@@ -375,6 +400,8 @@ class VerifiedControlledExecutionArtifacts:
         return self._artifacts
 
     def artifact(self, artifact_type: str) -> Mapping[str, Any]:
+        if type(artifact_type) is not str:
+            raise KeyError(artifact_type)
         matches = tuple(
             artifact
             for artifact in self._artifacts
@@ -383,6 +410,18 @@ class VerifiedControlledExecutionArtifacts:
         if len(matches) != 1:
             raise KeyError(artifact_type)
         return matches[0]
+
+    @property
+    def contents(self) -> Mapping[str, bytes]:
+        return self._contents
+
+    def content(self, artifact_type: str) -> bytes:
+        if type(artifact_type) is not str:
+            raise KeyError(artifact_type)
+        try:
+            return self._contents[artifact_type]
+        except KeyError as exc:
+            raise KeyError(artifact_type) from exc
 
     def to_dict(self) -> dict[str, Any]:
         return _thaw_json(self._document)
@@ -477,17 +516,54 @@ def _require_gross(document: dict[str, Any]) -> float:
     return value
 
 
-def _require_timestamp(value: str) -> None:
+def _parse_timestamp(value: str, *, label: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ControlledArtifactVerificationError(
-            "controlled artifact written_at is not ISO datetime"
+            f"controlled artifact {label} is not ISO datetime"
         ) from exc
     if parsed.tzinfo is None:
         raise ControlledArtifactVerificationError(
-            "controlled artifact written_at must include timezone"
+            f"controlled artifact {label} must include timezone"
         )
+    return parsed
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _materialize_contents(
+    artifact_contents: dict[str, bytes],
+) -> dict[str, bytes]:
+    if type(artifact_contents) is not dict:
+        raise TypeError(
+            "controlled artifact contents must be an exact built-in dict"
+        )
+    # Snapshot the exact dict through one items observation.  Do not first
+    # inspect keys and then look them up again: a stateful str subclass could
+    # otherwise make those two observations disagree.
+    items = tuple(artifact_contents.items())
+    for key, value in items:
+        if type(key) is not str:
+            raise TypeError(
+                "controlled artifact content keys must be exact built-in strings"
+            )
+        if type(value) is not bytes:
+            raise TypeError(
+                f"controlled {key} content must be exact built-in bytes"
+            )
+    if (
+        len(items) != len(CONTROLLED_ARTIFACT_TYPES)
+        or frozenset(key for key, _value in items)
+        != frozenset(CONTROLLED_ARTIFACT_TYPES)
+    ):
+        raise ControlledArtifactVerificationError(
+            "controlled artifact contents require exactly "
+            "Paper/Risk/Selection/Knowledge"
+        )
+    return dict(items)
 
 
 def _validate_stage_payload(
@@ -621,14 +697,17 @@ def load_verified_controlled_execution_artifacts(
     payload: bytes | str,
     *,
     authorization: VerifiedTraderAuthorization,
+    artifact_contents: dict[str, bytes],
 ) -> VerifiedControlledExecutionArtifacts:
     """Parse and verify one authority-returned canonical four-artifact bundle.
 
-    The caller may provide bytes and the already-returned Trader authorization,
-    but cannot provide a key registry, signer, store, output path, or verifier.
+    The caller must provide the authority-returned bundle bytes, Trader
+    authorization, and exactly four returned content byte strings.  It cannot
+    provide a key registry, signer, store, output path, clock, or verifier.
     Both trust roots are loaded from pinned public-only registries.
     """
 
+    contents = _materialize_contents(artifact_contents)
     document = _parse_document(payload)
     _require_closed(document, _BUNDLE_FIELDS, "controlled artifact bundle")
     if (
@@ -658,6 +737,8 @@ def load_verified_controlled_execution_artifacts(
     for name in (
         "strategy_id",
         "readiness_attestation_id",
+        "authorization_issued_at",
+        "authorization_expires_at",
         "universe_contract_id",
         "period_start",
         "period_end",
@@ -673,7 +754,21 @@ def load_verified_controlled_execution_artifacts(
         raise ControlledArtifactVerificationError(
             "controlled artifact period is reversed"
         )
-    _require_timestamp(document["written_at"])
+    written_at = _parse_timestamp(document["written_at"], label="written_at")
+    authorization_issued_at = _parse_timestamp(
+        document["authorization_issued_at"], label="authorization_issued_at"
+    )
+    authorization_expires_at = _parse_timestamp(
+        document["authorization_expires_at"], label="authorization_expires_at"
+    )
+    if (
+        written_at < authorization_issued_at
+        or written_at > authorization_expires_at
+        or written_at > _now() + CONTROLLED_ARTIFACT_CLOCK_TOLERANCE
+    ):
+        raise ControlledArtifactVerificationError(
+            "controlled artifact written_at is outside authorization/current time"
+        )
 
     artifacts = document["artifacts"]
     if type(artifacts) is not list or len(artifacts) != 4:
@@ -703,6 +798,17 @@ def load_verified_controlled_execution_artifacts(
             )
         )
 
+    for artifact_type, artifact in zip(
+        CONTROLLED_ARTIFACT_TYPES, validated, strict=True
+    ):
+        actual_digest = "sha256:" + hashlib.sha256(
+            contents[artifact_type]
+        ).hexdigest()
+        if artifact["payload"]["content_digest"] != actual_digest:
+            raise ControlledArtifactVerificationError(
+                f"controlled {artifact_type} content digest mismatch"
+            )
+
     unsigned_identity = dict(document)
     unsigned_identity.pop("signature")
     declared_bundle_id = unsigned_identity.pop("bundle_id")
@@ -723,6 +829,8 @@ def load_verified_controlled_execution_artifacts(
         ready_snapshot_id=document["ready_snapshot_id"],
         ready_manifest_digest=document["ready_manifest_digest"],
         readiness_attestation_id=document["readiness_attestation_id"],
+        issued_at=document["authorization_issued_at"],
+        expires_at=document["authorization_expires_at"],
         profile_digest=document["profile_digest"],
         plan_set_digest=document["plan_set_digest"],
         dependency_closure_digest=document["dependency_closure_digest"],
@@ -749,22 +857,7 @@ def load_verified_controlled_execution_artifacts(
             "controlled artifact writer signature is invalid"
         )
     return VerifiedControlledExecutionArtifacts(
-        document, _token=_VERIFIED_BUNDLE_TOKEN
-    )
-
-
-def verify_controlled_artifact_content(
-    content: bytes, *, expected_digest: str
-) -> bool:
-    """Verify authority-returned artifact bytes against a signed content ref."""
-
-    if type(content) is not bytes or type(expected_digest) is not str:
-        return False
-    if _SHA256_RE.fullmatch(expected_digest) is None:
-        return False
-    return (
-        "sha256:" + hashlib.sha256(content).hexdigest()
-        == expected_digest
+        document, contents, _token=_VERIFIED_BUNDLE_TOKEN
     )
 
 
@@ -777,5 +870,4 @@ __all__ = [
     "ControlledArtifactVerificationError",
     "VerifiedControlledExecutionArtifacts",
     "load_verified_controlled_execution_artifacts",
-    "verify_controlled_artifact_content",
 ]

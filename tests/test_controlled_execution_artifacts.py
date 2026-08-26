@@ -23,7 +23,6 @@ from execution.controlled_artifacts import (
     ControlledArtifactVerificationError,
     VerifiedControlledExecutionArtifacts,
     load_verified_controlled_execution_artifacts,
-    verify_controlled_artifact_content,
 )
 from execution.trader_authority import (
     TraderAuthorizationPublicKeyRegistry,
@@ -53,6 +52,15 @@ def _signature(private: Ed25519PrivateKey, body: dict) -> str:
 
 def _content_digest(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _artifact_contents() -> dict[str, bytes]:
+    return {
+        "Paper": b"paper-content",
+        "Risk": b"risk-content",
+        "Selection": b"selection-content",
+        "Knowledge": b"knowledge-content",
+    }
 
 
 def _authorization(
@@ -112,6 +120,8 @@ def _bundle(
         "ready_snapshot_id": authorization.ready_snapshot_id,
         "ready_manifest_digest": authorization.ready_manifest_digest,
         "readiness_attestation_id": authorization.readiness_attestation_id,
+        "authorization_issued_at": authorization.issued_at,
+        "authorization_expires_at": authorization.expires_at,
         "profile_digest": authorization.profile_digest,
         "plan_set_digest": authorization.plan_set_digest,
         "dependency_closure_digest": authorization.dependency_closure_digest,
@@ -232,6 +242,43 @@ def _install_test_roots(
         ),
     )
     monkeypatch.setattr(trader_module, "_now", lambda: clock)
+    monkeypatch.setattr(artifact_module, "_now", lambda: clock)
+
+
+def _signed_bundle_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    clock: datetime | None = None,
+    issued: datetime | None = None,
+    written_at: datetime | None = None,
+    bundle_overrides: dict | None = None,
+    mutate_artifact=None,
+) -> tuple[VerifiedTraderAuthorization, bytes]:
+    clock = clock if clock is not None else datetime.now(timezone.utc)
+    issued = issued if issued is not None else clock
+    written_at = written_at if written_at is not None else issued
+    trader_private = Ed25519PrivateKey.generate()
+    writer_private = Ed25519PrivateKey.generate()
+    authorization = _authorization(
+        trader_private, key_id="trader-test", issued=issued
+    )
+    payload = _bundle(
+        authorization,
+        writer_private,
+        writer_key_id="writer-test",
+        written_at=written_at,
+        bundle_overrides=bundle_overrides,
+        mutate_artifact=mutate_artifact,
+    )
+    _install_test_roots(
+        monkeypatch,
+        trader_private=trader_private,
+        trader_key_id="trader-test",
+        writer_private=writer_private,
+        writer_key_id="writer-test",
+        clock=clock,
+    )
+    return authorization, payload
 
 
 def test_committed_artifact_registry_is_explicitly_unprovisioned() -> None:
@@ -255,7 +302,9 @@ def test_unprovisioned_writer_reports_unknown_pending() -> None:
 
     with pytest.raises(ControlledArtifactAuthorityPending) as raised:
         load_verified_controlled_execution_artifacts(
-            payload, authorization=authorization
+            payload,
+            authorization=authorization,
+            artifact_contents=_artifact_contents(),
         )
     assert raised.value.status == "UNKNOWN"
     assert raised.value.reason_code == CONTROLLED_ARTIFACT_AUTHORITY_UNPROVISIONED
@@ -284,7 +333,9 @@ def test_exact_four_stage_bundle_verifies_and_is_deep_frozen(monkeypatch) -> Non
     )
 
     verified = load_verified_controlled_execution_artifacts(
-        payload, authorization=authorization
+        payload,
+        authorization=authorization,
+        artifact_contents=_artifact_contents(),
     )
     assert [item["artifact_type"] for item in verified.artifacts] == list(
         CONTROLLED_ARTIFACT_TYPES
@@ -295,13 +346,15 @@ def test_exact_four_stage_bundle_verifies_and_is_deep_frozen(monkeypatch) -> Non
     )
     with pytest.raises(TypeError):
         verified.artifact("Paper")["payload"]["lifecycle"] = "Draft"
-    paper_digest = verified.artifact("Paper")["payload"]["content_digest"]
-    assert verify_controlled_artifact_content(
-        b"paper-content", expected_digest=paper_digest
-    )
-    assert not verify_controlled_artifact_content(
-        b"tampered", expected_digest=paper_digest
-    )
+    assert verified.content("Paper") == b"paper-content"
+    assert dict(verified.contents) == _artifact_contents()
+    with pytest.raises(TypeError):
+        verified.contents["Paper"] = b"tampered"
+    with pytest.raises(AttributeError, match="immutable"):
+        verified._contents = {}  # noqa: SLF001 - immutability boundary
+    assert verified.verification_scope == "EVIDENCE_ONLY"
+    assert verified.authorizes_execution is False
+    assert verified.authorizes_promotion is False
 
 
 @pytest.mark.parametrize(
@@ -343,7 +396,9 @@ def test_writer_signature_cannot_replace_trader_bound_values(
         ControlledArtifactVerificationError, match="exact Trader authorization"
     ):
         load_verified_controlled_execution_artifacts(
-            payload, authorization=authorization
+            payload,
+            authorization=authorization,
+            artifact_contents=_artifact_contents(),
         )
 
 
@@ -377,7 +432,9 @@ def test_valid_writer_signature_cannot_break_stage_lineage(monkeypatch) -> None:
 
     with pytest.raises(ControlledArtifactVerificationError, match="parent lineage"):
         load_verified_controlled_execution_artifacts(
-            payload, authorization=authorization
+            payload,
+            authorization=authorization,
+            artifact_contents=_artifact_contents(),
         )
 
 
@@ -411,7 +468,9 @@ def test_valid_writer_signature_cannot_smuggle_stage_authority(monkeypatch) -> N
 
     with pytest.raises(ControlledArtifactVerificationError, match="not closed"):
         load_verified_controlled_execution_artifacts(
-            payload, authorization=authorization
+            payload,
+            authorization=authorization,
+            artifact_contents=_artifact_contents(),
         )
 
 
@@ -441,7 +500,9 @@ def test_trader_key_never_falls_back_as_artifact_writer(monkeypatch) -> None:
 
     with pytest.raises(ControlledArtifactVerificationError, match="writer signature"):
         load_verified_controlled_execution_artifacts(
-            payload, authorization=authorization
+            payload,
+            authorization=authorization,
+            artifact_contents=_artifact_contents(),
         )
 
 
@@ -475,7 +536,9 @@ def test_automatic_promotion_and_generation_two_are_rejected(monkeypatch) -> Non
             ControlledArtifactVerificationError, match="policy identity"
         ):
             load_verified_controlled_execution_artifacts(
-                payload, authorization=authorization
+                payload,
+                authorization=authorization,
+                artifact_contents=_artifact_contents(),
             )
 
 
@@ -496,7 +559,7 @@ def test_consumer_reverifies_expiry_and_has_no_clock_or_verifier_injection(
         authorization,
         writer_private,
         writer_key_id="writer-test",
-        written_at=clock,
+        written_at=issued + timedelta(minutes=10),
     )
     _install_test_roots(
         monkeypatch,
@@ -511,18 +574,22 @@ def test_consumer_reverifies_expiry_and_has_no_clock_or_verifier_injection(
         ControlledArtifactVerificationError, match="exact Trader authorization"
     ):
         load_verified_controlled_execution_artifacts(
-            payload, authorization=authorization
+            payload,
+            authorization=authorization,
+            artifact_contents=_artifact_contents(),
         )
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         load_verified_controlled_execution_artifacts(  # type: ignore[call-arg]
             payload,
             authorization=authorization,
+            artifact_contents=_artifact_contents(),
             now=issued,
         )
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         load_verified_controlled_execution_artifacts(  # type: ignore[call-arg]
             payload,
             authorization=authorization,
+            artifact_contents=_artifact_contents(),
             verifier=object(),
         )
 
@@ -536,6 +603,7 @@ def test_product_exposes_no_writer_store_path_or_private_key_api() -> None:
         "artifact_store",
         "output_path",
         "socket_path",
+        "verify_controlled_artifact_content",
     )
     for name in forbidden:
         assert not hasattr(artifact_module, name)
@@ -544,12 +612,12 @@ def test_product_exposes_no_writer_store_path_or_private_key_api() -> None:
     parameters = inspect.signature(
         load_verified_controlled_execution_artifacts
     ).parameters
-    assert set(parameters) == {"payload", "authorization"}
+    assert set(parameters) == {"payload", "authorization", "artifact_contents"}
 
     with pytest.raises(
         ControlledArtifactVerificationError, match="pinned loader"
     ):
-        VerifiedControlledExecutionArtifacts({})
+        VerifiedControlledExecutionArtifacts({}, _artifact_contents())
 
 
 def test_duplicate_json_key_and_post_signature_mutation_fail_closed(
@@ -561,7 +629,9 @@ def test_duplicate_json_key_and_post_signature_mutation_fail_closed(
     )
     with pytest.raises(ControlledArtifactVerificationError, match="duplicate key"):
         load_verified_controlled_execution_artifacts(
-            duplicate, authorization=object()  # type: ignore[arg-type]
+            duplicate,
+            authorization=object(),  # type: ignore[arg-type]
+            artifact_contents=_artifact_contents(),
         )
 
     issued = datetime.now(timezone.utc)
@@ -590,5 +660,179 @@ def test_duplicate_json_key_and_post_signature_mutation_fail_closed(
     )
     with pytest.raises(ControlledArtifactVerificationError, match="artifact_id"):
         load_verified_controlled_execution_artifacts(
-            tampered, authorization=authorization
+            tampered,
+            authorization=authorization,
+            artifact_contents=_artifact_contents(),
         )
+
+
+def test_signed_zero_digest_cannot_be_verified_without_matching_content(
+    monkeypatch,
+) -> None:
+    def zero_paper_digest(artifact_type: str, artifact: dict) -> None:
+        if artifact_type == "Paper":
+            artifact["payload"]["content_digest"] = "sha256:" + "0" * 64
+
+    authorization, payload = _signed_bundle_fixture(
+        monkeypatch,
+        mutate_artifact=zero_paper_digest,
+    )
+
+    with pytest.raises(TypeError, match="artifact_contents"):
+        load_verified_controlled_execution_artifacts(  # type: ignore[call-arg]
+            payload,
+            authorization=authorization,
+        )
+    with pytest.raises(
+        ControlledArtifactVerificationError, match="Paper content digest mismatch"
+    ):
+        load_verified_controlled_execution_artifacts(
+            payload,
+            authorization=authorization,
+            artifact_contents=_artifact_contents(),
+        )
+
+
+@pytest.mark.parametrize("shape", ("missing", "extra", "swapped"))
+def test_signed_bundle_requires_exact_matching_four_contents(
+    monkeypatch, shape: str
+) -> None:
+    authorization, payload = _signed_bundle_fixture(monkeypatch)
+    contents = _artifact_contents()
+    if shape == "missing":
+        contents.pop("Knowledge")
+    elif shape == "extra":
+        contents["Audit"] = b"extra"
+    else:
+        contents["Paper"], contents["Risk"] = (
+            contents["Risk"],
+            contents["Paper"],
+        )
+
+    with pytest.raises(
+        ControlledArtifactVerificationError,
+        match="exactly Paper/Risk/Selection/Knowledge|content digest mismatch",
+    ):
+        load_verified_controlled_execution_artifacts(
+            payload,
+            authorization=authorization,
+            artifact_contents=contents,
+        )
+
+
+def test_content_materialization_rejects_subclasses_and_stateful_mapping(
+    monkeypatch,
+) -> None:
+    class EvilBytes(bytes):
+        pass
+
+    class EvilStr(str):
+        pass
+
+    class StatefulDict(dict):
+        def items(self):
+            raise AssertionError("dict subclass must be rejected before observation")
+
+    authorization, payload = _signed_bundle_fixture(monkeypatch)
+
+    subclass_value = _artifact_contents()
+    subclass_value["Paper"] = EvilBytes(b"paper-content")
+    with pytest.raises(TypeError, match="exact built-in bytes"):
+        load_verified_controlled_execution_artifacts(
+            payload,
+            authorization=authorization,
+            artifact_contents=subclass_value,
+        )
+
+    subclass_key = _artifact_contents()
+    paper = subclass_key.pop("Paper")
+    subclass_key[EvilStr("Paper")] = paper
+    with pytest.raises(TypeError, match="exact built-in strings"):
+        load_verified_controlled_execution_artifacts(
+            payload,
+            authorization=authorization,
+            artifact_contents=subclass_key,
+        )
+
+    with pytest.raises(TypeError, match="exact built-in dict"):
+        load_verified_controlled_execution_artifacts(
+            payload,
+            authorization=authorization,
+            artifact_contents=StatefulDict(_artifact_contents()),
+        )
+
+
+@pytest.mark.parametrize("timing", ("before-authorization", "future"))
+def test_valid_signatures_cannot_bypass_internal_artifact_time_boundary(
+    monkeypatch, timing: str
+) -> None:
+    clock = datetime.now(timezone.utc)
+    written_at = (
+        clock - timedelta(seconds=1)
+        if timing == "before-authorization"
+        else clock + timedelta(minutes=6)
+    )
+    authorization, payload = _signed_bundle_fixture(
+        monkeypatch,
+        clock=clock,
+        written_at=written_at,
+    )
+
+    with pytest.raises(
+        ControlledArtifactVerificationError,
+        match="outside authorization/current time",
+    ):
+        load_verified_controlled_execution_artifacts(
+            payload,
+            authorization=authorization,
+            artifact_contents=_artifact_contents(),
+        )
+
+
+def test_writer_cannot_restate_trader_authorization_times(monkeypatch) -> None:
+    issued = datetime.now(timezone.utc)
+    authorization, payload = _signed_bundle_fixture(
+        monkeypatch,
+        clock=issued,
+        bundle_overrides={
+            "authorization_issued_at": (issued - timedelta(seconds=1)).isoformat()
+        },
+    )
+
+    with pytest.raises(
+        ControlledArtifactVerificationError, match="exact Trader authorization"
+    ):
+        load_verified_controlled_execution_artifacts(
+            payload,
+            authorization=authorization,
+            artifact_contents=_artifact_contents(),
+        )
+
+
+def test_repeat_loading_is_idempotent_evidence_not_execution_authority(
+    monkeypatch,
+) -> None:
+    authorization, payload = _signed_bundle_fixture(monkeypatch)
+    supplied = _artifact_contents()
+
+    first = load_verified_controlled_execution_artifacts(
+        payload,
+        authorization=authorization,
+        artifact_contents=supplied,
+    )
+    supplied["Paper"] = b"mutated-after-load"
+    second = load_verified_controlled_execution_artifacts(
+        payload,
+        authorization=authorization,
+        artifact_contents=_artifact_contents(),
+    )
+
+    assert first.bundle_id == second.bundle_id
+    assert first.content("Paper") == b"paper-content"
+    assert second.content("Paper") == b"paper-content"
+    for verified in (first, second):
+        assert verified.verification_scope == "EVIDENCE_ONLY"
+        assert verified.authorizes_execution is False
+        assert verified.authorizes_promotion is False
+        assert not hasattr(verified, "execute")
+        assert not hasattr(verified, "promote")

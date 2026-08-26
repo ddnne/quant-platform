@@ -282,6 +282,8 @@ def _binding(authorization: VerifiedTraderAuthorization) -> TraderAuthorizationB
         period_start=authorization.period_start,
         period_end=authorization.period_end,
         cost_scenario=authorization.cost_scenario,
+        issued_at=authorization.issued_at,
+        expires_at=authorization.expires_at,
     )
 
 

@@ -20,7 +20,6 @@ from .controlled_artifacts import (
     ControlledArtifactVerificationError,
     VerifiedControlledExecutionArtifacts,
     load_verified_controlled_execution_artifacts,
-    verify_controlled_artifact_content,
 )
 from .trader_authority import (
     TraderAuthorizationBinding,
@@ -45,6 +44,5 @@ __all__ = [
     "VerifiedTraderAuthorization",
     "VerifiedControlledExecutionArtifacts",
     "load_verified_controlled_execution_artifacts",
-    "verify_controlled_artifact_content",
     "verify_exact_trader_authorization",
 ]

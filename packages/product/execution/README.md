@@ -25,8 +25,12 @@ permissioned authority must return one signed, content-addressed
 Paper → Risk → Selection → Knowledge bundle. The verify-only loader binds all
 four artifacts to the same exact Trader authorization, READY snapshot,
 plan/closure, resolved universe, StrategySpec, period, cost scenario and gross
-limit. Its dedicated pinned writer registry intentionally has zero active keys,
-so verification currently reports
+limit. It requires the authority-returned bytes for exactly those four stages,
+hashes them against every signed content digest, and retains the immutable
+verified bytes. The returned value is evidence only: loading it, including a
+repeat load, does not authorize execution or promotion. Its dedicated pinned
+writer registry intentionally has zero active keys, so verification currently
+reports
 `UNKNOWN: CONTROLLED_ARTIFACT_AUTHORITY_UNPROVISIONED`.
 
 ## Allowed imports

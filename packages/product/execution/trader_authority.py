@@ -256,6 +256,8 @@ class TraderAuthorizationBinding:
     period_start: str
     period_end: str
     cost_scenario: str
+    issued_at: str
+    expires_at: str
 
     def __post_init__(self) -> None:
         values = tuple(
@@ -322,6 +324,8 @@ _BINDING_STRING_FIELDS = (
     "period_start",
     "period_end",
     "cost_scenario",
+    "issued_at",
+    "expires_at",
 )
 
 
