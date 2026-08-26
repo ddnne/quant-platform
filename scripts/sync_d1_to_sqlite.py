@@ -822,10 +822,7 @@ def _sync_export_changes(
     return pages, seen, registered, after_seq
 
 
-def _ensure_export_sync_audit(store: SqliteStore) -> None:
-    store._conn.execute(  # noqa: SLF001
-        """
-        CREATE TABLE IF NOT EXISTS main.local_d1_export_sync_runs (
+_SYNC_AUDIT_TABLE_BODY_SQL = """(
             export_digest     TEXT PRIMARY KEY,
             artifact_format   TEXT NOT NULL,
             source_mode       TEXT NOT NULL,
@@ -847,8 +844,13 @@ def _ensure_export_sync_audit(store: SqliteStore) -> None:
             started_at        TEXT NOT NULL,
             updated_at        TEXT NOT NULL,
             error             TEXT
-        )
-        """
+        )"""
+
+
+def _ensure_export_sync_audit(store: SqliteStore) -> None:
+    store._conn.execute(  # noqa: SLF001
+        "CREATE TABLE IF NOT EXISTS main.local_d1_export_sync_runs "
+        + _SYNC_AUDIT_TABLE_BODY_SQL
     )
     columns = {
         str(row[1])
@@ -916,6 +918,20 @@ def _require_canonical_sync_audit_table(conn: sqlite3.Connection) -> None:
         "SELECT type,name,sql FROM main.sqlite_master "
         "WHERE tbl_name='local_d1_export_sync_runs' ORDER BY type,name"
     ).fetchall()
+    table_objects = [tuple(row) for row in objects if row[0] == "table"]
+    expected_table_sql = _private_export._canonical_schema_sql(  # noqa: SLF001
+        "CREATE TABLE local_d1_export_sync_runs "
+        + _SYNC_AUDIT_TABLE_BODY_SQL
+    )
+    if (
+        len(table_objects) != 1
+        or type(table_objects[0][2]) is not str
+        or _private_export._canonical_schema_sql(  # noqa: SLF001
+            table_objects[0][2]
+        )
+        != expected_table_sql
+    ):
+        raise ValueError("D1 sync audit table DDL is not canonical")
     expected_objects = [
         (
             "index",
@@ -924,9 +940,7 @@ def _require_canonical_sync_audit_table(conn: sqlite3.Connection) -> None:
         )
     ]
     observed_non_table = [tuple(row) for row in objects if row[0] != "table"]
-    if observed_non_table != expected_objects or sum(
-        int(row[0] == "table") for row in objects
-    ) != 1:
+    if observed_non_table != expected_objects:
         raise ValueError("D1 sync audit table has unowned schema objects")
     temp_deputies = conn.execute(
         "SELECT 1 FROM sqlite_temp_master "

@@ -792,6 +792,34 @@ def test_temp_audit_table_cannot_shadow_signed_complete_persistence(
     store.close()
 
 
+@pytest.mark.parametrize("mutation", ["collation", "missing_check"])
+def test_audit_table_exact_ddl_rejects_semantic_schema_substitution(
+    mutation,
+):
+    from scripts import sync_d1_to_sqlite as sync
+
+    body = sync._SYNC_AUDIT_TABLE_BODY_SQL
+    if mutation == "collation":
+        body = body.replace(
+            "export_digest     TEXT PRIMARY KEY",
+            "export_digest     TEXT PRIMARY KEY COLLATE NOCASE",
+        )
+    else:
+        body = body.replace(
+            "CHECK (status IN ('APPLYING', 'COMPLETE', 'FAILED'))",
+            "CHECK (status IN ('APPLYING', 'COMPLETE', 'FAILED', 'FAKE'))",
+        )
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.execute(
+            "CREATE TABLE main.local_d1_export_sync_runs " + body
+        )
+        with pytest.raises(ValueError, match="DDL is not canonical"):
+            sync._require_canonical_sync_audit_table(conn)
+    finally:
+        conn.close()
+
+
 @pytest.mark.parametrize("mutation", ["missing_status", "wrong_purpose", "two_active"])
 def test_d1_sync_registry_rejects_invalid_shape_or_multiple_active_keys(
     tmp_path, monkeypatch, mutation
