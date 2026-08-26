@@ -14,7 +14,12 @@ from selection.budget_ledger import MassResearchDisabledError
 PLAN_EXECUTION_BINDING_FORMAT = "plan-execution-binding/v1"
 EXACT_FOUR_BINDING_FORMAT = "exact-four-execution-binding/v1"
 PILOT_READINESS_CLAIMS_FORMAT = "pilot-readiness-attestation-claims/v2"
-TRADER_AUTHORIZATION_CLAIMS_FORMAT = "exact-four-trader-authorization-claims/v2"
+# Historical unsigned lineage DTO retained for result-manifest compatibility.
+# It is not the future production Trader authorization wire contract.
+HISTORICAL_TRADER_AUTHORIZATION_CLAIMS_FORMAT = (
+    "exact-four-trader-authorization-claims/v2"
+)
+TRADER_AUTHORIZATION_CLAIMS_FORMAT = HISTORICAL_TRADER_AUTHORIZATION_CLAIMS_FORMAT
 CONTROLLED_EXECUTION_CLAIMS_FORMAT = "exact-four-execution-request-claims/v2"
 
 PILOT_READINESS_SCOPE = "VERIFIED_PILOT_READINESS"
@@ -245,6 +250,7 @@ __all__ = [
     "EXACT_FOUR_BINDING_FORMAT",
     "ExactFourAuthorityContractError",
     "ExactFourAuthorityPending",
+    "HISTORICAL_TRADER_AUTHORIZATION_CLAIMS_FORMAT",
     "PILOT_EXECUTION_MODE",
     "PILOT_READINESS_CLAIMS_FORMAT",
     "PILOT_READINESS_SCOPE",

@@ -49,6 +49,12 @@ PARALLEL_PROTOCOL_SCHEMAS: dict[str, Path] = {
     "exact_four_result_manifest": (
         ROOT / "specs" / "ready" / "exact_four_result_manifest.schema.json"
     ),
+    "exact_four_trader_authorization_v2": (
+        ROOT
+        / "specs"
+        / "ready"
+        / "exact_four_trader_authorization_v2.schema.json"
+    ),
 }
 
 PRINCIPALS = (
@@ -173,7 +179,99 @@ EXPECTED_PENDING_DEPENDENCIES = {
             "activation_blocked": True,
         }
     ],
-    **{principal: [] for principal in PRINCIPALS if principal != "receipt"},
+    "trader": [
+        {
+            "dependency_id": "verified_pilot_readiness_v2",
+            "status": "PENDING",
+            "required_contract": (
+                "VerifiedPilotReadinessV2 from the dedicated READY verifier"
+            ),
+            "observed_implementation": (
+                "positive READY type and Trader preparation entrypoint remain "
+                "unconstructible and fail closed"
+            ),
+            "activation_blocked": True,
+        },
+        {
+            "dependency_id": "governed_trader_rp_registry",
+            "status": "PENDING",
+            "required_contract": (
+                "pinned environment-scoped RP id and HTTPS origin registry"
+            ),
+            "observed_implementation": (
+                "wire evidence is frozen; active governed RP registry count is zero"
+            ),
+            "activation_blocked": True,
+        },
+        {
+            "dependency_id": "governed_webauthn_challenge_generator",
+            "status": "PENDING",
+            "required_contract": (
+                "authority-generated 32-or-more-byte CSPRNG challenge with "
+                "generation evidence"
+            ),
+            "observed_implementation": (
+                "canonical decoding and byte-size bounds are frozen; randomness "
+                "cannot be inferred from submitted bytes and no generator is active"
+            ),
+            "activation_blocked": True,
+        },
+        {
+            "dependency_id": "webauthn_credential_registry_and_signature_verifier",
+            "status": "PENDING",
+            "required_contract": (
+                "pinned active WebAuthn credential registry and signature verifier"
+            ),
+            "observed_implementation": (
+                "canonical bytes and evidence links validate; no credential is active "
+                "and no signature is verified"
+            ),
+            "activation_blocked": True,
+        },
+        {
+            "dependency_id": "atomic_one_use_and_counter_ledger",
+            "status": "PENDING",
+            "required_contract": (
+                "one transaction atomically consumes challenge and advances counter"
+            ),
+            "observed_implementation": (
+                "transaction wire and CAS invariants are frozen; no ledger is provisioned"
+            ),
+            "activation_blocked": True,
+        },
+        {
+            "dependency_id": "append_only_trader_authority_event_store",
+            "status": "PENDING",
+            "required_contract": (
+                "authority-event/v2 append-only store atomically unique on "
+                "environment, authority, stable decision/transaction key, request, "
+                "and ledger transaction/event identity; retry returns only the "
+                "byte-identical committed event"
+            ),
+            "observed_implementation": (
+                "stable decision and transaction keys are remeasured; no atomic "
+                "exactly-once store is provisioned"
+            ),
+            "activation_blocked": True,
+        },
+        {
+            "dependency_id": "controlled_execution_v2_consumer",
+            "status": "PENDING",
+            "required_contract": (
+                "consumer accepts only VerifiedPilotReadinessV2 and "
+                "VerifiedExactFourTraderAuthorizationV2"
+            ),
+            "observed_implementation": (
+                "typed positive interface is frozen and unconditionally PENDING"
+            ),
+            "activation_blocked": True,
+        },
+    ],
+    **{
+        principal: []
+        for principal in PRINCIPALS
+        if principal not in {"receipt", "trader"}
+    },
 }
 EXPECTED_PROVIDES = {
     "receipt": ("receipt:issue_for_segment",),
@@ -292,7 +390,7 @@ EXPECTED_RESIDUAL_RISK = "cloudflare_workers_scripts_write_account_scope"
 # contains its own body digest; this independent code pin prevents a caller from
 # changing the contract and merely recomputing that self-declared digest.
 PINNED_MANIFEST_DIGEST = (
-    "sha256:a251dda278eacef43d53a8815ea10e1887757d67410a1113e65924bd975de64c"
+    "sha256:fef9e5bbfc01512d7c194156fa2137504af7ef8c3994f222f5b3a9b9ad00bfd5"
 )
 
 _BROAD_CAPABILITY_TOKENS = frozenset(

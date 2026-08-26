@@ -2,7 +2,7 @@
   "schema_version": "authority-principal-manifest/v1",
   "generation": 1,
   "activation_status": "PENDING",
-  "schema_digest": "sha256:09c28d54c1a6c877fe5f3d87c5d12dc13d71543aaba5ad9e2ab011aec0f0d142",
+  "schema_digest": "sha256:9283bd383fe1ff0f357b9c6413f0628e8adacdeb84047107c4488e28fb5dd1dd",
   "protocol_schema_digests": {
     "frozen_mirror_request": "sha256:d0d20ba5094f7b6e5bb3f6b68792cf975956c05a2acbdbb18f50edf2f98cfe21",
     "frozen_mirror_handoff": "sha256:4041b2eef7f848dcc66addb14e3a5f6e8572fb5ac91e9e239dd66a29067779a5",
@@ -15,7 +15,8 @@
     "receipt_verify_public_keys": "sha256:ddd0537fd643cec7698ea089ce4e4fdae34b61423a03c586b6b683740e7b5626",
     "jquants_acquisition_collection": "sha256:f0cdf6b30067b170a7e4d821e8090a8f9859fd190432f5b3bd2836d1e4ee36ca",
     "exact_four_authority_protocol": "sha256:5654d2e8c5e19ac96de7eda23fcb54ded9194e533c68bb1fe4fbdd14cdb12b53",
-    "exact_four_result_manifest": "sha256:01ceaab94741e1c2f29c530a6af0208b10e10bf1d24b176ea9b8d8a6afada0bd"
+    "exact_four_result_manifest": "sha256:01ceaab94741e1c2f29c530a6af0208b10e10bf1d24b176ea9b8d8a6afada0bd",
+    "exact_four_trader_authorization_v2": "sha256:7bd30bbe97b0bac99c0b41877442a62f92712a504b249afecb70a96f65966386"
   },
   "residual_risks": {
     "cloudflare_workers_scripts_write_account_scope": {
@@ -543,7 +544,57 @@
           "authentication": "webauthn_human_presence"
         }
       ],
-      "pending_dependencies": [],
+      "pending_dependencies": [
+        {
+          "dependency_id": "verified_pilot_readiness_v2",
+          "status": "PENDING",
+          "required_contract": "VerifiedPilotReadinessV2 from the dedicated READY verifier",
+          "observed_implementation": "positive READY type and Trader preparation entrypoint remain unconstructible and fail closed",
+          "activation_blocked": true
+        },
+        {
+          "dependency_id": "governed_trader_rp_registry",
+          "status": "PENDING",
+          "required_contract": "pinned environment-scoped RP id and HTTPS origin registry",
+          "observed_implementation": "wire evidence is frozen; active governed RP registry count is zero",
+          "activation_blocked": true
+        },
+        {
+          "dependency_id": "governed_webauthn_challenge_generator",
+          "status": "PENDING",
+          "required_contract": "authority-generated 32-or-more-byte CSPRNG challenge with generation evidence",
+          "observed_implementation": "canonical decoding and byte-size bounds are frozen; randomness cannot be inferred from submitted bytes and no generator is active",
+          "activation_blocked": true
+        },
+        {
+          "dependency_id": "webauthn_credential_registry_and_signature_verifier",
+          "status": "PENDING",
+          "required_contract": "pinned active WebAuthn credential registry and signature verifier",
+          "observed_implementation": "canonical bytes and evidence links validate; no credential is active and no signature is verified",
+          "activation_blocked": true
+        },
+        {
+          "dependency_id": "atomic_one_use_and_counter_ledger",
+          "status": "PENDING",
+          "required_contract": "one transaction atomically consumes challenge and advances counter",
+          "observed_implementation": "transaction wire and CAS invariants are frozen; no ledger is provisioned",
+          "activation_blocked": true
+        },
+        {
+          "dependency_id": "append_only_trader_authority_event_store",
+          "status": "PENDING",
+          "required_contract": "authority-event/v2 append-only store atomically unique on environment, authority, stable decision/transaction key, request, and ledger transaction/event identity; retry returns only the byte-identical committed event",
+          "observed_implementation": "stable decision and transaction keys are remeasured; no atomic exactly-once store is provisioned",
+          "activation_blocked": true
+        },
+        {
+          "dependency_id": "controlled_execution_v2_consumer",
+          "status": "PENDING",
+          "required_contract": "consumer accepts only VerifiedPilotReadinessV2 and VerifiedExactFourTraderAuthorizationV2",
+          "observed_implementation": "typed positive interface is frozen and unconditionally PENDING",
+          "activation_blocked": true
+        }
+      ],
       "capabilities": [
         "ready_attestation:verified_read",
         "human_decision:read",
@@ -657,5 +708,5 @@
       }
     }
   },
-  "manifest_digest": "sha256:a251dda278eacef43d53a8815ea10e1887757d67410a1113e65924bd975de64c"
+  "manifest_digest": "sha256:fef9e5bbfc01512d7c194156fa2137504af7ef8c3994f222f5b3a9b9ad00bfd5"
 }

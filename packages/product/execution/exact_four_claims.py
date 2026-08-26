@@ -1,9 +1,14 @@
-"""READY -> Trader -> Execution claims and current-chain validation.
+"""READY -> historical unsigned Trader lineage -> Execution validation.
 
 This module is deliberately authority-free.  It can compile immutable claims
 and lineage pins, but it cannot sign READY, record human approval, authorize a
 Trader, or start execution.  The three positive capability types are nominal
 and non-constructible until their separately permissioned verifiers exist.
+
+``TraderAuthorizationClaimsV2`` is retained only so existing result manifests
+remain replayable. It is not the production v2 Trader authorization contract;
+that contract uses a deterministic pre-approval subject and a separate
+WebAuthn/ledger evidence envelope in ``exact_four_trader_v2``.
 
 The existing v1 verification paths remain available for audit compatibility.
 Nothing in this module enables Mass, live orders, generation two, or automatic
@@ -28,6 +33,7 @@ from execution.exact_four_codec import (
     CONTROLLED_EXECUTION_CLAIMS_FORMAT,
     CONTROLLED_EXECUTION_SCOPE,
     EXACT_FOUR_BINDING_FORMAT,
+    HISTORICAL_TRADER_AUTHORIZATION_CLAIMS_FORMAT,
     PILOT_EXECUTION_MODE,
     PILOT_READINESS_CLAIMS_FORMAT,
     PILOT_READINESS_SCOPE,
@@ -302,7 +308,7 @@ class PilotReadinessAttestationClaimsV2:
 
 @dataclass(frozen=True, slots=True)
 class TraderAuthorizationClaimsV2:
-    """Unsigned human-approval subject, distinct from READY and execution."""
+    """Historical unsigned lineage DTO; never a verified authorization."""
 
     pilot_run_id: str
     readiness_attestation_id: str
@@ -413,10 +419,11 @@ def build_trader_authorization_claims_v2(
     issued_at: str,
     expires_at: str,
 ) -> TraderAuthorizationClaimsV2:
-    """Derive unsigned Trader claims from the actual READY object.
+    """Derive the historical unsigned result-lineage DTO from READY.
 
-    The human event remains an input for the future isolated Trader verifier;
-    this authority-free builder neither verifies presence nor signs approval.
+    The caller-supplied human event fields are why this shape is explicitly
+    non-authoritative. The production v2 pre-approval subject does not consume
+    them.
     """
 
     if type(readiness) is not PilotReadinessAttestationClaimsV2:
@@ -1048,6 +1055,7 @@ __all__ = [
     "ExactFourAuthorityPending",
     "ExactFourExecutionBinding",
     "FeatureExecutionPin",
+    "HISTORICAL_TRADER_AUTHORIZATION_CLAIMS_FORMAT",
     "PILOT_EXECUTION_MODE",
     "PILOT_READINESS_CLAIMS_FORMAT",
     "PILOT_READINESS_SCOPE",

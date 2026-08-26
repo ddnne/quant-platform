@@ -29,6 +29,24 @@ and public `fetch` is fixed to 404. The other six authorities are separate local
 OS services. `trader` is additionally constrained to a WebAuthn platform or
 hardware credential with user presence; it may not use a file-backed signer.
 
+The canonical future Trader wire contract is
+`specs/ready/exact_four_trader_authorization_v2.schema.json`. Its audit-only
+compiler accepts unsigned Pilot READY claims, while the separate positive
+entrypoint requires the unavailable `VerifiedPilotReadinessV2` capability. The
+envelope binds governed RP and credential generations, canonical WebAuthn
+bytes, an atomic one-use-plus-counter ledger transaction, and the existing
+append-only `authority-event/v2` convention. Final issuance is exactly the
+authority event observation time and expiry is exactly the bound challenge
+expiry; neither remains caller-selectable. A stable decision/transaction key
+lets the future store atomically reject request or ledger rewraps and return
+only a byte-identical event for a true retry. Canonical decoding proves byte
+identity and size only; challenge randomness belongs to a separate governed
+32-or-more-byte CSPRNG generator that is not active. The older v1 WebAuthn
+schemas and unsigned Trader/execution claims remain audit/replay material and
+cannot enter the v2 positive path. RP/credential registries, credential
+signature verification, the challenge generator, transactional ledger,
+authority event store, and controlled v2 consumer are all still `PENDING`.
+
 The `ingestion-secrets` package now contains the closed typed v2
 `JQUANTS_ACQUISITION` target alongside its time-bounded legacy HTTP proxy. The
 manifest still records an activation-blocking `PENDING` dependency: no live

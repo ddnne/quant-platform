@@ -4,6 +4,10 @@ The values in this module are content-addressed evidence DTOs only.  They do
 not persist artifacts, verify external signatures, consume an execution lease,
 or mint any positive capability.  Those writer and authority paths remain
 explicitly PENDING.
+
+The ``TraderAuthorizationClaimsV2`` input is retained as historical unsigned
+lineage only. It cannot satisfy the separate production Trader v2 positive
+gate, so these result helpers remain evidence-only and cannot start a Pilot.
 """
 
 from __future__ import annotations
@@ -520,7 +524,7 @@ def build_exact_four_pilot_result_manifest_v2(
     aggregate_selection: AggregateSelectionEvidenceV2,
     knowledge_artifact: KnowledgeArtifactEvidenceV2,
 ) -> ExactFourPilotResultManifestV2:
-    """Build evidence from a current actual authority-parent chain."""
+    """Build evidence from the current historical unsigned lineage chain."""
 
     completion_clock = _trusted_utc_now().astimezone(timezone.utc)
     _validate_current_claim_chain_at(
