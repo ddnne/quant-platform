@@ -637,6 +637,53 @@ def test_authorization_expiring_during_reverification_rolls_back(
         ).fetchone()[0] == 0
 
 
+def test_authorization_expiring_during_postconditions_rolls_back_before_commit(
+    tmp_path: Path,
+    receipt_ed25519_keys: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "postcondition-expiry.sqlite"
+    _prepare_transition_db(
+        path,
+        datasets=_DATASETS,
+        receipt_signing_key=receipt_ed25519_keys.signing_key,
+    )
+    request = _request(path)
+    key_id, private = _test_transition_key()
+    _configure_test_registry(monkeypatch, _registry_for(key_id, private))
+    document = _sign_request(request, key_id=key_id, private=private)
+    issued = datetime.fromisoformat(
+        request["body"]["issued_at"].replace("Z", "+00:00")
+    )
+    expires = datetime.fromisoformat(
+        request["body"]["expires_at"].replace("Z", "+00:00")
+    )
+    clock = {"now": issued + timedelta(seconds=1)}
+    monkeypatch.setattr(transition_module, "_utc_now", lambda: clock["now"])
+    original_postconditions = transition_module._assert_post_apply_state
+
+    def _advance_clock_after_postconditions(*args: Any, **kwargs: Any) -> None:
+        original_postconditions(*args, **kwargs)
+        clock["now"] = expires + timedelta(seconds=1)
+
+    monkeypatch.setattr(
+        transition_module,
+        "_assert_post_apply_state",
+        _advance_clock_after_postconditions,
+    )
+
+    with pytest.raises(CoverageTransitionError, match="expired before commit"):
+        apply_signed_coverage_transition(str(path), document)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "SELECT status FROM dataset_coverage WHERE dataset=?",
+            _DATASETS,
+        ).fetchone()[0] == "PARTIAL"
+        assert conn.execute(
+            "SELECT COUNT(*) FROM coverage_complete_transition_tombstones"
+        ).fetchone()[0] == 0
+
+
 def test_two_dataset_failure_rolls_back_tombstone_and_first_cas(
     tmp_path: Path,
     receipt_ed25519_keys: Any,

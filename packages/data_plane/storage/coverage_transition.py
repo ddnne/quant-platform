@@ -1360,6 +1360,11 @@ def apply_signed_coverage_transition(
             consumed_at=consumed_at,
         )
         _assert_db_path_identity(path, identity)
+        commit_now = _utc_now()
+        if commit_now > expires:
+            raise CoverageTransitionError(
+                "Coverage transition authorization expired before commit"
+            )
         conn.commit()
         return MappingProxyType(
             {
