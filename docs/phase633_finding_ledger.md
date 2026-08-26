@@ -42,7 +42,7 @@ pass.
 | R3 | ExperimentPlan embedded `ready_snapshot_id=not-declared`, making later immutable snapshot equality circular | FIXED | `76240e89`; plan identity is snapshot-free and immutable snapshot binding occurs only in authorization; independent review passed |
 | R4 | exact-four bindings were caller-overridable | FIXED | `76240e89`; only the checked-in canonical four plans and exact plan/closure/profile digests reach the scheduler; independent attack tests passed |
 | R5 | Generic READY publication and a same-UID arbitrary READY signer remained reachable | OPEN | Dedicated READY authority independently rechecks the authenticated mirror, exact-four closure and immutable copy; Mass requires a separate explicit policy and stays disabled |
-| R6 | Missing natural-key ledger could pass through fixture compatibility | OPEN | Production missing evidence is UNKNOWN/FAIL; compatibility is private test-only policy |
+| R6 | Missing natural-key ledger could pass through fixture compatibility | FIXED | `d6a49e24`; production collector has no fixture/quality/raw override, exact run/build evidence is re-read fail-closed, fixture helpers are tests-only, and independent review reported P0/P1=0 |
 | R10 | Trader authorization remained a same-UID HOME-key signing oracle over caller-constructed approval decisions | OPEN | Rotate/tombstone the current key; production is verify-only; a separately permissioned human-approval authority independently reconstructs and signs the exact READY/plan/universe/gross-limit decision |
 | R11 | Controlled execution duplicated authority lineage into a caller-writable HOME store | OPEN | The authority UID is the only canonical Paper/Risk/Selection/Knowledge writer; the product client only verifies authority-returned content-addressed artifacts and exposes no production writer |
 
@@ -96,9 +96,9 @@ pass.
 
 ## Integration gate
 
-The latest independent adversarial reviews accepted R3, R4 and R7. The
-Coverage/READY candidate still has P0 rows D2, D3, R5, R6, R10, R11, C4,
-C9, C10 and A2 unresolved. R7's authority-owned append-only history and
+The latest independent adversarial reviews accepted R3, R4, R6 and R7. The
+Coverage/READY candidate still has P0 rows D2, D3, R5, R10, R11, C4, C9,
+C10 and A2 unresolved. R7's authority-owned append-only history and
 sidecar-retention residuals remain tracked by R5/A2 rather than reopening the
 fail-closed publication row. After all P0 rows are closed, run a fresh
 independent review against one immutable SHA, then run the full native

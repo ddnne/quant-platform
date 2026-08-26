@@ -1,6 +1,6 @@
 {
   "schema_version": "phase631-finding-ledger/v1",
-  "updated_at": "2026-08-26T09:12:30+09:00",
+  "updated_at": "2026-08-26T10:06:48+09:00",
   "merge_policy": {
     "required_p0_status": "FIXED",
     "independent_review_unresolved_p0": 0,
@@ -19,7 +19,7 @@
     {"id":"R3","area":"ready_plan_execution","severity":"P0","status":"FIXED","summary":"ExperimentPlan snapshot placeholder made identity circular","evidence":"76240e89; snapshot-free plan identity and authorization-only immutable snapshot binding; independent review"},
     {"id":"R4","area":"ready_plan_execution","severity":"P0","status":"FIXED","summary":"Exact-four bindings were caller-overridable","evidence":"76240e89; canonical final exact-four plan closure and profile digests; independent attack review"},
     {"id":"R5","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Generic READY and a same-UID arbitrary READY signer remained reachable","closure":"Dedicated READY evidence authority, profile closure publication, explicit separate Mass policy; Mass disabled"},
-    {"id":"R6","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Missing natural-key evidence could pass fixture compatibility","closure":"Production UNKNOWN or FAIL; private test-only compatibility"},
+    {"id":"R6","area":"ready_plan_execution","severity":"P0","status":"FIXED","summary":"Missing natural-key evidence could pass fixture compatibility","evidence":"d6a49e24; no production fixture raw or quality overrides; exact run/build evidence re-read fail-closed; tests-only fixture helper; independent review P0/P1=0"},
     {"id":"R10","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Trader authorization remained a same-UID HOME-key signing oracle","closure":"Rotate current key; production verify-only; separately permissioned human-approval authority independently binds exact READY plan universe and gross limit"},
     {"id":"R11","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Controlled execution duplicated authority lineage into a caller-writable HOME store","closure":"Authority UID is the only canonical Paper Risk Selection Knowledge writer; product client verifies authority-returned content-addressed artifacts and exposes no production writer"},
     {"id":"R7","area":"ready_plan_execution","severity":"P1","status":"FIXED","summary":"Snapshot publication swallowed a database exception","evidence":"4100f04e; fail-closed discovery cleanup and evidence quarantine; independent review"},
