@@ -90,7 +90,10 @@ def test_source_query_empty_fetch_does_not_copy_expected_or_complete(
         raw_paths=(raw_path,),
         manifest_path=manifest_path,
     )
-    with pytest.raises(ValueError, match="zero-row SUCCESS"):
+    # v1 persisted pagination evidence is now audit/recovery-only.  The legacy
+    # pipeline has no authority-owned transaction/live v2 capture and therefore
+    # fails before it can copy expected_items or mint COMPLETE.
+    with pytest.raises(TypeError, match="authority-owned ingestion transaction"):
         emit_catalog_job_receipt(
             store,
             job=job,

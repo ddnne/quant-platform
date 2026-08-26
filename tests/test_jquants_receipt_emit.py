@@ -110,16 +110,60 @@ def _tmp_service(
     )
 
 
-def _persisted_market_calendar_row(store: SqliteStore) -> dict:
+def _persisted_market_calendar_row(
+    store: SqliteStore, *, event_date: str = "2026-07-31"
+) -> dict:
     from ingestion.jquants.normalize import normalize_generic
 
     row = normalize_generic(
-        [{"Date": "2026-08-11"}],
+        [{"Date": event_date}],
         dataset="markets_calendar",
         ingested_at="2026-08-11T09:00:00+09:00",
     )[0]
     store.upsert("jquants_records", [row], commit=False)
     return row
+
+
+def _verified_collection(
+    tmp_path: Path,
+    raw: bytes,
+    *,
+    service,
+    required,
+):
+    from tests.jquants_acquisition_test_support import (
+        build_live_acquisition,
+        verify_live_acquisition,
+    )
+
+    fixture = build_live_acquisition(
+        tmp_path=tmp_path,
+        service=service,
+        required=required,
+        raw_pages=(raw,),
+    )
+    return verify_live_acquisition(
+        fixture,
+        service=service,
+        required=required,
+    )
+
+
+def _bound_context(store: SqliteStore, service, required):
+    return service.begin_collection(store=store, required=required)
+
+
+def _assert_no_trusted_effects(store: SqliteStore, service) -> None:
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM jquants_records"
+    ).fetchone()[0] == 0
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM collection_receipts"
+    ).fetchone()[0] == 0
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM ingestion_run_log"
+    ).fetchone()[0] == 0
+    assert service._issued_evidence == []
 
 
 def _persisted_collection(
@@ -177,7 +221,7 @@ def test_emit_segment_receipt_requires_authority(tmp_path: Path):
 
     store = SqliteStore(tmp_path / "t.sqlite")
     policy = coverage_contract_for("markets_calendar")
-    req = list(plan_required_segments(policy, "2026-08-11", source="jquants"))[-1]
+    req = list(plan_required_segments(policy, "2026-07-31", source="jquants"))[-1]
     _persisted_market_calendar_row(store)
     with pytest.raises(TypeError, match="GovernedReceiptService is required"):
         emit_segment_receipt(
@@ -201,7 +245,7 @@ def test_require_governed_receipt_service_fails_closed_without_key(monkeypatch):
 def test_persisted_evidence_rejects_bytes_not_minted_by_fetch(
     tmp_path: Path, receipt_ed25519_keys
 ):
-    raw = b'{"data":[{"Date":"2026-08-11"}]}'
+    raw = b'{"data":[{"Date":"2026-07-31"}]}'
     service = _tmp_service(receipt_ed25519_keys, raw=raw)
     import ingestion.runtime_authority as runtime
 
@@ -270,18 +314,20 @@ def test_emit_segment_receipt_records_verified_signature(
 
     store = SqliteStore(tmp_path / "t.sqlite")
     policy = coverage_contract_for("markets_calendar")
-    req = list(plan_required_segments(policy, "2026-08-11", source="jquants"))[-1]
+    req = list(plan_required_segments(policy, "2026-07-31", source="jquants"))[-1]
     record_required_segments(store._conn, [req])
-    raw = b'{"data":[{"Date":"2026-08-11"}]}'
+    raw = b'{"data":[{"Date":"2026-07-31"}]}'
     service = _tmp_service(receipt_ed25519_keys, raw=raw)
-    persisted = _persisted_collection(tmp_path, raw, service=service)
+    persisted = _verified_collection(
+        tmp_path, raw, service=service, required=req
+    )
     _persisted_market_calendar_row(store)
     receipt = emit_segment_receipt(
         store,
         required=req,
         run_id=1,
         persisted_collection=persisted,
-        collection_context=service.begin_collection(),
+        collection_context=_bound_context(store, service, req),
         service=service,
     )
     assert receipt.status == "SUCCESS"
@@ -303,11 +349,11 @@ def test_emit_segment_receipt_rejects_genuine_raw_with_unrelated_structured_row(
 
     store = SqliteStore(tmp_path / "t.sqlite")
     policy = coverage_contract_for("markets_calendar")
-    req = list(plan_required_segments(policy, "2026-08-11", source="jquants"))[-1]
-    raw = b'{"data":[{"Date":"2026-08-11"}]}'
+    req = list(plan_required_segments(policy, "2026-07-31", source="jquants"))[-1]
+    raw = b'{"data":[{"Date":"2026-07-31"}]}'
     service = _tmp_service(receipt_ed25519_keys, raw=raw)
-    persisted = _persisted_collection(
-        tmp_path, raw, service=service
+    persisted = _verified_collection(
+        tmp_path, raw, service=service, required=req
     )
     forged = normalize_generic(
         [{"Date": "2099-01-01"}],
@@ -322,7 +368,7 @@ def test_emit_segment_receipt_rejects_genuine_raw_with_unrelated_structured_row(
             required=req,
             run_id=1,
             persisted_collection=persisted,
-            collection_context=service.begin_collection(),
+            collection_context=_bound_context(store, service, req),
             service=service,
         )
 
@@ -350,87 +396,6 @@ def test_persisted_evidence_rejects_redirect_to_untrusted_https_host(
         )
 
 
-def test_post_mint_raw_and_manifest_rewrite_is_rejected(
-    tmp_path: Path, receipt_ed25519_keys,
-) -> None:
-    """chmod-back-to-readonly cannot hide a post-mint byte substitution."""
-    from ingestion.jquants.receipts import emit_segment_receipt
-
-    original = b'{"data":[{"Date":"2026-08-11"}]}'
-    service = _tmp_service(receipt_ed25519_keys, raw=original)
-    persisted = _persisted_collection(
-        tmp_path / "raw", original, service=service
-    )
-    forged = b'{"data":[{"Date":"2099-01-01"}]}'
-    raw_path = persisted.raw_paths[0]
-    raw_path.chmod(0o644)
-    raw_path.write_bytes(forged)
-    raw_path.chmod(0o444)
-    manifest_path = persisted.manifest_path
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    payload["pages"][0]["body_digest"] = (
-        "sha256:" + hashlib.sha256(forged).hexdigest()
-    )
-    manifest_path.chmod(0o644)
-    manifest_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
-    manifest_path.chmod(0o444)
-
-    store = SqliteStore(tmp_path / "toctou.sqlite")
-    req = list(
-        plan_required_segments(
-            coverage_contract_for("markets_calendar"),
-            "2026-08-11",
-            source="jquants",
-        )
-    )[-1]
-    _persisted_market_calendar_row(store)
-    with pytest.raises(ValueError, match="changed after mint"):
-        emit_segment_receipt(
-            store,
-            required=req,
-            run_id=1,
-            persisted_collection=persisted,
-            collection_context=service.begin_collection(),
-            service=service,
-        )
-    assert store._conn.execute(
-        "SELECT COUNT(*) FROM collection_receipts"
-    ).fetchone()[0] == 0
-    store.close()
-
-
-def test_replaced_persisted_handle_is_not_a_capability(
-    tmp_path: Path, receipt_ed25519_keys,
-) -> None:
-    from dataclasses import replace
-    from ingestion.jquants.receipts import emit_segment_receipt
-
-    raw = b'{"data":[{"Date":"2026-08-11"}]}'
-    service = _tmp_service(receipt_ed25519_keys, raw=raw)
-    persisted = _persisted_collection(
-        tmp_path / "raw", raw, service=service
-    )
-    forged = replace(persisted, manifest_digest="sha256:" + "0" * 64)
-    store = SqliteStore(tmp_path / "replaced.sqlite")
-    req = list(
-        plan_required_segments(
-            coverage_contract_for("markets_calendar"),
-            "2026-08-11",
-            source="jquants",
-        )
-    )[-1]
-    with pytest.raises(TypeError, match="not runtime-registered"):
-        emit_segment_receipt(
-            store,
-            required=req,
-            run_id=1,
-            persisted_collection=forged,
-            collection_context=service.begin_collection(),
-            service=service,
-        )
-    store.close()
-
-
 def test_raw_paths_and_caller_manifest_cannot_bypass_opaque_handle(
     tmp_path: Path, receipt_ed25519_keys,
 ) -> None:
@@ -443,33 +408,31 @@ def test_raw_paths_and_caller_manifest_cannot_bypass_opaque_handle(
     raw_path.write_bytes(b'{"data":[{"Date":"2026-08-11"}]}')
     raw_path.chmod(0o444)
     service = _tmp_service(receipt_ed25519_keys)
-    with pytest.raises(TypeError, match="runtime-minted persisted evidence"):
+    with pytest.raises(TypeError, match="verified live acquisition collection"):
         service.record_persisted_success(
             store,
             required=req,
             run_id=1,
-            collection_context=service.begin_collection(),
+            collection_context=_bound_context(store, service, req),
             raw_artifact_paths=(raw_path,),
         )
+    assert service._issued_evidence == []
     store.close()
 
 
 @pytest.mark.parametrize(
-    ("params", "message"),
+    "params",
     [
-        ({"from": "2026-08-01", "to": "2026-08-10"}, "exactly equal"),
-        (
-            {
-                "from": "2026-08-01",
-                "to": "2026-08-11",
-                "holidaydivision": "1",
-            },
-            "narrowing filter",
-        ),
+        {"from": "2026-08-01", "to": "2026-08-10"},
+        {
+            "from": "2026-08-01",
+            "to": "2026-08-11",
+            "holidaydivision": "1",
+        },
     ],
 )
-def test_partial_or_narrowed_query_cannot_sign_month_scope(
-    tmp_path: Path, receipt_ed25519_keys, params: dict, message: str,
+def test_v1_query_evidence_is_recovery_only_for_new_complete(
+    tmp_path: Path, receipt_ed25519_keys, params: dict,
 ) -> None:
     from ingestion.jquants.receipts import emit_segment_receipt
 
@@ -477,7 +440,7 @@ def test_partial_or_narrowed_query_cannot_sign_month_scope(
     req = list(
         plan_required_segments(
             coverage_contract_for("markets_calendar"),
-            "2026-08-11",
+            "2026-07-31",
             source="jquants",
         )
     )[-1]
@@ -490,18 +453,893 @@ def test_partial_or_narrowed_query_cannot_sign_month_scope(
         params=params,
     )
     _persisted_market_calendar_row(store)
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(TypeError, match="audit/recovery-only"):
         emit_segment_receipt(
             store,
             required=req,
             run_id=1,
             persisted_collection=persisted,
-            collection_context=service.begin_collection(),
+            collection_context=_bound_context(store, service, req),
             service=service,
         )
     assert store._conn.execute(
         "SELECT COUNT(*) FROM collection_receipts"
     ).fetchone()[0] == 0
+    assert service._issued_evidence == []
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM jquants_records"
+    ).fetchone()[0] == 0
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM ingestion_run_log"
+    ).fetchone()[0] == 0
+    store.close()
+
+
+@pytest.mark.parametrize(
+    "invalid_page",
+    (
+        b'{"data":[\xff]}',
+        b'{"data":',
+        b'{"data":[],"data":[]}',
+        b'{"data":[NaN]}',
+        b'{"rows":[]}',
+    ),
+)
+def test_one_malformed_live_page_rolls_back_the_entire_transaction(
+    tmp_path: Path, receipt_ed25519_keys, invalid_page: bytes
+) -> None:
+    from ingestion.jquants.normalize import normalize_generic
+    from tests.jquants_acquisition_test_support import build_live_acquisition
+
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "malformed.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("indices_bars_daily_topix"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    store.upsert(
+        "jquants_records",
+        normalize_generic(
+            [{"Date": "2026-07-01"}],
+            dataset=req.dataset,
+            ingested_at=context.checked_at,
+        ),
+        commit=False,
+    )
+    fixture = build_live_acquisition(
+        tmp_path=tmp_path / "capture",
+        service=service,
+        required=req,
+        raw_pages=(
+            b'{"data":[{"Date":"2026-07-01"}],"pagination_key":"next"}',
+            invalid_page,
+        ),
+    )
+    with pytest.raises(ValueError):
+        service.record_persisted_success(
+            store,
+            required=req,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_capture=fixture.capture,
+        )
+    _assert_no_trusted_effects(store, service)
+    store.close()
+
+
+def test_raw_only_live_capture_rolls_back_before_issuer(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    from tests.jquants_acquisition_test_support import (
+        _metadata_headers,
+        build_live_acquisition,
+    )
+
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "raw-only.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+
+    def mark_raw_only(document):
+        metadata = document["pages"][0]["metadata"]
+        metadata.update(evidence_state="RAW_ONLY", pagination_state="UNKNOWN")
+        document["pages"][0]["headers"] = _metadata_headers(metadata)
+
+    fixture = build_live_acquisition(
+        tmp_path=tmp_path / "capture",
+        service=service,
+        required=req,
+        raw_pages=(b'{"data":[{"Date":"2026-07-31"}]}',),
+        mutate_document=mark_raw_only,
+    )
+    with pytest.raises(ValueError, match="only RAW_PAGE"):
+        service.record_persisted_success(
+            store,
+            required=req,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_capture=fixture.capture,
+        )
+    _assert_no_trusted_effects(store, service)
+    store.close()
+
+
+@pytest.mark.parametrize("forgery", ["scope", "items"])
+def test_caller_cannot_substitute_canonical_required_claims(
+    tmp_path: Path, receipt_ed25519_keys, forgery: str
+) -> None:
+    from dataclasses import replace
+
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / f"required-{forgery}.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    forged = (
+        replace(req, expected_scope={**req.expected_scope, "universe_rule": "forged"})
+        if forgery == "scope"
+        else replace(req, expected_items=999)
+    )
+    with pytest.raises(ValueError, match="canonical Coverage planning"):
+        service.record_persisted_success(
+            store,
+            required=forged,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_collection=handle,
+        )
+    _assert_no_trusted_effects(store, service)
+    store.close()
+
+
+def test_verified_month_cannot_be_substituted_at_record_time(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    from ingestion.jquants.normalize import normalize_generic
+
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "cross-month.sqlite")
+    july = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    june = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-06-30",
+            source="jquants",
+        )
+    )[-1]
+    # The downstream transaction is itself valid for June.  Only the opaque
+    # acquisition handle is from July, so this reaches the frozen-capability
+    # identity check rather than merely failing the context digest check.
+    context = _bound_context(store, service, june)
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=july,
+    )
+    store.upsert(
+        "jquants_records",
+        normalize_generic(
+            [{"Date": "2026-06-30"}],
+            dataset=june.dataset,
+            ingested_at=context.checked_at,
+        ),
+        commit=False,
+    )
+    with pytest.raises(ValueError, match="segment differs from canonical"):
+        service.record_persisted_success(
+            store,
+            required=june,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_collection=handle,
+        )
+    _assert_no_trusted_effects(store, service)
+    store.close()
+
+
+def test_post_verify_required_scope_mutation_is_rejected(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "mutated-required.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    assert isinstance(req.expected_scope, dict)
+    req.expected_scope["universe_rule"] = "caller-mutated-after-verification"
+    with pytest.raises(ValueError, match="canonical Coverage planning"):
+        service.record_persisted_success(
+            store,
+            required=req,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_collection=handle,
+        )
+    _assert_no_trusted_effects(store, service)
+    store.close()
+
+
+def test_verified_live_handle_expires_before_fresh_record_context(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    now = {"value": "2026-08-11T05:59:00+00:00"}
+    service = _tmp_service(receipt_ed25519_keys, clock=lambda: now["value"])
+    store = SqliteStore(tmp_path / "expired-handle.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    now["value"] = "2026-08-11T06:00:01+00:00"
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+    with pytest.raises(ValueError, match="session has expired"):
+        service.record_persisted_success(
+            store,
+            required=req,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_collection=handle,
+        )
+    _assert_no_trusted_effects(store, service)
+    store.close()
+
+
+def test_substituted_run_id_rolls_back_before_collection_or_issuer(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "run-substitution.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    assert context.run_id is not None
+    with pytest.raises(ValueError, match="caller run_id differs"):
+        service.record_persisted_success(
+            store,
+            required=req,
+            run_id=context.run_id + 1,
+            collection_context=context,
+            jquants_collection=handle,
+        )
+    _assert_no_trusted_effects(store, service)
+    store.close()
+
+
+def test_in_place_context_timestamp_mutation_cannot_change_signed_claims(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "context-time-substitution.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    object.__setattr__(context, "checked_at", "2026-08-11T08:00:00+09:00")
+    with pytest.raises(ValueError, match="timestamp was mutated"):
+        service.record_persisted_success(
+            store,
+            required=req,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_collection=handle,
+        )
+    _assert_no_trusted_effects(store, service)
+    store.close()
+
+
+def test_post_verify_raw_mutation_rolls_back_staged_facts(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "mutated-raw.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+    from tests.jquants_acquisition_test_support import build_live_acquisition
+
+    fixture = build_live_acquisition(
+        tmp_path=tmp_path / "capture",
+        service=service,
+        required=req,
+        raw_pages=(b'{"data":[{"Date":"2026-07-31"}]}',),
+    )
+    handle = service.verify_live_jquants_collection(
+        capture=fixture.capture, required=req
+    )
+    raw_path = fixture.raw_paths[0]
+    raw_path.chmod(0o644)
+    raw_path.write_bytes(b'{"data":[{"Date":"2099-01-01"}]}')
+    raw_path.chmod(0o444)
+    with pytest.raises(ValueError, match="changed after verification"):
+        service.record_persisted_success(
+            store,
+            required=req,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_collection=handle,
+        )
+    _assert_no_trusted_effects(store, service)
+    store.close()
+
+
+def test_context_is_bound_to_the_exact_store_connection(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    service = _tmp_service(receipt_ed25519_keys)
+    original = SqliteStore(tmp_path / "original.sqlite")
+    other = SqliteStore(tmp_path / "other.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(original, service, req)
+    _persisted_market_calendar_row(other)
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    with pytest.raises(TypeError, match="another store"):
+        service.record_persisted_success(
+            other,
+            required=req,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_collection=handle,
+        )
+    _assert_no_trusted_effects(other, service)
+    assert original._conn.execute(
+        "SELECT COUNT(*) FROM ingestion_run_log"
+    ).fetchone()[0] == 0
+    original.close()
+    other.close()
+
+
+def test_begin_collection_cannot_self_assert_raw_stored(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "acquired-only.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    store._conn.commit()
+    row = store._conn.execute(
+        "SELECT status FROM ingestion_run_log WHERE id=?", (context.run_id,)
+    ).fetchone()
+    assert row is not None and row["status"] == "ACQUIRED"
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM collection_receipts"
+    ).fetchone()[0] == 0
+    store.close()
+
+
+def test_autocommit_is_rejected_before_authority_run_creation(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "autocommit-before-begin.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    store._conn.isolation_level = None
+    with pytest.raises(TypeError, match="rejects SQLite autocommit"):
+        service.begin_collection(store=store, required=req)
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM ingestion_run_log"
+    ).fetchone()[0] == 0
+    assert service._issued_evidence == []
+    store.close()
+
+
+def test_caller_enabling_autocommit_after_begin_cannot_reach_issuer(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "autocommit-after-begin.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    # sqlite3 commits the caller-owned transaction when autocommit is enabled.
+    # The authority cannot undo that caller action, but it must not sign it.
+    store._conn.isolation_level = None
+    with pytest.raises(TypeError, match="explicit SQLite transaction"):
+        service.record_persisted_success(
+            store,
+            required=req,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_collection=handle,
+        )
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM collection_receipts"
+    ).fetchone()[0] == 0
+    assert store._conn.execute(
+        "SELECT status FROM ingestion_run_log WHERE id=?", (context.run_id,)
+    ).fetchone()["status"] == "ACQUIRED"
+    assert service._issued_evidence == []
+    store.close()
+
+
+def test_structured_commit_is_visible_before_issuer_invocation(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "commit-before-issuer.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    service_type = type(service)
+    original = service_type._issue_reconciled_evidence
+    observed: list[str] = []
+
+    def assert_committed(bound_service, evidence):
+        observer = sqlite3.connect(str(store.path))
+        try:
+            assert observer.execute(
+                "SELECT COUNT(*) FROM jquants_records"
+            ).fetchone()[0] == 1
+            status = observer.execute(
+                "SELECT status FROM ingestion_run_log WHERE id=?", (context.run_id,)
+            ).fetchone()[0]
+            assert status == "STRUCTURED_COMMITTED"
+        finally:
+            observer.close()
+        observed.append("committed")
+        return original(bound_service, evidence)
+
+    with patch.object(
+        service_type, "_issue_reconciled_evidence", new=assert_committed
+    ):
+        receipt = service.record_persisted_success(
+            store,
+            required=req,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_collection=handle,
+        )
+    assert observed == ["committed"]
+    assert receipt.status == "SUCCESS"
+    store.close()
+
+
+def test_post_commit_row_substitution_is_caught_before_issuer(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    import ingestion.runtime_authority as runtime
+
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "post-commit-substitution.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    original = runtime._begin_receipt_verification_transaction
+
+    def substitute_then_begin(target_store):
+        attacker = sqlite3.connect(str(target_store.path))
+        try:
+            attacker.execute(
+                "DELETE FROM jquants_records WHERE dataset=?", (req.dataset,)
+            )
+            attacker.commit()
+        finally:
+            attacker.close()
+        original(target_store)
+
+    with patch.object(
+        runtime,
+        "_begin_receipt_verification_transaction",
+        side_effect=substitute_then_begin,
+    ):
+        with pytest.raises(ValueError, match="natural keys differ"):
+            service.record_persisted_success(
+                store,
+                required=req,
+                run_id=context.run_id,
+                collection_context=context,
+                jquants_collection=handle,
+            )
+    assert service._issued_evidence == []
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM collection_receipts"
+    ).fetchone()[0] == 0
+    assert store._conn.execute(
+        "SELECT status FROM ingestion_run_log WHERE id=?", (context.run_id,)
+    ).fetchone()["status"] == "STRUCTURED_COMMITTED"
+    store.close()
+
+
+def test_issuer_failure_leaves_structured_commit_without_receipt(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "issuer-failure.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    with patch.object(
+        type(service),
+        "_issue_reconciled_evidence",
+        side_effect=RuntimeError("injected issuer failure"),
+    ):
+        with pytest.raises(RuntimeError, match="injected issuer"):
+            service.record_persisted_success(
+                store,
+                required=req,
+                run_id=context.run_id,
+                collection_context=context,
+                jquants_collection=handle,
+            )
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM jquants_records"
+    ).fetchone()[0] == 1
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM collection_receipts"
+    ).fetchone()[0] == 0
+    assert store._conn.execute(
+        "SELECT status FROM ingestion_run_log WHERE id=?", (context.run_id,)
+    ).fetchone()["status"] == "STRUCTURED_COMMITTED"
+    store.close()
+
+
+def test_receipt_insert_failure_keeps_structured_commit_without_local_receipt(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    import ingestion.runtime_authority as runtime
+
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "receipt-insert-failure.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    with patch.object(
+        runtime,
+        "record_collection_receipt",
+        side_effect=sqlite3.OperationalError("injected receipt insert failure"),
+    ):
+        with pytest.raises(sqlite3.OperationalError, match="injected"):
+            service.record_persisted_success(
+                store,
+                required=req,
+                run_id=context.run_id,
+                collection_context=context,
+                jquants_collection=handle,
+            )
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM jquants_records"
+    ).fetchone()[0] == 1
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM collection_receipts"
+    ).fetchone()[0] == 0
+    run = store._conn.execute(
+        "SELECT status FROM ingestion_run_log WHERE id=?", (context.run_id,)
+    ).fetchone()
+    assert run is not None and run["status"] == "STRUCTURED_COMMITTED"
+    # The signed envelope is truthful and recoverable, but append/finalize is
+    # not cross-service atomic.  D2/D3 remain PENDING until a separate authority
+    # ledger/recovery protocol exists.
+    assert len(service._issued_evidence) == 1
+    store.close()
+
+
+def test_final_status_failure_rolls_back_receipt_but_not_structured_commit(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "final-status-failure.sqlite")
+    store._conn.executescript(
+        """
+        CREATE TRIGGER reject_receipt_verified
+        BEFORE UPDATE OF status ON ingestion_run_log
+        WHEN NEW.status = 'RECEIPT_VERIFIED'
+        BEGIN
+          SELECT RAISE(ABORT, 'injected final transition failure');
+        END;
+        """
+    )
+    store._conn.commit()
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="final transition"):
+        service.record_persisted_success(
+            store,
+            required=req,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_collection=handle,
+        )
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM jquants_records"
+    ).fetchone()[0] == 1
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM collection_receipts"
+    ).fetchone()[0] == 0
+    assert store._conn.execute(
+        "SELECT status FROM ingestion_run_log WHERE id=?", (context.run_id,)
+    ).fetchone()["status"] == "STRUCTURED_COMMITTED"
+    # This emitted-but-not-locally-finalized envelope is the explicit D2/D3
+    # cross-service atomicity residual; production activation remains PENDING.
+    assert len(service._issued_evidence) == 1
+    store.close()
+
+
+@pytest.mark.parametrize("mode", ["garbage", "valid_different_claims"])
+def test_unverified_or_mismatched_signer_response_never_marks_receipt_verified(
+    tmp_path: Path, receipt_ed25519_keys, mode: str
+) -> None:
+    from storage.receipt_crypto import canonical_evidence_digest
+    from tests.receipt_test_support import build_test_signed_digest_fields
+
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / f"wrong-signer-{mode}.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    _persisted_market_calendar_row(store)
+    handle = _verified_collection(
+        tmp_path / "capture",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+
+    def wrong_response(bound_service, evidence):
+        if mode == "garbage":
+            return {"garbage": "not-a-closed-signed-envelope"}
+        claims = dict(bound_service._consume_reconciled_evidence(evidence))
+        claims["raw_count"] = int(claims["raw_count"]) + 1
+        observation = {
+            key: value for key, value in claims.items() if key != "observation_digest"
+        }
+        claims["observation_digest"] = canonical_evidence_digest(observation)
+        return build_test_signed_digest_fields(
+            signing_key=receipt_ed25519_keys.signing_key,
+            closure_claims=claims,
+        )
+
+    with patch.object(
+        type(service), "_issue_reconciled_evidence", new=wrong_response
+    ):
+        with pytest.raises(ValueError):
+            service.record_persisted_success(
+                store,
+                required=req,
+                run_id=context.run_id,
+                collection_context=context,
+                jquants_collection=handle,
+            )
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM collection_receipts"
+    ).fetchone()[0] == 0
+    assert store._conn.execute(
+        "SELECT status FROM ingestion_run_log WHERE id=?", (context.run_id,)
+    ).fetchone()["status"] == "STRUCTURED_COMMITTED"
+    store.close()
+
+
+def test_standard_raw_manifest_and_acquisition_chain_digests_are_distinct(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    from storage.receipt_crypto import canonical_evidence_digest
+    from tests.jquants_acquisition_test_support import build_live_acquisition
+
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(tmp_path / "digest-semantics.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    context = _bound_context(store, service, req)
+    raw = b'{"data":[{"Date":"2026-07-31"}]}'
+    fixture = build_live_acquisition(
+        tmp_path=tmp_path / "capture",
+        service=service,
+        required=req,
+        raw_pages=(raw,),
+    )
+    handle = service.verify_live_jquants_collection(
+        capture=fixture.capture, required=req
+    )
+    _persisted_market_calendar_row(store)
+    receipt = service.record_persisted_success(
+        store,
+        required=req,
+        run_id=context.run_id,
+        collection_context=context,
+        jquants_collection=handle,
+    )
+    page_digest = canonical_evidence_digest(raw)
+    expected_page_manifest = canonical_evidence_digest(
+        {"pages": [{"index": 0, "digest": page_digest, "size": len(raw)}]}
+    )
+    assert receipt.digests["raw_manifest_digest"] == expected_page_manifest
+    assert receipt.digests["acquisition_collection_manifest_file_digest"] == (
+        canonical_evidence_digest(fixture.manifest_path.read_bytes())
+    )
+    assert receipt.digests["acquisition_collection_digest"] == (
+        fixture.document["collection_digest"]
+    )
+    assert receipt.digests["acquisition_terminal_chain_digest"] == (
+        fixture.document["pages"][-1]["metadata"]["chain_digest"]
+    )
+    assert (
+        receipt.digests["raw_manifest_digest"]
+        != receipt.digests["acquisition_collection_manifest_file_digest"]
+    )
     store.close()
 
 
@@ -514,14 +1352,14 @@ def test_caller_expected_empty_override_is_rejected(
     req = list(
         plan_required_segments(
             coverage_contract_for("markets_calendar"),
-            "2026-08-11",
+            "2026-07-31",
             source="jquants",
         )
     )[-1]
     raw = b'{"data":[]}'
     service = _tmp_service(receipt_ed25519_keys, raw=raw)
-    persisted = _persisted_collection(
-        tmp_path / "raw", raw, service=service
+    persisted = _verified_collection(
+        tmp_path / "raw", raw, service=service, required=req
     )
     with pytest.raises(ValueError, match="does not accept caller extra_evidence"):
         emit_segment_receipt(
@@ -529,10 +1367,11 @@ def test_caller_expected_empty_override_is_rejected(
             required=req,
             run_id=1,
             persisted_collection=persisted,
-            collection_context=service.begin_collection(),
+            collection_context=_bound_context(store, service, req),
             service=service,
             extra_evidence={"EXPECTED_EMPTY_WITH_EVIDENCE": True},
         )
+    assert service._issued_evidence == []
     store.close()
 
 
@@ -546,17 +1385,17 @@ def test_extra_structured_key_inside_segment_is_rejected(
     req = list(
         plan_required_segments(
             coverage_contract_for("markets_calendar"),
-            "2026-08-11",
+            "2026-07-31",
             source="jquants",
         )
     )[-1]
-    raw = b'{"data":[{"Date":"2026-08-11"}]}'
+    raw = b'{"data":[{"Date":"2026-07-31"}]}'
     service = _tmp_service(receipt_ed25519_keys, raw=raw)
-    persisted = _persisted_collection(
-        tmp_path / "raw", raw, service=service
+    persisted = _verified_collection(
+        tmp_path / "raw", raw, service=service, required=req
     )
     rows = normalize_generic(
-        [{"Date": "2026-08-11"}, {"Date": "2026-08-10"}],
+        [{"Date": "2026-07-31"}, {"Date": "2026-07-30"}],
         dataset="markets_calendar",
         ingested_at="2026-08-11T09:00:00+09:00",
     )
@@ -567,7 +1406,7 @@ def test_extra_structured_key_inside_segment_is_rejected(
             required=req,
             run_id=1,
             persisted_collection=persisted,
-            collection_context=service.begin_collection(),
+            collection_context=_bound_context(store, service, req),
             service=service,
         )
     assert service._issued_evidence == []
@@ -626,7 +1465,7 @@ def test_record_persisted_success_rejects_caller_claims(
             store,
             required=required,
             run_id=1,
-            collection_context=service.begin_collection(),
+            collection_context=_bound_context(store, service, required),
             **{claim: "caller-asserted"},  # type: ignore[arg-type]
         )
     assert service._issued_evidence == []
@@ -724,31 +1563,33 @@ def test_governed_client_constructs_direct_verified_transport(
     ctor.assert_called_once_with(verify=True, trust_env=False)
 
 
-def test_context_and_persisted_fetch_are_single_use(
+def test_context_and_verified_collection_are_single_use(
     tmp_path: Path, receipt_ed25519_keys,
 ) -> None:
     from dataclasses import replace
     from ingestion.jquants.normalize import normalize_generic
     from ingestion.jquants.receipts import emit_segment_receipt
 
-    raw = b'{"data":[{"Date":"2026-08-11"}]}'
+    raw = b'{"data":[{"Date":"2026-07-31"}]}'
     service = _tmp_service(receipt_ed25519_keys)
     store = SqliteStore(tmp_path / "single-use.sqlite")
     req = list(
         plan_required_segments(
             coverage_contract_for("markets_calendar"),
-            "2026-08-11",
+            "2026-07-31",
             source="jquants",
         )
     )[-1]
-    context = service.begin_collection()
+    context = _bound_context(store, service, req)
     row = normalize_generic(
-        [{"Date": "2026-08-11"}],
+        [{"Date": "2026-07-31"}],
         dataset="markets_calendar",
         ingested_at=context.checked_at,
     )[0]
     store.upsert("jquants_records", [row], commit=False)
-    handle = _persisted_collection(tmp_path / "raw-1", raw, service=service)
+    handle = _verified_collection(
+        tmp_path / "raw-1", raw, service=service, required=req
+    )
     emit_segment_receipt(
         store,
         required=req,
@@ -769,25 +1610,25 @@ def test_context_and_persisted_fetch_are_single_use(
     with pytest.raises(TypeError, match="another authority"):
         other_service._consume_reconciled_evidence(evidence)
 
-    fresh_handle = _persisted_collection(
-        tmp_path / "raw-2", raw, service=service
+    fresh_handle = _verified_collection(
+        tmp_path / "raw-2", raw, service=service, required=req
     )
     with pytest.raises(TypeError, match="context has already been consumed"):
         emit_segment_receipt(
             store,
             required=req,
-            run_id=2,
+            run_id=1,
             persisted_collection=fresh_handle,
             collection_context=context,
             service=service,
         )
-    with pytest.raises(TypeError, match="evidence has already been consumed"):
+    with pytest.raises(TypeError, match="collection has already been consumed"):
         emit_segment_receipt(
             store,
             required=req,
-            run_id=3,
+            run_id=2,
             persisted_collection=handle,
-            collection_context=service.begin_collection(),
+            collection_context=_bound_context(store, service, req),
             service=service,
         )
     assert store._conn.execute(
@@ -813,7 +1654,7 @@ def test_context_is_authority_bound_and_stale_context_fails_closed(
             source="jquants",
         )
     )[-1]
-    cross_context = service_a.begin_collection()
+    cross_context = _bound_context(store, service_a, req)
     cross_handle = _persisted_collection(
         tmp_path / "cross-raw", raw, service=service_b
     )
@@ -836,7 +1677,7 @@ def test_context_is_authority_bound_and_stale_context_fails_closed(
     stale_service = _tmp_service(
         receipt_ed25519_keys, clock=lambda: next(stale_ticks)
     )
-    stale_context = stale_service.begin_collection()
+    stale_context = _bound_context(store, stale_service, req)
     stale_row = normalize_generic(
         [{"Date": "2026-08-11"}],
         dataset="markets_calendar",
@@ -850,7 +1691,7 @@ def test_context_is_authority_bound_and_stale_context_fails_closed(
         emit_segment_receipt(
             store,
             required=req,
-            run_id=2,
+            run_id=stale_context.run_id,
             persisted_collection=stale_handle,
             collection_context=stale_context,
             service=stale_service,
@@ -859,34 +1700,6 @@ def test_context_is_authority_bound_and_stale_context_fails_closed(
         "SELECT COUNT(*) FROM collection_receipts"
     ).fetchone()[0] == 0
     store.close()
-
-
-def test_all_universe_scope_rejects_code_filter() -> None:
-    from ingestion.runtime_authority import _assert_jquants_request_scope
-    from storage.coverage_ledger import RequiredCoverageSegment
-
-    required = RequiredCoverageSegment(
-        source="jquants",
-        dataset="equities_bars_daily",
-        segment_id="2026-08",
-        segment_start="2026-08-01",
-        segment_end="2026-08-31",
-        expected_scope={
-            "universe": "all_listed",
-            "expected_item_unit": "source_query",
-        },
-        expected_items=1,
-    )
-    with pytest.raises(ValueError, match="narrowing filter 'code'"):
-        _assert_jquants_request_scope(
-            required=required,
-            base_params={
-                "from": "2026-08-01",
-                "to": "2026-08-31",
-                "code": "8697",
-            },
-            source_request=None,
-        )
 
 
 def test_same_segment_can_be_idempotently_reproved(
@@ -900,6 +1713,8 @@ def test_same_segment_can_be_idempotently_reproved(
         [
             "2026-08-11T09:00:00+09:00",
             "2026-08-11T09:00:00+09:00",
+            "2026-08-11T09:00:00+09:00",
+            "2026-08-11T09:01:00+09:00",
             "2026-08-11T09:01:00+09:00",
             "2026-08-11T09:01:00+09:00",
         ]
@@ -912,26 +1727,27 @@ def test_same_segment_can_be_idempotently_reproved(
     req = list(
         plan_required_segments(
             coverage_contract_for("markets_calendar"),
-            "2026-08-11",
+            "2026-07-31",
             source="jquants",
         )
     )[-1]
     record_required_segments(store._conn, [req])
     receipts = []
     for run_id in (1, 2):
-        context = service.begin_collection()
+        context = _bound_context(store, service, req)
         row = __import__(
             "ingestion.jquants.normalize", fromlist=["normalize_generic"]
         ).normalize_generic(
-            [{"Date": "2026-08-11"}],
+            [{"Date": "2026-07-31"}],
             dataset="markets_calendar",
             ingested_at=context.checked_at,
         )[0]
         store.upsert("jquants_records", [row], commit=False)
-        persisted = _persisted_collection(
+        persisted = _verified_collection(
             tmp_path / f"raw-{run_id}",
-            b'{"data":[{"Date":"2026-08-11"}]}',
+            b'{"data":[{"Date":"2026-07-31"}]}',
             service=service,
+            required=req,
         )
         receipts.append(
             emit_segment_receipt(
@@ -964,11 +1780,13 @@ def test_legacy_v3_receipt_cannot_supply_available_at_for_v4_reproof(
         [
             "2026-08-11T09:00:00+09:00",
             "2026-08-11T09:00:00+09:00",
+            "2026-08-11T09:00:00+09:00",
+            "2026-08-11T09:01:00+09:00",
             "2026-08-11T09:01:00+09:00",
             "2026-08-11T09:01:00+09:00",
         ]
     )
-    raw = b'{"data":[{"Date":"2026-08-11"}]}'
+    raw = b'{"data":[{"Date":"2026-07-31"}]}'
     service = _tmp_service(
         receipt_ed25519_keys,
         clock=lambda: next(ticks),
@@ -977,20 +1795,23 @@ def test_legacy_v3_receipt_cannot_supply_available_at_for_v4_reproof(
     req = list(
         plan_required_segments(
             coverage_contract_for("markets_calendar"),
-            "2026-08-11",
+            "2026-07-31",
             source="jquants",
         )
     )[-1]
     record_required_segments(store._conn, [req])
-    first_context = service.begin_collection()
+    first_context = _bound_context(store, service, req)
     first_row = normalize_generic(
-        [{"Date": "2026-08-11"}],
+        [{"Date": "2026-07-31"}],
         dataset="markets_calendar",
         ingested_at=first_context.checked_at,
     )[0]
     store.upsert("jquants_records", [first_row], commit=False)
-    first_handle = _persisted_collection(
-        tmp_path / "legacy-raw-1", raw, service=service
+    first_handle = _verified_collection(
+        tmp_path / "legacy-raw-1",
+        raw,
+        service=service,
+        required=req,
     )
     first = emit_segment_receipt(
         store,
@@ -1019,15 +1840,18 @@ def test_legacy_v3_receipt_cannot_supply_available_at_for_v4_reproof(
     )
     store._conn.commit()
 
-    second_context = service.begin_collection()
+    second_context = _bound_context(store, service, req)
     second_row = normalize_generic(
-        [{"Date": "2026-08-11"}],
+        [{"Date": "2026-07-31"}],
         dataset="markets_calendar",
         ingested_at=second_context.checked_at,
     )[0]
     store.upsert("jquants_records", [second_row], commit=False)
-    second_handle = _persisted_collection(
-        tmp_path / "legacy-raw-2", raw, service=service
+    second_handle = _verified_collection(
+        tmp_path / "legacy-raw-2",
+        raw,
+        service=service,
+        required=req,
     )
     with pytest.raises(ValueError, match="canonical normalization"):
         emit_segment_receipt(
