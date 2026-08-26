@@ -84,9 +84,10 @@ class SqliteStore:
         """PIT-safe upsert on the natural key. Unchanged re-fetch keeps earliest
         ``available_at``; amendments archive the displaced row first.
 
-        Governed ingestion passes ``commit=False`` so the structured mutation
-        and its trusted receipt are committed in one transaction.  All legacy
-        callers retain the auto-commit default.
+        Governed ingestion passes ``commit=False`` so its authority can first
+        reconcile and explicitly commit the structured generation, then reread
+        it in a fresh receipt-verification transaction.  All legacy callers
+        retain the auto-commit default.
         """
         rows = [dict(r) for r in rows]
         if not rows:

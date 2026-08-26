@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from dataclasses import dataclass
+from functools import wraps
 import json
 from pathlib import Path
 from threading import Lock
@@ -26,6 +27,16 @@ from storage.coverage_ledger import (
     record_collection_receipt,
 )
 from storage.receipt_crypto import STANDARD_CLAIM_KEYS, canonical_evidence_digest
+
+from ingestion.jquants.acquisition_collection import (
+    _LiveJQuantsAcquisitionCapture,
+    _VerifiedJQuantsAcquisitionCollection,
+    _canonical_required_segment,
+    _consume_verified_jquants_collection,
+    _records_from_verified_pages,
+    _reread_verified_jquants_state,
+    _verify_live_jquants_capture,
+)
 
 if TYPE_CHECKING:
     from storage.sqlite_store import SqliteStore
@@ -61,6 +72,13 @@ _RECONCILED_COLLECTIONS: WeakKeyDictionary[Any, dict[str, Any]] = (
 _CAPABILITY_REGISTRY_LOCK = Lock()
 _MAX_CONTEXT_AGE_SECONDS = 15 * 60
 _MAX_CLOCK_SKEW_SECONDS = 5
+_JQUANTS_ACQUISITION_EXTRA_DIGESTS = frozenset(
+    {
+        "acquisition_collection_manifest_file_digest",
+        "acquisition_collection_digest",
+        "acquisition_terminal_chain_digest",
+    }
+)
 
 
 class ReceiptEvidenceAuthorityPending(RuntimeError):
@@ -71,6 +89,31 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _rollback_store_on_failure(method: Callable[..., Any]) -> Callable[..., Any]:
+    """Rollback every failed authority operation after a store is supplied.
+
+    Callers stage canonical structured writes before asking this authority to
+    reconcile them.  Validation of the context, opaque acquisition capability,
+    immutable paths, parser output, signature handoff, receipt insert, and
+    commit are therefore all part of one failure boundary.  Keeping this guard
+    outside the method signature also covers Python argument-binding failures
+    from prohibited caller-supplied claim fields.
+    """
+
+    @wraps(method)
+    def guarded(self: Any, store: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return method(self, store, *args, **kwargs)
+        except Exception:
+            from storage.sqlite_store import SqliteStore
+
+            if isinstance(store, SqliteStore):
+                store._conn.rollback()  # noqa: SLF001
+            raise
+
+    return guarded
+
+
 @dataclass(frozen=True, eq=False)
 class _GovernedCollectionContext:
     """Authority-minted timestamp/correlation capability for one transaction."""
@@ -78,6 +121,8 @@ class _GovernedCollectionContext:
     _seal: object
     _authority_id: object
     checked_at: str
+    run_id: int | None = None
+    required_identity_digest: str | None = None
 
     def __post_init__(self) -> None:
         if self._seal is not _COLLECTION_CONTEXT_SEAL:
@@ -292,22 +337,79 @@ class _GovernedReceiptService:
         if self._seal is not _SERVICE_SEAL:
             raise TypeError("receipt service must be opened by ingestion runtime")
 
-    def begin_collection(self) -> _GovernedCollectionContext:
-        """Mint the only timestamp accepted by a governed transaction."""
+    def begin_collection(
+        self,
+        *,
+        store: SqliteStore | None = None,
+        required: RequiredCoverageSegment | None = None,
+    ) -> _GovernedCollectionContext:
+        """Mint timestamp/run authority for one local reconciliation transaction.
+
+        Passing both ``store`` and ``required`` creates the only context that
+        can reach receipt issuance: the authority inserts and owns the run row
+        in the same uncommitted SQLite transaction as structured facts and the
+        eventual receipt.  A no-argument context remains useful for negative
+        capability tests but is deliberately ineligible for SUCCESS.
+        """
         self._assert_registered()
         checked_at = str(self._clock())
         parsed = datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
         if parsed.tzinfo is None:
             raise ValueError("governed collection clock must be timezone-aware")
+        if (store is None) != (required is None):
+            raise TypeError("store and required must be supplied together")
+        run_id: int | None = None
+        required_identity_digest: str | None = None
+        run_detail: str | None = None
+        store_connection: Any | None = None
+        if store is not None and required is not None:
+            from storage.sqlite_store import SqliteStore
+
+            if not isinstance(store, SqliteStore):
+                raise TypeError("governed collection transaction requires SqliteStore")
+            if store._conn.isolation_level is None:  # noqa: SLF001
+                raise TypeError("governed collection rejects SQLite autocommit mode")
+            if not store._conn.in_transaction:  # noqa: SLF001
+                store._conn.execute("BEGIN IMMEDIATE")  # noqa: SLF001
+            canonical = _canonical_required_segment(required)
+            required_identity_digest = _required_segment_identity_digest(canonical)
+            run_detail = json.dumps(
+                {
+                    "schema_version": "trusted-jquants-reconciliation-run/v2",
+                    "required_identity_digest": required_identity_digest,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            cursor = store._conn.execute(  # noqa: SLF001
+                "INSERT INTO ingestion_run_log "
+                "(ran_at,source,runtime,status,detail) VALUES (?,?,?,?,?)",
+                (
+                    checked_at,
+                    "jquants",
+                    "trusted-jquants-reconciliation/v2",
+                    RUN_ACQUIRED,
+                    run_detail,
+                ),
+            )
+            run_id = int(cursor.lastrowid)
+            store_connection = store._conn  # noqa: SLF001
         context = _GovernedCollectionContext(
             _seal=_COLLECTION_CONTEXT_SEAL,
             _authority_id=self._authority_id,
             checked_at=checked_at,
+            run_id=run_id,
+            required_identity_digest=required_identity_digest,
         )
         with _CAPABILITY_REGISTRY_LOCK:
             _GOVERNED_CONTEXTS[context] = {
                 "authority_id": self._authority_id,
                 "consumed": False,
+                "checked_at": checked_at,
+                "run_id": run_id,
+                "required_identity_digest": required_identity_digest,
+                "run_detail": run_detail,
+                "store_connection": store_connection,
             }
         return context
 
@@ -390,7 +492,12 @@ class _GovernedReceiptService:
         raw_paths: Sequence[Path | str],
         manifest_path: Path | str,
     ) -> _PersistedJQuantsCollection:
-        """Bind one governed fetch to exact create-only persisted bytes."""
+        """Bind legacy v1 fetch evidence for audit/recovery only.
+
+        ``jquants-pagination-evidence/v1`` predates the typed acquisition
+        target and is never accepted by :meth:`record_persisted_success` for a
+        new COMPLETE receipt.
+        """
         self._assert_registered()
         return _seal_persisted_jquants_collection(
             authority_id=self._authority_id,
@@ -399,6 +506,35 @@ class _GovernedReceiptService:
             manifest_path=manifest_path,
         )
 
+    def verify_live_jquants_collection(
+        self,
+        *,
+        capture: _LiveJQuantsAcquisitionCapture,
+        required: RequiredCoverageSegment,
+    ) -> _VerifiedJQuantsAcquisitionCollection:
+        """Verify one live Service-Binding capture into an opaque capability.
+
+        There is deliberately no product constructor for ``capture`` yet.
+        The separate Receipt Worker/binding remains PENDING; persisted headers
+        and raw files cannot invoke this method without its registered live
+        authority capability.
+        """
+        self._assert_registered()
+        if not isinstance(required, RequiredCoverageSegment):
+            raise TypeError("required must be RequiredCoverageSegment")
+        canonical_required = (
+            _canonical_required_segment(required)
+            if required.source == "jquants"
+            else required
+        )
+        return _verify_live_jquants_capture(
+            capture,
+            authority_id=self._authority_id,
+            required=canonical_required,
+            now=str(self._clock()),
+        )
+
+    @_rollback_store_on_failure
     def record_persisted_success(
         self,
         store: SqliteStore,
@@ -407,7 +543,8 @@ class _GovernedReceiptService:
         run_id: int,
         collection_context: _GovernedCollectionContext,
         raw_artifact_paths: Sequence[Path | str] = (),
-        jquants_collection: _PersistedJQuantsCollection | None = None,
+        jquants_capture: _LiveJQuantsAcquisitionCapture | None = None,
+        jquants_collection: _VerifiedJQuantsAcquisitionCollection | None = None,
         source_request: Mapping[str, Any] | None = None,
         extra_evidence: Mapping[str, Any] | None = None,
     ) -> CollectionReceipt:
@@ -416,9 +553,11 @@ class _GovernedReceiptService:
         Counts, digests, parsed/normalized rows, table names, and exhaustion
         claims are never parameters.  They are derived from the required
         contract and immutable raw bytes.  The caller's canonical fact writes
-        remain uncommitted until this method independently reproduces them and
-        records the receipt in the same transaction.  Any mismatch rolls the
-        transaction back and cannot create COMPLETE-eligible evidence.
+        are committed only after the first reconciliation.  A fresh
+        transaction then repeats immutable-raw and natural-key readback before
+        issuance and receipt persistence.  Failures before the structured
+        commit roll everything back; later failures leave structured facts but
+        never a local COMPLETE-eligible receipt.
         """
         from storage.sqlite_store import SqliteStore
 
@@ -427,6 +566,11 @@ class _GovernedReceiptService:
             raise TypeError("governed receipt service requires SqliteStore")
         if not isinstance(required, RequiredCoverageSegment):
             raise TypeError("required must be RequiredCoverageSegment")
+        canonical_required = (
+            _canonical_required_segment(required)
+            if required.source == "jquants"
+            else required
+        )
         if (
             not isinstance(collection_context, _GovernedCollectionContext)
             or collection_context._seal is not _COLLECTION_CONTEXT_SEAL
@@ -443,7 +587,52 @@ class _GovernedReceiptService:
             if context_state["consumed"]:
                 raise TypeError("collection context has already been consumed")
             context_state["consumed"] = True
-        checked_at = collection_context.checked_at
+            context_run_id = context_state["run_id"]
+            context_checked_at = context_state["checked_at"]
+            context_required_digest = context_state["required_identity_digest"]
+            context_run_detail = context_state["run_detail"]
+            context_store_connection = context_state["store_connection"]
+        if (
+            context_run_id is None
+            or context_checked_at is None
+            or context_required_digest is None
+            or context_run_detail is None
+        ):
+            raise TypeError(
+                "governed SUCCESS requires an authority-owned ingestion transaction"
+            )
+        if context_store_connection is not store._conn:  # noqa: SLF001
+            if context_store_connection is not None:
+                context_store_connection.rollback()
+            raise TypeError("collection transaction belongs to another store")
+        if (
+            store._conn.isolation_level is None  # noqa: SLF001
+            or not store._conn.in_transaction  # noqa: SLF001
+        ):
+            raise TypeError("governed SUCCESS requires an explicit SQLite transaction")
+        if type(run_id) is not int or run_id != context_run_id:
+            raise ValueError("caller run_id differs from authority-owned transaction")
+        if collection_context.checked_at != context_checked_at:
+            raise ValueError("collection context timestamp was mutated")
+        if context_required_digest != _required_segment_identity_digest(
+            canonical_required
+        ):
+            raise ValueError("collection transaction required scope was substituted")
+        run_row = store._conn.execute(  # noqa: SLF001
+            "SELECT ran_at,source,runtime,status,detail FROM ingestion_run_log WHERE id=?",
+            (context_run_id,),
+        ).fetchone()
+        if (
+            run_row is None
+            or str(run_row["ran_at"]) != context_checked_at
+            or str(run_row["source"]) != "jquants"
+            or str(run_row["runtime"]) != "trusted-jquants-reconciliation/v2"
+            or str(run_row["status"]) != RUN_ACQUIRED
+            or str(run_row["detail"]) != context_run_detail
+        ):
+            raise ValueError("authority-owned ingestion transaction state drifted")
+        run_id = context_run_id
+        checked_at = str(context_checked_at)
         checked_dt = datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
         now_dt = datetime.fromisoformat(str(self._clock()).replace("Z", "+00:00"))
         if checked_dt.tzinfo is None or now_dt.tzinfo is None:
@@ -455,24 +644,71 @@ class _GovernedReceiptService:
             raise ValueError("collection context is stale")
 
         if required.source == "jquants":
-            if not isinstance(jquants_collection, _PersistedJQuantsCollection):
+            if jquants_capture is not None:
+                if jquants_collection is not None:
+                    raise TypeError(
+                        "supply either live capture or verified collection, not both"
+                    )
+                jquants_collection = _verify_live_jquants_capture(
+                    jquants_capture,
+                    authority_id=self._authority_id,
+                    required=canonical_required,
+                    now=str(self._clock()),
+                )
+            if isinstance(jquants_collection, _PersistedJQuantsCollection):
                 raise TypeError(
-                    "J-Quants COMPLETE requires runtime-minted persisted evidence"
+                    "jquants-pagination-evidence/v1 is audit/recovery-only and "
+                    "cannot mint a new COMPLETE receipt"
+                )
+            if not isinstance(
+                jquants_collection, _VerifiedJQuantsAcquisitionCollection
+            ):
+                raise TypeError(
+                    "J-Quants COMPLETE requires a verified live acquisition collection"
                 )
             if raw_artifact_paths:
                 raise TypeError("J-Quants raw paths cannot bypass the opaque handle")
-            if jquants_collection.dataset != required.dataset:
-                raise ValueError("persisted J-Quants dataset differs from required")
-            trusted_raw_pages, trusted_manifest = _consume_persisted_jquants_handle(
+            if source_request is not None:
+                raise TypeError(
+                    "J-Quants v2 does not accept a caller-supplied source_request"
+                )
+            trusted_raw_pages, verified_state = _consume_verified_jquants_collection(
                 jquants_collection,
                 authority_id=self._authority_id,
+                now=now_dt,
             )
-            _assert_jquants_request_scope(
-                required=required,
-                base_params=jquants_collection.base_params,
-                source_request=source_request,
+            if verified_state.dataset != required.dataset:
+                raise ValueError("verified J-Quants dataset differs from required")
+            if verified_state.required != canonical_required:
+                raise ValueError(
+                    "verified J-Quants segment differs from canonical required scope"
+                )
+            # Downstream claims are derived from the frozen verifier-owned
+            # canonical segment, never from the fresh caller mapping.
+            frozen_required = verified_state.required
+            required = RequiredCoverageSegment(
+                source=frozen_required.source,
+                dataset=frozen_required.dataset,
+                segment_id=frozen_required.segment_id,
+                segment_start=frozen_required.segment_start,
+                segment_end=frozen_required.segment_end,
+                expected_scope=dict(frozen_required.expected_scope),
+                expected_items=frozen_required.expected_items,
             )
-            candidates = jquants_collection.raw_paths
+            candidates = verified_state.raw_paths
+            trusted_source_request = dict(verified_state.initial_request)
+            trusted_source_request_digest = verified_state.initial_request_digest
+            trusted_acquisition_digests = MappingProxyType(
+                {
+                    "acquisition_collection_manifest_file_digest": (
+                        verified_state.manifest_file_digest
+                    ),
+                    "acquisition_collection_digest": verified_state.collection_digest,
+                    "acquisition_terminal_chain_digest": (
+                        verified_state.terminal_chain_digest
+                    ),
+                }
+            )
         else:
             # JSDA acquisition has not yet been migrated to a fetcher-minted,
             # redirect/host/discovery-bound opaque handle.  Local readonly
@@ -491,49 +727,80 @@ class _GovernedReceiptService:
                 raise ValueError(f"raw evidence must be a regular persisted file: {path}")
             if path.stat().st_mode & 0o222:
                 raise ValueError(f"raw evidence artifact is writable: {path}")
+        updated = store._conn.execute(  # noqa: SLF001
+            "UPDATE ingestion_run_log SET status=? WHERE id=? AND status=?",
+            (RUN_RAW_STORED, run_id, RUN_ACQUIRED),
+        )
+        if updated.rowcount != 1:
+            raise ValueError("raw evidence transaction transition failed")
 
         try:
             raw_pages = trusted_raw_pages
             if any(not page for page in raw_pages):
                 raise ValueError("reconciled SUCCESS requires non-empty raw pages")
-            if required.source == "jquants":
-                _verify_jquants_pagination_chain(
-                    required=required,
-                    raw_paths=paths,
-                    raw_pages=raw_pages,
-                    manifest_bytes=trusted_manifest,
-                    source_request=source_request,
+            caller_extras = _trusted_extra_evidence(required, extra_evidence)
+
+            def reconcile_pages(
+                pages_to_reconcile: Sequence[bytes],
+            ) -> tuple[tuple[Any, ...], tuple[Mapping[str, Any], ...]]:
+                raw_records, normalized_records, structured_table = (
+                    _canonical_collection_from_raw(
+                        store=store,
+                        required=required,
+                        raw_pages=pages_to_reconcile,
+                        raw_paths=paths,
+                        checked_at=checked_at,
+                        source_request=trusted_source_request,
+                        extra_evidence=caller_extras,
+                    )
                 )
-            trusted_extras = _trusted_extra_evidence(required, extra_evidence)
-            raw_records, normalized_records, structured_table = (
-                _canonical_collection_from_raw(
+                structured_rows = _fetch_exact_segment_rows(
                     store=store,
                     required=required,
-                    raw_pages=raw_pages,
-                    raw_paths=paths,
-                    checked_at=checked_at,
-                    source_request=source_request,
-                    extra_evidence=trusted_extras,
+                    structured_table=structured_table,
                 )
+                prior_available = _prior_verified_available_at(
+                    store=store,
+                    required=required,
+                    raw_records=raw_records,
+                    raw_pages=pages_to_reconcile,
+                )
+                _assert_canonical_structured_projection(
+                    required=required,
+                    expected_rows=normalized_records,
+                    persisted_rows=structured_rows,
+                    prior_verified_available_at=prior_available,
+                )
+                _assert_trusted_exhaustion(required)
+                return raw_records, structured_rows
+
+            # First pass validates caller-staged facts, then commits the
+            # structured generation before any receipt issuer is invoked.
+            reconcile_pages(raw_pages)
+            updated = store._conn.execute(  # noqa: SLF001
+                "UPDATE ingestion_run_log SET status=? WHERE id=? AND status=?",
+                (RUN_STRUCTURED_COMMITTED, run_id, RUN_RAW_STORED),
             )
-            structured_rows = _fetch_exact_segment_rows(
-                store=store,
-                required=required,
-                structured_table=structured_table,
+            if updated.rowcount != 1:
+                raise ValueError("authority-owned ingestion transaction transition failed")
+            store._conn.commit()  # noqa: SLF001
+
+            # The issuer sees only a fresh transaction: immutable raw is read
+            # again, exact natural keys are reloaded from the committed DB,
+            # and canonical parsing/normalization is repeated.
+            _begin_receipt_verification_transaction(store)
+            raw_pages = _reread_verified_jquants_state(
+                verified_state,
+                now=now_dt,
             )
-            prior_available = _prior_verified_available_at(
-                store=store,
-                required=required,
-                raw_records=raw_records,
-                raw_pages=raw_pages,
-            )
-            _assert_canonical_structured_projection(
-                required=required,
-                expected_rows=normalized_records,
-                persisted_rows=structured_rows,
-                prior_verified_available_at=prior_available,
-            )
-            _assert_trusted_exhaustion(required)
+            if any(not page for page in raw_pages):
+                raise ValueError("committed reconciliation lost immutable raw pages")
+            raw_records, structured_rows = reconcile_pages(raw_pages)
+            committed_run = store._conn.execute(  # noqa: SLF001
+                "SELECT status FROM ingestion_run_log WHERE id=?", (run_id,)
+            ).fetchone()
+            if committed_run is None or committed_run["status"] != RUN_STRUCTURED_COMMITTED:
+                raise ValueError("committed structured transaction state drifted")
             claims = _measure_collection_claims(
                 required=required,
                 run_id=run_id,
@@ -541,8 +808,10 @@ class _GovernedReceiptService:
                 raw_records=raw_records,
                 structured_records=structured_rows,
                 checked_at=checked_at,
-                source_request=source_request,
-                extra_evidence=trusted_extras,
+                source_request=trusted_source_request,
+                extra_evidence=caller_extras,
+                trusted_extra_evidence=trusted_acquisition_digests,
+                trusted_source_request_digest=trusted_source_request_digest,
             )
             # Registration deliberately stays inline at the end of the trusted
             # reconciliation sequence.  A module-level claims-to-capability
@@ -577,7 +846,24 @@ class _GovernedReceiptService:
                 error=None,
                 checked_at=checked_at,
             )
+            _verify_issued_receipt_matches_measurement(
+                receipt,
+                required=required,
+                claims=claims,
+            )
             record_collection_receipt(store._conn, receipt)  # noqa: SLF001
+            updated = store._conn.execute(  # noqa: SLF001
+                "UPDATE ingestion_run_log SET status=? WHERE id=? AND status=?",
+                (
+                    RUN_RECEIPT_VERIFIED,
+                    run_id,
+                    RUN_STRUCTURED_COMMITTED,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise ValueError("receipt transaction finalization failed")
+            if not store._conn.in_transaction:  # noqa: SLF001
+                raise RuntimeError("receipt transaction escaped explicit commit control")
             store._conn.commit()  # noqa: SLF001
         except Exception:
             store._conn.rollback()  # noqa: SLF001
@@ -605,76 +891,87 @@ def _direct_jquants_http() -> Any:
     return LocalHttpClient(verify=True, trust_env=False)
 
 
+def _begin_receipt_verification_transaction(store: SqliteStore) -> None:
+    """Start the post-structured-commit readback transaction."""
+    if store._conn.isolation_level is None:  # noqa: SLF001
+        raise TypeError("receipt verification rejects SQLite autocommit mode")
+    if store._conn.in_transaction:  # noqa: SLF001
+        raise RuntimeError("receipt verification transaction already active")
+    store._conn.execute("BEGIN IMMEDIATE")  # noqa: SLF001
+
+
 def _digest(payload: Any) -> str:
     return canonical_evidence_digest(payload)
 
 
-def _consume_persisted_jquants_handle(
-    collection: _PersistedJQuantsCollection,
-    *,
-    authority_id: object,
-) -> tuple[tuple[bytes, ...], bytes]:
-    """Read/check mint-time bytes once, then return that exact signing input."""
-    if (
-        not isinstance(collection, _PersistedJQuantsCollection)
-        or collection._seal is not _PERSISTED_JQUANTS_SEAL
-    ):
-        raise TypeError("persisted J-Quants evidence is not runtime-minted")
-    with _CAPABILITY_REGISTRY_LOCK:
-        state = _PERSISTED_JQUANTS_COLLECTIONS.get(collection)
-        if state is None:
-            raise TypeError("persisted J-Quants evidence is not runtime-registered")
-        if state["authority_id"] is not authority_id:
-            raise TypeError("persisted J-Quants evidence belongs to another authority")
-        if state["consumed"]:
-            raise TypeError("persisted J-Quants evidence has already been consumed")
-        state["consumed"] = True
-    if len(collection.raw_paths) != len(collection.raw_page_digests):
-        raise ValueError("persisted J-Quants page identity is inconsistent")
-    pages: list[bytes] = []
-    for path, expected in zip(
-        collection.raw_paths, collection.raw_page_digests, strict=True
-    ):
-        if path.is_symlink() or not path.is_file() or path.stat().st_mode & 0o222:
-            raise ValueError("persisted J-Quants page lost immutable state")
-        page = path.read_bytes()
-        if _digest(page) != expected:
-            raise ValueError("persisted J-Quants page changed after mint")
-        pages.append(page)
-    manifest = collection.manifest_path
-    if (
-        manifest.is_symlink()
-        or not manifest.is_file()
-        or manifest.stat().st_mode & 0o222
-    ):
-        raise ValueError("persisted J-Quants manifest lost immutable state")
-    manifest_bytes = manifest.read_bytes()
-    if _digest(manifest_bytes) != collection.manifest_digest:
-        raise ValueError("persisted J-Quants manifest changed after mint")
-    try:
-        manifest_payload = json.loads(manifest_bytes)
-        entries = manifest_payload["pages"]
-        identity = {
-            "dataset": collection.dataset,
-            "base_params": dict(collection.base_params),
-            "pages": [
-                {
-                    "request_path": entry["request_path"],
-                    "request_params": entry["request_params"],
-                    "response_url": entry["response_url"],
-                    "response_status": entry["response_status"],
-                    "pagination_in": entry["pagination_in"],
-                    "pagination_out": entry["pagination_out"],
-                    "body_digest": entry["body_digest"],
-                }
-                for entry in entries
-            ],
+def _required_segment_identity_digest(
+    required: RequiredCoverageSegment,
+) -> str:
+    return _digest(
+        {
+            "source": required.source,
+            "dataset": required.dataset,
+            "segment_id": required.segment_id,
+            "segment_start": required.segment_start,
+            "segment_end": required.segment_end,
+            "expected_scope": dict(required.expected_scope),
+            "expected_items": required.expected_items,
         }
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-        raise ValueError("persisted J-Quants manifest identity is invalid") from exc
-    if _digest(identity) != collection.fetch_identity_digest:
-        raise ValueError("persisted J-Quants fetch identity changed after mint")
-    return tuple(pages), manifest_bytes
+    )
+
+
+def _verify_issued_receipt_matches_measurement(
+    receipt: CollectionReceipt,
+    *,
+    required: RequiredCoverageSegment,
+    claims: Mapping[str, Any],
+) -> None:
+    """Reject a stale, malformed, or differently bound signer response.
+
+    The receipt principal is a separate trust boundary.  Its returned envelope
+    is therefore verified with the public registry before the local receipt is
+    inserted or the run is labelled ``RECEIPT_VERIFIED``.  Signature validity
+    alone is insufficient: every exposed closure field must equal the fresh
+    local raw/parser/natural-key measurement.
+    """
+    from storage.verified_receipt import require_verified_collection_closure
+
+    closure = require_verified_collection_closure(
+        receipt,
+        required=required,
+        expected_policy_version=str(claims["coverage_policy_version"]),
+        structured_digest=str(claims["structured_digest"]),
+    )
+    proof = closure.to_proof_dict()
+    expected = {
+        "coverage_policy_version": claims["coverage_policy_version"],
+        "source": claims["source"],
+        "dataset": claims["dataset"],
+        "segment_id": claims["segment_id"],
+        "segment_start": claims["segment_start"],
+        "segment_end": claims["segment_end"],
+        "scope_digest": claims["scope_digest"],
+        "expected_items": claims["expected_items"],
+        "observed_items": claims["observed_items"],
+        "raw_page_count": claims["raw_page_count"],
+        "raw_row_count": claims["raw_count"],
+        "structured_row_count": claims["structured_count"],
+        "pagination_exhausted": claims["pagination_exhausted"],
+        "discovery_exhausted": claims["discovery_exhausted"],
+        "raw_manifest_digest": claims["raw_manifest_digest"],
+        "raw_digest": claims["raw_digest"],
+        "structured_digest": claims["structured_digest"],
+        "structured_generation": claims["structured_generation"],
+        "observation_digest": claims["observation_digest"],
+        "run_id": claims["run_id"],
+        "checked_at": claims["checked_at"],
+    }
+    if {name: proof.get(name) for name in expected} != expected:
+        raise ValueError("receipt authority response differs from local measurement")
+    if dict(closure.extra_digests) != dict(claims["extra_digests"]):
+        raise ValueError("receipt authority extra digests differ from local measurement")
+    if receipt.digests.get("source_request_digest") != claims["source_request_digest"]:
+        raise ValueError("receipt authority source request differs from local measurement")
 
 
 def _trusted_extra_evidence(
@@ -699,68 +996,6 @@ def _trusted_extra_evidence(
     if "EXPECTED_EMPTY_WITH_EVIDENCE" in extras:
         raise ValueError("caller expected-empty evidence is not trusted")
     return MappingProxyType(extras)
-
-
-def _assert_jquants_request_scope(
-    *,
-    required: RequiredCoverageSegment,
-    base_params: Mapping[str, Any],
-    source_request: Mapping[str, Any] | None,
-) -> None:
-    """Require the opaque fetch query to cover the exact required time scope."""
-    params = dict(base_params)
-    temporal_keys = {"date", "from", "to"}
-    narrowing = sorted(set(params) - temporal_keys)
-    scope = dict(required.expected_scope)
-    for key in narrowing:
-        if key not in scope or scope[key] != params[key]:
-            raise ValueError(
-                f"J-Quants narrowing filter {key!r} is not in required scope"
-            )
-    request = dict(source_request or {})
-    if request:
-        if request.get("dataset", required.dataset) != required.dataset:
-            raise ValueError("source request dataset differs from required segment")
-        request_params = request.get("params")
-        if not isinstance(request_params, Mapping) or dict(request_params) != params:
-            raise ValueError("source request params differ from opaque fetch evidence")
-
-    start = required.segment_start[:10]
-    end = required.segment_end[:10]
-    date_value = str(params.get("date") or "")[:10]
-    from_value = str(params.get("from") or "")[:10]
-    to_value = str(params.get("to") or "")[:10]
-    if date_value:
-        policy = coverage_contract_for(required.dataset)
-        if (
-            policy.segment_granularity == "calendar_month"
-            or start != end
-            or date_value != start
-        ):
-            raise ValueError(
-                "single-date J-Quants query cannot prove a wider required segment"
-            )
-        if from_value or to_value:
-            raise ValueError("J-Quants temporal query shape is ambiguous")
-        return
-    if from_value or to_value:
-        if not from_value or not to_value or (from_value, to_value) != (start, end):
-            raise ValueError(
-                "J-Quants query window must exactly equal the required segment"
-            )
-        return
-    if start != end:
-        raise ValueError(
-            "unbounded J-Quants query cannot prove a multi-day required segment"
-        )
-    policy = coverage_contract_for(required.dataset)
-    if policy.history_mode not in {
-        "recent_snapshot",
-        "next_business_day_snapshot",
-    }:
-        raise ValueError(
-            "vendor-default J-Quants query is trusted only for tip snapshots"
-        )
 
 
 def _fetch_exact_segment_rows(
@@ -899,107 +1134,55 @@ def _json_records_from_pages(raw_pages: Sequence[bytes]) -> tuple[Any, ...] | No
     substituting same-sized parsed content while asking the runtime to sign
     the genuine raw artifact digest.
     """
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError(f"J-Quants raw page contains duplicate key {key!r}")
+            value[key] = item
+        return value
+
+    def reject_nonfinite(value: str) -> None:
+        raise ValueError(f"J-Quants raw page contains non-finite value {value!r}")
+
     measured: list[Any] = []
-    saw_json = False
-    for raw in raw_pages:
+    for index, raw in enumerate(raw_pages):
         try:
-            payload = json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
-            continue
-        saw_json = True
-        if isinstance(payload, list):
-            measured.extend(payload)
-            continue
-        if isinstance(payload, dict):
-            rows = next(
-                (
-                    payload.get(key)
-                    for key in ("data", "rows", "results", "records")
-                    if isinstance(payload.get(key), list)
-                ),
-                None,
+            payload = json.loads(
+                raw,
+                object_pairs_hook=reject_duplicates,
+                parse_constant=reject_nonfinite,
             )
-            measured.extend(rows or ())
-    return tuple(measured) if saw_json else None
-
-
-def _verify_jquants_pagination_chain(
-    *,
-    required: RequiredCoverageSegment,
-    raw_paths: Sequence[Path],
-    raw_pages: Sequence[bytes],
-    manifest_bytes: bytes,
-    source_request: Mapping[str, Any] | None,
-) -> None:
-    """Derive terminal pagination from verbatim page envelopes and chain."""
-    from ingestion.jquants import catalog
-
-    try:
-        manifest = json.loads(manifest_bytes)
-    except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError) as exc:
-        raise ValueError("pagination manifest is not canonical JSON") from exc
-    if not isinstance(manifest, Mapping):
-        raise ValueError("pagination manifest must be an object")
-    if manifest.get("schema_version") != "jquants-pagination-evidence/v1":
-        raise ValueError("unsupported J-Quants pagination manifest")
-    if manifest.get("source") != "jquants" or manifest.get("dataset") != required.dataset:
-        raise ValueError("pagination manifest source/dataset mismatch")
-    entries = manifest.get("pages")
-    if not isinstance(entries, list) or len(entries) != len(raw_pages):
-        raise ValueError("pagination manifest does not enumerate every raw page")
-    request = dict(source_request or {})
-    request_params = request.get("params")
-    if isinstance(request_params, Mapping) and dict(
-        manifest.get("base_params") or {}
-    ) != dict(request_params):
-        raise ValueError("pagination manifest base request mismatch")
-
-    previous_out: str | None = None
-    seen_out: set[str] = set()
-    expected_path = catalog.path_of(required.dataset)
-    for index, (entry, raw_path, raw_page) in enumerate(
-        zip(entries, raw_paths, raw_pages, strict=True)
-    ):
-        if not isinstance(entry, Mapping) or int(entry.get("index", -1)) != index:
-            raise ValueError("pagination manifest page order is invalid")
-        if Path(str(entry.get("raw_path") or "")).expanduser().resolve() != raw_path:
-            raise ValueError("pagination manifest raw path mismatch")
-        if entry.get("body_digest") != _digest(raw_page):
-            raise ValueError("pagination manifest page digest mismatch")
-        if entry.get("request_path") != expected_path:
-            raise ValueError("pagination manifest catalog path mismatch")
-        if int(entry.get("response_status", 0)) != 200:
-            raise ValueError("non-success J-Quants response cannot be signed")
-        try:
-            payload = json.loads(raw_page)
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError) as exc:
-            raise ValueError("J-Quants raw response page is not JSON") from exc
-        if not isinstance(payload, Mapping):
-            raise ValueError("J-Quants raw response page must be an envelope")
-        actual_out = payload.get("pagination_key") or payload.get("pagination_token")
-        actual_out = str(actual_out) if actual_out else None
-        recorded_in = entry.get("pagination_in")
-        recorded_in = str(recorded_in) if recorded_in else None
-        recorded_out = entry.get("pagination_out")
-        recorded_out = str(recorded_out) if recorded_out else None
-        if recorded_in != previous_out or recorded_out != actual_out:
-            raise ValueError("J-Quants continuation chain does not reconcile")
-        params = entry.get("request_params")
-        if not isinstance(params, Mapping):
-            raise ValueError("pagination page request params are missing")
-        param_token = params.get("pagination_key")
-        param_token = str(param_token) if param_token else None
-        if param_token != recorded_in:
-            raise ValueError("pagination request token does not match prior response")
-        if index < len(entries) - 1 and actual_out is None:
-            raise ValueError("pagination manifest continues after a terminal page")
-        if actual_out is not None:
-            if actual_out in seen_out:
-                raise ValueError("pagination continuation token repeated")
-            seen_out.add(actual_out)
-        previous_out = actual_out
-    if previous_out is not None:
-        raise ValueError("J-Quants pagination is not exhausted at terminal page")
+            raise ValueError(
+                f"J-Quants raw response page {index} is not strict UTF-8 JSON"
+            ) from exc
+        allowed_envelope_fields = {
+            "data",
+            "pagination_key",
+            "pagination_token",
+            "cursor",
+        }
+        if (
+            type(payload) is not dict
+            or "data" not in payload
+            or not set(payload).issubset(allowed_envelope_fields)
+        ):
+            raise ValueError(
+                f"J-Quants raw response page {index} is not the canonical data envelope"
+            )
+        for field in set(payload) - {"data"}:
+            if payload[field] is not None and not isinstance(payload[field], str):
+                raise ValueError(
+                    f"J-Quants raw response page {index} has invalid {field} state"
+                )
+        rows = payload["data"]
+        if not isinstance(rows, list):
+            raise ValueError(
+                f"J-Quants raw response page {index} data envelope is not an array"
+            )
+        measured.extend(rows)
+    return tuple(measured)
 
 
 def _canonical_json_value(value: Any) -> Any:
@@ -1035,9 +1218,7 @@ def _canonical_collection_from_raw(
     if required.source == "jquants":
         from ingestion.jquants.normalize import normalize_generic
 
-        decoded = _json_records_from_pages(pages)
-        if decoded is None:
-            raise ValueError("J-Quants governed raw must be a JSON record envelope")
+        decoded = _records_from_verified_pages(required.dataset, pages)
         if any(not isinstance(row, Mapping) for row in decoded):
             raise ValueError("J-Quants governed raw contains a non-object record")
         records = tuple(dict(row) for row in decoded)
@@ -1378,6 +1559,8 @@ def _measure_collection_claims(
     checked_at: str,
     source_request: Mapping[str, Any] | None = None,
     extra_evidence: Mapping[str, Any] | None = None,
+    trusted_extra_evidence: Mapping[str, Any] | None = None,
+    trusted_source_request_digest: str | None = None,
 ) -> dict[str, Any]:
     """Measure closed claims from concrete runtime state.
 
@@ -1393,7 +1576,11 @@ def _measure_collection_claims(
         raise ValueError("reconciled SUCCESS requires non-empty raw pages")
     raw_rows = tuple(raw_records)
     structured_rows = tuple(dict(row) for row in structured_records)
-    measured_json = _json_records_from_pages(pages)
+    measured_json = (
+        _records_from_verified_pages(required.dataset, pages)
+        if required.source == "jquants"
+        else _json_records_from_pages(pages)
+    )
     if measured_json is not None and _digest(list(measured_json)) != _digest(
         list(raw_rows)
     ):
@@ -1402,6 +1589,21 @@ def _measure_collection_claims(
         )
 
     extras = dict(_trusted_extra_evidence(required, extra_evidence))
+    authority_extras = dict(trusted_extra_evidence or {})
+    if required.source == "jquants":
+        if set(authority_extras) != _JQUANTS_ACQUISITION_EXTRA_DIGESTS:
+            raise ValueError("verified J-Quants acquisition digest set is incomplete")
+        if any(
+            not isinstance(value, str) or not value.startswith("sha256:")
+            for value in authority_extras.values()
+        ):
+            raise ValueError("verified J-Quants acquisition digest is invalid")
+    elif authority_extras:
+        raise ValueError("source does not accept J-Quants acquisition digests")
+    overlap = sorted((set(extras) | set(authority_extras)) & STANDARD_CLAIM_KEYS)
+    if overlap or set(extras) & set(authority_extras):
+        raise ValueError("trusted extra digest namespace overlaps receipt claims")
+    extras.update(authority_extras)
     if not raw_rows:
         raise ValueError("zero-row SUCCESS is not trusted")
     # Reaching this private function means the closed adapter's exhaustion
@@ -1416,7 +1618,10 @@ def _measure_collection_claims(
     raw_digest = page_manifest[0]["digest"] if len(page_manifest) == 1 else _digest(
         {"pages": page_manifest}
     )
-    raw_manifest_digest = _digest({"pages": page_manifest})
+    measured_raw_manifest_digest = _digest({"pages": page_manifest})
+    raw_manifest_digest = measured_raw_manifest_digest
+    if not str(raw_manifest_digest).startswith("sha256:"):
+        raise ValueError("trusted raw manifest digest is invalid")
     structured_digest = _digest(list(structured_rows))
     policy = coverage_contract_for(required.dataset)
     if (
@@ -1438,7 +1643,14 @@ def _measure_collection_claims(
     }
     scope_digest = _digest(scope)
     request = dict(source_request or scope)
-    source_request_digest = _digest(request)
+    measured_source_request_digest = _digest(request)
+    source_request_digest = (
+        trusted_source_request_digest or measured_source_request_digest
+    )
+    if trusted_source_request_digest is not None and (
+        trusted_source_request_digest != measured_source_request_digest
+    ):
+        raise ValueError("trusted source request digest does not reconcile")
 
     unit = str(required.expected_scope.get("expected_item_unit") or "")
     if unit in {
