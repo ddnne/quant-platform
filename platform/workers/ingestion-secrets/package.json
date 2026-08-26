@@ -6,7 +6,7 @@
   "description": "J-Quants API key holder + authenticated proxy for local ingestion runners",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",
+    "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts && node --test harness/*.test.mjs",
     "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
     "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
     "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"

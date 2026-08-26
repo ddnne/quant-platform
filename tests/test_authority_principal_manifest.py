@@ -293,7 +293,8 @@ def test_receipt_typed_acquisition_is_explicitly_pending() -> None:
                 "WorkerEntrypoint.fetch_governed_page over JQUANTS_ACQUISITION"
             ),
             "observed_implementation": (
-                "HTTP fetch with X-Ingestion-Token shared header"
+                "typed v2 target present; Receipt caller binding, live HMAC key, "
+                "raw persistence/reconciliation, and authority activation unprovisioned"
             ),
             "activation_blocked": True,
         }
@@ -451,19 +452,92 @@ def test_trader_webauthn_contract_requires_human_presence_and_environment_rp() -
 
 def test_jquants_rpc_contract_exposes_no_url_token_or_headers() -> None:
     request = {
-        "schema_version": "jquants-acquisition-rpc-request/v1",
+        "schema_version": "jquants-acquisition-rpc-request/v2",
         "environment": "staging",
         "operation": "fetch_governed_page",
         "dataset_id": "equities_bars_daily",
-        "segment_id": "2026-08-26",
+        "segment_id": "2026-07",
+        "segment_start": "2026-07-01",
+        "segment_end": "2026-07-31",
+        "acquisition_nonce": "a" * 64,
         "source_capability_digest": _digest("4"),
-        "upstream_locator_ref": "registry://jquants/equities_bars_daily",
-        "request_digest": _digest("5"),
+        "dataset_contract_digest": _digest("5"),
+        "coverage_policy_digest": _digest("6"),
+        "query_contract_digest": _digest("7"),
+        "target_registry_digest": _digest("8"),
+        "continuation_token": None,
     }
     _validate_schema("jquants_acquisition_rpc.schema.json", request)
     request["token"] = "must-not-cross-rpc"
     with pytest.raises(Exception):
         _validate_schema("jquants_acquisition_rpc.schema.json", request)
+
+
+def test_jquants_rpc_raw_metadata_requires_target_authority_fields() -> None:
+    metadata = {
+        "schema_version": "jquants-acquisition-rpc-response-metadata/v2",
+        "evidence_state": "RAW_PAGE",
+        "environment": "production",
+        "dataset_id": "equities_bars_daily",
+        "segment_id": "2026-07",
+        "segment_start": "2026-07-01",
+        "segment_end": "2026-07-31",
+        "request_digest": _digest("1"),
+        "request_identity_digest": _digest("2"),
+        "previous_request_digest": None,
+        "acquisition_id": "hmac-sha256:" + "3" * 64,
+        "acquisition_issued_at": "2026-08-26T00:00:00.000Z",
+        "acquisition_expires_at": "2026-08-26T06:00:00.000Z",
+        "target_registry_digest": _digest("4"),
+        "source_capability_digest": _digest("5"),
+        "dataset_contract_digest": _digest("6"),
+        "coverage_policy_digest": _digest("7"),
+        "query_contract_digest": _digest("8"),
+        "cursor_key_id": "hmac-sha256:" + "9" * 64,
+        "slice_date": "2026-07-01",
+        "query_digest": _digest("a"),
+        "page_ordinal": 0,
+        "slice_ordinal": 0,
+        "provider_page_ordinal": 0,
+        "provider_pagination_state": "EXHAUSTED",
+        "upstream_http_status": 200,
+        "body_digest": _digest("b"),
+        "body_kind": "UPSTREAM_EXACT_BYTES",
+        "pagination_state": "CONTINUATION",
+        "continuation_token": "jqa2.AA.AA",
+        "content_type": "application/json",
+        "redirect_count": 0,
+        "previous_chain_digest": _digest("c"),
+        "chain_digest": _digest("d"),
+    }
+    _validate_schema("jquants_acquisition_rpc.schema.json", metadata)
+
+    for field in (
+        "environment",
+        "request_identity_digest",
+        "acquisition_id",
+        "target_registry_digest",
+        "query_digest",
+        "chain_digest",
+    ):
+        invalid = copy.deepcopy(metadata)
+        invalid[field] = None
+        with pytest.raises(Exception):
+            _validate_schema("jquants_acquisition_rpc.schema.json", invalid)
+
+    raw_only = copy.deepcopy(metadata)
+    raw_only.update(
+        evidence_state="RAW_ONLY",
+        upstream_http_status=206,
+        provider_pagination_state="UNKNOWN",
+        pagination_state="UNKNOWN",
+        continuation_token=None,
+        content_type="application/octet-stream",
+    )
+    _validate_schema("jquants_acquisition_rpc.schema.json", raw_only)
+    raw_only["upstream_http_status"] = None
+    with pytest.raises(Exception):
+        _validate_schema("jquants_acquisition_rpc.schema.json", raw_only)
 
 
 def test_parallel_protocol_digest_cannot_be_self_declared() -> None:

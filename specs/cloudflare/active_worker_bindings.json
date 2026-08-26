@@ -390,7 +390,7 @@
     "ingestion-secrets": {
       "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
       "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
-      "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",
+      "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts && node --test harness/*.test.mjs",
       "typecheck": "tsc --noEmit",
       "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
     },

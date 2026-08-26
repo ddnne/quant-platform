@@ -1,7 +1,52 @@
 # J-Quants ingestion secret proxy
 
-This Worker keeps `JQUANTS_API_KEY` on Cloudflare and gives an authenticated
-local ingestion runner a deliberately narrow proxy capability.
+This Worker keeps `JQUANTS_API_KEY` on Cloudflare. It contains a closed typed
+acquisition RPC target for a future Receipt authority and retains the existing
+authenticated local-runner HTTP proxy during migration.
+
+## Typed acquisition RPC v2 (target implemented, activation pending)
+
+`IngestionSecretsWorker.fetch_governed_page()` is a `WorkerEntrypoint` method.
+It accepts only a governed dataset/closed-month identity, canonical contract
+digests, a caller nonce, and an opaque target-minted continuation token. The
+target owns the official origin, path, query mode, pagination mapping,
+credentials, redirect policy, and target registry. Public HTTP cannot invoke
+or tunnel this method.
+
+The first reviewed registry supports seven closed historical month routes:
+daily bars, financial summary/details/dividend/earnings-date, TOPIX daily bars,
+and market calendar. It deliberately leaves the following `PENDING`:
+
+- `equities_master`, until a verified JPX business-day authority prevents
+  non-business-date next-day results from crossing the governed month;
+- `equities_bars_daily_am` and `equities_earnings_calendar`, until a
+  target-owned trading-calendar/session-cutoff authority can derive tip
+  identity without trusting a caller date;
+- current or partial months, including the just-ended month until 01:00 JST on
+  the first day of the next month.
+
+Successful upstream bytes are returned unchanged in the RPC `Response`.
+Target-computed headers bind the raw body digest, exact query/segment identity,
+provider-page and whole-segment states, and an auditable page chain. Only exact
+HTTP 200 JSON with the reviewed top-level envelope and canonical pagination may
+be `RAW_PAGE`; non-200 2xx bytes and any parse/schema/pagination uncertainty are
+`RAW_ONLY/UNKNOWN`. Redirects, off-contract fields, cursor splicing, and
+unbounded or inconsistent continuation state fail closed.
+
+`JQUANTS_RPC_CURSOR_HMAC_KEY` is a dedicated target-only navigation key. Its
+HMAC output is not an offline-verifiable receipt or COMPLETE evidence and must
+never be shared with the caller/reconciler. A future Receipt authority must
+consume the live Service Binding response, create-only persist exact bytes and
+metadata, independently reconcile them, and issue its own Ed25519 receipt.
+Persisted target headers alone remain `RAW_ONLY` after a crash unless a future
+closed verification capability is added.
+
+No live `JQUANTS_ACQUISITION` caller binding or production HMAC key is
+provisioned by this change. Staging intentionally has zero secret names, so the
+RPC returns `rpc_unavailable`; production activation, caller/reconciler support,
+receipt signing, registry activation, and historical reproof all remain
+`PENDING`. The existing downstream reconciler also does not yet model daily
+sub-slices within a governed monthly segment or multiple provider chains.
 
 ## Authority boundary
 
@@ -37,13 +82,24 @@ account's one-time Zero Trust organization/auth-domain setup.
 ## Verify offline
 
 ```bash
-.venv/bin/python -m pytest -q tests/test_ingestion_secrets_worker_contract.py
 npm run typecheck
+npm test
+uv run python scripts/generate_jquants_acquisition_registry.py
+uv run python scripts/cloudflare_binding_manifest.py
 ```
+
+`npm test` includes Cloudflare workerd behavior tests and a separate-isolate,
+test-only caller-to-target Service Binding harness. The harness proves that
+binary `Response` bytes and the fixed metadata header surface cross RPC without
+upstream-header passthrough; it does not provision a live caller binding.
 
 Set secrets with Wrangler; never put their values in source or `wrangler.toml`:
 
 ```bash
 npx wrangler secret put JQUANTS_API_KEY
 npx wrangler secret put JQUANTS_PROXY_TOKEN
+npx wrangler secret put JQUANTS_RPC_CURSOR_HMAC_KEY
 ```
+
+The HMAC key must be independently generated and has no fallback to either the
+proxy token or API key. Do not provision production secrets into staging.

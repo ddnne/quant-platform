@@ -9,7 +9,7 @@
     "authority_event": "sha256:d42e86b7951dee725ae36df03f7bf74c44950657c970676043028b818ec55a05",
     "trader_webauthn_challenge": "sha256:7e43c2ec753fcf2fd1ba41ff55e9e3aa1573c6435e32fb8bf15a878ddb363bc2",
     "trader_webauthn_assertion": "sha256:6ca17bfe47cf361f8d41338ca5eb62befaa7d563ab3de38872efc6fa4559e415",
-    "jquants_acquisition_rpc": "sha256:fde1aadcbebed58ac6c87e0abe1896ad38008abed6b53fa59f0ccc1301d9189f"
+    "jquants_acquisition_rpc": "sha256:84d2b06b1e71cae3685a909d92e04a07a7e6051042fdc88090c8a1d4795e7fae"
   },
   "parallel_protocol_schema_digests": {
     "receipt_verify_public_keys": "sha256:ddd0537fd643cec7698ea089ce4e4fdae34b61423a03c586b6b683740e7b5626",
@@ -55,7 +55,7 @@
           "dependency_id": "jquants_acquisition_typed_rpc",
           "status": "PENDING",
           "required_contract": "WorkerEntrypoint.fetch_governed_page over JQUANTS_ACQUISITION",
-          "observed_implementation": "HTTP fetch with X-Ingestion-Token shared header",
+          "observed_implementation": "typed v2 target present; Receipt caller binding, live HMAC key, raw persistence/reconciliation, and authority activation unprovisioned",
           "activation_blocked": true
         }
       ],
@@ -656,5 +656,5 @@
       }
     }
   },
-  "manifest_digest": "sha256:157c281c27981707a83e5a4938b5f9c6b2737d533cd956207c62548e2a4bea73"
+  "manifest_digest": "sha256:a51881fca13445512f81ff9a1dd7d1d5347b25cf750229312a635133973b2d75"
 }

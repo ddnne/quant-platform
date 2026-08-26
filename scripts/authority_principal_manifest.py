@@ -164,7 +164,8 @@ EXPECTED_PENDING_DEPENDENCIES = {
                 "WorkerEntrypoint.fetch_governed_page over JQUANTS_ACQUISITION"
             ),
             "observed_implementation": (
-                "HTTP fetch with X-Ingestion-Token shared header"
+                "typed v2 target present; Receipt caller binding, live HMAC key, "
+                "raw persistence/reconciliation, and authority activation unprovisioned"
             ),
             "activation_blocked": True,
         }
@@ -288,7 +289,7 @@ EXPECTED_RESIDUAL_RISK = "cloudflare_workers_scripts_write_account_scope"
 # contains its own body digest; this independent code pin prevents a caller from
 # changing the contract and merely recomputing that self-declared digest.
 PINNED_MANIFEST_DIGEST = (
-    "sha256:157c281c27981707a83e5a4938b5f9c6b2737d533cd956207c62548e2a4bea73"
+    "sha256:a51881fca13445512f81ff9a1dd7d1d5347b25cf750229312a635133973b2d75"
 )
 
 _BROAD_CAPABILITY_TOKENS = frozenset(

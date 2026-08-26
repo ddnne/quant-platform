@@ -46,10 +46,15 @@ environment set, and authentication mechanism. Frozen-mirror requests and
 handoffs repeat those values and bind them into canonical request/handoff
 digests. Staging and production have different D1 identities.
 
-The typed `JQUANTS_ACQUISITION` WorkerEntrypoint contract is a desired boundary,
-not current runtime fact. The current target is an HTTP fetch handler protected
-by `X-Ingestion-Token`, so Receipt activation remains blocked until that
-dependency is replaced and runtime-tested.
+The closed typed v2 `JQUANTS_ACQUISITION` WorkerEntrypoint target is implemented
+and tested in workerd, including a separate-isolate test Service Binding. The
+legacy `X-Ingestion-Token` HTTP path remains during migration. Receipt
+activation is still blocked: the live caller binding and dedicated HMAC key are
+unprovisioned, and the Receipt-side create-only raw ledger, monthly sub-slice
+reconciler, independent digest/count checks, Ed25519 signer, and reproof are not
+implemented by the target lane. Target HMAC continuation state is live
+navigation state; the response metadata itself is not HMAC-authenticated and
+is not standalone COMPLETE evidence.
 
 ## Enforcement
 

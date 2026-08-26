@@ -312,7 +312,8 @@ _PINNED_PACKAGE_SCRIPTS = {
         "cf-typegen": _WRANGLER_PACKAGE_SCRIPT_POLICY["cf-typegen"],
         "test": (
             "vitest run --config vitest.config.ts && "
-            "vitest run --config vitest.runtime.config.ts"
+            "vitest run --config vitest.runtime.config.ts && "
+            "node --test harness/*.test.mjs"
         ),
     },
     "quant-ops-mcp": {

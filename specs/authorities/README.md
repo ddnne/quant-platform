@@ -29,10 +29,12 @@ and public `fetch` is fixed to 404. The other six authorities are separate local
 OS services. `trader` is additionally constrained to a WebAuthn platform or
 hardware credential with user presence; it may not use a file-backed signer.
 
-The desired `JQUANTS_ACQUISITION` surface is frozen as a closed typed RPC
-schema, but the observed `ingestion-secrets` target still uses HTTP plus a
-shared header token. The manifest records this as an activation-blocking
-`PENDING` dependency; it does not claim the typed RPC exists.
+The `ingestion-secrets` package now contains the closed typed v2
+`JQUANTS_ACQUISITION` target alongside its time-bounded legacy HTTP proxy. The
+manifest still records an activation-blocking `PENDING` dependency: no live
+Receipt caller Service Binding, dedicated cursor-HMAC key, raw persistence and
+reconciliation path, or authority activation is provisioned. The target HMAC
+authenticates live navigation state only; it is not standalone receipt proof.
 
 The frozen-mirror v2 protocols bind environment, authenticated caller, exact
 method and purpose, request digest, D1 identity, signed audit, immutable mirror
