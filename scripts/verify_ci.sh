@@ -87,6 +87,8 @@ fi
 
 echo "==> Cloudflare active-worker binding manifest"
 "$py" scripts/cloudflare_binding_manifest.py
+echo "==> J-Quants acquisition target registry"
+"$py" scripts/generate_jquants_acquisition_registry.py
 WORKERS=()
 while IFS= read -r worker_dir; do
   [[ -n "$worker_dir" ]] || continue
