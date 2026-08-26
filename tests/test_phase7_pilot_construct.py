@@ -153,6 +153,14 @@ def test_pilot_scheduler_public_constructor_has_no_caller_trust_root() -> None:
         ControlledPilotScheduler(verifier=object())  # type: ignore[call-arg]
 
 
+def test_controlled_scheduler_is_a_runtime_final_authority_boundary() -> None:
+    with pytest.raises(TypeError, match="final authority boundary"):
+
+        class BypassScheduler(ControlledPilotScheduler):
+            def _initialize(self, **_kwargs: object) -> None:
+                self._readiness = object()  # type: ignore[assignment]
+
+
 def test_pilot_readiness_is_final_and_method_override_cannot_authorize() -> None:
     with pytest.raises(TypeError, match="final"):
 

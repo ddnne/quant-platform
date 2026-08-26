@@ -7,7 +7,7 @@ READY, promotion, a next generation, or the legacy 2,000-catalog evaluation.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, final
 
 from research.artifacts import ExperimentPlan
 from research.readiness import (
@@ -171,8 +171,92 @@ def _require_canonical_controlled_budget_policy(
     return policy, clean_budget
 
 
+def _require_pilot_hypothesis_count(n: int) -> int:
+    if n > PILOT_MAX_HYPOTHESES:
+        raise MassResearchDisabledError(
+            f"pilot size refuses n>{PILOT_MAX_HYPOTHESES} (got {n})"
+        )
+    if n < PILOT_MIN_HYPOTHESES:
+        raise MassResearchDisabledError(
+            f"pilot size requires n>={PILOT_MIN_HYPOTHESES} (got {n})"
+        )
+    return n
+
+
+def _validated_controlled_pilot_scheduler_state(
+    *,
+    readiness: VerifiedPilotReadiness | None,
+    budget: ResearchBudgetCapability | None,
+    plan: ExperimentPlan | None,
+    authorized_evaluation_service: AuthorizedEvaluationService | None,
+    immutable_artifact_store: ImmutableArtifactStore | None,
+    operator_override: object | None,
+) -> tuple[
+    ControlledPilotPolicyPin,
+    ResearchBudgetCapability,
+    ExperimentPlan,
+    VerifiedPilotReadiness,
+    AuthorizedEvaluationService,
+    ImmutableArtifactStore,
+]:
+    """Validate every authority input before scheduler state is assigned."""
+
+    if operator_override is not None:
+        raise MassResearchDisabledError(
+            "operator_override cannot substitute; agent cannot mint "
+            "operator_override"
+        )
+    if type(budget) is not ResearchBudgetCapability:
+        raise MassResearchDisabledError("ResearchBudgetCapability required")
+    controlled_policy, controlled_budget = (
+        _require_canonical_controlled_budget_policy(budget)
+    )
+    if type(plan) is not ExperimentPlan:
+        raise MassResearchDisabledError("ExperimentPlan required")
+    from research.ready_manifest import load_exact_four_pilot_ready_binding
+
+    binding = load_exact_four_pilot_ready_binding()
+    canonical_plan = next(
+        (item for item in binding.plans if item.plan_id == plan.plan_id), None
+    )
+    if canonical_plan is None or canonical_plan.to_dict() != plan.to_dict():
+        raise MassResearchDisabledError(
+            "ControlledPilotScheduler requires a canonical exact-four ExperimentPlan"
+        )
+    verified_readiness = _require_signed_readiness(
+        readiness,
+        binding=binding,
+    )
+    evaluation_service = _require_authorized_evaluation_service(
+        authorized_evaluation_service
+    )
+    artifact_store = _require_artifact_store(immutable_artifact_store)
+    return (
+        controlled_policy,
+        controlled_budget,
+        canonical_plan,
+        verified_readiness,
+        evaluation_service,
+        artifact_store,
+    )
+
+
+@final
 class ControlledPilotScheduler:
     """Exact pilot scheduler. Fail-closed at construct. Execution stays OFF."""
+
+    __slots__ = (
+        "_artifact_store",
+        "_budget_ledger",
+        "_controlled_policy",
+        "_evaluation_service",
+        "_plan",
+        "_readiness",
+    )
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        del cls, kwargs
+        raise TypeError("ControlledPilotScheduler is a final authority boundary")
 
     def __init__(
         self,
@@ -185,74 +269,33 @@ class ControlledPilotScheduler:
         operator_override: object | None = None,
         n_hypotheses: int | None = None,
     ) -> None:
-        self._initialize(
+        if type(self) is not ControlledPilotScheduler:
+            raise MassResearchDisabledError(
+                "controlled pilot scheduler requires exact ControlledPilotScheduler"
+            )
+        (
+            controlled_policy,
+            controlled_budget,
+            canonical_plan,
+            verified_readiness,
+            evaluation_service,
+            artifact_store,
+        ) = _validated_controlled_pilot_scheduler_state(
             readiness=readiness,
             budget=budget,
             plan=plan,
             authorized_evaluation_service=authorized_evaluation_service,
             immutable_artifact_store=immutable_artifact_store,
             operator_override=operator_override,
-            n_hypotheses=n_hypotheses,
         )
-
-    def _initialize(
-        self,
-        *,
-        readiness: VerifiedPilotReadiness | None,
-        budget: ResearchBudgetCapability | None,
-        plan: ExperimentPlan | None,
-        authorized_evaluation_service: AuthorizedEvaluationService | None,
-        immutable_artifact_store: ImmutableArtifactStore | None,
-        operator_override: object | None,
-        n_hypotheses: int | None,
-    ) -> None:
-        if operator_override is not None:
-            raise MassResearchDisabledError(
-                "operator_override cannot substitute; agent cannot mint "
-                "operator_override"
-            )
-        if type(budget) is not ResearchBudgetCapability:
-            raise MassResearchDisabledError("ResearchBudgetCapability required")
-        (
-            self._controlled_policy,
-            controlled_budget,
-        ) = _require_canonical_controlled_budget_policy(budget)
-        if type(plan) is not ExperimentPlan:
-            raise MassResearchDisabledError("ExperimentPlan required")
-        from research.ready_manifest import load_exact_four_pilot_ready_binding
-
-        binding = load_exact_four_pilot_ready_binding()
-        canonical_plan = next(
-            (item for item in binding.plans if item.plan_id == plan.plan_id), None
-        )
-        if canonical_plan is None or canonical_plan.to_dict() != plan.to_dict():
-            raise MassResearchDisabledError(
-                "ControlledPilotScheduler requires a canonical exact-four ExperimentPlan"
-            )
-        self._readiness = _require_signed_readiness(
-            readiness,
-            binding=binding,
-        )
+        self._controlled_policy = controlled_policy
         self._budget_ledger = controlled_budget
         self._plan = canonical_plan
-        self._evaluation_service = _require_authorized_evaluation_service(
-            authorized_evaluation_service
-        )
-        self._artifact_store = _require_artifact_store(immutable_artifact_store)
+        self._readiness = verified_readiness
+        self._evaluation_service = evaluation_service
+        self._artifact_store = artifact_store
         if n_hypotheses is not None:
-            self._require_pilot_n(int(n_hypotheses))
-
-    @staticmethod
-    def _require_pilot_n(n: int) -> int:
-        if n > PILOT_MAX_HYPOTHESES:
-            raise MassResearchDisabledError(
-                f"pilot size refuses n>{PILOT_MAX_HYPOTHESES} (got {n})"
-            )
-        if n < PILOT_MIN_HYPOTHESES:
-            raise MassResearchDisabledError(
-                f"pilot size requires n>={PILOT_MIN_HYPOTHESES} (got {n})"
-            )
-        return n
+            _require_pilot_hypothesis_count(int(n_hypotheses))
 
     def mint_operator_override(self, *args: object, **kwargs: object) -> None:
         raise MassResearchDisabledError("agent cannot mint operator_override")
@@ -263,7 +306,7 @@ class ControlledPilotScheduler:
             raise MassResearchDisabledError(
                 "pilot hypotheses must be semantically distinct"
             )
-        self._require_pilot_n(len(ids))
+        _require_pilot_hypothesis_count(len(ids))
         return ids
 
     def start_mass_catalog_eval(self, n: int = MASS_CATALOG_EVAL_SIZE) -> None:
