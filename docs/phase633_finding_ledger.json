@@ -1,6 +1,6 @@
 {
   "schema_version": "phase631-finding-ledger/v1",
-  "updated_at": "2026-08-26T13:17:53+09:00",
+  "updated_at": "2026-08-26T13:39:53+09:00",
   "merge_policy": {
     "required_p0_status": "FIXED",
     "independent_review_unresolved_p0": 0,
@@ -39,6 +39,7 @@
 
     {"id":"A1","area":"architecture_test_operations","severity":"P0","status":"FIXED","summary":"JSDA Queue could not converge on historical discovery","evidence":"7afffade"},
     {"id":"A2","area":"architecture_test_operations","severity":"P0","status":"OPEN","summary":"Separate key files did not isolate Receipt D1 Ops READY Trader transition and execution signing principals","evidence":"2026-08-26 read-only audit: provisioned 0 of 7; Receipt D1 Ops READY Trader contract-only PARTIAL; Coverage transition and Controlled execution NOT_PROVISIONED; no dedicated account service socket root-owned store or authority Cloudflare binding; all checked registries active keys=0; same-UID legacy PEM filenames are not isolation","closure":"Administrator bootstrap creates dedicated identities and protected stores; each authority generates a fresh key internally; activate public registries only after independent evidence protocol acceptance; retire same-UID keys"},
+    {"id":"A7","area":"architecture_test_operations","severity":"P0","status":"OPEN","summary":"Release workflows did not consume the machine-readable P0 finding gate","evidence":"Independent audit of e1241c40: verify_ci deployment acceptance and release evidence accepted execution without reading the finding ledger","closure":"Use one strict repo-pinned gate in every release entrypoint and bind its exact digest and OPEN P0 inventory into release evidence"},
     {"id":"A3","area":"architecture_test_operations","severity":"P1","status":"FIXED","summary":"Worker coverage was almost entirely Node mocks","evidence":"32a1ea7d"},
     {"id":"A4","area":"architecture_test_operations","severity":"P1","status":"FIXED","summary":"Legacy strategy catalog was a product-runtime input","evidence":"e5969f50"},
     {"id":"A5","area":"architecture_test_operations","severity":"P1","status":"DEFERRED","summary":"Source, AST, and spelling-dependent Python tests remain","closure":"Replace incrementally with structural invariants"},

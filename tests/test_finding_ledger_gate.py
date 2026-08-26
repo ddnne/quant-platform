@@ -42,6 +42,7 @@ def test_current_pinned_ledger_blocks_with_exact_open_p0_inventory() -> None:
     snapshot = gate.load_pinned_finding_ledger()
     assert snapshot.open_p0_ids == (
         "A2",
+        "A7",
         "C10",
         "C4",
         "D2",

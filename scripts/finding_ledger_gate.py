@@ -81,6 +81,7 @@ _PINNED_FINDING_IDS = frozenset(
         "A4",
         "A5",
         "A6",
+        "A7",
     }
 )
 _PINNED_P0_FINDING_IDS = frozenset(
@@ -105,6 +106,7 @@ _PINNED_P0_FINDING_IDS = frozenset(
         "C10",
         "A1",
         "A2",
+        "A7",
     }
 )
 _AREA_BY_ID_PREFIX = {
