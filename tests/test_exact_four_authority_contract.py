@@ -12,18 +12,21 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
-import execution.exact_four_authority_contract as authority_module
+import execution.exact_four_claims as authority_module
+import execution.exact_four_authority_contract as authority_facade
 from execution.exact_four_authority_contract import (
     AUTHORITY_PROTOCOL_STATE,
     CONTROLLED_PILOT_POLICY_DIGEST,
     CONTROLLED_PILOT_POLICY_RAW_DIGEST,
     AuthorizedExactFourExecutionV2,
     ControlledExecutionClaimsV2,
+    ExactFourExecutionBinding,
     ExactFourAuthorityContractError,
     ExactFourAuthorityPending,
     PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_DIGEST,
     PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_RAW_DIGEST,
     PilotReadinessAttestationClaimsV2,
+    PlanExecutionBinding,
     ReadySnapshotLineage,
     TraderAuthorizationClaimsV2,
     VerifiedExactFourTraderAuthorizationV2,
@@ -166,6 +169,23 @@ def test_controlled_pilot_policy_digest_excludes_only_its_digest_field() -> None
     ).read_bytes()
     assert "sha256:" + hashlib.sha256(raw).hexdigest() == (
         CONTROLLED_PILOT_POLICY_RAW_DIGEST
+    )
+
+
+def test_compatibility_facade_preserves_public_api_but_not_private_validators() -> None:
+    assert ExactFourExecutionBinding.__module__ == "execution.exact_four_binding"
+    assert PlanExecutionBinding.__module__ == "execution.exact_four_binding"
+    assert PilotReadinessAttestationClaimsV2.__module__ == (
+        "execution.exact_four_claims"
+    )
+    assert VerifiedPilotReadinessV2.__module__ == "execution.exact_four_protocol"
+    assert authority_facade.ExactFourPilotResultManifestV2.__module__ == (
+        "execution.exact_four_results"
+    )
+    assert not hasattr(authority_facade, "_validate_claim_chain_structural")
+    assert not hasattr(
+        authority_facade,
+        "_validate_exact_four_authority_document_structural",
     )
 
 
