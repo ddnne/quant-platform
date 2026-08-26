@@ -780,10 +780,15 @@ def test_authenticated_mirror_pins_one_snapshot_and_is_single_use(
     )
     handle = sync_script.open_authenticated_applied_mirror(source)
 
-    with sqlite3.connect(source) as writer:
-        writer.execute(
-            "UPDATE opaque_source_marker SET value='replacement'"
-        )
+    writer = sqlite3.connect(source, timeout=0)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            writer.execute(
+                "UPDATE opaque_source_marker SET value='replacement'"
+            )
+        writer.rollback()
+    finally:
+        writer.close()
 
     observed = sync_script._consume_authenticated_applied_mirror(
         handle,
@@ -796,11 +801,37 @@ def test_authenticated_mirror_pins_one_snapshot_and_is_single_use(
         "original",
         sha256_digest({"opaque_source_marker": "original"}),
     )
+    with sqlite3.connect(source, timeout=0) as writer:
+        writer.execute("UPDATE opaque_source_marker SET value='after-consume'")
     with pytest.raises(RuntimeError, match="already consumed"):
         sync_script._consume_authenticated_applied_mirror(
             handle,
             lambda _conn, _identity: pytest.fail("replayed source was consumed"),
         )
+
+
+def test_authenticated_mirror_releases_writer_lock_after_consumer_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(),
+    )
+    handle = sync_script.open_authenticated_applied_mirror(source)
+
+    def fail_consumer(_conn, _identity):
+        raise LookupError("consumer failed")
+
+    with pytest.raises(LookupError, match="consumer failed"):
+        sync_script._consume_authenticated_applied_mirror(
+            handle, fail_consumer
+        )
+    with sqlite3.connect(source, timeout=0) as writer:
+        writer.execute("UPDATE opaque_source_marker SET value='unlocked'")
 
 
 def test_authenticated_mirror_preserves_distinct_source_schema_identity(

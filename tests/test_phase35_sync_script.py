@@ -571,6 +571,45 @@ def test_governed_identity_rejects_temp_shadow_and_temp_trigger(
         conn.close()
 
 
+def test_sqlite_identifier_key_folds_ascii_only(sync_module):
+    key = sync_module._private_export._sqlite_identifier_key
+    assert key("GoVeRnEd") == key("governed")
+    assert key("Straße") != key("STRASSE")
+    assert key("İ") == "İ"
+
+    class Identifier(str):
+        pass
+
+    with pytest.raises(TypeError, match="exact string"):
+        key(Identifier("governed"))
+
+
+def test_schema_reconciliation_rejects_mixed_case_main_trigger_target(
+    sync_module,
+):
+    source = sqlite3.connect(":memory:")
+    local = sqlite3.connect(":memory:")
+    try:
+        schema = (
+            "CREATE TABLE governed (value TEXT NOT NULL);"
+            "INSERT INTO governed VALUES ('MAIN');"
+        )
+        source.executescript(schema)
+        local.executescript(
+            schema
+            + "CREATE TRIGGER attacker_main_deputy "
+            "AFTER UPDATE ON main.GoVeRnEd BEGIN DELETE FROM governed; END;"
+        )
+
+        with pytest.raises(ValueError, match="schema mismatch"):
+            sync_module._private_export._exact_source_local_reconciliation(
+                source, local, ("governed",)
+            )
+    finally:
+        source.close()
+        local.close()
+
+
 def test_local_invalidation_trigger_contract_matches_migrated_sqlite(
     tmp_path, sync_module
 ):

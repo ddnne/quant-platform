@@ -536,7 +536,7 @@ def reject_temp_governed_deputies(
             }
         )
     )
-    governed_identifiers = {name.casefold() for name in governed}
+    governed_identifiers = {_sqlite_identifier_key(name) for name in governed}
     for object_type, name, table_name in conn.execute(
         "SELECT type,name,tbl_name FROM sqlite_temp_master"
     ):
@@ -546,13 +546,24 @@ def reject_temp_governed_deputies(
             or type(table_name) is not str
         ):
             raise ValueError("temporary SQLite object identity is not canonical")
-        # SQLite identifiers are ASCII case-insensitive.  Python's casefold is
-        # deliberately at least as strict for the governed ASCII identifiers.
         if (
-            name.casefold() in governed_identifiers
-            or table_name.casefold() in governed_identifiers
+            _sqlite_identifier_key(name) in governed_identifiers
+            or _sqlite_identifier_key(table_name) in governed_identifiers
         ):
             raise ValueError("temporary object shadows governed D1 state")
+
+
+_SQLITE_ASCII_IDENTIFIER_TRANSLATION = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "abcdefghijklmnopqrstuvwxyz",
+)
+
+
+def _sqlite_identifier_key(value: str) -> str:
+    """Apply SQLite's ASCII-only identifier case equivalence."""
+    if type(value) is not str:
+        raise TypeError("SQLite identifier must be one exact string")
+    return value.translate(_SQLITE_ASCII_IDENTIFIER_TRANSLATION)
 
 
 def _quoted_identifier(value: str) -> str:
@@ -596,6 +607,34 @@ def _canonical_schema_sql(value: object) -> str | None:
     return "".join(rendered).strip()
 
 
+def _main_schema_objects_for_table(
+    conn: sqlite3.Connection,
+    table: str,
+) -> list[tuple[str, str, str, str | None]]:
+    """Enumerate MAIN objects using SQLite's case-insensitive identifiers."""
+    target = _sqlite_identifier_key(table)
+    selected: list[tuple[str, str, str, str | None]] = []
+    for raw in conn.execute(
+        "SELECT type,name,tbl_name,sql FROM main.sqlite_master"
+    ):
+        row = tuple(raw)
+        if (
+            len(row) != 4
+            or type(row[0]) is not str
+            or type(row[1]) is not str
+            or type(row[2]) is not str
+            or type(row[3]) not in {str, type(None)}
+        ):
+            raise ValueError("main SQLite schema object identity is not canonical")
+        object_type, name, table_name, sql = row
+        if (
+            _sqlite_identifier_key(name) == target
+            or _sqlite_identifier_key(table_name) == target
+        ):
+            selected.append((object_type, name, table_name, sql))
+    return sorted(selected, key=lambda row: (row[0], row[1]))
+
+
 def _table_schema_manifest(
     conn: sqlite3.Connection, table: str
 ) -> dict[str, Any]:
@@ -618,18 +657,12 @@ def _table_schema_manifest(
 
     master = [
         {
-            "type": str(row[0]),
-            "name": str(row[1]),
-            "table_name": str(row[2]),
+            "type": row[0],
+            "name": row[1],
+            "table_name": row[2],
             "sql": _canonical_schema_sql(row[3]),
         }
-        for row in conn.execute(
-            "SELECT type,name,tbl_name,sql FROM main.sqlite_master "
-            "WHERE (type='table' AND name=?) "
-            "OR (type IN ('index','trigger') AND tbl_name=?) "
-            "ORDER BY type,name",
-            (table, table),
-        )
+        for row in _main_schema_objects_for_table(conn, table)
     ]
 
     indexes: list[dict[str, Any]] = []
@@ -810,19 +843,22 @@ def _replicated_schema_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     expected = _CANONICAL_LOCAL_INVALIDATION_TRIGGERS_BY_TABLE.get(
         table_name, {}
     )
-    expected_by_identifier = {name.casefold(): row for name, row in expected.items()}
+    expected_by_identifier = {
+        _sqlite_identifier_key(name): row for name, row in expected.items()
+    }
     observed: set[str] = set()
     retained: list[dict[str, Any]] = []
     for row in replicated["sqlite_master"]:
         name = row["name"]
         if type(name) is not str:
             raise ValueError("governed local schema identity is not canonical")
-        if row["type"] != "trigger" or not name.casefold().startswith(
+        identifier = _sqlite_identifier_key(name)
+        if row["type"] != "trigger" or not identifier.startswith(
             "invalidate_snapshot_"
         ):
             retained.append(row)
             continue
-        canonical = expected_by_identifier.get(name.casefold())
+        canonical = expected_by_identifier.get(identifier)
         if canonical is None or row != canonical:
             raise ValueError(
                 "local snapshot invalidation trigger is not canonical"

@@ -31,7 +31,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Callable, Mapping, TypeVar
 from urllib.parse import quote, urlencode
-from weakref import WeakSet
+from weakref import WeakKeyDictionary, WeakSet
 
 _here = Path(__file__).resolve().parent
 for _d in (_here, _here.parent):
@@ -911,10 +911,14 @@ def _require_canonical_sync_audit_table(
     )
     if columns != _SYNC_AUDIT_COLUMNS:
         raise ValueError("D1 sync audit table schema is not canonical")
-    objects = conn.execute(
-        "SELECT type,name,sql FROM main.sqlite_master "
-        "WHERE tbl_name='local_d1_export_sync_runs' ORDER BY type,name"
-    ).fetchall()
+    objects = [
+        (object_type, name, sql)
+        for object_type, name, _table_name, sql in (
+            _private_export._main_schema_objects_for_table(  # noqa: SLF001
+                conn, "local_d1_export_sync_runs"
+            )
+        )
+    ]
     table_objects = [tuple(row) for row in objects if row[0] == "table"]
     expected_table_sql = _private_export._canonical_schema_sql(  # noqa: SLF001
         "CREATE TABLE local_d1_export_sync_runs "
@@ -2180,18 +2184,21 @@ def _authenticated_export_cursor_chain(
 
 
 def _build_applied_mirror_authority():
-    """Mint one-shot handles over one verified, open SQLite read snapshot."""
+    """Mint one-shot handles over one writer-locked SQLite read snapshot."""
     live_mirrors = WeakSet()
+    mirror_states: WeakKeyDictionary[
+        object,
+        tuple[
+            Path,
+            tuple[int, int],
+            sqlite3.Connection,
+            sqlite3.Connection,
+            str,
+        ],
+    ] = WeakKeyDictionary()
 
     class _AuthenticatedAppliedMirror:
-        __slots__ = (
-            "_db_path",
-            "_path_identity",
-            "_conn",
-            "_identity_json",
-            "_consumed",
-            "__weakref__",
-        )
+        __slots__ = ("__weakref__",)
 
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             raise RuntimeError(
@@ -2204,38 +2211,81 @@ def _build_applied_mirror_authority():
                 [sqlite3.Connection, Mapping[str, object]], _MirrorResult
             ],
         ) -> _MirrorResult:
-            if self not in live_mirrors or self._consumed:
+            if self not in live_mirrors or self not in mirror_states:
                 raise RuntimeError("authenticated applied mirror was already consumed")
-            self._consumed = True
             live_mirrors.discard(self)
+            (
+                db_path,
+                path_identity,
+                lock_conn,
+                read_conn,
+                identity_json,
+            ) = mirror_states.pop(self)
             try:
                 try:
-                    current = self._db_path.stat()
+                    current = db_path.stat()
                 except OSError as exc:
                     raise RuntimeError(
                         "authenticated applied mirror path disappeared"
                     ) from exc
-                if (current.st_dev, current.st_ino) != self._path_identity:
+                if (current.st_dev, current.st_ino) != path_identity:
                     raise RuntimeError(
                         "authenticated applied mirror path was replaced"
                     )
-                observed = _authenticated_applied_mirror_identity_from_conn(
-                    self._conn
+                if not lock_conn.in_transaction or not read_conn.in_transaction:
+                    raise RuntimeError(
+                        "authenticated applied mirror lock was released"
+                    )
+                locked_identity = _canonical_applied_mirror_identity_json(
+                    _authenticated_applied_mirror_identity_from_conn(lock_conn)
                 )
-                observed_json = _canonical_applied_mirror_identity_json(observed)
-                if observed_json != self._identity_json:
+                read_identity = _canonical_applied_mirror_identity_json(
+                    _authenticated_applied_mirror_identity_from_conn(read_conn)
+                )
+                if locked_identity != identity_json or read_identity != identity_json:
                     raise RuntimeError(
                         "authenticated applied mirror identity changed"
                     )
-                restored = json.loads(self._identity_json)
+                current = db_path.stat()
+                if (current.st_dev, current.st_ino) != path_identity:
+                    raise RuntimeError(
+                        "authenticated applied mirror path was replaced"
+                    )
+                restored = json.loads(identity_json)
                 immutable_identity = _deep_immutable_json(restored)
                 assert isinstance(immutable_identity, Mapping)
-                return consumer(self._conn, immutable_identity)
+                result = consumer(read_conn, immutable_identity)
+                if not lock_conn.in_transaction or not read_conn.in_transaction:
+                    raise RuntimeError(
+                        "authenticated applied mirror lock was released"
+                    )
+                current = db_path.stat()
+                if (current.st_dev, current.st_ino) != path_identity:
+                    raise RuntimeError(
+                        "authenticated applied mirror path was replaced"
+                    )
+                if _canonical_applied_mirror_identity_json(
+                    _authenticated_applied_mirror_identity_from_conn(lock_conn)
+                ) != identity_json or _canonical_applied_mirror_identity_json(
+                    _authenticated_applied_mirror_identity_from_conn(read_conn)
+                ) != identity_json:
+                    raise RuntimeError(
+                        "authenticated applied mirror final identity changed"
+                    )
+                return result
             finally:
                 try:
-                    self._conn.rollback()
+                    read_conn.rollback()
+                except sqlite3.Error:
+                    pass
+                try:
+                    read_conn.close()
                 finally:
-                    self._conn.close()
+                    try:
+                        lock_conn.rollback()
+                    except sqlite3.Error:
+                        pass
+                    lock_conn.close()
 
     def _consume_authenticated_applied_mirror(
         handle: object,
@@ -2256,12 +2306,31 @@ def _build_applied_mirror_authority():
         if not path.is_file():
             raise ValueError("applied mirror is not an authenticated current D1 export")
         stat = path.stat()
-        uri = f"file:{quote(str(path), safe='/')}?mode=ro"
-        conn = sqlite3.connect(uri, uri=True)
+        lock_conn: sqlite3.Connection | None = None
+        read_conn: sqlite3.Connection | None = None
         try:
-            conn.execute("BEGIN")
-            identity = _authenticated_applied_mirror_identity_from_conn(conn)
-            identity_json = _canonical_applied_mirror_identity_json(identity)
+            lock_conn = sqlite3.connect(path, timeout=5.0)
+            lock_conn.execute("BEGIN IMMEDIATE")
+            current = path.stat()
+            if (current.st_dev, current.st_ino) != (stat.st_dev, stat.st_ino):
+                raise RuntimeError("authenticated applied mirror path was replaced")
+            uri = f"file:{quote(str(path), safe='/')}?mode=ro"
+            read_conn = sqlite3.connect(uri, uri=True)
+            read_conn.execute("PRAGMA query_only=ON")
+            read_conn.execute("BEGIN")
+            locked_json = _canonical_applied_mirror_identity_json(
+                _authenticated_applied_mirror_identity_from_conn(lock_conn)
+            )
+            identity_json = _canonical_applied_mirror_identity_json(
+                _authenticated_applied_mirror_identity_from_conn(read_conn)
+            )
+            if locked_json != identity_json:
+                raise RuntimeError(
+                    "authenticated applied mirror lock/read identity differs"
+                )
+            current = path.stat()
+            if (current.st_dev, current.st_ino) != (stat.st_dev, stat.st_ino):
+                raise RuntimeError("authenticated applied mirror path was replaced")
         except (
             ValueError,
             TypeError,
@@ -2269,19 +2338,36 @@ def _build_applied_mirror_authority():
             json.JSONDecodeError,
             sqlite3.Error,
         ) as exc:
-            conn.close()
+            if read_conn is not None:
+                read_conn.close()
+            if lock_conn is not None:
+                try:
+                    lock_conn.rollback()
+                except sqlite3.Error:
+                    pass
+                lock_conn.close()
             raise ValueError(
                 "applied mirror is not an authenticated current D1 export"
             ) from exc
         except Exception:
-            conn.close()
+            if read_conn is not None:
+                read_conn.close()
+            if lock_conn is not None:
+                try:
+                    lock_conn.rollback()
+                except sqlite3.Error:
+                    pass
+                lock_conn.close()
             raise
+        assert lock_conn is not None and read_conn is not None
         handle = object.__new__(_AuthenticatedAppliedMirror)
-        handle._db_path = path
-        handle._path_identity = (stat.st_dev, stat.st_ino)
-        handle._conn = conn
-        handle._identity_json = identity_json
-        handle._consumed = False
+        mirror_states[handle] = (
+            path,
+            (stat.st_dev, stat.st_ino),
+            lock_conn,
+            read_conn,
+            identity_json,
+        )
         live_mirrors.add(handle)
         return handle
 

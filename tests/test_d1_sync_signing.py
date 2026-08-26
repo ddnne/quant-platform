@@ -512,8 +512,12 @@ def test_verified_d1_cursor_chain_reaches_sync_boundary_without_mutable_alias(
             )
 
 
+@pytest.mark.parametrize(
+    "audit_target",
+    ["local_d1_export_sync_runs", "LOCAL_D1_EXPORT_SYNC_RUNS"],
+)
 def test_audit_insert_trigger_cannot_mutate_governed_data_and_commit_complete(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, audit_target
 ):
     now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
     sync, store, document = _bound_store_and_document(
@@ -521,9 +525,9 @@ def test_audit_insert_trigger_cannot_mutate_governed_data_and_commit_complete(
     )
     _install_test_sealed_audit(monkeypatch, document)
     store._conn.executescript(  # noqa: SLF001
-        """
+        f"""
         CREATE TRIGGER corrupt_governed_after_audit
-        AFTER INSERT ON local_d1_export_sync_runs BEGIN
+        AFTER INSERT ON {audit_target} BEGIN
             DELETE FROM jquants_records;
         END;
         """
@@ -683,6 +687,16 @@ def test_real_sqlite_signed_chain_retains_deep_immutable_projection_identity(
     store.close()
 
     handle = sync.open_authenticated_applied_mirror(path)
+    writer = sqlite3.connect(path, timeout=0)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            writer.execute(
+                "UPDATE main.local_snapshot_policy SET require_manifest=0 "
+                "WHERE singleton=1"
+            )
+        writer.rollback()
+    finally:
+        writer.close()
 
     def consume(_conn, identity):
         assert isinstance(identity, MappingProxyType)
@@ -867,7 +881,15 @@ def test_mixed_case_temp_audit_trigger_cannot_mutate_ready_state(
 
 
 @pytest.mark.parametrize(
-    "attack", ["missing_table", "missing_row", "duplicate_row", "extra_index"]
+    "attack",
+    [
+        "missing_table",
+        "missing_row",
+        "duplicate_row",
+        "extra_index",
+        "mixed_case_index",
+        "mixed_case_trigger",
+    ],
 )
 def test_signed_complete_requires_canonical_invalidation_policy_target(
     tmp_path, monkeypatch, attack
@@ -902,10 +924,27 @@ def test_signed_complete_requires_canonical_invalidation_policy_target(
                 (1,1,0,'now',NULL,'BUILDING','build-b',NULL);
             """
         )
-    else:
+    elif attack in {"extra_index", "mixed_case_index"}:
+        target = (
+            "local_snapshot_policy"
+            if attack == "extra_index"
+            else "LOCAL_SNAPSHOT_POLICY"
+        )
         store._conn.execute(  # noqa: SLF001
             "CREATE INDEX attacker_policy_index "
-            "ON local_snapshot_policy(snapshot_ready)"
+            f"ON {target}(snapshot_ready)"
+        )
+    else:
+        store._conn.execute(  # noqa: SLF001
+            """
+            CREATE TRIGGER attacker_restore_ready_on_invalidation
+            AFTER UPDATE ON main.LOCAL_SNAPSHOT_POLICY BEGIN
+                UPDATE local_snapshot_policy
+                SET snapshot_ready=1, publication_state='READY',
+                    active_snapshot_id='attacker-snapshot'
+                WHERE singleton=1;
+            END
+            """
         )
     store._conn.commit()  # noqa: SLF001
 
