@@ -1557,6 +1557,72 @@ def test_authority_clock_regression_fails_closed_at_every_receipt_stage(
     store.close()
 
 
+def test_final_precommit_expiry_rolls_back_local_receipt_after_issuer(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    from ingestion.jquants.normalize import normalize_generic
+
+    clock_ticks = iter(
+        (
+            "2026-08-11T14:59:55+09:00",
+            "2026-08-11T14:59:55+09:00",
+            "2026-08-11T14:59:55+09:00",
+            "2026-08-11T14:59:56+09:00",
+            "2026-08-11T14:59:57+09:00",
+            "2026-08-11T14:59:58+09:00",
+            "2026-08-11T14:59:59+09:00",
+            "2026-08-11T15:00:01+09:00",
+        )
+    )
+    service = _tmp_service(
+        receipt_ed25519_keys,
+        clock=lambda: next(clock_ticks),
+    )
+    store = SqliteStore(tmp_path / "expiry-final-precommit.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    handle = _verified_collection(
+        tmp_path / "capture-final-expiry",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    context = _bound_context(store, service, req)
+    store.upsert(
+        "jquants_records",
+        normalize_generic(
+            [{"Date": "2026-07-31"}],
+            dataset=req.dataset,
+            ingested_at=context.checked_at,
+        ),
+        commit=False,
+    )
+    with pytest.raises(ValueError, match="session has expired"):
+        service.record_persisted_success(
+            store,
+            required=req,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_collection=handle,
+        )
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM jquants_records"
+    ).fetchone()[0] == 1
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM collection_receipts"
+    ).fetchone()[0] == 0
+    assert store._conn.execute(
+        "SELECT status FROM ingestion_run_log WHERE id=?", (context.run_id,)
+    ).fetchone()["status"] == "STRUCTURED_COMMITTED"
+    assert len(service._issued_evidence) == 1
+    store.close()
+
+
 def test_issuer_failure_leaves_structured_commit_without_receipt(
     tmp_path: Path, receipt_ed25519_keys
 ) -> None:
