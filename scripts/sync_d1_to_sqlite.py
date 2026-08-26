@@ -1826,6 +1826,10 @@ def _authenticated_applied_mirror_identity_from_conn(
         raise ValueError(
             "authenticated applied mirror cursor chain is null or mismatched"
         )
+    counts = envelope["table_counts"]
+    if not isinstance(counts, Mapping):
+        raise ValueError("authenticated applied mirror inventory is incomplete")
+    owned_counts = dict(counts)
     return {
         "audit_digest": row.get("audit_digest"),
         "issuer_key_id": row.get("issuer_key_id"),
@@ -1836,22 +1840,38 @@ def _authenticated_applied_mirror_identity_from_conn(
         "local_content_digest": envelope["local_content_digest"],
         "source_schema_digest": envelope["source_schema_digest"],
         "schema_digest": envelope["schema_digest"],
-        "table_counts": envelope["table_counts"],
+        "table_counts": owned_counts,
     }
 
 
+_APPLIED_MIRROR_IDENTITY_FIELDS = frozenset(
+    {
+        "audit_digest",
+        "issuer_key_id",
+        "export_digest",
+        "source_change_seq",
+        "applied_change_seq",
+        "source_content_digest",
+        "local_content_digest",
+        "source_schema_digest",
+        "schema_digest",
+        "table_counts",
+    }
+)
+
+
 def _canonical_applied_mirror_identity_json(
-    identity: Mapping[str, object],
+    identity: dict[str, object],
 ) -> str:
     """Validate and freeze the sync/full-source identity held by one handle."""
+    if type(identity) is not dict or set(identity) != _APPLIED_MIRROR_IDENTITY_FIELDS:
+        raise ValueError("authenticated applied mirror identity is not closed")
     source = identity.get("source_change_seq")
     applied = identity.get("applied_change_seq")
     if (
-        isinstance(source, bool)
-        or not isinstance(source, int)
+        type(source) is not int
         or source <= 0
-        or isinstance(applied, bool)
-        or not isinstance(applied, int)
+        or type(applied) is not int
         or applied != source
     ):
         raise ValueError(
@@ -1868,7 +1888,7 @@ def _canonical_applied_mirror_identity_json(
     for field in digest_fields:
         value = identity.get(field)
         if (
-            not isinstance(value, str)
+            type(value) is not str
             or len(value) != 71
             or not value.startswith("sha256:")
         ):
@@ -1882,24 +1902,38 @@ def _canonical_applied_mirror_identity_json(
                 f"authenticated applied mirror {field} is invalid"
             ) from exc
     issuer = identity.get("issuer_key_id")
-    if not isinstance(issuer, str) or not issuer:
+    if type(issuer) is not str or not issuer:
         raise ValueError("authenticated applied mirror issuer is invalid")
     if identity["source_content_digest"] != identity["local_content_digest"]:
         raise ValueError("authenticated applied mirror source/local content differs")
     counts = identity.get("table_counts")
-    if not isinstance(counts, dict) or set(counts) != set(DEFAULT_TABLES):
+    if type(counts) is not dict or set(counts) != set(DEFAULT_TABLES):
         raise ValueError("authenticated applied mirror inventory is incomplete")
     if any(
-        isinstance(count, bool) or not isinstance(count, int) or count < 0
-        for count in counts.values()
+        type(table) is not str
+        or type(count) is not int
+        or count < 0
+        for table, count in dict.items(counts)
     ):
         raise ValueError("authenticated applied mirror table counts are invalid")
+    owned = dict.copy(identity)
+    owned["table_counts"] = dict.copy(counts)
     return json.dumps(
-        identity,
+        owned,
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
     )
+
+
+def _deep_immutable_json(value: object) -> object:
+    if type(value) is dict:
+        return MappingProxyType(
+            {key: _deep_immutable_json(item) for key, item in value.items()}
+        )
+    if type(value) is list:
+        return tuple(_deep_immutable_json(item) for item in value)
+    return value
 
 
 def _authenticated_export_cursor_chain(
@@ -1973,10 +2007,10 @@ def _build_applied_mirror_authority():
                     raise RuntimeError(
                         "authenticated applied mirror identity changed"
                     )
-                return consumer(
-                    self._conn,
-                    MappingProxyType(json.loads(self._identity_json)),
-                )
+                restored = json.loads(self._identity_json)
+                immutable_identity = _deep_immutable_json(restored)
+                assert isinstance(immutable_identity, Mapping)
+                return consumer(self._conn, immutable_identity)
             finally:
                 try:
                     self._conn.rollback()

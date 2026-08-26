@@ -391,6 +391,99 @@ def test_verified_d1_cursor_chain_reaches_sync_boundary_without_mutable_alias(
             )
 
 
+def test_real_sqlite_signed_chain_retains_deep_immutable_projection_identity(
+    tmp_path, monkeypatch
+):
+    from scripts import sync_d1_to_sqlite as sync
+    from storage.sqlite_store import SqliteStore
+
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    path = tmp_path / "authenticated-mirror.sqlite"
+    store = SqliteStore(path)
+    sync._ensure_export_sync_audit(store)
+    sync._record_change_seq(store, 7)
+    existing_tables = {
+        row[0]
+        for row in store._conn.execute(  # noqa: SLF001
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    for table in sync.DEFAULT_TABLES:
+        if table not in existing_tables:
+            store._conn.execute(  # noqa: SLF001
+                f'CREATE TABLE "{table}" (placeholder TEXT)'
+            )
+    store._conn.commit()  # noqa: SLF001
+    content_digest, schema_digest, counts = (
+        sync._private_export.governed_content_identity(
+            store._conn, sync.DEFAULT_TABLES  # noqa: SLF001
+        )
+    )
+    document = _signed_document(private, registry, issued_at=now)
+    document["envelope"].update(
+        {
+            "source_content_digest": content_digest,
+            "local_content_digest": content_digest,
+            "source_schema_digest": schema_digest,
+            "schema_digest": schema_digest,
+            "table_counts": counts,
+        }
+    )
+    _resign(private, document)
+    envelope = document["envelope"]
+    store._conn.execute(  # noqa: SLF001
+        """
+        INSERT INTO local_d1_export_sync_runs (
+            export_digest,artifact_format,source_mode,sync_kind,
+            source_change_seq,applied_change_seq,source_content_digest,
+            local_content_digest,schema_digest,table_counts_json,authority_id,
+            prior_audit_digest,audit_digest,issuer_key_id,signature,
+            signed_evidence_json,status,started_at,updated_at,error
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
+        """,
+        (
+            envelope["export_digest"],
+            envelope["artifact_format"],
+            envelope["source_mode"],
+            envelope["sync_kind"],
+            envelope["source_change_seq"],
+            envelope["applied_change_seq"],
+            envelope["source_content_digest"],
+            envelope["local_content_digest"],
+            envelope["schema_digest"],
+            json.dumps(counts, sort_keys=True, separators=(",", ":")),
+            envelope["authority_id"],
+            envelope["prior_audit_digest"],
+            signing.d1_sync_digest(document),
+            document["issuer_key_id"],
+            document["signature"],
+            json.dumps(document, sort_keys=True, separators=(",", ":")),
+            "COMPLETE",
+            envelope["issued_at"],
+            envelope["issued_at"],
+        ),
+    )
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+
+    handle = sync.open_authenticated_applied_mirror(path)
+
+    def consume(_conn, identity):
+        assert isinstance(identity, MappingProxyType)
+        immutable_counts = identity["table_counts"]
+        assert isinstance(immutable_counts, MappingProxyType)
+        assert immutable_counts == counts
+        with pytest.raises(TypeError):
+            immutable_counts["jquants_records"] = 999
+        return identity["source_change_seq"], identity["applied_change_seq"]
+
+    assert sync._consume_authenticated_applied_mirror(handle, consume) == (7, 7)
+
+
 def test_strict_json_rejects_duplicate_and_nonfinite_signed_documents(
     tmp_path, monkeypatch
 ):
