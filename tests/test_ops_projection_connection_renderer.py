@@ -254,6 +254,91 @@ def test_caller_owned_renderer_preserves_snapshot_and_restores_factory(
     _assert_exclusive_writer_available(source)
 
 
+def test_caller_owned_renderer_rejects_temp_shadow_objects(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _projection_source(source)
+    conn = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    conn.execute(
+        "CREATE TEMP TABLE dataset_coverage AS "
+        "SELECT * FROM main.dataset_coverage"
+    )
+    conn.execute(
+        "UPDATE temp.dataset_coverage SET status='COMPLETE' "
+        "WHERE dataset='equities_bars_daily'"
+    )
+    conn.commit()
+    conn.execute("PRAGMA query_only=ON")
+    conn.execute("BEGIN")
+    try:
+        identity = _frozen_test_identity(conn)
+        with pytest.raises(RuntimeError, match="contains TEMP objects"):
+            exporter._render_projection_candidate_from_connection(conn, identity)
+        with pytest.raises(RuntimeError, match="contains TEMP objects"):
+            exporter._render_projection_bundle(
+                conn,
+                generation_id="temp-shadow",
+                producer_commit_sha="a" * 40,
+                source_cursor=7,
+                export_cursor=7,
+                _generated_at=FIXED_NOW,
+                _seal_and_activate=False,
+            )
+        assert conn.in_transaction is True
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def test_source_reads_are_authorized_only_from_main(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _projection_source(source)
+    conn = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    conn.execute("PRAGMA query_only=ON")
+    conn.execute("BEGIN")
+    reads: list[tuple[str | None, str | None]] = []
+
+    def authorize(
+        action: int,
+        table: str | None,
+        _column: str | None,
+        database: str | None,
+        _trigger: str | None,
+    ) -> int:
+        if action == sqlite3.SQLITE_READ:
+            reads.append((table, database))
+        return sqlite3.SQLITE_OK
+
+    conn.set_authorizer(authorize)
+    try:
+        bundle = exporter._render_projection_bundle(
+            conn,
+            generation_id="main-only",
+            producer_commit_sha="a" * 40,
+            source_cursor=7,
+            export_cursor=7,
+            _generated_at=FIXED_NOW,
+            _seal_and_activate=False,
+        )
+        assert bundle.content_digest.startswith("sha256:")
+    finally:
+        conn.set_authorizer(None)
+        conn.rollback()
+        conn.close()
+
+    material_reads = [
+        (table, database)
+        for table, database in reads
+        if table is not None and not table.startswith("sqlite_")
+    ]
+    assert ("dataset_coverage", "main") in material_reads
+    assert material_reads
+    assert all(database == "main" for _table, database in material_reads)
+
+
 def test_caller_owned_renderer_exception_preserves_snapshot_and_factory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

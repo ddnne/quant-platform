@@ -145,7 +145,7 @@ def _build_projection_metadata_from_connection(
     }
     try:
         row = conn.execute(
-            "SELECT MAX(evaluated_at) FROM dataset_coverage"
+            "SELECT MAX(evaluated_at) FROM main.dataset_coverage"
         ).fetchone()
         source_generation = row[0] if row and row[0] else None
     except sqlite3.OperationalError:

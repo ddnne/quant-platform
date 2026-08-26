@@ -122,16 +122,40 @@ def _insert_sql(
     ]
 
 
+def _quoted_identifier(identifier: str) -> str:
+    if type(identifier) is not str or not identifier:
+        raise ValueError("SQLite identifier must be a non-empty exact string")
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _main_table(table: str) -> str:
+    """Return one quoted source-table reference in the main schema."""
+
+    return "main." + _quoted_identifier(table)
+
+
+def _reject_temp_objects(conn: sqlite3.Connection) -> None:
+    """TEMP is never an authority input and must not shadow main objects."""
+
+    if conn.execute("SELECT 1 FROM temp.sqlite_master LIMIT 1").fetchone() is not None:
+        raise RuntimeError("Ops Projection source connection contains TEMP objects")
+
+
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        "SELECT 1 FROM main.sqlite_master WHERE type='table' AND name=?", (table,)
     ).fetchone() is not None
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     if not _table_exists(conn, table):
         return set()
-    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+    return {
+        str(row[1])
+        for row in conn.execute(
+            f"PRAGMA main.table_info({_quoted_identifier(table)})"
+        )
+    }
 
 
 def _rows(
@@ -154,7 +178,7 @@ def _rows(
     return [
         dict(row)
         for row in conn.execute(
-            f"SELECT {','.join(columns)} FROM {table} ORDER BY {order_by}"
+            f"SELECT {','.join(columns)} FROM {_main_table(table)} ORDER BY {order_by}"
         ).fetchall()
     ]
 
@@ -164,16 +188,24 @@ def _safe_count(
 ) -> int | None:
     if not _table_exists(conn, table):
         return None
-    row = conn.execute(f"SELECT COUNT(*) FROM {table}{where}", tuple(binds)).fetchone()
+    row = conn.execute(
+        f"SELECT COUNT(*) FROM {_main_table(table)}{where}", tuple(binds)
+    ).fetchone()
     return int(row[0]) if row is not None else 0
 
 
 def _safe_scalar(
-    conn: sqlite3.Connection, table: str, sql: str, binds: Sequence[Any] = ()
+    conn: sqlite3.Connection,
+    table: str,
+    expression: str,
+    where: str = "",
+    binds: Sequence[Any] = (),
 ) -> Any:
     if not _table_exists(conn, table):
         return None
-    row = conn.execute(sql, tuple(binds)).fetchone()
+    row = conn.execute(
+        f"SELECT {expression} FROM {_main_table(table)}{where}", tuple(binds)
+    ).fetchone()
     return row[0] if row is not None else None
 
 
@@ -252,7 +284,8 @@ def _read_b0(conn: sqlite3.Connection, generation_id: str, now: str) -> dict[str
         row = conn.execute(
             "SELECT build_id,status,policy_version,evaluated_at,summary_json,"
             f"{results_select} "
-            "FROM snapshot_quality_results ORDER BY evaluated_at DESC LIMIT 1"
+            "FROM main.snapshot_quality_results "
+            "ORDER BY evaluated_at DESC LIMIT 1"
         ).fetchone()
         if row is not None:
             return {
@@ -386,7 +419,8 @@ def _read_latest_runs(conn: sqlite3.Connection, generation_id: str) -> list[dict
         return []
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id,ran_at,source,runtime,status,detail FROM ingestion_run_log "
+        "SELECT id,ran_at,source,runtime,status,detail "
+        "FROM main.ingestion_run_log "
         "ORDER BY id DESC LIMIT 100"
     ).fetchall()
     return [
@@ -406,14 +440,14 @@ def _read_latest_validation(
     latest = _safe_scalar(
         conn,
         "ingestion_validation",
-        "SELECT MAX(run_id) FROM ingestion_validation",
+        "MAX(run_id)",
     )
     if latest is None:
         return []
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         "SELECT run_id,dataset,status,rows_seen,rows_inserted,rows_revisions,detail "
-        "FROM ingestion_validation WHERE run_id=? ORDER BY dataset",
+        "FROM main.ingestion_validation WHERE run_id=? ORDER BY dataset",
         (latest,),
     ).fetchall()
     return [
@@ -432,7 +466,7 @@ def _read_watermarks(conn: sqlite3.Connection, generation_id: str) -> list[dict[
         {"projection_generation_id": generation_id, **dict(row)}
         for row in conn.execute(
             "SELECT dataset,last_event_date,last_ingested_at,last_export_cursor "
-            "FROM ingestion_watermarks ORDER BY dataset"
+            "FROM main.ingestion_watermarks ORDER BY dataset"
         ).fetchall()
     ]
 
@@ -443,7 +477,7 @@ def _read_applied_cursor(conn: sqlite3.Connection) -> tuple[int | None, str | No
     ):
         return None, None
     row = conn.execute(
-        "SELECT last_applied_change_seq,updated_at FROM sync_change_state "
+        "SELECT last_applied_change_seq,updated_at FROM main.sync_change_state "
         "WHERE feed=? LIMIT 1",
         (CANONICAL_APPLY_FEED,),
     ).fetchone()
@@ -467,7 +501,7 @@ def _read_authoritative_raw_segments(
     }
     has_raw = raw_columns <= _columns(conn, "raw_retention_manifests")
     join = (
-        "LEFT JOIN raw_retention_manifests m "
+        "LEFT JOIN main.raw_retention_manifests m "
         "ON m.dataset=r.dataset AND m.run_id=r.run_id"
         if has_raw
         else ""
@@ -487,7 +521,7 @@ def _read_authoritative_raw_segments(
                    PARTITION BY source,dataset,segment_id
                    ORDER BY checked_at DESC,run_id DESC
                  ) AS rank_no
-            FROM collection_receipts
+            FROM main.collection_receipts
         )
         SELECT r.source,r.dataset,r.segment_id,r.run_id,r.status,r.error,r.checked_at,
                {raw_select}
@@ -551,7 +585,7 @@ def _read_sla_rows(
         local = {
             str(row["dataset_id"]): dict(row)
             for row in conn.execute(
-                f"SELECT {','.join(columns)} FROM collection_sla_status"
+                f"SELECT {','.join(columns)} FROM main.collection_sla_status"
             ).fetchall()
         }
     rows: list[dict[str, Any]] = []
@@ -797,6 +831,7 @@ def _render_projection_bundle(
                 raise RuntimeError(
                     "caller-owned projection connection must already be read-only"
                 )
+        _reject_temp_objects(conn)
         coverage = _rows(
             conn,
             "dataset_coverage",
@@ -822,7 +857,7 @@ def _render_projection_bundle(
                 _safe_scalar(
                     conn,
                     "ingestion_change_log",
-                    "SELECT MAX(change_seq) FROM ingestion_change_log",
+                    "MAX(change_seq)",
                 )
             )
         change_rows = _safe_count(conn, "ingestion_change_log")
@@ -1325,6 +1360,7 @@ def _measure_connection_snapshot(
     journal_mode = conn.execute("PRAGMA journal_mode").fetchone()
     if journal_mode is None or tuple(journal_mode) != ("delete",):
         raise RuntimeError("Ops Projection source connection is not frozen")
+    _reject_temp_objects(conn)
     databases = [tuple(row) for row in conn.execute("PRAGMA database_list")]
     main_rows = [row for row in databases if len(row) == 3 and row[1] == "main"]
     other_rows = [row for row in databases if row not in main_rows]
