@@ -142,6 +142,49 @@ def test_previously_ignored_wrangler_fields_are_modeled(monkeypatch: pytest.Monk
     assert production["tail_consumers"] == []
 
 
+def test_missing_named_environment_name_tracks_wrangler_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = manifest_module.WORKER_ROOT / "ingestion-premium" / "wrangler.toml"
+    data = manifest_module._load_toml(config)  # noqa: SLF001
+    del data["env"]["production"]["name"]
+    monkeypatch.setattr(manifest_module, "_load_toml", lambda _path: data)
+    surface = manifest_module._effective_surface(  # noqa: SLF001
+        worker="ingestion-premium",
+        config_path=config,
+        environment="production",
+        named_environment="production",
+    )
+    assert surface["name"] == f'{data["name"]}-production'
+
+
+def test_durable_object_migration_order_is_semantic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = manifest_module.WORKER_ROOT / "research-ai-gateway" / "wrangler.toml"
+    data = manifest_module._load_toml(config)  # noqa: SLF001
+    first = {"tag": "v1", "new_sqlite_classes": ["BudgetLedger"]}
+    second = {"tag": "v2", "renamed_classes": [{"from": "A", "to": "B"}]}
+    data["migrations"] = [first, second]
+    monkeypatch.setattr(manifest_module, "_load_toml", lambda _path: data)
+    forward = manifest_module._effective_surface(  # noqa: SLF001
+        worker="research-ai-gateway",
+        config_path=config,
+        environment="base",
+        named_environment=None,
+    )
+    data["migrations"] = [second, first]
+    reversed_surface = manifest_module._effective_surface(  # noqa: SLF001
+        worker="research-ai-gateway",
+        config_path=config,
+        environment="base",
+        named_environment=None,
+    )
+    assert forward["migrations"] == [first, second]
+    assert reversed_surface["migrations"] == [second, first]
+    assert forward != reversed_surface
+
+
 def test_unclassified_wrangler_key_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     config = manifest_module.WORKER_ROOT / "ingestion-premium" / "wrangler.toml"
     data = manifest_module._load_toml(config)  # noqa: SLF001

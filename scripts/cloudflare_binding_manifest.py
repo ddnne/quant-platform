@@ -269,6 +269,15 @@ def _json_rows(value: Any) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: json.dumps(row, sort_keys=True))
 
 
+def _ordered_json_rows(value: Any, *, field: str) -> list[dict[str, Any]]:
+    """Validate rows while preserving declaration order when order is semantic."""
+    if not value:
+        return []
+    if not isinstance(value, list) or not all(isinstance(row, dict) for row in value):
+        raise ValueError(f"{field} must be a list of tables")
+    return [dict(sorted(row.items())) for row in value]
+
+
 def _secret_names(value: Any) -> list[str]:
     if not value:
         return []
@@ -334,11 +343,19 @@ def _effective_surface(
     routes = scalar("routes", default=[]) or []
     if route is not None and routes:
         raise ValueError(f"{config_path}: route and routes are mutually exclusive")
+    effective_name = scalar("name")
+    if named_environment is not None and "name" not in section:
+        base_name = data.get("name")
+        if not isinstance(base_name, str) or not base_name:
+            raise ValueError(f"{config_path}: inherited Worker name is invalid")
+        # Wrangler appends the named environment when an explicit name override
+        # is absent; raw TOML inheritance would otherwise freeze the wrong target.
+        effective_name = f"{base_name}-{named_environment}"
 
     return {
         "config": str(config_path.relative_to(ROOT)),
         "account_id": account_id,
-        "name": scalar("name"),
+        "name": effective_name,
         "main": scalar("main"),
         "compatibility_date": scalar("compatibility_date"),
         "compatibility_flags": sorted(scalar("compatibility_flags", default=[]) or []),
@@ -359,7 +376,7 @@ def _effective_surface(
         "placement": _canonical_json_value(
             scalar("placement", default={}) or {}, field="placement"
         ),
-        "migrations": _json_rows(migrations),
+        "migrations": _ordered_json_rows(migrations, field="migrations"),
         "crons": sorted(
             ((scalar("triggers", default={}) or {}).get("crons") or [])
         ),
