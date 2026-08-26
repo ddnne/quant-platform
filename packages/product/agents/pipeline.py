@@ -31,9 +31,9 @@ from .types import (
 )
 
 try:
-    from selection.screen import ExperimentBudget
+    from selection.screen import OfflineExperimentBudget
 except ImportError:
-    ExperimentBudget = None  # type: ignore[misc,assignment]
+    OfflineExperimentBudget = None  # type: ignore[misc,assignment]
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,7 @@ class AgentPaperPipeline:
         risk_store: JsonRiskStore | None = None,
         strategist: StrategistAgent | None = None,
         risk_agent: RiskAgent | None = None,
-        experiment_budget: ExperimentBudget | None = None,
+        experiment_budget: OfflineExperimentBudget | None = None,
     ) -> None:
         self.paper_store = paper_store or JsonPaperStore()
         self.risk_store = risk_store or JsonRiskStore()

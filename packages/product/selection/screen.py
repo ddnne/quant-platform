@@ -12,8 +12,13 @@ _CONTROLLED_PILOT_POLICY = load_controlled_pilot_policy()
 
 
 @dataclass(frozen=True)
-class ExperimentBudget:
-    """Controlled-pilot limits loaded from the cross-runtime policy SoT."""
+class OfflineExperimentBudget:
+    """Caller-tunable budget for DRAFT/offline screening and fixture runs.
+
+    This value is not a controlled-pilot policy or authorization capability.
+    Controlled v2 claims pin ``ControlledPilotPolicyPin`` loaded from the
+    digest-checked policy source of truth and never consume these overrides.
+    """
 
     max_parallel_experiments: int = _CONTROLLED_PILOT_POLICY.max_parallel_experiments
     max_generations: int = _CONTROLLED_PILOT_POLICY.max_generations
@@ -63,7 +68,7 @@ def early_stop(
     generation: int,
     paper_runs: int,
     model_calls: int,
-    budget: ExperimentBudget,
+    budget: OfflineExperimentBudget,
     best_score: float | None = None,
     floor: float | None = None,
 ) -> bool:
@@ -77,3 +82,16 @@ def early_stop(
     if floor is not None and best_score is not None and best_score < floor:
         return True
     return False
+
+
+# Compatibility name for the offline API.  New controlled code must never use
+# this alias as an authority or policy input.
+ExperimentBudget = OfflineExperimentBudget
+
+
+__all__ = [
+    "ExperimentBudget",
+    "OfflineExperimentBudget",
+    "early_stop",
+    "screen_candidates",
+]

@@ -26,7 +26,7 @@ from research.readiness import (
 from research.ready_manifest import build_ready_manifest, load_exact_four_pilot_ready_binding
 from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
-from selection.screen import ExperimentBudget
+from selection.screen import ExperimentBudget, OfflineExperimentBudget
 from storage.immutable_artifact import ImmutableArtifactStore
 from tests.readiness_test_support import (
     _TestReadinessSigner,
@@ -104,11 +104,15 @@ def _readiness(
     return pending
 
 
-def _budget(tmp_path: Path) -> ResearchBudgetCapability:
+def _budget(
+    tmp_path: Path,
+    *,
+    limits: OfflineExperimentBudget | None = None,
+) -> ResearchBudgetCapability:
     return ResearchBudgetCapability(
         "pilot-b",
         tmp_path / "pilot-b.sqlite",
-        ExperimentBudget(),
+        limits or OfflineExperimentBudget(),
     )
 
 
@@ -204,6 +208,21 @@ def test_construct_fails_without_readiness(tmp_path: Path) -> None:
 def test_construct_fails_without_budget(tmp_path: Path) -> None:
     with pytest.raises(MassResearchDisabledError, match="ResearchBudgetCapability"):
         _construct(tmp_path, budget=None)
+
+
+def test_controlled_scheduler_rejects_offline_caller_budget_overrides(
+    tmp_path: Path,
+) -> None:
+    assert ExperimentBudget is OfflineExperimentBudget
+    overridden = _budget(
+        tmp_path,
+        limits=OfflineExperimentBudget(max_model_calls=15),
+    )
+    with pytest.raises(
+        MassResearchDisabledError,
+        match="rejects caller budget overrides",
+    ):
+        _construct(tmp_path, budget=overridden)
 
 
 def test_construct_fails_without_plan(tmp_path: Path) -> None:

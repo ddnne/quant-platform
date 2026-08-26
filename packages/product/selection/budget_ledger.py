@@ -15,7 +15,7 @@ from typing import Mapping
 from urllib.parse import quote
 from uuid import uuid4
 
-from selection.screen import ExperimentBudget
+from selection.screen import OfflineExperimentBudget
 
 _COUNTERS = (
     "generations",
@@ -65,7 +65,7 @@ class ResearchBudgetCapability:
 
     budget_id: str
     ledger_path: Path
-    limits: ExperimentBudget
+    limits: OfflineExperimentBudget
 
     def __post_init__(self) -> None:
         # Hard token/cost budgets — never None for mass research.
@@ -331,7 +331,7 @@ def require_budget_capability(
     return cap
 
 
-def _limit_for(limits: ExperimentBudget, counter: str) -> int | None:
+def _limit_for(limits: OfflineExperimentBudget, counter: str) -> int | None:
     mapping = {
         "generations": limits.max_generations,
         "model_calls": limits.max_model_calls,

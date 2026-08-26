@@ -15,6 +15,11 @@ from research.readiness import (
     verify_pinned_pilot_readiness,
 )
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
+from selection.controlled_pilot_policy import (
+    ControlledPilotPolicyPin,
+    load_controlled_pilot_policy,
+)
+from selection.screen import OfflineExperimentBudget
 from storage.immutable_artifact import ImmutableArtifactStore
 
 PILOT_MIN_HYPOTHESES: int = 2
@@ -111,6 +116,37 @@ def _require_signed_readiness(
     return readiness
 
 
+def _require_canonical_controlled_budget_policy(
+    budget: ResearchBudgetCapability,
+) -> ControlledPilotPolicyPin:
+    """Treat the ledger as storage while deriving limits from the pinned policy."""
+
+    policy = load_controlled_pilot_policy()
+    limits = budget.limits
+    if type(limits) is not OfflineExperimentBudget:
+        raise MassResearchDisabledError(
+            "controlled pilot budget ledger requires exact offline budget storage"
+        )
+    expected = {
+        "max_parallel_experiments": policy.max_parallel_experiments,
+        "max_generations": policy.max_generations,
+        "max_model_calls": policy.max_model_calls,
+        "max_paper_runs": policy.max_paper_runs,
+        "max_input_tokens": policy.max_input_tokens,
+        "max_output_tokens": policy.max_output_tokens,
+        "max_cached_tokens": policy.max_cached_tokens,
+        "max_estimated_cost_micros": policy.max_cost_usd * 1_000_000,
+        "lease_ttl_seconds": policy.lease_ttl_seconds,
+        "automatic_promotion": policy.automatic_promotion,
+    }
+    if any(getattr(limits, name) != value for name, value in expected.items()):
+        raise MassResearchDisabledError(
+            "controlled pilot rejects caller budget overrides; canonical "
+            "ControlledPilotPolicyPin is required"
+        )
+    return policy
+
+
 class ControlledPilotScheduler:
     """Exact pilot scheduler. Fail-closed at construct. Execution stays OFF."""
 
@@ -153,6 +189,7 @@ class ControlledPilotScheduler:
             )
         if not isinstance(budget, ResearchBudgetCapability):
             raise MassResearchDisabledError("ResearchBudgetCapability required")
+        self._controlled_policy = _require_canonical_controlled_budget_policy(budget)
         if type(plan) is not ExperimentPlan:
             raise MassResearchDisabledError("ExperimentPlan required")
         from research.ready_manifest import load_exact_four_pilot_ready_binding
@@ -169,7 +206,7 @@ class ControlledPilotScheduler:
             readiness,
             binding=binding,
         )
-        self._budget = budget
+        self._budget_ledger = budget
         self._plan = canonical_plan
         self._evaluation_service = _require_authorized_evaluation_service(
             authorized_evaluation_service

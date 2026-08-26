@@ -7,12 +7,18 @@ from selection.budget_ledger import (
     require_budget_capability,
 )
 from selection.decision import DECISIONS, SelectionDecision
-from selection.screen import ExperimentBudget, early_stop, screen_candidates
+from selection.screen import (
+    ExperimentBudget,
+    OfflineExperimentBudget,
+    early_stop,
+    screen_candidates,
+)
 
 __all__ = [
     "BudgetExhaustedError",
     "DECISIONS",
     "ExperimentBudget",
+    "OfflineExperimentBudget",
     "MassResearchDisabledError",
     "ResearchBudgetCapability",
     "SelectionDecision",
