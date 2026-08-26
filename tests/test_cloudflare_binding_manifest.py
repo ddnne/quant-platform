@@ -133,7 +133,9 @@ def test_nested_package_json_cannot_escape_inventory(tmp_path: Path) -> None:
         manifest_module.validate_active_worker_inventory(worker_root=worker_root)
 
 
-@pytest.mark.parametrize("marker", ("wrangler.toml", "package.json"))
+@pytest.mark.parametrize(
+    "marker", ("wrangler.toml", "cloudflare.config.ts", "package.json")
+)
 def test_worker_outside_canonical_root_cannot_escape_repository_inventory(
     tmp_path: Path,
     marker: str,
@@ -157,7 +159,7 @@ def test_worker_outside_canonical_root_cannot_escape_repository_inventory(
         )
     rogue = repo_root / "packages" / "rogue"
     rogue.mkdir(parents=True)
-    if marker == "wrangler.toml":
+    if marker != "package.json":
         (rogue / marker).write_text('name = "rogue"\n', encoding="utf-8")
     else:
         (rogue / marker).write_text(

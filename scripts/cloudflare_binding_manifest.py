@@ -29,6 +29,9 @@ _ALLOWED_WORKER_CONTROL_FILES = _ALLOWED_WRANGLER_CONFIGS | frozenset(
     {"package.json", "package-lock.json", "tsconfig.json"}
 )
 _DEPLOYMENT_CONTROL_SUFFIXES = frozenset({".toml", ".json", ".jsonc"})
+_EXPERIMENTAL_WRANGLER_CONFIGS = frozenset(
+    {"cloudflare.config.ts", "wrangler.config.ts"}
+)
 _REPOSITORY_SCAN_PRUNED_DIRS = frozenset(
     {
         ".git",
@@ -88,13 +91,13 @@ def _is_wrangler_config_filename(name: str) -> bool:
     return (
         name.startswith("wrangler")
         and Path(name).suffix in _DEPLOYMENT_CONTROL_SUFFIXES
-    ) or name == "wrangler.config.ts"
+    ) or name in _EXPERIMENTAL_WRANGLER_CONFIGS
 
 
 def _is_deployment_control_filename(name: str) -> bool:
     return (
         Path(name).suffix in _DEPLOYMENT_CONTROL_SUFFIXES
-        or name == "wrangler.config.ts"
+        or name in _EXPERIMENTAL_WRANGLER_CONFIGS
     )
 
 
