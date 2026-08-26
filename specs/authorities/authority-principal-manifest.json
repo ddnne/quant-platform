@@ -1,0 +1,550 @@
+{
+  "schema_version": "authority-principal-manifest/v1",
+  "generation": 1,
+  "activation_status": "PENDING",
+  "schema_digest": "sha256:f453a9f81d8b94782b740628d3423924e350c912f09d9002a2ea80e195811fc1",
+  "protocol_schema_digests": {
+    "frozen_mirror_request": "sha256:bb7d61b2c494f94045e916dca937e1631149fb9c22c3ebd78c2c2e863131d28f",
+    "frozen_mirror_handoff": "sha256:c27efba1e4df56f30a27929333675d1bbd6bc220f6d2fd5cef2b7104969a09d5",
+    "authority_event": "sha256:058fabe00de1f0f6aaefaffcdd9ff5da60a1ff5b690dec19fe36c3577b23da2b"
+  },
+  "residual_risks": {
+    "cloudflare_workers_scripts_write_account_scope": {
+      "affected_principal": "receipt",
+      "status": "OPEN",
+      "scope": "ACCOUNT_WIDE",
+      "reason": "Cloudflare Workers Scripts Write remains account-scoped; separate Worker, Service Binding, Durable Object, and key custody do not make the deployment credential resource-scoped."
+    }
+  },
+  "principals": {
+    "receipt": {
+      "principal_id": "receipt",
+      "runtime": "cloudflare_worker",
+      "authority_status": "PENDING",
+      "signing_purpose": "trusted_collection_receipt",
+      "registry_path": "packages/data_plane/data_contracts/receipt_verify_public_keys.json",
+      "service_entrypoint": "receipt.issue_for_segment",
+      "provides": [
+        "receipt:issue_for_segment"
+      ],
+      "allowed_callers": [
+        "governed_ingestion"
+      ],
+      "capabilities": [
+        "jquants_acquisition:fetch_governed_page",
+        "raw_immutable:create_only",
+        "structured_immutable:create_only",
+        "structured_natural_key:segment_read",
+        "receipt_ledger:append",
+        "receipt_signature:sign"
+      ],
+      "forbidden_capabilities": [
+        "other_signer_private_key:read",
+        "ops_projection_signature:sign",
+        "ready_attestation:sign",
+        "general_complete:mint"
+      ],
+      "deployments": {
+        "staging": {
+          "mode": "PENDING_NO_KEY",
+          "worker_ref": "platform/workers/ingestion-premium",
+          "worker_name": "quant-platform-receipt-evidence-authority-staging",
+          "incoming_service_binding": {
+            "binding_name": "RECEIPT_EVIDENCE_AUTHORITY",
+            "caller_id": "governed_ingestion",
+            "caller_worker_ref": "platform/workers/ingestion-premium",
+            "target_worker_name": "quant-platform-receipt-evidence-authority-staging"
+          },
+          "durable_object_binding": "RECEIPT_EVIDENCE_AUTHORITY_DO",
+          "durable_object_class": "ReceiptEvidenceAuthority",
+          "workers_dev": false,
+          "preview_urls": false,
+          "routes": [],
+          "public_fetch_behavior": "NOT_FOUND_404",
+          "secret_names": [],
+          "key_backend": "durable_object_webcrypto_non_extractable",
+          "approval_backend": "service_policy",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "durable-object-webcrypto://staging/receipt/ed25519-non-extractable-key",
+          "readable_private_key_refs": [],
+          "event_store_ref": "durable-object-sqlite://staging/receipt/authority-events",
+          "cloudflare_resources": [
+            {
+              "provider": "cloudflare",
+              "kind": "r2",
+              "resource_ref": "cloudflare:staging:r2:quant-raw-staging",
+              "access": "create_only_read"
+            },
+            {
+              "provider": "cloudflare",
+              "kind": "r2",
+              "resource_ref": "cloudflare:staging:r2:quant-structured-staging",
+              "access": "create_only_read"
+            },
+            {
+              "provider": "cloudflare",
+              "kind": "d1",
+              "resource_ref": "cloudflare:staging:d1:quant-ingest-staging",
+              "access": "segment_reconcile_receipt_append"
+            },
+            {
+              "provider": "cloudflare",
+              "kind": "durable_object",
+              "resource_ref": "cloudflare:staging:durable_object:receipt-evidence-authority-staging",
+              "access": "key_sign_event_append"
+            },
+            {
+              "provider": "cloudflare",
+              "kind": "service_binding",
+              "resource_ref": "cloudflare:staging:service_binding:quant-platform-ingestion-secrets-staging",
+              "access": "typed_jquants_acquisition_rpc",
+              "binding_name": "JQUANTS_ACQUISITION"
+            }
+          ]
+        },
+        "production": {
+          "mode": "PENDING_NO_KEY",
+          "worker_ref": "platform/workers/ingestion-premium",
+          "worker_name": "quant-platform-receipt-evidence-authority",
+          "incoming_service_binding": {
+            "binding_name": "RECEIPT_EVIDENCE_AUTHORITY",
+            "caller_id": "governed_ingestion",
+            "caller_worker_ref": "platform/workers/ingestion-premium",
+            "target_worker_name": "quant-platform-receipt-evidence-authority"
+          },
+          "durable_object_binding": "RECEIPT_EVIDENCE_AUTHORITY_DO",
+          "durable_object_class": "ReceiptEvidenceAuthority",
+          "workers_dev": false,
+          "preview_urls": false,
+          "routes": [],
+          "public_fetch_behavior": "NOT_FOUND_404",
+          "secret_names": [],
+          "key_backend": "durable_object_webcrypto_non_extractable",
+          "approval_backend": "service_policy",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "durable-object-webcrypto://production/receipt/ed25519-non-extractable-key",
+          "readable_private_key_refs": [],
+          "event_store_ref": "durable-object-sqlite://production/receipt/authority-events",
+          "cloudflare_resources": [
+            {
+              "provider": "cloudflare",
+              "kind": "r2",
+              "resource_ref": "cloudflare:production:r2:quant-raw",
+              "access": "create_only_read"
+            },
+            {
+              "provider": "cloudflare",
+              "kind": "r2",
+              "resource_ref": "cloudflare:production:r2:quant-structured",
+              "access": "create_only_read"
+            },
+            {
+              "provider": "cloudflare",
+              "kind": "d1",
+              "resource_ref": "cloudflare:production:d1:quant-ingest",
+              "access": "segment_reconcile_receipt_append"
+            },
+            {
+              "provider": "cloudflare",
+              "kind": "durable_object",
+              "resource_ref": "cloudflare:production:durable_object:receipt-evidence-authority",
+              "access": "key_sign_event_append"
+            },
+            {
+              "provider": "cloudflare",
+              "kind": "service_binding",
+              "resource_ref": "cloudflare:production:service_binding:quant-platform-ingestion-secrets",
+              "access": "typed_jquants_acquisition_rpc",
+              "binding_name": "JQUANTS_ACQUISITION"
+            }
+          ]
+        }
+      }
+    },
+    "d1_sync": {
+      "principal_id": "d1_sync",
+      "runtime": "local_os_service",
+      "authority_status": "PENDING",
+      "signing_purpose": "d1_full_source_sync_audit",
+      "registry_path": "specs/d1_sync/verify_public_keys.json",
+      "service_entrypoint": "d1_sync.sync_now",
+      "provides": [
+        "d1_sync:sync_now",
+        "frozen_mirror:readonly_handoff",
+        "coverage_transition_apply:apply_signed"
+      ],
+      "allowed_callers": [
+        "ops_scheduler",
+        "ops_projection",
+        "coverage_transition"
+      ],
+      "capabilities": [
+        "cloudflare_d1:quant_ingest_export",
+        "mirror_store:write",
+        "frozen_mirror:readonly_handoff",
+        "d1_sync_audit:sign",
+        "d1_sync_event_ledger:append"
+      ],
+      "forbidden_capabilities": [
+        "other_signer_private_key:read",
+        "ops_projection_signature:sign",
+        "coverage_transition_signature:sign",
+        "ready_attestation:sign"
+      ],
+      "deployments": {
+        "staging": {
+          "mode": "PENDING_NO_KEY",
+          "service_identity": "qp-staging-d1-sync-authority",
+          "service_user": "qp_staging_d1_sync_authority",
+          "key_backend": "protected_local_key",
+          "approval_backend": "service_policy",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "local-protected://staging/d1_sync/ed25519-private-key",
+          "readable_private_key_refs": [
+            "local-protected://staging/d1_sync/ed25519-private-key"
+          ],
+          "event_store_ref": "local-protected://staging/d1_sync/authority-events.sqlite3",
+          "socket_path": "/var/run/quant-platform/staging/d1_sync.sock",
+          "cloudflare_resources": [
+            {
+              "provider": "cloudflare",
+              "kind": "d1",
+              "resource_ref": "cloudflare:staging:d1:quant-ingest-staging",
+              "access": "export_read"
+            }
+          ]
+        },
+        "production": {
+          "mode": "PENDING_NO_KEY",
+          "service_identity": "qp-production-d1-sync-authority",
+          "service_user": "qp_production_d1_sync_authority",
+          "key_backend": "protected_local_key",
+          "approval_backend": "service_policy",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "local-protected://production/d1_sync/ed25519-private-key",
+          "readable_private_key_refs": [
+            "local-protected://production/d1_sync/ed25519-private-key"
+          ],
+          "event_store_ref": "local-protected://production/d1_sync/authority-events.sqlite3",
+          "socket_path": "/var/run/quant-platform/production/d1_sync.sock",
+          "cloudflare_resources": [
+            {
+              "provider": "cloudflare",
+              "kind": "d1",
+              "resource_ref": "cloudflare:production:d1:quant-ingest",
+              "access": "export_read"
+            }
+          ]
+        }
+      }
+    },
+    "ops_projection": {
+      "principal_id": "ops_projection",
+      "runtime": "local_os_service",
+      "authority_status": "PENDING",
+      "signing_purpose": "ops_projection_envelope",
+      "registry_path": "specs/ops_projection/verify_public_keys.json",
+      "service_entrypoint": "ops_projection.render_and_sign",
+      "provides": [
+        "ops_projection:render_and_sign"
+      ],
+      "allowed_callers": [
+        "ops_scheduler"
+      ],
+      "capabilities": [
+        "frozen_mirror:readonly_consume",
+        "ops_projection:render",
+        "ops_projection_signature:sign",
+        "ops_projection_store:append_activate",
+        "ops_projection_event_ledger:append"
+      ],
+      "forbidden_capabilities": [
+        "source_d1:write",
+        "source_d1:direct_bind",
+        "mcp_quota_db:write",
+        "ready_private_key:read",
+        "other_signer_private_key:read"
+      ],
+      "deployments": {
+        "staging": {
+          "mode": "PENDING_NO_KEY",
+          "service_identity": "qp-staging-ops-projection-authority",
+          "service_user": "qp_staging_ops_projection_authority",
+          "key_backend": "protected_local_key",
+          "approval_backend": "service_policy",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "local-protected://staging/ops_projection/ed25519-private-key",
+          "readable_private_key_refs": [
+            "local-protected://staging/ops_projection/ed25519-private-key"
+          ],
+          "event_store_ref": "local-protected://staging/ops_projection/authority-events.sqlite3",
+          "socket_path": "/var/run/quant-platform/staging/ops_projection.sock",
+          "cloudflare_resources": [
+            {
+              "provider": "cloudflare",
+              "kind": "d1",
+              "resource_ref": "cloudflare:staging:d1:quant-ops-projection-staging",
+              "access": "append_activate"
+            }
+          ]
+        },
+        "production": {
+          "mode": "PENDING_NO_KEY",
+          "service_identity": "qp-production-ops-projection-authority",
+          "service_user": "qp_production_ops_projection_authority",
+          "key_backend": "protected_local_key",
+          "approval_backend": "service_policy",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "local-protected://production/ops_projection/ed25519-private-key",
+          "readable_private_key_refs": [
+            "local-protected://production/ops_projection/ed25519-private-key"
+          ],
+          "event_store_ref": "local-protected://production/ops_projection/authority-events.sqlite3",
+          "socket_path": "/var/run/quant-platform/production/ops_projection.sock",
+          "cloudflare_resources": [
+            {
+              "provider": "cloudflare",
+              "kind": "d1",
+              "resource_ref": "cloudflare:production:d1:quant-ops-projection",
+              "access": "append_activate"
+            }
+          ]
+        }
+      }
+    },
+    "coverage_transition": {
+      "principal_id": "coverage_transition",
+      "runtime": "local_os_service",
+      "authority_status": "PENDING",
+      "signing_purpose": "coverage_complete_transition",
+      "registry_path": "specs/coverage_transition/public_keys.json",
+      "service_entrypoint": "coverage_transition.authorize_and_apply",
+      "provides": [
+        "coverage_transition:authorize_and_apply"
+      ],
+      "allowed_callers": [
+        "coverage_scheduler"
+      ],
+      "capabilities": [
+        "frozen_mirror:readonly_consume",
+        "coverage_transition:derive",
+        "coverage_transition_signature:sign",
+        "coverage_transition_apply:request",
+        "coverage_transition_event_ledger:append"
+      ],
+      "forbidden_capabilities": [
+        "source_d1:write",
+        "source_d1:direct_bind",
+        "ready_private_key:read",
+        "other_signer_private_key:read"
+      ],
+      "deployments": {
+        "staging": {
+          "mode": "PENDING_NO_KEY",
+          "service_identity": "qp-staging-coverage-transition-authority",
+          "service_user": "qp_staging_coverage_transition_authority",
+          "key_backend": "protected_local_key",
+          "approval_backend": "service_policy",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "local-protected://staging/coverage_transition/ed25519-private-key",
+          "readable_private_key_refs": [
+            "local-protected://staging/coverage_transition/ed25519-private-key"
+          ],
+          "event_store_ref": "local-protected://staging/coverage_transition/authority-events.sqlite3",
+          "socket_path": "/var/run/quant-platform/staging/coverage_transition.sock",
+          "cloudflare_resources": []
+        },
+        "production": {
+          "mode": "PENDING_NO_KEY",
+          "service_identity": "qp-production-coverage-transition-authority",
+          "service_user": "qp_production_coverage_transition_authority",
+          "key_backend": "protected_local_key",
+          "approval_backend": "service_policy",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "local-protected://production/coverage_transition/ed25519-private-key",
+          "readable_private_key_refs": [
+            "local-protected://production/coverage_transition/ed25519-private-key"
+          ],
+          "event_store_ref": "local-protected://production/coverage_transition/authority-events.sqlite3",
+          "socket_path": "/var/run/quant-platform/production/coverage_transition.sock",
+          "cloudflare_resources": []
+        }
+      }
+    },
+    "ready": {
+      "principal_id": "ready",
+      "runtime": "local_os_service",
+      "authority_status": "PENDING",
+      "signing_purpose": "profile_plan_bound_ready",
+      "registry_path": "specs/ready/readiness_verify_public_keys.json",
+      "service_entrypoint": "ready.publish_profile_plan_bound",
+      "provides": [
+        "ready:publish_profile_plan_bound"
+      ],
+      "allowed_callers": [
+        "ready_publisher"
+      ],
+      "capabilities": [
+        "ops_projection:verified_read",
+        "immutable_snapshot:read",
+        "ready_attestation:sign",
+        "ready_store:append",
+        "ready_event_ledger:append"
+      ],
+      "forbidden_capabilities": [
+        "source_d1:write",
+        "receipt_private_key:read",
+        "ops_projection_private_key:read",
+        "other_signer_private_key:read"
+      ],
+      "deployments": {
+        "staging": {
+          "mode": "PENDING_NO_KEY",
+          "service_identity": "qp-staging-ready-authority",
+          "service_user": "qp_staging_ready_authority",
+          "key_backend": "protected_local_key",
+          "approval_backend": "service_policy",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "local-protected://staging/ready/ed25519-private-key",
+          "readable_private_key_refs": [
+            "local-protected://staging/ready/ed25519-private-key"
+          ],
+          "event_store_ref": "local-protected://staging/ready/authority-events.sqlite3",
+          "socket_path": "/var/run/quant-platform/staging/ready.sock",
+          "cloudflare_resources": []
+        },
+        "production": {
+          "mode": "PENDING_NO_KEY",
+          "service_identity": "qp-production-ready-authority",
+          "service_user": "qp_production_ready_authority",
+          "key_backend": "protected_local_key",
+          "approval_backend": "service_policy",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "local-protected://production/ready/ed25519-private-key",
+          "readable_private_key_refs": [
+            "local-protected://production/ready/ed25519-private-key"
+          ],
+          "event_store_ref": "local-protected://production/ready/authority-events.sqlite3",
+          "socket_path": "/var/run/quant-platform/production/ready.sock",
+          "cloudflare_resources": []
+        }
+      }
+    },
+    "trader": {
+      "principal_id": "trader",
+      "runtime": "local_os_service",
+      "authority_status": "PENDING",
+      "signing_purpose": "human_gated_trader_authorization",
+      "registry_path": "specs/trader_authorization/public_keys.json",
+      "service_entrypoint": "trader.authorize_exact_four_batch_human_present",
+      "provides": [
+        "trader:authorize_exact_four_batch_human_present"
+      ],
+      "allowed_callers": [
+        "human_approval_gateway"
+      ],
+      "capabilities": [
+        "ready_attestation:verified_read",
+        "human_decision:read",
+        "trader_authorization:sign",
+        "trader_authorization_ledger:append"
+      ],
+      "forbidden_capabilities": [
+        "automatic_approval:authorize",
+        "raw_db:read",
+        "other_signer_private_key:read",
+        "controlled_execution_signature:sign"
+      ],
+      "deployments": {
+        "staging": {
+          "mode": "PENDING_NO_KEY",
+          "service_identity": "qp-staging-trader-authority",
+          "service_user": "qp_staging_trader_authority",
+          "key_backend": "webauthn_platform_or_hardware",
+          "approval_backend": "human_presence_required",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "webauthn://staging/trader/platform-or-hardware-credential",
+          "readable_private_key_refs": [],
+          "event_store_ref": "local-protected://staging/trader/authority-events.sqlite3",
+          "socket_path": "/var/run/quant-platform/staging/trader.sock",
+          "cloudflare_resources": []
+        },
+        "production": {
+          "mode": "PENDING_NO_KEY",
+          "service_identity": "qp-production-trader-authority",
+          "service_user": "qp_production_trader_authority",
+          "key_backend": "webauthn_platform_or_hardware",
+          "approval_backend": "human_presence_required",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "webauthn://production/trader/platform-or-hardware-credential",
+          "readable_private_key_refs": [],
+          "event_store_ref": "local-protected://production/trader/authority-events.sqlite3",
+          "socket_path": "/var/run/quant-platform/production/trader.sock",
+          "cloudflare_resources": []
+        }
+      }
+    },
+    "controlled_execution": {
+      "principal_id": "controlled_execution",
+      "runtime": "local_os_service",
+      "authority_status": "PENDING",
+      "signing_purpose": "controlled_execution_artifact",
+      "registry_path": "specs/execution_artifacts/public_keys.json",
+      "service_entrypoint": "controlled_execution.execute_exact_four_one_shot",
+      "provides": [
+        "controlled_execution:execute_exact_four_one_shot"
+      ],
+      "allowed_callers": [
+        "controlled_pilot_orchestrator"
+      ],
+      "capabilities": [
+        "ready_attestation:verified_read",
+        "trader_authorization:verified_read",
+        "immutable_snapshot:read",
+        "paper_execution:execute_bounded",
+        "controlled_artifact:sign",
+        "controlled_artifact_store:append"
+      ],
+      "forbidden_capabilities": [
+        "external_http:request",
+        "raw_db:read",
+        "ingestion_secrets:read",
+        "automatic_promotion:execute",
+        "other_signer_private_key:read"
+      ],
+      "deployments": {
+        "staging": {
+          "mode": "PENDING_NO_KEY",
+          "service_identity": "qp-staging-controlled-execution-authority",
+          "service_user": "qp_staging_controlled_execution_authority",
+          "key_backend": "protected_local_key",
+          "approval_backend": "service_policy",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "local-protected://staging/controlled_execution/ed25519-private-key",
+          "readable_private_key_refs": [
+            "local-protected://staging/controlled_execution/ed25519-private-key"
+          ],
+          "event_store_ref": "local-protected://staging/controlled_execution/authority-events.sqlite3",
+          "socket_path": "/var/run/quant-platform/staging/controlled_execution.sock",
+          "cloudflare_resources": []
+        },
+        "production": {
+          "mode": "PENDING_NO_KEY",
+          "service_identity": "qp-production-controlled-execution-authority",
+          "service_user": "qp_production_controlled_execution_authority",
+          "key_backend": "protected_local_key",
+          "approval_backend": "service_policy",
+          "private_key_state": "ABSENT_UNTIL_ACTIVATION",
+          "private_key_ref": "local-protected://production/controlled_execution/ed25519-private-key",
+          "readable_private_key_refs": [
+            "local-protected://production/controlled_execution/ed25519-private-key"
+          ],
+          "event_store_ref": "local-protected://production/controlled_execution/authority-events.sqlite3",
+          "socket_path": "/var/run/quant-platform/production/controlled_execution.sock",
+          "cloudflare_resources": []
+        }
+      }
+    }
+  },
+  "manifest_digest": "sha256:8f43fb1d3062c7a4b290b371ebef8ee2f6b600c0d0020c68e417f80dc05056fe"
+}

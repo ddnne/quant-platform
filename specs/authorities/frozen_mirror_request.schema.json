@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-platform.invalid/specs/authorities/frozen_mirror_request.schema.json",
+  "title": "D1 frozen mirror request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "purpose"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "d1-frozen-mirror-request/v1"
+    },
+    "request_id": {
+      "$ref": "#/$defs/request_id"
+    },
+    "purpose": {
+      "enum": [
+        "ops_projection",
+        "coverage_transition"
+      ]
+    }
+  },
+  "$defs": {
+    "request_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    }
+  }
+}

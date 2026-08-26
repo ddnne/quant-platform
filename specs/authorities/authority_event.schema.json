@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-platform.invalid/specs/authorities/authority_event.schema.json",
+  "title": "Append-only authority event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "authority_id",
+    "sequence",
+    "request_id",
+    "event_type",
+    "subject_id",
+    "prior_event_digest",
+    "payload_digest",
+    "payload_json",
+    "observed_at",
+    "event_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "authority-event/v1"
+    },
+    "authority_id": {
+      "enum": [
+        "receipt",
+        "d1_sync",
+        "ops_projection",
+        "coverage_transition",
+        "ready",
+        "trader",
+        "controlled_execution"
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "request_id": {
+      "$ref": "#/$defs/request_id"
+    },
+    "event_type": {
+      "enum": [
+        "PREPARED",
+        "SIGNED",
+        "PUBLISHED",
+        "COMMITTED",
+        "REJECTED",
+        "FAILED",
+        "RECONCILED",
+        "ROLLBACK_DETECTED"
+      ]
+    },
+    "subject_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "prior_event_digest": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "payload_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "payload_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 1048576
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "event_digest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "request_id": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        {
+          "$ref": "#/$defs/sha256"
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

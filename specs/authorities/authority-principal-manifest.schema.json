@@ -1,0 +1,630 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-platform.invalid/specs/authorities/authority-principal-manifest.schema.json",
+  "title": "quant-platform authority principal manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generation",
+    "activation_status",
+    "schema_digest",
+    "protocol_schema_digests",
+    "residual_risks",
+    "principals",
+    "manifest_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "authority-principal-manifest/v1"
+    },
+    "generation": {
+      "const": 1
+    },
+    "activation_status": {
+      "const": "PENDING"
+    },
+    "schema_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "protocol_schema_digests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "frozen_mirror_request",
+        "frozen_mirror_handoff",
+        "authority_event"
+      ],
+      "properties": {
+        "frozen_mirror_request": {
+          "$ref": "#/$defs/sha256"
+        },
+        "frozen_mirror_handoff": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authority_event": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "residual_risks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cloudflare_workers_scripts_write_account_scope"
+      ],
+      "properties": {
+        "cloudflare_workers_scripts_write_account_scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "affected_principal",
+            "status",
+            "scope",
+            "reason"
+          ],
+          "properties": {
+            "affected_principal": {
+              "const": "receipt"
+            },
+            "status": {
+              "const": "OPEN"
+            },
+            "scope": {
+              "const": "ACCOUNT_WIDE"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          }
+        }
+      }
+    },
+    "principals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt",
+        "d1_sync",
+        "ops_projection",
+        "coverage_transition",
+        "ready",
+        "trader",
+        "controlled_execution"
+      ],
+      "properties": {
+        "receipt": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/principal"
+            },
+            {
+              "properties": {
+                "principal_id": {
+                  "const": "receipt"
+                },
+                "runtime": {
+                  "const": "cloudflare_worker"
+                }
+              }
+            }
+          ]
+        },
+        "d1_sync": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/principal"
+            },
+            {
+              "properties": {
+                "principal_id": {
+                  "const": "d1_sync"
+                },
+                "runtime": {
+                  "const": "local_os_service"
+                }
+              }
+            }
+          ]
+        },
+        "ops_projection": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/principal"
+            },
+            {
+              "properties": {
+                "principal_id": {
+                  "const": "ops_projection"
+                },
+                "runtime": {
+                  "const": "local_os_service"
+                }
+              }
+            }
+          ]
+        },
+        "coverage_transition": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/principal"
+            },
+            {
+              "properties": {
+                "principal_id": {
+                  "const": "coverage_transition"
+                },
+                "runtime": {
+                  "const": "local_os_service"
+                }
+              }
+            }
+          ]
+        },
+        "ready": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/principal"
+            },
+            {
+              "properties": {
+                "principal_id": {
+                  "const": "ready"
+                },
+                "runtime": {
+                  "const": "local_os_service"
+                }
+              }
+            }
+          ]
+        },
+        "trader": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/principal"
+            },
+            {
+              "properties": {
+                "principal_id": {
+                  "const": "trader"
+                },
+                "runtime": {
+                  "const": "local_os_service"
+                }
+              }
+            }
+          ]
+        },
+        "controlled_execution": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/principal"
+            },
+            {
+              "properties": {
+                "principal_id": {
+                  "const": "controlled_execution"
+                },
+                "runtime": {
+                  "const": "local_os_service"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "manifest_digest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "principal_id": {
+      "enum": [
+        "receipt",
+        "d1_sync",
+        "ops_projection",
+        "coverage_transition",
+        "ready",
+        "trader",
+        "controlled_execution"
+      ]
+    },
+    "principal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principal_id",
+        "runtime",
+        "authority_status",
+        "signing_purpose",
+        "registry_path",
+        "service_entrypoint",
+        "provides",
+        "allowed_callers",
+        "capabilities",
+        "forbidden_capabilities",
+        "deployments"
+      ],
+      "properties": {
+        "principal_id": {
+          "$ref": "#/$defs/principal_id"
+        },
+        "runtime": {
+          "enum": [
+            "cloudflare_worker",
+            "local_os_service"
+          ]
+        },
+        "authority_status": {
+          "const": "PENDING"
+        },
+        "signing_purpose": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]{2,127}$"
+        },
+        "registry_path": {
+          "type": "string",
+          "pattern": "^(packages|specs)/[a-zA-Z0-9_./-]+\\.json$"
+        },
+        "service_entrypoint": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+        },
+        "provides": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/capability"
+          }
+        },
+        "allowed_callers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{2,63}$"
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/capability"
+          }
+        },
+        "forbidden_capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/capability"
+          }
+        },
+        "deployments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "staging",
+            "production"
+          ],
+          "properties": {
+            "staging": {},
+            "production": {}
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "runtime": {
+                "const": "cloudflare_worker"
+              }
+            },
+            "required": [
+              "runtime"
+            ]
+          },
+          "then": {
+            "properties": {
+              "deployments": {
+                "properties": {
+                  "staging": {
+                    "$ref": "#/$defs/cloudflare_worker_deployment"
+                  },
+                  "production": {
+                    "$ref": "#/$defs/cloudflare_worker_deployment"
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "deployments": {
+                "properties": {
+                  "staging": {
+                    "$ref": "#/$defs/local_os_deployment"
+                  },
+                  "production": {
+                    "$ref": "#/$defs/local_os_deployment"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "capability": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$"
+    },
+    "local_os_deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "service_identity",
+        "service_user",
+        "key_backend",
+        "approval_backend",
+        "private_key_state",
+        "private_key_ref",
+        "readable_private_key_refs",
+        "event_store_ref",
+        "socket_path",
+        "cloudflare_resources"
+      ],
+      "properties": {
+        "mode": {
+          "const": "PENDING_NO_KEY"
+        },
+        "service_identity": {
+          "type": "string",
+          "pattern": "^qp-(staging|production)-[a-z0-9-]+-authority$"
+        },
+        "service_user": {
+          "type": "string",
+          "pattern": "^qp_(staging|production)_[a-z0-9_]+_authority$"
+        },
+        "key_backend": {
+          "enum": [
+            "protected_local_key",
+            "webauthn_platform_or_hardware"
+          ]
+        },
+        "approval_backend": {
+          "enum": [
+            "service_policy",
+            "human_presence_required"
+          ]
+        },
+        "private_key_state": {
+          "const": "ABSENT_UNTIL_ACTIVATION"
+        },
+        "private_key_ref": {
+          "type": "string",
+          "pattern": "^(local-protected://(staging|production)/[a-z0-9_]+/ed25519-private-key|webauthn://(staging|production)/trader/platform-or-hardware-credential)$"
+        },
+        "readable_private_key_refs": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(local-protected://(staging|production)/[a-z0-9_]+/ed25519-private-key|webauthn://(staging|production)/trader/platform-or-hardware-credential)$"
+          }
+        },
+        "event_store_ref": {
+          "type": "string",
+          "pattern": "^local-protected://(staging|production)/[a-z0-9_]+/authority-events\\.sqlite3$"
+        },
+        "socket_path": {
+          "type": "string",
+          "pattern": "^/var/run/quant-platform/(staging|production)/[a-z0-9_]+\\.sock$"
+        },
+        "cloudflare_resources": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/cloudflare_resource"
+          }
+        }
+      }
+    },
+    "cloudflare_worker_deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "worker_ref",
+        "worker_name",
+        "incoming_service_binding",
+        "durable_object_binding",
+        "durable_object_class",
+        "workers_dev",
+        "preview_urls",
+        "routes",
+        "public_fetch_behavior",
+        "secret_names",
+        "key_backend",
+        "approval_backend",
+        "private_key_state",
+        "private_key_ref",
+        "readable_private_key_refs",
+        "event_store_ref",
+        "cloudflare_resources"
+      ],
+      "properties": {
+        "mode": {
+          "const": "PENDING_NO_KEY"
+        },
+        "worker_ref": {
+          "const": "platform/workers/ingestion-premium"
+        },
+        "worker_name": {
+          "type": "string",
+          "pattern": "^quant-platform-receipt-evidence-authority(-staging)?$"
+        },
+        "incoming_service_binding": {
+          "$ref": "#/$defs/incoming_service_binding"
+        },
+        "durable_object_binding": {
+          "const": "RECEIPT_EVIDENCE_AUTHORITY_DO"
+        },
+        "durable_object_class": {
+          "const": "ReceiptEvidenceAuthority"
+        },
+        "workers_dev": {
+          "const": false
+        },
+        "preview_urls": {
+          "const": false
+        },
+        "routes": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "public_fetch_behavior": {
+          "const": "NOT_FOUND_404"
+        },
+        "secret_names": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "key_backend": {
+          "const": "durable_object_webcrypto_non_extractable"
+        },
+        "approval_backend": {
+          "const": "service_policy"
+        },
+        "private_key_state": {
+          "const": "ABSENT_UNTIL_ACTIVATION"
+        },
+        "private_key_ref": {
+          "type": "string",
+          "pattern": "^durable-object-webcrypto://(staging|production)/receipt/ed25519-non-extractable-key$"
+        },
+        "readable_private_key_refs": {
+          "type": "array",
+          "maxItems": 0,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^durable-object-webcrypto://(staging|production)/receipt/ed25519-non-extractable-key$"
+          }
+        },
+        "event_store_ref": {
+          "type": "string",
+          "pattern": "^durable-object-sqlite://(staging|production)/receipt/authority-events$"
+        },
+        "cloudflare_resources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/cloudflare_resource"
+          }
+        }
+      }
+    },
+    "incoming_service_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_name",
+        "caller_id",
+        "caller_worker_ref",
+        "target_worker_name"
+      ],
+      "properties": {
+        "binding_name": {
+          "const": "RECEIPT_EVIDENCE_AUTHORITY"
+        },
+        "caller_id": {
+          "const": "governed_ingestion"
+        },
+        "caller_worker_ref": {
+          "const": "platform/workers/ingestion-premium"
+        },
+        "target_worker_name": {
+          "type": "string",
+          "pattern": "^quant-platform-receipt-evidence-authority(-staging)?$"
+        }
+      }
+    },
+    "cloudflare_resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "kind",
+        "resource_ref",
+        "access"
+      ],
+      "properties": {
+        "provider": {
+          "const": "cloudflare"
+        },
+        "kind": {
+          "enum": [
+            "d1",
+            "r2",
+            "durable_object",
+            "service_binding"
+          ]
+        },
+        "resource_ref": {
+          "type": "string",
+          "pattern": "^cloudflare:(staging|production):(d1|r2|durable_object|service_binding):[a-z0-9-]+$"
+        },
+        "access": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{2,63}$"
+        },
+        "binding_name": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "service_binding"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "binding_name"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "binding_name"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
