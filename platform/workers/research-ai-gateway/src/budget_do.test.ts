@@ -60,6 +60,34 @@ function actualUsage(overrides: Record<string, unknown> = {}): Record<string, un
   };
 }
 
+async function fillOwnerCancellationTombstoneCapacity(
+  storage: MemoryBudgetStorage,
+  createdAt: number,
+): Promise<void> {
+  const state = await storage.get<Record<string, any>>("ledger");
+  if (!state) throw new Error("ledger");
+  state.owner_cancellation_tombstones = Object.fromEntries(
+    Array.from({ length: MAX_OWNER_CANCELLATION_TOMBSTONES }, (_, index) => {
+      const ownerHash = index.toString(16).padStart(64, "0");
+      return [
+        ownerHash,
+        {
+          owner_capability_hash: ownerHash,
+          idempotency_key: `capacity-${index}`,
+          request_digest: `digest-capacity-${index}`,
+          created_at: createdAt,
+          expires_at: createdAt + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+        },
+      ];
+    }),
+  );
+  await storage.commit(
+    "ledger",
+    state,
+    createdAt + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+  );
+}
+
 describe("PILOT_BUDGET_CAPS", () => {
   it("is the pilot hard cap set", () => {
     expect(PILOT_BUDGET_CAPS).toEqual({
@@ -2851,10 +2879,12 @@ describe("P0 terminal replay and capability isolation", () => {
     const legacy = await legacyStorage.get<Record<string, any>>("ledger");
     if (!legacy) throw new Error("legacy ledger");
     delete legacy.owner_cancellation_tombstones;
+    delete legacy.owner_cancellation_quarantine_until;
     await legacyStorage.commit("ledger", legacy, null);
     expect(await snapshotBudget(legacyStorage, T0 + 1)).toMatchObject({ ok: true });
     const migrated = await legacyStorage.get<Record<string, any>>("ledger");
     expect(migrated?.owner_cancellation_tombstones).toEqual({});
+    expect(migrated?.owner_cancellation_quarantine_until).toBeNull();
 
     const storage = new MemoryBudgetStorage();
     await cancelPreProviderReservation(
@@ -2898,6 +2928,18 @@ describe("P0 terminal replay and capability isolation", () => {
     await expect(snapshotBudget(corrupt, T0 + 1)).rejects.toThrow(
       /persisted_budget_state_invalid:owner_cancellation_tombstone_invalid/,
     );
+
+    const corruptQuarantine = new MemoryBudgetStorage();
+    await createBudget(corruptQuarantine, T0);
+    const corruptQuarantineState = await corruptQuarantine.get<
+      Record<string, any>
+    >("ledger");
+    if (!corruptQuarantineState) throw new Error("corrupt quarantine ledger");
+    corruptQuarantineState.owner_cancellation_quarantine_until = "later";
+    await corruptQuarantine.commit("ledger", corruptQuarantineState, null);
+    await expect(snapshotBudget(corruptQuarantine, T0 + 1)).rejects.toThrow(
+      /persisted_budget_state_invalid:owner_cancellation_quarantine_until_invalid/,
+    );
   });
 
   it("fails closed when persisted cancellation tombstones exceed bounded capacity", async () => {
@@ -2927,6 +2969,185 @@ describe("P0 terminal replay and capability isolation", () => {
     await expect(snapshotBudget(storage, T0 + 1)).rejects.toThrow(
       /persisted_budget_state_invalid:owner_cancellation_tombstones_over_capacity/,
     );
+  });
+
+  it("durably quarantines fresh occupancy when cancellation capacity is full", async () => {
+    const storage = new MemoryBudgetStorage();
+    await createBudget(storage, T0);
+    await fillOwnerCancellationTombstoneCapacity(storage, T0);
+
+    const saturatedCancel = await cancelPreProviderReservation(
+      storage,
+      {
+        idempotency_key: "capacity-cancel-before-reserve",
+        request_digest: "digest-capacity-cancel-before-reserve",
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 1,
+    );
+    expect(saturatedCancel).toEqual({
+      ok: false,
+      error: "owner_cancellation_tombstone_capacity_exhausted",
+    });
+    const quarantined = await storage.get<Record<string, any>>("ledger");
+    expect(quarantined?.owner_cancellation_quarantine_until).toBe(
+      T0 + 1 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+    );
+    expect(await storage.getAlarm()).toBe(
+      T0 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+    );
+
+    for (const input of [
+      {
+        ...leased("capacity-cancel-before-reserve", { model_calls: 1 }),
+        reserve_owner_capability: OWNER_A,
+      },
+      {
+        ...leased("capacity-fresh-owner", { model_calls: 1 }),
+        reserve_owner_capability: OWNER_B,
+      },
+    ]) {
+      const denied = await reserveOwnedBudget(storage, input, T0 + 2);
+      expect(denied).toEqual({
+        ok: false,
+        error: "budget_frozen",
+        detail: "owner_cancellation_tombstone_capacity_exhausted",
+      });
+    }
+    expect(await snapshotBudget(storage, T0 + 2)).toMatchObject({
+      ok: true,
+      reserved: { model_calls: 0 },
+      active_leases: 0,
+      owner_cancellation_quarantined: true,
+      owner_cancellation_quarantine_until:
+        T0 + 1 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+    });
+
+    await recoverExpiredLeases(
+      storage,
+      T0 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+    );
+    expect(await storage.getAlarm()).toBe(
+      T0 + 1 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+    );
+    const stillDenied = await reserveOwnedBudget(
+      storage,
+      {
+        ...leased("capacity-after-tombstone-expiry", { model_calls: 1 }),
+        reserve_owner_capability: OWNER_B,
+      },
+      T0 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+    );
+    expect(stillDenied).toMatchObject({ ok: false, error: "budget_frozen" });
+
+    const afterQuarantine = await reserveOwnedBudget(
+      storage,
+      {
+        ...leased("capacity-after-quarantine", { model_calls: 1 }),
+        reserve_owner_capability: OWNER_B,
+      },
+      T0 + 1 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+    );
+    expect(afterQuarantine).toMatchObject({ ok: true, existing: false });
+    expect(await snapshotBudget(
+      storage,
+      T0 + 1 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+    )).toMatchObject({
+      ok: true,
+      owner_cancellation_quarantined: false,
+      owner_cancellation_quarantine_until: null,
+    });
+  });
+
+  it("quarantines active recovery but preserves exact reconciled terminal replay", async () => {
+    const storage = new MemoryBudgetStorage();
+    const terminalInput = {
+      ...leased("terminal-before-capacity", { model_calls: 1, input_tokens: 4 }),
+      reserve_owner_capability: OWNER_A,
+    };
+    const terminalReserve = await reserveOwnedBudget(storage, terminalInput, T0);
+    if (!terminalReserve.ok || !terminalReserve.lease) {
+      throw new Error("terminal reserve");
+    }
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: terminalInput.idempotency_key,
+        request_digest: terminalInput.request_digest,
+        lease_id: terminalReserve.lease.lease_id,
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 1,
+    );
+    if (!started.ok || !started.settlement_capability) {
+      throw new Error("terminal start");
+    }
+    const finalized = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: terminalInput.idempotency_key,
+        request_digest: terminalInput.request_digest,
+        lease_id: terminalReserve.lease.lease_id,
+        reserve_owner_capability: OWNER_A,
+        settlement_capability: started.settlement_capability,
+        usage: actualUsage({ input_tokens: 2 }),
+        terminal_result: { http_status: 200, body: { ok: true } },
+      },
+      T0 + 2,
+    );
+    expect(finalized).toMatchObject({ ok: true });
+
+    const activeInput = {
+      ...leased("active-before-capacity", { model_calls: 1, input_tokens: 3 }),
+      reserve_owner_capability: OWNER_A,
+    };
+    const active = await reserveOwnedBudget(storage, activeInput, T0 + 3);
+    expect(active).toMatchObject({ ok: true, existing: false });
+    await fillOwnerCancellationTombstoneCapacity(storage, T0 + 3);
+
+    const saturatedCancel = await cancelPreProviderReservation(
+      storage,
+      {
+        idempotency_key: activeInput.idempotency_key,
+        request_digest: activeInput.request_digest,
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 4,
+    );
+    expect(saturatedCancel).toMatchObject({
+      ok: false,
+      error: "owner_cancellation_tombstone_capacity_exhausted",
+    });
+    const delayedActiveRecovery = await reserveOwnedBudget(
+      storage,
+      activeInput,
+      T0 + 5,
+    );
+    expect(delayedActiveRecovery).toEqual({
+      ok: false,
+      error: "budget_frozen",
+      detail: "owner_cancellation_tombstone_capacity_exhausted",
+    });
+
+    const terminalReplayFromDifferentOwner = await reserveOwnedBudget(
+      storage,
+      { ...terminalInput, reserve_owner_capability: OWNER_B },
+      T0 + 5,
+    );
+    expect(terminalReplayFromDifferentOwner).toMatchObject({
+      ok: true,
+      existing: true,
+      owner_recovered: false,
+      budget_run_id: terminalReserve.budget_run_id,
+      reservation: { status: "reconciled" },
+    });
+    expect(await snapshotBudget(storage, T0 + 5)).toMatchObject({
+      ok: true,
+      reserved: { model_calls: 1, input_tokens: 3 },
+      used: { model_calls: 1, input_tokens: 2 },
+      active_leases: 1,
+      owner_cancellation_quarantined: true,
+    });
   });
 
   it("requires the reserve owner at provider start and refuses cancellation after start", async () => {

@@ -177,6 +177,11 @@ export type LedgerState = {
   reservations: Record<string, Reservation>;
   leases: Record<string, Lease>;
   owner_cancellation_tombstones: Record<string, OwnerCancellationTombstone>;
+  /**
+   * Fail-closed window used only when a cancellation cannot obtain a bounded
+   * tombstone slot. No reserve may start/recover occupancy until it expires.
+   */
+  owner_cancellation_quarantine_until: number | null;
   frozen: boolean;
   frozen_at: number | null;
   frozen_reason: string | null;
@@ -255,6 +260,7 @@ export function emptyLedger(now: number): LedgerState {
     reservations: {},
     leases: {},
     owner_cancellation_tombstones: {},
+    owner_cancellation_quarantine_until: null,
     frozen: false,
     frozen_at: null,
     frozen_reason: null,
@@ -1027,6 +1033,16 @@ function coerceState(state: LedgerState): LedgerState {
     tombstones[key] = requirePersistedOwnerCancellationTombstone(value, key);
   }
   state.owner_cancellation_tombstones = tombstones;
+  const quarantineUntil = state.owner_cancellation_quarantine_until ?? null;
+  if (
+    quarantineUntil !== null &&
+    (!Number.isSafeInteger(quarantineUntil) || quarantineUntil < 0)
+  ) {
+    throw new PersistedBudgetStateError(
+      "owner_cancellation_quarantine_until_invalid",
+    );
+  }
+  state.owner_cancellation_quarantine_until = quarantineUntil;
   requirePersistedOccupancyClosure(state);
   return state;
 }
@@ -1041,6 +1057,16 @@ function cleanupOwnerCancellationTombstones(state: LedgerState, now: number): nu
     removed += 1;
   }
   return removed;
+}
+
+function cleanupOwnerCancellationQuarantine(
+  state: LedgerState,
+  now: number,
+): boolean {
+  const quarantineUntil = state.owner_cancellation_quarantine_until;
+  if (quarantineUntil === null || quarantineUntil > now) return false;
+  state.owner_cancellation_quarantine_until = null;
+  return true;
 }
 
 function ownerCancellationTombstoneMatches(
@@ -1079,6 +1105,13 @@ function persistOwnerCancellationTombstone(
     Object.keys(state.owner_cancellation_tombstones).length >=
     MAX_OWNER_CANCELLATION_TOMBSTONES
   ) {
+    // The exact owner cannot be recorded without exceeding the bounded map.
+    // Persist a global, equally bounded lease-window quarantine so a delayed
+    // reserve cannot race this failed cancellation and recreate occupancy.
+    state.owner_cancellation_quarantine_until = Math.max(
+      state.owner_cancellation_quarantine_until ?? 0,
+      now + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+    );
     return { ok: false, error: "owner_cancellation_tombstone_capacity_exhausted" };
   }
   state.owner_cancellation_tombstones[ownerHash] = {
@@ -1176,6 +1209,7 @@ function activeLeaseCount(state: LedgerState): number {
 
 export function recoverExpired(state: LedgerState, now: number): number {
   cleanupOwnerCancellationTombstones(state, now);
+  cleanupOwnerCancellationQuarantine(state, now);
   let recovered = 0;
   for (const lease of Object.values(state.leases)) {
     if (lease.released_at !== null) continue;
@@ -1215,6 +1249,12 @@ async function saveState(storage: AtomicBudgetStorage, state: LedgerState): Prom
       nextAlarm === null
         ? tombstone.expires_at
         : Math.min(nextAlarm, tombstone.expires_at);
+  }
+  if (state.owner_cancellation_quarantine_until !== null) {
+    nextAlarm =
+      nextAlarm === null
+        ? state.owner_cancellation_quarantine_until
+        : Math.min(nextAlarm, state.owner_cancellation_quarantine_until);
   }
   await storage.commit(STATE_KEY, state, nextAlarm);
 }
@@ -1312,10 +1352,31 @@ export async function reserveBudget(
         await saveState(transaction, state);
         return { ok: false, error: "idempotency_digest_conflict" };
       }
-      if (existing.status !== "released") {
+      if (existing.status === "reconciled") {
+        const lease = existing.lease_id ? state.leases[existing.lease_id] ?? null : null;
+        await saveState(transaction, state);
+        return {
+          ok: true,
+          reservation: publicReservation(existing),
+          lease,
+          existing: true,
+          owner_recovered: reserveOwnerMatches(existing, ownerHash),
+          budget_run_id: existing.reservation_id,
+        };
+      }
+      if (existing.status === "reserved") {
+        // Unlike a terminal replay, returning an active owner recovery can let
+        // a provider start. Quarantine it exactly like fresh occupancy.
+        if (state.owner_cancellation_quarantine_until !== null) {
+          await saveState(transaction, state);
+          return {
+            ok: false,
+            error: "budget_frozen",
+            detail: "owner_cancellation_tombstone_capacity_exhausted",
+          };
+        }
         const ownerRecovered = reserveOwnerMatches(existing, ownerHash);
         if (
-          existing.status === "reserved" &&
           existing.reserve_owner_capability_hash !== null &&
           !ownerRecovered
         ) {
@@ -1349,6 +1410,18 @@ export async function reserveBudget(
       }
       // Legacy unowned released reservations retain their historical replay
       // behavior. Provider-started work is never represented by released.
+    }
+
+    // Capacity saturation means one cancelled owner could not be represented
+    // in the bounded tombstone map. Terminal/released replay above is safe, but
+    // fresh occupancy must wait for the canonical delay window to close.
+    if (state.owner_cancellation_quarantine_until !== null) {
+      await saveState(transaction, state);
+      return {
+        ok: false,
+        error: "budget_frozen",
+        detail: "owner_cancellation_tombstone_capacity_exhausted",
+      };
     }
 
     // A frozen ledger still serves terminal idempotent results above, but never
@@ -2632,6 +2705,8 @@ export async function snapshotBudget(
     caps: typeof PILOT_BUDGET_CAPS;
     auto_promotion: false;
     frozen: boolean;
+    owner_cancellation_quarantined: boolean;
+    owner_cancellation_quarantine_until: number | null;
   }>
 > {
   return storage.runAtomic(async (transaction) => {
@@ -2647,6 +2722,10 @@ export async function snapshotBudget(
       caps: state.caps,
       auto_promotion: false,
       frozen: state.frozen === true,
+      owner_cancellation_quarantined:
+        state.owner_cancellation_quarantine_until !== null,
+      owner_cancellation_quarantine_until:
+        state.owner_cancellation_quarantine_until,
     };
   });
 }
