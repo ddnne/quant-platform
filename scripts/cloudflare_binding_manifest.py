@@ -29,6 +29,18 @@ _ALLOWED_WORKER_CONTROL_FILES = _ALLOWED_WRANGLER_CONFIGS | frozenset(
     {"package.json", "package-lock.json", "tsconfig.json"}
 )
 _DEPLOYMENT_CONTROL_SUFFIXES = frozenset({".toml", ".json", ".jsonc"})
+_REPOSITORY_SCAN_PRUNED_DIRS = frozenset(
+    {
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        ".wrangler",
+        ".wrangler-dry-run",
+        "node_modules",
+    }
+)
 
 
 def _load_active_workers(path: Path = INVENTORY) -> tuple[str, ...]:
@@ -67,13 +79,23 @@ def _wrangler_config_paths(worker_root: Path = WORKER_ROOT) -> tuple[Path, ...]:
         ]
         parent = Path(current)
         for name in filenames:
-            if name.startswith("wrangler") and Path(name).suffix in {
-                ".toml",
-                ".json",
-                ".jsonc",
-            }:
+            if _is_wrangler_config_filename(name):
                 discovered.append(parent / name)
     return tuple(sorted(discovered))
+
+
+def _is_wrangler_config_filename(name: str) -> bool:
+    return (
+        name.startswith("wrangler")
+        and Path(name).suffix in _DEPLOYMENT_CONTROL_SUFFIXES
+    ) or name == "wrangler.config.ts"
+
+
+def _is_deployment_control_filename(name: str) -> bool:
+    return (
+        Path(name).suffix in _DEPLOYMENT_CONTROL_SUFFIXES
+        or name == "wrangler.config.ts"
+    )
 
 
 def _deployment_control_paths(worker_root: Path = WORKER_ROOT) -> tuple[Path, ...]:
@@ -85,9 +107,80 @@ def _deployment_control_paths(worker_root: Path = WORKER_ROOT) -> tuple[Path, ..
         ]
         parent = Path(current)
         for name in filenames:
-            if Path(name).suffix in _DEPLOYMENT_CONTROL_SUFFIXES:
+            if _is_deployment_control_filename(name):
                 discovered.append(parent / name)
     return tuple(sorted(discovered))
+
+
+def _package_is_wrangler_marker(path: Path) -> bool:
+    try:
+        package = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(f"repository package marker is unreadable: {path}") from exc
+    if not isinstance(package, dict):
+        raise ValueError(f"repository package marker must be an object: {path}")
+    runtime_dependencies = package.get("dependencies") or {}
+    development_dependencies = package.get("devDependencies") or {}
+    scripts = package.get("scripts") or {}
+    if not all(
+        isinstance(value, dict)
+        for value in (runtime_dependencies, development_dependencies, scripts)
+    ):
+        raise ValueError(f"repository package marker fields are invalid: {path}")
+    dependencies = {**runtime_dependencies, **development_dependencies}
+    deployment_roles = {"cf-typegen", "deploy", "dev", "tail"}
+    return (
+        "wrangler" in dependencies
+        or bool(deployment_roles & set(scripts))
+        or any(
+            isinstance(command, str) and re.search(r"\bwrangler\b", command)
+            for command in scripts.values()
+        )
+    )
+
+
+def _repository_worker_marker_paths(repo_root: Path = ROOT) -> tuple[Path, ...]:
+    markers: list[Path] = []
+    for current, directories, filenames in os.walk(repo_root):
+        directories[:] = [
+            name for name in directories if name not in _REPOSITORY_SCAN_PRUNED_DIRS
+        ]
+        parent = Path(current)
+        for name in filenames:
+            path = parent / name
+            if _is_wrangler_config_filename(name):
+                markers.append(path)
+            elif name == "package.json" and _package_is_wrangler_marker(path):
+                markers.append(path)
+    return tuple(sorted(markers))
+
+
+def validate_repository_worker_boundary(
+    *,
+    repo_root: Path = ROOT,
+    worker_root: Path = WORKER_ROOT,
+    workers: tuple[str, ...] = ACTIVE_WORKERS,
+) -> None:
+    expected = {
+        worker_root / worker / "package.json"
+        for worker in workers
+    }
+    expected.update(
+        worker_root / worker / config
+        for worker in workers
+        for config in _ALLOWED_WRANGLER_CONFIGS
+        if (worker_root / worker / config).is_file()
+    )
+    observed = set(_repository_worker_marker_paths(repo_root))
+    if observed != expected:
+        missing = sorted(str(path.relative_to(repo_root)) for path in expected - observed)
+        ungoverned = sorted(
+            str(path.relative_to(repo_root)) for path in observed - expected
+        )
+        raise ValueError(
+            "repository Worker deployment boundary drift: "
+            f"missing={missing!r}, ungoverned={ungoverned!r}"
+        )
 
 
 def _deployable_worker_directories(worker_root: Path = WORKER_ROOT) -> tuple[str, ...]:
@@ -107,6 +200,8 @@ def validate_active_worker_inventory(
     *,
     worker_root: Path = WORKER_ROOT,
 ) -> None:
+    if worker_root == WORKER_ROOT:
+        validate_repository_worker_boundary(workers=workers)
     discovered = _deployable_worker_directories(worker_root)
     if discovered != workers:
         missing = sorted(set(workers) - set(discovered))

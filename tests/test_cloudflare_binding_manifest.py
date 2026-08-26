@@ -133,6 +133,45 @@ def test_nested_package_json_cannot_escape_inventory(tmp_path: Path) -> None:
         manifest_module.validate_active_worker_inventory(worker_root=worker_root)
 
 
+@pytest.mark.parametrize("marker", ("wrangler.toml", "package.json"))
+def test_worker_outside_canonical_root_cannot_escape_repository_inventory(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    repo_root = tmp_path / "repo"
+    worker_root = repo_root / "platform" / "workers"
+    for worker in manifest_module.ACTIVE_WORKERS:
+        directory = worker_root / worker
+        directory.mkdir(parents=True)
+        (directory / "package.json").write_text(
+            json.dumps(
+                {
+                    "devDependencies": {"wrangler": "4.125.0"},
+                    "scripts": {"deploy": "wrangler deploy"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (directory / "wrangler.toml").write_text(
+            f'name = "{worker}"\n', encoding="utf-8"
+        )
+    rogue = repo_root / "packages" / "rogue"
+    rogue.mkdir(parents=True)
+    if marker == "wrangler.toml":
+        (rogue / marker).write_text('name = "rogue"\n', encoding="utf-8")
+    else:
+        (rogue / marker).write_text(
+            json.dumps({"scripts": {"deploy": "node scripts/deploy-shadow.js"}}),
+            encoding="utf-8",
+        )
+    with pytest.raises(ValueError, match=r"ungoverned=.*packages/rogue"):
+        manifest_module.validate_repository_worker_boundary(
+            repo_root=repo_root,
+            worker_root=worker_root,
+            workers=manifest_module.ACTIVE_WORKERS,
+        )
+
+
 def test_package_script_commands_are_frozen() -> None:
     manifest = manifest_module.build_manifest()
     drifted = copy.deepcopy(manifest)
