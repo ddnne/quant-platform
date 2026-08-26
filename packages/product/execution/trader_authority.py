@@ -11,6 +11,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,6 +28,7 @@ from selection.budget_ledger import MassResearchDisabledError
 TRADER_AUTHORIZATION_FORMAT = "verified-trader-authorization/v1"
 TRADER_AUTHORIZATION_ISSUER = "ControlledTraderAuthorizationService/v1"
 TRADER_AUTHORIZATION_ALGORITHM = "Ed25519"
+_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 PINNED_TRADER_AUTHORIZATION_REGISTRY_DIGEST = (
     "sha256:14c1968604545135545c7dc13d353110b9148d911edd0dababe80bb07381096c"
 )
@@ -199,107 +202,307 @@ class VerifiedTraderAuthorization:
     signature: str
     issuer: str = TRADER_AUTHORIZATION_ISSUER
 
+    def __post_init__(self) -> None:
+        # Do not admit str/float subclasses or stateful coercion objects into
+        # an authority-bearing DTO.  Verification below still snapshots every
+        # field once because ``frozen=True`` is not an OS security boundary.
+        _materialize_authorization(self)
+
     def to_canonical_body(self) -> dict[str, Any]:
-        return {
-            "format": TRADER_AUTHORIZATION_FORMAT,
-            "authorization_id": self.authorization_id,
-            "mode": self.mode,
-            "strategy_id": self.strategy_id,
-            "strategy_spec_hash": self.strategy_spec_hash,
-            "max_gross_weight": self.max_gross_weight,
-            "ready_snapshot_id": self.ready_snapshot_id,
-            "ready_manifest_digest": self.ready_manifest_digest,
-            "readiness_attestation_id": self.readiness_attestation_id,
-            "profile_digest": self.profile_digest,
-            "plan_set_digest": self.plan_set_digest,
-            "dependency_closure_digest": self.dependency_closure_digest,
-            "universe_contract_id": self.universe_contract_id,
-            "universe_rule_digest": self.universe_rule_digest,
-            "resolved_universe_digest": self.resolved_universe_digest,
-            "period_start": self.period_start,
-            "period_end": self.period_end,
-            "cost_scenario": self.cost_scenario,
-            "issued_at": self.issued_at,
-            "expires_at": self.expires_at,
-            "key_id": self.key_id,
-            "issuer": self.issuer,
-        }
+        body, _signature = _materialize_authorization(self)
+        return body
 
     def to_dict(self) -> dict[str, Any]:
-        return {**self.to_canonical_body(), "signature": self.signature}
+        body, signature = _materialize_authorization(self)
+        return {**body, "signature": signature}
 
-    def is_valid(
-        self,
-        *,
-        now: datetime | None = None,
-    ) -> bool:
-        return _verify_pinned_trader_authorization(self, now=now)
+    def is_valid(self) -> bool:
+        return _verify_pinned_trader_authorization(self)
 
-    def require_valid(self, **kwargs: Any) -> "VerifiedTraderAuthorization":
-        if not self.is_valid(**kwargs):
+    def require_valid(self) -> "VerifiedTraderAuthorization":
+        if not self.is_valid():
             raise MassResearchDisabledError(
                 "VerifiedTraderAuthorization is expired, forged, or malformed"
             )
         return self
 
 
+@dataclass(frozen=True, slots=True)
+class TraderAuthorizationBinding:
+    """Authority-free expected values reconstructed by a trusted consumer.
+
+    This object does not approve or sign anything.  It freezes the exact
+    READY/plan/closure/universe/StrategySpec/gross-limit values that a
+    separately permissioned human-approval authority must have signed.  The
+    product verifier compares the signed body with this binding atomically.
+    """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise TypeError("TraderAuthorizationBinding is final")
+
+    authorization_id: str
+    strategy_id: str
+    strategy_spec_hash: str
+    max_gross_weight: float
+    ready_snapshot_id: str
+    ready_manifest_digest: str
+    readiness_attestation_id: str
+    profile_digest: str
+    plan_set_digest: str
+    dependency_closure_digest: str
+    universe_contract_id: str
+    universe_rule_digest: str
+    resolved_universe_digest: str
+    period_start: str
+    period_end: str
+    cost_scenario: str
+
+    def __post_init__(self) -> None:
+        values = tuple(
+            object.__getattribute__(self, name)
+            for name in _BINDING_STRING_FIELDS
+        )
+        if any(type(value) is not str or not value for value in values):
+            raise TypeError(
+                "TraderAuthorizationBinding requires exact non-empty strings"
+            )
+        gross = object.__getattribute__(self, "max_gross_weight")
+        if type(gross) is not float or not math.isfinite(gross):
+            raise TypeError(
+                "TraderAuthorizationBinding max_gross_weight must be an exact "
+                "finite float"
+            )
+        if not 0.0 < gross <= 1.0:
+            raise ValueError(
+                "TraderAuthorizationBinding max_gross_weight must be in (0, 1]"
+            )
+        _materialize_binding(self)
+
+    def to_dict(self) -> dict[str, Any]:
+        return _materialize_binding(self)
+
+
+_AUTHORIZATION_STRING_FIELDS = (
+    "authorization_id",
+    "mode",
+    "strategy_id",
+    "strategy_spec_hash",
+    "ready_snapshot_id",
+    "ready_manifest_digest",
+    "readiness_attestation_id",
+    "profile_digest",
+    "plan_set_digest",
+    "dependency_closure_digest",
+    "universe_contract_id",
+    "universe_rule_digest",
+    "resolved_universe_digest",
+    "period_start",
+    "period_end",
+    "cost_scenario",
+    "issued_at",
+    "expires_at",
+    "key_id",
+    "signature",
+    "issuer",
+)
+
+_BINDING_STRING_FIELDS = (
+    "authorization_id",
+    "strategy_id",
+    "strategy_spec_hash",
+    "ready_snapshot_id",
+    "ready_manifest_digest",
+    "readiness_attestation_id",
+    "profile_digest",
+    "plan_set_digest",
+    "dependency_closure_digest",
+    "universe_contract_id",
+    "universe_rule_digest",
+    "resolved_universe_digest",
+    "period_start",
+    "period_end",
+    "cost_scenario",
+)
+
+
+def _materialize_authorization(
+    authorization: VerifiedTraderAuthorization,
+) -> tuple[dict[str, Any], str]:
+    """Read every signed field exactly once and require built-in scalars."""
+
+    if type(authorization) is not VerifiedTraderAuthorization:
+        raise TypeError("exact VerifiedTraderAuthorization required")
+    values = {
+        name: object.__getattribute__(authorization, name)
+        for name in _AUTHORIZATION_STRING_FIELDS
+    }
+    if any(type(value) is not str for value in values.values()):
+        raise TypeError(
+            "VerifiedTraderAuthorization fields must be exact built-in strings"
+        )
+    gross = object.__getattribute__(authorization, "max_gross_weight")
+    if type(gross) is not float or not math.isfinite(gross):
+        raise TypeError(
+            "VerifiedTraderAuthorization max_gross_weight must be an exact "
+            "finite float"
+        )
+    body = {
+        "format": TRADER_AUTHORIZATION_FORMAT,
+        "authorization_id": values["authorization_id"],
+        "mode": values["mode"],
+        "strategy_id": values["strategy_id"],
+        "strategy_spec_hash": values["strategy_spec_hash"],
+        "max_gross_weight": gross,
+        "ready_snapshot_id": values["ready_snapshot_id"],
+        "ready_manifest_digest": values["ready_manifest_digest"],
+        "readiness_attestation_id": values["readiness_attestation_id"],
+        "profile_digest": values["profile_digest"],
+        "plan_set_digest": values["plan_set_digest"],
+        "dependency_closure_digest": values["dependency_closure_digest"],
+        "universe_contract_id": values["universe_contract_id"],
+        "universe_rule_digest": values["universe_rule_digest"],
+        "resolved_universe_digest": values["resolved_universe_digest"],
+        "period_start": values["period_start"],
+        "period_end": values["period_end"],
+        "cost_scenario": values["cost_scenario"],
+        "issued_at": values["issued_at"],
+        "expires_at": values["expires_at"],
+        "key_id": values["key_id"],
+        "issuer": values["issuer"],
+    }
+    return body, values["signature"]
+
+
+def _materialize_binding(binding: TraderAuthorizationBinding) -> dict[str, Any]:
+    if type(binding) is not TraderAuthorizationBinding:
+        raise TypeError("exact TraderAuthorizationBinding required")
+    values = {
+        name: object.__getattribute__(binding, name)
+        for name in _BINDING_STRING_FIELDS
+    }
+    if any(type(value) is not str or not value for value in values.values()):
+        raise TypeError(
+            "TraderAuthorizationBinding requires exact non-empty strings"
+        )
+    gross = object.__getattribute__(binding, "max_gross_weight")
+    if type(gross) is not float or not math.isfinite(gross):
+        raise TypeError(
+            "TraderAuthorizationBinding max_gross_weight must be an exact "
+            "finite float"
+        )
+    for name in (
+        "authorization_id",
+        "strategy_spec_hash",
+        "ready_snapshot_id",
+        "ready_manifest_digest",
+        "profile_digest",
+        "plan_set_digest",
+        "dependency_closure_digest",
+        "universe_rule_digest",
+        "resolved_universe_digest",
+    ):
+        if _SHA256_RE.fullmatch(values[name]) is None:
+            raise ValueError(f"TraderAuthorizationBinding {name} is not sha256")
+    return {**values, "max_gross_weight": gross}
+
+
 def _verify_pinned_trader_authorization(
     authorization: VerifiedTraderAuthorization,
-    *,
-    now: datetime | None = None,
 ) -> bool:
     """Authoritative product verifier; no caller registry can enter."""
 
-    if type(authorization) is not VerifiedTraderAuthorization:
-        return False
     try:
+        body, signature = _materialize_authorization(authorization)
         registry = TraderAuthorizationPublicKeyRegistry.load_pinned()
-    except MassResearchDisabledError:
+    except (MassResearchDisabledError, TypeError, ValueError):
         return False
-    digests = (
-        authorization.authorization_id,
-        authorization.strategy_spec_hash,
-        authorization.ready_snapshot_id,
-        authorization.ready_manifest_digest,
-        authorization.profile_digest,
-        authorization.plan_set_digest,
-        authorization.dependency_closure_digest,
-        authorization.universe_rule_digest,
-        authorization.resolved_universe_digest,
+    return _verify_materialized_authorization(
+        body,
+        signature=signature,
+        registry=registry,
     )
+
+
+def verify_exact_trader_authorization(
+    authorization: VerifiedTraderAuthorization,
+    binding: TraderAuthorizationBinding,
+) -> bool:
+    """Verify signature and exact independently reconstructed decision values.
+
+    The same one-time materialization is used for both cryptographic and
+    semantic checks.  A caller cannot make validation observe one value and
+    the execution-artifact verifier observe another via a stateful scalar.
+    """
+
     try:
-        gross_weight = float(authorization.max_gross_weight)
-    except (TypeError, ValueError):
+        body, signature = _materialize_authorization(authorization)
+        expected = _materialize_binding(binding)
+        registry = TraderAuthorizationPublicKeyRegistry.load_pinned()
+    except (MassResearchDisabledError, TypeError, ValueError):
         return False
+
+    if not _verify_materialized_authorization(
+        body, signature=signature, registry=registry
+    ):
+        return False
+    return all(body[name] == value for name, value in expected.items())
+
+
+def _verify_materialized_authorization(
+    body: Mapping[str, Any],
+    *,
+    signature: str,
+    registry: TraderAuthorizationPublicKeyRegistry,
+) -> bool:
+    """Verify an already-frozen body without rereading the source object."""
+
+    digests = tuple(
+        body[name]
+        for name in (
+            "authorization_id",
+            "strategy_spec_hash",
+            "ready_snapshot_id",
+            "ready_manifest_digest",
+            "profile_digest",
+            "plan_set_digest",
+            "dependency_closure_digest",
+            "universe_rule_digest",
+            "resolved_universe_digest",
+        )
+    )
     if (
-        authorization.mode != "paper"
-        or authorization.issuer != TRADER_AUTHORIZATION_ISSUER
+        body.get("format") != TRADER_AUTHORIZATION_FORMAT
+        or body.get("mode") != "paper"
+        or body.get("issuer") != TRADER_AUTHORIZATION_ISSUER
         or any(
-            not isinstance(value, str)
-            or not value.startswith("sha256:")
-            or len(value) != 71
+            type(value) is not str
+            or _SHA256_RE.fullmatch(value) is None
             for value in digests
         )
-        or not authorization.strategy_id
-        or not authorization.readiness_attestation_id
-        or not authorization.universe_contract_id
-        or not authorization.period_start
-        or authorization.period_start > authorization.period_end
-        or not 0.0 < gross_weight <= 1.0
+        or type(body.get("strategy_id")) is not str
+        or not body["strategy_id"]
+        or type(body.get("readiness_attestation_id")) is not str
+        or not body["readiness_attestation_id"]
+        or type(body.get("universe_contract_id")) is not str
+        or not body["universe_contract_id"]
+        or type(body.get("period_start")) is not str
+        or type(body.get("period_end")) is not str
+        or not body["period_start"]
+        or body["period_start"] > body["period_end"]
+        or type(body.get("max_gross_weight")) is not float
+        or not 0.0 < body["max_gross_weight"] <= 1.0
     ):
         return False
     try:
-        issued = datetime.fromisoformat(
-            authorization.issued_at.replace("Z", "+00:00")
-        )
+        issued = datetime.fromisoformat(body["issued_at"].replace("Z", "+00:00"))
         expires = datetime.fromisoformat(
-            authorization.expires_at.replace("Z", "+00:00")
+            body["expires_at"].replace("Z", "+00:00")
         )
-    except (TypeError, ValueError):
+    except (AttributeError, TypeError, ValueError):
         return False
     if issued.tzinfo is None or expires.tzinfo is None:
         return False
-    clock = now or _now()
+    clock = _now()
     if (
         clock < issued - timedelta(minutes=5)
         or clock > expires
@@ -307,18 +510,16 @@ def _verify_pinned_trader_authorization(
         or expires - issued > timedelta(seconds=1800)
     ):
         return False
-    id_body = authorization.to_canonical_body()
-    id_body.pop("authorization_id")
-    if authorization.authorization_id != _digest(id_body):
-        return False
-    return registry.verify(
-        key_id=authorization.key_id,
-        body=authorization.to_canonical_body(),
-        signature=authorization.signature,
+    id_body = dict(body)
+    id_body.pop("authorization_id", None)
+    return body["authorization_id"] == _digest(id_body) and registry.verify(
+        key_id=body["key_id"], body=body, signature=signature
     )
 
 
 __all__ = [
+    "TraderAuthorizationBinding",
     "TraderAuthorizationPublicKeyRegistry",
     "VerifiedTraderAuthorization",
+    "verify_exact_trader_authorization",
 ]
