@@ -41,12 +41,16 @@ The Python data plane contains a fail-closed candidate receipt-side verifier for
 `jquants-acquisition-collection/v2`. It accepts only a runtime-registered live
 Service Binding capture, independently rechecks the closed request, exact 37
 headers, immutable raw bytes, provider pagination/query transitions, chain and
-closed-month Coverage identity, then consumes the result once. The legacy
+closed-month Coverage identity, then pins the authority clock only after that
+verification completes. Only a subsequently created transaction context may
+provide the conservative PIT `available_at`/signed `checked_at`; direct
+record-time capture and context-before-capture ordering are rejected. The legacy
 `jquants-pagination-evidence/v1` format is audit/recovery-only and cannot mint a
 new COMPLETE receipt. Structured rows are committed only after canonical
 parse/normalize/natural-key reconciliation; a fresh transaction rereads raw and
-structured state before calling the receipt principal, and the returned envelope
-is public-key verified before local receipt finalization.
+structured state before calling the receipt principal. Acquisition expiry and
+context freshness are rechecked after that commit, immediately before issuance,
+and before local finalization; the returned envelope is public-key verified.
 
 This foundation does not activate D2 or D3. No production live-capture caller,
 Receipt Worker/DO, Service Binding, signing key, or authority ledger is

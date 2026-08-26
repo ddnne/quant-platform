@@ -9,7 +9,8 @@ capability and remain ``RAW_ONLY`` after a crash.
 
 The verifier independently checks the closed collection document, exact raw
 bytes, target header/metadata canonicalization, request and chain linkage, and
-the complete closed-month state machine.  Its output is another opaque,
+the complete closed-month state machine.  Only after those checks finish does
+it pin an authority-clock completion time.  Its output is another opaque,
 one-shot capability consumed by the canonical parser/normalizer/DB
 reconciliation boundary in :mod:`ingestion.runtime_authority`.
 """
@@ -21,6 +22,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import base64
 from functools import lru_cache
+from itertools import count
 import json
 import os
 from pathlib import Path
@@ -28,7 +30,7 @@ import re
 import stat
 from threading import Lock
 from types import MappingProxyType
-from typing import Any, Mapping, Sequence, TYPE_CHECKING
+from typing import Any, Callable, Mapping, Sequence, TYPE_CHECKING
 from weakref import WeakKeyDictionary
 
 from storage.receipt_crypto import canonical_evidence_digest
@@ -40,6 +42,7 @@ if TYPE_CHECKING:
 _LIVE_CAPTURE_SEAL = object()
 _VERIFIED_COLLECTION_SEAL = object()
 _CAPABILITY_LOCK = Lock()
+_AUTHORITY_EVENT_SEQUENCE = count(1)
 _LIVE_CAPTURES: WeakKeyDictionary[Any, dict[str, Any]] = WeakKeyDictionary()
 _VERIFIED_COLLECTIONS: WeakKeyDictionary[Any, dict[str, Any]] = (
     WeakKeyDictionary()
@@ -144,6 +147,8 @@ class _VerifiedState:
     terminal_chain_digest: str
     acquisition_issued_at: str
     acquisition_expires_at: str
+    verified_at: datetime
+    verified_sequence: int
 
 
 @dataclass(frozen=True)
@@ -155,6 +160,12 @@ class _ParsedProviderPage:
 
 def _digest(value: Any) -> str:
     return canonical_evidence_digest(value)
+
+
+def _next_authority_event_sequence() -> int:
+    """Order verifier/context capabilities even when clocks have equal ticks."""
+    with _CAPABILITY_LOCK:
+        return next(_AUTHORITY_EVENT_SEQUENCE)
 
 
 def _strict_json(raw: bytes, *, label: str = "collection manifest") -> dict[str, Any]:
@@ -1045,7 +1056,7 @@ def _verify_manifest(
     expected_manifest_size: int,
     expected_manifest_digest: str,
     required: RequiredCoverageSegment,
-    now: datetime,
+    clock: Callable[[], str],
 ) -> _VerifiedState:
     manifest_bytes = _read_immutable_file(
         manifest_path,
@@ -1127,6 +1138,7 @@ def _verify_manifest(
         raw_sizes.append(size)
         pages.append((raw_path, raw, metadata, parsed_page))
 
+    verification_now = _parse_clock(str(clock()))
     (
         initial_request_digest,
         terminal_chain,
@@ -1136,8 +1148,15 @@ def _verify_manifest(
         request=request,
         route=route,
         pages=pages,
-        now=now,
+        now=verification_now,
     )
+    verified_at = _parse_clock(str(clock()))
+    if verified_at < verification_now:
+        raise ValueError("receipt authority clock moved backwards during verification")
+    issued = _parse_instant(acquisition_issued_at, "acquisition_issued_at")
+    expires = _parse_instant(acquisition_expires_at, "acquisition_expires_at")
+    if not issued <= verified_at <= expires:
+        raise ValueError("live acquisition verification completed outside its session")
     return _VerifiedState(
         dataset=required.dataset,
         required=canonical_required,
@@ -1153,6 +1172,8 @@ def _verify_manifest(
         terminal_chain_digest=terminal_chain,
         acquisition_issued_at=acquisition_issued_at,
         acquisition_expires_at=acquisition_expires_at,
+        verified_at=verified_at,
+        verified_sequence=_next_authority_event_sequence(),
     )
 
 
@@ -1161,7 +1182,7 @@ def _verify_live_jquants_capture(
     *,
     authority_id: object,
     required: RequiredCoverageSegment,
-    now: str,
+    clock: Callable[[], str],
 ) -> _VerifiedJQuantsAcquisitionCollection:
     """Consume one live capture and return a one-shot verified capability."""
     if type(capture) is not _LiveJQuantsAcquisitionCapture or capture._seal is not _LIVE_CAPTURE_SEAL:
@@ -1183,7 +1204,7 @@ def _verify_live_jquants_capture(
         expected_manifest_size=manifest_size,
         expected_manifest_digest=manifest_digest,
         required=required,
-        now=_parse_clock(now),
+        clock=clock,
     )
     verified = _VerifiedJQuantsAcquisitionCollection(
         _seal=_VERIFIED_COLLECTION_SEAL,
@@ -1225,12 +1246,11 @@ def _consume_verified_jquants_collection(
     return _reread_verified_jquants_state(state, now=now), state
 
 
-def _reread_verified_jquants_state(
+def _assert_verified_jquants_session_current(
     state: _VerifiedState,
     *,
     now: datetime,
-) -> tuple[bytes, ...]:
-    """Re-read the immutable collection after the structured commit boundary."""
+) -> None:
     if not isinstance(state, _VerifiedState):
         raise TypeError("verified J-Quants state is invalid")
     if not isinstance(now, datetime) or now.tzinfo is None:
@@ -1240,6 +1260,15 @@ def _reread_verified_jquants_state(
     current = now.astimezone(timezone.utc)
     if not issued <= current <= expires:
         raise ValueError("verified live acquisition session has expired")
+
+
+def _reread_verified_jquants_state(
+    state: _VerifiedState,
+    *,
+    now: datetime,
+) -> tuple[bytes, ...]:
+    """Re-read the immutable collection after the structured commit boundary."""
+    _assert_verified_jquants_session_current(state, now=now)
     manifest = state.manifest_path
     manifest_bytes = _read_immutable_file(
         manifest,

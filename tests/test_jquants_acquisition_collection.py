@@ -57,6 +57,34 @@ def test_live_range_capture_verifies_once(tmp_path: Path, receipt_ed25519_keys) 
         support.verify_live_acquisition(fixture, service=service, required=required)
 
 
+def test_verification_rejects_authority_clock_rollback(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    ticks = iter(
+        (
+            "2026-08-11T09:14:00+09:00",
+            "2026-08-11T09:00:00+09:00",
+        )
+    )
+    service = _service(receipt_ed25519_keys, clock=lambda: next(ticks))
+    required = _required("indices_bars_daily_topix")
+    fixture = support.build_live_acquisition(
+        tmp_path=tmp_path,
+        service=service,
+        required=required,
+        raw_pages=(b'{"data":[{"Date":"2026-07-31"}]}',),
+    )
+    with pytest.raises(ValueError, match="clock moved backwards"):
+        support.verify_live_acquisition(
+            fixture, service=service, required=required
+        )
+    with pytest.raises(TypeError, match="already been consumed"):
+        support.verify_live_acquisition(
+            fixture, service=service, required=required
+        )
+    assert service._issued_evidence == []
+
+
 def test_live_range_capture_verifies_provider_page_chain(
     tmp_path: Path, receipt_ed25519_keys
 ) -> None:

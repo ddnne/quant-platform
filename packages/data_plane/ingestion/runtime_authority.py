@@ -31,8 +31,10 @@ from storage.receipt_crypto import STANDARD_CLAIM_KEYS, canonical_evidence_diges
 from ingestion.jquants.acquisition_collection import (
     _LiveJQuantsAcquisitionCapture,
     _VerifiedJQuantsAcquisitionCollection,
+    _assert_verified_jquants_session_current,
     _canonical_required_segment,
     _consume_verified_jquants_collection,
+    _next_authority_event_sequence,
     _records_from_verified_pages,
     _reread_verified_jquants_state,
     _verify_live_jquants_capture,
@@ -345,11 +347,14 @@ class _GovernedReceiptService:
     ) -> _GovernedCollectionContext:
         """Mint timestamp/run authority for one local reconciliation transaction.
 
-        Passing both ``store`` and ``required`` creates the only context that
-        can reach receipt issuance: the authority inserts and owns the run row
-        in the same uncommitted SQLite transaction as structured facts and the
-        eventual receipt.  A no-argument context remains useful for negative
-        capability tests but is deliberately ineligible for SUCCESS.
+        For J-Quants, live capture verification must finish before this call;
+        private authority ordering enforces that the context timestamp cannot
+        predate acquisition completion.  Passing both ``store`` and
+        ``required`` inserts the authority-owned run row and starts the first
+        explicit transaction for caller-staged structured facts.  Receipt
+        verification/finalization uses a later transaction after that
+        structured state commits.  A no-argument context remains useful for
+        negative capability tests but is deliberately ineligible for SUCCESS.
         """
         self._assert_registered()
         checked_at = str(self._clock())
@@ -362,6 +367,7 @@ class _GovernedReceiptService:
         required_identity_digest: str | None = None
         run_detail: str | None = None
         store_connection: Any | None = None
+        context_sequence: int | None = None
         if store is not None and required is not None:
             from storage.sqlite_store import SqliteStore
 
@@ -394,6 +400,7 @@ class _GovernedReceiptService:
             )
             run_id = int(cursor.lastrowid)
             store_connection = store._conn  # noqa: SLF001
+            context_sequence = _next_authority_event_sequence()
         context = _GovernedCollectionContext(
             _seal=_COLLECTION_CONTEXT_SEAL,
             _authority_id=self._authority_id,
@@ -410,6 +417,7 @@ class _GovernedReceiptService:
                 "required_identity_digest": required_identity_digest,
                 "run_detail": run_detail,
                 "store_connection": store_connection,
+                "context_sequence": context_sequence,
             }
         return context
 
@@ -517,7 +525,8 @@ class _GovernedReceiptService:
         There is deliberately no product constructor for ``capture`` yet.
         The separate Receipt Worker/binding remains PENDING; persisted headers
         and raw files cannot invoke this method without its registered live
-        authority capability.
+        authority capability.  Full raw/state-machine verification pins its
+        completion clock before a governed collection context may be created.
         """
         self._assert_registered()
         if not isinstance(required, RequiredCoverageSegment):
@@ -531,7 +540,7 @@ class _GovernedReceiptService:
             capture,
             authority_id=self._authority_id,
             required=canonical_required,
-            now=str(self._clock()),
+            clock=self._clock,
         )
 
     @_rollback_store_on_failure
@@ -592,11 +601,13 @@ class _GovernedReceiptService:
             context_required_digest = context_state["required_identity_digest"]
             context_run_detail = context_state["run_detail"]
             context_store_connection = context_state["store_connection"]
+            context_sequence = context_state["context_sequence"]
         if (
             context_run_id is None
             or context_checked_at is None
             or context_required_digest is None
             or context_run_detail is None
+            or context_sequence is None
         ):
             raise TypeError(
                 "governed SUCCESS requires an authority-owned ingestion transaction"
@@ -633,27 +644,15 @@ class _GovernedReceiptService:
             raise ValueError("authority-owned ingestion transaction state drifted")
         run_id = context_run_id
         checked_at = str(context_checked_at)
-        checked_dt = datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
-        now_dt = datetime.fromisoformat(str(self._clock()).replace("Z", "+00:00"))
-        if checked_dt.tzinfo is None or now_dt.tzinfo is None:
-            raise ValueError("governed collection clock must be timezone-aware")
-        age = (now_dt.astimezone(timezone.utc) - checked_dt.astimezone(timezone.utc))
-        if age.total_seconds() < -_MAX_CLOCK_SKEW_SECONDS:
-            raise ValueError("collection context timestamp is in the future")
-        if age.total_seconds() > _MAX_CONTEXT_AGE_SECONDS:
-            raise ValueError("collection context is stale")
+        checked_dt = _parse_authority_clock(checked_at)
+        now_dt = _parse_authority_clock(str(self._clock()))
+        _assert_context_clock_fresh(checked_dt, now_dt)
 
         if required.source == "jquants":
             if jquants_capture is not None:
-                if jquants_collection is not None:
-                    raise TypeError(
-                        "supply either live capture or verified collection, not both"
-                    )
-                jquants_collection = _verify_live_jquants_capture(
-                    jquants_capture,
-                    authority_id=self._authority_id,
-                    required=canonical_required,
-                    now=str(self._clock()),
+                raise TypeError(
+                    "live capture must be fully verified before beginning the "
+                    "authority-owned collection transaction"
                 )
             if isinstance(jquants_collection, _PersistedJQuantsCollection):
                 raise TypeError(
@@ -677,6 +676,13 @@ class _GovernedReceiptService:
                 authority_id=self._authority_id,
                 now=now_dt,
             )
+            if (
+                checked_dt.astimezone(timezone.utc) < verified_state.verified_at
+                or context_sequence <= verified_state.verified_sequence
+            ):
+                raise ValueError(
+                    "collection transaction predates live acquisition verification"
+                )
             if verified_state.dataset != required.dataset:
                 raise ValueError("verified J-Quants dataset differs from required")
             if verified_state.required != canonical_required:
@@ -789,9 +795,11 @@ class _GovernedReceiptService:
             # again, exact natural keys are reloaded from the committed DB,
             # and canonical parsing/normalization is repeated.
             _begin_receipt_verification_transaction(store)
+            post_commit_now = _parse_authority_clock(str(self._clock()))
+            _assert_context_clock_fresh(checked_dt, post_commit_now)
             raw_pages = _reread_verified_jquants_state(
                 verified_state,
-                now=now_dt,
+                now=post_commit_now,
             )
             if any(not page for page in raw_pages):
                 raise ValueError("committed reconciliation lost immutable raw pages")
@@ -813,6 +821,12 @@ class _GovernedReceiptService:
                 trusted_extra_evidence=trusted_acquisition_digests,
                 trusted_source_request_digest=trusted_source_request_digest,
             )
+            pre_issue_now = _parse_authority_clock(str(self._clock()))
+            _assert_context_clock_fresh(checked_dt, pre_issue_now)
+            _assert_verified_jquants_session_current(
+                verified_state,
+                now=pre_issue_now,
+            )
             # Registration deliberately stays inline at the end of the trusted
             # reconciliation sequence.  A module-level claims-to-capability
             # helper would be an importable mint oracle.
@@ -827,6 +841,12 @@ class _GovernedReceiptService:
                     "consumed": False,
                 }
             signed = dict(self._issue_reconciled_evidence(evidence))
+            post_issue_now = _parse_authority_clock(str(self._clock()))
+            _assert_context_clock_fresh(checked_dt, post_issue_now)
+            _assert_verified_jquants_session_current(
+                verified_state,
+                now=post_issue_now,
+            )
             receipt = CollectionReceipt(
                 source=required.source,
                 dataset=required.dataset,
@@ -918,6 +938,21 @@ def _required_segment_identity_digest(
             "expected_items": required.expected_items,
         }
     )
+
+
+def _parse_authority_clock(value: str) -> datetime:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("governed collection clock must be timezone-aware")
+    return parsed
+
+
+def _assert_context_clock_fresh(checked_at: datetime, now: datetime) -> None:
+    age = now.astimezone(timezone.utc) - checked_at.astimezone(timezone.utc)
+    if age.total_seconds() < -_MAX_CLOCK_SKEW_SECONDS:
+        raise ValueError("collection context timestamp is in the future")
+    if age.total_seconds() > _MAX_CONTEXT_AGE_SECONDS:
+        raise ValueError("collection context is stale")
 
 
 def _verify_issued_receipt_matches_measurement(

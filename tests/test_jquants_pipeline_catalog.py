@@ -89,8 +89,9 @@ def test_run_jquants_catalog_writes_to_generic_table(
     assert len(reports) >= 1
     assert all(r.kind == "equities_bars_daily" for r in reports)
     assert all(r.registered == 0 for r in reports)
-    assert all("single-date" in r.error for r in reports)
-    # One daily query cannot authorize a calendar-month segment. The raw
+    assert all(r.error for r in reports)
+    # The legacy local daily path has neither a verified live collection nor
+    # an authority-owned v2 transaction, so it cannot authorize COMPLETE. Raw
     # acquisition remains available for a future governed batch closure.
     assert store.fetch_all("jquants_records") == []
     assert read_collection_receipts(
