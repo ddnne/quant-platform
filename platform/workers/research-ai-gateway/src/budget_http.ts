@@ -3,6 +3,7 @@
 import { DurableObject } from "cloudflare:workers";
 
 import {
+  cancelPreProviderReservation,
   createBudget,
   createBudgetCoordinator,
   finalizeBudget,
@@ -11,6 +12,7 @@ import {
   recoverExpiredLeases,
   releaseBudget,
   reserveBudget,
+  reserveOwnedBudget,
   settleUncertainBudget,
   snapshotBudget,
   type BudgetResult,
@@ -74,7 +76,10 @@ function errorStatus(error: string): number {
     error === "lease_mismatch" ||
     error === "caller_settlement_rejected" ||
     error === "provider_usage_invalid" ||
-    error === "reservation_changed_retry"
+    error === "reservation_changed_retry" ||
+    error === "reserve_owner_capability_invalid" ||
+    error === "reservation_owned_by_other_invocation" ||
+    error === "reservation_not_cancellable"
   ) {
     return 409;
   }
@@ -90,6 +95,7 @@ export async function handleBudgetRequest(
   const path = url.pathname;
   if (
     path === "/finalize" ||
+    path === "/cancel-pre-provider" ||
     path === "/reconcile" ||
     path === "/provider-started" ||
     path === "/settle-uncertain" ||
@@ -140,6 +146,11 @@ export async function handleBudgetRequest(
         {
           lease_id: typeof rec.lease_id === "string" ? rec.lease_id : undefined,
           idempotency_key: typeof rec.idempotency_key === "string" ? rec.idempotency_key : undefined,
+          request_digest: typeof rec.request_digest === "string" ? rec.request_digest : undefined,
+          reserve_owner_capability:
+            typeof rec.reserve_owner_capability === "string"
+              ? rec.reserve_owner_capability
+              : undefined,
         },
         now,
       );
@@ -178,8 +189,16 @@ export class BudgetLedger extends DurableObject<unknown> {
     return this.coordinator.reserve(input);
   }
 
+  reserveOwned(input: Parameters<typeof reserveOwnedBudget>[1]) {
+    return this.coordinator.reserveOwned(input);
+  }
+
   markProviderStarted(input: Parameters<typeof markProviderStarted>[1]) {
     return this.coordinator.markProviderStarted(input);
+  }
+
+  cancelPreProvider(input: Parameters<typeof cancelPreProviderReservation>[1]) {
+    return this.coordinator.cancelPreProvider(input);
   }
 
   finalizeExact(input: Parameters<typeof finalizeBudget>[1]) {

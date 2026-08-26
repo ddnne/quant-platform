@@ -755,4 +755,198 @@ describe("POST /v1/complete control-plane occupancy", () => {
     expect(snap.used).toMatchObject({ model_calls: 1, input_tokens: 4, output_tokens: 3 });
     expect(snap.frozen).toBe(false);
   });
+
+  it("recovers an owner-bound reserve when commit succeeds but the first RPC response is lost", async () => {
+    const storage = new MemoryBudgetStorage();
+    let reserveCalls = 0;
+    let providerCalls = 0;
+    const env: GatewayEnv = {
+      GATEWAY_TOKEN,
+      BUDGET_LEDGER: {
+        idFromName(name: string) {
+          return { toString: () => name } as DurableObjectId;
+        },
+        get() {
+          const coordinator = createBudgetCoordinator(storage);
+          return {
+            ...coordinator,
+            reserveOwned: async (input: Parameters<typeof coordinator.reserveOwned>[0]) => {
+              reserveCalls += 1;
+              const committed = await coordinator.reserveOwned(input);
+              if (reserveCalls === 1) {
+                throw new Error("reserve response lost after commit");
+              }
+              return committed;
+            },
+          };
+        },
+      } as unknown as DurableObjectNamespace,
+      AI: {
+        run: async () => {
+          providerCalls += 1;
+          return {
+            response: JSON.stringify(insightArtifact),
+            usage: { prompt_tokens: 4, completion_tokens: 3 },
+          };
+        },
+      } as unknown as Ai,
+    };
+
+    const res = await worker.fetch(completeWithBudget(), env);
+    expect(res.status).toBe(200);
+    expect(reserveCalls).toBe(2);
+    expect(providerCalls).toBe(1);
+    const snap = await snapshotBudget(storage);
+    expect(snap).toMatchObject({
+      ok: true,
+      used: { model_calls: 1, input_tokens: 4, output_tokens: 3 },
+      reserved: { model_calls: 0, input_tokens: 0, output_tokens: 0 },
+      active_leases: 0,
+    });
+  });
+
+  it("allows only one Gateway invocation to own an in-flight idempotency key", async () => {
+    const storage = new MemoryBudgetStorage();
+    let providerCalls = 0;
+    let providerEntered!: () => void;
+    let unblockProvider!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      providerEntered = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      unblockProvider = resolve;
+    });
+    const env: GatewayEnv = {
+      GATEWAY_TOKEN,
+      BUDGET_LEDGER: {
+        idFromName(name: string) {
+          return { toString: () => name } as DurableObjectId;
+        },
+        get() {
+          return createBudgetCoordinator(storage);
+        },
+      } as unknown as DurableObjectNamespace,
+      AI: {
+        run: async () => {
+          providerCalls += 1;
+          providerEntered();
+          await blocked;
+          return {
+            response: JSON.stringify(insightArtifact),
+            usage: { prompt_tokens: 4, completion_tokens: 3 },
+          };
+        },
+      } as unknown as Ai,
+    };
+
+    const firstPending = worker.fetch(
+      completeWithBudget({ headers: { "Idempotency-Key": "same-client-key" } }),
+      env,
+    );
+    await entered;
+    const second = await worker.fetch(
+      completeWithBudget({ headers: { "Idempotency-Key": "same-client-key" } }),
+      env,
+    );
+    expect(second.status).toBe(409);
+    expect(await second.json()).toEqual({
+      ok: false,
+      error: "reservation_owned_by_other_invocation",
+    });
+    expect(providerCalls).toBe(1);
+
+    unblockProvider();
+    const first = await firstPending;
+    expect(first.status).toBe(200);
+    expect(providerCalls).toBe(1);
+    expect(await snapshotBudget(storage)).toMatchObject({
+      ok: true,
+      used: { model_calls: 1 },
+      reserved: { model_calls: 0 },
+      active_leases: 0,
+    });
+  });
+
+  it("atomically cancels two ambiguous pre-provider reserves without consuming parallel slots", async () => {
+    const storage = new MemoryBudgetStorage();
+    let providerCalls = 0;
+    let cancelCalls = 0;
+    const failingNamespace = {
+      idFromName(name: string) {
+        return { toString: () => name } as DurableObjectId;
+      },
+      get() {
+        const coordinator = createBudgetCoordinator(storage);
+        return {
+          ...coordinator,
+          reserveOwned: async (input: Parameters<typeof coordinator.reserveOwned>[0]) => {
+            await coordinator.reserveOwned(input);
+            throw new Error("reserve response always lost after commit");
+          },
+          cancelPreProvider: async (
+            input: Parameters<typeof coordinator.cancelPreProvider>[0],
+          ) => {
+            cancelCalls += 1;
+            const committed = await coordinator.cancelPreProvider(input);
+            if (cancelCalls === 1) {
+              throw new Error("cancel response lost after commit");
+            }
+            return committed;
+          },
+        };
+      },
+    } as unknown as DurableObjectNamespace;
+    const failingEnv: GatewayEnv = {
+      GATEWAY_TOKEN,
+      BUDGET_LEDGER: failingNamespace,
+      AI: {
+        run: async () => {
+          providerCalls += 1;
+          throw new Error("provider must not run");
+        },
+      } as unknown as Ai,
+    };
+    const secondBody = {
+      ...insightBody,
+      messages: [{ role: "user", content: "different ambiguous reserve" }],
+    };
+
+    const responses = await Promise.all([
+      worker.fetch(completeWithBudget(), failingEnv),
+      worker.fetch(completeWithBudget({ body: secondBody }), failingEnv),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([500, 500]);
+    expect(providerCalls).toBe(0);
+    const afterFailures = await snapshotBudget(storage);
+    expect(afterFailures).toMatchObject({
+      ok: true,
+      used: { model_calls: 0 },
+      reserved: { model_calls: 0 },
+      active_leases: 0,
+    });
+
+    const healthyEnv: GatewayEnv = {
+      GATEWAY_TOKEN,
+      BUDGET_LEDGER: {
+        idFromName(name: string) {
+          return { toString: () => name } as DurableObjectId;
+        },
+        get() {
+          return createBudgetCoordinator(storage);
+        },
+      } as unknown as DurableObjectNamespace,
+      AI: {
+        run: async () => {
+          providerCalls += 1;
+          return {
+            response: JSON.stringify(insightArtifact),
+            usage: { prompt_tokens: 4, completion_tokens: 3 },
+          };
+        },
+      } as unknown as Ai,
+    };
+    const recovered = await worker.fetch(completeWithBudget(), healthyEnv);
+    expect(recovered.status).toBe(200);
+    expect(providerCalls).toBe(1);
+  });
 });

@@ -4,6 +4,7 @@ import {
   CONTROL_PLANE_LEDGER_NAME,
   MemoryBudgetStorage,
   bindIdempotencyKey,
+  cancelPreProviderReservation,
   createBudget,
   finalizeBudget,
   heartbeatLease,
@@ -11,6 +12,7 @@ import {
   recoverExpiredLeases,
   releaseBudget,
   reserveBudget,
+  reserveOwnedBudget,
   settleUncertainBudget,
   snapshotBudget,
   zeroCounters,
@@ -25,6 +27,8 @@ import {
 /** In-memory ledger algebra. Live Cloudflare Durable Object occupancy is unproven. */
 
 const T0 = 1_700_000_000_000;
+const OWNER_A = "a".repeat(64);
+const OWNER_B = "b".repeat(64);
 
 function leased(
   idempotency_key: string,
@@ -1533,6 +1537,26 @@ function assertNoCapabilityLeak(payload: unknown, secret: string, hash: string):
 }
 
 describe("P0 terminal replay and capability isolation", () => {
+  it("rejects an unowned reservation on the production Gateway reserve surface", async () => {
+    const storage = new MemoryBudgetStorage();
+    const denied = await reserveOwnedBudget(
+      storage,
+      leased("unowned-production", { model_calls: 1 }) as Parameters<
+        typeof reserveOwnedBudget
+      >[1],
+      T0,
+    );
+    expect(denied).toEqual({
+      ok: false,
+      error: "reserve_owner_capability invalid",
+    });
+    expect(await snapshotBudget(storage, T0)).toMatchObject({
+      ok: true,
+      reserved: { model_calls: 0 },
+      active_leases: 0,
+    });
+  });
+
   it("public DTO has no sensitive capability fields", () => {
     expectTypeOf<Reservation>().toHaveProperty("settlement_capability_secret");
     expectTypeOf<Reservation>().toHaveProperty("settlement_capability_hash");
@@ -2656,5 +2680,311 @@ describe("P0 terminal replay and capability isolation", () => {
     await expect(snapshotBudget(storage, T0 + 3)).rejects.toThrow(
       /persisted_budget_state_invalid:settlement_counter_binding_invalid/,
     );
+  });
+
+  it("binds active reserve replay and cancellation to one invocation owner", async () => {
+    const storage = new MemoryBudgetStorage();
+    const input = {
+      ...leased("owner-bound", { model_calls: 1, input_tokens: 20 }),
+      reserve_owner_capability: OWNER_A,
+    };
+    const first = await reserveBudget(storage, input, T0);
+    expect(first).toMatchObject({ ok: true, existing: false, owner_recovered: false });
+    if (!first.ok || !first.lease) throw new Error("owner reserve");
+
+    const replay = await reserveBudget(storage, input, T0 + 1);
+    expect(replay).toMatchObject({
+      ok: true,
+      existing: true,
+      owner_recovered: true,
+      budget_run_id: first.budget_run_id,
+    });
+    const other = await reserveBudget(
+      storage,
+      { ...input, reserve_owner_capability: OWNER_B },
+      T0 + 2,
+    );
+    expect(other).toEqual({
+      ok: false,
+      error: "reservation_owned_by_other_invocation",
+    });
+
+    const wrongCancel = await cancelPreProviderReservation(
+      storage,
+      {
+        idempotency_key: "owner-bound",
+        request_digest: "digest-owner-bound",
+        reserve_owner_capability: OWNER_B,
+      },
+      T0 + 3,
+    );
+    expect(wrongCancel).toEqual({
+      ok: false,
+      error: "reserve_owner_capability_invalid",
+    });
+    expect(await snapshotBudget(storage, T0 + 3)).toMatchObject({
+      ok: true,
+      reserved: { model_calls: 1, input_tokens: 20 },
+      active_leases: 1,
+    });
+
+    const cancelled = await cancelPreProviderReservation(
+      storage,
+      {
+        idempotency_key: "owner-bound",
+        request_digest: "digest-owner-bound",
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 4,
+    );
+    expect(cancelled).toMatchObject({ ok: true, cancelled: true });
+    const cancelReplay = await cancelPreProviderReservation(
+      storage,
+      {
+        idempotency_key: "owner-bound",
+        request_digest: "digest-owner-bound",
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 5,
+    );
+    expect(cancelReplay).toMatchObject({ ok: true, cancelled: false });
+    expect(await snapshotBudget(storage, T0 + 5)).toMatchObject({
+      ok: true,
+      reserved: { model_calls: 0, input_tokens: 0 },
+      used: { model_calls: 0, input_tokens: 0 },
+      active_leases: 0,
+    });
+
+    const delayedSameOwner = await reserveBudget(storage, input, T0 + 6);
+    expect(delayedSameOwner).toEqual({ ok: false, error: "reservation_released" });
+    expect(await snapshotBudget(storage, T0 + 6)).toMatchObject({
+      ok: true,
+      reserved: { model_calls: 0, input_tokens: 0 },
+      active_leases: 0,
+    });
+
+    const freshOwner = await reserveBudget(
+      storage,
+      { ...input, reserve_owner_capability: OWNER_B },
+      T0 + 7,
+    );
+    expect(freshOwner).toMatchObject({ ok: true, existing: false });
+    if (!freshOwner.ok) throw new Error("fresh owner reserve");
+    expect(freshOwner.budget_run_id).not.toBe(first.budget_run_id);
+    await cancelPreProviderReservation(
+      storage,
+      {
+        idempotency_key: "owner-bound",
+        request_digest: "digest-owner-bound",
+        reserve_owner_capability: OWNER_B,
+      },
+      T0 + 8,
+    );
+
+    const persisted = await storage.get<Record<string, any>>("ledger");
+    const persistedOwnerHash = String(
+      persisted?.reservations["owner-bound"].reserve_owner_capability_hash || "",
+    );
+    expect(persistedOwnerHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(persisted)).not.toContain(OWNER_A);
+    expect(JSON.stringify(first)).not.toContain(OWNER_A);
+    expect(JSON.stringify(first)).not.toContain(persistedOwnerHash);
+    expect(first.reservation).not.toHaveProperty("reserve_owner_capability_hash");
+  });
+
+  it("requires the reserve owner at provider start and refuses cancellation after start", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      {
+        ...leased("owner-start", { model_calls: 1, input_tokens: 9 }),
+        reserve_owner_capability: OWNER_A,
+      },
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("owner reserve");
+
+    for (const capability of [undefined, OWNER_B]) {
+      const denied = await markProviderStarted(
+        storage,
+        {
+          idempotency_key: "owner-start",
+          request_digest: "digest-owner-start",
+          lease_id: reserved.lease.lease_id,
+          reserve_owner_capability: capability,
+        },
+        T0 + 1,
+      );
+      expect(denied).toEqual({
+        ok: false,
+        error: "reserve_owner_capability_invalid",
+      });
+    }
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "owner-start",
+        request_digest: "digest-owner-start",
+        lease_id: reserved.lease.lease_id,
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 2,
+    );
+    expect(started.ok).toBe(true);
+
+    const cancelStarted = await cancelPreProviderReservation(
+      storage,
+      {
+        idempotency_key: "owner-start",
+        request_digest: "digest-owner-start",
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 3,
+    );
+    expect(cancelStarted).toEqual({
+      ok: false,
+      error: "reservation_not_cancellable",
+    });
+    const releaseWithoutOwner = await releaseBudget(
+      storage,
+      {
+        idempotency_key: "owner-start",
+        lease_id: reserved.lease.lease_id,
+      },
+      T0 + 4,
+    );
+    expect(releaseWithoutOwner).toEqual({
+      ok: false,
+      error: "reservation_not_cancellable",
+    });
+    const releaseWithOwner = await releaseBudget(
+      storage,
+      {
+        idempotency_key: "owner-start",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-owner-start",
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 4,
+    );
+    expect(releaseWithOwner).toEqual({
+      ok: false,
+      error: "reservation_not_cancellable",
+    });
+    expect(await snapshotBudget(storage, T0 + 4)).toMatchObject({
+      ok: true,
+      reserved: { model_calls: 1, input_tokens: 9 },
+      active_leases: 1,
+    });
+  });
+
+  it("requires the owner for settlement and rejects owner material in the terminal cache", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      {
+        ...leased("owner-settle", { model_calls: 1, input_tokens: 9 }),
+        reserve_owner_capability: OWNER_A,
+      },
+      T0,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("owner reserve");
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "owner-settle",
+        request_digest: "digest-owner-settle",
+        lease_id: reserved.lease.lease_id,
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 1,
+    );
+    if (!started.ok || !started.settlement_capability) throw new Error("owner start");
+
+    for (const capability of [undefined, OWNER_B]) {
+      const denied = await finalizeBudget(
+        storage,
+        {
+          idempotency_key: "owner-settle",
+          request_digest: "digest-owner-settle",
+          lease_id: reserved.lease.lease_id,
+          settlement_capability: started.settlement_capability,
+          reserve_owner_capability: capability,
+          usage: actualUsage({ input_tokens: 2 }),
+          terminal_result: { http_status: 200, body: { ok: true } },
+        },
+        T0 + 2,
+      );
+      expect(denied).toEqual({
+        ok: false,
+        error: "reserve_owner_capability_invalid",
+      });
+    }
+
+    const smuggled = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "owner-settle",
+        request_digest: "digest-owner-settle",
+        lease_id: reserved.lease.lease_id,
+        settlement_capability: started.settlement_capability,
+        reserve_owner_capability: OWNER_A,
+        usage: actualUsage({ input_tokens: 2 }),
+        terminal_result: {
+          http_status: 200,
+          body: { ok: true, artifact: { nested: { owner: OWNER_A } } },
+        },
+      },
+      T0 + 3,
+    );
+    expect(smuggled).toEqual({
+      ok: false,
+      error: "cached_result_capability_material",
+    });
+    const afterReject = await storage.get<Record<string, any>>("ledger");
+    expect(afterReject?.reservations["owner-settle"]).toMatchObject({
+      status: "reserved",
+      cached_result: null,
+      settlement_capability_consumed: false,
+    });
+    expect(JSON.stringify(afterReject)).not.toContain(OWNER_A);
+
+    const finalized = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "owner-settle",
+        request_digest: "digest-owner-settle",
+        lease_id: reserved.lease.lease_id,
+        settlement_capability: started.settlement_capability,
+        reserve_owner_capability: OWNER_A,
+        usage: actualUsage({ input_tokens: 2 }),
+        terminal_result: { http_status: 200, body: { ok: true } },
+      },
+      T0 + 4,
+    );
+    expect(finalized.ok).toBe(true);
+    const terminalBefore = JSON.stringify(await storage.get("ledger"));
+    const cancelTerminal = await cancelPreProviderReservation(
+      storage,
+      {
+        idempotency_key: "owner-settle",
+        request_digest: "digest-owner-settle",
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 5,
+    );
+    expect(cancelTerminal).toEqual({ ok: false, error: "reservation_not_cancellable" });
+    const releaseTerminal = await releaseBudget(
+      storage,
+      {
+        idempotency_key: "owner-settle",
+        lease_id: reserved.lease.lease_id,
+        request_digest: "digest-owner-settle",
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 5,
+    );
+    expect(releaseTerminal).toEqual({ ok: false, error: "reservation_not_cancellable" });
+    expect(JSON.stringify(await storage.get("ledger"))).toBe(terminalBefore);
   });
 });

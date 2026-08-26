@@ -78,6 +78,7 @@ type BudgetRpc = {
   detail?: string;
   lease_id?: string;
   existing?: boolean;
+  owner_recovered?: boolean;
   budget_run_id?: string;
   reservation_status?: string;
   cached_result?: CachedBudgetBody | null;
@@ -85,11 +86,11 @@ type BudgetRpc = {
 };
 
 type BudgetLedgerRpc = {
-  reserve(input: unknown): Promise<unknown>;
+  reserveOwned(input: unknown): Promise<unknown>;
+  cancelPreProvider(input: unknown): Promise<unknown>;
   markProviderStarted(input: unknown): Promise<unknown>;
   finalizeExact(input: unknown): Promise<unknown>;
   settleUncertain(input: unknown): Promise<unknown>;
-  release(input: unknown): Promise<unknown>;
 };
 
 function parseCachedResult(raw: unknown): CachedBudgetBody | null {
@@ -118,7 +119,10 @@ function rpcStatus(error: string | undefined, ok: boolean): number {
     error === "settlement_capability_consumed" ||
     error === "request_digest_mismatch" ||
     error === "lease_mismatch" ||
-    error === "caller_settlement_rejected"
+    error === "caller_settlement_rejected" ||
+    error === "reserve_owner_capability_invalid" ||
+    error === "reservation_owned_by_other_invocation" ||
+    error === "reservation_not_cancellable"
   ) {
     return 409;
   }
@@ -173,6 +177,7 @@ async function budgetRpc(
     detail: typeof rec.detail === "string" ? rec.detail : undefined,
     lease_id: typeof lease.lease_id === "string" ? lease.lease_id : undefined,
     existing: rec.existing === true,
+    owner_recovered: rec.owner_recovered === true,
     budget_run_id: budgetRunId,
     reservation_status:
       typeof reservation.status === "string" ? reservation.status : undefined,
@@ -180,6 +185,39 @@ async function budgetRpc(
     settlement_capability:
       typeof rec.settlement_capability === "string" ? rec.settlement_capability : null,
   };
+}
+
+const AMBIGUOUS_BUDGET_RPC_ERRORS = new Set([
+  "budget_rpc_failed",
+  "budget_rpc_invalid_json",
+  "budget_rpc_unavailable",
+]);
+
+function budgetRpcOutcomeAmbiguous(result: BudgetRpc): boolean {
+  return !result.ok && AMBIGUOUS_BUDGET_RPC_ERRORS.has(result.error || "");
+}
+
+function mintReserveOwnerCapability(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function cancelOwnedPreProviderReserve(
+  env: GatewayEnv,
+  input: {
+    idempotency_key: string;
+    request_digest: string;
+    reserve_owner_capability: string;
+  },
+): Promise<BudgetRpc> {
+  let cancelled = await budgetRpc(env, "cancelPreProvider", input);
+  if (budgetRpcOutcomeAmbiguous(cancelled)) {
+    // Exact owner retry is idempotent: if the first cancel committed and only
+    // its response was lost, the released reservation returns cancelled=false.
+    cancelled = await budgetRpc(env, "cancelPreProvider", input);
+  }
+  return cancelled;
 }
 
 function completeRequestDigestPayload(
@@ -382,13 +420,30 @@ async function handleGatewayRequest(
       cached_tokens: estimatedInput,
       cost_usd: estimatedCost,
     };
-    const reserved = await budgetRpc(env, "reserve", {
+    const reserveOwnerCapability = mintReserveOwnerCapability();
+    const reserveInput = {
       idempotency_key: bound.idempotency_key,
       request_digest: bound.request_digest,
       acquire_lease: true,
       amounts: reserveAmounts,
-    });
+      reserve_owner_capability: reserveOwnerCapability,
+    };
+    let reserved = await budgetRpc(env, "reserveOwned", reserveInput);
+    const firstReserveAmbiguous = budgetRpcOutcomeAmbiguous(reserved);
+    if (firstReserveAmbiguous) {
+      // The DO may have committed before the RPC response was lost. Only this
+      // invocation can recover that reservation because its owner capability
+      // is hash-bound in the durable transaction.
+      reserved = await budgetRpc(env, "reserveOwned", reserveInput);
+    }
     if (!reserved.ok) {
+      if (firstReserveAmbiguous || budgetRpcOutcomeAmbiguous(reserved)) {
+        await cancelOwnedPreProviderReserve(env, {
+          idempotency_key: bound.idempotency_key,
+          request_digest: bound.request_digest,
+          reserve_owner_capability: reserveOwnerCapability,
+        });
+      }
       const publicDetail =
         reserved.error === "budget_exhausted" || reserved.error === "budget_frozen"
           ? reserved.detail
@@ -402,7 +457,7 @@ async function handleGatewayRequest(
     if (reserved.cached_result) {
       return cachedResponse(reserved.cached_result);
     }
-    if (reserved.existing) {
+    if (reserved.existing && !reserved.owner_recovered) {
       return json(
         {
           ok: false,
@@ -413,10 +468,13 @@ async function handleGatewayRequest(
       );
     }
     if (!budgetRunId || !reserved.lease_id) {
-      // The request key is enough to cancel a reserve that committed despite a
-      // malformed/lost response. No provider marker exists yet.
-      await budgetRpc(env, "release", {
+      // A malformed success response is still ambiguous after commit. Cancel
+      // only the reservation owned by this invocation; a duplicate client with
+      // the same idempotency key cannot release it.
+      await cancelOwnedPreProviderReserve(env, {
         idempotency_key: bound.idempotency_key,
+        request_digest: bound.request_digest,
+        reserve_owner_capability: reserveOwnerCapability,
       });
       return json(
         {
@@ -434,6 +492,7 @@ async function handleGatewayRequest(
       idempotency_key: bound.idempotency_key,
       lease_id: reserved.lease_id,
       request_digest: bound.request_digest,
+      reserve_owner_capability: reserveOwnerCapability,
     };
     let providerStarted = await budgetRpc(env, "markProviderStarted", startInput);
     if (!providerStarted.ok || !providerStarted.settlement_capability) {
@@ -443,12 +502,14 @@ async function handleGatewayRequest(
     }
     const settlementCapability = providerStarted.settlement_capability;
     if (!providerStarted.ok || !settlementCapability) {
-      // No provider call was made. If the marker itself committed but its
-      // capability cannot be recovered, release conservatively charges and
-      // freezes. The alarm remains the final recovery path if this RPC fails.
-      await budgetRpc(env, "release", {
+      // No provider call was made by this invocation. If the marker did not
+      // commit, owner-bound cancellation releases the estimate. If it did
+      // commit but its response/capability was lost, cancellation fails closed
+      // and the alarm performs conservative recovery.
+      await cancelOwnedPreProviderReserve(env, {
         idempotency_key: bound.idempotency_key,
-        lease_id: reserved.lease_id,
+        request_digest: bound.request_digest,
+        reserve_owner_capability: reserveOwnerCapability,
       });
       return json(
         {
@@ -571,6 +632,7 @@ async function handleGatewayRequest(
         request_digest: bound.request_digest,
         lease_id: reserved.lease_id,
         settlement_capability: settlementCapability,
+        reserve_owner_capability: reserveOwnerCapability,
         reason: uncertainReason,
       });
       if (uncertain.ok && uncertain.cached_result) {
@@ -595,6 +657,7 @@ async function handleGatewayRequest(
         request_digest: bound.request_digest,
         lease_id: reserved.lease_id,
         settlement_capability: settlementCapability,
+        reserve_owner_capability: reserveOwnerCapability,
         reason: "worker_interrupted",
       });
       return json(
@@ -608,6 +671,7 @@ async function handleGatewayRequest(
       request_digest: bound.request_digest,
       lease_id: reserved.lease_id,
       settlement_capability: settlementCapability,
+      reserve_owner_capability: reserveOwnerCapability,
       usage: measuredUsage,
       terminal_result: { http_status: responseStatus, body: responseBody },
     });
@@ -620,6 +684,7 @@ async function handleGatewayRequest(
         request_digest: bound.request_digest,
         lease_id: reserved.lease_id,
         settlement_capability: settlementCapability,
+        reserve_owner_capability: reserveOwnerCapability,
         reason: "finalize_failed",
       });
       return json(

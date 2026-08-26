@@ -65,10 +65,12 @@ type BudgetLedgerRpcStub = DurableObjectStub & {
     amounts: unknown;
     acquire_lease?: boolean;
     request_digest?: string;
+    reserve_owner_capability?: string;
   }): Promise<{
     ok: boolean;
     error?: string;
     existing?: boolean;
+    owner_recovered?: boolean;
     budget_run_id?: string;
     reservation?: Record<string, unknown>;
     lease?: { lease_id: string; expires_at: number } | null;
@@ -77,6 +79,7 @@ type BudgetLedgerRpcStub = DurableObjectStub & {
     idempotency_key: string;
     lease_id: string;
     request_digest?: string;
+    reserve_owner_capability?: string;
   }): Promise<{
     ok: boolean;
     error?: string;
@@ -116,12 +119,27 @@ type BudgetLedgerRpcStub = DurableObjectStub & {
   release(input: {
     lease_id?: string;
     idempotency_key?: string;
+    request_digest?: string;
+    reserve_owner_capability?: string;
   }): Promise<{
     ok: boolean;
     error?: string;
     reservation?: Record<string, unknown> | null;
   }>;
+  cancelPreProvider(input: {
+    idempotency_key: string;
+    request_digest: string;
+    reserve_owner_capability: string;
+  }): Promise<{
+    ok: boolean;
+    error?: string;
+    cancelled?: boolean;
+    reservation?: Record<string, unknown> | null;
+  }>;
 };
+
+const OWNER_A = "a".repeat(64);
+const OWNER_B = "b".repeat(64);
 
 afterEach(async () => {
   await reset();
@@ -399,6 +417,92 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(committed.used?.input_tokens).toBe(4);
   }, 15_000);
 
+  it("recovers and cancels an owner-bound reserve across eviction without exposing authority", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
+    const rpc = stub as BudgetLedgerRpcStub;
+    const input = {
+      idempotency_key: "runtime-owner-reserve",
+      request_digest: "digest-runtime-owner-reserve",
+      reserve_owner_capability: OWNER_A,
+      acquire_lease: true,
+      amounts: { model_calls: 1, input_tokens: 11, output_tokens: 2 },
+    } as const;
+    const reserved = await within("owner reserve", rpc.reserve(input));
+    expect(reserved).toMatchObject({
+      ok: true,
+      existing: false,
+      owner_recovered: false,
+    });
+    expect(JSON.stringify(reserved)).not.toContain(OWNER_A);
+    expect(reserved.reservation).not.toHaveProperty("reserve_owner_capability_hash");
+    let persistedHash = "";
+    await runInDurableObject(stub, async (_instance: BudgetLedger, state) => {
+      const ledger = await state.storage.get<LedgerState>("ledger");
+      persistedHash =
+        ledger?.reservations["runtime-owner-reserve"].reserve_owner_capability_hash ?? "";
+      expect(persistedHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(JSON.stringify(ledger)).not.toContain(OWNER_A);
+    });
+    expect(JSON.stringify(reserved)).not.toContain(persistedHash);
+
+    await within("evict owner reserve", evictDurableObject(stub));
+    const recovered = await within("recover owner reserve", rpc.reserve(input));
+    expect(recovered).toMatchObject({
+      ok: true,
+      existing: true,
+      owner_recovered: true,
+      budget_run_id: reserved.budget_run_id,
+    });
+    const other = await within(
+      "reject other owner reserve",
+      rpc.reserve({ ...input, reserve_owner_capability: OWNER_B }),
+    );
+    expect(other).toEqual({
+      ok: false,
+      error: "reservation_owned_by_other_invocation",
+    });
+    const wrongCancel = await within(
+      "reject other owner cancel",
+      rpc.cancelPreProvider({
+        idempotency_key: input.idempotency_key,
+        request_digest: input.request_digest,
+        reserve_owner_capability: OWNER_B,
+      }),
+    );
+    expect(wrongCancel).toEqual({
+      ok: false,
+      error: "reserve_owner_capability_invalid",
+    });
+    const cancelled = await within(
+      "cancel owner reserve",
+      rpc.cancelPreProvider({
+        idempotency_key: input.idempotency_key,
+        request_digest: input.request_digest,
+        reserve_owner_capability: OWNER_A,
+      }),
+    );
+    expect(cancelled).toMatchObject({ ok: true, cancelled: true });
+
+    await within("evict cancelled owner reserve", evictDurableObject(stub));
+    const cancelReplay = await within(
+      "replay owner cancel",
+      rpc.cancelPreProvider({
+        idempotency_key: input.idempotency_key,
+        request_digest: input.request_digest,
+        reserve_owner_capability: OWNER_A,
+      }),
+    );
+    expect(cancelReplay).toMatchObject({ ok: true, cancelled: false });
+    const snapshot = await within("owner cancel snapshot", stub.fetch("https://budget/snapshot"));
+    expect(await snapshot.json()).toMatchObject({
+      reserved: { model_calls: 0, input_tokens: 0, output_tokens: 0 },
+      used: { model_calls: 0, input_tokens: 0, output_tokens: 0 },
+      active_leases: 0,
+    });
+  }, 15_000);
+
   it("direct HTTP finalize, reconcile, provider-start, and mint are not settlement authority", async () => {
     const namespace = runtimeEnv.BUDGET_LEDGER;
     if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
@@ -413,6 +517,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     await reservedResponse.text();
     for (const path of [
       "/finalize",
+      "/cancel-pre-provider",
       "/reconcile",
       "/provider-started",
       "/settle-uncertain",
@@ -699,9 +804,12 @@ describe("BudgetLedger in the Workers runtime", () => {
   }, 15_000);
 
   it("public DTO has no sensitive capability fields", () => {
+    expectTypeOf<Reservation>().toHaveProperty("reserve_owner_capability_hash");
     expectTypeOf<Reservation>().toHaveProperty("settlement_capability_secret");
     expectTypeOf<Reservation>().toHaveProperty("settlement_capability_hash");
     expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability");
+    expectTypeOf<PublicReservation>().not.toHaveProperty("reserve_owner_capability");
+    expectTypeOf<PublicReservation>().not.toHaveProperty("reserve_owner_capability_hash");
     expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability_secret");
     expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability_hash");
   });

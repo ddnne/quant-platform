@@ -96,6 +96,12 @@ export type Reservation = {
   /** Persisted before invoking Workers AI. Null proves no provider side effect was started. */
   provider_started_at: number | null;
   uncertainty_reason: string | null;
+  /**
+   * SHA-256 of the Gateway-invocation-private reserve owner capability.
+   * The capability itself is never persisted or returned. A legacy/internal
+   * reservation may be unowned (null) and cannot use owner recovery/cancel.
+   */
+  reserve_owner_capability_hash: string | null;
   /** SHA-256 of the one-shot settlement capability bound to this reservation. */
   settlement_capability_hash: string | null;
   settlement_capability_consumed: boolean;
@@ -127,6 +133,8 @@ export type PublicReservation = {
 };
 
 type SensitiveCapabilityField =
+  | "reserve_owner_capability"
+  | "reserve_owner_capability_hash"
   | "settlement_capability"
   | "settlement_capability_secret"
   | "settlement_capability_hash";
@@ -552,6 +560,54 @@ export function bindIdempotencyKey(
   return { ok: true, idempotency_key: `digest:${digest}`, request_digest: digest };
 }
 
+const OWNER_CAPABILITY_RE = /^[0-9a-f]{64}$/;
+
+function requireReserveOwnerCapability(
+  raw: unknown,
+): BudgetResult<{ reserve_owner_capability: string }> {
+  if (typeof raw !== "string" || !OWNER_CAPABILITY_RE.test(raw)) {
+    return { ok: false, error: "reserve_owner_capability invalid" };
+  }
+  return { ok: true, reserve_owner_capability: raw };
+}
+
+async function hashReserveOwnerCapability(
+  capability: string,
+  idempotencyKey: string,
+  requestDigest: string,
+): Promise<string> {
+  return sha256HexUtf8(
+    JSON.stringify([
+      "budget-reserve-owner/v1",
+      capability,
+      idempotencyKey,
+      requestDigest,
+    ]),
+  );
+}
+
+function timingSafeEqualHex(left: string, right: string): boolean {
+  if (!OWNER_CAPABILITY_RE.test(left) || !OWNER_CAPABILITY_RE.test(right)) {
+    return false;
+  }
+  let different = 0;
+  for (let i = 0; i < left.length; i += 1) {
+    different |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  }
+  return different === 0;
+}
+
+function reserveOwnerMatches(
+  reservation: Reservation,
+  submittedHash: string | null,
+): boolean {
+  return Boolean(
+    submittedHash &&
+      reservation.reserve_owner_capability_hash &&
+      timingSafeEqualHex(submittedHash, reservation.reserve_owner_capability_hash),
+  );
+}
+
 function counterGreater(name: CounterName, left: number, right: number): boolean {
   if (name === "cost_usd") return usdMicros(left) > usdMicros(right);
   return left > right;
@@ -757,6 +813,10 @@ function coerceReservation(raw: Reservation): Reservation {
     raw.actual === null
       ? null
       : requirePersistedCounters(raw.actual, "reservation.actual");
+  const ownerHash = raw.reserve_owner_capability_hash ?? null;
+  if (ownerHash !== null && !OWNER_CAPABILITY_RE.test(ownerHash)) {
+    throw new PersistedBudgetStateError("reservation_owner_capability_hash_invalid");
+  }
   return {
     ...raw,
     amounts,
@@ -767,6 +827,7 @@ function coerceReservation(raw: Reservation): Reservation {
     settlement: requirePersistedSettlement(raw.settlement, amounts, actual),
     provider_started_at: raw.provider_started_at ?? null,
     uncertainty_reason: raw.uncertainty_reason ?? null,
+    reserve_owner_capability_hash: ownerHash,
     settlement_capability_hash: raw.settlement_capability_hash ?? null,
     settlement_capability_consumed: raw.settlement_capability_consumed === true,
     settlement_capability_secret:
@@ -1059,6 +1120,8 @@ export async function reserveBudget(
     amounts: unknown;
     acquire_lease?: boolean;
     request_digest?: string;
+    /** Gateway-internal. Omitted only by legacy/internal callers. */
+    reserve_owner_capability?: string;
   },
   now = Date.now(),
 ): Promise<
@@ -1066,6 +1129,7 @@ export async function reserveBudget(
     reservation: PublicReservation;
     lease: Lease | null;
     existing: boolean;
+    owner_recovered: boolean;
     budget_run_id: string;
   }>
 > {
@@ -1077,6 +1141,16 @@ export async function reserveBudget(
   const parsed = parseAmounts(input.amounts);
   if (!parsed.ok) return parsed;
   const amounts = parsed.amounts;
+  let ownerHash: string | null = null;
+  if (input.reserve_owner_capability !== undefined) {
+    const owner = requireReserveOwnerCapability(input.reserve_owner_capability);
+    if (!owner.ok) return owner;
+    ownerHash = await hashReserveOwnerCapability(
+      owner.reserve_owner_capability,
+      key.idempotency_key,
+      digest,
+    );
+  }
   const leaseId = crypto.randomUUID();
   const reservationId = crypto.randomUUID();
 
@@ -1100,6 +1174,15 @@ export async function reserveBudget(
         return { ok: false, error: "idempotency_digest_conflict" };
       }
       if (existing.status !== "released") {
+        const ownerRecovered = reserveOwnerMatches(existing, ownerHash);
+        if (
+          existing.status === "reserved" &&
+          existing.reserve_owner_capability_hash !== null &&
+          !ownerRecovered
+        ) {
+          await saveState(transaction, state);
+          return { ok: false, error: "reservation_owned_by_other_invocation" };
+        }
         const lease = existing.lease_id ? state.leases[existing.lease_id] ?? null : null;
         await saveState(transaction, state);
         return {
@@ -1107,12 +1190,26 @@ export async function reserveBudget(
           reservation: publicReservation(existing),
           lease,
           existing: true,
+          owner_recovered: ownerRecovered,
           budget_run_id: existing.reservation_id,
         };
       }
-      // A released reservation provably never crossed the provider marker, so a
-      // same-digest retry may obtain a fresh run. Provider-started work is never
-      // represented by the released status.
+      // Cancellation is a durable tombstone for the invocation that owned the
+      // reservation. A delayed reserve response/retry from that same invocation
+      // must not resurrect occupancy. A different, freshly minted owner may
+      // intentionally begin a new run for the same client idempotency key.
+      if (existing.reserve_owner_capability_hash !== null) {
+        if (ownerHash === null) {
+          await saveState(transaction, state);
+          return { ok: false, error: "reserve_owner_capability_invalid" };
+        }
+        if (reserveOwnerMatches(existing, ownerHash)) {
+          await saveState(transaction, state);
+          return { ok: false, error: "reservation_released" };
+        }
+      }
+      // Legacy unowned released reservations retain their historical replay
+      // behavior. Provider-started work is never represented by released.
     }
 
     // A frozen ledger still serves terminal idempotent results above, but never
@@ -1171,6 +1268,7 @@ export async function reserveBudget(
       settlement: null,
       provider_started_at: null,
       uncertainty_reason: null,
+      reserve_owner_capability_hash: ownerHash,
       settlement_capability_hash: null,
       settlement_capability_consumed: false,
       settlement_capability_secret: null,
@@ -1183,12 +1281,35 @@ export async function reserveBudget(
       reservation: publicReservation(reservation),
       lease,
       existing: false,
+      owner_recovered: false,
       budget_run_id: reservation.reservation_id,
     };
   });
 }
 
+/**
+ * Production Gateway reserve surface. The lower-level reserveBudget function
+ * remains available only for legacy HTTP recovery and algebra migration tests;
+ * a Gateway service-binding call cannot create an unowned reservation.
+ */
+export async function reserveOwnedBudget(
+  storage: BudgetStorage,
+  input: Parameters<typeof reserveBudget>[1] & {
+    reserve_owner_capability: string;
+  },
+  now = Date.now(),
+): ReturnType<typeof reserveBudget> {
+  if (!input || typeof input !== "object") {
+    return { ok: false, error: "reserve_owner_capability invalid" };
+  }
+  const owner = requireReserveOwnerCapability(input.reserve_owner_capability);
+  if (!owner.ok) return owner;
+  return reserveBudget(storage, input, now);
+}
+
 const FORBIDDEN_CAPABILITY_KEYS = new Set<SensitiveCapabilityField>([
+  "reserve_owner_capability",
+  "reserve_owner_capability_hash",
   "settlement_capability",
   "settlement_capability_secret",
   "settlement_capability_hash",
@@ -1220,18 +1341,23 @@ const PUBLIC_ERROR_BODY_KEYS = new Set(["ok", "error", "detail", "budget_run_id"
 
 function capabilityMaterialSet(
   reservation: Reservation,
-  submittedCapability?: string,
+  ...submittedCapabilities: unknown[]
 ): Set<string> {
   const material = new Set<string>();
+  if (reservation.reserve_owner_capability_hash) {
+    material.add(reservation.reserve_owner_capability_hash);
+  }
   if (reservation.settlement_capability_hash) {
     material.add(reservation.settlement_capability_hash);
   }
   if (reservation.settlement_capability_secret) {
     material.add(reservation.settlement_capability_secret);
   }
-  const submitted =
-    typeof submittedCapability === "string" ? submittedCapability.trim() : "";
-  if (submitted) material.add(submitted);
+  for (const submittedCapability of submittedCapabilities) {
+    const submitted =
+      typeof submittedCapability === "string" ? submittedCapability.trim() : "";
+    if (submitted) material.add(submitted);
+  }
   return material;
 }
 
@@ -1513,7 +1639,12 @@ function mintSettlementCapabilitySecret(): string {
 
 export async function markProviderStarted(
   storage: BudgetStorage,
-  input: { idempotency_key: string; lease_id: string; request_digest?: string },
+  input: {
+    idempotency_key: string;
+    lease_id: string;
+    request_digest?: string;
+    reserve_owner_capability?: string;
+  },
   now = Date.now(),
 ): Promise<
   BudgetResult<{
@@ -1528,6 +1659,16 @@ export async function markProviderStarted(
   if (!leaseId) return { ok: false, error: "lease_id required" };
   const digest = typeof input.request_digest === "string" ? input.request_digest.trim() : "";
   if (!digest) return { ok: false, error: "request_digest required" };
+  let ownerHash: string | null = null;
+  if (input.reserve_owner_capability !== undefined) {
+    const owner = requireReserveOwnerCapability(input.reserve_owner_capability);
+    if (!owner.ok) return owner;
+    ownerHash = await hashReserveOwnerCapability(
+      owner.reserve_owner_capability,
+      key.idempotency_key,
+      digest,
+    );
+  }
 
   // Randomness and WebCrypto happen before the transaction. The transaction
   // re-reads and validates the latest state, so concurrent calls can persist
@@ -1568,6 +1709,13 @@ export async function markProviderStarted(
     if (bound) {
       await saveState(transaction, state);
       return bound;
+    }
+    if (
+      reservation.reserve_owner_capability_hash !== null &&
+      !reserveOwnerMatches(reservation, ownerHash)
+    ) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reserve_owner_capability_invalid" };
     }
     const lease = state.leases[leaseId];
     if (
@@ -1718,6 +1866,7 @@ export async function settleUncertainBudget(
     request_digest?: string;
     lease_id?: string;
     settlement_capability?: string;
+    reserve_owner_capability?: string;
   },
   now = Date.now(),
 ): Promise<
@@ -1740,6 +1889,19 @@ export async function settleUncertainBudget(
     input.settlement_capability,
     now,
   );
+  const digest =
+    typeof input.request_digest === "string" ? input.request_digest.trim() : "";
+  let submittedOwnerHash: string | null = null;
+  if (input.reserve_owner_capability !== undefined) {
+    const owner = requireReserveOwnerCapability(input.reserve_owner_capability);
+    if (!owner.ok) return owner;
+    if (!digest) return { ok: false, error: "request_digest required" };
+    submittedOwnerHash = await hashReserveOwnerCapability(
+      owner.reserve_owner_capability,
+      key.idempotency_key,
+      digest,
+    );
+  }
   return storage.runAtomic(async (transaction) => {
     const state = await loadState(transaction, now);
     recoverExpired(state, now);
@@ -1747,6 +1909,13 @@ export async function settleUncertainBudget(
     if (!reservation) {
       await saveState(transaction, state);
       return { ok: false, error: "reservation_not_found" };
+    }
+    if (
+      reservation.reserve_owner_capability_hash !== null &&
+      !reserveOwnerMatches(reservation, submittedOwnerHash)
+    ) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reserve_owner_capability_invalid" };
     }
     if (reservation.status === "reconciled") {
       const verified = verifySettlementAuthority(
@@ -1862,6 +2031,7 @@ export async function finalizeBudget(
     request_digest: string;
     lease_id: string;
     settlement_capability: string;
+    reserve_owner_capability?: string;
     usage: unknown;
     terminal_result?: CachedBudgetResult;
     amounts?: unknown;
@@ -1895,6 +2065,16 @@ export async function finalizeBudget(
     input.settlement_capability,
     now,
   );
+  let submittedOwnerHash: string | null = null;
+  if (input.reserve_owner_capability !== undefined) {
+    const owner = requireReserveOwnerCapability(input.reserve_owner_capability);
+    if (!owner.ok) return owner;
+    submittedOwnerHash = await hashReserveOwnerCapability(
+      owner.reserve_owner_capability,
+      key.idempotency_key,
+      input.request_digest.trim(),
+    );
+  }
 
   return storage.runAtomic(async (transaction) => {
     const state = await loadState(transaction, now);
@@ -1903,6 +2083,13 @@ export async function finalizeBudget(
     if (!reservation) {
       await saveState(transaction, state);
       return { ok: false, error: "reservation_not_found" };
+    }
+    if (
+      reservation.reserve_owner_capability_hash !== null &&
+      !reserveOwnerMatches(reservation, submittedOwnerHash)
+    ) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reserve_owner_capability_invalid" };
     }
     if (reservation.status === "reconciled") {
       const verified = verifySettlementAuthority(
@@ -1965,7 +2152,11 @@ export async function finalizeBudget(
     const actual = parsed.amounts;
     const canonical = canonicalizeCachedResult(
       input.terminal_result,
-      capabilityMaterialSet(reservation, input.settlement_capability),
+      capabilityMaterialSet(
+        reservation,
+        input.settlement_capability,
+        input.reserve_owner_capability,
+      ),
     );
     if (!canonical.ok) {
       await saveState(transaction, state);
@@ -2033,9 +2224,92 @@ export async function heartbeatLease(
   });
 }
 
+/**
+ * Cancel only a pre-provider reservation owned by this exact Gateway
+ * invocation. The raw owner capability is never persisted or returned. This
+ * RPC is the safe recovery path when reserve may have committed but its
+ * response was lost; a duplicate client invocation has a different capability
+ * and cannot release another invocation's occupancy.
+ */
+export async function cancelPreProviderReservation(
+  storage: BudgetStorage,
+  input: {
+    idempotency_key: string;
+    request_digest: string;
+    reserve_owner_capability: string;
+  },
+  now = Date.now(),
+): Promise<
+  BudgetResult<{
+    cancelled: boolean;
+    reservation: PublicReservation;
+    budget_run_id: string;
+  }>
+> {
+  const key = requireIdempotencyKey(input.idempotency_key);
+  if (!key.ok) return key;
+  const boundDigest = requireNonemptyRequestDigest(input.request_digest);
+  if (!boundDigest.ok) return boundDigest;
+  const owner = requireReserveOwnerCapability(input.reserve_owner_capability);
+  if (!owner.ok) return owner;
+  const ownerHash = await hashReserveOwnerCapability(
+    owner.reserve_owner_capability,
+    key.idempotency_key,
+    boundDigest.request_digest,
+  );
+
+  return storage.runAtomic(async (transaction) => {
+    const state = await loadState(transaction, now);
+    recoverExpired(state, now);
+    const reservation = state.reservations[key.idempotency_key];
+    if (!reservation) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_not_found" };
+    }
+    if (reservation.request_digest !== boundDigest.request_digest) {
+      await saveState(transaction, state);
+      return { ok: false, error: "request_digest_mismatch" };
+    }
+    if (!reserveOwnerMatches(reservation, ownerHash)) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reserve_owner_capability_invalid" };
+    }
+    if (reservation.provider_started_at !== null || reservation.status === "reconciled") {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_not_cancellable" };
+    }
+    if (reservation.status === "released") {
+      await saveState(transaction, state);
+      return {
+        ok: true,
+        cancelled: false,
+        reservation: publicReservation(reservation),
+        budget_run_id: reservation.reservation_id,
+      };
+    }
+
+    state.reserved = applyDelta(state.reserved, reservation.amounts, -1);
+    reservation.status = "released";
+    reservation.released_at = now;
+    closeReservationLease(state, reservation, now);
+    await saveState(transaction, state);
+    return {
+      ok: true,
+      cancelled: true,
+      reservation: publicReservation(reservation),
+      budget_run_id: reservation.reservation_id,
+    };
+  });
+}
+
 export async function releaseBudget(
   storage: BudgetStorage,
-  input: { lease_id?: string; idempotency_key?: string },
+  input: {
+    lease_id?: string;
+    idempotency_key?: string;
+    request_digest?: string;
+    reserve_owner_capability?: string;
+  },
   now = Date.now(),
 ): Promise<
   BudgetResult<{ released: boolean; lease: Lease | null; reservation: PublicReservation | null }>
@@ -2070,6 +2344,14 @@ export async function releaseBudget(
     ) {
       await saveState(transaction, state);
       return { ok: false, error: "lease_reservation_mismatch" };
+    }
+    if (reservation && reservation.reserve_owner_capability_hash !== null) {
+      // Owner-bound reservations have one cancellation authority only:
+      // cancelPreProviderReservation. Keeping generic release incapable of
+      // mutating them prevents both post-provider release and terminal-state
+      // lifecycle bypasses, even when a lease id or owner secret is supplied.
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_not_cancellable" };
     }
 
     if (lease && lease.released_at === null) {
@@ -2118,6 +2400,18 @@ export function createBudgetCoordinator(storage: BudgetStorage) {
       now?: number,
     ): ReturnType<typeof reserveBudget> {
       return reserveBudget(storage, input, now);
+    },
+    reserveOwned(
+      input: Parameters<typeof reserveOwnedBudget>[1],
+      now?: number,
+    ): ReturnType<typeof reserveOwnedBudget> {
+      return reserveOwnedBudget(storage, input, now);
+    },
+    cancelPreProvider(
+      input: Parameters<typeof cancelPreProviderReservation>[1],
+      now?: number,
+    ): ReturnType<typeof cancelPreProviderReservation> {
+      return cancelPreProviderReservation(storage, input, now);
     },
     markProviderStarted(
       input: Parameters<typeof markProviderStarted>[1],
