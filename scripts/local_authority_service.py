@@ -11,21 +11,22 @@ from __future__ import annotations
 
 import array
 import base64
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
 import pwd
 import socket
 import sqlite3
 import stat
 import struct
 import sys
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Mapping, NoReturn, Sequence
+from typing import Any, NoReturn
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -39,7 +40,6 @@ from scripts.finding_ledger_gate import (
     FindingLedgerError,
     require_pinned_finding_ledger_gate,
 )
-
 
 REQUEST_FORMAT = "local-authority-request/v1"
 RESPONSE_FORMAT = "local-authority-response/v1"
@@ -139,9 +139,7 @@ def decode_strict_json(raw: bytes, *, field: str) -> dict[str, Any]:
 
 
 def _utc_now_text() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
-        "+00:00", "Z"
-    )
+    return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,7 +222,9 @@ class PeerPrincipalRegistry:
         object.__setattr__(self, "callers_by_uid", MappingProxyType(normalized))
 
     @classmethod
-    def from_usernames(cls, callers_by_username: Mapping[str, str]) -> "PeerPrincipalRegistry":
+    def from_usernames(
+        cls, callers_by_username: Mapping[str, str]
+    ) -> PeerPrincipalRegistry:
         resolved: dict[int, str] = {}
         for username, caller in callers_by_username.items():
             if type(username) is not str or not username:
@@ -263,13 +263,17 @@ class ExactMethodAcl:
             raise LocalAuthorityError("authority environment is invalid")
         manifest = load_and_validate_manifest()
         principal = manifest["principals"].get(authority_id)
-        if type(principal) is not dict or principal.get("runtime") != "local_os_service":
+        if (
+            type(principal) is not dict
+            or principal.get("runtime") != "local_os_service"
+        ):
             raise LocalAuthorityError("local authority is not declared")
         grants: set[MethodGrant] = set()
         for row in principal["method_acl"]:
-            if (
-                row.get("authentication") == "local_peer_credentials"
-                and environment in row.get("environments", [])
+            if row.get(
+                "authentication"
+            ) == "local_peer_credentials" and environment in row.get(
+                "environments", []
             ):
                 grants.add(
                     MethodGrant(
@@ -314,7 +318,9 @@ class FileEd25519KeyCustody:
         try:
             fd = os.open(self.path, flags)
         except OSError as exc:
-            raise LocalAuthorityPending("protected authority key is unavailable") from exc
+            raise LocalAuthorityPending(
+                "protected authority key is unavailable"
+            ) from exc
         try:
             before = os.fstat(fd)
             if (
@@ -339,7 +345,9 @@ class FileEd25519KeyCustody:
                 after.st_mtime_ns,
                 after.st_ctime_ns,
             ):
-                raise LocalAuthorityError("protected authority key changed or is invalid")
+                raise LocalAuthorityError(
+                    "protected authority key changed or is invalid"
+                )
             return Ed25519PrivateKey.from_private_bytes(raw)
         finally:
             os.close(fd)
@@ -351,9 +359,13 @@ class FileEd25519KeyCustody:
         return "ed25519:" + base64.b64encode(signature).decode("ascii")
 
     def public_key_base64(self) -> str:
-        public = self._load().public_key().public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
+        public = (
+            self._load()
+            .public_key()
+            .public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
         )
         return base64.b64encode(public).decode("ascii")
 
@@ -407,7 +419,9 @@ class SQLiteAuthorityEventLedger:
         try:
             parent_stat = parent.stat()
         except OSError as exc:
-            raise LocalAuthorityPending("authority ledger directory is unavailable") from exc
+            raise LocalAuthorityPending(
+                "authority ledger directory is unavailable"
+            ) from exc
         if (
             not stat.S_ISDIR(parent_stat.st_mode)
             or parent_stat.st_uid != self.expected_uid
@@ -480,7 +494,10 @@ class SQLiteAuthorityEventLedger:
         prior: str | None = None
         expected_sequence = 1
         for row in conn.execute("SELECT * FROM authority_events ORDER BY sequence"):
-            if row["sequence"] != expected_sequence or row["prior_event_digest"] != prior:
+            if (
+                row["sequence"] != expected_sequence
+                or row["prior_event_digest"] != prior
+            ):
                 raise AuthorityLedgerError("authority event chain is not contiguous")
             try:
                 request = decode_strict_json(
@@ -726,22 +743,30 @@ def call_unix_authority(
                 flags = os.O_ACCMODE & fcntl.fcntl(read_only_fd, fcntl.F_GETFL)
                 info = os.fstat(read_only_fd)
             except OSError as exc:
-                raise LocalAuthorityError("authority descriptor is unavailable") from exc
+                raise LocalAuthorityError(
+                    "authority descriptor is unavailable"
+                ) from exc
             if flags != os.O_RDONLY or not stat.S_ISREG(info.st_mode):
-                raise LocalAuthorityError("authority descriptor must be read-only regular file")
+                raise LocalAuthorityError(
+                    "authority descriptor must be read-only regular file"
+                )
             rights = array.array("i", [read_only_fd])
             sent = channel.sendmsg(
                 [header],
                 [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights.tobytes())],
             )
             if sent != len(header):
-                raise LocalAuthorityError("authority descriptor frame header was partial")
+                raise LocalAuthorityError(
+                    "authority descriptor frame header was partial"
+                )
             channel.sendall(body)
         raw, received = _recv_frame(channel)
         if received:
             for fd in received:
                 os.close(fd)
-            raise LocalAuthorityError("authority response returned an unexpected descriptor")
+            raise LocalAuthorityError(
+                "authority response returned an unexpected descriptor"
+            )
         response = decode_strict_json(raw, field="local authority response")
         if (
             response.get("format") != RESPONSE_FORMAT
@@ -750,7 +775,9 @@ def call_unix_authority(
             or type(response.get("result")) is not dict
             or set(response) != {"format", "request_id", "status", "result"}
         ):
-            raise LocalAuthorityError("authority response is rejected or malformed")
+            error_type = response.get("error")
+            suffix = error_type if type(error_type) is str else "malformed"
+            raise LocalAuthorityError(f"authority response rejected: {suffix}")
         return MappingProxyType(response["result"])
     finally:
         channel.close()
@@ -790,11 +817,13 @@ class UnixAuthorityService:
 
     def serve_connection(self, channel: socket.socket) -> None:
         fds: tuple[int, ...] = ()
+        request_id = "UNKNOWN"
         try:
             peer = peer_identity(channel)
             caller = self.peers.authenticate(peer)
             raw, fds = _recv_frame(channel)
             request = parse_request(raw)
+            request_id = request.request_id
             self.acl.require(
                 caller=caller,
                 operation=request.operation,
@@ -823,7 +852,7 @@ class UnixAuthorityService:
         except (LocalAuthorityError, FindingLedgerError) as exc:
             response = {
                 "format": RESPONSE_FORMAT,
-                "request_id": "UNKNOWN",
+                "request_id": request_id,
                 "status": "REJECTED",
                 "error": type(exc).__name__,
             }
@@ -836,50 +865,48 @@ class UnixAuthorityService:
 def require_declared_service_identity(
     *, authority_id: str, environment: str
 ) -> tuple[int, Mapping[str, Any]]:
-    """Resolve the declared service UID and reject the PENDING manifest state.
+    """Resolve one service through the root-owned live activation overlay.
 
-    Daemon startup calls this after a separately reviewed activation overlay is
-    available.  The checked-in contract intentionally remains PENDING_NO_KEY,
-    so invoking it today cannot accidentally start a positive authority.
+    The checked-in declaration remains ``PENDING_NO_KEY``.  Operational state
+    is an independently audited local observation bound to the pinned manifest
+    and strict finding-ledger gate; no code or manifest edit is needed after a
+    human provisions and audits the actual OS resources.
     """
 
-    manifest = load_and_validate_manifest()
-    require_pinned_finding_ledger_gate()
-    deployment = manifest["principals"][authority_id]["deployments"][environment]
-    if deployment.get("mode") != "ACTIVE":
-        raise LocalAuthorityPending(
-            f"{authority_id}/{environment} remains {deployment.get('mode')}"
-        )
-    username = deployment["service_user"]
+    from scripts.local_authority_activation import (
+        ActivationStateError,
+        require_active_service_identity,
+    )
+
     try:
-        uid = pwd.getpwnam(username).pw_uid
-    except KeyError as exc:
-        raise LocalAuthorityPending(f"service user is absent: {username}") from exc
-    if os.geteuid() != uid:
-        raise PeerAuthenticationError("authority daemon is not its declared service UID")
-    return uid, MappingProxyType(dict(deployment))
+        return require_active_service_identity(
+            authority_id=authority_id,
+            environment=environment,
+        )
+    except ActivationStateError as exc:
+        raise LocalAuthorityPending(str(exc)) from exc
 
 
 __all__ = [
+    "LEDGER_SCHEMA_VERSION",
+    "REQUEST_FORMAT",
+    "RESPONSE_FORMAT",
     "AuthorityLedgerError",
     "AuthorityRequest",
     "ExactMethodAcl",
     "FileEd25519KeyCustody",
-    "LEDGER_SCHEMA_VERSION",
     "LocalAuthorityError",
     "LocalAuthorityPending",
     "MethodGrant",
     "PeerAuthenticationError",
     "PeerIdentity",
     "PeerPrincipalRegistry",
-    "REQUEST_FORMAT",
-    "RESPONSE_FORMAT",
     "SQLiteAuthorityEventLedger",
     "UnixAuthorityService",
+    "call_unix_authority",
     "canonical_json_bytes",
     "canonical_json_text",
     "decode_strict_json",
-    "call_unix_authority",
     "parse_request",
     "peer_identity",
     "require_declared_service_identity",

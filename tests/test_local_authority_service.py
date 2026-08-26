@@ -5,20 +5,22 @@ from __future__ import annotations
 import array
 import json
 import os
-from pathlib import Path
 import socket
 import sqlite3
 import struct
 import threading
+from pathlib import Path
 
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-import pytest
 
 from scripts import local_authority_service as authority
 
 
-def _ledger(tmp_path: Path, authority_id: str = "ready") -> authority.SQLiteAuthorityEventLedger:
+def _ledger(
+    tmp_path: Path, authority_id: str = "ready"
+) -> authority.SQLiteAuthorityEventLedger:
     store = tmp_path / authority_id
     store.mkdir(mode=0o700)
     ledger = authority.SQLiteAuthorityEventLedger(
@@ -120,7 +122,9 @@ def test_ledger_rejects_request_id_rewrap_and_tampered_chain(tmp_path: Path) -> 
 
     with sqlite3.connect(ledger.path) as conn:
         conn.execute("DROP TRIGGER authority_events_no_update")
-        conn.execute("UPDATE authority_events SET event_digest=?", ("sha256:" + "0" * 64,))
+        conn.execute(
+            "UPDATE authority_events SET event_digest=?", ("sha256:" + "0" * 64,)
+        )
         conn.commit()
     with pytest.raises(authority.AuthorityLedgerError, match="event digest mismatch"):
         ledger.execute_once(
@@ -203,6 +207,7 @@ def test_service_authenticates_kernel_peer_and_commits_only_after_strict_gate(
     # unreachable and no event is appended.
     rejected = _serve_one(service, _request())
     assert rejected["status"] == "REJECTED"
+    assert rejected["request_id"] == "request-1"
     assert calls == 0
     with sqlite3.connect(ledger.path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM authority_events").fetchone() == (0,)
@@ -260,7 +265,7 @@ def test_frame_rejects_multiple_descriptors_and_closes_them() -> None:
         )
         sender.sendall(body)
         with pytest.raises(authority.LocalAuthorityError, match="too many"):
-            authority._recv_frame(receiver)  # noqa: SLF001
+            authority._recv_frame(receiver)
     finally:
         sender.close()
         receiver.close()
