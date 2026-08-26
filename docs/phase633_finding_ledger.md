@@ -84,7 +84,7 @@ pass.
 |----|---------|--------|------------------------------|
 | A1 | JSDA Queue repeatedly selected only the newest year/files and could not converge on history | FIXED | `7afffade`; stable child segment identity, cursor progress, retry/DLQ evidence |
 | A2 | Receipt, D1, Ops, READY, Trader, transition and execution keys had filenames but no complete principal/evidence-authority isolation | OPEN | 2026-08-26 read-only audit: 0/7 authorities provisioned; Receipt/D1/Ops/READY/Trader are contract-only `PARTIAL`, Coverage transition/Controlled execution are `NOT_PROVISIONED`; no dedicated account/service/socket/root-owned store or authority Cloudflare binding exists, all checked registries have active keys=0, and legacy PEM filenames are same-UID only; admin bootstrap, fresh in-authority keys and scoped identities remain required |
-| A7 | Release workflows did not consume the machine-readable P0 finding gate | OPEN | Independent audit of `e1241c40`: `verify_ci`, deployment acceptance, and release evidence accepted execution without reading the finding ledger; close by using one strict repo-pinned gate in every entrypoint and binding its exact digest and OPEN-P0 inventory into release evidence |
+| A7 | Release workflows did not consume the machine-readable P0 finding gate | FIXED | `6a8fc1f9`; one strict repo-pinned gate now runs before CI, deployment acceptance, and release evidence; the v3 evidence payload binds the exact ledger digest and OPEN-P0 inventory; 51 focused behavioral tests cover duplicate/nonfinite JSON, closed schema/ID/severity/policy attacks, and all four entrypoints |
 
 ### P1
 
@@ -101,8 +101,9 @@ The latest independent adversarial reviews accepted the code boundaries for R3,
 R4, R5, R6, R7, R10, R11, C9 and C10. R5/R10/R11/C10 remain `OPEN`
 because verify-only containment with zero active keys is not an operational
 authority.
-The Coverage/READY candidate still has P0 rows D2, D3, R5, R10, R11, C4,
-C10, A2 and A7 unresolved. Receipt and Ops Projection code containment does not
+A7 is structurally fixed by the single pinned finding-ledger authority and its
+four fail-closed release entrypoints. The Coverage/READY candidate still has P0
+rows D2, D3, R5, R10, R11, C4, C10 and A2 unresolved. Receipt and Ops Projection code containment does not
 substitute for the dedicated principals required by D2/D3/C4/A2; C9 likewise
 does not close the separately provisioned transition authority required by C10.
 R7's authority-owned append-only history and
