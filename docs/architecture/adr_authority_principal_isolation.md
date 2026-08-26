@@ -58,8 +58,10 @@ only a later authority-owned transaction timestamp may become conservative PIT
 `available_at`/signed `checked_at`. It then commits reconciled structured rows,
 starts a fresh transaction, rereads immutable raw and exact natural keys, and
 rechecks both acquisition expiry and context freshness immediately before
-issuance and finalization. The returned signed envelope is public-key verified
-before local receipt finalization. The legacy v1 pagination evidence is
+issuance, after issuance, and at the final local precommit boundary. Authority
+time must be nondecreasing across every stage; clock-skew tolerance never permits
+a rollback. The returned signed envelope is public-key verified before local
+receipt finalization. The legacy v1 pagination evidence is
 audit/recovery-only. Target HMAC continuation state is live navigation state;
 the response metadata itself is not HMAC-authenticated and is not standalone
 COMPLETE evidence.

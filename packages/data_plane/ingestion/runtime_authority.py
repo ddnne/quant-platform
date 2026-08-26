@@ -566,7 +566,9 @@ class _GovernedReceiptService:
         transaction then repeats immutable-raw and natural-key readback before
         issuance and receipt persistence.  Failures before the structured
         commit roll everything back; later failures leave structured facts but
-        never a local COMPLETE-eligible receipt.
+        never a local COMPLETE-eligible receipt.  Authority-clock observations
+        must remain nondecreasing from capture verification through the final
+        local precommit check.
         """
         from storage.sqlite_store import SqliteStore
 
@@ -646,6 +648,11 @@ class _GovernedReceiptService:
         checked_at = str(context_checked_at)
         checked_dt = _parse_authority_clock(checked_at)
         now_dt = _parse_authority_clock(str(self._clock()))
+        _assert_authority_clock_nondecreasing(
+            checked_dt,
+            now_dt,
+            stage="record entry",
+        )
         _assert_context_clock_fresh(checked_dt, now_dt)
 
         if required.source == "jquants":
@@ -677,12 +684,16 @@ class _GovernedReceiptService:
                 now=now_dt,
             )
             if (
-                checked_dt.astimezone(timezone.utc) < verified_state.verified_at
-                or context_sequence <= verified_state.verified_sequence
+                context_sequence <= verified_state.verified_sequence
             ):
                 raise ValueError(
                     "collection transaction predates live acquisition verification"
                 )
+            _assert_authority_clock_nondecreasing(
+                verified_state.verified_at,
+                checked_dt,
+                stage="collection context",
+            )
             if verified_state.dataset != required.dataset:
                 raise ValueError("verified J-Quants dataset differs from required")
             if verified_state.required != canonical_required:
@@ -796,6 +807,11 @@ class _GovernedReceiptService:
             # and canonical parsing/normalization is repeated.
             _begin_receipt_verification_transaction(store)
             post_commit_now = _parse_authority_clock(str(self._clock()))
+            _assert_authority_clock_nondecreasing(
+                now_dt,
+                post_commit_now,
+                stage="post-structured-commit",
+            )
             _assert_context_clock_fresh(checked_dt, post_commit_now)
             raw_pages = _reread_verified_jquants_state(
                 verified_state,
@@ -822,6 +838,11 @@ class _GovernedReceiptService:
                 trusted_source_request_digest=trusted_source_request_digest,
             )
             pre_issue_now = _parse_authority_clock(str(self._clock()))
+            _assert_authority_clock_nondecreasing(
+                post_commit_now,
+                pre_issue_now,
+                stage="pre-issuer",
+            )
             _assert_context_clock_fresh(checked_dt, pre_issue_now)
             _assert_verified_jquants_session_current(
                 verified_state,
@@ -842,6 +863,11 @@ class _GovernedReceiptService:
                 }
             signed = dict(self._issue_reconciled_evidence(evidence))
             post_issue_now = _parse_authority_clock(str(self._clock()))
+            _assert_authority_clock_nondecreasing(
+                pre_issue_now,
+                post_issue_now,
+                stage="post-issuer",
+            )
             _assert_context_clock_fresh(checked_dt, post_issue_now)
             _assert_verified_jquants_session_current(
                 verified_state,
@@ -884,6 +910,17 @@ class _GovernedReceiptService:
                 raise ValueError("receipt transaction finalization failed")
             if not store._conn.in_transaction:  # noqa: SLF001
                 raise RuntimeError("receipt transaction escaped explicit commit control")
+            final_precommit_now = _parse_authority_clock(str(self._clock()))
+            _assert_authority_clock_nondecreasing(
+                post_issue_now,
+                final_precommit_now,
+                stage="final-precommit",
+            )
+            _assert_context_clock_fresh(checked_dt, final_precommit_now)
+            _assert_verified_jquants_session_current(
+                verified_state,
+                now=final_precommit_now,
+            )
             store._conn.commit()  # noqa: SLF001
         except Exception:
             store._conn.rollback()  # noqa: SLF001
@@ -953,6 +990,16 @@ def _assert_context_clock_fresh(checked_at: datetime, now: datetime) -> None:
         raise ValueError("collection context timestamp is in the future")
     if age.total_seconds() > _MAX_CONTEXT_AGE_SECONDS:
         raise ValueError("collection context is stale")
+
+
+def _assert_authority_clock_nondecreasing(
+    previous: datetime,
+    current: datetime,
+    *,
+    stage: str,
+) -> None:
+    if current.astimezone(timezone.utc) < previous.astimezone(timezone.utc):
+        raise ValueError(f"authority clock moved backwards at {stage}")
 
 
 def _verify_issued_receipt_matches_measurement(

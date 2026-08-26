@@ -1413,6 +1413,150 @@ def test_expiry_after_measurement_stops_at_immediate_preissuer_check(
     store.close()
 
 
+@pytest.mark.parametrize(
+    ("stage", "ticks", "structured_committed", "issuer_calls"),
+    (
+        (
+            "collection context",
+            (
+                "2026-08-11T09:10:00+09:00",
+                "2026-08-11T09:10:00+09:00",
+                "2026-08-11T09:09:00+09:00",
+                "2026-08-11T09:09:00+09:00",
+            ),
+            False,
+            0,
+        ),
+        (
+            "record entry",
+            (
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T08:59:00+09:00",
+            ),
+            False,
+            0,
+        ),
+        (
+            "post-structured-commit",
+            (
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:10:00+09:00",
+                "2026-08-11T09:09:00+09:00",
+            ),
+            True,
+            0,
+        ),
+        (
+            "pre-issuer",
+            (
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:10:00+09:00",
+                "2026-08-11T09:11:00+09:00",
+                "2026-08-11T09:10:00+09:00",
+            ),
+            True,
+            0,
+        ),
+        (
+            "post-issuer",
+            (
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:10:00+09:00",
+                "2026-08-11T09:11:00+09:00",
+                "2026-08-11T09:12:00+09:00",
+                "2026-08-11T09:11:00+09:00",
+            ),
+            True,
+            1,
+        ),
+        (
+            "final-precommit",
+            (
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:00:00+09:00",
+                "2026-08-11T09:10:00+09:00",
+                "2026-08-11T09:11:00+09:00",
+                "2026-08-11T09:12:00+09:00",
+                "2026-08-11T09:13:00+09:00",
+                "2026-08-11T09:12:00+09:00",
+            ),
+            True,
+            1,
+        ),
+    ),
+)
+def test_authority_clock_regression_fails_closed_at_every_receipt_stage(
+    tmp_path: Path,
+    receipt_ed25519_keys,
+    stage: str,
+    ticks: tuple[str, ...],
+    structured_committed: bool,
+    issuer_calls: int,
+) -> None:
+    from ingestion.jquants.normalize import normalize_generic
+
+    clock_ticks = iter(ticks)
+    service = _tmp_service(
+        receipt_ed25519_keys,
+        clock=lambda: next(clock_ticks),
+    )
+    store = SqliteStore(tmp_path / f"clock-regression-{stage}.sqlite")
+    req = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-07-31",
+            source="jquants",
+        )
+    )[-1]
+    handle = _verified_collection(
+        tmp_path / f"capture-{stage}",
+        b'{"data":[{"Date":"2026-07-31"}]}',
+        service=service,
+        required=req,
+    )
+    context = _bound_context(store, service, req)
+    store.upsert(
+        "jquants_records",
+        normalize_generic(
+            [{"Date": "2026-07-31"}],
+            dataset=req.dataset,
+            ingested_at=context.checked_at,
+        ),
+        commit=False,
+    )
+    with pytest.raises(ValueError, match=f"clock moved backwards at {stage}"):
+        service.record_persisted_success(
+            store,
+            required=req,
+            run_id=context.run_id,
+            collection_context=context,
+            jquants_collection=handle,
+        )
+    if structured_committed:
+        assert store._conn.execute(
+            "SELECT COUNT(*) FROM jquants_records"
+        ).fetchone()[0] == 1
+        assert store._conn.execute(
+            "SELECT COUNT(*) FROM collection_receipts"
+        ).fetchone()[0] == 0
+        assert store._conn.execute(
+            "SELECT status FROM ingestion_run_log WHERE id=?", (context.run_id,)
+        ).fetchone()["status"] == "STRUCTURED_COMMITTED"
+    else:
+        _assert_no_trusted_effects(store, service)
+    assert len(service._issued_evidence) == issuer_calls
+    store.close()
+
+
 def test_issuer_failure_leaves_structured_commit_without_receipt(
     tmp_path: Path, receipt_ed25519_keys
 ) -> None:
