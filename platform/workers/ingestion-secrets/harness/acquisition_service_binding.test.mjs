@@ -49,13 +49,15 @@ function digest(value) {
 }
 
 async function registry() {
-  const source = await readFile(new URL("../src/generated/jquants_acquisition_registry.ts", import.meta.url), "utf8");
-  const prefix = "export default ";
-  const start = source.indexOf(prefix);
-  const end = source.lastIndexOf(" as const;");
-  assert.notEqual(start, -1);
-  assert.notEqual(end, -1);
-  return JSON.parse(source.slice(start + prefix.length, end));
+  const source = await readFile(
+    new URL(
+      "../../../../packages/data_plane/data_contracts/"
+        + "jquants_acquisition_target_registry.generated.json",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  return JSON.parse(source);
 }
 
 function nullable(value) {
