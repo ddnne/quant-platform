@@ -5,12 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from selection.controlled_pilot_policy import load_controlled_pilot_policy
-
-
-_CONTROLLED_PILOT_POLICY = load_controlled_pilot_policy()
-
-
 @dataclass(frozen=True)
 class OfflineExperimentBudget:
     """Caller-tunable budget for DRAFT/offline screening and fixture runs.
@@ -20,20 +14,17 @@ class OfflineExperimentBudget:
     digest-checked policy source of truth and never consume these overrides.
     """
 
-    max_parallel_experiments: int = _CONTROLLED_PILOT_POLICY.max_parallel_experiments
-    max_generations: int = _CONTROLLED_PILOT_POLICY.max_generations
-    max_model_calls: int = _CONTROLLED_PILOT_POLICY.max_model_calls
-    max_paper_runs: int = _CONTROLLED_PILOT_POLICY.max_paper_runs
-    # Hard token/cost caps (required for mass research; never leave None).
-    max_input_tokens: int = _CONTROLLED_PILOT_POLICY.max_input_tokens
-    max_output_tokens: int = _CONTROLLED_PILOT_POLICY.max_output_tokens
-    max_cached_tokens: int = _CONTROLLED_PILOT_POLICY.max_cached_tokens
+    max_parallel_experiments: int = 2
+    max_generations: int = 1
+    max_model_calls: int = 16
+    max_paper_runs: int = 8
+    max_input_tokens: int = 400_000
+    max_output_tokens: int = 80_000
+    max_cached_tokens: int = 400_000
     max_compute_time_ms: int = 3_600_000
-    max_estimated_cost_micros: int = (
-        _CONTROLLED_PILOT_POLICY.max_cost_usd * 1_000_000
-    )
-    lease_ttl_seconds: int = _CONTROLLED_PILOT_POLICY.lease_ttl_seconds
-    automatic_promotion: bool = _CONTROLLED_PILOT_POLICY.automatic_promotion
+    max_estimated_cost_micros: int = 20_000_000
+    lease_ttl_seconds: int = 1_800
+    automatic_promotion: bool = False
 
     def __post_init__(self) -> None:
         if self.max_parallel_experiments < 1:
