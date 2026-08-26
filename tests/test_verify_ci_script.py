@@ -58,7 +58,7 @@ def test_all_active_workers_have_locked_required_scripts() -> None:
         assert "--include-runtime false" in scripts["types"]
 
 
-def test_deployment_acceptance_fails_closed_without_credentials() -> None:
+def test_deployment_acceptance_stops_at_the_open_finding_ledger_first() -> None:
     assert SECRET_INVENTORY.is_file()
     assert os.access(SECRET_INVENTORY, os.X_OK)
     result = subprocess.run(
@@ -70,7 +70,8 @@ def test_deployment_acceptance_fails_closed_without_credentials() -> None:
         check=False,
     )
     assert result.returncode != 0
-    assert "CLOUDFLARE_API_TOKEN is required" in result.stderr
+    assert "finding ledger release gate blocked" in result.stderr
+    assert "CLOUDFLARE_API_TOKEN is required" not in result.stderr
 
 
 def test_workers_builds_wrapper_fails_closed_outside_cloudflare() -> None:

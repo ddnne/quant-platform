@@ -19,8 +19,19 @@ import re
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit
 
+try:
+    from scripts.finding_ledger_gate import (
+        FindingLedgerSnapshot,
+        require_pinned_finding_ledger_gate,
+    )
+except ModuleNotFoundError:  # Direct ``python scripts/...`` execution.
+    from finding_ledger_gate import (  # type: ignore[no-redef]
+        FindingLedgerSnapshot,
+        require_pinned_finding_ledger_gate,
+    )
 
-SCHEMA_VERSION = "quant-platform-release-evidence/v2"
+
+SCHEMA_VERSION = "quant-platform-release-evidence/v3"
 OBSERVATION_SCHEMA_VERSION = "quant-platform-release-observation/v1"
 REQUIRED_FIELDS = (
     "source_sha",
@@ -29,6 +40,7 @@ REQUIRED_FIELDS = (
     "cloudflare_build",
     "merged_prs",
     "open_prs",
+    "finding_ledger",
     "deployments",
     "migrations",
     "smoke",
@@ -619,6 +631,25 @@ def _validate_backup(payload: Mapping[str, Any]) -> None:
         raise ValueError("backup authenticated metadata digest does not match its evidence")
 
 
+def _validate_finding_ledger(
+    payload: Mapping[str, Any], snapshot: FindingLedgerSnapshot
+) -> None:
+    evidence = _exact_mapping(
+        payload["finding_ledger"],
+        "finding_ledger",
+        {"ledger_digest", "open_p0_ids"},
+    )
+    if evidence["ledger_digest"] != snapshot.digest:
+        raise ValueError("finding_ledger is not bound to the pinned ledger digest")
+    open_ids = evidence["open_p0_ids"]
+    if (
+        not isinstance(open_ids, list)
+        or any(not isinstance(value, str) for value in open_ids)
+        or open_ids != list(snapshot.open_p0_ids)
+    ):
+        raise ValueError("finding_ledger open P0 ids do not match the pinned gate")
+
+
 def _validate_controlled_pilot(payload: Mapping[str, Any]) -> None:
     source_sha = str(payload["source_sha"])
     pilot = _require_mapping(payload["controlled_pilot"], "controlled_pilot")
@@ -721,6 +752,7 @@ def _validate_remote_acceptance(payload: Mapping[str, Any]) -> None:
 
 
 def validate_payload(payload: Mapping[str, Any]) -> None:
+    snapshot = require_pinned_finding_ledger_gate()
     expected = frozenset(REQUIRED_FIELDS)
     if set(payload) != expected:
         missing = sorted(expected - set(payload))
@@ -746,6 +778,7 @@ def validate_payload(payload: Mapping[str, Any]) -> None:
         or len(set(merged_prs)) != len(merged_prs)
     ):
         raise ValueError("merged_prs must contain unique positive PR numbers")
+    _validate_finding_ledger(payload, snapshot)
     _validate_remote_acceptance(payload)
     _validate_backup(payload)
     _validate_controlled_pilot(payload)
@@ -785,6 +818,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("input", type=Path, help="normalized non-secret release observations JSON")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
+    require_pinned_finding_ledger_gate()
     raw = json.loads(args.input.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("release evidence input must be a JSON object")

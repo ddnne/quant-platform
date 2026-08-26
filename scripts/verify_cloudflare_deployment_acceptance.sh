@@ -5,6 +5,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+gate_py="$(command -v python3.11 2>/dev/null || command -v python3 2>/dev/null || true)"
+if [[ -z "$gate_py" ]]; then
+  echo "Python is required for the pinned finding-ledger release gate" >&2
+  exit 1
+fi
+"$gate_py" "$ROOT/scripts/finding_ledger_gate.py"
+
 if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
   echo "CLOUDFLARE_API_TOKEN is required for production acceptance" >&2
   exit 1

@@ -7,6 +7,8 @@ import uuid
 
 import pytest
 
+from scripts import finding_ledger_gate
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts" / "build_release_evidence.py"
@@ -17,6 +19,35 @@ SPEC.loader.exec_module(release)
 
 SHA = "a" * 40
 OBSERVED_AT = "2026-08-25T07:00:00Z"
+
+
+def _closed_test_ledger() -> finding_ledger_gate.FindingLedgerSnapshot:
+    document = json.loads(
+        (ROOT / "docs" / "phase633_finding_ledger.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    for finding in document["findings"]:
+        if finding["severity"] == "P0":
+            finding["status"] = "FIXED"
+    raw = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode(
+        "utf-8"
+    )
+    snapshot = finding_ledger_gate._evaluate_ledger_bytes(raw)
+    assert snapshot.release_allowed
+    return snapshot
+
+
+TEST_LEDGER = _closed_test_ledger()
+
+
+@pytest.fixture(autouse=True)
+def _use_closed_test_ledger(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        release,
+        "require_pinned_finding_ledger_gate",
+        lambda: TEST_LEDGER,
+    )
 
 
 def provenance(collector: str, label: str) -> dict[str, object]:
@@ -102,6 +133,7 @@ def payload() -> dict[str, object]:
         },
         "merged_prs": [42],
         "open_prs": [],
+        "finding_ledger": TEST_LEDGER.evidence_payload(),
         "deployments": deployments,
         "migrations": {
             environment: {
@@ -267,6 +299,28 @@ def test_release_evidence_rejects_policy_drift(
     facts[field] = value
     with pytest.raises(ValueError, match=message):
         release.build_envelope(facts)
+
+
+def test_release_evidence_requires_exact_pinned_finding_ledger() -> None:
+    missing = payload()
+    del missing["finding_ledger"]
+    with pytest.raises(ValueError, match="field membership drift"):
+        release.build_envelope(missing)
+
+    wrong_digest = payload()
+    wrong_digest["finding_ledger"]["ledger_digest"] = "sha256:" + "0" * 64  # type: ignore[index]
+    with pytest.raises(ValueError, match="pinned ledger digest"):
+        release.build_envelope(wrong_digest)
+
+    invented_open = payload()
+    invented_open["finding_ledger"]["open_p0_ids"] = ["A2"]  # type: ignore[index]
+    with pytest.raises(ValueError, match="open P0 ids"):
+        release.build_envelope(invented_open)
+
+    invented_field = payload()
+    invented_field["finding_ledger"]["reviewed"] = True  # type: ignore[index]
+    with pytest.raises(ValueError, match="finding_ledger schema drift"):
+        release.build_envelope(invented_field)
 
 
 def test_release_evidence_rejects_secrets_provider_tokens_and_local_paths() -> None:
