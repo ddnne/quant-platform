@@ -41,10 +41,10 @@ pass.
 | R2 | READY/coherence paths hard-coded one global V2 policy and rejected valid per-dataset V3 evidence | FIXED | `590a71d2`, `76d21575`; exact per-dataset policy triplets plus content-addressed local proof ID reverified from current ledgers/receipts/generation; independent review P0/P1=0 |
 | R3 | ExperimentPlan embedded `ready_snapshot_id=not-declared`, making later immutable snapshot equality circular | FIXED | `76240e89`; plan identity is snapshot-free and immutable snapshot binding occurs only in authorization; independent review passed |
 | R4 | exact-four bindings were caller-overridable | FIXED | `76240e89`; only the checked-in canonical four plans and exact plan/closure/profile digests reach the scheduler; independent attack tests passed |
-| R5 | Generic READY publication and a same-UID arbitrary READY signer remained reachable | OPEN | Dedicated READY authority independently rechecks the authenticated mirror, exact-four closure and immutable copy; Mass requires a separate explicit policy and stays disabled |
+| R5 | Generic READY publication and a same-UID arbitrary READY signer remained reachable | OPEN | `fa01ff3c` removes product mint/sign/private-key paths, pins every consumer to the exact-four verify-only trust root, and verifies the same immutable sidecar bytes; the registry has zero active keys, so a dedicated READY authority must still independently recheck the authenticated mirror, exact closure and immutable copy before activation; Mass stays disabled |
 | R6 | Missing natural-key ledger could pass through fixture compatibility | FIXED | `d6a49e24`; production collector has no fixture/quality/raw override, exact run/build evidence is re-read fail-closed, fixture helpers are tests-only, and independent review reported P0/P1=0 |
-| R10 | Trader authorization remained a same-UID HOME-key signing oracle over caller-constructed approval decisions | OPEN | Rotate/tombstone the current key; production is verify-only; a separately permissioned human-approval authority independently reconstructs and signs the exact READY/plan/universe/gross-limit decision |
-| R11 | Controlled execution duplicated authority lineage into a caller-writable HOME store | OPEN | The authority UID is the only canonical Paper/Risk/Selection/Knowledge writer; the product client only verifies authority-returned content-addressed artifacts and exposes no production writer |
+| R10 | Trader authorization remained a same-UID HOME-key signing oracle over caller-constructed approval decisions | OPEN | `4f9decc1` makes the product boundary verify-only and exact-binds READY/plan/closure/universe/spec/period/cost/gross/issued/expiry values; the registry has zero active keys, so the old key must still be retired and a separately permissioned human-approval authority provisioned |
+| R11 | Controlled execution duplicated authority lineage into a caller-writable HOME store | OPEN | `811d500c`, `b89cc23c`, `3601815e` verify the separate writer domain, exact four non-empty content digests and retained immutable bytes as evidence-only, with execution/promotion disabled; the canonical external writer principal/store is still unprovisioned |
 
 ### P1
 
@@ -65,13 +65,13 @@ pass.
 | C3 | Caller-supplied CI receipts could impersonate the required gate | FIXED | `6421d89b`; native Cloudflare required check is authoritative |
 | C4 | Ops Projection signer accepted a publisher-authored evidence envelope | OPEN | `5fb40304` removes product signer injection and binds a one-shot read-only source handle to path/inode/schema/count/digest/cursor identity; a dedicated principal must still own the renderer/signing authority and independently recompute the full projection |
 | C9 | Coverage V3 transition could omit required or failed segments and mark the remaining subset COMPLETE | FIXED | `18c2595d`; exact-five V3 inventory is regenerated at the authoritative build cutoff, every expected segment must bind one selected signed receipt, generic refresh/sync cannot mint first COMPLETE, and independent adversarial review reported P0/P1=0 |
-| C10 | Domain-separated production Coverage transition authority was not provisioned or callable | OPEN | Authority independently verifies active and target states, signs the transition domain, and records a durable one-shot CAS tombstone |
+| C10 | Domain-separated production Coverage transition authority was not provisioned or callable | OPEN | `071a0022`, `faf326a5` provide a fail-closed verify/apply boundary with independent in-transaction V3 inventory/receipt remeasurement, full-state CAS, immutable tombstone, postcondition and pre-commit expiry checks; the public registry has zero active keys and the external signing principal/store remain unprovisioned |
 
 ### P1
 
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
-| C5 | 17 MCP tools lacked closed output schemas and deployment schema-digest acceptance | OPEN | All tools require closed input/output schemas and deterministic aggregate digest parity |
+| C5 | 17 MCP tools lacked closed output schemas and deployment schema-digest acceptance | OPEN | Repository code now defines 17 closed input/output schemas and pins aggregate digest `sha256:dad7cd29ef002e76ee1f9802b8685a179f94fcbd0bb2e6df685858e41c1778d3`, but live `tools/list` still exposes 16 tools and omits `storage_plane_status`; close only after deployment acceptance proves exact name/schema parity |
 | C6 | Production Cron triggers disappeared under non-inherited named environments | FIXED | `6a37f61f`; Premium and JSDA production triggers explicit |
 | C7 | `ingestion-secrets` workers.dev endpoint is not protected by Access | HOLD | Zero Trust account activation requires explicit human agreement; header token remains enabled |
 | C8 | Six Worker lockfiles remain instead of one npm workspace | DEFERRED | Build-isolation exception in `architecture/adr_worker_dependency_isolation.md`; exact dependency parity required |
@@ -83,7 +83,7 @@ pass.
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
 | A1 | JSDA Queue repeatedly selected only the newest year/files and could not converge on history | FIXED | `7afffade`; stable child segment identity, cursor progress, retry/DLQ evidence |
-| A2 | Receipt, D1, Ops, READY, Trader, transition and execution keys had filenames but no complete principal/evidence-authority isolation | OPEN | Retire same-user keys; dedicated principals hold fresh private keys; public packages are verify-only; unprovisioned authorities remain PENDING/UNKNOWN |
+| A2 | Receipt, D1, Ops, READY, Trader, transition and execution keys had filenames but no complete principal/evidence-authority isolation | OPEN | 2026-08-26 read-only audit: 0/7 authorities provisioned; Receipt/D1/Ops/READY/Trader are contract-only `PARTIAL`, Coverage transition/Controlled execution are `NOT_PROVISIONED`; no dedicated account/service/socket/root-owned store or authority Cloudflare binding exists, all checked registries have active keys=0, and legacy PEM filenames are same-UID only; admin bootstrap, fresh in-authority keys and scoped identities remain required |
 
 ### P1
 
@@ -96,7 +96,10 @@ pass.
 
 ## Integration gate
 
-The latest independent adversarial reviews accepted R3, R4, R6, R7 and C9.
+The latest independent adversarial reviews accepted the code boundaries for R3,
+R4, R5, R6, R7, R10, R11, C9 and C10. R5/R10/R11/C10 remain `OPEN`
+because verify-only containment with zero active keys is not an operational
+authority.
 The Coverage/READY candidate still has P0 rows D2, D3, R5, R10, R11, C4,
 C10 and A2 unresolved. Receipt and Ops Projection code containment does not
 substitute for the dedicated principals required by D2/D3/C4/A2; C9 likewise
