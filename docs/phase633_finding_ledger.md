@@ -23,6 +23,7 @@ pass.
 | D2 | COMPLETE issuer accepted caller-originated parsed rows, counts, digests, and exhaustion state | OPEN | `3ced05dc` contains product minting behind a one-shot reconciled-evidence handle, but a separately privileged authority must still reparse immutable raw, normalize canonically, reread exact natural keys, prove exhaustion, rotate the key, and reprove eligible datasets |
 | D3 | A same-UID importable signing oracle could mint signed SUCCESS outside governed ingestion | OPEN | `3ced05dc` makes product receipt crypto verify-only and removes HOME/env private-key fallback; closure still requires a dedicated evidence-authority principal with a fresh key and a non-COMPLETE recovery path |
 | D4 | JSDA publication labels were used as quote-effective dates | FIXED | `56d4fcf9`; `2002-08-02 -> 2002-08-01`, `2002-08-05 -> 2002-08-02` |
+| D7 | Signed receipt closure inputs could change between verification and serialization | FIXED | `3836f069`; exact receipt, digest and claims are frozen once before signing; independent review P0/P1=0 |
 
 ### P1
 
@@ -53,6 +54,7 @@ pass.
 | R7 | Snapshot publication swallowed a database publication exception | FIXED | `4100f04e`; DB/pointer/marker/manifest post-replace failures remove discovery state and quarantine evidence; independent review passed |
 | R8 | Controlled and fixture Paper shared a boolean readiness bypass | FIXED | `ddc85178`; separate OfflineFixture and ControlledPilot services |
 | R9 | Pilot and Mass used nominally compatible readiness authority | FIXED | `ddc85178`; distinct verified types; Mass remains hard-disabled |
+| R12 | READY lower-verifier evidence remained subclassable or mutable after verification | FIXED | `3e6eb822`; exact immutable lower-verifier DTOs are frozen before the READY decision; independent review P0/P1=0 |
 
 ## Cloudflare / Ops / CI
 
@@ -66,6 +68,9 @@ pass.
 | C4 | Ops Projection signer accepted a publisher-authored evidence envelope | OPEN | `5fb40304` removes product signer injection and binds a one-shot read-only source handle to path/inode/schema/count/digest/cursor identity; a dedicated principal must still own the renderer/signing authority and independently recompute the full projection |
 | C9 | Coverage V3 transition could omit required or failed segments and mark the remaining subset COMPLETE | FIXED | `18c2595d`; exact-five V3 inventory is regenerated at the authoritative build cutoff, every expected segment must bind one selected signed receipt, generic refresh/sync cannot mint first COMPLETE, and independent adversarial review reported P0/P1=0 |
 | C10 | Domain-separated production Coverage transition authority was not provisioned or callable | OPEN | `071a0022`, `faf326a5` provide a fail-closed verify/apply boundary with independent in-transaction V3 inventory/receipt remeasurement, full-state CAS, immutable tombstone, postcondition and pre-commit expiry checks; the public registry has zero active keys and the external signing principal/store remain unprovisioned |
+| C11 | Signed D1 or Ops document A could authorize a different downstream verified envelope B | FIXED | `80080d79`, `bf41f97b`, `222b9bd6`, `66f36ff4`; signed projection and READY evidence is frozen into exact one-shot opaque results; trusted renderer/signing remains PENDING under C4 |
+| C13 | Authenticated SQLite acquisition, import, schema, or path identity could switch from database A to B | FIXED | `c0008890`, `8c61f840`, `f6538eb4`, `e4ec03e1`, `ac2cb420`, `c72bda77`, `7997670e`, `6c048274`; retained `O_NOFOLLOW` descriptor, exact schema/content identity, DELETE journal and writer lock; independent review `cfc377b4` / tree `075ddb4a` P0/P1=0; same-UID raw pwrite remains unresolved under A2 |
+| C14 | COMPLETE publication could outlive final freshness, cursor, count, or policy postconditions | FIXED | `c7836bf4`, `ac2cb420`, `c72bda77`, `6c048274`; final descriptor-rendered state and exact policy postconditions are rechecked before publication; independent review `cfc377b4` / tree `075ddb4a` P0/P1=0 |
 
 ### P1
 
@@ -75,6 +80,8 @@ pass.
 | C6 | Production Cron triggers disappeared under non-inherited named environments | FIXED | `6a37f61f`; Premium and JSDA production triggers explicit |
 | C7 | `ingestion-secrets` workers.dev endpoint is not protected by Access | HOLD | Zero Trust account activation requires explicit human agreement; header token remains enabled |
 | C8 | Six Worker lockfiles remain instead of one npm workspace | DEFERRED | Build-isolation exception in `architecture/adr_worker_dependency_isolation.md`; exact dependency parity required |
+| C12 | Coverage transition authorization accepted a backward-moving verification clock | FIXED | `b64b3af0`; authorization time is monotonic and rollback is rejected; independent review P0/P1=0 |
+| C15 | SQLite scalar or container coercions and stale timestamps weakened exact evidence comparison | FIXED | `c0008890`, `8c61f840`, `e4ec03e1`, `6c048274`; exact scalar/container types and current exported-at evidence are checked through the retained descriptor; independent review `cfc377b4` / tree `075ddb4a` P0/P1=0 |
 
 ## Architecture / Test / Operations
 
@@ -84,7 +91,7 @@ pass.
 |----|---------|--------|------------------------------|
 | A1 | JSDA Queue repeatedly selected only the newest year/files and could not converge on history | FIXED | `7afffade`; stable child segment identity, cursor progress, retry/DLQ evidence |
 | A2 | Receipt, D1, Ops, READY, Trader, transition and execution keys had filenames but no complete principal/evidence-authority isolation | OPEN | 2026-08-26 read-only audit: 0/7 authorities provisioned; Receipt/D1/Ops/READY/Trader are contract-only `PARTIAL`, Coverage transition/Controlled execution are `NOT_PROVISIONED`; no dedicated account/service/socket/root-owned store or authority Cloudflare binding exists, all checked registries have active keys=0, and legacy PEM filenames are same-UID only; admin bootstrap, fresh in-authority keys and scoped identities remain required |
-| A7 | Release workflows did not consume the machine-readable P0 finding gate | FIXED | `6a8fc1f9`; one strict repo-pinned gate now runs before CI, deployment acceptance, and release evidence; the v3 evidence payload binds the exact ledger digest and OPEN-P0 inventory; 51 focused behavioral tests cover duplicate/nonfinite JSON, closed schema/ID/severity/policy attacks, and all four entrypoints |
+| A7 | Release workflows did not consume the machine-readable P0 finding gate | FIXED | `6a8fc1f9`; one strict repo-pinned gate now runs before CI, deployment acceptance, and release evidence; the v3 evidence payload binds the exact ledger digest and OPEN-P0 inventory; focused behavioral tests cover duplicate/nonfinite JSON, closed schema/ID/severity/parity/policy attacks, and all four entrypoints |
 
 ### P1
 
@@ -97,15 +104,18 @@ pass.
 
 ## Integration gate
 
-The latest independent adversarial reviews accepted the code boundaries for R3,
-R4, R5, R6, R7, R10, R11, C9 and C10. R5/R10/R11/C10 remain `OPEN`
-because verify-only containment with zero active keys is not an operational
-authority.
+The latest independent adversarial reviews accepted the code boundaries for D7,
+R3, R4, R5, R6, R7, R10, R11, R12, C9, C10, C11, C12, C13, C14 and C15.
+R5/R10/R11/C10 remain `OPEN` because verify-only containment with zero active
+keys is not an operational authority.
 A7 is structurally fixed by the single pinned finding-ledger authority and its
 four fail-closed release entrypoints. The Coverage/READY candidate still has P0
-rows D2, D3, R5, R10, R11, C4, C10 and A2 unresolved. Receipt and Ops Projection code containment does not
-substitute for the dedicated principals required by D2/D3/C4/A2; C9 likewise
-does not close the separately provisioned transition authority required by C10.
+rows D2, D3, R5, R10, R11, C4, C10 and A2 unresolved. D7 and the
+C11/C13/C14 descriptor boundary fixes do not substitute for the dedicated
+Receipt or trusted renderer/signing principals required by D2/D3/C4/A2. Raw
+same-inode same-UID pwrite and private-consumer isolation remain under A2; C9
+and C12 likewise do not close the separately provisioned transition authority
+required by C10. Release, publication and Controlled Pilot remain blocked.
 R7's authority-owned append-only history and
 sidecar-retention residuals remain tracked by R5/A2 rather than reopening the
 fail-closed publication row. After all P0 rows are closed, run a fresh

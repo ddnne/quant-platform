@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -16,6 +17,53 @@ from scripts import finding_ledger_gate as gate
 
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER = ROOT / "docs" / "phase633_finding_ledger.json"
+MARKDOWN_LEDGER = ROOT / "docs" / "phase633_finding_ledger.md"
+
+EXPECTED_FINDING_IDS = frozenset(
+    {
+        "D1", "D2", "D3", "D4", "D5", "D6", "D7",
+        "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9",
+        "R10", "R11", "R12",
+        "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9",
+        "C10", "C11", "C12", "C13", "C14", "C15",
+        "A1", "A2", "A3", "A4", "A5", "A6", "A7",
+    }
+)
+EXPECTED_P0_FINDING_IDS = frozenset(
+    {
+        "D1", "D2", "D3", "D4", "D7",
+        "R1", "R2", "R3", "R4", "R5", "R6", "R10", "R11",
+        "C1", "C2", "C3", "C4", "C9", "C10", "C11", "C13", "C14",
+        "A1", "A2", "A7",
+    }
+)
+EXPECTED_P1_FINDING_IDS = frozenset(
+    {
+        "D5", "D6",
+        "R7", "R8", "R9", "R12",
+        "C5", "C6", "C7", "C8", "C12", "C15",
+        "A3", "A4", "A5", "A6",
+    }
+)
+EXPECTED_NEW_FINDINGS = {
+    "D7": ("data_pit_receipt", "P0", "FIXED"),
+    "R12": ("ready_plan_execution", "P1", "FIXED"),
+    "C11": ("cloudflare_ops_ci", "P0", "FIXED"),
+    "C12": ("cloudflare_ops_ci", "P1", "FIXED"),
+    "C13": ("cloudflare_ops_ci", "P0", "FIXED"),
+    "C14": ("cloudflare_ops_ci", "P0", "FIXED"),
+    "C15": ("cloudflare_ops_ci", "P1", "FIXED"),
+}
+MARKDOWN_AREAS = {
+    "Data / PIT / Receipt": "data_pit_receipt",
+    "READY / Plan / Execution": "ready_plan_execution",
+    "Cloudflare / Ops / CI": "cloudflare_ops_ci",
+    "Architecture / Test / Operations": "architecture_test_operations",
+}
+MARKDOWN_FINDING_ROW = re.compile(
+    r"^\|\s*(?P<id>[A-Z][0-9]+)\s*\|.*?\|\s*"
+    r"(?P<status>OPEN|FIXED|DEFERRED|HOLD)\s*\|.*\|\s*$"
+)
 
 
 def _document() -> dict[str, object]:
@@ -36,6 +84,87 @@ def _closed_document() -> dict[str, object]:
         if finding["severity"] == "P0":
             finding["status"] = "FIXED"
     return value
+
+
+def _markdown_structure() -> dict[str, tuple[str, str, str]]:
+    area: str | None = None
+    severity: str | None = None
+    rows: dict[str, tuple[str, str, str]] = {}
+    for line in MARKDOWN_LEDGER.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            area = MARKDOWN_AREAS.get(line.removeprefix("## ").strip())
+            severity = None
+            continue
+        if line.startswith("### "):
+            candidate = line.removeprefix("### ").strip()
+            severity = candidate if candidate in {"P0", "P1"} else None
+            continue
+        match = MARKDOWN_FINDING_ROW.fullmatch(line)
+        if match is None:
+            continue
+        assert area is not None, f"finding row outside a pinned area: {line}"
+        assert severity is not None, f"finding row outside P0/P1: {line}"
+        finding_id = match.group("id")
+        assert finding_id not in rows, f"duplicate Markdown finding id: {finding_id}"
+        rows[finding_id] = (area, severity, match.group("status"))
+    return rows
+
+
+def test_pinned_inventory_and_severity_oracles_are_exact() -> None:
+    assert len(EXPECTED_FINDING_IDS) == 41
+    assert len(EXPECTED_P0_FINDING_IDS) == 25
+    assert len(EXPECTED_P1_FINDING_IDS) == 16
+    assert EXPECTED_P0_FINDING_IDS.isdisjoint(EXPECTED_P1_FINDING_IDS)
+    assert EXPECTED_P0_FINDING_IDS | EXPECTED_P1_FINDING_IDS == EXPECTED_FINDING_IDS
+    assert gate._PINNED_FINDING_IDS == EXPECTED_FINDING_IDS
+    assert gate._PINNED_P0_FINDING_IDS == EXPECTED_P0_FINDING_IDS
+
+    document = _document()
+    rows = document["findings"]  # type: ignore[index]
+    assert {row["id"] for row in rows} == EXPECTED_FINDING_IDS
+    assert {row["id"] for row in rows if row["severity"] == "P0"} == (
+        EXPECTED_P0_FINDING_IDS
+    )
+    assert {row["id"] for row in rows if row["severity"] == "P1"} == (
+        EXPECTED_P1_FINDING_IDS
+    )
+    observed = {
+        row["id"]: (row["area"], row["severity"], row["status"])
+        for row in rows
+    }
+    assert {
+        finding_id: observed[finding_id] for finding_id in EXPECTED_NEW_FINDINGS
+    } == EXPECTED_NEW_FINDINGS
+    assert {
+        status: sum(row["status"] == status for row in rows)
+        for status in ("FIXED", "OPEN", "HOLD", "DEFERRED")
+    } == {"FIXED": 27, "OPEN": 10, "HOLD": 2, "DEFERRED": 2}
+
+
+@pytest.mark.parametrize("finding_id", sorted(EXPECTED_FINDING_IDS))
+def test_every_pinned_finding_severity_is_immutable(finding_id: str) -> None:
+    document = _closed_document()
+    row = next(
+        row for row in document["findings"] if row["id"] == finding_id  # type: ignore[index]
+    )
+    row["severity"] = "P1" if finding_id in EXPECTED_P0_FINDING_IDS else "P0"
+    with pytest.raises(
+        gate.FindingLedgerError,
+        match="severity does not match its pinned finding id",
+    ):
+        gate._evaluate_ledger_bytes(_render(document))
+
+
+def test_markdown_and_json_ledgers_have_exact_structural_parity() -> None:
+    document = _document()
+    json_rows: dict[str, tuple[str, str, str]] = {}
+    for row in document["findings"]:  # type: ignore[index]
+        finding_id = row["id"]
+        assert finding_id not in json_rows, f"duplicate JSON finding id: {finding_id}"
+        json_rows[finding_id] = (row["area"], row["severity"], row["status"])
+    assert len(json_rows) == 41
+    assert set(json_rows) == EXPECTED_FINDING_IDS
+    assert _markdown_structure() == json_rows
 
 
 def test_current_pinned_ledger_blocks_with_exact_open_p0_inventory() -> None:
@@ -168,12 +297,6 @@ def test_finding_inventory_cannot_vacuously_pass(mutation, message: str) -> None
         (
             lambda doc: doc["findings"][0].__setitem__("status", "CLOSED"),
             "status is invalid",
-        ),
-        (
-            lambda doc: next(
-                row for row in doc["findings"] if row["id"] == "A2"
-            ).__setitem__("severity", "P1"),
-            "severity does not match its pinned finding id",
         ),
         (
             lambda doc: doc["findings"][0].__setitem__(
