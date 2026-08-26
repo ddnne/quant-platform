@@ -38,7 +38,7 @@ pass.
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
 | R1 | exact-four closure required TOPIX but `indices_bars_daily_topix` had no V3 SourceCapability | FIXED | `eb21e84a`; official 2008-05-07 boundary and exact-five-dataset closure independently verified |
-| R2 | READY/coherence paths hard-coded one global V2 policy and rejected valid per-dataset V3 evidence | OPEN | Bind signed policy id/version/digest per dataset and fail on unknown/missing evidence |
+| R2 | READY/coherence paths hard-coded one global V2 policy and rejected valid per-dataset V3 evidence | FIXED | `590a71d2`, `76d21575`; exact per-dataset policy triplets plus content-addressed local proof ID reverified from current ledgers/receipts/generation; independent review P0/P1=0 |
 | R3 | ExperimentPlan embedded `ready_snapshot_id=not-declared`, making later immutable snapshot equality circular | FIXED | `76240e89`; plan identity is snapshot-free and immutable snapshot binding occurs only in authorization; independent review passed |
 | R4 | exact-four bindings were caller-overridable | FIXED | `76240e89`; only the checked-in canonical four plans and exact plan/closure/profile digests reach the scheduler; independent attack tests passed |
 | R5 | Generic READY publication and a same-UID arbitrary READY signer remained reachable | OPEN | Dedicated READY authority independently rechecks the authenticated mirror, exact-four closure and immutable copy; Mass requires a separate explicit policy and stays disabled |
@@ -97,7 +97,7 @@ pass.
 ## Integration gate
 
 The latest independent adversarial reviews accepted R3, R4 and R7. The
-Coverage/READY candidate still has P0 rows D2, D3, R2, R5, R6, R10, R11, C4,
+Coverage/READY candidate still has P0 rows D2, D3, R5, R6, R10, R11, C4,
 C9, C10 and A2 unresolved. R7's authority-owned append-only history and
 sidecar-retention residuals remain tracked by R5/A2 rather than reopening the
 fail-closed publication row. After all P0 rows are closed, run a fresh

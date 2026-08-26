@@ -1,6 +1,6 @@
 {
   "schema_version": "phase631-finding-ledger/v1",
-  "updated_at": "2026-08-26T08:36:02+09:00",
+  "updated_at": "2026-08-26T09:12:30+09:00",
   "merge_policy": {
     "required_p0_status": "FIXED",
     "independent_review_unresolved_p0": 0,
@@ -15,7 +15,7 @@
     {"id":"D6","area":"data_pit_receipt","severity":"P1","status":"FIXED","summary":"Canonical Registry duplicated PIT and Coverage semantics","evidence":"2bd96d69"},
 
     {"id":"R1","area":"ready_plan_execution","severity":"P0","status":"FIXED","summary":"TOPIX exact-four dependency lacked V3 SourceCapability","evidence":"eb21e84a; independent exact-four SourceCapability review"},
-    {"id":"R2","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"READY assumed one global V2 policy","closure":"Signed per-dataset policy id, version, and digest"},
+    {"id":"R2","area":"ready_plan_execution","severity":"P0","status":"FIXED","summary":"READY assumed one global V2 policy","evidence":"590a71d2,76d21575; exact policy triplets and authoritative content-addressed local proof reverified from current ledgers receipts and generation; independent review P0/P1=0"},
     {"id":"R3","area":"ready_plan_execution","severity":"P0","status":"FIXED","summary":"ExperimentPlan snapshot placeholder made identity circular","evidence":"76240e89; snapshot-free plan identity and authorization-only immutable snapshot binding; independent review"},
     {"id":"R4","area":"ready_plan_execution","severity":"P0","status":"FIXED","summary":"Exact-four bindings were caller-overridable","evidence":"76240e89; canonical final exact-four plan closure and profile digests; independent attack review"},
     {"id":"R5","area":"ready_plan_execution","severity":"P0","status":"OPEN","summary":"Generic READY and a same-UID arbitrary READY signer remained reachable","closure":"Dedicated READY evidence authority, profile closure publication, explicit separate Mass policy; Mass disabled"},
