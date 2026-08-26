@@ -327,6 +327,47 @@ describe("governed J-Quants WorkerEntrypoint RPC", () => {
     expect(rendered).not.toContain(PROXY_TOKEN);
   });
 
+  it("returns a closed FAILED envelope when cancelling a provider error body rejects", async () => {
+    const upstreamSecret = `upstream-only ${API_KEY} ${HMAC_KEY} ${PROXY_TOKEN}`;
+    let cancelCalls = 0;
+    installFetch(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes(upstreamSecret));
+      },
+      cancel() {
+        cancelCalls += 1;
+        return Promise.reject(new Error(`cancel rejected ${upstreamSecret}`));
+      },
+    }), {
+      status: 429,
+      headers: { "content-type": "text/plain", "set-cookie": upstreamSecret },
+    }));
+
+    const response = await rpc.fetch_governed_page(
+      await requestFor("indices_bars_daily_topix"),
+    );
+    const responseBody = await response.clone().text();
+    const meta = await metadata(response);
+    expect(cancelCalls).toBe(1);
+    expect(response.status).toBe(502);
+    expect(JSON.parse(responseBody)).toEqual({ error: "upstream_failed" });
+    expect(meta).toMatchObject({
+      evidence_state: "FAILED",
+      body_kind: "TARGET_ERROR_JSON",
+      provider_pagination_state: "NOT_APPLICABLE",
+      pagination_state: "NOT_APPLICABLE",
+      upstream_http_status: 429,
+      continuation_token: null,
+      chain_digest: null,
+    });
+    const rendered = `${responseBody} ${JSON.stringify([...response.headers])}`;
+    expect(rendered).not.toContain(upstreamSecret);
+    expect(rendered).not.toContain(API_KEY);
+    expect(rendered).not.toContain(HMAC_KEY);
+    expect(rendered).not.toContain(PROXY_TOKEN);
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
   it("does not tunnel RPC through public HTTP", async () => {
     const fetchMock = installFetch(async () => upstream('{"data":[]}'));
     const request = await requestFor("indices_bars_daily_topix");

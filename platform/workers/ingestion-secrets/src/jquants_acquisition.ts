@@ -552,7 +552,12 @@ export async function fetchGovernedPage(
   }
   if (!upstream.ok) {
     const upstreamStatus = upstream.status;
-    await upstream.body?.cancel();
+    try {
+      await upstream.body?.cancel();
+    } catch {
+      // A provider-controlled body stream cannot be allowed to suppress the
+      // target-owned, fail-closed error envelope.
+    }
     const response = await errorResponse("upstream_failed", 502, environment, "FAILED", resolved, session, upstreamStatus);
     audit(resolved, session.acquisitionId, "FAILED", response.status);
     return response;
