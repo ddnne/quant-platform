@@ -34,7 +34,27 @@ The `ingestion-secrets` package now contains the closed typed v2
 manifest still records an activation-blocking `PENDING` dependency: no live
 Receipt caller Service Binding, dedicated cursor-HMAC key, raw persistence and
 reconciliation path, or authority activation is provisioned. The target HMAC
-authenticates live navigation state only; it is not standalone receipt proof.
+authenticates only opaque live continuation state; response headers and metadata
+are not standalone receipt proof.
+
+The Python data plane contains a fail-closed candidate receipt-side verifier for
+`jquants-acquisition-collection/v2`. It accepts only a runtime-registered live
+Service Binding capture, independently rechecks the closed request, exact 37
+headers, immutable raw bytes, provider pagination/query transitions, chain and
+closed-month Coverage identity, then consumes the result once. The legacy
+`jquants-pagination-evidence/v1` format is audit/recovery-only and cannot mint a
+new COMPLETE receipt. Structured rows are committed only after canonical
+parse/normalize/natural-key reconciliation; a fresh transaction rereads raw and
+structured state before calling the receipt principal, and the returned envelope
+is public-key verified before local receipt finalization.
+
+This foundation does not activate D2 or D3. No production live-capture caller,
+Receipt Worker/DO, Service Binding, signing key, or authority ledger is
+provisioned. A signature can also be truthfully issued after the structured
+commit while the later local receipt/final-status transaction fails; the
+cross-service append/finalize recovery protocol is still PENDING. Persisted HMAC
+headers after a crash remain RAW_ONLY, and master, tip-only, current/partial-month
+acquisition plus the 22-dataset reproof remain outside this candidate.
 
 The frozen-mirror v2 protocols bind environment, authenticated caller, exact
 method and purpose, request digest, D1 identity, signed audit, immutable mirror

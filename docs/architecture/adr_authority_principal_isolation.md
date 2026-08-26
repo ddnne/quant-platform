@@ -50,11 +50,23 @@ The closed typed v2 `JQUANTS_ACQUISITION` WorkerEntrypoint target is implemented
 and tested in workerd, including a separate-isolate test Service Binding. The
 legacy `X-Ingestion-Token` HTTP path remains during migration. Receipt
 activation is still blocked: the live caller binding and dedicated HMAC key are
-unprovisioned, and the Receipt-side create-only raw ledger, monthly sub-slice
-reconciler, independent digest/count checks, Ed25519 signer, and reproof are not
-implemented by the target lane. Target HMAC continuation state is live
-navigation state; the response metadata itself is not HMAC-authenticated and
-is not standalone COMPLETE evidence.
+unprovisioned. A receipt-side candidate now verifies runtime-registered live
+captures, exact raw and 37-header metadata, target/request/query/chain identity,
+raw-derived provider pagination, full closed-month slice order, and canonical
+Coverage scope. It then commits reconciled structured rows, starts a fresh
+transaction, rereads immutable raw and exact natural keys, and public-key
+verifies the returned signed envelope before local receipt finalization. The
+legacy v1 pagination evidence is audit/recovery-only. Target HMAC continuation
+state is live navigation state; the response metadata itself is not
+HMAC-authenticated and is not standalone COMPLETE evidence.
+
+This is containment, not D2/D3 closure. The production live-capture caller,
+Receipt-side create-only raw ledger, Receipt Worker/DO, Ed25519 key and reproof
+remain unprovisioned. Structured state must be committed before the external
+issuer is called, so a truthful envelope may exist when the later local
+receipt/status transaction fails. An authority-owned append/finalize ledger and
+recovery protocol are required before activation. Master, tip-only and
+current/partial-month acquisition remain explicitly PENDING.
 
 ## Enforcement
 
