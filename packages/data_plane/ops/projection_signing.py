@@ -8,6 +8,8 @@ module has no private-key loader and no caller-envelope signing API.
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -47,9 +49,22 @@ class OpsProjectionSignatureError(RuntimeError):
     """Projection envelope is unsigned, malformed, or unverifiable."""
 
 
-def canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
+@dataclass(frozen=True, slots=True)
+class _VerifiedOpsProjectionDocument:
+    """Private immutable identity from one signed-document observation."""
+
+    envelope: Mapping[str, Any]
+    issuer_key_id: str
+    document_digest: str
+
+
+def canonical_json_bytes(value: dict[str, Any]) -> bytes:
+    if type(value) is not dict:
+        raise TypeError("Ops Projection canonical input must be one exact dict")
+    frozen = _copy_exact_json(value, field="Ops Projection canonical input")
+    assert type(frozen) is dict
     return json.dumps(
-        value,
+        frozen,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
@@ -57,9 +72,7 @@ def canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def sha256_digest(value: Mapping[str, Any]) -> str:
-    import hashlib
-
+def sha256_digest(value: dict[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(canonical_json_bytes(value)).hexdigest()
 
 
@@ -88,7 +101,7 @@ def _copy_exact_json(value: Any, *, field: str) -> Any:
     )
 
 
-def _decode_strict_json(raw: bytes, *, field: str) -> dict[str, Any]:
+def _decode_strict_json(raw: bytes | str, *, field: str) -> dict[str, Any]:
     def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         document: dict[str, Any] = {}
         for key, value in pairs:
@@ -347,7 +360,7 @@ _REGISTRY_FIELDS = {
 }
 
 
-def _registry_digest(document: Mapping[str, Any]) -> str:
+def _registry_digest(document: dict[str, Any]) -> str:
     return sha256_digest(
         {key: value for key, value in document.items() if key != "registry_digest"}
     )
@@ -366,11 +379,15 @@ def _load_pinned_active_keys() -> Mapping[str, Ed25519PublicKey]:
     if type(document) is not dict:
         raise OpsProjectionSignatureError("pinned Ops Projection registry is invalid")
     if sha256_digest(document) != PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST:
-        raise OpsProjectionSignatureError("pinned Ops Projection registry digest mismatch")
+        raise OpsProjectionSignatureError(
+            "pinned Ops Projection registry digest mismatch"
+        )
     if (
         set(document) != _REGISTRY_FIELDS
+        or type(document.get("schema_version")) is not int
         or document.get("schema_version") != 2
         or document.get("purpose") != "ops_projection_verification"
+        or type(document.get("generation")) is not int
         or document.get("generation") != PINNED_OPS_PROJECTION_REGISTRY_GENERATION
         or document.get("authority_status") not in {"ACTIVE", "PENDING"}
         or document.get("prior_registry_digest")
@@ -393,9 +410,13 @@ def _load_pinned_active_keys() -> Mapping[str, Ed25519PublicKey]:
             or row.get("algorithm") != "Ed25519"
             or row.get("status") not in {"active", "pending", "revoked"}
         ):
-            raise OpsProjectionSignatureError("pinned Ops Projection registry key invalid")
+            raise OpsProjectionSignatureError(
+                "pinned Ops Projection registry key invalid"
+            )
         if any(type(row[field]) is not str for field in row):
-            raise OpsProjectionSignatureError("pinned Ops Projection registry key invalid")
+            raise OpsProjectionSignatureError(
+                "pinned Ops Projection registry key invalid"
+            )
         key_id = row["key_id"].strip()
         if not key_id or key_id in seen:
             raise OpsProjectionSignatureError("Ops Projection key ids must be unique")
@@ -421,37 +442,63 @@ def _load_pinned_active_keys() -> Mapping[str, Ed25519PublicKey]:
 
 
 def verify_pinned_ops_projection(
-    document: Mapping[str, Any],
+    document: dict[str, Any] | bytes | str,
 ) -> Mapping[str, Any]:
     """Verify an envelope only against the compile-time production trust root."""
 
+    return _verify_pinned_document(document).envelope
+
+
+def _verify_pinned_document(
+    document: dict[str, Any] | bytes | str,
+) -> _VerifiedOpsProjectionDocument:
     keys = _load_pinned_active_keys()
-    return _verify_document(document, keys)
+    return _verify_document_identity(document, keys)
 
 
 def _verify_document(
-    document: Mapping[str, Any],
+    document: dict[str, Any] | bytes | str,
     keys: Mapping[str, Ed25519PublicKey],
 ) -> Mapping[str, Any]:
+    return _verify_document_identity(document, keys).envelope
+
+
+def _verify_document_identity(
+    document: dict[str, Any] | bytes | str,
+    keys: Mapping[str, Ed25519PublicKey],
+) -> _VerifiedOpsProjectionDocument:
     if type(keys) is not dict:
         raise OpsProjectionSignatureError(
             "Ops Projection verifier key set is not canonical"
         )
-    frozen = _copy_exact_json(document, field="signed Ops Projection document")
+    if type(document) in {bytes, str}:
+        frozen = _decode_strict_json(
+            document, field="signed Ops Projection document"
+        )
+    else:
+        frozen = _copy_exact_json(
+            document, field="signed Ops Projection document"
+        )
     if type(frozen) is not dict:
-        raise OpsProjectionSignatureError("signed Ops Projection document must be an object")
+        raise OpsProjectionSignatureError(
+            "signed Ops Projection document must be an object"
+        )
     allowed = {
         "schema_version", "algorithm", "issuer_key_id", "envelope", "signature"
     }
     if set(frozen) != allowed:
-        raise OpsProjectionSignatureError("signed Ops Projection document shape invalid")
+        raise OpsProjectionSignatureError(
+            "signed Ops Projection document shape invalid"
+        )
     if (
         frozen.get("schema_version") != SIGNED_DOCUMENT_SCHEMA
         or frozen.get("algorithm") != "Ed25519"
         or type(frozen.get("issuer_key_id")) is not str
         or type(frozen.get("signature")) is not str
     ):
-        raise OpsProjectionSignatureError("signed Ops Projection document identity invalid")
+        raise OpsProjectionSignatureError(
+            "signed Ops Projection document identity invalid"
+        )
     key_id = frozen["issuer_key_id"]
     public_key = keys.get(key_id)
     if public_key is None:
@@ -470,15 +517,21 @@ def _verify_document(
         )
         public_key.verify(signature, canonical_json_bytes(body))
     except (ValueError, InvalidSignature) as exc:
-        raise OpsProjectionSignatureError("Ops Projection signature is invalid") from exc
-    return _deep_immutable(envelope)
+        raise OpsProjectionSignatureError(
+            "Ops Projection signature is invalid"
+        ) from exc
+    return _VerifiedOpsProjectionDocument(
+        envelope=_deep_immutable(envelope),
+        issuer_key_id=key_id,
+        document_digest=sha256_digest(frozen),
+    )
 
 
 def verified_pinned_ops_projection_dataset_evidence(
-    document: Mapping[str, Any],
+    document: dict[str, Any] | bytes | str,
     required_datasets: tuple[str, ...] | list[str],
 ) -> tuple[Mapping[str, Any], Mapping[str, Mapping[str, Any]]]:
-    """Verify once and derive READY input from only that pinned envelope."""
+    """Derive immutable READY rows plus identity from one verified document."""
 
     if type(required_datasets) not in {tuple, list}:
         raise TypeError("required_datasets must be one exact tuple or list")
@@ -491,7 +544,8 @@ def verified_pinned_ops_projection_dataset_evidence(
         raise OpsProjectionSignatureError(
             "required_datasets must be unique exact non-empty strings"
         )
-    envelope = verify_pinned_ops_projection(document)
+    verified_document = _verify_pinned_document(document)
+    envelope = verified_document.envelope
     coverage = envelope["dataset_coverage"]
     assert isinstance(coverage, Mapping)  # validated by verify
     evidence: dict[str, dict[str, Any]] = {}
@@ -516,6 +570,12 @@ def verified_pinned_ops_projection_dataset_evidence(
             "source_generation": envelope["source_generation"],
             "export_cursor": envelope["export_cursor"],
             "applied_cursor": envelope["applied_cursor"],
+            "signed_projection_document_digest": (
+                verified_document.document_digest
+            ),
+            "signed_projection_issuer_key_id": (
+                verified_document.issuer_key_id
+            ),
         }
     return envelope, _deep_immutable(evidence)
 

@@ -1618,9 +1618,10 @@ def _finalize_sync_policy(
                 publish_exact_four_pilot_ready_snapshot,
             )
 
-            signed_document = json.loads(
-                Path(args.pilot_ready_evidence).read_text(encoding="utf-8")
-            )
+            # Preserve the exact signed bytes for the Ops trust boundary.  The
+            # verifier performs the one strict JSON decode, so duplicate keys
+            # and non-finite values cannot be collapsed by this CLI first.
+            signed_document = Path(args.pilot_ready_evidence).read_bytes()
             snapshot_dir = (
                 Path(args.snapshot_dir)
                 if args.snapshot_dir

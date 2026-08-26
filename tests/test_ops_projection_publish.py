@@ -549,6 +549,93 @@ def test_pinned_projection_verifier_freezes_one_exact_document_observation(
         verified["dataset_coverage"][dataset]["status"] = "COMPLETE"
 
 
+def test_verified_dataset_evidence_retains_signed_document_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    private = Ed25519PrivateKey.generate()
+    signer = TestOpsProjectionSigningKey("ops-projection-ephemeral", private)
+    signed = sign_projection_bundle_for_test(
+        render_projection_bundle_for_test(
+            source,
+            generation_id="signed-A",
+            producer_commit_sha="f" * 40,
+            source_cursor=12,
+            export_cursor=12,
+        ),
+        signer,
+    )
+    monkeypatch.setattr(
+        projection_signing,
+        "_load_pinned_active_keys",
+        lambda: {signer.key_id: private.public_key()},
+    )
+    expected_digest = sha256_digest(signed)
+
+    envelope, evidence = verified_pinned_ops_projection_dataset_evidence(
+        signed, ("equities_bars_daily",)
+    )
+    signed["issuer_key_id"] = "unsigned-B"
+    signed["envelope"]["generation_id"] = "unsigned-B"  # type: ignore[index]
+    row = evidence["equities_bars_daily"]
+
+    assert envelope["generation_id"] == "signed-A"
+    assert row["projection_generation"] == "signed-A"
+    assert row["signed_projection_document_digest"] == expected_digest
+    assert row["signed_projection_issuer_key_id"] == signer.key_id
+    with pytest.raises(TypeError, match="exact dict"):
+        sha256_digest(envelope)
+    with pytest.raises(TypeError):
+        row["signed_projection_issuer_key_id"] = "mutable"  # type: ignore[index]
+
+
+def test_signed_projection_raw_json_is_strictly_decoded_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    private = Ed25519PrivateKey.generate()
+    signer = TestOpsProjectionSigningKey("ops-projection-ephemeral", private)
+    signed = sign_projection_bundle_for_test(
+        render_projection_bundle_for_test(
+            source,
+            generation_id="raw-signed",
+            producer_commit_sha="f" * 40,
+            source_cursor=12,
+            export_cursor=12,
+        ),
+        signer,
+    )
+    monkeypatch.setattr(
+        projection_signing,
+        "_load_pinned_active_keys",
+        lambda: {signer.key_id: private.public_key()},
+    )
+
+    raw = json.dumps(signed, separators=(",", ":")).encode("utf-8")
+    envelope, evidence = verified_pinned_ops_projection_dataset_evidence(
+        raw, ("equities_bars_daily",)
+    )
+    assert envelope["generation_id"] == "raw-signed"
+    assert evidence["equities_bars_daily"]["projection_generation"] == (
+        "raw-signed"
+    )
+
+    # A permissive pre-parse would keep the later, valid schema_version and
+    # erase the attack before the signed boundary sees it.
+    duplicate = raw.replace(
+        b"{", b'{"schema_version":"attacker",', 1
+    )
+    with pytest.raises(OpsProjectionSignatureError, match="duplicate key"):
+        verified_pinned_ops_projection_dataset_evidence(
+            duplicate, ("equities_bars_daily",)
+        )
+    nonfinite = raw.replace(b'"schema_version"', b'"x":NaN,"schema_version"', 1)
+    with pytest.raises(OpsProjectionSignatureError, match="non-finite"):
+        verify_pinned_ops_projection(nonfinite)
+
+
 def test_projection_a_signature_cannot_return_stateful_b_envelope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1055,6 +1142,39 @@ def test_pinned_ops_registry_rejects_duplicate_key_json(
         projection_signing, "_PINNED_VERIFY_REGISTRY_PATH", path
     )
     with pytest.raises(OpsProjectionSignatureError, match="cannot load"):
+        verify_pinned_ops_projection({})
+
+
+@pytest.mark.parametrize("field", ["schema_version", "generation"])
+def test_pinned_ops_registry_rejects_float_integer_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    current = json.loads(
+        (ROOT / "specs/ops_projection/verify_public_keys.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    current[field] = 2.0
+    current["registry_digest"] = sha256_digest(
+        {key: value for key, value in current.items() if key != "registry_digest"}
+    )
+    path = tmp_path / f"float-{field}-ops-registry.json"
+    path.write_text(json.dumps(current), encoding="utf-8")
+    monkeypatch.setattr(projection_signing, "_PINNED_VERIFY_REGISTRY_PATH", path)
+    monkeypatch.setattr(
+        projection_signing,
+        "PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST",
+        current["registry_digest"],
+    )
+    monkeypatch.setattr(
+        projection_signing,
+        "PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST",
+        sha256_digest(current),
+    )
+
+    with pytest.raises(OpsProjectionSignatureError, match="registry is invalid"):
         verify_pinned_ops_projection({})
 
 

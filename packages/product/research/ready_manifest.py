@@ -1490,7 +1490,7 @@ def _verify_exact_four_pit_dependency_scope(
 
 
 def _verified_production_projection_evidence(
-    signed_document: Mapping[str, Any] | None,
+    signed_document: dict[str, Any] | bytes | str | None,
     required_datasets: Sequence[str],
 ) -> dict[str, dict[str, Any]]:
     """Verify one signed Ops envelope and derive the bounded READY input.
@@ -1509,7 +1509,7 @@ def _verified_production_projection_evidence(
     )
     from ops.projection_meta import DEFAULT_MAX_AGE_SECONDS
 
-    if not isinstance(signed_document, Mapping):
+    if type(signed_document) not in {dict, bytes, str}:
         raise MassResearchDisabledError(
             "production READY requires a signed Ops Projection evidence envelope"
         )
@@ -1536,15 +1536,10 @@ def _verified_production_projection_evidence(
         )
         if generated_at.tzinfo is None:
             raise ValueError("timezone required")
-        age_seconds = (_now() - generated_at).total_seconds()
     except (TypeError, ValueError) as exc:
         raise MassResearchDisabledError(
             "signed Ops Projection generated_at is malformed"
         ) from exc
-    if age_seconds < -300 or age_seconds > DEFAULT_MAX_AGE_SECONDS:
-        raise MassResearchDisabledError(
-            "signed Ops Projection evidence is outside the freshness SLA"
-        )
     signed_coverage = envelope.get("dataset_coverage")
     if not isinstance(signed_coverage, Mapping):  # verifier validates shape
         raise MassResearchDisabledError(
@@ -1584,8 +1579,7 @@ def _verified_production_projection_evidence(
             "signed Ops Projection source/export/applied cursor is null or not current"
         )
 
-    document_digest = canonical_digest(dict(signed_document))
-    issuer_key_id = str(signed_document.get("issuer_key_id") or "").strip()
+    owned_evidence: dict[str, dict[str, Any]] = {}
     for dataset_id, row in evidence.items():
         expected_policy = coverage_policy_binding(dataset_id)
         if any(
@@ -1595,16 +1589,33 @@ def _verified_production_projection_evidence(
             raise MassResearchDisabledError(
                 f"signed Ops Projection governed policy binding mismatch for {dataset_id}"
             )
-        row["signed_projection_document_digest"] = document_digest
-        row["signed_projection_issuer_key_id"] = issuer_key_id
-    return evidence
+        document_digest = row.get("signed_projection_document_digest")
+        issuer_key_id = row.get("signed_projection_issuer_key_id")
+        if not is_sha256_digest(document_digest) or (
+            type(issuer_key_id) is not str or not issuer_key_id
+        ):
+            raise MassResearchDisabledError(
+                "signed Ops Projection verified document identity is missing"
+            )
+        owned_evidence[dataset_id] = dict(row)
+    try:
+        age_seconds = (_now() - generated_at).total_seconds()
+    except (TypeError, ValueError) as exc:
+        raise MassResearchDisabledError(
+            "signed Ops Projection generated_at is malformed"
+        ) from exc
+    if age_seconds < -300 or age_seconds > DEFAULT_MAX_AGE_SECONDS:
+        raise MassResearchDisabledError(
+            "signed Ops Projection evidence is outside the freshness SLA"
+        )
+    return owned_evidence
 
 
 def _publish_exact_four_pilot_ready_snapshot_impl(
     staging_db: str | Path,
     snapshot_dir: str | Path,
     *,
-    signed_projection_document: Mapping[str, Any],
+    signed_projection_document: dict[str, Any] | bytes | str,
 ) -> Any:
     """Return PENDING before any local publication or signing mutation.
 
@@ -1623,7 +1634,7 @@ def publish_exact_four_pilot_ready_snapshot(
     staging_db: str | Path,
     snapshot_dir: str | Path,
     *,
-    signed_projection_document: Mapping[str, Any],
+    signed_projection_document: dict[str, Any] | bytes | str,
 ) -> Any:
     """Production exact-four READY publisher; signed Ops authority is required.
 

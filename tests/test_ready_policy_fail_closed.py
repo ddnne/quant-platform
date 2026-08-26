@@ -21,6 +21,7 @@ from ops.projection_content import (
 )
 from ops.projection_signing import (
     ENVELOPE_SCHEMA,
+    sha256_digest,
 )
 from paper_runtime.ready_policy import (
     CoverageEvidence,
@@ -31,6 +32,7 @@ from paper_runtime.ready_policy import (
 from paper_runtime.snapshot import SnapshotRejected, _publish_ready_snapshot
 from paper_runtime.snapshot_publish_policy import _raw_manifests_for
 import research.research_data_profile as profile_module
+import research.ready_manifest as ready_module
 from research.readiness import (
     ReadyPublicationAuthorityPending,
     ready_publication_authority_status,
@@ -151,15 +153,9 @@ def _configure_projection_registry_for_test(
     monkeypatch: pytest.MonkeyPatch,
     registry: TestOpsProjectionVerifier,
 ) -> None:
-    def verify_and_derive(document, required_datasets):
-        envelope = registry.verify(document)
-        return envelope, registry.verified_dataset_evidence(
-            document, required_datasets
-        )
-
     monkeypatch.setattr(
-        "ops.projection_signing.verified_pinned_ops_projection_dataset_evidence",
-        verify_and_derive,
+        "ops.projection_signing._load_pinned_active_keys",
+        lambda: {registry.key_id: registry.public_key},
     )
 
 
@@ -594,10 +590,79 @@ def test_signed_projection_verifier_derives_only_exact_closure_evidence(
     assert set(evidence) == set(binding.required_datasets)
     assert all(
         row["signed_projection_document_digest"].startswith("sha256:")
+        and row["signed_projection_issuer_key_id"]
+        == "ops-projection-ready-test"
         and row["source_generation"] == row["export_cursor"]
         and row["export_cursor"] == row["applied_cursor"]
+        and type(row) is dict
         for row in evidence.values()
     )
+
+
+def test_ready_uses_verified_projection_identity_after_caller_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = load_exact_four_pilot_ready_binding()
+    signed, registry = _signed_projection_evidence(binding.required_datasets)
+    _configure_projection_registry_for_test(monkeypatch, registry)
+    expected_digest = sha256_digest(signed)
+    expected_issuer = signed["issuer_key_id"]
+    observed_now = ready_module._now()
+
+    def mutate_after_verification() -> datetime:
+        signed["issuer_key_id"] = "unsigned-B-issuer"
+        signed["envelope"][  # type: ignore[index]
+            "generation_id"
+        ] = "unsigned-B-generation"
+        return observed_now
+
+    monkeypatch.setattr(ready_module, "_now", mutate_after_verification)
+    evidence = _verified_production_projection_evidence(
+        signed, binding.required_datasets
+    )
+
+    assert signed["issuer_key_id"] == "unsigned-B-issuer"
+    assert all(
+        row["signed_projection_document_digest"] == expected_digest
+        and row["signed_projection_issuer_key_id"] == expected_issuer
+        and row["projection_generation"] == "projection-generation-7"
+        for row in evidence.values()
+    )
+
+
+def test_ready_freshness_is_checked_after_policy_postconditions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ops.projection_meta import DEFAULT_MAX_AGE_SECONDS
+    import data_contracts.coverage as coverage_module
+
+    binding = load_exact_four_pilot_ready_binding()
+    signed, registry = _signed_projection_evidence(binding.required_datasets)
+    _configure_projection_registry_for_test(monkeypatch, registry)
+    generated_at = datetime.fromisoformat(
+        signed["envelope"]["generated_at"]  # type: ignore[index]
+    )
+    clock = {
+        "now": generated_at + timedelta(seconds=DEFAULT_MAX_AGE_SECONDS)
+    }
+    governed_binding = coverage_module.coverage_policy_binding
+
+    def advance_during_postconditions(dataset_id: str):
+        result = governed_binding(dataset_id)
+        clock["now"] += timedelta(seconds=1)
+        return result
+
+    monkeypatch.setattr(
+        coverage_module,
+        "coverage_policy_binding",
+        advance_during_postconditions,
+    )
+    monkeypatch.setattr(ready_module, "_now", lambda: clock["now"])
+
+    with pytest.raises(MassResearchDisabledError, match="freshness SLA"):
+        _verified_production_projection_evidence(
+            signed, binding.required_datasets
+        )
 
 
 def test_ops_projection_environment_registry_cannot_self_root_ready(

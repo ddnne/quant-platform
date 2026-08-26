@@ -94,6 +94,50 @@ def test_sync_script_exists():
     assert _SYNC.exists()
 
 
+def test_pilot_evidence_file_reaches_signed_boundary_as_exact_bytes(
+    tmp_path, sync_module, monkeypatch
+):
+    db = tmp_path / "local.sqlite"
+    store = SqliteStore(db)
+    evidence = tmp_path / "pilot-evidence.json"
+    raw = b'{"schema_version":"attacker","schema_version":"valid"}'
+    evidence.write_bytes(raw)
+    observed: list[bytes] = []
+
+    def reject_duplicate(
+        _db, _snapshot_dir, *, signed_projection_document
+    ):
+        observed.append(signed_projection_document)
+        assert type(signed_projection_document) is bytes
+        assert signed_projection_document == raw
+        raise RuntimeError("duplicate key schema_version")
+
+    import research.ready_manifest as ready_manifest
+
+    monkeypatch.setattr(
+        ready_manifest,
+        "publish_exact_four_pilot_ready_snapshot",
+        reject_duplicate,
+    )
+    failures: list[str] = []
+    args = SimpleNamespace(
+        table=[],
+        pilot_ready_evidence=str(evidence),
+        snapshot_dir=str(tmp_path / "snapshots"),
+        db=str(db),
+    )
+    try:
+        sync_module._finalize_sync_policy(
+            store, args, failures, source_mode="WRANGLER_REMOTE"
+        )
+    finally:
+        store.close()
+
+    assert observed == [raw]
+    assert len(failures) == 1
+    assert "duplicate key schema_version" in failures[0]
+
+
 def test_sync_defaults_fail_before_provider_acquisition(
     tmp_path, sync_module, monkeypatch
 ):
