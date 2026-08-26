@@ -15,6 +15,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from cryptography.exceptions import InvalidSignature
@@ -180,6 +181,54 @@ def decode_strict_ready_json(payload: bytes) -> Any:
         raise ReadyAttestationVerificationError("READY JSON is invalid") from exc
 
 
+def _materialize_exact_json(value: Any, *, field: str) -> Any:
+    """Snapshot one JSON value and reject subclass-driven observations.
+
+    ``ReadyManifest`` is supplied by a caller while the attestation document
+    is decoded locally.  Both must nevertheless cross the verifier through the
+    same closed, exact-built-in representation.  A shallow ``dict()`` copy is
+    insufficient because a nested ``str``/``list``/``dict`` subclass can make
+    digesting, semantic validation, and later use observe different values.
+    """
+
+    if type(value) is dict:
+        items = tuple(value.items())
+        frozen: dict[str, Any] = {}
+        for key, item in items:
+            if type(key) is not str or key in frozen:
+                raise ReadyAttestationVerificationError(
+                    f"{field} keys must be unique exact strings"
+                )
+            frozen[key] = _materialize_exact_json(
+                item,
+                field=f"{field}.{key}",
+            )
+        return frozen
+    if type(value) is list:
+        items = tuple(value)
+        return [
+            _materialize_exact_json(item, field=f"{field}[{index}]")
+            for index, item in enumerate(items)
+        ]
+    if type(value) in {str, int, bool, type(None)}:
+        return value
+    raise ReadyAttestationVerificationError(
+        f"{field} must contain only exact JSON built-in values"
+    )
+
+
+def _deep_immutable_json(value: Any) -> Any:
+    """Return an immutable view of an already materialized JSON value."""
+
+    if type(value) is dict:
+        return MappingProxyType(
+            {key: _deep_immutable_json(item) for key, item in value.items()}
+        )
+    if type(value) is list:
+        return tuple(_deep_immutable_json(item) for item in value)
+    return value
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -277,11 +326,17 @@ def load_pinned_readiness_public_keys() -> Mapping[str, Ed25519PublicKey]:
 def _validate_exact_four_ready_manifest(
     manifest: Mapping[str, Any], *, expected_snapshot_id: str
 ) -> dict[str, Any]:
-    if type(manifest) is not dict or set(manifest) != _READY_MANIFEST_FIELDS:
+    if type(expected_snapshot_id) is not str or not _is_sha256(
+        expected_snapshot_id
+    ):
+        raise ReadyAttestationVerificationError(
+            "expected snapshot id must be an exact sha256 string"
+        )
+    frozen = _materialize_exact_json(manifest, field="embedded ReadyManifest")
+    if type(frozen) is not dict or set(frozen) != _READY_MANIFEST_FIELDS:
         raise ReadyAttestationVerificationError(
             "embedded ReadyManifest shape is invalid"
         )
-    frozen = dict(manifest)
     declared_digest = frozen.get("manifest_digest")
     body = {key: value for key, value in frozen.items() if key != "manifest_digest"}
     if not _is_sha256(declared_digest) or _digest(body) != declared_digest:
@@ -399,7 +454,7 @@ def verify_pinned_pilot_snapshot_attestation(
     snapshot_id: str,
     ready_manifest: Mapping[str, Any],
     immutable_db_digest: str,
-) -> dict[str, Any]:
+) -> Mapping[str, Any]:
     """Verify one exact sidecar byte string against immutable snapshot facts.
 
     The caller hashes and verifies this same byte object. Accepting a path here
@@ -407,14 +462,21 @@ def verify_pinned_pilot_snapshot_attestation(
     between the publication-digest check and signature verification.
     """
 
-    manifest = _validate_exact_four_ready_manifest(
-        ready_manifest, expected_snapshot_id=snapshot_id
-    )
     if type(attestation_bytes) is not bytes:
         raise ReadyAttestationVerificationError(
             "READY attestation must be one immutable byte string"
         )
-    document = decode_strict_ready_json(attestation_bytes)
+    if type(immutable_db_digest) is not str or not _is_sha256(
+        immutable_db_digest
+    ):
+        raise ReadyAttestationVerificationError(
+            "immutable DB digest must be an exact sha256 string"
+        )
+    manifest = _validate_exact_four_ready_manifest(
+        ready_manifest, expected_snapshot_id=snapshot_id
+    )
+    decoded = decode_strict_ready_json(attestation_bytes)
+    document = _materialize_exact_json(decoded, field="READY attestation")
     if type(document) is not dict or set(document) != _ATTESTATION_FIELDS:
         raise ReadyAttestationVerificationError(
             "READY attestation sidecar shape is invalid"
@@ -556,7 +618,7 @@ def verify_pinned_pilot_snapshot_attestation(
         raise ReadyAttestationVerificationError(
             "READY attestation signature is invalid"
         ) from exc
-    return dict(document)
+    return _deep_immutable_json(document)
 
 
 __all__ = [

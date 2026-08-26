@@ -232,6 +232,11 @@ def test_runtime_verifier_has_no_caller_clock_and_accepts_bounded_ttl(
         immutable_db_digest=digest,
     )
     assert verified["snapshot_id"] == digest
+    assert type(verified["plan_ids"]) is tuple
+    with pytest.raises(TypeError):
+        verified["ready_state"] = "FORGED"  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        verified["plan_ids"].append("attacker-plan")
     with pytest.raises(TypeError, match="unexpected keyword argument 'now'"):
         runtime_attestation.verify_pinned_pilot_snapshot_attestation(
             sidecar.read_bytes(),
@@ -240,6 +245,112 @@ def test_runtime_verifier_has_no_caller_clock_and_accepts_bounded_ttl(
             immutable_db_digest=digest,
             now=clock,
         )  # type: ignore[call-arg]
+
+
+def test_runtime_manifest_rejects_equality_confused_scope_with_valid_signature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class EqualityConfusedScope(str):
+        def __eq__(self, other: object) -> bool:
+            return other == "PILOT"
+
+        def __ne__(self, other: object) -> bool:
+            return not self.__eq__(other)
+
+    clock = datetime(2026, 8, 26, 1, 0, tzinfo=timezone.utc)
+    sidecar, original_manifest, digest, signer = _signed_sidecar(
+        tmp_path,
+        verified_at=clock,
+        published_at=clock - timedelta(minutes=1),
+        ttl_seconds=3_600,
+    )
+    manifest_body = {
+        key: value
+        for key, value in original_manifest.items()
+        if key != "manifest_digest"
+    }
+    manifest_body["publication_scope"] = EqualityConfusedScope("MASS")
+    manifest = {
+        **manifest_body,
+        "manifest_digest": runtime_attestation._digest(manifest_body),
+    }
+    document = json.loads(sidecar.read_text(encoding="utf-8"))
+    document["ready_manifest_digest"] = manifest["manifest_digest"]
+    document["evidence_digest"] = runtime_attestation._digest(
+        {"manifest": manifest, "immutable_db_digest": digest}
+    )
+    unsigned = {
+        key: value for key, value in document.items() if key != "signature"
+    }
+    document["signature"] = signer.sign(unsigned)
+    payload = json.dumps(
+        document,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    monkeypatch.setattr(
+        runtime_attestation,
+        "_load_pinned_readiness_public_keys",
+        signer.public_keys,
+    )
+    monkeypatch.setattr(runtime_attestation, "_now", lambda: clock)
+    with pytest.raises(
+        runtime_attestation.ReadyAttestationVerificationError,
+        match="exact JSON built-in",
+    ):
+        runtime_attestation.verify_pinned_pilot_snapshot_attestation(
+            payload,
+            snapshot_id=digest,
+            ready_manifest=manifest,
+            immutable_db_digest=digest,
+        )
+
+
+def test_runtime_manifest_rejects_nested_container_subclasses_before_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class StatefulList(list):
+        pass
+
+    class StatefulDict(dict):
+        pass
+
+    clock = datetime(2026, 8, 26, 1, 0, tzinfo=timezone.utc)
+    sidecar, manifest, digest, signer = _signed_sidecar(
+        tmp_path,
+        verified_at=clock,
+        published_at=clock - timedelta(minutes=1),
+        ttl_seconds=3_600,
+    )
+    monkeypatch.setattr(
+        runtime_attestation,
+        "_load_pinned_readiness_public_keys",
+        signer.public_keys,
+    )
+    monkeypatch.setattr(runtime_attestation, "_now", lambda: clock)
+
+    hostile_manifests = []
+    hostile_list = dict(manifest)
+    hostile_list["plan_ids"] = StatefulList(manifest["plan_ids"])
+    hostile_manifests.append(hostile_list)
+    hostile_dict = dict(manifest)
+    hostile_dict["pit_contract_digests"] = StatefulDict(
+        manifest["pit_contract_digests"]
+    )
+    hostile_manifests.append(hostile_dict)
+
+    for hostile in hostile_manifests:
+        with pytest.raises(
+            runtime_attestation.ReadyAttestationVerificationError,
+            match="exact JSON built-in",
+        ):
+            runtime_attestation.verify_pinned_pilot_snapshot_attestation(
+                sidecar.read_bytes(),
+                snapshot_id=digest,
+                ready_manifest=hostile,
+                immutable_db_digest=digest,
+            )
 
 
 def test_runtime_verifier_rejects_unbounded_ttl(
