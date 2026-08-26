@@ -93,8 +93,53 @@ def test_known_worker_cannot_add_alternate_deployment_config(tmp_path: Path) -> 
     (worker_root / manifest_module.ACTIVE_WORKERS[0] / "wrangler.prod.jsonc").write_text(
         '{ "name": "shadow-deployment" }\n', encoding="utf-8"
     )
-    with pytest.raises(ValueError, match="ungoverned alternate Wrangler config"):
+    with pytest.raises(ValueError, match="ungoverned deployment control file"):
         manifest_module.validate_active_worker_inventory(worker_root=worker_root)
+
+
+def test_arbitrary_toml_config_cannot_escape_known_worker(tmp_path: Path) -> None:
+    worker_root = tmp_path / "workers"
+    worker_root.mkdir()
+    for worker in manifest_module.ACTIVE_WORKERS:
+        directory = worker_root / worker
+        directory.mkdir()
+        (directory / "wrangler.toml").write_text(
+            f'name = "{worker}"\n', encoding="utf-8"
+        )
+    (worker_root / manifest_module.ACTIVE_WORKERS[0] / "shadow.toml").write_text(
+        'name = "shadow-deployment"\n', encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match=r"shadow\.toml"):
+        manifest_module.validate_active_worker_inventory(worker_root=worker_root)
+
+
+def test_nested_package_json_cannot_escape_inventory(tmp_path: Path) -> None:
+    worker_root = tmp_path / "workers"
+    worker_root.mkdir()
+    for worker in manifest_module.ACTIVE_WORKERS:
+        directory = worker_root / worker
+        directory.mkdir()
+        (directory / "wrangler.toml").write_text(
+            f'name = "{worker}"\n', encoding="utf-8"
+        )
+    rogue = worker_root / "experiments" / "rogue"
+    rogue.mkdir(parents=True)
+    (rogue / "package.json").write_text(
+        json.dumps({"scripts": {"deploy": "wrangler deploy src/index.ts"}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="experiments/rogue"):
+        manifest_module.validate_active_worker_inventory(worker_root=worker_root)
+
+
+def test_package_script_commands_are_frozen() -> None:
+    manifest = manifest_module.build_manifest()
+    drifted = copy.deepcopy(manifest)
+    drifted["worker_package_scripts"]["ingestion-jsda"]["shadow"] = (
+        "wrangler deploy --name shadow"
+    )
+    with pytest.raises(ValueError, match="package-script deployment surface drift"):
+        manifest_module.validate_manifest(drifted)
 
 
 def test_manifest_is_fail_closed_for_toolchain_drift() -> None:

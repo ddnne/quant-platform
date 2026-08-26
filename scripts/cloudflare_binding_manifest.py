@@ -25,6 +25,10 @@ _WORKER_DIRECTORY_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 _ALLOWED_WRANGLER_CONFIGS = frozenset(
     {"wrangler.toml", "wrangler.staging.toml", "wrangler.test.toml"}
 )
+_ALLOWED_WORKER_CONTROL_FILES = _ALLOWED_WRANGLER_CONFIGS | frozenset(
+    {"package.json", "package-lock.json", "tsconfig.json"}
+)
+_DEPLOYMENT_CONTROL_SUFFIXES = frozenset({".toml", ".json", ".jsonc"})
 
 
 def _load_active_workers(path: Path = INVENTORY) -> tuple[str, ...]:
@@ -72,12 +76,26 @@ def _wrangler_config_paths(worker_root: Path = WORKER_ROOT) -> tuple[Path, ...]:
     return tuple(sorted(discovered))
 
 
+def _deployment_control_paths(worker_root: Path = WORKER_ROOT) -> tuple[Path, ...]:
+    """Find every file type that Wrangler or a package script can use as config."""
+    discovered: list[Path] = []
+    for current, directories, filenames in os.walk(worker_root):
+        directories[:] = [
+            name for name in directories if name not in {".wrangler", "node_modules"}
+        ]
+        parent = Path(current)
+        for name in filenames:
+            if Path(name).suffix in _DEPLOYMENT_CONTROL_SUFFIXES:
+                discovered.append(parent / name)
+    return tuple(sorted(discovered))
+
+
 def _deployable_worker_directories(worker_root: Path = WORKER_ROOT) -> tuple[str, ...]:
     """Discover every directory that has any Worker deployment marker."""
     discovered = {
-        directory.name
-        for directory in worker_root.iterdir()
-        if directory.is_dir() and (directory / "package.json").is_file()
+        path.parent.relative_to(worker_root).as_posix()
+        for path in _deployment_control_paths(worker_root)
+        if path.name == "package.json"
     }
     for path in _wrangler_config_paths(worker_root):
         discovered.add(path.parent.relative_to(worker_root).as_posix())
@@ -97,16 +115,19 @@ def validate_active_worker_inventory(
             "active Worker inventory/filesystem drift: "
             f"missing={missing!r}, ungoverned={ungoverned!r}"
         )
-    unexpected_configs = sorted(
+    unexpected_controls = sorted(
         str(path.relative_to(worker_root))
-        for path in _wrangler_config_paths(worker_root)
-        if path.parent.parent == worker_root
-        and path.name not in _ALLOWED_WRANGLER_CONFIGS
+        for path in _deployment_control_paths(worker_root)
+        if (
+            len(path.relative_to(worker_root).parts) != 2
+            or path.relative_to(worker_root).parts[0] not in workers
+            or path.name not in _ALLOWED_WORKER_CONTROL_FILES
+        )
     )
-    if unexpected_configs:
+    if unexpected_controls:
         raise ValueError(
-            "active Worker has an ungoverned alternate Wrangler config: "
-            f"{unexpected_configs!r}"
+            "active Worker has an ungoverned deployment control file: "
+            f"{unexpected_controls!r}"
         )
     required = (
         "package.json",
@@ -149,6 +170,23 @@ PRODUCTION_SECRET_NAMES: dict[str, tuple[str, ...]] = {
 def _load_toml(path: Path) -> dict[str, Any]:
     with path.open("rb") as fh:
         return tomllib.load(fh)
+
+
+def _package_scripts(worker: str) -> dict[str, str]:
+    path = WORKER_ROOT / worker / "package.json"
+    try:
+        package = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{worker}: package.json is unreadable") from exc
+    if not isinstance(package, dict):
+        raise ValueError(f"{worker}: package.json must contain an object")
+    scripts = package.get("scripts") or {}
+    if not isinstance(scripts, dict) or not all(
+        isinstance(name, str) and isinstance(command, str)
+        for name, command in scripts.items()
+    ):
+        raise ValueError(f"{worker}: package scripts must be a string map")
+    return dict(sorted(scripts.items()))
 
 
 REQUIRED_OBSERVABILITY = {"enabled": True, "head_sampling_rate": 1.0}
@@ -416,10 +454,13 @@ def build_manifest() -> dict[str, Any]:
             ),
         }
     manifest = {
-        "schema_version": "cloudflare-active-worker-bindings/v2",
+        "schema_version": "cloudflare-active-worker-bindings/v3",
         "active_workers": list(ACTIVE_WORKERS),
         "config_key_policy": CONFIG_KEY_POLICY,
         "toolchain_policy": TOOLCHAIN,
+        "worker_package_scripts": {
+            worker: _package_scripts(worker) for worker in ACTIVE_WORKERS
+        },
         "workers": workers,
     }
     validate_manifest(manifest)
@@ -432,10 +473,11 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "config_key_policy",
         "schema_version",
         "toolchain_policy",
+        "worker_package_scripts",
         "workers",
     }:
         raise ValueError("binding manifest fields are not closed")
-    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v2":
+    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v3":
         raise ValueError("binding manifest schema_version drift")
     if manifest["config_key_policy"] != CONFIG_KEY_POLICY:
         raise ValueError("Wrangler config-key policy drift")
@@ -443,6 +485,11 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("active Worker inventory digest surface drift")
     if manifest["toolchain_policy"] != TOOLCHAIN:
         raise ValueError("binding manifest toolchain policy drift")
+    expected_scripts = {
+        worker: _package_scripts(worker) for worker in ACTIVE_WORKERS
+    }
+    if manifest["worker_package_scripts"] != expected_scripts:
+        raise ValueError("active Worker package-script deployment surface drift")
     workers = manifest["workers"]
     if tuple(workers) != ACTIVE_WORKERS:
         raise ValueError("active Worker order or membership drift")

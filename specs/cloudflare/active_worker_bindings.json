@@ -57,13 +57,60 @@
     ],
     "unclassified": "REJECT"
   },
-  "schema_version": "cloudflare-active-worker-bindings/v2",
+  "schema_version": "cloudflare-active-worker-bindings/v3",
   "toolchain_policy": {
     "@cloudflare/vitest-plugin": "1.0.0",
     "@cloudflare/workers-types": "5.20260825.1",
     "typescript": "5.9.2",
     "vitest": "4.1.11",
     "wrangler": "4.125.0"
+  },
+  "worker_package_scripts": {
+    "ingestion-jsda": {
+      "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
+      "deploy": "wrangler deploy",
+      "tail": "wrangler tail",
+      "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --include-runtime false"
+    },
+    "ingestion-premium": {
+      "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
+      "cf-typegen": "wrangler types",
+      "test": "vitest run",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --include-runtime false"
+    },
+    "ingestion-secrets": {
+      "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
+      "cf-typegen": "wrangler types",
+      "test": "vitest run",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --include-runtime false"
+    },
+    "quant-ops-mcp": {
+      "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
+      "deploy": "npx wrangler deploy",
+      "test": "node --experimental-test-module-mocks --test test/*.test.mjs && vitest run --config vitest.runtime.config.ts && vitest run --config vitest.harness.config.ts",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --include-runtime false"
+    },
+    "research-ai-gateway": {
+      "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
+      "deploy": "wrangler deploy",
+      "test": "vitest run --config vitest.config.ts && vitest run --config vitest.harness.config.ts",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --include-runtime false"
+    },
+    "research-mass-eval": {
+      "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
+      "deploy": "wrangler deploy",
+      "dev": "wrangler dev",
+      "tail": "wrangler tail",
+      "test": "vitest run",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --include-runtime false"
+    }
   },
   "workers": {
     "ingestion-jsda": {
