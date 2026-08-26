@@ -12,7 +12,7 @@ singleton active pointer as the final SQL statement.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 import hashlib
 import json
@@ -41,6 +41,7 @@ from _bootstrap import ensure_repo_root  # noqa: E402
 ROOT = ensure_repo_root()
 
 from ops.projection_content import build_projection_content_manifest  # noqa: E402
+from ops.projection_contract_snapshot import ProjectionContractSnapshot  # noqa: E402
 from ops.d1_sync_signing import d1_sync_digest  # noqa: E402
 from ops.projection_candidate import (  # noqa: E402
     UNSIGNED_CANDIDATE_SCHEMA,
@@ -222,115 +223,22 @@ def _git_sha(explicit: str | None) -> str:
     return value
 
 
-def _digest_files(paths: Iterable[Path]) -> str:
-    digest = hashlib.sha256()
-    found = False
-    for path in sorted({p.resolve() for p in paths}, key=str):
-        if not path.is_file():
-            continue
-        found = True
-        digest.update(str(path.relative_to(ROOT)).encode())
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    if not found:
-        raise RuntimeError("projection contract digest has no source files")
-    return "sha256:" + digest.hexdigest()
+def _capture_projection_contract_snapshot() -> ProjectionContractSnapshot:
+    """Capture the exact contract bytes used by this projection render."""
+
+    return ProjectionContractSnapshot.capture(ROOT)
 
 
-def _contract_digests() -> tuple[str, str]:
-    package = ROOT / "packages" / "data_plane" / "data_contracts"
-    storage_package = ROOT / "packages" / "data_plane" / "storage"
-    registry = _digest_files((package / "canonical_datasets.json",))
-    contract = _digest_files(
-        (
-            package / "collection_coverage.json",
-            *sorted((package / "source_capability_contracts").glob("*.json")),
-            storage_package
-            / "authorities"
-            / "receipts"
-            / "signed_receipt_claims.schema.json",
-            ROOT / "specs" / "ops_projection" / "signed_envelope.schema.json",
-        )
-    )
-    return contract, registry
+def _contract_digests(
+    snapshot: ProjectionContractSnapshot,
+) -> tuple[str, str]:
+    return snapshot.contract_digest, snapshot.registry_digest
 
 
-def _source_inventory() -> list[dict[str, Any]]:
-    from data_contracts.canonical import CANONICAL_REGISTRY_PATH, all_canonical_datasets
-    from data_contracts.source_capability import source_capability_contract_or_none
-
-    document = json.loads(CANONICAL_REGISTRY_PATH.read_text(encoding="utf-8"))
-    raw_by_id = {row["dataset_id"]: row for row in document.get("datasets", [])}
-    inventory: list[dict[str, Any]] = []
-    for contract in all_canonical_datasets():
-        raw = raw_by_id.get(contract.dataset_id, {})
-        capability = source_capability_contract_or_none(contract.dataset_id)
-        sla = dict(raw.get("sla") or {})
-        upstream = None
-        collection_window = None
-        available_at_json = None
-        historical_start = raw.get("historical_start")
-        expected_frequency = raw.get("expected_frequency") or "unknown"
-        coverage_granularity = raw.get("coverage_segment_granularity") or "none"
-        research_eligible = False
-        has_coverage_contract = True
-        try:
-            historical_start = contract.historical_start
-            expected_frequency = contract.expected_frequency
-            coverage_granularity = contract.coverage_segment_granularity
-            research_eligible = bool(contract.research_eligible)
-        except ValueError:
-            # Experimental/unverified inventory members intentionally have no
-            # governed Coverage contract.  Keep them visible but ineligible.
-            has_coverage_contract = False
-        inventory_status = raw.get(
-            "inventory_status",
-            "GOVERNED"
-            if contract.governance_tier == "governed"
-            else "EXPERIMENTAL",
-        )
-        if capability is None or not has_coverage_contract:
-            # Absence is a capability fact, not a reason to copy a legacy date
-            # or eligibility flag from the meta-index.
-            inventory_status = "UNVERIFIED_ENDPOINT"
-        if capability is not None:
-            upstream = capability.upstream_locator
-            collection_window = capability.collection_window.grain
-            historical_start = capability.earliest_official_availability
-            sla.update(
-                {
-                    "expected_after": capability.freshness_sla.expected_after,
-                    "usable_by": capability.freshness_sla.usable_by,
-                    "timezone": capability.freshness_sla.timezone,
-                    "freshness_policy": capability.freshness_sla.rule,
-                    "official_evidence_url": capability.official_evidence_url,
-                }
-            )
-            available_at_json = json.dumps(
-                asdict(capability.available_at),
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        inventory.append(
-            {
-                "dataset_id": contract.dataset_id,
-                "display_name": contract.display_name,
-                "source": contract.source,
-                "governance_tier": contract.governance_tier,
-                "inventory_status": inventory_status,
-                "upstream_locator": upstream,
-                "collection_window": collection_window,
-                "expected_frequency": expected_frequency,
-                "coverage_segment_granularity": coverage_granularity,
-                "research_eligible": research_eligible,
-                "enabled": bool(raw.get("enabled", True)),
-                "sla": json.dumps(sla, sort_keys=True, separators=(",", ":")),
-                "historical_start": historical_start,
-                "available_at_json": available_at_json,
-            }
-        )
-    return inventory
+def _source_inventory(
+    snapshot: ProjectionContractSnapshot,
+) -> list[dict[str, Any]]:
+    return [dict(row) for row in snapshot.source_inventory]
 
 
 def _read_b0(conn: sqlite3.Connection, generation_id: str, now: str) -> dict[str, Any]:
@@ -849,16 +757,12 @@ def _render_projection_bundle(
     connection and then uses the same connection-owned query path.  The C4
     candidate boundary passes the already-authenticated connection directly.
     """
-    from data_contracts.coverage import (
-        all_coverage_contracts,
-        coverage_policy_binding,
-        coverage_policy_set_binding,
-    )
     from ops.projection_meta import _build_projection_metadata_from_connection
 
+    contract_snapshot = _capture_projection_contract_snapshot()
     gen = generation_id or "projgen-" + uuid4().hex
     commit_sha = _git_sha(producer_commit_sha)
-    contract_digest, registry_digest = _contract_digests()
+    contract_digest, registry_digest = _contract_digests(contract_snapshot)
     generated_at = _generated_at or _now()
     owns_connection = type(source) is not sqlite3.Connection
     if owns_connection:
@@ -907,7 +811,7 @@ def _render_projection_bundle(
             order_by="dataset,segment_start,segment_id",
             required=True,
         )
-        inventory = _source_inventory()
+        inventory = _source_inventory(contract_snapshot)
         runs = _read_latest_runs(conn, gen)
         validation = _read_latest_validation(conn, gen)
         watermarks = _read_watermarks(conn, gen)
@@ -928,9 +832,7 @@ def _render_projection_bundle(
             snapshot_dir, gen, generated_at
         )
 
-        expected_coverage_ids = {
-            contract.dataset_id for contract in all_coverage_contracts()
-        }
+        expected_coverage_ids = set(contract_snapshot.coverage_dataset_ids)
         observed_coverage_ids = {str(row["dataset"]) for row in coverage}
         if observed_coverage_ids != expected_coverage_ids:
             raise RuntimeError(
@@ -938,11 +840,15 @@ def _render_projection_bundle(
                 f"missing={sorted(expected_coverage_ids - observed_coverage_ids)}, "
                 f"extra={sorted(observed_coverage_ids - expected_coverage_ids)}"
             )
-        policy_set = coverage_policy_set_binding(sorted(observed_coverage_ids))
+        policy_set = contract_snapshot.coverage_policy_set_binding(
+            sorted(observed_coverage_ids)
+        )
         coverage_policy_version = str(policy_set["policy_version"])
         coverage_policy_digest = str(policy_set["policy_digest"])
         for row in coverage:
-            expected_policy = coverage_policy_binding(str(row["dataset"]))
+            expected_policy = contract_snapshot.coverage_policy_binding(
+                str(row["dataset"])
+            )
             if row.get("policy_version") != expected_policy["policy_version"]:
                 raise RuntimeError(
                     "dataset_coverage policy drift for "
@@ -1158,7 +1064,9 @@ def _render_projection_bundle(
         str(row["dataset"]): {
             "status": row.get("status"),
             "coverage_mode": row.get("coverage_mode"),
-            **dict(coverage_policy_binding(str(row["dataset"]))),
+            **dict(
+                contract_snapshot.coverage_policy_binding(str(row["dataset"]))
+            ),
             "collection_scope": row.get("collection_scope"),
             "observed_start": row.get("observed_start"),
             "observed_end": row.get("observed_end"),

@@ -144,6 +144,28 @@ def test_connection_candidate_matches_canonical_renderer_and_is_addressed(
     assert projection["sql"] == equivalent.sql
 
 
+def test_candidate_captures_one_contract_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _projection_source(source)
+    handle = _open_projection_handle(source, monkeypatch)
+    capture = exporter._capture_projection_contract_snapshot
+    calls = 0
+
+    def observed_capture():
+        nonlocal calls
+        calls += 1
+        return capture()
+
+    monkeypatch.setattr(
+        exporter, "_capture_projection_contract_snapshot", observed_capture
+    )
+    assert exporter._render_trusted_projection_candidate(handle).candidate_bytes
+    assert calls == 1
+
+
 def test_candidate_renderer_never_reopens_the_source_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -243,7 +265,9 @@ def test_caller_owned_renderer_exception_preserves_snapshot_and_factory(
     conn.row_factory = _tuple_row_factory
     conn.execute("BEGIN")
 
-    def fail_inventory() -> list[dict[str, object]]:
+    def fail_inventory(
+        _snapshot: object,
+    ) -> list[dict[str, object]]:
         raise LookupError("forced renderer failure")
 
     monkeypatch.setattr(exporter, "_source_inventory", fail_inventory)
