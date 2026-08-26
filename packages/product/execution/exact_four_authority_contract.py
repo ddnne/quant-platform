@@ -16,7 +16,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -55,6 +55,7 @@ TRADER_AUTHORIZATION_SCOPE = "EXACT_FOUR_TRADER_AUTHORIZATION"
 CONTROLLED_EXECUTION_SCOPE = "EXACT_FOUR_CONTROLLED_PAPER_EXECUTION"
 PILOT_EXECUTION_MODE = "paper"
 AUTHORITY_PROTOCOL_STATE = "PENDING_EXTERNAL_AUTHORITIES"
+_CURRENT_CLOCK_SKEW = timedelta(seconds=30)
 
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _UNAVAILABLE_CURRENT_VALUES = frozenset(
@@ -212,6 +213,34 @@ def _require_bounded_window(
             f"{label} lifetime exceeds the controlled-pilot policy TTL"
         )
     return issued, expires
+
+
+def _trusted_utc_now() -> datetime:
+    """Read the module-owned system clock used by public current validators."""
+
+    return datetime.now(timezone.utc)
+
+
+def _require_current_window(
+    issued_at: Any,
+    expires_at: Any,
+    *,
+    label: str,
+    now: datetime,
+) -> None:
+    """Reject claims that are expired or not yet valid at the trusted clock."""
+
+    issued = _parsed_timestamp(issued_at, f"{label} issued_at")
+    expires = _parsed_timestamp(expires_at, f"{label} expires_at")
+    current = now.astimezone(timezone.utc)
+    if issued > current + _CURRENT_CLOCK_SKEW:
+        raise ExactFourAuthorityContractError(
+            f"{label} is not yet valid at the trusted UTC clock"
+        )
+    if expires <= current:
+        raise ExactFourAuthorityContractError(
+            f"{label} is expired at the trusted UTC clock"
+        )
 
 
 def _require_current_token(value: Any, label: str) -> str:
@@ -1078,7 +1107,11 @@ def build_trader_authorization_claims_v2(
         issued_at=issued_at,
         expires_at=expires_at,
     )
-    _validate_readiness_trader_link(readiness, claims)
+    _validate_current_readiness_trader(
+        readiness,
+        claims,
+        now=_trusted_utc_now(),
+    )
     return claims
 
 
@@ -1283,8 +1316,13 @@ def _claims_from_document(
     raise ExactFourAuthorityContractError("unknown exact-four authority claims format")
 
 
-def validate_exact_four_authority_document(document: Any) -> str:
-    """Validate schema, exact JSON types, semantics, and the declared content id."""
+def _validate_exact_four_authority_document_structural(document: Any) -> str:
+    """Validate syntax and semantics without asserting current authority time.
+
+    This deliberately private helper exists for constructors, fixture creation,
+    and protocol replay.  Callers processing an untrusted downstream document
+    must use one of the parent-required public parsers below.
+    """
 
     if type(document) is not dict:
         raise ExactFourAuthorityContractError(
@@ -1330,20 +1368,109 @@ def validate_exact_four_authority_document(document: Any) -> str:
     return claims.request_id
 
 
-def parse_and_validate_exact_four_authority_document(
+def _parse_exact_four_authority_document_structural(
+    raw: bytes | str,
+) -> tuple[dict[str, Any], Any]:
+    document = _strict_json_loads(raw, label="exact-four authority document")
+    _validate_exact_four_authority_document_structural(document)
+    return document, _claims_from_document(document)
+
+
+def parse_and_validate_pilot_readiness_document(
     raw: bytes | str,
 ) -> dict[str, Any]:
-    """Strictly decode one untrusted v2 document and verify its whole body."""
+    """Parse one READY document and require it to be current now."""
 
-    document = _strict_json_loads(raw, label="exact-four authority document")
-    validate_exact_four_authority_document(document)
+    document, claims = _parse_exact_four_authority_document_structural(raw)
+    if type(claims) is not PilotReadinessAttestationClaimsV2:
+        raise ExactFourAuthorityContractError("a READY document is required")
+    _validate_current_readiness(claims, now=_trusted_utc_now())
+    return document
+
+
+def parse_and_validate_trader_authorization_document(
+    raw: bytes | str,
+    *,
+    readiness: PilotReadinessAttestationClaimsV2,
+) -> dict[str, Any]:
+    """Parse Trader claims only in the context of their actual READY parent."""
+
+    document, claims = _parse_exact_four_authority_document_structural(raw)
+    if type(claims) is not TraderAuthorizationClaimsV2:
+        raise ExactFourAuthorityContractError(
+            "a Trader authorization document is required"
+        )
+    _validate_current_readiness_trader(
+        readiness,
+        claims,
+        now=_trusted_utc_now(),
+    )
+    return document
+
+
+def parse_and_validate_controlled_execution_document(
+    raw: bytes | str,
+    *,
+    readiness: PilotReadinessAttestationClaimsV2,
+    trader: TraderAuthorizationClaimsV2,
+) -> dict[str, Any]:
+    """Parse execution claims only with their actual READY and Trader parents."""
+
+    document, claims = _parse_exact_four_authority_document_structural(raw)
+    if type(claims) is not ControlledExecutionClaimsV2:
+        raise ExactFourAuthorityContractError(
+            "a controlled execution document is required"
+        )
+    _validate_current_claim_chain(readiness, trader, claims)
+    return document
+
+
+def parse_and_validate_exact_four_authority_document(
+    raw: bytes | str,
+    *,
+    readiness: PilotReadinessAttestationClaimsV2 | None = None,
+    trader: TraderAuthorizationClaimsV2 | None = None,
+) -> dict[str, Any]:
+    """Compatibility dispatcher with mandatory parents for downstream claims.
+
+    A READY body is self-contained.  Trader and execution bodies are not; they
+    are rejected unless their actual parent claims are supplied and the entire
+    resulting chain is current at the module-owned UTC clock.
+    """
+
+    document, claims = _parse_exact_four_authority_document_structural(raw)
+    if type(claims) is PilotReadinessAttestationClaimsV2:
+        _validate_current_readiness(claims, now=_trusted_utc_now())
+        return document
+    if type(claims) is TraderAuthorizationClaimsV2:
+        if type(readiness) is not PilotReadinessAttestationClaimsV2:
+            raise ExactFourAuthorityContractError(
+                "Trader document validation requires the actual READY parent"
+            )
+        _validate_current_readiness_trader(
+            readiness,
+            claims,
+            now=_trusted_utc_now(),
+        )
+        return document
+    if (
+        type(readiness) is not PilotReadinessAttestationClaimsV2
+        or type(trader) is not TraderAuthorizationClaimsV2
+    ):
+        raise ExactFourAuthorityContractError(
+            "execution document validation requires actual READY and Trader parents"
+        )
+    _validate_current_claim_chain(readiness, trader, claims)
     return document
 
 
 def validate_exact_four_authority_claims_v2(
     claims: Any,
+    *,
+    readiness: PilotReadinessAttestationClaimsV2 | None = None,
+    trader: TraderAuthorizationClaimsV2 | None = None,
 ) -> str:
-    """Revalidate a claims object after construction; this grants no authority."""
+    """Revalidate current claims, requiring actual parents downstream."""
 
     if type(claims) not in {
         PilotReadinessAttestationClaimsV2,
@@ -1353,15 +1480,37 @@ def validate_exact_four_authority_claims_v2(
         raise ExactFourAuthorityContractError(
             "an exact unsigned v2 claims object is required"
         )
-    return validate_exact_four_authority_document(claims.to_dict())
+    content_id = _validate_exact_four_authority_document_structural(claims.to_dict())
+    if type(claims) is PilotReadinessAttestationClaimsV2:
+        _validate_current_readiness(claims, now=_trusted_utc_now())
+    elif type(claims) is TraderAuthorizationClaimsV2:
+        if type(readiness) is not PilotReadinessAttestationClaimsV2:
+            raise ExactFourAuthorityContractError(
+                "Trader claims validation requires the actual READY parent"
+            )
+        _validate_current_readiness_trader(
+            readiness,
+            claims,
+            now=_trusted_utc_now(),
+        )
+    else:
+        if (
+            type(readiness) is not PilotReadinessAttestationClaimsV2
+            or type(trader) is not TraderAuthorizationClaimsV2
+        ):
+            raise ExactFourAuthorityContractError(
+                "execution claims validation requires actual READY and Trader parents"
+            )
+        _validate_current_claim_chain(readiness, trader, claims)
+    return content_id
 
 
 def _validate_readiness_trader_link(
     readiness: PilotReadinessAttestationClaimsV2,
     trader: TraderAuthorizationClaimsV2,
 ) -> None:
-    validate_exact_four_authority_claims_v2(readiness)
-    validate_exact_four_authority_claims_v2(trader)
+    _validate_exact_four_authority_document_structural(readiness.to_dict())
+    _validate_exact_four_authority_document_structural(trader.to_dict())
     exact_four = readiness.exact_four
     if (
         trader.pilot_run_id != readiness.pilot_run_id
@@ -1385,16 +1534,49 @@ def _validate_readiness_trader_link(
         )
 
 
-def validate_exact_four_authority_claim_chain_v2(
+def _validate_current_readiness(
+    readiness: PilotReadinessAttestationClaimsV2,
+    *,
+    now: datetime,
+) -> None:
+    if type(readiness) is not PilotReadinessAttestationClaimsV2:
+        raise ExactFourAuthorityContractError("exact READY claims are required")
+    _validate_exact_four_authority_document_structural(readiness.to_dict())
+    _require_current_window(
+        readiness.issued_at,
+        readiness.expires_at,
+        label="READY claims",
+        now=now,
+    )
+
+
+def _validate_current_readiness_trader(
+    readiness: PilotReadinessAttestationClaimsV2,
+    trader: TraderAuthorizationClaimsV2,
+    *,
+    now: datetime,
+) -> None:
+    _validate_readiness_trader_link(readiness, trader)
+    _require_current_window(
+        readiness.issued_at,
+        readiness.expires_at,
+        label="READY claims",
+        now=now,
+    )
+    _require_current_window(
+        trader.issued_at,
+        trader.expires_at,
+        label="Trader authorization",
+        now=now,
+    )
+
+
+def _validate_claim_chain_structural(
     readiness: PilotReadinessAttestationClaimsV2,
     trader: TraderAuthorizationClaimsV2,
     execution: ControlledExecutionClaimsV2,
 ) -> str:
-    """Validate one READY -> human Trader -> one-shot execution claims chain.
-
-    The returned digest is only a diagnostic content address.  It is not a
-    verified readiness, Trader authorization, or execution capability.
-    """
+    """Private replay validator; it intentionally makes no current-time claim."""
 
     if type(readiness) is not PilotReadinessAttestationClaimsV2:
         raise ExactFourAuthorityContractError("exact READY claims are required")
@@ -1403,7 +1585,7 @@ def validate_exact_four_authority_claim_chain_v2(
     if type(execution) is not ControlledExecutionClaimsV2:
         raise ExactFourAuthorityContractError("exact execution claims are required")
     _validate_readiness_trader_link(readiness, trader)
-    validate_exact_four_authority_claims_v2(execution)
+    _validate_exact_four_authority_document_structural(execution.to_dict())
     if (
         execution.pilot_run_id != readiness.pilot_run_id
         or execution.readiness_attestation_id != readiness.attestation_id
@@ -1436,6 +1618,37 @@ def validate_exact_four_authority_claim_chain_v2(
             "lease_id": execution.lease_id,
         }
     )
+
+
+def _validate_current_claim_chain(
+    readiness: PilotReadinessAttestationClaimsV2,
+    trader: TraderAuthorizationClaimsV2,
+    execution: ControlledExecutionClaimsV2,
+) -> str:
+    chain_digest = _validate_claim_chain_structural(readiness, trader, execution)
+    now = _trusted_utc_now()
+    _validate_current_readiness_trader(readiness, trader, now=now)
+    _require_current_window(
+        execution.issued_at,
+        execution.expires_at,
+        label="controlled execution lease",
+        now=now,
+    )
+    return chain_digest
+
+
+def validate_exact_four_authority_claim_chain_v2(
+    readiness: PilotReadinessAttestationClaimsV2,
+    trader: TraderAuthorizationClaimsV2,
+    execution: ControlledExecutionClaimsV2,
+) -> str:
+    """Validate one READY -> human Trader -> one-shot execution claims chain.
+
+    The returned digest is only a diagnostic content address.  It is not a
+    verified readiness, Trader authorization, or execution capability.
+    """
+
+    return _validate_current_claim_chain(readiness, trader, execution)
 
 
 def build_controlled_execution_claims_v2(
@@ -1619,10 +1832,12 @@ __all__ = [
     "load_exact_four_authority_schema",
     "load_exact_four_execution_binding",
     "parse_and_validate_exact_four_authority_document",
+    "parse_and_validate_controlled_execution_document",
+    "parse_and_validate_pilot_readiness_document",
+    "parse_and_validate_trader_authorization_document",
     "require_authorized_exact_four_execution_v2",
     "require_verified_pilot_readiness_v2",
     "require_verified_trader_authorization_v2",
     "validate_exact_four_authority_claim_chain_v2",
     "validate_exact_four_authority_claims_v2",
-    "validate_exact_four_authority_document",
 ]

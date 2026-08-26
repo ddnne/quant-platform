@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
+import execution.exact_four_authority_contract as authority_module
 from execution.exact_four_authority_contract import (
     AUTHORITY_PROTOCOL_STATE,
     CONTROLLED_PILOT_POLICY_DIGEST,
@@ -32,6 +35,9 @@ from execution.exact_four_authority_contract import (
     load_exact_four_authority_schema,
     load_exact_four_execution_binding,
     parse_and_validate_exact_four_authority_document,
+    parse_and_validate_controlled_execution_document,
+    parse_and_validate_pilot_readiness_document,
+    parse_and_validate_trader_authorization_document,
     require_authorized_exact_four_execution_v2,
     require_verified_pilot_readiness_v2,
     require_verified_trader_authorization_v2,
@@ -46,6 +52,10 @@ from selection.controlled_pilot_policy import ControlledPilotPolicyError
 
 def _digest(label: str) -> str:
     return canonical_authority_digest({"test": label})
+
+
+def _iso(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat()
 
 
 def _snapshot(**overrides: object) -> ReadySnapshotLineage:
@@ -92,31 +102,32 @@ def _snapshot(**overrides: object) -> ReadySnapshotLineage:
     return ReadySnapshotLineage(**values)  # type: ignore[arg-type]
 
 
-def _claims() -> tuple[
+def _claims(*, at: datetime | None = None) -> tuple[
     PilotReadinessAttestationClaimsV2,
     TraderAuthorizationClaimsV2,
     ControlledExecutionClaimsV2,
 ]:
     exact_four = load_exact_four_execution_binding()
+    now = at or datetime.now(timezone.utc)
     readiness = PilotReadinessAttestationClaimsV2(
         pilot_run_id="pilot-run-20260826-001",
         snapshot=_snapshot(),
         exact_four=exact_four,
-        issued_at="2026-08-26T00:00:00+00:00",
-        expires_at="2026-08-26T00:30:00+00:00",
+        issued_at=_iso(now - timedelta(minutes=5)),
+        expires_at=_iso(now + timedelta(minutes=25)),
     )
     trader = build_trader_authorization_claims_v2(
         readiness,
         human_approval_event_id="human-approval-event-001",
         human_approval_event_digest=_digest("human-approval-event"),
-        issued_at="2026-08-26T00:01:00+00:00",
-        expires_at="2026-08-26T00:20:00+00:00",
+        issued_at=_iso(now - timedelta(minutes=4)),
+        expires_at=_iso(now + timedelta(minutes=20)),
     )
     execution = build_controlled_execution_claims_v2(
         readiness,
         trader,
-        issued_at="2026-08-26T00:02:00+00:00",
-        expires_at="2026-08-26T00:10:00+00:00",
+        issued_at=_iso(now - timedelta(minutes=3)),
+        expires_at=_iso(now + timedelta(minutes=10)),
     )
     return readiness, trader, execution
 
@@ -298,7 +309,12 @@ def test_ready_attestation_id_is_content_addressed_and_tamper_evident() -> None:
         readiness.to_canonical_dict()
     )
 
-    changed = replace(readiness, expires_at="2026-08-26T00:29:59+00:00")
+    changed = replace(
+        readiness,
+        expires_at=_iso(
+            datetime.fromisoformat(readiness.expires_at) - timedelta(seconds=1)
+        ),
+    )
     assert changed.attestation_id != readiness.attestation_id
 
     with pytest.raises(ExactFourAuthorityContractError, match="governed"):
@@ -324,29 +340,34 @@ def test_trader_and_execution_claims_bind_canonical_limits() -> None:
 
 def test_claim_lifetimes_are_bounded_by_policy_and_parent_authority() -> None:
     readiness, trader, execution = _claims()
+    ready_issued = datetime.fromisoformat(readiness.issued_at)
+    ready_expires = datetime.fromisoformat(readiness.expires_at)
+    trader_issued = datetime.fromisoformat(trader.issued_at)
+    trader_expires = datetime.fromisoformat(trader.expires_at)
+    execution_issued = datetime.fromisoformat(execution.issued_at)
     with pytest.raises(ExactFourAuthorityContractError, match="policy TTL"):
-        replace(readiness, expires_at="2026-08-26T00:30:01+00:00")
+        replace(readiness, expires_at=_iso(ready_issued + timedelta(seconds=1801)))
     with pytest.raises(ExactFourAuthorityContractError, match="policy TTL"):
-        replace(trader, expires_at="2026-08-26T00:31:01+00:00")
+        replace(trader, expires_at=_iso(trader_issued + timedelta(seconds=1801)))
     with pytest.raises(ExactFourAuthorityContractError, match="policy TTL"):
         replace(
             execution,
-            expires_at="2026-08-26T00:32:01+00:00",
+            expires_at=_iso(execution_issued + timedelta(seconds=1801)),
         )
     with pytest.raises(ExactFourAuthorityContractError, match="READY lifetime"):
         build_trader_authorization_claims_v2(
             readiness,
             human_approval_event_id="human-approval-event-late",
             human_approval_event_digest=_digest("human-approval-event-late"),
-            issued_at="2026-08-26T00:29:00+00:00",
-            expires_at="2026-08-26T00:31:00+00:00",
+            issued_at=_iso(ready_expires - timedelta(minutes=1)),
+            expires_at=_iso(ready_expires + timedelta(minutes=1)),
         )
     with pytest.raises(ExactFourAuthorityContractError, match="Trader authorization"):
         build_controlled_execution_claims_v2(
             readiness,
             trader,
-            issued_at="2026-08-26T00:19:00+00:00",
-            expires_at="2026-08-26T00:21:00+00:00",
+            issued_at=_iso(trader_expires - timedelta(minutes=1)),
+            expires_at=_iso(trader_expires + timedelta(minutes=1)),
         )
 
 
@@ -364,8 +385,8 @@ def test_safe_factories_and_chain_validator_bind_actual_claim_objects() -> None:
     same_authority_new_window = build_controlled_execution_claims_v2(
         readiness,
         trader,
-        issued_at="2026-08-26T00:03:00+00:00",
-        expires_at="2026-08-26T00:11:00+00:00",
+        issued_at=_iso(datetime.fromisoformat(execution.issued_at) + timedelta(seconds=1)),
+        expires_at=_iso(datetime.fromisoformat(execution.expires_at) + timedelta(seconds=1)),
     )
     assert same_authority_new_window.lease_id == execution.lease_id
     assert same_authority_new_window.idempotency_key == execution.idempotency_key
@@ -392,19 +413,80 @@ def test_safe_factories_and_chain_validator_bind_actual_claim_objects() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("claimed_now", "message"),
+    [
+        (datetime(2000, 1, 1, 12, tzinfo=timezone.utc), "expired"),
+        (datetime(2099, 1, 1, 12, tzinfo=timezone.utc), "not yet valid"),
+    ],
+)
+def test_public_chain_uses_module_clock_and_rejects_2000_or_2099_claims(
+    monkeypatch: pytest.MonkeyPatch,
+    claimed_now: datetime,
+    message: str,
+) -> None:
+    monkeypatch.setattr(authority_module, "_trusted_utc_now", lambda: claimed_now)
+    readiness, trader, execution = _claims(at=claimed_now)
+
+    actual_now = datetime.now(timezone.utc)
+    monkeypatch.setattr(authority_module, "_trusted_utc_now", lambda: actual_now)
+    with pytest.raises(ExactFourAuthorityContractError, match=message):
+        validate_exact_four_authority_claim_chain_v2(
+            readiness,
+            trader,
+            execution,
+        )
+    assert "now" not in inspect.signature(
+        validate_exact_four_authority_claim_chain_v2
+    ).parameters
+
+
+def test_downstream_parsers_reject_split_brain_parent_claims() -> None:
+    readiness, trader, execution = _claims()
+    other_ready = replace(readiness, pilot_run_id="pilot-run-split-brain")
+    other_trader = build_trader_authorization_claims_v2(
+        other_ready,
+        human_approval_event_id="human-approval-split-brain",
+        human_approval_event_digest=_digest("human-approval-split-brain"),
+        issued_at=trader.issued_at,
+        expires_at=trader.expires_at,
+    )
+    trader_raw = json.dumps(trader.to_dict(), separators=(",", ":"))
+    execution_raw = json.dumps(execution.to_dict(), separators=(",", ":"))
+
+    with pytest.raises(ExactFourAuthorityContractError, match="supplied READY"):
+        parse_and_validate_trader_authorization_document(
+            trader_raw,
+            readiness=other_ready,
+        )
+    with pytest.raises(
+        ExactFourAuthorityContractError,
+        match="supplied READY and Trader",
+    ):
+        parse_and_validate_controlled_execution_document(
+            execution_raw,
+            readiness=other_ready,
+            trader=other_trader,
+        )
+
+
 def test_serialization_exposes_mutation_and_semantic_revalidation_rejects_it() -> None:
     readiness, trader, execution = _claims()
     trader_id = trader.authorization_id
     object.__setattr__(trader, "automatic_promotion", True)
     assert trader.authorization_id != trader_id
     with pytest.raises(ExactFourAuthorityContractError):
-        validate_exact_four_authority_claims_v2(trader)
+        validate_exact_four_authority_claims_v2(trader, readiness=readiness)
 
     execution_id = execution.request_id
     object.__setattr__(execution, "generation", 2)
     assert execution.request_id != execution_id
     with pytest.raises(ExactFourAuthorityContractError):
-        validate_exact_four_authority_claims_v2(execution)
+        validate_exact_four_authority_claims_v2(
+            execution,
+            readiness=readiness,
+            trader=trader,
+        )
 
     ready_id = readiness.attestation_id
     object.__setattr__(readiness.exact_four, "mass_research_enabled", True)
@@ -416,10 +498,31 @@ def test_serialization_exposes_mutation_and_semantic_revalidation_rejects_it() -
 def test_strict_parser_and_schema_are_lockstep_with_semantic_content_ids() -> None:
     readiness, trader, execution = _claims()
     schema_only = _validator()
-    for claims in (readiness, trader, execution):
-        raw = json.dumps(claims.to_dict(), separators=(",", ":"))
-        parsed = parse_and_validate_exact_four_authority_document(raw)
-        assert parsed == claims.to_dict()
+    ready_raw = json.dumps(readiness.to_dict(), separators=(",", ":"))
+    trader_raw = json.dumps(trader.to_dict(), separators=(",", ":"))
+    execution_raw = json.dumps(execution.to_dict(), separators=(",", ":"))
+    assert parse_and_validate_pilot_readiness_document(ready_raw) == (
+        readiness.to_dict()
+    )
+    assert parse_and_validate_trader_authorization_document(
+        trader_raw,
+        readiness=readiness,
+    ) == trader.to_dict()
+    assert parse_and_validate_controlled_execution_document(
+        execution_raw,
+        readiness=readiness,
+        trader=trader,
+    ) == execution.to_dict()
+    assert parse_and_validate_exact_four_authority_document(
+        execution_raw,
+        readiness=readiness,
+        trader=trader,
+    ) == execution.to_dict()
+
+    with pytest.raises(ExactFourAuthorityContractError, match="READY parent"):
+        parse_and_validate_exact_four_authority_document(trader_raw)
+    with pytest.raises(ExactFourAuthorityContractError, match="READY and Trader"):
+        parse_and_validate_exact_four_authority_document(execution_raw)
 
     duplicate = json.dumps(readiness.to_dict(), separators=(",", ":")).replace(
         '"format":"pilot-readiness-attestation-claims/v2",',
@@ -441,7 +544,9 @@ def test_strict_parser_and_schema_are_lockstep_with_semantic_content_ids() -> No
     schema_only.validate(float_integer)
     with pytest.raises(ExactFourAuthorityContractError, match="exact JSON built-in"):
         parse_and_validate_exact_four_authority_document(
-            json.dumps(float_integer, separators=(",", ":"))
+            json.dumps(float_integer, separators=(",", ":")),
+            readiness=readiness,
+            trader=trader,
         )
 
     self_reported = execution.to_dict()
@@ -449,7 +554,9 @@ def test_strict_parser_and_schema_are_lockstep_with_semantic_content_ids() -> No
     schema_only.validate(self_reported)
     with pytest.raises(ExactFourAuthorityContractError, match="content id"):
         parse_and_validate_exact_four_authority_document(
-            json.dumps(self_reported, separators=(",", ":"))
+            json.dumps(self_reported, separators=(",", ":")),
+            readiness=readiness,
+            trader=trader,
         )
 
 
