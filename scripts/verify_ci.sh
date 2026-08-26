@@ -89,6 +89,8 @@ echo "==> Cloudflare active-worker binding manifest"
 "$py" scripts/cloudflare_binding_manifest.py
 echo "==> J-Quants acquisition target registry"
 "$py" scripts/generate_jquants_acquisition_registry.py
+echo "==> generated Quant Ops canonical routing authority"
+"$py" scripts/verify_governed_js_drift.py
 echo "==> installed SourceCapability wheel authority"
 "$py" scripts/verify_source_capability_wheel.py \
   --uv "$uv_cmd" --python "$py"

@@ -193,6 +193,102 @@ def _bundle(path: Path, generation: str):
     )
 
 
+def _insert_ingestion_run(store: SqliteStore, run_id: int, source: str) -> None:
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO ingestion_run_log "
+        "(id,ran_at,source,runtime,status,detail) VALUES (?,?,?,?,?,?)",
+        (
+            run_id,
+            "2026-08-25T00:00:00Z",
+            source,
+            "governed-test",
+            "pass",
+            "{}",
+        ),
+    )
+
+
+def _insert_collection_receipt(
+    store: SqliteStore,
+    *,
+    source: str,
+    dataset: str,
+    run_id: int,
+    segment_id: str,
+    digests: Mapping[str, object] | None = None,
+    status: str = "SUCCESS",
+) -> None:
+    store._conn.execute(  # noqa: SLF001
+        """INSERT INTO collection_receipts
+          (source,dataset,segment_id,segment_start,segment_end,expected_scope,
+           expected_items,observed_items,raw_page_count,raw_row_count,
+           structured_row_count,pagination_exhausted,digests_json,run_id,
+           status,error,checked_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            source,
+            dataset,
+            segment_id,
+            "2026-08-25",
+            "2026-08-25",
+            "{}",
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            json.dumps(digests or {}, sort_keys=True, separators=(",", ":")),
+            run_id,
+            status,
+            None if status == "SUCCESS" else "collection failed",
+            "2026-08-25T00:00:00Z",
+        ),
+    )
+
+
+def _insert_raw_manifest(
+    store: SqliteStore,
+    *,
+    dataset: str,
+    run_id: int,
+    completeness: str = "ACQUIRED",
+) -> None:
+    store._conn.execute(  # noqa: SLF001
+        """INSERT INTO raw_retention_manifests
+           (dataset,run_id,manifest_key,page_count,row_count,raw_bytes,
+            data_digest,completeness,created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+        (
+            dataset,
+            run_id,
+            f"raw/{dataset}/{run_id}.json",
+            1,
+            1,
+            10,
+            f"sha256:{run_id:064x}",
+            completeness,
+            "2026-08-25T00:00:00Z",
+        ),
+    )
+
+
+def _recreate_evidence_table_without_constraints(
+    store: SqliteStore,
+    table: str,
+) -> None:
+    if table not in {
+        "collection_receipts",
+        "ingestion_run_log",
+        "raw_retention_manifests",
+    }:
+        raise ValueError(f"unsupported test evidence table: {table}")
+    retained = table + "_with_constraints"
+    store._conn.execute(f'ALTER TABLE "{table}" RENAME TO "{retained}"')  # noqa: S608,SLF001
+    store._conn.execute(  # noqa: S608,SLF001
+        f'CREATE TABLE "{table}" AS SELECT * FROM "{retained}" WHERE 0'
+    )
+    store._conn.execute(f'DROP TABLE "{retained}"')  # noqa: S608,SLF001
+
+
 def test_two_generations_preserve_prior_rows_and_flip_pointer(tmp_path: Path) -> None:
     source = tmp_path / "source.sqlite"
     _source(source)
@@ -306,12 +402,20 @@ def test_pointer_update_atomically_rejects_cursor_regression(
     target.close()
 
 
-def test_latest_successful_receipt_supersedes_old_failed_attempt(
+def test_newer_successful_run_supersedes_late_closing_old_failed_attempt(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "source.sqlite"
     _source(source)
     store = SqliteStore(source)
+    store._conn.executemany(  # noqa: SLF001
+        "INSERT INTO ingestion_run_log "
+        "(id,ran_at,source,runtime,status,detail) VALUES (?,?,?,?,?,?)",
+        (
+            (10, "2026-08-24T00:00:00Z", "jsda", "governed-test", "failed", "{}"),
+            (11, "2026-08-25T00:00:00Z", "jsda", "governed-test", "pass", "{}"),
+        ),
+    )
     receipt = """INSERT INTO collection_receipts
       (source,dataset,segment_id,segment_start,segment_end,expected_scope,
        expected_items,observed_items,raw_page_count,raw_row_count,
@@ -320,16 +424,18 @@ def test_latest_successful_receipt_supersedes_old_failed_attempt(
     store._conn.execute(  # noqa: SLF001
         receipt,
         (
-            "jquants", "equities_bars_daily", "2008-05", "2008-05-07",
-            "2008-05-31", "{}", 1, 0, 0, 0, 0, 0, "{}", 10, "FAILED",
-            "timeout", "2026-08-24T00:00:00Z",
+            "jsda", "jsda_otc_bond_reference_prices", "2002-08-02",
+            "2002-08-02", "2002-08-02", "{}", 1, 0, 0, 0, 0, 0, "{}",
+            10, "FAILED",
+            "timeout", "2026-08-26T00:00:00Z",
         ),
     )
     store._conn.execute(  # noqa: SLF001
         receipt,
         (
-            "jquants", "equities_bars_daily", "2008-05", "2008-05-07",
-            "2008-05-31", "{}", 1, 10, 1, 10, 10, 1, "{}", 11, "SUCCESS",
+            "jsda", "jsda_otc_bond_reference_prices", "2002-08-02",
+            "2002-08-02", "2002-08-02", "{}", 1, 10, 1, 10, 10, 1, "{}",
+            11, "SUCCESS",
             None, "2026-08-25T00:00:00Z",
         ),
     )
@@ -338,7 +444,7 @@ def test_latest_successful_receipt_supersedes_old_failed_attempt(
            (dataset,run_id,manifest_key,page_count,row_count,raw_bytes,
             data_digest,completeness,created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
         (
-            "equities_bars_daily", 11, "raw/success.json", 1, 10, 100,
+            "jsda_otc_bond_reference_prices", 11, "raw/success.json", 1, 10, 100,
             "sha256:success", "ACQUIRED", "2026-08-25T00:00:00Z",
         ),
     )
@@ -352,9 +458,382 @@ def test_latest_successful_receipt_supersedes_old_failed_attempt(
         "WHERE projection_generation_id=?",
         (bundle.generation_id,),
     ).fetchone() == (
-        "jquants", 11, "ACQUIRED", "latest authoritative segment receipt"
+        "jsda",
+        11,
+        "ACQUIRED",
+        "latest operational raw acquisition receipt",
     )
     target.close()
+
+
+def test_run_projection_globally_rejects_unreferenced_duplicate_ids(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    store = SqliteStore(source)
+    _recreate_evidence_table_without_constraints(store, "ingestion_run_log")
+    _insert_ingestion_run(store, 50, "jquants")
+    _insert_ingestion_run(store, 50, "jsda")
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+
+    with pytest.raises(RuntimeError, match="duplicate authority id"):
+        _bundle(source, "projgen-unreferenced-duplicate-run")
+
+
+@pytest.mark.parametrize(
+    ("run_id", "source_name"),
+    ((0, "jsda"), ("not-an-integer", "jsda"), (52, " jsda"), (53, 1)),
+)
+def test_run_projection_globally_rejects_noncanonical_unreferenced_identity(
+    tmp_path: Path,
+    run_id: object,
+    source_name: object,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    store = SqliteStore(source)
+    _recreate_evidence_table_without_constraints(store, "ingestion_run_log")
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO ingestion_run_log "
+        "(id,ran_at,source,runtime,status,detail) VALUES (?,?,?,?,?,?)",
+        (
+            run_id,
+            "2026-08-25T00:00:00Z",
+            source_name,
+            "governed-test",
+            "pass",
+            "{}",
+        ),
+    )
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+
+    with pytest.raises(RuntimeError, match="non-canonical positive integer id"):
+        _bundle(source, "projgen-unreferenced-noncanonical-run")
+
+
+def test_run_projection_uses_positive_id_as_deterministic_authority_order(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    store = SqliteStore(source)
+    _insert_ingestion_run(store, 51, "jquants")
+    _insert_ingestion_run(store, 53, "jsda")
+    _insert_ingestion_run(store, 52, "jquants")
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+
+    with sqlite3.connect(source) as conn:
+        rows = exporter._read_latest_runs(
+            conn,
+            "projgen-run-order",
+            exporter._capture_projection_contract_snapshot(),
+        )
+    assert [(row["id"], row["source"]) for row in rows] == [
+        (53, "jsda"),
+        (52, "jquants"),
+        (51, "jquants"),
+    ]
+
+
+@pytest.mark.parametrize("table", ["collection_receipts", "raw_retention_manifests"])
+def test_raw_projection_rejects_noncanonical_run_id(
+    tmp_path: Path,
+    table: str,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    store = SqliteStore(source)
+    if table == "collection_receipts":
+        store._conn.execute(  # noqa: SLF001
+            """INSERT INTO collection_receipts
+              (source,dataset,segment_id,segment_start,segment_end,expected_scope,
+               expected_items,observed_items,raw_page_count,raw_row_count,
+               structured_row_count,pagination_exhausted,digests_json,run_id,
+               status,error,checked_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "jsda", "jsda_otc_bond_reference_prices", "bad-run",
+                "2002-08-02", "2002-08-02", "{}", 1, 0, 0, 0, 0, 0, "{}",
+                "not-an-integer", "FAILED", "invalid", "2026-08-25T00:00:00Z",
+            ),
+        )
+    else:
+        store._conn.execute(  # noqa: SLF001
+            """INSERT INTO raw_retention_manifests
+               (dataset,run_id,manifest_key,page_count,row_count,raw_bytes,
+                data_digest,completeness,created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                "jsda_otc_bond_reference_prices", "not-an-integer", "raw/bad",
+                0, 0, 0, "sha256:bad", "FAILED", "2026-08-25T00:00:00Z",
+            ),
+        )
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+    with pytest.raises(RuntimeError, match="non-canonical positive integer run_id"):
+        _bundle(source, "projgen-bad-run-id")
+
+
+def test_raw_projection_rejects_receipt_without_authority_run(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    store = SqliteStore(source)
+    store._conn.execute(  # noqa: SLF001
+        """INSERT INTO collection_receipts
+          (source,dataset,segment_id,segment_start,segment_end,expected_scope,
+           expected_items,observed_items,raw_page_count,raw_row_count,
+           structured_row_count,pagination_exhausted,digests_json,run_id,
+           status,error,checked_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            "jsda", "jsda_otc_bond_reference_prices", "orphan-run",
+            "2002-08-02", "2002-08-02", "{}", 1, 0, 0, 0, 0, 0, "{}", 99,
+            "FAILED", "orphan", "2026-08-25T00:00:00Z",
+        ),
+    )
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+    with pytest.raises(RuntimeError, match="authority-bound to its source run"):
+        _bundle(source, "projgen-orphan-run-id")
+
+
+def test_raw_projection_rejects_cross_source_dataset_spoof(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    store = SqliteStore(source)
+    _insert_ingestion_run(store, 20, "jquants")
+    _insert_collection_receipt(
+        store,
+        source="jquants",
+        dataset="jsda_otc_bond_reference_prices",
+        run_id=20,
+        segment_id="spoofed-jsda-segment",
+    )
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+
+    with pytest.raises(RuntimeError, match="mismatches frozen canonical inventory"):
+        _bundle(source, "projgen-cross-source-spoof")
+
+
+def test_raw_projection_rejects_manifest_without_exact_receipt(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    store = SqliteStore(source)
+    _insert_ingestion_run(store, 21, "jquants")
+    _insert_raw_manifest(store, dataset="equities_bars_daily", run_id=21)
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+
+    with pytest.raises(RuntimeError, match="no exact operational acquisition"):
+        _bundle(source, "projgen-orphan-raw")
+
+
+@pytest.mark.parametrize(
+    ("duplicate_table", "message"),
+    [
+        ("collection_receipts", "duplicate authoritative identity"),
+        ("raw_retention_manifests", "duplicate acquisition identity"),
+        ("ingestion_run_log", "duplicate authority id"),
+    ],
+)
+def test_raw_projection_rejects_duplicate_authority_identities(
+    tmp_path: Path,
+    duplicate_table: str,
+    message: str,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    store = SqliteStore(source)
+    _recreate_evidence_table_without_constraints(store, duplicate_table)
+    _insert_ingestion_run(store, 23, "jquants")
+    if duplicate_table == "ingestion_run_log":
+        _insert_ingestion_run(store, 23, "jquants")
+    _insert_collection_receipt(
+        store,
+        source="jquants",
+        dataset="equities_bars_daily",
+        run_id=23,
+        segment_id="duplicate-identity",
+    )
+    if duplicate_table == "collection_receipts":
+        _insert_collection_receipt(
+            store,
+            source="jquants",
+            dataset="equities_bars_daily",
+            run_id=23,
+            segment_id="duplicate-identity",
+            status="FAILED",
+        )
+    if duplicate_table == "raw_retention_manifests":
+        _insert_raw_manifest(store, dataset="equities_bars_daily", run_id=23)
+        store._conn.execute(  # noqa: SLF001
+            "INSERT INTO raw_retention_manifests "
+            "SELECT dataset,run_id,manifest_key || '-conflict',page_count,row_count,"
+            "raw_bytes,data_digest,completeness,created_at "
+            "FROM raw_retention_manifests WHERE dataset=? AND run_id=?",
+            ("equities_bars_daily", 23),
+        )
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+
+    with pytest.raises(RuntimeError, match=message):
+        _bundle(source, f"projgen-duplicate-{duplicate_table}")
+
+
+@pytest.mark.parametrize("evidence_table", ["receipt", "raw"])
+def test_raw_projection_rejects_unknown_dataset(
+    tmp_path: Path,
+    evidence_table: str,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    store = SqliteStore(source)
+    _insert_ingestion_run(store, 22, "jquants")
+    if evidence_table == "receipt":
+        _insert_collection_receipt(
+            store,
+            source="jquants",
+            dataset="unknown_dataset",
+            run_id=22,
+            segment_id="unknown",
+        )
+    else:
+        _insert_raw_manifest(store, dataset="unknown_dataset", run_id=22)
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+
+    with pytest.raises(RuntimeError, match="unknown canonical dataset"):
+        _bundle(source, f"projgen-unknown-{evidence_table}")
+
+
+def test_unsigned_operational_receipts_emit_raw_only_not_coverage_or_ready(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    store = SqliteStore(source)
+    for run_id, plane, dataset in (
+        (30, "jquants", "equities_bars_daily"),
+        (31, "jsda", "jsda_otc_bond_reference_prices"),
+    ):
+        _insert_ingestion_run(store, run_id, plane)
+        _insert_collection_receipt(
+            store,
+            source=plane,
+            dataset=dataset,
+            run_id=run_id,
+            segment_id=f"segment-{run_id}",
+        )
+        _insert_raw_manifest(store, dataset=dataset, run_id=run_id)
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+
+    with sqlite3.connect(source) as conn:
+        operational_digests = [
+            json.loads(row[0])
+            for row in conn.execute(
+                "SELECT digests_json FROM collection_receipts ORDER BY run_id"
+            )
+        ]
+    assert operational_digests == [{}, {}]
+
+    bundle = _bundle(source, "projgen-valid-source-bindings")
+    target = _target()
+    target.executescript(bundle.sql)
+    assert target.execute(
+        "SELECT source,dataset,run_id,completeness,reason "
+        "FROM raw_retention_manifests ORDER BY run_id"
+    ).fetchall() == [
+        (
+            "jquants",
+            "equities_bars_daily",
+            30,
+            "ACQUIRED",
+            "latest operational raw acquisition receipt",
+        ),
+        (
+            "jsda",
+            "jsda_otc_bond_reference_prices",
+            31,
+            "ACQUIRED",
+            "latest operational raw acquisition receipt",
+        ),
+    ]
+    assert target.execute(
+        "SELECT status FROM dataset_coverage WHERE dataset=?",
+        ("equities_bars_daily",),
+    ).fetchone() == ("PARTIAL",)
+    assert target.execute(
+        "SELECT status,snapshot_id FROM ops_ready_state"
+    ).fetchone() == ("NOT_READY", None)
+    assert target.execute("SELECT COUNT(*) FROM ops_ready_snapshots").fetchone() == (
+        0,
+    )
+    target.close()
+
+
+@pytest.mark.parametrize(
+    "digests",
+    (
+        {
+            "eligibility": "RECOVERED_RAW_ONLY",
+            "origin": "recovered-raw-only",
+        },
+        {"eligibility": []},
+        {"eligibility": None},
+        {"eligibility": "TRUSTED_COLLECTION "},
+        {"origin": []},
+        {"origin": {}},
+        {"origin": None},
+        {"synthetic": "true"},
+        {"synthetic": None},
+    ),
+)
+def test_recovered_raw_only_receipt_stays_unprojected_and_cannot_bind_raw(
+    tmp_path: Path,
+    digests: Mapping[str, object],
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    store = SqliteStore(source)
+    _insert_ingestion_run(store, 40, "jsda")
+    _insert_collection_receipt(
+        store,
+        source="jsda",
+        dataset="jsda_otc_bond_reference_prices",
+        run_id=40,
+        segment_id="recovered-only",
+        digests=digests,
+    )
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+
+    pending = _bundle(source, "projgen-recovered-pending")
+    target = _target()
+    target.executescript(pending.sql)
+    assert target.execute("SELECT COUNT(*) FROM raw_retention_manifests").fetchone() == (
+        0,
+    )
+    target.close()
+
+    store = SqliteStore(source)
+    _insert_raw_manifest(
+        store,
+        dataset="jsda_otc_bond_reference_prices",
+        run_id=40,
+    )
+    store._conn.commit()  # noqa: SLF001
+    store.close()
+    with pytest.raises(RuntimeError, match="no exact operational acquisition"):
+        _bundle(source, "projgen-recovered-cannot-upgrade")
 
 
 def test_storage_aggregate_has_no_default_cutoff(tmp_path: Path) -> None:
@@ -376,6 +855,46 @@ def test_storage_aggregate_has_no_default_cutoff(tmp_path: Path) -> None:
         "status": "NOT_PROJECTED",
     }
     target.close()
+
+
+def test_storage_aggregate_jsda_coverage_rejects_prefix_spoof(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    with sqlite3.connect(source) as conn:
+        snapshot = exporter._capture_projection_contract_snapshot()
+        exact_jsda = exporter._canonical_jsda_datasets(snapshot)
+        assert exact_jsda == frozenset(
+            {
+                "jsda_corporate_bond_transactions",
+                "jsda_otc_bond_reference_prices",
+                "jsda_tokyo_repo_rates",
+            }
+        )
+        payload = exporter._storage_payload(
+            conn,
+            generation_id="projgen-storage-jsda-membership",
+            generated_at="2026-08-25T00:00:00Z",
+            source_db_digest="sha256:" + "0" * 64,
+            coverage=(
+                {
+                    "dataset": "jsda_fake",
+                    "status": "COMPLETE",
+                    "row_count": 999,
+                },
+                {
+                    "dataset": "jsda_otc_bond_reference_prices",
+                    "status": "PARTIAL",
+                    "row_count": 5_886,
+                },
+            ),
+            jsda_datasets=exact_jsda,
+            hot_cutoff=None,
+        )
+    assert set(payload["jsda_coverage"]) == {
+        "jsda_otc_bond_reference_prices"
+    }
 
 
 def test_explicit_hot_cutoff_is_materialized_at_publish_time(tmp_path: Path) -> None:

@@ -10,11 +10,32 @@ from tests.receipt_test_support import (
     _reconcile_collection_evidence,
 )
 from storage.coverage_ledger import (
+    _latest_receipt_for,
     build_collection_receipt,
     evaluate_segment,
     is_complete_eligible_receipt,
     plan_required_segments,
 )
+from storage.receipt_policy import (
+    is_recovered_only_digests,
+    receipt_source_for_canonical_source,
+)
+
+
+def test_shared_receipt_source_and_recovery_policy_is_closed() -> None:
+    assert receipt_source_for_canonical_source("jquants_premium_core") == "jquants"
+    assert receipt_source_for_canonical_source("jquants_addon") == "jquants"
+    assert receipt_source_for_canonical_source("jsda_governed") == "jsda"
+    assert is_recovered_only_digests({"eligibility": "RECOVERED_RAW_ONLY"})
+    assert is_recovered_only_digests({"origin": "parsed-staging-only"})
+    assert is_recovered_only_digests({"eligibility": []})
+    assert is_recovered_only_digests({"eligibility": None})
+    assert is_recovered_only_digests({"eligibility": "TRUSTED_COLLECTION "})
+    assert is_recovered_only_digests({"origin": {}})
+    assert is_recovered_only_digests({"origin": None})
+    assert is_recovered_only_digests({"synthetic": "true"})
+    assert is_recovered_only_digests({"synthetic": None})
+    assert not is_recovered_only_digests({})
 
 
 def _month_required():
@@ -93,6 +114,38 @@ def test_signed_receipt_can_complete(receipt_ed25519_keys: SimpleNamespace):
     assert receipt.digests["signature"].startswith("ed25519:")
     status, detail = evaluate_segment(policy, req, receipt)
     assert status == "COMPLETE", detail
+
+
+def test_malformed_recovery_sentinel_cannot_break_or_outrank_ledger(
+    receipt_ed25519_keys: SimpleNamespace,
+) -> None:
+    policy, req = _month_required()
+    raw = b'{"data":[{"Date":"2025-01-01"}]}'
+    trusted = _issue(
+        _authority(receipt_ed25519_keys),
+        req,
+        raw,
+        [{"Date": "2025-01-01"}],
+    )
+    for key, value in (
+        ("eligibility", []),
+        ("eligibility", None),
+        ("eligibility", "TRUSTED_COLLECTION "),
+        ("origin", {}),
+        ("origin", []),
+        ("origin", None),
+        ("synthetic", "true"),
+        ("synthetic", None),
+    ):
+        malformed = replace(
+            trusted,
+            run_id=trusted.run_id + 1,
+            checked_at="2025-02-02T00:00:00+00:00",
+            digests={**trusted.digests, key: value},
+        )
+        assert _latest_receipt_for((trusted, malformed), req) is trusted
+        status, _detail = evaluate_segment(policy, req, malformed)
+        assert status == "PARTIAL"
 
 
 def test_signed_empty_data_envelope_is_not_complete(

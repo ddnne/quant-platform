@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+import storage.coverage_ledger as coverage_ledger_module
 from data_contracts.coverage import coverage_contract_for, coverage_policy_binding
 from paper_runtime.snapshot_coverage_proof import (
     _coverage_proof,
@@ -80,6 +81,31 @@ def test_discovery_inventory_without_transition_authority_fails_closed(
         compare_exact_coverage_inventory(
             store._conn,  # noqa: SLF001
             (dataset,),
+            target_end=_CUTOFF,
+        )
+    store.close()
+
+
+def test_exact_inventory_translates_shared_receipt_route_failure(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(_source: str) -> str:
+        raise ValueError("test unsupported route")
+
+    monkeypatch.setattr(
+        coverage_ledger_module,
+        "receipt_source_for_canonical_source",
+        unavailable,
+    )
+    store = SqliteStore(tmp_path / "unsupported-route.sqlite")
+    with pytest.raises(
+        CoverageInventoryAuthorityUnavailable,
+        match="unsupported source 'jquants_premium_core'",
+    ):
+        compare_exact_coverage_inventory(
+            store._conn,  # noqa: SLF001
+            ("equities_bars_daily",),
             target_end=_CUTOFF,
         )
     store.close()

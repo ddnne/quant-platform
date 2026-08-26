@@ -117,7 +117,13 @@ test("production projection verifier root is purpose-bound and digest-pinned", a
   assert.equal(await projectionSha256(audit), PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST);
 });
 
-function signedGeneration(generation, now, contentManifest, contentDigest) {
+function signedGeneration(
+  generation,
+  now,
+  contentManifest,
+  contentDigest,
+  cursorIdentity = {},
+) {
   const digest = (character) => `sha256:${character.repeat(64)}`;
   const envelope = {
     schema_version: "ops-projection-envelope/v1",
@@ -130,12 +136,18 @@ function signedGeneration(generation, now, contentManifest, contentDigest) {
     registry_digest: digest("4"),
     coverage_policy_version: "collection-coverage/v3",
     coverage_policy_digest: digest("8"),
-    projection_status: "FRESH",
-    source_generation: 10,
-    source_snapshot_generation: now,
-    source_cursor: 10,
-    export_cursor: 10,
-    applied_cursor: 10,
+    projection_status: cursorIdentity.status ?? "FRESH",
+    source_generation: cursorIdentity.source === undefined ? 10 : cursorIdentity.source,
+    source_snapshot_generation: cursorIdentity.snapshot === undefined
+      ? now
+      : cursorIdentity.snapshot,
+    source_cursor: cursorIdentity.source === undefined ? 10 : cursorIdentity.source,
+    export_cursor: cursorIdentity.exported === undefined
+      ? 10
+      : cursorIdentity.exported,
+    applied_cursor: cursorIdentity.applied === undefined
+      ? 10
+      : cursorIdentity.applied,
     coverage_status_digest: digest("5"),
     dataset_coverage: {},
     b0_status: "UNKNOWN",
@@ -185,6 +197,8 @@ async function seedGeneration(
     status = "FRESH",
     populate = null,
     sync = {},
+    jsdaWatermark = true,
+    envelopeSync = null,
     signing = true,
     afterManifest = null,
     documentTransform = null,
@@ -192,6 +206,12 @@ async function seedGeneration(
   } = {},
 ) {
   const now = new Date().toISOString();
+  const syncIdentity = {
+    source: sync.source === undefined ? 10 : sync.source,
+    exported: sync.exported === undefined ? 10 : sync.exported,
+    applied: sync.applied === undefined ? 10 : sync.applied,
+    snapshot: now,
+  };
   db.prepare(`INSERT INTO ops_projection_generation
     (generation_id,status,source_db_digest,content_digest,generated_at,
      producer_commit_sha,contract_digest,registry_digest,coverage_policy_version,
@@ -207,7 +227,8 @@ async function seedGeneration(
      export_cursor,applied_cursor,age_seconds,status,projection_version,
      refresh_attempt_at,refresh_success_at,refresh_error,detail_json)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      generation, now, now, 10, 10, 10, 0, status, "ops_projection/v4",
+      generation, now, now, syncIdentity.source, syncIdentity.exported,
+      syncIdentity.applied, 0, status, "ops_projection/v4",
       now, status === "FRESH" ? now : null, null,
       JSON.stringify({ refresh_status: status === "FRESH" ? "success" : "failed" }),
     );
@@ -223,12 +244,20 @@ async function seedGeneration(
      exported_cursor,applied_cursor,updated_at)
     VALUES (?,'jquants_records',?,?,?,?,?)`).run(
       generation,
-      sync.source === undefined ? 10 : sync.source,
+      syncIdentity.source,
       sync.changeLogRows === undefined ? 1 : sync.changeLogRows,
-      sync.exported === undefined ? 10 : sync.exported,
-      sync.applied === undefined ? 10 : sync.applied,
+      syncIdentity.exported,
+      syncIdentity.applied,
       now,
     );
+  if (jsdaWatermark) {
+    db.prepare(`INSERT INTO ingestion_watermarks
+      (projection_generation_id,dataset,last_event_date,last_ingested_at,last_export_cursor)
+      VALUES (?,?,?,?,?)`).run(
+        generation, "jsda_otc_bond_reference_prices", "2026-08-25", now,
+        syncIdentity.exported,
+      );
+  }
   db.prepare(`INSERT INTO ops_storage_plane_status
     (projection_generation_id,materialized_at,payload_json) VALUES (?,?,?)`).run(
       generation, now,
@@ -247,6 +276,7 @@ async function seedGeneration(
     now,
     contentManifest,
     contentDigestOverride || contentDigest,
+    { ...syncIdentity, status, ...(envelopeSync || {}) },
   );
   const storedDocument = documentTransform
     ? documentTransform(structuredClone(signed.document))
@@ -432,6 +462,34 @@ test("signature-valid payload tampering is detected by table rehash", async () =
   db.close();
 });
 
+test("validation rehash binds its exact ingestion run after manifest creation", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-validation-run-tampered", {
+    populate(target, generation, now) {
+      target.prepare(`INSERT INTO ingestion_run_log
+        (projection_generation_id,id,ran_at,source,runtime,status,detail)
+        VALUES (?,?,?,?,?,?,?)`).run(
+        generation, 9, now, "jsda", "queue", "pass", "{}",
+      );
+      target.prepare(`INSERT INTO ingestion_validation
+        (projection_generation_id,run_id,dataset,status,rows_seen,rows_inserted,
+         rows_revisions,detail) VALUES (?,?,?,?,?,?,?,?)`).run(
+        generation, 9, "jsda_otc_bond_reference_prices", "pass", 1, 1, 0, "{}",
+      );
+    },
+    afterManifest(target, generation) {
+      target.prepare(`UPDATE ingestion_run_log SET source='jquants'
+        WHERE projection_generation_id=? AND id=9`).run(generation);
+    },
+  });
+  const result = await opsCall(db, "validation_summary", {});
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.equal(result.projection_signature_verified, true);
+  assert.equal(result.required_content_verified, false);
+  assert.match(result.reason, /content mismatch for ingestion_run_log/);
+  db.close();
+});
+
 test("OPEN publication seals pointer-last and freezes every payload table", async () => {
   const db = projectionDb();
   await seedGeneration(db, "projgen-frozen");
@@ -521,7 +579,7 @@ test("a missing active Coverage row never falls back to an older generation", as
   db.close();
 });
 
-test("raw status exposes one authoritative segment row and no historical attempts", async () => {
+test("raw status exposes one current acquisition row and no historical attempts", async () => {
   const db = projectionDb();
   await seedGeneration(db, "projgen-raw", {
     populate(target, generation, now) {
@@ -531,7 +589,7 @@ test("raw status exposes one authoritative segment row and no historical attempt
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
           generation, "jquants", "equities_bars_daily", "2026-08", 2, "raw/latest", 1,
           4, 40, "sha256:latest", "ACQUIRED", now,
-          "latest authoritative segment receipt",
+          "latest operational raw acquisition receipt",
         );
     },
   });
@@ -544,6 +602,226 @@ test("raw status exposes one authoritative segment row and no historical attempt
   assert.equal(result.attestations[0].run_id, 2);
   assert.equal(result.attestations[0].source, "jquants");
   assert.equal(result.attestations[0].acquisition_state, "EXPECTED_AND_CAPTURED");
+  assert.match(result.note, /not TrustedReceipt.*READY.*D2\/D3 closure/);
+  const summary = await opsCall(db, "ops_status", {});
+  assert.equal(summary.raw_retention.current_acquisition_segments, 1);
+  assert.equal(
+    summary.raw_retention.authoritative_segments,
+    summary.raw_retention.current_acquisition_segments,
+  );
+  assert.match(
+    summary.research_note,
+    /authoritative_segments is a deprecated compatibility alias.*neither proves TrustedReceipt.*Coverage COMPLETE.*READY.*D2\/D3 closure/,
+  );
+  db.close();
+});
+
+test("J-Quants rows never masquerade as projected JSDA operations", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-jq-only", {
+    jsdaWatermark: false,
+    populate(target, generation, now) {
+      target.prepare(`INSERT INTO ingestion_run_log
+        (projection_generation_id,id,ran_at,source,runtime,status,detail)
+        VALUES (?,?,?,?,?,?,?)`).run(
+          generation, 1, now, "jquants", "cloudflare", "pass", "{}",
+        );
+      target.prepare(`INSERT INTO ingestion_validation
+        (projection_generation_id,run_id,dataset,status,rows_seen,rows_inserted,
+         rows_revisions,detail) VALUES (?,?,?,?,?,?,?,?)`).run(
+          generation, 1, "equities_bars_daily", "pass", 4, 4, 0, "{}",
+        );
+      target.prepare(`INSERT INTO raw_retention_manifests
+        (projection_generation_id,source,dataset,segment_id,run_id,manifest_key,page_count,
+         row_count,raw_bytes,data_digest,completeness,created_at,reason)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+          generation, "jquants", "equities_bars_daily", "2026-08", 1,
+          "raw/jq", 1, 4, 40, "sha256:jq", "ACQUIRED", now,
+          "latest operational raw acquisition receipt",
+        );
+    },
+  });
+  for (const [name, args, reason] of [
+    ["ingestion_last_run", {}, /JSDA ingestion run evidence is absent/],
+    ["validation_summary", {}, /not bound to exactly one JSDA ingestion run/],
+    ["raw_retention_status", { dataset: "jsda_otc_bond_reference_prices" }, /raw acquisition evidence is absent/],
+    ["sync_status", {}, /JSDA sync watermark evidence is absent/],
+  ]) {
+    const result = await opsCall(db, name, args);
+    assert.equal(result.status, "NOT_PROJECTED", name);
+    assert.equal(result.plane, "ops_current", name);
+    assert.equal(result.projection_generation, "projgen-jq-only", name);
+    assert.match(result.reason, reason, name);
+  }
+  db.close();
+});
+
+test("run and validation tools accept explicit JSDA evidence in the active generation", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-jsda-ops", {
+    populate(target, generation, now) {
+      const insertRun = target.prepare(`INSERT INTO ingestion_run_log
+        (projection_generation_id,id,ran_at,source,runtime,status,detail)
+        VALUES (?,?,?,?,?,?,?)`);
+      insertRun.run(generation, 1, now, "jquants", "cloudflare", "pass", "{}");
+      insertRun.run(generation, 2, now, "jsda", "cloudflare_queue_v2", "pass", "{}");
+      const insertValidation = target.prepare(`INSERT INTO ingestion_validation
+        (projection_generation_id,run_id,dataset,status,rows_seen,rows_inserted,
+         rows_revisions,detail) VALUES (?,?,?,?,?,?,?,?)`);
+      insertValidation.run(
+        generation, 2, "equities_bars_daily", "pass", 4, 4, 0, "{}",
+      );
+      insertValidation.run(
+        generation, 2, "jsda_otc_bond_reference_prices", "pass", 4, 4, 0, "{}",
+      );
+    },
+  });
+  const run = await opsCall(db, "ingestion_last_run", {});
+  assert.equal(run.status, "AVAILABLE");
+  assert.equal(run.run.source, "jsda");
+  const validation = await opsCall(db, "validation_summary", {});
+  assert.equal(validation.status, "PASS");
+  assert.equal(validation.dataset_count, 2);
+  db.close();
+});
+
+test("validation JSDA presence is canonical-dataset and exact-run bound", async () => {
+  for (const mode of ["missing", "wrong-source", "duplicate"]) {
+    const db = projectionDb();
+    await seedGeneration(db, `projgen-validation-binding-${mode}`, {
+      populate(target, generation, now) {
+        if (mode === "duplicate") {
+          target.exec(`DROP TABLE ingestion_run_log;
+            CREATE TABLE ingestion_run_log (
+              projection_generation_id TEXT NOT NULL,
+              id INTEGER NOT NULL,
+              ran_at TEXT NOT NULL,
+              source TEXT NOT NULL,
+              runtime TEXT,
+              status TEXT NOT NULL,
+              detail TEXT
+            );`);
+        }
+        const insertRun = target.prepare(`INSERT INTO ingestion_run_log
+          (projection_generation_id,id,ran_at,source,runtime,status,detail)
+          VALUES (?,?,?,?,?,?,?)`);
+        if (mode === "wrong-source") {
+          insertRun.run(generation, 7, now, "jquants", "cloudflare", "pass", "{}");
+        } else if (mode === "duplicate") {
+          insertRun.run(generation, 7, now, "jsda", "queue", "pass", "{}");
+          insertRun.run(generation, 7, now, "jsda", "queue-replay", "pass", "{}");
+        }
+        target.prepare(`INSERT INTO ingestion_validation
+          (projection_generation_id,run_id,dataset,status,rows_seen,rows_inserted,
+           rows_revisions,detail) VALUES (?,?,?,?,?,?,?,?)`).run(
+          generation, 7, "jsda_otc_bond_reference_prices", "pass", 1, 1, 0, "{}",
+        );
+      },
+    });
+    const result = await opsCall(db, "validation_summary", {});
+    assert.equal(result.status, "NOT_PROJECTED", mode);
+    assert.match(result.reason, /not bound to exactly one JSDA ingestion run/, mode);
+    db.close();
+  }
+});
+
+test("jsda-looking unknown datasets cannot spoof validation or watermark evidence", async () => {
+  const validationDb = projectionDb();
+  await seedGeneration(validationDb, "projgen-validation-dataset-spoof", {
+    populate(target, generation, now) {
+      target.prepare(`INSERT INTO ingestion_run_log
+        (projection_generation_id,id,ran_at,source,runtime,status,detail)
+        VALUES (?,?,?,?,?,?,?)`).run(
+        generation, 8, now, "jsda", "queue", "pass", "{}",
+      );
+      target.prepare(`INSERT INTO ingestion_validation
+        (projection_generation_id,run_id,dataset,status,rows_seen,rows_inserted,
+         rows_revisions,detail) VALUES (?,?,?,?,?,?,?,?)`).run(
+        generation, 8, "jsda_fake", "pass", 1, 1, 0, "{}",
+      );
+      target.prepare(`INSERT INTO ingestion_validation
+        (projection_generation_id,run_id,dataset,status,rows_seen,rows_inserted,
+         rows_revisions,detail) VALUES (?,?,?,?,?,?,?,?)`).run(
+        generation, 8, "jsda_otc_bond_reference_prices", "pass", 1, 1, 0, "{}",
+      );
+    },
+  });
+  const validation = await opsCall(validationDb, "validation_summary", {});
+  assert.equal(validation.status, "NOT_PROJECTED");
+  assert.match(validation.reason, /outside the canonical catalog/);
+  validationDb.close();
+
+  const watermarkDb = projectionDb();
+  await seedGeneration(watermarkDb, "projgen-watermark-dataset-spoof", {
+    populate(target, generation, now) {
+      target.prepare(`INSERT INTO ingestion_watermarks
+        (projection_generation_id,dataset,last_event_date,last_ingested_at,last_export_cursor)
+        VALUES (?,?,?,?,?)`).run(generation, "jsda_fake", "2026-08-25", now, 10);
+    },
+  });
+  const sync = await opsCall(watermarkDb, "sync_status", {});
+  assert.equal(sync.status, "NOT_PROJECTED");
+  assert.match(sync.reason, /outside the canonical catalog/);
+  watermarkDb.close();
+});
+
+test("canonical addon watermarks do not invalidate exact JSDA presence", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-canonical-addon-watermark", {
+    populate(target, generation, now) {
+      target.prepare(`INSERT INTO ingestion_watermarks
+        (projection_generation_id,dataset,last_event_date,last_ingested_at,last_export_cursor)
+        VALUES (?,?,?,?,?)`).run(generation, "equities_trades", "2026-08-25", now, 10);
+    },
+  });
+  const result = await opsCall(db, "sync_status", {});
+  assert.equal(result.status, "CURRENT");
+  assert.equal(result.watermarks.length, 2);
+  db.close();
+});
+
+test("an old canonical JSDA watermark proves presence, not source freshness", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-old-jsda-watermark", {
+    populate(target, generation) {
+      target.prepare(`UPDATE ingestion_watermarks SET last_event_date=?
+        WHERE projection_generation_id=? AND dataset=?`).run(
+        "2002-08-02", generation, "jsda_otc_bond_reference_prices",
+      );
+    },
+  });
+  const result = await opsCall(db, "sync_status", {});
+  assert.equal(result.status, "CURRENT");
+  assert.notEqual(result.status, "FRESH");
+  assert.equal(result.watermarks[0].last_event_date, "2002-08-02");
+  db.close();
+});
+
+test("raw totals cover the whole generation while compatibility rows stay bounded", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-raw-bounded", {
+    populate(target, generation, now) {
+      const statement = target.prepare(`INSERT INTO raw_retention_manifests
+        (projection_generation_id,source,dataset,segment_id,run_id,manifest_key,page_count,
+         row_count,raw_bytes,data_digest,completeness,created_at,reason)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      for (let index = 1; index <= 501; index += 1) {
+        statement.run(
+          generation, "jsda", "jsda_otc_bond_reference_prices",
+          `segment-${String(index).padStart(4, "0")}`, index,
+          `raw/jsda/${index}`, 1, 1, 10, `sha256:${index}`, "ACQUIRED", now,
+          "latest operational raw acquisition receipt",
+        );
+      }
+    },
+  });
+  const result = await opsCall(db, "raw_retention_status", {
+    dataset: "jsda_otc_bond_reference_prices",
+  });
+  assert.equal(result.status, "AVAILABLE");
+  assert.equal(result.totals.total_segments, 501);
+  assert.equal(result.totals.acquired_segments, 501);
+  assert.equal(result.attestations.length, 500);
   db.close();
 });
 
@@ -573,6 +851,33 @@ test("sync status requires non-null equal source/export/applied cursors", async 
   assert.equal(result.status, "UNKNOWN");
   assert.equal(result.applied_cursor, null);
   assert.notEqual(result.state, "CURRENT");
+  db.close();
+});
+
+test("signed envelope and projected cursor identities must match exactly", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-cursor-disagreement", {
+    sync: { source: 9, exported: 9, applied: 9 },
+    envelopeSync: { source: 10, exported: 10, applied: 10 },
+  });
+  for (const name of ["projection_status", "sync_status"]) {
+    const result = await opsCall(db, name, {});
+    assert.equal(result.status, "NOT_PROJECTED", name);
+    assert.equal(result.projection_generation, "projgen-cursor-disagreement", name);
+    assert.match(result.reason, /signed cursor identity mismatch/, name);
+  }
+  db.close();
+});
+
+test("unsafe cross-runtime cursors are non-canonical", async () => {
+  const db = projectionDb();
+  const unsafe = Number.MAX_SAFE_INTEGER + 1;
+  await seedGeneration(db, "projgen-unsafe-cursor", {
+    envelopeSync: { source: unsafe, exported: unsafe, applied: unsafe },
+  });
+  const result = await opsCall(db, "sync_status", {});
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.match(result.reason, /cursor identity is non-canonical/);
   db.close();
 });
 

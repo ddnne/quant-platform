@@ -48,6 +48,10 @@ from ops.projection_candidate import (  # noqa: E402
     UnsignedOpsProjectionCandidate,
     _freeze_unsigned_projection_candidate,
 )
+from storage.receipt_policy import (  # noqa: E402
+    is_recovered_only_digests,
+    receipt_source_for_canonical_source,
+)
 
 PROJECTION_VERSION = "ops_projection/v4"
 DEFAULT_MAX_AGE_SECONDS = 86_400
@@ -413,19 +417,101 @@ def _read_ready(
     return state, [ready], [quality]
 
 
-def _read_latest_runs(conn: sqlite3.Connection, generation_id: str) -> list[dict[str, Any]]:
+def _canonical_receipt_routing(
+    contract_snapshot: ProjectionContractSnapshot,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Derive exact dataset/source routing from the retained snapshot only."""
+    canonical_sources: dict[str, str] = {}
+    receipt_sources: dict[str, str] = {}
+    for item in contract_snapshot.source_inventory:
+        dataset = item.get("dataset_id")
+        canonical_source = item.get("source")
+        if type(dataset) is not str or not dataset:
+            raise RuntimeError("projection source inventory has an invalid dataset_id")
+        if type(canonical_source) is not str or not canonical_source:
+            raise RuntimeError(
+                f"projection source inventory has no canonical source for {dataset}"
+            )
+        if dataset in canonical_sources:
+            raise RuntimeError(
+                f"projection source inventory contains duplicate dataset {dataset}"
+            )
+        try:
+            receipt_source = receipt_source_for_canonical_source(canonical_source)
+        except ValueError as exc:
+            raise RuntimeError(
+                "projection source inventory contains an unsupported canonical "
+                f"source for {dataset}: {canonical_source}"
+            ) from exc
+        canonical_sources[dataset] = canonical_source
+        receipt_sources[dataset] = receipt_source
+    return canonical_sources, receipt_sources
+
+
+def _read_latest_runs(
+    conn: sqlite3.Connection,
+    generation_id: str,
+    contract_snapshot: ProjectionContractSnapshot,
+) -> list[dict[str, Any]]:
     required = ("id", "ran_at", "source", "runtime", "status", "detail")
-    if not set(required) <= _columns(conn, "ingestion_run_log"):
+    available = _columns(conn, "ingestion_run_log")
+    if not set(required) <= available:
+        if available and _safe_count(conn, "ingestion_run_log"):
+            raise RuntimeError(
+                "ingestion_run_log cannot be authority-checked; missing columns: "
+                + ",".join(sorted(set(required) - available))
+            )
         return []
+    _canonical_sources, receipt_sources = _canonical_receipt_routing(
+        contract_snapshot
+    )
+    allowed_sources = tuple(sorted(set(receipt_sources.values())))
+    if not allowed_sources:
+        raise RuntimeError("projection source inventory has no ingestion planes")
+    placeholders = ",".join("?" for _source in allowed_sources)
+    invalid_identity = conn.execute(
+        "SELECT 1 FROM main.ingestion_run_log "
+        "WHERE typeof(id)<>'integer' OR id<=0 "
+        f"OR typeof(source)<>'text' OR source NOT IN ({placeholders}) LIMIT 1",
+        allowed_sources,
+    ).fetchone()
+    if invalid_identity is not None:
+        raise RuntimeError(
+            "ingestion_run_log contains a non-canonical positive integer id "
+            "or source identity"
+        )
+    duplicate_identity = conn.execute(
+        "SELECT 1 FROM main.ingestion_run_log "
+        "GROUP BY id HAVING COUNT(*)<>1 LIMIT 1"
+    ).fetchone()
+    if duplicate_identity is not None:
+        raise RuntimeError("ingestion_run_log contains a duplicate authority id")
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         "SELECT id,ran_at,source,runtime,status,detail "
         "FROM main.ingestion_run_log "
-        "ORDER BY id DESC LIMIT 100"
+        "ORDER BY id DESC,source,ran_at,runtime,status,detail LIMIT 100"
     ).fetchall()
     return [
         {"projection_generation_id": generation_id, **dict(row)} for row in rows
     ]
+
+
+def _canonical_jsda_datasets(
+    contract_snapshot: ProjectionContractSnapshot,
+) -> frozenset[str]:
+    """Return the exact JSDA membership from retained canonical routing."""
+    _canonical_sources, receipt_sources = _canonical_receipt_routing(
+        contract_snapshot
+    )
+    datasets = frozenset(
+        dataset
+        for dataset, receipt_source in receipt_sources.items()
+        if receipt_source == "jsda"
+    )
+    if not datasets:
+        raise RuntimeError("projection source inventory has no canonical JSDA datasets")
+    return datasets
 
 
 def _read_latest_validation(
@@ -486,20 +572,195 @@ def _read_applied_cursor(conn: sqlite3.Connection) -> tuple[int | None, str | No
     return coerce_applied_seq(row[0]), row[1]
 
 
-def _read_authoritative_raw_segments(
-    conn: sqlite3.Connection, generation_id: str
+def _read_current_raw_acquisition_segments(
+    conn: sqlite3.Connection,
+    generation_id: str,
+    contract_snapshot: ProjectionContractSnapshot,
 ) -> list[dict[str, Any]]:
+    canonical_sources, receipt_sources = _canonical_receipt_routing(
+        contract_snapshot
+    )
+
     receipt_columns = {
         "source", "dataset", "segment_id", "run_id", "status", "error",
-        "checked_at",
+        "checked_at", "digests_json",
     }
-    if not receipt_columns <= _columns(conn, "collection_receipts"):
-        return []
     raw_columns = {
         "dataset", "run_id", "manifest_key", "page_count", "row_count",
         "raw_bytes", "data_digest", "completeness", "created_at",
     }
-    has_raw = raw_columns <= _columns(conn, "raw_retention_manifests")
+    receipt_table_exists = _table_exists(conn, "collection_receipts")
+    raw_table_exists = _table_exists(conn, "raw_retention_manifests")
+    if receipt_table_exists:
+        missing = receipt_columns - _columns(conn, "collection_receipts")
+        if missing:
+            raise RuntimeError(
+                "collection_receipts cannot be authority-checked; missing columns: "
+                + ",".join(sorted(missing))
+            )
+    if raw_table_exists:
+        missing = raw_columns - _columns(conn, "raw_retention_manifests")
+        if missing:
+            raise RuntimeError(
+                "raw_retention_manifests cannot be authority-checked; missing "
+                "columns: " + ",".join(sorted(missing))
+            )
+    if not receipt_table_exists:
+        if raw_table_exists and _safe_count(conn, "raw_retention_manifests"):
+            raise RuntimeError(
+                "raw_retention_manifests has no collection_receipts authority"
+            )
+        return []
+
+    invalid_receipt_run = conn.execute(
+        "SELECT 1 FROM main.collection_receipts "
+        "WHERE typeof(run_id)<>'integer' OR run_id<=0 LIMIT 1"
+    ).fetchone()
+    if invalid_receipt_run is not None:
+        raise RuntimeError(
+            "collection_receipts contains a non-canonical positive integer run_id"
+        )
+    duplicate_receipt = conn.execute(
+        "SELECT 1 FROM main.collection_receipts "
+        "GROUP BY source,dataset,segment_id,run_id HAVING COUNT(*)<>1 LIMIT 1"
+    ).fetchone()
+    if duplicate_receipt is not None:
+        raise RuntimeError(
+            "collection_receipts contains a duplicate authoritative identity"
+        )
+    run_columns = _columns(conn, "ingestion_run_log")
+    if not {"id", "source"} <= run_columns:
+        if _safe_count(conn, "collection_receipts"):
+            raise RuntimeError(
+                "collection_receipts cannot bind run_id to ingestion_run_log"
+            )
+    else:
+        orphan_receipt_run = conn.execute(
+            "SELECT 1 FROM main.collection_receipts r WHERE "
+            "(SELECT COUNT(*) FROM main.ingestion_run_log l "
+            "WHERE l.id=r.run_id)<>1 OR "
+            "(SELECT COUNT(*) FROM main.ingestion_run_log l "
+            "WHERE l.id=r.run_id AND l.source=r.source)<>1 LIMIT 1"
+        ).fetchone()
+        if orphan_receipt_run is not None:
+            raise RuntimeError(
+                "collection_receipts run_id is not authority-bound to its source run"
+            )
+
+    def decode_digests(raw: Any, *, dataset: str, run_id: int) -> dict[str, Any]:
+        if type(raw) is not str:
+            raise RuntimeError(
+                f"collection_receipts has non-text digests_json for {dataset}/{run_id}"
+            )
+
+        def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            decoded: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in decoded:
+                    raise ValueError(f"duplicate key {key!r}")
+                decoded[key] = value
+            return decoded
+
+        def reject_nonfinite(value: str) -> None:
+            raise ValueError(f"non-finite value {value!r}")
+
+        try:
+            decoded = json.loads(
+                raw,
+                object_pairs_hook=reject_duplicates,
+                parse_constant=reject_nonfinite,
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"collection_receipts has invalid digests_json for {dataset}/{run_id}"
+            ) from exc
+        if type(decoded) is not dict:
+            raise RuntimeError(
+                f"collection_receipts digests_json is not an object for {dataset}/{run_id}"
+            )
+        return decoded
+
+    conn.row_factory = sqlite3.Row
+    receipt_rows = conn.execute(
+        "SELECT source,dataset,segment_id,run_id,digests_json "
+        "FROM main.collection_receipts"
+    ).fetchall()
+    recovered_receipts: set[tuple[str, str, str, int]] = set()
+    # This is raw acquisition evidence from the authenticated projection
+    # transport, not a VerifiedCollectionClosure.  Verified-v2 reconciliation,
+    # Dataset Coverage COMPLETE, and READY remain separate D2/D3/C4 authorities.
+    operational_manifest_keys: set[tuple[str, int]] = set()
+    for row in receipt_rows:
+        source = row["source"]
+        dataset = row["dataset"]
+        run_id = row["run_id"]
+        segment_id = row["segment_id"]
+        if (
+            type(source) is not str
+            or type(dataset) is not str
+            or type(segment_id) is not str
+            or not source
+            or not dataset
+            or not segment_id
+        ):
+            raise RuntimeError(
+                "collection_receipts source/dataset/segment_id must be exact text"
+            )
+        if dataset not in canonical_sources:
+            raise RuntimeError(
+                f"collection_receipts references unknown canonical dataset {dataset}"
+            )
+        expected_source = receipt_sources[dataset]
+        if source != expected_source:
+            raise RuntimeError(
+                "collection_receipts dataset/source mismatches frozen canonical "
+                f"inventory: {dataset} expects {expected_source}, got {source}"
+            )
+        digests = decode_digests(row["digests_json"], dataset=dataset, run_id=run_id)
+        identity = (source, dataset, segment_id, run_id)
+        recovered_only = is_recovered_only_digests(digests)
+        if recovered_only:
+            recovered_receipts.add(identity)
+        else:
+            operational_manifest_keys.add((dataset, run_id))
+
+    has_raw = raw_table_exists
+    if has_raw:
+        invalid_manifest_run = conn.execute(
+            "SELECT 1 FROM main.raw_retention_manifests "
+            "WHERE typeof(run_id)<>'integer' OR run_id<=0 LIMIT 1"
+        ).fetchone()
+        if invalid_manifest_run is not None:
+            raise RuntimeError(
+                "raw_retention_manifests contains a non-canonical positive "
+                "integer run_id"
+            )
+        duplicate_manifest = conn.execute(
+            "SELECT 1 FROM main.raw_retention_manifests "
+            "GROUP BY dataset,run_id HAVING COUNT(*)<>1 LIMIT 1"
+        ).fetchone()
+        if duplicate_manifest is not None:
+            raise RuntimeError(
+                "raw_retention_manifests contains a duplicate acquisition identity"
+            )
+        manifest_rows = conn.execute(
+            "SELECT dataset,run_id FROM main.raw_retention_manifests"
+        ).fetchall()
+        for manifest in manifest_rows:
+            dataset = manifest["dataset"]
+            run_id = manifest["run_id"]
+            if type(dataset) is not str or dataset not in canonical_sources:
+                raise RuntimeError(
+                    "raw_retention_manifests references an unknown canonical "
+                    f"dataset: {dataset}"
+                )
+            if (dataset, run_id) not in operational_manifest_keys:
+                expected_source = receipt_sources[dataset]
+                raise RuntimeError(
+                    "raw_retention_manifests row has no exact operational "
+                    "acquisition receipt: "
+                    f"dataset={dataset},run_id={run_id},source={expected_source}"
+                )
     join = (
         "LEFT JOIN main.raw_retention_manifests m "
         "ON m.dataset=r.dataset AND m.run_id=r.run_id"
@@ -512,37 +773,47 @@ def _read_authoritative_raw_segments(
         if has_raw
         else "NULL,NULL,NULL,NULL,NULL,NULL,NULL"
     )
-    conn.row_factory = sqlite3.Row
     rows = conn.execute(
         f"""
-        WITH ranked AS (
-          SELECT source,dataset,segment_id,run_id,status,error,checked_at,
-                 ROW_NUMBER() OVER (
-                   PARTITION BY source,dataset,segment_id
-                   ORDER BY checked_at DESC,run_id DESC
-                 ) AS rank_no
-            FROM main.collection_receipts
-        )
         SELECT r.source,r.dataset,r.segment_id,r.run_id,r.status,r.error,r.checked_at,
                {raw_select}
-          FROM ranked r {join}
-         WHERE r.rank_no=1
-         ORDER BY r.dataset,r.segment_id
+          FROM main.collection_receipts r {join}
+         -- The governed transaction allocates run_id monotonically. Completion
+         -- timestamps are diagnostic and may arrive late; run_id therefore stays
+         -- the primary order, with deterministic diagnostic tie-breakers.
+         ORDER BY r.source,r.dataset,r.segment_id,
+                  r.run_id DESC,r.checked_at DESC,r.status DESC
         """
     ).fetchall()
     projected: list[dict[str, Any]] = []
+    selected_segments: set[tuple[str, str, str]] = set()
     for row in rows:
         value = dict(row)
+        receipt_identity = (
+            str(value["source"]),
+            str(value["dataset"]),
+            str(value["segment_id"]),
+            value["run_id"],
+        )
+        if receipt_identity in recovered_receipts:
+            continue
+        segment_identity = receipt_identity[:3]
+        if segment_identity in selected_segments:
+            continue
+        selected_segments.add(segment_identity)
         receipt_ok = str(value["status"]).upper() == "SUCCESS"
         completeness = value.pop("raw_completeness")
         if not receipt_ok:
             completeness = "FAILED"
-            reason = value.get("error") or "latest authoritative receipt failed"
+            reason = (
+                value.get("error")
+                or "latest operational acquisition receipt failed"
+            )
         elif completeness is None:
             completeness = "NOT_CAPTURED"
             reason = "latest successful receipt has no raw retention manifest"
         else:
-            reason = "latest authoritative segment receipt"
+            reason = "latest operational raw acquisition receipt"
         projected.append(
             {
                 "projection_generation_id": generation_id,
@@ -624,6 +895,7 @@ def _storage_payload(
     generated_at: str,
     source_db_digest: str,
     coverage: Sequence[Mapping[str, Any]],
+    jsda_datasets: frozenset[str],
     hot_cutoff: str | None,
 ) -> dict[str, Any]:
     counts = {
@@ -699,7 +971,7 @@ def _storage_payload(
             "observed_end": row.get("observed_end"),
         }
         for row in coverage
-        if str(row.get("dataset") or "").startswith("jsda_")
+        if row.get("dataset") in jsda_datasets
     }
     return {
         "schema": "ops_storage_plane_status/v1",
@@ -847,10 +1119,12 @@ def _render_projection_bundle(
             required=True,
         )
         inventory = _source_inventory(contract_snapshot)
-        runs = _read_latest_runs(conn, gen)
+        runs = _read_latest_runs(conn, gen, contract_snapshot)
         validation = _read_latest_validation(conn, gen)
         watermarks = _read_watermarks(conn, gen)
-        raw_segments = _read_authoritative_raw_segments(conn, gen)
+        raw_segments = _read_current_raw_acquisition_segments(
+            conn, gen, contract_snapshot
+        )
         applied_cursor, applied_updated_at = _read_applied_cursor(conn)
         if source_cursor is None:
             source_cursor = coerce_applied_seq(
@@ -949,6 +1223,7 @@ def _render_projection_bundle(
             generated_at=generated_at,
             source_db_digest=source_db_digest,
             coverage=tagged_coverage,
+            jsda_datasets=_canonical_jsda_datasets(contract_snapshot),
             hot_cutoff=storage_hot_cutoff,
         )
     finally:

@@ -50,6 +50,10 @@ from storage.coverage_receipts import (
     build_synthetic_complete_receipt,
     compute_raw_digest,
 )
+from storage.receipt_policy import (
+    is_recovered_only_digests,
+    receipt_source_for_canonical_source,
+)
 
 
 def _now() -> str:
@@ -460,10 +464,6 @@ def plan_required_segments(
 
 
 _DETERMINISTIC_READY_INVENTORY_GRAINS = frozenset({"calendar_month"})
-_INVENTORY_SOURCE_NAMES = {
-    "jquants_premium_core": "jquants",
-    "jsda_governed": "jsda",
-}
 
 
 def _canonical_segment_identity(
@@ -555,8 +555,8 @@ def compare_exact_coverage_inventory(
                 f"{grain!r} requires an authority-issued inventory (C10 OPEN)"
             )
         try:
-            source = _INVENTORY_SOURCE_NAMES[capability.source]
-        except KeyError as exc:
+            source = receipt_source_for_canonical_source(capability.source)
+        except ValueError as exc:
             raise CoverageInventoryAuthorityUnavailable(
                 f"Coverage inventory authority unavailable for {dataset}: "
                 f"unsupported source {capability.source!r}"
@@ -1008,7 +1008,11 @@ def _dataset_status(
 
 
 def _coverage_source(dataset: str) -> str:
-    return "jsda" if dataset.startswith("jsda_") else "jquants"
+    from data_contracts.canonical import canonical_dataset_for
+
+    return receipt_source_for_canonical_source(
+        canonical_dataset_for(dataset).source
+    )
 
 
 def _jsda_validation_status(
@@ -1293,16 +1297,7 @@ def _verify_exact_coverage_complete_in_snapshot(
 def _rank_receipt_for_match(item: CollectionReceipt) -> tuple:
     """Trusted first, recovered last, then structured/time."""
     trusted = 1 if is_complete_eligible_receipt(item) else 0
-    origin = str(item.digests.get("origin") or "")
-    recovered = 1 if (
-        item.digests.get("eligibility") == "RECOVERED_RAW_ONLY"
-        or origin in {
-            "recovered-raw-only",
-            "parsed-staging-only",
-            "offline-test-fixture",
-        }
-        or bool(item.digests.get("synthetic"))
-    ) else 0
+    recovered = 1 if is_recovered_only_digests(item.digests) else 0
     structured = int(item.structured_row_count or 0)
     return (trusted, -recovered, structured, item.checked_at, item.run_id)
 

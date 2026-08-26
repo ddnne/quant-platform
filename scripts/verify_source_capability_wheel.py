@@ -46,6 +46,9 @@ REGISTRY_NAME = "jquants_acquisition_target_registry.generated.json"
 REGISTRY_SOURCE_LOCATOR = (
     "packages/data_plane/data_contracts/source_capability_contracts"
 )
+EXPECTED_CANONICAL_SOURCE_DIGEST = (
+    "sha256:1f72a99e049e9519827fb045db50c56863835c0b0183f52989f42d7c378b9f92"
+)
 
 
 def _canonical_digest(value: Any) -> str:
@@ -71,14 +74,17 @@ def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
     sys.path.insert(0, str(installed_root))
 
     import data_contracts
+    import data_contracts.canonical as canonical_module
     import data_contracts.coverage as coverage_module
     import data_contracts.source_capability as capability_module
     from ingestion.jquants import acquisition_collection as acquisition_module
     import ingestion.runtime_authority as runtime_authority_module
     import storage.coverage_transition as coverage_transition_module
     import storage.receipt_crypto as receipt_crypto_module
+    import storage.receipt_policy as receipt_policy_module
     import storage.verified_receipt as verified_receipt_module
     from data_contracts.coverage import coverage_contract_for
+    from data_contracts.canonical import all_canonical_datasets
     from data_contracts.source_capability import (
         all_source_capability_contracts,
         derive_collection_coverage_v3,
@@ -95,12 +101,14 @@ def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
     ).resolve()
     receipt_crypto_module_path = Path(receipt_crypto_module.__file__).resolve()
     verified_receipt_module_path = Path(verified_receipt_module.__file__).resolve()
+    receipt_policy_module_path = Path(receipt_policy_module.__file__).resolve()
     authority_dir = specs_dir().resolve()
     registry_path = package_root / REGISTRY_NAME
     coverage_transition_registry_path = (
         coverage_transition_module._PINNED_REGISTRY_PATH.resolve()
     )
     receipt_schema_path = verified_receipt_module._SCHEMA_PATH.resolve()
+    canonical_registry_path = canonical_module.CANONICAL_REGISTRY_PATH.resolve()
     for path, label in (
         (package_root, "data_contracts package"),
         (capability_module_path, "SourceCapability module"),
@@ -110,10 +118,12 @@ def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
         (coverage_transition_module_path, "Coverage transition module"),
         (receipt_crypto_module_path, "receipt crypto module"),
         (verified_receipt_module_path, "verified Receipt module"),
+        (receipt_policy_module_path, "receipt policy module"),
         (authority_dir, "SourceCapability authority"),
         (registry_path, "acquisition registry"),
         (coverage_transition_registry_path, "Coverage transition registry"),
         (receipt_schema_path, "signed Receipt claims schema"),
+        (canonical_registry_path, "canonical dataset registry"),
     ):
         _require_under(path, installed_root, label=label)
     if authority_dir.parent != package_root:
@@ -137,6 +147,39 @@ def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
     receipt_schema = verified_receipt_module._claims_schema()
     if receipt_schema.get("$id") != "specs/receipts/signed_receipt_claims.schema.json":
         raise AssertionError("installed signed Receipt claims schema identity drift")
+
+    canonical_sources = {
+        contract.dataset_id: receipt_policy_module.receipt_source_for_canonical_source(
+            contract.source
+        )
+        for contract in all_canonical_datasets()
+    }
+    governed_ids = sorted(
+        contract.dataset_id
+        for contract in all_canonical_datasets()
+        if contract.governance_tier == "governed"
+    )
+    if len(canonical_sources) != 31 or len(governed_ids) != 26:
+        raise AssertionError("installed canonical routing inventory count drift")
+    if {
+        dataset
+        for dataset, source in canonical_sources.items()
+        if source == "jsda"
+    } != {
+        "jsda_corporate_bond_transactions",
+        "jsda_otc_bond_reference_prices",
+        "jsda_tokyo_repo_rates",
+    }:
+        raise AssertionError("installed canonical JSDA routing membership drift")
+    if canonical_sources.get("equities_trades") != "jquants":
+        raise AssertionError("installed addon routing policy drift")
+    if not receipt_policy_module.is_recovered_only_digests({"origin": []}):
+        raise AssertionError("malformed recovery sentinel did not fail closed")
+    if not receipt_policy_module.is_recovered_only_digests({"origin": None}):
+        raise AssertionError("null recovery sentinel did not fail closed")
+    canonical_source_digest = _canonical_digest(canonical_sources)
+    if canonical_source_digest != EXPECTED_CANONICAL_SOURCE_DIGEST:
+        raise AssertionError("installed canonical receipt-source digest drift")
 
     files = frozenset(path.name for path in authority_dir.glob("*.json"))
     if files != EXPECTED_CONTRACT_FILES:
@@ -225,6 +268,7 @@ def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
         "contract_count": len(contracts),
         "contract_ids": sorted(contract_ids),
         "registry_digest": registry_digest,
+        "canonical_source_digest": canonical_source_digest,
         "route_digests": route_digests,
     }
 

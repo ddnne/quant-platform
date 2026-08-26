@@ -1,6 +1,11 @@
 /** Quant Ops read-model dispatch. Every query is bound to one active generation. */
 
-import { GOVERNED_DATASETS, GOVERNED_DATASET_SET } from "./governed.js";
+import {
+  CANONICAL_JSDA_DATASET_SET,
+  CANONICAL_RECEIPT_SOURCE_BY_DATASET,
+  GOVERNED_DATASETS,
+  GOVERNED_DATASET_SET,
+} from "./governed.js";
 import {
   classifyRawAcquisition,
   honestProjectionStatus,
@@ -28,7 +33,7 @@ const TOOL_CONTENT_TABLES = Object.freeze({
   coverage_gaps: ["dataset_coverage"],
   coverage_segments: ["coverage_segments"],
   backfill_status: ["coverage_segments"],
-  validation_summary: ["ingestion_validation"],
+  validation_summary: ["ingestion_run_log", "ingestion_validation"],
   b0_status: ["ops_b0_status"],
   latest_ready_snapshot: ["ops_ready_state", "ops_ready_snapshots"],
   snapshot_quality: ["ops_ready_state", "ops_snapshot_quality"],
@@ -57,7 +62,7 @@ export const OPS_TOOLS = Object.freeze([
   tool("b0_status", "Active B0 gate evidence, including explicit UNKNOWN."),
   tool("latest_ready_snapshot", "Active profile/plan/closure-bound immutable READY publication state."),
   tool("snapshot_quality", "Quality result attached to an active READY snapshot.", { snapshot_id: STRING }),
-  tool("raw_retention_status", "Latest authoritative raw evidence per source segment.", OPTIONAL_DATASET),
+  tool("raw_retention_status", "Latest raw acquisition rows per source segment; not TrustedReceipt or Coverage COMPLETE.", OPTIONAL_DATASET),
   tool("sync_status", "Active source/export/applied cursor projection."),
   tool("storage_plane_status", "Publisher-materialized storage aggregate; never scans ingestion facts."),
 ]);
@@ -93,6 +98,15 @@ function datasetArg(value, options = {}) {
     throw new RangeError("dataset is not in the governed Ops catalog");
   }
   return dataset;
+}
+
+/** @param {unknown} value */
+function canonicalReceiptSource(value) {
+  if (typeof value !== "string" ||
+      !Object.hasOwn(CANONICAL_RECEIPT_SOURCE_BY_DATASET, value)) {
+    return null;
+  }
+  return CANONICAL_RECEIPT_SOURCE_BY_DATASET[value];
 }
 
 /** @param {unknown} value */
@@ -185,6 +199,39 @@ function parseJson(value) {
   }
 }
 
+/** @param {unknown} value */
+function isCanonicalCursor(value) {
+  return value === null || (
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+  );
+}
+
+/**
+ * The signed envelope, projection metadata, and sync-feed row are three views
+ * of one authority identity.  Content signatures alone must not permit a
+ * signer to publish mutually inconsistent cursor claims.
+ * @param {Record<string, unknown>} observed
+ * @param {Record<string, unknown>} envelope
+ * @param {Record<string, string>} fields
+ */
+function cursorIdentityError(observed, envelope, fields) {
+  for (const [observedField, envelopeField] of Object.entries(fields)) {
+    const observedValue = observed[observedField];
+    const envelopeValue = envelope[envelopeField];
+    if (!isCanonicalCursor(observedValue) || !isCanonicalCursor(envelopeValue)) {
+      return `cursor identity is non-canonical for ${observedField}`;
+    }
+    if (observedValue !== envelopeValue) {
+      return `signed cursor identity mismatch for ${observedField}`;
+    }
+  }
+  if (!isCanonicalCursor(envelope.source_generation) ||
+      envelope.source_generation !== envelope.source_cursor) {
+    return "signed source generation does not equal its source cursor";
+  }
+  return null;
+}
+
 /**
  * @param {D1Database} db
  * @param {string} name
@@ -233,6 +280,17 @@ async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
   }
 
   if (name === "ingestion_last_run") {
+    const jsdaRun = await first(db, `
+      SELECT id
+        FROM ingestion_run_log
+       WHERE projection_generation_id=? AND source='jsda'
+       ORDER BY id DESC LIMIT 1`, [generation]);
+    if (!jsdaRun) {
+      return notProjected(
+        active,
+        "JSDA ingestion run evidence is absent from the active generation",
+      );
+    }
     const run = await first(db, `
       SELECT id,ran_at,source,runtime,status,detail
         FROM ingestion_run_log
@@ -373,12 +431,39 @@ async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
     if (latest?.run_id === null || latest?.run_id === undefined) {
       return notProjected(active, "validation rows are absent from the active generation");
     }
+    if (!Number.isSafeInteger(latest.run_id) || Number(latest.run_id) <= 0) {
+      return notProjected(active, "latest validation run identity is non-canonical");
+    }
+    const runBinding = await first(db, `
+      SELECT COUNT(*) AS run_count,
+             SUM(CASE WHEN source='jsda' THEN 1 ELSE 0 END) AS jsda_run_count
+        FROM ingestion_run_log
+       WHERE projection_generation_id=? AND id=?`, [generation, latest.run_id]);
+    if (!runBinding || runBinding.run_count !== 1 ||
+        runBinding.jsda_run_count !== 1) {
+      return notProjected(
+        active,
+        "latest validation run is not bound to exactly one JSDA ingestion run",
+      );
+    }
     const rows = await all(db, `
       SELECT dataset,status,rows_seen,rows_inserted,rows_revisions,detail
         FROM ingestion_validation
        WHERE projection_generation_id=? AND run_id=?
-       ORDER BY dataset LIMIT 500`, [generation, latest.run_id]);
+       ORDER BY dataset`, [generation, latest.run_id]);
     if (!rows.length) return notProjected(active, "validation rows are absent from the active generation");
+    if (rows.some((row) => canonicalReceiptSource(row.dataset) === null)) {
+      return notProjected(
+        active,
+        "latest validation run contains a dataset outside the canonical catalog",
+      );
+    }
+    if (!rows.some((row) => CANONICAL_JSDA_DATASET_SET.has(String(row.dataset)))) {
+      return notProjected(
+        active,
+        "JSDA validation evidence is absent from the latest validation run",
+      );
+    }
     return {
       plane: "ops_current", mutable: false,
       status: rows.every((row) => row.status === "pass") ? "PASS" : "FAIL",
@@ -448,6 +533,21 @@ async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
       filter = " AND dataset=?";
       binds.push(datasetArg(args.dataset));
     }
+    const totals = await first(db, `
+      SELECT COUNT(*) AS total_segments,
+             SUM(CASE WHEN completeness IN ('ACQUIRED','COMPLETE') THEN 1 ELSE 0 END)
+               AS acquired_segments,
+             SUM(CASE WHEN completeness='FAILED' THEN 1 ELSE 0 END)
+               AS failed_segments,
+             SUM(CASE WHEN completeness NOT IN ('ACQUIRED','COMPLETE')
+                      OR completeness IS NULL THEN 1 ELSE 0 END)
+               AS not_captured_segments
+        FROM raw_retention_manifests
+       WHERE projection_generation_id=?${filter}`, binds);
+    if (!totals || !Number.isSafeInteger(totals.total_segments) ||
+        Number(totals.total_segments) <= 0) {
+      return { ...notProjected(active, "current raw acquisition evidence is absent"), totals: null, attestations: [] };
+    }
     const rows = await all(db, `
       SELECT source,dataset,segment_id,run_id,manifest_key,page_count,row_count,raw_bytes,
              data_digest,completeness,created_at,reason
@@ -455,20 +555,17 @@ async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
        WHERE projection_generation_id=?${filter}
        ORDER BY dataset,segment_id LIMIT 500`, binds);
     if (!rows.length) {
-      return { ...notProjected(active, "authoritative raw segment evidence is absent"), totals: null, attestations: [] };
+      return { ...notProjected(active, "current raw acquisition evidence is absent"), totals: null, attestations: [] };
     }
-    const captured = new Set(["ACQUIRED", "COMPLETE"]);
-    const totals = {
-      total_segments: rows.length,
-      acquired_segments: rows.filter((row) => captured.has(String(row.completeness))).length,
-      failed_segments: rows.filter((row) => row.completeness === "FAILED").length,
-      not_captured_segments: rows.filter((row) => !captured.has(String(row.completeness))).length,
-    };
     return {
       plane: "ops_current", mutable: false, status: "AVAILABLE", ...generationFields(active),
-      totals,
+      totals: Object.fromEntries(
+        Object.entries(totals).map(([key, value]) => [key, Number(value)]),
+      ),
       attestations: rows.map((row) => ({ ...row, acquisition_state: classifyRawAcquisition(row) })),
-      note: "one latest authoritative row per source segment; superseded failed attempts are audit-only upstream",
+      // `attestations` is a frozen public compatibility field. Its rows are
+      // signed-projection transport facts, not TrustedReceipt attestations.
+      note: "attestations is a legacy field name: raw acquisition transport only; not TrustedReceipt, Dataset Coverage COMPLETE, READY, or D2/D3 closure",
     };
   }
 
@@ -527,6 +624,20 @@ async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
         FROM ops_projection_metadata
        WHERE projection_generation_id=? LIMIT 1`, [generation]);
     if (!metadata) return notProjected(active, "projection metadata is absent from the active generation");
+    const envelope = /** @type {Record<string, unknown>} */ (verified.envelope);
+    const cursorError = cursorIdentityError(metadata, envelope, {
+      source_cursor: "source_cursor",
+      export_cursor: "export_cursor",
+      applied_cursor: "applied_cursor",
+    });
+    if (cursorError || metadata.source_generation !== envelope.source_snapshot_generation ||
+        metadata.generated_at !== envelope.generated_at ||
+        metadata.status !== envelope.projection_status) {
+      return notProjected(
+        active,
+        cursorError || "signed projection metadata identity mismatch",
+      );
+    }
     const honest = honestProjectionStatus(metadata);
     const status = honest.status;
     const stale = status !== "FRESH";
@@ -591,27 +702,67 @@ async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
     const marks = await all(db, `
       SELECT dataset,last_event_date,last_ingested_at,last_export_cursor
         FROM ingestion_watermarks
-       WHERE projection_generation_id=? ORDER BY dataset LIMIT 500`, [generation]);
-    const source = feed.latest_source_change_seq == null ? null : Number(feed.latest_source_change_seq);
-    const exported = feed.exported_cursor == null ? null : Number(feed.exported_cursor);
-    const applied = feed.applied_cursor == null ? null : Number(feed.applied_cursor);
+       WHERE projection_generation_id=? ORDER BY dataset`, [generation]);
+    const source = feed.latest_source_change_seq;
+    const exported = feed.exported_cursor;
+    const applied = feed.applied_cursor;
+    const envelope = /** @type {Record<string, unknown>} */ (verified.envelope);
+    const cursorError = cursorIdentityError(feed, envelope, {
+      latest_source_change_seq: "source_cursor",
+      exported_cursor: "export_cursor",
+      applied_cursor: "applied_cursor",
+    });
+    if (cursorError) {
+      return notProjected(active, cursorError);
+    }
+    const sourceCursor = /** @type {number | null} */ (source);
+    const exportCursor = /** @type {number | null} */ (exported);
+    const appliedCursor = /** @type {number | null} */ (applied);
     const changeLogRows = feed.change_log_row_count == null
       ? null
       : Number(feed.change_log_row_count);
     if (changeLogRows === null) {
       return {
         ...notProjected(active, "source change-log evidence is absent from the active generation"),
-        source_cursor: source,
-        export_cursor: exported,
-        applied_cursor: applied,
+        source_cursor: sourceCursor,
+        export_cursor: exportCursor,
+        applied_cursor: appliedCursor,
         change_log_row_count: null,
         watermarks: marks,
       };
     }
-    const lag = source == null || exported == null ? null : Math.max(0, source - exported);
+    if (marks.some((row) => canonicalReceiptSource(row.dataset) === null)) {
+      return {
+        ...notProjected(
+          active,
+          "sync watermarks contain a dataset outside the canonical catalog",
+        ),
+        source_cursor: sourceCursor,
+        export_cursor: exportCursor,
+        applied_cursor: appliedCursor,
+        change_log_row_count: changeLogRows,
+        watermarks: marks,
+      };
+    }
+    if (!marks.some((row) => CANONICAL_JSDA_DATASET_SET.has(String(row.dataset)))) {
+      return {
+        ...notProjected(
+          active,
+          "JSDA sync watermark evidence is absent from the active generation",
+        ),
+        source_cursor: sourceCursor,
+        export_cursor: exportCursor,
+        applied_cursor: appliedCursor,
+        change_log_row_count: changeLogRows,
+        watermarks: marks,
+      };
+    }
+    const lag = sourceCursor == null || exportCursor == null
+      ? null
+      : Math.max(0, sourceCursor - exportCursor);
     const state = syncDatasetState({
-      exported,
-      applied,
+      exported: exportCursor,
+      applied: appliedCursor,
       lag,
       changeLogRows,
     });
@@ -620,9 +771,9 @@ async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
       status: state === "CURRENT" ? "CURRENT" : "UNKNOWN",
       ...generationFields(active),
       feed: feed.feed,
-      source_cursor: source,
-      export_cursor: exported,
-      applied_cursor: applied,
+      source_cursor: sourceCursor,
+      export_cursor: exportCursor,
+      applied_cursor: appliedCursor,
       change_log_row_count: changeLogRows,
       lag,
       state,
@@ -679,11 +830,17 @@ async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
     coverage_status_counts: coverage.length ? coverage : null,
     governed_dataset_count: GOVERNED_DATASETS.length,
     raw_retention: rawRows.length
-      ? { authoritative_segments: rawRows.length, acquired_segments: captured }
+      ? {
+          current_acquisition_segments: rawRows.length,
+          // Deprecated compatibility alias. This is an operational row count,
+          // not a claim that the raw evidence is a trusted attestation.
+          authoritative_segments: rawRows.length,
+          acquired_segments: captured,
+        }
       : null,
     alerts,
     reason: coverage.length ? null : "Coverage summary is absent from the active generation",
-    research_note: "Active Ops projection is not a research READY snapshot.",
+    research_note: "Active Ops projection is not a research READY snapshot. raw_retention.authoritative_segments is a deprecated compatibility alias for current_acquisition_segments; neither proves TrustedReceipt, Dataset Coverage COMPLETE, READY, or D2/D3 closure.",
   };
 }
 
