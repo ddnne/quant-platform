@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from pathlib import Path
 
@@ -27,6 +29,33 @@ from tests.receipt_test_support import (
     generate_test_receipt_keypair,
     write_test_receipt_registry,
 )
+
+
+def _pin_test_registry(
+    crypto: object,
+    monkeypatch: pytest.MonkeyPatch,
+    path: Path,
+) -> None:
+    raw = path.read_bytes()
+    document = json.loads(raw)
+    canonical = json.dumps(
+        document,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    monkeypatch.setattr(crypto, "_PINNED_VERIFY_KEYS_PATH", path)
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_REGISTRY_RAW_DIGEST",
+        "sha256:" + hashlib.sha256(raw).hexdigest(),
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_REGISTRY_DOCUMENT_DIGEST",
+        "sha256:" + hashlib.sha256(canonical).hexdigest(),
+    )
 
 
 def _plant_host_pem(
@@ -145,8 +174,7 @@ def test_revoked_same_uid_key_cannot_reactivate_receipt_minting(
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["keys"][0]["status"] = "revoked"
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
-    monkeypatch.setattr(crypto, "_PINNED_VERIFY_KEYS_PATH", registry_path)
-    crypto._load_verify_key_file.cache_clear()
+    _pin_test_registry(crypto, monkeypatch, registry_path)
     _plant_host_pem(tmp_path, monkeypatch, private_pem=private_pem)
     monkeypatch.delenv("QUANT_RECEIPT_DISABLE_HOST_PEM", raising=False)
 
@@ -170,8 +198,54 @@ def test_receipt_registry_never_defaults_missing_status_to_active(
     document["keys"][0].pop("status")
     path.write_text(json.dumps(document), encoding="utf-8")
     stat = path.stat()
-    with pytest.raises(ReceiptKeyConfigurationError, match="explicit active/revoked"):
+    with pytest.raises(ReceiptKeyConfigurationError, match="not closed"):
         crypto._load_verify_key_file(str(path), stat.st_mtime_ns, stat.st_size)
+
+
+def test_receipt_registry_rejects_duplicate_json_keys_even_when_last_value_matches(
+    tmp_path: Path,
+) -> None:
+    import storage.receipt_crypto as crypto
+
+    _private, public_raw, key_id = generate_test_receipt_keypair()
+    encoded = base64.b64encode(public_raw).decode("ascii")
+    path = tmp_path / "duplicate.json"
+    path.write_text(
+        '{"schema_version":0,"schema_version":1,'
+        '"purpose":"receipt_verification","keys":[{'
+        f'"key_id":"{key_id}","algorithm":"Ed25519",'
+        f'"public_key_b64":"{encoded}","status":"active"'
+        '}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(ReceiptKeyConfigurationError, match="duplicate key"):
+        crypto._load_verify_key_file(str(path))
+
+
+def test_receipt_registry_same_stat_content_swap_cannot_reuse_cached_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+    import storage.receipt_crypto as crypto
+
+    _private_a, public_a, key_id = generate_test_receipt_keypair(key_id="same-id")
+    _private_b, public_b, _ = generate_test_receipt_keypair(key_id="same-id")
+    path = write_test_receipt_registry(
+        tmp_path / "registry.json", key_id=key_id, public_raw=public_a
+    )
+    _pin_test_registry(crypto, monkeypatch, path)
+    assert set(load_verify_keys()) == {key_id}
+    original_stat = path.stat()
+    replacement = tmp_path / "replacement.json"
+    write_test_receipt_registry(replacement, key_id=key_id, public_raw=public_b)
+    assert replacement.stat().st_size == original_stat.st_size
+    path.write_bytes(replacement.read_bytes())
+    os.utime(
+        path,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+    with pytest.raises(ReceiptKeyConfigurationError, match="raw digest mismatch"):
+        load_verify_keys()
 
 
 def test_readiness_publisher_never_falls_back_to_receipt_pem(

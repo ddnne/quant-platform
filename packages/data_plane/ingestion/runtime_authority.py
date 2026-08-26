@@ -571,7 +571,7 @@ class _GovernedReceiptService:
                 raw_row_count=int(claims["raw_count"]),
                 structured_row_count=int(claims["structured_count"]),
                 pagination_exhausted=True,
-                digests=MappingProxyType(dict(signed)),
+                digests=dict(signed),
                 run_id=int(run_id),
                 status="SUCCESS",
                 error=None,

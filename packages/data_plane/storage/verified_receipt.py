@@ -24,7 +24,7 @@ from storage.receipt_crypto import (
     STANDARD_CLAIM_KEYS,
     body_digest,
     canonical_evidence_digest,
-    verify_receipt_signature,
+    verify_receipt_signature_values,
 )
 
 
@@ -37,6 +37,219 @@ _SCHEMA_PATH = (
 
 class ReceiptVerificationError(ValueError):
     """Signed claims do not close over the receipt or required segment."""
+
+
+_RECEIPT_STRING_FIELDS = (
+    "source",
+    "dataset",
+    "segment_id",
+    "segment_start",
+    "segment_end",
+    "status",
+    "checked_at",
+)
+_RECEIPT_INT_FIELDS = (
+    "observed_items",
+    "raw_page_count",
+    "raw_row_count",
+    "structured_row_count",
+    "run_id",
+)
+_SIGNED_ENVELOPE_FIELDS = frozenset(
+    {
+        "eligibility",
+        "issuer_class",
+        "issuer_key_id",
+        "issuer_id",
+        "parser_normalizer_version",
+        "signed_body_b64",
+        "signature",
+        "body_digest",
+        "issued_at",
+        "checked_at",
+        "source_request_digest",
+        "raw_manifest_digest",
+        "raw",
+        "structured_generation",
+        "structured_digest",
+        "scope_digest",
+        "observation_digest",
+        "extra_digests",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _FrozenReceiptInput:
+    outer: Mapping[str, Any]
+    digests: Mapping[str, Any]
+    claims: Mapping[str, Any]
+    signed_body: bytes
+
+
+def _copy_exact_json(value: Any, *, field: str) -> Any:
+    """Copy one JSON value while rejecting adapters and scalar subclasses."""
+    if type(value) is dict:
+        copied: dict[str, Any] = {}
+        for key, item in dict.items(value):
+            if type(key) is not str or key in copied:
+                raise ReceiptVerificationError(
+                    f"{field} keys must be unique exact strings"
+                )
+            copied[key] = _copy_exact_json(item, field=f"{field}.{key}")
+        return copied
+    if type(value) is list:
+        return [
+            _copy_exact_json(item, field=f"{field}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if type(value) in {str, int, bool, type(None)}:
+        return value
+    raise ReceiptVerificationError(
+        f"{field} must contain only exact JSON built-in values"
+    )
+
+
+def _decode_strict_signed_claims(body_b64: str) -> tuple[dict[str, Any], bytes]:
+    try:
+        raw = base64.b64decode(body_b64, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ReceiptVerificationError("signed body is not valid base64") from exc
+
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        document: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in document:
+                raise ReceiptVerificationError(
+                    f"signed body contains duplicate key {key!r}"
+                )
+            document[key] = value
+        return document
+
+    def reject_nonfinite(value: str) -> None:
+        raise ReceiptVerificationError(
+            f"signed body contains non-finite value {value!r}"
+        )
+
+    try:
+        claims = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicates,
+            parse_constant=reject_nonfinite,
+        )
+    except ReceiptVerificationError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ReceiptVerificationError("signed body is not valid JSON") from exc
+    if type(claims) is not dict:
+        raise ReceiptVerificationError("signed body must be an object")
+    return _copy_exact_json(claims, field="signed claims"), raw
+
+
+def _materialize_receipt_input(receipt: Any) -> _FrozenReceiptInput:
+    """Read an exact receipt and its envelope once for all trust decisions."""
+    from storage.coverage_ledger import CollectionReceipt
+
+    if type(receipt) is not CollectionReceipt:
+        raise ReceiptVerificationError("exact CollectionReceipt required")
+    attribute_names = (
+        *_RECEIPT_STRING_FIELDS,
+        "expected_scope",
+        "expected_items",
+        *_RECEIPT_INT_FIELDS,
+        "pagination_exhausted",
+        "digests",
+        "error",
+    )
+    observed = {
+        name: object.__getattribute__(receipt, name) for name in attribute_names
+    }
+    if any(
+        type(observed[name]) is not str or not observed[name]
+        for name in _RECEIPT_STRING_FIELDS
+    ):
+        raise ReceiptVerificationError(
+            "receipt string fields must be exact non-empty strings"
+        )
+    if any(
+        type(observed[name]) is not int or observed[name] < 0
+        for name in _RECEIPT_INT_FIELDS
+    ):
+        raise ReceiptVerificationError(
+            "receipt count/run fields must be exact non-negative integers"
+        )
+    expected_items = observed["expected_items"]
+    if expected_items is not None and (
+        type(expected_items) is not int or expected_items < 0
+    ):
+        raise ReceiptVerificationError(
+            "receipt expected_items must be an exact non-negative integer or null"
+        )
+    if type(observed["pagination_exhausted"]) is not bool:
+        raise ReceiptVerificationError(
+            "receipt pagination_exhausted must be an exact bool"
+        )
+    error = observed["error"]
+    if error is not None and type(error) is not str:
+        raise ReceiptVerificationError("receipt error must be an exact string or null")
+    expected_scope = _copy_exact_json(
+        observed["expected_scope"], field="receipt.expected_scope"
+    )
+    if type(expected_scope) is not dict:
+        raise ReceiptVerificationError("receipt expected_scope must be an exact object")
+    if type(observed["digests"]) is not dict:
+        raise ReceiptVerificationError(
+            "receipt digests must be an exact built-in dict"
+        )
+    digests = _copy_exact_json(observed["digests"], field="receipt.digests")
+    body_b64 = digests.get("signed_body_b64")
+    if type(body_b64) is not str or not body_b64:
+        raise ReceiptVerificationError("missing signed_body_b64")
+    claims, signed_body = _decode_strict_signed_claims(body_b64)
+    extras = claims.get("extra_digests")
+    if type(extras) is not dict:
+        raise ReceiptVerificationError("signed extra_digests must be an exact object")
+    expected_envelope_fields = _SIGNED_ENVELOPE_FIELDS | frozenset(extras)
+    if set(digests) != expected_envelope_fields:
+        missing = sorted(expected_envelope_fields - set(digests))
+        extra = sorted(set(digests) - expected_envelope_fields)
+        raise ReceiptVerificationError(
+            "signed receipt envelope fields are not closed: "
+            f"missing={missing}, extra={extra}"
+        )
+    string_envelope_fields = _SIGNED_ENVELOPE_FIELDS - {
+        "structured_generation",
+        "extra_digests",
+    }
+    if any(
+        type(digests[field]) is not str or not digests[field]
+        for field in string_envelope_fields
+    ):
+        raise ReceiptVerificationError(
+            "signed receipt envelope strings must be exact and non-empty"
+        )
+    if (
+        type(digests["structured_generation"]) is not int
+        or digests["structured_generation"] < 0
+        or type(digests["extra_digests"]) is not dict
+    ):
+        raise ReceiptVerificationError(
+            "signed receipt envelope structured values are invalid"
+        )
+    outer = {
+        **{name: observed[name] for name in _RECEIPT_STRING_FIELDS},
+        **{name: observed[name] for name in _RECEIPT_INT_FIELDS},
+        "expected_scope": expected_scope,
+        "expected_items": expected_items,
+        "pagination_exhausted": observed["pagination_exhausted"],
+        "error": error,
+    }
+    return _FrozenReceiptInput(
+        outer=MappingProxyType(outer),
+        digests=MappingProxyType(digests),
+        claims=MappingProxyType(claims),
+        signed_body=signed_body,
+    )
 
 
 def _deep_freeze(value: Any) -> Any:
@@ -234,20 +447,6 @@ def _claims_validator() -> Any:
     return validator
 
 
-def _decode_signed_claims(digests: Mapping[str, Any]) -> tuple[dict[str, Any], bytes]:
-    body_b64 = digests.get("signed_body_b64")
-    if not isinstance(body_b64, str) or not body_b64:
-        raise ReceiptVerificationError("missing signed_body_b64")
-    try:
-        raw = base64.b64decode(body_b64, validate=True)
-        claims = json.loads(raw.decode("utf-8"))
-    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ReceiptVerificationError("signed body is not valid JSON") from exc
-    if not isinstance(claims, dict):
-        raise ReceiptVerificationError("signed body must be an object")
-    return claims, raw
-
-
 def _validate_schema(claims: Mapping[str, Any]) -> None:
     try:
         import jsonschema
@@ -326,14 +525,17 @@ def audit_signed_receipt_claims(
     receipt: Any,
 ) -> Mapping[str, Any]:
     """Decode a valid v1/v2 signature for audit without granting COMPLETE."""
-    digests = receipt.digests if hasattr(receipt, "digests") else None
-    if not isinstance(digests, Mapping):
-        raise ReceiptVerificationError("receipt digests must be a mapping")
-    if not verify_receipt_signature(digests):
+    frozen = _materialize_receipt_input(receipt)
+    digests = frozen.digests
+    claims = frozen.claims
+    if not verify_receipt_signature_values(
+        body=frozen.signed_body,
+        signature=digests["signature"],
+        key_id=digests["issuer_key_id"],
+    ):
         raise ReceiptVerificationError("Ed25519 signature is invalid")
-    claims, raw = _decode_signed_claims(digests)
     declared = digests.get("body_digest")
-    if declared is not None and declared != body_digest(raw):
+    if declared is not None and declared != body_digest(frozen.signed_body):
         raise ReceiptVerificationError("signed body_digest mismatch")
     version = claims.get("version")
     if version not in {
@@ -359,19 +561,21 @@ def verify_collection_closure(
     structured_digest: str | None = None,
 ) -> VerifiedCollectionClosure:
     """Return an opaque v2 closure or fail without a partial trust result."""
-    if receipt is None:
-        raise ReceiptVerificationError("missing collection receipt")
-    digests = receipt.digests if hasattr(receipt, "digests") else None
-    if not isinstance(digests, Mapping):
-        raise ReceiptVerificationError("receipt digests must be a mapping")
+    frozen = _materialize_receipt_input(receipt)
+    digests = frozen.digests
+    claims = frozen.claims
+    outer = frozen.outer
     if digests.get("synthetic"):
         raise ReceiptVerificationError("synthetic receipts are not verifiable")
     if digests.get("eligibility") != "TRUSTED_COLLECTION":
         raise ReceiptVerificationError("receipt is not a trusted collection")
-    if not verify_receipt_signature(digests):
+    if not verify_receipt_signature_values(
+        body=frozen.signed_body,
+        signature=digests["signature"],
+        key_id=digests["issuer_key_id"],
+    ):
         raise ReceiptVerificationError("Ed25519 signature is invalid")
 
-    claims, raw_body = _decode_signed_claims(digests)
     version = claims.get("version")
     if version == LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION:
         raise ReceiptVerificationError(
@@ -381,7 +585,7 @@ def verify_collection_closure(
         raise ReceiptVerificationError("unsupported signed claims version")
     _validate_schema(claims)
     _validate_digest_chain(claims)
-    if body_digest(raw_body) != digests.get("body_digest"):
+    if body_digest(frozen.signed_body) != digests.get("body_digest"):
         raise ReceiptVerificationError("signed body_digest mismatch")
 
     extras = claims["extra_digests"]
@@ -394,22 +598,22 @@ def verify_collection_closure(
         raise ReceiptVerificationError("parser_normalizer_version mismatch")
 
     outer_bindings = {
-        "source": receipt.source,
-        "dataset": receipt.dataset,
-        "segment_id": receipt.segment_id,
-        "segment_start": receipt.segment_start,
-        "segment_end": receipt.segment_end,
-        "expected_scope": receipt.expected_scope,
-        "expected_items": receipt.expected_items,
-        "observed_items": receipt.observed_items,
-        "raw_page_count": receipt.raw_page_count,
-        "raw_count": receipt.raw_row_count,
-        "structured_count": receipt.structured_row_count,
-        "pagination_exhausted": receipt.pagination_exhausted,
-        "run_id": receipt.run_id,
-        "status": receipt.status,
-        "error": receipt.error,
-        "checked_at": receipt.checked_at,
+        "source": outer["source"],
+        "dataset": outer["dataset"],
+        "segment_id": outer["segment_id"],
+        "segment_start": outer["segment_start"],
+        "segment_end": outer["segment_end"],
+        "expected_scope": outer["expected_scope"],
+        "expected_items": outer["expected_items"],
+        "observed_items": outer["observed_items"],
+        "raw_page_count": outer["raw_page_count"],
+        "raw_count": outer["raw_row_count"],
+        "structured_count": outer["structured_row_count"],
+        "pagination_exhausted": outer["pagination_exhausted"],
+        "run_id": outer["run_id"],
+        "status": outer["status"],
+        "error": outer["error"],
+        "checked_at": outer["checked_at"],
     }
     for name, outer_value in outer_bindings.items():
         _require_same(name, claims[name], outer_value)
@@ -439,26 +643,76 @@ def verify_collection_closure(
             )
 
     if required is not None:
+        from storage.coverage_ledger import RequiredCoverageSegment
+
+        if type(required) is not RequiredCoverageSegment:
+            raise ReceiptVerificationError(
+                "exact RequiredCoverageSegment required"
+            )
+        required_names = (
+            "source",
+            "dataset",
+            "segment_id",
+            "segment_start",
+            "segment_end",
+            "expected_scope",
+            "expected_items",
+        )
+        required_values = {
+            name: object.__getattribute__(required, name)
+            for name in required_names
+        }
+        required_scope = _copy_exact_json(
+            required_values["expected_scope"], field="required.expected_scope"
+        )
+        if type(required_scope) is not dict:
+            raise ReceiptVerificationError(
+                "required expected_scope must be an exact object"
+            )
+        if any(
+            type(required_values[name]) is not str or not required_values[name]
+            for name in required_names[:5]
+        ):
+            raise ReceiptVerificationError(
+                "required identity fields must be exact non-empty strings"
+            )
+        required_expected = required_values["expected_items"]
+        if required_expected is not None and (
+            type(required_expected) is not int or required_expected < 0
+        ):
+            raise ReceiptVerificationError(
+                "required expected_items must be an exact non-negative integer or null"
+            )
         required_bindings = {
-            "source": required.source,
-            "dataset": required.dataset,
-            "segment_id": required.segment_id,
-            "segment_start": required.segment_start,
-            "segment_end": required.segment_end,
-            "expected_scope": required.expected_scope,
-            "expected_items": required.expected_items,
+            "source": required_values["source"],
+            "dataset": required_values["dataset"],
+            "segment_id": required_values["segment_id"],
+            "segment_start": required_values["segment_start"],
+            "segment_end": required_values["segment_end"],
+            "expected_scope": required_scope,
+            "expected_items": required_expected,
         }
         for name, value in required_bindings.items():
             _require_same(f"required.{name}", claims[name], value)
     if expected_policy_version is not None:
+        if type(expected_policy_version) is not str:
+            raise ReceiptVerificationError(
+                "expected policy version must be an exact string"
+            )
         _require_same(
             "coverage_policy_version",
             claims["coverage_policy_version"],
             expected_policy_version,
         )
     if raw is not None:
+        if type(raw) is not bytes:
+            raise ReceiptVerificationError("raw evidence must be exact bytes")
         _require_same("raw evidence", claims["raw_digest"], compute_raw_digest(raw))
     if structured_digest is not None:
+        if type(structured_digest) is not str:
+            raise ReceiptVerificationError(
+                "structured digest must be an exact string"
+            )
         _require_same(
             "structured evidence", claims["structured_digest"], structured_digest
         )

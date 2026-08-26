@@ -163,6 +163,102 @@ def test_forged_signature_rejected(receipt_ed25519_keys: SimpleNamespace):
     assert not is_complete_eligible_receipt(forged)
 
 
+def test_stateful_digest_mapping_cannot_swap_signed_body_after_verification(
+    receipt_ed25519_keys: SimpleNamespace,
+) -> None:
+    """The former A-signature/B-claims confused deputy is fail-closed."""
+    from storage.coverage_ledger import CollectionReceipt
+    from storage.verified_receipt import audit_signed_receipt_claims
+
+    authority = _SignedReceiptAuthority(
+        signing_key=receipt_ed25519_keys.signing_key
+    )
+    required_a = _calendar_required()
+    required_b = replace(
+        required_a,
+        segment_id="2025-02",
+        segment_start="2025-02-01",
+        segment_end="2025-02-28",
+        expected_scope={"month": "2025-02"},
+    )
+    receipt_a = _issue(authority, required_a)
+    receipt_b = _issue(authority, required_b)
+
+    class SwitchingDigests(dict):
+        def __init__(self) -> None:
+            super().__init__(receipt_b.digests)
+            self.body_reads = 0
+
+        def get(self, key, default=None):
+            if key == "signed_body_b64":
+                self.body_reads += 1
+                if self.body_reads == 1:
+                    return receipt_a.digests[key]
+            if key == "signature":
+                return receipt_a.digests[key]
+            return super().get(key, default)
+
+    switched = replace(receipt_b, digests=SwitchingDigests())
+    with pytest.raises(ReceiptVerificationError, match="exact built-in dict"):
+        verify(switched, required=required_b)
+    with pytest.raises(ReceiptVerificationError, match="exact built-in dict"):
+        audit_signed_receipt_claims(switched)
+    assert not is_complete_eligible_receipt(switched)
+
+    stable_transplant = replace(
+        receipt_b,
+        digests={
+            **receipt_b.digests,
+            "signature": receipt_a.digests["signature"],
+        },
+    )
+    with pytest.raises(ReceiptVerificationError, match="signature is invalid"):
+        verify(stable_transplant, required=required_b)
+
+    # The ordinary exact DTO remains the sole accepted transport type.
+    assert verify(receipt_b, required=required_b).segment_id == "2025-02"
+    assert type(receipt_b) is CollectionReceipt
+
+
+def test_receipt_and_scalar_subclasses_cannot_enter_closure_authority(
+    receipt_ed25519_keys: SimpleNamespace,
+) -> None:
+    from storage.coverage_ledger import CollectionReceipt
+
+    receipt = _issue(
+        _SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key),
+        _calendar_required(),
+    )
+
+    class ReceiptSubclass(CollectionReceipt):
+        pass
+
+    subclass = ReceiptSubclass(
+        **{
+            name: object.__getattribute__(receipt, name)
+            for name in CollectionReceipt.__dataclass_fields__
+        }
+    )
+    with pytest.raises(ReceiptVerificationError, match="exact CollectionReceipt"):
+        verify(subclass)
+
+    class StatefulString(str):
+        pass
+
+    scalar_subclass = replace(receipt, dataset=StatefulString(receipt.dataset))
+    with pytest.raises(ReceiptVerificationError, match="exact non-empty strings"):
+        verify(scalar_subclass)
+
+    class ScopeSubclass(dict):
+        pass
+
+    scope_subclass = replace(
+        receipt, expected_scope=ScopeSubclass(receipt.expected_scope)
+    )
+    with pytest.raises(ReceiptVerificationError, match="exact JSON"):
+        verify(scope_subclass)
+
+
 def test_prior_v3_receipt_remains_audit_only_and_loses_complete_eligibility(
     receipt_ed25519_keys: SimpleNamespace,
 ) -> None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -170,7 +171,25 @@ def configure_test_receipt_authority(
         public_raw=public_raw,
     )
     monkeypatch.setattr(crypto, "_PINNED_VERIFY_KEYS_PATH", registry_path)
-    crypto._load_verify_key_file.cache_clear()
+    raw_registry = registry_path.read_bytes()
+    registry_document = json.loads(raw_registry)
+    canonical_registry = json.dumps(
+        registry_document,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_REGISTRY_RAW_DIGEST",
+        "sha256:" + hashlib.sha256(raw_registry).hexdigest(),
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_REGISTRY_DOCUMENT_DIGEST",
+        "sha256:" + hashlib.sha256(canonical_registry).hexdigest(),
+    )
     monkeypatch.delenv("QUANT_RECEIPT_SIGNING_KEY_PEM", raising=False)
     monkeypatch.delenv("QUANT_RECEIPT_VERIFY_KEYS", raising=False)
     monkeypatch.delenv("QUANT_RECEIPT_KEY_ID", raising=False)
@@ -271,7 +290,7 @@ class TestSignedReceiptAuthority:
             raw_row_count=int(claims["raw_count"]),
             structured_row_count=int(claims["structured_count"]),
             pagination_exhausted=bool(claims["pagination_exhausted"]),
-            digests=MappingProxyType(dict(signed)),
+            digests=dict(signed),
             run_id=int(claims["run_id"]),
             status=str(claims["status"]),
             error=None,
