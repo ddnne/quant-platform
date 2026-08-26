@@ -58,8 +58,8 @@ if ! host_py="$(find_python_311_plus)"; then
   exit 1
 fi
 
-echo "==> pinned finding-ledger release gate"
-"$host_py" "$ROOT/scripts/finding_ledger_gate.py"
+echo "==> pinned finding-ledger source-integration validation"
+"$host_py" "$ROOT/scripts/finding_ledger_ci.py"
 
 echo "==> secret/path scan"
 "$host_py" "$ROOT/scripts/verify_secret_paths.py"

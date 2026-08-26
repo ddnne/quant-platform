@@ -440,7 +440,6 @@ def test_production_cli_accepts_no_caller_ledger_path() -> None:
     "command",
     [
         [sys.executable, "scripts/finding_ledger_gate.py"],
-        ["bash", "scripts/verify_ci.sh"],
         ["bash", "scripts/verify_cloudflare_deployment_acceptance.sh"],
         [
             sys.executable,
@@ -466,3 +465,29 @@ def test_every_release_entrypoint_stops_on_the_current_open_ledger(
     assert result.returncode != 0
     assert "finding ledger release gate blocked" in result.stderr
     assert not (ROOT / "does-not-exist-output").exists()
+
+
+def test_source_integration_validation_reports_open_p0_without_authorizing_release() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/finding_ledger_ci.py"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "finding ledger CI validation: ok" in result.stdout
+    assert "release_allowed=false" in result.stdout
+    assert "A2" in result.stdout
+
+
+def test_source_integration_validation_accepts_no_caller_ledger_path() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/finding_ledger_ci.py", str(LEDGER)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "accepts no arguments" in result.stderr
