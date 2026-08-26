@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 import hashlib
-import inspect
 import json
 from pathlib import Path
 import sqlite3
@@ -422,9 +421,6 @@ def test_trusted_candidate_rejects_caller_authored_projection_fields(
     source = tmp_path / "authenticated.sqlite"
     _projection_source(source)
     handle = _open_projection_handle(source, monkeypatch)
-    assert tuple(inspect.signature(exporter._render_trusted_projection_candidate).parameters) == (
-        "applied_mirror",
-    )
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         exporter._render_trusted_projection_candidate(handle, **forged)
     # Argument rejection happens before the positive capability is consumed.

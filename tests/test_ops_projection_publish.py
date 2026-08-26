@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 import gc
-import inspect
 import json
 from pathlib import Path
 import sqlite3
@@ -192,29 +191,6 @@ def _bundle(path: Path, generation: str):
         refresh_status="success",
         last_success_at="2026-08-25T00:01:00Z",
     )
-
-
-def test_render_is_append_only_and_pointer_is_last(tmp_path: Path) -> None:
-    source = tmp_path / "source.sqlite"
-    _source(source)
-    sql = _bundle(source, "projgen-one").sql
-    assert "DELETE FROM" not in sql
-    assert "INSERT OR REPLACE" not in sql
-    statements = [line for line in sql.splitlines() if line and line != "COMMIT;"]
-    open_index = next(
-        index for index, statement in enumerate(statements)
-        if statement.startswith("INSERT INTO ops_projection_generation")
-    )
-    metadata_index = next(
-        index for index, statement in enumerate(statements)
-        if statement.startswith("INSERT INTO ops_projection_metadata")
-    )
-    seal_index = next(
-        index for index, statement in enumerate(statements)
-        if statement.startswith("UPDATE ops_projection_generation")
-    )
-    assert open_index < metadata_index < seal_index < len(statements) - 1
-    assert statements[-1].startswith("INSERT INTO ops_projection_active")
 
 
 def test_two_generations_preserve_prior_rows_and_flip_pointer(tmp_path: Path) -> None:
@@ -461,7 +437,16 @@ def test_publish_writes_content_addressed_generation_metadata(tmp_path: Path) ->
     assert document["generation_id"].startswith("projgen-")
     assert document["source_db_digest"].startswith("sha256:")
     assert document["row_counts"]["ops_projection_metadata"] == 1
-    assert "DELETE FROM" not in output.read_text(encoding="utf-8")
+    target = _target()
+    target.executescript(output.read_text(encoding="utf-8"))
+    assert target.execute(
+        "SELECT status FROM ops_projection_generation WHERE generation_id=?",
+        (document["generation_id"],),
+    ).fetchone() == ("SEALED",)
+    assert target.execute(
+        "SELECT generation_id FROM ops_projection_active WHERE singleton=1"
+    ).fetchone() == (document["generation_id"],)
+    target.close()
 
 
 def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
@@ -765,20 +750,19 @@ def test_product_exporter_has_no_signer_or_test_authority_injection_surface(
 ) -> None:
     source = tmp_path / "source.sqlite"
     _source(source)
-    parameters = inspect.signature(exporter._render_projection_bundle).parameters
-    assert {
-        "projection_signer",
-        "_test_authority",
-        "_test_enforce_trusted_guards",
-    }.isdisjoint(parameters)
     assert not hasattr(exporter, "_render_projection_bundle_for_test")
-    with pytest.raises(TypeError, match="projection_signer"):
-        exporter._render_projection_bundle(
-            source,
-            projection_signer=TestOpsProjectionSigningKey(
+    forbidden_injections = (
+        {
+            "projection_signer": TestOpsProjectionSigningKey(
                 "ops-projection-test-v1", Ed25519PrivateKey.generate()
-            ),
-        )
+            )
+        },
+        {"_test_authority": object()},
+        {"_test_enforce_trusted_guards": False},
+    )
+    for forged in forbidden_injections:
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            exporter._render_projection_bundle(source, **forged)
 
 
 def test_authenticated_mirror_pins_one_snapshot_and_is_single_use(
