@@ -77,7 +77,7 @@ class ExperimentSlotLease:
         return clock > expires
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ResearchBudgetCapability:
     """Positive capability required to start mass research."""
 

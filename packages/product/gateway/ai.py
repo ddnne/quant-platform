@@ -250,6 +250,8 @@ class OfflineFixture:
             raise TypeError("offline fixture mode must be OfflineFixtureMode")
         if self.usage is not None and type(self.usage) is not OfflineFixtureUsage:
             raise TypeError("offline fixture usage must be exact OfflineFixtureUsage")
+        if self.usage is not None:
+            OfflineFixtureUsage.__post_init__(self.usage)
         if self.mode is OfflineFixtureMode.PAYLOAD:
             if (
                 type(self.payload_json) is not str

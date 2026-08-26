@@ -90,6 +90,18 @@ def test_gateway_rejects_virtual_budget_capability_subclass(tmp_path: Path) -> N
     assert not hostile.ledger_path.exists()
 
 
+def test_exact_budget_capability_cannot_gain_instance_method_override(
+    tmp_path: Path,
+) -> None:
+    capability = _budget(tmp_path)
+    with pytest.raises((AttributeError, TypeError)):
+        object.__setattr__(
+            capability,
+            "settle_provider_usage_once",
+            lambda **_kwargs: False,
+        )
+
+
 def test_fixture_payload_is_strict_canonical_data() -> None:
     with pytest.raises(ValueError, match="duplicate JSON key"):
         OfflineFixture(
@@ -103,6 +115,15 @@ def test_fixture_payload_is_strict_canonical_data() -> None:
         )
     with pytest.raises(ValueError, match="OfflineFixtureUsage"):
         OfflineFixture.from_payload({"usage": {"input_tokens": 1}})
+
+
+def test_gateway_revalidates_mutated_exact_fixture_usage(tmp_path: Path) -> None:
+    usage = OfflineFixtureUsage(input_tokens=2, output_tokens=1)
+    fixture = OfflineFixture.from_payload(_insight_payload(), usage=usage)
+    gateway = AIGateway(provider=fixture, research_budget=_budget(tmp_path))
+    object.__setattr__(usage, "input_tokens", -1)
+    with pytest.raises(TypeError, match="offline fixture invalid"):
+        gateway.run(role="q", task="t", prompt="p", expected_schema="Insight")
 
 
 def _budget(
