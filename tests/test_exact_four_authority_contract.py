@@ -461,6 +461,23 @@ def test_public_chain_uses_module_clock_and_rejects_2000_or_2099_claims(
     ).parameters
 
 
+def test_public_chain_rejects_near_future_issuance_without_clock_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actual_now = datetime.now(timezone.utc)
+    claimed_now = actual_now + timedelta(minutes=5, seconds=10)
+    monkeypatch.setattr(authority_module, "_trusted_utc_now", lambda: claimed_now)
+    readiness, trader, execution = _claims(at=claimed_now)
+
+    monkeypatch.setattr(authority_module, "_trusted_utc_now", lambda: actual_now)
+    with pytest.raises(ExactFourAuthorityContractError, match="not yet valid"):
+        validate_exact_four_authority_claim_chain_v2(
+            readiness,
+            trader,
+            execution,
+        )
+
+
 def test_downstream_parsers_reject_split_brain_parent_claims() -> None:
     readiness, trader, execution = _claims()
     other_ready = replace(readiness, pilot_run_id="pilot-run-split-brain")

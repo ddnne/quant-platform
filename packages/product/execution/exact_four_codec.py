@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from selection.budget_ledger import MassResearchDisabledError
@@ -23,7 +23,6 @@ CONTROLLED_EXECUTION_SCOPE = "EXACT_FOUR_CONTROLLED_PAPER_EXECUTION"
 PILOT_EXECUTION_MODE = "paper"
 AUTHORITY_PROTOCOL_STATE = "PENDING_EXTERNAL_AUTHORITIES"
 
-_CURRENT_CLOCK_SKEW = timedelta(seconds=30)
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _UNAVAILABLE_CURRENT_VALUES = frozenset(
     {
@@ -197,7 +196,7 @@ def _require_current_window(
     issued = _parsed_timestamp(issued_at, f"{label} issued_at")
     expires = _parsed_timestamp(expires_at, f"{label} expires_at")
     current = now.astimezone(timezone.utc)
-    if issued > current + _CURRENT_CLOCK_SKEW:
+    if issued > current:
         raise ExactFourAuthorityContractError(
             f"{label} is not yet valid at the trusted UTC clock"
         )
