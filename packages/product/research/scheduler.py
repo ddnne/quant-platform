@@ -97,7 +97,6 @@ class ExperimentScheduler:
             budget=self._budget,
             readiness=readiness,
         )
-        att.require_valid()
         if plan.plan_id not in att.plan_ids:
             raise MassResearchDisabledError(
                 "ExperimentPlan is not a member of the signed Mass readiness plan set"

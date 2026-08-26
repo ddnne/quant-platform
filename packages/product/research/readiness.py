@@ -1,32 +1,27 @@
 """Scope-separated research readiness attestations.
 
 READY is a positive capability, not a count supplied by a scheduler. Pilot
-and Mass attestations are deliberately different nominal types, and every
-attestation is signed by a dedicated Ed25519 key owned by the READY
-publication service. Verifiers receive public keys only; receipt signing keys
-and HMAC compatibility fallbacks are intentionally not consulted.
+and Mass attestations are deliberately different nominal types. This product
+module is verify-only: a separately isolated READY publication service must
+sign every attestation with its dedicated Ed25519 key. Verifiers receive
+public keys only; receipt signing keys and HMAC compatibility fallbacks are
+intentionally not consulted.
 """
 
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import re
-import sqlite3
 from dataclasses import dataclass, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, ClassVar, Mapping, TypeVar
+from typing import Any, ClassVar, Mapping, final
 from uuid import uuid4
 
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey,
-    Ed25519PublicKey,
-)
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from selection.budget_ledger import (
     MassResearchDisabledError,
@@ -34,16 +29,74 @@ from selection.budget_ledger import (
 )
 
 READINESS_SIGNATURE_ALGORITHM = "Ed25519"
-DEFAULT_READINESS_PUBLIC_KEYS_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "specs"
-    / "ready"
-    / "readiness_verify_public_keys.json"
-)
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 MASS_READINESS_ENABLED: bool = False
 _MASS_AUTHORITY_TOKEN = object()
-_READY_PUBLICATION_SIGNER_TOKEN = object()
+
+READY_PUBLICATION_AUTHORITY_CONTRACT = "ready-publication-authority/v1"
+READY_PUBLICATION_REQUIRED_CHECKS = (
+    "authenticated_immutable_ops_mirror",
+    "canonical_exact_four_plan_closure_profile",
+    "trusted_coverage_proof",
+    "b0_b4_pass",
+    "source_export_applied_generation_coherence",
+    "independently_reopened_immutable_snapshot_copy",
+)
+
+
+class ReadyPublicationAuthorityPending(MassResearchDisabledError):
+    """A dedicated READY issuer principal or remote service is unavailable."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReadyPublicationAuthorityStatus:
+    """Machine-readable fail-closed state for the external READY issuer."""
+
+    state: str
+    evidence_state: str
+    contract_version: str
+    required_checks: tuple[str, ...]
+    mass_state: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        if (
+            self.state not in {"PENDING", "ACTIVE"}
+            or self.evidence_state not in {"UNKNOWN", "VERIFIED"}
+            or self.mass_state != "DISABLED"
+            or self.contract_version != READY_PUBLICATION_AUTHORITY_CONTRACT
+            or self.required_checks != READY_PUBLICATION_REQUIRED_CHECKS
+        ):
+            raise ValueError("invalid READY publication authority status")
+
+
+def ready_publication_authority_status() -> ReadyPublicationAuthorityStatus:
+    """Report PENDING/UNKNOWN until a separately isolated issuer exists.
+
+    Product code intentionally has no private-key type, private-key loader,
+    signer factory, or issuer injection hook.  Activating this contract needs
+    a different OS principal or remote service that independently reopens and
+    remeasures every item in ``required_checks`` before it signs anything.
+    """
+
+    return ReadyPublicationAuthorityStatus(
+        state="PENDING",
+        evidence_state="UNKNOWN",
+        contract_version=READY_PUBLICATION_AUTHORITY_CONTRACT,
+        required_checks=READY_PUBLICATION_REQUIRED_CHECKS,
+        mass_state="DISABLED",
+        reason="dedicated READY publication authority is not provisioned",
+    )
+
+
+def require_ready_publication_authority() -> None:
+    """Fail before publication mutation while the external issuer is absent."""
+
+    status = ready_publication_authority_status()
+    raise ReadyPublicationAuthorityPending(
+        f"READY authority {status.state}; evidence {status.evidence_state}; "
+        f"contract={status.contract_version}; Mass={status.mass_state}"
+    )
 
 
 def _is_sha256(value: Any) -> bool:
@@ -55,6 +108,8 @@ def _now() -> datetime:
 
 
 def _digest(payload: Mapping[str, Any] | list[Any] | str) -> str:
+    import hashlib
+
     if isinstance(payload, str):
         raw = payload.encode("utf-8")
     else:
@@ -159,45 +214,18 @@ class ReadinessPublicKeyRegistry:
 
     @classmethod
     def load_pinned(cls) -> "ReadinessPublicKeyRegistry":
-        """Load only the committed production trust root; no path/env override."""
+        """Load only the code-pinned lower-plane verifier trust root."""
+        from paper_runtime.readiness_attestation import (
+            ReadyAttestationVerificationError,
+            load_pinned_readiness_public_keys,
+        )
+
         try:
-            document = json.loads(
-                DEFAULT_READINESS_PUBLIC_KEYS_PATH.read_text(encoding="utf-8")
-            )
-        except (OSError, json.JSONDecodeError) as exc:
+            return cls(load_pinned_readiness_public_keys())
+        except ReadyAttestationVerificationError as exc:
             raise MassResearchDisabledError(
                 "cannot load the pinned readiness public key registry"
             ) from exc
-        if (
-            not isinstance(document, Mapping)
-            or document.get("purpose")
-            != "readiness_attestation_verification"
-        ):
-            raise MassResearchDisabledError(
-                "pinned readiness public key registry purpose mismatch"
-            )
-        return cls.from_document(document)
-
-    def _key_id_for_public_key(self, key: Ed25519PublicKey) -> str:
-        raw = key.public_bytes(
-            serialization.Encoding.Raw,
-            serialization.PublicFormat.Raw,
-        )
-        matches = [
-            key_id
-            for key_id, registered in self._keys.items()
-            if registered.public_bytes(
-                serialization.Encoding.Raw,
-                serialization.PublicFormat.Raw,
-            )
-            == raw
-        ]
-        if len(matches) != 1:
-            raise MassResearchDisabledError(
-                "dedicated readiness key does not match exactly one active "
-                "key in the pinned registry"
-            )
-        return matches[0]
 
     def verify(self, *, key_id: str, body: Mapping[str, Any], signature: str) -> bool:
         key = self._keys.get(str(key_id))
@@ -210,7 +238,7 @@ class ReadinessPublicKeyRegistry:
         return True
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _VerifiedReadiness:
     """Signed immutable capability shared by the two nominal scope types."""
 
@@ -252,10 +280,18 @@ class _VerifiedReadiness:
     issuer: str = "ReadyPublicationService/v3"
 
     def __post_init__(self) -> None:
-        if self.readiness_scope != self.EXPECTED_SCOPE:
+        concrete_type = type(self)
+        if concrete_type is VerifiedPilotReadiness:
+            expected_scope = "PILOT"
+        elif concrete_type is VerifiedMassReadiness:
+            expected_scope = "MASS"
+        else:
+            raise ValueError("readiness capability requires an exact final scope type")
+        readiness_scope = object.__getattribute__(self, "readiness_scope")
+        if type(readiness_scope) is not str or readiness_scope != expected_scope:
             raise ValueError(
-                f"{type(self).__name__} requires readiness_scope "
-                f"{self.EXPECTED_SCOPE!r}"
+                f"{concrete_type.__name__} requires readiness_scope "
+                f"{expected_scope!r}"
             )
 
     def to_canonical_body(self) -> dict[str, Any]:
@@ -299,109 +335,40 @@ class _VerifiedReadiness:
         """Serialize the complete signed capability for immutable retention."""
         return {**self.to_canonical_body(), "signature": self.signature}
 
-    def is_expired(self, *, now: datetime | None = None) -> bool:
-        clock = now or _now()
-        try:
-            expires = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
-        except ValueError:
-            return True
-        if expires.tzinfo is None:
-            return True
-        return clock > expires
+    def is_valid(self) -> bool:
+        """Verify only through the configured pinned product trust root.
 
-    def _scope_fields_valid(self) -> bool:
+        The DTO deliberately accepts no caller registry, expected binding, or
+        clock. Consumers that need an expected artifact identity use the
+        module verifier, which also materializes the exact final type once.
+        """
+
+        try:
+            self.require_valid()
+        except (MassResearchDisabledError, TypeError, ValueError):
+            return False
         return True
 
-    def is_valid(
-        self,
-        *,
-        expected_snapshot_id: str | None = None,
-        expected_plan_set_digest: str | None = None,
-        expected_closure_digest: str | None = None,
-        verifier: ReadinessPublicKeyRegistry | None = None,
-        now: datetime | None = None,
-    ) -> bool:
-        digest_fields = (
-            self.snapshot_id,
-            self.profile_digest,
-            self.plan_set_digest,
-            self.dependency_closure_digest,
-            self.universe_rule_digest,
-            self.resolved_universe_digest,
-            self.ready_manifest_digest,
-            self.immutable_db_digest,
-            self.coverage_policy_digest,
-            self.coverage_proof_digest,
-            self.governed_membership_digest,
-            self.raw_proof_digest,
-            self.receipt_proof_digest,
-            self.validation_proof_digest,
-            self.b0_quality_proof_digest,
-            self.b4_quality_proof_digest,
-            self.evidence_digest,
-        )
-        if (
-            not self.attestation_id
-            or self.ready_state != "READY"
-            or self.readiness_scope != self.EXPECTED_SCOPE
-            or not self.profile_id
-            or not self.profile_version
-            or not self.plan_ids
-            or len(self.plan_ids) != len(set(self.plan_ids))
-            or not self.dataset_ids
-            or len(self.dataset_ids) != len(set(self.dataset_ids))
-            or not self.key_id
-            or any(not _is_sha256(value) for value in digest_fields)
-            or not self.source_generation
-            or not self.export_cursor
-            or not self.applied_cursor
-            or self.source_generation != self.export_cursor
-            or self.export_cursor != self.applied_cursor
-            or not self._scope_fields_valid()
-            or self.is_expired(now=now)
-        ):
-            return False
-        if expected_snapshot_id is not None and self.snapshot_id != expected_snapshot_id:
-            return False
-        if (
-            expected_plan_set_digest is not None
-            and self.plan_set_digest != expected_plan_set_digest
-        ):
-            return False
-        if (
-            expected_closure_digest is not None
-            and self.dependency_closure_digest != expected_closure_digest
-        ):
-            return False
-        registry = verifier or ReadinessPublicKeyRegistry.load_pinned()
-        return registry.verify(
-            key_id=self.key_id,
-            body=self.to_canonical_body(),
-            signature=self.signature,
+    def require_valid(self) -> "_VerifiedReadiness":
+        """Return a freshly materialized, pinned capability or fail closed."""
+
+        if type(self) is VerifiedPilotReadiness:
+            return verify_pinned_pilot_readiness(self)
+        raise MassResearchDisabledError(
+            f"{type(self).__name__} cannot be verified by an enabled authority"
         )
 
-    def require_valid(self, **kwargs: Any) -> "_VerifiedReadiness":
-        if not self.is_valid(**kwargs):
-            raise MassResearchDisabledError(
-                f"{type(self).__name__} invalid, expired, scope-mismatched, "
-                "or signature mismatch"
-            )
-        return self
 
-
+@final
 class VerifiedPilotReadiness(_VerifiedReadiness):
     """Capability valid only for an exact controlled-pilot plan set."""
 
+    __slots__ = ()
     EXPECTED_SCOPE = "PILOT"
 
-    def _scope_fields_valid(self) -> bool:
-        from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
-
-        return (
-            self.profile_id == "controlled-pilot/exact-four"
-            and len(self.plan_ids) == 4
-            and self.universe_rule_digest == EXACT_FOUR_UNIVERSE_RULE_DIGEST
-        )
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        del cls, kwargs
+        raise TypeError("VerifiedPilotReadiness is final")
 
 
 def load_verified_pilot_readiness(
@@ -418,12 +385,23 @@ def load_verified_pilot_readiness(
     """
     source = Path(path)
     try:
-        document = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        raw_document = source.read_bytes()
+    except OSError as exc:
         raise MassResearchDisabledError(
             f"cannot load pilot readiness sidecar: {source}"
         ) from exc
-    if not isinstance(document, Mapping):
+    from paper_runtime.readiness_attestation import (
+        ReadyAttestationVerificationError,
+        decode_strict_ready_json,
+    )
+
+    try:
+        document = decode_strict_ready_json(raw_document)
+    except ReadyAttestationVerificationError as exc:
+        raise MassResearchDisabledError(
+            "pilot readiness sidecar JSON is ambiguous or invalid"
+        ) from exc
+    if type(document) is not dict:
         raise MassResearchDisabledError("pilot readiness sidecar must be an object")
 
     canonical_fields = {field.name for field in fields(VerifiedPilotReadiness)}
@@ -446,9 +424,9 @@ def load_verified_pilot_readiness(
     for field in ("plan_ids", "dataset_ids"):
         value = init_payload[field]
         if (
-            not isinstance(value, list)
+            type(value) is not list
             or not value
-            or any(not isinstance(item, str) or not item for item in value)
+            or any(type(item) is not str or not item for item in value)
         ):
             raise MassResearchDisabledError(
                 f"pilot readiness sidecar {field} must be a non-empty string array"
@@ -457,7 +435,7 @@ def load_verified_pilot_readiness(
     for field, value in init_payload.items():
         if field in {"plan_ids", "dataset_ids"}:
             continue
-        if not isinstance(value, str) or not value:
+        if type(value) is not str or not value:
             raise MassResearchDisabledError(
                 f"pilot readiness sidecar {field} must be a non-empty string"
             )
@@ -493,26 +471,235 @@ def load_verified_pilot_readiness(
         raise MassResearchDisabledError(
             "pilot readiness sidecar ReadyManifest digest mismatch"
         )
-    registry = ReadinessPublicKeyRegistry.load_pinned()
-    if not readiness.is_valid(
+    return verify_pinned_pilot_readiness(
+        readiness,
         expected_snapshot_id=expected_snapshot_id,
-        expected_plan_set_digest=binding.plan_set_digest,
-        expected_closure_digest=binding.closure_set_digest,
-        verifier=registry,
-    ):
-        raise MassResearchDisabledError(
-            "pilot readiness sidecar is invalid, expired, or untrusted"
-        )
-    return readiness
+        expected_ready_manifest_digest=expected_ready_manifest_digest,
+    )
 
 
+@final
 class VerifiedMassReadiness(_VerifiedReadiness):
     """Capability valid only for an explicit Mass data profile."""
 
+    __slots__ = ()
     EXPECTED_SCOPE = "MASS"
 
-    def _scope_fields_valid(self) -> bool:
-        return self.profile_id.startswith("mass/")
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        del cls, kwargs
+        raise TypeError("VerifiedMassReadiness is final")
+
+
+_READINESS_SEQUENCE_FIELDS = frozenset({"plan_ids", "dataset_ids"})
+
+
+def _materialize_exact_pilot_readiness(
+    readiness: object,
+) -> dict[str, Any]:
+    """Read every exact capability field once into closed built-in values."""
+
+    if type(readiness) is not VerifiedPilotReadiness:
+        raise MassResearchDisabledError(
+            "exact VerifiedPilotReadiness required; subclasses are rejected"
+        )
+    frozen: dict[str, Any] = {}
+    for field in fields(VerifiedPilotReadiness):
+        value = object.__getattribute__(readiness, field.name)
+        if field.name in _READINESS_SEQUENCE_FIELDS:
+            if (
+                type(value) is not tuple
+                or not value
+                or any(type(item) is not str or not item for item in value)
+            ):
+                raise MassResearchDisabledError(
+                    f"readiness {field.name} must be an exact non-empty string tuple"
+                )
+            frozen[field.name] = tuple(value)
+        else:
+            if type(value) is not str or not value:
+                raise MassResearchDisabledError(
+                    f"readiness {field.name} must be an exact non-empty string"
+                )
+            frozen[field.name] = value
+    return frozen
+
+
+def _canonical_pilot_body(values: Mapping[str, Any]) -> dict[str, Any]:
+    """Build signed bytes from the one frozen value set, never dynamic methods."""
+
+    return {
+        "format": VerifiedPilotReadiness.FORMAT,
+        "attestation_id": values["attestation_id"],
+        "readiness_scope": values["readiness_scope"],
+        "snapshot_id": values["snapshot_id"],
+        "profile_id": values["profile_id"],
+        "profile_version": values["profile_version"],
+        "profile_digest": values["profile_digest"],
+        "plan_ids": list(values["plan_ids"]),
+        "plan_set_digest": values["plan_set_digest"],
+        "dependency_closure_digest": values["dependency_closure_digest"],
+        "universe_rule_digest": values["universe_rule_digest"],
+        "resolved_universe_digest": values["resolved_universe_digest"],
+        "dataset_ids": list(values["dataset_ids"]),
+        "ready_state": values["ready_state"],
+        "ready_manifest_digest": values["ready_manifest_digest"],
+        "immutable_db_digest": values["immutable_db_digest"],
+        "coverage_policy_version": values["coverage_policy_version"],
+        "coverage_policy_digest": values["coverage_policy_digest"],
+        "coverage_proof_digest": values["coverage_proof_digest"],
+        "governed_membership_digest": values["governed_membership_digest"],
+        "raw_proof_digest": values["raw_proof_digest"],
+        "receipt_proof_digest": values["receipt_proof_digest"],
+        "validation_proof_digest": values["validation_proof_digest"],
+        "b0_quality_proof_digest": values["b0_quality_proof_digest"],
+        "b4_quality_proof_digest": values["b4_quality_proof_digest"],
+        "source_generation": values["source_generation"],
+        "export_cursor": values["export_cursor"],
+        "applied_cursor": values["applied_cursor"],
+        "verified_at": values["verified_at"],
+        "expires_at": values["expires_at"],
+        "evidence_digest": values["evidence_digest"],
+        "key_id": values["key_id"],
+        "issuer": values["issuer"],
+    }
+
+
+def _verify_exact_pilot_readiness_values(
+    readiness: object,
+    *,
+    registry: ReadinessPublicKeyRegistry,
+    clock: datetime,
+    expected_snapshot_id: str | None = None,
+    expected_ready_manifest_digest: str | None = None,
+) -> VerifiedPilotReadiness:
+    """Non-overridable verifier over one frozen exact capability value set."""
+
+    if type(registry) is not ReadinessPublicKeyRegistry:
+        raise MassResearchDisabledError(
+            "exact pinned readiness public-key registry required"
+        )
+    if clock.tzinfo is None:
+        raise MassResearchDisabledError("readiness verifier clock must be aware")
+    if expected_snapshot_id is not None and type(expected_snapshot_id) is not str:
+        raise MassResearchDisabledError("expected snapshot id must be an exact string")
+    if (
+        expected_ready_manifest_digest is not None
+        and type(expected_ready_manifest_digest) is not str
+    ):
+        raise MassResearchDisabledError(
+            "expected ReadyManifest digest must be an exact string"
+        )
+    values = _materialize_exact_pilot_readiness(readiness)
+
+    from paper_runtime.readiness_attestation import (
+        MAX_READY_ATTESTATION_TTL_SECONDS,
+        MIN_READY_ATTESTATION_TTL_SECONDS,
+    )
+    from research.ready_manifest import load_exact_four_pilot_ready_binding
+    from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
+
+    binding = load_exact_four_pilot_ready_binding()
+    digest_fields = (
+        "snapshot_id",
+        "profile_digest",
+        "plan_set_digest",
+        "dependency_closure_digest",
+        "universe_rule_digest",
+        "resolved_universe_digest",
+        "ready_manifest_digest",
+        "immutable_db_digest",
+        "coverage_policy_digest",
+        "coverage_proof_digest",
+        "governed_membership_digest",
+        "raw_proof_digest",
+        "receipt_proof_digest",
+        "validation_proof_digest",
+        "b0_quality_proof_digest",
+        "b4_quality_proof_digest",
+        "evidence_digest",
+    )
+    if any(not _is_sha256(values[field]) for field in digest_fields):
+        raise MassResearchDisabledError("readiness proof digest is malformed")
+    if (
+        values["readiness_scope"] != "PILOT"
+        or values["ready_state"] != "READY"
+        or values["issuer"] != "ReadyPublicationService/v3"
+        or values["profile_id"] != binding.profile_id
+        or values["profile_version"] != binding.profile_version
+        or values["profile_digest"] != binding.profile_digest
+        or values["plan_ids"] != binding.plan_ids
+        or values["plan_set_digest"] != binding.plan_set_digest
+        or values["dependency_closure_digest"] != binding.closure_set_digest
+        or values["universe_rule_digest"] != EXACT_FOUR_UNIVERSE_RULE_DIGEST
+        or values["dataset_ids"] != binding.required_datasets
+        or values["source_generation"] != values["export_cursor"]
+        or values["export_cursor"] != values["applied_cursor"]
+        or (
+            expected_snapshot_id is not None
+            and values["snapshot_id"] != expected_snapshot_id
+        )
+        or (
+            expected_ready_manifest_digest is not None
+            and values["ready_manifest_digest"]
+            != expected_ready_manifest_digest
+        )
+    ):
+        raise MassResearchDisabledError(
+            "pilot readiness does not match the canonical exact-four binding"
+        )
+    try:
+        verified_at = datetime.fromisoformat(
+            values["verified_at"].replace("Z", "+00:00")
+        )
+        expires_at = datetime.fromisoformat(
+            values["expires_at"].replace("Z", "+00:00")
+        )
+    except ValueError as exc:
+        raise MassResearchDisabledError(
+            "pilot readiness timestamps are malformed"
+        ) from exc
+    if verified_at.tzinfo is None or expires_at.tzinfo is None:
+        raise MassResearchDisabledError(
+            "pilot readiness timestamps must be timezone-aware"
+        )
+    ttl = expires_at - verified_at
+    if (
+        ttl < timedelta(seconds=MIN_READY_ATTESTATION_TTL_SECONDS)
+        or ttl > timedelta(seconds=MAX_READY_ATTESTATION_TTL_SECONDS)
+        or verified_at > clock + timedelta(minutes=5)
+        or clock > expires_at
+    ):
+        raise MassResearchDisabledError(
+            "pilot readiness is expired or time-incoherent"
+        )
+    key = object.__getattribute__(registry, "_keys").get(values["key_id"])
+    if key is None:
+        raise MassResearchDisabledError("pilot readiness issuer is untrusted")
+    body = _canonical_pilot_body(values)
+    try:
+        key.verify(_decode_signature(values["signature"]), _canonical_bytes(body))
+    except (InvalidSignature, ValueError) as exc:
+        raise MassResearchDisabledError(
+            "pilot readiness signature is invalid"
+        ) from exc
+    return VerifiedPilotReadiness(**values)
+
+
+def verify_pinned_pilot_readiness(
+    readiness: object,
+    *,
+    expected_snapshot_id: str | None = None,
+    expected_ready_manifest_digest: str | None = None,
+) -> VerifiedPilotReadiness:
+    """Verify an exact pilot capability against only the pinned trust root."""
+
+    return _verify_exact_pilot_readiness_values(
+        readiness,
+        registry=ReadinessPublicKeyRegistry.load_pinned(),
+        clock=_now(),
+        expected_snapshot_id=expected_snapshot_id,
+        expected_ready_manifest_digest=expected_ready_manifest_digest,
+    )
 
 
 class GovernedMassReadinessAuthority:
@@ -546,218 +733,6 @@ class GovernedMassReadinessAuthority:
 # Compatibility import only. It resolves to the Mass type, so a pilot
 # capability can never pass old mass call sites through inheritance.
 VerifiedResearchReadiness = VerifiedMassReadiness
-
-
-_R = TypeVar("_R", bound=_VerifiedReadiness)
-
-
-class _ReadyPublicationSigner:
-    """Private signing capability owned by the READY publication service."""
-
-    __slots__ = ("_key_id", "_private_key")
-
-    def __init__(
-        self,
-        *,
-        key_id: str,
-        private_key: Ed25519PrivateKey,
-        _factory_token: object | None = None,
-    ) -> None:
-        if _factory_token is not _READY_PUBLICATION_SIGNER_TOKEN:
-            raise MassResearchDisabledError(
-                "READY signer is issued only inside the publication service"
-            )
-        key = str(key_id).strip()
-        if not key or not isinstance(private_key, Ed25519PrivateKey):
-            raise MassResearchDisabledError(
-                "READY publisher requires key_id and Ed25519 private key"
-            )
-        self._key_id = key
-        self._private_key = private_key
-
-    @classmethod
-    def _from_private_pem(
-        cls, *, key_id: str, private_pem: bytes
-    ) -> "_ReadyPublicationSigner":
-        try:
-            key = serialization.load_pem_private_key(private_pem, password=None)
-        except (TypeError, ValueError) as exc:
-            raise MassResearchDisabledError("invalid readiness private key PEM") from exc
-        if not isinstance(key, Ed25519PrivateKey):
-            raise MassResearchDisabledError("readiness signing key must be Ed25519")
-        return cls(
-            key_id=key_id,
-            private_key=key,
-            _factory_token=_READY_PUBLICATION_SIGNER_TOKEN,
-        )
-
-    @property
-    def key_id(self) -> str:
-        return self._key_id
-
-    def _public_registry(self) -> ReadinessPublicKeyRegistry:
-        return ReadinessPublicKeyRegistry(
-            {self._key_id: self._private_key.public_key()}
-        )
-
-    def _sign(self, body: Mapping[str, Any]) -> str:
-        signature = self._private_key.sign(_canonical_bytes(body))
-        return "ed25519:" + base64.b64encode(signature).decode("ascii")
-
-    def _mint_pilot(
-        self,
-        manifest: Any,
-        *,
-        db_path: str | Path,
-        profile_binding: Any,
-        ttl_seconds: int = 3600,
-    ) -> VerifiedPilotReadiness:
-        return _mint_bound_readiness(
-            VerifiedPilotReadiness,
-            manifest,
-            publisher=self,
-            db_path=db_path,
-            profile_binding=profile_binding,
-            ttl_seconds=ttl_seconds,
-        )
-
-    def _mint_mass(
-        self,
-        manifest: Any,
-        *,
-        mass_authority: GovernedMassReadinessAuthority | None = None,
-    ) -> VerifiedMassReadiness:
-        if not isinstance(mass_authority, GovernedMassReadinessAuthority):
-            raise MassResearchDisabledError(
-                "explicit GovernedMassReadinessAuthority required; "
-                "generic/core profiles cannot mint Mass readiness"
-            )
-        raise MassResearchDisabledError(
-            "Mass readiness minting is hard-disabled in Phase 6.3.1"
-        )
-
-
-def _load_pinned_ready_publication_signer() -> _ReadyPublicationSigner:
-    """Fail closed until a separately provisioned READY authority exists.
-
-    Production publication is verify-only in this process.  In particular it
-    never reads private material from HOME, environment variables, or a
-    caller-selected path.  Test fixtures construct an ephemeral signer
-    explicitly under ``tests`` and cannot activate the pinned production
-    registry.
-    """
-    raise MassResearchDisabledError(
-        "dedicated readiness publication authority is not provisioned; "
-        "readiness remains PENDING"
-    )
-
-def _mint_bound_readiness(
-    readiness_type: type[_R],
-    manifest: Any,
-    *,
-    publisher: _ReadyPublicationSigner,
-    db_path: str | Path,
-    profile_binding: Any,
-    ttl_seconds: int,
-) -> _R:
-    # Kept here rather than in ready_manifest.py so the private key never
-    # crosses into a policy/parser module.
-    from research.ready_manifest import (
-        ReadyManifest,
-        canonical_digest,
-        is_sha256_digest,
-        missing_ready_manifest_proofs,
-        validate_ready_manifest_profile_binding,
-    )
-
-    if not isinstance(manifest, ReadyManifest):
-        raise MassResearchDisabledError("ReadyManifest required")
-    expected_scope = readiness_type.EXPECTED_SCOPE
-    if manifest.publication_scope != expected_scope:
-        raise MassResearchDisabledError(
-            f"{expected_scope} readiness cannot be minted from "
-            f"{manifest.publication_scope} ReadyManifest"
-        )
-    missing = missing_ready_manifest_proofs(manifest)
-    if missing:
-        raise MassResearchDisabledError(
-            "ReadyManifest proofs UNKNOWN/MISSING: " + ", ".join(missing)
-        )
-    validate_ready_manifest_profile_binding(manifest, profile=profile_binding)
-    artifact = Path(db_path)
-    if not artifact.is_file():
-        raise MassResearchDisabledError(
-            f"READY snapshot artifact missing: {artifact}"
-        )
-    digest = hashlib.sha256()
-    with artifact.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    db_digest = "sha256:" + digest.hexdigest()
-    try:
-        from paper_runtime.snapshot import _immutable_data_snapshot_id
-
-        observed_snapshot_id = _immutable_data_snapshot_id(artifact)
-    except (FileNotFoundError, RuntimeError, ValueError, sqlite3.DatabaseError) as exc:
-        raise MassResearchDisabledError(
-            "READY publisher requires a verified snapshot artifact"
-        ) from exc
-    if observed_snapshot_id != manifest.snapshot_id:
-        raise MassResearchDisabledError(
-            "READY artifact snapshot_id does not match ReadyManifest"
-        )
-    if not is_sha256_digest(db_digest):
-        raise MassResearchDisabledError(
-            "ReadyManifest proofs UNKNOWN/MISSING: immutable_db_digest"
-        )
-
-    clock = _now()
-    expires = clock + timedelta(seconds=max(60, ttl_seconds))
-    evidence = {
-        "manifest": manifest.to_dict(),
-        "immutable_db_digest": db_digest,
-    }
-    body = {
-        "attestation_id": str(uuid4()),
-        "readiness_scope": expected_scope,
-        "snapshot_id": manifest.snapshot_id,
-        "profile_id": manifest.profile_id,
-        "profile_version": manifest.profile_version,
-        "profile_digest": manifest.profile_digest,
-        "plan_ids": tuple(manifest.plan_ids),
-        "plan_set_digest": manifest.plan_set_digest,
-        "dependency_closure_digest": manifest.dependency_closure_digest,
-        "universe_rule_digest": manifest.universe_rule_digest,
-        "resolved_universe_digest": manifest.resolved_universe_digest,
-        "dataset_ids": tuple(manifest.dataset_ids),
-        "ready_state": "READY",
-        "ready_manifest_digest": manifest.to_dict()["manifest_digest"],
-        "immutable_db_digest": db_digest,
-        "coverage_policy_version": manifest.coverage_policy_version,
-        "coverage_policy_digest": manifest.coverage_policy_digest,
-        "coverage_proof_digest": manifest.coverage_proof_digest,
-        "governed_membership_digest": manifest.dataset_membership_digest,
-        "raw_proof_digest": manifest.raw_proof_digest,
-        "receipt_proof_digest": manifest.receipt_proof_digest,
-        "validation_proof_digest": manifest.validation_proof_digest,
-        "b0_quality_proof_digest": manifest.b0_proof_digest,
-        "b4_quality_proof_digest": manifest.b4_proof_digest,
-        "source_generation": manifest.source_generation,
-        "export_cursor": manifest.export_cursor,
-        "applied_cursor": manifest.applied_cursor,
-        "verified_at": clock.isoformat(),
-        "expires_at": expires.isoformat(),
-        "evidence_digest": canonical_digest(evidence),
-        "key_id": publisher.key_id,
-        "issuer": "ReadyPublicationService/v3",
-    }
-    signature = publisher._sign({"format": readiness_type.FORMAT, **body})
-    minted = readiness_type(signature=signature, **body)
-    if not minted.is_valid(verifier=publisher._public_registry(), now=clock):
-        raise MassResearchDisabledError(
-            f"{readiness_type.__name__} scope or signed field invariants failed"
-        )
-    return minted
 
 
 @dataclass(frozen=True)
@@ -835,21 +810,22 @@ class OperatorOverrideService:
 class ResearchReadinessService:
     """Public-key-only verifier for an already minted READY attestation."""
 
-    def __init__(self) -> None:
-        self._verifier = ReadinessPublicKeyRegistry.load_pinned()
-
     def verify(
         self,
         readiness: _VerifiedReadiness,
         *,
         expected_snapshot_id: str | None = None,
     ) -> _VerifiedReadiness:
-        if not isinstance(readiness, _VerifiedReadiness):
-            raise MassResearchDisabledError("signed readiness attestation required")
-        return readiness.require_valid(
-            expected_snapshot_id=expected_snapshot_id,
-            verifier=self._verifier,
-        )
+        if type(readiness) is VerifiedPilotReadiness:
+            return verify_pinned_pilot_readiness(
+                readiness,
+                expected_snapshot_id=expected_snapshot_id,
+            )
+        if type(readiness) is VerifiedMassReadiness:
+            raise MassResearchDisabledError(
+                "Mass readiness verification remains disabled in Phase 6.3.1"
+            )
+        raise MassResearchDisabledError("signed readiness attestation required")
 
 
 def require_mass_research_start(
@@ -871,10 +847,17 @@ __all__ = [
     "OperatorOverrideCapability",
     "OperatorOverrideService",
     "ReadinessPublicKeyRegistry",
+    "ReadyPublicationAuthorityPending",
+    "ReadyPublicationAuthorityStatus",
     "ResearchReadinessService",
+    "READY_PUBLICATION_AUTHORITY_CONTRACT",
+    "READY_PUBLICATION_REQUIRED_CHECKS",
     "VerifiedMassReadiness",
     "VerifiedPilotReadiness",
     "VerifiedResearchReadiness",
     "load_verified_pilot_readiness",
+    "ready_publication_authority_status",
+    "require_ready_publication_authority",
     "require_mass_research_start",
+    "verify_pinned_pilot_readiness",
 ]

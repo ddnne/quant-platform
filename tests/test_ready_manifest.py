@@ -36,17 +36,20 @@ from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
 from research.readiness import (
     GovernedMassReadinessAuthority,
     ReadinessPublicKeyRegistry,
-    _ReadyPublicationSigner,
+    ReadyPublicationAuthorityPending,
+    ready_publication_authority_status,
+    require_ready_publication_authority,
     load_verified_pilot_readiness,
 )
 from selection.budget_ledger import MassResearchDisabledError
 from tests.readiness_test_support import (
+    _TestReadinessSigner,
     make_readiness_signer,
     mint_pilot_readiness,
 )
 
 @pytest.fixture
-def readiness_publisher() -> _ReadyPublicationSigner:
+def readiness_publisher() -> _TestReadinessSigner:
     return make_readiness_signer(
         key_id="test-readiness-v1",
         private_key=Ed25519PrivateKey.generate(),
@@ -260,11 +263,14 @@ def test_ready_private_key_and_mint_are_not_public_control_plane_api() -> None:
     assert not hasattr(readiness_module, "ReadinessAttestationPublisher")
     assert not hasattr(manifest_module, "mint_verified_research_readiness")
     assert not hasattr(manifest_module, "mint_verified_pilot_readiness")
-    with pytest.raises(MassResearchDisabledError, match="publication service"):
-        _ReadyPublicationSigner(
-            key_id="caller-key",
-            private_key=Ed25519PrivateKey.generate(),
-        )
+    status = ready_publication_authority_status()
+    assert (status.state, status.evidence_state, status.mass_state) == (
+        "PENDING",
+        "UNKNOWN",
+        "DISABLED",
+    )
+    with pytest.raises(ReadyPublicationAuthorityPending, match="PENDING"):
+        require_ready_publication_authority()
 
 
 def test_unknown_fields_and_missing_proofs_are_not_pass() -> None:
@@ -310,7 +316,7 @@ def test_unknown_fields_and_missing_proofs_are_not_pass() -> None:
 
 
 def test_ready_manifest_offline_e2e_serialize_reload_mint(
-    tmp_path: Path, readiness_publisher: _ReadyPublicationSigner
+    tmp_path: Path, readiness_publisher: _TestReadinessSigner
 ) -> None:
     """Publisher helpers → serialize → reload → mint. No live R2. Not production READY."""
     built = _complete_manifest()
@@ -329,10 +335,11 @@ def test_ready_manifest_offline_e2e_serialize_reload_mint(
     assert readiness.ready_manifest_digest == built.manifest_digest
     assert readiness.coverage_proof_digest == built.coverage_proof_digest
     assert readiness.b0_quality_proof_digest.startswith("sha256:")
-    assert readiness.require_valid(
-        expected_snapshot_id=built.snapshot_id,
-        verifier=readiness_publisher._public_registry(),
-    ) is readiness
+    assert readiness_publisher._public_registry().verify(
+        key_id=readiness.key_id,
+        body=readiness.to_canonical_body(),
+        signature=readiness.signature,
+    )
     dumped = path.read_text(encoding="utf-8")
     assert "r2://" not in dumped
     assert "production READY" not in dumped
@@ -340,24 +347,17 @@ def test_ready_manifest_offline_e2e_serialize_reload_mint(
 
 
 def test_production_mint_cannot_accept_caller_supplied_artifact_digest_or_clock(
-    readiness_publisher: _ReadyPublicationSigner,
+    readiness_publisher: _TestReadinessSigner,
 ) -> None:
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
-        readiness_publisher._mint_pilot(
-            _complete_manifest(),
-            immutable_db_digest=_digest("caller-asserted-db"),
-        )  # type: ignore[call-arg]
+    del readiness_publisher
+    with pytest.raises(ReadyPublicationAuthorityPending, match="PENDING"):
+        require_ready_publication_authority()
 
 
 def test_mass_mint_requires_unavailable_governed_authority_and_stays_disabled(
-    readiness_publisher: _ReadyPublicationSigner,
+    readiness_publisher: _TestReadinessSigner,
 ) -> None:
-    manifest = _complete_manifest(publication_scope="MASS")
-    with pytest.raises(
-        MassResearchDisabledError,
-        match="GovernedMassReadinessAuthority",
-    ):
-        readiness_publisher._mint_mass(manifest)
+    del readiness_publisher
     with pytest.raises(MassResearchDisabledError, match="no public issuer"):
         GovernedMassReadinessAuthority(
             policy_id="mass-policy/v1",
@@ -471,16 +471,17 @@ def test_exact_four_binding_discards_caller_mutable_sequence_aliases() -> None:
 
 
 def test_private_signer_cannot_mint_generic_caller_pilot_manifest(
-    readiness_publisher: _ReadyPublicationSigner,
+    readiness_publisher: _TestReadinessSigner,
 ) -> None:
     caller_manifest = _complete_manifest(
         profile_id="caller/generic-pilot",
         profile_digest=_digest("caller-profile"),
     )
     with pytest.raises(MassResearchDisabledError, match="profile_id mismatch"):
-        readiness_publisher._mint_pilot(
+        mint_pilot_readiness(
             caller_manifest,
-            db_path=Path("/nonexistent/caller-db.sqlite"),
+            publisher=readiness_publisher,
+            immutable_db_digest=_digest("caller-db"),
             profile_binding=load_exact_four_pilot_ready_binding(),
         )
 

@@ -11,13 +11,13 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from research.readiness import (
     ReadinessPublicKeyRegistry,
-    _load_pinned_ready_publication_signer,
+    ReadyPublicationAuthorityPending,
+    require_ready_publication_authority,
 )
 from ingestion.runtime_authority import (
     ReceiptEvidenceAuthorityPending,
     _open_governed_receipt_service,
 )
-from selection.budget_ledger import MassResearchDisabledError
 from storage.receipt_crypto import (
     ReceiptKeyConfigurationError,
     load_verify_keys,
@@ -178,8 +178,8 @@ def test_readiness_publisher_never_falls_back_to_receipt_pem(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _plant_host_pem(tmp_path, monkeypatch)
-    with pytest.raises(MassResearchDisabledError, match="dedicated readiness"):
-        _load_pinned_ready_publication_signer()
+    with pytest.raises(ReadyPublicationAuthorityPending, match="PENDING"):
+        require_ready_publication_authority()
 
 
 def test_same_uid_readiness_key_file_cannot_enable_production_signer(
@@ -195,8 +195,8 @@ def test_same_uid_readiness_key_file_cannot_enable_production_signer(
     assert readiness_private_pem != receipt_private_pem
     readiness_path = _pem_path.with_name("readiness_signing_key.pem")
     readiness_path.write_bytes(readiness_private_pem)
-    with pytest.raises(MassResearchDisabledError, match="not provisioned"):
-        _load_pinned_ready_publication_signer()
+    with pytest.raises(ReadyPublicationAuthorityPending, match="PENDING"):
+        require_ready_publication_authority()
 
 
 def test_readiness_env_path_key_id_and_registry_cannot_self_root(
@@ -235,8 +235,8 @@ def test_readiness_env_path_key_id_and_registry_cannot_self_root(
     monkeypatch.setenv(
         "QUANT_READINESS_PUBLIC_KEY_REGISTRY", str(tmp_path / "attacker.json")
     )
-    with pytest.raises(MassResearchDisabledError, match="not provisioned"):
-        _load_pinned_ready_publication_signer()
+    with pytest.raises(ReadyPublicationAuthorityPending, match="PENDING"):
+        require_ready_publication_authority()
 
 
 def test_pytest_current_test_cannot_disable_host_pem(
@@ -255,5 +255,5 @@ def test_pytest_current_test_cannot_disable_host_pem(
         _open_governed_receipt_service()
     assert pem_path.is_file()
 
-    with pytest.raises(MassResearchDisabledError, match="dedicated readiness"):
-        _load_pinned_ready_publication_signer()
+    with pytest.raises(ReadyPublicationAuthorityPending, match="PENDING"):
+        require_ready_publication_authority()

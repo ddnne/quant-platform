@@ -610,30 +610,23 @@ class ExactFourPilotReadyBinding:
 
 @dataclass(frozen=True, slots=True)
 class VerifiedPilotReadyPublication:
-    """Atomic exact-four publication result with its signed pilot capability."""
+    """Reserved result type for the unprovisioned external READY authority.
+
+    Product code cannot construct this positive publication capability. The
+    future loader must independently reopen and verify the immutable snapshot,
+    manifest, and sidecar instead of trusting caller-created DTOs.
+    """
 
     snapshot: Any
     readiness: Any
     readiness_path: Path
 
     def __post_init__(self) -> None:
-        from paper_runtime.snapshot import ReadySnapshot
-        from research.readiness import VerifiedPilotReadiness
+        from research.readiness import require_ready_publication_authority
 
-        if not isinstance(self.snapshot, ReadySnapshot):
-            raise MassResearchDisabledError("ReadySnapshot publication required")
-        if not isinstance(self.readiness, VerifiedPilotReadiness):
-            raise MassResearchDisabledError(
-                "VerifiedPilotReadiness publication required"
-            )
-        if self.readiness.snapshot_id != self.snapshot.snapshot_id:
-            raise MassResearchDisabledError(
-                "published snapshot/readiness identity mismatch"
-            )
-        if not Path(self.readiness_path).is_file():
-            raise MassResearchDisabledError(
-                "immutable readiness attestation sidecar is missing"
-            )
+        # Do not inspect caller DTOs while the independently isolated
+        # publication principal/service is absent.
+        require_ready_publication_authority()
 
     @property
     def snapshot_id(self) -> str:
@@ -1613,138 +1606,17 @@ def _publish_exact_four_pilot_ready_snapshot_impl(
     *,
     signed_projection_document: Mapping[str, Any],
 ) -> Any:
-    """Publish one immutable READY generation bound to the exact-four closure.
+    """Return PENDING before any local publication or signing mutation.
 
-    The caller cannot choose dataset membership, plan ids, or closure digests.
-    They are compiled from the governed exact-four plans before the runtime
-    publication transaction starts.
+    A future dedicated authority must implement the frozen contract in
+    ``research.readiness`` under a different OS principal or remote service.
+    It must independently reopen the authenticated mirror and immutable copy;
+    this client process must never accept a caller-injected issuer callback.
     """
-    from paper_runtime.snapshot import _publish_ready_snapshot
-    from research.research_data_profile import profile_ready
+    from research.readiness import require_ready_publication_authority
 
-    governed = load_exact_four_pilot_ready_binding()
-    evidence = _verified_production_projection_evidence(
-        signed_projection_document,
-        governed.required_datasets,
-    )
-    if not isinstance(evidence, Mapping) or set(
-        evidence
-    ) != set(governed.required_datasets):
-        raise MassResearchDisabledError(
-            "pilot READY evidence must exactly match the dependency closure"
-        )
-    for profile in governed.profiles:
-        if not profile_ready(profile, evidence):
-            raise MassResearchDisabledError(
-                f"pilot READY evidence is incomplete for {profile.plan_id}"
-            )
-    for dataset_id in governed.required_datasets:
-        row = evidence.get(dataset_id)
-        if not isinstance(row, Mapping):
-            raise MassResearchDisabledError(
-                f"pilot READY evidence missing for {dataset_id}"
-            )
-        source = str(row.get("source_generation") or "").strip()
-        exported = str(row.get("export_cursor") or "").strip()
-        applied = str(
-            row.get("applied_sync_generation") or row.get("applied_cursor") or ""
-        ).strip()
-        if not source or source != exported or exported != applied:
-            raise MassResearchDisabledError(
-                f"pilot READY cursor chain is missing or not current for {dataset_id}"
-            )
-        scopes = [
-            dict(scope)
-            for profile in governed.profiles
-            for scope in profile.dataset_scopes
-            if scope.get("dataset_id") == dataset_id
-        ]
-        required_start = min(str(scope["period_start"]) for scope in scopes)
-        required_end = max(str(scope["period_end"]) for scope in scopes)
-        observed_start = str(row.get("observed_start") or "")[:10]
-        observed_end = str(row.get("observed_end") or "")[:10]
-        if (
-            not observed_start
-            or not observed_end
-            or observed_start > required_start
-            or observed_end < required_end
-        ):
-            raise MassResearchDisabledError(
-                "pilot READY Coverage does not span the dependency period for "
-                f"{dataset_id}: observed={observed_start}..{observed_end}, "
-                f"required={required_start}..{required_end}"
-            )
-
-    # The dependency proof is part of the outer immutable snapshot identity,
-    # not only the nested ReadyManifest.  Compute it before publication so the
-    # runtime embeds the exact same document before deriving ``snapshot_id``.
-    scope_proof = _verify_exact_four_pit_dependency_scope(
-        staging_db, governed
-    )
-
-    def _build(document: Mapping[str, Any]) -> Mapping[str, Any]:
-        return build_profile_bound_ready_manifest_from_snapshot_document(
-            document, profile=governed
-        ).to_dict()
-
-    published_attestation: dict[str, Any] = {}
-
-    def _attest(ready: Any) -> Path:
-        from paper_runtime.snapshot_persist import _atomic_json
-        from research.readiness import _load_pinned_ready_publication_signer
-
-        manifest = ready_manifest_from_snapshot_document(ready.manifest)
-        immutable_scope_proof = _verify_exact_four_pit_dependency_scope(
-            ready.db_path, governed
-        )
-        if (
-            manifest.pit_contract_digests.get("dependency_scope")
-            != immutable_scope_proof["proof_digest"]
-        ):
-            raise MassResearchDisabledError(
-                "immutable snapshot PIT dependency scope proof drifted before signing"
-            )
-        signer = _load_pinned_ready_publication_signer()
-        readiness = signer._mint_pilot(
-            manifest,
-            db_path=ready.db_path,
-            profile_binding=governed,
-        )
-        readiness_path = ready.db_path.with_name(
-            f"{ready.db_path.stem}.{readiness.attestation_id}.readiness.json"
-        )
-        try:
-            _atomic_json(readiness_path, readiness.to_dict(), mode=0o444)
-        except Exception:
-            # `_atomic_json` is replace-last, but a filesystem error may be
-            # raised after the destination appears. Never retain a signed
-            # capability for a publication that the caller observes failing.
-            readiness_path.unlink(missing_ok=True)
-            raise
-        published_attestation.update(
-            readiness=readiness,
-            readiness_path=readiness_path,
-        )
-        return readiness_path
-
-    snapshot = _publish_ready_snapshot(
-        staging_db,
-        snapshot_dir,
-        required_datasets=governed.required_datasets,
-        _profile_coverage_evidence=evidence,
-        _dependency_scope_evidence=scope_proof,
-        _ready_manifest_builder=_build,
-        _ready_attestation_builder=_attest,
-    )
-    if set(published_attestation) != {"readiness", "readiness_path"}:
-        raise MassResearchDisabledError(
-            "atomic pilot readiness attestation was not produced"
-        )
-    return VerifiedPilotReadyPublication(
-        snapshot=snapshot,
-        readiness=published_attestation["readiness"],
-        readiness_path=Path(published_attestation["readiness_path"]),
-    )
+    del staging_db, snapshot_dir, signed_projection_document
+    require_ready_publication_authority()
 
 
 def publish_exact_four_pilot_ready_snapshot(

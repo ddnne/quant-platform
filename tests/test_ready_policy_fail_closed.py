@@ -28,14 +28,15 @@ from paper_runtime.ready_policy import (
     SyncGenerationEvidence,
     collect_typed_evidence,
 )
-from paper_runtime.snapshot import ReadySnapshot, SnapshotRejected, _publish_ready_snapshot
+from paper_runtime.snapshot import SnapshotRejected, _publish_ready_snapshot
 from paper_runtime.snapshot_publish_policy import _raw_manifests_for
 import research.research_data_profile as profile_module
-from research.readiness import ReadinessPublicKeyRegistry
+from research.readiness import (
+    ReadyPublicationAuthorityPending,
+    ready_publication_authority_status,
+)
 from research.ready_manifest import (
-    VerifiedPilotReadyPublication,
     build_profile_bound_ready_manifest_from_snapshot_document,
-    build_ready_manifest,
     canonical_digest,
     load_exact_four_pilot_ready_binding,
     publish_exact_four_pilot_ready_snapshot,
@@ -43,14 +44,12 @@ from research.ready_manifest import (
     _verify_exact_four_pit_dependency_scope,
 )
 from research.research_data_profile import load_core_profile, official_mode
-from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
 from selection.budget_ledger import MassResearchDisabledError
 from storage.coverage_ledger import (
     RequiredCoverageSegment,
     record_collection_receipt,
 )
 from storage.sqlite_store import SqliteStore
-from tests.readiness_test_support import make_readiness_signer
 from tests.ops_projection_signing_support import (
     TestOpsProjectionSigningKey,
     TestOpsProjectionVerifier,
@@ -552,116 +551,52 @@ def test_public_ready_surface_has_no_generic_or_fixture_bypass(
         )
 
 
-def test_signed_projection_is_the_only_production_pilot_input(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
+def test_unprovisioned_ready_authority_is_pending_before_local_mutation(
+    tmp_path,
 ) -> None:
-    monkeypatch.setattr(
-        profile_module,
-        "source_capability_contract_or_none",
-        lambda _dataset_id: object(),
+    staging = tmp_path / "current.sqlite"
+    staging.write_bytes(b"caller-owned-current-db")
+    before = staging.read_bytes()
+    snapshots = tmp_path / "snapshots"
+
+    status = ready_publication_authority_status()
+    assert status.state == "PENDING"
+    assert status.evidence_state == "UNKNOWN"
+    assert status.required_checks == (
+        "authenticated_immutable_ops_mirror",
+        "canonical_exact_four_plan_closure_profile",
+        "trusted_coverage_proof",
+        "b0_b4_pass",
+        "source_export_applied_generation_coherence",
+        "independently_reopened_immutable_snapshot_copy",
     )
+    with pytest.raises(ReadyPublicationAuthorityPending, match="PENDING"):
+        publish_exact_four_pilot_ready_snapshot(
+            staging,
+            snapshots,
+            signed_projection_document={"caller": "cannot become authority"},
+        )
+    assert staging.read_bytes() == before
+    assert not snapshots.exists()
+
+
+def test_signed_projection_verifier_derives_only_exact_closure_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     binding = load_exact_four_pilot_ready_binding()
     signed, registry = _signed_projection_evidence(
         (*binding.required_datasets, "markets_margin_alert")
     )
     _configure_projection_registry_for_test(monkeypatch, registry)
-    assert str(signed["envelope"]["coverage_policy_version"]).startswith(  # type: ignore[index]
-        "mixed:sha256:"
+    evidence = _verified_production_projection_evidence(
+        signed, binding.required_datasets
     )
-    captured: dict[str, object] = {}
-    proof = canonical_digest({"production": "proof"})
-    snapshot_id = canonical_digest({"production": "snapshot"})
-    manifest = build_ready_manifest(
-        snapshot_id=snapshot_id,
-        publication_scope="PILOT",
-        profile_id=binding.profile_id,
-        profile_version=binding.profile_version,
-        profile_digest=binding.profile_digest,
-        plan_ids=binding.plan_ids,
-        plan_set_digest=binding.plan_set_digest,
-        dependency_closure_digest=binding.closure_set_digest,
-        universe_rule_digest=EXACT_FOUR_UNIVERSE_RULE_DIGEST,
-        resolved_universe_digest=proof,
-        dataset_ids=binding.required_datasets,
-        coverage_proof_digest=proof,
-        raw_proof_digest=proof,
-        receipt_proof_digest=proof,
-        validation_proof_digest=proof,
-        b0_proof_digest=proof,
-        b4_proof_digest=proof,
-        source_generation="7",
-        applied_sync_generation="7",
-        export_cursor="7",
-        applied_cursor="7",
-        pit_contract_digests={"pit_api": proof, "dependency_scope": proof},
-        feature_generation=proof,
-        catalog_generation=proof,
-        created_at="2026-08-25T00:00:00+00:00",
-        published_at="2026-08-25T00:01:00+00:00",
-    )
-    artifact = tmp_path / "immutable.sqlite"
-    artifact.write_bytes(b"immutable-snapshot-fixture")
-    artifact.chmod(0o444)
-    manifest_path = tmp_path / "immutable.manifest.json"
-    manifest_path.write_text("{}", encoding="utf-8")
-    ready = ReadySnapshot(
-        snapshot_id=snapshot_id,
-        db_path=artifact,
-        manifest_path=manifest_path,
-        manifest={},
-    )
-    readiness_key = Ed25519PrivateKey.generate()
-    readiness_signer = make_readiness_signer(
-        key_id="configured-ready-test",
-        private_key=readiness_key,
-    )
-    monkeypatch.setattr(
-        "research.readiness._load_pinned_ready_publication_signer",
-        lambda: readiness_signer,
-    )
-    monkeypatch.setattr(
-        "paper_runtime.snapshot._immutable_data_snapshot_id",
-        lambda _path: snapshot_id,
-    )
-    monkeypatch.setattr(
-        "research.ready_manifest.ready_manifest_from_snapshot_document",
-        lambda _document: manifest,
-    )
-    monkeypatch.setattr(
-        "research.ready_manifest._verify_exact_four_pit_dependency_scope",
-        lambda _path, _binding: {"proof_digest": proof},
-    )
-
-    def fake_publish(_db, _snapshot_dir, **kwargs):
-        captured.update(kwargs)
-        kwargs["_ready_attestation_builder"](ready)
-        return ready
-
-    monkeypatch.setattr("paper_runtime.snapshot._publish_ready_snapshot", fake_publish)
-    result = publish_exact_four_pilot_ready_snapshot(
-        tmp_path / "current.sqlite",
-        tmp_path / "snapshots",
-        signed_projection_document=signed,
-    )
-    assert isinstance(result, VerifiedPilotReadyPublication)
-    assert result.snapshot is ready
-    assert result.readiness.snapshot_id == snapshot_id
-    assert result.readiness_path.is_file()
-    assert result.readiness_path.stat().st_mode & 0o222 == 0
-    sidecar = json.loads(result.readiness_path.read_text(encoding="utf-8"))
-    assert sidecar["format"] == "verified-readiness-attestation/v1"
-    assert sidecar["signature"].startswith("ed25519:")
-    assert result.readiness.require_valid(
-        expected_snapshot_id=snapshot_id,
-        verifier=ReadinessPublicKeyRegistry(
-            {"configured-ready-test": readiness_key.public_key()}
-        ),
-    ) is result.readiness
-    evidence = captured["_profile_coverage_evidence"]
-    assert set(evidence) == set(binding.required_datasets)  # type: ignore[arg-type]
+    assert set(evidence) == set(binding.required_datasets)
     assert all(
         row["signed_projection_document_digest"].startswith("sha256:")
-        for row in evidence.values()  # type: ignore[union-attr]
+        and row["source_generation"] == row["export_cursor"]
+        and row["export_cursor"] == row["applied_cursor"]
+        for row in evidence.values()
     )
 
 
@@ -698,10 +633,8 @@ def test_signed_projection_still_rejects_nonpass_gates(
     )
     _configure_projection_registry_for_test(monkeypatch, registry)
     with pytest.raises(MassResearchDisabledError, match="B0/B4"):
-        publish_exact_four_pilot_ready_snapshot(
-            tmp_path / "current.sqlite",
-            tmp_path / "snapshots",
-            signed_projection_document=signed,
+        _verified_production_projection_evidence(
+            signed, binding.required_datasets
         )
 
 
@@ -721,10 +654,8 @@ def test_signed_projection_rejects_signed_per_dataset_policy_drift(
     )
     _configure_projection_registry_for_test(monkeypatch, registry)
     with pytest.raises(MassResearchDisabledError, match="governed policy binding"):
-        publish_exact_four_pilot_ready_snapshot(
-            tmp_path / "current.sqlite",
-            tmp_path / "snapshots",
-            signed_projection_document=signed,
+        _verified_production_projection_evidence(
+            signed, binding.required_datasets
         )
 
 
@@ -741,10 +672,8 @@ def test_tampered_signed_projection_is_rejected(
     _configure_projection_registry_for_test(monkeypatch, registry)
     signed["envelope"]["applied_cursor"] = 8  # type: ignore[index]
     with pytest.raises(MassResearchDisabledError, match="signature is invalid"):
-        publish_exact_four_pilot_ready_snapshot(
-            tmp_path / "current.sqlite",
-            tmp_path / "snapshots",
-            signed_projection_document=signed,
+        _verified_production_projection_evidence(
+            signed, binding.required_datasets
         )
 
 
@@ -763,10 +692,8 @@ def test_tampered_signed_dependency_period_scope_is_rejected(
         "observed_start"
     ] = "2026-08-25"
     with pytest.raises(MassResearchDisabledError, match="signature is invalid"):
-        publish_exact_four_pilot_ready_snapshot(
-            tmp_path / "current.sqlite",
-            tmp_path / "snapshots",
-            signed_projection_document=signed,
+        _verified_production_projection_evidence(
+            signed, binding.required_datasets
         )
 
 
@@ -791,10 +718,8 @@ def test_caller_owned_projection_registry_cannot_authorize_ready(
     _configure_projection_registry_for_test(monkeypatch, trusted_registry)
 
     with pytest.raises(MassResearchDisabledError, match="issuer is not trusted"):
-        publish_exact_four_pilot_ready_snapshot(
-            tmp_path / "current.sqlite",
-            tmp_path / "snapshots",
-            signed_projection_document=attacker_signed,
+        _verified_production_projection_evidence(
+            attacker_signed, binding.required_datasets
         )
 
 

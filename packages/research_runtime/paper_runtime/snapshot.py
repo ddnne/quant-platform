@@ -35,7 +35,6 @@ from paper_runtime.snapshot_persist import (
 )
 from paper_runtime.snapshot_publish_policy import (
     READY_MANIFEST_SCHEMA,
-    evaluate_ready_publication,
     _transition_policy,
 )
 from paper_runtime.snapshot_read import (
@@ -498,18 +497,21 @@ def _publish_ready_snapshot(
     ) = None,
     _ready_attestation_builder: Callable[[ReadySnapshot], Path | None] | None = None,
 ) -> ReadySnapshot:
-    """Production-only profile/plan-bound snapshot publication boundary."""
-    return _publish_ready_snapshot_impl(
+    """Reject generic local production publication before any mutation.
+
+    Production snapshots are accepted only through the verify-only reader
+    after an external READY authority has signed the exact immutable artifact.
+    """
+    del (
         staging_db,
         snapshot_dir,
-        required_datasets=required_datasets,
-        _profile_coverage_evidence=_profile_coverage_evidence,
-        _dependency_scope_evidence=_dependency_scope_evidence,
-        _ready_manifest_builder=_ready_manifest_builder,
-        _ready_attestation_builder=_ready_attestation_builder,
-        publication_gate=evaluate_ready_publication,
-        fixture_compatibility=False,
+        required_datasets,
+        _profile_coverage_evidence,
+        _dependency_scope_evidence,
+        _ready_manifest_builder,
+        _ready_attestation_builder,
     )
+    raise SnapshotRejected("generic production READY authority is PENDING")
 
 
 def _publish_ready_snapshot_impl(
@@ -531,17 +533,11 @@ def _publish_ready_snapshot_impl(
     The product-owned READY(P) bridge may supply retained profile evidence and
     a closed ReadyManifest builder. Both must be present together.
     """
-    if fixture_compatibility is True:
-        publication_scope = "FIXTURE"
-    elif (
-        fixture_compatibility is False
-        and publication_gate is evaluate_ready_publication
-    ):
-        publication_scope = "PRODUCTION"
-    else:
+    if fixture_compatibility is not True:
         raise SnapshotRejected(
-            "production READY requires the exact production publication gate"
+            "local production READY publication is disabled; authority is PENDING"
         )
+    publication_scope = "FIXTURE"
     staging_path = Path(staging_db).resolve()
     if not staging_path.is_file():
         raise FileNotFoundError(f"staging database does not exist: {staging_path}")

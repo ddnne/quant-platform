@@ -8,18 +8,21 @@ through their configured public-key loader.
 
 from __future__ import annotations
 
+import base64
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import patch
 from uuid import uuid4
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 
 from research.readiness import (
     ReadinessPublicKeyRegistry,
     VerifiedPilotReadiness,
-    _ReadyPublicationSigner,
 )
 from research.ready_manifest import (
     ReadyManifest,
@@ -31,28 +34,51 @@ from research.ready_manifest import (
 from selection.budget_ledger import MassResearchDisabledError
 
 
+class _TestReadinessSigner:
+    """Ephemeral signer that exists only in the tests distribution."""
+
+    __test__ = False
+
+    def __init__(self, *, key_id: str, private_key: Ed25519PrivateKey) -> None:
+        if type(key_id) is not str or not key_id.strip():
+            raise ValueError("test readiness key_id required")
+        self.key_id = key_id.strip()
+        self._private_key = private_key
+
+    def sign(self, body: dict[str, Any]) -> str:
+        encoded = json.dumps(
+            body, sort_keys=True, separators=(",", ":"), default=str
+        ).encode("utf-8")
+        signature = self._private_key.sign(encoded)
+        return "ed25519:" + base64.b64encode(signature).decode("ascii")
+
+    def public_registry(self) -> ReadinessPublicKeyRegistry:
+        return ReadinessPublicKeyRegistry(
+            self.public_keys()
+        )
+
+    def public_keys(self) -> dict[str, Ed25519PublicKey]:
+        return {self.key_id: self._private_key.public_key()}
+
+    # Compatibility for existing tests; this class is never shipped by product.
+    def _public_registry(self) -> ReadinessPublicKeyRegistry:
+        return self.public_registry()
+
+
 def make_readiness_signer(
     *,
     key_id: str = "test-readiness-v1",
     private_key: Ed25519PrivateKey | None = None,
-) -> _ReadyPublicationSigner:
+) -> _TestReadinessSigner:
     """Create a private publication signer strictly for test fixtures."""
     key = private_key or Ed25519PrivateKey.generate()
-    private_pem = key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
-    return _ReadyPublicationSigner._from_private_pem(
-        key_id=key_id,
-        private_pem=private_pem,
-    )
+    return _TestReadinessSigner(key_id=key_id, private_key=key)
 
 
 def mint_pilot_readiness(
     manifest: ReadyManifest,
     *,
-    publisher: _ReadyPublicationSigner | None = None,
+    publisher: _TestReadinessSigner | None = None,
     immutable_db_digest: str,
     profile_binding: Any | None = None,
     now: datetime | None = None,
@@ -113,13 +139,17 @@ def mint_pilot_readiness(
         "key_id": signer.key_id,
         "issuer": "ReadyPublicationService/v3",
     }
-    signature = signer._sign(
+    signature = signer.sign(
         {"format": VerifiedPilotReadiness.FORMAT, **body}
     )
     minted = VerifiedPilotReadiness(signature=signature, **body)
-    if not minted.is_valid(verifier=signer._public_registry(), now=clock):
+    if not signer.public_registry().verify(
+        key_id=minted.key_id,
+        body=minted.to_canonical_body(),
+        signature=minted.signature,
+    ):
         raise MassResearchDisabledError(
-            "synthetic VerifiedPilotReadiness failed its signed invariants"
+            "synthetic VerifiedPilotReadiness signature verification failed"
         )
     return minted
 

@@ -18,7 +18,6 @@ from paper_runtime.snapshot_coverage_proof import (
     persist_coverage_proof,
 )
 from paper_runtime.snapshot_read import describe_snapshot, latest_ready_snapshot
-from research.readiness import ReadinessPublicKeyRegistry
 from research.ready_manifest import (
     build_profile_bound_ready_manifest_from_snapshot_document,
     load_exact_four_pilot_ready_binding,
@@ -352,9 +351,8 @@ def test_production_reader_binds_nested_ready_manifest_and_artifact_bytes(
         mode=0o444,
     )
     monkeypatch.setattr(
-        ReadinessPublicKeyRegistry,
-        "load_pinned",
-        classmethod(lambda cls: signer._public_registry()),
+        "paper_runtime.readiness_attestation._load_pinned_readiness_public_keys",
+        signer.public_keys,
     )
 
     observed = describe_snapshot(snapshot_dir, outer["snapshot_id"])
@@ -433,7 +431,7 @@ def test_fixture_gate_cannot_publish_a_production_scope(tmp_path: Path) -> None:
     staging.touch()
     snapshot_dir = tmp_path / "snapshots"
 
-    with pytest.raises(SnapshotRejected, match="exact production publication gate"):
+    with pytest.raises(SnapshotRejected, match="authority is PENDING"):
         snapshot_module._publish_ready_snapshot_impl(
             staging,
             snapshot_dir,

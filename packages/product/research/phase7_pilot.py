@@ -10,9 +10,9 @@ from typing import Sequence
 
 from research.artifacts import ExperimentPlan
 from research.readiness import (
-    ReadinessPublicKeyRegistry,
     VerifiedMassReadiness,
     VerifiedPilotReadiness,
+    verify_pinned_pilot_readiness,
 )
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
 from storage.immutable_artifact import ImmutableArtifactStore
@@ -86,17 +86,8 @@ def _require_signed_readiness(
     readiness: object | None,
     *,
     binding: object,
-    verifier: ReadinessPublicKeyRegistry | None,
 ) -> VerifiedPilotReadiness:
-    if not isinstance(readiness, VerifiedPilotReadiness):
-        raise MassResearchDisabledError(
-            "VerifiedPilotReadiness required (type check)"
-        )
-    readiness.require_valid(
-        expected_plan_set_digest=str(getattr(binding, "plan_set_digest", "")),
-        expected_closure_digest=str(getattr(binding, "closure_set_digest", "")),
-        verifier=verifier,
-    )
+    readiness = verify_pinned_pilot_readiness(readiness)
     if (
         tuple(readiness.plan_ids) != tuple(getattr(binding, "plan_ids", ()))
         or readiness.profile_digest != getattr(binding, "profile_digest", None)
@@ -177,7 +168,6 @@ class ControlledPilotScheduler:
         self._readiness = _require_signed_readiness(
             readiness,
             binding=binding,
-            verifier=ReadinessPublicKeyRegistry.load_pinned(),
         )
         self._budget = budget
         self._plan = canonical_plan

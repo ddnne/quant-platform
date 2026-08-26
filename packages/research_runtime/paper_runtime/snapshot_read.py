@@ -207,7 +207,8 @@ def _describe_snapshot_for_scope(
         attestation_path = directory / attestation_name
         if not attestation_path.is_file():
             raise RuntimeError("READY attestation is missing")
-        digest = hashlib.sha256(attestation_path.read_bytes()).hexdigest()
+        attestation_bytes = attestation_path.read_bytes()
+        digest = hashlib.sha256(attestation_bytes).hexdigest()
         if attestation_digest != "sha256:" + digest:
             raise RuntimeError("READY attestation digest mismatch")
         if attestation_path.stat().st_mode & (
@@ -216,26 +217,21 @@ def _describe_snapshot_for_scope(
             raise RuntimeError("READY attestation is writable")
         if publication_scope == "PRODUCTION":
             try:
-                from research.readiness import load_verified_pilot_readiness
-                from research.ready_manifest import (
-                    ready_manifest_from_snapshot_document,
+                from paper_runtime.readiness_attestation import (
+                    verify_pinned_pilot_snapshot_attestation,
                 )
 
-                nested_manifest = ready_manifest_from_snapshot_document(
-                    manifest
-                )
-
-                readiness = load_verified_pilot_readiness(
-                    attestation_path,
-                    expected_snapshot_id=snapshot_id,
-                    expected_ready_manifest_digest=str(
-                        nested_manifest.to_dict().get("manifest_digest") or ""
-                    ),
-                )
-                if readiness.immutable_db_digest != artifact_digest:
+                nested_manifest = manifest.get("ready_manifest")
+                if not isinstance(nested_manifest, dict):
                     raise RuntimeError(
-                        "production READY attestation does not bind the artifact"
+                        "production READY snapshot has no embedded ReadyManifest"
                     )
+                verify_pinned_pilot_snapshot_attestation(
+                    attestation_bytes,
+                    snapshot_id=snapshot_id,
+                    ready_manifest=nested_manifest,
+                    immutable_db_digest=artifact_digest,
+                )
             except Exception as exc:
                 raise RuntimeError(
                     "production READY attestation is not trusted"

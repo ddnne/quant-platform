@@ -1,7 +1,7 @@
 """Pilot and Mass scheduler readiness scopes are nominally separated."""
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +21,6 @@ from research.phase7_pilot import (
 from research.readiness import (
     VerifiedMassReadiness,
     VerifiedPilotReadiness,
-    _ReadyPublicationSigner,
     require_mass_research_start,
 )
 from research.ready_manifest import build_ready_manifest, load_exact_four_pilot_ready_binding
@@ -30,6 +29,7 @@ from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCap
 from selection.screen import ExperimentBudget
 from storage.immutable_artifact import ImmutableArtifactStore
 from tests.readiness_test_support import (
+    _TestReadinessSigner,
     controlled_pilot_scheduler,
     make_readiness_signer,
     mint_pilot_readiness,
@@ -38,7 +38,7 @@ from tests.readiness_test_support import (
 _SNAPSHOT_ID = "sha256:" + ("12" * 32)
 
 
-def _publisher() -> _ReadyPublicationSigner:
+def _publisher() -> _TestReadinessSigner:
     return make_readiness_signer(
         key_id="phase7-pilot-test",
         private_key=Ed25519PrivateKey.generate(),
@@ -46,10 +46,10 @@ def _publisher() -> _ReadyPublicationSigner:
 
 
 def _readiness(
-    publisher: _ReadyPublicationSigner,
+    publisher: _TestReadinessSigner,
     *,
     snapshot_id: str = _SNAPSHOT_ID,
-    expires_at: str = "2099-01-01T00:00:00+00:00",
+    expires_at: str | None = None,
     signature: str | None = None,
     **field_overrides: object,
 ) -> VerifiedPilotReadiness:
@@ -83,9 +83,13 @@ def _readiness(
         created_at="2026-01-01T00:00:00+00:00",
         published_at="2026-01-01T00:01:00+00:00",
     )
-    expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-    baseline = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    mint_now = baseline if expiry > baseline else expiry - timedelta(seconds=60)
+    current = datetime.now(timezone.utc)
+    expiry = (
+        current + timedelta(hours=1)
+        if expires_at is None
+        else datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    )
+    mint_now = current if expiry > current else expiry - timedelta(seconds=60)
     pending = mint_pilot_readiness(
         manifest,
         publisher=publisher,
@@ -122,7 +126,7 @@ def _store(tmp_path: Path) -> ImmutableArtifactStore:
 
 def _construct(
     tmp_path: Path,
-    publisher: _ReadyPublicationSigner | None = None,
+    publisher: _TestReadinessSigner | None = None,
     **overrides: object,
 ) -> ControlledPilotScheduler:
     publisher = publisher or _publisher()
@@ -143,6 +147,51 @@ def _construct(
 def test_pilot_scheduler_public_constructor_has_no_caller_trust_root() -> None:
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         ControlledPilotScheduler(verifier=object())  # type: ignore[call-arg]
+
+
+def test_pilot_readiness_is_final_and_method_override_cannot_authorize() -> None:
+    with pytest.raises(TypeError, match="final"):
+
+        class EvilPilot(VerifiedPilotReadiness):
+            def require_valid(self) -> "EvilPilot":
+                return self
+
+
+def test_pilot_readiness_dto_rejects_caller_verifier_and_clock() -> None:
+    readiness = _readiness(_publisher())
+    with pytest.raises(TypeError, match="unexpected keyword argument 'verifier'"):
+        readiness.require_valid(verifier=object())  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="unexpected keyword argument 'now'"):
+        readiness.is_valid(now=datetime.now(timezone.utc))  # type: ignore[call-arg]
+
+
+class _ExplosiveStr(str):
+    def __eq__(self, other: object) -> bool:
+        raise AssertionError("stateful scalar comparison was invoked")
+
+
+class _ExplosiveTuple(tuple):
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        raise AssertionError("stateful tuple iteration was invoked")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("ready_state", _ExplosiveStr("READY"), "exact non-empty string"),
+        ("plan_ids", _ExplosiveTuple(("forged",)), "exact non-empty string tuple"),
+    ),
+)
+def test_scheduler_rejects_stateful_readiness_scalars_before_use(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    publisher = _publisher()
+    poisoned = replace(_readiness(publisher), **{field: value})
+    with pytest.raises(MassResearchDisabledError, match=message):
+        _construct(tmp_path, publisher=publisher, readiness=poisoned)
 
 
 def test_construct_fails_without_readiness(tmp_path: Path) -> None:
@@ -206,10 +255,10 @@ def test_construct_rejects_operator_override(tmp_path: Path) -> None:
 def test_construct_refuses_expired_or_bad_signature(tmp_path: Path) -> None:
     pub = _publisher()
     expired = _readiness(pub, expires_at="2000-01-01T00:00:00+00:00")
-    with pytest.raises(MassResearchDisabledError, match="invalid, expired"):
+    with pytest.raises(MassResearchDisabledError, match="expired|time-incoherent"):
         _construct(tmp_path, publisher=pub, readiness=expired)
     bad_sig = _readiness(pub, signature="ed25519:not-a-real-signature")
-    with pytest.raises(MassResearchDisabledError, match="invalid, expired"):
+    with pytest.raises(MassResearchDisabledError, match="signature"):
         _construct(tmp_path, publisher=pub, readiness=bad_sig)
 
 
@@ -224,7 +273,7 @@ def test_construct_refuses_noncanonical_plan_instead_of_mutating_snapshot(
 def test_construct_refuses_empty_digest(tmp_path: Path) -> None:
     pub = _publisher()
     empty = _readiness(pub, b0_quality_proof_digest="")
-    with pytest.raises(MassResearchDisabledError, match="invalid, expired"):
+    with pytest.raises(MassResearchDisabledError, match="digest"):
         _construct(tmp_path, publisher=pub, readiness=empty)
 
 
@@ -272,9 +321,14 @@ def test_mass_scheduler_and_start_are_hard_disabled_even_for_mass_nominal_type(
     pilot = _readiness(pub)
     mass_like = VerifiedMassReadiness(
         **{
-            **pilot.__dict__,
-            "readiness_scope": "MASS",
-            "profile_id": "mass/governed-v1",
+            field.name: (
+                "MASS"
+                if field.name == "readiness_scope"
+                else "mass/governed-v1"
+                if field.name == "profile_id"
+                else object.__getattribute__(pilot, field.name)
+            )
+            for field in fields(VerifiedPilotReadiness)
         }
     )
     with pytest.raises(MassResearchDisabledError, match="hard-disabled"):
