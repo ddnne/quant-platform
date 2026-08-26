@@ -4,6 +4,10 @@
 # Never skip missing node_modules. Fast local helper: scripts/verify_all.sh
 set -euo pipefail
 
+# Vitest's Wrangler integration also reads this ambient selector. Every CLI
+# invocation below pins --env explicitly; clear it for npm test subprocesses.
+unset CLOUDFLARE_ENV
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 

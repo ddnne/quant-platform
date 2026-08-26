@@ -290,6 +290,7 @@ def test_authoritative_ci_dry_runs_test_harness_configs() -> None:
     assert "wrangler deploy --dry-run --config=wrangler.test.toml" in ci
     assert "--config=wrangler.toml --env=\"\"" in ci
     assert "--config=wrangler.toml --env=production" in ci
+    assert "unset CLOUDFLARE_ENV" in ci
     logical_lines = ci.replace("\\\n", " ").splitlines()
     wrangler_invocations = [
         line.strip()
