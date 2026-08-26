@@ -133,6 +133,7 @@ export type PublicReservation = {
 };
 
 type SensitiveCapabilityField =
+  | "owner_capability_hash"
   | "reserve_owner_capability"
   | "reserve_owner_capability_hash"
   | "settlement_capability"
@@ -154,6 +155,19 @@ export type Lease = {
   released_at: number | null;
 };
 
+/** Keep response-reordering cancellation authority for one canonical lease window. */
+export const OWNER_CANCELLATION_TOMBSTONE_TTL_MS =
+  PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000;
+export const MAX_OWNER_CANCELLATION_TOMBSTONES = 4_096;
+
+export type OwnerCancellationTombstone = {
+  owner_capability_hash: string;
+  idempotency_key: string;
+  request_digest: string;
+  created_at: number;
+  expires_at: number;
+};
+
 export type LedgerState = {
   created: boolean;
   created_at: number;
@@ -162,6 +176,7 @@ export type LedgerState = {
   reserved: Counters;
   reservations: Record<string, Reservation>;
   leases: Record<string, Lease>;
+  owner_cancellation_tombstones: Record<string, OwnerCancellationTombstone>;
   frozen: boolean;
   frozen_at: number | null;
   frozen_reason: string | null;
@@ -239,6 +254,7 @@ export function emptyLedger(now: number): LedgerState {
     reserved: zeroCounters(),
     reservations: {},
     leases: {},
+    owner_cancellation_tombstones: {},
     frozen: false,
     frozen_at: null,
     frozen_reason: null,
@@ -860,6 +876,33 @@ function requirePersistedLease(raw: unknown, key: string): Lease {
   return { ...lease };
 }
 
+function requirePersistedOwnerCancellationTombstone(
+  raw: unknown,
+  key: string,
+): OwnerCancellationTombstone {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PersistedBudgetStateError("owner_cancellation_tombstone_not_object");
+  }
+  const tombstone = raw as OwnerCancellationTombstone;
+  if (
+    !OWNER_CAPABILITY_RE.test(key) ||
+    tombstone.owner_capability_hash !== key ||
+    typeof tombstone.idempotency_key !== "string" ||
+    !tombstone.idempotency_key ||
+    tombstone.idempotency_key.length > 256 ||
+    typeof tombstone.request_digest !== "string" ||
+    !tombstone.request_digest ||
+    tombstone.request_digest !== tombstone.request_digest.trim() ||
+    !Number.isSafeInteger(tombstone.created_at) ||
+    !Number.isSafeInteger(tombstone.expires_at) ||
+    tombstone.expires_at !==
+      tombstone.created_at + OWNER_CANCELLATION_TOMBSTONE_TTL_MS
+  ) {
+    throw new PersistedBudgetStateError("owner_cancellation_tombstone_invalid");
+  }
+  return { ...tombstone };
+}
+
 function persistedCountersEqual(left: Counters, right: Counters): boolean {
   return COUNTERS.every((name) =>
     name === "cost_usd"
@@ -967,8 +1010,85 @@ function coerceState(state: LedgerState): LedgerState {
     leases[k] = requirePersistedLease(v, k);
   }
   state.leases = leases;
+  const rawTombstones = state.owner_cancellation_tombstones ?? {};
+  if (
+    rawTombstones === null ||
+    typeof rawTombstones !== "object" ||
+    Array.isArray(rawTombstones)
+  ) {
+    throw new PersistedBudgetStateError("owner_cancellation_tombstones_invalid");
+  }
+  const tombstoneEntries = Object.entries(rawTombstones);
+  if (tombstoneEntries.length > MAX_OWNER_CANCELLATION_TOMBSTONES) {
+    throw new PersistedBudgetStateError("owner_cancellation_tombstones_over_capacity");
+  }
+  const tombstones: Record<string, OwnerCancellationTombstone> = {};
+  for (const [key, value] of tombstoneEntries) {
+    tombstones[key] = requirePersistedOwnerCancellationTombstone(value, key);
+  }
+  state.owner_cancellation_tombstones = tombstones;
   requirePersistedOccupancyClosure(state);
   return state;
+}
+
+function cleanupOwnerCancellationTombstones(state: LedgerState, now: number): number {
+  let removed = 0;
+  for (const [ownerHash, tombstone] of Object.entries(
+    state.owner_cancellation_tombstones,
+  )) {
+    if (tombstone.expires_at > now) continue;
+    delete state.owner_cancellation_tombstones[ownerHash];
+    removed += 1;
+  }
+  return removed;
+}
+
+function ownerCancellationTombstoneMatches(
+  state: LedgerState,
+  ownerHash: string | null,
+  idempotencyKey: string,
+  requestDigest: string,
+): boolean {
+  if (!ownerHash) return false;
+  const tombstone = state.owner_cancellation_tombstones[ownerHash];
+  return Boolean(
+    tombstone &&
+      tombstone.idempotency_key === idempotencyKey &&
+      tombstone.request_digest === requestDigest,
+  );
+}
+
+function persistOwnerCancellationTombstone(
+  state: LedgerState,
+  ownerHash: string,
+  idempotencyKey: string,
+  requestDigest: string,
+  now: number,
+): BudgetErr | null {
+  const existing = state.owner_cancellation_tombstones[ownerHash];
+  if (existing) {
+    if (
+      existing.idempotency_key !== idempotencyKey ||
+      existing.request_digest !== requestDigest
+    ) {
+      return { ok: false, error: "owner_cancellation_tombstone_conflict" };
+    }
+    return null;
+  }
+  if (
+    Object.keys(state.owner_cancellation_tombstones).length >=
+    MAX_OWNER_CANCELLATION_TOMBSTONES
+  ) {
+    return { ok: false, error: "owner_cancellation_tombstone_capacity_exhausted" };
+  }
+  state.owner_cancellation_tombstones[ownerHash] = {
+    owner_capability_hash: ownerHash,
+    idempotency_key: idempotencyKey,
+    request_digest: requestDigest,
+    created_at: now,
+    expires_at: now + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+  };
+  return null;
 }
 
 function closeReservationLease(state: LedgerState, reservation: Reservation, now: number): void {
@@ -1055,6 +1175,7 @@ function activeLeaseCount(state: LedgerState): number {
 }
 
 export function recoverExpired(state: LedgerState, now: number): number {
+  cleanupOwnerCancellationTombstones(state, now);
   let recovered = 0;
   for (const lease of Object.values(state.leases)) {
     if (lease.released_at !== null) continue;
@@ -1088,6 +1209,12 @@ async function saveState(storage: AtomicBudgetStorage, state: LedgerState): Prom
   for (const lease of Object.values(state.leases)) {
     if (lease.released_at !== null) continue;
     nextAlarm = nextAlarm === null ? lease.expires_at : Math.min(nextAlarm, lease.expires_at);
+  }
+  for (const tombstone of Object.values(state.owner_cancellation_tombstones)) {
+    nextAlarm =
+      nextAlarm === null
+        ? tombstone.expires_at
+        : Math.min(nextAlarm, tombstone.expires_at);
   }
   await storage.commit(STATE_KEY, state, nextAlarm);
 }
@@ -1165,6 +1292,18 @@ export async function reserveBudget(
     if (input.acquire_lease !== true) {
       await saveState(transaction, state);
       return { ok: false, error: "lease_required" };
+    }
+
+    if (
+      ownerCancellationTombstoneMatches(
+        state,
+        ownerHash,
+        key.idempotency_key,
+        digest,
+      )
+    ) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_released" };
     }
 
     const existing = state.reservations[key.idempotency_key];
@@ -1308,6 +1447,7 @@ export async function reserveOwnedBudget(
 }
 
 const FORBIDDEN_CAPABILITY_KEYS = new Set<SensitiveCapabilityField>([
+  "owner_capability_hash",
   "reserve_owner_capability",
   "reserve_owner_capability_hash",
   "settlement_capability",
@@ -2242,8 +2382,9 @@ export async function cancelPreProviderReservation(
 ): Promise<
   BudgetResult<{
     cancelled: boolean;
-    reservation: PublicReservation;
-    budget_run_id: string;
+    tombstoned: boolean;
+    reservation: PublicReservation | null;
+    budget_run_id: string | null;
   }>
 > {
   const key = requireIdempotencyKey(input.idempotency_key);
@@ -2263,8 +2404,25 @@ export async function cancelPreProviderReservation(
     recoverExpired(state, now);
     const reservation = state.reservations[key.idempotency_key];
     if (!reservation) {
+      const tombstoneError = persistOwnerCancellationTombstone(
+        state,
+        ownerHash,
+        key.idempotency_key,
+        boundDigest.request_digest,
+        now,
+      );
+      if (tombstoneError) {
+        await saveState(transaction, state);
+        return tombstoneError;
+      }
       await saveState(transaction, state);
-      return { ok: false, error: "reservation_not_found" };
+      return {
+        ok: true,
+        cancelled: false,
+        tombstoned: true,
+        reservation: null,
+        budget_run_id: null,
+      };
     }
     if (reservation.request_digest !== boundDigest.request_digest) {
       await saveState(transaction, state);
@@ -2278,11 +2436,23 @@ export async function cancelPreProviderReservation(
       await saveState(transaction, state);
       return { ok: false, error: "reservation_not_cancellable" };
     }
+    const tombstoneError = persistOwnerCancellationTombstone(
+      state,
+      ownerHash,
+      key.idempotency_key,
+      boundDigest.request_digest,
+      now,
+    );
+    if (tombstoneError) {
+      await saveState(transaction, state);
+      return tombstoneError;
+    }
     if (reservation.status === "released") {
       await saveState(transaction, state);
       return {
         ok: true,
         cancelled: false,
+        tombstoned: true,
         reservation: publicReservation(reservation),
         budget_run_id: reservation.reservation_id,
       };
@@ -2296,6 +2466,7 @@ export async function cancelPreProviderReservation(
     return {
       ok: true,
       cancelled: true,
+      tombstoned: true,
       reservation: publicReservation(reservation),
       budget_run_id: reservation.reservation_id,
     };

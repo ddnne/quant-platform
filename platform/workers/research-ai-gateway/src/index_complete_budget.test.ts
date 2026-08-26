@@ -867,6 +867,61 @@ describe("POST /v1/complete control-plane occupancy", () => {
     });
   });
 
+  it("tombstones cancellation when reserve RPC delivery is reordered after cancel", async () => {
+    const storage = new MemoryBudgetStorage();
+    const coordinator = createBudgetCoordinator(storage);
+    const delayedReserveInputs: Array<
+      Parameters<typeof coordinator.reserveOwned>[0]
+    > = [];
+    let providerCalls = 0;
+    const env: GatewayEnv = {
+      GATEWAY_TOKEN,
+      BUDGET_LEDGER: {
+        idFromName(name: string) {
+          return { toString: () => name } as DurableObjectId;
+        },
+        get() {
+          return {
+            ...coordinator,
+            reserveOwned: async (
+              input: Parameters<typeof coordinator.reserveOwned>[0],
+            ) => {
+              delayedReserveInputs.push(structuredClone(input));
+              throw new Error("reserve request delivery delayed beyond response");
+            },
+          };
+        },
+      } as unknown as DurableObjectNamespace,
+      AI: {
+        run: async () => {
+          providerCalls += 1;
+          throw new Error("provider must not run");
+        },
+      } as unknown as Ai,
+    };
+
+    const response = await worker.fetch(
+      completeWithBudget({ headers: { "Idempotency-Key": "reordered-reserve" } }),
+      env,
+    );
+    expect(response.status).toBe(500);
+    expect(providerCalls).toBe(0);
+    expect(delayedReserveInputs).toHaveLength(2);
+
+    for (const delayedInput of delayedReserveInputs) {
+      await expect(coordinator.reserveOwned(delayedInput)).resolves.toEqual({
+        ok: false,
+        error: "reservation_released",
+      });
+    }
+    expect(await snapshotBudget(storage)).toMatchObject({
+      ok: true,
+      used: { model_calls: 0 },
+      reserved: { model_calls: 0 },
+      active_leases: 0,
+    });
+  });
+
   it("atomically cancels two ambiguous pre-provider reserves without consuming parallel slots", async () => {
     const storage = new MemoryBudgetStorage();
     let providerCalls = 0;

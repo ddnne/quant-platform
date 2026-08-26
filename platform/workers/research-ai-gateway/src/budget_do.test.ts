@@ -3,6 +3,8 @@ import {
   PILOT_BUDGET_CAPS,
   CONTROL_PLANE_LEDGER_NAME,
   MemoryBudgetStorage,
+  MAX_OWNER_CANCELLATION_TOMBSTONES,
+  OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
   bindIdempotencyKey,
   cancelPreProviderReservation,
   createBudget,
@@ -2790,6 +2792,141 @@ describe("P0 terminal replay and capability isolation", () => {
     expect(JSON.stringify(first)).not.toContain(OWNER_A);
     expect(JSON.stringify(first)).not.toContain(persistedOwnerHash);
     expect(first.reservation).not.toHaveProperty("reserve_owner_capability_hash");
+  });
+
+  it("persists cancellation authority before reserve and rejects the delayed same owner", async () => {
+    const storage = new MemoryBudgetStorage();
+    const cancelledFirst = await cancelPreProviderReservation(
+      storage,
+      {
+        idempotency_key: "cancel-before-reserve",
+        request_digest: "digest-cancel-before-reserve",
+        reserve_owner_capability: OWNER_A,
+      },
+      T0,
+    );
+    expect(cancelledFirst).toEqual({
+      ok: true,
+      cancelled: false,
+      tombstoned: true,
+      reservation: null,
+      budget_run_id: null,
+    });
+    expect(await storage.getAlarm()).toBe(
+      T0 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+    );
+    const persisted = await storage.get<Record<string, any>>("ledger");
+    expect(Object.values(persisted?.owner_cancellation_tombstones ?? {})).toHaveLength(1);
+    expect(JSON.stringify(persisted)).not.toContain(OWNER_A);
+
+    const delayedSameOwner = await reserveOwnedBudget(
+      storage,
+      {
+        ...leased("cancel-before-reserve", { model_calls: 1 }),
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 1,
+    );
+    expect(delayedSameOwner).toEqual({ ok: false, error: "reservation_released" });
+    expect(await snapshotBudget(storage, T0 + 1)).toMatchObject({
+      ok: true,
+      reserved: { model_calls: 0 },
+      active_leases: 0,
+    });
+
+    const differentOwner = await reserveOwnedBudget(
+      storage,
+      {
+        ...leased("cancel-before-reserve", { model_calls: 1 }),
+        reserve_owner_capability: OWNER_B,
+      },
+      T0 + 2,
+    );
+    expect(differentOwner).toMatchObject({ ok: true, existing: false });
+  });
+
+  it("migrates legacy state and removes expired owner cancellation tombstones", async () => {
+    const legacyStorage = new MemoryBudgetStorage();
+    await createBudget(legacyStorage, T0);
+    const legacy = await legacyStorage.get<Record<string, any>>("ledger");
+    if (!legacy) throw new Error("legacy ledger");
+    delete legacy.owner_cancellation_tombstones;
+    await legacyStorage.commit("ledger", legacy, null);
+    expect(await snapshotBudget(legacyStorage, T0 + 1)).toMatchObject({ ok: true });
+    const migrated = await legacyStorage.get<Record<string, any>>("ledger");
+    expect(migrated?.owner_cancellation_tombstones).toEqual({});
+
+    const storage = new MemoryBudgetStorage();
+    await cancelPreProviderReservation(
+      storage,
+      {
+        idempotency_key: "expiring-cancel",
+        request_digest: "digest-expiring-cancel",
+        reserve_owner_capability: OWNER_A,
+      },
+      T0,
+    );
+    const afterExpiry = await reserveOwnedBudget(
+      storage,
+      {
+        ...leased("expiring-cancel", { model_calls: 1 }),
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+    );
+    expect(afterExpiry).toMatchObject({ ok: true, existing: false });
+    const cleaned = await storage.get<Record<string, any>>("ledger");
+    expect(cleaned?.owner_cancellation_tombstones).toEqual({});
+
+    const corrupt = new MemoryBudgetStorage();
+    await cancelPreProviderReservation(
+      corrupt,
+      {
+        idempotency_key: "corrupt-cancel",
+        request_digest: "digest-corrupt-cancel",
+        reserve_owner_capability: OWNER_A,
+      },
+      T0,
+    );
+    const corruptState = await corrupt.get<Record<string, any>>("ledger");
+    if (!corruptState) throw new Error("corrupt ledger");
+    const tombstone = Object.values(
+      corruptState.owner_cancellation_tombstones,
+    )[0] as Record<string, unknown>;
+    tombstone.expires_at = T0 - 1;
+    await corrupt.commit("ledger", corruptState, null);
+    await expect(snapshotBudget(corrupt, T0 + 1)).rejects.toThrow(
+      /persisted_budget_state_invalid:owner_cancellation_tombstone_invalid/,
+    );
+  });
+
+  it("fails closed when persisted cancellation tombstones exceed bounded capacity", async () => {
+    const storage = new MemoryBudgetStorage();
+    await createBudget(storage, T0);
+    const state = await storage.get<Record<string, any>>("ledger");
+    if (!state) throw new Error("ledger");
+    state.owner_cancellation_tombstones = Object.fromEntries(
+      Array.from(
+        { length: MAX_OWNER_CANCELLATION_TOMBSTONES + 1 },
+        (_, index) => {
+          const ownerHash = index.toString(16).padStart(64, "0");
+          return [
+            ownerHash,
+            {
+              owner_capability_hash: ownerHash,
+              idempotency_key: `bounded-${index}`,
+              request_digest: `digest-bounded-${index}`,
+              created_at: T0,
+              expires_at: T0 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+            },
+          ];
+        },
+      ),
+    );
+    await storage.commit("ledger", state, null);
+    await expect(snapshotBudget(storage, T0 + 1)).rejects.toThrow(
+      /persisted_budget_state_invalid:owner_cancellation_tombstones_over_capacity/,
+    );
   });
 
   it("requires the reserve owner at provider start and refuses cancellation after start", async () => {
