@@ -60,10 +60,8 @@ MARKDOWN_AREAS = {
     "Cloudflare / Ops / CI": "cloudflare_ops_ci",
     "Architecture / Test / Operations": "architecture_test_operations",
 }
-MARKDOWN_FINDING_ROW = re.compile(
-    r"^\|\s*(?P<id>[A-Z][0-9]+)\s*\|.*?\|\s*"
-    r"(?P<status>OPEN|FIXED|DEFERRED|HOLD)\s*\|.*\|\s*$"
-)
+MARKDOWN_FINDING_ID = re.compile(r"^[A-Z][0-9]+$")
+MARKDOWN_STATUSES = frozenset({"OPEN", "FIXED", "DEFERRED", "HOLD"})
 
 
 def _document() -> dict[str, object]:
@@ -86,11 +84,19 @@ def _closed_document() -> dict[str, object]:
     return value
 
 
-def _markdown_structure() -> dict[str, tuple[str, str, str]]:
+def _markdown_structure(
+    markdown: str | None = None,
+) -> dict[str, tuple[str, str, str]]:
     area: str | None = None
     severity: str | None = None
     rows: dict[str, tuple[str, str, str]] = {}
-    for line in MARKDOWN_LEDGER.read_text(encoding="utf-8").splitlines():
+    seen_ids: set[str] = set()
+    rendered_markdown = (
+        MARKDOWN_LEDGER.read_text(encoding="utf-8")
+        if markdown is None
+        else markdown
+    )
+    for line in rendered_markdown.splitlines():
         if line.startswith("## "):
             area = MARKDOWN_AREAS.get(line.removeprefix("## ").strip())
             severity = None
@@ -99,15 +105,48 @@ def _markdown_structure() -> dict[str, tuple[str, str, str]]:
             candidate = line.removeprefix("### ").strip()
             severity = candidate if candidate in {"P0", "P1"} else None
             continue
-        match = MARKDOWN_FINDING_ROW.fullmatch(line)
-        if match is None:
+        rendered = line.strip()
+        if not rendered.startswith("|"):
             continue
+        first_cell = rendered.removeprefix("|").split("|", 1)[0].strip()
+        if MARKDOWN_FINDING_ID.fullmatch(first_cell) is None:
+            continue
+        finding_id = first_cell
+        assert finding_id not in seen_ids, (
+            f"duplicate Markdown finding id: {finding_id}"
+        )
+        seen_ids.add(finding_id)
+
+        body = rendered.removeprefix("|")
+        if body.endswith("|"):
+            body = body.removesuffix("|")
+        cells = tuple(cell.strip() for cell in body.split("|"))
+        assert len(cells) == 4, (
+            f"Markdown finding {finding_id} must have exactly four table cells"
+        )
+        row_id, finding, status, evidence = cells
+        assert row_id == finding_id
+        assert finding, f"Markdown finding {finding_id} must have finding text"
+        assert status in MARKDOWN_STATUSES, (
+            f"Markdown finding {finding_id} has invalid status {status!r}"
+        )
+        assert evidence, f"Markdown finding {finding_id} must have evidence text"
         assert area is not None, f"finding row outside a pinned area: {line}"
         assert severity is not None, f"finding row outside P0/P1: {line}"
-        finding_id = match.group("id")
-        assert finding_id not in rows, f"duplicate Markdown finding id: {finding_id}"
-        rows[finding_id] = (area, severity, match.group("status"))
+        rows[finding_id] = (area, severity, status)
     return rows
+
+
+def _replace_markdown_finding_row(finding_id: str, replacement: str) -> str:
+    lines = MARKDOWN_LEDGER.read_text(encoding="utf-8").splitlines()
+    indexes = [
+        index
+        for index, line in enumerate(lines)
+        if line.startswith(f"| {finding_id} |")
+    ]
+    assert len(indexes) == 1
+    lines[indexes[0]] = replacement
+    return "\n".join(lines) + "\n"
 
 
 def test_pinned_inventory_and_severity_oracles_are_exact() -> None:
@@ -165,6 +204,48 @@ def test_markdown_and_json_ledgers_have_exact_structural_parity() -> None:
     assert len(json_rows) == 41
     assert set(json_rows) == EXPECTED_FINDING_IDS
     assert _markdown_structure() == json_rows
+
+
+def test_markdown_row_cannot_search_a_later_allowed_status() -> None:
+    attacked = _replace_markdown_finding_row(
+        "D2",
+        "| D2 | forged | CLOSED | OPEN | evidence |",
+    )
+    with pytest.raises(AssertionError, match="exactly four table cells"):
+        _markdown_structure(attacked)
+
+
+def test_markdown_duplicate_id_is_rejected_even_when_row_is_malformed() -> None:
+    attacked = (
+        MARKDOWN_LEDGER.read_text(encoding="utf-8").rstrip()
+        + "\n| D7 | contradictory | CLOSED | bogus |\n"
+    )
+    with pytest.raises(AssertionError, match="duplicate Markdown finding id: D7"):
+        _markdown_structure(attacked)
+
+
+def test_markdown_status_must_be_exactly_allowed() -> None:
+    attacked = _replace_markdown_finding_row(
+        "D7",
+        "| D7 | contradictory | CLOSED | bogus |",
+    )
+    with pytest.raises(AssertionError, match="has invalid status 'CLOSED'"):
+        _markdown_structure(attacked)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "| D7 | finding | FIXED | evidence | extra |",
+        "| D7 | finding | FIXED |",
+    ],
+)
+def test_markdown_finding_rows_require_exactly_four_cells(
+    replacement: str,
+) -> None:
+    attacked = _replace_markdown_finding_row("D7", replacement)
+    with pytest.raises(AssertionError, match="exactly four table cells"):
+        _markdown_structure(attacked)
 
 
 def test_current_pinned_ledger_blocks_with_exact_open_p0_inventory() -> None:
