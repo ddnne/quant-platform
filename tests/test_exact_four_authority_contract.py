@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
@@ -12,6 +13,7 @@ from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 from execution.exact_four_authority_contract import (
     AUTHORITY_PROTOCOL_STATE,
     CONTROLLED_PILOT_POLICY_DIGEST,
+    CONTROLLED_PILOT_POLICY_RAW_DIGEST,
     AuthorizedExactFourExecutionV2,
     ControlledExecutionClaimsV2,
     ExactFourAuthorityContractError,
@@ -23,13 +25,18 @@ from execution.exact_four_authority_contract import (
     TraderAuthorizationClaimsV2,
     VerifiedExactFourTraderAuthorizationV2,
     VerifiedPilotReadinessV2,
+    build_controlled_execution_claims_v2,
+    build_trader_authorization_claims_v2,
     canonical_authority_digest,
     load_controlled_pilot_policy,
     load_exact_four_authority_schema,
     load_exact_four_execution_binding,
+    parse_and_validate_exact_four_authority_document,
     require_authorized_exact_four_execution_v2,
     require_verified_pilot_readiness_v2,
     require_verified_trader_authorization_v2,
+    validate_exact_four_authority_claim_chain_v2,
+    validate_exact_four_authority_claims_v2,
 )
 from qp_paths import repo_root
 from research.experiment_plans import PILOT_EXPERIMENT_PLAN_IDS
@@ -54,17 +61,30 @@ def _snapshot(**overrides: object) -> ReadySnapshotLineage:
         "resolved_universe_digest": _digest("resolved-universe"),
         "coverage_policy_version": exact_four.coverage_policy_version,
         "coverage_policy_digest": exact_four.coverage_policy_digest,
+        "coverage_status": "COMPLETE",
         "coverage_proof_digest": _digest("coverage"),
+        "raw_status": "PRESENT",
         "raw_proof_digest": _digest("raw"),
+        "trusted_receipt_status": "COMPLETE",
         "receipt_proof_digest": _digest("receipt"),
+        "validation_status": "PASS",
         "validation_proof_digest": _digest("validation"),
+        "natural_key_status": "PASS",
+        "natural_key_proof_digest": _digest("natural-key"),
+        "b0_status": "PASS",
         "b0_proof_digest": _digest("b0"),
+        "b4_status": "PASS",
         "b4_proof_digest": _digest("b4"),
         "pit_contract_set_digest": _digest("pit-contracts"),
-        "source_generation": "cursor-42",
-        "applied_sync_generation": "cursor-42",
-        "export_cursor": "cursor-42",
-        "applied_cursor": "cursor-42",
+        "projection_status": "FRESH",
+        "projection_refresh_success": True,
+        "projection_is_current": True,
+        "projection_generation": "projection-generation-7",
+        "source_generation": 42,
+        "applied_sync_generation": 42,
+        "source_cursor": 2_891_821,
+        "export_cursor": 2_891_821,
+        "applied_cursor": 2_891_821,
         "feature_generation": _digest("features"),
         "catalog_generation": _digest("catalog"),
     }
@@ -79,34 +99,24 @@ def _claims() -> tuple[
 ]:
     exact_four = load_exact_four_execution_binding()
     readiness = PilotReadinessAttestationClaimsV2(
+        pilot_run_id="pilot-run-20260826-001",
         snapshot=_snapshot(),
         exact_four=exact_four,
         issued_at="2026-08-26T00:00:00+00:00",
         expires_at="2026-08-26T00:30:00+00:00",
     )
-    trader = TraderAuthorizationClaimsV2(
-        pilot_run_id="pilot-run-20260826-001",
-        readiness_attestation_id=readiness.attestation_id,
-        exact_four_binding_digest=exact_four.binding_digest,
-        controlled_pilot_policy_digest=CONTROLLED_PILOT_POLICY_DIGEST,
-        budget_scope_digest=exact_four.budget_scope_digest,
-        execution_limit_set_digest=exact_four.execution_limit_set_digest,
-        lease_ttl_seconds=exact_four.lease_ttl_seconds,
+    trader = build_trader_authorization_claims_v2(
+        readiness,
         human_approval_event_id="human-approval-event-001",
         human_approval_event_digest=_digest("human-approval-event"),
         issued_at="2026-08-26T00:01:00+00:00",
         expires_at="2026-08-26T00:20:00+00:00",
     )
-    execution = ControlledExecutionClaimsV2(
-        pilot_run_id=trader.pilot_run_id,
-        readiness_attestation_id=readiness.attestation_id,
-        trader_authorization_id=trader.authorization_id,
-        exact_four_binding_digest=exact_four.binding_digest,
-        controlled_pilot_policy_digest=CONTROLLED_PILOT_POLICY_DIGEST,
-        budget_scope_digest=exact_four.budget_scope_digest,
-        execution_limit_set_digest=exact_four.execution_limit_set_digest,
-        lease_ttl_seconds=exact_four.lease_ttl_seconds,
-        idempotency_key="pilot-run-20260826-001:exact-four:generation-1",
+    execution = build_controlled_execution_claims_v2(
+        readiness,
+        trader,
+        issued_at="2026-08-26T00:02:00+00:00",
+        expires_at="2026-08-26T00:10:00+00:00",
     )
     return readiness, trader, execution
 
@@ -140,6 +150,54 @@ def test_controlled_pilot_policy_digest_excludes_only_its_digest_field() -> None
     assert declared == CONTROLLED_PILOT_POLICY_DIGEST
     assert policy.policy_digest == canonical_authority_digest(document)
     assert policy.policy_digest == canonical_authority_digest(policy.to_digest_body())
+    raw = (
+        repo_root() / "specs" / "policy" / "controlled_pilot_policy.json"
+    ).read_bytes()
+    assert "sha256:" + hashlib.sha256(raw).hexdigest() == (
+        CONTROLLED_PILOT_POLICY_RAW_DIGEST
+    )
+
+
+@pytest.mark.parametrize(
+    ("replacement", "message"),
+    [
+        (
+            '"plans_exactly": 4,\n  "plans_exactly": 4,',
+            "duplicate key",
+        ),
+        ('"max_cost_usd": NaN', "non-finite"),
+    ],
+)
+def test_controlled_pilot_policy_loader_rejects_ambiguous_json(
+    tmp_path: Path,
+    replacement: str,
+    message: str,
+) -> None:
+    source = (
+        repo_root() / "specs" / "policy" / "controlled_pilot_policy.json"
+    ).read_text(encoding="utf-8")
+    if "plans_exactly" in replacement:
+        source = source.replace('"plans_exactly": 4,', replacement, 1)
+    else:
+        source = source.replace('"max_cost_usd": 20', replacement, 1)
+    target = tmp_path / "specs" / "policy" / "controlled_pilot_policy.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(source, encoding="utf-8")
+    with pytest.raises(ControlledPilotPolicyError, match=message):
+        load_controlled_pilot_policy(root=tmp_path)
+
+
+def test_controlled_pilot_policy_loader_rejects_raw_byte_drift(
+    tmp_path: Path,
+) -> None:
+    source = (
+        repo_root() / "specs" / "policy" / "controlled_pilot_policy.json"
+    ).read_bytes()
+    target = tmp_path / "specs" / "policy" / "controlled_pilot_policy.json"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(source + b"\n")
+    with pytest.raises(ControlledPilotPolicyError, match="raw digest"):
+        load_controlled_pilot_policy(root=tmp_path)
 
 
 def test_constructed_policy_cannot_reuse_digest_with_larger_limits() -> None:
@@ -207,14 +265,29 @@ def test_plan_dates_and_risk_limits_are_exact_canonical_values() -> None:
 
 def test_ready_snapshot_requires_complete_current_evidence_chain() -> None:
     snapshot = _snapshot()
-    assert snapshot.source_generation == snapshot.applied_cursor
+    assert snapshot.source_generation == snapshot.applied_sync_generation
+    assert snapshot.source_cursor == snapshot.export_cursor == snapshot.applied_cursor
+    assert snapshot.projection_generation != snapshot.source_generation
+    assert snapshot.coverage_status == "COMPLETE"
+    assert snapshot.trusted_receipt_status == "COMPLETE"
+    assert snapshot.natural_key_status == "PASS"
+    assert snapshot.projection_status == "FRESH"
     assert snapshot.raw_proof_digest.startswith("sha256:")
     assert snapshot.validation_proof_digest.startswith("sha256:")
     assert snapshot.b0_proof_digest.startswith("sha256:")
     assert snapshot.b4_proof_digest.startswith("sha256:")
 
-    with pytest.raises(ExactFourAuthorityContractError, match="must be current"):
-        _snapshot(applied_cursor="cursor-41")
+    with pytest.raises(ExactFourAuthorityContractError, match="cursor chain"):
+        _snapshot(applied_cursor=2_891_820)
+    with pytest.raises(ExactFourAuthorityContractError, match="sync generation"):
+        _snapshot(applied_sync_generation=41)
+    with pytest.raises(ExactFourAuthorityContractError, match="production evidence"):
+        _snapshot(coverage_status="PARTIAL")
+    with pytest.raises(ExactFourAuthorityContractError, match="refreshed"):
+        _snapshot(projection_refresh_success=False)
+    for sentinel in ("UNKNOWN", "null", "None", "stale"):
+        with pytest.raises(ExactFourAuthorityContractError, match="positive integer"):
+            _snapshot(source_cursor=sentinel)
     with pytest.raises(ExactFourAuthorityContractError, match="sha256"):
         _snapshot(raw_proof_digest="UNKNOWN")
 
@@ -247,6 +320,137 @@ def test_trader_and_execution_claims_bind_canonical_limits() -> None:
         replace(trader, lease_ttl_seconds=1801)
     with pytest.raises(ExactFourAuthorityContractError, match="limits"):
         replace(execution, budget_scope_digest=_digest("larger-budget"))
+
+
+def test_claim_lifetimes_are_bounded_by_policy_and_parent_authority() -> None:
+    readiness, trader, execution = _claims()
+    with pytest.raises(ExactFourAuthorityContractError, match="policy TTL"):
+        replace(readiness, expires_at="2026-08-26T00:30:01+00:00")
+    with pytest.raises(ExactFourAuthorityContractError, match="policy TTL"):
+        replace(trader, expires_at="2026-08-26T00:31:01+00:00")
+    with pytest.raises(ExactFourAuthorityContractError, match="policy TTL"):
+        replace(
+            execution,
+            expires_at="2026-08-26T00:32:01+00:00",
+        )
+    with pytest.raises(ExactFourAuthorityContractError, match="READY lifetime"):
+        build_trader_authorization_claims_v2(
+            readiness,
+            human_approval_event_id="human-approval-event-late",
+            human_approval_event_digest=_digest("human-approval-event-late"),
+            issued_at="2026-08-26T00:29:00+00:00",
+            expires_at="2026-08-26T00:31:00+00:00",
+        )
+    with pytest.raises(ExactFourAuthorityContractError, match="Trader authorization"):
+        build_controlled_execution_claims_v2(
+            readiness,
+            trader,
+            issued_at="2026-08-26T00:19:00+00:00",
+            expires_at="2026-08-26T00:21:00+00:00",
+        )
+
+
+def test_safe_factories_and_chain_validator_bind_actual_claim_objects() -> None:
+    readiness, trader, execution = _claims()
+    chain_digest = validate_exact_four_authority_claim_chain_v2(
+        readiness, trader, execution
+    )
+    assert chain_digest.startswith("sha256:")
+    assert readiness.pilot_run_id == trader.pilot_run_id == execution.pilot_run_id
+    assert trader.readiness_attestation_id == readiness.attestation_id
+    assert execution.trader_authorization_id == trader.authorization_id
+    assert execution.one_shot is True
+
+    same_authority_new_window = build_controlled_execution_claims_v2(
+        readiness,
+        trader,
+        issued_at="2026-08-26T00:03:00+00:00",
+        expires_at="2026-08-26T00:11:00+00:00",
+    )
+    assert same_authority_new_window.lease_id == execution.lease_id
+    assert same_authority_new_window.idempotency_key == execution.idempotency_key
+    assert same_authority_new_window.request_id != execution.request_id
+
+    unrelated_ready = replace(
+        readiness,
+        pilot_run_id="pilot-run-20260826-unrelated",
+    )
+    with pytest.raises(ExactFourAuthorityContractError, match="supplied READY"):
+        validate_exact_four_authority_claim_chain_v2(
+            unrelated_ready, trader, execution
+        )
+    other_trader = replace(
+        trader,
+        human_approval_event_id="human-approval-event-002",
+        human_approval_event_digest=_digest("human-approval-event-002"),
+    )
+    with pytest.raises(
+        ExactFourAuthorityContractError, match="supplied READY and Trader"
+    ):
+        validate_exact_four_authority_claim_chain_v2(
+            readiness, other_trader, execution
+        )
+
+
+def test_serialization_exposes_mutation_and_semantic_revalidation_rejects_it() -> None:
+    readiness, trader, execution = _claims()
+    trader_id = trader.authorization_id
+    object.__setattr__(trader, "automatic_promotion", True)
+    assert trader.authorization_id != trader_id
+    with pytest.raises(ExactFourAuthorityContractError):
+        validate_exact_four_authority_claims_v2(trader)
+
+    execution_id = execution.request_id
+    object.__setattr__(execution, "generation", 2)
+    assert execution.request_id != execution_id
+    with pytest.raises(ExactFourAuthorityContractError):
+        validate_exact_four_authority_claims_v2(execution)
+
+    ready_id = readiness.attestation_id
+    object.__setattr__(readiness.exact_four, "mass_research_enabled", True)
+    assert readiness.attestation_id != ready_id
+    with pytest.raises(ExactFourAuthorityContractError):
+        validate_exact_four_authority_claims_v2(readiness)
+
+
+def test_strict_parser_and_schema_are_lockstep_with_semantic_content_ids() -> None:
+    readiness, trader, execution = _claims()
+    schema_only = _validator()
+    for claims in (readiness, trader, execution):
+        raw = json.dumps(claims.to_dict(), separators=(",", ":"))
+        parsed = parse_and_validate_exact_four_authority_document(raw)
+        assert parsed == claims.to_dict()
+
+    duplicate = json.dumps(readiness.to_dict(), separators=(",", ":")).replace(
+        '"format":"pilot-readiness-attestation-claims/v2",',
+        '"format":"pilot-readiness-attestation-claims/v2",'
+        '"format":"pilot-readiness-attestation-claims/v2",',
+        1,
+    )
+    with pytest.raises(ExactFourAuthorityContractError, match="duplicate JSON key"):
+        parse_and_validate_exact_four_authority_document(duplicate)
+
+    nonfinite = json.dumps(execution.to_dict(), separators=(",", ":")).replace(
+        '"lease_ttl_seconds":1800', '"lease_ttl_seconds":NaN', 1
+    )
+    with pytest.raises(ExactFourAuthorityContractError, match="non-finite"):
+        parse_and_validate_exact_four_authority_document(nonfinite)
+
+    float_integer = execution.to_dict()
+    float_integer["generation"] = 1.0
+    schema_only.validate(float_integer)
+    with pytest.raises(ExactFourAuthorityContractError, match="exact JSON built-in"):
+        parse_and_validate_exact_four_authority_document(
+            json.dumps(float_integer, separators=(",", ":"))
+        )
+
+    self_reported = execution.to_dict()
+    self_reported["request_id"] = _digest("self-reported-request")
+    schema_only.validate(self_reported)
+    with pytest.raises(ExactFourAuthorityContractError, match="content id"):
+        parse_and_validate_exact_four_authority_document(
+            json.dumps(self_reported, separators=(",", ":"))
+        )
 
 
 def test_closed_schema_accepts_three_scopes_and_rejects_substitution() -> None:

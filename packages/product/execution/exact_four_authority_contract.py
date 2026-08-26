@@ -27,6 +27,7 @@ from selection.budget_ledger import MassResearchDisabledError
 from selection.controlled_pilot_policy import (
     CONTROLLED_PILOT_POLICY_DIGEST,
     CONTROLLED_PILOT_POLICY_ID,
+    CONTROLLED_PILOT_POLICY_RAW_DIGEST,
     CONTROLLED_PILOT_POLICY_SCHEMA_URI,
     ControlledPilotPolicyPin,
     load_controlled_pilot_policy,
@@ -37,10 +38,10 @@ EXACT_FOUR_AUTHORITY_SCHEMA_REL = (
     Path("specs") / "ready" / "exact_four_authority_protocol.schema.json"
 )
 PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_DIGEST = (
-    "sha256:7067a7bf42530485fb8c60db05a494ef43fd842986ba40f21562b7d01958d8a1"
+    "sha256:5654d2e8c5e19ac96de7eda23fcb54ded9194e533c68bb1fe4fbdd14cdb12b53"
 )
 PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_RAW_DIGEST = (
-    "sha256:19089c9627020bd29cdce4ae61b8a78b12dbb7a2d706d672ac20780d810a4954"
+    "sha256:39f8d317da87c0658d536e90594a0fd3d762bd1e622b13c079d0bcad2e8dca05"
 )
 
 PLAN_EXECUTION_BINDING_FORMAT = "plan-execution-binding/v1"
@@ -56,6 +57,20 @@ PILOT_EXECUTION_MODE = "paper"
 AUTHORITY_PROTOCOL_STATE = "PENDING_EXTERNAL_AUTHORITIES"
 
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_UNAVAILABLE_CURRENT_VALUES = frozenset(
+    {
+        "n/a",
+        "na",
+        "none",
+        "not-declared",
+        "not_declared",
+        "null",
+        "pending",
+        "stale",
+        "unknown",
+        "unset",
+    }
+)
 
 
 class ExactFourAuthorityContractError(MassResearchDisabledError):
@@ -66,7 +81,62 @@ class ExactFourAuthorityPending(ExactFourAuthorityContractError):
     """Raised because no v2 publication/approval/execution principal exists."""
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    document: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in document:
+            raise ExactFourAuthorityContractError(
+                f"authority contract contains duplicate JSON key: {key}"
+            )
+        document[key] = value
+    return document
+
+
+def _reject_nonfinite(value: str) -> Any:
+    raise ExactFourAuthorityContractError(
+        f"authority contract contains non-finite JSON number: {value}"
+    )
+
+
+def _require_exact_json(value: Any, *, path: str = "$") -> None:
+    if type(value) is dict:
+        for key, item in value.items():
+            if type(key) is not str:
+                raise ExactFourAuthorityContractError(
+                    f"{path}: JSON object keys must be exact strings"
+                )
+            _require_exact_json(item, path=f"{path}.{key}")
+        return
+    if type(value) is list:
+        for ordinal, item in enumerate(value):
+            _require_exact_json(item, path=f"{path}[{ordinal}]")
+        return
+    if type(value) not in {str, int, bool, type(None)}:
+        raise ExactFourAuthorityContractError(
+            f"{path}: value must be an exact JSON built-in"
+        )
+
+
+def _strict_json_loads(raw: bytes | str, *, label: str) -> dict[str, Any]:
+    try:
+        text = raw.decode("utf-8") if type(raw) is bytes else raw
+        if type(text) is not str:
+            raise TypeError("raw authority document must be bytes or str")
+        value = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_nonfinite,
+        )
+    except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ExactFourAuthorityContractError(f"cannot decode {label}") from exc
+    if type(value) is not dict:
+        raise ExactFourAuthorityContractError(f"{label} must be one JSON object")
+    _require_exact_json(value)
+    return value
+
+
 def _canonical_bytes(value: Any) -> bytes:
+    _require_exact_json(value)
     try:
         return json.dumps(
             value,
@@ -114,6 +184,51 @@ def _require_timestamp(value: Any, label: str) -> str:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ExactFourAuthorityContractError(f"{label} must include a timezone")
     return text
+
+
+def _parsed_timestamp(value: Any, label: str) -> datetime:
+    text = _require_timestamp(value, label)
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def _require_bounded_window(
+    issued_at: Any,
+    expires_at: Any,
+    *,
+    ttl_seconds: Any,
+    label: str,
+) -> tuple[datetime, datetime]:
+    if type(ttl_seconds) is not int or ttl_seconds < 1:
+        raise ExactFourAuthorityContractError(f"{label} TTL must be a positive integer")
+    issued = _parsed_timestamp(issued_at, f"{label} issued_at")
+    expires = _parsed_timestamp(expires_at, f"{label} expires_at")
+    lifetime = (expires - issued).total_seconds()
+    if lifetime <= 0:
+        raise ExactFourAuthorityContractError(
+            f"{label} expiry must be after issuance"
+        )
+    if lifetime > ttl_seconds:
+        raise ExactFourAuthorityContractError(
+            f"{label} lifetime exceeds the controlled-pilot policy TTL"
+        )
+    return issued, expires
+
+
+def _require_current_token(value: Any, label: str) -> str:
+    text = _require_text(value, label)
+    if text.casefold() in _UNAVAILABLE_CURRENT_VALUES:
+        raise ExactFourAuthorityContractError(
+            f"{label} must identify a current non-sentinel value"
+        )
+    return text
+
+
+def _require_positive_int(value: Any, label: str) -> int:
+    if type(value) is not int or value < 1:
+        raise ExactFourAuthorityContractError(
+            f"{label} must be an exact positive integer"
+        )
+    return value
 
 
 def _require_date(value: Any, label: str) -> str:
@@ -459,10 +574,12 @@ class ExactFourExecutionBinding:
             raise ExactFourAuthorityContractError(
                 "exact ControlledPilotPolicyPin is required"
             )
+        self.policy.__post_init__()
         if type(self.artifact_cardinality) is not ControlledPilotArtifactCardinality:
             raise ExactFourAuthorityContractError(
                 "exact ControlledPilotArtifactCardinality is required"
             )
+        self.artifact_cardinality.__post_init__()
         plans = tuple(self.plan_bindings)
         expected = _compiled_plan_bindings()
         if (
@@ -549,9 +666,9 @@ class ExactFourExecutionBinding:
             "budget_scope_digest": self.budget_scope_digest,
             "execution_limit_set_digest": self.execution_limit_set_digest,
             "lease_ttl_seconds": self.lease_ttl_seconds,
-            "automatic_promotion": False,
-            "mass_research_enabled": False,
-            "live_trading_enabled": False,
+            "automatic_promotion": self.automatic_promotion,
+            "mass_research_enabled": self.mass_research_enabled,
+            "live_trading_enabled": self.live_trading_enabled,
         }
 
     @property
@@ -608,17 +725,30 @@ class ReadySnapshotLineage:
     resolved_universe_digest: str
     coverage_policy_version: str
     coverage_policy_digest: str
+    coverage_status: str
     coverage_proof_digest: str
+    raw_status: str
     raw_proof_digest: str
+    trusted_receipt_status: str
     receipt_proof_digest: str
+    validation_status: str
     validation_proof_digest: str
+    natural_key_status: str
+    natural_key_proof_digest: str
+    b0_status: str
     b0_proof_digest: str
+    b4_status: str
     b4_proof_digest: str
     pit_contract_set_digest: str
-    source_generation: str
-    applied_sync_generation: str
-    export_cursor: str
-    applied_cursor: str
+    projection_status: str
+    projection_refresh_success: bool
+    projection_is_current: bool
+    projection_generation: str
+    source_generation: int
+    applied_sync_generation: int
+    source_cursor: int
+    export_cursor: int
+    applied_cursor: int
     feature_generation: str
     catalog_generation: str
 
@@ -635,6 +765,7 @@ class ReadySnapshotLineage:
             "raw_proof_digest",
             "receipt_proof_digest",
             "validation_proof_digest",
+            "natural_key_proof_digest",
             "b0_proof_digest",
             "b4_proof_digest",
             "pit_contract_set_digest",
@@ -642,22 +773,53 @@ class ReadySnapshotLineage:
             "catalog_generation",
         ):
             _require_digest(getattr(self, name), name)
+        expected_statuses = {
+            "coverage_status": "COMPLETE",
+            "raw_status": "PRESENT",
+            "trusted_receipt_status": "COMPLETE",
+            "validation_status": "PASS",
+            "natural_key_status": "PASS",
+            "b0_status": "PASS",
+            "b4_status": "PASS",
+            "projection_status": "FRESH",
+        }
+        for name, expected in expected_statuses.items():
+            value = getattr(self, name)
+            if type(value) is not str or value != expected:
+                raise ExactFourAuthorityContractError(
+                    f"{name} must be exact production evidence state {expected}"
+                )
+        if (
+            type(self.projection_refresh_success) is not bool
+            or not self.projection_refresh_success
+            or type(self.projection_is_current) is not bool
+            or not self.projection_is_current
+        ):
+            raise ExactFourAuthorityContractError(
+                "READY projection must be refreshed successfully and current"
+            )
         for name in (
             "coverage_policy_version",
+            "projection_generation",
+        ):
+            _require_current_token(getattr(self, name), name)
+        for name in (
             "source_generation",
             "applied_sync_generation",
+            "source_cursor",
             "export_cursor",
             "applied_cursor",
         ):
-            _require_text(getattr(self, name), name)
+            _require_positive_int(getattr(self, name), name)
+        if self.source_generation != self.applied_sync_generation:
+            raise ExactFourAuthorityContractError(
+                "source and applied sync generation must be current"
+            )
         if not (
-            self.source_generation
-            == self.applied_sync_generation
-            == self.export_cursor
-            == self.applied_cursor
+            self.source_cursor == self.export_cursor == self.applied_cursor
         ):
             raise ExactFourAuthorityContractError(
-                "source/export/applied generation and cursor must be current"
+                "source/export/applied cursor chain must be current"
             )
 
     def to_dict(self) -> dict[str, Any]:
@@ -670,15 +832,28 @@ class ReadySnapshotLineage:
             "resolved_universe_digest": self.resolved_universe_digest,
             "coverage_policy_version": self.coverage_policy_version,
             "coverage_policy_digest": self.coverage_policy_digest,
+            "coverage_status": self.coverage_status,
             "coverage_proof_digest": self.coverage_proof_digest,
+            "raw_status": self.raw_status,
             "raw_proof_digest": self.raw_proof_digest,
+            "trusted_receipt_status": self.trusted_receipt_status,
             "receipt_proof_digest": self.receipt_proof_digest,
+            "validation_status": self.validation_status,
             "validation_proof_digest": self.validation_proof_digest,
+            "natural_key_status": self.natural_key_status,
+            "natural_key_proof_digest": self.natural_key_proof_digest,
+            "b0_status": self.b0_status,
             "b0_proof_digest": self.b0_proof_digest,
+            "b4_status": self.b4_status,
             "b4_proof_digest": self.b4_proof_digest,
             "pit_contract_set_digest": self.pit_contract_set_digest,
+            "projection_status": self.projection_status,
+            "projection_refresh_success": self.projection_refresh_success,
+            "projection_is_current": self.projection_is_current,
+            "projection_generation": self.projection_generation,
             "source_generation": self.source_generation,
             "applied_sync_generation": self.applied_sync_generation,
+            "source_cursor": self.source_cursor,
             "export_cursor": self.export_cursor,
             "applied_cursor": self.applied_cursor,
             "feature_generation": self.feature_generation,
@@ -690,6 +865,7 @@ class ReadySnapshotLineage:
 class PilotReadinessAttestationClaimsV2:
     """Unsigned, content-addressed READY claims; never a verified capability."""
 
+    pilot_run_id: str
     snapshot: ReadySnapshotLineage
     exact_four: ExactFourExecutionBinding
     issued_at: str
@@ -703,6 +879,7 @@ class PilotReadinessAttestationClaimsV2:
             raise ExactFourAuthorityContractError(
                 "READY claims require exact ReadySnapshotLineage"
             )
+        _require_text(self.pilot_run_id, "pilot_run_id")
         if type(self.exact_four) is not ExactFourExecutionBinding:
             raise ExactFourAuthorityContractError(
                 "READY claims require exact ExactFourExecutionBinding"
@@ -718,14 +895,14 @@ class PilotReadinessAttestationClaimsV2:
             raise ExactFourAuthorityContractError(
                 "READY claims authority identity is not canonical"
             )
-        issued = _require_timestamp(self.issued_at, "issued_at")
-        expires = _require_timestamp(self.expires_at, "expires_at")
-        if datetime.fromisoformat(issued.replace("Z", "+00:00")) >= (
-            datetime.fromisoformat(expires.replace("Z", "+00:00"))
-        ):
-            raise ExactFourAuthorityContractError(
-                "READY claims expiry must be after issuance"
-            )
+        self.snapshot.__post_init__()
+        self.exact_four.__post_init__()
+        _require_bounded_window(
+            self.issued_at,
+            self.expires_at,
+            ttl_seconds=self.exact_four.lease_ttl_seconds,
+            label="READY claims",
+        )
         canonical = load_exact_four_execution_binding()
         if self.exact_four.binding_digest != canonical.binding_digest:
             raise ExactFourAuthorityContractError(
@@ -750,6 +927,7 @@ class PilotReadinessAttestationClaimsV2:
             "format": self.format,
             "issuer": self.issuer,
             "authority_scope": self.authority_scope,
+            "pilot_run_id": self.pilot_run_id,
             "snapshot": self.snapshot.to_dict(),
             "exact_four": self.exact_four.to_dict(),
             "issued_at": self.issued_at,
@@ -824,14 +1002,12 @@ class TraderAuthorizationClaimsV2:
             raise ExactFourAuthorityContractError(
                 "Trader risk, execution, or budget limits are not canonical"
             )
-        issued = _require_timestamp(self.issued_at, "issued_at")
-        expires = _require_timestamp(self.expires_at, "expires_at")
-        if datetime.fromisoformat(issued.replace("Z", "+00:00")) >= (
-            datetime.fromisoformat(expires.replace("Z", "+00:00"))
-        ):
-            raise ExactFourAuthorityContractError(
-                "Trader authorization expiry must be after issuance"
-            )
+        _require_bounded_window(
+            self.issued_at,
+            self.expires_at,
+            ttl_seconds=self.lease_ttl_seconds,
+            label="Trader authorization",
+        )
         if (
             self.automatic_promotion is not False
             or self.mass_research_enabled is not False
@@ -859,9 +1035,9 @@ class TraderAuthorizationClaimsV2:
             "human_approval_event_digest": self.human_approval_event_digest,
             "issued_at": self.issued_at,
             "expires_at": self.expires_at,
-            "automatic_promotion": False,
-            "mass_research_enabled": False,
-            "live_trading_enabled": False,
+            "automatic_promotion": self.automatic_promotion,
+            "mass_research_enabled": self.mass_research_enabled,
+            "live_trading_enabled": self.live_trading_enabled,
         }
 
     @property
@@ -870,6 +1046,69 @@ class TraderAuthorizationClaimsV2:
 
     def to_dict(self) -> dict[str, Any]:
         return {**self.to_canonical_dict(), "authorization_id": self.authorization_id}
+
+
+def build_trader_authorization_claims_v2(
+    readiness: PilotReadinessAttestationClaimsV2,
+    *,
+    human_approval_event_id: str,
+    human_approval_event_digest: str,
+    issued_at: str,
+    expires_at: str,
+) -> TraderAuthorizationClaimsV2:
+    """Derive unsigned Trader claims from the actual READY object.
+
+    The human event remains an input for the future isolated Trader verifier;
+    this authority-free builder neither verifies presence nor signs approval.
+    """
+
+    if type(readiness) is not PilotReadinessAttestationClaimsV2:
+        raise ExactFourAuthorityContractError("exact READY claims are required")
+    exact_four = readiness.exact_four
+    claims = TraderAuthorizationClaimsV2(
+        pilot_run_id=readiness.pilot_run_id,
+        readiness_attestation_id=readiness.attestation_id,
+        exact_four_binding_digest=exact_four.binding_digest,
+        controlled_pilot_policy_digest=exact_four.policy.policy_digest,
+        budget_scope_digest=exact_four.budget_scope_digest,
+        execution_limit_set_digest=exact_four.execution_limit_set_digest,
+        lease_ttl_seconds=exact_four.lease_ttl_seconds,
+        human_approval_event_id=human_approval_event_id,
+        human_approval_event_digest=human_approval_event_digest,
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
+    _validate_readiness_trader_link(readiness, claims)
+    return claims
+
+
+def _controlled_execution_lease_id(
+    *,
+    pilot_run_id: str,
+    readiness_attestation_id: str,
+    trader_authorization_id: str,
+    exact_four_binding_digest: str,
+) -> str:
+    return canonical_authority_digest(
+        {
+            "authority_scope": CONTROLLED_EXECUTION_SCOPE,
+            "pilot_run_id": pilot_run_id,
+            "readiness_attestation_id": readiness_attestation_id,
+            "trader_authorization_id": trader_authorization_id,
+            "exact_four_binding_digest": exact_four_binding_digest,
+            "generation": 1,
+        }
+    )
+
+
+def _controlled_execution_idempotency_key(lease_id: str) -> str:
+    return canonical_authority_digest(
+        {
+            "authority_scope": CONTROLLED_EXECUTION_SCOPE,
+            "lease_id": lease_id,
+            "one_shot": True,
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -884,11 +1123,15 @@ class ControlledExecutionClaimsV2:
     budget_scope_digest: str
     execution_limit_set_digest: str
     lease_ttl_seconds: int
+    lease_id: str
     idempotency_key: str
+    issued_at: str
+    expires_at: str
     format: str = CONTROLLED_EXECUTION_CLAIMS_FORMAT
     authority_scope: str = CONTROLLED_EXECUTION_SCOPE
     execution_mode: str = PILOT_EXECUTION_MODE
     generation: int = 1
+    one_shot: bool = True
     automatic_promotion: bool = False
     mass_research_enabled: bool = False
     live_trading_enabled: bool = False
@@ -914,6 +1157,8 @@ class ControlledExecutionClaimsV2:
             "controlled_pilot_policy_digest",
             "budget_scope_digest",
             "execution_limit_set_digest",
+            "lease_id",
+            "idempotency_key",
         ):
             _require_digest(getattr(self, name), name)
         if self.controlled_pilot_policy_digest != CONTROLLED_PILOT_POLICY_DIGEST:
@@ -932,6 +1177,32 @@ class ControlledExecutionClaimsV2:
             )
         if type(self.generation) is not int or self.generation != 1:
             raise ExactFourAuthorityContractError("generation two is disabled")
+        if type(self.one_shot) is not bool or not self.one_shot:
+            raise ExactFourAuthorityContractError(
+                "controlled execution lease must be one-shot"
+            )
+        expected_lease_id = _controlled_execution_lease_id(
+            pilot_run_id=self.pilot_run_id,
+            readiness_attestation_id=self.readiness_attestation_id,
+            trader_authorization_id=self.trader_authorization_id,
+            exact_four_binding_digest=self.exact_four_binding_digest,
+        )
+        if self.lease_id != expected_lease_id:
+            raise ExactFourAuthorityContractError(
+                "controlled execution lease id is not content-bound"
+            )
+        if self.idempotency_key != _controlled_execution_idempotency_key(
+            self.lease_id
+        ):
+            raise ExactFourAuthorityContractError(
+                "controlled execution idempotency key is not one-shot bound"
+            )
+        _require_bounded_window(
+            self.issued_at,
+            self.expires_at,
+            ttl_seconds=self.lease_ttl_seconds,
+            label="controlled execution lease",
+        )
         if (
             self.automatic_promotion is not False
             or self.mass_research_enabled is not False
@@ -956,11 +1227,15 @@ class ControlledExecutionClaimsV2:
             "budget_scope_digest": self.budget_scope_digest,
             "execution_limit_set_digest": self.execution_limit_set_digest,
             "lease_ttl_seconds": self.lease_ttl_seconds,
+            "lease_id": self.lease_id,
             "idempotency_key": self.idempotency_key,
-            "generation": 1,
-            "automatic_promotion": False,
-            "mass_research_enabled": False,
-            "live_trading_enabled": False,
+            "issued_at": self.issued_at,
+            "expires_at": self.expires_at,
+            "generation": self.generation,
+            "one_shot": self.one_shot,
+            "automatic_promotion": self.automatic_promotion,
+            "mass_research_enabled": self.mass_research_enabled,
+            "live_trading_enabled": self.live_trading_enabled,
         }
 
     @property
@@ -971,6 +1246,237 @@ class ControlledExecutionClaimsV2:
         return {**self.to_canonical_dict(), "request_id": self.request_id}
 
 
+def _claims_from_document(
+    document: dict[str, Any],
+) -> (
+    PilotReadinessAttestationClaimsV2
+    | TraderAuthorizationClaimsV2
+    | ControlledExecutionClaimsV2
+):
+    format_value = document.get("format")
+    body = dict(document)
+    if format_value == PILOT_READINESS_CLAIMS_FORMAT:
+        body.pop("attestation_id", None)
+        snapshot_document = body.pop("snapshot", None)
+        exact_four_document = body.pop("exact_four", None)
+        if type(snapshot_document) is not dict or type(exact_four_document) is not dict:
+            raise ExactFourAuthorityContractError(
+                "READY document must carry closed snapshot and exact-four objects"
+            )
+        exact_four = load_exact_four_execution_binding()
+        if exact_four_document != exact_four.to_dict():
+            raise ExactFourAuthorityContractError(
+                "READY document exact-four body is not the canonical compiler output"
+            )
+        snapshot = ReadySnapshotLineage(**snapshot_document)
+        return PilotReadinessAttestationClaimsV2(
+            snapshot=snapshot,
+            exact_four=exact_four,
+            **body,
+        )
+    if format_value == TRADER_AUTHORIZATION_CLAIMS_FORMAT:
+        body.pop("authorization_id", None)
+        return TraderAuthorizationClaimsV2(**body)
+    if format_value == CONTROLLED_EXECUTION_CLAIMS_FORMAT:
+        body.pop("request_id", None)
+        return ControlledExecutionClaimsV2(**body)
+    raise ExactFourAuthorityContractError("unknown exact-four authority claims format")
+
+
+def validate_exact_four_authority_document(document: Any) -> str:
+    """Validate schema, exact JSON types, semantics, and the declared content id."""
+
+    if type(document) is not dict:
+        raise ExactFourAuthorityContractError(
+            "exact-four authority document must be one exact dict"
+        )
+    _require_exact_json(document)
+    try:
+        from jsonschema import Draft202012Validator, FormatChecker
+
+        validator = Draft202012Validator(
+            load_exact_four_authority_schema(),
+            format_checker=FormatChecker(),
+        )
+        errors = sorted(
+            validator.iter_errors(document),
+            key=lambda item: tuple(str(part) for part in item.path),
+        )
+    except ExactFourAuthorityContractError:
+        raise
+    except Exception as exc:
+        raise ExactFourAuthorityContractError(
+            "cannot validate exact-four authority document schema"
+        ) from exc
+    if errors:
+        location = "$" + "".join(
+            f"[{part}]" if type(part) is int else f".{part}"
+            for part in errors[0].path
+        )
+        raise ExactFourAuthorityContractError(
+            f"exact-four authority schema violation at {location}: "
+            f"{errors[0].message}"
+        )
+    claims = _claims_from_document(document)
+    rebuilt = claims.to_dict()
+    if rebuilt != document:
+        raise ExactFourAuthorityContractError(
+            "exact-four authority document content id or canonical body is invalid"
+        )
+    if type(claims) is PilotReadinessAttestationClaimsV2:
+        return claims.attestation_id
+    if type(claims) is TraderAuthorizationClaimsV2:
+        return claims.authorization_id
+    return claims.request_id
+
+
+def parse_and_validate_exact_four_authority_document(
+    raw: bytes | str,
+) -> dict[str, Any]:
+    """Strictly decode one untrusted v2 document and verify its whole body."""
+
+    document = _strict_json_loads(raw, label="exact-four authority document")
+    validate_exact_four_authority_document(document)
+    return document
+
+
+def validate_exact_four_authority_claims_v2(
+    claims: Any,
+) -> str:
+    """Revalidate a claims object after construction; this grants no authority."""
+
+    if type(claims) not in {
+        PilotReadinessAttestationClaimsV2,
+        TraderAuthorizationClaimsV2,
+        ControlledExecutionClaimsV2,
+    }:
+        raise ExactFourAuthorityContractError(
+            "an exact unsigned v2 claims object is required"
+        )
+    return validate_exact_four_authority_document(claims.to_dict())
+
+
+def _validate_readiness_trader_link(
+    readiness: PilotReadinessAttestationClaimsV2,
+    trader: TraderAuthorizationClaimsV2,
+) -> None:
+    validate_exact_four_authority_claims_v2(readiness)
+    validate_exact_four_authority_claims_v2(trader)
+    exact_four = readiness.exact_four
+    if (
+        trader.pilot_run_id != readiness.pilot_run_id
+        or trader.readiness_attestation_id != readiness.attestation_id
+        or trader.exact_four_binding_digest != exact_four.binding_digest
+        or trader.controlled_pilot_policy_digest != exact_four.policy.policy_digest
+        or trader.budget_scope_digest != exact_four.budget_scope_digest
+        or trader.execution_limit_set_digest != exact_four.execution_limit_set_digest
+        or trader.lease_ttl_seconds != exact_four.lease_ttl_seconds
+    ):
+        raise ExactFourAuthorityContractError(
+            "Trader authorization does not bind the supplied READY object"
+        )
+    readiness_issued = _parsed_timestamp(readiness.issued_at, "READY issued_at")
+    readiness_expires = _parsed_timestamp(readiness.expires_at, "READY expires_at")
+    trader_issued = _parsed_timestamp(trader.issued_at, "Trader issued_at")
+    trader_expires = _parsed_timestamp(trader.expires_at, "Trader expires_at")
+    if trader_issued < readiness_issued or trader_expires > readiness_expires:
+        raise ExactFourAuthorityContractError(
+            "Trader authorization lifetime is outside the supplied READY lifetime"
+        )
+
+
+def validate_exact_four_authority_claim_chain_v2(
+    readiness: PilotReadinessAttestationClaimsV2,
+    trader: TraderAuthorizationClaimsV2,
+    execution: ControlledExecutionClaimsV2,
+) -> str:
+    """Validate one READY -> human Trader -> one-shot execution claims chain.
+
+    The returned digest is only a diagnostic content address.  It is not a
+    verified readiness, Trader authorization, or execution capability.
+    """
+
+    if type(readiness) is not PilotReadinessAttestationClaimsV2:
+        raise ExactFourAuthorityContractError("exact READY claims are required")
+    if type(trader) is not TraderAuthorizationClaimsV2:
+        raise ExactFourAuthorityContractError("exact Trader claims are required")
+    if type(execution) is not ControlledExecutionClaimsV2:
+        raise ExactFourAuthorityContractError("exact execution claims are required")
+    _validate_readiness_trader_link(readiness, trader)
+    validate_exact_four_authority_claims_v2(execution)
+    if (
+        execution.pilot_run_id != readiness.pilot_run_id
+        or execution.readiness_attestation_id != readiness.attestation_id
+        or execution.trader_authorization_id != trader.authorization_id
+        or execution.exact_four_binding_digest != readiness.exact_four.binding_digest
+        or execution.controlled_pilot_policy_digest
+        != readiness.exact_four.policy.policy_digest
+        or execution.budget_scope_digest != readiness.exact_four.budget_scope_digest
+        or execution.execution_limit_set_digest
+        != readiness.exact_four.execution_limit_set_digest
+        or execution.lease_ttl_seconds != readiness.exact_four.lease_ttl_seconds
+    ):
+        raise ExactFourAuthorityContractError(
+            "execution claims do not bind the supplied READY and Trader objects"
+        )
+    trader_issued = _parsed_timestamp(trader.issued_at, "Trader issued_at")
+    trader_expires = _parsed_timestamp(trader.expires_at, "Trader expires_at")
+    execution_issued = _parsed_timestamp(execution.issued_at, "execution issued_at")
+    execution_expires = _parsed_timestamp(execution.expires_at, "execution expires_at")
+    if execution_issued < trader_issued or execution_expires > trader_expires:
+        raise ExactFourAuthorityContractError(
+            "execution lease lifetime is outside the human Trader authorization"
+        )
+    return canonical_authority_digest(
+        {
+            "pilot_run_id": readiness.pilot_run_id,
+            "readiness_attestation_id": readiness.attestation_id,
+            "trader_authorization_id": trader.authorization_id,
+            "execution_request_id": execution.request_id,
+            "lease_id": execution.lease_id,
+        }
+    )
+
+
+def build_controlled_execution_claims_v2(
+    readiness: PilotReadinessAttestationClaimsV2,
+    trader: TraderAuthorizationClaimsV2,
+    *,
+    issued_at: str,
+    expires_at: str,
+) -> ControlledExecutionClaimsV2:
+    """Build unsigned, PENDING one-shot claims from the actual READY/Trader pair."""
+
+    if type(readiness) is not PilotReadinessAttestationClaimsV2:
+        raise ExactFourAuthorityContractError("exact READY claims are required")
+    if type(trader) is not TraderAuthorizationClaimsV2:
+        raise ExactFourAuthorityContractError("exact Trader claims are required")
+    _validate_readiness_trader_link(readiness, trader)
+    exact_four = readiness.exact_four
+    lease_id = _controlled_execution_lease_id(
+        pilot_run_id=readiness.pilot_run_id,
+        readiness_attestation_id=readiness.attestation_id,
+        trader_authorization_id=trader.authorization_id,
+        exact_four_binding_digest=exact_four.binding_digest,
+    )
+    claims = ControlledExecutionClaimsV2(
+        pilot_run_id=readiness.pilot_run_id,
+        readiness_attestation_id=readiness.attestation_id,
+        trader_authorization_id=trader.authorization_id,
+        exact_four_binding_digest=exact_four.binding_digest,
+        controlled_pilot_policy_digest=exact_four.policy.policy_digest,
+        budget_scope_digest=exact_four.budget_scope_digest,
+        execution_limit_set_digest=exact_four.execution_limit_set_digest,
+        lease_ttl_seconds=exact_four.lease_ttl_seconds,
+        lease_id=lease_id,
+        idempotency_key=_controlled_execution_idempotency_key(lease_id),
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
+    validate_exact_four_authority_claim_chain_v2(readiness, trader, claims)
+    return claims
+
+
 class _PendingCapability:
     __slots__ = ()
 
@@ -979,6 +1485,7 @@ class _PendingCapability:
         raise ExactFourAuthorityPending(
             f"{cls.__name__} is unavailable: {AUTHORITY_PROTOCOL_STATE}"
         )
+
 
 class VerifiedPilotReadinessV2(_PendingCapability):
     """Opaque future output of the isolated READY verifier."""
@@ -1008,8 +1515,8 @@ def authority_schema_path() -> Path:
 def load_exact_four_authority_schema() -> dict[str, Any]:
     try:
         raw = authority_schema_path().read_bytes()
-        value = json.loads(raw)
-    except (OSError, json.JSONDecodeError) as exc:
+        value = _strict_json_loads(raw, label="exact-four authority protocol schema")
+    except (OSError, ExactFourAuthorityContractError) as exc:
         raise ExactFourAuthorityContractError(
             "cannot load exact-four authority protocol schema"
         ) from exc
@@ -1081,6 +1588,7 @@ __all__ = [
     "CONTROLLED_EXECUTION_SCOPE",
     "CONTROLLED_PILOT_POLICY_DIGEST",
     "CONTROLLED_PILOT_POLICY_ID",
+    "CONTROLLED_PILOT_POLICY_RAW_DIGEST",
     "ControlledExecutionClaimsV2",
     "ControlledPilotArtifactCardinality",
     "ControlledPilotPolicyPin",
@@ -1104,11 +1612,17 @@ __all__ = [
     "VerifiedExactFourTraderAuthorizationV2",
     "VerifiedPilotReadinessV2",
     "authority_schema_path",
+    "build_controlled_execution_claims_v2",
+    "build_trader_authorization_claims_v2",
     "canonical_authority_digest",
     "load_controlled_pilot_policy",
     "load_exact_four_authority_schema",
     "load_exact_four_execution_binding",
+    "parse_and_validate_exact_four_authority_document",
     "require_authorized_exact_four_execution_v2",
     "require_verified_pilot_readiness_v2",
     "require_verified_trader_authorization_v2",
+    "validate_exact_four_authority_claim_chain_v2",
+    "validate_exact_four_authority_claims_v2",
+    "validate_exact_four_authority_document",
 ]
