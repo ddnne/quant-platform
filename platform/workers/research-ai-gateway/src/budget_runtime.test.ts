@@ -16,6 +16,12 @@ import { BudgetLedger } from "./budget_http";
 import type { GatewayEnv } from "./index";
 
 const runtimeEnv = env as GatewayEnv;
+// A DO eviction forces a fresh workerd isolate. Six Worker lanes run in
+// parallel in the authoritative CI, so the former 2s per-stage watchdog could
+// expire during isolate startup even though the operation completed correctly.
+// Keep a strict bound, but leave enough room for the runtime lifecycle rather
+// than measuring host scheduler latency.
+const RUNTIME_STAGE_TIMEOUT_MS = 5_000;
 
 function testDigest(label: string): string {
   const seed = Array.from(
@@ -33,7 +39,7 @@ async function within<T>(stage: string, promise: Promise<T>): Promise<T> {
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
           () => reject(new Error(`runtime stage timed out: ${stage}`)),
-          2_000,
+          RUNTIME_STAGE_TIMEOUT_MS,
         );
       }),
     ]);
@@ -245,7 +251,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     });
     expect(snapshot.reserved.model_calls).toBe(0);
     expect(snapshot.active_leases).toBe(0);
-  }, 15_000);
+  }, 20_000);
 
   it("alarm conservatively settles provider-started expiry", async () => {
     const namespace = runtimeEnv.BUDGET_LEDGER;
