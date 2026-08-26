@@ -184,6 +184,46 @@ def _query_resolution(dataset_id: str, capability: dict[str, Any]) -> dict[str, 
     }
 
 
+def _closed_rpc_surface(schema: dict[str, Any]) -> dict[str, list[str]]:
+    """Freeze the reviewed wire inventories into the package-owned registry.
+
+    The receipt runtime is distributed without the repository-level ``specs``
+    tree.  These inventories are therefore generated from the reviewed schema,
+    covered by both the schema digest and the registry self-digest, and shipped
+    beside the Python package and Worker target.
+    """
+    definitions = schema.get("$defs")
+    if type(definitions) is not dict:
+        raise ValueError("J-Quants acquisition RPC schema definitions are missing")
+    result: dict[str, list[str]] = {}
+    for definition_name, output_name, expected_count in (
+        ("request", "request_fields", 14),
+        ("response_metadata", "response_metadata_fields", 34),
+        ("response_headers", "response_header_fields", 37),
+    ):
+        definition = definitions.get(definition_name)
+        if type(definition) is not dict:
+            raise ValueError(
+                f"J-Quants acquisition RPC schema lacks {definition_name}"
+            )
+        required = definition.get("required")
+        properties = definition.get("properties")
+        if (
+            type(required) is not list
+            or not all(type(item) is str for item in required)
+            or len(required) != len(set(required))
+            or type(properties) is not dict
+            or set(required) != set(properties)
+            or definition.get("additionalProperties") is not False
+            or len(required) != expected_count
+        ):
+            raise ValueError(
+                f"J-Quants acquisition RPC {definition_name} is not the closed reviewed surface"
+            )
+        result[output_name] = list(required)
+    return result
+
+
 def build_registry() -> dict[str, Any]:
     canonical = _rows_by_id(_load(CANONICAL_DATASETS), label="canonical registry")
     premium = _rows_by_id(_load(PREMIUM_CONTRACT), label="Premium contract")
@@ -257,6 +297,7 @@ def build_registry() -> dict[str, Any]:
     actual_exclusions = [row["dataset_id"] for row in exclusions]
     if len(actual_exclusions) != len(set(actual_exclusions)) or set(actual_exclusions) != expected_exclusions:
         raise ValueError("reviewed PENDING exclusion inventory is incomplete")
+    rpc_schema = _load(JQUANTS_ACQUISITION_RPC_SCHEMA)
     body: dict[str, Any] = {
         "schema_version": "jquants-acquisition-target-registry/v2",
         "official_origin": "https://api.jquants.com",
@@ -275,10 +316,11 @@ def build_registry() -> dict[str, Any]:
                 JQUANTS_ACQUISITION_RPC_SCHEMA.relative_to(ROOT)
             ),
             "jquants_acquisition_rpc_schema_digest": _digest(
-                _load(JQUANTS_ACQUISITION_RPC_SCHEMA)
+                rpc_schema
             ),
             "official_client_revision": _CLIENT_REVISION,
         },
+        "rpc_surface": _closed_rpc_surface(rpc_schema),
         "datasets": rows,
         "excluded_datasets": exclusions,
     }
