@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Template only. Bootstrap does not install or load this job. -->
+  <key>Label</key>
+  <string>com.quant-platform.__ENVIRONMENT__.__AUTHORITY__</string>
+  <key>UserName</key>
+  <string>__SERVICE_USER__</string>
+  <key>GroupName</key>
+  <string>quant_platform_authorities</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__UV_PATH__</string>
+    <string>run</string>
+    <string>--frozen</string>
+    <string>python</string>
+    <string>__REPOSITORY__/scripts/run_local_authority.py</string>
+    <string>--authority</string>
+    <string>__AUTHORITY__</string>
+    <string>--environment</string>
+    <string>__ENVIRONMENT__</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPOSITORY__</string>
+  <key>Sockets</key>
+  <dict>
+    <key>Listener</key>
+    <dict>
+      <key>SockPathName</key>
+      <string>__SOCKET_PATH__</string>
+      <key>SockPathMode</key>
+      <integer>384</integer>
+    </dict>
+  </dict>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <false/>
+</dict>
+</plist>
