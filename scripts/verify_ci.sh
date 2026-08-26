@@ -10,15 +10,6 @@ cd "$ROOT"
 # Ban: do not pass --legacy-peer-deps (peer graph must resolve from lockfiles).
 # Ban: do not skip missing node_modules (always npm ci from package-lock.json).
 
-WORKERS=(
-  platform/workers/ingestion-jsda
-  platform/workers/ingestion-premium
-  platform/workers/ingestion-secrets
-  platform/workers/quant-ops-mcp
-  platform/workers/research-ai-gateway
-  platform/workers/research-mass-eval
-)
-
 # Print package.json scripts.<name> body, or empty if missing.
 npm_script_body() {
   "$1" -c 'import json, sys
@@ -92,6 +83,15 @@ fi
 
 echo "==> Cloudflare active-worker binding manifest"
 "$py" scripts/cloudflare_binding_manifest.py
+WORKERS=()
+while IFS= read -r worker_dir; do
+  [[ -n "$worker_dir" ]] || continue
+  WORKERS+=("$worker_dir")
+done < <("$py" scripts/cloudflare_binding_manifest.py --print-worker-paths)
+if [[ "${#WORKERS[@]}" -eq 0 ]]; then
+  echo "active Worker inventory is empty" >&2
+  exit 1
+fi
 
 echo "==> Cloudflare canonical D1 migration manifest"
 "$py" scripts/cloudflare_d1_migration_manifest.py

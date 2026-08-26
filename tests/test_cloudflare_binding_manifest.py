@@ -25,6 +25,28 @@ def test_frozen_manifest_equals_effective_wrangler_surfaces() -> None:
     assert "ci-aggregate" not in frozen["workers"]
 
 
+def test_canonical_inventory_equals_every_deployable_worker_directory() -> None:
+    assert manifest_module._deployable_worker_directories() == (  # noqa: SLF001
+        manifest_module.ACTIVE_WORKERS
+    )
+
+
+def test_ungoverned_deployable_worker_fails_closed(tmp_path: Path) -> None:
+    worker_root = tmp_path / "workers"
+    worker_root.mkdir()
+    for worker in manifest_module.ACTIVE_WORKERS:
+        directory = worker_root / worker
+        directory.mkdir()
+        (directory / "wrangler.toml").write_text(
+            f'name = "{worker}"\n', encoding="utf-8"
+        )
+    rogue = worker_root / "rogue-worker"
+    rogue.mkdir()
+    (rogue / "wrangler.toml").write_text('name = "rogue"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="ungoverned=.*rogue-worker"):
+        manifest_module.validate_active_worker_inventory(worker_root=worker_root)
+
+
 def test_manifest_is_fail_closed_for_toolchain_drift() -> None:
     manifest = manifest_module.build_manifest()
     drifted = copy.deepcopy(manifest)

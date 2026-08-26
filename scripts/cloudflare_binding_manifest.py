@@ -17,16 +17,70 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "specs" / "cloudflare" / "active_worker_bindings.json"
+INVENTORY = ROOT / "specs" / "cloudflare" / "active_workers.json"
 WORKER_ROOT = ROOT / "platform" / "workers"
 
-ACTIVE_WORKERS = (
-    "ingestion-jsda",
-    "ingestion-premium",
-    "ingestion-secrets",
-    "quant-ops-mcp",
-    "research-ai-gateway",
-    "research-mass-eval",
-)
+
+def _load_active_workers(path: Path = INVENTORY) -> tuple[str, ...]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"active Worker inventory is unreadable: {path}") from exc
+    if not isinstance(document, dict) or set(document) != {"schema_version", "workers"}:
+        raise ValueError("active Worker inventory fields are not closed")
+    if document["schema_version"] != "cloudflare-active-worker-inventory/v1":
+        raise ValueError("active Worker inventory schema_version drift")
+    workers = document["workers"]
+    if (
+        not isinstance(workers, list)
+        or not workers
+        or not all(isinstance(worker, str) and worker for worker in workers)
+        or len(workers) != len(set(workers))
+        or workers != sorted(workers)
+    ):
+        raise ValueError("active Worker inventory must be a sorted unique non-empty list")
+    return tuple(workers)
+
+
+ACTIVE_WORKERS = _load_active_workers()
+
+
+def _deployable_worker_directories(worker_root: Path = WORKER_ROOT) -> tuple[str, ...]:
+    """Discover every directory that has any Worker deployment marker."""
+    markers = ("package.json", "wrangler.toml", "wrangler.staging.toml")
+    return tuple(
+        sorted(
+            directory.name
+            for directory in worker_root.iterdir()
+            if directory.is_dir()
+            and any((directory / marker).is_file() for marker in markers)
+        )
+    )
+
+
+def validate_active_worker_inventory(
+    workers: tuple[str, ...] = ACTIVE_WORKERS,
+    *,
+    worker_root: Path = WORKER_ROOT,
+) -> None:
+    discovered = _deployable_worker_directories(worker_root)
+    if discovered != workers:
+        missing = sorted(set(workers) - set(discovered))
+        ungoverned = sorted(set(discovered) - set(workers))
+        raise ValueError(
+            "active Worker inventory/filesystem drift: "
+            f"missing={missing!r}, ungoverned={ungoverned!r}"
+        )
+    required = (
+        "package.json",
+        "package-lock.json",
+        "wrangler.toml",
+        "wrangler.staging.toml",
+    )
+    for worker in workers:
+        absent = [name for name in required if not (worker_root / worker / name).is_file()]
+        if absent:
+            raise ValueError(f"{worker}: active Worker files missing: {absent!r}")
 
 TOOLCHAIN = {
     "wrangler": "4.125.0",
@@ -154,6 +208,7 @@ def _effective_surface(
 
 
 def build_manifest() -> dict[str, Any]:
+    validate_active_worker_inventory()
     workers: dict[str, Any] = {}
     for worker in ACTIVE_WORKERS:
         directory = WORKER_ROOT / worker
@@ -316,7 +371,19 @@ def _render(manifest: dict[str, Any]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write", action="store_true", help="replace the frozen manifest")
+    parser.add_argument(
+        "--print-worker-paths",
+        action="store_true",
+        help="print canonical active Worker paths, one per line",
+    )
     args = parser.parse_args(argv)
+    if args.write and args.print_worker_paths:
+        parser.error("--write and --print-worker-paths are mutually exclusive")
+    if args.print_worker_paths:
+        validate_active_worker_inventory()
+        for worker in ACTIVE_WORKERS:
+            print((WORKER_ROOT / worker).relative_to(ROOT))
+        return 0
     rendered = _render(build_manifest())
     if args.write:
         MANIFEST.parent.mkdir(parents=True, exist_ok=True)
