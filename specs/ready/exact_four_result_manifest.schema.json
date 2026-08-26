@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-platform.local/specs/ready/exact_four_result_manifest.schema.json",
+  "title": "Exact-four controlled-pilot v2 result manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "execution_mode",
+    "pilot_run_id",
+    "readiness_attestation_id",
+    "trader_authorization_id",
+    "execution_request_id",
+    "lease_id",
+    "idempotency_key",
+    "exact_four_binding_digest",
+    "controlled_pilot_policy_digest",
+    "budget_scope_digest",
+    "plan_set_digest",
+    "dependency_closure_set_digest",
+    "profile_set_digest",
+    "required_dataset_membership_digest",
+    "snapshot_id",
+    "ready_manifest_digest",
+    "immutable_snapshot_digest",
+    "paper_results",
+    "risk_results",
+    "aggregate_selection",
+    "knowledge_artifact",
+    "generation",
+    "one_shot",
+    "automatic_promotion",
+    "mass_research_enabled",
+    "live_trading_enabled",
+    "manifest_id"
+  ],
+  "properties": {
+    "format": { "const": "exact-four-pilot-result-manifest/v2" },
+    "execution_mode": { "const": "paper" },
+    "pilot_run_id": { "$ref": "#/$defs/nonEmpty" },
+    "readiness_attestation_id": { "$ref": "#/$defs/digest" },
+    "trader_authorization_id": { "$ref": "#/$defs/digest" },
+    "execution_request_id": { "$ref": "#/$defs/digest" },
+    "lease_id": { "$ref": "#/$defs/digest" },
+    "idempotency_key": { "$ref": "#/$defs/digest" },
+    "exact_four_binding_digest": { "$ref": "#/$defs/digest" },
+    "controlled_pilot_policy_digest": { "$ref": "#/$defs/digest" },
+    "budget_scope_digest": { "$ref": "#/$defs/digest" },
+    "plan_set_digest": { "$ref": "#/$defs/digest" },
+    "dependency_closure_set_digest": { "$ref": "#/$defs/digest" },
+    "profile_set_digest": { "$ref": "#/$defs/digest" },
+    "required_dataset_membership_digest": { "$ref": "#/$defs/digest" },
+    "snapshot_id": { "$ref": "#/$defs/digest" },
+    "ready_manifest_digest": { "$ref": "#/$defs/digest" },
+    "immutable_snapshot_digest": { "$ref": "#/$defs/digest" },
+    "paper_results": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        { "$ref": "#/$defs/paper1" },
+        { "$ref": "#/$defs/paper2" },
+        { "$ref": "#/$defs/paper3" },
+        { "$ref": "#/$defs/paper4" }
+      ],
+      "items": false
+    },
+    "risk_results": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        { "$ref": "#/$defs/risk1" },
+        { "$ref": "#/$defs/risk2" },
+        { "$ref": "#/$defs/risk3" },
+        { "$ref": "#/$defs/risk4" }
+      ],
+      "items": false
+    },
+    "aggregate_selection": { "$ref": "#/$defs/selection" },
+    "knowledge_artifact": { "$ref": "#/$defs/knowledge" },
+    "generation": { "type": "integer", "const": 1 },
+    "one_shot": { "const": true },
+    "automatic_promotion": { "const": false },
+    "mass_research_enabled": { "const": false },
+    "live_trading_enabled": { "const": false },
+    "manifest_id": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "nonEmpty": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S(?:.*\\S)?$"
+    },
+    "paperBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "ordinal",
+        "plan_id",
+        "plan_binding_digest",
+        "paper_result_id",
+        "paper_artifact_digest",
+        "evidence_id"
+      ],
+      "properties": {
+        "format": { "const": "paper-result-evidence/v2" },
+        "ordinal": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "plan_id": { "$ref": "#/$defs/nonEmpty" },
+        "plan_binding_digest": { "$ref": "#/$defs/digest" },
+        "paper_result_id": { "$ref": "#/$defs/digest" },
+        "paper_artifact_digest": { "$ref": "#/$defs/digest" },
+        "evidence_id": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "paper1": {
+      "allOf": [
+        { "$ref": "#/$defs/paperBase" },
+        { "properties": { "ordinal": { "const": 1 }, "plan_id": { "const": "exp-mdh-hold10-momentum" } } }
+      ]
+    },
+    "paper2": {
+      "allOf": [
+        { "$ref": "#/$defs/paperBase" },
+        { "properties": { "ordinal": { "const": 2 }, "plan_id": { "const": "exp-xs-hold10-mom5" } } }
+      ]
+    },
+    "paper3": {
+      "allOf": [
+        { "$ref": "#/$defs/paperBase" },
+        { "properties": { "ordinal": { "const": 3 }, "plan_id": { "const": "exp-event-post-hold5" } } }
+      ]
+    },
+    "paper4": {
+      "allOf": [
+        { "$ref": "#/$defs/paperBase" },
+        { "properties": { "ordinal": { "const": 4 }, "plan_id": { "const": "exp-fund-hold10-value-mom" } } }
+      ]
+    },
+    "riskBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "ordinal",
+        "plan_id",
+        "plan_binding_digest",
+        "paper_result_id",
+        "paper_evidence_id",
+        "risk_result_id",
+        "risk_artifact_digest",
+        "evidence_id"
+      ],
+      "properties": {
+        "format": { "const": "risk-result-evidence/v2" },
+        "ordinal": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "plan_id": { "$ref": "#/$defs/nonEmpty" },
+        "plan_binding_digest": { "$ref": "#/$defs/digest" },
+        "paper_result_id": { "$ref": "#/$defs/digest" },
+        "paper_evidence_id": { "$ref": "#/$defs/digest" },
+        "risk_result_id": { "$ref": "#/$defs/digest" },
+        "risk_artifact_digest": { "$ref": "#/$defs/digest" },
+        "evidence_id": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "risk1": {
+      "allOf": [
+        { "$ref": "#/$defs/riskBase" },
+        { "properties": { "ordinal": { "const": 1 }, "plan_id": { "const": "exp-mdh-hold10-momentum" } } }
+      ]
+    },
+    "risk2": {
+      "allOf": [
+        { "$ref": "#/$defs/riskBase" },
+        { "properties": { "ordinal": { "const": 2 }, "plan_id": { "const": "exp-xs-hold10-mom5" } } }
+      ]
+    },
+    "risk3": {
+      "allOf": [
+        { "$ref": "#/$defs/riskBase" },
+        { "properties": { "ordinal": { "const": 3 }, "plan_id": { "const": "exp-event-post-hold5" } } }
+      ]
+    },
+    "risk4": {
+      "allOf": [
+        { "$ref": "#/$defs/riskBase" },
+        { "properties": { "ordinal": { "const": 4 }, "plan_id": { "const": "exp-fund-hold10-value-mom" } } }
+      ]
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "paper_evidence_ids",
+        "risk_evidence_ids",
+        "input_pair_set_digest",
+        "selected_plan_ids",
+        "selection_result_id",
+        "selection_artifact_digest",
+        "evidence_id"
+      ],
+      "properties": {
+        "format": { "const": "aggregate-selection-evidence/v2" },
+        "paper_evidence_ids": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/digest" }
+        },
+        "risk_evidence_ids": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/digest" }
+        },
+        "input_pair_set_digest": { "$ref": "#/$defs/digest" },
+        "selected_plan_ids": {
+          "type": "array",
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "exp-mdh-hold10-momentum",
+              "exp-xs-hold10-mom5",
+              "exp-event-post-hold5",
+              "exp-fund-hold10-value-mom"
+            ]
+          }
+        },
+        "selection_result_id": { "$ref": "#/$defs/digest" },
+        "selection_artifact_digest": { "$ref": "#/$defs/digest" },
+        "evidence_id": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "knowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "selection_evidence_id",
+        "selection_result_id",
+        "knowledge_artifact_id",
+        "knowledge_artifact_digest",
+        "evidence_id"
+      ],
+      "properties": {
+        "format": { "const": "knowledge-artifact-evidence/v2" },
+        "selection_evidence_id": { "$ref": "#/$defs/digest" },
+        "selection_result_id": { "$ref": "#/$defs/digest" },
+        "knowledge_artifact_id": { "$ref": "#/$defs/digest" },
+        "knowledge_artifact_digest": { "$ref": "#/$defs/digest" },
+        "evidence_id": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}
