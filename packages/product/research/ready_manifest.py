@@ -717,9 +717,10 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
             "profile-bound snapshot does not exactly match the research profile"
         )
     coverage_proof = document.get("coverage_proof")
+    coverage_proof_id = document.get("coverage_proof_id")
     if not isinstance(coverage_proof, Mapping) or not is_sha256_digest(
         coverage_proof.get("proof_digest")
-    ):
+    ) or not is_sha256_digest(coverage_proof_id):
         raise MassResearchDisabledError("snapshot coverage proof missing")
     expected_policy_set = coverage_policy_set_binding(list(profile.required_datasets))
     if (
@@ -962,6 +963,7 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
         coverage_proof_digest=canonical_digest(
             {
                 "coverage_proof_digest": coverage_proof["proof_digest"],
+                "coverage_proof_id": coverage_proof_id,
                 "coverage_policy_version": coverage_proof["policy_version"],
                 "coverage_policy_digest": coverage_proof["policy_digest"],
                 "profile_id": profile.profile_id,
@@ -974,6 +976,7 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
             {
                 "coverage_receipt_count": coverage_proof.get("receipt_count"),
                 "trusted_receipt_proof_digest": coverage_proof["proof_digest"],
+                "coverage_proof_id": coverage_proof_id,
             }
         ),
         validation_proof_digest=canonical_digest(validations),

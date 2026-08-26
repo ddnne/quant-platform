@@ -76,13 +76,14 @@ def test_local_schema_migrations_are_formal_and_idempotent(tmp_path):
         (7, "phase61_jsda_correction_provenance"),
         (8, "phase62_jsda_corporate_bond_transactions"),
         (9, "phase632_raw_acquisition_status"),
+        (10, "phase633_immutable_local_coverage_proofs"),
     ]
     first.close()
 
     second = SqliteStore(path)
     assert second._conn.execute(  # noqa: SLF001
         "SELECT COUNT(*) FROM schema_migrations"
-    ).fetchone()[0] == 9
+    ).fetchone()[0] == 10
     second.close()
 
 

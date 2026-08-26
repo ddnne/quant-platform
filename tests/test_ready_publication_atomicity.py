@@ -12,7 +12,10 @@ import pytest
 import paper_runtime.snapshot as snapshot_module
 from data_contracts.coverage import coverage_policy_binding
 from paper_runtime.snapshot import SnapshotRejected
-from paper_runtime.snapshot_coverage_proof import _coverage_proof
+from paper_runtime.snapshot_coverage_proof import (
+    _coverage_proof,
+    persist_coverage_proof,
+)
 from paper_runtime.snapshot_read import describe_snapshot, latest_ready_snapshot
 from research.readiness import ReadinessPublicKeyRegistry
 from research.ready_manifest import (
@@ -72,6 +75,9 @@ def _replace_fixture_with_coherent_exact_four_artifact(ready, binding):
             conn, tuple(required), coverage_rows
         )
         outer["coverage_proof"] = coverage_proof
+        outer["coverage_proof_id"] = persist_coverage_proof(
+            conn, tuple(required)
+        )
         outer["coverage_policy_version"] = coverage_proof["policy_version"]
         outer["coverage_policy_digest"] = coverage_proof["policy_digest"]
 

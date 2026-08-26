@@ -28,6 +28,7 @@ from paper_runtime.ready_policy import (
     ReadyEvidenceItem,
     _collect_typed_evidence,
 )
+from paper_runtime.snapshot_coverage_proof import persist_coverage_proof
 from paper_runtime.snapshot_publish_policy import (
     READY_MANIFEST_FORMAT,
     READY_MANIFEST_SCHEMA,
@@ -68,6 +69,39 @@ def _evaluate_ready_publication_fixture(
         _raw_manifests,
         coverage_proof,
     ) = result
+    # Older sparse fixtures predate the source change ledger.  Tests may add
+    # that missing observation, but they still persist and verify the exact
+    # same immutable Coverage record as production.  Existing mismatches are
+    # deliberately not repaired here.
+    applied_row = conn.execute(
+        "SELECT last_applied_change_seq FROM sync_change_state "
+        "WHERE feed='jquants_records'"
+    ).fetchone()
+    applied_generation = int(applied_row[0]) if applied_row else 0
+    if applied_generation <= 0:
+        applied_generation = 1
+        conn.execute(
+            "INSERT INTO sync_change_state "
+            "(feed,last_applied_change_seq,updated_at) VALUES "
+            "('jquants_records',1,'tests-only-fixture') "
+            "ON CONFLICT(feed) DO UPDATE SET "
+            "last_applied_change_seq=excluded.last_applied_change_seq, "
+            "updated_at=excluded.updated_at"
+        )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ingestion_change_log "
+        "(change_seq INTEGER NOT NULL)"
+    )
+    source_row = conn.execute(
+        "SELECT COALESCE(MAX(change_seq),0) FROM ingestion_change_log"
+    ).fetchone()
+    if int(source_row[0]) == 0:
+        conn.execute(
+            "INSERT INTO ingestion_change_log(change_seq) VALUES (?)",
+            (applied_generation,),
+        )
+    conn.commit()
+    coverage_proof_id = persist_coverage_proof(conn, required)
     bundle = ReadyEvidenceBundle()
     for gate in check_ready_coherence(
         conn, staging_path, required, run_id=run_id
@@ -99,7 +133,7 @@ def _evaluate_ready_publication_fixture(
         staging_path,
         required,
         run_id=run_id,
-        coverage_proof=coverage_proof,
+        coverage_proof_id=coverage_proof_id,
         quality_status="FAIL" if failures else "PASS",
         raw_manifest_ok=True,
         fixture_compatibility=True,
@@ -110,7 +144,7 @@ def _evaluate_ready_publication_fixture(
             f"{item.name}: {item.reason}" for item in bundle.failures()
         )
         raise SnapshotRejected(f"READY publication policy failed: {detail}")
-    return (*result, bundle.to_dict())
+    return (*result, coverage_proof_id, bundle.to_dict())
 
 
 def publish_ready_snapshot_fixture(

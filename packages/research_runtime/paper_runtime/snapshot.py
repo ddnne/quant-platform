@@ -712,7 +712,7 @@ def _publish_ready_snapshot_impl(
             (
                 run_id, run_detail, validations, coverage_rows,
                 quality_summary, quality_failures, raw_manifests,
-                coverage_proof, ready_evidence,
+                coverage_proof, coverage_proof_id, ready_evidence,
             ) = publication_gate(
                 conn,
                 staging_path,
@@ -803,6 +803,7 @@ def _publish_ready_snapshot_impl(
                 for row in coverage_rows
             ],
             "coverage_proof": coverage_proof,
+            "coverage_proof_id": coverage_proof_id,
             "quality": {
                 "status": "PASS",
                 "summary": quality_summary,

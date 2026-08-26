@@ -13,7 +13,10 @@ from typing import Any
 
 from cf_platform.ingest_premium.coverage import run_coverage, summarize
 from data_contracts.loader import all_contracts
-from paper_runtime.snapshot_coverage_proof import _coverage_proof
+from paper_runtime.snapshot_coverage_proof import (
+    _coverage_proof,
+    persist_coverage_proof,
+)
 from qp_paths import repo_root
 from storage.coverage_ledger import refresh_coverage_ledger
 
@@ -237,16 +240,18 @@ def _evaluate_publication_gate(
 ) -> tuple[
     int, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]],
     dict[str, int], list[dict[str, Any]], dict[str, dict[str, Any]],
-    dict[str, Any],
+    dict[str, Any], str,
 ]:
     """Production B0/Coverage gate; compatibility cannot be selected."""
-    return _evaluate_publication_gate_impl(
+    result = _evaluate_publication_gate_impl(
         conn,
         staging_path,
         build_id=build_id,
         required=required,
         fixture_compatibility=False,
     )
+    proof_id = persist_coverage_proof(conn, required)
+    return (*result, proof_id)
 
 
 def evaluate_ready_publication(
@@ -258,7 +263,7 @@ def evaluate_ready_publication(
 ) -> tuple[
     int, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]],
     dict[str, int], list[dict[str, Any]], dict[str, dict[str, Any]],
-    dict[str, Any], dict[str, Any],
+    dict[str, Any], str, dict[str, Any],
 ]:
     """Single READY publication gate. Coverage/B0 plus ReadyPublicationPolicy."""
     from paper_runtime.ready_policy import ReadyPublicationPolicy
@@ -276,7 +281,7 @@ def evaluate_ready_publication(
     )
     (
         run_id, _run_detail, _validations, _coverage_rows, _quality_summary,
-        failures, _raw_manifests, coverage_proof,
+        failures, _raw_manifests, _coverage_proof_document, coverage_proof_id,
     ) = result
     policy = ReadyPublicationPolicy()
     bundle = policy.evaluate(
@@ -284,7 +289,7 @@ def evaluate_ready_publication(
         staging_path,
         required,
         run_id=run_id,
-        coverage_proof=coverage_proof if isinstance(coverage_proof, dict) else None,
+        coverage_proof_id=coverage_proof_id,
         quality_status="FAIL" if failures else "PASS",
         raw_manifest_ok=True,
     )

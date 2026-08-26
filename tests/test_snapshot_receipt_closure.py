@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from dataclasses import replace
 import json
+import sqlite3
 
 import pytest
 
@@ -14,7 +15,14 @@ from tests.receipt_test_support import (
     _reconcile_collection_evidence,
 )
 from paper_runtime.snapshot import SnapshotRejected
-from paper_runtime.snapshot_coverage_proof import _coverage_proof
+from paper_runtime.ready_policy import CoverageEvidence, collect_typed_evidence
+from paper_runtime.snapshot_coverage_proof import (
+    CoverageProofVerificationError,
+    VerifiedCoverageProof,
+    _coverage_proof,
+    persist_coverage_proof,
+    require_persisted_coverage_proof,
+)
 from storage.coverage_ledger import (
     RequiredCoverageSegment,
     record_collection_receipt,
@@ -80,6 +88,35 @@ def _seed_closed_segment(tmp_path, receipt_ed25519_keys):
             _POLICY_VERSION,
         ),
     )
+    conn.execute(
+        """
+        INSERT INTO dataset_coverage (
+            dataset, status, policy_version, collection_scope,
+            history_target_start, history_target_end_rule, coverage_mode,
+            expected_frequency, universe_rule, raw_retention_required,
+            structured_reconciliation_required, governance_tier,
+            observed_start, observed_end, row_count, source_run_id,
+            evaluated_at, detail_json
+        ) VALUES (?, 'COMPLETE', ?, 'test-authoritative-scope',
+                  '2026-08-01', 'fixed:2026-08-31', 'monthly', 'daily',
+                  'all', 1, 1, 'governed', '2026-08-01', '2026-08-31',
+                  1, 41, ?, '{}')
+        """,
+        (_DATASET, _POLICY_VERSION, _CHECKED_AT),
+    )
+    conn.execute(
+        "CREATE TABLE ingestion_change_log (change_seq INTEGER NOT NULL)"
+    )
+    conn.execute("INSERT INTO ingestion_change_log VALUES (7)")
+    conn.execute(
+        "INSERT INTO sync_change_state "
+        "(feed,last_applied_change_seq,updated_at) VALUES "
+        "('jquants_records',7,?) "
+        "ON CONFLICT(feed) DO UPDATE SET "
+        "last_applied_change_seq=excluded.last_applied_change_seq, "
+        "updated_at=excluded.updated_at",
+        (_CHECKED_AT,),
+    )
     conn.commit()
     coverage_rows = [{
         "dataset": _DATASET,
@@ -87,6 +124,187 @@ def _seed_closed_segment(tmp_path, receipt_ed25519_keys):
         "status": "COMPLETE",
     }]
     return store, receipt, coverage_rows
+
+
+def _coverage_item(evidence):
+    return next(
+        item.to_item() for item in evidence if isinstance(item, CoverageEvidence)
+    )
+
+
+def test_persisted_coverage_proof_is_canonical_immutable_and_policy_eligible(
+    tmp_path, receipt_ed25519_keys
+):
+    store, _receipt, _coverage_rows = _seed_closed_segment(
+        tmp_path, receipt_ed25519_keys
+    )
+    conn = store._conn  # noqa: SLF001
+
+    proof_id = persist_coverage_proof(conn, (_DATASET,))
+    capability = require_persisted_coverage_proof(
+        conn, (_DATASET,), proof_id
+    )
+    assert capability.proof_id == proof_id
+    assert capability.required_datasets == (_DATASET,)
+    assert capability.source_generation == capability.applied_generation == 7
+    item = _coverage_item(
+        collect_typed_evidence(
+            conn,
+            store.path,
+            (_DATASET,),
+            coverage_proof_id=proof_id,
+        )
+    )
+    assert item.passed is True
+    assert item.detail["proof_id"] == proof_id
+    assert item.detail["required_datasets"] == [_DATASET]
+
+    row = conn.execute(
+        "SELECT required_datasets_json,coverage_proof_json,"
+        "source_generation,applied_generation "
+        "FROM local_coverage_proofs WHERE proof_id=?",
+        (proof_id,),
+    ).fetchone()
+    assert json.loads(row[0]) == [_DATASET]
+    assert json.loads(row[1]) == capability.proof
+    assert tuple(row[2:]) == (7, 7)
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        conn.execute(
+            "UPDATE local_coverage_proofs SET persisted_at='tampered' "
+            "WHERE proof_id=?",
+            (proof_id,),
+        )
+    conn.rollback()
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        conn.execute(
+            "DELETE FROM local_coverage_proofs WHERE proof_id=?", (proof_id,)
+        )
+    conn.rollback()
+    store.close()
+
+
+def test_caller_constructed_verified_value_is_not_policy_authority(
+    tmp_path, receipt_ed25519_keys
+):
+    store, _receipt, _coverage_rows = _seed_closed_segment(
+        tmp_path, receipt_ed25519_keys
+    )
+    conn = store._conn  # noqa: SLF001
+    proof_id = persist_coverage_proof(conn, (_DATASET,))
+    forged_id = "sha256:" + ("22" * 32)
+    forged = VerifiedCoverageProof(
+        proof_id=forged_id,
+        _proof_json=json.dumps(
+            {
+                "status": "COMPLETE",
+                "proof_digest": "sha256:" + ("33" * 32),
+                "dataset_count": 999,
+            }
+        ),
+        required_datasets=(_DATASET,),
+        source_generation=7,
+        applied_generation=7,
+    )
+    assert forged.proof["status"] == "COMPLETE"
+    assert CoverageEvidence(conn, (_DATASET,), forged.proof_id).to_item().passed is False
+    store.close()
+
+
+def test_persisted_coverage_proof_rejects_tampered_unknown_and_stale_ids(
+    tmp_path, receipt_ed25519_keys
+):
+    store, _receipt, _coverage_rows = _seed_closed_segment(
+        tmp_path, receipt_ed25519_keys
+    )
+    conn = store._conn  # noqa: SLF001
+    proof_id = persist_coverage_proof(conn, (_DATASET,))
+    tampered_id = proof_id[:-1] + ("0" if proof_id[-1] != "0" else "1")
+    for invalid_id in (None, "UNKNOWN", tampered_id):
+        with pytest.raises(CoverageProofVerificationError):
+            require_persisted_coverage_proof(conn, (_DATASET,), invalid_id)
+    with pytest.raises(CoverageProofVerificationError, match="exact, sorted"):
+        require_persisted_coverage_proof(
+            conn, (_DATASET, _DATASET), proof_id
+        )
+
+    conn.execute("INSERT INTO ingestion_change_log VALUES (8)")
+    conn.execute(
+        "UPDATE sync_change_state SET last_applied_change_seq=8 "
+        "WHERE feed='jquants_records'"
+    )
+    conn.commit()
+    with pytest.raises(CoverageProofVerificationError, match="stale"):
+        require_persisted_coverage_proof(conn, (_DATASET,), proof_id)
+    assert _coverage_item(
+        collect_typed_evidence(
+            conn,
+            store.path,
+            (_DATASET,),
+            coverage_proof_id=proof_id,
+        )
+    ).passed is False
+    store.close()
+
+
+def test_persisted_coverage_proof_rejects_receipt_ledger_mutation(
+    tmp_path, receipt_ed25519_keys
+):
+    store, receipt, _coverage_rows = _seed_closed_segment(
+        tmp_path, receipt_ed25519_keys
+    )
+    conn = store._conn  # noqa: SLF001
+    proof_id = persist_coverage_proof(conn, (_DATASET,))
+    conn.execute(
+        "UPDATE collection_receipts SET observed_items=0 "
+        "WHERE source=? AND dataset=? AND segment_id=? AND run_id=?",
+        (receipt.source, receipt.dataset, receipt.segment_id, receipt.run_id),
+    )
+    conn.commit()
+    with pytest.raises(
+        CoverageProofVerificationError, match="cannot be reproduced"
+    ):
+        require_persisted_coverage_proof(conn, (_DATASET,), proof_id)
+    store.close()
+
+
+def test_copied_coverage_record_without_receipt_cannot_mint_capability(
+    tmp_path, receipt_ed25519_keys
+):
+    source, _receipt, _coverage_rows = _seed_closed_segment(
+        tmp_path, receipt_ed25519_keys
+    )
+    source_conn = source._conn  # noqa: SLF001
+    proof_id = persist_coverage_proof(source_conn, (_DATASET,))
+
+    target = SqliteStore(tmp_path / "copied-record.sqlite")
+    target_conn = target._conn  # noqa: SLF001
+    for table in ("dataset_coverage", "local_coverage_proofs"):
+        cursor = source_conn.execute(f"SELECT * FROM {table}")
+        columns = [item[0] for item in cursor.description]
+        rows = cursor.fetchall()
+        target_conn.executemany(
+            f"INSERT INTO {table} ({','.join(columns)}) "
+            f"VALUES ({','.join('?' for _ in columns)})",
+            [tuple(row) for row in rows],
+        )
+    target_conn.execute(
+        "CREATE TABLE ingestion_change_log (change_seq INTEGER NOT NULL)"
+    )
+    target_conn.execute("INSERT INTO ingestion_change_log VALUES (7)")
+    target_conn.execute(
+        "INSERT INTO sync_change_state "
+        "(feed,last_applied_change_seq,updated_at) VALUES "
+        "('jquants_records',7,?)",
+        (_CHECKED_AT,),
+    )
+    target_conn.commit()
+
+    with pytest.raises(
+        CoverageProofVerificationError, match="cannot be reproduced"
+    ):
+        require_persisted_coverage_proof(target_conn, (_DATASET,), proof_id)
+    target.close()
+    source.close()
 
 
 def test_snapshot_proof_hashes_verified_closure_and_rejects_outer_mutation(

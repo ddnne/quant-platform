@@ -12,31 +12,58 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
 from paper_runtime.coherence import CoherenceGateResult, check_ready_coherence
+from paper_runtime.snapshot_coverage_proof import (
+    CoverageProofVerificationError,
+    require_persisted_coverage_proof,
+)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CoverageEvidence:
-    """Typed coverage evidence — no PASS/FAIL decision of its own for READY."""
+    """Self-verifying Coverage evidence; stored values are never authority."""
 
-    governed_complete: int
-    governed_total: int
-    proof_digest: str | None = None
-    status: str | None = None
-    detail: Mapping[str, Any] = field(default_factory=dict)
+    _conn: sqlite3.Connection = field(repr=False)
+    _required_datasets: tuple[str, ...]
+    _proof_id: object = field(repr=False)
 
     def to_item(self) -> "ReadyEvidenceItem":
+        try:
+            verified = require_persisted_coverage_proof(
+                self._conn,
+                self._required_datasets,
+                self._proof_id,
+            )
+        except CoverageProofVerificationError as exc:
+            return ReadyEvidenceItem(
+                name="CoverageEvidence",
+                passed=False,
+                reason=str(exc),
+                detail={"status": "UNKNOWN", "proof_id": "MISSING"},
+            )
+        proof = verified.proof
+        detail = {
+            "proof_id": verified.proof_id,
+            "status": proof.get("status"),
+            "proof_digest": proof.get("proof_digest"),
+            "governed_complete": proof.get("dataset_count"),
+            "governed_total": proof.get("dataset_count"),
+            "required_datasets": list(verified.required_datasets),
+            "source_generation": verified.source_generation,
+            "applied_generation": verified.applied_generation,
+        }
+        governed_complete = detail.get("governed_complete")
+        governed_total = detail.get("governed_total")
         ok = (
-            self.governed_total > 0
-            and self.governed_complete == self.governed_total
-            and (self.status is None or self.status == "COMPLETE")
+            isinstance(governed_total, int)
+            and governed_total > 0
+            and governed_complete == governed_total
+            and detail.get("status") == "COMPLETE"
         )
         return ReadyEvidenceItem(
             name="CoverageEvidence",
             passed=ok,
-            reason=None
-            if ok
-            else f"COMPLETE {self.governed_complete}/{self.governed_total}",
-            detail=dict(self.detail),
+            reason=None if ok else "Verified Coverage proof is not COMPLETE",
+            detail=detail,
         )
 
 
@@ -182,7 +209,7 @@ def _collect_typed_evidence(
     required_datasets: Sequence[str],
     *,
     run_id: int | None = None,
-    coverage_proof: dict[str, Any] | None = None,
+    coverage_proof_id: object,
     quality_status: str | None = None,
     raw_manifest_ok: bool | None = None,
     fixture_compatibility: bool,
@@ -205,22 +232,11 @@ def _collect_typed_evidence(
         complete = sum(1 for d in required if status_map.get(d) == "COMPLETE")
     except sqlite3.Error:
         complete = 0
-    proof_status = None
-    proof_digest = None
-    if coverage_proof is not None:
-        proof_status = str(coverage_proof.get("status") or "")
-        proof_digest = (
-            str(coverage_proof.get("proof_digest"))
-            if coverage_proof.get("proof_digest")
-            else None
-        )
     evidence.append(
         CoverageEvidence(
-            governed_complete=complete,
-            governed_total=total,
-            proof_digest=proof_digest,
-            status=proof_status,
-            detail={"required": list(required)},
+            _conn=conn,
+            _required_datasets=required,
+            _proof_id=coverage_proof_id,
         )
     )
 
@@ -322,7 +338,7 @@ def collect_typed_evidence(
     required_datasets: Sequence[str],
     *,
     run_id: int | None = None,
-    coverage_proof: dict[str, Any] | None = None,
+    coverage_proof_id: object,
     quality_status: str | None = None,
     raw_manifest_ok: bool | None = None,
 ) -> list[TypedReadyEvidence]:
@@ -332,7 +348,7 @@ def collect_typed_evidence(
         db_path,
         required_datasets,
         run_id=run_id,
-        coverage_proof=coverage_proof,
+        coverage_proof_id=coverage_proof_id,
         quality_status=quality_status,
         raw_manifest_ok=raw_manifest_ok,
         fixture_compatibility=False,
@@ -349,10 +365,9 @@ class ReadyPublicationPolicy:
         required_datasets: Sequence[str],
         *,
         run_id: int | None = None,
-        coverage_proof: dict[str, Any] | None = None,
+        coverage_proof_id: object,
         quality_status: str | None = None,
         raw_manifest_ok: bool | None = None,
-        typed_evidence: Sequence[TypedReadyEvidence] | None = None,
     ) -> ReadyEvidenceBundle:
         required = tuple(required_datasets)
         bundle = ReadyEvidenceBundle()
@@ -372,14 +387,12 @@ class ReadyPublicationPolicy:
             )
 
         evidence = list(
-            typed_evidence
-            if typed_evidence is not None
-            else collect_typed_evidence(
+            collect_typed_evidence(
                 conn,
                 db_path,
                 required,
                 run_id=run_id,
-                coverage_proof=coverage_proof,
+                coverage_proof_id=coverage_proof_id,
                 quality_status=quality_status,
                 raw_manifest_ok=raw_manifest_ok,
             )

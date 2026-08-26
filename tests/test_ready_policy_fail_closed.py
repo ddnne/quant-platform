@@ -23,6 +23,8 @@ from ops.projection_signing import (
     ENVELOPE_SCHEMA,
 )
 from paper_runtime.ready_policy import (
+    CoverageEvidence,
+    ReadyPublicationPolicy,
     SyncGenerationEvidence,
     collect_typed_evidence,
 )
@@ -168,6 +170,7 @@ def test_missing_production_ledgers_are_not_pass() -> None:
         ":memory:",
         ("equities_bars_daily",),
         run_id=1,
+        coverage_proof_id="sha256:" + ("ab" * 32),
     )
     by_type = {type(item).__name__: item.to_item() for item in evidence}
     for evidence_type in (
@@ -179,6 +182,72 @@ def test_missing_production_ledgers_are_not_pass() -> None:
         "SyncGenerationEvidence",
     ):
         assert by_type[evidence_type].passed is False
+
+
+@pytest.mark.parametrize(
+    "coverage_proof_id",
+    (
+        None,
+        "",
+        "UNKNOWN",
+        "sha256:" + ("AB" * 32),
+        "sha256:" + ("ab" * 32),
+    ),
+)
+def test_coverage_evidence_rejects_missing_arbitrary_or_unknown_proof_ids(
+    coverage_proof_id,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE dataset_coverage(dataset TEXT, status TEXT)")
+    conn.execute(
+        "INSERT INTO dataset_coverage VALUES (?, 'COMPLETE')",
+        ("equities_bars_daily",),
+    )
+    evidence = collect_typed_evidence(
+        conn,
+        ":memory:",
+        ("equities_bars_daily",),
+        coverage_proof_id=coverage_proof_id,
+    )
+    coverage = next(item for item in evidence if isinstance(item, CoverageEvidence))
+
+    assert coverage.to_item().passed is False
+
+
+def test_coverage_evidence_cannot_be_directly_forged_into_pass() -> None:
+    conn = sqlite3.connect(":memory:")
+    forged = CoverageEvidence(
+        conn,
+        ("equities_bars_daily",),
+        "sha256:" + ("ab" * 32),
+    )
+    assert forged.to_item().passed is False
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        CoverageEvidence(  # type: ignore[call-arg]
+            governed_complete=1,
+            governed_total=1,
+            status="COMPLETE",
+            proof_digest="sha256:" + ("ab" * 32),
+        )
+
+
+def test_old_proof_dict_and_typed_evidence_injection_kwargs_are_removed() -> None:
+    conn = sqlite3.connect(":memory:")
+    with pytest.raises(TypeError, match="coverage_proof"):
+        collect_typed_evidence(  # type: ignore[call-arg]
+            conn,
+            ":memory:",
+            ("equities_bars_daily",),
+            coverage_proof={"status": "COMPLETE"},
+        )
+    with pytest.raises(TypeError, match="typed_evidence"):
+        ReadyPublicationPolicy().evaluate(  # type: ignore[call-arg]
+            conn,
+            ":memory:",
+            ("equities_bars_daily",),
+            coverage_proof_id="sha256:" + ("ab" * 32),
+            typed_evidence=[object()],
+        )
 
 
 def test_source_and_applied_generation_must_match() -> None:
@@ -279,7 +348,10 @@ def test_signed_projection_is_the_only_production_pilot_input(
         "research.readiness._load_pinned_ready_publication_signer",
         lambda: readiness_signer,
     )
-    monkeypatch.setattr("paper_runtime.data_snapshot_id", lambda _path: snapshot_id)
+    monkeypatch.setattr(
+        "paper_runtime.snapshot._immutable_data_snapshot_id",
+        lambda _path: snapshot_id,
+    )
     monkeypatch.setattr(
         "research.ready_manifest.ready_manifest_from_snapshot_document",
         lambda _document: manifest,
@@ -486,6 +558,7 @@ def test_signed_projection_cursor_must_equal_local_snapshot_generation() -> None
             "policy_version": policy_set["policy_version"],
             "policy_digest": policy_set["policy_digest"],
         },
+        "coverage_proof_id": canonical_digest({"coverage": "record"}),
         "profile_coverage_evidence": profile_evidence,
     }
     with pytest.raises(
