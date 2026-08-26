@@ -352,7 +352,7 @@ def test_pagination_incomplete_is_not_complete():
     )
 
     assert status == "PARTIAL"
-    assert "verified v2 collection closure" in detail["reason"]
+    assert "receipt closure invalid" in detail["reason"]
 
 
 def test_raw_structured_mismatch_is_not_complete():

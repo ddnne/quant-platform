@@ -705,6 +705,7 @@ def _publish_ready_snapshot_impl(
         manifest: dict[str, Any] = {
             "format": RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
             "state": "READY",
+            "build_id": build_id,
             "contract_version": contract,
             "source_contract_versions": {
                 "jquants": contract,

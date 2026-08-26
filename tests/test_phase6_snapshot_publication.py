@@ -428,7 +428,8 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(
     assert list_ready_snapshots(snapshot_dir) == []
     with pytest.raises(RuntimeError, match="publication marker is invalid"):
         latest_ready_snapshot(snapshot_dir)
-    assert data_snapshot_id(ready.db_path) == ready.snapshot_id
+    with pytest.raises(RuntimeError, match="Coverage proof id is unknown"):
+        data_snapshot_id(ready.db_path)
     with pytest.raises(RuntimeError, match="not committed"):
         data_snapshot_id(path)
     as_of = datetime.now(timezone.utc).date().isoformat() + "T23:59:59+09:00"
@@ -458,8 +459,10 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(
     repeated = publish_ready_snapshot_fixture(
         path, snapshot_dir, required_datasets=required
     )
-    assert repeated.snapshot_id == ready.snapshot_id
-    assert len(list_ready_snapshots_fixture(snapshot_dir)) == 1
+    # Each publication now binds its publisher-owned build row and frozen
+    # Coverage cutoff, so identical fact data still yields distinct evidence.
+    assert repeated.snapshot_id != ready.snapshot_id
+    assert len(list_ready_snapshots_fixture(snapshot_dir)) == 2
 
 
 def test_latest_pointer_cannot_roll_back_to_an_older_valid_generation(

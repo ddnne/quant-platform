@@ -14,6 +14,7 @@ from data_contracts.coverage import coverage_policy_binding
 from paper_runtime.snapshot import SnapshotRejected
 from paper_runtime.snapshot_coverage_proof import (
     _coverage_proof,
+    _publication_cutoff_for_build,
     persist_coverage_proof,
 )
 from paper_runtime.snapshot_read import describe_snapshot, latest_ready_snapshot
@@ -71,12 +72,31 @@ def _replace_fixture_with_coherent_exact_four_artifact(ready, binding):
             )
             if str(row["dataset"]) in required_set
         ]
+        build_id = str(outer["build_id"])
+        # This fixture deliberately derives a new profile-scoped artifact from
+        # an existing fixture. Re-enter the same active VALIDATING boundary the
+        # product publisher uses; product proof minting never occurs from READY.
+        conn.execute(
+            "UPDATE snapshot_publications SET state='VALIDATING',staging_path=? "
+            "WHERE build_id=?",
+            (str(ready.db_path.resolve()), build_id),
+        )
+        conn.execute(
+            "UPDATE local_snapshot_policy SET publication_state='VALIDATING',"
+            "snapshot_ready=0,active_build_id=?,active_snapshot_id=NULL "
+            "WHERE singleton=1",
+            (build_id,),
+        )
+        conn.commit()
         coverage_proof = _coverage_proof(
-            conn, tuple(required), coverage_rows
+            conn,
+            tuple(required),
+            coverage_rows,
+            publication_cutoff=_publication_cutoff_for_build(conn, build_id),
         )
         outer["coverage_proof"] = coverage_proof
         outer["coverage_proof_id"] = persist_coverage_proof(
-            conn, tuple(required)
+            conn, tuple(required), build_id=build_id
         )
         outer["coverage_policy_version"] = coverage_proof["policy_version"]
         outer["coverage_policy_digest"] = coverage_proof["policy_digest"]
@@ -167,16 +187,17 @@ def _replace_fixture_with_coherent_exact_four_artifact(ready, binding):
             (snapshot_id,),
         )
         conn.execute(
-            "UPDATE snapshot_publications SET snapshot_id=?, artifact_path=?, "
+            "UPDATE snapshot_publications SET state='READY',snapshot_id=?, artifact_path=?, "
             "manifest_path=?, committed_at=?, change_seq=?, manifest_json=? "
-            "WHERE state='READY'",
+            "WHERE build_id=?",
             (
                 snapshot_id,
-                artifact_name,
-                f"{stem}.manifest.json",
+                str(ready.db_path.with_name(artifact_name).resolve()),
+                str(ready.db_path.with_name(f"{stem}.manifest.json").resolve()),
                 outer["committed_at"],
                 outer["change_seq"],
                 manifest_json,
+                build_id,
             ),
         )
         conn.commit()

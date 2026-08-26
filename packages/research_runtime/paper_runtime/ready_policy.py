@@ -26,6 +26,7 @@ class CoverageEvidence:
     _conn: sqlite3.Connection = field(repr=False)
     _required_datasets: tuple[str, ...]
     _proof_id: object = field(repr=False)
+    _build_id: object = field(default=None, repr=False)
 
     def to_item(self) -> "ReadyEvidenceItem":
         try:
@@ -33,6 +34,7 @@ class CoverageEvidence:
                 self._conn,
                 self._required_datasets,
                 self._proof_id,
+                build_id=self._build_id,
             )
         except CoverageProofVerificationError as exc:
             return ReadyEvidenceItem(
@@ -49,6 +51,9 @@ class CoverageEvidence:
             "governed_complete": proof.get("dataset_count"),
             "governed_total": proof.get("dataset_count"),
             "required_datasets": list(verified.required_datasets),
+            "build_id": verified.build_id,
+            "publication_cutoff": verified.publication_cutoff,
+            "inventory_set_digest": proof.get("inventory_set_digest"),
             "source_generation": verified.source_generation,
             "applied_generation": verified.applied_generation,
         }
@@ -235,6 +240,7 @@ def collect_typed_evidence(
             _conn=conn,
             _required_datasets=required,
             _proof_id=coverage_proof_id,
+            _build_id=build_id,
         )
     )
 

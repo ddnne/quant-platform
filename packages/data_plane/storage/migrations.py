@@ -454,6 +454,43 @@ MIGRATIONS: tuple[Migration, ...] = (
         END;
         """,
     ),
+    Migration(
+        11,
+        "phase631_exact_coverage_inventory_proofs",
+        """
+        CREATE TABLE IF NOT EXISTS local_coverage_proofs_v2 (
+            proof_id                 TEXT PRIMARY KEY CHECK
+                (length(proof_id) = 71 AND
+                 substr(proof_id, 1, 7) = 'sha256:' AND
+                 substr(proof_id, 8) NOT GLOB '*[^0-9a-f]*'),
+            format                   TEXT NOT NULL CHECK
+                (format = 'local-coverage-proof/v2'),
+            build_id                 TEXT NOT NULL UNIQUE,
+            publication_cutoff       TEXT NOT NULL CHECK
+                (length(publication_cutoff) = 10),
+            required_datasets_json   TEXT NOT NULL,
+            coverage_proof_json      TEXT NOT NULL,
+            coverage_policy_version  TEXT NOT NULL,
+            coverage_policy_digest   TEXT NOT NULL,
+            inventory_set_digest     TEXT NOT NULL,
+            source_generation        INTEGER NOT NULL CHECK
+                (source_generation > 0),
+            applied_generation       INTEGER NOT NULL CHECK
+                (applied_generation > 0),
+            persisted_at             TEXT NOT NULL
+        );
+
+        CREATE TRIGGER IF NOT EXISTS local_coverage_proofs_v2_no_update
+        BEFORE UPDATE ON local_coverage_proofs_v2 BEGIN
+            SELECT RAISE(ABORT, 'local coverage proofs v2 are immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS local_coverage_proofs_v2_no_delete
+        BEFORE DELETE ON local_coverage_proofs_v2 BEGIN
+            SELECT RAISE(ABORT, 'local coverage proofs v2 are immutable');
+        END;
+        """,
+    ),
 )
 
 

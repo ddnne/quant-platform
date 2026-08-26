@@ -12,15 +12,24 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterable
 
 from data_contracts.coverage import (
     coverage_policy_binding,
     coverage_policy_set_binding,
 )
+from storage.coverage_ledger import (
+    CoverageInventoryAuthorityUnavailable,
+    CoveragePublicationCutoffError,
+    validation_coverage_cutoff_for_build,
+    verify_exact_coverage_complete,
+)
 
 
-LOCAL_COVERAGE_PROOF_FORMAT = "local-coverage-proof/v1"
+LOCAL_COVERAGE_PROOF_FORMAT = "local-coverage-proof/v2"
+COVERAGE_PROOF_FORMAT = "coverage-proof/v2"
+COVERAGE_INVENTORY_FORMAT = "coverage-required-inventory/v1"
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
@@ -41,6 +50,8 @@ class VerifiedCoverageProof:
     proof_id: str
     _proof_json: str
     required_datasets: tuple[str, ...]
+    build_id: str
+    publication_cutoff: str
     source_generation: int
     applied_generation: int
 
@@ -75,6 +86,184 @@ def _canonical_required(required: Iterable[str]) -> tuple[str, ...]:
             "Coverage proof membership must be exact, sorted, and duplicate-free"
         )
     return observed
+
+
+def _publication_cutoff_for_build_impl(
+    conn: sqlite3.Connection,
+    build_id: object,
+    *,
+    proof_id: object | None = None,
+    require_quality_pass: bool,
+) -> str:
+    """Return the cutoff only for the active build or its exact READY manifest."""
+    if not isinstance(build_id, str) or not build_id:
+        raise CoverageProofVerificationError(
+            "Coverage proof requires a publisher-owned build id"
+        )
+    try:
+        rows = conn.execute(
+            "SELECT state,staging_path,artifact_path,snapshot_id,created_at,"
+            "manifest_json FROM snapshot_publications WHERE build_id=?",
+            (build_id,),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise CoverageProofVerificationError(
+            "Coverage proof publication ledger is unavailable"
+        ) from exc
+    if len(rows) != 1:
+        raise CoverageProofVerificationError(
+            "Coverage proof build has no exact publication row"
+        )
+    state = str(rows[0][0])
+    staging_path = str(rows[0][1])
+    artifact_path = None if rows[0][2] is None else str(rows[0][2])
+    snapshot_id = None if rows[0][3] is None else str(rows[0][3])
+    created_at = str(rows[0][4])
+    manifest_raw = rows[0][5]
+    try:
+        policy_rows = conn.execute(
+            "SELECT publication_state,snapshot_ready,active_build_id,"
+            "active_snapshot_id FROM local_snapshot_policy WHERE singleton=1"
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise CoverageProofVerificationError(
+            "Coverage proof active publication policy is unavailable"
+        ) from exc
+    if len(policy_rows) != 1:
+        raise CoverageProofVerificationError(
+            "Coverage proof has no unique active publication policy"
+        )
+    policy_state = str(policy_rows[0][0])
+    snapshot_ready = int(policy_rows[0][1])
+    active_build_id = policy_rows[0][2]
+    active_snapshot_id = policy_rows[0][3]
+
+    main_path = next(
+        (
+            str(row[2])
+            for row in conn.execute("PRAGMA database_list").fetchall()
+            if str(row[1]) == "main"
+        ),
+        "",
+    )
+    if state == "VALIDATING":
+        if (
+            policy_state != "VALIDATING"
+            or active_build_id != build_id
+            or not main_path
+            or Path(main_path).resolve() != Path(staging_path).resolve()
+        ):
+            raise CoverageProofVerificationError(
+                "Coverage proof build is not the unique active VALIDATING build"
+            )
+        if require_quality_pass:
+            quality_rows = conn.execute(
+                "SELECT status FROM snapshot_quality_results WHERE build_id=?",
+                (build_id,),
+            ).fetchall()
+            if len(quality_rows) != 1 or quality_rows[0][0] != "PASS":
+                raise CoverageProofVerificationError(
+                    "Coverage proof VALIDATING build has no authoritative PASS"
+                )
+    elif state == "READY":
+        if (
+            policy_state != "READY"
+            or snapshot_ready != 1
+            or snapshot_id is None
+            or active_snapshot_id != snapshot_id
+            or not isinstance(proof_id, str)
+            or _SHA256_RE.fullmatch(proof_id) is None
+        ):
+            raise CoverageProofVerificationError(
+                "Coverage proof is not linked to the active READY publication"
+            )
+        try:
+            manifest = json.loads(str(manifest_raw))
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise CoverageProofVerificationError(
+                "Coverage proof READY manifest is malformed"
+            ) from exc
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("state") != "READY"
+            or manifest.get("build_id") != build_id
+            or manifest.get("snapshot_id") != snapshot_id
+            or manifest.get("created_at") != created_at
+            or manifest.get("coverage_proof_id") != proof_id
+        ):
+            raise CoverageProofVerificationError(
+                "Coverage proof READY manifest linkage is invalid"
+            )
+        if (
+            not main_path
+            or not artifact_path
+            or Path(main_path).resolve() != Path(artifact_path).resolve()
+        ):
+            raise CoverageProofVerificationError(
+                "Coverage proof READY database is not the immutable artifact"
+            )
+        embedded_rows = conn.execute(
+            "SELECT manifest_json FROM local_snapshot_manifests "
+            "WHERE snapshot_id=?",
+            (snapshot_id,),
+        ).fetchall()
+        if len(embedded_rows) != 1 or str(embedded_rows[0][0]) != str(manifest_raw):
+            raise CoverageProofVerificationError(
+                "Coverage proof READY embedded manifest linkage is invalid"
+            )
+    else:
+        raise CoverageProofVerificationError(
+            f"Coverage proof build state {state!r} is not authoritative"
+        )
+    try:
+        instant = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise CoverageProofVerificationError(
+            "Coverage proof publication timestamp is malformed"
+        ) from exc
+    if instant.tzinfo is None or instant.utcoffset() is None:
+        raise CoverageProofVerificationError(
+            "Coverage proof publication timestamp must be timezone-aware"
+        )
+    return instant.astimezone(timezone.utc).date().isoformat()
+
+
+def _publication_cutoff_for_build(
+    conn: sqlite3.Connection,
+    build_id: object,
+    *,
+    proof_id: object | None = None,
+) -> str:
+    """Proof cutoff for a scored active build or exact READY artifact."""
+    return _publication_cutoff_for_build_impl(
+        conn,
+        build_id,
+        proof_id=proof_id,
+        require_quality_pass=True,
+    )
+
+
+def _validation_cutoff_for_build(
+    conn: sqlite3.Connection,
+    build_id: object,
+) -> str:
+    """Internal pre-quality cutoff for the active publisher VALIDATING build."""
+    main_path = next(
+        (
+            str(row[2])
+            for row in conn.execute("PRAGMA database_list").fetchall()
+            if str(row[1]) == "main"
+        ),
+        "",
+    )
+    try:
+        return validation_coverage_cutoff_for_build(
+            conn,
+            main_path,
+            build_id,
+        )
+    except CoveragePublicationCutoffError as exc:
+        raise CoverageProofVerificationError(str(exc)) from exc
 
 
 def _coverage_rows_for(
@@ -126,32 +315,55 @@ def _proof_record_body(
     *,
     required: tuple[str, ...],
     proof: dict[str, Any],
+    build_id: str,
+    publication_cutoff: str,
     source_generation: int,
     applied_generation: int,
 ) -> dict[str, Any]:
     return {
         "format": LOCAL_COVERAGE_PROOF_FORMAT,
+        "build_id": build_id,
+        "publication_cutoff": publication_cutoff,
         "required_datasets": list(required),
         "coverage_proof": proof,
         "coverage_policy_version": proof.get("policy_version"),
         "coverage_policy_digest": proof.get("policy_digest"),
+        "inventory_set_digest": proof.get("inventory_set_digest"),
         "source_generation": source_generation,
         "applied_generation": applied_generation,
     }
 
 
-def persist_coverage_proof(
+def _persist_coverage_proof_in_transaction(
     conn: sqlite3.Connection,
     required_datasets: Iterable[str],
+    *,
+    build_id: object,
 ) -> str:
     """Recompute and durably persist one immutable, content-addressed proof."""
     from paper_runtime.snapshot import SnapshotRejected
 
     required = _canonical_required(required_datasets)
+    if not isinstance(build_id, str) or not build_id:
+        raise CoverageProofVerificationError(
+            "Coverage proof requires a publisher-owned build id"
+        )
+    publication_cutoff = _publication_cutoff_for_build(conn, build_id)
     coverage_rows = _coverage_rows_for(conn, required)
     try:
-        proof = _coverage_proof(conn, required, coverage_rows)
-    except (SnapshotRejected, sqlite3.Error, ValueError, TypeError) as exc:
+        proof = _coverage_proof(
+            conn,
+            required,
+            coverage_rows,
+            publication_cutoff=publication_cutoff,
+        )
+    except (
+        CoverageProofVerificationError,
+        SnapshotRejected,
+        sqlite3.Error,
+        ValueError,
+        TypeError,
+    ) as exc:
         raise CoverageProofVerificationError(
             f"Coverage proof cannot be persisted: {exc}"
         ) from exc
@@ -159,6 +371,8 @@ def persist_coverage_proof(
     body = _proof_record_body(
         required=required,
         proof=proof,
+        build_id=build_id,
+        publication_cutoff=publication_cutoff,
         source_generation=source_generation,
         applied_generation=applied_generation,
     )
@@ -167,27 +381,30 @@ def persist_coverage_proof(
     try:
         conn.execute(
             """
-            INSERT OR IGNORE INTO local_coverage_proofs (
-                proof_id, format, required_datasets_json, coverage_proof_json,
+            INSERT OR IGNORE INTO local_coverage_proofs_v2 (
+                proof_id, format, build_id, publication_cutoff,
+                required_datasets_json, coverage_proof_json,
                 coverage_policy_version, coverage_policy_digest,
-                source_generation, applied_generation, persisted_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                inventory_set_digest, source_generation, applied_generation,
+                persisted_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 proof_id,
                 LOCAL_COVERAGE_PROOF_FORMAT,
+                build_id,
+                publication_cutoff,
                 _canonical_json(list(required)),
                 _canonical_json(proof),
                 str(proof["policy_version"]),
                 str(proof["policy_digest"]),
+                str(proof["inventory_set_digest"]),
                 source_generation,
                 applied_generation,
                 persisted_at,
             ),
         )
-        conn.commit()
     except sqlite3.Error as exc:
-        conn.rollback()
         raise CoverageProofVerificationError(
             "Coverage proof ledger persistence failed"
         ) from exc
@@ -197,19 +414,23 @@ def persist_coverage_proof(
     # performs the independent full ledger recomputation before PASS.
     row = conn.execute(
         """
-        SELECT format, required_datasets_json, coverage_proof_json,
+        SELECT format, build_id, publication_cutoff, required_datasets_json,
+               coverage_proof_json,
                coverage_policy_version, coverage_policy_digest,
-               source_generation, applied_generation
-        FROM local_coverage_proofs WHERE proof_id=?
+               inventory_set_digest, source_generation, applied_generation
+        FROM local_coverage_proofs_v2 WHERE proof_id=?
         """,
         (proof_id,),
     ).fetchone()
     expected = (
         LOCAL_COVERAGE_PROOF_FORMAT,
+        build_id,
+        publication_cutoff,
         _canonical_json(list(required)),
         _canonical_json(proof),
         str(proof["policy_version"]),
         str(proof["policy_digest"]),
+        str(proof["inventory_set_digest"]),
         source_generation,
         applied_generation,
     )
@@ -220,10 +441,37 @@ def persist_coverage_proof(
     return proof_id
 
 
-def require_persisted_coverage_proof(
+def persist_coverage_proof(
+    conn: sqlite3.Connection,
+    required_datasets: Iterable[str],
+    *,
+    build_id: object,
+) -> str:
+    """Persist proof atomically with build/cutoff/inventory verification."""
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        proof_id = _persist_coverage_proof_in_transaction(
+            conn,
+            required_datasets,
+            build_id=build_id,
+        )
+        if owns_transaction:
+            conn.commit()
+        return proof_id
+    except BaseException:
+        if owns_transaction:
+            conn.rollback()
+        raise
+
+
+def _require_persisted_coverage_proof_in_snapshot(
     conn: sqlite3.Connection,
     required_datasets: Iterable[str],
     proof_id: object,
+    *,
+    build_id: object,
 ) -> VerifiedCoverageProof:
     """Recompute every authority-bound field and return verified values."""
     from paper_runtime.snapshot import SnapshotRejected
@@ -231,13 +479,18 @@ def require_persisted_coverage_proof(
     required = _canonical_required(required_datasets)
     if not isinstance(proof_id, str) or _SHA256_RE.fullmatch(proof_id) is None:
         raise CoverageProofVerificationError("Coverage proof id is invalid")
+    if not isinstance(build_id, str) or not build_id:
+        raise CoverageProofVerificationError(
+            "Coverage proof requires its publisher-owned build id"
+        )
     try:
         row = conn.execute(
             """
-            SELECT format, required_datasets_json, coverage_proof_json,
+            SELECT format, build_id, publication_cutoff,
+                   required_datasets_json, coverage_proof_json,
                    coverage_policy_version, coverage_policy_digest,
-                   source_generation, applied_generation
-            FROM local_coverage_proofs WHERE proof_id=?
+                   inventory_set_digest, source_generation, applied_generation
+            FROM local_coverage_proofs_v2 WHERE proof_id=?
             """,
             (proof_id,),
         ).fetchone()
@@ -248,20 +501,30 @@ def require_persisted_coverage_proof(
     if row is None:
         raise CoverageProofVerificationError("Coverage proof id is unknown")
     try:
-        stored_required = json.loads(str(row[1]))
-        stored_proof = json.loads(str(row[2]))
-        source_generation = int(row[5])
-        applied_generation = int(row[6])
+        stored_build_id = str(row[1])
+        stored_cutoff = str(row[2])
+        stored_required = json.loads(str(row[3]))
+        stored_proof = json.loads(str(row[4]))
+        source_generation = int(row[8])
+        applied_generation = int(row[9])
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise CoverageProofVerificationError(
             "Persisted Coverage proof record is malformed"
         ) from exc
     if (
         row[0] != LOCAL_COVERAGE_PROOF_FORMAT
+        or stored_build_id != build_id
+        or stored_cutoff != _publication_cutoff_for_build(
+            conn,
+            build_id,
+            proof_id=proof_id,
+        )
         or stored_required != list(required)
         or not isinstance(stored_proof, dict)
-        or row[3] != stored_proof.get("policy_version")
-        or row[4] != stored_proof.get("policy_digest")
+        or row[5] != stored_proof.get("policy_version")
+        or row[6] != stored_proof.get("policy_digest")
+        or row[7] != stored_proof.get("inventory_set_digest")
+        or stored_proof.get("inventory_cutoff") != stored_cutoff
     ):
         raise CoverageProofVerificationError(
             "Persisted Coverage proof record binding is invalid"
@@ -269,8 +532,19 @@ def require_persisted_coverage_proof(
 
     coverage_rows = _coverage_rows_for(conn, required)
     try:
-        recomputed = _coverage_proof(conn, required, coverage_rows)
-    except (SnapshotRejected, sqlite3.Error, ValueError, TypeError) as exc:
+        recomputed = _coverage_proof(
+            conn,
+            required,
+            coverage_rows,
+            publication_cutoff=stored_cutoff,
+        )
+    except (
+        CoverageProofVerificationError,
+        SnapshotRejected,
+        sqlite3.Error,
+        ValueError,
+        TypeError,
+    ) as exc:
         raise CoverageProofVerificationError(
             f"Persisted Coverage proof cannot be reproduced: {exc}"
         ) from exc
@@ -289,6 +563,8 @@ def require_persisted_coverage_proof(
     body = _proof_record_body(
         required=required,
         proof=recomputed,
+        build_id=stored_build_id,
+        publication_cutoff=stored_cutoff,
         source_generation=current_source,
         applied_generation=current_applied,
     )
@@ -300,87 +576,78 @@ def require_persisted_coverage_proof(
         proof_id=proof_id,
         _proof_json=_canonical_json(recomputed),
         required_datasets=required,
+        build_id=stored_build_id,
+        publication_cutoff=stored_cutoff,
         source_generation=current_source,
         applied_generation=current_applied,
     )
 
 
-def _required_segment_from_row(row: sqlite3.Row):
-    """Rebuild the trusted inventory value from the coverage-segment row."""
-    from storage.coverage_ledger import RequiredCoverageSegment
-
-    scope = json.loads(str(row["expected_scope"]))
-    if not isinstance(scope, dict):
-        raise ValueError("coverage segment expected_scope must be an object")
-    expected_items = row["expected_items"]
-    return RequiredCoverageSegment(
-        source=str(row["source"]),
-        dataset=str(row["dataset"]),
-        segment_id=str(row["segment_id"]),
-        segment_start=str(row["segment_start"]),
-        segment_end=str(row["segment_end"]),
-        expected_scope=scope,
-        expected_items=(
-            None if expected_items is None else int(expected_items)
-        ),
-    )
-
-
-def _untrusted_receipt_from_row(row: sqlite3.Row):
-    """Rebuild the persisted receipt DTO without granting it any trust."""
-    from storage.coverage_ledger import CollectionReceipt
-
-    scope = json.loads(str(row["receipt_scope"]))
-    digests = json.loads(str(row["digests_json"]))
-    if not isinstance(scope, dict):
-        raise ValueError("collection receipt expected_scope must be an object")
-    if not isinstance(digests, dict):
-        raise ValueError("collection receipt digests must be an object")
-    expected_items = row["receipt_expected_items"]
-    return CollectionReceipt(
-        source=str(row["receipt_source"]),
-        dataset=str(row["receipt_dataset"]),
-        segment_id=str(row["receipt_segment_id"]),
-        segment_start=str(row["receipt_start"]),
-        segment_end=str(row["receipt_end"]),
-        expected_scope=scope,
-        expected_items=(
-            None if expected_items is None else int(expected_items)
-        ),
-        observed_items=int(row["observed_items"]),
-        raw_page_count=int(row["raw_page_count"]),
-        raw_row_count=int(row["raw_row_count"]),
-        structured_row_count=int(row["structured_row_count"]),
-        pagination_exhausted=bool(row["pagination_exhausted"]),
-        digests=digests,
-        run_id=int(row["receipt_run_id"]),
-        status=str(row["receipt_status"]),
-        error=row["error"],
-        checked_at=str(row["checked_at"]),
-    )
+def require_persisted_coverage_proof(
+    conn: sqlite3.Connection,
+    required_datasets: Iterable[str],
+    proof_id: object,
+    *,
+    build_id: object,
+) -> VerifiedCoverageProof:
+    """Reopen proof under one pinned SQLite read snapshot."""
+    owns_snapshot = not conn.in_transaction
+    if owns_snapshot:
+        conn.execute("BEGIN")
+    try:
+        return _require_persisted_coverage_proof_in_snapshot(
+            conn,
+            required_datasets,
+            proof_id,
+            build_id=build_id,
+        )
+    finally:
+        if owns_snapshot:
+            conn.rollback()
 
 
 def _coverage_proof(
     conn: sqlite3.Connection,
     required: tuple[str, ...],
     coverage_rows: list[dict[str, Any]],
+    *,
+    publication_cutoff: str,
 ) -> dict[str, Any]:
-    """Verify governed segment receipts; return a bounded manifest proof."""
+    """Verify exact canonical inventory and every selected signed receipt."""
     from paper_runtime.snapshot import (
         SnapshotRejected,
-        _canonical_digest,
         all_coverage_contracts,
     )
-    from storage.verified_receipt import (
-        ReceiptVerificationError,
-        require_verified_collection_closure,
-    )
-
     policies = {policy.dataset_id: policy for policy in all_coverage_contracts()}
     governed = tuple(
         dataset for dataset in required
         if policies[dataset].governance_tier == "governed"
     )
+    try:
+        complete_verification = verify_exact_coverage_complete(
+            conn,
+            governed,
+            target_end=publication_cutoff,
+        )
+    except CoverageInventoryAuthorityUnavailable as exc:
+        raise SnapshotRejected(str(exc)) from exc
+    inventory = complete_verification.inventory
+    if not inventory.exact:
+        raise SnapshotRejected(
+            "governed Coverage exact inventory rejected: "
+            + _canonical_json(inventory.detail())
+        )
+    if not complete_verification.complete_eligible:
+        raise SnapshotRejected(
+            "governed Coverage segment proof rejected: invalid="
+            f"{list(complete_verification.invalid_segments[:20])}"
+        )
+    expected_by_dataset = {
+        dataset: inventory.segments_for(dataset) for dataset in governed
+    }
+    expected_identity_dicts = [
+        identity.to_dict() for identity in inventory.expected_identities
+    ]
     by_dataset = {str(row["dataset"]): row for row in coverage_rows}
     invalid_ledger = sorted(
         dataset
@@ -395,149 +662,43 @@ def _coverage_proof(
             f"governed Coverage aggregate proof incomplete={invalid_ledger}"
         )
 
-    placeholders = ",".join("?" for _ in governed)
-    rows = conn.execute(
-        """
-        SELECT
-            s.source, s.dataset, s.segment_id, s.policy_version,
-            s.segment_start, s.segment_end, s.expected_scope,
-            s.expected_items, s.status AS segment_status,
-            s.receipt_run_id AS selected_receipt_run_id,
-            r.source AS receipt_source,
-            r.dataset AS receipt_dataset,
-            r.segment_id AS receipt_segment_id,
-            r.run_id AS receipt_run_id,
-            r.segment_start AS receipt_start,
-            r.segment_end AS receipt_end,
-            r.expected_scope AS receipt_scope,
-            r.expected_items AS receipt_expected_items,
-            r.observed_items, r.raw_page_count, r.raw_row_count,
-            r.structured_row_count, r.pagination_exhausted,
-            r.digests_json, r.status AS receipt_status, r.error,
-            r.checked_at
-        FROM coverage_segments AS s
-        LEFT JOIN collection_receipts AS r
-          ON r.source = s.source
-         AND r.dataset = s.dataset
-         AND r.segment_id = s.segment_id
-         AND r.run_id = s.receipt_run_id
-        WHERE s.dataset IN ("""
-        + placeholders
-        + ")"
-        + " ORDER BY s.dataset, s.segment_start, s.segment_id",
-        governed,
-    ).fetchall()
-    segments_by_dataset: dict[str, list[sqlite3.Row]] = {
-        dataset: [] for dataset in governed
-    }
-    proof_entries: list[dict[str, Any]] = []
-    invalid_segments: list[tuple[str, str, str]] = []
-    for row in rows:
-        dataset = str(row["dataset"])
-        expected_policy = coverage_policy_binding(dataset)
-        # Older policy rows remain immutable audit history. Only the currently
-        # governed per-dataset version is eligible for this proof.
-        if row["policy_version"] != expected_policy["policy_version"]:
-            continue
-        segments_by_dataset[dataset].append(row)
-        reason: str | None = None
-        policy = policies[dataset]
-        if row["segment_status"] != "COMPLETE":
-            reason = "segment not COMPLETE"
-        elif (
-            row["selected_receipt_run_id"] is None
-            or row["receipt_run_id"] is None
-        ):
-            reason = "successful receipt missing"
-        else:
-            try:
-                required_segment = _required_segment_from_row(row)
-                untrusted_receipt = _untrusted_receipt_from_row(row)
-                closure = require_verified_collection_closure(
-                    untrusted_receipt,
-                    required=required_segment,
-                    expected_policy_version=expected_policy["policy_version"],
-                )
-            except (
-                ReceiptVerificationError,
-                TypeError,
-                ValueError,
-                json.JSONDecodeError,
-            ) as exc:
-                reason = f"receipt closure invalid: {exc}"
-
-        # From this point forward, no persisted receipt field is consulted.
-        # Every COMPLETE input and every proof field comes from the opaque,
-        # signature-bound v2 closure returned above.
-        if reason is None and (
-            closure.status != "SUCCESS" or closure.error is not None
-        ):
-            reason = "successful receipt missing"
-        elif reason is None and (
-            not closure.pagination_exhausted
-            or not closure.discovery_exhausted
-        ):
-            reason = "pagination not exhausted"
-        elif reason is None and (
-            policy.expected_frequency != "event_driven"
-            and closure.expected_items is None
-        ):
-            reason = "non-event expected items missing"
-        elif reason is None and (
-            closure.expected_items is not None
-            and closure.observed_items != closure.expected_items
-        ):
-            reason = "expected scope incomplete"
-        elif reason is None and (
-            closure.raw_page_count < 1 or not closure.raw_digest
-        ):
-            reason = "raw retention proof missing"
-        elif reason is None and (
-            policy.structured_reconciliation_required
-            and closure.raw_row_count != closure.structured_row_count
-        ):
-            reason = "raw/structured mismatch"
-        elif reason is None and (
-            policy.expected_frequency != "event_driven"
-            and closure.observed_items == 0
-        ):
-            reason = "non-event receipt is empty"
-        if reason is not None:
-            invalid_segments.append((dataset, str(row["segment_id"]), reason))
-            continue
-        proof_entries.append(closure.to_proof_dict())
-
-    missing_inventory = sorted(
-        dataset for dataset, segments in segments_by_dataset.items()
-        if not segments
-    )
-    if missing_inventory or invalid_segments:
-        raise SnapshotRejected(
-            "governed Coverage segment proof rejected: "
-            f"missing_inventory={missing_inventory}, "
-            f"invalid={invalid_segments[:20]}"
-        )
+    proof_entries = [
+        closure.to_proof_dict()
+        for closure in complete_verification.closures
+    ]
     dataset_summary = [
         {
             "dataset": dataset,
             **dict(coverage_policy_binding(dataset)),
             "required_segments": len(segments),
             "complete_segments": len(segments),
-            "first_segment": str(segments[0]["segment_id"]),
-            "last_segment": str(segments[-1]["segment_id"]),
+            "inventory_digest": _canonical_digest([
+                identity.to_dict()
+                for identity in inventory.expected_identities
+                if identity.dataset == dataset
+            ]),
+            "first_segment": segments[0].segment_id,
+            "last_segment": segments[-1].segment_id,
         }
-        for dataset, segments in segments_by_dataset.items()
+        for dataset, segments in expected_by_dataset.items()
     ]
     policy_set = coverage_policy_set_binding(list(governed))
+    inventory_set_digest = _canonical_digest(expected_identity_dicts)
     return {
-        "format": "coverage-proof/v1",
+        "format": COVERAGE_PROOF_FORMAT,
         "status": "COMPLETE",
         "policy_version": policy_set["policy_version"],
         "policy_digest": policy_set["policy_digest"],
+        "inventory_format": COVERAGE_INVENTORY_FORMAT,
+        "inventory_cutoff": publication_cutoff,
+        "inventory_set_digest": inventory_set_digest,
         "dataset_count": len(governed),
         "segment_count": len(proof_entries),
         "receipt_count": len(proof_entries),
-        "proof_digest": _canonical_digest(proof_entries),
+        "proof_digest": _canonical_digest({
+            "inventory_set_digest": inventory_set_digest,
+            "receipts": proof_entries,
+        }),
         "datasets": dataset_summary,
     }
 
@@ -589,6 +750,7 @@ def _verify_coverage_manifest(
             conn,
             required,
             manifest.get("coverage_proof_id"),
+            build_id=manifest.get("build_id"),
         )
     except CoverageProofVerificationError as exc:
         raise RuntimeError(f"READY Coverage proof is invalid: {exc}") from exc

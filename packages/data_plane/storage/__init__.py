@@ -6,13 +6,18 @@ Every structured row carries the PIT columns:
 """
 
 from .coverage_ledger import (
+    CanonicalCoverageSegmentIdentity,
     CollectionReceipt,
+    CoverageInventoryAuthorityUnavailable,
+    ExactCoverageCompleteVerification,
+    ExactCoverageInventoryComparison,
     RequiredCoverageSegment,
     SYNTHETIC_RECEIPT_MARKER,
     aggregate_status_from_segment_counts,
     build_collection_receipt,
     build_surgical_reagg_detail,
     compute_raw_digest,
+    compare_exact_coverage_inventory,
     coverage_gaps,
     coverage_summary,
     evaluate_required_segments,
@@ -28,6 +33,7 @@ from .coverage_ledger import (
     record_required_segments,
     refresh_coverage_ledger,
     sync_dataset_coverage_from_segments,
+    verify_exact_coverage_complete,
 )
 from .verified_receipt import (
     VerifiedCollectionClosure,
@@ -38,7 +44,11 @@ from .verified_receipt import (
 
 __all__ = [
     "__version__",
+    "CanonicalCoverageSegmentIdentity",
     "CollectionReceipt",
+    "CoverageInventoryAuthorityUnavailable",
+    "ExactCoverageCompleteVerification",
+    "ExactCoverageInventoryComparison",
     "RequiredCoverageSegment",
     "SYNTHETIC_RECEIPT_MARKER",
     "VerifiedCollectionClosure",
@@ -46,6 +56,7 @@ __all__ = [
     "build_collection_receipt",
     "build_surgical_reagg_detail",
     "compute_raw_digest",
+    "compare_exact_coverage_inventory",
     "coverage_gaps",
     "coverage_summary",
     "evaluate_required_segments",
@@ -62,5 +73,6 @@ __all__ = [
     "require_verified_collection_closure",
     "refresh_coverage_ledger",
     "sync_dataset_coverage_from_segments",
+    "verify_exact_coverage_complete",
 ]
 __version__ = "0.1.0"

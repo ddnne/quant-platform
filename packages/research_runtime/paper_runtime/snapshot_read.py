@@ -246,7 +246,14 @@ def _describe_snapshot_for_scope(
         attestation_name is not None or attestation_digest is not None
     ):
         raise RuntimeError("fixture publication cannot carry READY authority")
-    if _immutable_data_snapshot_id(artifact_path) != snapshot_id:
+    # Product data-snapshot identity reopens the production v2 Coverage proof.
+    # Fixture publications intentionally have no such authority; their file,
+    # external/embedded manifest, and publication-marker digests were already
+    # checked above through the tests-only scope.
+    if (
+        publication_scope == "PRODUCTION"
+        and _immutable_data_snapshot_id(artifact_path) != snapshot_id
+    ):
         raise RuntimeError("embedded snapshot manifest does not match sidecar")
     return ReadySnapshot(snapshot_id, artifact_path, manifest_path, manifest)
 

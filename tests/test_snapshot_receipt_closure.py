@@ -9,7 +9,7 @@ import sqlite3
 
 import pytest
 
-from data_contracts.coverage import coverage_policy_binding
+from data_contracts.coverage import coverage_contract_for, coverage_policy_binding
 from tests.receipt_test_support import (
     _SignedReceiptAuthority,
     _reconcile_collection_evidence,
@@ -24,7 +24,7 @@ from paper_runtime.snapshot_coverage_proof import (
     require_persisted_coverage_proof,
 )
 from storage.coverage_ledger import (
-    RequiredCoverageSegment,
+    plan_required_segments,
     record_collection_receipt,
     record_required_segments,
 )
@@ -44,25 +44,19 @@ from storage.verified_receipt import (
 _DATASET = "markets_calendar"
 _CHECKED_AT = "2026-08-25T00:00:00+00:00"
 _POLICY_VERSION = coverage_policy_binding(_DATASET)["policy_version"]
+_BUILD_ID = "build-exact-coverage-test"
+_PUBLICATION_CUTOFF = "2008-01-31"
 
 
 def _seed_closed_segment(tmp_path, receipt_ed25519_keys):
     store = SqliteStore(tmp_path / "snapshot-closure.sqlite")
     conn = store._conn  # noqa: SLF001
-    required = RequiredCoverageSegment(
+    required = plan_required_segments(
+        coverage_contract_for(_DATASET),
+        _PUBLICATION_CUTOFF,
         source="jquants",
-        dataset=_DATASET,
-        segment_id="2026-08",
-        segment_start="2026-08-01",
-        segment_end="2026-08-31",
-        expected_scope={
-            "period_start": "2026-08-01",
-            "period_end": "2026-08-31",
-            "expected_item_unit": "calendar_day",
-        },
-        expected_items=1,
-    )
-    raw_record = {"Date": "2026-08-25", "HolidayDivision": "1"}
+    )[0]
+    raw_record = {"Date": "2008-01-25", "HolidayDivision": "1"}
     evidence = _reconcile_collection_evidence(
         required=required,
         run_id=41,
@@ -70,7 +64,10 @@ def _seed_closed_segment(tmp_path, receipt_ed25519_keys):
         raw_records=[raw_record],
         structured_records=[raw_record],
         checked_at=_CHECKED_AT,
-        source_request={"from": "2026-08-01", "to": "2026-08-31"},
+        source_request={
+            "from": required.segment_start,
+            "to": required.segment_end,
+        },
     )
     receipt = _SignedReceiptAuthority(
         signing_key=receipt_ed25519_keys.signing_key
@@ -98,8 +95,9 @@ def _seed_closed_segment(tmp_path, receipt_ed25519_keys):
             observed_start, observed_end, row_count, source_run_id,
             evaluated_at, detail_json
         ) VALUES (?, 'COMPLETE', ?, 'test-authoritative-scope',
-                  '2026-08-01', 'fixed:2026-08-31', 'monthly', 'daily',
-                  'all', 1, 1, 'governed', '2026-08-01', '2026-08-31',
+                  '2008-01-01', 'fixed:2008-01-31', 'calendar', 'calendar_day',
+                  'jpx_calendar_days', 1, 1, 'governed',
+                  '2008-01-01', '2008-01-31',
                   1, 41, ?, '{}')
         """,
         (_DATASET, _POLICY_VERSION, _CHECKED_AT),
@@ -116,6 +114,41 @@ def _seed_closed_segment(tmp_path, receipt_ed25519_keys):
         "last_applied_change_seq=excluded.last_applied_change_seq, "
         "updated_at=excluded.updated_at",
         (_CHECKED_AT,),
+    )
+    conn.execute(
+        """
+        INSERT INTO snapshot_publications (
+            build_id,state,staging_path,contract_version,
+            coverage_policy_version,quality_policy_version,created_at
+        ) VALUES (?, 'VALIDATING', ?, 'test-contract/v1', ?,
+                  'test-quality/v1', ?)
+        """,
+        (
+            _BUILD_ID,
+            str(store.path),
+            _POLICY_VERSION,
+            _PUBLICATION_CUTOFF + "T23:59:59+00:00",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO local_snapshot_policy (
+            singleton,require_manifest,snapshot_ready,publication_state,
+            active_build_id
+        ) VALUES (1,1,0,'VALIDATING',?)
+        ON CONFLICT(singleton) DO UPDATE SET
+            require_manifest=1,snapshot_ready=0,
+            publication_state='VALIDATING',active_build_id=excluded.active_build_id
+        """,
+        (_BUILD_ID,),
+    )
+    conn.execute(
+        """
+        INSERT INTO snapshot_quality_results (
+            build_id,status,policy_version,evaluated_at,summary_json,results_json
+        ) VALUES (?, 'PASS', 'test-quality/v1', ?, '{}', '[]')
+        """,
+        (_BUILD_ID, _CHECKED_AT),
     )
     conn.commit()
     coverage_rows = [{
@@ -140,9 +173,11 @@ def test_persisted_coverage_proof_is_canonical_immutable_and_policy_eligible(
     )
     conn = store._conn  # noqa: SLF001
 
-    proof_id = persist_coverage_proof(conn, (_DATASET,))
+    proof_id = persist_coverage_proof(
+        conn, (_DATASET,), build_id=_BUILD_ID
+    )
     capability = require_persisted_coverage_proof(
-        conn, (_DATASET,), proof_id
+        conn, (_DATASET,), proof_id, build_id=_BUILD_ID
     )
     assert capability.proof_id == proof_id
     assert capability.required_datasets == (_DATASET,)
@@ -152,6 +187,7 @@ def test_persisted_coverage_proof_is_canonical_immutable_and_policy_eligible(
             conn,
             store.path,
             (_DATASET,),
+            build_id=_BUILD_ID,
             coverage_proof_id=proof_id,
         )
     )
@@ -162,7 +198,7 @@ def test_persisted_coverage_proof_is_canonical_immutable_and_policy_eligible(
     row = conn.execute(
         "SELECT required_datasets_json,coverage_proof_json,"
         "source_generation,applied_generation "
-        "FROM local_coverage_proofs WHERE proof_id=?",
+        "FROM local_coverage_proofs_v2 WHERE proof_id=?",
         (proof_id,),
     ).fetchone()
     assert json.loads(row[0]) == [_DATASET]
@@ -170,14 +206,14 @@ def test_persisted_coverage_proof_is_canonical_immutable_and_policy_eligible(
     assert tuple(row[2:]) == (7, 7)
     with pytest.raises(sqlite3.IntegrityError, match="immutable"):
         conn.execute(
-            "UPDATE local_coverage_proofs SET persisted_at='tampered' "
+            "UPDATE local_coverage_proofs_v2 SET persisted_at='tampered' "
             "WHERE proof_id=?",
             (proof_id,),
         )
     conn.rollback()
     with pytest.raises(sqlite3.IntegrityError, match="immutable"):
         conn.execute(
-            "DELETE FROM local_coverage_proofs WHERE proof_id=?", (proof_id,)
+            "DELETE FROM local_coverage_proofs_v2 WHERE proof_id=?", (proof_id,)
         )
     conn.rollback()
     store.close()
@@ -190,7 +226,9 @@ def test_caller_constructed_verified_value_is_not_policy_authority(
         tmp_path, receipt_ed25519_keys
     )
     conn = store._conn  # noqa: SLF001
-    proof_id = persist_coverage_proof(conn, (_DATASET,))
+    proof_id = persist_coverage_proof(
+        conn, (_DATASET,), build_id=_BUILD_ID
+    )
     forged_id = "sha256:" + ("22" * 32)
     forged = VerifiedCoverageProof(
         proof_id=forged_id,
@@ -202,11 +240,219 @@ def test_caller_constructed_verified_value_is_not_policy_authority(
             }
         ),
         required_datasets=(_DATASET,),
+        build_id=_BUILD_ID,
+        publication_cutoff=_PUBLICATION_CUTOFF,
         source_generation=7,
         applied_generation=7,
     )
     assert forged.proof["status"] == "COMPLETE"
-    assert CoverageEvidence(conn, (_DATASET,), forged.proof_id).to_item().passed is False
+    assert CoverageEvidence(
+        conn, (_DATASET,), forged.proof_id, _BUILD_ID
+    ).to_item().passed is False
+    store.close()
+
+
+def test_local_v1_proof_is_audit_only_for_new_ready(
+    tmp_path, receipt_ed25519_keys
+):
+    store, _receipt, _coverage_rows = _seed_closed_segment(
+        tmp_path, receipt_ed25519_keys
+    )
+    conn = store._conn  # noqa: SLF001
+    v1_id = "sha256:" + ("44" * 32)
+    conn.execute(
+        """
+        INSERT INTO local_coverage_proofs (
+            proof_id,format,required_datasets_json,coverage_proof_json,
+            coverage_policy_version,coverage_policy_digest,
+            source_generation,applied_generation,persisted_at
+        ) VALUES (?, 'local-coverage-proof/v1', ?, '{}', ?, ?, 7, 7, ?)
+        """,
+        (
+            v1_id,
+            json.dumps([_DATASET]),
+            _POLICY_VERSION,
+            coverage_policy_binding(_DATASET)["policy_digest"],
+            _CHECKED_AT,
+        ),
+    )
+    conn.commit()
+    with pytest.raises(CoverageProofVerificationError, match="unknown"):
+        require_persisted_coverage_proof(
+            conn,
+            (_DATASET,),
+            v1_id,
+            build_id=_BUILD_ID,
+        )
+    store.close()
+
+
+@pytest.mark.parametrize("state", ("BUILDING", "SYNCED", "REJECTED"))
+def test_non_authoritative_publication_state_cannot_choose_proof_cutoff(
+    tmp_path,
+    receipt_ed25519_keys,
+    state: str,
+) -> None:
+    store, _receipt, _coverage_rows = _seed_closed_segment(
+        tmp_path, receipt_ed25519_keys
+    )
+    conn = store._conn  # noqa: SLF001
+    conn.execute(
+        "UPDATE snapshot_publications SET state=? WHERE build_id=?",
+        (state, _BUILD_ID),
+    )
+    conn.commit()
+
+    with pytest.raises(
+        CoverageProofVerificationError,
+        match="not authoritative",
+    ):
+        persist_coverage_proof(conn, (_DATASET,), build_id=_BUILD_ID)
+    store.close()
+
+
+def test_orphan_validating_row_cannot_choose_proof_cutoff(
+    tmp_path,
+    receipt_ed25519_keys,
+) -> None:
+    store, _receipt, _coverage_rows = _seed_closed_segment(
+        tmp_path, receipt_ed25519_keys
+    )
+    conn = store._conn  # noqa: SLF001
+    conn.execute(
+        "UPDATE local_snapshot_policy SET active_build_id='caller-forged' "
+        "WHERE singleton=1"
+    )
+    conn.commit()
+
+    with pytest.raises(
+        CoverageProofVerificationError,
+        match="unique active VALIDATING build",
+    ):
+        persist_coverage_proof(conn, (_DATASET,), build_id=_BUILD_ID)
+    store.close()
+
+
+def test_ready_reopen_requires_exact_manifest_proof_linkage(
+    tmp_path,
+    receipt_ed25519_keys,
+) -> None:
+    store, _receipt, _coverage_rows = _seed_closed_segment(
+        tmp_path, receipt_ed25519_keys
+    )
+    conn = store._conn  # noqa: SLF001
+    proof_id = persist_coverage_proof(
+        conn,
+        (_DATASET,),
+        build_id=_BUILD_ID,
+    )
+    snapshot_id = "sha256:" + ("55" * 32)
+    row = conn.execute(
+        "SELECT created_at FROM snapshot_publications WHERE build_id=?",
+        (_BUILD_ID,),
+    ).fetchone()
+    forged_manifest = {
+        "state": "READY",
+        "build_id": _BUILD_ID,
+        "snapshot_id": snapshot_id,
+        "created_at": str(row[0]),
+        "coverage_proof_id": "sha256:" + ("66" * 32),
+    }
+    conn.execute(
+        "UPDATE snapshot_publications SET state='READY',snapshot_id=?,"
+        "artifact_path=?,manifest_json=? WHERE build_id=?",
+        (
+            snapshot_id,
+            str(store.path),
+            json.dumps(forged_manifest),
+            _BUILD_ID,
+        ),
+    )
+    conn.execute(
+        "UPDATE local_snapshot_policy SET publication_state='READY',"
+        "snapshot_ready=1,active_snapshot_id=? WHERE singleton=1",
+        (snapshot_id,),
+    )
+    conn.execute(
+        """
+        INSERT INTO local_snapshot_manifests (
+            snapshot_id,format,committed_at,source_run_id,change_seq,manifest_json
+        ) VALUES (?, 'research-snapshot-manifest/v1', ?, 41, 7, ?)
+        """,
+        (snapshot_id, _CHECKED_AT, json.dumps(forged_manifest)),
+    )
+    conn.commit()
+
+    with pytest.raises(
+        CoverageProofVerificationError,
+        match="READY manifest linkage",
+    ):
+        require_persisted_coverage_proof(
+            conn,
+            (_DATASET,),
+            proof_id,
+            build_id=_BUILD_ID,
+        )
+    store.close()
+
+
+def test_mutable_source_ready_row_cannot_reopen_coverage_proof(
+    tmp_path,
+    receipt_ed25519_keys,
+) -> None:
+    store, _receipt, _coverage_rows = _seed_closed_segment(
+        tmp_path, receipt_ed25519_keys
+    )
+    conn = store._conn  # noqa: SLF001
+    proof_id = persist_coverage_proof(
+        conn,
+        (_DATASET,),
+        build_id=_BUILD_ID,
+    )
+    snapshot_id = "sha256:" + ("77" * 32)
+    created_at = conn.execute(
+        "SELECT created_at FROM snapshot_publications WHERE build_id=?",
+        (_BUILD_ID,),
+    ).fetchone()[0]
+    manifest = {
+        "state": "READY",
+        "build_id": _BUILD_ID,
+        "snapshot_id": snapshot_id,
+        "created_at": created_at,
+        "coverage_proof_id": proof_id,
+    }
+    manifest_json = json.dumps(manifest)
+    conn.execute(
+        "UPDATE snapshot_publications SET state='READY',snapshot_id=?,"
+        "artifact_path=?,manifest_json=? WHERE build_id=?",
+        (snapshot_id, str(store.path), manifest_json, _BUILD_ID),
+    )
+    # Source publication rows deliberately remain unreadable after publish.
+    conn.execute(
+        "UPDATE local_snapshot_policy SET publication_state='READY',"
+        "snapshot_ready=0,active_snapshot_id=? WHERE singleton=1",
+        (snapshot_id,),
+    )
+    conn.execute(
+        """
+        INSERT INTO local_snapshot_manifests (
+            snapshot_id,format,committed_at,source_run_id,change_seq,manifest_json
+        ) VALUES (?, 'research-snapshot-manifest/v1', ?, 41, 7, ?)
+        """,
+        (snapshot_id, _CHECKED_AT, manifest_json),
+    )
+    conn.commit()
+
+    with pytest.raises(
+        CoverageProofVerificationError,
+        match="active READY publication",
+    ):
+        require_persisted_coverage_proof(
+            conn,
+            (_DATASET,),
+            proof_id,
+            build_id=_BUILD_ID,
+        )
     store.close()
 
 
@@ -217,14 +463,18 @@ def test_persisted_coverage_proof_rejects_tampered_unknown_and_stale_ids(
         tmp_path, receipt_ed25519_keys
     )
     conn = store._conn  # noqa: SLF001
-    proof_id = persist_coverage_proof(conn, (_DATASET,))
+    proof_id = persist_coverage_proof(
+        conn, (_DATASET,), build_id=_BUILD_ID
+    )
     tampered_id = proof_id[:-1] + ("0" if proof_id[-1] != "0" else "1")
     for invalid_id in (None, "UNKNOWN", tampered_id):
         with pytest.raises(CoverageProofVerificationError):
-            require_persisted_coverage_proof(conn, (_DATASET,), invalid_id)
+            require_persisted_coverage_proof(
+                conn, (_DATASET,), invalid_id, build_id=_BUILD_ID
+            )
     with pytest.raises(CoverageProofVerificationError, match="exact, sorted"):
         require_persisted_coverage_proof(
-            conn, (_DATASET, _DATASET), proof_id
+            conn, (_DATASET, _DATASET), proof_id, build_id=_BUILD_ID
         )
 
     conn.execute("INSERT INTO ingestion_change_log VALUES (8)")
@@ -234,12 +484,15 @@ def test_persisted_coverage_proof_rejects_tampered_unknown_and_stale_ids(
     )
     conn.commit()
     with pytest.raises(CoverageProofVerificationError, match="stale"):
-        require_persisted_coverage_proof(conn, (_DATASET,), proof_id)
+        require_persisted_coverage_proof(
+            conn, (_DATASET,), proof_id, build_id=_BUILD_ID
+        )
     assert _coverage_item(
         collect_typed_evidence(
             conn,
             store.path,
             (_DATASET,),
+            build_id=_BUILD_ID,
             coverage_proof_id=proof_id,
         )
     ).passed is False
@@ -253,7 +506,9 @@ def test_persisted_coverage_proof_rejects_receipt_ledger_mutation(
         tmp_path, receipt_ed25519_keys
     )
     conn = store._conn  # noqa: SLF001
-    proof_id = persist_coverage_proof(conn, (_DATASET,))
+    proof_id = persist_coverage_proof(
+        conn, (_DATASET,), build_id=_BUILD_ID
+    )
     conn.execute(
         "UPDATE collection_receipts SET observed_items=0 "
         "WHERE source=? AND dataset=? AND segment_id=? AND run_id=?",
@@ -263,7 +518,9 @@ def test_persisted_coverage_proof_rejects_receipt_ledger_mutation(
     with pytest.raises(
         CoverageProofVerificationError, match="cannot be reproduced"
     ):
-        require_persisted_coverage_proof(conn, (_DATASET,), proof_id)
+        require_persisted_coverage_proof(
+            conn, (_DATASET,), proof_id, build_id=_BUILD_ID
+        )
     store.close()
 
 
@@ -274,11 +531,17 @@ def test_copied_coverage_record_without_receipt_cannot_mint_capability(
         tmp_path, receipt_ed25519_keys
     )
     source_conn = source._conn  # noqa: SLF001
-    proof_id = persist_coverage_proof(source_conn, (_DATASET,))
+    proof_id = persist_coverage_proof(
+        source_conn, (_DATASET,), build_id=_BUILD_ID
+    )
 
     target = SqliteStore(tmp_path / "copied-record.sqlite")
     target_conn = target._conn  # noqa: SLF001
-    for table in ("dataset_coverage", "local_coverage_proofs"):
+    for table in (
+        "dataset_coverage",
+        "local_coverage_proofs_v2",
+        "snapshot_publications",
+    ):
         cursor = source_conn.execute(f"SELECT * FROM {table}")
         columns = [item[0] for item in cursor.description]
         rows = cursor.fetchall()
@@ -300,11 +563,65 @@ def test_copied_coverage_record_without_receipt_cannot_mint_capability(
     target_conn.commit()
 
     with pytest.raises(
-        CoverageProofVerificationError, match="cannot be reproduced"
+        CoverageProofVerificationError, match="active publication policy"
     ):
-        require_persisted_coverage_proof(target_conn, (_DATASET,), proof_id)
+        require_persisted_coverage_proof(
+            target_conn, (_DATASET,), proof_id, build_id=_BUILD_ID
+        )
     target.close()
     source.close()
+
+
+@pytest.mark.parametrize(
+    "mutation_sql",
+    (
+        "DELETE FROM coverage_segments WHERE dataset='markets_calendar'",
+        """
+        INSERT INTO coverage_segments
+        SELECT source,dataset,'2099-surprise',policy_version,
+               segment_start,segment_end,expected_scope,expected_items,
+               status,receipt_run_id,evaluated_at,detail_json
+        FROM coverage_segments WHERE dataset='markets_calendar'
+        """,
+        """
+        INSERT INTO coverage_segments
+        SELECT 'alternate-source',dataset,segment_id,policy_version,
+               segment_start,segment_end,expected_scope,expected_items,
+               status,receipt_run_id,evaluated_at,detail_json
+        FROM coverage_segments WHERE dataset='markets_calendar'
+        """,
+        "UPDATE coverage_segments SET policy_version='collection-coverage/v999' "
+        "WHERE dataset='markets_calendar'",
+        "UPDATE coverage_segments SET expected_scope='{\"tampered\":true}' "
+        "WHERE dataset='markets_calendar'",
+    ),
+    ids=(
+        "deleted-orphan-receipt",
+        "unexpected-segment",
+        "duplicate-cross-source",
+        "wrong-policy",
+        "wrong-scope-window",
+    ),
+)
+def test_snapshot_proof_requires_exact_canonical_inventory(
+    tmp_path,
+    receipt_ed25519_keys,
+    mutation_sql,
+):
+    store, _receipt, coverage_rows = _seed_closed_segment(
+        tmp_path, receipt_ed25519_keys
+    )
+    conn = store._conn  # noqa: SLF001
+    conn.execute(mutation_sql)
+    conn.commit()
+    with pytest.raises(SnapshotRejected, match="exact inventory rejected"):
+        _coverage_proof(
+            conn,
+            (_DATASET,),
+            coverage_rows,
+            publication_cutoff=_PUBLICATION_CUTOFF,
+        )
+    store.close()
 
 
 def test_snapshot_proof_hashes_verified_closure_and_rejects_outer_mutation(
@@ -314,7 +631,12 @@ def test_snapshot_proof_hashes_verified_closure_and_rejects_outer_mutation(
         tmp_path, receipt_ed25519_keys
     )
     conn = store._conn  # noqa: SLF001
-    proof = _coverage_proof(conn, (_DATASET,), coverage_rows)
+    proof = _coverage_proof(
+        conn,
+        (_DATASET,),
+        coverage_rows,
+        publication_cutoff=_PUBLICATION_CUTOFF,
+    )
     assert proof["status"] == "COMPLETE"
     assert proof["receipt_count"] == 1
     assert proof["proof_digest"].startswith("sha256:")
@@ -328,7 +650,12 @@ def test_snapshot_proof_hashes_verified_closure_and_rejects_outer_mutation(
     )
     conn.commit()
     with pytest.raises(SnapshotRejected, match="receipt closure invalid"):
-        _coverage_proof(conn, (_DATASET,), coverage_rows)
+        _coverage_proof(
+            conn,
+            (_DATASET,),
+            coverage_rows,
+            publication_cutoff=_PUBLICATION_CUTOFF,
+        )
     store.close()
 
 
@@ -369,5 +696,10 @@ def test_snapshot_proof_rejects_validly_signed_legacy_v1(
     with pytest.raises(
         SnapshotRejected, match="v1 is audit-only and not COMPLETE-eligible"
     ):
-        _coverage_proof(conn, (_DATASET,), coverage_rows)
+        _coverage_proof(
+            conn,
+            (_DATASET,),
+            coverage_rows,
+            publication_cutoff=_PUBLICATION_CUTOFF,
+        )
     store.close()

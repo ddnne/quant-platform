@@ -9,12 +9,13 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from cf_platform.ingest_premium.coverage import run_coverage, summarize
 from data_contracts.loader import all_contracts
 from paper_runtime.snapshot_coverage_proof import (
     _coverage_proof,
+    _validation_cutoff_for_build,
     persist_coverage_proof,
 )
 from qp_paths import repo_root
@@ -120,10 +121,11 @@ def _evaluate_publication_gate_impl(
     build_id: str,
     required: tuple[str, ...],
     fixture_compatibility: bool,
+    _fixture_coverage_refresh: Callable[..., list[dict[str, Any]]] | None = None,
 ) -> tuple[
     int, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]],
     dict[str, int], list[dict[str, Any]], dict[str, dict[str, Any]],
-    dict[str, Any],
+    dict[str, Any] | None,
 ]:
     """Strict B0 + Phase 3.5 daily checks + governed Coverage ledger."""
     from paper_runtime.snapshot import (
@@ -143,11 +145,36 @@ def _evaluate_publication_gate_impl(
         conn, jquants_required
     )
     raw_manifests = _raw_manifests_for(conn, run_id, jquants_required)
-    today = datetime.now(timezone.utc).date().isoformat()
+    # Coverage inventory and refresh share the exact UTC cutoff frozen by the
+    # publisher-owned BUILDING row. Wall-clock drift cannot change membership
+    # between gate evaluation, proof persistence, and artifact reopen.
+    today = _validation_cutoff_for_build(conn, build_id)
     # No year-index HTML on the READY path. Explicit None is fail-closed empty OTC.
-    coverage_rows = refresh_coverage_ledger(
-        conn, staging_path, datasets=required, today=today, index_text=None
-    )
+    if fixture_compatibility:
+        if _fixture_coverage_refresh is None:
+            raise SnapshotRejected(
+                "fixture Coverage evaluation must be supplied by tests support"
+            )
+        coverage_rows = _fixture_coverage_refresh(
+            conn,
+            staging_path,
+            required=required,
+            today=today,
+            build_id=build_id,
+        )
+    else:
+        if _fixture_coverage_refresh is not None:  # pragma: no cover - private API
+            raise SnapshotRejected(
+                "production Coverage evaluation cannot accept fixture authority"
+            )
+        coverage_rows = refresh_coverage_ledger(
+            conn,
+            staging_path,
+            datasets=required,
+            today=today,
+            index_text=None,
+            _publication_build_id=build_id,
+        )
     quality_results = run_coverage(
         staging_path,
         tier="daily",
@@ -181,10 +208,16 @@ def _evaluate_publication_gate_impl(
     ]
     coverage_proof: dict[str, Any] | None = None
     proof_failure: str | None = None
-    try:
-        coverage_proof = _coverage_proof(conn, required, coverage_rows)
-    except SnapshotRejected as exc:
-        proof_failure = str(exc)
+    if not fixture_compatibility:
+        try:
+            coverage_proof = _coverage_proof(
+                conn,
+                required,
+                coverage_rows,
+                publication_cutoff=today,
+            )
+        except SnapshotRejected as exc:
+            proof_failure = str(exc)
     evaluated_at = datetime.now(timezone.utc).isoformat()
     passed = not failures and not incomplete and proof_failure is None
     conn.execute(
@@ -226,7 +259,7 @@ def _evaluate_publication_gate_impl(
         if proof_failure is not None:
             parts.append(proof_failure)
         raise SnapshotRejected("; ".join(parts))
-    if coverage_proof is None:  # pragma: no cover - guarded by passed
+    if coverage_proof is None and not fixture_compatibility:
         raise SnapshotRejected("governed Coverage proof was not produced")
     return (
         run_id, run_detail, validations, coverage_rows, quality_summary,
@@ -255,7 +288,7 @@ def _evaluate_publication_gate(
         required=required,
         fixture_compatibility=False,
     )
-    proof_id = persist_coverage_proof(conn, required)
+    proof_id = persist_coverage_proof(conn, required, build_id=build_id)
     return (*result, proof_id)
 
 
