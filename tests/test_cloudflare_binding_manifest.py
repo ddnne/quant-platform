@@ -142,6 +142,26 @@ def test_package_script_commands_are_frozen() -> None:
         manifest_module.validate_manifest(drifted)
 
 
+def test_package_script_rejects_wrangler_config_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = "ingestion-jsda"
+    package = manifest_module.WORKER_ROOT / worker / "package.json"
+    original_read_text = Path.read_text
+
+    def read_text(path: Path, *args: object, **kwargs: object) -> str:
+        body = original_read_text(path, *args, **kwargs)
+        if path == package:
+            data = json.loads(body)
+            data["scripts"]["deploy"] = "wrangler deploy"
+            return json.dumps(data)
+        return body
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    with pytest.raises(ValueError, match="must pin --config=wrangler.toml"):
+        manifest_module._package_scripts(worker)  # noqa: SLF001
+
+
 def test_test_harness_configs_are_frozen_as_nonpublic_surfaces() -> None:
     manifest = manifest_module.build_manifest()
     expected = {
@@ -155,11 +175,56 @@ def test_test_harness_configs_are_frozen_as_nonpublic_surfaces() -> None:
         assert surface["name"].endswith("-test")
         assert surface["workers_dev"] is False
         assert surface["preview_urls"] is False
+        assert surface["route"] is None
+        assert surface["routes"] == []
 
     drifted = copy.deepcopy(manifest)
     worker = next(iter(drifted["test_harness_surfaces"]))
     drifted["test_harness_surfaces"][worker]["workers_dev"] = True
     with pytest.raises(ValueError, match="test-harness workers_dev must be false"):
+        manifest_module.validate_manifest(drifted)
+
+    routed = copy.deepcopy(manifest)
+    routed["test_harness_surfaces"][worker]["routes"] = [
+        {"pattern": "test.example/*", "zone_name": "test.example"}
+    ]
+    with pytest.raises(ValueError, match="test-harness routes must be empty"):
+        manifest_module.validate_manifest(routed)
+
+    production_bound = copy.deepcopy(manifest)
+    production_bound["test_harness_surfaces"][worker]["d1_databases"] = [
+        {
+            "binding": "SHADOW_DB",
+            "database_name": "shadow-test",
+            "database_id": manifest["workers"]["ingestion-premium"]["production"][
+                "d1_databases"
+            ][0]["database_id"],
+        }
+    ]
+    with pytest.raises(ValueError, match="external binding target overlap"):
+        manifest_module.validate_manifest(production_bound)
+
+
+def test_staging_binding_identity_cannot_alias_production() -> None:
+    manifest = manifest_module.build_manifest()
+    production_id = manifest["workers"]["ingestion-premium"]["production"][
+        "d1_databases"
+    ][0]["database_id"]
+    drifted = copy.deepcopy(manifest)
+    drifted["workers"]["ingestion-premium"]["staging"]["d1_databases"][0][
+        "database_id"
+    ] = production_id
+    with pytest.raises(ValueError, match="staging external binding targets overlap"):
+        manifest_module.validate_manifest(drifted)
+
+    production_kv = manifest["workers"]["quant-ops-mcp"]["production"][
+        "kv_namespaces"
+    ][0]["id"]
+    drifted = copy.deepcopy(manifest)
+    drifted["workers"]["quant-ops-mcp"]["staging"]["kv_namespaces"][0][
+        "id"
+    ] = production_kv
+    with pytest.raises(ValueError, match="staging external binding targets overlap"):
         manifest_module.validate_manifest(drifted)
 
 
@@ -194,6 +259,8 @@ def test_authoritative_ci_dry_runs_test_harness_configs() -> None:
         encoding="utf-8"
     )
     assert "wrangler deploy --dry-run --config=wrangler.test.toml" in ci
+    assert "--config=wrangler.toml --env=\"\"" in ci
+    assert "--config=wrangler.toml --env=production" in ci
 
 
 def test_manifest_is_fail_closed_for_toolchain_drift() -> None:

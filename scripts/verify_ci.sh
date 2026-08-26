@@ -225,10 +225,12 @@ verify_worker() {
   (cd "$dir" && npm test)
   echo "==> npm run typecheck ($name)"
   (cd "$dir" && npm run typecheck)
-  echo "==> wrangler deploy --dry-run --env= ($name)"
-  (cd "$dir" && npx --no-install wrangler deploy --dry-run --env="")
-  echo "==> wrangler deploy --dry-run --env=production ($name)"
-  (cd "$dir" && npx --no-install wrangler deploy --dry-run --env=production)
+  echo "==> wrangler deploy --dry-run --config=wrangler.toml --env= ($name)"
+  (cd "$dir" && npx --no-install wrangler deploy --dry-run \
+    --config=wrangler.toml --env="")
+  echo "==> wrangler deploy --dry-run --config=wrangler.toml --env=production ($name)"
+  (cd "$dir" && npx --no-install wrangler deploy --dry-run \
+    --config=wrangler.toml --env=production)
   echo "==> wrangler deploy --dry-run --config=wrangler.staging.toml ($name)"
   (cd "$dir" && npx --no-install wrangler deploy --dry-run --config=wrangler.staging.toml)
   if [[ -f "$dir/wrangler.test.toml" ]]; then
@@ -242,7 +244,7 @@ verify_worker() {
     (cd "$dir" && npm run types -- --check)
   else
     echo "==> wrangler types ($name)"
-    (cd "$dir" && npx --no-install wrangler types)
+    (cd "$dir" && npx --no-install wrangler types --config=wrangler.toml)
   fi
   local type_dir base_types production_types staging_types
   type_dir="$ci_log_dir/types-$name"
@@ -252,10 +254,10 @@ verify_worker() {
   staging_types="$type_dir/staging.d.ts"
   echo "==> wrangler types --env=base ($name)"
   (cd "$dir" && npx --no-install wrangler types "$base_types" \
-    --include-runtime=false)
+    --config=wrangler.toml --include-runtime=false)
   echo "==> wrangler types --env=production ($name)"
   (cd "$dir" && npx --no-install wrangler types "$production_types" \
-    --env=production --include-runtime=false)
+    --config=wrangler.toml --env=production --include-runtime=false)
   echo "==> wrangler types --config=wrangler.staging.toml ($name)"
   (cd "$dir" && npx --no-install wrangler types "$staging_types" \
     --config=wrangler.staging.toml --include-runtime=false)

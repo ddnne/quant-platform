@@ -6,9 +6,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
-    "cf-typegen": "wrangler types",
-    "types": "wrangler types --include-runtime false"
+    "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
+    "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
+    "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.0.0",

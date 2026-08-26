@@ -186,7 +186,28 @@ def _package_scripts(worker: str) -> dict[str, str]:
         for name, command in scripts.items()
     ):
         raise ValueError(f"{worker}: package scripts must be a string map")
-    return dict(sorted(scripts.items()))
+    frozen = dict(sorted(scripts.items()))
+    for name, command in frozen.items():
+        wrangler_command = re.search(
+            r"\bwrangler\s+(deploy|dev|tail|types)\b", command
+        )
+        if wrangler_command and (
+            "--config=wrangler.toml" not in command
+            and "--config wrangler.toml" not in command
+        ):
+            raise ValueError(
+                f"{worker}: package script {name!r} must pin --config=wrangler.toml"
+            )
+        if wrangler_command and "--env=" not in command and "--env " not in command:
+            raise ValueError(
+                f"{worker}: package script {name!r} must pin an explicit --env"
+            )
+        if wrangler_command and wrangler_command.group(1) in {"deploy", "tail"}:
+            if "--dry-run" not in command and "--env=production" not in command:
+                raise ValueError(
+                    f"{worker}: package script {name!r} must target production"
+                )
+    return frozen
 
 
 REQUIRED_OBSERVABILITY = {"enabled": True, "head_sampling_rate": 1.0}
@@ -316,6 +337,29 @@ def _ordered_json_rows(value: Any, *, field: str) -> list[dict[str, Any]]:
     if not isinstance(value, list) or not all(isinstance(row, dict) for row in value):
         raise ValueError(f"{field} must be a list of tables")
     return [dict(sorted(row.items())) for row in value]
+
+
+def _external_binding_targets(surface: dict[str, Any]) -> set[tuple[str, str]]:
+    """Return resource identities that must not cross environment boundaries."""
+    targets: set[tuple[str, str]] = set()
+    tables = {
+        "d1_databases": ("d1", ("database_id",)),
+        "kv_namespaces": ("kv", ("id",)),
+        "r2_buckets": ("r2", ("bucket_name",)),
+        "queue_producers": ("queue", ("queue",)),
+        "queue_consumers": ("queue", ("queue", "dead_letter_queue")),
+        "services": ("service", ("service", "environment")),
+        "tail_consumers": ("tail_service", ("service", "environment")),
+        "durable_objects": ("do_script", ("script_name", "environment")),
+        "ratelimits": ("ratelimit", ("namespace_id",)),
+    }
+    for table, (kind, fields) in tables.items():
+        for row in surface.get(table) or []:
+            for field in fields:
+                value = row.get(field)
+                if value is not None and str(value):
+                    targets.add((f"{kind}.{field}", str(value)))
+    return targets
 
 
 def _secret_names(value: Any) -> list[str]:
@@ -504,6 +548,27 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     }
     if manifest["worker_package_scripts"] != expected_scripts:
         raise ValueError("active Worker package-script deployment surface drift")
+    workers = manifest["workers"]
+    if tuple(workers) != ACTIVE_WORKERS:
+        raise ValueError("active Worker order or membership drift")
+    production_targets = set().union(
+        *(
+            _external_binding_targets(environments[environment])
+            for environments in workers.values()
+            for environment in ("base", "production")
+        )
+    )
+    staging_targets = set().union(
+        *(
+            _external_binding_targets(environments["staging"])
+            for environments in workers.values()
+        )
+    )
+    overlap = production_targets & staging_targets
+    if overlap:
+        raise ValueError(
+            f"staging external binding targets overlap production: {sorted(overlap)!r}"
+        )
     expected_test_workers = tuple(
         worker
         for worker in ACTIVE_WORKERS
@@ -524,9 +589,32 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError(f"{worker}: test-harness workers_dev must be false")
         if surface.get("preview_urls") is not False:
             raise ValueError(f"{worker}: test-harness preview_urls must be false")
-    workers = manifest["workers"]
-    if tuple(workers) != ACTIVE_WORKERS:
-        raise ValueError("active Worker order or membership drift")
+        if surface.get("route") is not None or surface.get("routes") != []:
+            raise ValueError(f"{worker}: test-harness routes must be empty")
+        for table, fields in {
+            "d1_databases": ("database_name",),
+            "r2_buckets": ("bucket_name",),
+            "queue_producers": ("queue",),
+            "queue_consumers": ("queue", "dead_letter_queue"),
+            "services": ("service",),
+            "tail_consumers": ("service",),
+            "durable_objects": ("script_name",),
+        }.items():
+            for row in surface.get(table) or []:
+                for field in fields:
+                    value = row.get(field)
+                    if value is not None and not str(value).endswith("-test"):
+                        raise ValueError(
+                            f"{worker}/test: {table}.{field} is not test-isolated: "
+                            f"{value}"
+                        )
+        forbidden_test_targets = production_targets | staging_targets
+        test_overlap = _external_binding_targets(surface) & forbidden_test_targets
+        if test_overlap:
+            raise ValueError(
+                f"{worker}: test-harness external binding target overlap: "
+                f"{sorted(test_overlap)!r}"
+            )
 
     for worker, environments in workers.items():
         for environment, surface in environments.items():
