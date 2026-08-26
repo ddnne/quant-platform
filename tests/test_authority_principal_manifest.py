@@ -39,6 +39,96 @@ def _digest(character: str = "a") -> str:
     return "sha256:" + character * 64
 
 
+def _header_value(value: object) -> str:
+    return "NONE" if value is None else str(value)
+
+
+def _jquants_response_headers(metadata: dict[str, object]) -> dict[str, object]:
+    return {
+        "cache-control": "no-store",
+        "content-type": metadata["content_type"],
+        "x-content-type-options": "nosniff",
+        "x-quant-acquisition-acquisition-expires-at": _header_value(
+            metadata["acquisition_expires_at"]
+        ),
+        "x-quant-acquisition-acquisition-id": _header_value(
+            metadata["acquisition_id"]
+        ),
+        "x-quant-acquisition-acquisition-issued-at": _header_value(
+            metadata["acquisition_issued_at"]
+        ),
+        "x-quant-acquisition-body-digest": metadata["body_digest"],
+        "x-quant-acquisition-body-kind": metadata["body_kind"],
+        "x-quant-acquisition-chain-digest": _header_value(
+            metadata["chain_digest"]
+        ),
+        "x-quant-acquisition-continuation": _header_value(
+            metadata["continuation_token"]
+        ),
+        "x-quant-acquisition-coverage-policy-digest": _header_value(
+            metadata["coverage_policy_digest"]
+        ),
+        "x-quant-acquisition-cursor-key-id": _header_value(
+            metadata["cursor_key_id"]
+        ),
+        "x-quant-acquisition-dataset": _header_value(metadata["dataset_id"]),
+        "x-quant-acquisition-dataset-contract-digest": _header_value(
+            metadata["dataset_contract_digest"]
+        ),
+        "x-quant-acquisition-environment": _header_value(metadata["environment"]),
+        "x-quant-acquisition-evidence-state": metadata["evidence_state"],
+        "x-quant-acquisition-metadata-digest": _digest("e"),
+        "x-quant-acquisition-page-ordinal": _header_value(
+            metadata["page_ordinal"]
+        ),
+        "x-quant-acquisition-pagination-state": metadata["pagination_state"],
+        "x-quant-acquisition-previous-chain-digest": _header_value(
+            metadata["previous_chain_digest"]
+        ),
+        "x-quant-acquisition-previous-request-digest": _header_value(
+            metadata["previous_request_digest"]
+        ),
+        "x-quant-acquisition-provider-page-ordinal": _header_value(
+            metadata["provider_page_ordinal"]
+        ),
+        "x-quant-acquisition-provider-pagination-state": metadata[
+            "provider_pagination_state"
+        ],
+        "x-quant-acquisition-query-contract-digest": _header_value(
+            metadata["query_contract_digest"]
+        ),
+        "x-quant-acquisition-query-digest": _header_value(metadata["query_digest"]),
+        "x-quant-acquisition-redirect-count": _header_value(
+            metadata["redirect_count"]
+        ),
+        "x-quant-acquisition-registry-digest": _header_value(
+            metadata["target_registry_digest"]
+        ),
+        "x-quant-acquisition-request-digest": _header_value(
+            metadata["request_digest"]
+        ),
+        "x-quant-acquisition-request-identity-digest": _header_value(
+            metadata["request_identity_digest"]
+        ),
+        "x-quant-acquisition-schema": "jquants-acquisition-rpc-response/v2",
+        "x-quant-acquisition-segment": _header_value(metadata["segment_id"]),
+        "x-quant-acquisition-segment-end": _header_value(metadata["segment_end"]),
+        "x-quant-acquisition-segment-start": _header_value(
+            metadata["segment_start"]
+        ),
+        "x-quant-acquisition-slice-date": _header_value(metadata["slice_date"]),
+        "x-quant-acquisition-slice-ordinal": _header_value(
+            metadata["slice_ordinal"]
+        ),
+        "x-quant-acquisition-source-capability-digest": _header_value(
+            metadata["source_capability_digest"]
+        ),
+        "x-quant-acquisition-upstream-status": _header_value(
+            metadata["upstream_http_status"]
+        ),
+    }
+
+
 def _handoff() -> dict[str, object]:
     tables = {
         name: 0
@@ -511,6 +601,34 @@ def test_jquants_rpc_raw_metadata_requires_target_authority_fields() -> None:
         "chain_digest": _digest("d"),
     }
     _validate_schema("jquants_acquisition_rpc.schema.json", metadata)
+    headers = _jquants_response_headers(metadata)
+    _validate_schema("jquants_acquisition_rpc.schema.json", headers)
+    for field, value in (
+        ("x-quant-acquisition-body-kind", "TARGET_ERROR_JSON"),
+        ("content-type", "application/octet-stream"),
+        ("x-quant-acquisition-environment", "NONE"),
+        ("x-quant-acquisition-upstream-status", "NONE"),
+        ("x-quant-acquisition-provider-pagination-state", "UNKNOWN"),
+        ("x-quant-acquisition-pagination-state", "UNKNOWN"),
+        ("x-quant-acquisition-query-digest", "NONE"),
+        ("x-quant-acquisition-chain-digest", "NONE"),
+    ):
+        invalid_headers = copy.deepcopy(headers)
+        invalid_headers[field] = value
+        with pytest.raises(Exception):
+            _validate_schema("jquants_acquisition_rpc.schema.json", invalid_headers)
+
+    contradictory = copy.deepcopy(metadata)
+    contradictory.update(
+        provider_pagination_state="CONTINUATION",
+        pagination_state="EXHAUSTED",
+        continuation_token=None,
+    )
+    with pytest.raises(Exception):
+        _validate_schema("jquants_acquisition_rpc.schema.json", contradictory)
+    contradictory_headers = _jquants_response_headers(contradictory)
+    with pytest.raises(Exception):
+        _validate_schema("jquants_acquisition_rpc.schema.json", contradictory_headers)
 
     for field in (
         "environment",
@@ -535,6 +653,38 @@ def test_jquants_rpc_raw_metadata_requires_target_authority_fields() -> None:
         content_type="application/octet-stream",
     )
     _validate_schema("jquants_acquisition_rpc.schema.json", raw_only)
+    raw_only_headers = _jquants_response_headers(raw_only)
+    _validate_schema("jquants_acquisition_rpc.schema.json", raw_only_headers)
+    for field, value in (
+        ("x-quant-acquisition-body-kind", "TARGET_ERROR_JSON"),
+        ("x-quant-acquisition-environment", "NONE"),
+        ("x-quant-acquisition-upstream-status", "NONE"),
+        ("x-quant-acquisition-pagination-state", "EXHAUSTED"),
+        ("x-quant-acquisition-query-digest", "NONE"),
+        ("x-quant-acquisition-chain-digest", "NONE"),
+    ):
+        invalid_headers = copy.deepcopy(raw_only_headers)
+        invalid_headers[field] = value
+        with pytest.raises(Exception):
+            _validate_schema("jquants_acquisition_rpc.schema.json", invalid_headers)
+
+    failed = copy.deepcopy(metadata)
+    failed.update(
+        evidence_state="FAILED",
+        upstream_http_status=None,
+        body_kind="TARGET_ERROR_JSON",
+        provider_pagination_state="NOT_APPLICABLE",
+        pagination_state="NOT_APPLICABLE",
+        continuation_token=None,
+        chain_digest=None,
+    )
+    _validate_schema("jquants_acquisition_rpc.schema.json", failed)
+    failed_headers = _jquants_response_headers(failed)
+    _validate_schema("jquants_acquisition_rpc.schema.json", failed_headers)
+    failed_headers["x-quant-acquisition-body-kind"] = "UPSTREAM_EXACT_BYTES"
+    with pytest.raises(Exception):
+        _validate_schema("jquants_acquisition_rpc.schema.json", failed_headers)
+
     raw_only["upstream_http_status"] = None
     with pytest.raises(Exception):
         _validate_schema("jquants_acquisition_rpc.schema.json", raw_only)

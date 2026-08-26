@@ -198,6 +198,26 @@
           }
         },
         {
+          "if": {
+            "properties": {
+              "evidence_state": {"const": "RAW_PAGE"},
+              "provider_pagination_state": {"const": "CONTINUATION"}
+            },
+            "required": ["evidence_state", "provider_pagination_state"]
+          },
+          "then": {"properties": {"pagination_state": {"const": "CONTINUATION"}}}
+        },
+        {
+          "if": {
+            "properties": {
+              "evidence_state": {"const": "RAW_PAGE"},
+              "pagination_state": {"const": "EXHAUSTED"}
+            },
+            "required": ["evidence_state", "pagination_state"]
+          },
+          "then": {"properties": {"provider_pagination_state": {"const": "EXHAUSTED"}}}
+        },
+        {
           "if": {"properties": {"pagination_state": {"const": "CONTINUATION"}}, "required": ["pagination_state"]},
           "then": {"properties": {"continuation_token": {"type": "string", "pattern": "^jqa2\\."}}}
         },
@@ -273,7 +293,165 @@
         "x-quant-acquisition-slice-ordinal": {"$ref": "#/$defs/header_nullable_integer"},
         "x-quant-acquisition-source-capability-digest": {"$ref": "#/$defs/header_nullable_sha256"},
         "x-quant-acquisition-upstream-status": {"type": "string", "pattern": "^(?:NONE|[1-5][0-9]{2})$"}
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "x-quant-acquisition-evidence-state": {"const": "RAW_PAGE"}
+            },
+            "required": ["x-quant-acquisition-evidence-state"]
+          },
+          "then": {
+            "properties": {
+              "content-type": {"const": "application/json"},
+              "x-quant-acquisition-body-kind": {"const": "UPSTREAM_EXACT_BYTES"},
+              "x-quant-acquisition-environment": {"enum": ["staging", "production"]},
+              "x-quant-acquisition-dataset": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,127}$"},
+              "x-quant-acquisition-segment": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$"},
+              "x-quant-acquisition-segment-start": {"$ref": "#/$defs/date"},
+              "x-quant-acquisition-segment-end": {"$ref": "#/$defs/date"},
+              "x-quant-acquisition-request-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-request-identity-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-acquisition-id": {"$ref": "#/$defs/hmac_sha256"},
+              "x-quant-acquisition-acquisition-issued-at": {"$ref": "#/$defs/instant"},
+              "x-quant-acquisition-acquisition-expires-at": {"$ref": "#/$defs/instant"},
+              "x-quant-acquisition-registry-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-source-capability-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-dataset-contract-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-coverage-policy-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-query-contract-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-cursor-key-id": {"$ref": "#/$defs/hmac_sha256"},
+              "x-quant-acquisition-page-ordinal": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)$"},
+              "x-quant-acquisition-slice-ordinal": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)$"},
+              "x-quant-acquisition-provider-page-ordinal": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)$"},
+              "x-quant-acquisition-provider-pagination-state": {"enum": ["CONTINUATION", "EXHAUSTED"]},
+              "x-quant-acquisition-upstream-status": {"const": "200"},
+              "x-quant-acquisition-pagination-state": {"enum": ["CONTINUATION", "EXHAUSTED"]},
+              "x-quant-acquisition-query-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-previous-chain-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-chain-digest": {"$ref": "#/$defs/sha256"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "x-quant-acquisition-evidence-state": {"const": "RAW_ONLY"}
+            },
+            "required": ["x-quant-acquisition-evidence-state"]
+          },
+          "then": {
+            "properties": {
+              "x-quant-acquisition-body-kind": {"const": "UPSTREAM_EXACT_BYTES"},
+              "x-quant-acquisition-environment": {"enum": ["staging", "production"]},
+              "x-quant-acquisition-dataset": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,127}$"},
+              "x-quant-acquisition-segment": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}$"},
+              "x-quant-acquisition-segment-start": {"$ref": "#/$defs/date"},
+              "x-quant-acquisition-segment-end": {"$ref": "#/$defs/date"},
+              "x-quant-acquisition-request-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-request-identity-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-acquisition-id": {"$ref": "#/$defs/hmac_sha256"},
+              "x-quant-acquisition-acquisition-issued-at": {"$ref": "#/$defs/instant"},
+              "x-quant-acquisition-acquisition-expires-at": {"$ref": "#/$defs/instant"},
+              "x-quant-acquisition-registry-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-source-capability-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-dataset-contract-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-coverage-policy-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-query-contract-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-cursor-key-id": {"$ref": "#/$defs/hmac_sha256"},
+              "x-quant-acquisition-page-ordinal": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)$"},
+              "x-quant-acquisition-slice-ordinal": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)$"},
+              "x-quant-acquisition-provider-page-ordinal": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)$"},
+              "x-quant-acquisition-provider-pagination-state": {"enum": ["CONTINUATION", "EXHAUSTED", "UNKNOWN"]},
+              "x-quant-acquisition-upstream-status": {"type": "string", "pattern": "^2[0-9]{2}$"},
+              "x-quant-acquisition-pagination-state": {"const": "UNKNOWN"},
+              "x-quant-acquisition-continuation": {"const": "NONE"},
+              "x-quant-acquisition-query-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-previous-chain-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-chain-digest": {"$ref": "#/$defs/sha256"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "x-quant-acquisition-evidence-state": {"enum": ["REJECTED", "FAILED"]}
+            },
+            "required": ["x-quant-acquisition-evidence-state"]
+          },
+          "then": {
+            "properties": {
+              "content-type": {"const": "application/json"},
+              "x-quant-acquisition-body-kind": {"const": "TARGET_ERROR_JSON"},
+              "x-quant-acquisition-provider-pagination-state": {"const": "NOT_APPLICABLE"},
+              "x-quant-acquisition-pagination-state": {"const": "NOT_APPLICABLE"},
+              "x-quant-acquisition-continuation": {"const": "NONE"},
+              "x-quant-acquisition-chain-digest": {"const": "NONE"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "x-quant-acquisition-evidence-state": {"const": "RAW_PAGE"},
+              "x-quant-acquisition-provider-pagination-state": {"const": "CONTINUATION"}
+            },
+            "required": [
+              "x-quant-acquisition-evidence-state",
+              "x-quant-acquisition-provider-pagination-state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "x-quant-acquisition-pagination-state": {"const": "CONTINUATION"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "x-quant-acquisition-evidence-state": {"const": "RAW_PAGE"},
+              "x-quant-acquisition-pagination-state": {"const": "EXHAUSTED"}
+            },
+            "required": [
+              "x-quant-acquisition-evidence-state",
+              "x-quant-acquisition-pagination-state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "x-quant-acquisition-provider-pagination-state": {"const": "EXHAUSTED"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "x-quant-acquisition-pagination-state": {"const": "CONTINUATION"}
+            },
+            "required": ["x-quant-acquisition-pagination-state"]
+          },
+          "then": {
+            "properties": {
+              "x-quant-acquisition-continuation": {"type": "string", "pattern": "^jqa2\\."}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "x-quant-acquisition-pagination-state": {"const": "EXHAUSTED"}
+            },
+            "required": ["x-quant-acquisition-pagination-state"]
+          },
+          "then": {
+            "properties": {
+              "x-quant-acquisition-continuation": {"const": "NONE"}
+            }
+          }
+        }
+      ]
     }
   }
 }
