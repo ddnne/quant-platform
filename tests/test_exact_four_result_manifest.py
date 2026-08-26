@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import execution.exact_four_claims as claims_module
 import execution.exact_four_results as results_module
 from execution.exact_four_authority_contract import (
     ControlledExecutionClaimsV2,
@@ -246,6 +247,89 @@ def test_historical_result_audit_survives_parent_expiry(
     with pytest.raises(ExactFourAuthorityContractError, match="expired"):
         validate_current_exact_four_pilot_result_manifest_v2(
             manifest,
+            readiness=readiness,
+            trader=trader,
+            execution=execution,
+        )
+
+
+def test_historical_validators_reject_future_ready_trader_execution_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trusted_present = datetime.now(timezone.utc)
+    future_clock = trusted_present + timedelta(hours=1)
+    exact_four = load_exact_four_execution_binding()
+    readiness = PilotReadinessAttestationClaimsV2(
+        pilot_run_id="pilot-run-future-result-manifest-001",
+        snapshot=_snapshot(),
+        exact_four=exact_four,
+        issued_at=(future_clock - timedelta(minutes=5)).isoformat(),
+        expires_at=(future_clock + timedelta(minutes=25)).isoformat(),
+    )
+    monkeypatch.setattr(claims_module, "_trusted_utc_now", lambda: future_clock)
+    trader = build_trader_authorization_claims_v2(
+        readiness,
+        human_approval_event_id="human-approval-future-result-manifest-001",
+        human_approval_event_digest=_digest("human-approval-future"),
+        issued_at=(future_clock - timedelta(minutes=4)).isoformat(),
+        expires_at=(future_clock + timedelta(minutes=20)).isoformat(),
+    )
+    execution = build_controlled_execution_claims_v2(
+        readiness,
+        trader,
+        issued_at=(future_clock - timedelta(minutes=3)).isoformat(),
+        expires_at=(future_clock + timedelta(minutes=10)).isoformat(),
+    )
+    monkeypatch.setattr(results_module, "_trusted_utc_now", lambda: future_clock)
+    papers, risks, selection, knowledge = _evidence()
+    manifest = build_exact_four_pilot_result_manifest_v2(
+        readiness,
+        trader,
+        execution,
+        paper_results=papers,
+        risk_results=risks,
+        aggregate_selection=selection,
+        knowledge_artifact=knowledge,
+    )
+
+    monkeypatch.setattr(results_module, "_trusted_utc_now", lambda: trusted_present)
+    with pytest.raises(ExactFourAuthorityContractError, match="future"):
+        validate_exact_four_pilot_result_manifest_v2(
+            manifest,
+            readiness=readiness,
+            trader=trader,
+            execution=execution,
+        )
+    with pytest.raises(ExactFourAuthorityContractError, match="future"):
+        parse_and_validate_exact_four_pilot_result_manifest_v2(
+            json.dumps(manifest.to_dict(), separators=(",", ":")),
+            readiness=readiness,
+            trader=trader,
+            execution=execution,
+        )
+
+
+def test_historical_validators_have_no_future_completion_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    readiness, trader, execution, manifest = _manifest()
+    completion = datetime.fromisoformat(manifest.completed_at)
+    monkeypatch.setattr(
+        results_module,
+        "_trusted_utc_now",
+        lambda: completion - timedelta(microseconds=1),
+    )
+
+    with pytest.raises(ExactFourAuthorityContractError, match="future"):
+        validate_exact_four_pilot_result_manifest_v2(
+            manifest,
+            readiness=readiness,
+            trader=trader,
+            execution=execution,
+        )
+    with pytest.raises(ExactFourAuthorityContractError, match="future"):
+        parse_and_validate_exact_four_pilot_result_manifest_v2(
+            json.dumps(manifest.to_dict(), separators=(",", ":")),
             readiness=readiness,
             trader=trader,
             execution=execution,

@@ -575,7 +575,12 @@ def validate_exact_four_pilot_result_manifest_v2(
     trader: TraderAuthorizationClaimsV2,
     execution: ControlledExecutionClaimsV2,
 ) -> str:
-    """Revalidate content and actual current READY/Trader/Execution parents."""
+    """Revalidate historical content against its actual authority parents.
+
+    Expired parent windows remain auditable, but a result cannot become
+    historical evidence before its module-trusted completion clock has
+    actually occurred.
+    """
 
     if type(manifest) is not ExactFourPilotResultManifestV2:
         raise ExactFourAuthorityContractError(
@@ -583,6 +588,13 @@ def validate_exact_four_pilot_result_manifest_v2(
         )
     _validate_claim_chain_structural(readiness, trader, execution)
     manifest.__post_init__()
+    if _parsed_timestamp(
+        manifest.completed_at,
+        "result manifest completed_at",
+    ) > _trusted_utc_now().astimezone(timezone.utc):
+        raise ExactFourAuthorityContractError(
+            "result completion cannot be in the future at the trusted UTC clock"
+        )
     if (
         manifest.pilot_run_id != readiness.pilot_run_id
         or manifest.readiness_attestation_id != readiness.attestation_id
@@ -634,13 +646,6 @@ def validate_current_exact_four_pilot_result_manifest_v2(
         trader=trader,
         execution=execution,
     )
-    if _parsed_timestamp(
-        manifest.completed_at,
-        "result manifest completed_at",
-    ) > current:
-        raise ExactFourAuthorityContractError(
-            "result completion cannot be in the future at the trusted UTC clock"
-        )
     return content_id
 
 
