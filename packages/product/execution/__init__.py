@@ -13,6 +13,15 @@ from .paper_service import (
     PaperExecutionRejected,
     PaperExecutionService,
 )
+from .controlled_artifacts import (
+    CONTROLLED_ARTIFACT_AUTHORITY_UNPROVISIONED,
+    ControlledArtifactAuthorityPending,
+    ControlledArtifactPublicKeyRegistry,
+    ControlledArtifactVerificationError,
+    VerifiedControlledExecutionArtifacts,
+    load_verified_controlled_execution_artifacts,
+    verify_controlled_artifact_content,
+)
 from .trader_authority import (
     TraderAuthorizationBinding,
     TraderAuthorizationPublicKeyRegistry,
@@ -22,6 +31,10 @@ from .trader_authority import (
 
 __all__ = [
     "CONTROLLED_AUTHORITY_UNPROVISIONED",
+    "CONTROLLED_ARTIFACT_AUTHORITY_UNPROVISIONED",
+    "ControlledArtifactAuthorityPending",
+    "ControlledArtifactPublicKeyRegistry",
+    "ControlledArtifactVerificationError",
     "ControlledPilotExecutionService",
     "ControlledPilotPending",
     "OfflineFixturePaperService",
@@ -30,5 +43,8 @@ __all__ = [
     "TraderAuthorizationBinding",
     "TraderAuthorizationPublicKeyRegistry",
     "VerifiedTraderAuthorization",
+    "VerifiedControlledExecutionArtifacts",
+    "load_verified_controlled_execution_artifacts",
+    "verify_controlled_artifact_content",
     "verify_exact_trader_authorization",
 ]
