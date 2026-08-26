@@ -13,6 +13,7 @@ import base64
 import hashlib
 import json
 import re
+import sqlite3
 from dataclasses import dataclass, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -694,10 +695,10 @@ def _mint_bound_readiness(
             digest.update(chunk)
     db_digest = "sha256:" + digest.hexdigest()
     try:
-        from paper_runtime import data_snapshot_id
+        from paper_runtime.snapshot import _immutable_data_snapshot_id
 
-        observed_snapshot_id = data_snapshot_id(artifact)
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        observed_snapshot_id = _immutable_data_snapshot_id(artifact)
+    except (FileNotFoundError, RuntimeError, ValueError, sqlite3.DatabaseError) as exc:
         raise MassResearchDisabledError(
             "READY publisher requires a verified snapshot artifact"
         ) from exc

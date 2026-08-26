@@ -101,13 +101,15 @@ class ReadySnapshot:
         return str(self.manifest["committed_at"])
 
 
-def _connect_readonly(path: Path) -> sqlite3.Connection:
-    # Published snapshots are content-addressed immutable artifacts.  SQLite's
-    # ordinary read-only mode may still create ``-wal``/``-shm`` sidecars for
-    # a database whose header is in WAL mode, mutating an authority-owned
-    # publication directory.  ``immutable=1`` makes the no-write contract
-    # explicit and is safe here because callers verify the artifact digest.
-    uri = "file:" + quote(str(path.resolve())) + "?mode=ro&immutable=1"
+def _connect_readonly(
+    path: Path, *, immutable: bool = False
+) -> sqlite3.Connection:
+    # Published snapshots are content-addressed immutable artifacts, where
+    # SQLite must not create ``-wal``/``-shm`` sidecars.  Mutable current DBs,
+    # however, may have committed data only in an uncheckpointed WAL; treating
+    # those as immutable would silently read stale state.
+    query = "?mode=ro&immutable=1" if immutable else "?mode=ro"
+    uri = "file:" + quote(str(path.resolve())) + query
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     return conn
@@ -1126,13 +1128,13 @@ def _manifest_snapshot_state(
     }
 
 
-def data_snapshot_id(db_path: str | Path) -> str:
-    """Logical snapshot id from watermarks/validation (not a byte hash)."""
+def _data_snapshot_id(db_path: str | Path, *, immutable: bool) -> str:
+    """Logical snapshot id with an explicit mutable/immutable read contract."""
     path = Path(db_path)
     if not path.is_file():
         raise FileNotFoundError(f"paper database does not exist: {path}")
 
-    conn = _connect_readonly(path)
+    conn = _connect_readonly(path, immutable=immutable)
     try:
         conn.execute("BEGIN")
         tables = {
@@ -1161,6 +1163,16 @@ def data_snapshot_id(db_path: str | Path) -> str:
         conn.close()
 
     return _canonical_digest(state)
+
+
+def data_snapshot_id(db_path: str | Path) -> str:
+    """Logical id for a current DB, including committed WAL state."""
+    return _data_snapshot_id(db_path, immutable=False)
+
+
+def _immutable_data_snapshot_id(db_path: str | Path) -> str:
+    """Logical id for a checkpointed content-addressed snapshot artifact."""
+    return _data_snapshot_id(db_path, immutable=True)
 
 
 __all__ = [

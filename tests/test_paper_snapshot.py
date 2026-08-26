@@ -9,6 +9,7 @@ import sqlite3
 import pytest
 
 from paper_runtime import data_snapshot_id
+from paper_runtime.snapshot import _immutable_data_snapshot_id
 
 
 def _create_fallback_db(path) -> None:
@@ -101,10 +102,35 @@ def test_snapshot_read_does_not_create_wal_or_shared_memory_sidecars(tmp_path):
 
     (tmp_path / "wal-fixture.sqlite-wal").unlink(missing_ok=True)
     (tmp_path / "wal-fixture.sqlite-shm").unlink(missing_ok=True)
-    data_snapshot_id(db)
+    _immutable_data_snapshot_id(db)
 
     assert not (tmp_path / "wal-fixture.sqlite-wal").exists()
     assert not (tmp_path / "wal-fixture.sqlite-shm").exists()
+
+
+def test_current_snapshot_reads_committed_uncheckpointed_wal(tmp_path):
+    db = tmp_path / "mutable-wal.sqlite"
+    writer = sqlite3.connect(db)
+    try:
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute(
+            "CREATE TABLE facts (id INTEGER PRIMARY KEY, ingested_at TEXT)"
+        )
+        writer.execute(
+            "INSERT INTO facts VALUES (1, '2025-04-01T15:30:00+09:00')"
+        )
+        writer.commit()
+        first = data_snapshot_id(db)
+
+        writer.execute(
+            "INSERT INTO facts VALUES (2, '2025-04-02T15:30:00+09:00')"
+        )
+        writer.commit()
+
+        assert data_snapshot_id(db) != first
+    finally:
+        writer.close()
 
 
 def test_fallback_snapshot_changes_when_fact_state_changes(tmp_path):

@@ -88,9 +88,9 @@ def _describe_snapshot_for_scope(
         ReadySnapshot,
         _artifact_stem,
         _canonical_digest,
+        _immutable_data_snapshot_id,
         _research_manifest_digest,
         _research_manifest_id,
-        data_snapshot_id,
         RESEARCH_SNAPSHOT_PUBLICATION_FORMAT,
     )
 
@@ -246,7 +246,7 @@ def _describe_snapshot_for_scope(
         attestation_name is not None or attestation_digest is not None
     ):
         raise RuntimeError("fixture publication cannot carry READY authority")
-    if data_snapshot_id(artifact_path) != snapshot_id:
+    if _immutable_data_snapshot_id(artifact_path) != snapshot_id:
         raise RuntimeError("embedded snapshot manifest does not match sidecar")
     return ReadySnapshot(snapshot_id, artifact_path, manifest_path, manifest)
 
