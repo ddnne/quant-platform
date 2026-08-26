@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -22,7 +23,11 @@ from ingestion.runtime_authority import (
 )
 from storage.receipt_crypto import (
     PINNED_RECEIPT_AUTHORITY_STATUS as COMMITTED_AUTHORITY_STATUS,
+    PINNED_RECEIPT_PRIOR_AUTHORITY_STATUS as COMMITTED_PRIOR_AUTHORITY_STATUS,
     PINNED_RECEIPT_PRIOR_REGISTRY_DIGEST as COMMITTED_PRIOR_REGISTRY_DIGEST,
+    PINNED_RECEIPT_PRIOR_REGISTRY_DOCUMENT_DIGEST as COMMITTED_PRIOR_DOCUMENT_DIGEST,
+    PINNED_RECEIPT_PRIOR_REGISTRY_GENERATION as COMMITTED_PRIOR_GENERATION,
+    PINNED_RECEIPT_PRIOR_REGISTRY_RAW_DIGEST as COMMITTED_PRIOR_RAW_DIGEST,
     PINNED_RECEIPT_REGISTRY_BODY_DIGEST as COMMITTED_REGISTRY_BODY_DIGEST,
     PINNED_RECEIPT_REGISTRY_DOCUMENT_DIGEST as COMMITTED_DOCUMENT_DIGEST,
     PINNED_RECEIPT_REGISTRY_GENERATION as COMMITTED_REGISTRY_GENERATION,
@@ -84,6 +89,85 @@ def _pin_test_registry(
         "PINNED_RECEIPT_REGISTRY_BODY_DIGEST",
         document["registry_digest"],
     )
+
+
+def _pin_committed_registry(
+    crypto: object,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    current_path: Path | None = None,
+    prior_path: Path | None = None,
+) -> tuple[Path, Path]:
+    data_contracts = Path(crypto.__file__).resolve().parents[1] / "data_contracts"
+    current = current_path or data_contracts / "receipt_verify_public_keys.json"
+    prior = prior_path or (
+        data_contracts / "receipt_verify_public_keys.generation-1.json"
+    )
+    monkeypatch.setattr(crypto, "_PINNED_VERIFY_KEYS_PATH", current)
+    monkeypatch.setattr(crypto, "_PINNED_PRIOR_VERIFY_KEYS_PATH", prior)
+    monkeypatch.setattr(
+        crypto, "PINNED_RECEIPT_REGISTRY_RAW_DIGEST", COMMITTED_RAW_DIGEST
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_REGISTRY_DOCUMENT_DIGEST",
+        COMMITTED_DOCUMENT_DIGEST,
+    )
+    monkeypatch.setattr(
+        crypto, "PINNED_RECEIPT_REGISTRY_GENERATION", COMMITTED_REGISTRY_GENERATION
+    )
+    monkeypatch.setattr(
+        crypto, "PINNED_RECEIPT_AUTHORITY_STATUS", COMMITTED_AUTHORITY_STATUS
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_PRIOR_REGISTRY_DIGEST",
+        COMMITTED_PRIOR_REGISTRY_DIGEST,
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_PRIOR_REGISTRY_RAW_DIGEST",
+        COMMITTED_PRIOR_RAW_DIGEST,
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_PRIOR_REGISTRY_DOCUMENT_DIGEST",
+        COMMITTED_PRIOR_DOCUMENT_DIGEST,
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_PRIOR_REGISTRY_GENERATION",
+        COMMITTED_PRIOR_GENERATION,
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_PRIOR_AUTHORITY_STATUS",
+        COMMITTED_PRIOR_AUTHORITY_STATUS,
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_REGISTRY_BODY_DIGEST",
+        COMMITTED_REGISTRY_BODY_DIGEST,
+    )
+    return current, prior
+
+
+def _noncanonical_base64_spelling(value: str) -> str:
+    """Return a different padded spelling which decodes to the same bytes."""
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    if value.endswith("=="):
+        index = len(value) - 3
+    elif value.endswith("="):
+        index = len(value) - 2
+    else:
+        raise AssertionError("test input must have Base64 padding")
+    replacement = alphabet[alphabet.index(value[index]) + 1]
+    changed = value[:index] + replacement + value[index + 1 :]
+    assert changed != value
+    assert base64.b64decode(changed, validate=True) == base64.b64decode(
+        value, validate=True
+    )
+    return changed
 
 
 def _rewrite_registry(path: Path, document: dict) -> None:
@@ -171,14 +255,12 @@ def test_matching_pinned_test_key_still_cannot_enable_production_authority(
         _open_governed_receipt_service()
 
 
-def test_committed_receipt_registry_has_no_current_signing_authority() -> None:
+def test_committed_receipt_registry_has_no_current_signing_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import storage.receipt_crypto as crypto
 
-    committed_path = (
-        Path(crypto.__file__).resolve().parents[1]
-        / "data_contracts"
-        / "receipt_verify_public_keys.json"
-    )
+    committed_path, prior_path = _pin_committed_registry(crypto, monkeypatch)
     committed_raw = committed_path.read_bytes()
     document = json.loads(committed_raw)
     schema_path = (
@@ -225,19 +307,107 @@ def test_committed_receipt_registry_has_no_current_signing_authority() -> None:
         "t1",
     }
 
-    prior_path = committed_path.with_name(
-        "receipt_verify_public_keys.generation-1.json"
-    )
     prior_raw = prior_path.read_bytes()
     prior = json.loads(prior_raw)
-    assert crypto.body_digest(prior_raw) == (
-        "sha256:de08e72ea133bf4ab876944e27520a5aa7207e7bdfee412b8866131b9e7b1c90"
-    )
+    assert crypto.body_digest(prior_raw) == COMMITTED_PRIOR_RAW_DIGEST
     assert (
         document["prior_registry_digest"]
         == crypto.canonical_evidence_digest(prior)
+        == COMMITTED_PRIOR_DOCUMENT_DIGEST
         == COMMITTED_PRIOR_REGISTRY_DIGEST
     )
+    registry = crypto._load_pinned_registry()
+    assert registry.generation == 2
+    assert registry.authority_status == "PENDING"
+    assert registry.active_keys == ()
+
+
+def test_pinned_loader_requires_exact_generation_one_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import storage.receipt_crypto as crypto
+
+    data_contracts = Path(crypto.__file__).resolve().parents[1] / "data_contracts"
+    current = tmp_path / "receipt_verify_public_keys.json"
+    prior = tmp_path / "receipt_verify_public_keys.generation-1.json"
+    current.write_bytes(
+        (data_contracts / "receipt_verify_public_keys.json").read_bytes()
+    )
+    committed_prior = (
+        data_contracts / "receipt_verify_public_keys.generation-1.json"
+    ).read_bytes()
+    prior.write_bytes(committed_prior)
+    _pin_committed_registry(
+        crypto,
+        monkeypatch,
+        current_path=current,
+        prior_path=prior,
+    )
+    assert crypto._load_pinned_registry().authority_status == "PENDING"
+
+    prior.unlink()
+    with pytest.raises(
+        ReceiptKeyConfigurationError, match="cannot read the pinned prior"
+    ):
+        crypto._load_pinned_registry()
+
+    prior.write_bytes(committed_prior + b"\n")
+    with pytest.raises(ReceiptKeyConfigurationError, match="raw digest mismatch"):
+        crypto._load_pinned_registry()
+
+    changed = json.loads(committed_prior)
+    changed["keys"][0]["note"] += " changed"
+    changed_raw = json.dumps(changed).encode("utf-8")
+    prior.write_bytes(changed_raw)
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_PRIOR_REGISTRY_RAW_DIGEST",
+        crypto.body_digest(changed_raw),
+    )
+    with pytest.raises(ReceiptKeyConfigurationError, match="document digest mismatch"):
+        crypto._load_pinned_registry()
+
+    duplicate_raw = committed_prior.replace(
+        b'"schema_version": 1,',
+        b'"schema_version": 0, "schema_version": 1,',
+        1,
+    )
+    prior.write_bytes(duplicate_raw)
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_PRIOR_REGISTRY_RAW_DIGEST",
+        crypto.body_digest(duplicate_raw),
+    )
+    with pytest.raises(ReceiptKeyConfigurationError, match="duplicate key"):
+        crypto._load_pinned_registry()
+
+
+def test_receipt_registry_chain_requires_contiguous_pending_transition() -> None:
+    import storage.receipt_crypto as crypto
+
+    data_contracts = Path(crypto.__file__).resolve().parents[1] / "data_contracts"
+    current = crypto._parse_registry_document(
+        (data_contracts / "receipt_verify_public_keys.json").read_bytes()
+    )
+    prior = crypto._parse_prior_registry_document(
+        (
+            data_contracts / "receipt_verify_public_keys.generation-1.json"
+        ).read_bytes()
+    )
+    crypto._validate_registry_chain(prior=prior, current=current)
+
+    for changed in (
+        replace(current, generation=3),
+        replace(current, prior_registry_digest="sha256:" + "0" * 64),
+        replace(current, authority_status="ACTIVE"),
+        replace(
+            current,
+            entries=(replace(current.entries[0], status="pending"),)
+            + current.entries[1:],
+        ),
+    ):
+        with pytest.raises(ReceiptKeyConfigurationError, match="chain|transition"):
+            crypto._validate_registry_chain(prior=prior, current=changed)
 
 
 def test_revoked_same_uid_key_cannot_reactivate_receipt_minting(
@@ -289,6 +459,57 @@ def test_revoked_receipt_key_is_cryptographic_audit_only(
     assert verify_receipt_signature_values_for_audit(
         body=body, signature=signature, key_id=key_id
     )
+
+
+def test_receipt_envelope_rejects_noncanonical_base64_and_signature_lengths(
+    receipt_ed25519_keys,
+) -> None:
+    body = b"x"
+    signature = receipt_ed25519_keys.signing_key.sign(body)
+    encoded_signature = signature.removeprefix("ed25519:")
+    assert verify_receipt_signature_values(
+        body=body,
+        signature=signature,
+        key_id=receipt_ed25519_keys.key_id,
+    )
+
+    noncanonical_signature = "ed25519:" + _noncanonical_base64_spelling(
+        encoded_signature
+    )
+    assert not verify_receipt_signature_values(
+        body=body,
+        signature=noncanonical_signature,
+        key_id=receipt_ed25519_keys.key_id,
+    )
+    raw_signature = base64.b64decode(encoded_signature, validate=True)
+    for invalid_raw in (raw_signature[:-1], raw_signature + b"\x00"):
+        assert not verify_receipt_signature_values(
+            body=body,
+            signature="ed25519:" + base64.b64encode(invalid_raw).decode("ascii"),
+            key_id=receipt_ed25519_keys.key_id,
+        )
+
+    canonical_body = base64.b64encode(body).decode("ascii")
+    envelope = {
+        "signed_body_b64": canonical_body,
+        "signature": signature,
+        "issuer_key_id": receipt_ed25519_keys.key_id,
+    }
+    assert verify_receipt_signature(envelope)
+    envelope["signed_body_b64"] = _noncanonical_base64_spelling(canonical_body)
+    assert not verify_receipt_signature(envelope)
+
+
+def test_strict_receipt_materializer_rejects_noncanonical_signed_body() -> None:
+    from storage.verified_receipt import (
+        ReceiptVerificationError,
+        _decode_strict_signed_claims,
+    )
+
+    canonical = base64.b64encode(b"{}").decode("ascii")
+    noncanonical = _noncanonical_base64_spelling(canonical)
+    with pytest.raises(ReceiptVerificationError, match="canonical base64"):
+        _decode_strict_signed_claims(noncanonical)
 
 
 def test_pending_authority_rejects_an_active_key(
@@ -391,6 +612,10 @@ def test_receipt_registry_schema_and_parser_reject_invalid_key_rows(
     )
     whitespace_id = json.loads(json.dumps(base))
     whitespace_id["keys"][0]["key_id"] = "   "
+    leading_whitespace_id = json.loads(json.dumps(base))
+    leading_whitespace_id["keys"][0]["key_id"] = " leading"
+    trailing_whitespace_id = json.loads(json.dumps(base))
+    trailing_whitespace_id["keys"][0]["key_id"] = "trailing "
     malformed_public_key = json.loads(json.dumps(base))
     malformed_public_key["keys"][0]["public_key_base64"] = "x" * 44
     schema_path = (
@@ -404,7 +629,13 @@ def test_receipt_registry_schema_and_parser_reject_invalid_key_rows(
     )
 
     for index, document in enumerate(
-        (duplicate_pending, whitespace_id, malformed_public_key)
+        (
+            duplicate_pending,
+            whitespace_id,
+            leading_whitespace_id,
+            trailing_whitespace_id,
+            malformed_public_key,
+        )
     ):
         path = tmp_path / f"invalid-row-{index}.json"
         _rewrite_registry(path, document)
@@ -412,6 +643,105 @@ def test_receipt_registry_schema_and_parser_reject_invalid_key_rows(
             validator.validate(document)
         with pytest.raises(ReceiptKeyConfigurationError):
             crypto._load_verify_key_file(str(path))
+
+
+@pytest.mark.parametrize(
+    ("first_status", "second_status", "accepted"),
+    [
+        ("revoked", "revoked", True),
+        ("revoked", "pending", False),
+        ("pending", "revoked", False),
+        ("revoked", "active", False),
+        ("active", "revoked", False),
+        ("pending", "pending", False),
+    ],
+)
+def test_registry_public_key_bytes_are_reusable_only_for_revoked_history(
+    tmp_path: Path,
+    first_status: str,
+    second_status: str,
+    accepted: bool,
+) -> None:
+    import jsonschema
+    import storage.receipt_crypto as crypto
+
+    _private, public_raw, key_id = generate_test_receipt_keypair()
+    path = write_test_receipt_registry(
+        tmp_path / f"duplicate-key-{first_status}-{second_status}.json",
+        key_id=key_id,
+        public_raw=public_raw,
+        status=first_status,
+    )
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["keys"].append(
+        {
+            **document["keys"][0],
+            "key_id": "same-public-key-second-id",
+            "status": second_status,
+        }
+    )
+    document["authority_status"] = (
+        "ACTIVE" if "active" in {first_status, second_status} else "PENDING"
+    )
+    _rewrite_registry(path, document)
+
+    schema_path = (
+        Path(crypto.__file__).resolve().parents[3]
+        / "specs"
+        / "receipts"
+        / "receipt_verify_public_keys.schema.json"
+    )
+    validator = jsonschema.Draft202012Validator(
+        json.loads(schema_path.read_text(encoding="utf-8"))
+    )
+    if first_status == second_status == "pending":
+        with pytest.raises(jsonschema.ValidationError):
+            validator.validate(document)
+    else:
+        # JSON Schema cannot compare a property across distinct array rows;
+        # the strict semantic parser remains the activation authority.
+        validator.validate(document)
+
+    if accepted:
+        assert crypto._load_verify_key_file(str(path)) == ()
+    else:
+        with pytest.raises(
+            ReceiptKeyConfigurationError,
+            match="must not reuse public-key bytes|at most one pending",
+        ):
+            crypto._load_verify_key_file(str(path))
+
+
+def test_registry_strict_parser_rejects_jsonschema_integer_equivalent_float(
+    tmp_path: Path,
+) -> None:
+    import jsonschema
+    import storage.receipt_crypto as crypto
+
+    _private, public_raw, key_id = generate_test_receipt_keypair()
+    path = write_test_receipt_registry(
+        tmp_path / "generation-float.json",
+        key_id=key_id,
+        public_raw=public_raw,
+    )
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["generation"] = 1.0
+    _rewrite_registry(path, document)
+    schema_path = (
+        Path(crypto.__file__).resolve().parents[3]
+        / "specs"
+        / "receipts"
+        / "receipt_verify_public_keys.schema.json"
+    )
+    validator = jsonschema.Draft202012Validator(
+        json.loads(schema_path.read_text(encoding="utf-8"))
+    )
+
+    # Draft 2020-12 intentionally considers 1.0 an integer. The production
+    # parser requires an exact Python int and is the semantic authority.
+    validator.validate(document)
+    with pytest.raises(ReceiptKeyConfigurationError, match="registry is invalid"):
+        crypto._load_verify_key_file(str(path))
 
 
 def test_pinned_receipt_registry_generation_chain_cannot_drift(

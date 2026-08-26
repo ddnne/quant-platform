@@ -24,6 +24,9 @@ _PINNED_VERIFY_KEYS_PATH = (
     / "data_contracts"
     / "receipt_verify_public_keys.json"
 )
+_PINNED_PRIOR_VERIFY_KEYS_PATH = _PINNED_VERIFY_KEYS_PATH.with_name(
+    "receipt_verify_public_keys.generation-1.json"
+)
 PINNED_RECEIPT_REGISTRY_RAW_DIGEST = (
     "sha256:dc6095db1d09bf775f972cb428944a1ba5bc47fefa0af19e77c3f3a157ae47f5"
 )
@@ -35,6 +38,14 @@ PINNED_RECEIPT_AUTHORITY_STATUS = "PENDING"
 PINNED_RECEIPT_PRIOR_REGISTRY_DIGEST = (
     "sha256:087cfea679c27c267c4e79aaa7518097778d3b44d251c931e5bb6fd2803a2465"
 )
+PINNED_RECEIPT_PRIOR_REGISTRY_RAW_DIGEST = (
+    "sha256:de08e72ea133bf4ab876944e27520a5aa7207e7bdfee412b8866131b9e7b1c90"
+)
+PINNED_RECEIPT_PRIOR_REGISTRY_DOCUMENT_DIGEST = (
+    "sha256:087cfea679c27c267c4e79aaa7518097778d3b44d251c931e5bb6fd2803a2465"
+)
+PINNED_RECEIPT_PRIOR_REGISTRY_GENERATION = 1
+PINNED_RECEIPT_PRIOR_AUTHORITY_STATUS = "REVOKED"
 PINNED_RECEIPT_REGISTRY_BODY_DIGEST = (
     "sha256:7dbf4eae91e927d74bd7075bc69210232030bb9077052d55853dc09f0c7bb921"
 )
@@ -170,14 +181,27 @@ class ReceiptVerifyKey:
     public_key: Ed25519PublicKey
 
     def verify(self, body: bytes, signature: str) -> bool:
+        if type(body) is not bytes or type(signature) is not str:
+            return False
         if not signature.startswith("ed25519:"):
             return False
+        raw = _decode_canonical_base64(
+            signature[len("ed25519:") :], expected_length=64
+        )
+        if raw is None:
+            return False
         try:
-            raw = base64.b64decode(signature[len("ed25519:") :], validate=True)
             self.public_key.verify(raw, body)
             return True
-        except (InvalidSignature, ValueError, TypeError):
+        except InvalidSignature:
             return False
+
+
+@dataclass(frozen=True)
+class _ReceiptVerifyRegistryEntry:
+    key_id: str
+    public_key_bytes: bytes
+    status: str
 
 
 @dataclass(frozen=True)
@@ -186,8 +210,17 @@ class _ReceiptVerifyRegistry:
     authority_status: str
     prior_registry_digest: str | None
     registry_digest: str
+    entries: tuple[_ReceiptVerifyRegistryEntry, ...]
     active_keys: tuple[ReceiptVerifyKey, ...]
     audit_keys: tuple[ReceiptVerifyKey, ...]
+
+
+@dataclass(frozen=True)
+class _PriorReceiptVerifyRegistry:
+    generation: int
+    authority_status: str
+    document_digest: str
+    entries: tuple[_ReceiptVerifyRegistryEntry, ...]
 
 
 _REGISTRY_FIELDS = {
@@ -205,6 +238,39 @@ _REGISTRY_KEY_FIELDS = {
     "public_key_base64",
     "status",
 }
+_PRIOR_REGISTRY_FIELDS = {
+    "schema_version",
+    "purpose",
+    "keys",
+}
+_PRIOR_REGISTRY_KEY_FIELDS = {
+    "key_id",
+    "public_key_b64",
+    "algorithm",
+    "status",
+    "note",
+}
+
+
+def _decode_canonical_base64(
+    value: object, *, expected_length: int | None = None
+) -> bytes | None:
+    if type(value) is not str:
+        return None
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except (ValueError, TypeError):
+        return None
+    if base64.b64encode(raw).decode("ascii") != value:
+        return None
+    if expected_length is not None and len(raw) != expected_length:
+        return None
+    return raw
+
+
+def decode_canonical_signed_body(value: object) -> bytes | None:
+    """Decode one receipt body only when its Base64 spelling is canonical."""
+    return _decode_canonical_base64(value)
 
 
 def _registry_body_digest(document: Mapping[str, Any]) -> str:
@@ -259,7 +325,9 @@ def _parse_registry_document(raw: bytes) -> _ReceiptVerifyRegistry:
         )
     active: dict[str, ReceiptVerifyKey] = {}
     audit: dict[str, ReceiptVerifyKey] = {}
+    entries: list[_ReceiptVerifyRegistryEntry] = []
     seen_ids: set[str] = set()
+    seen_public_key_status: dict[bytes, str] = {}
     pending_count = 0
     for row in doc["keys"]:
         if type(row) is not dict or set(row) != _REGISTRY_KEY_FIELDS:
@@ -270,10 +338,11 @@ def _parse_registry_document(raw: bytes) -> _ReceiptVerifyRegistry:
             raise ReceiptKeyConfigurationError(
                 "pinned receipt registry fields must be exact strings"
             )
-        key_id = row["key_id"].strip()
-        if not key_id or key_id in seen_ids:
+        raw_key_id = row["key_id"]
+        key_id = raw_key_id.strip()
+        if raw_key_id != key_id or not key_id or key_id in seen_ids:
             raise ReceiptKeyConfigurationError(
-                "pinned receipt registry key ids must be non-empty and unique"
+                "pinned receipt registry key ids must be trimmed, non-empty, and unique"
             )
         seen_ids.add(key_id)
         if row["algorithm"] != "Ed25519":
@@ -286,17 +355,31 @@ def _parse_registry_document(raw: bytes) -> _ReceiptVerifyRegistry:
                 "pinned receipt registry requires an explicit key status"
             )
         try:
-            raw_key = base64.b64decode(row["public_key_base64"], validate=True)
-            if (
-                base64.b64encode(raw_key).decode("ascii")
-                != row["public_key_base64"]
-            ):
-                raise ValueError("receipt public key is not canonical base64")
+            raw_key = _decode_canonical_base64(
+                row["public_key_base64"], expected_length=32
+            )
+            if raw_key is None:
+                raise ValueError("receipt public key is not canonical Ed25519 base64")
             public_key = Ed25519PublicKey.from_public_bytes(raw_key)
         except (TypeError, ValueError) as exc:
             raise ReceiptKeyConfigurationError(
                 f"invalid pinned receipt public key: {key_id}"
             ) from exc
+        prior_status = seen_public_key_status.get(raw_key)
+        if prior_status is not None and (
+            prior_status != "revoked" or status != "revoked"
+        ):
+            raise ReceiptKeyConfigurationError(
+                "active or pending receipt public keys must not reuse public-key bytes"
+            )
+        seen_public_key_status[raw_key] = status
+        entries.append(
+            _ReceiptVerifyRegistryEntry(
+                key_id=key_id,
+                public_key_bytes=raw_key,
+                status=status,
+            )
+        )
         verify_key = ReceiptVerifyKey(key_id=key_id, public_key=public_key)
         if status == "active":
             active[key_id] = verify_key
@@ -319,8 +402,76 @@ def _parse_registry_document(raw: bytes) -> _ReceiptVerifyRegistry:
         authority_status=doc["authority_status"],
         prior_registry_digest=doc["prior_registry_digest"],
         registry_digest=doc["registry_digest"],
+        entries=tuple(entries),
         active_keys=tuple(active.values()),
         audit_keys=tuple(audit.values()),
+    )
+
+
+@lru_cache(maxsize=4)
+def _parse_prior_registry_document(raw: bytes) -> _PriorReceiptVerifyRegistry:
+    """Parse the exact legacy generation-1 audit artifact."""
+    doc = _strict_json_document(raw)
+    if (
+        set(doc) != _PRIOR_REGISTRY_FIELDS
+        or type(doc["schema_version"]) is not int
+        or doc["schema_version"] != 1
+        or type(doc["purpose"]) is not str
+        or doc["purpose"] != "receipt_verification"
+        or type(doc["keys"]) is not list
+        or not 1 <= len(doc["keys"]) <= 16
+    ):
+        raise ReceiptKeyConfigurationError(
+            "pinned prior receipt registry is invalid"
+        )
+
+    entries: list[_ReceiptVerifyRegistryEntry] = []
+    seen_ids: set[str] = set()
+    for row in doc["keys"]:
+        if type(row) is not dict or set(row) != _PRIOR_REGISTRY_KEY_FIELDS:
+            raise ReceiptKeyConfigurationError(
+                "pinned prior receipt registry row is not closed"
+            )
+        if any(type(row[field]) is not str for field in _PRIOR_REGISTRY_KEY_FIELDS):
+            raise ReceiptKeyConfigurationError(
+                "pinned prior receipt registry fields must be exact strings"
+            )
+        raw_key_id = row["key_id"]
+        key_id = raw_key_id.strip()
+        if raw_key_id != key_id or not key_id or key_id in seen_ids:
+            raise ReceiptKeyConfigurationError(
+                "pinned prior receipt registry key ids must be trimmed, "
+                "non-empty, and unique"
+            )
+        seen_ids.add(key_id)
+        if (
+            row["algorithm"] != "Ed25519"
+            or row["status"] != "revoked"
+            or row["note"] != row["note"].strip()
+            or not row["note"]
+        ):
+            raise ReceiptKeyConfigurationError(
+                "pinned prior receipt registry must remain revoked audit evidence"
+            )
+        raw_key = _decode_canonical_base64(
+            row["public_key_b64"], expected_length=32
+        )
+        if raw_key is None:
+            raise ReceiptKeyConfigurationError(
+                f"invalid pinned prior receipt public key: {key_id}"
+            )
+        entries.append(
+            _ReceiptVerifyRegistryEntry(
+                key_id=key_id,
+                public_key_bytes=raw_key,
+                status="revoked",
+            )
+        )
+    return _PriorReceiptVerifyRegistry(
+        generation=1,
+        authority_status="REVOKED",
+        document_digest=body_digest(_canonical_registry_bytes(doc)),
+        entries=tuple(entries),
     )
 
 
@@ -387,7 +538,71 @@ def _load_pinned_registry() -> _ReceiptVerifyRegistry:
         raise ReceiptKeyConfigurationError(
             "pinned receipt registry generation chain mismatch"
         )
+    if registry.generation > 1:
+        prior = _load_pinned_prior_registry()
+        _validate_registry_chain(prior=prior, current=registry)
     return registry
+
+
+def _load_pinned_prior_registry() -> _PriorReceiptVerifyRegistry:
+    """Load the immutable predecessor artifact and all of its code pins."""
+    try:
+        raw = _PINNED_PRIOR_VERIFY_KEYS_PATH.read_bytes()
+    except OSError as exc:
+        raise ReceiptKeyConfigurationError(
+            "cannot read the pinned prior receipt public-key registry"
+        ) from exc
+    if body_digest(raw) != PINNED_RECEIPT_PRIOR_REGISTRY_RAW_DIGEST:
+        raise ReceiptKeyConfigurationError(
+            "pinned prior receipt registry raw digest mismatch"
+        )
+    document = _strict_json_document(raw)
+    document_digest = body_digest(_canonical_registry_bytes(document))
+    if document_digest != PINNED_RECEIPT_PRIOR_REGISTRY_DOCUMENT_DIGEST:
+        raise ReceiptKeyConfigurationError(
+            "pinned prior receipt registry document digest mismatch"
+        )
+    prior = _parse_prior_registry_document(raw)
+    if (
+        prior.generation != PINNED_RECEIPT_PRIOR_REGISTRY_GENERATION
+        or prior.authority_status != PINNED_RECEIPT_PRIOR_AUTHORITY_STATUS
+        or prior.document_digest != PINNED_RECEIPT_PRIOR_REGISTRY_DOCUMENT_DIGEST
+    ):
+        raise ReceiptKeyConfigurationError(
+            "pinned prior receipt registry code pins mismatch"
+        )
+    return prior
+
+
+def _validate_registry_chain(
+    *, prior: _PriorReceiptVerifyRegistry, current: _ReceiptVerifyRegistry
+) -> None:
+    """Validate the repository-pinned generation-1 -> generation-2 transition.
+
+    This closes the immutable repository chain. An external monotonic state is
+    still required before a future authority can prove rollback resistance.
+    """
+    if (
+        current.generation != prior.generation + 1
+        or current.prior_registry_digest != prior.document_digest
+        or (prior.authority_status, current.authority_status)
+        != ("REVOKED", "PENDING")
+    ):
+        raise ReceiptKeyConfigurationError(
+            "pinned receipt registry prior chain mismatch"
+        )
+    current_by_id = {entry.key_id: entry for entry in current.entries}
+    for prior_entry in prior.entries:
+        current_entry = current_by_id.get(prior_entry.key_id)
+        if (
+            current_entry is None
+            or current_entry.public_key_bytes != prior_entry.public_key_bytes
+            or prior_entry.status != "revoked"
+            or current_entry.status != "revoked"
+        ):
+            raise ReceiptKeyConfigurationError(
+                "pinned receipt registry revoked history transition mismatch"
+            )
 
 
 def load_verify_keys() -> dict[str, ReceiptVerifyKey]:
@@ -425,11 +640,10 @@ def verify_receipt_signature(
     key_id = frozen.get("issuer_key_id")
     if type(body_b64) is not str or type(signature) is not str:
         return False
-    if type(key_id) is not str or not key_id:
+    if type(key_id) is not str or not key_id or key_id != key_id.strip():
         return False
-    try:
-        body = base64.b64decode(body_b64, validate=True)
-    except (ValueError, TypeError):
+    body = decode_canonical_signed_body(body_b64)
+    if body is None:
         return False
     return verify_receipt_signature_values(
         body=body,
@@ -446,6 +660,8 @@ def verify_receipt_signature_values(
         type(body) is not bytes
         or type(signature) is not str
         or type(key_id) is not str
+        or not key_id
+        or key_id != key_id.strip()
     ):
         return False
     vk = load_verify_keys().get(key_id)
@@ -460,6 +676,8 @@ def verify_receipt_signature_values_for_audit(
         type(body) is not bytes
         or type(signature) is not str
         or type(key_id) is not str
+        or not key_id
+        or key_id != key_id.strip()
     ):
         return False
     vk = load_audit_verify_keys().get(key_id)
@@ -474,13 +692,18 @@ __all__ = [
     "ReceiptKeyConfigurationError",
     "ReceiptVerifyKey",
     "PINNED_RECEIPT_AUTHORITY_STATUS",
+    "PINNED_RECEIPT_PRIOR_AUTHORITY_STATUS",
     "PINNED_RECEIPT_PRIOR_REGISTRY_DIGEST",
+    "PINNED_RECEIPT_PRIOR_REGISTRY_DOCUMENT_DIGEST",
+    "PINNED_RECEIPT_PRIOR_REGISTRY_GENERATION",
+    "PINNED_RECEIPT_PRIOR_REGISTRY_RAW_DIGEST",
     "PINNED_RECEIPT_REGISTRY_BODY_DIGEST",
     "PINNED_RECEIPT_REGISTRY_DOCUMENT_DIGEST",
     "PINNED_RECEIPT_REGISTRY_GENERATION",
     "PINNED_RECEIPT_REGISTRY_RAW_DIGEST",
     "canonical_evidence_digest",
     "canonical_receipt_body",
+    "decode_canonical_signed_body",
     "load_audit_verify_keys",
     "load_verify_keys",
     "partition_extra_digests",

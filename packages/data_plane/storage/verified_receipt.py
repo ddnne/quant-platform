@@ -7,7 +7,6 @@ used by COMPLETE policy to signed-receipt-claims/v2.
 
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 from functools import lru_cache
 import json
@@ -24,6 +23,7 @@ from storage.receipt_crypto import (
     STANDARD_CLAIM_KEYS,
     body_digest,
     canonical_evidence_digest,
+    decode_canonical_signed_body,
     verify_receipt_signature_values,
     verify_receipt_signature_values_for_audit,
 )
@@ -112,10 +112,9 @@ def _copy_exact_json(value: Any, *, field: str) -> Any:
 
 
 def _decode_strict_signed_claims(body_b64: str) -> tuple[dict[str, Any], bytes]:
-    try:
-        raw = base64.b64decode(body_b64, validate=True)
-    except (ValueError, TypeError) as exc:
-        raise ReceiptVerificationError("signed body is not valid base64") from exc
+    raw = decode_canonical_signed_body(body_b64)
+    if raw is None:
+        raise ReceiptVerificationError("signed body is not canonical base64")
 
     def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         document: dict[str, Any] = {}

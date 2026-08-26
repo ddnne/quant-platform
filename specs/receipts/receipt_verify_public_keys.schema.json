@@ -41,6 +41,7 @@
       "type": "array",
       "minItems": 1,
       "maxItems": 16,
+      "uniqueItems": true,
       "contains": {"$ref": "#/$defs/pendingKey"},
       "minContains": 0,
       "maxContains": 1,
@@ -54,7 +55,10 @@
           "status"
         ],
         "properties": {
-          "key_id": {"type": "string", "pattern": "\\S"},
+          "key_id": {
+            "type": "string",
+            "pattern": "^(?!\\s)[\\s\\S]*\\S(?![\\s\\S])"
+          },
           "algorithm": {"const": "Ed25519"},
           "public_key_base64": {
             "type": "string",
