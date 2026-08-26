@@ -64,13 +64,36 @@ Do not hand-loop a subset of SQL files. Do not apply Ops projection SQL to
 `quant-ingest`. `ingestion-premium` owns `quant-ingest`; `quant-ops-mcp` owns
 `quant-ops-projection` and `quant-ops-quota`.
 
+### quant-ingest 0013 quarantine
+
+Do **not** run generic `wrangler d1 migrations apply quant-ingest` while
+`0013_restore_specialized_jquants_schema.sql` is pending. Its additive
+`IF NOT EXISTS` statements cannot distinguish an absent object from a
+same-name malformed object, and a migration-history row does not prove exact
+postflight. Migration 0013 stays quarantined until one reviewed authority
+orchestrates all of the following against the same authenticated D1 identity:
+
+1. bind `environment`, binding, database name, and database ID to the canonical
+   manifest rather than caller input;
+2. create and verify a recoverable encrypted backup plus the provider restore
+   bookmark before any apply;
+3. run exact preflight with no attached/TEMP deputy, accepting only absent or
+   exact canonical `sqlite_master`/PRAGMA structure;
+4. apply the exact reviewed 0013 checksum after confirmed 0012;
+5. run independent exact postflight even when 0013 already has a history row,
+   then bind the pre/post schema digests and observed history to immutable
+   release evidence.
+
+[`scripts/d1_specialized_schema_validation.py`](../../scripts/d1_specialized_schema_validation.py)
+implements only read-only local SQLite validation. It does not authenticate a
+live D1, create a backup/bookmark, apply SQL, or mint release evidence. Its
+machine-readable result remains `UNVERIFIED` and cannot close A2 or A6. Until
+the governed orchestration above exists, stop rather than bypass this hold.
+
 ```bash
 .venv/bin/python scripts/cloudflare_d1_migration_manifest.py
 
-cd platform/workers/ingestion-premium
-npx wrangler d1 migrations apply quant-ingest --remote --env production
-
-cd ../quant-ops-mcp
+cd platform/workers/quant-ops-mcp
 npx wrangler d1 migrations apply quant-ops-projection --remote --env production
 npx wrangler d1 migrations apply quant-ops-quota --remote --env production
 cd ../../..
@@ -78,7 +101,7 @@ cd ../../..
 
 JSDA observation identity lives in
 `platform/workers/ingestion-premium/migrations/0012_jsda_observation_identity.sql`
-and is applied through the `quant-ingest` owner above.
+and precedes quarantined migration 0013 in the canonical `quant-ingest` chain.
 
 ## 3. Publish the signed Ops projection
 

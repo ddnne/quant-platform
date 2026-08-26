@@ -116,6 +116,13 @@
           "checksum": "sha256:f5eeac1f534ff0c1e4a8c9193f21cc1626c2863557b3f3d80be52e158e1e521e",
           "order": 12,
           "depends_on": "quant-ingest:0011_jsda_queue_v2"
+        },
+        {
+          "migration_id": "quant-ingest:0013_restore_specialized_jquants_schema",
+          "path": "platform/workers/ingestion-premium/migrations/0013_restore_specialized_jquants_schema.sql",
+          "checksum": "sha256:8ee5c5954ee309d89dc781aac1ce75b4a6170a0bdf828e262e8a792a536163be",
+          "order": 13,
+          "depends_on": "quant-ingest:0012_jsda_observation_identity"
         }
       ]
     },
