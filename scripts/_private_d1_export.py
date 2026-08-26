@@ -10,6 +10,7 @@ is read.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import sqlite3
@@ -20,7 +21,7 @@ import tomllib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 from urllib.parse import quote
 from weakref import WeakSet
 
@@ -43,6 +44,22 @@ PINNED_WRANGLER_VERSION = "4.125.0"
 GOVERNED_D1_NAME = "quant-ingest"
 GOVERNED_D1_ID = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 GOVERNED_WRANGLER_ENV = "production"
+GOVERNED_D1_SYNC_TABLES: tuple[str, ...] = (
+    "jquants_market_calendar",
+    "jquants_listed_info",
+    "jquants_daily_bars",
+    "jquants_records",
+    "jquants_market_calendar_revisions",
+    "jquants_listed_info_revisions",
+    "jquants_daily_bars_revisions",
+    "jquants_records_revisions",
+    "ingestion_run_log",
+    "ingestion_validation",
+    "ingestion_watermarks",
+    "raw_retention_manifests",
+    "coverage_segments",
+    "collection_receipts",
+)
 
 def _validated_governed_wrangler() -> tuple[str, Path]:
     """Return the repository-pinned executable/config after authority checks.
@@ -184,10 +201,11 @@ def _require_file_identity(path: Path, expected: _PinnedFileIdentity) -> None:
 
 def _snapshot_source_artifact(
     source: Path, destination_directory: Path
-) -> tuple[Path, _PinnedFileIdentity]:
+) -> tuple[Path, BinaryIO, _PinnedFileIdentity]:
     """Copy and hash a raw artifact from the same single opened file view."""
     destination_directory.mkdir(parents=True, exist_ok=True)
     snapshot_path: Path | None = None
+    output_handle: BinaryIO | None = None
     try:
         with source.open("rb") as input_handle:
             before = os.fstat(input_handle.fileno())
@@ -199,19 +217,19 @@ def _snapshot_source_artifact(
                 raise ValueError("D1 export artifact identity changed while opening")
             digest = hashlib.sha256()
             size = 0
-            with tempfile.NamedTemporaryFile(
+            output_handle = tempfile.NamedTemporaryFile(
                 mode="w+b",
                 prefix=".pinned-d1-source-",
                 dir=destination_directory,
                 delete=False,
-            ) as output_handle:
-                snapshot_path = Path(output_handle.name)
-                for chunk in iter(lambda: input_handle.read(1024 * 1024), b""):
-                    digest.update(chunk)
-                    size += len(chunk)
-                    output_handle.write(chunk)
-                output_handle.flush()
-                os.fsync(output_handle.fileno())
+            )
+            snapshot_path = Path(output_handle.name)
+            for chunk in iter(lambda: input_handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+                size += len(chunk)
+                output_handle.write(chunk)
+            output_handle.flush()
+            os.fsync(output_handle.fileno())
             after = os.fstat(input_handle.fileno())
             path_after = source.stat()
         if (
@@ -223,13 +241,35 @@ def _snapshot_source_artifact(
             or size != after.st_size
         ):
             raise ValueError("D1 export artifact changed while snapshotting")
-        assert snapshot_path is not None
+        assert snapshot_path is not None and output_handle is not None
         snapshot_path.chmod(0o600)
-        identity = _measure_regular_file(snapshot_path)
-        if identity.digest != f"sha256:{digest.hexdigest()}" or identity.size != size:
+        snapshot_stat = os.fstat(output_handle.fileno())
+        snapshot_path_stat = snapshot_path.stat()
+        output_handle.seek(0)
+        snapshot_digest = hashlib.sha256()
+        snapshot_size = 0
+        for chunk in iter(lambda: output_handle.read(1024 * 1024), b""):
+            snapshot_digest.update(chunk)
+            snapshot_size += len(chunk)
+        identity = _PinnedFileIdentity(
+            device=snapshot_stat.st_dev,
+            inode=snapshot_stat.st_ino,
+            size=snapshot_size,
+            digest=f"sha256:{snapshot_digest.hexdigest()}",
+        )
+        if (
+            (snapshot_path_stat.st_dev, snapshot_path_stat.st_ino)
+            != (identity.device, identity.inode)
+            or identity.digest != f"sha256:{digest.hexdigest()}"
+            or identity.size != size
+            or snapshot_stat.st_size != size
+        ):
             raise ValueError("D1 export artifact snapshot digest changed")
-        return snapshot_path, identity
+        output_handle.seek(0)
+        return snapshot_path, output_handle, identity
     except Exception:
+        if output_handle is not None:
+            output_handle.close()
         if snapshot_path is not None:
             snapshot_path.unlink(missing_ok=True)
         raise
@@ -254,9 +294,16 @@ def _sql_import_authorizer(
     return sqlite3.SQLITE_OK
 
 
-def _import_d1_sql(sql_path: Path, sqlite_path: Path) -> None:
-    """Stream a Wrangler SQL export into an isolated SQLite database."""
-    conn = sqlite3.connect(sqlite_path)
+def _import_d1_sql(
+    sql_handle: BinaryIO, conn: sqlite3.Connection
+) -> None:
+    """Stream the already-pinned Wrangler SQL view into ``conn``.
+
+    The binary handle is the exact inode that was copied and hashed by
+    :func:`_snapshot_source_artifact`.  Never reopen its temporary pathname:
+    another same-user process could otherwise substitute different SQL between
+    hashing and import.
+    """
     conn.enable_load_extension(False)
     conn.set_authorizer(_sql_import_authorizer)
     conn.execute("PRAGMA journal_mode=OFF")
@@ -264,31 +311,43 @@ def _import_d1_sql(sql_path: Path, sqlite_path: Path) -> None:
     statement_parts: list[str] = []
     statement_bytes = 0
     max_statement_bytes = 256 * 1024 * 1024
+    text_handle: io.TextIOWrapper | None = None
     try:
-        with sql_path.open("r", encoding="utf-8", newline="") as handle:
-            for line in handle:
-                if line.lstrip().startswith("."):
-                    raise ValueError("SQLite dot-commands are not allowed in D1 export")
-                statement_parts.append(line)
-                statement_bytes += len(line.encode("utf-8"))
-                if statement_bytes > max_statement_bytes:
-                    raise ValueError("D1 export contains an oversized SQL statement")
-                candidate = "".join(statement_parts)
-                if not sqlite3.complete_statement(candidate):
-                    continue
-                if candidate.strip():
-                    conn.execute(candidate)
-                statement_parts.clear()
-                statement_bytes = 0
+        sql_handle.seek(0)
+        text_handle = io.TextIOWrapper(
+            sql_handle, encoding="utf-8", newline=""
+        )
+        for line in text_handle:
+            if line.lstrip().startswith("."):
+                raise ValueError("SQLite dot-commands are not allowed in D1 export")
+            statement_parts.append(line)
+            statement_bytes += len(line.encode("utf-8"))
+            if statement_bytes > max_statement_bytes:
+                raise ValueError("D1 export contains an oversized SQL statement")
+            candidate = "".join(statement_parts)
+            if not sqlite3.complete_statement(candidate):
+                continue
+            if candidate.strip():
+                conn.execute(candidate)
+            statement_parts.clear()
+            statement_bytes = 0
         if "".join(statement_parts).strip():
             raise ValueError("D1 export ends with an incomplete SQL statement")
         conn.commit()
     except (OSError, UnicodeError, sqlite3.Error) as exc:
         conn.rollback()
         raise ValueError("D1 export SQL import failed; statement content withheld") from exc
+    except Exception:
+        conn.rollback()
+        raise
     finally:
-        conn.close()
-    sqlite_path.chmod(0o600)
+        if text_handle is not None:
+            # Detach rather than close: ownership of the pinned binary snapshot
+            # remains with the materializer through its final identity check.
+            try:
+                text_handle.detach()
+            except ValueError:
+                pass
 
 
 def _validate_sqlite_artifact(path: Path) -> None:
@@ -303,10 +362,39 @@ def _validate_sqlite_artifact(path: Path) -> None:
         conn.close()
 
 
+def _validate_sqlite_connection(conn: sqlite3.Connection) -> None:
+    result = conn.execute("PRAGMA integrity_check").fetchone()
+    if result is None or str(result[0]).lower() != "ok":
+        raise ValueError("D1 export SQLite integrity check failed")
+
+
+def _serialized_connection_identity(
+    conn: sqlite3.Connection,
+) -> tuple[str, int]:
+    """Hash the exact SQLite view held by ``conn`` without reopening a path."""
+    serialized = conn.serialize(name="main")
+    return f"sha256:{hashlib.sha256(serialized).hexdigest()}", len(serialized)
+
+
+def _require_connection_file_identity(
+    conn: sqlite3.Connection,
+    expected: _PinnedFileIdentity,
+) -> None:
+    digest, size = _serialized_connection_identity(conn)
+    if digest != expected.digest or size != expected.size:
+        raise ValueError("pinned D1 SQLite connection/file identity mismatch")
+
+
 def _materialize_d1_export_with_identity(
     artifact: Path,
     sqlite_path: Path,
-) -> tuple[str, int, str, _PinnedFileIdentity]:
+) -> tuple[
+    str,
+    int,
+    str,
+    _PinnedFileIdentity,
+    sqlite3.Connection,
+]:
     """Materialize a standalone Wrangler SQL/SQLite artifact for read-only sync."""
     source = artifact.expanduser().resolve(strict=True)
     wal_path = Path(f"{source}-wal")
@@ -314,12 +402,16 @@ def _materialize_d1_export_with_identity(
         raise ValueError(
             "SQLite artifact has a live WAL; checkpoint it before offline sync"
         )
-    snapshot, raw_identity = _snapshot_source_artifact(source, sqlite_path.parent)
+    snapshot, snapshot_handle, raw_identity = _snapshot_source_artifact(
+        source, sqlite_path.parent
+    )
+    materialized_conn: sqlite3.Connection | None = None
     try:
         if raw_identity.size == 0:
             raise ValueError("D1 export artifact is empty")
-        with snapshot.open("rb") as handle:
-            is_sqlite = handle.read(16) == b"SQLite format 3\x00"
+        snapshot_handle.seek(0)
+        is_sqlite = snapshot_handle.read(16) == b"SQLite format 3\x00"
+        snapshot_handle.seek(0)
         if is_sqlite and wal_path.exists() and wal_path.stat().st_size:
             raise ValueError(
                 "SQLite artifact has a live WAL; checkpoint it before offline sync"
@@ -336,38 +428,68 @@ def _materialize_d1_export_with_identity(
         finally:
             os.close(descriptor)
         created_identity = (created.st_dev, created.st_ino)
+        materialized_conn = sqlite3.connect(sqlite_path)
         if is_sqlite:
             source_uri = (
                 f"file:{quote(str(snapshot), safe='/')}?mode=ro&immutable=1"
             )
             source_conn = sqlite3.connect(source_uri, uri=True)
-            destination = sqlite3.connect(sqlite_path)
             try:
-                source_conn.backup(destination)
-                destination.commit()
+                # The path-based SQLite open must still describe the exact raw
+                # inode copied and hashed above.  This detects A/B/A swaps at
+                # sqlite3.connect rather than trusting the temporary pathname.
+                source_digest, source_size = _serialized_connection_identity(
+                    source_conn
+                )
+                if (
+                    source_digest != raw_identity.digest
+                    or source_size != raw_identity.size
+                ):
+                    raise ValueError(
+                        "D1 SQLite source connection/raw identity mismatch"
+                    )
+                source_conn.backup(materialized_conn)
+                materialized_conn.commit()
             finally:
-                destination.close()
                 source_conn.close()
             artifact_format = "sqlite"
         else:
-            _import_d1_sql(snapshot, sqlite_path)
+            _import_d1_sql(snapshot_handle, materialized_conn)
             artifact_format = "sql"
-        sqlite_path.chmod(0o600)
-        _validate_sqlite_artifact(sqlite_path)
-        materialized_identity = _measure_regular_file(sqlite_path)
-        if (
-            materialized_identity.device,
-            materialized_identity.inode,
-        ) != created_identity:
-            raise ValueError("D1 materialized artifact path was replaced")
-        _require_file_identity(snapshot, raw_identity)
-        return (
-            raw_identity.digest,
-            raw_identity.size,
-            artifact_format,
-            materialized_identity,
-        )
+        try:
+            sqlite_path.chmod(0o600)
+            _validate_sqlite_connection(materialized_conn)
+            # Keep path validation as an independent corruption/integrity
+            # check, then bind that named inode to the retained connection.
+            _validate_sqlite_artifact(sqlite_path)
+            materialized_identity = _measure_regular_file(sqlite_path)
+            if (
+                materialized_identity.device,
+                materialized_identity.inode,
+            ) != created_identity:
+                raise ValueError("D1 materialized artifact path was replaced")
+            _require_connection_file_identity(
+                materialized_conn, materialized_identity
+            )
+            materialized_conn.row_factory = sqlite3.Row
+            materialized_conn.execute("PRAGMA query_only=ON")
+            return (
+                raw_identity.digest,
+                raw_identity.size,
+                artifact_format,
+                materialized_identity,
+                materialized_conn,
+            )
+        except Exception:
+            materialized_conn.close()
+            materialized_conn = None
+            raise
+    except Exception:
+        if materialized_conn is not None:
+            materialized_conn.close()
+        raise
     finally:
+        snapshot_handle.close()
         snapshot.unlink(missing_ok=True)
 
 
@@ -375,9 +497,10 @@ def materialize_d1_export(
     artifact: Path,
     sqlite_path: Path,
 ) -> tuple[str, int, str]:
-    digest, size, artifact_format, _identity = (
+    digest, size, artifact_format, _identity, materialized_conn = (
         _materialize_d1_export_with_identity(artifact, sqlite_path)
     )
+    materialized_conn.close()
     return digest, size, artifact_format
 
 
@@ -781,6 +904,8 @@ def _build_authenticated_export_authority():
             "_sqlite_path",
             "_materialized_identity",
             "_source_conn",
+            "_source_claimed",
+            "_baseline_json",
             "_exported_at",
             "_authenticated",
             "__weakref__",
@@ -794,24 +919,24 @@ def _build_authenticated_export_authority():
                 raise RuntimeError(
                     "pinned Wrangler export was not minted by governed acquisition"
                 )
-            _require_file_identity(
-                self._sqlite_path, self._materialized_identity
-            )
-
-        def open_source(self) -> sqlite3.Connection:
-            self._require_acquired()
-            if self._source_conn is not None:
-                raise RuntimeError("pinned Wrangler export source is single-use")
-            source = open_export_sqlite(self._sqlite_path)
             try:
                 _require_file_identity(
                     self._sqlite_path, self._materialized_identity
                 )
+                _require_connection_file_identity(
+                    self._source_conn, self._materialized_identity
+                )
             except Exception:
-                source.close()
+                acquired_exports.discard(self)
+                self._source_conn.close()
                 raise
-            self._source_conn = source
-            return source
+
+        def open_source(self) -> sqlite3.Connection:
+            self._require_acquired()
+            if self._source_claimed:
+                raise RuntimeError("pinned Wrangler export source is single-use")
+            self._source_claimed = True
+            return self._source_conn
 
         def authenticate_local(
             self,
@@ -826,12 +951,29 @@ def _build_authenticated_export_authority():
                 raise RuntimeError(
                     "pinned Wrangler export authentication is single-use"
                 )
-            source = self._source_conn
-            if source is None:
+            if not self._source_claimed:
                 raise RuntimeError(
                     "pinned Wrangler export source must be opened exactly once"
                 )
+            if type(tables) is not tuple or tables != GOVERNED_D1_SYNC_TABLES:
+                raise ValueError(
+                    "authenticated D1 reconciliation inventory is not canonical"
+                )
+            source = self._source_conn
+            baseline = json.loads(self._baseline_json)
+            observed_content, observed_schema, observed_counts = (
+                governed_content_identity(source, GOVERNED_D1_SYNC_TABLES)
+            )
             source_cursor = _change_seq(source)
+            if baseline != {
+                "source_change_seq": source_cursor,
+                "source_content_digest": observed_content,
+                "source_schema_digest": observed_schema,
+                "table_counts": observed_counts,
+            }:
+                raise ValueError(
+                    "pinned D1 export view changed after governed acquisition"
+                )
             local_cursor = _local_change_seq(local)
             if source_cursor != local_cursor:
                 raise ValueError(
@@ -843,8 +985,33 @@ def _build_authenticated_export_authority():
                 local_schema_digest,
                 counts,
             ) = _exact_source_local_reconciliation(source, local, tables)
+            final_content, final_schema, final_counts = governed_content_identity(
+                source, GOVERNED_D1_SYNC_TABLES
+            )
+            final_cursor = _change_seq(source)
+            if (
+                baseline
+                != {
+                    "source_change_seq": final_cursor,
+                    "source_content_digest": final_content,
+                    "source_schema_digest": final_schema,
+                    "table_counts": final_counts,
+                }
+                or content_digest != baseline["source_content_digest"]
+                or source_schema_digest != baseline["source_schema_digest"]
+                or counts != baseline["table_counts"]
+            ):
+                raise ValueError(
+                    "pinned D1 export view changed during reconciliation"
+                )
+            _require_connection_file_identity(
+                source, self._materialized_identity
+            )
             _require_file_identity(
                 self._sqlite_path, self._materialized_identity
+            )
+            _require_connection_file_identity(
+                source, self._materialized_identity
             )
             facts = {
                 "sync_kind": sync_kind,
@@ -886,14 +1053,44 @@ def _build_authenticated_export_authority():
             artifact_size,
             artifact_format,
             materialized_identity,
+            materialized_conn,
         ) = _materialize_d1_export_with_identity(raw_artifact, materialized)
+        try:
+            materialized_conn.execute("BEGIN")
+            content_digest, schema_digest, counts = governed_content_identity(
+                materialized_conn, GOVERNED_D1_SYNC_TABLES
+            )
+            source_cursor = _change_seq(materialized_conn)
+            baseline_json = json.dumps(
+                {
+                    "source_change_seq": source_cursor,
+                    "source_content_digest": content_digest,
+                    "source_schema_digest": schema_digest,
+                    "table_counts": counts,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            _require_connection_file_identity(
+                materialized_conn, materialized_identity
+            )
+            _require_file_identity(materialized, materialized_identity)
+            _require_connection_file_identity(
+                materialized_conn, materialized_identity
+            )
+        except Exception:
+            materialized_conn.close()
+            raise
         acquired = object.__new__(_PinnedWranglerExport)
         acquired.export_digest = export_digest
         acquired.artifact_size = artifact_size
         acquired.artifact_format = artifact_format
         acquired._sqlite_path = materialized
         acquired._materialized_identity = materialized_identity
-        acquired._source_conn = None
+        acquired._source_conn = materialized_conn
+        acquired._source_claimed = False
+        acquired._baseline_json = baseline_json
         acquired._exported_at = _utc_now().isoformat()
         acquired._authenticated = False
         acquired_exports.add(acquired)

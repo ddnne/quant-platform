@@ -12,7 +12,7 @@ import os
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import pytest
 import pit
@@ -89,6 +89,22 @@ def _write_private_d1_export(
                 f"VALUES ({change_placeholders})",
                 tuple(row[column] for column in change_columns),
             )
+
+
+def _add_governed_inventory(path: Path, tables: tuple[str, ...]) -> None:
+    """Fill test-only placeholder tables for the exact production inventory."""
+    with sqlite3.connect(path) as conn:
+        existing = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM main.sqlite_master WHERE type='table'"
+            )
+        }
+        for table in tables:
+            if table in existing:
+                continue
+            quoted = '"' + table.replace('"', '""') + '"'
+            conn.execute(f"CREATE TABLE {quoted} (placeholder TEXT)")
 
 
 def test_sync_script_exists():
@@ -865,6 +881,141 @@ def test_materialization_hashes_and_imports_one_raw_snapshot(
         ).fetchone()[0] == 100
 
 
+def test_sql_materialization_consumes_retained_snapshot_during_path_swap(
+    tmp_path, sync_module, monkeypatch
+):
+    source_a = tmp_path / "source-a.sql"
+    source_b = tmp_path / "source-b.sql"
+    source_a.write_text(
+        "CREATE TABLE governed(value TEXT);\n"
+        "INSERT INTO governed VALUES ('A');\n",
+        encoding="utf-8",
+    )
+    source_b.write_text(
+        "CREATE TABLE governed(value TEXT);\n"
+        "INSERT INTO governed VALUES ('B');\n",
+        encoding="utf-8",
+    )
+    raw_a = source_a.read_bytes()
+    expected_digest = "sha256:" + hashlib.sha256(raw_a).hexdigest()
+    real_import = sync_module._private_export._import_d1_sql
+    attacked = []
+
+    def swap_named_snapshot(sql_handle, destination):
+        snapshot_path = Path(sql_handle.name)
+        retained_a = tmp_path / "retained-snapshot-a.sql"
+        os.replace(snapshot_path, retained_a)
+        os.replace(source_b, snapshot_path)
+        try:
+            attacked.append(snapshot_path)
+            return real_import(sql_handle, destination)
+        finally:
+            os.replace(snapshot_path, source_b)
+            os.replace(retained_a, snapshot_path)
+
+    monkeypatch.setattr(
+        sync_module._private_export, "_import_d1_sql", swap_named_snapshot
+    )
+    output = tmp_path / "materialized.sqlite"
+    digest, _size, artifact_format = sync_module._materialize_d1_export(
+        source_a, output
+    )
+
+    assert attacked
+    assert digest == expected_digest
+    assert artifact_format == "sql"
+    with sqlite3.connect(output) as conn:
+        assert conn.execute("SELECT value FROM governed").fetchone()[0] == "A"
+
+
+def test_sqlite_raw_connection_swap_cannot_bind_a_digest_to_b_content(
+    tmp_path, sync_module, monkeypatch
+):
+    source_a = tmp_path / "source-a.sqlite"
+    source_b = tmp_path / "source-b.sqlite"
+    _write_private_d1_export(
+        source_a,
+        current_rows=(_record(100, ingested_at="2025-04-02T01:00:00+09:00"),),
+    )
+    _write_private_d1_export(
+        source_b,
+        current_rows=(_record(999, ingested_at="2025-04-02T01:00:00+09:00"),),
+    )
+    real_connect = sync_module._private_export.sqlite3.connect
+    attacked = []
+
+    def connect_swapped_snapshot(database, *args, **kwargs):
+        rendered = os.fspath(database)
+        if (
+            rendered.startswith("file:")
+            and ".pinned-d1-source-" in rendered
+        ):
+            snapshot_path = Path(unquote(rendered[5:].split("?", 1)[0]))
+            retained_a = tmp_path / "retained-raw-a.sqlite"
+            os.replace(snapshot_path, retained_a)
+            os.replace(source_b, snapshot_path)
+            try:
+                connection = real_connect(database, *args, **kwargs)
+                attacked.append(snapshot_path)
+            finally:
+                os.replace(snapshot_path, source_b)
+                os.replace(retained_a, snapshot_path)
+            return connection
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(
+        sync_module._private_export.sqlite3, "connect", connect_swapped_snapshot
+    )
+    with pytest.raises(ValueError, match="source connection/raw identity"):
+        sync_module._materialize_d1_export(
+            source_a, tmp_path / "materialized.sqlite"
+        )
+    assert attacked
+
+
+def test_materialized_connection_swap_cannot_bind_a_path_to_b_view(
+    tmp_path, sync_module, monkeypatch
+):
+    source_a = tmp_path / "source-a.sqlite"
+    connection_b = tmp_path / "connection-b.sqlite"
+    _write_private_d1_export(
+        source_a,
+        current_rows=(_record(100, ingested_at="2025-04-02T01:00:00+09:00"),),
+    )
+    _write_private_d1_export(
+        connection_b,
+        current_rows=(_record(999, ingested_at="2025-04-02T01:00:00+09:00"),),
+    )
+    output = tmp_path / "materialized.sqlite"
+    retained_created = tmp_path / "retained-created.sqlite"
+    real_connect = sync_module._private_export.sqlite3.connect
+    attacked = []
+
+    def connect_swapped_destination(database, *args, **kwargs):
+        if os.fspath(database) == os.fspath(output):
+            os.replace(output, retained_created)
+            os.replace(connection_b, output)
+            try:
+                connection = real_connect(database, *args, **kwargs)
+                connection.execute("PRAGMA journal_mode=OFF")
+                connection.execute("PRAGMA synchronous=OFF")
+                attacked.append(output)
+            finally:
+                os.replace(output, connection_b)
+                os.replace(retained_created, output)
+            return connection
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(
+        sync_module._private_export.sqlite3,
+        "connect",
+        connect_swapped_destination,
+    )
+    with pytest.raises(ValueError, match="connection/file identity mismatch"):
+        sync_module._materialize_d1_export(source_a, output)
+    assert attacked
+
+
 def test_pinned_export_reuses_one_connection_and_rejects_path_replacement(
     tmp_path, sync_module, monkeypatch
 ):
@@ -872,12 +1023,19 @@ def test_pinned_export_reuses_one_connection_and_rejects_path_replacement(
 
     raw_source = tmp_path / "remote-source.sqlite"
     replacement = tmp_path / "replacement.sqlite"
-    _write_private_d1_export(raw_source)
+    _write_private_d1_export(
+        raw_source,
+        current_rows=(_record(100, ingested_at="2025-04-02T01:00:00+09:00"),),
+    )
     _write_private_d1_export(
         replacement,
         current_rows=(_record(999, ingested_at="2025-04-02T01:00:00+09:00"),),
     )
+    governed_tables = sync_module._private_export.GOVERNED_D1_SYNC_TABLES
+    _add_governed_inventory(raw_source, governed_tables)
+    _add_governed_inventory(replacement, governed_tables)
     raw_bytes = raw_source.read_bytes()
+    expected_export_digest = "sha256:" + hashlib.sha256(raw_bytes).hexdigest()
     monkeypatch.setattr(
         d1_sync_signing,
         "_preflight_d1_sync_signing_authority",
@@ -888,23 +1046,42 @@ def test_pinned_export_reuses_one_connection_and_rejects_path_replacement(
         "run_wrangler_d1_export",
         lambda *, output_path: output_path.write_bytes(raw_bytes),
     )
-    opened_connections: list[sqlite3.Connection] = []
-    open_export = sync_module._private_export.open_export_sqlite
-
-    def tracked_open(path):
-        connection = open_export(path)
-        opened_connections.append(connection)
-        return connection
-
     monkeypatch.setattr(
-        sync_module._private_export, "open_export_sqlite", tracked_open
+        sync_module._private_export,
+        "open_export_sqlite",
+        lambda _path: pytest.fail("governed capability must never reopen its path"),
     )
     acquisition_dir = tmp_path / "acquisition"
     acquisition_dir.mkdir()
     acquired = sync_module._private_export.acquire_pinned_wrangler_export(
         acquisition_dir
     )
+    materialized = acquisition_dir / "remote-export.sqlite"
+    retained_a = tmp_path / "retained-materialized-a.sqlite"
+    real_require_identity = sync_module._private_export._require_file_identity
+    attacked = []
+
+    def swap_after_precheck(path, expected):
+        real_require_identity(path, expected)
+        if Path(path) == materialized and not attacked:
+            os.replace(materialized, retained_a)
+            os.replace(replacement, materialized)
+            attacked.append(materialized)
+
+    monkeypatch.setattr(
+        sync_module._private_export,
+        "_require_file_identity",
+        swap_after_precheck,
+    )
     opened = acquired.open_source()
+    assert attacked
+    assert opened.execute(
+        "SELECT json_extract(payload, '$.Close') FROM main.jquants_records"
+    ).fetchone()[0] == 100
+    # Complete the deterministic A/B/A attack before authentication.  The
+    # capability must retain A's already-open view throughout.
+    os.replace(materialized, replacement)
+    os.replace(retained_a, materialized)
     with pytest.raises(RuntimeError, match="source is single-use"):
         acquired.open_source()
 
@@ -920,12 +1097,13 @@ def test_pinned_export_reuses_one_connection_and_rejects_path_replacement(
     def reconcile_same_connection(source, observed_local, tables):
         assert source is opened
         assert observed_local is local
-        assert tables == ("governed",)
+        assert tables == governed_tables
+        baseline = json.loads(acquired._baseline_json)
         return (
-            "sha256:" + "1" * 64,
-            "sha256:" + "2" * 64,
+            baseline["source_content_digest"],
+            baseline["source_schema_digest"],
             "sha256:" + "3" * 64,
-            {"governed": 0},
+            baseline["table_counts"],
         )
 
     monkeypatch.setattr(
@@ -935,12 +1113,18 @@ def test_pinned_export_reuses_one_connection_and_rejects_path_replacement(
     )
     authenticated = acquired.authenticate_local(
         local,
-        ("governed",),
+        governed_tables,
         sync_kind="FULL",
         prior_audit_digest=None,
     )
-    assert authenticated is not None
-    assert opened_connections == [opened]
+    facts = authenticated._consume_for_signing()
+    assert facts["export_digest"] == expected_export_digest
+    assert facts["source_content_digest"] == json.loads(
+        acquired._baseline_json
+    )["source_content_digest"]
+    assert opened.execute(
+        "SELECT json_extract(payload, '$.Close') FROM main.jquants_records"
+    ).fetchone()[0] == 100
     opened.close()
     local.close()
 
@@ -953,7 +1137,7 @@ def test_pinned_export_reuses_one_connection_and_rejects_path_replacement(
         with pytest.raises(ValueError, match="identity changed"):
             acquired.authenticate_local(
                 local,
-                (),
+                governed_tables,
                 sync_kind="FULL",
                 prior_audit_digest=None,
             )

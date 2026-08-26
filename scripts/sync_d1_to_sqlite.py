@@ -54,22 +54,7 @@ from storage.sqlite_store import SqliteStore  # noqa: E402
 
 _MirrorResult = TypeVar("_MirrorResult")
 
-DEFAULT_TABLES: tuple[str, ...] = (
-    "jquants_market_calendar",
-    "jquants_listed_info",
-    "jquants_daily_bars",
-    "jquants_records",
-    "jquants_market_calendar_revisions",
-    "jquants_listed_info_revisions",
-    "jquants_daily_bars_revisions",
-    "jquants_records_revisions",
-    "ingestion_run_log",
-    "ingestion_validation",
-    "ingestion_watermarks",
-    "raw_retention_manifests",
-    "coverage_segments",
-    "collection_receipts",
-)
+DEFAULT_TABLES: tuple[str, ...] = _private_export.GOVERNED_D1_SYNC_TABLES
 DEFAULT_PAGE_LIMIT = 500
 DEFAULT_MAX_PAGES = 10_000
 _CHANGE_FEED_TABLES = frozenset({
@@ -1157,6 +1142,16 @@ def _verified_sync_envelope_from_row(
     row_counts = _decode_strict_json(
         row["table_counts_json"], field="D1 sync audit SQLite table counts"
     )
+    if (
+        set(row_counts) != set(DEFAULT_TABLES)
+        or any(
+            type(table) is not str
+            or type(count) is not int
+            or count < 0
+            for table, count in dict.items(row_counts)
+        )
+    ):
+        raise ValueError("D1 sync audit SQLite table counts are not canonical")
     row_bindings = {
         "export_digest": row.get("export_digest"),
         "artifact_format": row.get("artifact_format"),
