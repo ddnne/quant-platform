@@ -1,4 +1,4 @@
-"""Receipt key resolution has no caller-spoofable test-runner branch."""
+"""Receipt trust root is verify-only; production minting stays PENDING."""
 
 from __future__ import annotations
 
@@ -13,10 +13,13 @@ from research.readiness import (
     ReadinessPublicKeyRegistry,
     _load_pinned_ready_publication_signer,
 )
+from ingestion.runtime_authority import (
+    ReceiptEvidenceAuthorityPending,
+    _open_governed_receipt_service,
+)
 from selection.budget_ledger import MassResearchDisabledError
 from storage.receipt_crypto import (
     ReceiptKeyConfigurationError,
-    load_signing_key,
     load_verify_keys,
     verify_receipt_signature,
 )
@@ -44,30 +47,26 @@ def _plant_host_pem(
     return pem_path, priv_pem
 
 
-def test_explicit_operator_policy_can_disable_host_pem(
+def test_home_and_environment_private_pem_cannot_open_receipt_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _plant_host_pem(tmp_path, monkeypatch)
-    monkeypatch.setenv("QUANT_RECEIPT_DISABLE_HOST_PEM", "1")
-    assert load_signing_key() is None
+    pem_path, private_pem = _plant_host_pem(tmp_path, monkeypatch)
+    monkeypatch.setenv(
+        "QUANT_RECEIPT_SIGNING_KEY_PEM",
+        private_pem.decode("ascii"),
+    )
+    with pytest.raises(ReceiptEvidenceAuthorityPending, match="PENDING"):
+        _open_governed_receipt_service()
+    assert pem_path.is_file()
 
 
-def test_production_signer_factory_is_argless_and_rejects_foreign_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    pem_path, priv_pem = _plant_host_pem(tmp_path, monkeypatch)
-    monkeypatch.setenv("QUANT_RECEIPT_DISABLE_HOST_PEM", "1")
-    assert load_signing_key() is None
+def test_production_receipt_module_exposes_no_minting_primitive() -> None:
+    import storage.receipt_crypto as crypto
 
-    with pytest.raises(TypeError, match="unexpected keyword argument 'pem'"):
-        load_signing_key(pem=priv_pem)  # type: ignore[call-arg]
-    with pytest.raises(TypeError, match="unexpected keyword argument 'path'"):
-        load_signing_key(path=pem_path)  # type: ignore[call-arg]
-    with pytest.raises(TypeError, match="unexpected keyword argument 'key_id'"):
-        load_signing_key(key_id="attacker")  # type: ignore[call-arg]
-
-    monkeypatch.setenv("QUANT_RECEIPT_SIGNING_KEY_PEM", priv_pem.decode("ascii"))
-    assert load_signing_key() is None
+    assert not hasattr(crypto, "ReceiptSigningKey")
+    assert not hasattr(crypto, "load_signing_key")
+    assert not hasattr(crypto, "build_signed_digest_fields")
+    assert not hasattr(crypto, "Ed25519PrivateKey")
 
 
 def test_verify_registry_env_and_loader_arguments_cannot_self_root(
@@ -85,7 +84,6 @@ def test_verify_registry_env_and_loader_arguments_cannot_self_root(
     monkeypatch.setenv("QUANT_RECEIPT_KEY_ID", key_id)
     monkeypatch.setenv("QUANT_RECEIPT_SIGNING_KEY_PEM", private_pem.decode("ascii"))
 
-    assert load_signing_key() is None
     with pytest.raises(TypeError, match="unexpected keyword argument 'path'"):
         load_verify_keys(path=attacker_registry)  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="unexpected keyword argument 'extra'"):
@@ -96,7 +94,7 @@ def test_verify_registry_env_and_loader_arguments_cannot_self_root(
         )
 
 
-def test_matching_pinned_test_key_still_cannot_enable_production_signer(
+def test_matching_pinned_test_key_still_cannot_enable_production_authority(
     monkeypatch: pytest.MonkeyPatch, receipt_ed25519_keys
 ) -> None:
     monkeypatch.setenv(
@@ -104,7 +102,8 @@ def test_matching_pinned_test_key_still_cannot_enable_production_signer(
         receipt_ed25519_keys.private_pem.decode("ascii"),
     )
     monkeypatch.setenv("QUANT_RECEIPT_KEY_ID", "attacker-asserted-id")
-    assert load_signing_key() is None
+    with pytest.raises(ReceiptEvidenceAuthorityPending, match="PENDING"):
+        _open_governed_receipt_service()
 
 
 def test_committed_receipt_registry_has_no_current_signing_authority() -> None:
@@ -151,7 +150,8 @@ def test_revoked_same_uid_key_cannot_reactivate_receipt_minting(
     _plant_host_pem(tmp_path, monkeypatch, private_pem=private_pem)
     monkeypatch.delenv("QUANT_RECEIPT_DISABLE_HOST_PEM", raising=False)
 
-    assert load_signing_key() is None
+    with pytest.raises(ReceiptEvidenceAuthorityPending, match="PENDING"):
+        _open_governed_receipt_service()
     assert load_verify_keys() == {}
 
 
@@ -251,7 +251,8 @@ def test_pytest_current_test_cannot_disable_host_pem(
     monkeypatch.delenv("QUANT_RECEIPT_DISABLE_HOST_PEM", raising=False)
     monkeypatch.delenv("QUANT_READINESS_DISABLE_HOST_PEM", raising=False)
 
-    assert load_signing_key() is None
+    with pytest.raises(ReceiptEvidenceAuthorityPending, match="PENDING"):
+        _open_governed_receipt_service()
     assert pem_path.is_file()
 
     with pytest.raises(MassResearchDisabledError, match="dedicated readiness"):

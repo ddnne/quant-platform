@@ -185,14 +185,8 @@ def test_run_jquants_catalog_incremental_default_window(
     store.close()
 
 
-def test_run_jquants_without_authority_does_not_write_structured(
-    tmp_path, monkeypatch
-):
+def test_run_jquants_without_authority_does_not_write_structured(tmp_path):
     """Governed fact upsert is forbidden until SignedReceiptAuthority is verified."""
-    monkeypatch.setattr(
-        "ingestion.runtime_authority.load_signing_key",
-        lambda **kwargs: None,
-    )
     http = _CatalogHttp([{"Code": "8697", "Date": "2025-04-01", "Close": 100}])
     store = _store(tmp_path)
     today = datetime(2025, 4, 2, 9, 0, 0)

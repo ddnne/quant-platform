@@ -330,7 +330,7 @@ def test_every_digest_alias_is_bound(
 def test_valid_signature_cannot_bypass_scope_observation_digest_chain(
     receipt_ed25519_keys: SimpleNamespace,
 ) -> None:
-    from storage.receipt_crypto import build_signed_digest_fields
+    from tests.receipt_test_support import build_test_signed_digest_fields
 
     auth = _SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
     receipt = _issue(auth, _calendar_required())
@@ -343,7 +343,7 @@ def test_valid_signature_cannot_bypass_scope_observation_digest_chain(
         "issued_at",
     ):
         claims.pop(envelope_field)
-    inconsistent_but_signed = build_signed_digest_fields(
+    inconsistent_but_signed = build_test_signed_digest_fields(
         signing_key=receipt_ed25519_keys.signing_key,
         closure_claims=claims,
     )

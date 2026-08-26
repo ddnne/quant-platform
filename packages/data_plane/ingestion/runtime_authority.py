@@ -1,10 +1,11 @@
-"""Trusted ingestion runtime — sole holder of receipt signing keys.
+"""Trusted ingestion reconciliation runtime (verify-only client process).
 
-Production ingestion receives a private governed service, never the private-key
-issuer.  The service re-parses persisted immutable raw bytes with the canonical
-source adapter, re-runs the canonical normalizer, rereads those exact natural
-keys from the still-open structured transaction, and only then signs and
-commits the fact/receipt transaction.
+The acquisition process never holds receipt private material.  It re-parses
+persisted immutable raw bytes with the canonical source adapter, re-runs the
+canonical normalizer, rereads exact natural keys, and only then creates a
+one-shot opaque reconciliation handle.  A separately provisioned evidence
+authority must consume that handle.  Until that authority exists, production
+fails closed and no COMPLETE-eligible receipt is committed.
 """
 
 from __future__ import annotations
@@ -24,13 +25,7 @@ from storage.coverage_ledger import (
     RequiredCoverageSegment,
     record_collection_receipt,
 )
-from storage.receipt_crypto import (
-    ReceiptSigningKey,
-    STANDARD_CLAIM_KEYS,
-    build_signed_digest_fields,
-    canonical_evidence_digest,
-    load_signing_key,
-)
+from storage.receipt_crypto import STANDARD_CLAIM_KEYS, canonical_evidence_digest
 
 if TYPE_CHECKING:
     from storage.sqlite_store import SqliteStore
@@ -49,6 +44,7 @@ _SERVICE_SEAL = object()
 _PERSISTED_JQUANTS_SEAL = object()
 _COLLECTION_CONTEXT_SEAL = object()
 _GOVERNED_JQUANTS_CLIENT_SEAL = object()
+_RECONCILED_COLLECTION_SEAL = object()
 _TRUSTED_JQUANTS_FETCHES: WeakKeyDictionary[Any, dict[str, Any]] = (
     WeakKeyDictionary()
 )
@@ -59,9 +55,16 @@ _GOVERNED_JQUANTS_CLIENTS: WeakSet[Any] = WeakSet()
 _PERSISTED_JQUANTS_COLLECTIONS: WeakKeyDictionary[Any, dict[str, Any]] = (
     WeakKeyDictionary()
 )
+_RECONCILED_COLLECTIONS: WeakKeyDictionary[Any, dict[str, Any]] = (
+    WeakKeyDictionary()
+)
 _CAPABILITY_REGISTRY_LOCK = Lock()
 _MAX_CONTEXT_AGE_SECONDS = 15 * 60
 _MAX_CLOCK_SKEW_SECONDS = 5
+
+
+class ReceiptEvidenceAuthorityPending(RuntimeError):
+    """The dedicated receipt evidence authority has not been provisioned."""
 
 
 def _utc_now() -> str:
@@ -97,6 +100,18 @@ class _PersistedJQuantsCollection:
     def __post_init__(self) -> None:
         if self._seal is not _PERSISTED_JQUANTS_SEAL:
             raise TypeError("persisted J-Quants evidence is minted by ingestion runtime")
+
+
+@dataclass(frozen=True, eq=False)
+class _ReconciledCollectionEvidence:
+    """Opaque one-shot handle; scalar claims are never an authority API."""
+
+    _seal: object
+    _authority_id: object
+
+    def __post_init__(self) -> None:
+        if self._seal is not _RECONCILED_COLLECTION_SEAL:
+            raise TypeError("reconciled evidence must be minted by ingestion runtime")
 
 
 def _seal_persisted_jquants_collection(
@@ -270,7 +285,6 @@ class _GovernedReceiptService:
     """Positive capability for DB/raw reconciliation and receipt persistence."""
 
     _seal: object
-    _signing_key: ReceiptSigningKey
     _clock: Callable[[], str]
     _authority_id: object
 
@@ -301,6 +315,44 @@ class _GovernedReceiptService:
         with _CAPABILITY_REGISTRY_LOCK:
             if self not in _GOVERNED_SERVICES:
                 raise TypeError("receipt service is not runtime-registered")
+
+    def _consume_reconciled_evidence(
+        self, evidence: _ReconciledCollectionEvidence
+    ) -> Mapping[str, Any]:
+        """Consume one runtime-registered handle exactly once.
+
+        A copied object is not present in the registry even when a caller can
+        import private implementation names.  The authority identity and
+        consumed bit also prevent cross-service use and replay.
+        """
+        self._assert_registered()
+        if (
+            type(evidence) is not _ReconciledCollectionEvidence
+            or evidence._seal is not _RECONCILED_COLLECTION_SEAL
+        ):
+            raise TypeError("receipt authority requires opaque reconciled evidence")
+        with _CAPABILITY_REGISTRY_LOCK:
+            state = _RECONCILED_COLLECTIONS.get(evidence)
+            if state is None:
+                raise TypeError("reconciled evidence is not runtime-registered")
+            if state["authority_id"] is not self._authority_id:
+                raise TypeError("reconciled evidence belongs to another authority")
+            if state["consumed"]:
+                raise TypeError("reconciled evidence has already been consumed")
+            state["consumed"] = True
+            claims = state["claims"]
+        if not isinstance(claims, Mapping):  # pragma: no cover - registry invariant
+            raise TypeError("reconciled evidence registry is invalid")
+        return claims
+
+    def _issue_reconciled_evidence(
+        self, evidence: _ReconciledCollectionEvidence
+    ) -> Mapping[str, Any]:
+        """Production base has no local receipt-minting implementation."""
+        del evidence
+        raise ReceiptEvidenceAuthorityPending(
+            "receipt evidence authority is PENDING: no local signer exists"
+        )
 
     def open_jquants_client(
         self,
@@ -359,7 +411,7 @@ class _GovernedReceiptService:
         source_request: Mapping[str, Any] | None = None,
         extra_evidence: Mapping[str, Any] | None = None,
     ) -> CollectionReceipt:
-        """Commit, independently remeasure persisted state, sign, and record.
+        """Independently remeasure state, request issuance, and atomically record.
 
         Counts, digests, parsed/normalized rows, table names, and exhaustion
         claims are never parameters.  They are derived from the required
@@ -492,10 +544,20 @@ class _GovernedReceiptService:
                 source_request=source_request,
                 extra_evidence=trusted_extras,
             )
-            signed = build_signed_digest_fields(
-                signing_key=self._signing_key,
-                closure_claims=claims,
+            # Registration deliberately stays inline at the end of the trusted
+            # reconciliation sequence.  A module-level claims-to-capability
+            # helper would be an importable mint oracle.
+            evidence = _ReconciledCollectionEvidence(
+                _seal=_RECONCILED_COLLECTION_SEAL,
+                _authority_id=self._authority_id,
             )
+            with _CAPABILITY_REGISTRY_LOCK:
+                _RECONCILED_COLLECTIONS[evidence] = {
+                    "authority_id": self._authority_id,
+                    "claims": MappingProxyType(dict(claims)),
+                    "consumed": False,
+                }
+            signed = dict(self._issue_reconciled_evidence(evidence))
             receipt = CollectionReceipt(
                 source=required.source,
                 dataset=required.dataset,
@@ -524,24 +586,16 @@ class _GovernedReceiptService:
 
 
 def _open_governed_receipt_service() -> _GovernedReceiptService:
-    """Open the only production capability that can persist signed SUCCESS.
+    """Fail closed until a separate receipt evidence service is provisioned.
 
-    The factory is deliberately argument-free: private material comes only
-    from the dedicated runtime configuration, and ``load_signing_key`` derives
-    the issuer id by exact match against the committed verifier registry.
+    There is intentionally no HOME/env PEM fallback and no local signer.  The
+    future service must run under a dedicated principal, independently repeat
+    raw/parser/structured reconciliation, and consume only the opaque handle.
     """
-    key = load_signing_key()
-    if key is None:
-        raise RuntimeError("receipt signing authority is not configured")
-    service = _GovernedReceiptService(
-        _seal=_SERVICE_SEAL,
-        _signing_key=key,
-        _clock=_utc_now,
-        _authority_id=object(),
+    raise ReceiptEvidenceAuthorityPending(
+        "receipt evidence authority is PENDING: dedicated principal/service "
+        "with independent raw/parser/structured readback is not provisioned"
     )
-    with _CAPABILITY_REGISTRY_LOCK:
-        _GOVERNED_SERVICES.add(service)
-    return service
 
 
 def _direct_jquants_http() -> Any:

@@ -180,16 +180,16 @@ def synced_cf_d1_db(
 
 
 @pytest.fixture(autouse=True)
-def _disable_host_receipt_pem(
+def _configure_receipt_verifier_fixtures(
     monkeypatch: pytest.MonkeyPatch, receipt_ed25519_keys: SimpleNamespace
 ) -> None:
-    """Never load operator ~/.config receipt PEM during pytest.
+    """Bind only tests-owned receipt keys and keep readiness fail-closed.
 
-    Bind the tmp Ed25519 helper used by snapshot/coherence tests that import
+    Product receipt crypto is verify-only. Bind the tmp Ed25519 helper used by
+    snapshot/coherence tests that import
     ``tests.test_phase61_coverage_v2._signed_digests`` without that module's
     autouse fixture.
     """
-    monkeypatch.setenv("QUANT_RECEIPT_DISABLE_HOST_PEM", "1")
     monkeypatch.setenv("QUANT_READINESS_DISABLE_HOST_PEM", "1")
     import tests.test_phase61_coverage_v2 as phase61
 

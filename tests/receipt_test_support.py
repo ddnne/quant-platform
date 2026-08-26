@@ -9,7 +9,8 @@ and requires an explicitly injected ephemeral test key.
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,15 +24,84 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from data_contracts import coverage_contract_for
 from storage.coverage_ledger import CollectionReceipt, RequiredCoverageSegment
 from storage.receipt_crypto import (
-    ReceiptSigningKey,
-    build_signed_digest_fields,
+    PARSER_NORMALIZER_VERSION,
+    SIGNED_RECEIPT_CLAIMS_VERSION,
+    body_digest,
     canonical_evidence_digest,
+    canonical_receipt_body,
     partition_extra_digests,
 )
 
 
 _TEST_EVIDENCE_SEAL = object()
 _TEST_EVIDENCE: WeakSet[Any] = WeakSet()
+
+
+@dataclass(frozen=True)
+class TestReceiptSigningKey:
+    """Ephemeral private material confined to the test tree."""
+
+    key_id: str
+    private: Ed25519PrivateKey
+
+    def sign(self, body: bytes) -> str:
+        signature = self.private.sign(body)
+        return "ed25519:" + base64.b64encode(signature).decode("ascii")
+
+
+def build_test_signed_digest_fields(
+    *,
+    signing_key: TestReceiptSigningKey,
+    closure_claims: Mapping[str, Any],
+    issued_at: str | None = None,
+) -> dict[str, Any]:
+    """Build a signed verifier fixture without restoring product mint APIs."""
+    issued = issued_at or datetime.now(timezone.utc).isoformat()
+    body_fields = dict(closure_claims)
+    extras = partition_extra_digests(body_fields.get("extra_digests"))
+    forbidden = {
+        "signature",
+        "signed_body_b64",
+        "body_digest",
+        "eligibility",
+        "issuer_class",
+        "issuer_key_id",
+    }
+    overlap = sorted(forbidden & set(body_fields))
+    if overlap:
+        raise ValueError(f"closure claims contain signature fields: {overlap}")
+    body_fields.update(
+        {
+            "version": SIGNED_RECEIPT_CLAIMS_VERSION,
+            "parser_normalizer_version": PARSER_NORMALIZER_VERSION,
+            "issuer_id": signing_key.key_id,
+            "issued_at": issued,
+            "extra_digests": extras,
+        }
+    )
+    body = canonical_receipt_body(body_fields)
+    envelope = {
+        "eligibility": "TRUSTED_COLLECTION",
+        "issuer_class": "SignedReceiptAuthority",
+        "issuer_key_id": signing_key.key_id,
+        "issuer_id": signing_key.key_id,
+        "parser_normalizer_version": PARSER_NORMALIZER_VERSION,
+        "signed_body_b64": base64.b64encode(body).decode("ascii"),
+        "signature": signing_key.sign(body),
+        "body_digest": body_digest(body),
+        "issued_at": issued,
+        "checked_at": body_fields["checked_at"],
+        "source_request_digest": body_fields["source_request_digest"],
+        "raw_manifest_digest": body_fields["raw_manifest_digest"],
+        "raw": body_fields["raw_digest"],
+        "structured_generation": body_fields["structured_generation"],
+        "structured_digest": body_fields["structured_digest"],
+        "scope_digest": body_fields["scope_digest"],
+        "observation_digest": body_fields["observation_digest"],
+        "extra_digests": extras,
+    }
+    envelope.update(extras)
+    return envelope
 
 
 def generate_test_receipt_keypair(
@@ -111,23 +181,26 @@ def configure_test_receipt_authority(
         key_id=resolved_key_id,
         private_pem=private_pem,
         public_raw=public_raw,
-        signing_key=ReceiptSigningKey(key_id=resolved_key_id, _private=private),
+        signing_key=TestReceiptSigningKey(
+            key_id=resolved_key_id,
+            private=private,
+        ),
     )
 
 
 def open_test_receipt_service(
     *,
-    signing_key: ReceiptSigningKey,
+    signing_key: TestReceiptSigningKey,
     clock: Any | None = None,
 ) -> Any:
     """Construct/register governed service authority only for unit tests."""
     import ingestion.runtime_authority as runtime
 
-    service = runtime._GovernedReceiptService(
+    service = _RuntimeTestGovernedReceiptService(
         _seal=runtime._SERVICE_SEAL,
-        _signing_key=signing_key,
         _clock=clock or runtime._utc_now,
         _authority_id=object(),
+        _test_signing_key=signing_key,
     )
     with runtime._CAPABILITY_REGISTRY_LOCK:
         runtime._GOVERNED_SERVICES.add(service)
@@ -174,13 +247,13 @@ TestReconciledEvidence.__test__ = False
 class TestSignedReceiptAuthority:
     """Ephemeral fixture authority; never imported by production code."""
 
-    signing_key: ReceiptSigningKey
+    signing_key: TestReceiptSigningKey
 
     def issue(self, evidence: TestReconciledEvidence) -> CollectionReceipt:
         if not isinstance(evidence, TestReconciledEvidence) or evidence not in _TEST_EVIDENCE:
             raise TypeError("test evidence is not fixture-minted")
         claims = _thaw(evidence.claims)
-        signed = build_signed_digest_fields(
+        signed = build_test_signed_digest_fields(
             signing_key=self.signing_key,
             closure_claims=claims,
         )
@@ -302,3 +375,27 @@ def reconcile_test_evidence(
 # Old names are aliases only inside the test tree, keeping fixture diffs small.
 _SignedReceiptAuthority = TestSignedReceiptAuthority
 _reconcile_collection_evidence = reconcile_test_evidence
+build_signed_digest_fields = build_test_signed_digest_fields
+
+
+from ingestion import runtime_authority as _runtime
+
+
+@dataclass(frozen=True, eq=False)
+class _RuntimeTestGovernedReceiptService(_runtime._GovernedReceiptService):
+    """Tests-only in-process issuer used to exercise production reconciliation."""
+
+    _test_signing_key: TestReceiptSigningKey
+    _issued_evidence: list[Any] = field(
+        default_factory=list,
+        compare=False,
+        repr=False,
+    )
+
+    def _issue_reconciled_evidence(self, evidence: Any) -> Mapping[str, Any]:
+        self._issued_evidence.append(evidence)
+        claims = self._consume_reconciled_evidence(evidence)
+        return build_test_signed_digest_fields(
+            signing_key=self._test_signing_key,
+            closure_claims=dict(claims),
+        )

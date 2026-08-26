@@ -18,7 +18,8 @@ def require_governed_receipt_service(
 ) -> _GovernedReceiptService:
     """Open/verify the reconciliation capability before fact mutation.
 
-    The returned object never exposes its private-key issuer.
+    The returned object contains no receipt private key. Production issuance
+    remains unavailable until the separate evidence authority is provisioned.
     """
     if service is None:
         raise TypeError(
@@ -40,7 +41,7 @@ def emit_segment_receipt(
     source_request: Mapping[str, Any] | None = None,
     extra_evidence: Mapping[str, Any] | None = None,
 ) -> CollectionReceipt:
-    """Re-read persisted raw/facts and record one signed SUCCESS closure."""
+    """Re-read persisted raw/facts and request one signed SUCCESS closure."""
     service = require_governed_receipt_service(service)
     return service.record_persisted_success(
         store,

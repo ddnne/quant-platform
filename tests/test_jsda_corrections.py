@@ -204,11 +204,7 @@ def test_otc_correction_revision_no_lookahead_provenance_and_idempotency(
     store.close()
 
 
-def test_otc_correction_without_authority_does_not_apply(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "ingestion.runtime_authority.load_signing_key",
-        lambda **kwargs: None,
-    )
+def test_otc_correction_without_authority_does_not_apply(tmp_path):
     store = SqliteStore(tmp_path / "corrections-unsigned.sqlite")
     _seed_original(store)
     client = _CorrectionClient()

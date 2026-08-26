@@ -570,6 +570,69 @@ def test_extra_structured_key_inside_segment_is_rejected(
             collection_context=service.begin_collection(),
             service=service,
         )
+    assert service._issued_evidence == []
+    store.close()
+
+
+def test_reconciled_evidence_direct_import_is_not_a_capability(
+    receipt_ed25519_keys,
+) -> None:
+    import ingestion.runtime_authority as runtime
+
+    assert not hasattr(runtime, "_mint_reconciled_collection_evidence")
+    service = _tmp_service(receipt_ed25519_keys)
+    with pytest.raises(TypeError, match="minted by ingestion runtime"):
+        runtime._ReconciledCollectionEvidence(
+            _seal=object(),
+            _authority_id=service._authority_id,
+        )
+
+    # Even importing the implementation seal cannot register arbitrary claims.
+    forged = runtime._ReconciledCollectionEvidence(
+        _seal=runtime._RECONCILED_COLLECTION_SEAL,
+        _authority_id=service._authority_id,
+    )
+    with pytest.raises(TypeError, match="not runtime-registered"):
+        service._consume_reconciled_evidence(forged)
+
+
+@pytest.mark.parametrize(
+    "claim",
+    (
+        "observed_items",
+        "raw_row_count",
+        "structured_row_count",
+        "structured_digest",
+        "pagination_exhausted",
+        "discovery_exhausted",
+        "receipt_digests",
+    ),
+)
+def test_record_persisted_success_rejects_caller_claims(
+    claim: str,
+    receipt_ed25519_keys,
+) -> None:
+    service = _tmp_service(receipt_ed25519_keys)
+    store = SqliteStore(":memory:")
+    required = list(
+        plan_required_segments(
+            coverage_contract_for("markets_calendar"),
+            "2026-08-11",
+            source="jquants",
+        )
+    )[-1]
+    with pytest.raises(TypeError, match=claim):
+        service.record_persisted_success(
+            store,
+            required=required,
+            run_id=1,
+            collection_context=service.begin_collection(),
+            **{claim: "caller-asserted"},  # type: ignore[arg-type]
+        )
+    assert service._issued_evidence == []
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM collection_receipts"
+    ).fetchone()[0] == 0
     store.close()
 
 
@@ -615,9 +678,14 @@ def test_authority_context_cannot_be_caller_timestamp(
 def test_production_opener_rejects_clock_and_transport_injection_even_under_pytest_env(
     receipt_ed25519_keys, monkeypatch,
 ) -> None:
-    from ingestion.runtime_authority import _open_governed_receipt_service
+    from ingestion.runtime_authority import (
+        ReceiptEvidenceAuthorityPending,
+        _open_governed_receipt_service,
+    )
 
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "caller-controlled")
+    with pytest.raises(ReceiptEvidenceAuthorityPending, match="PENDING"):
+        _open_governed_receipt_service()
     with pytest.raises(TypeError, match="unexpected keyword argument 'pem'"):
         _open_governed_receipt_service(  # type: ignore[call-arg]
             pem=receipt_ed25519_keys.private_pem
@@ -659,6 +727,7 @@ def test_governed_client_constructs_direct_verified_transport(
 def test_context_and_persisted_fetch_are_single_use(
     tmp_path: Path, receipt_ed25519_keys,
 ) -> None:
+    from dataclasses import replace
     from ingestion.jquants.normalize import normalize_generic
     from ingestion.jquants.receipts import emit_segment_receipt
 
@@ -688,6 +757,17 @@ def test_context_and_persisted_fetch_are_single_use(
         collection_context=context,
         service=service,
     )
+
+    assert len(service._issued_evidence) == 1
+    evidence = service._issued_evidence[0]
+    with pytest.raises(TypeError, match="already been consumed"):
+        service._consume_reconciled_evidence(evidence)
+    copied = replace(evidence)
+    with pytest.raises(TypeError, match="not runtime-registered"):
+        service._consume_reconciled_evidence(copied)
+    other_service = _tmp_service(receipt_ed25519_keys)
+    with pytest.raises(TypeError, match="another authority"):
+        other_service._consume_reconciled_evidence(evidence)
 
     fresh_handle = _persisted_collection(
         tmp_path / "raw-2", raw, service=service

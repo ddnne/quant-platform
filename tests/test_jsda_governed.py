@@ -397,12 +397,8 @@ def test_otc_archive_refresh_reuses_fetched_index_html_not_weekends(
     store.close()
 
 
-def test_otc_archive_without_authority_does_not_write_structured(tmp_path, monkeypatch):
+def test_otc_archive_without_authority_does_not_write_structured(tmp_path):
     """Governed fact upsert is forbidden until SignedReceiptAuthority is verified."""
-    monkeypatch.setattr(
-        "ingestion.runtime_authority.load_signing_key",
-        lambda **kwargs: None,
-    )
     store = SqliteStore(tmp_path / "unsigned.sqlite")
     client = _ArchiveClient()
     report = run_otc_reference_backfill(
@@ -433,12 +429,8 @@ def test_otc_archive_without_authority_does_not_write_structured(tmp_path, monke
 
 
 def test_otc_archive_unsigned_stays_partial_without_complete_resume(
-    tmp_path, monkeypatch
+    tmp_path,
 ):
-    monkeypatch.setattr(
-        "ingestion.runtime_authority.load_signing_key",
-        lambda **kwargs: None,
-    )
     store = SqliteStore(tmp_path / "unsigned-resume.sqlite")
     client = _ArchiveClient()
     report = run_otc_reference_backfill(

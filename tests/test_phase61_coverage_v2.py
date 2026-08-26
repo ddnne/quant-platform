@@ -19,11 +19,9 @@ from storage import (
     record_collection_receipt,
 )
 from storage.coverage_ledger import EXPECTED_EMPTY_WITH_EVIDENCE
-from storage.receipt_crypto import (
-    build_signed_digest_fields,
-    canonical_evidence_digest,
-)
+from storage.receipt_crypto import canonical_evidence_digest
 from storage.sqlite_store import SqliteStore
+from tests.receipt_test_support import build_test_signed_digest_fields
 
 _REPO = Path(__file__).resolve().parents[1]
 
@@ -152,7 +150,7 @@ def _signed_digests(
         "extra_digests": extra_digests or {},
     }
     claims["observation_digest"] = canonical_evidence_digest(claims)
-    signed = build_signed_digest_fields(
+    signed = build_test_signed_digest_fields(
         signing_key=_SIGNED_KEY,
         closure_claims=claims,
     )

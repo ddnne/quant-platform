@@ -1,8 +1,9 @@
-"""Ed25519 receipt signing authority (Phase 6.2.3 P0).
+"""Public, verify-only Ed25519 receipt cryptography.
 
-Private key material is loaded only by the trusted ingestion runtime.
-Coverage/READY verification uses public keys only — issuer_class strings
-alone never grant COMPLETE eligibility.
+This product module deliberately has no private-key type, private-key loader,
+or signing helper.  Receipt minting belongs to a separately provisioned
+evidence authority; Coverage and READY consume only signed documents verified
+against the committed public-key registry.
 """
 
 from __future__ import annotations
@@ -11,16 +12,12 @@ import base64
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey,
-    Ed25519PublicKey,
-)
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 _PINNED_VERIFY_KEYS_PATH = (
     Path(__file__).resolve().parents[1]
@@ -30,7 +27,7 @@ _PINNED_VERIFY_KEYS_PATH = (
 
 
 class ReceiptKeyConfigurationError(RuntimeError):
-    """Receipt signing/verification keys are absent, malformed, or unpinned."""
+    """Receipt verification keys are absent, malformed, or unpinned."""
 
 
 PARSER_NORMALIZER_VERSION = "coverage-receipt/v4-ed25519-closure"
@@ -81,10 +78,6 @@ STANDARD_CLAIM_KEYS = frozenset(
 )
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def canonical_receipt_body(fields: Mapping[str, Any]) -> bytes:
     """Deterministic JSON bytes for signing (sorted keys, no whitespace)."""
     return json.dumps(
@@ -113,18 +106,6 @@ def canonical_evidence_digest(payload: Any) -> str:
 
 
 @dataclass(frozen=True)
-class ReceiptSigningKey:
-    """Private signing material — never construct from public digests."""
-
-    key_id: str
-    _private: Ed25519PrivateKey
-
-    def sign(self, body: bytes) -> str:
-        sig = self._private.sign(body)
-        return "ed25519:" + base64.b64encode(sig).decode("ascii")
-
-
-@dataclass(frozen=True)
 class ReceiptVerifyKey:
     key_id: str
     public_key: Ed25519PublicKey
@@ -138,18 +119,6 @@ class ReceiptVerifyKey:
             return True
         except (InvalidSignature, ValueError, TypeError):
             return False
-
-
-def load_signing_key() -> ReceiptSigningKey | None:
-    """Return no signer until a separately provisioned authority exists.
-
-    Production code is verify-only: it never reads private material from
-    HOME, environment variables, or caller-selected paths.  The compatibility
-    factory remains argument-free so governed ingestion fails closed while
-    the external receipt authority is unprovisioned.
-    """
-
-    return None
 
 
 @lru_cache(maxsize=8)
@@ -255,79 +224,15 @@ def verify_receipt_signature(
     return vk.verify(body, signature)
 
 
-def build_signed_digest_fields(
-    *,
-    signing_key: ReceiptSigningKey,
-    closure_claims: Mapping[str, Any],
-    issued_at: str | None = None,
-) -> dict[str, Any]:
-    """Sign a pre-reconciled v2 closure.
-
-    This function deliberately accepts one closed claims object rather than
-    caller-supplied counts and digests.  Only the ingestion reconciliation
-    boundary builds that object; this layer adds issuer identity and signs it.
-    """
-    issued = issued_at or _now()
-    body_fields = dict(closure_claims)
-    extras = partition_extra_digests(body_fields.get("extra_digests"))
-    body_fields.update(
-        {
-            "version": SIGNED_RECEIPT_CLAIMS_VERSION,
-            "parser_normalizer_version": PARSER_NORMALIZER_VERSION,
-            "issuer_id": signing_key.key_id,
-            "issued_at": issued,
-            "extra_digests": extras,
-        }
-    )
-    forbidden = {
-        "signature",
-        "signed_body_b64",
-        "body_digest",
-        "eligibility",
-        "issuer_class",
-        "issuer_key_id",
-    }
-    overlap = sorted(forbidden & set(closure_claims))
-    if overlap:
-        raise ValueError(f"closure claims contain signature envelope fields: {overlap}")
-    body = canonical_receipt_body(body_fields)
-    signature = signing_key.sign(body)
-    envelope = {
-        "eligibility": "TRUSTED_COLLECTION",
-        "issuer_class": "SignedReceiptAuthority",
-        "issuer_key_id": signing_key.key_id,
-        "issuer_id": signing_key.key_id,
-        "parser_normalizer_version": PARSER_NORMALIZER_VERSION,
-        "signed_body_b64": base64.b64encode(body).decode("ascii"),
-        "signature": signature,
-        "body_digest": body_digest(body),
-        "issued_at": issued,
-        "checked_at": body_fields["checked_at"],
-        "source_request_digest": body_fields["source_request_digest"],
-        "raw_manifest_digest": body_fields["raw_manifest_digest"],
-        "raw": body_fields["raw_digest"],
-        "structured_generation": body_fields["structured_generation"],
-        "structured_digest": body_fields["structured_digest"],
-        "scope_digest": body_fields["scope_digest"],
-        "observation_digest": body_fields["observation_digest"],
-        "extra_digests": extras,
-    }
-    envelope.update(extras)
-    return envelope
-
-
 __all__ = [
     "PARSER_NORMALIZER_VERSION",
     "LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION",
     "SIGNED_RECEIPT_CLAIMS_VERSION",
     "STANDARD_CLAIM_KEYS",
     "ReceiptKeyConfigurationError",
-    "ReceiptSigningKey",
     "ReceiptVerifyKey",
-    "build_signed_digest_fields",
     "canonical_evidence_digest",
     "canonical_receipt_body",
-    "load_signing_key",
     "load_verify_keys",
     "partition_extra_digests",
     "verify_receipt_signature",
