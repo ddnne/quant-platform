@@ -172,6 +172,21 @@ def _load_toml(path: Path) -> dict[str, Any]:
         return tomllib.load(fh)
 
 
+_WRANGLER_PACKAGE_SCRIPT_POLICY = {
+    "build": (
+        'wrangler deploy --dry-run --config=wrangler.toml --env="" '
+        "--outdir .wrangler-dry-run"
+    ),
+    "cf-typegen": 'wrangler types --config=wrangler.toml --env=""',
+    "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+    "dev": 'wrangler dev --config=wrangler.toml --env=""',
+    "tail": "wrangler tail --config=wrangler.toml --env=production",
+    "types": (
+        'wrangler types --config=wrangler.toml --env="" --include-runtime false'
+    ),
+}
+
+
 def _package_scripts(worker: str) -> dict[str, str]:
     path = WORKER_ROOT / worker / "package.json"
     try:
@@ -188,25 +203,18 @@ def _package_scripts(worker: str) -> dict[str, str]:
         raise ValueError(f"{worker}: package scripts must be a string map")
     frozen = dict(sorted(scripts.items()))
     for name, command in frozen.items():
-        wrangler_command = re.search(
-            r"\bwrangler\s+(deploy|dev|tail|types)\b", command
-        )
-        if wrangler_command and (
-            "--config=wrangler.toml" not in command
-            and "--config wrangler.toml" not in command
-        ):
-            raise ValueError(
-                f"{worker}: package script {name!r} must pin --config=wrangler.toml"
-            )
-        if wrangler_command and "--env=" not in command and "--env " not in command:
-            raise ValueError(
-                f"{worker}: package script {name!r} must pin an explicit --env"
-            )
-        if wrangler_command and wrangler_command.group(1) in {"deploy", "tail"}:
-            if "--dry-run" not in command and "--env=production" not in command:
+        if re.search(r"\bwrangler\b", command):
+            expected = _WRANGLER_PACKAGE_SCRIPT_POLICY.get(name)
+            if command != expected:
                 raise ValueError(
-                    f"{worker}: package script {name!r} must target production"
+                    f"{worker}: package script {name!r} violates the closed "
+                    "Wrangler command policy"
                 )
+    for required in ("build", "types"):
+        if frozen.get(required) != _WRANGLER_PACKAGE_SCRIPT_POLICY[required]:
+            raise ValueError(
+                f"{worker}: required package script {required!r} is not canonical"
+            )
     return frozen
 
 

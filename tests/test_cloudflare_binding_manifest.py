@@ -6,6 +6,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import shlex
 
 import pytest
 
@@ -158,8 +159,55 @@ def test_package_script_rejects_wrangler_config_redirect(
         return body
 
     monkeypatch.setattr(Path, "read_text", read_text)
-    with pytest.raises(ValueError, match="must pin --config=wrangler.toml"):
+    with pytest.raises(ValueError, match="closed Wrangler command policy"):
         manifest_module._package_scripts(worker)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    "script,command",
+    (
+        (
+            "deploy",
+            "wrangler deploy --config=wrangler.toml --env=production "
+            "--name quant-platform-rogue",
+        ),
+        (
+            "build",
+            'wrangler deploy --dry-run=false --config=wrangler.toml --env="" '
+            "--outdir .wrangler-dry-run",
+        ),
+        (
+            "build",
+            'wrangler deploy --dry-run --config=wrangler.toml --env="" '
+            "--outdir .wrangler-dry-run && wrangler deploy "
+            "--config=wrangler.toml --env=production",
+        ),
+        (
+            "deploy",
+            "wrangler deploy src/shadow.ts --config=wrangler.toml --env=production",
+        ),
+    ),
+)
+def test_package_script_rejects_wrangler_command_escape(
+    monkeypatch: pytest.MonkeyPatch,
+    script: str,
+    command: str,
+) -> None:
+    worker = "ingestion-jsda"
+    package = manifest_module.WORKER_ROOT / worker / "package.json"
+    original_read_text = Path.read_text
+
+    def read_text(path: Path, *args: object, **kwargs: object) -> str:
+        body = original_read_text(path, *args, **kwargs)
+        if path == package:
+            data = json.loads(body)
+            data["scripts"][script] = command
+            return json.dumps(data)
+        return body
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    with pytest.raises(ValueError, match="closed Wrangler command policy"):
+        manifest_module.build_manifest()
 
 
 def test_test_harness_configs_are_frozen_as_nonpublic_surfaces() -> None:
@@ -301,6 +349,32 @@ def test_authoritative_ci_dry_runs_test_harness_configs() -> None:
     for command in wrangler_invocations:
         assert "--config=" in command, command
         assert "--env=" in command, command
+        payload = command.split("npx --no-install wrangler ", 1)[1].rstrip(")")
+        tokens = shlex.split(payload)
+        operation = tokens[0]
+        assert operation in {"deploy", "types"}, command
+        assert not any(
+            token == "--name" or token.startswith("--name=") for token in tokens
+        ), command
+        assert sum(token.startswith("--config=") for token in tokens) == 1, command
+        assert sum(token.startswith("--env=") for token in tokens) == 1, command
+        if operation == "deploy":
+            assert tokens.count("--dry-run") == 1, command
+            assert not any(token.startswith("--dry-run=") for token in tokens), command
+            assert all(
+                token == "--dry-run"
+                or token.startswith("--config=")
+                or token.startswith("--env=")
+                for token in tokens[1:]
+            ), command
+        else:
+            assert all(
+                token.startswith("--config=")
+                or token.startswith("--env=")
+                or token == "--include-runtime=false"
+                or token in {"$base_types", "$production_types", "$staging_types"}
+                for token in tokens[1:]
+            ), command
 
 
 def test_manifest_is_fail_closed_for_toolchain_drift() -> None:
