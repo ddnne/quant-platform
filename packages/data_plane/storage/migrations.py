@@ -491,6 +491,48 @@ MIGRATIONS: tuple[Migration, ...] = (
         END;
         """,
     ),
+    Migration(
+        12,
+        "phase631_coverage_complete_transition_tombstones",
+        """
+        CREATE TABLE IF NOT EXISTS coverage_complete_transition_tombstones (
+            transition_id              TEXT PRIMARY KEY CHECK
+                (length(transition_id) = 71 AND
+                 substr(transition_id, 1, 7) = 'sha256:' AND
+                 substr(transition_id, 8) NOT GLOB '*[^0-9a-f]*'),
+            format                     TEXT NOT NULL CHECK
+                (format = 'coverage-complete-transition/v1'),
+            authority_domain           TEXT NOT NULL CHECK
+                (authority_domain =
+                 'quant-platform/coverage/complete-transition/v1'),
+            issuer_key_id              TEXT NOT NULL,
+            build_id                   TEXT NOT NULL,
+            publication_cutoff         TEXT NOT NULL CHECK
+                (length(publication_cutoff) = 10),
+            dataset_set_digest         TEXT NOT NULL,
+            from_state_digest          TEXT NOT NULL,
+            target_state_digest        TEXT NOT NULL,
+            coverage_policy_set_digest TEXT NOT NULL,
+            inventory_set_digest       TEXT NOT NULL,
+            receipt_set_digest         TEXT NOT NULL,
+            signed_evidence_json        TEXT NOT NULL,
+            consumed_at                TEXT NOT NULL,
+            UNIQUE (build_id, dataset_set_digest)
+        );
+
+        CREATE TRIGGER IF NOT EXISTS
+            coverage_complete_transition_tombstones_no_update
+        BEFORE UPDATE ON coverage_complete_transition_tombstones BEGIN
+            SELECT RAISE(ABORT, 'coverage transition tombstones are immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS
+            coverage_complete_transition_tombstones_no_delete
+        BEFORE DELETE ON coverage_complete_transition_tombstones BEGIN
+            SELECT RAISE(ABORT, 'coverage transition tombstones are immutable');
+        END;
+        """,
+    ),
 )
 
 
