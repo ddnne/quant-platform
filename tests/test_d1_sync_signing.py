@@ -123,6 +123,71 @@ def _resign(private: Ed25519PrivateKey, document: dict) -> None:
     ).decode("ascii")
 
 
+def _bound_store_and_document(tmp_path, monkeypatch, *, now: datetime):
+    from scripts import sync_d1_to_sqlite as sync
+    from storage.sqlite_store import SqliteStore
+
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    store = SqliteStore(tmp_path / "persistence.sqlite")
+    sync._ensure_export_sync_audit(store)
+    sync._record_change_seq(store, 7)
+    existing_tables = {
+        row[0]
+        for row in store._conn.execute(  # noqa: SLF001
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    for table in sync.DEFAULT_TABLES:
+        if table not in existing_tables:
+            store._conn.execute(  # noqa: SLF001
+                f'CREATE TABLE "{table}" (placeholder TEXT)'
+            )
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO jquants_records "
+        "(source,dataset,natural_key,event_time,available_at,ingested_at,payload) "
+        "VALUES ('jquants','equities_bars_daily','{}','2026-08-25',"
+        "'2026-08-25','2026-08-25','{}')"
+    )
+    store._conn.commit()  # noqa: SLF001
+    content_digest, schema_digest, counts = (
+        sync._private_export.governed_content_identity(
+            store._conn, sync.DEFAULT_TABLES  # noqa: SLF001
+        )
+    )
+    document = _signed_document(private, registry, issued_at=now)
+    document["envelope"].update(
+        {
+            "source_content_digest": content_digest,
+            "local_content_digest": content_digest,
+            "source_schema_digest": schema_digest,
+            "schema_digest": schema_digest,
+            "table_counts": counts,
+        }
+    )
+    _resign(private, document)
+    return sync, store, document
+
+
+def _install_test_sealed_audit(monkeypatch, document: dict) -> None:
+    class SealedAudit:
+        def _consume_for_persistence(self):
+            return (
+                signing.d1_sync_digest(document),
+                document["issuer_key_id"],
+                document["signature"],
+                document,
+            )
+
+    monkeypatch.setattr(
+        signing,
+        "_seal_authenticated_wrangler_export",
+        lambda _capability: SealedAudit(),
+    )
+
+
 def test_committed_d1_registry_has_no_trusted_same_uid_authority() -> None:
     registry = json.loads(
         signing._PINNED_VERIFY_REGISTRY_PATH.read_text(encoding="utf-8")
@@ -390,6 +455,117 @@ def test_verified_d1_cursor_chain_reaches_sync_boundary_without_mutable_alias(
                 conn, StatefulRow(row), recompute_local=False
             )
 
+    class StrSubclass(str):
+        pass
+
+    class IntSubclass(int):
+        pass
+
+    with sqlite3.connect(":memory:") as conn:
+        with pytest.raises(ValueError, match="types are not canonical"):
+            sync._verified_sync_envelope_from_row(
+                conn,
+                {**row, "status": StrSubclass("COMPLETE")},
+                recompute_local=False,
+            )
+    with sqlite3.connect(":memory:") as conn:
+        with pytest.raises(ValueError, match="types are not canonical"):
+            sync._verified_sync_envelope_from_row(
+                conn,
+                {**row, "source_change_seq": IntSubclass(7)},
+                recompute_local=False,
+            )
+
+
+def test_audit_insert_trigger_cannot_mutate_governed_data_and_commit_complete(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+    store._conn.executescript(  # noqa: SLF001
+        """
+        CREATE TRIGGER corrupt_governed_after_audit
+        AFTER INSERT ON local_d1_export_sync_runs BEGIN
+            DELETE FROM jquants_records;
+        END;
+        """
+    )
+    store._conn.commit()  # noqa: SLF001
+
+    with pytest.raises(ValueError, match="unowned schema objects"):
+        sync._mark_authenticated_export_complete(store, object())
+
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM jquants_records"
+    ).fetchone()[0] == 1
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM local_d1_export_sync_runs"
+    ).fetchone()[0] == 0
+    store.close()
+
+
+def test_authenticated_audit_commits_only_after_exact_final_postcondition(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+
+    envelope = sync._mark_authenticated_export_complete(store, object())
+
+    row = store._conn.execute(  # noqa: SLF001
+        "SELECT status,audit_digest,signed_evidence_json "
+        "FROM main.local_d1_export_sync_runs"
+    ).fetchone()
+    assert envelope["source_change_seq"] == 7
+    assert row[0] == "COMPLETE"
+    assert row[1] == signing.d1_sync_digest(document)
+    assert json.loads(row[2]) == document
+    store.close()
+
+
+def test_audit_persistence_rechecks_freshness_after_all_postconditions(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+    clock = {"now": now}
+    monkeypatch.setattr(signing, "_utc_now", lambda: clock["now"])
+    governed_identity = sync._private_export.governed_content_identity
+    calls = {"count": 0}
+
+    def advance_during_postcondition(conn, tables):
+        result = governed_identity(conn, tables)
+        calls["count"] += 1
+        if calls["count"] == 2:
+            clock["now"] = now + timedelta(
+                seconds=signing.D1_SYNC_AUDIT_MAX_AGE_SECONDS + 1
+            )
+        return result
+
+    monkeypatch.setattr(
+        sync._private_export,
+        "governed_content_identity",
+        advance_during_postcondition,
+    )
+
+    with pytest.raises(signing.D1SyncAuditError, match="stale"):
+        sync._mark_authenticated_export_complete(store, object())
+
+    assert calls["count"] >= 2
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM local_d1_export_sync_runs"
+    ).fetchone()[0] == 0
+    store.close()
+
 
 def test_real_sqlite_signed_chain_retains_deep_immutable_projection_identity(
     tmp_path, monkeypatch
@@ -574,6 +750,46 @@ def test_freshness_is_rechecked_at_final_verified_return(tmp_path, monkeypatch):
 
     with pytest.raises(signing.D1SyncAuditError, match="stale"):
         signing.verify_signed_d1_sync_audit(document)
+
+
+def test_current_audit_rejects_old_export_with_fresh_restatement(
+    tmp_path, monkeypatch
+):
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(private, registry, issued_at=now)
+    document["envelope"]["exported_at"] = (
+        now - timedelta(days=1)
+    ).isoformat()
+    _resign(private, document)
+
+    with pytest.raises(signing.D1SyncAuditError, match="stale"):
+        signing.verify_signed_d1_sync_audit(document)
+
+
+def test_temp_audit_table_cannot_shadow_signed_complete_persistence(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+    store._conn.execute(  # noqa: SLF001
+        "CREATE TEMP TABLE local_d1_export_sync_runs "
+        "(export_digest TEXT PRIMARY KEY, status TEXT)"
+    )
+
+    with pytest.raises(ValueError, match="temporary object"):
+        sync._mark_authenticated_export_complete(store, object())
+
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM main.local_d1_export_sync_runs"
+    ).fetchone()[0] == 0
+    store.close()
 
 
 @pytest.mark.parametrize("mutation", ["missing_status", "wrong_purpose", "two_active"])

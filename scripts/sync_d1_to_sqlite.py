@@ -493,7 +493,7 @@ def _sync_table(
 
 def _last_change_seq(store: SqliteStore) -> int:
     row = store._conn.execute(  # noqa: SLF001
-        "SELECT last_applied_change_seq FROM sync_change_state "
+        "SELECT last_applied_change_seq FROM main.sync_change_state "
         "WHERE feed = 'jquants_records'"
     ).fetchone()
     return int(row[0]) if row is not None else 0
@@ -509,7 +509,7 @@ def _record_change_seq(store: SqliteStore, value: int) -> None:
         )
     store._conn.execute(  # noqa: SLF001
         """
-        INSERT INTO sync_change_state (feed, last_applied_change_seq, updated_at)
+        INSERT INTO main.sync_change_state (feed, last_applied_change_seq, updated_at)
         VALUES ('jquants_records', ?, ?)
         ON CONFLICT(feed) DO UPDATE SET
             last_applied_change_seq = excluded.last_applied_change_seq,
@@ -623,7 +623,7 @@ def _sync_changes(
 
 def _source_table_exists(conn: sqlite3.Connection, table: str) -> bool:
     row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        "SELECT 1 FROM main.sqlite_master WHERE type='table' AND name=?",
         (table,),
     ).fetchone()
     return row is not None
@@ -640,7 +640,9 @@ def _source_change_seq(conn: sqlite3.Connection) -> int:
         raise ValueError("D1 export is missing ingestion_change_log")
     columns = {
         str(row[1])
-        for row in conn.execute("PRAGMA table_info(ingestion_change_log)").fetchall()
+        for row in conn.execute(
+            "PRAGMA main.table_info(ingestion_change_log)"
+        ).fetchall()
     }
     required = {
         "change_seq",
@@ -658,7 +660,7 @@ def _source_change_seq(conn: sqlite3.Connection) -> int:
     if missing:
         raise ValueError(f"D1 change feed is missing required columns: {missing}")
     row = conn.execute(
-        "SELECT COALESCE(MAX(change_seq), 0) FROM ingestion_change_log"
+        "SELECT COALESCE(MAX(change_seq), 0) FROM main.ingestion_change_log"
     ).fetchone()
     value = row[0] if row is not None else 0
     if not isinstance(value, int) or value < 0:
@@ -705,8 +707,10 @@ def _reset_governed_local_tables(store: SqliteStore, tables: list[str]) -> None:
     for table in tables:
         if not _source_table_exists(conn, table):
             raise ValueError(f"local mirror is missing governed table: {table}")
-        conn.execute(f'DELETE FROM "{table}"')
-    conn.execute("DELETE FROM sync_change_state WHERE feed='jquants_records'")
+        conn.execute(f'DELETE FROM main."{table}"')
+    conn.execute(
+        "DELETE FROM main.sync_change_state WHERE feed='jquants_records'"
+    )
     conn.commit()
 
 
@@ -731,7 +735,7 @@ def _sync_export_table(
                 f"export exceeded max_pages={max_pages} for table={table}"
             )
         fetched = source.execute(
-            f'SELECT rowid AS "__sync_rowid", * FROM "{table}" '
+            f'SELECT rowid AS "__sync_rowid", * FROM main."{table}" '
             'WHERE rowid > ? ORDER BY rowid LIMIT ?',
             (cursor, page_limit + 1),
         ).fetchall()
@@ -782,7 +786,7 @@ def _sync_export_changes(
         if pages >= max_pages:
             raise ValueError(f"change feed exceeded max_pages={max_pages}")
         fetched = source.execute(
-            f"SELECT {select_columns} FROM ingestion_change_log "
+            f"SELECT {select_columns} FROM main.ingestion_change_log "
             "WHERE change_seq > ? ORDER BY change_seq LIMIT ?",
             (after_seq, page_limit + 1),
         ).fetchall()
@@ -821,7 +825,7 @@ def _sync_export_changes(
 def _ensure_export_sync_audit(store: SqliteStore) -> None:
     store._conn.execute(  # noqa: SLF001
         """
-        CREATE TABLE IF NOT EXISTS local_d1_export_sync_runs (
+        CREATE TABLE IF NOT EXISTS main.local_d1_export_sync_runs (
             export_digest     TEXT PRIMARY KEY,
             artifact_format   TEXT NOT NULL,
             source_mode       TEXT NOT NULL,
@@ -846,7 +850,12 @@ def _ensure_export_sync_audit(store: SqliteStore) -> None:
         )
         """
     )
-    columns = _local_table_columns(store._conn, "local_d1_export_sync_runs")  # noqa: SLF001
+    columns = {
+        str(row[1])
+        for row in store._conn.execute(  # noqa: SLF001
+            "PRAGMA main.table_info(local_d1_export_sync_runs)"
+        )
+    }
     additions = {
         "sync_kind": "TEXT NOT NULL DEFAULT 'UNTRUSTED'",
         "source_content_digest": "TEXT",
@@ -863,9 +872,81 @@ def _ensure_export_sync_audit(store: SqliteStore) -> None:
     for column, declaration in additions.items():
         if column not in columns:
             store._conn.execute(  # noqa: SLF001
-                f"ALTER TABLE local_d1_export_sync_runs ADD COLUMN {column} {declaration}"
+                f"ALTER TABLE main.local_d1_export_sync_runs "
+                f"ADD COLUMN {column} {declaration}"
             )
     store._conn.commit()  # noqa: SLF001
+
+
+_SYNC_AUDIT_COLUMNS = (
+    ("export_digest", "TEXT", 0, None, 1, 0),
+    ("artifact_format", "TEXT", 1, None, 0, 0),
+    ("source_mode", "TEXT", 1, None, 0, 0),
+    ("sync_kind", "TEXT", 1, "'UNTRUSTED'", 0, 0),
+    ("source_change_seq", "INTEGER", 0, None, 0, 0),
+    ("applied_change_seq", "INTEGER", 1, None, 0, 0),
+    ("source_content_digest", "TEXT", 0, None, 0, 0),
+    ("local_content_digest", "TEXT", 0, None, 0, 0),
+    ("schema_digest", "TEXT", 0, None, 0, 0),
+    ("table_counts_json", "TEXT", 0, None, 0, 0),
+    ("authority_id", "TEXT", 0, None, 0, 0),
+    ("prior_audit_digest", "TEXT", 0, None, 0, 0),
+    ("audit_digest", "TEXT", 0, None, 0, 0),
+    ("issuer_key_id", "TEXT", 0, None, 0, 0),
+    ("signature", "TEXT", 0, None, 0, 0),
+    ("signed_evidence_json", "TEXT", 0, None, 0, 0),
+    ("status", "TEXT", 1, None, 0, 0),
+    ("started_at", "TEXT", 1, None, 0, 0),
+    ("updated_at", "TEXT", 1, None, 0, 0),
+    ("error", "TEXT", 0, None, 0, 0),
+)
+
+
+def _require_canonical_sync_audit_table(conn: sqlite3.Connection) -> None:
+    """Reject database-side deputies on the signed COMPLETE write boundary."""
+    columns = tuple(
+        (row[1], row[2], row[3], row[4], row[5], row[6])
+        for row in conn.execute(
+            "PRAGMA main.table_xinfo(local_d1_export_sync_runs)"
+        )
+    )
+    if columns != _SYNC_AUDIT_COLUMNS:
+        raise ValueError("D1 sync audit table schema is not canonical")
+    objects = conn.execute(
+        "SELECT type,name,sql FROM main.sqlite_master "
+        "WHERE tbl_name='local_d1_export_sync_runs' ORDER BY type,name"
+    ).fetchall()
+    expected_objects = [
+        (
+            "index",
+            "sqlite_autoindex_local_d1_export_sync_runs_1",
+            None,
+        )
+    ]
+    observed_non_table = [tuple(row) for row in objects if row[0] != "table"]
+    if observed_non_table != expected_objects or sum(
+        int(row[0] == "table") for row in objects
+    ) != 1:
+        raise ValueError("D1 sync audit table has unowned schema objects")
+    temp_deputies = conn.execute(
+        "SELECT 1 FROM sqlite_temp_master "
+        "WHERE name='local_d1_export_sync_runs' "
+        "OR tbl_name='local_d1_export_sync_runs' LIMIT 1"
+    ).fetchone()
+    if temp_deputies is not None:
+        raise ValueError("D1 sync audit table has an unowned temporary object")
+    indexes = [
+        (str(row[1]), int(row[2]), str(row[3]), int(row[4]))
+        for row in conn.execute(
+            "PRAGMA main.index_list(local_d1_export_sync_runs)"
+        )
+    ]
+    if indexes != [
+        ("sqlite_autoindex_local_d1_export_sync_runs_1", 1, "pk", 0)
+    ] or list(
+        conn.execute("PRAGMA main.foreign_key_list(local_d1_export_sync_runs)")
+    ):
+        raise ValueError("D1 sync audit table constraints are not canonical")
 
 
 def _mark_untrusted_export_sync(
@@ -886,7 +967,7 @@ def _mark_untrusted_export_sync(
     now = datetime.now(timezone.utc).isoformat()
     store._conn.execute(  # noqa: SLF001
         """
-        INSERT INTO local_d1_export_sync_runs (
+        INSERT INTO main.local_d1_export_sync_runs (
             export_digest, artifact_format, source_mode, source_change_seq,
             applied_change_seq, status, started_at, updated_at, error,
             sync_kind, source_content_digest, local_content_digest,
@@ -950,7 +1031,7 @@ def _latest_export_sync_row(conn: sqlite3.Connection) -> dict[str, object] | Non
     impossible. Revoked or tampered rows never become current.
     """
     cursor = conn.execute(
-        "SELECT * FROM local_d1_export_sync_runs "
+        "SELECT * FROM main.local_d1_export_sync_runs "
         "WHERE status='COMPLETE' AND signed_evidence_json IS NOT NULL"
     )
     columns = tuple(column[0] for column in cursor.description or ())
@@ -1019,15 +1100,38 @@ def _verified_sync_envelope_from_row(
 ) -> Mapping[str, object]:
     from ops.d1_sync_signing import (
         GOVERNED_AUTHORITY_ID,
+        _decode_strict_json,
         _verify_signed_d1_sync_audit_document,
     )
 
     if type(row) is not dict:
         raise TypeError("D1 sync audit row must be one exact dict")
     row = dict.copy(row)
+    exact_text_fields = (
+        "signed_evidence_json",
+        "status",
+        "audit_digest",
+        "issuer_key_id",
+        "signature",
+        "table_counts_json",
+        "export_digest",
+        "artifact_format",
+        "source_mode",
+        "sync_kind",
+        "source_content_digest",
+        "local_content_digest",
+        "schema_digest",
+        "authority_id",
+    )
+    if any(type(row.get(field)) is not str for field in exact_text_fields):
+        raise ValueError("D1 sync audit SQLite row types are not canonical")
+    if any(
+        type(row.get(field)) is not int
+        for field in ("source_change_seq", "applied_change_seq")
+    ) or type(row.get("prior_audit_digest")) not in {str, type(None)}:
+        raise ValueError("D1 sync audit SQLite row types are not canonical")
     document_text = row.get("signed_evidence_json")
-    if not isinstance(document_text, str):
-        raise ValueError("latest D1 sync audit is unsigned")
+    assert type(document_text) is str
     verified_document = _verify_signed_d1_sync_audit_document(
         document_text, require_fresh=require_fresh, eligibility=eligibility
     )
@@ -1036,7 +1140,9 @@ def _verified_sync_envelope_from_row(
     expected_counts = envelope["table_counts"]
     if set(expected_counts) != set(DEFAULT_TABLES):
         raise ValueError("signed D1 sync audit inventory membership drift")
-    row_counts = json.loads(str(row.get("table_counts_json") or "null"))
+    row_counts = _decode_strict_json(
+        row["table_counts_json"], field="D1 sync audit SQLite table counts"
+    )
     row_bindings = {
         "export_digest": row.get("export_digest"),
         "artifact_format": row.get("artifact_format"),
@@ -1069,7 +1175,7 @@ def _verified_sync_envelope_from_row(
             _private_export.governed_content_identity(conn, DEFAULT_TABLES)
         )
         current_cursor = conn.execute(
-            "SELECT last_applied_change_seq FROM sync_change_state "
+            "SELECT last_applied_change_seq FROM main.sync_change_state "
             "WHERE feed='jquants_records'"
         ).fetchone()
         applied = current_cursor[0] if current_cursor is not None else 0
@@ -1112,60 +1218,79 @@ def _mark_authenticated_export_complete(
         raise ValueError("authenticated D1 sync audit digest mismatch")
     if set(envelope["table_counts"]) != set(DEFAULT_TABLES):
         raise ValueError("authenticated D1 sync audit inventory membership drift")
-    observed_content, observed_schema, observed_counts = (
-        _private_export.governed_content_identity(  # noqa: SLF001
-            store._conn, DEFAULT_TABLES
-        )
-    )
-    if (
-        observed_content != envelope["local_content_digest"]
-        or observed_schema != envelope["schema_digest"]
-        or observed_counts != envelope["table_counts"]
-        or _last_change_seq(store) != envelope["applied_change_seq"]
-    ):
-        raise ValueError("authenticated D1 sync audit changed before persistence")
-    existing_cursor = store._conn.execute(  # noqa: SLF001
-        "SELECT * FROM local_d1_export_sync_runs WHERE export_digest=?",
-        (envelope["export_digest"],),
-    )
-    existing_tuple = existing_cursor.fetchone()
-    if existing_tuple is not None and envelope["sync_kind"] == "INCREMENTAL":
-        existing_row = dict(
-            zip(
-                (column[0] for column in existing_cursor.description),
-                existing_tuple,
-                strict=True,
-            )
-        )
-        existing_envelope = _verified_sync_envelope_from_row(
-            store._conn,  # noqa: SLF001
-            existing_row,
-            recompute_local=True,
-        )
-        unchanged_fields = (
-            "export_digest",
-            "artifact_format",
-            "source_change_seq",
-            "applied_change_seq",
-            "source_content_digest",
-            "local_content_digest",
-            "source_schema_digest",
-            "schema_digest",
-            "table_counts",
+    conn = store._conn  # noqa: SLF001
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        _require_canonical_sync_audit_table(conn)
+        observed_content, observed_schema, observed_counts = (
+            _private_export.governed_content_identity(conn, DEFAULT_TABLES)
         )
         if (
-            envelope["prior_audit_digest"] == existing_row["audit_digest"]
-            and all(
-                envelope[field] == existing_envelope[field]
-                for field in unchanged_fields
-            )
+            observed_content != envelope["local_content_digest"]
+            or observed_schema != envelope["schema_digest"]
+            or observed_counts != envelope["table_counts"]
+            or _last_change_seq(store) != envelope["applied_change_seq"]
         ):
-            return existing_envelope
-        raise ValueError("incremental D1 export digest collision is not a no-op")
-    now = datetime.now(timezone.utc).isoformat()
-    store._conn.execute(  # noqa: SLF001
-        """
-        INSERT INTO local_d1_export_sync_runs (
+            raise ValueError(
+                "authenticated D1 sync audit changed before persistence"
+            )
+        existing_cursor = conn.execute(
+            "SELECT * FROM main.local_d1_export_sync_runs WHERE export_digest=?",
+            (envelope["export_digest"],),
+        )
+        existing_tuple = existing_cursor.fetchone()
+        if existing_tuple is not None and envelope["sync_kind"] == "INCREMENTAL":
+            existing_row = dict(
+                zip(
+                    (column[0] for column in existing_cursor.description),
+                    existing_tuple,
+                    strict=True,
+                )
+            )
+            existing_envelope = _verified_sync_envelope_from_row(
+                conn,
+                existing_row,
+                recompute_local=True,
+                require_fresh=False,
+            )
+            unchanged_fields = (
+                "export_digest",
+                "artifact_format",
+                "source_change_seq",
+                "applied_change_seq",
+                "source_content_digest",
+                "local_content_digest",
+                "source_schema_digest",
+                "schema_digest",
+                "table_counts",
+            )
+            if not (
+                envelope["prior_audit_digest"] == existing_row["audit_digest"]
+                and all(
+                    envelope[field] == existing_envelope[field]
+                    for field in unchanged_fields
+                )
+            ):
+                raise ValueError(
+                    "incremental D1 export digest collision is not a no-op"
+                )
+            final_existing = _verify_signed_d1_sync_audit_document(
+                existing_row["signed_evidence_json"],
+                require_fresh=True,
+                eligibility="current",
+            )
+            conn.rollback()
+            return final_existing.envelope
+
+        before_other_rows = conn.execute(
+            "SELECT * FROM main.local_d1_export_sync_runs "
+            "WHERE export_digest<>? ORDER BY export_digest",
+            (envelope["export_digest"],),
+        ).fetchall()
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+        INSERT INTO main.local_d1_export_sync_runs (
             export_digest, artifact_format, source_mode, source_change_seq,
             applied_change_seq, status, started_at, updated_at, error,
             sync_kind, source_content_digest, local_content_digest,
@@ -1192,34 +1317,89 @@ def _mark_authenticated_export_complete(
             issuer_key_id=excluded.issuer_key_id,
             signature=excluded.signature,
             signed_evidence_json=excluded.signed_evidence_json
-        """,
-        (
-            envelope["export_digest"],
-            envelope["artifact_format"],
-            envelope["source_mode"],
-            envelope["source_change_seq"],
-            envelope["applied_change_seq"],
-            envelope["issued_at"],
-            now,
-            envelope["sync_kind"],
-            envelope["source_content_digest"],
-            envelope["local_content_digest"],
-            json.dumps(
-                dict(envelope["table_counts"]),
-                sort_keys=True,
-                separators=(",", ":"),
+            """,
+            (
+                envelope["export_digest"],
+                envelope["artifact_format"],
+                envelope["source_mode"],
+                envelope["source_change_seq"],
+                envelope["applied_change_seq"],
+                envelope["issued_at"],
+                now,
+                envelope["sync_kind"],
+                envelope["source_content_digest"],
+                envelope["local_content_digest"],
+                json.dumps(
+                    dict(envelope["table_counts"]),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                envelope["authority_id"],
+                envelope["schema_digest"],
+                envelope["prior_audit_digest"],
+                audit_digest,
+                issuer_key_id,
+                signature,
+                verified_document.canonical_document_json,
             ),
-            envelope["authority_id"],
-            envelope["schema_digest"],
-            envelope["prior_audit_digest"],
-            audit_digest,
-            issuer_key_id,
-            signature,
+        )
+
+        post_cursor = conn.execute(
+            "SELECT * FROM main.local_d1_export_sync_runs WHERE export_digest=?",
+            (envelope["export_digest"],),
+        )
+        post_tuple = post_cursor.fetchone()
+        if post_tuple is None or post_cursor.fetchone() is not None:
+            raise ValueError(
+                "authenticated D1 sync audit postcondition row is not exact"
+            )
+        post_row = dict(
+            zip(
+                (column[0] for column in post_cursor.description),
+                post_tuple,
+                strict=True,
+            )
+        )
+        if conn.execute(
+            "SELECT * FROM main.local_d1_export_sync_runs "
+            "WHERE export_digest<>? ORDER BY export_digest",
+            (envelope["export_digest"],),
+        ).fetchall() != before_other_rows:
+            raise ValueError(
+                "authenticated D1 sync audit changed unrelated audit rows"
+            )
+        post_envelope = _verified_sync_envelope_from_row(
+            conn,
+            post_row,
+            recompute_local=True,
+            require_fresh=False,
+        )
+        if post_envelope != envelope:
+            raise ValueError(
+                "authenticated D1 sync audit postcondition identity changed"
+            )
+        # Final UTC and signature verification happens after every SQLite and
+        # governed-content postcondition.  Crossing the lease during any of
+        # those checks rolls back the audit row and trigger side effects.
+        final_document = _verify_signed_d1_sync_audit_document(
             verified_document.canonical_document_json,
-        ),
-    )
-    store._conn.commit()  # noqa: SLF001
-    return envelope
+            require_fresh=True,
+            eligibility="current",
+        )
+        if (
+            final_document.document_digest != audit_digest
+            or final_document.issuer_key_id != issuer_key_id
+            or final_document.signature != signature
+            or final_document.envelope != post_envelope
+        ):
+            raise ValueError(
+                "authenticated D1 sync audit final identity changed"
+            )
+        conn.commit()
+        return final_document.envelope
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _latest_trusted_sync_audit(
@@ -1277,6 +1457,12 @@ def _run_private_export_sync(
 ) -> tuple[int, int, int, list[str]]:
     total_seen = total_registered = total_skipped = 0
     failures: list[str] = []
+    _private_export.reject_temp_governed_deputies(
+        source, DEFAULT_TABLES
+    )
+    _private_export.reject_temp_governed_deputies(
+        store._conn, DEFAULT_TABLES  # noqa: SLF001
+    )
     _ensure_control_tables(store._conn)  # noqa: SLF001
     _ensure_export_sync_audit(store)
     store._conn.commit()  # noqa: SLF001
@@ -1348,7 +1534,7 @@ def _run_private_export_sync(
     if noop_trusted and not failures:
         return total_seen, total_registered, total_skipped, failures
     signed_digest_collision = store._conn.execute(  # noqa: SLF001
-        "SELECT 1 FROM local_d1_export_sync_runs "
+        "SELECT 1 FROM main.local_d1_export_sync_runs "
         "WHERE export_digest=? AND signed_evidence_json IS NOT NULL",
         (export_digest,),
     ).fetchone()
@@ -1471,7 +1657,7 @@ def _run_private_export_sync(
             _mark_authenticated_export_complete(store, authenticated_export)
             if audit_export_digest != export_digest:
                 store._conn.execute(  # noqa: SLF001
-                    "DELETE FROM local_d1_export_sync_runs "
+                    "DELETE FROM main.local_d1_export_sync_runs "
                     "WHERE export_digest=? AND signed_evidence_json IS NULL",
                     (audit_export_digest,),
                 )

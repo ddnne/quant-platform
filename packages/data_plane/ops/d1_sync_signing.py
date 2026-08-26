@@ -371,7 +371,11 @@ def _require_fresh_audit(exported_utc: datetime, issued_utc: datetime) -> None:
         seconds=D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS
     ):
         raise D1SyncAuditError("signed D1 sync audit issued_at is in the future")
-    if now - issued_utc > timedelta(seconds=D1_SYNC_AUDIT_MAX_AGE_SECONDS):
+    if (
+        now - issued_utc > timedelta(seconds=D1_SYNC_AUDIT_MAX_AGE_SECONDS)
+        or now - exported_utc
+        > timedelta(seconds=D1_SYNC_AUDIT_MAX_AGE_SECONDS)
+    ):
         raise D1SyncAuditError("signed D1 sync audit is stale")
 
 

@@ -13,13 +13,18 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
 import subprocess
+import tempfile
 import tomllib
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 from weakref import WeakSet
+
+from storage.migrations import SNAPSHOT_INVALIDATION_TRIGGERS
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WRANGLER_CONFIG = (
@@ -124,14 +129,110 @@ def run_wrangler_d1_export(
     output_path.chmod(0o600)
 
 
-def _file_sha256(path: Path) -> tuple[str, int]:
+@dataclass(frozen=True, slots=True)
+class _PinnedFileIdentity:
+    device: int
+    inode: int
+    size: int
+    digest: str
+
+
+def _measure_regular_file(path: Path) -> _PinnedFileIdentity:
+    """Hash one opened inode and prove the path still names that inode."""
     digest = hashlib.sha256()
     size = 0
     with path.open("rb") as handle:
+        before = os.fstat(handle.fileno())
+        path_before = path.stat()
+        if not stat.S_ISREG(before.st_mode) or (
+            path_before.st_dev,
+            path_before.st_ino,
+        ) != (before.st_dev, before.st_ino):
+            raise ValueError("D1 export artifact identity changed while opening")
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
             size += len(chunk)
-    return f"sha256:{digest.hexdigest()}", size
+        after = os.fstat(handle.fileno())
+        path_after = path.stat()
+    if (
+        (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+        or (path_after.st_dev, path_after.st_ino)
+        != (before.st_dev, before.st_ino)
+        or after.st_size != before.st_size
+        or after.st_mtime_ns != before.st_mtime_ns
+        or size != after.st_size
+    ):
+        raise ValueError("D1 export artifact changed while hashing")
+    return _PinnedFileIdentity(
+        device=before.st_dev,
+        inode=before.st_ino,
+        size=size,
+        digest=f"sha256:{digest.hexdigest()}",
+    )
+
+
+def _file_sha256(path: Path) -> tuple[str, int]:
+    identity = _measure_regular_file(path)
+    return identity.digest, identity.size
+
+
+def _require_file_identity(path: Path, expected: _PinnedFileIdentity) -> None:
+    observed = _measure_regular_file(path)
+    if observed != expected:
+        raise ValueError("pinned D1 export artifact identity changed")
+
+
+def _snapshot_source_artifact(
+    source: Path, destination_directory: Path
+) -> tuple[Path, _PinnedFileIdentity]:
+    """Copy and hash a raw artifact from the same single opened file view."""
+    destination_directory.mkdir(parents=True, exist_ok=True)
+    snapshot_path: Path | None = None
+    try:
+        with source.open("rb") as input_handle:
+            before = os.fstat(input_handle.fileno())
+            path_before = source.stat()
+            if not stat.S_ISREG(before.st_mode) or (
+                path_before.st_dev,
+                path_before.st_ino,
+            ) != (before.st_dev, before.st_ino):
+                raise ValueError("D1 export artifact identity changed while opening")
+            digest = hashlib.sha256()
+            size = 0
+            with tempfile.NamedTemporaryFile(
+                mode="w+b",
+                prefix=".pinned-d1-source-",
+                dir=destination_directory,
+                delete=False,
+            ) as output_handle:
+                snapshot_path = Path(output_handle.name)
+                for chunk in iter(lambda: input_handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                    size += len(chunk)
+                    output_handle.write(chunk)
+                output_handle.flush()
+                os.fsync(output_handle.fileno())
+            after = os.fstat(input_handle.fileno())
+            path_after = source.stat()
+        if (
+            (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+            or (path_after.st_dev, path_after.st_ino)
+            != (before.st_dev, before.st_ino)
+            or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns
+            or size != after.st_size
+        ):
+            raise ValueError("D1 export artifact changed while snapshotting")
+        assert snapshot_path is not None
+        snapshot_path.chmod(0o600)
+        identity = _measure_regular_file(snapshot_path)
+        if identity.digest != f"sha256:{digest.hexdigest()}" or identity.size != size:
+            raise ValueError("D1 export artifact snapshot digest changed")
+        return snapshot_path, identity
+    except Exception:
+        if snapshot_path is not None:
+            snapshot_path.unlink(missing_ok=True)
+        raise
 
 
 def _sql_import_authorizer(
@@ -202,40 +303,81 @@ def _validate_sqlite_artifact(path: Path) -> None:
         conn.close()
 
 
+def _materialize_d1_export_with_identity(
+    artifact: Path,
+    sqlite_path: Path,
+) -> tuple[str, int, str, _PinnedFileIdentity]:
+    """Materialize a standalone Wrangler SQL/SQLite artifact for read-only sync."""
+    source = artifact.expanduser().resolve(strict=True)
+    wal_path = Path(f"{source}-wal")
+    if wal_path.exists() and wal_path.stat().st_size:
+        raise ValueError(
+            "SQLite artifact has a live WAL; checkpoint it before offline sync"
+        )
+    snapshot, raw_identity = _snapshot_source_artifact(source, sqlite_path.parent)
+    try:
+        if raw_identity.size == 0:
+            raise ValueError("D1 export artifact is empty")
+        with snapshot.open("rb") as handle:
+            is_sqlite = handle.read(16) == b"SQLite format 3\x00"
+        if is_sqlite and wal_path.exists() and wal_path.stat().st_size:
+            raise ValueError(
+                "SQLite artifact has a live WAL; checkpoint it before offline sync"
+            )
+        if sqlite_path.exists():
+            raise ValueError("D1 materialized destination already exists")
+        descriptor = os.open(
+            sqlite_path,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+        try:
+            created = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+        created_identity = (created.st_dev, created.st_ino)
+        if is_sqlite:
+            source_uri = (
+                f"file:{quote(str(snapshot), safe='/')}?mode=ro&immutable=1"
+            )
+            source_conn = sqlite3.connect(source_uri, uri=True)
+            destination = sqlite3.connect(sqlite_path)
+            try:
+                source_conn.backup(destination)
+                destination.commit()
+            finally:
+                destination.close()
+                source_conn.close()
+            artifact_format = "sqlite"
+        else:
+            _import_d1_sql(snapshot, sqlite_path)
+            artifact_format = "sql"
+        sqlite_path.chmod(0o600)
+        _validate_sqlite_artifact(sqlite_path)
+        materialized_identity = _measure_regular_file(sqlite_path)
+        if (
+            materialized_identity.device,
+            materialized_identity.inode,
+        ) != created_identity:
+            raise ValueError("D1 materialized artifact path was replaced")
+        _require_file_identity(snapshot, raw_identity)
+        return (
+            raw_identity.digest,
+            raw_identity.size,
+            artifact_format,
+            materialized_identity,
+        )
+    finally:
+        snapshot.unlink(missing_ok=True)
+
+
 def materialize_d1_export(
     artifact: Path,
     sqlite_path: Path,
 ) -> tuple[str, int, str]:
-    """Materialize a standalone Wrangler SQL/SQLite artifact for read-only sync."""
-    source = artifact.expanduser().resolve(strict=True)
-    if not source.is_file():
-        raise ValueError("D1 export artifact is not a regular file")
-    digest, size = _file_sha256(source)
-    if size == 0:
-        raise ValueError("D1 export artifact is empty")
-    with source.open("rb") as handle:
-        is_sqlite = handle.read(16) == b"SQLite format 3\x00"
-    if is_sqlite:
-        wal_path = Path(f"{source}-wal")
-        if wal_path.exists() and wal_path.stat().st_size:
-            raise ValueError(
-                "SQLite artifact has a live WAL; checkpoint it before offline sync"
-            )
-        source_uri = f"file:{quote(str(source), safe='/')}?mode=ro&immutable=1"
-        source_conn = sqlite3.connect(source_uri, uri=True)
-        destination = sqlite3.connect(sqlite_path)
-        try:
-            source_conn.backup(destination)
-            destination.commit()
-        finally:
-            destination.close()
-            source_conn.close()
-        artifact_format = "sqlite"
-    else:
-        _import_d1_sql(source, sqlite_path)
-        artifact_format = "sql"
-    sqlite_path.chmod(0o600)
-    _validate_sqlite_artifact(sqlite_path)
+    digest, size, artifact_format, _identity = (
+        _materialize_d1_export_with_identity(artifact, sqlite_path)
+    )
     return digest, size, artifact_format
 
 
@@ -249,8 +391,34 @@ def open_export_sqlite(path: Path) -> sqlite3.Connection:
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        "SELECT 1 FROM main.sqlite_master WHERE type='table' AND name=?",
+        (table,),
     ).fetchone() is not None
+
+
+def reject_temp_governed_deputies(
+    conn: sqlite3.Connection, tables: tuple[str, ...]
+) -> None:
+    """TEMP objects must never shadow or trigger governed main objects."""
+    governed = tuple(
+        sorted(
+            set(tables)
+            | {
+                "ingestion_change_log",
+                "sync_change_state",
+                "local_d1_export_sync_runs",
+            }
+        )
+    )
+    placeholders = ",".join("?" for _ in governed)
+    deputy = conn.execute(
+        "SELECT type,name,tbl_name FROM sqlite_temp_master "
+        f"WHERE name IN ({placeholders}) OR tbl_name IN ({placeholders}) "
+        "LIMIT 1",
+        (*governed, *governed),
+    ).fetchone()
+    if deputy is not None:
+        raise ValueError("temporary object shadows governed D1 state")
 
 
 def _quoted_identifier(value: str) -> str:
@@ -309,7 +477,7 @@ def _table_schema_manifest(
             "primary_key_ordinal": int(row[5]),
             "hidden": int(row[6]),
         }
-        for row in conn.execute(f"PRAGMA table_xinfo({table_identifier})")
+        for row in conn.execute(f"PRAGMA main.table_xinfo({table_identifier})")
     ]
     if not xinfo:
         raise ValueError(f"governed table has no columns: {table}")
@@ -322,7 +490,7 @@ def _table_schema_manifest(
             "sql": _canonical_schema_sql(row[3]),
         }
         for row in conn.execute(
-            "SELECT type,name,tbl_name,sql FROM sqlite_master "
+            "SELECT type,name,tbl_name,sql FROM main.sqlite_master "
             "WHERE (type='table' AND name=?) "
             "OR (type IN ('index','trigger') AND tbl_name=?) "
             "ORDER BY type,name",
@@ -331,7 +499,9 @@ def _table_schema_manifest(
     ]
 
     indexes: list[dict[str, Any]] = []
-    index_rows = list(conn.execute(f"PRAGMA index_list({table_identifier})"))
+    index_rows = list(
+        conn.execute(f"PRAGMA main.index_list({table_identifier})")
+    )
     for row in sorted(index_rows, key=lambda candidate: str(candidate[1])):
         name = str(row[1])
         index_identifier = _quoted_identifier(name)
@@ -344,7 +514,9 @@ def _table_schema_manifest(
                 "collation": None if item[4] is None else str(item[4]),
                 "key": int(item[5]),
             }
-            for item in conn.execute(f"PRAGMA index_xinfo({index_identifier})")
+            for item in conn.execute(
+                f"PRAGMA main.index_xinfo({index_identifier})"
+            )
         ]
         indexes.append(
             {
@@ -367,7 +539,9 @@ def _table_schema_manifest(
             "on_delete": str(row[6]),
             "match": str(row[7]),
         }
-        for row in conn.execute(f"PRAGMA foreign_key_list({table_identifier})")
+        for row in conn.execute(
+            f"PRAGMA main.foreign_key_list({table_identifier})"
+        )
     ]
     return {
         "table_xinfo": xinfo,
@@ -375,6 +549,17 @@ def _table_schema_manifest(
         "indexes": indexes,
         "foreign_keys": foreign_keys,
     }
+
+
+_CANONICAL_LOCAL_INVALIDATION_TRIGGERS = {
+    trigger.name: {
+        "type": "trigger",
+        "name": trigger.name,
+        "table_name": trigger.table,
+        "sql": trigger.sqlite_master_sql,
+    }
+    for trigger in SNAPSHOT_INVALIDATION_TRIGGERS
+}
 
 
 def _replicated_schema_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -387,14 +572,19 @@ def _replicated_schema_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     replicated = json.loads(
         json.dumps(manifest, sort_keys=True, separators=(",", ":"))
     )
-    replicated["sqlite_master"] = [
-        row
-        for row in replicated["sqlite_master"]
-        if not (
-            row["type"] == "trigger"
-            and row["name"].startswith("invalidate_snapshot_")
-        )
-    ]
+    retained: list[dict[str, Any]] = []
+    for row in replicated["sqlite_master"]:
+        if row["type"] != "trigger" or not row["name"].startswith(
+            "invalidate_snapshot_"
+        ):
+            retained.append(row)
+            continue
+        expected = _CANONICAL_LOCAL_INVALIDATION_TRIGGERS.get(row["name"])
+        if expected is None or row != expected:
+            raise ValueError(
+                "local snapshot invalidation trigger is not canonical"
+            )
+    replicated["sqlite_master"] = retained
     return replicated
 
 
@@ -421,7 +611,7 @@ def _table_fingerprint(
     selected = ",".join(f'"{column}"' for column in columns)
     row_digests: list[bytes] = []
     count = 0
-    for row in conn.execute(f'SELECT {selected} FROM "{table}"'):
+    for row in conn.execute(f"SELECT {selected} FROM main.{_quoted_identifier(table)}"):
         encoded = json.dumps(
             [
                 _fingerprint_value(column, row[index])
@@ -451,6 +641,7 @@ def governed_content_identity(
     cannot be laundered through a shared-column projection.
     """
 
+    reject_temp_governed_deputies(conn, tables)
     inventory: dict[str, dict[str, Any]] = {}
     schema: dict[str, dict[str, Any]] = {}
     counts: dict[str, int] = {}
@@ -486,6 +677,8 @@ def _exact_source_local_reconciliation(
     local: sqlite3.Connection,
     tables: tuple[str, ...],
 ) -> tuple[str, str, str, dict[str, int]]:
+    reject_temp_governed_deputies(source, tables)
+    reject_temp_governed_deputies(local, tables)
     for table in tables:
         if not _table_exists(source, table):
             raise ValueError(f"D1 export is missing governed table: {table}")
@@ -528,7 +721,7 @@ def _change_seq(conn: sqlite3.Connection) -> int:
     if not _table_exists(conn, "ingestion_change_log"):
         raise ValueError("D1 export is missing ingestion_change_log")
     row = conn.execute(
-        "SELECT COALESCE(MAX(change_seq), 0) FROM ingestion_change_log"
+        "SELECT COALESCE(MAX(change_seq), 0) FROM main.ingestion_change_log"
     ).fetchone()
     value = row[0] if row is not None else None
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -538,7 +731,7 @@ def _change_seq(conn: sqlite3.Connection) -> int:
 
 def _local_change_seq(conn: sqlite3.Connection) -> int:
     row = conn.execute(
-        "SELECT last_applied_change_seq FROM sync_change_state "
+        "SELECT last_applied_change_seq FROM main.sync_change_state "
         "WHERE feed='jquants_records'"
     ).fetchone()
     value = row[0] if row is not None else 0
@@ -586,6 +779,8 @@ def _build_authenticated_export_authority():
             "artifact_size",
             "artifact_format",
             "_sqlite_path",
+            "_materialized_identity",
+            "_source_conn",
             "_exported_at",
             "_authenticated",
             "__weakref__",
@@ -599,10 +794,24 @@ def _build_authenticated_export_authority():
                 raise RuntimeError(
                     "pinned Wrangler export was not minted by governed acquisition"
                 )
+            _require_file_identity(
+                self._sqlite_path, self._materialized_identity
+            )
 
         def open_source(self) -> sqlite3.Connection:
             self._require_acquired()
-            return open_export_sqlite(self._sqlite_path)
+            if self._source_conn is not None:
+                raise RuntimeError("pinned Wrangler export source is single-use")
+            source = open_export_sqlite(self._sqlite_path)
+            try:
+                _require_file_identity(
+                    self._sqlite_path, self._materialized_identity
+                )
+            except Exception:
+                source.close()
+                raise
+            self._source_conn = source
+            return source
 
         def authenticate_local(
             self,
@@ -617,19 +826,26 @@ def _build_authenticated_export_authority():
                 raise RuntimeError(
                     "pinned Wrangler export authentication is single-use"
                 )
-            with open_export_sqlite(self._sqlite_path) as source:
-                source_cursor = _change_seq(source)
-                local_cursor = _local_change_seq(local)
-                if source_cursor != local_cursor:
-                    raise ValueError(
-                        "authenticated D1 source/local applied cursor mismatch"
-                    )
-                (
-                    content_digest,
-                    source_schema_digest,
-                    local_schema_digest,
-                    counts,
-                ) = _exact_source_local_reconciliation(source, local, tables)
+            source = self._source_conn
+            if source is None:
+                raise RuntimeError(
+                    "pinned Wrangler export source must be opened exactly once"
+                )
+            source_cursor = _change_seq(source)
+            local_cursor = _local_change_seq(local)
+            if source_cursor != local_cursor:
+                raise ValueError(
+                    "authenticated D1 source/local applied cursor mismatch"
+                )
+            (
+                content_digest,
+                source_schema_digest,
+                local_schema_digest,
+                counts,
+            ) = _exact_source_local_reconciliation(source, local, tables)
+            _require_file_identity(
+                self._sqlite_path, self._materialized_identity
+            )
             facts = {
                 "sync_kind": sync_kind,
                 "export_digest": self.export_digest,
@@ -665,14 +881,19 @@ def _build_authenticated_export_authority():
         raw_artifact = directory / "remote-export.sql"
         run_wrangler_d1_export(output_path=raw_artifact)
         materialized = directory / "remote-export.sqlite"
-        export_digest, artifact_size, artifact_format = materialize_d1_export(
-            raw_artifact, materialized
-        )
+        (
+            export_digest,
+            artifact_size,
+            artifact_format,
+            materialized_identity,
+        ) = _materialize_d1_export_with_identity(raw_artifact, materialized)
         acquired = object.__new__(_PinnedWranglerExport)
         acquired.export_digest = export_digest
         acquired.artifact_size = artifact_size
         acquired.artifact_format = artifact_format
         acquired._sqlite_path = materialized
+        acquired._materialized_identity = materialized_identity
+        acquired._source_conn = None
         acquired._exported_at = _utc_now().isoformat()
         acquired._authenticated = False
         acquired_exports.add(acquired)
