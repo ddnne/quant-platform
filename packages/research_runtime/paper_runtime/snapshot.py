@@ -30,7 +30,6 @@ from paper_runtime.snapshot_persist import (
     _atomic_json,
     _copy_sqlite,
     _persist_building_publication,
-    _persist_synced_policy,
     _persist_synced_publication,
     begin_snapshot_sync,
 )
@@ -402,86 +401,6 @@ def _latest_complete_run(
     return run_id, detail, [latest[dataset] for dataset in required]
 
 
-def commit_snapshot_manifest(
-    conn: sqlite3.Connection,
-    *,
-    required_datasets: Iterable[str],
-) -> str:
-    """Legacy in-place manifest for compatibility fixtures (not production READY)."""
-    required = tuple(sorted(set(str(item) for item in required_datasets)))
-    if not required:
-        raise ValueError("required_datasets must not be empty")
-    _persist_synced_policy(conn)
-    conn.execute(
-        "UPDATE local_snapshot_policy SET publication_state='VALIDATING' "
-        "WHERE singleton=1"
-    )
-    conn.commit()
-    run_id, detail, validations = _latest_complete_run(conn, required)
-
-    placeholders = ",".join("?" for _ in required)
-    rows = conn.execute(
-        "SELECT dataset, last_event_date, last_ingested_at "
-        "FROM ingestion_watermarks "
-        f"WHERE dataset IN ({placeholders}) ORDER BY dataset",
-        required,
-    ).fetchall()
-    watermarks = [dict(row) for row in rows]
-    present = {str(row["dataset"]) for row in watermarks}
-    missing = sorted(set(required) - present)
-    if missing:
-        raise RuntimeError(f"required dataset watermarks missing: {missing}")
-    change = conn.execute(
-        "SELECT last_applied_change_seq FROM sync_change_state "
-        "WHERE feed = 'jquants_records'"
-    ).fetchone()
-    change_seq = int(change[0]) if change is not None else 0
-    committed_at = datetime.now(timezone.utc).isoformat()
-    manifest = {
-        "format": LOCAL_SNAPSHOT_MANIFEST_FORMAT,
-        "committed_at": committed_at,
-        "source_run": {
-            "id": run_id,
-            "started_at": detail.get("startedAt"),
-            "finished_at": detail.get("finishedAt"),
-        },
-        "required_datasets": list(required),
-        "change_seq": change_seq,
-        "dataset_watermarks": watermarks,
-        "validations": validations,
-    }
-    snapshot_id = _canonical_digest(manifest)
-    manifest_json = json.dumps(
-        manifest, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
-        allow_nan=False,
-    )
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO local_snapshot_manifests
-                (snapshot_id, format, committed_at, source_run_id, change_seq,
-                 manifest_json)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                snapshot_id, LOCAL_SNAPSHOT_MANIFEST_FORMAT, committed_at,
-                run_id, change_seq, manifest_json,
-            ),
-        )
-        conn.execute(
-            "UPDATE local_snapshot_policy SET snapshot_ready = 1, "
-            "last_error = NULL, publication_state='READY', "
-            "active_snapshot_id=? WHERE singleton = 1",
-            (snapshot_id,),
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    return snapshot_id
-
-
 def _research_manifest_id(manifest: dict[str, Any]) -> str:
     identity = dict(manifest)
     identity.pop("snapshot_id", None)
@@ -612,6 +531,17 @@ def _publish_ready_snapshot_impl(
     The product-owned READY(P) bridge may supply retained profile evidence and
     a closed ReadyManifest builder. Both must be present together.
     """
+    if fixture_compatibility is True:
+        publication_scope = "FIXTURE"
+    elif (
+        fixture_compatibility is False
+        and publication_gate is evaluate_ready_publication
+    ):
+        publication_scope = "PRODUCTION"
+    else:
+        raise SnapshotRejected(
+            "production READY requires the exact production publication gate"
+        )
     staging_path = Path(staging_db).resolve()
     if not staging_path.is_file():
         raise FileNotFoundError(f"staging database does not exist: {staging_path}")
@@ -956,9 +886,7 @@ def _publish_ready_snapshot_impl(
             "committed_at": committed_at,
             "change_seq": change_seq,
             "artifact_digest": artifact_digest,
-            "publication_scope": (
-                "FIXTURE" if fixture_compatibility else "PRODUCTION"
-            ),
+            "publication_scope": publication_scope,
             "readiness_attestation": (
                 readiness_sidecar_path.name
                 if readiness_sidecar_path is not None
@@ -1185,7 +1113,6 @@ __all__ = [
     "ReadySnapshot",
     "SnapshotRejected",
     "begin_snapshot_sync",
-    "commit_snapshot_manifest",
     "data_snapshot_id",
     "describe_snapshot",
     "fail_snapshot_sync",

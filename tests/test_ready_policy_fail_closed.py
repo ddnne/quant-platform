@@ -29,6 +29,7 @@ from paper_runtime.ready_policy import (
     collect_typed_evidence,
 )
 from paper_runtime.snapshot import ReadySnapshot, SnapshotRejected, _publish_ready_snapshot
+from paper_runtime.snapshot_publish_policy import _raw_manifests_for
 import research.research_data_profile as profile_module
 from research.readiness import ReadinessPublicKeyRegistry
 from research.ready_manifest import (
@@ -185,6 +186,256 @@ def test_missing_production_ledgers_are_not_pass() -> None:
 
 
 @pytest.mark.parametrize(
+    ("missing_table", "evidence_type"),
+    (
+        ("raw_retention_manifests", "RawRetentionEvidence"),
+        ("ingestion_validation", "ValidationEvidence"),
+        ("natural_key_migrations", "NaturalKeyEvidence"),
+        ("snapshot_quality_results", "QualityEvidence"),
+        ("ingestion_change_log", "SyncGenerationEvidence"),
+        ("sync_change_state", "SyncGenerationEvidence"),
+    ),
+)
+def test_each_missing_production_ledger_fails_its_evidence(
+    missing_table: str,
+    evidence_type: str,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE raw_retention_manifests (
+            dataset TEXT, run_id INTEGER, completeness TEXT
+        );
+        INSERT INTO raw_retention_manifests
+        VALUES ('equities_bars_daily', 1, 'COMPLETE');
+        CREATE TABLE ingestion_validation (
+            run_id INTEGER, dataset TEXT, status TEXT
+        );
+        INSERT INTO ingestion_validation
+        VALUES (1, 'equities_bars_daily', 'PASS');
+        CREATE TABLE natural_key_migrations (state TEXT);
+        INSERT INTO natural_key_migrations VALUES ('READY');
+        CREATE TABLE snapshot_quality_results (
+            build_id TEXT, status TEXT, results_json TEXT
+        );
+        INSERT INTO snapshot_quality_results VALUES (
+            'build-1', 'PASS',
+            '[{"check_id":"B0","status":"pass"},{"check_id":"B4","status":"pass"}]'
+        );
+        CREATE TABLE ingestion_change_log (change_seq INTEGER);
+        INSERT INTO ingestion_change_log VALUES (7);
+        CREATE TABLE sync_change_state (
+            feed TEXT PRIMARY KEY,
+            last_applied_change_seq INTEGER
+        );
+        INSERT INTO sync_change_state VALUES ('jquants_records', 7);
+        """
+    )
+    conn.execute(f"DROP TABLE {missing_table}")
+
+    evidence = collect_typed_evidence(
+        conn,
+        ":memory:",
+        ("equities_bars_daily",),
+        run_id=1,
+        build_id="build-1",
+        coverage_proof_id="sha256:" + ("ab" * 32),
+    )
+    by_type = {type(item).__name__: item.to_item() for item in evidence}
+
+    assert by_type[evidence_type].passed is False
+
+
+@pytest.mark.parametrize(
+    "validation_rows",
+    (
+        ((1, "unrelated", "PASS"),),
+        (
+            (1, "equities_bars_daily", "PASS"),
+            (1, "equities_bars_daily", "PASS"),
+        ),
+        ((1, "equities_bars_daily", "FAIL"),),
+        ((2, "equities_bars_daily", "PASS"),),
+    ),
+)
+def test_validation_requires_one_exact_passing_row_per_required_dataset(
+    validation_rows: tuple[tuple[int, str, str], ...],
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE ingestion_validation "
+        "(run_id INTEGER, dataset TEXT, status TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO ingestion_validation VALUES (?,?,?)",
+        validation_rows,
+    )
+
+    evidence = collect_typed_evidence(
+        conn,
+        ":memory:",
+        ("equities_bars_daily",),
+        run_id=1,
+        coverage_proof_id="sha256:" + ("ab" * 32),
+    )
+    validation = next(
+        item for item in evidence if type(item).__name__ == "ValidationEvidence"
+    )
+
+    assert validation.to_item().passed is False
+
+
+@pytest.mark.parametrize(
+    "quality_rows",
+    (
+        (),
+        (("other-build", "PASS", '[{"check_id":"B0","status":"pass"},'
+          ' {"check_id":"B4","status":"pass"}]'),),
+        (
+            ("build-1", "PASS", '[{"check_id":"B0","status":"pass"},'
+             ' {"check_id":"B4","status":"pass"}]'),
+            ("build-1", "FAIL", '[{"check_id":"B0","status":"pass"},'
+             ' {"check_id":"B4","status":"pass"}]'),
+        ),
+        (("build-1", "PASS", '[{"check_id":"B4","status":"pass"}]'),),
+        (("build-1", "PASS", '[{"check_id":"B0","status":"pass"}]'),),
+        (("build-1", "PASS", '[{"check_id":"B0","status":"fail"},'
+          ' {"check_id":"B4","status":"pass"}]'),),
+        (("build-1", "PASS", '[{"check_id":"B0","status":"pass"},'
+          ' {"check_id":"B4","status":"fail"}]'),),
+    ),
+)
+def test_quality_requires_one_exact_build_with_passing_b0_and_b4(
+    quality_rows: tuple[tuple[str, str, str], ...],
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE snapshot_quality_results "
+        "(build_id TEXT, status TEXT, results_json TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO snapshot_quality_results VALUES (?,?,?)",
+        quality_rows,
+    )
+
+    evidence = collect_typed_evidence(
+        conn,
+        ":memory:",
+        ("equities_bars_daily",),
+        build_id="build-1",
+        coverage_proof_id="sha256:" + ("ab" * 32),
+    )
+    quality = next(
+        item for item in evidence if type(item).__name__ == "QualityEvidence"
+    )
+
+    assert quality.to_item().passed is False
+
+
+def test_raw_retention_rejects_duplicate_required_rows() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE raw_retention_manifests "
+        "(dataset TEXT, run_id INTEGER, completeness TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO raw_retention_manifests VALUES (?,?,?)",
+        (
+            ("equities_bars_daily", 1, "COMPLETE"),
+            ("equities_bars_daily", 1, "COMPLETE"),
+        ),
+    )
+
+    evidence = collect_typed_evidence(
+        conn,
+        ":memory:",
+        ("equities_bars_daily",),
+        run_id=1,
+        coverage_proof_id="sha256:" + ("ab" * 32),
+    )
+    raw = next(
+        item for item in evidence if type(item).__name__ == "RawRetentionEvidence"
+    )
+
+    assert raw.to_item().passed is False
+
+
+@pytest.mark.parametrize(
+    ("raw_status", "expected_pass"),
+    (("ACQUIRED", True), ("COMPLETE", True), ("FAILED", False)),
+)
+def test_raw_retention_uses_raw_plane_acquisition_semantics(
+    raw_status: str,
+    expected_pass: bool,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE raw_retention_manifests "
+        "(dataset TEXT, run_id INTEGER, completeness TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO raw_retention_manifests VALUES (?,?,?)",
+        ("equities_bars_daily", 1, raw_status),
+    )
+
+    evidence = collect_typed_evidence(
+        conn,
+        ":memory:",
+        ("equities_bars_daily",),
+        run_id=1,
+        coverage_proof_id="sha256:" + ("ab" * 32),
+    )
+    raw = next(
+        item for item in evidence if type(item).__name__ == "RawRetentionEvidence"
+    )
+
+    assert raw.to_item().passed is expected_pass
+
+
+@pytest.mark.parametrize(
+    ("raw_status", "expected_pass"),
+    (("ACQUIRED", True), ("COMPLETE", True), ("FAILED", False)),
+)
+def test_publication_raw_gate_uses_raw_plane_acquisition_semantics(
+    raw_status: str,
+    expected_pass: bool,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE raw_retention_manifests ("
+        "dataset TEXT, run_id INTEGER, manifest_key TEXT, page_count INTEGER, "
+        "row_count INTEGER, raw_bytes INTEGER, data_digest TEXT, "
+        "completeness TEXT, created_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO raw_retention_manifests VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            "equities_bars_daily",
+            1,
+            "raw/manifest.json",
+            1,
+            1,
+            1,
+            "sha256:" + ("ab" * 32),
+            raw_status,
+            "2026-08-26T00:00:00Z",
+        ),
+    )
+
+    if expected_pass:
+        manifests = _raw_manifests_for(
+            conn,
+            1,
+            ("equities_bars_daily",),
+        )
+        assert manifests["equities_bars_daily"]["completeness"] == raw_status
+    else:
+        with pytest.raises(SnapshotRejected, match="raw retention incomplete"):
+            _raw_manifests_for(conn, 1, ("equities_bars_daily",))
+
+
+@pytest.mark.parametrize(
     "coverage_proof_id",
     (
         None,
@@ -248,6 +499,23 @@ def test_old_proof_dict_and_typed_evidence_injection_kwargs_are_removed() -> Non
             coverage_proof_id="sha256:" + ("ab" * 32),
             typed_evidence=[object()],
         )
+    with pytest.raises(TypeError, match="fixture_compatibility"):
+        collect_typed_evidence(  # type: ignore[call-arg]
+            conn,
+            ":memory:",
+            ("equities_bars_daily",),
+            coverage_proof_id="sha256:" + ("ab" * 32),
+            fixture_compatibility=True,
+        )
+    for removed_override in ("raw_manifest_ok", "quality_status"):
+        with pytest.raises(TypeError, match=removed_override):
+            collect_typed_evidence(  # type: ignore[call-arg]
+                conn,
+                ":memory:",
+                ("equities_bars_daily",),
+                coverage_proof_id="sha256:" + ("ab" * 32),
+                **{removed_override: True if removed_override == "raw_manifest_ok" else "PASS"},
+            )
 
 
 def test_source_and_applied_generation_must_match() -> None:
@@ -268,9 +536,12 @@ def test_public_ready_surface_has_no_generic_or_fixture_bypass(
     unsafe_keyword: str,
 ) -> None:
     import paper_runtime
+    import paper_runtime.snapshot as snapshot_module
     import research.ready_manifest as ready_module
 
     assert not hasattr(paper_runtime, "publish_ready_snapshot")
+    assert not hasattr(paper_runtime, "commit_snapshot_manifest")
+    assert not hasattr(snapshot_module, "commit_snapshot_manifest")
     assert not hasattr(ready_module, "publish_profile_bound_ready_snapshot")
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         publish_exact_four_pilot_ready_snapshot(

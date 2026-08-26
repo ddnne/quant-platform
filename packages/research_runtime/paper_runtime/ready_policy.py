@@ -6,6 +6,7 @@ The private runtime publisher must refuse READY transition without policy PASS.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -116,17 +117,30 @@ class NaturalKeyEvidence:
 @dataclass(frozen=True)
 class QualityEvidence:
     b0_status: str
+    b4_status: str
     quality_status: str
     detail: Mapping[str, Any] = field(default_factory=dict)
 
     def to_item(self) -> "ReadyEvidenceItem":
-        ok = self.b0_status == "PASS" and self.quality_status == "PASS"
+        ok = (
+            self.b0_status == "PASS"
+            and self.b4_status == "PASS"
+            and self.quality_status == "PASS"
+        )
         return ReadyEvidenceItem(
             name="QualityEvidence",
             passed=ok,
-            reason=None if ok else f"b0={self.b0_status} quality={self.quality_status}",
+            reason=(
+                None
+                if ok
+                else (
+                    f"b0={self.b0_status} b4={self.b4_status} "
+                    f"quality={self.quality_status}"
+                )
+            ),
             detail={
                 "b0_status": self.b0_status,
+                "b4_status": self.b4_status,
                 "quality_status": self.quality_status,
                 **dict(self.detail),
             },
@@ -203,35 +217,19 @@ class ReadyEvidenceBundle:
         }
 
 
-def _collect_typed_evidence(
+def collect_typed_evidence(
     conn: sqlite3.Connection,
     db_path: str | Path,
     required_datasets: Sequence[str],
     *,
     run_id: int | None = None,
+    build_id: str | None = None,
     coverage_proof_id: object,
-    quality_status: str | None = None,
-    raw_manifest_ok: bool | None = None,
-    fixture_compatibility: bool,
 ) -> list[TypedReadyEvidence]:
-    """Subsystems produce typed evidence only — no READY decision here."""
+    """Collect production evidence; absent ledgers never receive substitutes."""
     required = tuple(required_datasets)
     evidence: list[TypedReadyEvidence] = []
 
-    # Coverage counts from dataset_coverage when present.
-    complete = 0
-    total = len(required)
-    try:
-        rows = conn.execute(
-            "SELECT dataset, status FROM dataset_coverage WHERE dataset IN ({})".format(
-                ",".join("?" * len(required))
-            ),
-            required,
-        ).fetchall()
-        status_map = {str(r[0]): str(r[1]) for r in rows}
-        complete = sum(1 for d in required if status_map.get(d) == "COMPLETE")
-    except sqlite3.Error:
-        complete = 0
     evidence.append(
         CoverageEvidence(
             _conn=conn,
@@ -242,15 +240,34 @@ def _collect_typed_evidence(
 
     # Raw retention
     manifest_count = 0
-    manifests_ok = False if raw_manifest_ok is None else bool(raw_manifest_ok)
+    manifests_ok = False
     try:
-        row = conn.execute("SELECT COUNT(*) FROM raw_retention_manifests").fetchone()
-        manifest_count = int(row[0]) if row else 0
-        if raw_manifest_ok is None:
-            manifests_ok = manifest_count > 0
+        if run_id is not None:
+            placeholders = ",".join("?" for _ in required)
+            rows = conn.execute(
+                "SELECT dataset, completeness FROM raw_retention_manifests "
+                f"WHERE run_id=? AND dataset IN ({placeholders})",
+                (run_id, *required),
+            ).fetchall()
+            status_by_dataset: dict[str, str] = {}
+            duplicate_dataset = False
+            for row in rows:
+                dataset = str(row[0])
+                if dataset in status_by_dataset:
+                    duplicate_dataset = True
+                status_by_dataset[dataset] = str(row[1])
+            manifest_count = len(rows)
+            manifests_ok = (
+                not duplicate_dataset
+                and manifest_count == len(required)
+                and set(status_by_dataset) == set(required)
+                and all(
+                    status_by_dataset.get(dataset) in ("ACQUIRED", "COMPLETE")
+                    for dataset in required
+                )
+            )
     except sqlite3.Error:
-        if fixture_compatibility and raw_manifest_ok is None:
-            manifests_ok = complete == total
+        manifests_ok = False
     evidence.append(
         RawRetentionEvidence(manifests_ok=manifests_ok, manifest_count=manifest_count)
     )
@@ -259,23 +276,31 @@ def _collect_typed_evidence(
     val_status = "UNKNOWN"
     if run_id is not None:
         try:
-            counts = conn.execute(
-                """
-                SELECT COUNT(*), SUM(
-                    CASE WHEN status NOT IN ('pass', 'PASS') THEN 1 ELSE 0 END
-                ) FROM ingestion_validation WHERE run_id=?
-                """,
-                (run_id,),
-            ).fetchone()
-            total_validations = int(counts[0]) if counts else 0
-            failures = int(counts[1] or 0) if counts else 0
+            placeholders = ",".join("?" for _ in required)
+            rows = conn.execute(
+                "SELECT dataset, status FROM ingestion_validation "
+                f"WHERE run_id=? AND dataset IN ({placeholders})",
+                (run_id, *required),
+            ).fetchall()
+            validation_by_dataset: dict[str, str] = {}
+            duplicate_dataset = False
+            for row in rows:
+                dataset = str(row[0])
+                if dataset in validation_by_dataset:
+                    duplicate_dataset = True
+                validation_by_dataset[dataset] = str(row[1])
             val_status = (
                 "PASS"
-                if total_validations >= len(required) and failures == 0
+                if not duplicate_dataset
+                and set(validation_by_dataset) == set(required)
+                and all(
+                    validation_by_dataset[dataset] in ("pass", "PASS")
+                    for dataset in required
+                )
                 else "FAIL"
             )
         except sqlite3.Error:
-            val_status = "PASS" if fixture_compatibility else "UNKNOWN"
+            val_status = "UNKNOWN"
     evidence.append(ValidationEvidence(status=val_status, run_id=run_id))
 
     # Natural keys
@@ -287,23 +312,54 @@ def _collect_typed_evidence(
         if row:
             nk_state = str(row[0])
     except sqlite3.Error:
-        nk_state = "READY" if fixture_compatibility else "UNKNOWN"
+        nk_state = "UNKNOWN"
     evidence.append(NaturalKeyEvidence(state=nk_state))
 
-    # Quality / B0
+    # Quality / B0 / B4.  All three observations come from the same exact
+    # build row; a global/latest Ops row cannot authorize a different build.
     b0 = "UNKNOWN"
-    q = quality_status or ("PASS" if fixture_compatibility else "UNKNOWN")
-    try:
-        row = conn.execute(
-            "SELECT status FROM ops_b0_status ORDER BY checked_at DESC LIMIT 1"
-        ).fetchone()
-        if row:
-            b0 = str(row[0])
-    except sqlite3.Error:
-        b0 = "PASS" if fixture_compatibility else "UNKNOWN"
-    if fixture_compatibility and b0 == "UNKNOWN":
-        b0 = "PASS"
-    evidence.append(QualityEvidence(b0_status=b0, quality_status=q))
+    b4 = "UNKNOWN"
+    q = "UNKNOWN"
+    if build_id is not None:
+        try:
+            rows = conn.execute(
+                "SELECT status, results_json FROM snapshot_quality_results "
+                "WHERE build_id=?",
+                (build_id,),
+            ).fetchall()
+            if len(rows) == 1:
+                row = rows[0]
+                q = str(row[0])
+                result_rows = json.loads(str(row[1]))
+                if not isinstance(result_rows, list):
+                    raise ValueError("quality results must be a list")
+
+                def exact_check_status(check_id: str) -> str:
+                    checks = [
+                        item
+                        for item in result_rows
+                        if isinstance(item, Mapping)
+                        and item.get("check_id") == check_id
+                    ]
+                    if not checks:
+                        return "UNKNOWN"
+                    return (
+                        "PASS"
+                        if all(item.get("status") == "pass" for item in checks)
+                        else "FAIL"
+                    )
+
+                b0 = exact_check_status("B0")
+                b4 = exact_check_status("B4")
+        except sqlite3.Error:
+            q = "UNKNOWN"
+        except (TypeError, ValueError, json.JSONDecodeError):
+            b0 = "UNKNOWN"
+            b4 = "UNKNOWN"
+            q = "UNKNOWN"
+    evidence.append(
+        QualityEvidence(b0_status=b0, b4_status=b4, quality_status=q)
+    )
 
     # Sync generation
     src_gen = 0
@@ -314,7 +370,7 @@ def _collect_typed_evidence(
         ).fetchone()
         src_gen = int(row[0]) if row else 0
     except sqlite3.Error:
-        src_gen = 1 if fixture_compatibility and complete == total and complete > 0 else 0
+        src_gen = 0
     try:
         row = conn.execute(
             "SELECT last_applied_change_seq FROM sync_change_state "
@@ -322,37 +378,12 @@ def _collect_typed_evidence(
         ).fetchone()
         sync_gen = int(row[0]) if row else 0
     except sqlite3.Error:
-        sync_gen = src_gen if fixture_compatibility else 0
-    if fixture_compatibility and sync_gen <= 0:
-        sync_gen = src_gen
+        sync_gen = 0
     evidence.append(
         SyncGenerationEvidence(source_generation=src_gen, sync_generation=sync_gen)
     )
 
     return evidence
-
-
-def collect_typed_evidence(
-    conn: sqlite3.Connection,
-    db_path: str | Path,
-    required_datasets: Sequence[str],
-    *,
-    run_id: int | None = None,
-    coverage_proof_id: object,
-    quality_status: str | None = None,
-    raw_manifest_ok: bool | None = None,
-) -> list[TypedReadyEvidence]:
-    """Production evidence collection; missing ledgers are never compatible."""
-    return _collect_typed_evidence(
-        conn,
-        db_path,
-        required_datasets,
-        run_id=run_id,
-        coverage_proof_id=coverage_proof_id,
-        quality_status=quality_status,
-        raw_manifest_ok=raw_manifest_ok,
-        fixture_compatibility=False,
-    )
 
 
 class ReadyPublicationPolicy:
@@ -365,9 +396,8 @@ class ReadyPublicationPolicy:
         required_datasets: Sequence[str],
         *,
         run_id: int | None = None,
+        build_id: str | None = None,
         coverage_proof_id: object,
-        quality_status: str | None = None,
-        raw_manifest_ok: bool | None = None,
     ) -> ReadyEvidenceBundle:
         required = tuple(required_datasets)
         bundle = ReadyEvidenceBundle()
@@ -392,9 +422,8 @@ class ReadyPublicationPolicy:
                 db_path,
                 required,
                 run_id=run_id,
+                build_id=build_id,
                 coverage_proof_id=coverage_proof_id,
-                quality_status=quality_status,
-                raw_manifest_ok=raw_manifest_ok,
             )
         )
         for ev in evidence:

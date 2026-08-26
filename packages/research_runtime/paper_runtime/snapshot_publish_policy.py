@@ -57,7 +57,12 @@ _JQUANTS_DATASETS = frozenset(
 def _raw_manifests_for(
     conn: sqlite3.Connection, run_id: int, required: tuple[str, ...]
 ) -> dict[str, dict[str, Any]]:
-    """Require one COMPLETE R2 raw-retention attestation per dataset."""
+    """Require one successful raw acquisition per dataset.
+
+    ``ACQUIRED`` is the current raw-plane success state.  Historical
+    ``COMPLETE`` rows remain readable, but structured completeness is proven
+    separately by reconciled signed receipts and the Coverage proof.
+    """
     from paper_runtime.snapshot import SnapshotRejected
 
     table = conn.execute(
@@ -78,7 +83,7 @@ def _raw_manifests_for(
     missing = sorted(set(required) - set(manifests))
     failed = sorted(
         dataset for dataset, row in manifests.items()
-        if row["completeness"] != "COMPLETE"
+        if row["completeness"] not in ("ACQUIRED", "COMPLETE")
     )
     if missing or failed:
         raise SnapshotRejected(
@@ -289,9 +294,8 @@ def evaluate_ready_publication(
         staging_path,
         required,
         run_id=run_id,
+        build_id=build_id,
         coverage_proof_id=coverage_proof_id,
-        quality_status="FAIL" if failures else "PASS",
-        raw_manifest_ok=True,
     )
     if not bundle.passed:
         detail = "; ".join(f"{i.name}: {i.reason}" for i in bundle.failures())

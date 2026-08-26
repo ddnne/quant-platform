@@ -193,40 +193,6 @@ def _replace_fixture_with_coherent_exact_four_artifact(ready, binding):
     return artifact_path, manifest_path, outer, nested
 
 
-def _exact_four_scope_proof(binding):
-    body = {
-        "format": "pit-dependency-scope-proof/v1",
-        "status": "PASS",
-        "profile_digest": binding.profile_digest,
-        "plan_set_digest": binding.plan_set_digest,
-        "dependency_closure_digest": binding.closure_set_digest,
-        "universe_rule_digest": EXACT_FOUR_UNIVERSE_RULE_DIGEST,
-        "resolved_universe_digest": "sha256:" + ("cd" * 32),
-    }
-    return {
-        **body,
-        "proof_digest": snapshot_module._canonical_digest(body),
-    }
-
-
-def _exact_four_profile_evidence(binding):
-    evidence = {}
-    for dataset_id in binding.required_datasets:
-        policy = coverage_policy_binding(dataset_id)
-        evidence[dataset_id] = {
-            "status": "COMPLETE",
-            "projection_status": "FRESH",
-            "coverage_mode": official_mode(dataset_id),
-            "policy_id": policy["policy_id"],
-            "policy_version": policy["policy_version"],
-            "policy_digest": policy["policy_digest"],
-            "source_generation": "1",
-            "export_cursor": "1",
-            "applied_sync_generation": "1",
-        }
-    return evidence
-
-
 def test_rejected_pointer_finalization_removes_already_minted_sidecar(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -440,85 +406,24 @@ def test_production_reader_binds_nested_ready_manifest_and_artifact_bytes(
         describe_snapshot(snapshot_dir, outer["snapshot_id"])
 
 
-def test_production_scope_repeat_reuses_one_authority_bound_artifact(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Repeat publication must validate, not silently replace, generation N."""
-    monkeypatch.setattr(
-        snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
-    )
-    staging = tmp_path / "production-repeat.sqlite"
-    _seed_publishable_db(staging)
+def test_fixture_gate_cannot_publish_a_production_scope(tmp_path: Path) -> None:
+    """A tests-owned gate is rejected before source or artifact mutation."""
+    staging = tmp_path / "mixed-scope.sqlite"
+    staging.touch()
     snapshot_dir = tmp_path / "snapshots"
-    binding = load_exact_four_pilot_ready_binding()
-    with sqlite3.connect(staging) as conn:
-        row = conn.execute(
-            "SELECT id,detail FROM ingestion_run_log "
-            "WHERE source='jquants' ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        detail = json.loads(row[1])
-        detail.update(
-            datasetCount=len(binding.required_datasets),
-            passed=len(binding.required_datasets),
-            failed=0,
-        )
-        conn.execute(
-            "UPDATE ingestion_run_log SET detail=? WHERE id=?",
-            (json.dumps(detail), row[0]),
-        )
-    profile_evidence = _exact_four_profile_evidence(binding)
-    scope_proof = _exact_four_scope_proof(binding)
-    signer = make_readiness_signer(key_id="r7-production-repeat-test")
-    monkeypatch.setattr(
-        ReadinessPublicKeyRegistry,
-        "load_pinned",
-        classmethod(lambda cls: signer._public_registry()),
-    )
 
-    def build_manifest(document):
-        return build_profile_bound_ready_manifest_from_snapshot_document(
-            document,
-            profile=binding,
-        ).to_dict()
-
-    def attest(ready):
-        nested = ready_manifest_from_snapshot_document(ready.manifest)
-        readiness = mint_pilot_readiness(
-            nested,
-            publisher=signer,
-            immutable_db_digest=_sha256_file(ready.db_path),
-            profile_binding=binding,
-        )
-        path = ready.db_path.with_name(
-            f"{ready.db_path.stem}.{readiness.attestation_id}.readiness.json"
-        )
-        snapshot_module._atomic_json(path, readiness.to_dict(), mode=0o444)
-        return path
-
-    def publish_once():
-        return snapshot_module._publish_ready_snapshot_impl(
+    with pytest.raises(SnapshotRejected, match="exact production publication gate"):
+        snapshot_module._publish_ready_snapshot_impl(
             staging,
             snapshot_dir,
-            required_datasets=binding.required_datasets,
-            _profile_coverage_evidence=profile_evidence,
-            _dependency_scope_evidence=scope_proof,
-            _ready_manifest_builder=build_manifest,
-            _ready_attestation_builder=attest,
+            required_datasets=("equities_bars_daily",),
             publication_gate=_evaluate_ready_publication_fixture,
             fixture_compatibility=False,
         )
 
-    first = publish_once()
-    second = publish_once()
-
-    assert second.snapshot_id == first.snapshot_id
-    assert describe_snapshot(snapshot_dir, first.snapshot_id).snapshot_id == (
-        first.snapshot_id
-    )
-    assert latest_ready_snapshot(snapshot_dir).snapshot_id == first.snapshot_id
-    assert len(list(snapshot_dir.glob("sha256_*.sqlite"))) == 1
-    assert len(list(snapshot_dir.glob("sha256_*.manifest.json"))) == 1
-    assert len(list(snapshot_dir.glob("sha256_*.publication.json"))) == 1
+    assert not snapshot_dir.exists()
+    assert not list(tmp_path.glob("**/*.publication.json"))
+    assert not list(tmp_path.glob("**/latest-ready.json"))
 
 
 def test_publication_marker_post_replace_failure_is_not_discoverable(
