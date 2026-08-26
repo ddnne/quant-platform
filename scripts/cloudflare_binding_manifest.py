@@ -185,6 +185,56 @@ _WRANGLER_PACKAGE_SCRIPT_POLICY = {
         'wrangler types --config=wrangler.toml --env="" --include-runtime false'
     ),
 }
+_COMMON_PACKAGE_SCRIPTS = {
+    "build": _WRANGLER_PACKAGE_SCRIPT_POLICY["build"],
+    "typecheck": "tsc --noEmit",
+    "types": _WRANGLER_PACKAGE_SCRIPT_POLICY["types"],
+}
+_PINNED_PACKAGE_SCRIPTS = {
+    "ingestion-jsda": {
+        **_COMMON_PACKAGE_SCRIPTS,
+        "deploy": _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"],
+        "tail": _WRANGLER_PACKAGE_SCRIPT_POLICY["tail"],
+        "test": (
+            "vitest run --config vitest.config.ts && "
+            "vitest run --config vitest.runtime.config.ts"
+        ),
+    },
+    "ingestion-premium": {
+        **_COMMON_PACKAGE_SCRIPTS,
+        "cf-typegen": _WRANGLER_PACKAGE_SCRIPT_POLICY["cf-typegen"],
+        "test": "vitest run",
+    },
+    "ingestion-secrets": {
+        **_COMMON_PACKAGE_SCRIPTS,
+        "cf-typegen": _WRANGLER_PACKAGE_SCRIPT_POLICY["cf-typegen"],
+        "test": "vitest run",
+    },
+    "quant-ops-mcp": {
+        **_COMMON_PACKAGE_SCRIPTS,
+        "deploy": _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"],
+        "test": (
+            "node --experimental-test-module-mocks --test test/*.test.mjs && "
+            "vitest run --config vitest.runtime.config.ts && "
+            "vitest run --config vitest.harness.config.ts"
+        ),
+    },
+    "research-ai-gateway": {
+        **_COMMON_PACKAGE_SCRIPTS,
+        "deploy": _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"],
+        "test": (
+            "vitest run --config vitest.config.ts && "
+            "vitest run --config vitest.harness.config.ts"
+        ),
+    },
+    "research-mass-eval": {
+        **_COMMON_PACKAGE_SCRIPTS,
+        "deploy": _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"],
+        "dev": _WRANGLER_PACKAGE_SCRIPT_POLICY["dev"],
+        "tail": _WRANGLER_PACKAGE_SCRIPT_POLICY["tail"],
+        "test": "vitest run",
+    },
+}
 
 
 def _package_scripts(worker: str) -> dict[str, str]:
@@ -202,19 +252,9 @@ def _package_scripts(worker: str) -> dict[str, str]:
     ):
         raise ValueError(f"{worker}: package scripts must be a string map")
     frozen = dict(sorted(scripts.items()))
-    for name, command in frozen.items():
-        if re.search(r"\bwrangler\b", command):
-            expected = _WRANGLER_PACKAGE_SCRIPT_POLICY.get(name)
-            if command != expected:
-                raise ValueError(
-                    f"{worker}: package script {name!r} violates the closed "
-                    "Wrangler command policy"
-                )
-    for required in ("build", "types"):
-        if frozen.get(required) != _WRANGLER_PACKAGE_SCRIPT_POLICY[required]:
-            raise ValueError(
-                f"{worker}: required package script {required!r} is not canonical"
-            )
+    expected = dict(sorted(_PINNED_PACKAGE_SCRIPTS.get(worker, {}).items()))
+    if frozen != expected:
+        raise ValueError(f"{worker}: package scripts violate the closed command policy")
     return frozen
 
 
@@ -354,9 +394,9 @@ def _external_binding_targets(surface: dict[str, Any]) -> set[tuple[str, str]]:
     if worker_name is not None and str(worker_name):
         targets.add(("worker", str(worker_name)))
     tables = {
-        "d1_databases": ("d1", ("database_id",)),
-        "kv_namespaces": ("kv", ("id",)),
-        "r2_buckets": ("r2", ("bucket_name",)),
+        "d1_databases": ("d1", ("database_id", "preview_database_id")),
+        "kv_namespaces": ("kv", ("id", "preview_id")),
+        "r2_buckets": ("r2", ("bucket_name", "preview_bucket_name")),
         "queue_producers": ("queue", ("queue",)),
         "queue_consumers": ("queue", ("queue", "dead_letter_queue")),
         "services": ("worker", ("service",)),
@@ -369,8 +409,7 @@ def _external_binding_targets(surface: dict[str, Any]) -> set[tuple[str, str]]:
             for field in fields:
                 value = row.get(field)
                 if value is not None and str(value):
-                    identity_kind = "worker" if kind == "worker" else f"{kind}.{field}"
-                    targets.add((identity_kind, str(value)))
+                    targets.add((kind, str(value)))
     return targets
 
 
@@ -605,7 +644,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError(f"{worker}: test-harness routes must be empty")
         for table, fields in {
             "d1_databases": ("database_name",),
-            "r2_buckets": ("bucket_name",),
+            "r2_buckets": ("bucket_name", "preview_bucket_name"),
             "queue_producers": ("queue",),
             "queue_consumers": ("queue", "dead_letter_queue"),
             "services": ("service",),
@@ -685,7 +724,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError(f"{worker}: production secret names leaked into staging policy")
         for table, fields in {
             "d1_databases": ("database_name",),
-            "r2_buckets": ("bucket_name",),
+            "r2_buckets": ("bucket_name", "preview_bucket_name"),
             "queue_producers": ("queue",),
             "queue_consumers": ("queue", "dead_letter_queue"),
             "services": ("service",),

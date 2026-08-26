@@ -159,7 +159,7 @@ def test_package_script_rejects_wrangler_config_redirect(
         return body
 
     monkeypatch.setattr(Path, "read_text", read_text)
-    with pytest.raises(ValueError, match="closed Wrangler command policy"):
+    with pytest.raises(ValueError, match="closed command policy"):
         manifest_module._package_scripts(worker)  # noqa: SLF001
 
 
@@ -206,7 +206,42 @@ def test_package_script_rejects_wrangler_command_escape(
         return body
 
     monkeypatch.setattr(Path, "read_text", read_text)
-    with pytest.raises(ValueError, match="closed Wrangler command policy"):
+    with pytest.raises(ValueError, match="closed command policy"):
+        manifest_module.build_manifest()
+
+
+@pytest.mark.parametrize(
+    "script,command",
+    (
+        (
+            "deploy",
+            "wran''gler deploy --config=wran''gler.toml --env=production "
+            "--name quant-platform-rogue",
+        ),
+        ("deploy", "node scripts/deploy-shadow.js"),
+        ("test", "node scripts/deploy-shadow.js"),
+        ("shadow", "node scripts/deploy-shadow.js"),
+    ),
+)
+def test_all_package_script_roles_are_independently_pinned(
+    monkeypatch: pytest.MonkeyPatch,
+    script: str,
+    command: str,
+) -> None:
+    worker = "ingestion-jsda"
+    package = manifest_module.WORKER_ROOT / worker / "package.json"
+    original_read_text = Path.read_text
+
+    def read_text(path: Path, *args: object, **kwargs: object) -> str:
+        body = original_read_text(path, *args, **kwargs)
+        if path == package:
+            data = json.loads(body)
+            data["scripts"][script] = command
+            return json.dumps(data)
+        return body
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    with pytest.raises(ValueError, match="closed command policy"):
         manifest_module.build_manifest()
 
 
@@ -264,6 +299,38 @@ def test_staging_binding_identity_cannot_alias_production() -> None:
     ] = production_id
     with pytest.raises(ValueError, match="staging external binding targets overlap"):
         manifest_module.validate_manifest(drifted)
+
+    preview_aliases = (
+        (
+            "ingestion-premium",
+            "d1_databases",
+            "preview_database_id",
+            production_id,
+        ),
+        (
+            "quant-ops-mcp",
+            "kv_namespaces",
+            "preview_id",
+            manifest["workers"]["quant-ops-mcp"]["production"]["kv_namespaces"][
+                0
+            ]["id"],
+        ),
+        (
+            "ingestion-premium",
+            "r2_buckets",
+            "preview_bucket_name",
+            manifest["workers"]["ingestion-premium"]["production"]["r2_buckets"][
+                0
+            ]["bucket_name"],
+        ),
+    )
+    for worker, table, field, production_target in preview_aliases:
+        drifted = copy.deepcopy(manifest)
+        drifted["workers"][worker]["staging"][table][0][field] = production_target
+        with pytest.raises(
+            ValueError, match="staging external binding targets overlap"
+        ):
+            manifest_module.validate_manifest(drifted)
 
     for table, row in (
         ("tail_consumers", {"service": "quant-platform-ingestion-premium"}),
@@ -346,35 +413,43 @@ def test_authoritative_ci_dry_runs_test_harness_configs() -> None:
         if "npx --no-install wrangler " in line and not line.lstrip().startswith("#")
     ]
     assert wrangler_invocations
+    parsed_invocations = []
     for command in wrangler_invocations:
-        assert "--config=" in command, command
-        assert "--env=" in command, command
         payload = command.split("npx --no-install wrangler ", 1)[1].rstrip(")")
-        tokens = shlex.split(payload)
-        operation = tokens[0]
-        assert operation in {"deploy", "types"}, command
-        assert not any(
-            token == "--name" or token.startswith("--name=") for token in tokens
-        ), command
-        assert sum(token.startswith("--config=") for token in tokens) == 1, command
-        assert sum(token.startswith("--env=") for token in tokens) == 1, command
-        if operation == "deploy":
-            assert tokens.count("--dry-run") == 1, command
-            assert not any(token.startswith("--dry-run=") for token in tokens), command
-            assert all(
-                token == "--dry-run"
-                or token.startswith("--config=")
-                or token.startswith("--env=")
-                for token in tokens[1:]
-            ), command
-        else:
-            assert all(
-                token.startswith("--config=")
-                or token.startswith("--env=")
-                or token == "--include-runtime=false"
-                or token in {"$base_types", "$production_types", "$staging_types"}
-                for token in tokens[1:]
-            ), command
+        parsed_invocations.append(shlex.split(payload))
+    assert parsed_invocations == [
+        ["deploy", "--dry-run", "--config=wrangler.toml", "--env="],
+        [
+            "deploy",
+            "--dry-run",
+            "--config=wrangler.toml",
+            "--env=production",
+        ],
+        ["deploy", "--dry-run", "--config=wrangler.staging.toml", "--env="],
+        ["deploy", "--dry-run", "--config=wrangler.test.toml", "--env="],
+        ["types", "--config=wrangler.toml", "--env="],
+        [
+            "types",
+            "$base_types",
+            "--config=wrangler.toml",
+            "--env=",
+            "--include-runtime=false",
+        ],
+        [
+            "types",
+            "$production_types",
+            "--config=wrangler.toml",
+            "--env=production",
+            "--include-runtime=false",
+        ],
+        [
+            "types",
+            "$staging_types",
+            "--config=wrangler.staging.toml",
+            "--env=",
+            "--include-runtime=false",
+        ],
+    ]
 
 
 def test_manifest_is_fail_closed_for_toolchain_drift() -> None:
