@@ -31,7 +31,7 @@ describe("handleBudgetRequest POST /reserve without amounts", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         idempotency_key: "k1",
-        request_digest: "digest-k1",
+        request_digest: "a".repeat(64),
       }),
     });
     expect(res.status).not.toBe(429);

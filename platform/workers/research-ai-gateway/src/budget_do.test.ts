@@ -3,7 +3,11 @@ import {
   PILOT_BUDGET_CAPS,
   CONTROL_PLANE_LEDGER_NAME,
   MemoryBudgetStorage,
+  MAX_IDEMPOTENCY_KEY_BYTES,
+  MAX_MUTABLE_LEDGER_STATE_BYTES,
   MAX_OWNER_CANCELLATION_TOMBSTONES,
+  MAX_SERIALIZED_LEDGER_STATE_BYTES,
+  OWNER_CANCELLATION_QUARANTINE_HEADROOM_BYTES,
   OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
   bindIdempotencyKey,
   cancelPreProviderReservation,
@@ -32,10 +36,18 @@ const T0 = 1_700_000_000_000;
 const OWNER_A = "a".repeat(64);
 const OWNER_B = "b".repeat(64);
 
+function testDigest(label: string): string {
+  const seed = Array.from(
+    new TextEncoder().encode(label),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("") || "0";
+  return seed.repeat(Math.ceil(64 / seed.length)).slice(0, 64);
+}
+
 function leased(
   idempotency_key: string,
   amounts: unknown,
-  request_digest = `digest-${idempotency_key}`,
+  request_digest = testDigest(idempotency_key),
 ): {
   idempotency_key: string;
   request_digest: string;
@@ -69,12 +81,14 @@ async function fillOwnerCancellationTombstoneCapacity(
   state.owner_cancellation_tombstones = Object.fromEntries(
     Array.from({ length: MAX_OWNER_CANCELLATION_TOMBSTONES }, (_, index) => {
       const ownerHash = index.toString(16).padStart(64, "0");
+      const suffix = `-${index}`;
       return [
         ownerHash,
         {
           owner_capability_hash: ownerHash,
-          idempotency_key: `capacity-${index}`,
-          request_digest: `digest-capacity-${index}`,
+          idempotency_key:
+            "i".repeat(MAX_IDEMPOTENCY_KEY_BYTES - suffix.length) + suffix,
+          request_digest: testDigest(`capacity-${index}`),
           created_at: createdAt,
           expires_at: createdAt + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
         },
@@ -86,6 +100,9 @@ async function fillOwnerCancellationTombstoneCapacity(
     state,
     createdAt + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
   );
+  const persisted = await storage.get("ledger");
+  const bytes = new TextEncoder().encode(JSON.stringify(persisted)).byteLength;
+  expect(bytes).toBeLessThanOrEqual(MAX_MUTABLE_LEDGER_STATE_BYTES);
 }
 
 describe("PILOT_BUDGET_CAPS", () => {
@@ -103,6 +120,18 @@ describe("PILOT_BUDGET_CAPS", () => {
       lease_ttl_seconds: 1800,
       auto_promotion: false,
     });
+  });
+
+  it("keeps the transitional whole-state value below the platform ceiling", () => {
+    expect(MAX_OWNER_CANCELLATION_TOMBSTONES).toBe(512);
+    expect(OWNER_CANCELLATION_QUARANTINE_HEADROOM_BYTES).toBeGreaterThanOrEqual(
+      16 * 1024,
+    );
+    expect(MAX_MUTABLE_LEDGER_STATE_BYTES).toBe(
+      MAX_SERIALIZED_LEDGER_STATE_BYTES -
+        OWNER_CANCELLATION_QUARANTINE_HEADROOM_BYTES,
+    );
+    expect(MAX_SERIALIZED_LEDGER_STATE_BYTES).toBeLessThanOrEqual(1_572_864);
   });
 });
 
@@ -200,7 +229,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "k1",
-        request_digest: "digest-k1",
+        request_digest: testDigest("k1"),
         amounts: { model_calls: 1, input_tokens: 40, output_tokens: 10 },
         acquire_lease: true,
       },
@@ -213,7 +242,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "k1",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-k1",
+        request_digest: testDigest("k1"),
       },
       T0 + 1,
     );
@@ -223,7 +252,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "k1",
-        request_digest: "digest-k1",
+        request_digest: testDigest("k1"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
         usage: actualUsage({ model_calls: 1, input_tokens: 12, output_tokens: 7 }),
@@ -235,7 +264,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "k1",
-        request_digest: "digest-k1",
+        request_digest: testDigest("k1"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
         usage: actualUsage({ model_calls: 1, input_tokens: 99, output_tokens: 99 }),
@@ -307,7 +336,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "usage-provenance",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-usage-provenance",
+        request_digest: testDigest("usage-provenance"),
       },
       T0 + 1,
     );
@@ -316,7 +345,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "usage-provenance",
-        request_digest: "digest-usage-provenance",
+        request_digest: testDigest("usage-provenance"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
         usage: actualUsage(overrides),
@@ -405,7 +434,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "retry-pre-provider",
-        request_digest: "digest-retry",
+        request_digest: testDigest("retry"),
         amounts: { model_calls: 1 },
         acquire_lease: true,
       },
@@ -424,7 +453,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "retry-pre-provider",
-        request_digest: "digest-retry",
+        request_digest: testDigest("retry"),
         amounts: { model_calls: 1 },
         acquire_lease: true,
       },
@@ -493,7 +522,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "uncertain-expiry",
-        request_digest: "digest-uncertain-expiry",
+        request_digest: testDigest("uncertain-expiry"),
         amounts: {
           model_calls: 1,
           input_tokens: 200,
@@ -513,7 +542,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "uncertain-expiry",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-uncertain-expiry",
+        request_digest: testDigest("uncertain-expiry"),
       },
       T0 + 1,
     );
@@ -558,7 +587,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "no-zero-release",
-        request_digest: "digest-no-zero-release",
+        request_digest: testDigest("no-zero-release"),
         amounts: { model_calls: 1, input_tokens: 100, output_tokens: 10 },
         acquire_lease: true,
       },
@@ -570,7 +599,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "no-zero-release",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-no-zero-release",
+        request_digest: testDigest("no-zero-release"),
       },
       T0 + 1,
     );
@@ -597,7 +626,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "uncertain-idempotent",
-        request_digest: "digest-uncertain",
+        request_digest: testDigest("uncertain"),
         amounts: { model_calls: 1, input_tokens: 50, output_tokens: 5, cached_tokens: 50 },
         acquire_lease: true,
       },
@@ -609,7 +638,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "uncertain-idempotent",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-uncertain",
+        request_digest: testDigest("uncertain"),
       },
       T0 + 1,
     );
@@ -619,7 +648,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "uncertain-idempotent",
         reason: "finalize_failed",
-        request_digest: "digest-uncertain",
+        request_digest: testDigest("uncertain"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
       },
@@ -630,7 +659,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "uncertain-idempotent",
         reason: "finalize_failed",
-        request_digest: "digest-uncertain",
+        request_digest: testDigest("uncertain"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
       },
@@ -641,7 +670,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "uncertain-idempotent",
-        request_digest: "digest-uncertain",
+        request_digest: testDigest("uncertain"),
         amounts: { model_calls: 1 },
         acquire_lease: true,
       },
@@ -665,7 +694,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "freeze-first",
-        request_digest: "digest-freeze-first",
+        request_digest: testDigest("freeze-first"),
         amounts: { model_calls: 1, input_tokens: 10 },
         acquire_lease: true,
       },
@@ -675,7 +704,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "freeze-second",
-        request_digest: "digest-freeze-second",
+        request_digest: testDigest("freeze-second"),
         amounts: { model_calls: 1, input_tokens: 10 },
         acquire_lease: true,
       },
@@ -689,7 +718,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "freeze-first",
         lease_id: first.lease.lease_id,
-        request_digest: "digest-freeze-first",
+        request_digest: testDigest("freeze-first"),
       },
       T0 + 1,
     );
@@ -699,7 +728,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "freeze-first",
         reason: "provider_error",
-        request_digest: "digest-freeze-first",
+        request_digest: testDigest("freeze-first"),
         lease_id: first.lease.lease_id,
         settlement_capability: started.settlement_capability,
       },
@@ -710,7 +739,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "freeze-second",
         lease_id: second.lease.lease_id,
-        request_digest: "digest-freeze-second",
+        request_digest: testDigest("freeze-second"),
       },
       T0 + 3,
     );
@@ -785,7 +814,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "k-dup",
-        request_digest: "digest-a",
+        request_digest: testDigest("a"),
         amounts: { model_calls: 1 },
         acquire_lease: true,
       },
@@ -795,7 +824,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "k-dup",
-        request_digest: "digest-a",
+        request_digest: testDigest("a"),
         amounts: { model_calls: 1 },
         acquire_lease: true,
       },
@@ -805,7 +834,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "k-dup",
-        request_digest: "digest-b",
+        request_digest: testDigest("b"),
         amounts: { model_calls: 1 },
         acquire_lease: true,
       },
@@ -829,7 +858,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "schema-reject",
-        request_digest: "digest-schema-reject",
+        request_digest: testDigest("schema-reject"),
         amounts: { model_calls: 1, input_tokens: 40, output_tokens: 16 },
         acquire_lease: true,
       },
@@ -842,7 +871,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "schema-reject",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-schema-reject",
+        request_digest: testDigest("schema-reject"),
       },
       T0 + 1,
     );
@@ -851,7 +880,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "schema-reject",
-        request_digest: "digest-schema-reject",
+        request_digest: testDigest("schema-reject"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
         usage: actualUsage({ model_calls: 1, input_tokens: 12, output_tokens: 4 }),
@@ -878,7 +907,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "over",
-        request_digest: "digest-over",
+        request_digest: testDigest("over"),
         amounts: { model_calls: 1, input_tokens: 10 },
         acquire_lease: true,
       },
@@ -890,7 +919,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "over",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-over",
+        request_digest: testDigest("over"),
       },
       T0 + 1,
     );
@@ -899,7 +928,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "over",
-        request_digest: "digest-over",
+        request_digest: testDigest("over"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
         usage: actualUsage({ model_calls: 1, input_tokens: 11 }),
@@ -931,7 +960,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "unstarted",
-        request_digest: "digest-unstarted",
+        request_digest: testDigest("unstarted"),
         amounts: { model_calls: 1, cost_usd: 1 },
         acquire_lease: true,
       },
@@ -942,7 +971,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "unstarted",
-        request_digest: "digest-unstarted",
+        request_digest: testDigest("unstarted"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: "0".repeat(64),
         usage: actualUsage({ model_calls: 0, cost_usd: 0 }),
@@ -967,7 +996,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "cap-a",
-        request_digest: "digest-a",
+        request_digest: testDigest("a"),
         amounts: { model_calls: 1, input_tokens: 10 },
         acquire_lease: true,
       },
@@ -977,7 +1006,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "cap-b",
-        request_digest: "digest-b",
+        request_digest: testDigest("b"),
         amounts: { model_calls: 1, input_tokens: 10 },
         acquire_lease: true,
       },
@@ -991,7 +1020,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "cap-a",
         lease_id: first.lease.lease_id,
-        request_digest: "digest-a",
+        request_digest: testDigest("a"),
       },
       T0 + 1,
     );
@@ -1000,7 +1029,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "cap-b",
         lease_id: second.lease.lease_id,
-        request_digest: "digest-b",
+        request_digest: testDigest("b"),
       },
       T0 + 1,
     );
@@ -1012,7 +1041,7 @@ describe("budget ledger algebra", () => {
         storage,
         {
           idempotency_key: "cap-a",
-          request_digest: "digest-a",
+          request_digest: testDigest("a"),
           lease_id: first.lease.lease_id,
           settlement_capability: "ff".repeat(32),
           usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
@@ -1026,7 +1055,7 @@ describe("budget ledger algebra", () => {
         storage,
         {
           idempotency_key: "cap-a",
-          request_digest: "digest-b",
+          request_digest: testDigest("b"),
           lease_id: first.lease.lease_id,
           settlement_capability: startedA.settlement_capability,
           usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
@@ -1040,7 +1069,7 @@ describe("budget ledger algebra", () => {
         storage,
         {
           idempotency_key: "cap-a",
-          request_digest: "digest-a",
+          request_digest: testDigest("a"),
           lease_id: second.lease.lease_id,
           settlement_capability: startedA.settlement_capability,
           usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
@@ -1054,7 +1083,7 @@ describe("budget ledger algebra", () => {
         storage,
         {
           idempotency_key: "cap-a",
-          request_digest: "digest-a",
+          request_digest: testDigest("a"),
           lease_id: first.lease.lease_id,
           settlement_capability: startedB.settlement_capability,
           usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
@@ -1067,7 +1096,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "cap-a",
-        request_digest: "digest-a",
+        request_digest: testDigest("a"),
         lease_id: first.lease.lease_id,
         settlement_capability: startedA.settlement_capability,
         usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
@@ -1080,7 +1109,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "cap-a",
-        request_digest: "digest-a",
+        request_digest: testDigest("a"),
         lease_id: first.lease.lease_id,
         settlement_capability: startedA.settlement_capability,
         usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -1100,7 +1129,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "inject",
-        request_digest: "digest-inject",
+        request_digest: testDigest("inject"),
         amounts: { model_calls: 1, input_tokens: 20, cost_usd: 1 },
         acquire_lease: true,
       },
@@ -1112,7 +1141,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "inject",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-inject",
+        request_digest: testDigest("inject"),
       },
       T0 + 1,
     );
@@ -1121,7 +1150,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "inject",
-        request_digest: "digest-inject",
+        request_digest: testDigest("inject"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
         usage: actualUsage({ model_calls: 1, input_tokens: 8, cost_usd: 0.2 }),
@@ -1159,7 +1188,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "binding-required",
-        request_digest: "digest-binding",
+        request_digest: testDigest("binding"),
         amounts: { model_calls: 1, input_tokens: 8 },
         acquire_lease: true,
       },
@@ -1190,7 +1219,7 @@ describe("budget ledger algebra", () => {
         {
           idempotency_key: "binding-required",
           lease_id: "",
-          request_digest: "digest-binding",
+          request_digest: testDigest("binding"),
         },
         T0 + 1,
       ),
@@ -1200,7 +1229,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "binding-required",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-binding",
+        request_digest: testDigest("binding"),
       },
       T0 + 1,
     );
@@ -1239,7 +1268,7 @@ describe("budget ledger algebra", () => {
         {
           idempotency_key: "binding-required",
           reason: "timeout",
-          request_digest: "digest-binding",
+          request_digest: testDigest("binding"),
           settlement_capability: started.settlement_capability,
         },
         T0 + 2,
@@ -1260,7 +1289,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "start-retry",
-        request_digest: "digest-start-retry",
+        request_digest: testDigest("start-retry"),
         amounts: { model_calls: 1, input_tokens: 6 },
         acquire_lease: true,
       },
@@ -1272,7 +1301,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "start-retry",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-start-retry",
+        request_digest: testDigest("start-retry"),
       },
       T0 + 1,
     );
@@ -1281,7 +1310,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "start-retry",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-start-retry",
+        request_digest: testDigest("start-retry"),
       },
       T0 + 2,
     );
@@ -1293,7 +1322,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "start-retry",
-        request_digest: "digest-start-retry",
+        request_digest: testDigest("start-retry"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: lostResponseRetry.settlement_capability as string,
         usage: actualUsage({ model_calls: 1, input_tokens: 3 }),
@@ -1307,7 +1336,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "start-retry",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-start-retry",
+        request_digest: testDigest("start-retry"),
       },
       T0 + 4,
     );
@@ -1349,7 +1378,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "no-lease",
-        request_digest: "digest-no-lease",
+        request_digest: testDigest("no-lease"),
         amounts: { model_calls: 1 },
       },
       T0,
@@ -1358,7 +1387,7 @@ describe("budget ledger algebra", () => {
       storage,
       {
         idempotency_key: "no-lease-false",
-        request_digest: "digest-no-lease-false",
+        request_digest: testDigest("no-lease-false"),
         amounts: { model_calls: 1 },
         acquire_lease: false,
       },
@@ -1383,7 +1412,7 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      leased("replay-digest", { model_calls: 1 }, "digest-replay"),
+      leased("replay-digest", { model_calls: 1 }, testDigest("replay")),
       T0,
     );
     expect(reserved.ok).toBe(true);
@@ -1394,7 +1423,7 @@ describe("budget ledger algebra", () => {
     );
     const wrong = await reserveBudget(
       storage,
-      leased("replay-digest", { model_calls: 1 }, "digest-other"),
+      leased("replay-digest", { model_calls: 1 }, testDigest("other")),
       T0 + 2,
     );
     expect(omitted).toMatchObject({ ok: false, error: "request_digest required" });
@@ -1415,7 +1444,7 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      leased("replay-secret", { model_calls: 1, input_tokens: 8 }, "digest-replay-secret"),
+      leased("replay-secret", { model_calls: 1, input_tokens: 8 }, testDigest("replay-secret")),
       T0,
     );
     if (!reserved.ok || !reserved.lease) throw new Error("lease");
@@ -1424,7 +1453,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "replay-secret",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-replay-secret",
+        request_digest: testDigest("replay-secret"),
       },
       T0 + 1,
     );
@@ -1442,7 +1471,7 @@ describe("budget ledger algebra", () => {
 
     const replay = await reserveBudget(
       storage,
-      leased("replay-secret", { model_calls: 1, input_tokens: 8 }, "digest-replay-secret"),
+      leased("replay-secret", { model_calls: 1, input_tokens: 8 }, testDigest("replay-secret")),
       T0 + 2,
     );
     expect(replay.ok).toBe(true);
@@ -1463,7 +1492,7 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      leased("mark-retry", { model_calls: 1 }, "digest-mark-retry"),
+      leased("mark-retry", { model_calls: 1 }, testDigest("mark-retry")),
       T0,
     );
     if (!reserved.ok || !reserved.lease) throw new Error("lease");
@@ -1472,7 +1501,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "mark-retry",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-mark-retry",
+        request_digest: testDigest("mark-retry"),
       },
       T0 + 1,
     );
@@ -1481,7 +1510,7 @@ describe("budget ledger algebra", () => {
       {
         idempotency_key: "mark-retry",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-mark-retry",
+        request_digest: testDigest("mark-retry"),
       },
       T0 + 2,
     );
@@ -1493,7 +1522,7 @@ describe("budget ledger algebra", () => {
     expect(first.reservation).not.toHaveProperty("settlement_capability_hash");
     const reserveReplay = await reserveBudget(
       storage,
-      leased("mark-retry", { model_calls: 1 }, "digest-mark-retry"),
+      leased("mark-retry", { model_calls: 1 }, testDigest("mark-retry")),
       T0 + 3,
     );
     expect(reserveReplay.ok).toBe(true);
@@ -1506,7 +1535,7 @@ describe("budget ledger algebra", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      leased("pre-provider-expiry", { model_calls: 3, input_tokens: 30 }, "digest-pre-provider-expiry"),
+      leased("pre-provider-expiry", { model_calls: 3, input_tokens: 30 }, testDigest("pre-provider-expiry")),
       T0,
     );
     expect(reserved.ok).toBe(true);
@@ -1537,7 +1566,7 @@ describe("budget ledger algebra", () => {
     expect(state?.leases[reserved.lease.lease_id].released_at).toEqual(expect.any(Number));
     const retry = await reserveBudget(
       storage,
-      leased("pre-provider-expiry", { model_calls: 3 }, "digest-pre-provider-expiry"),
+      leased("pre-provider-expiry", { model_calls: 3 }, testDigest("pre-provider-expiry")),
       T0 + PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000 + 3,
     );
     expect(retry.ok).toBe(true);
@@ -1551,15 +1580,27 @@ describe("budget ledger algebra", () => {
   });
 
   it("bindIdempotencyKey uses digest when the client key is absent", () => {
-    const bound = bindIdempotencyKey(undefined, "abc");
+    const digest = testDigest("abc");
+    const bound = bindIdempotencyKey(undefined, digest);
     expect(bound.ok).toBe(true);
     if (bound.ok) {
-      expect(bound.idempotency_key).toBe("digest:abc");
-      expect(bound.request_digest).toBe("abc");
+      expect(bound.idempotency_key).toBe(`digest:${digest}`);
+      expect(bound.request_digest).toBe(digest);
     }
-    const named = bindIdempotencyKey("k1", "abc");
+    const named = bindIdempotencyKey("k1", digest);
     expect(named.ok).toBe(true);
     if (named.ok) expect(named.idempotency_key).toBe("k1");
+    expect(bindIdempotencyKey("界".repeat(86), digest)).toMatchObject({
+      ok: false,
+      error: "idempotency_key too long",
+    });
+
+    for (const invalid of ["abc", "A".repeat(64), "g".repeat(64)]) {
+      expect(bindIdempotencyKey(undefined, invalid)).toMatchObject({
+        ok: false,
+        error: "request_digest must be lowercase sha256 hex",
+      });
+    }
   });
 });
 
@@ -1609,7 +1650,7 @@ describe("P0 terminal replay and capability isolation", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      leased("p0-lease", { model_calls: 1, input_tokens: 8 }, "digest-p0-lease"),
+      leased("p0-lease", { model_calls: 1, input_tokens: 8 }, testDigest("p0-lease")),
       T0,
     );
     expect(reserved.ok).toBe(true);
@@ -1623,7 +1664,7 @@ describe("P0 terminal replay and capability isolation", () => {
         storage,
         {
           idempotency_key: "p0-lease",
-          request_digest: "digest-p0-lease",
+          request_digest: testDigest("p0-lease"),
           amounts: { model_calls: 1, input_tokens: 8 },
           ...(acquire === false ? { acquire_lease: false } : {}),
         },
@@ -1639,7 +1680,7 @@ describe("P0 terminal replay and capability isolation", () => {
       {
         idempotency_key: "p0-lease",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-p0-lease",
+        request_digest: testDigest("p0-lease"),
       },
       T0 + 2,
     );
@@ -1648,7 +1689,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "p0-lease",
-        request_digest: "digest-p0-lease",
+        request_digest: testDigest("p0-lease"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
         usage: actualUsage({ model_calls: 1, input_tokens: 3 }),
@@ -1663,7 +1704,7 @@ describe("P0 terminal replay and capability isolation", () => {
         storage,
         {
           idempotency_key: "p0-lease",
-          request_digest: "digest-p0-lease",
+          request_digest: testDigest("p0-lease"),
           amounts: { model_calls: 1, input_tokens: 8 },
           ...(acquire === false ? { acquire_lease: false } : {}),
         },
@@ -1676,7 +1717,7 @@ describe("P0 terminal replay and capability isolation", () => {
 
     const exactReplay = await reserveBudget(
       storage,
-      leased("p0-lease", { model_calls: 1, input_tokens: 8 }, "digest-p0-lease"),
+      leased("p0-lease", { model_calls: 1, input_tokens: 8 }, testDigest("p0-lease")),
       T0 + 5,
     );
     expect(exactReplay.ok).toBe(true);
@@ -1695,7 +1736,7 @@ describe("P0 terminal replay and capability isolation", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      leased("p0-smuggle", { model_calls: 1, input_tokens: 8 }, "digest-p0-smuggle"),
+      leased("p0-smuggle", { model_calls: 1, input_tokens: 8 }, testDigest("p0-smuggle")),
       T0,
     );
     if (!reserved.ok || !reserved.lease) throw new Error("lease");
@@ -1704,7 +1745,7 @@ describe("P0 terminal replay and capability isolation", () => {
       {
         idempotency_key: "p0-smuggle",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-p0-smuggle",
+        request_digest: testDigest("p0-smuggle"),
       },
       T0 + 1,
     );
@@ -1723,7 +1764,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "p0-smuggle",
-        request_digest: "digest-p0-smuggle",
+        request_digest: testDigest("p0-smuggle"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: secret,
         usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
@@ -1753,7 +1794,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "p0-smuggle",
-        request_digest: "digest-p0-smuggle",
+        request_digest: testDigest("p0-smuggle"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: secret,
         usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
@@ -1790,7 +1831,7 @@ describe("P0 terminal replay and capability isolation", () => {
 
     const reserveReplay = await reserveBudget(
       storage,
-      leased("p0-smuggle", { model_calls: 1, input_tokens: 8 }, "digest-p0-smuggle"),
+      leased("p0-smuggle", { model_calls: 1, input_tokens: 8 }, testDigest("p0-smuggle")),
       T0 + 4,
     );
     expect(reserveReplay.ok).toBe(true);
@@ -1800,7 +1841,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "p0-smuggle",
-        request_digest: "digest-p0-smuggle",
+        request_digest: testDigest("p0-smuggle"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: secret,
         usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
@@ -1814,7 +1855,7 @@ describe("P0 terminal replay and capability isolation", () => {
 
     const cachedReplay = await reserveBudget(
       storage,
-      leased("p0-smuggle", { model_calls: 1, input_tokens: 8 }, "digest-p0-smuggle"),
+      leased("p0-smuggle", { model_calls: 1, input_tokens: 8 }, testDigest("p0-smuggle")),
       T0 + 7,
     );
     expect(cachedReplay.ok).toBe(true);
@@ -1847,7 +1888,7 @@ describe("P0 terminal replay and capability isolation", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      leased("p0-substr", { model_calls: 1, input_tokens: 8 }, "digest-p0-substr"),
+      leased("p0-substr", { model_calls: 1, input_tokens: 8 }, testDigest("p0-substr")),
       T0,
     );
     if (!reserved.ok || !reserved.lease) throw new Error("lease");
@@ -1857,7 +1898,7 @@ describe("P0 terminal replay and capability isolation", () => {
       {
         idempotency_key: "p0-substr",
         lease_id: leaseId,
-        request_digest: "digest-p0-substr",
+        request_digest: testDigest("p0-substr"),
       },
       T0 + 1,
     );
@@ -1912,7 +1953,7 @@ describe("P0 terminal replay and capability isolation", () => {
         storage,
         {
           idempotency_key: "p0-substr",
-          request_digest: "digest-p0-substr",
+          request_digest: testDigest("p0-substr"),
           lease_id: leaseId,
           settlement_capability: secret,
           usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
@@ -1976,7 +2017,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "p0-substr",
-        request_digest: "digest-p0-substr",
+        request_digest: testDigest("p0-substr"),
         lease_id: leaseId,
         settlement_capability: secret,
         usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
@@ -1994,7 +2035,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "p0-substr",
-        request_digest: "digest-p0-substr",
+        request_digest: testDigest("p0-substr"),
         lease_id: leaseId,
         settlement_capability: secret,
         usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -2011,7 +2052,7 @@ describe("P0 terminal replay and capability isolation", () => {
 
     const cachedReplay = await reserveBudget(
       storage,
-      leased("p0-substr", { model_calls: 1, input_tokens: 8 }, "digest-p0-substr"),
+      leased("p0-substr", { model_calls: 1, input_tokens: 8 }, testDigest("p0-substr")),
       now,
     );
     now += 1;
@@ -2054,7 +2095,7 @@ describe("P0 terminal replay and capability isolation", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      leased("p0-finalize", { model_calls: 1, input_tokens: 10 }, "digest-p0-finalize"),
+      leased("p0-finalize", { model_calls: 1, input_tokens: 10 }, testDigest("p0-finalize")),
       T0,
     );
     if (!reserved.ok || !reserved.lease) throw new Error("lease");
@@ -2064,7 +2105,7 @@ describe("P0 terminal replay and capability isolation", () => {
       {
         idempotency_key: "p0-finalize",
         lease_id: leaseId,
-        request_digest: "digest-p0-finalize",
+        request_digest: testDigest("p0-finalize"),
       },
       T0 + 1,
     );
@@ -2074,7 +2115,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "p0-finalize",
-        request_digest: "digest-p0-finalize",
+        request_digest: testDigest("p0-finalize"),
         lease_id: leaseId,
         settlement_capability: cap,
         usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
@@ -2090,7 +2131,7 @@ describe("P0 terminal replay and capability isolation", () => {
           name: "wrong digest",
           input: {
             idempotency_key: "p0-finalize",
-            request_digest: "digest-other",
+            request_digest: testDigest("other"),
             lease_id: leaseId,
             settlement_capability: cap,
             usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -2112,7 +2153,7 @@ describe("P0 terminal replay and capability isolation", () => {
           name: "wrong lease",
           input: {
             idempotency_key: "p0-finalize",
-            request_digest: "digest-p0-finalize",
+            request_digest: testDigest("p0-finalize"),
             lease_id: "00000000-0000-4000-8000-000000000000",
             settlement_capability: cap,
             usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -2123,7 +2164,7 @@ describe("P0 terminal replay and capability isolation", () => {
           name: "omitted lease",
           input: {
             idempotency_key: "p0-finalize",
-            request_digest: "digest-p0-finalize",
+            request_digest: testDigest("p0-finalize"),
             lease_id: "",
             settlement_capability: cap,
             usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -2134,7 +2175,7 @@ describe("P0 terminal replay and capability isolation", () => {
           name: "wrong capability",
           input: {
             idempotency_key: "p0-finalize",
-            request_digest: "digest-p0-finalize",
+            request_digest: testDigest("p0-finalize"),
             lease_id: leaseId,
             settlement_capability: "ff".repeat(32),
             usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -2145,7 +2186,7 @@ describe("P0 terminal replay and capability isolation", () => {
           name: "omitted capability",
           input: {
             idempotency_key: "p0-finalize",
-            request_digest: "digest-p0-finalize",
+            request_digest: testDigest("p0-finalize"),
             lease_id: leaseId,
             settlement_capability: "",
             usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -2165,7 +2206,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "p0-finalize",
-        request_digest: "digest-p0-finalize",
+        request_digest: testDigest("p0-finalize"),
         lease_id: leaseId,
         settlement_capability: cap,
         usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -2184,7 +2225,7 @@ describe("P0 terminal replay and capability isolation", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      leased("p0-uncertain", { model_calls: 1, input_tokens: 12 }, "digest-p0-uncertain"),
+      leased("p0-uncertain", { model_calls: 1, input_tokens: 12 }, testDigest("p0-uncertain")),
       T0,
     );
     if (!reserved.ok || !reserved.lease) throw new Error("lease");
@@ -2194,7 +2235,7 @@ describe("P0 terminal replay and capability isolation", () => {
       {
         idempotency_key: "p0-uncertain",
         lease_id: leaseId,
-        request_digest: "digest-p0-uncertain",
+        request_digest: testDigest("p0-uncertain"),
       },
       T0 + 1,
     );
@@ -2205,7 +2246,7 @@ describe("P0 terminal replay and capability isolation", () => {
       {
         idempotency_key: "p0-uncertain",
         reason: "timeout",
-        request_digest: "digest-p0-uncertain",
+        request_digest: testDigest("p0-uncertain"),
         lease_id: leaseId,
         settlement_capability: cap,
       },
@@ -2223,7 +2264,7 @@ describe("P0 terminal replay and capability isolation", () => {
         input: {
           idempotency_key: "p0-uncertain",
           reason: "timeout",
-          request_digest: "digest-other",
+          request_digest: testDigest("other"),
           lease_id: leaseId,
           settlement_capability: cap,
         },
@@ -2244,7 +2285,7 @@ describe("P0 terminal replay and capability isolation", () => {
         input: {
           idempotency_key: "p0-uncertain",
           reason: "timeout",
-          request_digest: "digest-p0-uncertain",
+          request_digest: testDigest("p0-uncertain"),
           lease_id: "00000000-0000-4000-8000-000000000000",
           settlement_capability: cap,
         },
@@ -2255,7 +2296,7 @@ describe("P0 terminal replay and capability isolation", () => {
         input: {
           idempotency_key: "p0-uncertain",
           reason: "timeout",
-          request_digest: "digest-p0-uncertain",
+          request_digest: testDigest("p0-uncertain"),
           settlement_capability: cap,
         },
         error: "lease_id required",
@@ -2265,7 +2306,7 @@ describe("P0 terminal replay and capability isolation", () => {
         input: {
           idempotency_key: "p0-uncertain",
           reason: "timeout",
-          request_digest: "digest-p0-uncertain",
+          request_digest: testDigest("p0-uncertain"),
           lease_id: leaseId,
           settlement_capability: "aa".repeat(32),
         },
@@ -2276,7 +2317,7 @@ describe("P0 terminal replay and capability isolation", () => {
         input: {
           idempotency_key: "p0-uncertain",
           reason: "timeout",
-          request_digest: "digest-p0-uncertain",
+          request_digest: testDigest("p0-uncertain"),
           lease_id: leaseId,
         },
         error: "settlement_capability_required",
@@ -2295,7 +2336,7 @@ describe("P0 terminal replay and capability isolation", () => {
       {
         idempotency_key: "p0-uncertain",
         reason: "timeout",
-        request_digest: "digest-p0-uncertain",
+        request_digest: testDigest("p0-uncertain"),
         lease_id: leaseId,
         settlement_capability: cap,
       },
@@ -2311,7 +2352,7 @@ describe("P0 terminal replay and capability isolation", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      leased("p0-replay-state", { model_calls: 1, input_tokens: 9, cost_usd: 0.2 }, "digest-p0-replay-state"),
+      leased("p0-replay-state", { model_calls: 1, input_tokens: 9, cost_usd: 0.2 }, testDigest("p0-replay-state")),
       T0,
     );
     if (!reserved.ok || !reserved.lease) throw new Error("lease");
@@ -2321,7 +2362,7 @@ describe("P0 terminal replay and capability isolation", () => {
       {
         idempotency_key: "p0-replay-state",
         lease_id: leaseId,
-        request_digest: "digest-p0-replay-state",
+        request_digest: testDigest("p0-replay-state"),
       },
       T0 + 1,
     );
@@ -2337,7 +2378,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "p0-replay-state",
-        request_digest: "digest-p0-replay-state",
+        request_digest: testDigest("p0-replay-state"),
         lease_id: leaseId,
         settlement_capability: secret,
         usage: actualUsage({ model_calls: 1, input_tokens: 5, cost_usd: 0.1 }),
@@ -2353,7 +2394,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "p0-replay-state",
-        request_digest: "digest-p0-replay-state",
+        request_digest: testDigest("p0-replay-state"),
         lease_id: leaseId,
         settlement_capability: secret,
         usage: actualUsage({ model_calls: 1, input_tokens: 99, cost_usd: 9 }),
@@ -2385,7 +2426,7 @@ describe("P0 terminal replay and capability isolation", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      leased("p0-lost-start", { model_calls: 1, input_tokens: 7 }, "digest-p0-lost-start"),
+      leased("p0-lost-start", { model_calls: 1, input_tokens: 7 }, testDigest("p0-lost-start")),
       T0,
     );
     if (!reserved.ok || !reserved.lease) throw new Error("lease");
@@ -2395,7 +2436,7 @@ describe("P0 terminal replay and capability isolation", () => {
       {
         idempotency_key: "p0-lost-start",
         lease_id: leaseId,
-        request_digest: "digest-p0-lost-start",
+        request_digest: testDigest("p0-lost-start"),
       },
       T0 + 1,
     );
@@ -2404,7 +2445,7 @@ describe("P0 terminal replay and capability isolation", () => {
 
     const viaReserve = await reserveBudget(
       storage,
-      leased("p0-lost-start", { model_calls: 1, input_tokens: 7 }, "digest-p0-lost-start"),
+      leased("p0-lost-start", { model_calls: 1, input_tokens: 7 }, testDigest("p0-lost-start")),
       T0 + 2,
     );
     expect(viaReserve.ok).toBe(true);
@@ -2416,7 +2457,7 @@ describe("P0 terminal replay and capability isolation", () => {
       {
         idempotency_key: "p0-lost-start",
         lease_id: leaseId,
-        request_digest: "digest-other",
+        request_digest: testDigest("other"),
       },
       T0 + 3,
     );
@@ -2428,7 +2469,7 @@ describe("P0 terminal replay and capability isolation", () => {
       {
         idempotency_key: "p0-lost-start",
         lease_id: leaseId,
-        request_digest: "digest-p0-lost-start",
+        request_digest: testDigest("p0-lost-start"),
       },
       T0 + 4,
     );
@@ -2441,7 +2482,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "p0-lost-start",
-        request_digest: "digest-p0-lost-start",
+        request_digest: testDigest("p0-lost-start"),
         lease_id: leaseId,
         settlement_capability: retried.settlement_capability as string,
         usage: actualUsage({ model_calls: 1, input_tokens: 3 }),
@@ -2459,13 +2500,13 @@ describe("P0 terminal replay and capability isolation", () => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(
       storage,
-      leased("bounded-body", { model_calls: 1, input_tokens: 8 }, "digest-bounded-body"),
+      leased("bounded-body", { model_calls: 1, input_tokens: 8 }, testDigest("bounded-body")),
       T0,
     );
     if (!reserved.ok || !reserved.lease) throw new Error("lease");
     const started = await markProviderStarted(storage, {
       idempotency_key: "bounded-body",
-      request_digest: "digest-bounded-body",
+      request_digest: testDigest("bounded-body"),
       lease_id: reserved.lease.lease_id,
     }, T0 + 1);
     if (!started.ok || !started.settlement_capability) throw new Error("capability");
@@ -2479,7 +2520,7 @@ describe("P0 terminal replay and capability isolation", () => {
     ]) {
       await expect(finalizeBudget(storage, {
         idempotency_key: "bounded-body",
-        request_digest: "digest-bounded-body",
+        request_digest: testDigest("bounded-body"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
         usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
@@ -2489,7 +2530,7 @@ describe("P0 terminal replay and capability isolation", () => {
 
     const committed = await finalizeBudget(storage, {
       idempotency_key: "bounded-body",
-      request_digest: "digest-bounded-body",
+      request_digest: testDigest("bounded-body"),
       lease_id: reserved.lease.lease_id,
       settlement_capability: started.settlement_capability,
       usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
@@ -2538,19 +2579,19 @@ describe("P0 terminal replay and capability isolation", () => {
       const key = `terminal-${label}`;
       const reserved = await reserveBudget(
         storage,
-        leased(key, { model_calls: 1, input_tokens: 8 }, `digest-${key}`),
+        leased(key, { model_calls: 1, input_tokens: 8 }, testDigest(key)),
         T0,
       );
       if (!reserved.ok || !reserved.lease) throw new Error("lease");
       const started = await markProviderStarted(storage, {
         idempotency_key: key,
-        request_digest: `digest-${key}`,
+        request_digest: testDigest(key),
         lease_id: reserved.lease.lease_id,
       }, T0 + 1);
       if (!started.ok || !started.settlement_capability) throw new Error("capability");
       await expect(finalizeBudget(storage, {
         idempotency_key: key,
-        request_digest: `digest-${key}`,
+        request_digest: testDigest(key),
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
         usage: actualUsage({ input_tokens: 2 }),
@@ -2651,13 +2692,13 @@ describe("P0 terminal replay and capability isolation", () => {
     if (!reserved.ok || !reserved.lease) throw new Error("lease");
     const started = await markProviderStarted(storage, {
       idempotency_key: "legacy-cost",
-      request_digest: "digest-legacy-cost",
+      request_digest: testDigest("legacy-cost"),
       lease_id: reserved.lease.lease_id,
     }, T0 + 1);
     if (!started.ok || !started.settlement_capability) throw new Error("capability");
     const finalized = await finalizeBudget(storage, {
       idempotency_key: "legacy-cost",
-      request_digest: "digest-legacy-cost",
+      request_digest: testDigest("legacy-cost"),
       lease_id: reserved.lease.lease_id,
       settlement_capability: started.settlement_capability,
       usage: actualUsage({ input_tokens: 2, cost_usd: 0.1 }),
@@ -2694,13 +2735,13 @@ describe("P0 terminal replay and capability isolation", () => {
     if (!reserved.ok || !reserved.lease) throw new Error("lease");
     const started = await markProviderStarted(storage, {
       idempotency_key: "settlement-divergence",
-      request_digest: "digest-settlement-divergence",
+      request_digest: testDigest("settlement-divergence"),
       lease_id: reserved.lease.lease_id,
     }, T0 + 1);
     if (!started.ok || !started.settlement_capability) throw new Error("capability");
     await finalizeBudget(storage, {
       idempotency_key: "settlement-divergence",
-      request_digest: "digest-settlement-divergence",
+      request_digest: testDigest("settlement-divergence"),
       lease_id: reserved.lease.lease_id,
       settlement_capability: started.settlement_capability,
       usage: actualUsage({ input_tokens: 2, cost_usd: 0.1 }),
@@ -2747,7 +2788,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "owner-bound",
-        request_digest: "digest-owner-bound",
+        request_digest: testDigest("owner-bound"),
         reserve_owner_capability: OWNER_B,
       },
       T0 + 3,
@@ -2766,7 +2807,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "owner-bound",
-        request_digest: "digest-owner-bound",
+        request_digest: testDigest("owner-bound"),
         reserve_owner_capability: OWNER_A,
       },
       T0 + 4,
@@ -2776,7 +2817,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "owner-bound",
-        request_digest: "digest-owner-bound",
+        request_digest: testDigest("owner-bound"),
         reserve_owner_capability: OWNER_A,
       },
       T0 + 5,
@@ -2809,7 +2850,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "owner-bound",
-        request_digest: "digest-owner-bound",
+        request_digest: testDigest("owner-bound"),
         reserve_owner_capability: OWNER_B,
       },
       T0 + 8,
@@ -2832,7 +2873,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "cancel-before-reserve",
-        request_digest: "digest-cancel-before-reserve",
+        request_digest: testDigest("cancel-before-reserve"),
         reserve_owner_capability: OWNER_A,
       },
       T0,
@@ -2895,7 +2936,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "expiring-cancel",
-        request_digest: "digest-expiring-cancel",
+        request_digest: testDigest("expiring-cancel"),
         reserve_owner_capability: OWNER_A,
       },
       T0,
@@ -2917,7 +2958,7 @@ describe("P0 terminal replay and capability isolation", () => {
       corrupt,
       {
         idempotency_key: "corrupt-cancel",
-        request_digest: "digest-corrupt-cancel",
+        request_digest: testDigest("corrupt-cancel"),
         reserve_owner_capability: OWNER_A,
       },
       T0,
@@ -2961,7 +3002,7 @@ describe("P0 terminal replay and capability isolation", () => {
             {
               owner_capability_hash: ownerHash,
               idempotency_key: `bounded-${index}`,
-              request_digest: `digest-bounded-${index}`,
+              request_digest: testDigest(`bounded-${index}`),
               created_at: T0,
               expires_at: T0 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
             },
@@ -2975,6 +3016,78 @@ describe("P0 terminal replay and capability isolation", () => {
     );
   });
 
+  it("spends reserved headroom on durable quarantine before near-limit occupancy can reappear", async () => {
+    const storage = new MemoryBudgetStorage();
+    await createBudget(storage, T0);
+    const state = await storage.get<Record<string, any>>("ledger");
+    if (!state) throw new Error("ledger");
+
+    // Model a pre-row-migration ledger whose retained history is already just
+    // beyond the new mutable byte budget. The unbounded history layout remains a known
+    // residual; this correction makes its failure mode explicit and closed.
+    state.frozen_reason = "";
+    const withoutPadding = new TextEncoder().encode(JSON.stringify(state)).byteLength;
+    const legacyBytes = MAX_MUTABLE_LEDGER_STATE_BYTES + 1024;
+    state.frozen_reason = "x".repeat(
+      legacyBytes - withoutPadding,
+    );
+    expect(new TextEncoder().encode(JSON.stringify(state)).byteLength).toBe(
+      legacyBytes,
+    );
+    await storage.commit("ledger", state, null);
+
+    const digest = testDigest("near-limit-cancel");
+    const cancelled = await cancelPreProviderReservation(
+      storage,
+      {
+        idempotency_key: "near-limit-cancel",
+        request_digest: digest,
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 1,
+    );
+    expect(cancelled).toEqual({
+      ok: false,
+      error: "owner_cancellation_tombstone_capacity_exhausted",
+    });
+
+    const quarantined = await storage.get<Record<string, any>>("ledger");
+    expect(quarantined?.owner_cancellation_tombstones).toEqual({});
+    expect(quarantined?.owner_cancellation_quarantine_until).toBe(
+      T0 + 1 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+    );
+    expect(new TextEncoder().encode(JSON.stringify(quarantined)).byteLength).toBeLessThanOrEqual(
+      MAX_SERIALIZED_LEDGER_STATE_BYTES,
+    );
+
+    const delayedReserve = await reserveOwnedBudget(
+      storage,
+      {
+        ...leased("near-limit-cancel", { model_calls: 1 }, digest),
+        reserve_owner_capability: OWNER_A,
+      },
+      T0 + 2,
+    );
+    expect(delayedReserve).toEqual({
+      ok: false,
+      error: "budget_frozen",
+      detail: "owner_cancellation_tombstone_capacity_exhausted",
+    });
+  });
+
+  it("fails closed on a pre-existing whole-state value beyond the safe limit", async () => {
+    const storage = new MemoryBudgetStorage();
+    await createBudget(storage, T0);
+    const state = await storage.get<Record<string, any>>("ledger");
+    if (!state) throw new Error("ledger");
+    state.frozen_reason = "x".repeat(MAX_SERIALIZED_LEDGER_STATE_BYTES);
+    await storage.commit("ledger", state, null);
+
+    await expect(snapshotBudget(storage, T0 + 1)).rejects.toThrow(
+      /persisted_budget_state_invalid:ledger_serialized_size_exceeds_safe_limit/,
+    );
+  });
+
   it("durably quarantines fresh occupancy when cancellation capacity is full", async () => {
     const storage = new MemoryBudgetStorage();
     await createBudget(storage, T0);
@@ -2984,7 +3097,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "capacity-cancel-before-reserve",
-        request_digest: "digest-capacity-cancel-before-reserve",
+        request_digest: testDigest("capacity-cancel-before-reserve"),
         reserve_owner_capability: OWNER_A,
       },
       T0 + 1,
@@ -2996,6 +3109,12 @@ describe("P0 terminal replay and capability isolation", () => {
     const quarantined = await storage.get<Record<string, any>>("ledger");
     expect(quarantined?.owner_cancellation_quarantine_until).toBe(
       T0 + 1 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+    );
+    const quarantinedBytes = new TextEncoder().encode(
+      JSON.stringify(quarantined),
+    ).byteLength;
+    expect(quarantinedBytes).toBeLessThanOrEqual(
+      MAX_SERIALIZED_LEDGER_STATE_BYTES,
     );
     expect(await storage.getAlarm()).toBe(
       T0 + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
@@ -3171,7 +3290,7 @@ describe("P0 terminal replay and capability isolation", () => {
         storage,
         {
           idempotency_key: "owner-start",
-          request_digest: "digest-owner-start",
+          request_digest: testDigest("owner-start"),
           lease_id: reserved.lease.lease_id,
           reserve_owner_capability: capability,
         },
@@ -3186,7 +3305,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "owner-start",
-        request_digest: "digest-owner-start",
+        request_digest: testDigest("owner-start"),
         lease_id: reserved.lease.lease_id,
         reserve_owner_capability: OWNER_A,
       },
@@ -3198,7 +3317,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "owner-start",
-        request_digest: "digest-owner-start",
+        request_digest: testDigest("owner-start"),
         reserve_owner_capability: OWNER_A,
       },
       T0 + 3,
@@ -3224,7 +3343,7 @@ describe("P0 terminal replay and capability isolation", () => {
       {
         idempotency_key: "owner-start",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-owner-start",
+        request_digest: testDigest("owner-start"),
         reserve_owner_capability: OWNER_A,
       },
       T0 + 4,
@@ -3255,7 +3374,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "owner-settle",
-        request_digest: "digest-owner-settle",
+        request_digest: testDigest("owner-settle"),
         lease_id: reserved.lease.lease_id,
         reserve_owner_capability: OWNER_A,
       },
@@ -3268,7 +3387,7 @@ describe("P0 terminal replay and capability isolation", () => {
         storage,
         {
           idempotency_key: "owner-settle",
-          request_digest: "digest-owner-settle",
+          request_digest: testDigest("owner-settle"),
           lease_id: reserved.lease.lease_id,
           settlement_capability: started.settlement_capability,
           reserve_owner_capability: capability,
@@ -3287,7 +3406,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "owner-settle",
-        request_digest: "digest-owner-settle",
+        request_digest: testDigest("owner-settle"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
         reserve_owner_capability: OWNER_A,
@@ -3315,7 +3434,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "owner-settle",
-        request_digest: "digest-owner-settle",
+        request_digest: testDigest("owner-settle"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: started.settlement_capability,
         reserve_owner_capability: OWNER_A,
@@ -3330,7 +3449,7 @@ describe("P0 terminal replay and capability isolation", () => {
       storage,
       {
         idempotency_key: "owner-settle",
-        request_digest: "digest-owner-settle",
+        request_digest: testDigest("owner-settle"),
         reserve_owner_capability: OWNER_A,
       },
       T0 + 5,
@@ -3341,7 +3460,7 @@ describe("P0 terminal replay and capability isolation", () => {
       {
         idempotency_key: "owner-settle",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-owner-settle",
+        request_digest: testDigest("owner-settle"),
         reserve_owner_capability: OWNER_A,
       },
       T0 + 5,

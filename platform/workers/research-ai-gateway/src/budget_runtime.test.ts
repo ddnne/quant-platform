@@ -17,6 +17,14 @@ import type { GatewayEnv } from "./index";
 
 const runtimeEnv = env as GatewayEnv;
 
+function testDigest(label: string): string {
+  const seed = Array.from(
+    new TextEncoder().encode(label),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("") || "0";
+  return seed.repeat(Math.ceil(64 / seed.length)).slice(0, 64);
+}
+
 async function within<T>(stage: string, promise: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -167,7 +175,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       idempotencyKeys.map((idempotencyKey) =>
         post(stub, "/reserve", {
           idempotency_key: idempotencyKey,
-          request_digest: `digest-${idempotencyKey}`,
+          request_digest: testDigest(idempotencyKey),
           acquire_lease: true,
           amounts: { model_calls: 1, input_tokens: 10, output_tokens: 5 },
         }),
@@ -209,13 +217,13 @@ describe("BudgetLedger in the Workers runtime", () => {
       const started = await rpc.markProviderStarted({
         idempotency_key: row.idempotencyKey,
         lease_id: row.leaseId,
-        request_digest: `digest-${row.idempotencyKey}`,
+        request_digest: testDigest(row.idempotencyKey),
       });
       expect(started.ok).toBe(true);
       expect(started.settlement_capability).toEqual(expect.any(String));
       const finalized = await rpc.finalizeExact({
         idempotency_key: row.idempotencyKey,
-        request_digest: `digest-${row.idempotencyKey}`,
+        request_digest: testDigest(row.idempotencyKey),
         lease_id: row.leaseId,
         settlement_capability: started.settlement_capability as string,
         usage: actualUsage({ model_calls: 1, input_tokens: 7, output_tokens: 3 }),
@@ -245,7 +253,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
     const reservedResponse = await within("uncertain reserve", post(stub, "/reserve", {
       idempotency_key: "runtime-uncertain",
-      request_digest: "digest-runtime-uncertain",
+      request_digest: testDigest("runtime-uncertain"),
       acquire_lease: true,
       amounts: {
         model_calls: 1,
@@ -264,7 +272,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       (stub as BudgetLedgerRpcStub).markProviderStarted({
         idempotency_key: "runtime-uncertain",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-runtime-uncertain",
+        request_digest: testDigest("runtime-uncertain"),
       }),
     );
     expect(started.ok).toBe(true);
@@ -307,7 +315,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
     const reservedResponse = await within("restart reserve", post(stub, "/reserve", {
       idempotency_key: "runtime-restart-uncertain",
-      request_digest: "digest-runtime-restart-uncertain",
+      request_digest: testDigest("runtime-restart-uncertain"),
       acquire_lease: true,
       amounts: { model_calls: 1, input_tokens: 70, output_tokens: 7, cached_tokens: 70 },
     }));
@@ -317,7 +325,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       (stub as BudgetLedgerRpcStub).markProviderStarted({
         idempotency_key: "runtime-restart-uncertain",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-runtime-restart-uncertain",
+        request_digest: testDigest("runtime-restart-uncertain"),
       }),
     );
     expect(started.ok).toBe(true);
@@ -357,7 +365,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       "lost-start reserve",
       post(stub, "/reserve", {
         idempotency_key: "runtime-lost-start",
-        request_digest: "digest-runtime-lost-start",
+        request_digest: testDigest("runtime-lost-start"),
         acquire_lease: true,
         amounts: { model_calls: 1, input_tokens: 12, output_tokens: 3 },
       }),
@@ -368,7 +376,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       rpc.markProviderStarted({
         idempotency_key: "runtime-lost-start",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-runtime-lost-start",
+        request_digest: testDigest("runtime-lost-start"),
       }),
     );
     expect(started.ok).toBe(true);
@@ -387,7 +395,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       rpc.markProviderStarted({
         idempotency_key: "runtime-lost-start",
         lease_id: reserved.lease.lease_id,
-        request_digest: "digest-runtime-lost-start",
+        request_digest: testDigest("runtime-lost-start"),
       }),
     );
     expect(retried.ok).toBe(true);
@@ -406,7 +414,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       "lost-start exact settle",
       rpc.finalizeExact({
         idempotency_key: "runtime-lost-start",
-        request_digest: "digest-runtime-lost-start",
+        request_digest: testDigest("runtime-lost-start"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: retried.settlement_capability as string,
         usage: actualUsage({ model_calls: 1, input_tokens: 4, output_tokens: 2 }),
@@ -424,7 +432,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     const rpc = stub as BudgetLedgerRpcStub;
     const input = {
       idempotency_key: "runtime-owner-reserve",
-      request_digest: "digest-runtime-owner-reserve",
+      request_digest: testDigest("runtime-owner-reserve"),
       reserve_owner_capability: OWNER_A,
       acquire_lease: true,
       amounts: { model_calls: 1, input_tokens: 11, output_tokens: 2 },
@@ -509,7 +517,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     const stub = namespace.get(namespace.idFromName(CONTROL_PLANE_LEDGER_NAME));
     const reservedResponse = await post(stub, "/reserve", {
       idempotency_key: "runtime-http-bypass",
-      request_digest: "digest-runtime-http-bypass",
+      request_digest: testDigest("runtime-http-bypass"),
       acquire_lease: true,
       amounts: { model_calls: 1, cost_usd: 1 },
     });
@@ -549,14 +557,14 @@ describe("BudgetLedger in the Workers runtime", () => {
     const rpc = stub as BudgetLedgerRpcStub;
     const reservedResponse = await post(stub, "/reserve", {
       idempotency_key: "runtime-rpc-auth",
-      request_digest: "digest-runtime-rpc-auth",
+      request_digest: testDigest("runtime-rpc-auth"),
       acquire_lease: true,
       amounts: { model_calls: 1, input_tokens: 20 },
     });
     const reserved = (await reservedResponse.json()) as { lease: { lease_id: string } };
     const unstarted = await rpc.finalizeExact({
       idempotency_key: "runtime-rpc-auth",
-      request_digest: "digest-runtime-rpc-auth",
+      request_digest: testDigest("runtime-rpc-auth"),
       lease_id: reserved.lease.lease_id,
       settlement_capability: "aa".repeat(32),
       usage: actualUsage({ model_calls: 0, input_tokens: 0 }),
@@ -566,7 +574,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     const started = await rpc.markProviderStarted({
       idempotency_key: "runtime-rpc-auth",
       lease_id: reserved.lease.lease_id,
-      request_digest: "digest-runtime-rpc-auth",
+      request_digest: testDigest("runtime-rpc-auth"),
     });
     expect(started.ok).toBe(true);
     const cap = started.settlement_capability as string;
@@ -574,7 +582,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(
       await rpc.finalizeExact({
         idempotency_key: "runtime-rpc-auth",
-        request_digest: "digest-runtime-rpc-auth",
+        request_digest: testDigest("runtime-rpc-auth"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: "ff".repeat(32),
         usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
@@ -584,7 +592,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(
       await rpc.finalizeExact({
         idempotency_key: "runtime-rpc-auth",
-        request_digest: "digest-other",
+        request_digest: testDigest("other"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: cap,
         usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
@@ -594,7 +602,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(
       await rpc.finalizeExact({
         idempotency_key: "runtime-rpc-auth",
-        request_digest: "digest-runtime-rpc-auth",
+        request_digest: testDigest("runtime-rpc-auth"),
         lease_id: reserved.lease.lease_id,
         settlement_capability: cap,
         usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
@@ -606,7 +614,7 @@ describe("BudgetLedger in the Workers runtime", () => {
 
     const committed = await rpc.finalizeExact({
       idempotency_key: "runtime-rpc-auth",
-      request_digest: "digest-runtime-rpc-auth",
+      request_digest: testDigest("runtime-rpc-auth"),
       lease_id: reserved.lease.lease_id,
       settlement_capability: cap,
       usage: actualUsage({ model_calls: 1, input_tokens: 6 }),
@@ -615,7 +623,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(committed.ok).toBe(true);
     const replay = await rpc.finalizeExact({
       idempotency_key: "runtime-rpc-auth",
-      request_digest: "digest-runtime-rpc-auth",
+      request_digest: testDigest("runtime-rpc-auth"),
       lease_id: reserved.lease.lease_id,
       settlement_capability: cap,
       usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -645,7 +653,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       "no-lease reserve",
       rpc.reserve({
         idempotency_key: "runtime-no-lease",
-        request_digest: "digest-runtime-no-lease",
+        request_digest: testDigest("runtime-no-lease"),
         amounts: { model_calls: 1 },
         acquire_lease: false,
       }),
@@ -666,7 +674,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       "bound reserve",
       rpc.reserve({
         idempotency_key: "runtime-bind-secret",
-        request_digest: "digest-runtime-bind-secret",
+        request_digest: testDigest("runtime-bind-secret"),
         amounts: { model_calls: 1, input_tokens: 9 },
         acquire_lease: true,
       }),
@@ -686,7 +694,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       "replay wrong digest",
       rpc.reserve({
         idempotency_key: "runtime-bind-secret",
-        request_digest: "digest-other",
+        request_digest: testDigest("other"),
         amounts: { model_calls: 1 },
         acquire_lease: true,
       }),
@@ -703,7 +711,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       rpc.markProviderStarted({
         idempotency_key: "runtime-bind-secret",
         lease_id: reserved.lease!.lease_id,
-        request_digest: "digest-runtime-bind-secret",
+        request_digest: testDigest("runtime-bind-secret"),
       }),
     );
     expect(started.ok).toBe(true);
@@ -714,7 +722,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       rpc.markProviderStarted({
         idempotency_key: "runtime-bind-secret",
         lease_id: reserved.lease!.lease_id,
-        request_digest: "digest-runtime-bind-secret",
+        request_digest: testDigest("runtime-bind-secret"),
       }),
     );
     expect(retriedStart.ok).toBe(true);
@@ -737,7 +745,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       "reserve replay after start",
       rpc.reserve({
         idempotency_key: "runtime-bind-secret",
-        request_digest: "digest-runtime-bind-secret",
+        request_digest: testDigest("runtime-bind-secret"),
         amounts: { model_calls: 1, input_tokens: 9 },
         acquire_lease: true,
       }),
@@ -765,7 +773,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       "pre-provider reserve",
       post(stub, "/reserve", {
         idempotency_key: "runtime-pre-provider-expiry",
-        request_digest: "digest-runtime-pre-provider-expiry",
+        request_digest: testDigest("runtime-pre-provider-expiry"),
         acquire_lease: true,
         amounts: { model_calls: 2, input_tokens: 40 },
       }),
@@ -823,7 +831,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       "p0 lease reserve",
       rpc.reserve({
         idempotency_key: "runtime-p0-lease",
-        request_digest: "digest-runtime-p0-lease",
+        request_digest: testDigest("runtime-p0-lease"),
         amounts: { model_calls: 1, input_tokens: 8 },
         acquire_lease: true,
       }),
@@ -833,7 +841,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       "p0 active omitted lease",
       rpc.reserve({
         idempotency_key: "runtime-p0-lease",
-        request_digest: "digest-runtime-p0-lease",
+        request_digest: testDigest("runtime-p0-lease"),
         amounts: { model_calls: 1, input_tokens: 8 },
       }),
     );
@@ -841,7 +849,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       "p0 active false lease",
       rpc.reserve({
         idempotency_key: "runtime-p0-lease",
-        request_digest: "digest-runtime-p0-lease",
+        request_digest: testDigest("runtime-p0-lease"),
         amounts: { model_calls: 1, input_tokens: 8 },
         acquire_lease: false,
       }),
@@ -854,12 +862,12 @@ describe("BudgetLedger in the Workers runtime", () => {
     const started = await rpc.markProviderStarted({
       idempotency_key: "runtime-p0-lease",
       lease_id: reserved.lease!.lease_id,
-      request_digest: "digest-runtime-p0-lease",
+      request_digest: testDigest("runtime-p0-lease"),
     });
     expect(started.ok).toBe(true);
     const finalized = await rpc.finalizeExact({
       idempotency_key: "runtime-p0-lease",
-      request_digest: "digest-runtime-p0-lease",
+      request_digest: testDigest("runtime-p0-lease"),
       lease_id: reserved.lease!.lease_id,
       settlement_capability: started.settlement_capability as string,
       usage: actualUsage({ model_calls: 1, input_tokens: 3 }),
@@ -868,12 +876,12 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(finalized.ok).toBe(true);
     const reconciledOmitted = await rpc.reserve({
       idempotency_key: "runtime-p0-lease",
-      request_digest: "digest-runtime-p0-lease",
+      request_digest: testDigest("runtime-p0-lease"),
       amounts: { model_calls: 1, input_tokens: 8 },
     });
     const reconciledFalse = await rpc.reserve({
       idempotency_key: "runtime-p0-lease",
-      request_digest: "digest-runtime-p0-lease",
+      request_digest: testDigest("runtime-p0-lease"),
       amounts: { model_calls: 1, input_tokens: 8 },
       acquire_lease: false,
     });
@@ -882,7 +890,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(JSON.stringify(reconciledOmitted)).not.toMatch(/cached_result|settlement_capability/);
     const exact = await rpc.reserve({
       idempotency_key: "runtime-p0-lease",
-      request_digest: "digest-runtime-p0-lease",
+      request_digest: testDigest("runtime-p0-lease"),
       amounts: { model_calls: 1, input_tokens: 8 },
       acquire_lease: true,
     });
@@ -897,14 +905,14 @@ describe("BudgetLedger in the Workers runtime", () => {
     const rpc = stub as BudgetLedgerRpcStub;
     const reserved = await rpc.reserve({
       idempotency_key: "runtime-p0-smuggle",
-      request_digest: "digest-runtime-p0-smuggle",
+      request_digest: testDigest("runtime-p0-smuggle"),
       amounts: { model_calls: 1, input_tokens: 8 },
       acquire_lease: true,
     });
     const started = await rpc.markProviderStarted({
       idempotency_key: "runtime-p0-smuggle",
       lease_id: reserved.lease!.lease_id,
-      request_digest: "digest-runtime-p0-smuggle",
+      request_digest: testDigest("runtime-p0-smuggle"),
     });
     const secret = started.settlement_capability as string;
     let hash = "";
@@ -916,7 +924,7 @@ describe("BudgetLedger in the Workers runtime", () => {
 
     const nestedObject = await rpc.finalizeExact({
       idempotency_key: "runtime-p0-smuggle",
-      request_digest: "digest-runtime-p0-smuggle",
+      request_digest: testDigest("runtime-p0-smuggle"),
       lease_id: reserved.lease!.lease_id,
       settlement_capability: secret,
       usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
@@ -939,7 +947,7 @@ describe("BudgetLedger in the Workers runtime", () => {
 
     const nestedArray = await rpc.finalizeExact({
       idempotency_key: "runtime-p0-smuggle",
-      request_digest: "digest-runtime-p0-smuggle",
+      request_digest: testDigest("runtime-p0-smuggle"),
       lease_id: reserved.lease!.lease_id,
       settlement_capability: secret,
       usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
@@ -959,7 +967,7 @@ describe("BudgetLedger in the Workers runtime", () => {
 
     const committed = await rpc.finalizeExact({
       idempotency_key: "runtime-p0-smuggle",
-      request_digest: "digest-runtime-p0-smuggle",
+      request_digest: testDigest("runtime-p0-smuggle"),
       lease_id: reserved.lease!.lease_id,
       settlement_capability: secret,
       usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
@@ -968,7 +976,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(committed.ok).toBe(true);
     const replay = await rpc.reserve({
       idempotency_key: "runtime-p0-smuggle",
-      request_digest: "digest-runtime-p0-smuggle",
+      request_digest: testDigest("runtime-p0-smuggle"),
       amounts: { model_calls: 1, input_tokens: 8 },
       acquire_lease: true,
     });
@@ -990,14 +998,14 @@ describe("BudgetLedger in the Workers runtime", () => {
     const rpc = stub as BudgetLedgerRpcStub;
     const reserved = await rpc.reserve({
       idempotency_key: "runtime-p0-substr",
-      request_digest: "digest-runtime-p0-substr",
+      request_digest: testDigest("runtime-p0-substr"),
       amounts: { model_calls: 1, input_tokens: 8 },
       acquire_lease: true,
     });
     const started = await rpc.markProviderStarted({
       idempotency_key: "runtime-p0-substr",
       lease_id: reserved.lease!.lease_id,
-      request_digest: "digest-runtime-p0-substr",
+      request_digest: testDigest("runtime-p0-substr"),
     });
     const secret = started.settlement_capability as string;
     let hash = "";
@@ -1034,7 +1042,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     for (const body of bodies) {
       const denied = await rpc.finalizeExact({
         idempotency_key: "runtime-p0-substr",
-        request_digest: "digest-runtime-p0-substr",
+        request_digest: testDigest("runtime-p0-substr"),
         lease_id: reserved.lease!.lease_id,
         settlement_capability: secret,
         usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
@@ -1081,7 +1089,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     };
     const committed = await rpc.finalizeExact({
       idempotency_key: "runtime-p0-substr",
-      request_digest: "digest-runtime-p0-substr",
+      request_digest: testDigest("runtime-p0-substr"),
       lease_id: reserved.lease!.lease_id,
       settlement_capability: secret,
       usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
@@ -1095,7 +1103,7 @@ describe("BudgetLedger in the Workers runtime", () => {
 
     const retry = await rpc.finalizeExact({
       idempotency_key: "runtime-p0-substr",
-      request_digest: "digest-runtime-p0-substr",
+      request_digest: testDigest("runtime-p0-substr"),
       lease_id: reserved.lease!.lease_id,
       settlement_capability: secret,
       usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -1110,7 +1118,7 @@ describe("BudgetLedger in the Workers runtime", () => {
 
     const replay = await rpc.reserve({
       idempotency_key: "runtime-p0-substr",
-      request_digest: "digest-runtime-p0-substr",
+      request_digest: testDigest("runtime-p0-substr"),
       amounts: { model_calls: 1, input_tokens: 8 },
       acquire_lease: true,
     });
@@ -1146,19 +1154,19 @@ describe("BudgetLedger in the Workers runtime", () => {
 
     const reserved = await rpc.reserve({
       idempotency_key: "runtime-p0-finalize",
-      request_digest: "digest-runtime-p0-finalize",
+      request_digest: testDigest("runtime-p0-finalize"),
       amounts: { model_calls: 1, input_tokens: 10 },
       acquire_lease: true,
     });
     const started = await rpc.markProviderStarted({
       idempotency_key: "runtime-p0-finalize",
       lease_id: reserved.lease!.lease_id,
-      request_digest: "digest-runtime-p0-finalize",
+      request_digest: testDigest("runtime-p0-finalize"),
     });
     const cap = started.settlement_capability as string;
     const first = await rpc.finalizeExact({
       idempotency_key: "runtime-p0-finalize",
-      request_digest: "digest-runtime-p0-finalize",
+      request_digest: testDigest("runtime-p0-finalize"),
       lease_id: reserved.lease!.lease_id,
       settlement_capability: cap,
       usage: actualUsage({ model_calls: 1, input_tokens: 4 }),
@@ -1174,7 +1182,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(
       await rpc.finalizeExact({
         idempotency_key: "runtime-p0-finalize",
-        request_digest: "digest-other",
+        request_digest: testDigest("other"),
         lease_id: reserved.lease!.lease_id,
         settlement_capability: cap,
         usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -1192,7 +1200,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(
       await rpc.finalizeExact({
         idempotency_key: "runtime-p0-finalize",
-        request_digest: "digest-runtime-p0-finalize",
+        request_digest: testDigest("runtime-p0-finalize"),
         lease_id: "00000000-0000-4000-8000-000000000000",
         settlement_capability: cap,
         usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -1201,7 +1209,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(
       await rpc.finalizeExact({
         idempotency_key: "runtime-p0-finalize",
-        request_digest: "digest-runtime-p0-finalize",
+        request_digest: testDigest("runtime-p0-finalize"),
         lease_id: "",
         settlement_capability: cap,
         usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -1210,7 +1218,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(
       await rpc.finalizeExact({
         idempotency_key: "runtime-p0-finalize",
-        request_digest: "digest-runtime-p0-finalize",
+        request_digest: testDigest("runtime-p0-finalize"),
         lease_id: reserved.lease!.lease_id,
         settlement_capability: "ff".repeat(32),
         usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -1219,7 +1227,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(
       await rpc.finalizeExact({
         idempotency_key: "runtime-p0-finalize",
-        request_digest: "digest-runtime-p0-finalize",
+        request_digest: testDigest("runtime-p0-finalize"),
         lease_id: reserved.lease!.lease_id,
         settlement_capability: "",
         usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -1228,7 +1236,7 @@ describe("BudgetLedger in the Workers runtime", () => {
 
     const retry = await rpc.finalizeExact({
       idempotency_key: "runtime-p0-finalize",
-      request_digest: "digest-runtime-p0-finalize",
+      request_digest: testDigest("runtime-p0-finalize"),
       lease_id: reserved.lease!.lease_id,
       settlement_capability: cap,
       usage: actualUsage({ model_calls: 1, input_tokens: 99 }),
@@ -1250,20 +1258,20 @@ describe("BudgetLedger in the Workers runtime", () => {
 
     const uncertainReserved = await rpc.reserve({
       idempotency_key: "runtime-p0-uncertain",
-      request_digest: "digest-runtime-p0-uncertain",
+      request_digest: testDigest("runtime-p0-uncertain"),
       amounts: { model_calls: 1, input_tokens: 11 },
       acquire_lease: true,
     });
     const uncertainStarted = await rpc.markProviderStarted({
       idempotency_key: "runtime-p0-uncertain",
       lease_id: uncertainReserved.lease!.lease_id,
-      request_digest: "digest-runtime-p0-uncertain",
+      request_digest: testDigest("runtime-p0-uncertain"),
     });
     const uncertainCap = uncertainStarted.settlement_capability as string;
     const uncertainFirst = await rpc.settleUncertain({
       idempotency_key: "runtime-p0-uncertain",
       reason: "timeout",
-      request_digest: "digest-runtime-p0-uncertain",
+      request_digest: testDigest("runtime-p0-uncertain"),
       lease_id: uncertainReserved.lease!.lease_id,
       settlement_capability: uncertainCap,
     });
@@ -1272,7 +1280,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       await rpc.settleUncertain({
         idempotency_key: "runtime-p0-uncertain",
         reason: "timeout",
-        request_digest: "digest-other",
+        request_digest: testDigest("other"),
         lease_id: uncertainReserved.lease!.lease_id,
         settlement_capability: uncertainCap,
       }),
@@ -1289,7 +1297,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       await rpc.settleUncertain({
         idempotency_key: "runtime-p0-uncertain",
         reason: "timeout",
-        request_digest: "digest-runtime-p0-uncertain",
+        request_digest: testDigest("runtime-p0-uncertain"),
         lease_id: "00000000-0000-4000-8000-000000000000",
         settlement_capability: uncertainCap,
       }),
@@ -1298,7 +1306,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       await rpc.settleUncertain({
         idempotency_key: "runtime-p0-uncertain",
         reason: "timeout",
-        request_digest: "digest-runtime-p0-uncertain",
+        request_digest: testDigest("runtime-p0-uncertain"),
         settlement_capability: uncertainCap,
       }),
     ).toMatchObject({ ok: false, error: "lease_id required" });
@@ -1306,7 +1314,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       await rpc.settleUncertain({
         idempotency_key: "runtime-p0-uncertain",
         reason: "timeout",
-        request_digest: "digest-runtime-p0-uncertain",
+        request_digest: testDigest("runtime-p0-uncertain"),
         lease_id: uncertainReserved.lease!.lease_id,
         settlement_capability: "aa".repeat(32),
       }),
@@ -1315,14 +1323,14 @@ describe("BudgetLedger in the Workers runtime", () => {
       await rpc.settleUncertain({
         idempotency_key: "runtime-p0-uncertain",
         reason: "timeout",
-        request_digest: "digest-runtime-p0-uncertain",
+        request_digest: testDigest("runtime-p0-uncertain"),
         lease_id: uncertainReserved.lease!.lease_id,
       }),
     ).toMatchObject({ ok: false, error: "settlement_capability_required" });
     const uncertainRetry = await rpc.settleUncertain({
       idempotency_key: "runtime-p0-uncertain",
       reason: "timeout",
-      request_digest: "digest-runtime-p0-uncertain",
+      request_digest: testDigest("runtime-p0-uncertain"),
       lease_id: uncertainReserved.lease!.lease_id,
       settlement_capability: uncertainCap,
     });
@@ -1342,20 +1350,20 @@ describe("BudgetLedger in the Workers runtime", () => {
     const rpc = stub as BudgetLedgerRpcStub;
     const reserved = await rpc.reserve({
       idempotency_key: "runtime-p0-lost-start",
-      request_digest: "digest-runtime-p0-lost-start",
+      request_digest: testDigest("runtime-p0-lost-start"),
       amounts: { model_calls: 1, input_tokens: 6 },
       acquire_lease: true,
     });
     const started = await rpc.markProviderStarted({
       idempotency_key: "runtime-p0-lost-start",
       lease_id: reserved.lease!.lease_id,
-      request_digest: "digest-runtime-p0-lost-start",
+      request_digest: testDigest("runtime-p0-lost-start"),
     });
     const secret = started.settlement_capability as string;
     await within("evict p0 lost-start", evictDurableObject(stub));
     const viaReserve = await rpc.reserve({
       idempotency_key: "runtime-p0-lost-start",
-      request_digest: "digest-runtime-p0-lost-start",
+      request_digest: testDigest("runtime-p0-lost-start"),
       amounts: { model_calls: 1, input_tokens: 6 },
       acquire_lease: true,
     });
@@ -1364,12 +1372,12 @@ describe("BudgetLedger in the Workers runtime", () => {
     const retried = await rpc.markProviderStarted({
       idempotency_key: "runtime-p0-lost-start",
       lease_id: reserved.lease!.lease_id,
-      request_digest: "digest-runtime-p0-lost-start",
+      request_digest: testDigest("runtime-p0-lost-start"),
     });
     expect(retried.settlement_capability).toBe(secret);
     const finalized = await rpc.finalizeExact({
       idempotency_key: "runtime-p0-lost-start",
-      request_digest: "digest-runtime-p0-lost-start",
+      request_digest: testDigest("runtime-p0-lost-start"),
       lease_id: reserved.lease!.lease_id,
       settlement_capability: retried.settlement_capability as string,
       usage: actualUsage({ model_calls: 1, input_tokens: 2 }),
@@ -1387,14 +1395,14 @@ describe("BudgetLedger in the Workers runtime", () => {
     const keys = ["runtime-atomic-a", "runtime-atomic-b"];
     const reservations = await Promise.all(keys.map((key, index) => rpc.reserve({
       idempotency_key: key,
-      request_digest: `digest-${key}`,
+      request_digest: testDigest(key),
       amounts: { model_calls: 1, input_tokens: 20 + index },
       acquire_lease: true,
     })));
     const starts = await Promise.all(reservations.flatMap((reservation, index) => [0, 1].map(() =>
       rpc.markProviderStarted({
         idempotency_key: keys[index],
-        request_digest: `digest-${keys[index]}`,
+        request_digest: testDigest(keys[index]),
         lease_id: reservation.lease!.lease_id,
       }),
     )));
@@ -1405,7 +1413,7 @@ describe("BudgetLedger in the Workers runtime", () => {
     const finalized = await Promise.all(reservations.map((reservation, index) =>
       rpc.finalizeExact({
         idempotency_key: keys[index],
-        request_digest: `digest-${keys[index]}`,
+        request_digest: testDigest(keys[index]),
         lease_id: reservation.lease!.lease_id,
         settlement_capability: starts[index * 2].settlement_capability as string,
         usage: actualUsage({ model_calls: 1, input_tokens: 5 + index }),
@@ -1428,18 +1436,18 @@ describe("BudgetLedger in the Workers runtime", () => {
     const key = "runtime-terminal-race";
     const reserved = await rpc.reserve({
       idempotency_key: key,
-      request_digest: `digest-${key}`,
+      request_digest: testDigest(key),
       amounts: { model_calls: 1, input_tokens: 40 },
       acquire_lease: true,
     });
     const started = await rpc.markProviderStarted({
       idempotency_key: key,
-      request_digest: `digest-${key}`,
+      request_digest: testDigest(key),
       lease_id: reserved.lease!.lease_id,
     });
     const authority = {
       idempotency_key: key,
-      request_digest: `digest-${key}`,
+      request_digest: testDigest(key),
       lease_id: reserved.lease!.lease_id,
       settlement_capability: started.settlement_capability as string,
     };
@@ -1482,18 +1490,18 @@ describe("BudgetLedger in the Workers runtime", () => {
       const key = `strict-usage-${label}`;
       const reserved = await rpc.reserve({
         idempotency_key: key,
-        request_digest: `digest-${key}`,
+        request_digest: testDigest(key),
         amounts: { model_calls: 1, input_tokens: 10 },
         acquire_lease: true,
       });
       const started = await rpc.markProviderStarted({
         idempotency_key: key,
-        request_digest: `digest-${key}`,
+        request_digest: testDigest(key),
         lease_id: reserved.lease!.lease_id,
       });
       expect(await rpc.finalizeExact({
         idempotency_key: key,
-        request_digest: `digest-${key}`,
+        request_digest: testDigest(key),
         lease_id: reserved.lease!.lease_id,
         settlement_capability: started.settlement_capability as string,
         usage: actualUsage({ model_calls: 1, input_tokens: malformed }),
@@ -1533,7 +1541,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       const key = `closed-usage-${label}`;
       const reserved = await rpc.reserve({
         idempotency_key: key,
-        request_digest: `digest-${key}`,
+        request_digest: testDigest(key),
         amounts: {
           model_calls: 1,
           input_tokens: 10,
@@ -1545,12 +1553,12 @@ describe("BudgetLedger in the Workers runtime", () => {
       });
       const started = await rpc.markProviderStarted({
         idempotency_key: key,
-        request_digest: `digest-${key}`,
+        request_digest: testDigest(key),
         lease_id: reserved.lease!.lease_id,
       });
       expect(await rpc.finalizeExact({
         idempotency_key: key,
-        request_digest: `digest-${key}`,
+        request_digest: testDigest(key),
         lease_id: reserved.lease!.lease_id,
         settlement_capability: started.settlement_capability as string,
         usage,

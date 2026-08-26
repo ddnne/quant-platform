@@ -158,7 +158,25 @@ export type Lease = {
 /** Keep response-reordering cancellation authority for one canonical lease window. */
 export const OWNER_CANCELLATION_TOMBSTONE_TTL_MS =
   PILOT_BUDGET_CAPS.lease_ttl_seconds * 1000;
-export const MAX_OWNER_CANCELLATION_TOMBSTONES = 4_096;
+
+/**
+ * A ledger is currently persisted as one Durable Object storage value. Keep
+ * this transitional representation far below the 2 MiB per-value ceiling:
+ * 1.5 MiB leaves 512 KiB for storage-encoding overhead, and the mutable limit
+ * reserves a further 16 KiB so cancellation quarantine can always be written.
+ * This guard fails closed; it does not replace the pending row-per-reservation
+ * migration needed for indefinitely retained terminal history.
+ */
+export const MAX_SERIALIZED_LEDGER_STATE_BYTES = 1_572_864;
+export const OWNER_CANCELLATION_QUARANTINE_HEADROOM_BYTES = 16 * 1024;
+export const MAX_MUTABLE_LEDGER_STATE_BYTES =
+  MAX_SERIALIZED_LEDGER_STATE_BYTES -
+  OWNER_CANCELLATION_QUARANTINE_HEADROOM_BYTES;
+
+/** Bounded so worst-case canonical tombstones remain well inside one value. */
+export const MAX_OWNER_CANCELLATION_TOMBSTONES = 512;
+export const MAX_IDEMPOTENCY_KEY_BYTES = 256;
+const REQUEST_DIGEST_RE = /^[0-9a-f]{64}$/;
 
 export type OwnerCancellationTombstone = {
   owner_capability_hash: string;
@@ -196,6 +214,41 @@ export class PersistedBudgetStateError extends Error {
   constructor(detail: string) {
     super(`persisted_budget_state_invalid:${detail}`);
     this.name = "PersistedBudgetStateError";
+  }
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+function serializedLedgerStateBytes(value: unknown): number {
+  try {
+    const encoded = JSON.stringify(value);
+    if (typeof encoded !== "string") {
+      throw new PersistedBudgetStateError("ledger_not_serializable");
+    }
+    return utf8ByteLength(encoded);
+  } catch (error) {
+    if (error instanceof PersistedBudgetStateError) throw error;
+    throw new PersistedBudgetStateError("ledger_not_serializable");
+  }
+}
+
+function requireLedgerStateWithinAbsoluteValueLimit(state: LedgerState): number {
+  const bytes = serializedLedgerStateBytes(state);
+  if (bytes > MAX_SERIALIZED_LEDGER_STATE_BYTES) {
+    throw new PersistedBudgetStateError("ledger_serialized_size_exceeds_safe_limit");
+  }
+  return bytes;
+}
+
+function requireLedgerStateWithinCommitLimit(state: LedgerState): void {
+  const bytes = requireLedgerStateWithinAbsoluteValueLimit(state);
+  if (
+    state.owner_cancellation_quarantine_until === null &&
+    bytes > MAX_MUTABLE_LEDGER_STATE_BYTES
+  ) {
+    throw new PersistedBudgetStateError("ledger_serialized_size_exhausts_quarantine_headroom");
   }
 }
 
@@ -566,7 +619,9 @@ function requireIdempotencyKey(raw: unknown): BudgetResult<{ idempotency_key: st
     return { ok: false, error: "idempotency_key required" };
   }
   const key = raw.trim();
-  if (key.length > 256) return { ok: false, error: "idempotency_key too long" };
+  if (utf8ByteLength(key) > MAX_IDEMPOTENCY_KEY_BYTES) {
+    return { ok: false, error: "idempotency_key too long" };
+  }
   return { ok: true, idempotency_key: key };
 }
 
@@ -575,12 +630,14 @@ export function bindIdempotencyKey(
   clientKey: string | undefined | null,
   requestDigest: string,
 ): BudgetResult<{ idempotency_key: string; request_digest: string }> {
-  const digest = typeof requestDigest === "string" ? requestDigest.trim() : "";
-  if (!digest) return { ok: false, error: "request_digest required" };
+  const boundedDigest = requireNonemptyRequestDigest(requestDigest);
+  if (!boundedDigest.ok) return boundedDigest;
+  const digest = boundedDigest.request_digest;
   const client = typeof clientKey === "string" ? clientKey.trim() : "";
   if (client) {
-    if (client.length > 256) return { ok: false, error: "idempotency_key too long" };
-    return { ok: true, idempotency_key: client, request_digest: digest };
+    const boundedKey = requireIdempotencyKey(client);
+    if (!boundedKey.ok) return boundedKey;
+    return { ok: true, idempotency_key: boundedKey.idempotency_key, request_digest: digest };
   }
   return { ok: true, idempotency_key: `digest:${digest}`, request_digest: digest };
 }
@@ -820,9 +877,16 @@ function coerceReservation(raw: Reservation): Reservation {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new PersistedBudgetStateError("reservation_not_object");
   }
+  const boundedKey = requireIdempotencyKey(raw.idempotency_key);
+  const boundedDigest =
+    raw.request_digest === null || raw.request_digest === undefined
+      ? null
+      : requireNonemptyRequestDigest(raw.request_digest);
   if (
-    typeof raw.idempotency_key !== "string" ||
-    !raw.idempotency_key ||
+    !boundedKey.ok ||
+    boundedKey.idempotency_key !== raw.idempotency_key ||
+    (boundedDigest !== null &&
+      (!boundedDigest.ok || boundedDigest.request_digest !== raw.request_digest)) ||
     typeof raw.reservation_id !== "string" ||
     !raw.reservation_id ||
     !(["reserved", "reconciled", "released"] as const).includes(raw.status) ||
@@ -893,15 +957,15 @@ function requirePersistedOwnerCancellationTombstone(
     throw new PersistedBudgetStateError("owner_cancellation_tombstone_not_object");
   }
   const tombstone = raw as OwnerCancellationTombstone;
+  const boundedKey = requireIdempotencyKey(tombstone.idempotency_key);
+  const boundedDigest = requireNonemptyRequestDigest(tombstone.request_digest);
   if (
     !OWNER_CAPABILITY_RE.test(key) ||
     tombstone.owner_capability_hash !== key ||
-    typeof tombstone.idempotency_key !== "string" ||
-    !tombstone.idempotency_key ||
-    tombstone.idempotency_key.length > 256 ||
-    typeof tombstone.request_digest !== "string" ||
-    !tombstone.request_digest ||
-    tombstone.request_digest !== tombstone.request_digest.trim() ||
+    !boundedKey.ok ||
+    boundedKey.idempotency_key !== tombstone.idempotency_key ||
+    !boundedDigest.ok ||
+    boundedDigest.request_digest !== tombstone.request_digest ||
     !Number.isSafeInteger(tombstone.created_at) ||
     !Number.isSafeInteger(tombstone.expires_at) ||
     tombstone.expires_at !==
@@ -1087,13 +1151,30 @@ function ownerCancellationTombstoneMatches(
   );
 }
 
-function persistOwnerCancellationTombstone(
+async function persistOwnerCancellationQuarantine(
+  storage: AtomicBudgetStorage,
+  state: LedgerState,
+  now: number,
+): Promise<BudgetErr> {
+  state.owner_cancellation_quarantine_until = Math.max(
+    state.owner_cancellation_quarantine_until ?? 0,
+    now + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
+  );
+  // Await the state write inside the same storage transaction before returning
+  // the saturation error. A delayed reserve therefore cannot be admitted
+  // between learning that its owner tombstone was lost and quarantine commit.
+  await saveState(storage, state);
+  return { ok: false, error: "owner_cancellation_tombstone_capacity_exhausted" };
+}
+
+async function persistOwnerCancellationTombstone(
+  storage: AtomicBudgetStorage,
   state: LedgerState,
   ownerHash: string,
   idempotencyKey: string,
   requestDigest: string,
   now: number,
-): BudgetErr | null {
+): Promise<BudgetErr | null> {
   const existing = state.owner_cancellation_tombstones[ownerHash];
   if (existing) {
     if (
@@ -1109,13 +1190,7 @@ function persistOwnerCancellationTombstone(
     MAX_OWNER_CANCELLATION_TOMBSTONES
   ) {
     // The exact owner cannot be recorded without exceeding the bounded map.
-    // Persist a global, equally bounded lease-window quarantine so a delayed
-    // reserve cannot race this failed cancellation and recreate occupancy.
-    state.owner_cancellation_quarantine_until = Math.max(
-      state.owner_cancellation_quarantine_until ?? 0,
-      now + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
-    );
-    return { ok: false, error: "owner_cancellation_tombstone_capacity_exhausted" };
+    return persistOwnerCancellationQuarantine(storage, state, now);
   }
   state.owner_cancellation_tombstones[ownerHash] = {
     owner_capability_hash: ownerHash,
@@ -1124,6 +1199,13 @@ function persistOwnerCancellationTombstone(
     created_at: now,
     expires_at: now + OWNER_CANCELLATION_TOMBSTONE_TTL_MS,
   };
+  if (serializedLedgerStateBytes(state) > MAX_MUTABLE_LEDGER_STATE_BYTES) {
+    // Whole-state history may consume the transitional mutable budget before
+    // the tombstone-count cap. Remove the uncommitted tombstone and spend only
+    // the reserved headroom on a fail-closed global quarantine.
+    delete state.owner_cancellation_tombstones[ownerHash];
+    return persistOwnerCancellationQuarantine(storage, state, now);
+  }
   return null;
 }
 
@@ -1238,10 +1320,19 @@ export function recoverExpired(state: LedgerState, now: number): number {
 
 async function loadState(storage: AtomicBudgetStorage, now: number): Promise<LedgerState> {
   const existing = await storage.get<LedgerState>(STATE_KEY);
-  return existing === undefined ? emptyLedger(now) : coerceState(existing);
+  if (existing === undefined) return emptyLedger(now);
+  const state = coerceState(existing);
+  // Legacy whole-state values inside the absolute safety ceiling remain
+  // readable so a cancellation can transition them into quarantine. The
+  // mutable/headroom threshold is enforced only before a new write.
+  requireLedgerStateWithinAbsoluteValueLimit(state);
+  return state;
 }
 
 async function saveState(storage: AtomicBudgetStorage, state: LedgerState): Promise<void> {
+  // This preflight is the enforcement point for every whole-value write,
+  // including the Durable Object adapter's transaction.put below this layer.
+  requireLedgerStateWithinCommitLimit(state);
   let nextAlarm: number | null = null;
   for (const lease of Object.values(state.leases)) {
     if (lease.released_at !== null) continue;
@@ -1791,7 +1882,11 @@ function requireNonemptyRequestDigest(raw: unknown): BudgetResult<{ request_dige
   if (typeof raw !== "string" || !raw.trim()) {
     return { ok: false, error: "request_digest required" };
   }
-  return { ok: true, request_digest: raw.trim() };
+  const digest = raw.trim();
+  if (!REQUEST_DIGEST_RE.test(digest)) {
+    return { ok: false, error: "request_digest must be lowercase sha256 hex" };
+  }
+  return { ok: true, request_digest: digest };
 }
 
 function requireExactLeaseAndDigest(
@@ -2480,7 +2575,8 @@ export async function cancelPreProviderReservation(
     recoverExpired(state, now);
     const reservation = state.reservations[key.idempotency_key];
     if (!reservation) {
-      const tombstoneError = persistOwnerCancellationTombstone(
+      const tombstoneError = await persistOwnerCancellationTombstone(
+        transaction,
         state,
         ownerHash,
         key.idempotency_key,
@@ -2488,7 +2584,6 @@ export async function cancelPreProviderReservation(
         now,
       );
       if (tombstoneError) {
-        await saveState(transaction, state);
         return tombstoneError;
       }
       await saveState(transaction, state);
@@ -2512,7 +2607,8 @@ export async function cancelPreProviderReservation(
       await saveState(transaction, state);
       return { ok: false, error: "reservation_not_cancellable" };
     }
-    const tombstoneError = persistOwnerCancellationTombstone(
+    const tombstoneError = await persistOwnerCancellationTombstone(
+      transaction,
       state,
       ownerHash,
       key.idempotency_key,
@@ -2520,7 +2616,6 @@ export async function cancelPreProviderReservation(
       now,
     );
     if (tombstoneError) {
-      await saveState(transaction, state);
       return tombstoneError;
     }
     if (reservation.status === "released") {

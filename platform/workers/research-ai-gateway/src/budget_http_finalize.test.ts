@@ -62,7 +62,7 @@ describe("handleBudgetRequest POST /finalize", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         idempotency_key: "http-finalize",
-        request_digest: "digest-http-finalize",
+        request_digest: "a".repeat(64),
         acquire_lease: true,
         amounts: { model_calls: 1, cost_usd: 1 },
       }),
