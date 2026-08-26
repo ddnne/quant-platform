@@ -20,6 +20,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, BinaryIO
 from urllib.parse import quote
@@ -60,6 +61,7 @@ GOVERNED_D1_SYNC_TABLES: tuple[str, ...] = (
     "coverage_segments",
     "collection_receipts",
 )
+
 
 def _validated_governed_wrangler() -> tuple[str, Path]:
     """Return the repository-pinned executable/config after authority checks.
@@ -530,18 +532,27 @@ def reject_temp_governed_deputies(
                 "ingestion_change_log",
                 "sync_change_state",
                 "local_d1_export_sync_runs",
+                "local_snapshot_policy",
             }
         )
     )
-    placeholders = ",".join("?" for _ in governed)
-    deputy = conn.execute(
-        "SELECT type,name,tbl_name FROM sqlite_temp_master "
-        f"WHERE name IN ({placeholders}) OR tbl_name IN ({placeholders}) "
-        "LIMIT 1",
-        (*governed, *governed),
-    ).fetchone()
-    if deputy is not None:
-        raise ValueError("temporary object shadows governed D1 state")
+    governed_identifiers = {name.casefold() for name in governed}
+    for object_type, name, table_name in conn.execute(
+        "SELECT type,name,tbl_name FROM sqlite_temp_master"
+    ):
+        if (
+            type(object_type) is not str
+            or type(name) is not str
+            or type(table_name) is not str
+        ):
+            raise ValueError("temporary SQLite object identity is not canonical")
+        # SQLite identifiers are ASCII case-insensitive.  Python's casefold is
+        # deliberately at least as strict for the governed ASCII identifiers.
+        if (
+            name.casefold() in governed_identifiers
+            or table_name.casefold() in governed_identifiers
+        ):
+            raise ValueError("temporary object shadows governed D1 state")
 
 
 def _quoted_identifier(value: str) -> str:
@@ -674,6 +685,88 @@ def _table_schema_manifest(
     }
 
 
+@lru_cache(maxsize=1)
+def _canonical_snapshot_policy_manifest_json() -> str:
+    """Derive the local policy-table contract from the canonical migrations."""
+    from storage.migrations import apply_schema_migrations
+    from storage.schema import SCHEMA_SQL
+
+    canonical = sqlite3.connect(":memory:")
+    try:
+        canonical.executescript(SCHEMA_SQL)
+        apply_schema_migrations(canonical)
+        manifest = _table_schema_manifest(canonical, "local_snapshot_policy")
+        return json.dumps(
+            manifest, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+    finally:
+        canonical.close()
+
+
+def require_canonical_snapshot_policy(
+    conn: sqlite3.Connection,
+    *,
+    require_building: bool,
+) -> tuple[object, ...]:
+    """Return the exact singleton target of every invalidation trigger."""
+    reject_temp_governed_deputies(conn, GOVERNED_D1_SYNC_TABLES)
+    observed = json.dumps(
+        _table_schema_manifest(conn, "local_snapshot_policy"),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    if observed != _canonical_snapshot_policy_manifest_json():
+        raise ValueError("local snapshot policy table is not canonical")
+    rows = conn.execute(
+        "SELECT singleton,require_manifest,snapshot_ready,sync_started_at,"
+        "last_error,publication_state,active_build_id,active_snapshot_id "
+        "FROM main.local_snapshot_policy"
+    ).fetchall()
+    if len(rows) != 1:
+        raise ValueError("local snapshot policy singleton is not exact")
+    row = tuple(rows[0])
+    if (
+        type(row[0]) is not int
+        or row[0] != 1
+        or type(row[1]) is not int
+        or row[1] != 1
+        or type(row[2]) is not int
+        or row[2] not in {0, 1}
+        or type(row[3]) not in {str, type(None)}
+        or type(row[4]) not in {str, type(None)}
+        or type(row[5]) is not str
+        or row[5] not in {"BUILDING", "SYNCED", "VALIDATING", "READY", "REJECTED"}
+        or type(row[6]) not in {str, type(None)}
+        or type(row[7]) not in {str, type(None)}
+    ):
+        raise ValueError("local snapshot policy singleton types are not canonical")
+    ready_state = row[5] == "READY"
+    if (
+        ready_state
+        and (
+            type(row[7]) is not str
+            or not row[7]
+        )
+    ) or (
+        not ready_state
+        and (row[2] != 0 or row[7] is not None)
+    ):
+        raise ValueError("local snapshot policy state is internally inconsistent")
+    if require_building and (
+        row[1] != 1
+        or row[2] != 0
+        or type(row[3]) is not str
+        or not row[3]
+        or row[5] != "BUILDING"
+        or type(row[6]) is not str
+        or not row[6]
+        or row[7] is not None
+    ):
+        raise ValueError("local snapshot policy is not exact D1 BUILDING state")
+    return row
+
+
 _CANONICAL_LOCAL_INVALIDATION_TRIGGERS = {
     trigger.name: {
         "type": "trigger",
@@ -682,6 +775,17 @@ _CANONICAL_LOCAL_INVALIDATION_TRIGGERS = {
         "sql": trigger.sqlite_master_sql,
     }
     for trigger in SNAPSHOT_INVALIDATION_TRIGGERS
+}
+_CANONICAL_LOCAL_INVALIDATION_TRIGGERS_BY_TABLE = {
+    table: {
+        name: row
+        for name, row in _CANONICAL_LOCAL_INVALIDATION_TRIGGERS.items()
+        if row["table_name"] == table
+    }
+    for table in {
+        row["table_name"]
+        for row in _CANONICAL_LOCAL_INVALIDATION_TRIGGERS.values()
+    }
 }
 
 
@@ -695,18 +799,39 @@ def _replicated_schema_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     replicated = json.loads(
         json.dumps(manifest, sort_keys=True, separators=(",", ":"))
     )
+    table_rows = [
+        row
+        for row in replicated["sqlite_master"]
+        if row["type"] == "table"
+    ]
+    if len(table_rows) != 1 or type(table_rows[0]["name"]) is not str:
+        raise ValueError("governed local table identity is not canonical")
+    table_name = table_rows[0]["name"]
+    expected = _CANONICAL_LOCAL_INVALIDATION_TRIGGERS_BY_TABLE.get(
+        table_name, {}
+    )
+    expected_by_identifier = {name.casefold(): row for name, row in expected.items()}
+    observed: set[str] = set()
     retained: list[dict[str, Any]] = []
     for row in replicated["sqlite_master"]:
-        if row["type"] != "trigger" or not row["name"].startswith(
+        name = row["name"]
+        if type(name) is not str:
+            raise ValueError("governed local schema identity is not canonical")
+        if row["type"] != "trigger" or not name.casefold().startswith(
             "invalidate_snapshot_"
         ):
             retained.append(row)
             continue
-        expected = _CANONICAL_LOCAL_INVALIDATION_TRIGGERS.get(row["name"])
-        if expected is None or row != expected:
+        canonical = expected_by_identifier.get(name.casefold())
+        if canonical is None or row != canonical:
             raise ValueError(
                 "local snapshot invalidation trigger is not canonical"
             )
+        observed.add(name)
+    if observed != set(expected):
+        raise ValueError(
+            "local snapshot invalidation trigger set is incomplete"
+        )
     replicated["sqlite_master"] = retained
     return replicated
 

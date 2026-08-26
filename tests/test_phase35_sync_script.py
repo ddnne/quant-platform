@@ -428,6 +428,8 @@ def test_structural_schema_manifest_rejects_relaxed_pk_and_unique_constraints(
 def test_schema_reconciliation_normalizes_only_local_invalidation_trigger(
     sync_module,
 ):
+    from storage.migrations import SNAPSHOT_INVALIDATION_TRIGGERS
+
     source = sqlite3.connect(":memory:")
     local = sqlite3.connect(":memory:")
     try:
@@ -443,12 +445,12 @@ def test_schema_reconciliation_normalizes_only_local_invalidation_trigger(
             + "CREATE TABLE local_snapshot_policy "
             "(singleton INTEGER PRIMARY KEY, snapshot_ready INTEGER, "
             "active_snapshot_id TEXT, last_error TEXT);"
-            "CREATE TRIGGER invalidate_snapshot_jquants_records_u "
-            "AFTER UPDATE ON jquants_records BEGIN "
-            "UPDATE local_snapshot_policy SET snapshot_ready=0, "
-            "active_snapshot_id=NULL, "
-            "last_error='fact mutation invalidated research snapshot' "
-            "WHERE singleton=1; END;"
+            + ";".join(
+                trigger.sqlite_master_sql
+                for trigger in SNAPSHOT_INVALIDATION_TRIGGERS
+                if trigger.table == "jquants_records"
+            )
+            + ";"
         )
 
         content, source_schema, local_schema, counts = (
@@ -462,6 +464,46 @@ def test_schema_reconciliation_normalizes_only_local_invalidation_trigger(
         assert source_schema.startswith("sha256:")
         assert local_schema.startswith("sha256:")
         assert source_schema != local_schema
+    finally:
+        source.close()
+        local.close()
+
+
+@pytest.mark.parametrize("missing_suffix", ["i", "u", "d"])
+def test_schema_reconciliation_requires_every_local_invalidation_trigger(
+    sync_module, missing_suffix
+):
+    from storage.migrations import SNAPSHOT_INVALIDATION_TRIGGERS
+
+    source = sqlite3.connect(":memory:")
+    local = sqlite3.connect(":memory:")
+    try:
+        schema = (
+            "CREATE TABLE jquants_records "
+            "(id INTEGER PRIMARY KEY, value TEXT NOT NULL);"
+            "INSERT INTO jquants_records VALUES (1,'A');"
+        )
+        source.executescript(schema)
+        local.executescript(
+            schema
+            + "CREATE TABLE local_snapshot_policy "
+            "(singleton INTEGER PRIMARY KEY, snapshot_ready INTEGER, "
+            "active_snapshot_id TEXT, last_error TEXT);"
+            + ";".join(
+                trigger.sqlite_master_sql
+                for trigger in SNAPSHOT_INVALIDATION_TRIGGERS
+                if trigger.table == "jquants_records"
+            )
+            + ";"
+        )
+        local.execute(
+            f"DROP TRIGGER invalidate_snapshot_jquants_records_{missing_suffix}"
+        )
+
+        with pytest.raises(ValueError, match="trigger set is incomplete"):
+            sync_module._private_export._exact_source_local_reconciliation(
+                source, local, ("jquants_records",)
+            )
     finally:
         source.close()
         local.close()
@@ -495,7 +537,9 @@ def test_schema_reconciliation_rejects_destructive_invalidation_prefix(
         local.close()
 
 
-@pytest.mark.parametrize("deputy", ["table", "trigger"])
+@pytest.mark.parametrize(
+    "deputy", ["table", "trigger", "mixed_case_table", "mixed_case_trigger"]
+)
 def test_governed_identity_rejects_temp_shadow_and_temp_trigger(
     sync_module, deputy
 ):
@@ -505,15 +549,17 @@ def test_governed_identity_rejects_temp_shadow_and_temp_trigger(
             "CREATE TABLE governed (value TEXT NOT NULL);"
             "INSERT INTO main.governed VALUES ('MAIN');"
         )
-        if deputy == "table":
+        if deputy in {"table", "mixed_case_table"}:
+            table_name = "governed" if deputy == "table" else "GoVeRnEd"
             conn.executescript(
-                "CREATE TEMP TABLE governed (value TEXT NOT NULL);"
-                "INSERT INTO temp.governed VALUES ('TEMP');"
+                f"CREATE TEMP TABLE {table_name} (value TEXT NOT NULL);"
+                f"INSERT INTO temp.{table_name} VALUES ('TEMP');"
             )
         else:
+            target = "governed" if deputy == "trigger" else "GoVeRnEd"
             conn.executescript(
                 "CREATE TEMP TRIGGER governed_temp_deputy "
-                "AFTER INSERT ON main.governed BEGIN "
+                f"AFTER INSERT ON main.{target} BEGIN "
                 "DELETE FROM governed; END;"
             )
 

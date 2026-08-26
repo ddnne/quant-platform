@@ -132,6 +132,7 @@ def _bound_store_and_document(tmp_path, monkeypatch, *, now: datetime):
     )
     monkeypatch.setattr(signing, "_utc_now", lambda: now)
     store = SqliteStore(tmp_path / "persistence.sqlite")
+    sync._ensure_control_tables(store._conn)  # noqa: SLF001
     sync._ensure_export_sync_audit(store)
     sync._record_change_seq(store, 7)
     existing_tables = {
@@ -614,6 +615,7 @@ def test_real_sqlite_signed_chain_retains_deep_immutable_projection_identity(
     monkeypatch.setattr(signing, "_utc_now", lambda: now)
     path = tmp_path / "authenticated-mirror.sqlite"
     store = SqliteStore(path)
+    sync._ensure_control_tables(store._conn)  # noqa: SLF001
     sync._ensure_export_sync_audit(store)
     sync._record_change_seq(store, 7)
     existing_tables = {
@@ -692,6 +694,14 @@ def test_real_sqlite_signed_chain_retains_deep_immutable_projection_identity(
         return identity["source_change_seq"], identity["applied_change_seq"]
 
     assert sync._consume_authenticated_applied_mirror(handle, consume) == (7, 7)
+
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE main.local_snapshot_policy SET require_manifest=0 "
+            "WHERE singleton=1"
+        )
+    with pytest.raises(ValueError, match="not an authenticated current"):
+        sync.open_authenticated_applied_mirror(path)
 
 
 def test_strict_json_rejects_duplicate_and_nonfinite_signed_documents(
@@ -822,6 +832,142 @@ def test_temp_audit_table_cannot_shadow_signed_complete_persistence(
 
     assert store._conn.execute(  # noqa: SLF001
         "SELECT COUNT(*) FROM main.local_d1_export_sync_runs"
+    ).fetchone()[0] == 0
+    store.close()
+
+
+def test_mixed_case_temp_audit_trigger_cannot_mutate_ready_state(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+    store._conn.executescript(  # noqa: SLF001
+        """
+        CREATE TEMP TRIGGER attacker_ready_deputy
+        AFTER INSERT ON main.LoCaL_D1_ExPoRt_SyNc_RuNs BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=1
+            WHERE singleton=1;
+        END;
+        """
+    )
+
+    with pytest.raises(ValueError, match="temporary object"):
+        sync._mark_authenticated_export_complete(store, object())
+
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM main.local_d1_export_sync_runs"
+    ).fetchone()[0] == 0
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT snapshot_ready FROM main.local_snapshot_policy WHERE singleton=1"
+    ).fetchone()[0] == 0
+    store.close()
+
+
+@pytest.mark.parametrize(
+    "attack", ["missing_table", "missing_row", "duplicate_row", "extra_index"]
+)
+def test_signed_complete_requires_canonical_invalidation_policy_target(
+    tmp_path, monkeypatch, attack
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+    if attack == "missing_table":
+        store._conn.execute("DROP TABLE main.local_snapshot_policy")  # noqa: SLF001
+    elif attack == "missing_row":
+        store._conn.execute(  # noqa: SLF001
+            "DELETE FROM main.local_snapshot_policy WHERE singleton=1"
+        )
+    elif attack == "duplicate_row":
+        store._conn.executescript(  # noqa: SLF001
+            """
+            DROP TABLE main.local_snapshot_policy;
+            CREATE TABLE main.local_snapshot_policy (
+                singleton INTEGER,
+                require_manifest INTEGER,
+                snapshot_ready INTEGER,
+                sync_started_at TEXT,
+                last_error TEXT,
+                publication_state TEXT,
+                active_build_id TEXT,
+                active_snapshot_id TEXT
+            );
+            INSERT INTO main.local_snapshot_policy VALUES
+                (1,1,0,'now',NULL,'BUILDING','build-a',NULL),
+                (1,1,0,'now',NULL,'BUILDING','build-b',NULL);
+            """
+        )
+    else:
+        store._conn.execute(  # noqa: SLF001
+            "CREATE INDEX attacker_policy_index "
+            "ON local_snapshot_policy(snapshot_ready)"
+        )
+    store._conn.commit()  # noqa: SLF001
+
+    with pytest.raises(ValueError, match="snapshot policy|no columns"):
+        sync._mark_authenticated_export_complete(store, object())
+
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM main.local_d1_export_sync_runs"
+    ).fetchone()[0] == 0
+    store.close()
+
+
+def test_audit_insert_policy_side_effect_rolls_back_from_final_postcondition(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+    before = tuple(
+        store._conn.execute(  # noqa: SLF001
+            "SELECT * FROM main.local_snapshot_policy WHERE singleton=1"
+        ).fetchone()
+    )
+    require_boundary = sync._require_canonical_sync_audit_table
+    installed = []
+
+    def install_after_precondition(conn):
+        policy = require_boundary(conn)
+        conn.execute(
+            """
+            CREATE TRIGGER attacker_restore_ready_after_audit
+            AFTER INSERT ON main.local_d1_export_sync_runs BEGIN
+                UPDATE local_snapshot_policy
+                SET snapshot_ready=1, publication_state='READY',
+                    active_snapshot_id='attacker-snapshot'
+                WHERE singleton=1;
+            END
+            """
+        )
+        installed.append(True)
+        return policy
+
+    monkeypatch.setattr(
+        sync, "_require_canonical_sync_audit_table", install_after_precondition
+    )
+    with pytest.raises(ValueError, match="snapshot policy"):
+        sync._mark_authenticated_export_complete(store, object())
+
+    assert installed == [True]
+    assert tuple(
+        store._conn.execute(  # noqa: SLF001
+            "SELECT * FROM main.local_snapshot_policy WHERE singleton=1"
+        ).fetchone()
+    ) == before
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM main.local_d1_export_sync_runs"
+    ).fetchone()[0] == 0
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM main.sqlite_master "
+        "WHERE name='attacker_restore_ready_after_audit'"
     ).fetchone()[0] == 0
     store.close()
 

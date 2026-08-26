@@ -271,6 +271,16 @@ def _ensure_control_tables(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    conn.execute(
+        """
+        INSERT INTO main.local_snapshot_policy (
+            singleton, require_manifest, snapshot_ready, sync_started_at,
+            last_error, publication_state, active_build_id, active_snapshot_id
+        ) VALUES (1, 1, 0, ?, NULL, 'BUILDING', 'd1-sync-seed', NULL)
+        ON CONFLICT(singleton) DO NOTHING
+        """,
+        (datetime.now(timezone.utc).isoformat(),),
+    )
 
 
 def _local_table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -889,7 +899,9 @@ _SYNC_AUDIT_COLUMNS = (
 )
 
 
-def _require_canonical_sync_audit_table(conn: sqlite3.Connection) -> None:
+def _require_canonical_sync_audit_table(
+    conn: sqlite3.Connection,
+) -> tuple[object, ...]:
     """Reject database-side deputies on the signed COMPLETE write boundary."""
     columns = tuple(
         (row[1], row[2], row[3], row[4], row[5], row[6])
@@ -927,13 +939,7 @@ def _require_canonical_sync_audit_table(conn: sqlite3.Connection) -> None:
     observed_non_table = [tuple(row) for row in objects if row[0] != "table"]
     if observed_non_table != expected_objects:
         raise ValueError("D1 sync audit table has unowned schema objects")
-    temp_deputies = conn.execute(
-        "SELECT 1 FROM sqlite_temp_master "
-        "WHERE name='local_d1_export_sync_runs' "
-        "OR tbl_name='local_d1_export_sync_runs' LIMIT 1"
-    ).fetchone()
-    if temp_deputies is not None:
-        raise ValueError("D1 sync audit table has an unowned temporary object")
+    _private_export.reject_temp_governed_deputies(conn, DEFAULT_TABLES)
     indexes = [
         (str(row[1]), int(row[2]), str(row[3]), int(row[4]))
         for row in conn.execute(
@@ -946,6 +952,9 @@ def _require_canonical_sync_audit_table(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA main.foreign_key_list(local_d1_export_sync_runs)")
     ):
         raise ValueError("D1 sync audit table constraints are not canonical")
+    return _private_export.require_canonical_snapshot_policy(
+        conn, require_building=True
+    )
 
 
 def _mark_untrusted_export_sync(
@@ -1180,6 +1189,9 @@ def _verified_sync_envelope_from_row(
     ):
         raise ValueError("signed D1 sync audit does not bind its SQLite row")
     if recompute_local:
+        _private_export.require_canonical_snapshot_policy(
+            conn, require_building=False
+        )
         observed_content, observed_schema, observed_counts = (
             _private_export.governed_content_identity(conn, DEFAULT_TABLES)
         )
@@ -1230,7 +1242,7 @@ def _mark_authenticated_export_complete(
     conn = store._conn  # noqa: SLF001
     conn.execute("BEGIN IMMEDIATE")
     try:
-        _require_canonical_sync_audit_table(conn)
+        policy_before = _require_canonical_sync_audit_table(conn)
         observed_content, observed_schema, observed_counts = (
             _private_export.governed_content_identity(conn, DEFAULT_TABLES)
         )
@@ -1387,6 +1399,12 @@ def _mark_authenticated_export_complete(
             raise ValueError(
                 "authenticated D1 sync audit postcondition identity changed"
             )
+        if _private_export.require_canonical_snapshot_policy(
+            conn, require_building=True
+        ) != policy_before:
+            raise ValueError(
+                "authenticated D1 sync audit changed snapshot policy state"
+            )
         # Final UTC and signature verification happens after every SQLite and
         # governed-content postcondition.  Crossing the lease during any of
         # those checks rolls back the audit row and trigger side effects.
@@ -1403,6 +1421,12 @@ def _mark_authenticated_export_complete(
         ):
             raise ValueError(
                 "authenticated D1 sync audit final identity changed"
+            )
+        if _private_export.require_canonical_snapshot_policy(
+            conn, require_building=True
+        ) != policy_before:
+            raise ValueError(
+                "authenticated D1 sync audit changed final snapshot policy state"
             )
         conn.commit()
         return final_document.envelope
