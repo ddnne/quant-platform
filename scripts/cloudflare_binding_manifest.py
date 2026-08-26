@@ -251,8 +251,10 @@ def _validate_config_key_policy(
         )
 
     envs = data.get("env")
-    if environment == "staging" and envs is not None:
-        raise ValueError(f"{config_path}: staging config must not contain named envs")
+    if environment in {"staging", "test"} and envs is not None:
+        raise ValueError(
+            f"{config_path}: standalone {environment} config must not contain named envs"
+        )
     sections: list[tuple[str, dict[str, Any]]] = [("root", data)]
     if envs is not None:
         if not isinstance(envs, dict) or set(envs) != {"production"}:

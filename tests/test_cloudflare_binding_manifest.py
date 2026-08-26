@@ -163,6 +163,32 @@ def test_test_harness_configs_are_frozen_as_nonpublic_surfaces() -> None:
         manifest_module.validate_manifest(drifted)
 
 
+def test_test_harness_config_rejects_hidden_named_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = next(
+        worker
+        for worker in manifest_module.ACTIVE_WORKERS
+        if (manifest_module.WORKER_ROOT / worker / "wrangler.test.toml").is_file()
+    )
+    config = manifest_module.WORKER_ROOT / worker / "wrangler.test.toml"
+    data = manifest_module._load_toml(config)  # noqa: SLF001
+    data["env"] = {
+        "production": {
+            "name": "shadow-production",
+            "main": "src/shadow.ts",
+        }
+    }
+    monkeypatch.setattr(manifest_module, "_load_toml", lambda _path: data)
+    with pytest.raises(ValueError, match="standalone test config"):
+        manifest_module._effective_surface(  # noqa: SLF001
+            worker=worker,
+            config_path=config,
+            environment="test",
+            named_environment=None,
+        )
+
+
 def test_authoritative_ci_dry_runs_test_harness_configs() -> None:
     ci = (manifest_module.ROOT / "scripts" / "verify_ci.sh").read_text(
         encoding="utf-8"
