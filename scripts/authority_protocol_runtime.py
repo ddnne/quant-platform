@@ -12,12 +12,11 @@ from __future__ import annotations
 
 import array
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import fcntl
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import socket
@@ -26,6 +25,7 @@ import stat
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 from urllib.parse import quote
+from weakref import WeakKeyDictionary
 
 try:
     from scripts import authority_principal_manifest as _contracts
@@ -47,6 +47,7 @@ TRADER_ASSERTION_SCHEMA = AUTHORITY_SPECS / "trader_webauthn_assertion.schema.js
 _MAX_REQUEST_TTL = timedelta(minutes=2)
 _MAX_HANDOFF_TTL = timedelta(minutes=2)
 _MAX_WEBAUTHN_TTL = timedelta(minutes=2)
+_MAX_EVENT_AGE = timedelta(minutes=5)
 _MAX_FUTURE_SKEW = timedelta(seconds=5)
 _D1_IDENTITIES = {
     "staging": (
@@ -83,9 +84,9 @@ def _copy_exact_json(value: Any, *, field: str) -> Any:
         ]
     if type(value) in {str, int, bool, type(None)}:
         return value
-    if type(value) is float and math.isfinite(value):
-        return value
-    raise AuthorityProtocolError(f"{field}: non-finite or adapted JSON value")
+    raise AuthorityProtocolError(
+        f"{field}: floats and adapted JSON values are forbidden"
+    )
 
 
 def _strict_json(raw: bytes | str, *, field: str) -> dict[str, Any]:
@@ -100,11 +101,15 @@ def _strict_json(raw: bytes | str, *, field: str) -> dict[str, Any]:
     def reject_nonfinite(value: str) -> None:
         raise AuthorityProtocolError(f"{field}: non-finite value {value!r}")
 
+    def reject_float(value: str) -> None:
+        raise AuthorityProtocolError(f"{field}: JSON float is forbidden: {value!r}")
+
     try:
         value = json.loads(
             raw,
             object_pairs_hook=reject_duplicates,
             parse_constant=reject_nonfinite,
+            parse_float=reject_float,
         )
     except AuthorityProtocolError:
         raise
@@ -190,29 +195,121 @@ def _require_window(
         raise AuthorityProtocolError(f"{field}: TTL exceeds contract")
 
 
+def _trusted_now() -> datetime:
+    """Return the service-owned clock; tests may replace this before activation."""
+    return datetime.now(timezone.utc)
+
+
+def _trusted_now_utc() -> datetime:
+    current = _trusted_now()
+    if (
+        type(current) is not datetime
+        or current.tzinfo is None
+        or current.utcoffset() is None
+    ):
+        raise TypeError("authority trusted clock must be an exact aware datetime")
+    return current.astimezone(timezone.utc)
+
+
+_CANDIDATE_SEAL = object()
+
+
 @dataclass(frozen=True, slots=True)
+class _CandidateProvenance:
+    kind: str
+    document: Mapping[str, Any]
+    canonical_bytes: bytes
+    digest: str
+    context: tuple[tuple[str, Any], ...]
+    payload: Mapping[str, Any] | None = None
+
+
+_CANDIDATE_PROVENANCE: WeakKeyDictionary[object, _CandidateProvenance] = (
+    WeakKeyDictionary()
+)
+
+
+@dataclass(frozen=True, slots=True, eq=False, weakref_slot=True)
 class _FrozenMirrorRequestCandidate:
     document: Mapping[str, Any]
     digest: str
+    _seal: object = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if self._seal is not _CANDIDATE_SEAL:
+            raise AuthorityProtocolError("request candidate lacks verifier provenance")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False, weakref_slot=True)
 class _FrozenMirrorHandoffCandidate:
     document: Mapping[str, Any]
     audit_document_digest: str
     descriptor_digest: str
+    _seal: object = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if self._seal is not _CANDIDATE_SEAL:
+            raise AuthorityProtocolError("handoff candidate lacks verifier provenance")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False, weakref_slot=True)
 class _AuthorityEventCandidate:
     document: Mapping[str, Any]
     payload: Mapping[str, Any]
+    _seal: object = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if self._seal is not _CANDIDATE_SEAL:
+            raise AuthorityProtocolError("event candidate lacks verifier provenance")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False, weakref_slot=True)
 class _TraderAssertionCandidate:
     document: Mapping[str, Any]
     sign_count: int
+    _seal: object = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if self._seal is not _CANDIDATE_SEAL:
+            raise AuthorityProtocolError("Trader candidate lacks verifier provenance")
+
+
+def _register_candidate(
+    candidate: object,
+    *,
+    kind: str,
+    document: Mapping[str, Any],
+    canonical_bytes: bytes,
+    digest: str,
+    context: Mapping[str, Any],
+    payload: Mapping[str, Any] | None = None,
+) -> None:
+    _CANDIDATE_PROVENANCE[candidate] = _CandidateProvenance(
+        kind=kind,
+        document=document,
+        canonical_bytes=canonical_bytes,
+        digest=digest,
+        context=tuple(sorted(context.items())),
+        payload=payload,
+    )
+
+
+def _require_candidate_provenance(
+    candidate: object,
+    *,
+    expected_type: type,
+    kind: str,
+) -> _CandidateProvenance:
+    if type(candidate) is not expected_type:
+        raise AuthorityProtocolError(f"{kind} requires the exact inspected candidate")
+    if getattr(candidate, "_seal", None) is not _CANDIDATE_SEAL:
+        raise AuthorityProtocolError(f"{kind} candidate seal mismatch")
+    provenance = _CANDIDATE_PROVENANCE.get(candidate)
+    if provenance is None or provenance.kind != kind:
+        raise AuthorityProtocolError(f"{kind} candidate was not issued by this verifier")
+    if getattr(candidate, "document", None) is not provenance.document:
+        raise AuthorityProtocolError(f"{kind} candidate document was replaced")
+    return provenance
 
 
 class AuthorityEventStore(Protocol):
@@ -220,7 +317,9 @@ class AuthorityEventStore(Protocol):
 
     One transaction must enforce `(environment, authority_id, sequence)` and
     `idempotency_key` uniqueness, compare `prior_event_digest` with the current
-    tail, append the exact canonical event, and durably commit before returning.
+    tail, call `_require_authority_event_candidate_provenance` against that
+    tail including its monotonic `observed_at`, append the exact canonical
+    event, and durably commit before returning.
     """
 
     def append_if_current(
@@ -229,17 +328,17 @@ class AuthorityEventStore(Protocol):
         *,
         expected_sequence: int,
         expected_prior_event_digest: str | None,
+        expected_prior_observed_at: str | None,
     ) -> str: ...
 
 
-def inspect_frozen_mirror_request_candidate(
-    raw: bytes | str,
+def _validate_frozen_mirror_request_document(
+    document: dict[str, Any],
     *,
     transport_authenticated_caller: str,
     expected_environment: str,
-    now: datetime | None = None,
-) -> _FrozenMirrorRequestCandidate:
-    document = _strict_json(raw, field="frozen mirror request")
+    now: datetime,
+) -> str:
     _validate_schema(document, REQUEST_SCHEMA)
     if document["authenticated_caller"] != transport_authenticated_caller:
         raise AuthorityProtocolError("request caller is not transport-authenticated")
@@ -251,7 +350,7 @@ def inspect_frozen_mirror_request_candidate(
     _require_window(
         document["issued_at"],
         document["expires_at"],
-        now=now or datetime.now(timezone.utc),
+        now=now,
         max_ttl=_MAX_REQUEST_TTL,
         field="frozen mirror request",
     )
@@ -266,7 +365,68 @@ def inspect_frozen_mirror_request_candidate(
     ]
     if len(matching_acl) != 1:
         raise AuthorityProtocolError("request is not authorized by exact method ACL")
-    return _FrozenMirrorRequestCandidate(_deep_immutable(document), expected_digest)
+    return expected_digest
+
+
+def inspect_frozen_mirror_request_candidate(
+    raw: bytes | str,
+    *,
+    transport_authenticated_caller: str,
+    expected_environment: str,
+) -> _FrozenMirrorRequestCandidate:
+    document = _strict_json(raw, field="frozen mirror request")
+    expected_digest = _validate_frozen_mirror_request_document(
+        document,
+        transport_authenticated_caller=transport_authenticated_caller,
+        expected_environment=expected_environment,
+        now=_trusted_now_utc(),
+    )
+    immutable = _deep_immutable(document)
+    candidate = _FrozenMirrorRequestCandidate(
+        immutable, expected_digest, _CANDIDATE_SEAL
+    )
+    _register_candidate(
+        candidate,
+        kind="frozen mirror request",
+        document=immutable,
+        canonical_bytes=_canonical_bytes(document),
+        digest=expected_digest,
+        context={
+            "transport_authenticated_caller": transport_authenticated_caller,
+            "expected_environment": expected_environment,
+        },
+    )
+    return candidate
+
+
+def _require_frozen_mirror_request_candidate(
+    request: object,
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    provenance = _require_candidate_provenance(
+        request,
+        expected_type=_FrozenMirrorRequestCandidate,
+        kind="frozen mirror request",
+    )
+    context = dict(provenance.context)
+    document = _strict_json(
+        provenance.canonical_bytes,
+        field="provenance-bound frozen mirror request",
+    )
+    digest = _validate_frozen_mirror_request_document(
+        document,
+        transport_authenticated_caller=context["transport_authenticated_caller"],
+        expected_environment=context["expected_environment"],
+        now=now,
+    )
+    if (
+        getattr(request, "digest", None) != digest
+        or provenance.digest != digest
+        or document["request_digest"] != digest
+    ):
+        raise AuthorityProtocolError("request candidate digest provenance mismatch")
+    return document
 
 
 def _descriptor_identity(fd: int) -> dict[str, Any]:
@@ -373,11 +533,14 @@ def inspect_frozen_mirror_handoff_candidate(
     *,
     request: _FrozenMirrorRequestCandidate,
     received_fd: int,
-    now: datetime | None = None,
 ) -> _FrozenMirrorHandoffCandidate:
     document = _strict_json(raw, field="frozen mirror handoff")
     _validate_schema(document, HANDOFF_SCHEMA)
-    request_document = request.document
+    current = _trusted_now_utc()
+    request_document = _require_frozen_mirror_request_candidate(
+        request,
+        now=current,
+    )
     for field in (
         "request_id",
         "request_digest",
@@ -391,7 +554,6 @@ def inspect_frozen_mirror_handoff_candidate(
     expected_d1 = _D1_IDENTITIES[document["environment"]]
     if (document["source_d1_name"], document["source_d1_id"]) != expected_d1:
         raise AuthorityProtocolError("handoff D1 identity drift")
-    current = now or datetime.now(timezone.utc)
     _require_window(
         request_document["issued_at"],
         request_document["expires_at"],
@@ -506,16 +668,46 @@ def inspect_frozen_mirror_handoff_candidate(
     expected_mirror_digest = _digest(mirror_body)
     if document["mirror_identity_digest"] != expected_mirror_digest:
         raise AuthorityProtocolError("mirror identity digest mismatch")
-    return _FrozenMirrorHandoffCandidate(
-        _deep_immutable(document), verified.document_digest, descriptor["sha256"]
+    immutable = _deep_immutable(document)
+    candidate = _FrozenMirrorHandoffCandidate(
+        immutable,
+        verified.document_digest,
+        descriptor["sha256"],
+        _CANDIDATE_SEAL,
     )
+    _register_candidate(
+        candidate,
+        kind="frozen mirror handoff",
+        document=immutable,
+        canonical_bytes=_canonical_bytes(document),
+        digest=document["handoff_digest"],
+        context={
+            "request_digest": request.digest,
+            "descriptor_digest": descriptor["sha256"],
+            "audit_document_digest": verified.document_digest,
+        },
+    )
+    return candidate
+
+
+def _make_received_fd_non_inheritable(fd: int) -> None:
+    try:
+        os.set_inheritable(fd, False)
+        if os.get_inheritable(fd):
+            raise OSError("descriptor remains inheritable")
+    except OSError as exc:
+        raise AuthorityProtocolError(
+            "received descriptor could not be made close-on-exec"
+        ) from exc
 
 
 def _recv_exactly_one_fd(channel: socket.socket) -> tuple[bytes, int]:
     item_size = array.array("i").itemsize
+    recv_flags = getattr(socket, "MSG_CMSG_CLOEXEC", 0)
     payload, ancillary, flags, _ = channel.recvmsg(
         1024 * 1024,
         socket.CMSG_SPACE(item_size * 2),
+        recv_flags,
     )
     received: list[int] = []
     try:
@@ -528,7 +720,9 @@ def _recv_exactly_one_fd(channel: socket.socket) -> tuple[bytes, int]:
                 raise AuthorityProtocolError("malformed SCM_RIGHTS capability")
             values = array.array("i")
             values.frombytes(data)
-            received.extend(values.tolist())
+            for fd in values.tolist():
+                received.append(fd)
+                _make_received_fd_non_inheritable(fd)
         if len(received) != 1:
             raise AuthorityProtocolError("handoff requires exactly one descriptor")
         return payload, received.pop()
@@ -542,10 +736,9 @@ def activate_frozen_mirror_handoff(
     *,
     request: _FrozenMirrorRequestCandidate,
     received_fd: int,
-    now: datetime | None = None,
 ) -> None:
     inspect_frozen_mirror_handoff_candidate(
-        raw, request=request, received_fd=received_fd, now=now
+        raw, request=request, received_fd=received_fd
     )
     raise AuthorityProtocolPending(
         "OS peer credentials, dedicated sockets, and transactional handoff ledger "
@@ -557,27 +750,42 @@ def receive_and_activate_frozen_mirror_handoff(
     channel: socket.socket,
     *,
     request: _FrozenMirrorRequestCandidate,
-    now: datetime | None = None,
 ) -> None:
     raw, fd = _recv_exactly_one_fd(channel)
     try:
         activate_frozen_mirror_handoff(
-            raw, request=request, received_fd=fd, now=now
+            raw, request=request, received_fd=fd
         )
     finally:
         os.close(fd)
 
 
-def inspect_authority_event_candidate(
-    raw: bytes | str,
+def _validate_authority_event_document(
+    document: dict[str, Any],
     *,
     expected_authority: str,
     expected_environment: str,
     expected_sequence: int,
     expected_prior_event_digest: str | None,
-) -> _AuthorityEventCandidate:
-    document = _strict_json(raw, field="authority event")
+    expected_prior_observed_at: str | None,
+    trusted_now: datetime,
+) -> dict[str, Any]:
     _validate_schema(document, EVENT_SCHEMA)
+    if type(expected_sequence) is not int or expected_sequence < 1:
+        raise TypeError("trusted authority event sequence must be a positive integer")
+    if expected_sequence == 1:
+        if (
+            expected_prior_event_digest is not None
+            or expected_prior_observed_at is not None
+        ):
+            raise AuthorityProtocolError("first authority event cannot have a tail")
+    elif (
+        type(expected_prior_event_digest) is not str
+        or expected_prior_observed_at is None
+    ):
+        raise AuthorityProtocolError(
+            "non-first authority event requires the exact ledger tail"
+        )
     if document["authority_id"] != expected_authority:
         raise AuthorityProtocolError("authority event principal mismatch")
     if document["environment"] != expected_environment:
@@ -586,6 +794,23 @@ def inspect_authority_event_candidate(
         raise AuthorityProtocolError("authority event sequence mismatch")
     if document["prior_event_digest"] != expected_prior_event_digest:
         raise AuthorityProtocolError("authority event prior-chain mismatch")
+    observed_at = _timestamp(document["observed_at"], field="event.observed_at")
+    if observed_at > trusted_now + _MAX_FUTURE_SKEW:
+        raise AuthorityProtocolError("authority event observed_at is in the future")
+    if observed_at < trusted_now - _MAX_EVENT_AGE:
+        raise AuthorityProtocolError(
+            "authority event is too old; historical reconcile requires its "
+            "separate PENDING protocol"
+        )
+    if expected_prior_observed_at is not None:
+        prior_observed_at = _timestamp(
+            expected_prior_observed_at,
+            field="trusted ledger tail observed_at",
+        )
+        if observed_at < prior_observed_at:
+            raise AuthorityProtocolError(
+                "authority event observed_at moved behind the ledger tail"
+            )
     payload = _strict_json(document["payload_json"], field="authority event payload")
     canonical_payload = _canonical_bytes(payload).decode()
     if document["payload_json"] != canonical_payload:
@@ -608,11 +833,102 @@ def inspect_authority_event_candidate(
         raise AuthorityProtocolError("authority event idempotency key mismatch")
     if document["event_digest"] != _digest(_without(document, "event_digest")):
         raise AuthorityProtocolError("authority event digest mismatch")
-    return _AuthorityEventCandidate(_deep_immutable(document), _deep_immutable(payload))
+    return payload
+
+
+def inspect_authority_event_candidate(
+    raw: bytes | str,
+    *,
+    expected_authority: str,
+    expected_environment: str,
+    expected_sequence: int,
+    expected_prior_event_digest: str | None,
+    expected_prior_observed_at: str | None = None,
+) -> _AuthorityEventCandidate:
+    document = _strict_json(raw, field="authority event")
+    payload = _validate_authority_event_document(
+        document,
+        expected_authority=expected_authority,
+        expected_environment=expected_environment,
+        expected_sequence=expected_sequence,
+        expected_prior_event_digest=expected_prior_event_digest,
+        expected_prior_observed_at=expected_prior_observed_at,
+        trusted_now=_trusted_now_utc(),
+    )
+    immutable_document = _deep_immutable(document)
+    immutable_payload = _deep_immutable(payload)
+    candidate = _AuthorityEventCandidate(
+        immutable_document,
+        immutable_payload,
+        _CANDIDATE_SEAL,
+    )
+    _register_candidate(
+        candidate,
+        kind="authority event",
+        document=immutable_document,
+        canonical_bytes=_canonical_bytes(document),
+        digest=document["event_digest"],
+        context={
+            "expected_authority": expected_authority,
+            "expected_environment": expected_environment,
+            "expected_sequence": expected_sequence,
+            "expected_prior_event_digest": expected_prior_event_digest,
+            "expected_prior_observed_at": expected_prior_observed_at,
+        },
+        payload=immutable_payload,
+    )
+    return candidate
+
+
+def _require_authority_event_candidate_provenance(
+    candidate: object,
+    *,
+    expected_authority: str,
+    expected_environment: str,
+    expected_sequence: int,
+    expected_prior_event_digest: str | None,
+    expected_prior_observed_at: str | None = None,
+) -> None:
+    provenance = _require_candidate_provenance(
+        candidate,
+        expected_type=_AuthorityEventCandidate,
+        kind="authority event",
+    )
+    expected_context = tuple(
+        sorted(
+            {
+                "expected_authority": expected_authority,
+                "expected_environment": expected_environment,
+                "expected_sequence": expected_sequence,
+                "expected_prior_event_digest": expected_prior_event_digest,
+                "expected_prior_observed_at": expected_prior_observed_at,
+            }.items()
+        )
+    )
+    if provenance.context != expected_context:
+        raise AuthorityProtocolError("authority event verifier context mismatch")
+    if getattr(candidate, "payload", None) is not provenance.payload:
+        raise AuthorityProtocolError("authority event candidate payload was replaced")
+    document = _strict_json(
+        provenance.canonical_bytes,
+        field="provenance-bound authority event",
+    )
+    _validate_authority_event_document(
+        document,
+        expected_authority=expected_authority,
+        expected_environment=expected_environment,
+        expected_sequence=expected_sequence,
+        expected_prior_event_digest=expected_prior_event_digest,
+        expected_prior_observed_at=expected_prior_observed_at,
+        trusted_now=_trusted_now_utc(),
+    )
+    if document["event_digest"] != provenance.digest:
+        raise AuthorityProtocolError("authority event candidate digest provenance mismatch")
 
 
 def append_authority_event(raw: bytes | str, **expected: Any) -> None:
-    inspect_authority_event_candidate(raw, **expected)
+    candidate = inspect_authority_event_candidate(raw, **expected)
+    _require_authority_event_candidate_provenance(candidate, **expected)
     raise AuthorityProtocolPending(
         "transactional append-only authority event ledger is not provisioned"
     )
@@ -638,13 +954,12 @@ def inspect_trader_webauthn_assertion_candidate(
     expected_exact_four_authorization_digest: str,
     stored_sign_count: int,
     one_use_key_available: bool,
-    now: datetime | None = None,
 ) -> _TraderAssertionCandidate:
     challenge = _strict_json(challenge_raw, field="Trader WebAuthn challenge")
     assertion = _strict_json(assertion_raw, field="Trader WebAuthn assertion")
     _validate_schema(challenge, TRADER_CHALLENGE_SCHEMA)
     _validate_schema(assertion, TRADER_ASSERTION_SCHEMA)
-    current = now or datetime.now(timezone.utc)
+    current = _trusted_now_utc()
     if challenge["environment"] != expected_environment:
         raise AuthorityProtocolError("WebAuthn challenge environment mismatch")
     if challenge["challenge_digest"] != _digest(
@@ -728,13 +1043,81 @@ def inspect_trader_webauthn_assertion_candidate(
         raise AuthorityProtocolError("WebAuthn asserted flags mismatch")
     if assertion["sign_count"] != sign_count:
         raise AuthorityProtocolError("WebAuthn counter claim mismatch")
+    if stored_sign_count > 0 and sign_count == 0:
+        raise AuthorityProtocolError("WebAuthn counter rolled back to counterless mode")
+    if sign_count == 0 and stored_sign_count != 0:
+        raise AuthorityProtocolError(
+            "counterless WebAuthn credentials require a counterless stored state"
+        )
     if sign_count != 0 and sign_count <= stored_sign_count:
         raise AuthorityProtocolError("WebAuthn counter did not advance")
     if assertion["assertion_digest"] != _digest(
         _without(assertion, "assertion_digest")
     ):
         raise AuthorityProtocolError("WebAuthn assertion digest mismatch")
-    return _TraderAssertionCandidate(_deep_immutable(assertion), sign_count)
+    immutable = _deep_immutable(assertion)
+    candidate = _TraderAssertionCandidate(
+        immutable,
+        sign_count,
+        _CANDIDATE_SEAL,
+    )
+    _register_candidate(
+        candidate,
+        kind="Trader WebAuthn assertion",
+        document=immutable,
+        canonical_bytes=_canonical_bytes(assertion),
+        digest=assertion["assertion_digest"],
+        context={
+            "expected_environment": expected_environment,
+            "expected_exact_four_authorization_digest": (
+                expected_exact_four_authorization_digest
+            ),
+            "stored_sign_count": stored_sign_count,
+            "one_use_key_available": one_use_key_available,
+            "challenge_digest": challenge["challenge_digest"],
+        },
+    )
+    return candidate
+
+
+def _require_trader_assertion_candidate_provenance(
+    candidate: object,
+    *,
+    expected_environment: str,
+    expected_exact_four_authorization_digest: str,
+    stored_sign_count: int,
+    one_use_key_available: bool,
+    challenge_digest: str,
+) -> None:
+    provenance = _require_candidate_provenance(
+        candidate,
+        expected_type=_TraderAssertionCandidate,
+        kind="Trader WebAuthn assertion",
+    )
+    expected_context = tuple(
+        sorted(
+            {
+                "expected_environment": expected_environment,
+                "expected_exact_four_authorization_digest": (
+                    expected_exact_four_authorization_digest
+                ),
+                "stored_sign_count": stored_sign_count,
+                "one_use_key_available": one_use_key_available,
+                "challenge_digest": challenge_digest,
+            }.items()
+        )
+    )
+    if provenance.context != expected_context:
+        raise AuthorityProtocolError("Trader candidate verifier context mismatch")
+    document = _strict_json(
+        provenance.canonical_bytes,
+        field="provenance-bound Trader assertion",
+    )
+    if (
+        document["assertion_digest"] != provenance.digest
+        or getattr(candidate, "sign_count", None) != document["sign_count"]
+    ):
+        raise AuthorityProtocolError("Trader candidate digest provenance mismatch")
 
 
 def authorize_trader_webauthn_assertion(
@@ -742,8 +1125,23 @@ def authorize_trader_webauthn_assertion(
     assertion_raw: bytes | str,
     **expected: Any,
 ) -> None:
-    inspect_trader_webauthn_assertion_candidate(
+    candidate = inspect_trader_webauthn_assertion_candidate(
         challenge_raw, assertion_raw, **expected
+    )
+    challenge = _strict_json(challenge_raw, field="Trader WebAuthn challenge")
+    provenance_expected = {
+        key: expected[key]
+        for key in (
+            "expected_environment",
+            "expected_exact_four_authorization_digest",
+            "stored_sign_count",
+            "one_use_key_available",
+        )
+    }
+    _require_trader_assertion_candidate_provenance(
+        candidate,
+        challenge_digest=challenge["challenge_digest"],
+        **provenance_expected,
     )
     raise AuthorityProtocolPending(
         "WebAuthn credential signature verifier and transactional one-use ledger "

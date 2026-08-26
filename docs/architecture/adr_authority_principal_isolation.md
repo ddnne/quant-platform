@@ -59,14 +59,28 @@ identities/keys/stores/sockets/users, wildcard or broad capabilities,
 unauthorized peers, cross-environment resources, cross-signer credential
 access, a file-backed Trader key, or missing human presence.
 
-Strict runtime codecs must independently verify canonical JSON/digests,
-freshness, the signed D1 audit and governed table identity, and exactly one
-read-only SCM_RIGHTS descriptor. Authority events require canonical payload and
-event digests plus an exact sequence/prior chain. WebAuthn requires RP/origin,
-UP, UV, counter, expiry, and one-use enforcement. Until the OS peer credential,
-transactional ledgers, staging signer, and human-approval services exist, the
-public activation entrypoints fail with explicit `PENDING`; shape validation is
-diagnostic only.
+Strict runtime codecs use integer-only canonical JSON: all finite and
+non-finite floats, scalar adapters, duplicate keys, and schema coercions are
+rejected. Decimal evidence must use a governed scaled integer or an upstream
+content digest; authority event payloads are intentionally integer-only.
+Inspected request, handoff, event, and WebAuthn candidates carry
+module-private nominal provenance backed by a weak registry; raw DTOs and a
+copied seal are not positive capabilities. The runtime independently verifies
+canonical digests, freshness, the signed D1 audit and governed table identity,
+and exactly one read-only SCM_RIGHTS descriptor. A received descriptor is made
+non-inheritable immediately, using `MSG_CMSG_CLOEXEC` where available and a
+verified `FD_CLOEXEC` fallback; failure closes the descriptor.
+
+Every security-relevant inspector uses the service-owned clock rather than a
+caller-supplied timestamp. Authority events require canonical payload and event
+digests, a bounded current observation, and an exact sequence/prior digest plus
+monotonic prior `observed_at` chain. Historical reconciliation requires a
+separate protocol and remains PENDING. WebAuthn requires RP/origin, UP, UV,
+expiry, and one-use enforcement; a counting credential cannot roll back to
+zero, while counterless mode is valid only when both stored and new counters
+are zero. Until the OS peer credential, transactional ledgers, staging signer,
+and human-approval services exist, the public activation entrypoints fail with
+explicit `PENDING`; shape validation is diagnostic only.
 
 ## Residual risk
 

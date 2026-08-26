@@ -37,6 +37,11 @@ TABLES = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _module_owned_authority_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runtime, "_trusted_now", lambda: NOW)
+
+
 def _json(value: dict[str, object]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -66,7 +71,6 @@ def _parsed_request(environment: str = "production"):
         _json(_request(environment)),
         transport_authenticated_caller="ops_projection",
         expected_environment=environment,
-        now=NOW,
     )
 
 
@@ -180,7 +184,6 @@ def test_request_binds_transport_caller_environment_digest_and_method_acl() -> N
             _json(request),
             transport_authenticated_caller="coverage_transition",
             expected_environment="production",
-            now=NOW,
         )
     request["target_operation"] = "d1_sync:sync_now"
     request["request_digest"] = runtime._digest(  # noqa: SLF001
@@ -191,7 +194,45 @@ def test_request_binds_transport_caller_environment_digest_and_method_acl() -> N
             _json(request),
             transport_authenticated_caller="ops_projection",
             expected_environment="production",
-            now=NOW,
+        )
+
+
+def test_security_inspectors_do_not_accept_a_caller_supplied_clock(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument 'now'"):
+        runtime.inspect_frozen_mirror_request_candidate(
+            _json(_request()),
+            transport_authenticated_caller="ops_projection",
+            expected_environment="production",
+            now=datetime(2099, 1, 1, tzinfo=timezone.utc),  # type: ignore[call-arg]
+        )
+
+    request = _parsed_request()
+    fd, _ = _sqlite_fd(tmp_path)
+    try:
+        with pytest.raises(TypeError, match="unexpected keyword argument 'now'"):
+            runtime.inspect_frozen_mirror_handoff_candidate(
+                "{}",
+                request=request,
+                received_fd=fd,
+                now=datetime(2099, 1, 1, tzinfo=timezone.utc),  # type: ignore[call-arg]
+            )
+    finally:
+        os.close(fd)
+
+    challenge, assertion = _webauthn_pair()
+    with pytest.raises(TypeError, match="unexpected keyword argument 'now'"):
+        runtime.inspect_trader_webauthn_assertion_candidate(
+            _json(challenge),
+            _json(assertion),
+            expected_environment="production",
+            expected_exact_four_authorization_digest=challenge[
+                "exact_four_authorization_digest"
+            ],
+            stored_sign_count=6,
+            one_use_key_available=True,
+            now=datetime(2099, 1, 1, tzinfo=timezone.utc),  # type: ignore[call-arg]
         )
 
 
@@ -200,6 +241,7 @@ def test_request_binds_transport_caller_environment_digest_and_method_acl() -> N
     [
         '{"schema_version":"x","schema_version":"y"}',
         '{"schema_version":"x","value":NaN}',
+        '{"schema_version":"x","value":1.0}',
     ],
 )
 def test_runtime_codec_rejects_duplicate_and_nonfinite_json(raw: str) -> None:
@@ -208,7 +250,59 @@ def test_runtime_codec_rejects_duplicate_and_nonfinite_json(raw: str) -> None:
             raw,
             transport_authenticated_caller="ops_projection",
             expected_environment="production",
-            now=NOW,
+        )
+
+
+def test_runtime_codec_rejects_finite_float_on_every_protocol_surface(
+    tmp_path: Path,
+) -> None:
+    request = _parsed_request()
+    fd, _ = _sqlite_fd(tmp_path)
+    try:
+        with pytest.raises(runtime.AuthorityProtocolError, match="float"):
+            runtime.inspect_frozen_mirror_handoff_candidate(
+                '{"source_change_seq":7.0}',
+                request=request,
+                received_fd=fd,
+            )
+    finally:
+        os.close(fd)
+
+    with pytest.raises(runtime.AuthorityProtocolError, match="float"):
+        runtime.inspect_authority_event_candidate(
+            '{"sequence":1.0}',
+            expected_authority="d1_sync",
+            expected_environment="staging",
+            expected_sequence=1,
+            expected_prior_event_digest=None,
+        )
+
+    challenge, assertion = _webauthn_pair()
+    assertion_raw = _json(assertion).replace('"sign_count":7', '"sign_count":7.0')
+    with pytest.raises(runtime.AuthorityProtocolError, match="float"):
+        runtime.inspect_trader_webauthn_assertion_candidate(
+            _json(challenge),
+            assertion_raw,
+            expected_environment="production",
+            expected_exact_four_authorization_digest=challenge[
+                "exact_four_authorization_digest"
+            ],
+            stored_sign_count=6,
+            one_use_key_available=True,
+        )
+
+    event = _event()
+    event["payload_json"] = '{"ratio":1.5}'
+    event["event_digest"] = runtime._digest(  # noqa: SLF001
+        runtime._without(event, "event_digest")  # noqa: SLF001
+    )
+    with pytest.raises(runtime.AuthorityProtocolError, match="float"):
+        runtime.inspect_authority_event_candidate(
+            _json(event),
+            expected_authority="d1_sync",
+            expected_environment="staging",
+            expected_sequence=1,
+            expected_prior_event_digest=None,
         )
 
 
@@ -235,7 +329,7 @@ def test_handoff_remeasures_audit_mirror_and_exact_readonly_fd(
             lambda conn: identity,
         )
         candidate = runtime.inspect_frozen_mirror_handoff_candidate(
-            _json(handoff), request=request, received_fd=fd, now=NOW
+            _json(handoff), request=request, received_fd=fd
         )
         assert candidate.audit_document_digest == handoff[
             "signed_audit_document_digest"
@@ -250,13 +344,13 @@ def test_handoff_remeasures_audit_mirror_and_exact_readonly_fd(
         try:
             with pytest.raises(runtime.AuthorityProtocolError, match="descriptor identity"):
                 runtime.inspect_frozen_mirror_handoff_candidate(
-                    _json(handoff), request=request, received_fd=swap_fd, now=NOW
+                    _json(handoff), request=request, received_fd=swap_fd
                 )
         finally:
             os.close(swap_fd)
         with pytest.raises(runtime.AuthorityProtocolPending, match="OS peer"):
             runtime.activate_frozen_mirror_handoff(
-                _json(handoff), request=request, received_fd=fd, now=NOW
+                _json(handoff), request=request, received_fd=fd
             )
     finally:
         os.close(fd)
@@ -271,7 +365,37 @@ def test_shape_valid_staging_handoff_never_becomes_verified(
         handoff, _, _ = _handoff(fd, request, environment="staging")
         with pytest.raises(runtime.AuthorityProtocolPending, match="staging"):
             runtime.inspect_frozen_mirror_handoff_candidate(
-                _json(handoff), request=request, received_fd=fd, now=NOW
+                _json(handoff), request=request, received_fd=fd
+            )
+    finally:
+        os.close(fd)
+
+
+def test_handoff_rejects_forged_request_candidate_even_with_stolen_seal(
+    tmp_path: Path,
+) -> None:
+    fd, _ = _sqlite_fd(tmp_path)
+    try:
+        request = _parsed_request()
+        handoff, _, _ = _handoff(fd, request)
+        forged = runtime._FrozenMirrorRequestCandidate(  # noqa: SLF001
+            request.document,
+            request.digest,
+            request._seal,  # noqa: SLF001
+        )
+        with pytest.raises(runtime.AuthorityProtocolError, match="not issued"):
+            runtime.inspect_frozen_mirror_handoff_candidate(
+                _json(handoff),
+                request=forged,
+                received_fd=fd,
+            )
+
+        object.__setattr__(request, "digest", _sha("f"))
+        with pytest.raises(runtime.AuthorityProtocolError, match="digest provenance"):
+            runtime.inspect_frozen_mirror_handoff_candidate(
+                _json(handoff),
+                request=request,
+                received_fd=fd,
             )
     finally:
         os.close(fd)
@@ -342,6 +466,7 @@ def test_scm_rights_requires_exactly_one_descriptor(tmp_path: Path) -> None:
         try:
             assert payload == b"{}"
             assert os.fstat(received).st_ino == os.fstat(fd).st_ino
+            assert os.get_inheritable(received) is False
         finally:
             os.close(received)
     finally:
@@ -360,6 +485,36 @@ def test_scm_rights_rejects_multiple_descriptors(tmp_path: Path) -> None:
         )
         with pytest.raises(runtime.AuthorityProtocolError, match="exactly one"):
             runtime._recv_exactly_one_fd(receiver)  # noqa: SLF001
+    finally:
+        sender.close()
+        receiver.close()
+        os.close(fd)
+
+
+def test_scm_rights_cloexec_failure_closes_received_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fd, _ = _sqlite_fd(tmp_path)
+    sender, receiver = socket.socketpair()
+    received_numbers: list[int] = []
+
+    def fail_cloexec(received_fd: int, inheritable: bool) -> None:
+        assert inheritable is False
+        received_numbers.append(received_fd)
+        raise OSError("simulated CLOEXEC failure")
+
+    monkeypatch.setattr(runtime.os, "set_inheritable", fail_cloexec)
+    try:
+        sender.sendmsg(
+            [b"{}"],
+            [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [fd]))],
+        )
+        with pytest.raises(runtime.AuthorityProtocolError, match="close-on-exec"):
+            runtime._recv_exactly_one_fd(receiver)  # noqa: SLF001
+        assert len(received_numbers) == 1
+        with pytest.raises(OSError):
+            os.fstat(received_numbers[0])
     finally:
         sender.close()
         receiver.close()
@@ -426,6 +581,82 @@ def test_authority_event_canonical_chain_and_ledger_pending() -> None:
             expected_environment="staging",
             expected_sequence=1,
             expected_prior_event_digest=None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("observed_at", "message"),
+    [
+        ("2026-08-26T00:00:36Z", "future"),
+        ("2026-08-25T23:55:29Z", "too old"),
+    ],
+)
+def test_authority_event_uses_trusted_current_clock(
+    observed_at: str,
+    message: str,
+) -> None:
+    event = _event()
+    event["observed_at"] = observed_at
+    event["event_digest"] = runtime._digest(  # noqa: SLF001
+        runtime._without(event, "event_digest")  # noqa: SLF001
+    )
+    with pytest.raises(runtime.AuthorityProtocolError, match=message):
+        runtime.inspect_authority_event_candidate(
+            _json(event),
+            expected_authority="d1_sync",
+            expected_environment="staging",
+            expected_sequence=1,
+            expected_prior_event_digest=None,
+        )
+
+
+def test_authority_event_rejects_tail_clock_rollback_and_forged_candidate() -> None:
+    event = _event()
+    prior_digest = _sha("9")
+    event["sequence"] = 2
+    event["prior_event_digest"] = prior_digest
+    event["event_digest"] = runtime._digest(  # noqa: SLF001
+        runtime._without(event, "event_digest")  # noqa: SLF001
+    )
+    with pytest.raises(runtime.AuthorityProtocolError, match="ledger tail"):
+        runtime.inspect_authority_event_candidate(
+            _json(event),
+            expected_authority="d1_sync",
+            expected_environment="staging",
+            expected_sequence=2,
+            expected_prior_event_digest=prior_digest,
+        )
+    with pytest.raises(runtime.AuthorityProtocolError, match="moved behind"):
+        runtime.inspect_authority_event_candidate(
+            _json(event),
+            expected_authority="d1_sync",
+            expected_environment="staging",
+            expected_sequence=2,
+            expected_prior_event_digest=prior_digest,
+            expected_prior_observed_at="2026-08-26T00:00:01Z",
+        )
+
+    candidate = runtime.inspect_authority_event_candidate(
+        _json(event),
+        expected_authority="d1_sync",
+        expected_environment="staging",
+        expected_sequence=2,
+        expected_prior_event_digest=prior_digest,
+        expected_prior_observed_at="2026-08-26T00:00:00Z",
+    )
+    forged = runtime._AuthorityEventCandidate(  # noqa: SLF001
+        candidate.document,
+        candidate.payload,
+        candidate._seal,  # noqa: SLF001
+    )
+    with pytest.raises(runtime.AuthorityProtocolError, match="not issued"):
+        runtime._require_authority_event_candidate_provenance(  # noqa: SLF001
+            forged,
+            expected_authority="d1_sync",
+            expected_environment="staging",
+            expected_sequence=2,
+            expected_prior_event_digest=prior_digest,
+            expected_prior_observed_at="2026-08-26T00:00:00Z",
         )
 
 
@@ -502,7 +733,6 @@ def test_webauthn_inspection_binds_exact_four_up_uv_counter_and_stays_pending() 
         ],
         "stored_sign_count": 6,
         "one_use_key_available": True,
-        "now": NOW,
     }
     candidate = runtime.inspect_trader_webauthn_assertion_candidate(
         _json(challenge), _json(assertion), **expected
@@ -527,4 +757,65 @@ def test_webauthn_inspection_binds_exact_four_up_uv_counter_and_stays_pending() 
     with pytest.raises(runtime.AuthorityProtocolError, match="UP and UV"):
         runtime.inspect_trader_webauthn_assertion_candidate(
             _json(challenge), _json(assertion), **expected
+        )
+
+
+def test_webauthn_counterless_mode_cannot_follow_a_counting_credential() -> None:
+    challenge, assertion = _webauthn_pair()
+    encoded = str(assertion["authenticator_data_base64url"])
+    authenticator = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    assertion["authenticator_data_base64url"] = _b64(
+        authenticator[:33] + (0).to_bytes(4, "big")
+    )
+    assertion["sign_count"] = 0
+    assertion["assertion_digest"] = runtime._digest(  # noqa: SLF001
+        runtime._without(assertion, "assertion_digest")  # noqa: SLF001
+    )
+    common = {
+        "expected_environment": "production",
+        "expected_exact_four_authorization_digest": challenge[
+            "exact_four_authorization_digest"
+        ],
+        "one_use_key_available": True,
+    }
+    with pytest.raises(runtime.AuthorityProtocolError, match="rolled back"):
+        runtime.inspect_trader_webauthn_assertion_candidate(
+            _json(challenge),
+            _json(assertion),
+            stored_sign_count=6,
+            **common,
+        )
+
+    candidate = runtime.inspect_trader_webauthn_assertion_candidate(
+        _json(challenge),
+        _json(assertion),
+        stored_sign_count=0,
+        **common,
+    )
+    assert candidate.sign_count == 0
+
+
+def test_trader_candidate_requires_verifier_provenance() -> None:
+    challenge, assertion = _webauthn_pair()
+    expected = {
+        "expected_environment": "production",
+        "expected_exact_four_authorization_digest": challenge[
+            "exact_four_authorization_digest"
+        ],
+        "stored_sign_count": 6,
+        "one_use_key_available": True,
+    }
+    candidate = runtime.inspect_trader_webauthn_assertion_candidate(
+        _json(challenge), _json(assertion), **expected
+    )
+    forged = runtime._TraderAssertionCandidate(  # noqa: SLF001
+        candidate.document,
+        candidate.sign_count,
+        candidate._seal,  # noqa: SLF001
+    )
+    with pytest.raises(runtime.AuthorityProtocolError, match="not issued"):
+        runtime._require_trader_assertion_candidate_provenance(  # noqa: SLF001
+            forged,
+            challenge_digest=challenge["challenge_digest"],
+            **expected,
         )
