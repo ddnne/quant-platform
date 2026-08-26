@@ -117,6 +117,111 @@ def _load_toml(path: Path) -> dict[str, Any]:
 REQUIRED_OBSERVABILITY = {"enabled": True, "head_sampling_rate": 1.0}
 VERSION_METADATA_BINDING = "CF_VERSION_METADATA"
 
+_MODELED_CONFIG_KEYS = (
+    "account_id",
+    "ai",
+    "compatibility_date",
+    "compatibility_flags",
+    "d1_databases",
+    "durable_objects",
+    "kv_namespaces",
+    "main",
+    "migrations",
+    "name",
+    "observability",
+    "placement",
+    "preview_urls",
+    "queues",
+    "r2_buckets",
+    "ratelimits",
+    "route",
+    "routes",
+    "secrets",
+    "services",
+    "tail_consumers",
+    "triggers",
+    "vars",
+    "version_metadata",
+    "workers_dev",
+)
+_NESTED_CONFIG_KEYS = {
+    "durable_objects": ("bindings",),
+    "queues": ("consumers", "producers"),
+    "secrets": ("required",),
+    "triggers": ("crons",),
+}
+CONFIG_KEY_POLICY = {
+    "schema_version": "wrangler-config-key-policy/v1",
+    "modeled": list(_MODELED_CONFIG_KEYS),
+    "selection_only": ["env"],
+    "ignored": [],
+    "nested_modeled": {
+        key: list(value) for key, value in sorted(_NESTED_CONFIG_KEYS.items())
+    },
+    "unclassified": "REJECT",
+}
+
+
+def _validate_config_key_policy(
+    data: dict[str, Any],
+    *,
+    config_path: Path,
+    environment: str,
+) -> None:
+    allowed = set(_MODELED_CONFIG_KEYS)
+    unknown_root = sorted(set(data) - allowed - {"env"})
+    if unknown_root:
+        raise ValueError(
+            f"{config_path}: unclassified top-level Wrangler keys: {unknown_root!r}"
+        )
+
+    envs = data.get("env")
+    if environment == "staging" and envs is not None:
+        raise ValueError(f"{config_path}: staging config must not contain named envs")
+    sections: list[tuple[str, dict[str, Any]]] = [("root", data)]
+    if envs is not None:
+        if not isinstance(envs, dict) or set(envs) != {"production"}:
+            raise ValueError(
+                f"{config_path}: named environments must be exactly ['production']"
+            )
+        production = envs["production"]
+        if not isinstance(production, dict):
+            raise ValueError(f"{config_path}: env.production must be a table")
+        sections.append(("env.production", production))
+
+    for label, section in sections:
+        keys = set(section) - ({"env"} if label == "root" else set())
+        unknown = sorted(keys - allowed)
+        if unknown:
+            raise ValueError(
+                f"{config_path}: {label} has unclassified Wrangler keys: {unknown!r}"
+            )
+        for table, nested_allowed in _NESTED_CONFIG_KEYS.items():
+            value = section.get(table)
+            if value is None:
+                continue
+            if not isinstance(value, dict):
+                raise ValueError(f"{config_path}: {label}.{table} must be a table")
+            nested_unknown = sorted(set(value) - set(nested_allowed))
+            if nested_unknown:
+                raise ValueError(
+                    f"{config_path}: {label}.{table} has unclassified keys: "
+                    f"{nested_unknown!r}"
+                )
+
+
+def _canonical_json_value(value: Any, *, field: str) -> Any:
+    try:
+        encoded = json.dumps(
+            value,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return json.loads(encoded)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{field} must be canonical JSON data") from exc
+
 
 def _json_rows(value: Any) -> list[dict[str, Any]]:
     if not value:
@@ -150,6 +255,11 @@ def _effective_surface(
     named_environment: str | None,
 ) -> dict[str, Any]:
     data = _load_toml(config_path)
+    _validate_config_key_policy(
+        data,
+        config_path=config_path,
+        environment=environment,
+    )
     section: dict[str, Any]
     if named_environment is None:
         section = data
@@ -176,18 +286,29 @@ def _effective_surface(
     package = json.loads((WORKER_ROOT / worker / "package.json").read_text(encoding="utf-8"))
     dev_dependencies = package.get("devDependencies") or {}
     pinned_toolchain = {name: dev_dependencies.get(name) for name in TOOLCHAIN}
-    observability = section.get("observability")
+    observability = scalar("observability")
     version_metadata = section.get("version_metadata")
+    account_id = scalar("account_id")
+    if account_id is not None and (
+        not isinstance(account_id, str) or not account_id.strip()
+    ):
+        raise ValueError(f"{config_path}: account_id must be a non-empty string")
+    route = scalar("route")
+    routes = scalar("routes", default=[]) or []
+    if route is not None and routes:
+        raise ValueError(f"{config_path}: route and routes are mutually exclusive")
 
     return {
         "config": str(config_path.relative_to(ROOT)),
+        "account_id": account_id,
         "name": scalar("name"),
         "main": scalar("main"),
         "compatibility_date": scalar("compatibility_date"),
         "compatibility_flags": sorted(scalar("compatibility_flags", default=[]) or []),
         "workers_dev": bool(scalar("workers_dev", default=True)),
         "preview_urls": bool(scalar("preview_urls", default=True)),
-        "routes": _json_rows(section.get("routes")),
+        "routes": _json_rows(routes),
+        "route": _canonical_json_value(route, field="route"),
         "d1_databases": _json_rows(section.get("d1_databases")),
         "r2_buckets": _json_rows(section.get("r2_buckets")),
         "kv_namespaces": _json_rows(section.get("kv_namespaces")),
@@ -195,10 +316,16 @@ def _effective_surface(
         "queue_consumers": _json_rows(queues.get("consumers")),
         "durable_objects": _json_rows(durable_objects.get("bindings")),
         "services": _json_rows(section.get("services")),
+        "tail_consumers": _json_rows(section.get("tail_consumers")),
         "ratelimits": _json_rows(section.get("ratelimits")),
         "ai": dict(sorted((section.get("ai") or {}).items())),
+        "placement": _canonical_json_value(
+            scalar("placement", default={}) or {}, field="placement"
+        ),
         "migrations": _json_rows(migrations),
-        "crons": sorted(((section.get("triggers") or {}).get("crons") or [])),
+        "crons": sorted(
+            ((scalar("triggers", default={}) or {}).get("crons") or [])
+        ),
         "vars": dict(sorted((section.get("vars") or {}).items())),
         "secret_names": _secret_names(section.get("secrets")),
         "toolchain": pinned_toolchain,
@@ -235,8 +362,9 @@ def build_manifest() -> dict[str, Any]:
             ),
         }
     manifest = {
-        "schema_version": "cloudflare-active-worker-bindings/v1",
+        "schema_version": "cloudflare-active-worker-bindings/v2",
         "active_workers": list(ACTIVE_WORKERS),
+        "config_key_policy": CONFIG_KEY_POLICY,
         "toolchain_policy": TOOLCHAIN,
         "workers": workers,
     }
@@ -245,6 +373,22 @@ def build_manifest() -> dict[str, Any]:
 
 
 def validate_manifest(manifest: dict[str, Any]) -> None:
+    if set(manifest) != {
+        "active_workers",
+        "config_key_policy",
+        "schema_version",
+        "toolchain_policy",
+        "workers",
+    }:
+        raise ValueError("binding manifest fields are not closed")
+    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v2":
+        raise ValueError("binding manifest schema_version drift")
+    if manifest["config_key_policy"] != CONFIG_KEY_POLICY:
+        raise ValueError("Wrangler config-key policy drift")
+    if manifest["active_workers"] != list(ACTIVE_WORKERS):
+        raise ValueError("active Worker inventory digest surface drift")
+    if manifest["toolchain_policy"] != TOOLCHAIN:
+        raise ValueError("binding manifest toolchain policy drift")
     workers = manifest["workers"]
     if tuple(workers) != ACTIVE_WORKERS:
         raise ValueError("active Worker order or membership drift")

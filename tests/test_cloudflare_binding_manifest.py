@@ -57,6 +57,55 @@ def test_manifest_is_fail_closed_for_toolchain_drift() -> None:
         manifest_module.validate_manifest(drifted)
 
 
+def test_previously_ignored_wrangler_fields_are_modeled(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = manifest_module.WORKER_ROOT / "ingestion-premium" / "wrangler.toml"
+    data = manifest_module._load_toml(config)  # noqa: SLF001
+    data["account_id"] = "account-for-test"
+    data["route"] = {"pattern": "example.test/*", "zone_name": "example.test"}
+    data["tail_consumers"] = [{"service": "audit-tail"}]
+    data["placement"] = {"mode": "smart"}
+    monkeypatch.setattr(manifest_module, "_load_toml", lambda _path: data)
+
+    surface = manifest_module._effective_surface(  # noqa: SLF001
+        worker="ingestion-premium",
+        config_path=config,
+        environment="base",
+        named_environment=None,
+    )
+    assert surface["account_id"] == "account-for-test"
+    assert surface["route"] == {
+        "pattern": "example.test/*",
+        "zone_name": "example.test",
+    }
+    assert surface["tail_consumers"] == [{"service": "audit-tail"}]
+    assert surface["placement"] == {"mode": "smart"}
+
+    production = manifest_module._effective_surface(  # noqa: SLF001
+        worker="ingestion-premium",
+        config_path=config,
+        environment="production",
+        named_environment="production",
+    )
+    assert production["account_id"] == "account-for-test"
+    assert production["route"] == surface["route"]
+    assert production["placement"] == surface["placement"]
+    assert production["tail_consumers"] == []
+
+
+def test_unclassified_wrangler_key_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = manifest_module.WORKER_ROOT / "ingestion-premium" / "wrangler.toml"
+    data = manifest_module._load_toml(config)  # noqa: SLF001
+    data["future_unmodeled_binding"] = {"binding": "ESCAPED"}
+    monkeypatch.setattr(manifest_module, "_load_toml", lambda _path: data)
+    with pytest.raises(ValueError, match="unclassified top-level Wrangler keys"):
+        manifest_module._effective_surface(  # noqa: SLF001
+            worker="ingestion-premium",
+            config_path=config,
+            environment="base",
+            named_environment=None,
+        )
+
+
 def test_removed_observability_fails_closed() -> None:
     drifted = copy.deepcopy(manifest_module.build_manifest())
     drifted["workers"]["ingestion-jsda"]["production"]["observability"] = {
