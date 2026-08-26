@@ -6,6 +6,7 @@ READY, promotion, a next generation, or the legacy 2,000-catalog evaluation.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Sequence
 
 from research.artifacts import ExperimentPlan
@@ -118,10 +119,26 @@ def _require_signed_readiness(
 
 def _require_canonical_controlled_budget_policy(
     budget: ResearchBudgetCapability,
-) -> ControlledPilotPolicyPin:
+) -> tuple[ControlledPilotPolicyPin, ResearchBudgetCapability]:
     """Treat the ledger as storage while deriving limits from the pinned policy."""
 
     policy = load_controlled_pilot_policy()
+    if type(budget) is not ResearchBudgetCapability:
+        raise MassResearchDisabledError(
+            "controlled pilot budget requires exact ResearchBudgetCapability"
+        )
+    if (
+        type(budget.budget_id) is not str
+        or not budget.budget_id.strip()
+        or budget.budget_id != budget.budget_id.strip()
+    ):
+        raise MassResearchDisabledError(
+            "controlled pilot budget_id must be an exact non-empty string"
+        )
+    if type(budget.ledger_path) is not type(Path()):
+        raise MassResearchDisabledError(
+            "controlled pilot ledger_path must be an exact platform Path"
+        )
     limits = budget.limits
     if type(limits) is not OfflineExperimentBudget:
         raise MassResearchDisabledError(
@@ -139,12 +156,19 @@ def _require_canonical_controlled_budget_policy(
         "lease_ttl_seconds": policy.lease_ttl_seconds,
         "automatic_promotion": policy.automatic_promotion,
     }
-    if any(getattr(limits, name) != value for name, value in expected.items()):
+    if limits != OfflineExperimentBudget() or any(
+        getattr(limits, name) != value for name, value in expected.items()
+    ):
         raise MassResearchDisabledError(
             "controlled pilot rejects caller budget overrides; canonical "
             "ControlledPilotPolicyPin is required"
         )
-    return policy
+    clean_budget = ResearchBudgetCapability(
+        budget_id=budget.budget_id,
+        ledger_path=Path(budget.ledger_path),
+        limits=OfflineExperimentBudget(),
+    )
+    return policy, clean_budget
 
 
 class ControlledPilotScheduler:
@@ -187,9 +211,12 @@ class ControlledPilotScheduler:
                 "operator_override cannot substitute; agent cannot mint "
                 "operator_override"
             )
-        if not isinstance(budget, ResearchBudgetCapability):
+        if type(budget) is not ResearchBudgetCapability:
             raise MassResearchDisabledError("ResearchBudgetCapability required")
-        self._controlled_policy = _require_canonical_controlled_budget_policy(budget)
+        (
+            self._controlled_policy,
+            controlled_budget,
+        ) = _require_canonical_controlled_budget_policy(budget)
         if type(plan) is not ExperimentPlan:
             raise MassResearchDisabledError("ExperimentPlan required")
         from research.ready_manifest import load_exact_four_pilot_ready_binding
@@ -206,7 +233,7 @@ class ControlledPilotScheduler:
             readiness,
             binding=binding,
         )
-        self._budget_ledger = budget
+        self._budget_ledger = controlled_budget
         self._plan = canonical_plan
         self._evaluation_service = _require_authorized_evaluation_service(
             authorized_evaluation_service

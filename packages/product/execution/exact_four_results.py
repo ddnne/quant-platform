@@ -9,6 +9,7 @@ explicitly PENDING.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timezone
 from typing import Any
 
 from execution.exact_four_binding import load_exact_four_execution_binding
@@ -16,15 +17,18 @@ from execution.exact_four_claims import (
     ControlledExecutionClaimsV2,
     PilotReadinessAttestationClaimsV2,
     TraderAuthorizationClaimsV2,
-    _validate_current_claim_chain,
+    _validate_claim_chain_structural,
+    _validate_current_claim_chain_at,
 )
 from execution.exact_four_codec import (
     PILOT_EXECUTION_MODE,
     ExactFourAuthorityContractError,
+    _parsed_timestamp,
     _require_digest,
     _require_exact_json,
     _require_text,
     _strict_json_loads,
+    _trusted_utc_now,
     canonical_authority_digest,
 )
 from execution.exact_four_protocol import (
@@ -286,6 +290,9 @@ class ExactFourPilotResultManifestV2:
     snapshot_id: str
     ready_manifest_digest: str
     immutable_snapshot_digest: str
+    execution_issued_at: str
+    execution_expires_at: str
+    completed_at: str
     paper_results: tuple[PaperResultEvidenceV2, ...]
     risk_results: tuple[RiskResultEvidenceV2, ...]
     aggregate_selection: AggregateSelectionEvidenceV2
@@ -339,6 +346,29 @@ class ExactFourPilotResultManifestV2:
             "immutable_snapshot_digest",
         ):
             _require_digest(getattr(self, name), f"result manifest {name}")
+        execution_issued = _parsed_timestamp(
+            self.execution_issued_at,
+            "result manifest execution_issued_at",
+        )
+        execution_expires = _parsed_timestamp(
+            self.execution_expires_at,
+            "result manifest execution_expires_at",
+        )
+        completed = _parsed_timestamp(
+            self.completed_at,
+            "result manifest completed_at",
+        )
+        if (
+            completed.utcoffset() != timezone.utc.utcoffset(completed)
+            or completed.isoformat() != self.completed_at
+        ):
+            raise ExactFourAuthorityContractError(
+                "result completion must be a canonical UTC timestamp"
+            )
+        if not execution_issued <= completed < execution_expires:
+            raise ExactFourAuthorityContractError(
+                "result completion must be inside the controlled execution window"
+            )
         papers = tuple(self.paper_results)
         risks = tuple(self.risk_results)
         if (
@@ -458,6 +488,9 @@ class ExactFourPilotResultManifestV2:
             "snapshot_id": self.snapshot_id,
             "ready_manifest_digest": self.ready_manifest_digest,
             "immutable_snapshot_digest": self.immutable_snapshot_digest,
+            "execution_issued_at": self.execution_issued_at,
+            "execution_expires_at": self.execution_expires_at,
+            "completed_at": self.completed_at,
             "paper_results": [item.to_dict() for item in self.paper_results],
             "risk_results": [item.to_dict() for item in self.risk_results],
             "aggregate_selection": self.aggregate_selection.to_dict(),
@@ -489,7 +522,14 @@ def build_exact_four_pilot_result_manifest_v2(
 ) -> ExactFourPilotResultManifestV2:
     """Build evidence from a current actual authority-parent chain."""
 
-    _validate_current_claim_chain(readiness, trader, execution)
+    completion_clock = _trusted_utc_now().astimezone(timezone.utc)
+    _validate_current_claim_chain_at(
+        readiness,
+        trader,
+        execution,
+        now=completion_clock,
+    )
+    completed_at = completion_clock.isoformat()
     exact_four = readiness.exact_four
     snapshot = readiness.snapshot
     manifest = ExactFourPilotResultManifestV2(
@@ -511,6 +551,9 @@ def build_exact_four_pilot_result_manifest_v2(
         snapshot_id=snapshot.snapshot_id,
         ready_manifest_digest=snapshot.ready_manifest_digest,
         immutable_snapshot_digest=snapshot.immutable_snapshot_digest,
+        execution_issued_at=execution.issued_at,
+        execution_expires_at=execution.expires_at,
+        completed_at=completed_at,
         paper_results=paper_results,
         risk_results=risk_results,
         aggregate_selection=aggregate_selection,
@@ -538,7 +581,7 @@ def validate_exact_four_pilot_result_manifest_v2(
         raise ExactFourAuthorityContractError(
             "an exact ExactFourPilotResultManifestV2 is required"
         )
-    _validate_current_claim_chain(readiness, trader, execution)
+    _validate_claim_chain_structural(readiness, trader, execution)
     manifest.__post_init__()
     if (
         manifest.pilot_run_id != readiness.pilot_run_id
@@ -552,9 +595,11 @@ def validate_exact_four_pilot_result_manifest_v2(
         != readiness.snapshot.ready_manifest_digest
         or manifest.immutable_snapshot_digest
         != readiness.snapshot.immutable_snapshot_digest
+        or manifest.execution_issued_at != execution.issued_at
+        or manifest.execution_expires_at != execution.expires_at
     ):
         raise ExactFourAuthorityContractError(
-            "result manifest does not bind the supplied current authority chain"
+            "result manifest does not bind the supplied authority parent chain"
         )
     document = manifest.to_dict()
     _validate_result_schema_document(document)
@@ -565,6 +610,38 @@ def validate_exact_four_pilot_result_manifest_v2(
             "result manifest content id is invalid"
         )
     return manifest.manifest_id
+
+
+def validate_current_exact_four_pilot_result_manifest_v2(
+    manifest: Any,
+    *,
+    readiness: PilotReadinessAttestationClaimsV2,
+    trader: TraderAuthorizationClaimsV2,
+    execution: ControlledExecutionClaimsV2,
+) -> str:
+    """Current writer-side validation; historical audit uses the base validator."""
+
+    current = _trusted_utc_now().astimezone(timezone.utc)
+    _validate_current_claim_chain_at(
+        readiness,
+        trader,
+        execution,
+        now=current,
+    )
+    content_id = validate_exact_four_pilot_result_manifest_v2(
+        manifest,
+        readiness=readiness,
+        trader=trader,
+        execution=execution,
+    )
+    if _parsed_timestamp(
+        manifest.completed_at,
+        "result manifest completed_at",
+    ) > current:
+        raise ExactFourAuthorityContractError(
+            "result completion cannot be in the future at the trusted UTC clock"
+        )
+    return content_id
 
 
 def _validate_result_schema_document(document: dict[str, Any]) -> None:
@@ -702,5 +779,6 @@ __all__ = [
     "load_exact_four_result_schema",
     "parse_and_validate_exact_four_pilot_result_manifest_v2",
     "result_writer_state",
+    "validate_current_exact_four_pilot_result_manifest_v2",
     "validate_exact_four_pilot_result_manifest_v2",
 ]

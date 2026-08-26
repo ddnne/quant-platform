@@ -225,6 +225,31 @@ def test_controlled_scheduler_rejects_offline_caller_budget_overrides(
         _construct(tmp_path, budget=overridden)
 
 
+def test_controlled_scheduler_rejects_budget_subclass_and_clones_exact_input(
+    tmp_path: Path,
+) -> None:
+    class OverridingBudgetCapability(ResearchBudgetCapability):
+        def consume(self, **amounts: int) -> None:
+            del amounts
+
+    subclassed = OverridingBudgetCapability(
+        "subclassed-budget",
+        tmp_path / "subclassed.sqlite",
+        OfflineExperimentBudget(),
+    )
+    with pytest.raises(MassResearchDisabledError, match="ResearchBudgetCapability"):
+        _construct(tmp_path, budget=subclassed)
+
+    caller_budget = _budget(tmp_path)
+    scheduler = _construct(tmp_path, budget=caller_budget)
+    original_ledger_path = scheduler._budget_ledger.ledger_path
+    object.__setattr__(caller_budget, "ledger_path", tmp_path / "caller-mutated.sqlite")
+    assert scheduler._budget_ledger is not caller_budget
+    assert scheduler._budget_ledger.ledger_path == original_ledger_path
+    assert scheduler._budget_ledger.ledger_path != caller_budget.ledger_path
+    assert type(scheduler._budget_ledger) is ResearchBudgetCapability
+
+
 def test_construct_fails_without_plan(tmp_path: Path) -> None:
     with pytest.raises(MassResearchDisabledError, match="ExperimentPlan"):
         _construct(tmp_path, plan=None)

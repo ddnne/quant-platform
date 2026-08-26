@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import execution.exact_four_results as results_module
 from execution.exact_four_authority_contract import (
     ControlledExecutionClaimsV2,
     ExactFourAuthorityContractError,
@@ -33,6 +35,7 @@ from execution.exact_four_results import (
     exact_four_result_schema_path,
     load_exact_four_result_schema,
     parse_and_validate_exact_four_pilot_result_manifest_v2,
+    validate_current_exact_four_pilot_result_manifest_v2,
     validate_exact_four_pilot_result_manifest_v2,
 )
 
@@ -204,12 +207,84 @@ def test_result_manifest_binds_exact_four_authority_and_artifact_chain() -> None
     assert manifest.execution_request_id == execution.request_id
     assert manifest.lease_id == execution.lease_id
     assert manifest.idempotency_key == execution.idempotency_key
+    assert manifest.execution_issued_at == execution.issued_at
+    assert manifest.execution_expires_at == execution.expires_at
+    assert datetime.fromisoformat(execution.issued_at) <= datetime.fromisoformat(
+        manifest.completed_at
+    ) <= datetime.fromisoformat(execution.expires_at)
     assert validate_exact_four_pilot_result_manifest_v2(
         manifest,
         readiness=readiness,
         trader=trader,
         execution=execution,
     ) == manifest.manifest_id
+
+
+def test_historical_result_audit_survives_parent_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    readiness, trader, execution, manifest = _manifest()
+    monkeypatch.setattr(
+        results_module,
+        "_trusted_utc_now",
+        lambda: datetime(2099, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert validate_exact_four_pilot_result_manifest_v2(
+        manifest,
+        readiness=readiness,
+        trader=trader,
+        execution=execution,
+    ) == manifest.manifest_id
+    parsed = parse_and_validate_exact_four_pilot_result_manifest_v2(
+        json.dumps(manifest.to_dict(), separators=(",", ":")),
+        readiness=readiness,
+        trader=trader,
+        execution=execution,
+    )
+    assert parsed == manifest
+    with pytest.raises(ExactFourAuthorityContractError, match="expired"):
+        validate_current_exact_four_pilot_result_manifest_v2(
+            manifest,
+            readiness=readiness,
+            trader=trader,
+            execution=execution,
+        )
+
+
+def test_result_completion_is_writer_clock_derived_and_inside_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    readiness, trader, execution, manifest = _manifest()
+    before = (
+        datetime.fromisoformat(execution.issued_at) - timedelta(microseconds=1)
+    ).isoformat()
+    after = (
+        datetime.fromisoformat(execution.expires_at) + timedelta(microseconds=1)
+    ).isoformat()
+
+    for completed_at in (before, execution.expires_at, after):
+        with pytest.raises(ExactFourAuthorityContractError, match="execution window"):
+            replace(manifest, completed_at=completed_at)
+    with pytest.raises(ExactFourAuthorityContractError, match="canonical UTC"):
+        replace(manifest, completed_at=manifest.completed_at.replace("+00:00", "Z"))
+
+    fixed = datetime.now(timezone.utc)
+    monkeypatch.setattr(results_module, "_trusted_utc_now", lambda: fixed)
+    papers, risks, selection, knowledge = _evidence()
+    rebuilt = build_exact_four_pilot_result_manifest_v2(
+        readiness,
+        trader,
+        execution,
+        paper_results=papers,
+        risk_results=risks,
+        aggregate_selection=selection,
+        knowledge_artifact=knowledge,
+    )
+    assert rebuilt.completed_at == fixed.isoformat()
+    assert "completed_at" not in inspect.signature(
+        build_exact_four_pilot_result_manifest_v2
+    ).parameters
 
 
 def test_result_schema_is_pinned_and_untrusted_round_trip_is_parent_bound() -> None:

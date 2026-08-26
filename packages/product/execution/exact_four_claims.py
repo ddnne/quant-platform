@@ -13,6 +13,7 @@ promotion.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from execution.exact_four_binding import (
@@ -947,13 +948,14 @@ def _validate_claim_chain_structural(
     )
 
 
-def _validate_current_claim_chain(
+def _validate_current_claim_chain_at(
     readiness: PilotReadinessAttestationClaimsV2,
     trader: TraderAuthorizationClaimsV2,
     execution: ControlledExecutionClaimsV2,
+    *,
+    now: datetime,
 ) -> str:
     chain_digest = _validate_claim_chain_structural(readiness, trader, execution)
-    now = _trusted_utc_now()
     _validate_current_readiness_trader(readiness, trader, now=now)
     _require_current_window(
         execution.issued_at,
@@ -962,6 +964,19 @@ def _validate_current_claim_chain(
         now=now,
     )
     return chain_digest
+
+
+def _validate_current_claim_chain(
+    readiness: PilotReadinessAttestationClaimsV2,
+    trader: TraderAuthorizationClaimsV2,
+    execution: ControlledExecutionClaimsV2,
+) -> str:
+    return _validate_current_claim_chain_at(
+        readiness,
+        trader,
+        execution,
+        now=_trusted_utc_now(),
+    )
 
 
 def validate_exact_four_authority_claim_chain_v2(

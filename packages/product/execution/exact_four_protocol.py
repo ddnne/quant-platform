@@ -30,10 +30,10 @@ EXACT_FOUR_RESULT_SCHEMA_REL = (
     Path("specs") / "ready" / "exact_four_result_manifest.schema.json"
 )
 PINNED_EXACT_FOUR_RESULT_SCHEMA_DIGEST = (
-    "sha256:4b90686e23344ddba965a74c1fa317d016d81b68ebeee7c83cfacb4850e7551a"
+    "sha256:01ceaab94741e1c2f29c530a6af0208b10e10bf1d24b176ea9b8d8a6afada0bd"
 )
 PINNED_EXACT_FOUR_RESULT_SCHEMA_RAW_DIGEST = (
-    "sha256:049d2f8ec49d0c759dd78c6c6b85d78ce4521299829c825c406cb1ae46b08651"
+    "sha256:df3b08e1654a9017206cca79bf51e9918307fcafc3f77e104add98386bac19f3"
 )
 
 
