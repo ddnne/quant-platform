@@ -958,7 +958,7 @@ def _latest_export_sync_row(conn: sqlite3.Connection) -> dict[str, object] | Non
     if not rows:
         return None
 
-    current: list[tuple[datetime, dict[str, object], dict[str, object]]] = []
+    current: list[tuple[datetime, dict[str, object], Mapping[str, object]]] = []
     for row in rows:
         try:
             envelope = _verified_sync_envelope_from_row(
@@ -986,7 +986,7 @@ def _latest_export_sync_row(conn: sqlite3.Connection) -> dict[str, object] | Non
     if len(current) > 1 and current[-2][0] == current[-1][0]:
         raise ValueError("signed D1 sync audit issuance order is ambiguous")
 
-    eligible: list[tuple[datetime, dict[str, object], dict[str, object]]] = []
+    eligible: list[tuple[datetime, dict[str, object], Mapping[str, object]]] = []
     seen_digests: set[object] = set()
     previous_cursor = -1
     for issued_at, row, envelope in current:
@@ -1016,21 +1016,23 @@ def _verified_sync_envelope_from_row(
     recompute_local: bool,
     require_fresh: bool = True,
     eligibility: str = "current",
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     from ops.d1_sync_signing import (
         GOVERNED_AUTHORITY_ID,
-        _verify_signed_d1_sync_audit,
-        d1_sync_digest,
+        _verify_signed_d1_sync_audit_document,
     )
 
+    if type(row) is not dict:
+        raise TypeError("D1 sync audit row must be one exact dict")
+    row = dict.copy(row)
     document_text = row.get("signed_evidence_json")
     if not isinstance(document_text, str):
         raise ValueError("latest D1 sync audit is unsigned")
-    document = json.loads(document_text)
-    envelope = _verify_signed_d1_sync_audit(
-        document, require_fresh=require_fresh, eligibility=eligibility
+    verified_document = _verify_signed_d1_sync_audit_document(
+        document_text, require_fresh=require_fresh, eligibility=eligibility
     )
-    audit_digest = d1_sync_digest(document)
+    envelope = verified_document.envelope
+    audit_digest = verified_document.document_digest
     expected_counts = envelope["table_counts"]
     if set(expected_counts) != set(DEFAULT_TABLES):
         raise ValueError("signed D1 sync audit inventory membership drift")
@@ -1051,8 +1053,8 @@ def _verified_sync_envelope_from_row(
     if (
         row.get("status") != "COMPLETE"
         or row.get("audit_digest") != audit_digest
-        or row.get("issuer_key_id") != document["issuer_key_id"]
-        or row.get("signature") != document["signature"]
+        or row.get("issuer_key_id") != verified_document.issuer_key_id
+        or row.get("signature") != verified_document.signature
         or row_counts != expected_counts
         or row_bindings
         != {
@@ -1086,12 +1088,11 @@ def _verified_sync_envelope_from_row(
 def _mark_authenticated_export_complete(
     store: SqliteStore,
     authenticated_export,
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     """Persist one single-use capability; there is no caller evidence input."""
     from ops.d1_sync_signing import (
         _seal_authenticated_wrangler_export,
-        d1_sync_digest,
-        verify_signed_d1_sync_audit,
+        _verify_signed_d1_sync_audit_document,
     )
 
     _ensure_export_sync_audit(store)
@@ -1099,13 +1100,22 @@ def _mark_authenticated_export_complete(
     audit_digest, issuer_key_id, signature, document = (
         sealed._consume_for_persistence()  # noqa: SLF001
     )
-    envelope = verify_signed_d1_sync_audit(document)
-    if audit_digest != d1_sync_digest(document):
+    verified_document = _verify_signed_d1_sync_audit_document(
+        document, require_fresh=True, eligibility="current"
+    )
+    envelope = verified_document.envelope
+    if (
+        audit_digest != verified_document.document_digest
+        or issuer_key_id != verified_document.issuer_key_id
+        or signature != verified_document.signature
+    ):
         raise ValueError("authenticated D1 sync audit digest mismatch")
     if set(envelope["table_counts"]) != set(DEFAULT_TABLES):
         raise ValueError("authenticated D1 sync audit inventory membership drift")
     observed_content, observed_schema, observed_counts = (
-        _private_export.governed_content_identity(store._conn, DEFAULT_TABLES)  # noqa: SLF001
+        _private_export.governed_content_identity(  # noqa: SLF001
+            store._conn, DEFAULT_TABLES
+        )
     )
     if (
         observed_content != envelope["local_content_digest"]
@@ -1195,7 +1205,9 @@ def _mark_authenticated_export_complete(
             envelope["source_content_digest"],
             envelope["local_content_digest"],
             json.dumps(
-                envelope["table_counts"], sort_keys=True, separators=(",", ":")
+                dict(envelope["table_counts"]),
+                sort_keys=True,
+                separators=(",", ":"),
             ),
             envelope["authority_id"],
             envelope["schema_digest"],
@@ -1203,7 +1215,7 @@ def _mark_authenticated_export_complete(
             audit_digest,
             issuer_key_id,
             signature,
-            json.dumps(document, sort_keys=True, separators=(",", ":")),
+            verified_document.canonical_document_json,
         ),
     )
     store._conn.commit()  # noqa: SLF001
@@ -1212,7 +1224,7 @@ def _mark_authenticated_export_complete(
 
 def _latest_trusted_sync_audit(
     store: SqliteStore,
-) -> tuple[dict[str, object], dict[str, object]] | None:
+) -> tuple[dict[str, object], Mapping[str, object]] | None:
     _ensure_export_sync_audit(store)
     row = _latest_export_sync_row(store._conn)  # noqa: SLF001
     if row is None:
@@ -1228,7 +1240,7 @@ def _latest_trusted_sync_audit(
 
 def _require_trusted_incremental_base(
     store: SqliteStore,
-) -> tuple[dict[str, object], dict[str, object]]:
+) -> tuple[dict[str, object], Mapping[str, object]]:
     verified = _latest_trusted_sync_audit(store)
     if verified is None:
         raise ValueError(

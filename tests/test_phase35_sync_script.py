@@ -364,6 +364,40 @@ def test_structural_schema_manifest_rejects_relaxed_pk_and_unique_constraints(
         local.close()
 
 
+def test_schema_reconciliation_normalizes_only_local_invalidation_trigger(
+    sync_module,
+):
+    source = sqlite3.connect(":memory:")
+    local = sqlite3.connect(":memory:")
+    try:
+        schema = (
+            "CREATE TABLE governed (id INTEGER PRIMARY KEY, value TEXT NOT NULL);"
+            "CREATE INDEX ix_governed_value ON governed(value);"
+            "INSERT INTO governed VALUES (1,'A');"
+        )
+        source.executescript(schema)
+        local.executescript(
+            schema
+            + "CREATE TRIGGER invalidate_snapshot_governed "
+            "AFTER UPDATE ON governed BEGIN SELECT NEW.id; END;"
+        )
+
+        content, source_schema, local_schema, counts = (
+            sync_module._private_export._exact_source_local_reconciliation(
+                source, local, ("governed",)
+            )
+        )
+
+        assert content.startswith("sha256:")
+        assert counts == {"governed": 1}
+        assert source_schema.startswith("sha256:")
+        assert local_schema.startswith("sha256:")
+        assert source_schema != local_schema
+    finally:
+        source.close()
+        local.close()
+
+
 def test_private_export_incremental_replay_is_idempotent_and_monotonic(
     tmp_path, sync_module
 ):

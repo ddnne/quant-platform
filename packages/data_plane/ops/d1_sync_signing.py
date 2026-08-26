@@ -8,10 +8,13 @@ signs the entire D1 generation.  This module never loads private material.
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import math
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from cryptography.exceptions import InvalidSignature
@@ -26,11 +29,23 @@ GOVERNED_D1_ID = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 GOVERNED_AUTHORITY_ID = f"cloudflare-d1:{GOVERNED_D1_ID}"
 D1_SYNC_AUDIT_MAX_AGE_SECONDS = 1_800
 D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS = 60
-DEFAULT_VERIFY_REGISTRY_PATH = (
+_PINNED_VERIFY_REGISTRY_PATH = (
     Path(__file__).resolve().parents[3]
     / "specs"
     / "d1_sync"
     / "verify_public_keys.json"
+)
+PINNED_D1_SYNC_REGISTRY_GENERATION = 2
+# These values are an independent code pin. Replacing or redirecting the JSON
+# cannot replace the production trust root without a reviewed code change.
+PINNED_D1_SYNC_PRIOR_REGISTRY_DIGEST = (
+    "sha256:6e632d3e2d5753b0ab7ea5b1959084c78c44d764805bd69b952def2dac7bd0c7"
+)
+PINNED_D1_SYNC_REGISTRY_BODY_DIGEST = (
+    "sha256:90b0e08c7098b3662f1ea805ffdf7acfc0b22304795f013623d7232fdb933644"
+)
+PINNED_D1_SYNC_REGISTRY_DOCUMENT_DIGEST = (
+    "sha256:e469f909faddcfbf8702f07a3a9f6bce5605b4b1252433bee31675c3ba67a60a"
 )
 
 _ENVELOPE_FIELDS = frozenset(
@@ -59,19 +74,50 @@ _ENVELOPE_FIELDS = frozenset(
 _DOCUMENT_FIELDS = frozenset(
     {"schema_version", "algorithm", "issuer_key_id", "envelope", "signature"}
 )
+_REGISTRY_FIELDS = frozenset(
+    {
+        "schema_version",
+        "purpose",
+        "generation",
+        "authority_status",
+        "prior_registry_digest",
+        "keys",
+        "registry_digest",
+    }
+)
+_REGISTRY_KEY_FIELDS = frozenset(
+    {"key_id", "algorithm", "public_key_base64", "status"}
+)
 
 
 class D1SyncAuditError(RuntimeError):
     """A D1 sync signing key, audit, or public registry is invalid."""
 
 
+@dataclass(frozen=True, slots=True)
+class _VerifiedD1SyncAuditDocument:
+    """Private immutable facts from one strict decode and signature check."""
+
+    envelope: Mapping[str, Any]
+    issuer_key_id: str
+    signature: str
+    document_digest: str
+    canonical_document_json: str
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def canonical_d1_sync_bytes(value: Mapping[str, Any]) -> bytes:
+def canonical_d1_sync_bytes(value: dict[str, Any]) -> bytes:
+    """Canonicalize one exact JSON object; adapters are not an input contract."""
+
+    if type(value) is not dict:
+        raise TypeError("D1 sync canonical input must be one exact dict")
+    frozen = _copy_exact_json(value, field="D1 sync canonical input")
+    assert type(frozen) is dict
     return json.dumps(
-        dict(value),
+        frozen,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
@@ -79,20 +125,24 @@ def canonical_d1_sync_bytes(value: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def d1_sync_digest(value: Mapping[str, Any]) -> str:
+def d1_sync_digest(value: dict[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(canonical_d1_sync_bytes(value)).hexdigest()
 
 
 def _is_digest(value: object) -> bool:
-    text = str(value or "")
-    return len(text) == 71 and text.startswith("sha256:") and all(
-        character in "0123456789abcdef" for character in text[7:]
+    return (
+        type(value) is str
+        and len(value) == 71
+        and value.startswith("sha256:")
+        and all(character in "0123456789abcdef" for character in value[7:])
     )
 
 
 def _decode_public_key(value: object) -> Ed25519PublicKey | None:
+    if type(value) is not str:
+        return None
     try:
-        raw = base64.b64decode(str(value), validate=True)
+        raw = base64.b64decode(value, validate=True)
         if len(raw) != 32:
             return None
         return Ed25519PublicKey.from_public_bytes(raw)
@@ -100,57 +150,134 @@ def _decode_public_key(value: object) -> Ed25519PublicKey | None:
         return None
 
 
+def _copy_exact_json(value: Any, *, field: str) -> Any:
+    """Take one snapshot and reject adapters and scalar subclasses."""
+
+    if type(value) is dict:
+        copied: dict[str, Any] = {}
+        for key, item in dict.items(value):
+            if type(key) is not str or key in copied:
+                raise D1SyncAuditError(f"{field} keys must be unique exact strings")
+            copied[key] = _copy_exact_json(item, field=f"{field}.{key}")
+        return copied
+    if type(value) is list:
+        return [
+            _copy_exact_json(item, field=f"{field}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if type(value) in {str, int, bool, type(None)}:
+        return value
+    if type(value) is float and math.isfinite(value):
+        return value
+    raise D1SyncAuditError(
+        f"{field} must contain only exact finite JSON built-in values"
+    )
+
+
+def _decode_strict_json(raw: bytes | str, *, field: str) -> dict[str, Any]:
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        document: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in document:
+                raise D1SyncAuditError(f"{field} contains duplicate key {key!r}")
+            document[key] = value
+        return document
+
+    def reject_nonfinite(value: str) -> None:
+        raise D1SyncAuditError(f"{field} contains non-finite value {value!r}")
+
+    try:
+        document = json.loads(
+            raw,
+            object_pairs_hook=reject_duplicates,
+            parse_constant=reject_nonfinite,
+        )
+    except D1SyncAuditError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise D1SyncAuditError(f"{field} is invalid JSON") from exc
+    frozen = _copy_exact_json(document, field=field)
+    if type(frozen) is not dict:
+        raise D1SyncAuditError(f"{field} must be an object")
+    return frozen
+
+
+def _deep_immutable(value: Any) -> Any:
+    if type(value) is dict:
+        return MappingProxyType(
+            {key: _deep_immutable(item) for key, item in value.items()}
+        )
+    if type(value) is list:
+        return tuple(_deep_immutable(item) for item in value)
+    return value
+
+
+def _registry_body_digest(document: dict[str, Any]) -> str:
+    return d1_sync_digest(
+        {key: value for key, value in document.items() if key != "registry_digest"}
+    )
+
+
 def _load_registry_document() -> dict[str, Any]:
     try:
-        raw = json.loads(DEFAULT_VERIFY_REGISTRY_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise D1SyncAuditError("cannot load pinned D1 sync public-key registry") from exc
-    if not isinstance(raw, dict) or set(raw) != {
-        "schema_version",
-        "purpose",
-        "keys",
-    }:
-        raise D1SyncAuditError("pinned D1 sync registry shape is invalid")
+        raw = _PINNED_VERIFY_REGISTRY_PATH.read_bytes()
+        document = _decode_strict_json(raw, field="pinned D1 sync registry")
+    except (OSError, D1SyncAuditError) as exc:
+        raise D1SyncAuditError(
+            "cannot load pinned D1 sync public-key registry"
+        ) from exc
+    if d1_sync_digest(document) != PINNED_D1_SYNC_REGISTRY_DOCUMENT_DIGEST:
+        raise D1SyncAuditError("pinned D1 sync registry digest mismatch")
     if (
-        raw.get("schema_version") != 1
-        or raw.get("purpose") != REGISTRY_PURPOSE
-        or not isinstance(raw.get("keys"), list)
-        or not 1 <= len(raw["keys"]) <= 16
+        set(document) != _REGISTRY_FIELDS
+        or type(document.get("schema_version")) is not int
+        or document.get("schema_version") != 2
+        or document.get("purpose") != REGISTRY_PURPOSE
+        or type(document.get("generation")) is not int
+        or document.get("generation") != PINNED_D1_SYNC_REGISTRY_GENERATION
+        or document.get("authority_status") not in {"ACTIVE", "PENDING"}
+        or document.get("prior_registry_digest")
+        != PINNED_D1_SYNC_PRIOR_REGISTRY_DIGEST
+        or document.get("registry_digest")
+        != PINNED_D1_SYNC_REGISTRY_BODY_DIGEST
+        or _registry_body_digest(document) != PINNED_D1_SYNC_REGISTRY_BODY_DIGEST
     ):
         raise D1SyncAuditError("pinned D1 sync registry policy is invalid")
+    rows = document.get("keys")
+    if type(rows) is not list or not 1 <= len(rows) <= 16:
+        raise D1SyncAuditError("pinned D1 sync registry keys are invalid")
     seen: set[str] = set()
     active = 0
-    for candidate in raw["keys"]:
-        if not isinstance(candidate, dict) or set(candidate) != {
-            "key_id",
-            "algorithm",
-            "public_key_base64",
-            "status",
-        }:
+    for candidate in rows:
+        if (
+            type(candidate) is not dict
+            or set(candidate) != _REGISTRY_KEY_FIELDS
+        ):
             raise D1SyncAuditError("pinned D1 sync registry key shape is invalid")
-        key_id = str(candidate.get("key_id") or "").strip()
+        if any(type(candidate[field]) is not str for field in _REGISTRY_KEY_FIELDS):
+            raise D1SyncAuditError("pinned D1 sync registry key is invalid")
+        key_id = candidate["key_id"].strip()
         status_value = candidate.get("status")
         if (
             not key_id
             or key_id in seen
             or candidate.get("algorithm") != "Ed25519"
-            or status_value not in {"active", "retired", "revoked"}
+            or status_value not in {"active", "pending", "retired", "revoked"}
             or _decode_public_key(candidate.get("public_key_base64")) is None
         ):
             raise D1SyncAuditError("pinned D1 sync registry key is invalid")
         seen.add(key_id)
         active += int(status_value == "active")
-    if active > 1:
+    expected_active = 1 if document["authority_status"] == "ACTIVE" else 0
+    if active != expected_active:
         raise D1SyncAuditError(
-            "pinned D1 sync registry cannot contain multiple active keys"
+            "pinned D1 sync registry active keys do not match authority status"
         )
-    return raw
+    return document
 
 
-def _validate_envelope(
-    envelope: Mapping[str, Any], *, require_fresh: bool
-) -> None:
-    if set(envelope) != _ENVELOPE_FIELDS:
+def _validate_envelope(envelope: Mapping[str, Any]) -> tuple[datetime, datetime]:
+    if type(envelope) is not dict or set(envelope) != _ENVELOPE_FIELDS:
         raise D1SyncAuditError("D1 sync audit envelope fields are not closed")
     if (
         envelope.get("schema_version") != AUDIT_ENVELOPE_SCHEMA
@@ -163,6 +290,17 @@ def _validate_envelope(
     ):
         raise D1SyncAuditError("D1 sync audit authority or mode is invalid")
     for field in (
+        "schema_version",
+        "authority_id",
+        "source_mode",
+        "d1_name",
+        "d1_id",
+        "sync_kind",
+        "artifact_format",
+    ):
+        if type(envelope[field]) is not str:
+            raise D1SyncAuditError(f"D1 sync audit {field} is invalid")
+    for field in (
         "export_digest",
         "source_content_digest",
         "local_content_digest",
@@ -172,26 +310,27 @@ def _validate_envelope(
     ):
         if not _is_digest(envelope.get(field)):
             raise D1SyncAuditError(f"D1 sync audit {field} is invalid")
+    if envelope["registry_digest"] != PINNED_D1_SYNC_REGISTRY_DOCUMENT_DIGEST:
+        raise D1SyncAuditError("D1 sync audit registry digest is not pinned")
     if envelope["source_content_digest"] != envelope["local_content_digest"]:
         raise D1SyncAuditError("D1 sync audit source/local content differs")
     source_cursor = envelope.get("source_change_seq")
     applied_cursor = envelope.get("applied_change_seq")
     if (
-        isinstance(source_cursor, bool)
-        or not isinstance(source_cursor, int)
+        type(source_cursor) is not int
         or source_cursor < 0
+        or type(applied_cursor) is not int
         or applied_cursor != source_cursor
     ):
         raise D1SyncAuditError("D1 sync audit cursor chain is invalid")
     counts = envelope.get("table_counts")
-    if not isinstance(counts, dict) or not counts:
+    if type(counts) is not dict or not counts:
         raise D1SyncAuditError("D1 sync audit table counts are missing")
-    for table, count in counts.items():
+    for table, count in dict.items(counts):
         if (
-            not isinstance(table, str)
+            type(table) is not str
             or not table
-            or isinstance(count, bool)
-            or not isinstance(count, int)
+            or type(count) is not int
             or count < 0
         ):
             raise D1SyncAuditError("D1 sync audit table counts are invalid")
@@ -203,7 +342,7 @@ def _validate_envelope(
         raise D1SyncAuditError("incremental D1 sync audit requires a prior digest")
     exported_at = envelope.get("exported_at")
     issued_at = envelope.get("issued_at")
-    if not isinstance(exported_at, str) or not isinstance(issued_at, str):
+    if type(exported_at) is not str or type(issued_at) is not str:
         raise D1SyncAuditError("D1 sync audit timestamps are invalid")
     try:
         exported_parsed = datetime.fromisoformat(exported_at.replace("Z", "+00:00"))
@@ -214,18 +353,26 @@ def _validate_envelope(
         raise D1SyncAuditError("D1 sync audit timestamps must include a timezone")
     exported_utc = exported_parsed.astimezone(timezone.utc)
     issued_utc = issued_parsed.astimezone(timezone.utc)
-    if issued_utc + timedelta(seconds=D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS) < exported_utc:
+    if (
+        issued_utc + timedelta(seconds=D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS)
+        < exported_utc
+    ):
         raise D1SyncAuditError("D1 sync audit issued_at predates exported_at")
-    if require_fresh:
-        now = _utc_now()
-        if exported_utc > now + timedelta(
-            seconds=D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS
-        ) or issued_utc > now + timedelta(
-            seconds=D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS
-        ):
-            raise D1SyncAuditError("signed D1 sync audit issued_at is in the future")
-        if now - issued_utc > timedelta(seconds=D1_SYNC_AUDIT_MAX_AGE_SECONDS):
-            raise D1SyncAuditError("signed D1 sync audit is stale")
+    return exported_utc, issued_utc
+
+
+def _require_fresh_audit(exported_utc: datetime, issued_utc: datetime) -> None:
+    """Apply the internal clock only at the final verified return boundary."""
+
+    now = _utc_now()
+    if exported_utc > now + timedelta(
+        seconds=D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS
+    ) or issued_utc > now + timedelta(
+        seconds=D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS
+    ):
+        raise D1SyncAuditError("signed D1 sync audit issued_at is in the future")
+    if now - issued_utc > timedelta(seconds=D1_SYNC_AUDIT_MAX_AGE_SECONDS):
+        raise D1SyncAuditError("signed D1 sync audit is stale")
 
 
 def _preflight_d1_sync_signing_authority() -> None:
@@ -246,36 +393,40 @@ def _seal_authenticated_wrangler_export(_authenticated_export: object) -> None:
     )
 
 
-def _verify_signed_d1_sync_audit(
+def _verify_signed_d1_sync_audit_document(
     document: object,
     *,
     require_fresh: bool,
     eligibility: str = "current",
-) -> dict[str, Any]:
-    if eligibility not in {"current", "historical"}:
+) -> _VerifiedD1SyncAuditDocument:
+    if type(eligibility) is not str or eligibility not in {
+        "current",
+        "historical",
+    }:
         raise D1SyncAuditError("D1 sync audit eligibility is invalid")
-    if isinstance(document, str):
-        try:
-            document = json.loads(document)
-        except json.JSONDecodeError as exc:
-            raise D1SyncAuditError("signed D1 sync audit is invalid JSON") from exc
-    if not isinstance(document, dict) or set(document) != _DOCUMENT_FIELDS:
+    if type(document) is str:
+        frozen = _decode_strict_json(document, field="signed D1 sync audit")
+    else:
+        frozen = _copy_exact_json(document, field="signed D1 sync audit")
+    if type(frozen) is not dict or set(frozen) != _DOCUMENT_FIELDS:
         raise D1SyncAuditError("signed D1 sync audit document shape is invalid")
     if (
-        document.get("schema_version") != SIGNED_DOCUMENT_SCHEMA
-        or document.get("algorithm") != "Ed25519"
-        or not isinstance(document.get("issuer_key_id"), str)
-        or not isinstance(document.get("envelope"), dict)
-        or not isinstance(document.get("signature"), str)
+        frozen.get("schema_version") != SIGNED_DOCUMENT_SCHEMA
+        or frozen.get("algorithm") != "Ed25519"
+        or type(frozen.get("schema_version")) is not str
+        or type(frozen.get("algorithm")) is not str
+        or type(frozen.get("issuer_key_id")) is not str
+        or type(frozen.get("envelope")) is not dict
+        or type(frozen.get("signature")) is not str
     ):
         raise D1SyncAuditError("signed D1 sync audit document is invalid")
-    envelope = document["envelope"]
-    _validate_envelope(envelope, require_fresh=require_fresh)
+    envelope = frozen["envelope"]
+    exported_utc, issued_utc = _validate_envelope(envelope)
     registry = _load_registry_document()
     matching = [
         row
         for row in registry["keys"]
-        if row["key_id"] == document["issuer_key_id"]
+        if row["key_id"] == frozen["issuer_key_id"]
     ]
     if len(matching) != 1:
         raise D1SyncAuditError("signed D1 sync audit issuer is unknown")
@@ -286,23 +437,48 @@ def _verify_signed_d1_sync_audit(
     elif status == "revoked":
         raise D1SyncAuditError("signed D1 sync audit issuer is revoked")
     elif status not in {"active", "retired"}:
-        raise D1SyncAuditError("signed D1 sync audit issuer is not historically auditable")
+        raise D1SyncAuditError(
+            "signed D1 sync audit issuer is not historically auditable"
+        )
     public_key = _decode_public_key(matching[0]["public_key_base64"])
-    signature = document["signature"]
+    signature = frozen["signature"]
     if not signature.startswith("ed25519:") or public_key is None:
         raise D1SyncAuditError("signed D1 sync audit signature is malformed")
     try:
         signature_bytes = base64.b64decode(
             signature[len("ed25519:") :], validate=True
         )
-        body = {key: document[key] for key in _DOCUMENT_FIELDS if key != "signature"}
+        body = {key: frozen[key] for key in _DOCUMENT_FIELDS if key != "signature"}
         public_key.verify(signature_bytes, canonical_d1_sync_bytes(body))
     except (InvalidSignature, TypeError, ValueError) as exc:
         raise D1SyncAuditError("signed D1 sync audit signature is invalid") from exc
-    return dict(envelope)
+    canonical_document = canonical_d1_sync_bytes(frozen)
+    verified = _VerifiedD1SyncAuditDocument(
+        envelope=_deep_immutable(envelope),
+        issuer_key_id=frozen["issuer_key_id"],
+        signature=signature,
+        document_digest="sha256:" + hashlib.sha256(canonical_document).hexdigest(),
+        canonical_document_json=canonical_document.decode("utf-8"),
+    )
+    if require_fresh:
+        _require_fresh_audit(exported_utc, issued_utc)
+    return verified
 
 
-def verify_signed_d1_sync_audit(document: object) -> dict[str, Any]:
+def _verify_signed_d1_sync_audit(
+    document: object,
+    *,
+    require_fresh: bool,
+    eligibility: str = "current",
+) -> Mapping[str, Any]:
+    return _verify_signed_d1_sync_audit_document(
+        document,
+        require_fresh=require_fresh,
+        eligibility=eligibility,
+    ).envelope
+
+
+def verify_signed_d1_sync_audit(document: object) -> Mapping[str, Any]:
     """Verify one current closed audit using only the pinned public registry."""
 
     return _verify_signed_d1_sync_audit(
@@ -316,6 +492,10 @@ __all__ = [
     "GOVERNED_AUTHORITY_ID",
     "GOVERNED_D1_ID",
     "GOVERNED_D1_NAME",
+    "PINNED_D1_SYNC_PRIOR_REGISTRY_DIGEST",
+    "PINNED_D1_SYNC_REGISTRY_BODY_DIGEST",
+    "PINNED_D1_SYNC_REGISTRY_DOCUMENT_DIGEST",
+    "PINNED_D1_SYNC_REGISTRY_GENERATION",
     "canonical_d1_sync_bytes",
     "d1_sync_digest",
     "verify_signed_d1_sync_audit",

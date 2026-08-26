@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "purpose": "d1_sync_registry_audit",
+  "generation": 1,
+  "authority_status": "REVOKED",
+  "original_registry_digest": "sha256:7a2513ea5cc9839a01c25846c7d9d33b4d16f0c0ca36101a8ded8e641828f7d6",
+  "revoked_key_ids": [
+    "d1-sync-20260825-v1"
+  ],
+  "reason": "legacy same-UID private-key lineage is not a production authority"
+}
