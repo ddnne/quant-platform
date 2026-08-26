@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping
 
 from cryptography.exceptions import InvalidSignature
@@ -17,6 +18,10 @@ from ops.projection_signing import (
     _validate_envelope,
     canonical_json_bytes,
     OpsProjectionSignatureError,
+)
+from scripts.export_ops_projection import (
+    ProjectionBundle,
+    _render_projection_bundle,
 )
 
 
@@ -119,3 +124,19 @@ def make_test_ops_projection_verifier(
     key_id: str = "ops-projection-test-v1",
 ) -> TestOpsProjectionVerifier:
     return TestOpsProjectionVerifier(key_id, private_key.public_key())
+
+
+def render_projection_bundle_for_test(
+    db_path: str | Path,
+    **kwargs: Any,
+) -> ProjectionBundle:
+    """Render synthetic cursor states without adding a product test seam."""
+    return _render_projection_bundle(db_path, **kwargs)
+
+
+def sign_projection_bundle_for_test(
+    bundle: ProjectionBundle,
+    signer: TestOpsProjectionSigningKey,
+) -> dict[str, Any]:
+    """Sign only in tests; product renderers never receive this signer."""
+    return signer.sign(bundle.envelope)

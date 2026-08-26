@@ -6,11 +6,9 @@ import sqlite3
 from pathlib import Path
 
 from data_contracts.coverage import all_coverage_contracts, coverage_policy_binding
-from scripts.export_ops_projection import (
-    _render_projection_bundle_for_test,
-    sync_dataset_state,
-)
+from scripts.export_ops_projection import sync_dataset_state
 from storage.sqlite_store import SqliteStore
+from tests.ops_projection_signing_support import render_projection_bundle_for_test
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECTION_MIGRATION = (
@@ -112,7 +110,7 @@ def test_source_export_applied_cursors_are_projected_without_coercion(
 ) -> None:
     path = tmp_path / "source.sqlite"
     _source_db(path, applied=42)
-    bundle = _render_projection_bundle_for_test(
+    bundle = render_projection_bundle_for_test(
         path,
         generation_id="projgen-cursors",
         producer_commit_sha="a" * 40,
@@ -137,7 +135,7 @@ def test_source_export_applied_cursors_are_projected_without_coercion(
 def test_missing_applied_cursor_projects_sql_null_not_zero(tmp_path: Path) -> None:
     path = tmp_path / "source.sqlite"
     _source_db(path, applied=None)
-    bundle = _render_projection_bundle_for_test(
+    bundle = render_projection_bundle_for_test(
         path,
         generation_id="projgen-unpinned",
         producer_commit_sha="b" * 40,

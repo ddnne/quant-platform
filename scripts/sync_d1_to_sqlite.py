@@ -28,6 +28,8 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
+from typing import Callable, Mapping, TypeVar
 from urllib.parse import quote, urlencode
 from weakref import WeakSet
 
@@ -49,6 +51,8 @@ from paper_runtime import (  # noqa: E402
     fail_snapshot_sync,
 )
 from storage.sqlite_store import SqliteStore  # noqa: E402
+
+_MirrorResult = TypeVar("_MirrorResult")
 
 DEFAULT_TABLES: tuple[str, ...] = (
     "jquants_market_calendar",
@@ -1781,16 +1785,109 @@ def _authenticated_export_cursor_chain_from_conn(
     conn: sqlite3.Connection,
 ) -> tuple[int | None, int | None]:
     """Validate the trusted cursor/content chain in one caller-owned read view."""
+    identity = _authenticated_applied_mirror_identity_from_conn(conn)
+    source = identity["source_change_seq"]
+    assert isinstance(source, int)  # validated by identity derivation
+    return source, source
+
+
+def _authenticated_applied_mirror_identity_from_conn(
+    conn: sqlite3.Connection,
+) -> dict[str, object]:
+    """Recompute the complete signed-sync identity in the active read view."""
     row = _latest_export_sync_row(conn)
     if row is None:
-        return None, None
+        raise ValueError("applied mirror has no current signed D1 sync audit")
     envelope = _verified_sync_envelope_from_row(
         conn, row, recompute_local=True
     )
     source = envelope["source_change_seq"]
-    if not isinstance(source, int) or source <= 0:
-        return None, None
-    return source, source
+    applied = envelope["applied_change_seq"]
+    if (
+        isinstance(source, bool)
+        or not isinstance(source, int)
+        or source <= 0
+        or isinstance(applied, bool)
+        or not isinstance(applied, int)
+        or applied != source
+    ):
+        raise ValueError(
+            "authenticated applied mirror cursor chain is null or mismatched"
+        )
+    return {
+        "audit_digest": row.get("audit_digest"),
+        "issuer_key_id": row.get("issuer_key_id"),
+        "export_digest": envelope["export_digest"],
+        "source_change_seq": source,
+        "applied_change_seq": applied,
+        "source_content_digest": envelope["source_content_digest"],
+        "local_content_digest": envelope["local_content_digest"],
+        "source_schema_digest": envelope["source_schema_digest"],
+        "schema_digest": envelope["schema_digest"],
+        "table_counts": envelope["table_counts"],
+    }
+
+
+def _canonical_applied_mirror_identity_json(
+    identity: Mapping[str, object],
+) -> str:
+    """Validate and freeze the sync/full-source identity held by one handle."""
+    source = identity.get("source_change_seq")
+    applied = identity.get("applied_change_seq")
+    if (
+        isinstance(source, bool)
+        or not isinstance(source, int)
+        or source <= 0
+        or isinstance(applied, bool)
+        or not isinstance(applied, int)
+        or applied != source
+    ):
+        raise ValueError(
+            "authenticated applied mirror cursor chain is null or mismatched"
+        )
+    digest_fields = (
+        "audit_digest",
+        "export_digest",
+        "source_content_digest",
+        "local_content_digest",
+        "source_schema_digest",
+        "schema_digest",
+    )
+    for field in digest_fields:
+        value = identity.get(field)
+        if (
+            not isinstance(value, str)
+            or len(value) != 71
+            or not value.startswith("sha256:")
+        ):
+            raise ValueError(
+                f"authenticated applied mirror {field} is invalid"
+            )
+        try:
+            int(value.removeprefix("sha256:"), 16)
+        except ValueError as exc:
+            raise ValueError(
+                f"authenticated applied mirror {field} is invalid"
+            ) from exc
+    issuer = identity.get("issuer_key_id")
+    if not isinstance(issuer, str) or not issuer:
+        raise ValueError("authenticated applied mirror issuer is invalid")
+    if identity["source_content_digest"] != identity["local_content_digest"]:
+        raise ValueError("authenticated applied mirror source/local content differs")
+    counts = identity.get("table_counts")
+    if not isinstance(counts, dict) or set(counts) != set(DEFAULT_TABLES):
+        raise ValueError("authenticated applied mirror inventory is incomplete")
+    if any(
+        isinstance(count, bool) or not isinstance(count, int) or count < 0
+        for count in counts.values()
+    ):
+        raise ValueError("authenticated applied mirror table counts are invalid")
+    return json.dumps(
+        identity,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
 
 
 def _authenticated_export_cursor_chain(
@@ -1817,14 +1914,15 @@ def _authenticated_export_cursor_chain(
 
 
 def _build_applied_mirror_authority():
-    """Mint one-shot handles over a verified current applied mirror."""
+    """Mint one-shot handles over one verified, open SQLite read snapshot."""
     live_mirrors = WeakSet()
 
     class _AuthenticatedAppliedMirror:
         __slots__ = (
             "_db_path",
-            "_source_cursor",
-            "_export_cursor",
+            "_path_identity",
+            "_conn",
+            "_identity_json",
             "_consumed",
             "__weakref__",
         )
@@ -1834,46 +1932,89 @@ def _build_applied_mirror_authority():
                 "authenticated applied mirror has no public constructor"
             )
 
-        def cursor_chain(self) -> tuple[int, int]:
-            if self not in live_mirrors or self._consumed:
-                raise RuntimeError("authenticated applied mirror is not live")
-            return self._source_cursor, self._export_cursor
-
-        def _consume_for_projection(self) -> dict[str, object]:
+        def _consume_for_projection(
+            self,
+            consumer: Callable[
+                [sqlite3.Connection, Mapping[str, object]], _MirrorResult
+            ],
+        ) -> _MirrorResult:
             if self not in live_mirrors or self._consumed:
                 raise RuntimeError("authenticated applied mirror was already consumed")
             self._consumed = True
             live_mirrors.discard(self)
-            return {
-                "db_path": self._db_path,
-                "source_cursor": self._source_cursor,
-                "export_cursor": self._export_cursor,
-            }
+            try:
+                try:
+                    current = self._db_path.stat()
+                except OSError as exc:
+                    raise RuntimeError(
+                        "authenticated applied mirror path disappeared"
+                    ) from exc
+                if (current.st_dev, current.st_ino) != self._path_identity:
+                    raise RuntimeError(
+                        "authenticated applied mirror path was replaced"
+                    )
+                observed = _authenticated_applied_mirror_identity_from_conn(
+                    self._conn
+                )
+                observed_json = _canonical_applied_mirror_identity_json(observed)
+                if observed_json != self._identity_json:
+                    raise RuntimeError(
+                        "authenticated applied mirror identity changed"
+                    )
+                return consumer(
+                    self._conn,
+                    MappingProxyType(json.loads(self._identity_json)),
+                )
+            finally:
+                try:
+                    self._conn.rollback()
+                finally:
+                    self._conn.close()
 
-    def _consume_authenticated_applied_mirror(handle: object) -> dict[str, object]:
+    def _consume_authenticated_applied_mirror(
+        handle: object,
+        consumer: Callable[
+            [sqlite3.Connection, Mapping[str, object]], _MirrorResult
+        ],
+    ) -> _MirrorResult:
         if type(handle) is not _AuthenticatedAppliedMirror:
             raise RuntimeError(
                 "Ops projection requires an authenticated applied mirror handle"
             )
-        return handle._consume_for_projection()
+        return handle._consume_for_projection(consumer)
 
     def open_authenticated_applied_mirror(
         db_path: str | Path,
     ) -> _AuthenticatedAppliedMirror:
         path = Path(db_path).resolve()
-        source_cursor, export_cursor = _authenticated_export_cursor_chain(path)
-        if (
-            not isinstance(source_cursor, int)
-            or source_cursor <= 0
-            or export_cursor != source_cursor
-        ):
+        if not path.is_file():
+            raise ValueError("applied mirror is not an authenticated current D1 export")
+        stat = path.stat()
+        uri = f"file:{quote(str(path), safe='/')}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        try:
+            conn.execute("BEGIN")
+            identity = _authenticated_applied_mirror_identity_from_conn(conn)
+            identity_json = _canonical_applied_mirror_identity_json(identity)
+        except (
+            ValueError,
+            TypeError,
+            RuntimeError,
+            json.JSONDecodeError,
+            sqlite3.Error,
+        ) as exc:
+            conn.close()
             raise ValueError(
                 "applied mirror is not an authenticated current D1 export"
-            )
+            ) from exc
+        except Exception:
+            conn.close()
+            raise
         handle = object.__new__(_AuthenticatedAppliedMirror)
         handle._db_path = path
-        handle._source_cursor = source_cursor
-        handle._export_cursor = export_cursor
+        handle._path_identity = (stat.st_dev, stat.st_ino)
+        handle._conn = conn
+        handle._identity_json = identity_json
         handle._consumed = False
         live_mirrors.add(handle)
         return handle

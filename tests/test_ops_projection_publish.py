@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 import sqlite3
@@ -28,10 +29,10 @@ from ops.projection_signing import (
     sha256_digest,
     verify_pinned_ops_projection,
 )
+from scripts import export_ops_projection as exporter
 from scripts import publish_ops_projection as publisher
 from scripts import sync_d1_to_sqlite as sync_script
 from scripts.export_ops_projection import (
-    _render_projection_bundle_for_test,
     _render_trusted_projection_bundle,
     render_projection_bundle,
 )
@@ -39,6 +40,8 @@ from storage.sqlite_store import SqliteStore
 from tests.ops_projection_signing_support import (
     TestOpsProjectionSigningKey,
     make_test_ops_projection_verifier,
+    render_projection_bundle_for_test,
+    sign_projection_bundle_for_test,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,6 +125,47 @@ def _target() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.executescript(MIGRATION.read_text(encoding="utf-8"))
     return conn
+
+
+def _opaque_source(path: Path, marker: str) -> None:
+    with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE opaque_source_marker (value TEXT NOT NULL)")
+        conn.execute("INSERT INTO opaque_source_marker VALUES (?)", (marker,))
+
+
+def _test_mirror_identity(
+    *,
+    source_cursor: object = 7,
+    applied_cursor: object = 7,
+    distinct_source_schema: bool = False,
+):
+    def identity(conn: sqlite3.Connection) -> dict[str, object]:
+        marker = conn.execute(
+            "SELECT value FROM opaque_source_marker"
+        ).fetchone()[0]
+        digest = sha256_digest({"opaque_source_marker": marker})
+        source_schema_digest = (
+            sha256_digest({"source_schema": "remote"})
+            if distinct_source_schema
+            else digest
+        )
+        return {
+            "audit_digest": digest,
+            "issuer_key_id": "test-d1-sync-authority",
+            "export_digest": digest,
+            "source_change_seq": source_cursor,
+            "applied_change_seq": applied_cursor,
+            "source_content_digest": digest,
+            "local_content_digest": digest,
+            "source_schema_digest": source_schema_digest,
+            "schema_digest": digest,
+            "table_counts": {
+                table: 0 for table in sync_script.DEFAULT_TABLES
+            },
+        }
+
+    return identity
 
 
 def _bundle(path: Path, generation: str):
@@ -224,14 +268,11 @@ def test_incomplete_generation_cannot_replace_active_pointer(tmp_path: Path) -> 
     target.close()
 
 
-def test_signed_pointer_update_atomically_rejects_cursor_regression(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_pointer_update_atomically_rejects_cursor_regression(
+    tmp_path: Path,
 ) -> None:
     source = tmp_path / "source.sqlite"
     _source(source)
-    signer = TestOpsProjectionSigningKey(
-        "ops-projection-test-v1", Ed25519PrivateKey.generate()
-    )
 
     def set_cursor(value: int) -> None:
         with sqlite3.connect(source) as conn:
@@ -242,34 +283,25 @@ def test_signed_pointer_update_atomically_rejects_cursor_regression(
             )
 
     cursor = 12
-    monkeypatch.setattr(
-        sync_script,
-        "_authenticated_export_cursor_chain_from_conn",
-        lambda _conn: (cursor, cursor),
-    )
     set_cursor(cursor)
-    first = _render_projection_bundle_for_test(
+    first = render_projection_bundle_for_test(
         source,
         source_cursor=cursor,
         export_cursor=cursor,
-        projection_signer=signer,
         generation_id="projgen-cursor-12",
         producer_commit_sha="a" * 40,
-        _test_enforce_trusted_guards=True,
     )
     target = _target()
     target.executescript(first.sql)
 
     cursor = 11
     set_cursor(cursor)
-    replay = _render_projection_bundle_for_test(
+    replay = render_projection_bundle_for_test(
         source,
         source_cursor=cursor,
         export_cursor=cursor,
-        projection_signer=signer,
         generation_id="projgen-cursor-11",
         producer_commit_sha="b" * 40,
-        _test_enforce_trusted_guards=True,
     )
     target.executescript(replay.sql)
     assert target.execute(
@@ -423,23 +455,23 @@ def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
     _source(source)
     private = Ed25519PrivateKey.generate()
     signer = TestOpsProjectionSigningKey("ops-projection-test-v1", private)
-    bundle = _render_projection_bundle_for_test(
+    bundle = render_projection_bundle_for_test(
         source,
         generation_id="projgen-signed",
         producer_commit_sha="f" * 40,
         source_cursor=12,
         export_cursor=11,
-        projection_signer=signer,
     )
+    signed_envelope = sign_projection_bundle_for_test(bundle, signer)
     registry = make_test_ops_projection_verifier(private)
-    assert bundle.signed_envelope is not None
+    assert bundle.signed_envelope is None
     schema = json.loads(
         (ROOT / "specs/ops_projection/signed_envelope.schema.json").read_text(
             encoding="utf-8"
         )
     )
-    Draft202012Validator(schema).validate(bundle.signed_envelope)
-    envelope = registry.verify(bundle.signed_envelope)
+    Draft202012Validator(schema).validate(signed_envelope)
+    envelope = registry.verify(signed_envelope)
     assert envelope["generation_id"] == "projgen-signed"
     assert envelope["content_digest"] == bundle.content_digest
     assert envelope["source_cursor"] == 12
@@ -454,7 +486,7 @@ def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
         "coverage", "raw_retention", "ready", "storage", "sync", "validation"
     }
     derived = registry.verified_dataset_evidence(
-        bundle.signed_envelope, ["equities_bars_daily"]
+        signed_envelope, ["equities_bars_daily"]
     )["equities_bars_daily"]
     assert derived["status"] == "PARTIAL"
     assert derived["coverage_mode"] == next(
@@ -466,12 +498,15 @@ def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
     assert derived["export_cursor"] == 11
     assert derived["applied_cursor"] is None
 
-    tampered = json.loads(json.dumps(bundle.signed_envelope))
+    with pytest.raises(OpsProjectionSignatureError, match="issuer is not trusted"):
+        verify_pinned_ops_projection(signed_envelope)
+
+    tampered = json.loads(json.dumps(signed_envelope))
     tampered["envelope"]["applied_cursor"] = 12
     with pytest.raises(OpsProjectionSignatureError, match="signature is invalid"):
         registry.verify(tampered)
 
-    former = json.loads(json.dumps(bundle.signed_envelope))
+    former = json.loads(json.dumps(signed_envelope))
     former["issuer_key_id"] = "ops-projection-20260825-v1"
     with pytest.raises(OpsProjectionSignatureError, match="issuer is not trusted"):
         verify_pinned_ops_projection(former)
@@ -482,18 +517,171 @@ def test_trusted_renderer_rejects_generic_sqlite_path_and_caller_claims(
 ) -> None:
     source = tmp_path / "manual.sqlite"
     _source(source)
-    signer = TestOpsProjectionSigningKey(
-        "ops-projection-test-v1", Ed25519PrivateKey.generate()
-    )
-    with pytest.raises(RuntimeError, match="PENDING full-source authority"):
+    with pytest.raises(RuntimeError, match="authenticated applied mirror handle"):
         _render_trusted_projection_bundle(
             source,
-            projection_signer=signer,
             generation_id="projgen-forged",
             producer_commit_sha="f" * 40,
         )
     with pytest.raises(ValueError, match="authenticated current D1 export"):
         sync_script.open_authenticated_applied_mirror(source)
+
+
+def test_product_exporter_has_no_signer_or_test_authority_injection_surface(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    parameters = inspect.signature(exporter._render_projection_bundle).parameters
+    assert {
+        "projection_signer",
+        "_test_authority",
+        "_test_enforce_trusted_guards",
+    }.isdisjoint(parameters)
+    assert not hasattr(exporter, "_render_projection_bundle_for_test")
+    with pytest.raises(TypeError, match="projection_signer"):
+        exporter._render_projection_bundle(
+            source,
+            projection_signer=TestOpsProjectionSigningKey(
+                "ops-projection-test-v1", Ed25519PrivateKey.generate()
+            ),
+        )
+
+
+def test_authenticated_mirror_pins_one_snapshot_and_is_single_use(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "original")
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(),
+    )
+    handle = sync_script.open_authenticated_applied_mirror(source)
+
+    with sqlite3.connect(source) as writer:
+        writer.execute(
+            "UPDATE opaque_source_marker SET value='replacement'"
+        )
+
+    observed = sync_script._consume_authenticated_applied_mirror(
+        handle,
+        lambda conn, identity: (
+            conn.execute("SELECT value FROM opaque_source_marker").fetchone()[0],
+            identity["source_content_digest"],
+        ),
+    )
+    assert observed == (
+        "original",
+        sha256_digest({"opaque_source_marker": "original"}),
+    )
+    with pytest.raises(RuntimeError, match="already consumed"):
+        sync_script._consume_authenticated_applied_mirror(
+            handle,
+            lambda _conn, _identity: pytest.fail("replayed source was consumed"),
+        )
+
+
+def test_authenticated_mirror_preserves_distinct_source_schema_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(distinct_source_schema=True),
+    )
+    handle = sync_script.open_authenticated_applied_mirror(source)
+    observed = sync_script._consume_authenticated_applied_mirror(
+        handle,
+        lambda _conn, identity: (
+            identity["source_schema_digest"],
+            identity["schema_digest"],
+        ),
+    )
+    assert observed[0] != observed[1]
+
+
+def test_authenticated_mirror_rejects_path_replacement_before_consumer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    replacement = tmp_path / "attacker.sqlite"
+    _opaque_source(source, "trusted")
+    _opaque_source(replacement, "attacker")
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(),
+    )
+    handle = sync_script.open_authenticated_applied_mirror(source)
+    replacement.replace(source)
+    consumed: list[bool] = []
+
+    with pytest.raises(RuntimeError, match="path was replaced"):
+        sync_script._consume_authenticated_applied_mirror(
+            handle,
+            lambda _conn, _identity: consumed.append(True),
+        )
+    assert consumed == []
+    with pytest.raises(RuntimeError, match="already consumed"):
+        sync_script._consume_authenticated_applied_mirror(
+            handle,
+            lambda _conn, _identity: None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("source_cursor", "applied_cursor"),
+    [
+        (None, None),
+        (7, None),
+        (7, 6),
+        (0, 0),
+        (True, True),
+    ],
+)
+def test_authenticated_mirror_rejects_null_or_mismatched_cursor_at_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_cursor: object,
+    applied_cursor: object,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(
+            source_cursor=source_cursor,
+            applied_cursor=applied_cursor,
+        ),
+    )
+    with pytest.raises(ValueError, match="authenticated current D1 export"):
+        sync_script.open_authenticated_applied_mirror(source)
+
+
+def test_trusted_renderer_consumes_handle_before_pending_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(),
+    )
+    handle = sync_script.open_authenticated_applied_mirror(source)
+    with pytest.raises(RuntimeError, match="PENDING full-source authority"):
+        _render_trusted_projection_bundle(handle)
+    with pytest.raises(RuntimeError, match="already consumed"):
+        _render_trusted_projection_bundle(handle)
 
 
 @pytest.mark.parametrize("dry_run", [False, True])

@@ -440,11 +440,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 7
 
-    projection_signer = open_ops_projection_signing_service()
+    projection_authority = open_ops_projection_signing_service()
     if (
         args.apply_remote
         and has_trusted_cursor_chain
-        and projection_signer is None
+        and projection_authority is None
     ):
         print(
             "ERROR: dedicated Ops Projection signing authority is PENDING",
@@ -532,7 +532,7 @@ def main(argv: list[str] | None = None) -> int:
         "last_success_at": last_success_at,
         "storage_hot_cutoff": args.storage_hot_cutoff,
     }
-    if has_trusted_cursor_chain and projection_signer is not None:
+    if has_trusted_cursor_chain and projection_authority is not None:
         try:
             applied_mirror = open_authenticated_applied_mirror(db_path)
         except (ValueError, TypeError, RuntimeError, json.JSONDecodeError, sqlite3.Error):
@@ -543,7 +543,6 @@ def main(argv: list[str] | None = None) -> int:
             return 7
         bundle = _render_trusted_projection_bundle(
             applied_mirror,
-            projection_signer=projection_signer,
             **render_kwargs,
         )
     else:

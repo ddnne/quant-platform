@@ -66,6 +66,7 @@ class ProjectionBundle:
     content_digest: str
     row_counts: Mapping[str, int]
     metadata: Mapping[str, Any]
+    envelope: Mapping[str, Any]
     signed_envelope: Mapping[str, Any] | None
 
 
@@ -812,9 +813,6 @@ def _render_projection_bundle(
     source_cursor: int | None = None,
     export_cursor: int | None = None,
     storage_hot_cutoff: str | None = None,
-    projection_signer: Any | None = None,
-    _test_authority: bool = False,
-    _test_enforce_trusted_guards: bool = False,
 ) -> ProjectionBundle:
     """Render an append-only projection and a pointer-last activation guard."""
     from data_contracts.coverage import (
@@ -827,10 +825,6 @@ def _render_projection_bundle(
     path = Path(db_path).resolve()
     if not path.is_file():
         raise FileNotFoundError(path)
-    if projection_signer is not None and not _test_authority:
-        raise RuntimeError(
-            "Ops Projection signing is PENDING full-source authority integration"
-        )
     gen = generation_id or "projgen-" + uuid4().hex
     commit_sha = _git_sha(producer_commit_sha)
     contract_digest, registry_digest = _contract_digests()
@@ -842,29 +836,6 @@ def _render_projection_bundle(
         # Freeze every source query (coverage, receipts, cursors, READY and
         # evidence digests) to one SQLite read snapshot.
         conn.execute("BEGIN")
-        if projection_signer is not None and (
-            not _test_authority or _test_enforce_trusted_guards
-        ):
-            from scripts.sync_d1_to_sqlite import (
-                _authenticated_export_cursor_chain_from_conn,
-            )
-
-            try:
-                trusted_source, trusted_export = (
-                    _authenticated_export_cursor_chain_from_conn(conn)
-                )
-            except (ValueError, TypeError, json.JSONDecodeError, sqlite3.Error):
-                trusted_source, trusted_export = None, None
-            if (
-                trusted_source is None
-                or trusted_export is None
-                or source_cursor != trusted_source
-                or export_cursor != trusted_export
-            ):
-                raise RuntimeError(
-                    "signed Ops projection cursor chain is not bound to the "
-                    "authenticated local-sync audit"
-                )
         coverage = _rows(
             conn,
             "dataset_coverage",
@@ -885,19 +856,6 @@ def _render_projection_bundle(
         watermarks = _read_watermarks(conn, gen)
         raw_segments = _read_authoritative_raw_segments(conn, gen)
         applied_cursor, applied_updated_at = _read_applied_cursor(conn)
-        if projection_signer is not None and (
-            not _test_authority or _test_enforce_trusted_guards
-        ):
-            if (
-                isinstance(source_cursor, bool)
-                or not isinstance(source_cursor, int)
-                or source_cursor < 0
-                or export_cursor != source_cursor
-                or applied_cursor != source_cursor
-            ):
-                raise RuntimeError(
-                    "trusted Ops projection requires an exact applied cursor chain"
-                )
         if source_cursor is None:
             source_cursor = coerce_applied_seq(
                 _safe_scalar(
@@ -1168,18 +1126,13 @@ def _render_projection_bundle(
         "content_manifest": content_manifest,
         "row_counts": row_counts,
     }
-    signed_envelope = (
-        projection_signer.sign(envelope)
-        if projection_signer is not None and _test_authority
-        else None
-    )
-    signed_envelope_json = (
-        json.dumps(signed_envelope, sort_keys=True, separators=(",", ":"))
-        if signed_envelope
-        else None
-    )
-    issuer_key_id = signed_envelope.get("issuer_key_id") if signed_envelope else None
-    signature = signed_envelope.get("signature") if signed_envelope else None
+    # Diagnostic/product rendering is strictly unsigned.  A future dedicated
+    # authority must derive and sign from an authenticated full-source handle;
+    # this exporter intentionally accepts no signer or pre-authored envelope.
+    signed_envelope = None
+    signed_envelope_json = None
+    issuer_key_id = None
+    signature = None
 
     statements = ["BEGIN TRANSACTION;"] if use_sql_transaction else []
     statements.append(
@@ -1213,10 +1166,14 @@ def _render_projection_bundle(
         for table in required_counts
     )
     cursor_guard = "1=1"
-    if projection_signer is not None and (
-        not _test_authority or _test_enforce_trusted_guards
-    ):
-        assert isinstance(source_cursor, int)
+    exact_current_cursor = (
+        not isinstance(source_cursor, bool)
+        and isinstance(source_cursor, int)
+        and source_cursor > 0
+        and export_cursor == source_cursor
+        and applied_cursor == source_cursor
+    )
+    if exact_current_cursor:
         cursor_guard = (
             "(NOT EXISTS (SELECT 1 FROM ops_projection_active current "
             "WHERE current.singleton=1) OR EXISTS ("
@@ -1257,6 +1214,7 @@ def _render_projection_bundle(
         content_digest=content_digest,
         row_counts=row_counts,
         metadata=metadata_row,
+        envelope=envelope,
         signed_envelope=signed_envelope,
     )
 
@@ -1293,27 +1251,28 @@ def render_projection_bundle(
         last_refresh_attempt_at=last_refresh_attempt_at,
         last_success_at=last_success_at,
         storage_hot_cutoff=storage_hot_cutoff,
-        projection_signer=None,
     )
 
 
 def _render_trusted_projection_bundle(
-    _applied_mirror: Any,
-    *,
-    projection_signer: Any,
+    applied_mirror: Any,
     **_kwargs: Any,
 ) -> ProjectionBundle:
-    """Fail closed until a full-source authority owns derivation and signing."""
+    """Consume the opaque source once, then fail closed while C4 is PENDING."""
+    from scripts.sync_d1_to_sqlite import _consume_authenticated_applied_mirror
 
-    del projection_signer
-    raise RuntimeError(
-        "Ops Projection signing is PENDING full-source authority integration"
+    def pending_authority(
+        _conn: sqlite3.Connection,
+        _sync_identity: Mapping[str, object],
+    ) -> ProjectionBundle:
+        raise RuntimeError(
+            "Ops Projection signing is PENDING full-source authority integration"
+        )
+
+    return _consume_authenticated_applied_mirror(
+        applied_mirror,
+        pending_authority,
     )
-
-
-def _render_projection_bundle_for_test(db_path: str | Path, **kwargs: Any) -> ProjectionBundle:
-    """Private unit-test seam for synthetic cursors and ephemeral signers."""
-    return _render_projection_bundle(db_path, _test_authority=True, **kwargs)
 
 
 def render_projection_sql(db_path: str | Path, **kwargs: Any) -> str:
