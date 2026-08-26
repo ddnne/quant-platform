@@ -453,10 +453,21 @@ def build_manifest() -> dict[str, Any]:
                 named_environment=None,
             ),
         }
+    test_harness_surfaces = {
+        worker: _effective_surface(
+            worker=worker,
+            config_path=WORKER_ROOT / worker / "wrangler.test.toml",
+            environment="test",
+            named_environment=None,
+        )
+        for worker in ACTIVE_WORKERS
+        if (WORKER_ROOT / worker / "wrangler.test.toml").is_file()
+    }
     manifest = {
-        "schema_version": "cloudflare-active-worker-bindings/v3",
+        "schema_version": "cloudflare-active-worker-bindings/v4",
         "active_workers": list(ACTIVE_WORKERS),
         "config_key_policy": CONFIG_KEY_POLICY,
+        "test_harness_surfaces": test_harness_surfaces,
         "toolchain_policy": TOOLCHAIN,
         "worker_package_scripts": {
             worker: _package_scripts(worker) for worker in ACTIVE_WORKERS
@@ -472,12 +483,13 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "active_workers",
         "config_key_policy",
         "schema_version",
+        "test_harness_surfaces",
         "toolchain_policy",
         "worker_package_scripts",
         "workers",
     }:
         raise ValueError("binding manifest fields are not closed")
-    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v3":
+    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v4":
         raise ValueError("binding manifest schema_version drift")
     if manifest["config_key_policy"] != CONFIG_KEY_POLICY:
         raise ValueError("Wrangler config-key policy drift")
@@ -490,6 +502,26 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     }
     if manifest["worker_package_scripts"] != expected_scripts:
         raise ValueError("active Worker package-script deployment surface drift")
+    expected_test_workers = tuple(
+        worker
+        for worker in ACTIVE_WORKERS
+        if (WORKER_ROOT / worker / "wrangler.test.toml").is_file()
+    )
+    test_surfaces = manifest["test_harness_surfaces"]
+    if tuple(test_surfaces) != expected_test_workers:
+        raise ValueError("test-harness Wrangler config membership drift")
+    for worker, surface in test_surfaces.items():
+        expected_config = str(
+            (WORKER_ROOT / worker / "wrangler.test.toml").relative_to(ROOT)
+        )
+        if surface.get("config") != expected_config:
+            raise ValueError(f"{worker}: test-harness config path drift")
+        if not str(surface.get("name") or "").endswith("-test"):
+            raise ValueError(f"{worker}: test-harness Worker name must end in -test")
+        if surface.get("workers_dev") is not False:
+            raise ValueError(f"{worker}: test-harness workers_dev must be false")
+        if surface.get("preview_urls") is not False:
+            raise ValueError(f"{worker}: test-harness preview_urls must be false")
     workers = manifest["workers"]
     if tuple(workers) != ACTIVE_WORKERS:
         raise ValueError("active Worker order or membership drift")

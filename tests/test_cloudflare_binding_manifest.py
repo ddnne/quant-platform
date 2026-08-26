@@ -142,6 +142,34 @@ def test_package_script_commands_are_frozen() -> None:
         manifest_module.validate_manifest(drifted)
 
 
+def test_test_harness_configs_are_frozen_as_nonpublic_surfaces() -> None:
+    manifest = manifest_module.build_manifest()
+    expected = {
+        worker
+        for worker in manifest_module.ACTIVE_WORKERS
+        if (manifest_module.WORKER_ROOT / worker / "wrangler.test.toml").is_file()
+    }
+    assert set(manifest["test_harness_surfaces"]) == expected
+    for worker, surface in manifest["test_harness_surfaces"].items():
+        assert surface["config"].endswith(f"/{worker}/wrangler.test.toml")
+        assert surface["name"].endswith("-test")
+        assert surface["workers_dev"] is False
+        assert surface["preview_urls"] is False
+
+    drifted = copy.deepcopy(manifest)
+    worker = next(iter(drifted["test_harness_surfaces"]))
+    drifted["test_harness_surfaces"][worker]["workers_dev"] = True
+    with pytest.raises(ValueError, match="test-harness workers_dev must be false"):
+        manifest_module.validate_manifest(drifted)
+
+
+def test_authoritative_ci_dry_runs_test_harness_configs() -> None:
+    ci = (manifest_module.ROOT / "scripts" / "verify_ci.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "wrangler deploy --dry-run --config=wrangler.test.toml" in ci
+
+
 def test_manifest_is_fail_closed_for_toolchain_drift() -> None:
     manifest = manifest_module.build_manifest()
     drifted = copy.deepcopy(manifest)

@@ -231,6 +231,10 @@ verify_worker() {
   (cd "$dir" && npx --no-install wrangler deploy --dry-run --env=production)
   echo "==> wrangler deploy --dry-run --config=wrangler.staging.toml ($name)"
   (cd "$dir" && npx --no-install wrangler deploy --dry-run --config=wrangler.staging.toml)
+  if [[ -f "$dir/wrangler.test.toml" ]]; then
+    echo "==> wrangler deploy --dry-run --config=wrangler.test.toml ($name)"
+    (cd "$dir" && npx --no-install wrangler deploy --dry-run --config=wrangler.test.toml)
+  fi
   if [[ -n "$(npm_script_body "$py" "$dir/package.json" types)" ]]; then
     echo "==> wrangler types --check ($name)"
     # Honor scripts.types flags (include-runtime false). Bare
