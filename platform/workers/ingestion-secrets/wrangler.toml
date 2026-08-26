@@ -13,12 +13,16 @@ compatibility_date = "2026-08-01"
 workers_dev = true
 preview_urls = false
 
+[vars]
+ENVIRONMENT = "production"
+
 [secrets]
-required = ["JQUANTS_API_KEY", "JQUANTS_PROXY_TOKEN"]
+required = ["JQUANTS_API_KEY", "JQUANTS_PROXY_TOKEN", "JQUANTS_RPC_CURSOR_HMAC_KEY"]
 
 # Secret bindings (values set via `wrangler secret put`, never in this file):
 # - JQUANTS_API_KEY
 # - JQUANTS_PROXY_TOKEN        (allowlisted upstream GET only)
+# - JQUANTS_RPC_CURSOR_HMAC_KEY (target-only RPC navigation; no key fallback)
 
 [observability]
 enabled = true
@@ -40,8 +44,11 @@ name = "quant-platform-ingestion-secrets"
 workers_dev = true
 preview_urls = false
 
+[env.production.vars]
+ENVIRONMENT = "production"
+
 [env.production.secrets]
-required = ["JQUANTS_API_KEY", "JQUANTS_PROXY_TOKEN"]
+required = ["JQUANTS_API_KEY", "JQUANTS_PROXY_TOKEN", "JQUANTS_RPC_CURSOR_HMAC_KEY"]
 
 [[env.production.ratelimits]]
 name = "PROXY_RATE_LIMITER"

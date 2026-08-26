@@ -2,10 +2,11 @@
   "name": "quant-platform-ingestion-secrets",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "J-Quants API key holder + authenticated proxy for local ingestion runners",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",
     "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
     "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
     "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"

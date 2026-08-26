@@ -254,7 +254,11 @@ PRODUCTION_SECRET_NAMES: dict[str, tuple[str, ...]] = {
         "INGESTION_RUN_TOKEN",
         "JQUANTS_API_KEY",
     ),
-    "ingestion-secrets": ("JQUANTS_API_KEY", "JQUANTS_PROXY_TOKEN"),
+    "ingestion-secrets": (
+        "JQUANTS_API_KEY",
+        "JQUANTS_PROXY_TOKEN",
+        "JQUANTS_RPC_CURSOR_HMAC_KEY",
+    ),
     "quant-ops-mcp": (
         "GITHUB_CLIENT_ID",
         "GITHUB_CLIENT_SECRET",
@@ -306,7 +310,10 @@ _PINNED_PACKAGE_SCRIPTS = {
     "ingestion-secrets": {
         **_COMMON_PACKAGE_SCRIPTS,
         "cf-typegen": _WRANGLER_PACKAGE_SCRIPT_POLICY["cf-typegen"],
-        "test": "vitest run",
+        "test": (
+            "vitest run --config vitest.config.ts && "
+            "vitest run --config vitest.runtime.config.ts"
+        ),
     },
     "quant-ops-mcp": {
         **_COMMON_PACKAGE_SCRIPTS,

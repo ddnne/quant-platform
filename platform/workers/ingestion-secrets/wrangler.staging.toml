@@ -6,6 +6,9 @@ compatibility_date = "2026-08-01"
 workers_dev = false
 preview_urls = false
 
+[vars]
+ENVIRONMENT = "staging"
+
 # No public route and no secret bindings until an internal service-binding
 # consumer is deployed.
 

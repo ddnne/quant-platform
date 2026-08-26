@@ -1,0 +1,19 @@
+name = "quant-platform-ingestion-secrets-test"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+workers_dev = false
+preview_urls = false
+
+[vars]
+ENVIRONMENT = "production"
+JQUANTS_API_KEY = "jq-runtime-api-key-not-for-live"
+JQUANTS_PROXY_TOKEN = "jq-runtime-proxy-token-not-for-live"
+JQUANTS_RPC_CURSOR_HMAC_KEY = "jq-runtime-cursor-hmac-key-not-for-live-00000000000000000000000000000000"
+
+[[ratelimits]]
+name = "PROXY_RATE_LIMITER"
+namespace_id = "63103"
+
+[ratelimits.simple]
+limit = 1000
+period = 60

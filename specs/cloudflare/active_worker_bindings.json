@@ -135,6 +135,56 @@
       "version_metadata": {},
       "workers_dev": false
     },
+    "ingestion-secrets": {
+      "account_id": null,
+      "ai": {},
+      "compatibility_date": "2026-08-01",
+      "compatibility_flags": [],
+      "config": "platform/workers/ingestion-secrets/wrangler.test.toml",
+      "crons": [],
+      "d1_databases": [],
+      "durable_objects": [],
+      "kv_namespaces": [],
+      "main": "src/index.ts",
+      "migrations": [],
+      "name": "quant-platform-ingestion-secrets-test",
+      "observability": {},
+      "placement": {},
+      "preview_urls": false,
+      "queue_consumers": [],
+      "queue_producers": [],
+      "r2_buckets": [],
+      "ratelimits": [
+        {
+          "name": "PROXY_RATE_LIMITER",
+          "namespace_id": "63103",
+          "simple": {
+            "limit": 1000,
+            "period": 60
+          }
+        }
+      ],
+      "route": null,
+      "routes": [],
+      "secret_names": [],
+      "services": [],
+      "tail_consumers": [],
+      "toolchain": {
+        "@cloudflare/vitest-plugin": "1.0.0",
+        "@cloudflare/workers-types": "5.20260825.1",
+        "typescript": "5.9.2",
+        "vitest": "4.1.11",
+        "wrangler": "4.125.0"
+      },
+      "vars": {
+        "ENVIRONMENT": "production",
+        "JQUANTS_API_KEY": "jq-runtime-api-key-not-for-live",
+        "JQUANTS_PROXY_TOKEN": "jq-runtime-proxy-token-not-for-live",
+        "JQUANTS_RPC_CURSOR_HMAC_KEY": "jq-runtime-cursor-hmac-key-not-for-live-00000000000000000000000000000000"
+      },
+      "version_metadata": {},
+      "workers_dev": false
+    },
     "quant-ops-mcp": {
       "account_id": null,
       "ai": {},
@@ -340,7 +390,7 @@
     "ingestion-secrets": {
       "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
       "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
-      "test": "vitest run",
+      "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",
       "typecheck": "tsc --noEmit",
       "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
     },
@@ -843,7 +893,8 @@
         "routes": [],
         "secret_names": [
           "JQUANTS_API_KEY",
-          "JQUANTS_PROXY_TOKEN"
+          "JQUANTS_PROXY_TOKEN",
+          "JQUANTS_RPC_CURSOR_HMAC_KEY"
         ],
         "services": [],
         "tail_consumers": [],
@@ -854,7 +905,9 @@
           "vitest": "4.1.11",
           "wrangler": "4.125.0"
         },
-        "vars": {},
+        "vars": {
+          "ENVIRONMENT": "production"
+        },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
@@ -896,7 +949,8 @@
         "routes": [],
         "secret_names": [
           "JQUANTS_API_KEY",
-          "JQUANTS_PROXY_TOKEN"
+          "JQUANTS_PROXY_TOKEN",
+          "JQUANTS_RPC_CURSOR_HMAC_KEY"
         ],
         "services": [],
         "tail_consumers": [],
@@ -907,7 +961,9 @@
           "vitest": "4.1.11",
           "wrangler": "4.125.0"
         },
-        "vars": {},
+        "vars": {
+          "ENVIRONMENT": "production"
+        },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
@@ -957,7 +1013,9 @@
           "vitest": "4.1.11",
           "wrangler": "4.125.0"
         },
-        "vars": {},
+        "vars": {
+          "ENVIRONMENT": "staging"
+        },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
