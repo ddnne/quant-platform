@@ -9,12 +9,24 @@ Object.
 ## Public entry
 
 ```python
-from gateway import OfflineFixtureAIGateway, GatewayBudget, GatewayResult, GatewaySchemaRejected, OfflineStubProvider
+from gateway import OfflineFixture, OfflineFixtureAIGateway, GatewayBudget, GatewayResult, GatewaySchemaRejected
 ```
 
-`AIGateway` remains a compatibility alias for `OfflineFixtureAIGateway`; it does
-not restore a Python production-provider path. Public result evidence includes
-`execution_mode=OFFLINE_FIXTURE_DRAFT` and `promotion_eligible=false`.
+`AIGateway` remains a compatibility alias for `OfflineFixtureAIGateway`; both
+accept only the exact frozen, data-only `OfflineFixture` type. Structural
+providers, callables, subclasses, and live-provider adapters are rejected at
+runtime. Failure cases use closed fixture modes rather than executable test
+providers. This does not restore a Python production-provider path. Public
+result evidence includes `execution_mode=OFFLINE_FIXTURE_DRAFT` and
+`promotion_eligible=false`.
+
+After fixture execution starts, exact measured usage—or the reserved prompt
+estimate when usage is unavailable—is settled once to both the volatile helper
+and persistent `ResearchBudgetCapability` before schema decoding. Rejected
+schemas and already-started failures therefore cannot erase usage. Persistent
+audit is two-phase: the provider charge trigger is committed first, then one
+idempotent terminal outcome (`success`, `schema_reject`, `provider_error`,
+`invalid_usage`, or `actual_overage`) is finalized without charging again.
 
 ## Allowed imports
 

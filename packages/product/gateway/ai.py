@@ -1,6 +1,6 @@
 """Offline-fixture closed-schema gateway — fail-closed typed boundary.
 
-Fixture Provider → raw → strict typed decoder → GatewayResult[T] → downstream.
+Fixture data → strict typed decoder → GatewayResult[T] → downstream.
 No raw-dict fallback on decoder failure. No production decode=False.
 Generated code is never executed.
 
@@ -14,13 +14,17 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, ClassVar, Generic, Mapping, Protocol, TypeVar
+from enum import Enum
+from pathlib import Path
+from typing import Any, ClassVar, Generic, Mapping, TypeVar
 from uuid import uuid4
 
 from selection.budget_ledger import (
+    BudgetExhaustedError,
     MassResearchDisabledError,
     ResearchBudgetCapability,
 )
+from selection.screen import ExperimentBudget
 
 T = TypeVar("T")
 
@@ -56,6 +60,14 @@ _INSIGHT_ALLOWED_KEYS = frozenset(
 
 class GatewaySchemaRejected(RuntimeError):
     """Raised when provider output fails strict typed decode."""
+
+
+class OfflineFixtureProviderError(RuntimeError):
+    """Closed offline fixture representing a provider-side failure."""
+
+
+class OfflineFixtureUsageError(RuntimeError):
+    """Closed offline fixture representing unavailable/invalid usage."""
 
 
 @dataclass(frozen=True)
@@ -136,17 +148,34 @@ class GatewayBudget:
         calls: int = 1,
         tokens: int = 0,
     ) -> None:
-        """Release the full estimate, then record measured fixture usage."""
+        """Settle usage and raise only after conservative charge is recorded."""
+        over_limit = self.settle(
+            reservation,
+            calls=calls,
+            tokens=tokens,
+        )
+        if over_limit:
+            raise RuntimeError("AI gateway actual usage exceeded volatile budget")
+
+    def settle(
+        self,
+        reservation: GatewayBudgetReservation,
+        *,
+        calls: int = 1,
+        tokens: int = 0,
+    ) -> bool:
+        """Release the estimate, record usage once, and report any overage."""
         calls = max(0, int(calls))
         tokens = max(0, int(tokens))
         if not self._release_exact(reservation):
             raise RuntimeError("AI gateway budget reservation already released")
-        if self.calls_used + calls > self.max_calls:
-            raise RuntimeError("AI gateway model call budget exhausted")
-        if self.tokens_used + tokens > self.max_tokens:
-            raise RuntimeError("AI gateway token budget exhausted")
+        over_limit = (
+            self.calls_used + calls > self.max_calls
+            or self.tokens_used + tokens > self.max_tokens
+        )
         self.calls_used += calls
         self.tokens_used += tokens
+        return over_limit
 
     def charge(self, tokens: int = 0) -> None:
         """Legacy single-step charge (reserve+reconcile of 1 call)."""
@@ -162,22 +191,129 @@ class GatewayBudget:
             self.release(reservation)
 
 
-class OfflineFixtureProvider(Protocol):
-    """Fixture-only provider protocol; not an Edge production capability."""
+class OfflineFixtureMode(str, Enum):
+    MINIMAL_SUCCESS = "MINIMAL_SUCCESS"
+    PAYLOAD = "PAYLOAD"
+    PROVIDER_ERROR = "PROVIDER_ERROR"
+    INVALID_USAGE = "INVALID_USAGE"
 
-    def complete(
-        self,
+
+@dataclass(frozen=True)
+class OfflineFixtureUsage:
+    input_tokens: int
+    output_tokens: int
+    cached_tokens: int = 0
+
+    def __post_init__(self) -> None:
+        for name in ("input_tokens", "output_tokens", "cached_tokens"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} must be an integer >= 0")
+        if self.input_tokens + self.output_tokens + self.cached_tokens < 1:
+            raise ValueError("offline fixture usage must contain at least one token")
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON number rejected: {value}")
+
+
+def _strict_json_object(raw: str) -> dict[str, Any]:
+    def pairs_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in out:
+                raise ValueError(f"duplicate JSON key rejected: {key}")
+            out[key] = value
+        return out
+
+    decoded = json.loads(
+        raw,
+        object_pairs_hook=pairs_hook,
+        parse_constant=_reject_json_constant,
+    )
+    if type(decoded) is not dict:
+        raise ValueError("offline fixture payload must be a JSON object")
+    return decoded
+
+
+@dataclass(frozen=True)
+class OfflineFixture:
+    """Exact data-only fixture. It owns no callable or network capability."""
+
+    mode: OfflineFixtureMode = OfflineFixtureMode.MINIMAL_SUCCESS
+    payload_json: str | None = None
+    usage: OfflineFixtureUsage | None = None
+    error_message: str | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.mode) is not OfflineFixtureMode:
+            raise TypeError("offline fixture mode must be OfflineFixtureMode")
+        if self.usage is not None and type(self.usage) is not OfflineFixtureUsage:
+            raise TypeError("offline fixture usage must be exact OfflineFixtureUsage")
+        if self.mode is OfflineFixtureMode.PAYLOAD:
+            if (
+                type(self.payload_json) is not str
+                or not self.payload_json
+                or len(self.payload_json.encode("utf-8")) > 64 * 1024
+            ):
+                raise ValueError("PAYLOAD fixture requires bounded payload_json")
+            payload = _strict_json_object(self.payload_json)
+            if "usage" in payload or "usage_tokens" in payload:
+                raise ValueError("fixture usage must use OfflineFixtureUsage")
+            if self.error_message is not None:
+                raise ValueError("PAYLOAD fixture cannot carry error_message")
+            return
+        if self.payload_json is not None:
+            raise ValueError(f"{self.mode.value} fixture cannot carry payload_json")
+        if self.mode is OfflineFixtureMode.PROVIDER_ERROR:
+            if (
+                type(self.error_message) is not str
+                or not self.error_message
+                or self.error_message != self.error_message.strip()
+                or len(self.error_message) > 256
+            ):
+                raise ValueError("PROVIDER_ERROR requires bounded error_message")
+            return
+        if self.error_message is not None:
+            raise ValueError(f"{self.mode.value} fixture cannot carry error_message")
+        if self.mode is OfflineFixtureMode.INVALID_USAGE and self.usage is not None:
+            raise ValueError("INVALID_USAGE cannot claim measured usage")
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
         *,
-        role: str,
-        task: str,
-        prompt: str,
-        expected_schema: str,
-    ) -> Mapping[str, Any]:
-        ...
+        usage: OfflineFixtureUsage | None = None,
+    ) -> OfflineFixture:
+        canonical = json.dumps(
+            dict(payload),
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return cls(
+            mode=OfflineFixtureMode.PAYLOAD,
+            payload_json=canonical,
+            usage=usage,
+        )
 
+    @classmethod
+    def provider_error(
+        cls,
+        message: str = "offline fixture provider error",
+        *,
+        usage: OfflineFixtureUsage | None = None,
+    ) -> OfflineFixture:
+        return cls(
+            mode=OfflineFixtureMode.PROVIDER_ERROR,
+            usage=usage,
+            error_message=message,
+        )
 
-# Compatibility type alias. It does not designate a production provider path.
-LLMProvider = OfflineFixtureProvider
+    @classmethod
+    def invalid_usage(cls) -> OfflineFixture:
+        return cls(mode=OfflineFixtureMode.INVALID_USAGE)
 
 
 def _minimal_stub_body(schema: str, *, role: str, task: str, prompt: str) -> dict[str, Any]:
@@ -226,20 +362,9 @@ def _minimal_stub_body(schema: str, *, role: str, task: str, prompt: str) -> dic
     raise GatewaySchemaRejected(f"no offline stub for schema {schema!r}")
 
 
-class OfflineStubProvider:
-    """Deterministic offline provider used when no LLM is configured."""
-
-    def complete(
-        self,
-        *,
-        role: str,
-        task: str,
-        prompt: str,
-        expected_schema: str,
-    ) -> Mapping[str, Any]:
-        return _minimal_stub_body(
-            expected_schema, role=role, task=task, prompt=prompt
-        )
+# Compatibility constructor name. It resolves to the same exact data-only type;
+# no structural provider protocol or callable is retained.
+OfflineStubProvider = OfflineFixture
 
 
 @dataclass(frozen=True)
@@ -247,6 +372,7 @@ class GatewayUsage:
     input_tokens: int
     output_tokens: int
     total_tokens: int
+    cached_tokens: int = 0
     calls: int = 1
 
 
@@ -283,6 +409,7 @@ class GatewayResult(Generic[T]):
             "calls_used": self.usage.calls,
             "tokens_used": self.usage.total_tokens,
             "charged_tokens": self.usage.total_tokens,
+            "cached_tokens_used": self.usage.cached_tokens,
             "cost": self.cost,
             "schema_version": self.schema_version,
             "prompt_digest": self.prompt_digest,
@@ -357,50 +484,69 @@ def _decode_typed(schema: str, payload: Mapping[str, Any]) -> Any:
     raise GatewaySchemaRejected(f"no decoder for schema {schema!r}")
 
 
-def _extract_usage(raw: dict[str, Any], *, estimate: int) -> GatewayUsage:
-    """Split provider usage into input/output tokens; fall back to prompt estimate."""
-    usage_block = raw.pop("usage", None)
-    usage_tokens = int(raw.pop("usage_tokens", 0) or 0)
-    input_tokens = 0
-    output_tokens = 0
-    if isinstance(usage_block, Mapping):
-        input_tokens = max(
-            0,
-            int(
-                usage_block.get("input_tokens")
-                or usage_block.get("prompt_tokens")
-                or 0
+def _settlement_usage(
+    fixture_usage: OfflineFixtureUsage | None,
+    reservation: GatewayBudgetReservation,
+) -> tuple[GatewayUsage, str]:
+    if fixture_usage is None:
+        return (
+            GatewayUsage(
+                input_tokens=reservation.tokens,
+                output_tokens=0,
+                total_tokens=reservation.tokens,
+                cached_tokens=0,
+                calls=reservation.calls,
             ),
+            "reserved_estimate",
         )
-        output_tokens = max(
-            0,
-            int(
-                usage_block.get("output_tokens")
-                or usage_block.get("completion_tokens")
-                or 0
-            ),
-        )
-        total = int(usage_block.get("total_tokens") or 0)
-        if usage_tokens <= 0:
-            usage_tokens = total or (input_tokens + output_tokens)
-    if input_tokens <= 0 and output_tokens <= 0:
-        charge = usage_tokens if usage_tokens > 0 else max(1, int(estimate))
-        input_tokens = charge
-        output_tokens = 0
-    total_tokens = input_tokens + output_tokens
-    if total_tokens <= 0:
-        total_tokens = max(1, int(estimate))
-        input_tokens = total_tokens
-    return GatewayUsage(
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        total_tokens=total_tokens,
-        calls=1,
+    total = (
+        fixture_usage.input_tokens
+        + fixture_usage.output_tokens
+        + fixture_usage.cached_tokens
+    )
+    return (
+        GatewayUsage(
+            input_tokens=fixture_usage.input_tokens,
+            output_tokens=fixture_usage.output_tokens,
+            total_tokens=total,
+            cached_tokens=fixture_usage.cached_tokens,
+            calls=reservation.calls,
+        ),
+        "measured",
     )
 
 
 def _prompt_digest(prompt: str) -> str:
     return "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+
+def _require_exact_budget_capability(
+    candidate: object,
+) -> ResearchBudgetCapability:
+    """Reject virtual or malformed settlement capabilities at the gateway edge."""
+    if type(candidate) is not ResearchBudgetCapability:
+        raise MassResearchDisabledError(
+            "exact ResearchBudgetCapability is required; subclasses are not authority"
+        )
+    try:
+        if (
+            type(candidate.budget_id) is not str
+            or not candidate.budget_id
+            or candidate.budget_id != candidate.budget_id.strip()
+            or len(candidate.budget_id) > 128
+        ):
+            raise ValueError("budget_id invalid")
+        if not isinstance(candidate.ledger_path, Path):
+            raise TypeError("ledger_path must be a Path")
+        if type(candidate.limits) is not ExperimentBudget:
+            raise TypeError("limits must be exact ExperimentBudget")
+        ExperimentBudget.__post_init__(candidate.limits)
+        ResearchBudgetCapability.__post_init__(candidate)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise MassResearchDisabledError(
+            f"ResearchBudgetCapability state invalid: {exc}"
+        ) from exc
+    return candidate
 
 
 @dataclass
@@ -410,12 +556,28 @@ class OfflineFixtureAIGateway:
     EXECUTION_MODE: ClassVar[str] = OFFLINE_FIXTURE_DRAFT
     EDGE_PRODUCTION_PROVIDER_EXIT: ClassVar[bool] = False
     PROMOTION_ELIGIBLE: ClassVar[bool] = False
+    PROVIDER_NAME: ClassVar[str] = "offline_fixture"
+    MODEL_NAME: ClassVar[str] = "offline-fixture/v1"
 
-    provider: OfflineFixtureProvider = field(default_factory=OfflineStubProvider)
+    provider: OfflineFixture = field(default_factory=OfflineFixture)
     budget: GatewayBudget = field(default_factory=GatewayBudget)
     research_budget: ResearchBudgetCapability | None = None
-    provider_name: str = "offline_stub"
-    model_name: str = "offline-stub/v0"
+
+    def __post_init__(self) -> None:
+        self._require_exact_fixture()
+
+    def _require_exact_fixture(self) -> OfflineFixture:
+        fixture = self.provider
+        if type(fixture) is not OfflineFixture:
+            raise TypeError(
+                "provider must be exact data-only OfflineFixture; "
+                "production provider execution exits through Edge"
+            )
+        try:
+            OfflineFixture.__post_init__(fixture)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise TypeError(f"offline fixture invalid: {exc}") from exc
+        return fixture
 
     def run(
         self,
@@ -429,12 +591,10 @@ class OfflineFixtureAIGateway:
     ) -> GatewayResult[Any]:
         """Offline fixture/DRAFT API — always strict decode. No decode=False.
 
-        The in-process estimate is always released in ``finally``. Measured
-        fixture usage is charged even when strict schema decoding later rejects
-        the response. The persistent ResearchBudgetCapability retains its
-        existing contract: it is charged only after successful strict decode.
-        Missing/exhausted capability fail-closes, and operator_override cannot
-        substitute for it.
+        Once fixture execution starts, measured usage (or the reserved estimate
+        when unknown) is settled exactly once to both volatile and persistent
+        ledgers before strict decode. Missing capability fail-closes, and
+        operator_override cannot substitute for it.
         """
         if operator_override is not None:
             raise MassResearchDisabledError(
@@ -450,81 +610,171 @@ class OfflineFixtureAIGateway:
             if research_budget is not None
             else self.research_budget
         )
-        if not isinstance(cap, ResearchBudgetCapability):
-            raise MassResearchDisabledError(
-                "ResearchBudgetCapability is required; AI gateway complete is fail-closed"
-            )
-        # Pre-call reserve using prompt estimate; reconcile with provider usage.
+        cap = _require_exact_budget_capability(cap)
+        fixture = self._require_exact_fixture()
         estimate = max(1, len(prompt) // 4)
         reservation = self.budget.reserve(calls=1, tokens=estimate)
-        usage: GatewayUsage | None = None
-        try:
-            raw = dict(
-                self.provider.complete(
-                    role=role,
-                    task=task,
-                    prompt=prompt,
-                    expected_schema=expected_schema,
-                )
+        settlement_id = str(uuid4())
+        provider_started = False
+        volatile_settled = False
+        persistent_settled = False
+        persistent_over_limit = False
+        usage, usage_source = _settlement_usage(fixture.usage, reservation)
+        charge_trigger = "provider_error"
+        terminal_finalized = False
+        terminal_intent: str | None = None
+        volatile_over_limit = False
+
+        def persist_usage_once() -> bool:
+            return cap.settle_provider_usage_once(
+                settlement_id=settlement_id,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cached_tokens=usage.cached_tokens,
+                model_calls=usage.calls,
+                usage_source=usage_source,
+                charge_trigger=charge_trigger,
             )
-            usage = _extract_usage(raw, estimate=estimate)
-            self.budget.reconcile(
-                reservation,
-                calls=usage.calls,
-                tokens=usage.total_tokens,
-            )
-        finally:
-            # Idempotent after reconcile; exact on provider/usage failures.
-            self.budget.release(reservation)
 
-        if usage is None:  # pragma: no cover - finally preserves the invariant
-            raise RuntimeError("AI gateway provider usage unavailable")
-
-        if "schema" in raw:
-            schema = str(raw.get("schema"))
-            if schema not in ALLOWED_OUTPUT_SCHEMAS:
-                raise GatewaySchemaRejected("provider returned non-closed schema")
-            if schema != expected_schema:
-                raise GatewaySchemaRejected(
-                    f"provider schema {schema!r} != expected {expected_schema!r}"
+        def settle_started_usage() -> None:
+            nonlocal volatile_settled, persistent_settled
+            nonlocal volatile_over_limit, persistent_over_limit
+            if not volatile_settled:
+                volatile_over_limit = self.budget.settle(
+                    reservation,
+                    calls=usage.calls,
+                    tokens=usage.total_tokens,
                 )
-        schema = expected_schema
+                volatile_settled = True
+            if not persistent_settled:
+                try:
+                    persistent_over_limit = persist_usage_once()
+                except Exception:
+                    # Exact settlement IDs distinguish a committed-but-unseen
+                    # response from a fresh charge and make this retry safe.
+                    persistent_over_limit = persist_usage_once()
+                persistent_settled = True
+
+        def finalize_terminal(terminal_outcome: str) -> None:
+            nonlocal terminal_finalized, terminal_intent
+            terminal_intent = terminal_outcome
+            try:
+                cap.finalize_provider_settlement_once(
+                    settlement_id=settlement_id,
+                    terminal_outcome=terminal_outcome,
+                )
+            except Exception:
+                # The first transaction may have committed before its response
+                # was observed. An exact retry is safe and never re-charges.
+                cap.finalize_provider_settlement_once(
+                    settlement_id=settlement_id,
+                    terminal_outcome=terminal_outcome,
+                )
+            terminal_finalized = True
+
+        def raise_settlement_overage() -> None:
+            if persistent_over_limit:
+                finalize_terminal("actual_overage")
+                raise BudgetExhaustedError(
+                    "provider usage exceeded persistent budget after start; usage recorded"
+                )
+            if volatile_over_limit:
+                finalize_terminal("actual_overage")
+                raise RuntimeError("AI gateway actual usage exceeded volatile budget")
 
         try:
-            typed = _decode_typed(schema, raw)
-        except GatewaySchemaRejected:
+            try:
+                provider_started = True
+                if fixture.mode is OfflineFixtureMode.PROVIDER_ERROR:
+                    charge_trigger = "provider_error"
+                    settle_started_usage()
+                    raise_settlement_overage()
+                    finalize_terminal("provider_error")
+                    raise OfflineFixtureProviderError(
+                        fixture.error_message or "provider error"
+                    )
+                if fixture.mode is OfflineFixtureMode.INVALID_USAGE:
+                    charge_trigger = "invalid_usage"
+                    settle_started_usage()
+                    raise_settlement_overage()
+                    finalize_terminal("invalid_usage")
+                    raise OfflineFixtureUsageError(
+                        "offline fixture usage unavailable; reserved estimate charged"
+                    )
+                charge_trigger = "provider_response"
+                if fixture.mode is OfflineFixtureMode.MINIMAL_SUCCESS:
+                    raw = _minimal_stub_body(
+                        expected_schema,
+                        role=role,
+                        task=task,
+                        prompt=prompt,
+                    )
+                else:
+                    raw = _strict_json_object(fixture.payload_json or "")
+                settle_started_usage()
+                raise_settlement_overage()
+            finally:
+                if provider_started:
+                    settle_started_usage()
+                else:
+                    self.budget.release(reservation)
+
+            try:
+                if "schema" in raw:
+                    schema = str(raw.get("schema"))
+                    if schema not in ALLOWED_OUTPUT_SCHEMAS:
+                        raise GatewaySchemaRejected(
+                            "provider returned non-closed schema"
+                        )
+                    if schema != expected_schema:
+                        raise GatewaySchemaRejected(
+                            f"provider schema {schema!r} != expected {expected_schema!r}"
+                        )
+                schema = expected_schema
+                typed = _decode_typed(schema, raw)
+            except GatewaySchemaRejected:
+                finalize_terminal("schema_reject")
+                raise
+            except Exception as exc:  # pragma: no cover — defensive
+                finalize_terminal("schema_reject")
+                raise GatewaySchemaRejected(str(exc)) from exc
+
+            schema_version = schema
+            if schema == "Insight" and isinstance(typed, Mapping):
+                schema_version = str(
+                    typed.get("schema_version") or INSIGHT_SCHEMA_VERSION
+                )
+            elif schema == "StrategySpec" and hasattr(typed, "version"):
+                schema_version = str(typed.version)
+
+            result = GatewayResult(
+                payload=typed,
+                schema_name=schema,
+                provider=self.PROVIDER_NAME,
+                model=self.MODEL_NAME,
+                request_id=settlement_id,
+                usage=usage,
+                cost=None,
+                schema_version=schema_version,
+                prompt_digest=_prompt_digest(prompt),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                budget_id=cap.budget_id,
+                execution_mode=self.EXECUTION_MODE,
+            )
+            finalize_terminal("success")
+            return result
+        except BaseException:
+            if persistent_settled and not terminal_finalized:
+                if terminal_intent is not None:
+                    fallback_outcome = terminal_intent
+                elif persistent_over_limit or volatile_over_limit:
+                    fallback_outcome = "actual_overage"
+                elif charge_trigger == "provider_response":
+                    fallback_outcome = "schema_reject"
+                else:
+                    fallback_outcome = charge_trigger
+                finalize_terminal(fallback_outcome)
             raise
-        except Exception as exc:  # pragma: no cover — defensive
-            raise GatewaySchemaRejected(str(exc)) from exc
-
-        # Charge only after successful strict decode. Single consume is atomic
-        # across input_tokens/output_tokens/model_calls (ROLLBACK if any cap trips).
-        cap.charge_provider_usage(
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
-            model_calls=usage.calls,
-        )
-
-        schema_version = schema
-        if schema == "Insight" and isinstance(typed, Mapping):
-            schema_version = str(typed.get("schema_version") or INSIGHT_SCHEMA_VERSION)
-        elif schema == "StrategySpec" and hasattr(typed, "version"):
-            schema_version = str(typed.version)
-
-        return GatewayResult(
-            payload=typed,
-            schema_name=schema,
-            provider=self.provider_name,
-            model=self.model_name,
-            request_id=str(uuid4()),
-            usage=usage,
-            cost=None,
-            schema_version=schema_version,
-            prompt_digest=_prompt_digest(prompt),
-            created_at=datetime.now(timezone.utc).isoformat(),
-            budget_id=cap.budget_id,
-            execution_mode=self.EXECUTION_MODE,
-        )
 
     def _run_raw_for_tests(
         self,
@@ -560,9 +810,12 @@ __all__ = [
     "GatewaySchemaRejected",
     "GatewayUsage",
     "INSIGHT_SCHEMA_VERSION",
-    "LLMProvider",
     "OFFLINE_FIXTURE_DRAFT",
+    "OfflineFixture",
     "OfflineFixtureAIGateway",
-    "OfflineFixtureProvider",
+    "OfflineFixtureMode",
+    "OfflineFixtureProviderError",
+    "OfflineFixtureUsage",
+    "OfflineFixtureUsageError",
     "OfflineStubProvider",
 ]
