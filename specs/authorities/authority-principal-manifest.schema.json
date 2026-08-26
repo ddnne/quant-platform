@@ -63,7 +63,22 @@
     "parallel_protocol_schema_digests": {
       "type": "object",
       "additionalProperties": false,
-      "maxProperties": 0
+      "required": [
+        "receipt_verify_public_keys",
+        "exact_four_authority_protocol",
+        "exact_four_result_manifest"
+      ],
+      "properties": {
+        "receipt_verify_public_keys": {
+          "$ref": "#/$defs/sha256"
+        },
+        "exact_four_authority_protocol": {
+          "$ref": "#/$defs/sha256"
+        },
+        "exact_four_result_manifest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
     },
     "residual_risks": {
       "type": "object",

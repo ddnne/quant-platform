@@ -33,10 +33,20 @@ PROTOCOL_SCHEMAS = {
         AUTHORITY_SPECS / "jquants_acquisition_rpc.schema.json"
     ),
 }
-# Parallel lanes must add their reviewed path here and their digest to the
-# manifest in the same commit.  An empty checked-in object is intentional: a
-# caller cannot bless a new protocol by self-declaring only its digest.
-PARALLEL_PROTOCOL_SCHEMAS: dict[str, Path] = {}
+# Parallel lanes must add each independently reviewed path here and its digest
+# to the manifest in the same commit. A caller cannot bless a new protocol by
+# self-declaring only its digest.
+PARALLEL_PROTOCOL_SCHEMAS: dict[str, Path] = {
+    "receipt_verify_public_keys": (
+        ROOT / "specs" / "receipts" / "receipt_verify_public_keys.schema.json"
+    ),
+    "exact_four_authority_protocol": (
+        ROOT / "specs" / "ready" / "exact_four_authority_protocol.schema.json"
+    ),
+    "exact_four_result_manifest": (
+        ROOT / "specs" / "ready" / "exact_four_result_manifest.schema.json"
+    ),
+}
 
 PRINCIPALS = (
     "receipt",
@@ -278,7 +288,7 @@ EXPECTED_RESIDUAL_RISK = "cloudflare_workers_scripts_write_account_scope"
 # contains its own body digest; this independent code pin prevents a caller from
 # changing the contract and merely recomputing that self-declared digest.
 PINNED_MANIFEST_DIGEST = (
-    "sha256:6306542c0e87c9c438faed9c739af4e9805edec66fe0bd7367ba21a04366b4c5"
+    "sha256:157c281c27981707a83e5a4938b5f9c6b2737d533cd956207c62548e2a4bea73"
 )
 
 _BROAD_CAPABILITY_TOKENS = frozenset(
