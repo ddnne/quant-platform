@@ -14,6 +14,23 @@ from tests import jquants_acquisition_test_support as support
 from tests.receipt_test_support import open_test_receipt_service
 
 
+_CANONICAL_VECTORS_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "specs"
+    / "authorities"
+    / "jquants_acquisition_canonical_vectors.json"
+)
+
+
+def _canonical_vectors() -> dict[str, dict]:
+    document = json.loads(_CANONICAL_VECTORS_PATH.read_text(encoding="utf-8"))
+    assert document["schema_version"] == "jquants-acquisition-canonical-vectors/v1"
+    assert document["canonicalization"] == "RFC8259_UTF8_SORTED_KEYS_NO_WHITESPACE"
+    vectors = {row["id"]: row for row in document["vectors"]}
+    assert len(vectors) == len(document["vectors"])
+    return vectors
+
+
 def _required(dataset: str, target_end: str = "2026-07-31"):
     return list(
         plan_required_segments(
@@ -106,6 +123,101 @@ def test_live_range_capture_verifies_provider_page_chain(
     assert support.verify_live_acquisition(
         fixture, service=service, required=required
     )
+
+
+def test_jquants_canonical_vectors_match_worker_utf8_bytes() -> None:
+    from ingestion.jquants import acquisition_collection as acquisition
+    from storage.receipt_crypto import canonical_evidence_digest
+
+    vectors = _canonical_vectors()
+    assert set(vectors) == {
+        "ascii-pagination-key",
+        "unicode-bmp-pagination-key",
+        "unicode-astral-pagination-key",
+    }
+    for vector in vectors.values():
+        assert (
+            acquisition._canonical_acquisition_bytes(vector["value"]).decode("utf-8")
+            == vector["canonical_json"]
+        )
+        assert acquisition._digest(vector["value"]) == vector["sha256_digest"]
+
+    ascii_value = vectors["ascii-pagination-key"]["value"]
+    assert acquisition._digest(ascii_value) == canonical_evidence_digest(ascii_value)
+    exact_bytes = "次ページ".encode("utf-8")
+    assert acquisition._canonical_acquisition_bytes(exact_bytes) == exact_bytes
+    assert acquisition._digest(exact_bytes) == canonical_evidence_digest(exact_bytes)
+    with pytest.raises(ValueError, match="Out of range float values"):
+        acquisition._digest({"invalid": float("nan")})
+
+
+@pytest.mark.parametrize(
+    "vector_id",
+    ("unicode-bmp-pagination-key", "unicode-astral-pagination-key"),
+)
+def test_unicode_provider_cursor_multi_page_capture_verifies(
+    tmp_path: Path, receipt_ed25519_keys, vector_id: str
+) -> None:
+    vector = _canonical_vectors()[vector_id]
+    cursor = vector["value"]["ordered_query"][-1][1]
+    service = _service(receipt_ed25519_keys)
+    required = _required("indices_bars_daily_topix", "2024-02-29")
+    first_page = json.dumps(
+        {"data": [], "pagination_key": cursor},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    fixture = support.build_live_acquisition(
+        tmp_path=tmp_path,
+        service=service,
+        required=required,
+        raw_pages=(first_page, b'{"data":[],"pagination_key":null}'),
+    )
+    assert fixture.document["pages"][1]["metadata"]["query_digest"] == vector[
+        "sha256_digest"
+    ]
+    assert support.verify_live_acquisition(
+        fixture, service=service, required=required
+    )
+
+
+@pytest.mark.parametrize("replacement", ("legacy-ascii-escaped", "altered"))
+def test_unicode_provider_cursor_noncanonical_query_digest_fails_closed(
+    tmp_path: Path, receipt_ed25519_keys, replacement: str
+) -> None:
+    from storage.receipt_crypto import canonical_evidence_digest
+
+    vector = _canonical_vectors()["unicode-bmp-pagination-key"]
+    cursor = vector["value"]["ordered_query"][-1][1]
+    replacement_digest = (
+        canonical_evidence_digest(vector["value"])
+        if replacement == "legacy-ascii-escaped"
+        else "sha256:" + "f" * 64
+    )
+    assert replacement_digest != vector["sha256_digest"]
+
+    def replace_query_digest(document):
+        metadata = document["pages"][1]["metadata"]
+        metadata["query_digest"] = replacement_digest
+        document["pages"][1]["headers"] = support._metadata_headers(metadata)
+
+    service = _service(receipt_ed25519_keys)
+    required = _required("indices_bars_daily_topix", "2024-02-29")
+    first_page = json.dumps(
+        {"data": [], "pagination_key": cursor},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    fixture = support.build_live_acquisition(
+        tmp_path=tmp_path,
+        service=service,
+        required=required,
+        raw_pages=(first_page, b'{"data":[],"pagination_key":null}'),
+        mutate_document=replace_query_digest,
+    )
+    with pytest.raises(ValueError, match="receipt-side resolution"):
+        support.verify_live_acquisition(fixture, service=service, required=required)
+    assert service._issued_evidence == []
 
 
 def test_sliced_capture_enumerates_every_calendar_day(

@@ -15,11 +15,10 @@ from typing import Any, Callable, Mapping, Sequence
 
 from ingestion.jquants import acquisition_collection as acquisition
 from storage.coverage_ledger import RequiredCoverageSegment
-from storage.receipt_crypto import canonical_evidence_digest
 
 
 def _digest(value: Any) -> str:
-    return canonical_evidence_digest(value)
+    return acquisition._digest(value)
 
 
 def _token(index: int) -> str:

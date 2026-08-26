@@ -33,7 +33,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence, TYPE_CHECKING
 from weakref import WeakKeyDictionary
 
-from storage.receipt_crypto import canonical_evidence_digest
+from storage.receipt_crypto import body_digest
 
 if TYPE_CHECKING:
     from storage.coverage_ledger import RequiredCoverageSegment
@@ -158,8 +158,29 @@ class _ParsedProviderPage:
     cursor: str | None
 
 
+def _canonical_acquisition_bytes(value: Any) -> bytes:
+    """Return exact bytes or the J-Quants v2 canonical JSON wire form.
+
+    The acquisition RPC pins RFC 8259 UTF-8 with sorted object keys and no
+    insignificant whitespace.  In particular, non-ASCII provider cursors stay
+    as UTF-8 instead of Python's default ``\\u`` escaping so this verifier
+    measures the same bytes as the Worker ``JSON.stringify`` canonicalizer.
+    """
+    return (
+        value
+        if isinstance(value, bytes)
+        else json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    )
+
+
 def _digest(value: Any) -> str:
-    return canonical_evidence_digest(value)
+    return body_digest(_canonical_acquisition_bytes(value))
 
 
 def _next_authority_event_sequence() -> int:

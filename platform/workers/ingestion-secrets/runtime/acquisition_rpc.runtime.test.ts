@@ -1,5 +1,6 @@
 import { exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import canonicalVectorsDocument from "../../../../specs/authorities/jquants_acquisition_canonical_vectors.json";
 import generatedRegistry from "../src/generated/jquants_acquisition_registry";
 import {
   ACQUISITION_RESPONSE_HEADER_NAMES,
@@ -7,6 +8,7 @@ import {
   type AcquisitionEnv,
 } from "../src/jquants_acquisition";
 import {
+  canonicalJson,
   canonicalDigest,
   resolveGovernedRequest,
   sha256Digest,
@@ -30,6 +32,28 @@ type RegistryRow = {
   query_resolution: Record<string, unknown>;
   source_capability: Record<string, unknown>;
 };
+
+type CanonicalVector = {
+  id: string;
+  value: {
+    schema_version: string;
+    path: string;
+    ordered_query: readonly (readonly [string, string])[];
+  };
+  canonical_json: string;
+  sha256_digest: string;
+};
+
+function canonicalVector(id: string): CanonicalVector {
+  expect(canonicalVectorsDocument).toMatchObject({
+    schema_version: "jquants-acquisition-canonical-vectors/v1",
+    canonicalization: "RFC8259_UTF8_SORTED_KEYS_NO_WHITESPACE",
+  });
+  const vectors = canonicalVectorsDocument.vectors as unknown as readonly CanonicalVector[];
+  const matches = vectors.filter((item) => item.id === id);
+  expect(matches).toHaveLength(1);
+  return matches[0]!;
+}
 
 function registryRow(datasetId: string): RegistryRow {
   const rows = generatedRegistry.datasets as unknown as readonly RegistryRow[];
@@ -150,6 +174,58 @@ afterEach(() => {
 });
 
 describe("governed J-Quants WorkerEntrypoint RPC", () => {
+  it("matches the shared ASCII and Unicode canonical JSON vectors", async () => {
+    const expectedIds = [
+      "ascii-pagination-key",
+      "unicode-bmp-pagination-key",
+      "unicode-astral-pagination-key",
+    ];
+    for (const id of expectedIds) {
+      const vector = canonicalVector(id);
+      expect(canonicalJson(vector.value)).toBe(vector.canonical_json);
+      expect(await canonicalDigest(vector.value)).toBe(vector.sha256_digest);
+    }
+  });
+
+  it.each([
+    "unicode-bmp-pagination-key",
+    "unicode-astral-pagination-key",
+  ])("keeps %s pagination RAW_PAGE and replays its UTF-8 cursor", async (vectorId) => {
+    const vector = canonicalVector(vectorId);
+    const cursor = vector.value.ordered_query.at(-1)![1];
+    const firstBody = bytes(JSON.stringify({ data: [], pagination_key: cursor }));
+    const secondBody = bytes('{"data":[],"pagination_key":null}');
+    const fetchMock = installFetch(async () =>
+      fetchMock.mock.calls.length === 1 ? upstream(firstBody) : upstream(secondBody)
+    );
+    const firstRequest = await requestFor("indices_bars_daily_topix");
+    const first = await rpc.fetch_governed_page(firstRequest);
+    expect(new Uint8Array(await first.arrayBuffer())).toEqual(firstBody);
+    const firstMeta = await metadata(first);
+    expect(firstMeta).toMatchObject({
+      evidence_state: "RAW_PAGE",
+      provider_pagination_state: "CONTINUATION",
+      pagination_state: "CONTINUATION",
+    });
+
+    const second = await rpc.fetch_governed_page({
+      ...firstRequest,
+      continuation_token: firstMeta.continuation_token,
+    });
+    expect(new Uint8Array(await second.arrayBuffer())).toEqual(secondBody);
+    const secondMeta = await metadata(second);
+    expect(secondMeta).toMatchObject({
+      evidence_state: "RAW_PAGE",
+      provider_pagination_state: "EXHAUSTED",
+      pagination_state: "EXHAUSTED",
+      query_digest: vector.sha256_digest,
+    });
+    expect(String(fetchMock.mock.calls[1]![0])).toBe(
+      "https://api.jquants.com/v2/indices/bars/daily/topix" +
+      `?from=2024-02-01&to=2024-02-29&pagination_key=${encodeURIComponent(cursor)}`,
+    );
+  });
+
   it("returns exact bytes and a chained provider continuation then exhaustion", async () => {
     const firstBody = bytes('{"data":[{"Name":"日本"}],"pagination_key":"page-2"}\n');
     const secondBody = bytes('{"data":[],"pagination_key":null}\n');
