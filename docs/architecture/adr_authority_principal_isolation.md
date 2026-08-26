@@ -40,6 +40,17 @@ All checked-in deployments remain `PENDING_NO_KEY`. Test keys, real OS users,
 Cloudflare resources, bindings, migrations, and registry activation are outside
 this contract-freeze commit.
 
+Authorization is method-scoped rather than a caller-by-operation Cartesian
+product. Each row fixes authenticated caller, target operation, purpose,
+environment set, and authentication mechanism. Frozen-mirror requests and
+handoffs repeat those values and bind them into canonical request/handoff
+digests. Staging and production have different D1 identities.
+
+The typed `JQUANTS_ACQUISITION` WorkerEntrypoint contract is a desired boundary,
+not current runtime fact. The current target is an HTTP fetch handler protected
+by `X-Ingestion-Token`, so Receipt activation remains blocked until that
+dependency is replaced and runtime-tested.
+
 ## Enforcement
 
 The schema closes every object. The validator independently pins the manifest
@@ -47,6 +58,15 @@ body and protocol-schema digests and rejects principal drift, duplicate
 identities/keys/stores/sockets/users, wildcard or broad capabilities,
 unauthorized peers, cross-environment resources, cross-signer credential
 access, a file-backed Trader key, or missing human presence.
+
+Strict runtime codecs must independently verify canonical JSON/digests,
+freshness, the signed D1 audit and governed table identity, and exactly one
+read-only SCM_RIGHTS descriptor. Authority events require canonical payload and
+event digests plus an exact sequence/prior chain. WebAuthn requires RP/origin,
+UP, UV, counter, expiry, and one-use enforcement. Until the OS peer credential,
+transactional ledgers, staging signer, and human-approval services exist, the
+public activation entrypoints fail with explicit `PENDING`; shape validation is
+diagnostic only.
 
 ## Residual risk
 

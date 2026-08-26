@@ -10,6 +10,7 @@
     "activation_status",
     "schema_digest",
     "protocol_schema_digests",
+    "parallel_protocol_schema_digests",
     "residual_risks",
     "principals",
     "manifest_digest"
@@ -33,7 +34,10 @@
       "required": [
         "frozen_mirror_request",
         "frozen_mirror_handoff",
-        "authority_event"
+        "authority_event",
+        "trader_webauthn_challenge",
+        "trader_webauthn_assertion",
+        "jquants_acquisition_rpc"
       ],
       "properties": {
         "frozen_mirror_request": {
@@ -44,8 +48,22 @@
         },
         "authority_event": {
           "$ref": "#/$defs/sha256"
+        },
+        "trader_webauthn_challenge": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trader_webauthn_assertion": {
+          "$ref": "#/$defs/sha256"
+        },
+        "jquants_acquisition_rpc": {
+          "$ref": "#/$defs/sha256"
         }
       }
+    },
+    "parallel_protocol_schema_digests": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 0
     },
     "residual_risks": {
       "type": "object",
@@ -248,6 +266,8 @@
         "service_entrypoint",
         "provides",
         "allowed_callers",
+        "method_acl",
+        "pending_dependencies",
         "capabilities",
         "forbidden_capabilities",
         "deployments"
@@ -292,6 +312,21 @@
           "items": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]{2,63}$"
+          }
+        },
+        "method_acl": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/method_acl"
+          }
+        },
+        "pending_dependencies": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/pending_dependency"
           }
         },
         "capabilities": {
@@ -369,6 +404,72 @@
     "capability": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$"
+    },
+    "method_acl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authenticated_caller",
+        "target_operation",
+        "purpose",
+        "environments",
+        "authentication"
+      ],
+      "properties": {
+        "authenticated_caller": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{2,63}$"
+        },
+        "target_operation": {
+          "$ref": "#/$defs/capability"
+        },
+        "purpose": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{2,63}$"
+        },
+        "environments": {
+          "const": [
+            "staging",
+            "production"
+          ]
+        },
+        "authentication": {
+          "enum": [
+            "cloudflare_typed_service_binding",
+            "local_peer_credentials",
+            "webauthn_human_presence"
+          ]
+        }
+      }
+    },
+    "pending_dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dependency_id",
+        "status",
+        "required_contract",
+        "observed_implementation",
+        "activation_blocked"
+      ],
+      "properties": {
+        "dependency_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{2,127}$"
+        },
+        "status": {"const": "PENDING"},
+        "required_contract": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "observed_implementation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "activation_blocked": {"const": true}
+      }
     },
     "local_os_deployment": {
       "type": "object",

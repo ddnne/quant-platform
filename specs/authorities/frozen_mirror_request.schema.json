@@ -7,26 +7,47 @@
   "required": [
     "schema_version",
     "request_id",
-    "purpose"
+    "environment",
+    "authenticated_caller",
+    "target_authority",
+    "target_operation",
+    "purpose",
+    "issued_at",
+    "expires_at",
+    "request_digest"
   ],
   "properties": {
-    "schema_version": {
-      "const": "d1-frozen-mirror-request/v1"
+    "schema_version": {"const": "d1-frozen-mirror-request/v2"},
+    "request_id": {"$ref": "#/$defs/request_id"},
+    "environment": {"enum": ["staging", "production"]},
+    "authenticated_caller": {
+      "enum": ["ops_projection", "coverage_transition"]
     },
-    "request_id": {
-      "$ref": "#/$defs/request_id"
-    },
-    "purpose": {
-      "enum": [
-        "ops_projection",
-        "coverage_transition"
-      ]
-    }
+    "target_authority": {"const": "d1_sync"},
+    "target_operation": {"const": "frozen_mirror:readonly_handoff"},
+    "purpose": {"enum": ["ops_projection", "coverage_transition"]},
+    "issued_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "request_digest": {"$ref": "#/$defs/sha256"}
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"authenticated_caller": {"const": "ops_projection"}},
+        "required": ["authenticated_caller"]
+      },
+      "then": {"properties": {"purpose": {"const": "ops_projection"}}},
+      "else": {"properties": {"purpose": {"const": "coverage_transition"}}}
+    }
+  ],
   "$defs": {
     "request_id": {
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
     }
   }
 }

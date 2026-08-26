@@ -60,16 +60,22 @@ def _handoff() -> dict[str, object]:
         )
     }
     return {
-        "schema_version": "authenticated-applied-mirror-handoff/v1",
-        "authority_domain": "quant-platform/d1-sync/frozen-mirror/v1",
+        "schema_version": "authenticated-applied-mirror-handoff/v2",
+        "authority_domain": "quant-platform/d1-sync/frozen-mirror/v2",
         "request_id": "00000000-0000-4000-8000-000000000001",
-        "consumer_authority": "ops_projection",
+        "request_digest": _digest("0"),
+        "environment": "production",
+        "authenticated_caller": "ops_projection",
+        "target_operation": "frozen_mirror:readonly_handoff",
+        "purpose": "ops_projection",
         "source_d1_name": "quant-ingest",
         "source_d1_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
         "signed_audit_document_json": "{}",
         "signed_audit_document_digest": _digest("1"),
+        "signed_audit_issuer_key_id": "d1-sync-test-v1",
         "source_change_seq": 0,
         "applied_change_seq": 0,
+        "descriptor_open_mode": "O_RDONLY",
         "descriptor_identity": {
             "device": 0,
             "inode": 1,
@@ -86,18 +92,23 @@ def _handoff() -> dict[str, object]:
         "opened_at": "2026-08-26T00:00:00Z",
         "expires_at": "2026-08-26T00:01:00Z",
         "fd_count": 1,
+        "handoff_digest": _digest("7"),
     }
 
 
 def _event(request_id: str) -> dict[str, object]:
     return {
-        "schema_version": "authority-event/v1",
+        "schema_version": "authority-event/v2",
+        "environment": "production",
         "authority_id": "receipt",
         "sequence": 1,
+        "event_id": "00000000-0000-4000-8000-000000000002",
+        "idempotency_key": _digest("5"),
         "request_id": request_id,
         "event_type": "PREPARED",
         "subject_id": "segment-1",
         "prior_event_digest": None,
+        "payload_schema": "receipt-event/v1",
         "payload_digest": _digest("6"),
         "payload_json": "{}",
         "observed_at": "2026-08-26T00:00:00Z",
@@ -264,6 +275,31 @@ def test_unauthorized_peer_fails_closed() -> None:
         manifest_module.validate_manifest(drifted)
 
 
+def test_method_acl_prevents_caller_operation_cartesian_product() -> None:
+    drifted = _manifest()
+    d1_sync = drifted["principals"]["d1_sync"]
+    d1_sync["method_acl"][0]["authenticated_caller"] = "ops_projection"
+    with pytest.raises(ValueError, match="method ACL surface drift"):
+        manifest_module.validate_manifest(drifted)
+
+
+def test_receipt_typed_acquisition_is_explicitly_pending() -> None:
+    receipt = _manifest()["principals"]["receipt"]
+    assert receipt["pending_dependencies"] == [
+        {
+            "dependency_id": "jquants_acquisition_typed_rpc",
+            "status": "PENDING",
+            "required_contract": (
+                "WorkerEntrypoint.fetch_governed_page over JQUANTS_ACQUISITION"
+            ),
+            "observed_implementation": (
+                "HTTP fetch with X-Ingestion-Token shared header"
+            ),
+            "activation_blocked": True,
+        }
+    ]
+
+
 def test_production_resource_in_staging_fails_closed() -> None:
     drifted = _manifest()
     resource = drifted["principals"]["d1_sync"]["deployments"]["staging"][
@@ -326,14 +362,27 @@ def test_account_wide_receipt_deploy_risk_cannot_be_marked_closed() -> None:
 
 def test_frozen_mirror_request_is_a_closed_transport_trigger() -> None:
     request = {
-        "schema_version": "d1-frozen-mirror-request/v1",
+        "schema_version": "d1-frozen-mirror-request/v2",
         "request_id": "00000000-0000-4000-8000-000000000001",
+        "environment": "production",
+        "authenticated_caller": "ops_projection",
+        "target_authority": "d1_sync",
+        "target_operation": "frozen_mirror:readonly_handoff",
         "purpose": "ops_projection",
+        "issued_at": "2026-08-26T00:00:00Z",
+        "expires_at": "2026-08-26T00:01:00Z",
+        "request_digest": _digest("0"),
     }
     _validate_schema("frozen_mirror_request.schema.json", request)
     request["db_path"] = "/tmp/caller.sqlite3"
     with pytest.raises(Exception):
         _validate_schema("frozen_mirror_request.schema.json", request)
+
+    wrong_purpose = copy.deepcopy(request)
+    del wrong_purpose["db_path"]
+    wrong_purpose["purpose"] = "coverage_transition"
+    with pytest.raises(Exception):
+        _validate_schema("frozen_mirror_request.schema.json", wrong_purpose)
 
 
 def test_frozen_handoff_accepts_initial_sequence_and_exact_fourteen_tables() -> None:
@@ -351,6 +400,11 @@ def test_frozen_handoff_accepts_initial_sequence_and_exact_fourteen_tables() -> 
     writable_handoff["fd_count"] = 2
     with pytest.raises(Exception):
         _validate_schema("frozen_mirror_handoff.schema.json", writable_handoff)
+
+    staging = copy.deepcopy(handoff)
+    staging["environment"] = "staging"
+    with pytest.raises(Exception):
+        _validate_schema("frozen_mirror_handoff.schema.json", staging)
 
 
 @pytest.mark.parametrize(
@@ -371,3 +425,49 @@ def test_authority_event_is_closed() -> None:
     event["private_key_path"] = "/tmp/key.pem"
     with pytest.raises(Exception):
         _validate_schema("authority_event.schema.json", event)
+
+
+def test_trader_webauthn_contract_requires_human_presence_and_environment_rp() -> None:
+    challenge = {
+        "schema_version": "trader-webauthn-challenge/v1",
+        "environment": "production",
+        "challenge_id": "00000000-0000-4000-8000-000000000003",
+        "challenge_base64url": "A" * 43,
+        "exact_four_authorization_digest": _digest("1"),
+        "rp_id": "quant-platform.local",
+        "origin": "https://quant-platform.local",
+        "user_presence_required": True,
+        "user_verification_required": True,
+        "issued_at": "2026-08-26T00:00:00Z",
+        "expires_at": "2026-08-26T00:01:00Z",
+        "one_use_key": _digest("2"),
+        "challenge_digest": _digest("3"),
+    }
+    _validate_schema("trader_webauthn_challenge.schema.json", challenge)
+    challenge["user_verification_required"] = False
+    with pytest.raises(Exception):
+        _validate_schema("trader_webauthn_challenge.schema.json", challenge)
+
+
+def test_jquants_rpc_contract_exposes_no_url_token_or_headers() -> None:
+    request = {
+        "schema_version": "jquants-acquisition-rpc-request/v1",
+        "environment": "staging",
+        "operation": "fetch_governed_page",
+        "dataset_id": "equities_bars_daily",
+        "segment_id": "2026-08-26",
+        "source_capability_digest": _digest("4"),
+        "upstream_locator_ref": "registry://jquants/equities_bars_daily",
+        "request_digest": _digest("5"),
+    }
+    _validate_schema("jquants_acquisition_rpc.schema.json", request)
+    request["token"] = "must-not-cross-rpc"
+    with pytest.raises(Exception):
+        _validate_schema("jquants_acquisition_rpc.schema.json", request)
+
+
+def test_parallel_protocol_digest_cannot_be_self_declared() -> None:
+    drifted = _manifest()
+    drifted["parallel_protocol_schema_digests"]["unreviewed"] = _digest("a")
+    with pytest.raises(ValueError):
+        manifest_module.validate_manifest(drifted)

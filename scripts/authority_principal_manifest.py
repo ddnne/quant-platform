@@ -23,7 +23,20 @@ PROTOCOL_SCHEMAS = {
     "frozen_mirror_request": AUTHORITY_SPECS / "frozen_mirror_request.schema.json",
     "frozen_mirror_handoff": AUTHORITY_SPECS / "frozen_mirror_handoff.schema.json",
     "authority_event": AUTHORITY_SPECS / "authority_event.schema.json",
+    "trader_webauthn_challenge": (
+        AUTHORITY_SPECS / "trader_webauthn_challenge.schema.json"
+    ),
+    "trader_webauthn_assertion": (
+        AUTHORITY_SPECS / "trader_webauthn_assertion.schema.json"
+    ),
+    "jquants_acquisition_rpc": (
+        AUTHORITY_SPECS / "jquants_acquisition_rpc.schema.json"
+    ),
 }
+# Parallel lanes must add their reviewed path here and their digest to the
+# manifest in the same commit.  An empty checked-in object is intentional: a
+# caller cannot bless a new protocol by self-declaring only its digest.
+PARALLEL_PROTOCOL_SCHEMAS: dict[str, Path] = {}
 
 PRINCIPALS = (
     "receipt",
@@ -49,6 +62,104 @@ ALLOWED_CALLERS = {
     "ready": ("ready_publisher",),
     "trader": ("human_approval_gateway",),
     "controlled_execution": ("controlled_pilot_orchestrator",),
+}
+_BOTH_ENVIRONMENTS = ["staging", "production"]
+
+
+def _acl(
+    caller: str,
+    operation: str,
+    purpose: str,
+    authentication: str = "local_peer_credentials",
+) -> dict[str, Any]:
+    return {
+        "authenticated_caller": caller,
+        "target_operation": operation,
+        "purpose": purpose,
+        "environments": _BOTH_ENVIRONMENTS,
+        "authentication": authentication,
+    }
+
+
+EXPECTED_METHOD_ACL = {
+    "receipt": [
+        _acl(
+            "governed_ingestion",
+            "receipt:issue_for_segment",
+            "trusted_collection_receipt",
+            "cloudflare_typed_service_binding",
+        )
+    ],
+    "d1_sync": [
+        _acl("ops_scheduler", "d1_sync:sync_now", "sync_current"),
+        _acl(
+            "ops_projection",
+            "frozen_mirror:readonly_handoff",
+            "ops_projection",
+        ),
+        _acl(
+            "coverage_transition",
+            "frozen_mirror:readonly_handoff",
+            "coverage_transition",
+        ),
+        _acl(
+            "coverage_transition",
+            "coverage_transition_apply:apply_signed",
+            "coverage_transition_apply",
+        ),
+    ],
+    "ops_projection": [
+        _acl(
+            "ops_scheduler",
+            "ops_projection:render_and_sign",
+            "render_current_projection",
+        )
+    ],
+    "coverage_transition": [
+        _acl(
+            "coverage_scheduler",
+            "coverage_transition:authorize_and_apply",
+            "coverage_v3_transition",
+        )
+    ],
+    "ready": [
+        _acl(
+            "ready_publisher",
+            "ready:publish_profile_plan_bound",
+            "profile_plan_closure_ready",
+        )
+    ],
+    "trader": [
+        _acl(
+            "human_approval_gateway",
+            "trader:authorize_exact_four_batch_human_present",
+            "exact_four_human_approval",
+            "webauthn_human_presence",
+        )
+    ],
+    "controlled_execution": [
+        _acl(
+            "controlled_pilot_orchestrator",
+            "controlled_execution:execute_exact_four_one_shot",
+            "exact_four_one_shot",
+        )
+    ],
+}
+EXPECTED_PENDING_DEPENDENCIES = {
+    "receipt": [
+        {
+            "dependency_id": "jquants_acquisition_typed_rpc",
+            "status": "PENDING",
+            "required_contract": (
+                "WorkerEntrypoint.fetch_governed_page over JQUANTS_ACQUISITION"
+            ),
+            "observed_implementation": (
+                "HTTP fetch with X-Ingestion-Token shared header"
+            ),
+            "activation_blocked": True,
+        }
+    ],
+    **{principal: [] for principal in PRINCIPALS if principal != "receipt"},
 }
 EXPECTED_PROVIDES = {
     "receipt": ("receipt:issue_for_segment",),
@@ -167,7 +278,7 @@ EXPECTED_RESIDUAL_RISK = "cloudflare_workers_scripts_write_account_scope"
 # contains its own body digest; this independent code pin prevents a caller from
 # changing the contract and merely recomputing that self-declared digest.
 PINNED_MANIFEST_DIGEST = (
-    "sha256:8f43fb1d3062c7a4b290b371ebef8ee2f6b600c0d0020c68e417f80dc05056fe"
+    "sha256:6306542c0e87c9c438faed9c739af4e9805edec66fe0bd7367ba21a04366b4c5"
 )
 
 _BROAD_CAPABILITY_TOKENS = frozenset(
@@ -325,7 +436,7 @@ def _expected_cloudflare_resources(
                     f"cloudflare:{environment}:service_binding:"
                     f"quant-platform-ingestion-secrets{suffix}"
                 ),
-                "access": "typed_jquants_acquisition_rpc",
+                "access": "pending_typed_jquants_acquisition_rpc",
                 "binding_name": "JQUANTS_ACQUISITION",
             },
         ]
@@ -490,6 +601,15 @@ def _validate_semantics(manifest: dict[str, Any]) -> None:
             raise ValueError(f"{principal}: authority runtime drift")
         if tuple(document["allowed_callers"]) != ALLOWED_CALLERS[principal]:
             raise ValueError(f"{principal}: unauthorized peer in allowed callers")
+        if document["method_acl"] != EXPECTED_METHOD_ACL[principal]:
+            raise ValueError(f"{principal}: method ACL surface drift")
+        derived_callers = tuple(
+            dict.fromkeys(row["authenticated_caller"] for row in document["method_acl"])
+        )
+        if derived_callers != ALLOWED_CALLERS[principal]:
+            raise ValueError(f"{principal}: allowed callers are not derived from method ACL")
+        if document["pending_dependencies"] != EXPECTED_PENDING_DEPENDENCIES[principal]:
+            raise ValueError(f"{principal}: pending dependency inventory drift")
         if tuple(document["provides"]) != EXPECTED_PROVIDES[principal]:
             raise ValueError(f"{principal}: provided operation surface drift")
         if tuple(document["capabilities"]) != EXPECTED_CAPABILITIES[principal]:
@@ -598,6 +718,14 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         expected = canonical_digest(_load_strict_json(path))
         if manifest["protocol_schema_digests"][name] != expected:
             raise ValueError(f"authority protocol schema digest drift: {name}")
+    if set(manifest["protocol_schema_digests"]) != set(PROTOCOL_SCHEMAS):
+        raise ValueError("authority protocol schema membership drift")
+    parallel = manifest["parallel_protocol_schema_digests"]
+    if set(parallel) != set(PARALLEL_PROTOCOL_SCHEMAS):
+        raise ValueError("parallel authority protocol schema membership drift")
+    for name, path in PARALLEL_PROTOCOL_SCHEMAS.items():
+        if parallel[name] != canonical_digest(_load_strict_json(path)):
+            raise ValueError(f"parallel authority protocol schema digest drift: {name}")
 
     _validate_semantics(manifest)
     body_digest = manifest_body_digest(manifest)

@@ -2,12 +2,16 @@
   "schema_version": "authority-principal-manifest/v1",
   "generation": 1,
   "activation_status": "PENDING",
-  "schema_digest": "sha256:f453a9f81d8b94782b740628d3423924e350c912f09d9002a2ea80e195811fc1",
+  "schema_digest": "sha256:5193a9694ee537c08ba17058735da056d1a8842220969c4ad0b334171a7fc5d0",
   "protocol_schema_digests": {
-    "frozen_mirror_request": "sha256:bb7d61b2c494f94045e916dca937e1631149fb9c22c3ebd78c2c2e863131d28f",
-    "frozen_mirror_handoff": "sha256:c27efba1e4df56f30a27929333675d1bbd6bc220f6d2fd5cef2b7104969a09d5",
-    "authority_event": "sha256:058fabe00de1f0f6aaefaffcdd9ff5da60a1ff5b690dec19fe36c3577b23da2b"
+    "frozen_mirror_request": "sha256:d0d20ba5094f7b6e5bb3f6b68792cf975956c05a2acbdbb18f50edf2f98cfe21",
+    "frozen_mirror_handoff": "sha256:4041b2eef7f848dcc66addb14e3a5f6e8572fb5ac91e9e239dd66a29067779a5",
+    "authority_event": "sha256:d42e86b7951dee725ae36df03f7bf74c44950657c970676043028b818ec55a05",
+    "trader_webauthn_challenge": "sha256:7e43c2ec753fcf2fd1ba41ff55e9e3aa1573c6435e32fb8bf15a878ddb363bc2",
+    "trader_webauthn_assertion": "sha256:6ca17bfe47cf361f8d41338ca5eb62befaa7d563ab3de38872efc6fa4559e415",
+    "jquants_acquisition_rpc": "sha256:fde1aadcbebed58ac6c87e0abe1896ad38008abed6b53fa59f0ccc1301d9189f"
   },
+  "parallel_protocol_schema_digests": {},
   "residual_risks": {
     "cloudflare_workers_scripts_write_account_scope": {
       "affected_principal": "receipt",
@@ -29,6 +33,27 @@
       ],
       "allowed_callers": [
         "governed_ingestion"
+      ],
+      "method_acl": [
+        {
+          "authenticated_caller": "governed_ingestion",
+          "target_operation": "receipt:issue_for_segment",
+          "purpose": "trusted_collection_receipt",
+          "environments": [
+            "staging",
+            "production"
+          ],
+          "authentication": "cloudflare_typed_service_binding"
+        }
+      ],
+      "pending_dependencies": [
+        {
+          "dependency_id": "jquants_acquisition_typed_rpc",
+          "status": "PENDING",
+          "required_contract": "WorkerEntrypoint.fetch_governed_page over JQUANTS_ACQUISITION",
+          "observed_implementation": "HTTP fetch with X-Ingestion-Token shared header",
+          "activation_blocked": true
+        }
       ],
       "capabilities": [
         "jquants_acquisition:fetch_governed_page",
@@ -97,7 +122,7 @@
               "provider": "cloudflare",
               "kind": "service_binding",
               "resource_ref": "cloudflare:staging:service_binding:quant-platform-ingestion-secrets-staging",
-              "access": "typed_jquants_acquisition_rpc",
+              "access": "pending_typed_jquants_acquisition_rpc",
               "binding_name": "JQUANTS_ACQUISITION"
             }
           ]
@@ -154,7 +179,7 @@
               "provider": "cloudflare",
               "kind": "service_binding",
               "resource_ref": "cloudflare:production:service_binding:quant-platform-ingestion-secrets",
-              "access": "typed_jquants_acquisition_rpc",
+              "access": "pending_typed_jquants_acquisition_rpc",
               "binding_name": "JQUANTS_ACQUISITION"
             }
           ]
@@ -178,6 +203,37 @@
         "ops_projection",
         "coverage_transition"
       ],
+      "method_acl": [
+        {
+          "authenticated_caller": "ops_scheduler",
+          "target_operation": "d1_sync:sync_now",
+          "purpose": "sync_current",
+          "environments": ["staging", "production"],
+          "authentication": "local_peer_credentials"
+        },
+        {
+          "authenticated_caller": "ops_projection",
+          "target_operation": "frozen_mirror:readonly_handoff",
+          "purpose": "ops_projection",
+          "environments": ["staging", "production"],
+          "authentication": "local_peer_credentials"
+        },
+        {
+          "authenticated_caller": "coverage_transition",
+          "target_operation": "frozen_mirror:readonly_handoff",
+          "purpose": "coverage_transition",
+          "environments": ["staging", "production"],
+          "authentication": "local_peer_credentials"
+        },
+        {
+          "authenticated_caller": "coverage_transition",
+          "target_operation": "coverage_transition_apply:apply_signed",
+          "purpose": "coverage_transition_apply",
+          "environments": ["staging", "production"],
+          "authentication": "local_peer_credentials"
+        }
+      ],
+      "pending_dependencies": [],
       "capabilities": [
         "cloudflare_d1:quant_ingest_export",
         "mirror_store:write",
@@ -251,6 +307,16 @@
       "allowed_callers": [
         "ops_scheduler"
       ],
+      "method_acl": [
+        {
+          "authenticated_caller": "ops_scheduler",
+          "target_operation": "ops_projection:render_and_sign",
+          "purpose": "render_current_projection",
+          "environments": ["staging", "production"],
+          "authentication": "local_peer_credentials"
+        }
+      ],
+      "pending_dependencies": [],
       "capabilities": [
         "frozen_mirror:readonly_consume",
         "ops_projection:render",
@@ -325,6 +391,16 @@
       "allowed_callers": [
         "coverage_scheduler"
       ],
+      "method_acl": [
+        {
+          "authenticated_caller": "coverage_scheduler",
+          "target_operation": "coverage_transition:authorize_and_apply",
+          "purpose": "coverage_v3_transition",
+          "environments": ["staging", "production"],
+          "authentication": "local_peer_credentials"
+        }
+      ],
+      "pending_dependencies": [],
       "capabilities": [
         "frozen_mirror:readonly_consume",
         "coverage_transition:derive",
@@ -384,6 +460,16 @@
       "allowed_callers": [
         "ready_publisher"
       ],
+      "method_acl": [
+        {
+          "authenticated_caller": "ready_publisher",
+          "target_operation": "ready:publish_profile_plan_bound",
+          "purpose": "profile_plan_closure_ready",
+          "environments": ["staging", "production"],
+          "authentication": "local_peer_credentials"
+        }
+      ],
+      "pending_dependencies": [],
       "capabilities": [
         "ops_projection:verified_read",
         "immutable_snapshot:read",
@@ -443,6 +529,16 @@
       "allowed_callers": [
         "human_approval_gateway"
       ],
+      "method_acl": [
+        {
+          "authenticated_caller": "human_approval_gateway",
+          "target_operation": "trader:authorize_exact_four_batch_human_present",
+          "purpose": "exact_four_human_approval",
+          "environments": ["staging", "production"],
+          "authentication": "webauthn_human_presence"
+        }
+      ],
+      "pending_dependencies": [],
       "capabilities": [
         "ready_attestation:verified_read",
         "human_decision:read",
@@ -497,6 +593,16 @@
       "allowed_callers": [
         "controlled_pilot_orchestrator"
       ],
+      "method_acl": [
+        {
+          "authenticated_caller": "controlled_pilot_orchestrator",
+          "target_operation": "controlled_execution:execute_exact_four_one_shot",
+          "purpose": "exact_four_one_shot",
+          "environments": ["staging", "production"],
+          "authentication": "local_peer_credentials"
+        }
+      ],
+      "pending_dependencies": [],
       "capabilities": [
         "ready_attestation:verified_read",
         "trader_authorization:verified_read",
@@ -546,5 +652,5 @@
       }
     }
   },
-  "manifest_digest": "sha256:8f43fb1d3062c7a4b290b371ebef8ee2f6b600c0d0020c68e417f80dc05056fe"
+  "manifest_digest": "sha256:6306542c0e87c9c438faed9c739af4e9805edec66fe0bd7367ba21a04366b4c5"
 }

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-platform.invalid/specs/authorities/jquants_acquisition_rpc.schema.json",
+  "title": "Pending typed J-Quants acquisition RPC",
+  "oneOf": [
+    {"$ref": "#/$defs/request"},
+    {"$ref": "#/$defs/response"}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "environment",
+        "operation",
+        "dataset_id",
+        "segment_id",
+        "source_capability_digest",
+        "upstream_locator_ref",
+        "request_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "jquants-acquisition-rpc-request/v1"},
+        "environment": {"enum": ["staging", "production"]},
+        "operation": {"const": "fetch_governed_page"},
+        "dataset_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,127}$"},
+        "segment_id": {"type": "string", "minLength": 1, "maxLength": 512},
+        "source_capability_digest": {"$ref": "#/$defs/sha256"},
+        "upstream_locator_ref": {"type": "string", "pattern": "^registry://[a-z0-9_./-]{3,512}$"},
+        "request_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "request_digest",
+        "status",
+        "http_status",
+        "body_digest",
+        "next_cursor",
+        "response_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "jquants-acquisition-rpc-response/v1"},
+        "request_digest": {"$ref": "#/$defs/sha256"},
+        "status": {"enum": ["ACQUIRED", "EXHAUSTED", "REJECTED", "FAILED"]},
+        "http_status": {"type": "integer", "minimum": 100, "maximum": 599},
+        "body_digest": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "next_cursor": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 2048}, {"type": "null"}]},
+        "response_digest": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}
