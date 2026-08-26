@@ -1,12 +1,20 @@
 # gateway
 
-Phase 7 AI Gateway stubs — **fail-closed**. Sole intended LLM exit shape; no production LLM loop in B1.
+Phase 7 offline fixture gateway — **fail-closed** and permanently `DRAFT`.
+It is not a production provider exit and cannot produce promotion-eligible output.
+Production provider execution goes only through the Cloudflare
+`research-ai-gateway` Service Binding and its persistent BudgetLedger Durable
+Object.
 
 ## Public entry
 
 ```python
-from gateway import AIGateway, GatewayBudget, GatewayResult, GatewaySchemaRejected, OfflineStubProvider
+from gateway import OfflineFixtureAIGateway, GatewayBudget, GatewayResult, GatewaySchemaRejected, OfflineStubProvider
 ```
+
+`AIGateway` remains a compatibility alias for `OfflineFixtureAIGateway`; it does
+not restore a Python production-provider path. Public result evidence includes
+`execution_mode=OFFLINE_FIXTURE_DRAFT` and `promotion_eligible=false`.
 
 ## Allowed imports
 
@@ -14,6 +22,7 @@ from gateway import AIGateway, GatewayBudget, GatewayResult, GatewaySchemaReject
 
 ## Forbidden
 
+- Treating the Python fixture provider protocol as a production provider exit
 - Opening sockets / real remote LLM providers as default
 - Market HTTP (`ingestion`)
 - Arming Mass research or Phase 7 GO

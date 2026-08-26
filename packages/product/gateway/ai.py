@@ -1,8 +1,11 @@
-"""Closed-schema AI gateway — fail-closed typed boundary (Phase 6.2.2 P0).
+"""Offline-fixture closed-schema gateway — fail-closed typed boundary.
 
-LLM Provider → raw → strict typed decoder → GatewayResult[T] → downstream.
+Fixture Provider → raw → strict typed decoder → GatewayResult[T] → downstream.
 No raw-dict fallback on decoder failure. No production decode=False.
 Generated code is never executed.
+
+Production provider execution is owned exclusively by the Edge
+research-ai-gateway Worker and its persistent BudgetLedger Durable Object.
 """
 
 from __future__ import annotations
@@ -45,6 +48,7 @@ _BANNED_KEYS = frozenset(
 )
 
 INSIGHT_SCHEMA_VERSION = "insight/v1"
+OFFLINE_FIXTURE_DRAFT = "OFFLINE_FIXTURE_DRAFT"
 _INSIGHT_ALLOWED_KEYS = frozenset(
     {"role", "task", "summary", "prompt_chars", "schema_version"}
 )
@@ -52,6 +56,15 @@ _INSIGHT_ALLOWED_KEYS = frozenset(
 
 class GatewaySchemaRejected(RuntimeError):
     """Raised when provider output fails strict typed decode."""
+
+
+@dataclass(frozen=True)
+class GatewayBudgetReservation:
+    """Opaque in-process estimate reservation for one fixture invocation."""
+
+    reservation_id: str
+    calls: int
+    tokens: int
 
 
 @dataclass
@@ -69,8 +82,15 @@ class GatewayBudget:
     tokens_used: int = 0
     reserved_tokens: int = 0
     reserved_calls: int = 0
+    _reservations: dict[str, GatewayBudgetReservation] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
 
-    def reserve(self, *, calls: int = 1, tokens: int = 0) -> None:
+    def reserve(
+        self, *, calls: int = 1, tokens: int = 0
+    ) -> GatewayBudgetReservation:
         """Reserve capacity before provider call (fail closed pre-call)."""
         calls = max(0, int(calls))
         tokens = max(0, int(tokens))
@@ -78,16 +98,49 @@ class GatewayBudget:
             raise RuntimeError("AI gateway model call budget exhausted (reserve)")
         if self.tokens_used + self.reserved_tokens + tokens > self.max_tokens:
             raise RuntimeError("AI gateway token budget exhausted (reserve)")
+        reservation = GatewayBudgetReservation(
+            reservation_id=str(uuid4()),
+            calls=calls,
+            tokens=tokens,
+        )
         self.reserved_calls += calls
         self.reserved_tokens += tokens
+        self._reservations[reservation.reservation_id] = reservation
+        return reservation
 
-    def reconcile(self, *, calls: int = 1, tokens: int = 0) -> None:
-        """Convert reservation into actual usage after provider returns."""
+    def _release_exact(self, reservation: GatewayBudgetReservation) -> bool:
+        if not isinstance(reservation, GatewayBudgetReservation):
+            raise RuntimeError("AI gateway budget reservation invalid")
+        current = self._reservations.get(reservation.reservation_id)
+        if current is None:
+            return False
+        if current != reservation:
+            raise RuntimeError("AI gateway budget reservation mismatch")
+        remaining_calls = self.reserved_calls - current.calls
+        remaining_tokens = self.reserved_tokens - current.tokens
+        if remaining_calls < 0 or remaining_tokens < 0:
+            raise RuntimeError("AI gateway budget reservation state invalid")
+        del self._reservations[reservation.reservation_id]
+        self.reserved_calls = remaining_calls
+        self.reserved_tokens = remaining_tokens
+        return True
+
+    def release(self, reservation: GatewayBudgetReservation) -> bool:
+        """Release one exact estimate; retry is an idempotent no-op."""
+        return self._release_exact(reservation)
+
+    def reconcile(
+        self,
+        reservation: GatewayBudgetReservation,
+        *,
+        calls: int = 1,
+        tokens: int = 0,
+    ) -> None:
+        """Release the full estimate, then record measured fixture usage."""
         calls = max(0, int(calls))
         tokens = max(0, int(tokens))
-        self.reserved_calls = max(0, self.reserved_calls - 1)
-        self.reserved_tokens = max(0, self.reserved_tokens - tokens)
-        # charge actual
+        if not self._release_exact(reservation):
+            raise RuntimeError("AI gateway budget reservation already released")
         if self.calls_used + calls > self.max_calls:
             raise RuntimeError("AI gateway model call budget exhausted")
         if self.tokens_used + tokens > self.max_tokens:
@@ -98,11 +151,20 @@ class GatewayBudget:
     def charge(self, tokens: int = 0) -> None:
         """Legacy single-step charge (reserve+reconcile of 1 call)."""
         estimate = max(0, int(tokens))
-        self.reserve(calls=1, tokens=estimate)
-        self.reconcile(calls=1, tokens=estimate)
+        reservation = self.reserve(calls=1, tokens=estimate)
+        try:
+            self.reconcile(
+                reservation,
+                calls=1,
+                tokens=estimate,
+            )
+        finally:
+            self.release(reservation)
 
 
-class LLMProvider(Protocol):
+class OfflineFixtureProvider(Protocol):
+    """Fixture-only provider protocol; not an Edge production capability."""
+
     def complete(
         self,
         *,
@@ -112,6 +174,10 @@ class LLMProvider(Protocol):
         expected_schema: str,
     ) -> Mapping[str, Any]:
         ...
+
+
+# Compatibility type alias. It does not designate a production provider path.
+LLMProvider = OfflineFixtureProvider
 
 
 def _minimal_stub_body(schema: str, *, role: str, task: str, prompt: str) -> dict[str, Any]:
@@ -199,6 +265,7 @@ class GatewayResult(Generic[T]):
     prompt_digest: str
     created_at: str
     budget_id: str
+    execution_mode: str
 
     def to_public_dict(self) -> dict[str, Any]:
         """Serialize for logs/tests; never re-introduces decode bypass."""
@@ -221,6 +288,8 @@ class GatewayResult(Generic[T]):
             "prompt_digest": self.prompt_digest,
             "created_at": self.created_at,
             "budget_id": self.budget_id,
+            "execution_mode": self.execution_mode,
+            "promotion_eligible": False,
         }
         return body
 
@@ -335,8 +404,14 @@ def _prompt_digest(prompt: str) -> str:
 
 
 @dataclass
-class AIGateway:
-    provider: LLMProvider = field(default_factory=OfflineStubProvider)
+class OfflineFixtureAIGateway:
+    """Offline fixture/DRAFT gateway; never a production provider exit."""
+
+    EXECUTION_MODE: ClassVar[str] = OFFLINE_FIXTURE_DRAFT
+    EDGE_PRODUCTION_PROVIDER_EXIT: ClassVar[bool] = False
+    PROMOTION_ELIGIBLE: ClassVar[bool] = False
+
+    provider: OfflineFixtureProvider = field(default_factory=OfflineStubProvider)
     budget: GatewayBudget = field(default_factory=GatewayBudget)
     research_budget: ResearchBudgetCapability | None = None
     provider_name: str = "offline_stub"
@@ -352,12 +427,14 @@ class AIGateway:
         research_budget: ResearchBudgetCapability | None = None,
         operator_override: object | None = None,
     ) -> GatewayResult[Any]:
-        """Production API — always strict decode. No decode=False.
+        """Offline fixture/DRAFT API — always strict decode. No decode=False.
 
-        After a successful closed-schema decode, input/output tokens are charged
-        on ResearchBudgetCapability via a single charge_provider_usage call
-        (one BEGIN IMMEDIATE consume). Missing or exhausted budget fail-closes.
-        operator_override cannot substitute for a budget capability.
+        The in-process estimate is always released in ``finally``. Measured
+        fixture usage is charged even when strict schema decoding later rejects
+        the response. The persistent ResearchBudgetCapability retains its
+        existing contract: it is charged only after successful strict decode.
+        Missing/exhausted capability fail-closes, and operator_override cannot
+        substitute for it.
         """
         if operator_override is not None:
             raise MassResearchDisabledError(
@@ -379,23 +456,29 @@ class AIGateway:
             )
         # Pre-call reserve using prompt estimate; reconcile with provider usage.
         estimate = max(1, len(prompt) // 4)
-        self.budget.reserve(calls=1, tokens=estimate)
-        raw = dict(
-            self.provider.complete(
-                role=role,
-                task=task,
-                prompt=prompt,
-                expected_schema=expected_schema,
-            )
-        )
-        usage = _extract_usage(raw, estimate=estimate)
+        reservation = self.budget.reserve(calls=1, tokens=estimate)
+        usage: GatewayUsage | None = None
         try:
-            self.budget.reconcile(calls=1, tokens=usage.total_tokens)
-        except RuntimeError:
-            # Release reservation on over-budget actuals.
-            self.budget.reserved_calls = max(0, self.budget.reserved_calls - 1)
-            self.budget.reserved_tokens = max(0, self.budget.reserved_tokens - estimate)
-            raise
+            raw = dict(
+                self.provider.complete(
+                    role=role,
+                    task=task,
+                    prompt=prompt,
+                    expected_schema=expected_schema,
+                )
+            )
+            usage = _extract_usage(raw, estimate=estimate)
+            self.budget.reconcile(
+                reservation,
+                calls=usage.calls,
+                tokens=usage.total_tokens,
+            )
+        finally:
+            # Idempotent after reconcile; exact on provider/usage failures.
+            self.budget.release(reservation)
+
+        if usage is None:  # pragma: no cover - finally preserves the invariant
+            raise RuntimeError("AI gateway provider usage unavailable")
 
         if "schema" in raw:
             schema = str(raw.get("schema"))
@@ -440,6 +523,7 @@ class AIGateway:
             prompt_digest=_prompt_digest(prompt),
             created_at=datetime.now(timezone.utc).isoformat(),
             budget_id=cap.budget_id,
+            execution_mode=self.EXECUTION_MODE,
         )
 
     def _run_raw_for_tests(
@@ -462,14 +546,23 @@ class AIGateway:
         ).to_public_dict()
 
 
+# Compatibility import only. The concrete type and public evidence remain
+# explicitly OfflineFixture/DRAFT; production provider calls exit through Edge.
+AIGateway = OfflineFixtureAIGateway
+
+
 __all__ = [
     "ALLOWED_OUTPUT_SCHEMAS",
     "AIGateway",
     "GatewayBudget",
+    "GatewayBudgetReservation",
     "GatewayResult",
     "GatewaySchemaRejected",
     "GatewayUsage",
     "INSIGHT_SCHEMA_VERSION",
     "LLMProvider",
+    "OFFLINE_FIXTURE_DRAFT",
+    "OfflineFixtureAIGateway",
+    "OfflineFixtureProvider",
     "OfflineStubProvider",
 ]
