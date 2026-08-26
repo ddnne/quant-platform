@@ -261,6 +261,16 @@ def test_authoritative_ci_dry_runs_test_harness_configs() -> None:
     assert "wrangler deploy --dry-run --config=wrangler.test.toml" in ci
     assert "--config=wrangler.toml --env=\"\"" in ci
     assert "--config=wrangler.toml --env=production" in ci
+    logical_lines = ci.replace("\\\n", " ").splitlines()
+    wrangler_invocations = [
+        line.strip()
+        for line in logical_lines
+        if "npx --no-install wrangler " in line and not line.lstrip().startswith("#")
+    ]
+    assert wrangler_invocations
+    for command in wrangler_invocations:
+        assert "--config=" in command, command
+        assert "--env=" in command, command
 
 
 def test_manifest_is_fail_closed_for_toolchain_drift() -> None:

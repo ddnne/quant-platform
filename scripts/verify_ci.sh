@@ -232,10 +232,12 @@ verify_worker() {
   (cd "$dir" && npx --no-install wrangler deploy --dry-run \
     --config=wrangler.toml --env=production)
   echo "==> wrangler deploy --dry-run --config=wrangler.staging.toml ($name)"
-  (cd "$dir" && npx --no-install wrangler deploy --dry-run --config=wrangler.staging.toml)
+  (cd "$dir" && npx --no-install wrangler deploy --dry-run \
+    --config=wrangler.staging.toml --env="")
   if [[ -f "$dir/wrangler.test.toml" ]]; then
     echo "==> wrangler deploy --dry-run --config=wrangler.test.toml ($name)"
-    (cd "$dir" && npx --no-install wrangler deploy --dry-run --config=wrangler.test.toml)
+    (cd "$dir" && npx --no-install wrangler deploy --dry-run \
+      --config=wrangler.test.toml --env="")
   fi
   if [[ -n "$(npm_script_body "$py" "$dir/package.json" types)" ]]; then
     echo "==> wrangler types --check ($name)"
@@ -244,7 +246,8 @@ verify_worker() {
     (cd "$dir" && npm run types -- --check)
   else
     echo "==> wrangler types ($name)"
-    (cd "$dir" && npx --no-install wrangler types --config=wrangler.toml)
+    (cd "$dir" && npx --no-install wrangler types \
+      --config=wrangler.toml --env="")
   fi
   local type_dir base_types production_types staging_types
   type_dir="$ci_log_dir/types-$name"
@@ -254,13 +257,13 @@ verify_worker() {
   staging_types="$type_dir/staging.d.ts"
   echo "==> wrangler types --env=base ($name)"
   (cd "$dir" && npx --no-install wrangler types "$base_types" \
-    --config=wrangler.toml --include-runtime=false)
+    --config=wrangler.toml --env="" --include-runtime=false)
   echo "==> wrangler types --env=production ($name)"
   (cd "$dir" && npx --no-install wrangler types "$production_types" \
     --config=wrangler.toml --env=production --include-runtime=false)
   echo "==> wrangler types --config=wrangler.staging.toml ($name)"
   (cd "$dir" && npx --no-install wrangler types "$staging_types" \
-    --config=wrangler.staging.toml --include-runtime=false)
+    --config=wrangler.staging.toml --env="" --include-runtime=false)
   local environment generated assertion env_tsconfig
   for environment in $("$py" "$ROOT/scripts/verify_generated_worker_env.py" \
     --list-environments); do
