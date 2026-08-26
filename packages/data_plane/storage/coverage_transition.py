@@ -237,6 +237,35 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _observe_authorization_time(
+    *,
+    issued: datetime,
+    expires: datetime,
+    previous: datetime | None,
+    stage: str,
+    window_error: str,
+) -> datetime:
+    """Read internal UTC once and bind it to the window and prior reading."""
+
+    observed = _utc_now()
+    if (
+        type(observed) is not datetime
+        or observed.tzinfo is None
+        or observed.utcoffset() is None
+    ):
+        raise CoverageTransitionError(
+            f"Coverage transition internal clock is invalid at {stage}"
+        )
+    observed = observed.astimezone(timezone.utc)
+    if previous is not None and observed < previous:
+        raise CoverageTransitionError(
+            f"Coverage transition clock moved backwards before {stage}"
+        )
+    if observed < issued or observed > expires:
+        raise CoverageTransitionError(window_error)
+    return observed
+
+
 def _normalize_datasets(datasets: Sequence[str]) -> tuple[str, ...]:
     if type(datasets) not in {tuple, list}:
         raise TypeError("Coverage transition datasets must be a list or tuple")
@@ -1287,16 +1316,20 @@ def apply_signed_coverage_transition(
     body = frozen["body"]
     issued = _parse_utc_z(body["issued_at"], field="issued_at")
     expires = _parse_utc_z(body["expires_at"], field="expires_at")
-    now = _utc_now()
     if (
         expires <= issued
         or (expires - issued).total_seconds() > MAX_AUTHORIZATION_SECONDS
-        or now < issued
-        or now > expires
     ):
         raise CoverageTransitionError(
             "Coverage transition authorization is not current"
         )
+    initial_now = _observe_authorization_time(
+        issued=issued,
+        expires=expires,
+        previous=None,
+        stage="initial verification",
+        window_error="Coverage transition authorization is not current",
+    )
 
     conn, path, identity = _open_db(db_path, readonly=False)
     try:
@@ -1338,11 +1371,15 @@ def apply_signed_coverage_transition(
                 "Coverage transition does not bind the exact live active/target state"
             )
         active_rows = _read_active_rows(conn, datasets)
-        final_now = _utc_now()
-        if final_now < issued or final_now > expires:
-            raise CoverageTransitionError(
+        final_now = _observe_authorization_time(
+            issued=issued,
+            expires=expires,
+            previous=initial_now,
+            stage="state verification",
+            window_error=(
                 "Coverage transition authorization expired during verification"
-            )
+            ),
+        )
         consumed_at = final_now.isoformat(timespec="seconds")
         _assert_db_path_identity(path, identity)
         expected_rows = _apply_cas(
@@ -1360,11 +1397,13 @@ def apply_signed_coverage_transition(
             consumed_at=consumed_at,
         )
         _assert_db_path_identity(path, identity)
-        commit_now = _utc_now()
-        if commit_now > expires:
-            raise CoverageTransitionError(
-                "Coverage transition authorization expired before commit"
-            )
+        _observe_authorization_time(
+            issued=issued,
+            expires=expires,
+            previous=final_now,
+            stage="commit",
+            window_error="Coverage transition authorization expired before commit",
+        )
         conn.commit()
         return MappingProxyType(
             {

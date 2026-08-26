@@ -684,6 +684,48 @@ def test_authorization_expiring_during_postconditions_rolls_back_before_commit(
         ).fetchone()[0] == 0
 
 
+def test_authorization_clock_rollback_before_commit_rolls_back(
+    tmp_path: Path,
+    receipt_ed25519_keys: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "postcondition-clock-rollback.sqlite"
+    _prepare_transition_db(
+        path,
+        datasets=_DATASETS,
+        receipt_signing_key=receipt_ed25519_keys.signing_key,
+    )
+    request = _request(path)
+    key_id, private = _test_transition_key()
+    _configure_test_registry(monkeypatch, _registry_for(key_id, private))
+    document = _sign_request(request, key_id=key_id, private=private)
+    issued = datetime.fromisoformat(
+        request["body"]["issued_at"].replace("Z", "+00:00")
+    )
+    observed = iter(
+        (
+            issued + timedelta(seconds=1),
+            issued + timedelta(seconds=2),
+            issued - timedelta(seconds=1),
+        )
+    )
+    monkeypatch.setattr(transition_module, "_utc_now", lambda: next(observed))
+
+    with pytest.raises(
+        CoverageTransitionError,
+        match="moved backwards before commit",
+    ):
+        apply_signed_coverage_transition(str(path), document)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "SELECT status FROM dataset_coverage WHERE dataset=?",
+            _DATASETS,
+        ).fetchone()[0] == "PARTIAL"
+        assert conn.execute(
+            "SELECT COUNT(*) FROM coverage_complete_transition_tombstones"
+        ).fetchone()[0] == 0
+
+
 def test_two_dataset_failure_rolls_back_tombstone_and_first_cas(
     tmp_path: Path,
     receipt_ed25519_keys: Any,
