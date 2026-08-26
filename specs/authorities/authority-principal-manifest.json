@@ -388,7 +388,7 @@
       "runtime": "local_os_service",
       "authority_status": "PENDING",
       "signing_purpose": "coverage_complete_transition",
-      "registry_path": "specs/coverage_transition/public_keys.json",
+      "registry_path": "packages/data_plane/storage/authorities/coverage_transition/public_keys.json",
       "service_entrypoint": "coverage_transition.authorize_and_apply",
       "provides": [
         "coverage_transition:authorize_and_apply"
@@ -657,5 +657,5 @@
       }
     }
   },
-  "manifest_digest": "sha256:8c76f9d5764dd3ea860e349eae0b1b1f89e6f7cfd5a53c4536c1c33cc58e01be"
+  "manifest_digest": "sha256:a251dda278eacef43d53a8815ea10e1887757d67410a1113e65924bd975de64c"
 }

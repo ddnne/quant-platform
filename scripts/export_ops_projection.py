@@ -240,12 +240,16 @@ def _digest_files(paths: Iterable[Path]) -> str:
 
 def _contract_digests() -> tuple[str, str]:
     package = ROOT / "packages" / "data_plane" / "data_contracts"
+    storage_package = ROOT / "packages" / "data_plane" / "storage"
     registry = _digest_files((package / "canonical_datasets.json",))
     contract = _digest_files(
         (
             package / "collection_coverage.json",
             *sorted((package / "source_capability_contracts").glob("*.json")),
-            ROOT / "specs" / "receipts" / "signed_receipt_claims.schema.json",
+            storage_package
+            / "authorities"
+            / "receipts"
+            / "signed_receipt_claims.schema.json",
             ROOT / "specs" / "ops_projection" / "signed_envelope.schema.json",
         )
     )

@@ -41,7 +41,6 @@ from data_contracts.coverage import (
     coverage_policy_binding,
     coverage_policy_set_binding,
 )
-from qp_paths import repo_root
 from storage.coverage_ledger import (
     CoverageInventoryAuthorityUnavailable,
     CoveragePublicationCutoffError,
@@ -62,7 +61,9 @@ COVERAGE_TRANSITION_PENDING_REASON = (
 MAX_AUTHORIZATION_SECONDS = 15 * 60
 
 _PINNED_REGISTRY_PATH = (
-    repo_root() / "specs" / "coverage_transition" / "public_keys.json"
+    Path(__file__).with_name("authorities")
+    / "coverage_transition"
+    / "public_keys.json"
 )
 # Filled with the canonical digest of the checked-in empty public registry.
 _PINNED_REGISTRY_DIGEST = (

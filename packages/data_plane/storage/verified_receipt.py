@@ -10,11 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import json
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 from weakref import WeakSet
 
-from qp_paths import repo_root
 from storage.coverage_receipts import compute_raw_digest
 from storage.receipt_crypto import (
     LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION,
@@ -32,7 +32,9 @@ from storage.receipt_crypto import (
 _VERIFIED_CLOSURE = object()
 _VERIFIED_CLOSURES: WeakSet[Any] = WeakSet()
 _SCHEMA_PATH = (
-    repo_root() / "specs" / "receipts" / "signed_receipt_claims.schema.json"
+    Path(__file__).with_name("authorities")
+    / "receipts"
+    / "signed_receipt_claims.schema.json"
 )
 
 

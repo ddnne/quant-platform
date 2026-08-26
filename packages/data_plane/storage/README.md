@@ -11,6 +11,12 @@ Phase 1 実装:
 
 PIT のため `available_at` は構造化保存で必須（空は拒否）。
 
+Receipt/Coverage verification authorities are package-owned under
+`storage/authorities/`: the Coverage transition public-key registry and the
+signed Receipt claims schema ship in the wheel beside their verify-only
+consumers. Their canonical identities and digests are unchanged by the move;
+runtime loading has no repository-root or CWD fallback.
+
 Phase 6 hardening adds formal migrations for `dataset_coverage`, publication
 lifecycle/quality rows, and fact/revision mutation triggers.
 
