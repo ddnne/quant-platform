@@ -273,6 +273,12 @@ class ControlledPilotScheduler:
             raise MassResearchDisabledError(
                 "controlled pilot scheduler requires exact ControlledPilotScheduler"
             )
+        if n_hypotheses is not None:
+            if type(n_hypotheses) is not int:
+                raise MassResearchDisabledError(
+                    "controlled pilot n_hypotheses requires an exact int"
+                )
+            _require_pilot_hypothesis_count(n_hypotheses)
         (
             controlled_policy,
             controlled_budget,
@@ -294,8 +300,6 @@ class ControlledPilotScheduler:
         self._readiness = verified_readiness
         self._evaluation_service = evaluation_service
         self._artifact_store = artifact_store
-        if n_hypotheses is not None:
-            _require_pilot_hypothesis_count(int(n_hypotheses))
 
     def mint_operator_override(self, *args: object, **kwargs: object) -> None:
         raise MassResearchDisabledError("agent cannot mint operator_override")

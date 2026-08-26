@@ -161,6 +161,36 @@ def test_controlled_scheduler_is_a_runtime_final_authority_boundary() -> None:
                 self._readiness = object()  # type: ignore[assignment]
 
 
+def test_controlled_scheduler_rejects_coercible_hypothesis_count_before_state_assignment(
+) -> None:
+    captured: list[object] = []
+
+    class HostileCount:
+        def __int__(self) -> int:
+            import inspect
+
+            caller = inspect.currentframe()
+            if caller is not None and caller.f_back is not None:
+                scheduler = caller.f_back.f_locals.get("self")
+                if scheduler is not None:
+                    captured.append(scheduler)
+            return 1
+
+    with pytest.raises(MassResearchDisabledError, match="exact int"):
+        ControlledPilotScheduler(n_hypotheses=HostileCount())  # type: ignore[arg-type]
+
+    assert captured == []
+
+
+def test_controlled_scheduler_requires_exact_int_hypothesis_count() -> None:
+    class IntSubclass(int):
+        pass
+
+    for hostile_count in (True, False, IntSubclass(2)):
+        with pytest.raises(MassResearchDisabledError, match="exact int"):
+            ControlledPilotScheduler(n_hypotheses=hostile_count)
+
+
 def test_pilot_readiness_is_final_and_method_override_cannot_authorize() -> None:
     with pytest.raises(TypeError, match="final"):
 
