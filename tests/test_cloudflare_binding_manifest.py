@@ -42,8 +42,58 @@ def test_ungoverned_deployable_worker_fails_closed(tmp_path: Path) -> None:
         )
     rogue = worker_root / "rogue-worker"
     rogue.mkdir()
-    (rogue / "wrangler.toml").write_text('name = "rogue"\n', encoding="utf-8")
+    (rogue / "wrangler.jsonc").write_text(
+        '{ "name": "rogue" }\n', encoding="utf-8"
+    )
     with pytest.raises(ValueError, match="ungoverned=.*rogue-worker"):
+        manifest_module.validate_active_worker_inventory(worker_root=worker_root)
+
+
+def test_nested_worker_config_cannot_escape_inventory(tmp_path: Path) -> None:
+    worker_root = tmp_path / "workers"
+    worker_root.mkdir()
+    for worker in manifest_module.ACTIVE_WORKERS:
+        directory = worker_root / worker
+        directory.mkdir()
+        (directory / "wrangler.toml").write_text(
+            f'name = "{worker}"\n', encoding="utf-8"
+        )
+    nested = worker_root / "experiments" / "rogue-worker"
+    nested.mkdir(parents=True)
+    (nested / "wrangler.toml").write_text('name = "rogue"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="experiments/rogue-worker"):
+        manifest_module.validate_active_worker_inventory(worker_root=worker_root)
+
+
+@pytest.mark.parametrize("worker", ("../rogue", "rogue/worker", "rogue\nworker"))
+def test_inventory_worker_names_are_safe_paths(tmp_path: Path, worker: str) -> None:
+    inventory = tmp_path / "active_workers.json"
+    inventory.write_text(
+        json.dumps(
+            {
+                "schema_version": "cloudflare-active-worker-inventory/v1",
+                "workers": [worker],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="sorted unique non-empty list"):
+        manifest_module._load_active_workers(inventory)  # noqa: SLF001
+
+
+def test_known_worker_cannot_add_alternate_deployment_config(tmp_path: Path) -> None:
+    worker_root = tmp_path / "workers"
+    worker_root.mkdir()
+    for worker in manifest_module.ACTIVE_WORKERS:
+        directory = worker_root / worker
+        directory.mkdir()
+        (directory / "wrangler.toml").write_text(
+            f'name = "{worker}"\n', encoding="utf-8"
+        )
+    (worker_root / manifest_module.ACTIVE_WORKERS[0] / "wrangler.prod.jsonc").write_text(
+        '{ "name": "shadow-deployment" }\n', encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="ungoverned alternate Wrangler config"):
         manifest_module.validate_active_worker_inventory(worker_root=worker_root)
 
 

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -19,6 +21,10 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "specs" / "cloudflare" / "active_worker_bindings.json"
 INVENTORY = ROOT / "specs" / "cloudflare" / "active_workers.json"
 WORKER_ROOT = ROOT / "platform" / "workers"
+_WORKER_DIRECTORY_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+_ALLOWED_WRANGLER_CONFIGS = frozenset(
+    {"wrangler.toml", "wrangler.staging.toml", "wrangler.test.toml"}
+)
 
 
 def _load_active_workers(path: Path = INVENTORY) -> tuple[str, ...]:
@@ -34,7 +40,11 @@ def _load_active_workers(path: Path = INVENTORY) -> tuple[str, ...]:
     if (
         not isinstance(workers, list)
         or not workers
-        or not all(isinstance(worker, str) and worker for worker in workers)
+        or not all(
+            isinstance(worker, str)
+            and _WORKER_DIRECTORY_RE.fullmatch(worker) is not None
+            for worker in workers
+        )
         or len(workers) != len(set(workers))
         or workers != sorted(workers)
     ):
@@ -45,17 +55,33 @@ def _load_active_workers(path: Path = INVENTORY) -> tuple[str, ...]:
 ACTIVE_WORKERS = _load_active_workers()
 
 
+def _wrangler_config_paths(worker_root: Path = WORKER_ROOT) -> tuple[Path, ...]:
+    discovered: list[Path] = []
+    for current, directories, filenames in os.walk(worker_root):
+        directories[:] = [
+            name for name in directories if name not in {".wrangler", "node_modules"}
+        ]
+        parent = Path(current)
+        for name in filenames:
+            if name.startswith("wrangler") and Path(name).suffix in {
+                ".toml",
+                ".json",
+                ".jsonc",
+            }:
+                discovered.append(parent / name)
+    return tuple(sorted(discovered))
+
+
 def _deployable_worker_directories(worker_root: Path = WORKER_ROOT) -> tuple[str, ...]:
     """Discover every directory that has any Worker deployment marker."""
-    markers = ("package.json", "wrangler.toml", "wrangler.staging.toml")
-    return tuple(
-        sorted(
-            directory.name
-            for directory in worker_root.iterdir()
-            if directory.is_dir()
-            and any((directory / marker).is_file() for marker in markers)
-        )
-    )
+    discovered = {
+        directory.name
+        for directory in worker_root.iterdir()
+        if directory.is_dir() and (directory / "package.json").is_file()
+    }
+    for path in _wrangler_config_paths(worker_root):
+        discovered.add(path.parent.relative_to(worker_root).as_posix())
+    return tuple(sorted(discovered))
 
 
 def validate_active_worker_inventory(
@@ -70,6 +96,17 @@ def validate_active_worker_inventory(
         raise ValueError(
             "active Worker inventory/filesystem drift: "
             f"missing={missing!r}, ungoverned={ungoverned!r}"
+        )
+    unexpected_configs = sorted(
+        str(path.relative_to(worker_root))
+        for path in _wrangler_config_paths(worker_root)
+        if path.parent.parent == worker_root
+        and path.name not in _ALLOWED_WRANGLER_CONFIGS
+    )
+    if unexpected_configs:
+        raise ValueError(
+            "active Worker has an ungoverned alternate Wrangler config: "
+            f"{unexpected_configs!r}"
         )
     required = (
         "package.json",
