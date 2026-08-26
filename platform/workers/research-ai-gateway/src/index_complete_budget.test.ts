@@ -507,6 +507,12 @@ describe("POST /v1/complete control-plane occupancy", () => {
         cached_tokens: 1,
         prompt_tokens_details: { cached_tokens: 1 },
       },
+      { prompt_tokens: 4, completion_tokens: 3, cached_tokens: 5 },
+      {
+        prompt_tokens: 4,
+        completion_tokens: 3,
+        prompt_tokens_details: { cached_tokens: 5 },
+      },
     ]) {
       const { BUDGET_LEDGER, storage } = memoryLedger();
       const env: GatewayEnv = {

@@ -285,6 +285,10 @@ describe("budget ledger algebra", () => {
         pricing_policy_digest: AI_GATEWAY_PRICING_POLICY_DIGEST,
       },
     ],
+    [
+      "cached tokens outside input tokens",
+      { input_tokens: 4, cached_tokens: 5 },
+    ],
   ])("fails closed for %s usage provenance", async (_label, overrides) => {
     const storage = new MemoryBudgetStorage();
     const reserved = await reserveBudget(

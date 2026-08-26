@@ -437,6 +437,9 @@ function parseActualUsage(raw: unknown): BudgetResult<ExactUsageEvidence> {
       return { ok: false, error: `${name} must be an integer >= 0` };
     }
   }
+  if ((values.cached_tokens as number) > (values.input_tokens as number)) {
+    return { ok: false, error: "cached_tokens must be a subset of input_tokens" };
+  }
   const cost = values.cost_usd;
   if (
     typeof cost !== "number" ||

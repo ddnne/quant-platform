@@ -209,7 +209,9 @@ class OfflineFixtureUsage:
             value = getattr(self, name)
             if type(value) is not int or value < 0:
                 raise ValueError(f"{name} must be an integer >= 0")
-        if self.input_tokens + self.output_tokens + self.cached_tokens < 1:
+        if self.cached_tokens > self.input_tokens:
+            raise ValueError("cached_tokens must be a subset of input_tokens")
+        if self.input_tokens + self.output_tokens < 1:
             raise ValueError("offline fixture usage must contain at least one token")
 
 
@@ -501,11 +503,9 @@ def _settlement_usage(
             ),
             "reserved_estimate",
         )
-    total = (
-        fixture_usage.input_tokens
-        + fixture_usage.output_tokens
-        + fixture_usage.cached_tokens
-    )
+    # Provider total-token semantics count cached input once: cached_tokens is
+    # an informational subset of input_tokens, not a third charged category.
+    total = fixture_usage.input_tokens + fixture_usage.output_tokens
     return (
         GatewayUsage(
             input_tokens=fixture_usage.input_tokens,

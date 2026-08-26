@@ -1525,6 +1525,7 @@ describe("BudgetLedger in the Workers runtime", () => {
       ["unknown", actualUsage({ unexpected: 1 })],
       ["model-calls-zero", actualUsage({ model_calls: 0 })],
       ["model-calls-two", actualUsage({ model_calls: 2 })],
+      ["cached-outside-input", actualUsage({ input_tokens: 4, cached_tokens: 5 })],
     ];
     for (const [label, usage] of variants) {
       const stub = namespace.get(namespace.idFromName(`closed-usage-${label}`));

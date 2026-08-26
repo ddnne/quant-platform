@@ -126,6 +126,11 @@ def test_gateway_revalidates_mutated_exact_fixture_usage(tmp_path: Path) -> None
         gateway.run(role="q", task="t", prompt="p", expected_schema="Insight")
 
 
+def test_fixture_cached_tokens_must_be_an_input_subset() -> None:
+    with pytest.raises(ValueError, match="subset of input_tokens"):
+        OfflineFixtureUsage(input_tokens=2, output_tokens=1, cached_tokens=3)
+
+
 def _budget(
     tmp_path: Path,
     *,
@@ -312,7 +317,7 @@ def test_usage_settlement_commit_response_loss_retries_without_recharge(
     cap = _budget(tmp_path)
     fixture = OfflineFixture.from_payload(
         _insight_payload(),
-        usage=OfflineFixtureUsage(input_tokens=5, output_tokens=2),
+        usage=OfflineFixtureUsage(input_tokens=5, output_tokens=2, cached_tokens=3),
     )
     original = ResearchBudgetCapability.settle_provider_usage_once
     calls = 0
@@ -340,8 +345,13 @@ def test_usage_settlement_commit_response_loss_retries_without_recharge(
         expected_schema="Insight",
     )
     assert result.usage.total_tokens == 7
+    assert result.usage.cached_tokens == 3
     assert calls == 2
-    assert cap.snapshot()["model_calls"] == 1
+    snapshot = cap.snapshot()
+    assert snapshot["input_tokens"] == 5
+    assert snapshot["output_tokens"] == 2
+    assert snapshot["cached_tokens"] == 3
+    assert snapshot["model_calls"] == 1
     assert _settlement_audit(cap)[1] == "success"
 
 

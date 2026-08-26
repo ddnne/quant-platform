@@ -330,7 +330,10 @@ function tokenCount(
   const hasTopCached = Object.prototype.hasOwnProperty.call(usage, "cached_tokens");
   if (hasTopCached && detailCached !== null) return invalid;
   const cached = hasTopCached ? finiteTokenCount(usage.cached_tokens) : detailCached ?? 0;
-  if (cached === null) return invalid;
+  // Provider APIs report cached tokens as a subset of input/prompt tokens.
+  // Treating them as an independent bucket would permit inconsistent usage
+  // evidence and double count the provider's total-token semantics.
+  if (cached === null || cached > input) return invalid;
 
   const costAliases = ["cost_usd", "monetary_cost_usd"].filter((key) =>
     Object.prototype.hasOwnProperty.call(usage, key),
