@@ -693,6 +693,32 @@ def test_signed_zero_digest_cannot_be_verified_without_matching_content(
         )
 
 
+@pytest.mark.parametrize("empty_stage", CONTROLLED_ARTIFACT_TYPES)
+def test_signed_empty_stage_digest_and_content_are_rejected(
+    monkeypatch, empty_stage: str
+) -> None:
+    def sign_empty_content(artifact_type: str, artifact: dict) -> None:
+        if artifact_type == empty_stage:
+            artifact["payload"]["content_digest"] = _content_digest("")
+
+    authorization, payload = _signed_bundle_fixture(
+        monkeypatch,
+        mutate_artifact=sign_empty_content,
+    )
+    contents = _artifact_contents()
+    contents[empty_stage] = b""
+
+    with pytest.raises(
+        ControlledArtifactVerificationError,
+        match=rf"controlled {empty_stage} content must be non-empty",
+    ):
+        load_verified_controlled_execution_artifacts(
+            payload,
+            authorization=authorization,
+            artifact_contents=contents,
+        )
+
+
 @pytest.mark.parametrize("shape", ("missing", "extra", "swapped"))
 def test_signed_bundle_requires_exact_matching_four_contents(
     monkeypatch, shape: str

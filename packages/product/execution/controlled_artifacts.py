@@ -554,6 +554,10 @@ def _materialize_contents(
             raise TypeError(
                 f"controlled {key} content must be exact built-in bytes"
             )
+        if len(value) == 0:
+            raise ControlledArtifactVerificationError(
+                f"controlled {key} content must be non-empty"
+            )
     if (
         len(items) != len(CONTROLLED_ARTIFACT_TYPES)
         or frozenset(key for key, _value in items)
