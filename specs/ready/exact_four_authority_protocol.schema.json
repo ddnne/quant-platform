@@ -1,0 +1,430 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-platform.local/specs/ready/exact_four_authority_protocol.schema.json",
+  "title": "Exact-four controlled-pilot v2 authority protocol",
+  "oneOf": [
+    { "$ref": "#/$defs/readinessClaims" },
+    { "$ref": "#/$defs/traderClaims" },
+    { "$ref": "#/$defs/executionClaims" }
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "nonEmpty": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S(?:.*\\S)?$"
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_id",
+        "policy_digest",
+        "plans_exactly",
+        "max_parallel_experiments",
+        "max_generations",
+        "max_model_calls",
+        "max_input_tokens",
+        "max_output_tokens",
+        "max_cached_tokens",
+        "max_paper_runs",
+        "max_cost_usd",
+        "lease_ttl_seconds",
+        "automatic_promotion"
+      ],
+      "properties": {
+        "policy_id": { "const": "controlled-pilot-policy/v1" },
+        "policy_digest": {
+          "const": "sha256:60fc8438f7dd4914c9fec99ae53476b9a514a80d0411b7ab07dc7e9963d5f319"
+        },
+        "plans_exactly": { "const": 4 },
+        "max_parallel_experiments": { "const": 2 },
+        "max_generations": { "const": 1 },
+        "max_model_calls": { "const": 16 },
+        "max_input_tokens": { "const": 400000 },
+        "max_output_tokens": { "const": 80000 },
+        "max_cached_tokens": { "const": 400000 },
+        "max_paper_runs": { "const": 8 },
+        "max_cost_usd": { "const": 20 },
+        "lease_ttl_seconds": { "const": 1800 },
+        "automatic_promotion": { "const": false }
+      }
+    },
+    "artifactCardinality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "batch_authorizations_exactly",
+        "paper_results_exactly",
+        "risk_results_exactly",
+        "aggregate_selection_results_exactly",
+        "knowledge_artifacts_exactly"
+      ],
+      "properties": {
+        "batch_authorizations_exactly": { "const": 1 },
+        "paper_results_exactly": { "const": 4 },
+        "risk_results_exactly": { "const": 4 },
+        "aggregate_selection_results_exactly": { "const": 1 },
+        "knowledge_artifacts_exactly": { "const": 1 }
+      }
+    },
+    "featurePin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordinal",
+        "feature_id",
+        "feature_version",
+        "definition_digest",
+        "params_digest",
+        "dataset_membership_digest"
+      ],
+      "properties": {
+        "ordinal": { "type": "integer", "minimum": 0 },
+        "feature_id": { "$ref": "#/$defs/nonEmpty" },
+        "feature_version": { "$ref": "#/$defs/nonEmpty" },
+        "definition_digest": { "$ref": "#/$defs/digest" },
+        "params_digest": { "$ref": "#/$defs/digest" },
+        "dataset_membership_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "planBindingBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "ordinal",
+        "plan_id",
+        "plan_digest",
+        "dependency_closure_digest",
+        "profile_id",
+        "profile_version",
+        "profile_digest",
+        "strategy_spec_id",
+        "strategy_spec_version",
+        "strategy_spec_hash",
+        "feature_pins",
+        "feature_dependency_set_digest",
+        "universe_dependency_set_digest",
+        "evaluation_dependency_digest",
+        "risk_dependency_digest",
+        "cost_dependency_digest",
+        "required_dataset_membership_digest",
+        "max_gross_weight_ppm",
+        "max_paper_runs",
+        "risk_execution_limit_digest",
+        "period_start",
+        "period_end",
+        "cost_scenario",
+        "binding_digest"
+      ],
+      "properties": {
+        "format": { "const": "plan-execution-binding/v1" },
+        "ordinal": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "plan_id": { "$ref": "#/$defs/nonEmpty" },
+        "plan_digest": { "$ref": "#/$defs/digest" },
+        "dependency_closure_digest": { "$ref": "#/$defs/digest" },
+        "profile_id": { "$ref": "#/$defs/nonEmpty" },
+        "profile_version": { "$ref": "#/$defs/nonEmpty" },
+        "profile_digest": { "$ref": "#/$defs/digest" },
+        "strategy_spec_id": { "$ref": "#/$defs/nonEmpty" },
+        "strategy_spec_version": { "$ref": "#/$defs/nonEmpty" },
+        "strategy_spec_hash": { "$ref": "#/$defs/digest" },
+        "feature_pins": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/featurePin" }
+        },
+        "feature_dependency_set_digest": { "$ref": "#/$defs/digest" },
+        "universe_dependency_set_digest": { "$ref": "#/$defs/digest" },
+        "evaluation_dependency_digest": { "$ref": "#/$defs/digest" },
+        "risk_dependency_digest": { "$ref": "#/$defs/digest" },
+        "cost_dependency_digest": { "$ref": "#/$defs/digest" },
+        "required_dataset_membership_digest": { "$ref": "#/$defs/digest" },
+        "max_gross_weight_ppm": { "const": 500000 },
+        "max_paper_runs": { "const": 2 },
+        "risk_execution_limit_digest": { "$ref": "#/$defs/digest" },
+        "period_start": { "type": "string", "format": "date" },
+        "period_end": { "type": "string", "format": "date" },
+        "cost_scenario": { "$ref": "#/$defs/nonEmpty" },
+        "binding_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "plan1": {
+      "allOf": [
+        { "$ref": "#/$defs/planBindingBase" },
+        {
+          "properties": {
+            "ordinal": { "const": 1 },
+            "plan_id": { "const": "exp-mdh-hold10-momentum" }
+          }
+        }
+      ]
+    },
+    "plan2": {
+      "allOf": [
+        { "$ref": "#/$defs/planBindingBase" },
+        {
+          "properties": {
+            "ordinal": { "const": 2 },
+            "plan_id": { "const": "exp-xs-hold10-mom5" }
+          }
+        }
+      ]
+    },
+    "plan3": {
+      "allOf": [
+        { "$ref": "#/$defs/planBindingBase" },
+        {
+          "properties": {
+            "ordinal": { "const": 3 },
+            "plan_id": { "const": "exp-event-post-hold5" }
+          }
+        }
+      ]
+    },
+    "plan4": {
+      "allOf": [
+        { "$ref": "#/$defs/planBindingBase" },
+        {
+          "properties": {
+            "ordinal": { "const": 4 },
+            "plan_id": { "const": "exp-fund-hold10-value-mom" }
+          }
+        }
+      ]
+    },
+    "exactFour": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "execution_mode",
+        "policy",
+        "artifact_cardinality",
+        "publication_profile_id",
+        "publication_profile_version",
+        "plan_bindings",
+        "plan_set_digest",
+        "dependency_closure_set_digest",
+        "profile_set_digest",
+        "required_dataset_membership_digest",
+        "universe_rule_digest",
+        "coverage_policy_version",
+        "coverage_policy_digest",
+        "budget_scope_digest",
+        "execution_limit_set_digest",
+        "lease_ttl_seconds",
+        "automatic_promotion",
+        "mass_research_enabled",
+        "live_trading_enabled",
+        "binding_digest"
+      ],
+      "properties": {
+        "format": { "const": "exact-four-execution-binding/v1" },
+        "execution_mode": { "const": "paper" },
+        "policy": { "$ref": "#/$defs/policy" },
+        "artifact_cardinality": { "$ref": "#/$defs/artifactCardinality" },
+        "publication_profile_id": { "const": "controlled-pilot/exact-four" },
+        "publication_profile_version": { "const": "research-data-profile-set/v1" },
+        "plan_bindings": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "prefixItems": [
+            { "$ref": "#/$defs/plan1" },
+            { "$ref": "#/$defs/plan2" },
+            { "$ref": "#/$defs/plan3" },
+            { "$ref": "#/$defs/plan4" }
+          ],
+          "items": false
+        },
+        "plan_set_digest": { "$ref": "#/$defs/digest" },
+        "dependency_closure_set_digest": { "$ref": "#/$defs/digest" },
+        "profile_set_digest": { "$ref": "#/$defs/digest" },
+        "required_dataset_membership_digest": { "$ref": "#/$defs/digest" },
+        "universe_rule_digest": {
+          "const": "sha256:2d8b9b49ff0b99e9da1f206f839aeb5b1f88e264be4796cd17954ea181a7e860"
+        },
+        "coverage_policy_version": { "const": "collection-coverage/v3" },
+        "coverage_policy_digest": {
+          "const": "sha256:f98d44ec18da2e892fa8c138fa1785e969cc80fa08bf9d519c942ce026ab19d7"
+        },
+        "budget_scope_digest": { "$ref": "#/$defs/digest" },
+        "execution_limit_set_digest": { "$ref": "#/$defs/digest" },
+        "lease_ttl_seconds": { "const": 1800 },
+        "automatic_promotion": { "const": false },
+        "mass_research_enabled": { "const": false },
+        "live_trading_enabled": { "const": false },
+        "binding_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshot_id",
+        "ready_manifest_digest",
+        "immutable_snapshot_digest",
+        "governed_membership_digest",
+        "universe_rule_digest",
+        "resolved_universe_digest",
+        "coverage_policy_version",
+        "coverage_policy_digest",
+        "coverage_proof_digest",
+        "raw_proof_digest",
+        "receipt_proof_digest",
+        "validation_proof_digest",
+        "b0_proof_digest",
+        "b4_proof_digest",
+        "pit_contract_set_digest",
+        "source_generation",
+        "applied_sync_generation",
+        "export_cursor",
+        "applied_cursor",
+        "feature_generation",
+        "catalog_generation"
+      ],
+      "properties": {
+        "snapshot_id": { "$ref": "#/$defs/digest" },
+        "ready_manifest_digest": { "$ref": "#/$defs/digest" },
+        "immutable_snapshot_digest": { "$ref": "#/$defs/digest" },
+        "governed_membership_digest": { "$ref": "#/$defs/digest" },
+        "universe_rule_digest": { "$ref": "#/$defs/digest" },
+        "resolved_universe_digest": { "$ref": "#/$defs/digest" },
+        "coverage_policy_version": { "$ref": "#/$defs/nonEmpty" },
+        "coverage_policy_digest": { "$ref": "#/$defs/digest" },
+        "coverage_proof_digest": { "$ref": "#/$defs/digest" },
+        "raw_proof_digest": { "$ref": "#/$defs/digest" },
+        "receipt_proof_digest": { "$ref": "#/$defs/digest" },
+        "validation_proof_digest": { "$ref": "#/$defs/digest" },
+        "b0_proof_digest": { "$ref": "#/$defs/digest" },
+        "b4_proof_digest": { "$ref": "#/$defs/digest" },
+        "pit_contract_set_digest": { "$ref": "#/$defs/digest" },
+        "source_generation": { "$ref": "#/$defs/nonEmpty" },
+        "applied_sync_generation": { "$ref": "#/$defs/nonEmpty" },
+        "export_cursor": { "$ref": "#/$defs/nonEmpty" },
+        "applied_cursor": { "$ref": "#/$defs/nonEmpty" },
+        "feature_generation": { "$ref": "#/$defs/digest" },
+        "catalog_generation": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "readinessClaims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "issuer",
+        "authority_scope",
+        "snapshot",
+        "exact_four",
+        "issued_at",
+        "expires_at",
+        "attestation_id"
+      ],
+      "properties": {
+        "format": { "const": "pilot-readiness-attestation-claims/v2" },
+        "issuer": { "const": "PilotReadyPublicationService/v2" },
+        "authority_scope": { "const": "VERIFIED_PILOT_READINESS" },
+        "snapshot": { "$ref": "#/$defs/snapshot" },
+        "exact_four": { "$ref": "#/$defs/exactFour" },
+        "issued_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "attestation_id": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "traderClaims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "authority_scope",
+        "execution_mode",
+        "pilot_run_id",
+        "readiness_attestation_id",
+        "exact_four_binding_digest",
+        "controlled_pilot_policy_digest",
+        "budget_scope_digest",
+        "execution_limit_set_digest",
+        "lease_ttl_seconds",
+        "human_approval_event_id",
+        "human_approval_event_digest",
+        "issued_at",
+        "expires_at",
+        "automatic_promotion",
+        "mass_research_enabled",
+        "live_trading_enabled",
+        "authorization_id"
+      ],
+      "properties": {
+        "format": { "const": "exact-four-trader-authorization-claims/v2" },
+        "authority_scope": { "const": "EXACT_FOUR_TRADER_AUTHORIZATION" },
+        "execution_mode": { "const": "paper" },
+        "pilot_run_id": { "$ref": "#/$defs/nonEmpty" },
+        "readiness_attestation_id": { "$ref": "#/$defs/digest" },
+        "exact_four_binding_digest": { "$ref": "#/$defs/digest" },
+        "controlled_pilot_policy_digest": {
+          "const": "sha256:60fc8438f7dd4914c9fec99ae53476b9a514a80d0411b7ab07dc7e9963d5f319"
+        },
+        "budget_scope_digest": { "$ref": "#/$defs/digest" },
+        "execution_limit_set_digest": { "$ref": "#/$defs/digest" },
+        "lease_ttl_seconds": { "const": 1800 },
+        "human_approval_event_id": { "$ref": "#/$defs/nonEmpty" },
+        "human_approval_event_digest": { "$ref": "#/$defs/digest" },
+        "issued_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "automatic_promotion": { "const": false },
+        "mass_research_enabled": { "const": false },
+        "live_trading_enabled": { "const": false },
+        "authorization_id": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "executionClaims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "authority_scope",
+        "execution_mode",
+        "pilot_run_id",
+        "readiness_attestation_id",
+        "trader_authorization_id",
+        "exact_four_binding_digest",
+        "controlled_pilot_policy_digest",
+        "budget_scope_digest",
+        "execution_limit_set_digest",
+        "lease_ttl_seconds",
+        "idempotency_key",
+        "generation",
+        "automatic_promotion",
+        "mass_research_enabled",
+        "live_trading_enabled",
+        "request_id"
+      ],
+      "properties": {
+        "format": { "const": "exact-four-execution-request-claims/v2" },
+        "authority_scope": { "const": "EXACT_FOUR_CONTROLLED_PAPER_EXECUTION" },
+        "execution_mode": { "const": "paper" },
+        "pilot_run_id": { "$ref": "#/$defs/nonEmpty" },
+        "readiness_attestation_id": { "$ref": "#/$defs/digest" },
+        "trader_authorization_id": { "$ref": "#/$defs/digest" },
+        "exact_four_binding_digest": { "$ref": "#/$defs/digest" },
+        "controlled_pilot_policy_digest": {
+          "const": "sha256:60fc8438f7dd4914c9fec99ae53476b9a514a80d0411b7ab07dc7e9963d5f319"
+        },
+        "budget_scope_digest": { "$ref": "#/$defs/digest" },
+        "execution_limit_set_digest": { "$ref": "#/$defs/digest" },
+        "lease_ttl_seconds": { "const": 1800 },
+        "idempotency_key": { "$ref": "#/$defs/nonEmpty" },
+        "generation": { "const": 1 },
+        "automatic_promotion": { "const": false },
+        "mass_research_enabled": { "const": false },
+        "live_trading_enabled": { "const": false },
+        "request_id": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

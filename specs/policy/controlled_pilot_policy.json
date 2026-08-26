@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "policy_id": "controlled-pilot-policy/v1",
+  "policy_digest": "sha256:60fc8438f7dd4914c9fec99ae53476b9a514a80d0411b7ab07dc7e9963d5f319",
   "plans_exactly": 4,
   "max_parallel_experiments": 2,
   "max_generations": 1,

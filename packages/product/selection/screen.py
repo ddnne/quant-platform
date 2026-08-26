@@ -2,43 +2,33 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from selection.controlled_pilot_policy import load_controlled_pilot_policy
 
-_POLICY_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "specs"
-    / "policy"
-    / "controlled_pilot_policy.json"
-)
-_CONTROLLED_PILOT_POLICY = json.loads(_POLICY_PATH.read_text(encoding="utf-8"))
+
+_CONTROLLED_PILOT_POLICY = load_controlled_pilot_policy()
 
 
 @dataclass(frozen=True)
 class ExperimentBudget:
     """Controlled-pilot limits loaded from the cross-runtime policy SoT."""
 
-    max_parallel_experiments: int = int(
-        _CONTROLLED_PILOT_POLICY["max_parallel_experiments"]
-    )
-    max_generations: int = int(_CONTROLLED_PILOT_POLICY["max_generations"])
-    max_model_calls: int = int(_CONTROLLED_PILOT_POLICY["max_model_calls"])
-    max_paper_runs: int = int(_CONTROLLED_PILOT_POLICY["max_paper_runs"])
+    max_parallel_experiments: int = _CONTROLLED_PILOT_POLICY.max_parallel_experiments
+    max_generations: int = _CONTROLLED_PILOT_POLICY.max_generations
+    max_model_calls: int = _CONTROLLED_PILOT_POLICY.max_model_calls
+    max_paper_runs: int = _CONTROLLED_PILOT_POLICY.max_paper_runs
     # Hard token/cost caps (required for mass research; never leave None).
-    max_input_tokens: int = int(_CONTROLLED_PILOT_POLICY["max_input_tokens"])
-    max_output_tokens: int = int(_CONTROLLED_PILOT_POLICY["max_output_tokens"])
-    max_cached_tokens: int = int(_CONTROLLED_PILOT_POLICY["max_cached_tokens"])
+    max_input_tokens: int = _CONTROLLED_PILOT_POLICY.max_input_tokens
+    max_output_tokens: int = _CONTROLLED_PILOT_POLICY.max_output_tokens
+    max_cached_tokens: int = _CONTROLLED_PILOT_POLICY.max_cached_tokens
     max_compute_time_ms: int = 3_600_000
-    max_estimated_cost_micros: int = int(
-        float(_CONTROLLED_PILOT_POLICY["max_cost_usd"]) * 1_000_000
+    max_estimated_cost_micros: int = (
+        _CONTROLLED_PILOT_POLICY.max_cost_usd * 1_000_000
     )
-    lease_ttl_seconds: int = int(_CONTROLLED_PILOT_POLICY["lease_ttl_seconds"])
-    automatic_promotion: bool = bool(
-        _CONTROLLED_PILOT_POLICY["automatic_promotion"]
-    )
+    lease_ttl_seconds: int = _CONTROLLED_PILOT_POLICY.lease_ttl_seconds
+    automatic_promotion: bool = _CONTROLLED_PILOT_POLICY.automatic_promotion
 
     def __post_init__(self) -> None:
         if self.max_parallel_experiments < 1:
