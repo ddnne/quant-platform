@@ -67,9 +67,17 @@ def _require_under(path: Path, parent: Path, *, label: str) -> None:
 
 
 def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
+    installed_root = expected_prefix.resolve()
+    sys.path.insert(0, str(installed_root))
+
     import data_contracts
     import data_contracts.coverage as coverage_module
     import data_contracts.source_capability as capability_module
+    from ingestion.jquants import acquisition_collection as acquisition_module
+    import ingestion.runtime_authority as runtime_authority_module
+    import storage.coverage_transition as coverage_transition_module
+    import storage.receipt_crypto as receipt_crypto_module
+    import storage.verified_receipt as verified_receipt_module
     from data_contracts.coverage import coverage_contract_for
     from data_contracts.source_capability import (
         all_source_capability_contracts,
@@ -77,24 +85,58 @@ def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
         specs_dir,
     )
 
-    installed_root = expected_prefix.resolve()
     package_root = Path(data_contracts.__file__).resolve().parent
     capability_module_path = Path(capability_module.__file__).resolve()
     coverage_module_path = Path(coverage_module.__file__).resolve()
+    acquisition_module_path = Path(acquisition_module.__file__).resolve()
+    runtime_authority_module_path = Path(runtime_authority_module.__file__).resolve()
+    coverage_transition_module_path = Path(
+        coverage_transition_module.__file__
+    ).resolve()
+    receipt_crypto_module_path = Path(receipt_crypto_module.__file__).resolve()
+    verified_receipt_module_path = Path(verified_receipt_module.__file__).resolve()
     authority_dir = specs_dir().resolve()
     registry_path = package_root / REGISTRY_NAME
+    coverage_transition_registry_path = (
+        coverage_transition_module._PINNED_REGISTRY_PATH.resolve()
+    )
+    receipt_schema_path = verified_receipt_module._SCHEMA_PATH.resolve()
     for path, label in (
         (package_root, "data_contracts package"),
         (capability_module_path, "SourceCapability module"),
         (coverage_module_path, "Coverage module"),
+        (acquisition_module_path, "J-Quants acquisition module"),
+        (runtime_authority_module_path, "ingestion runtime authority module"),
+        (coverage_transition_module_path, "Coverage transition module"),
+        (receipt_crypto_module_path, "receipt crypto module"),
+        (verified_receipt_module_path, "verified Receipt module"),
         (authority_dir, "SourceCapability authority"),
         (registry_path, "acquisition registry"),
+        (coverage_transition_registry_path, "Coverage transition registry"),
+        (receipt_schema_path, "signed Receipt claims schema"),
     ):
         _require_under(path, installed_root, label=label)
     if authority_dir.parent != package_root:
         raise AssertionError("SourceCapability authority is not package-owned")
+    if acquisition_module._SHARED_REGISTRY_PATH.resolve() != registry_path:
+        raise AssertionError("J-Quants acquisition import did not bind wheel registry")
     if "qp_paths" in sys.modules:
         raise AssertionError("installed SourceCapability loading consulted qp_paths")
+    for module_name, module in tuple(sys.modules.items()):
+        if not module_name.startswith(("data_contracts", "ingestion", "storage")):
+            continue
+        module_file = getattr(module, "__file__", None)
+        if module_file is not None:
+            _require_under(
+                Path(module_file).resolve(),
+                installed_root,
+                label=f"loaded first-party module {module_name}",
+            )
+    if coverage_transition_module.CoverageTransitionPublicKeyRegistry.load_pinned().provisioned:
+        raise AssertionError("Coverage transition authority unexpectedly active")
+    receipt_schema = verified_receipt_module._claims_schema()
+    if receipt_schema.get("$id") != "specs/receipts/signed_receipt_claims.schema.json":
+        raise AssertionError("installed signed Receipt claims schema identity drift")
 
     files = frozenset(path.name for path in authority_dir.glob("*.json"))
     if files != EXPECTED_CONTRACT_FILES:
@@ -131,6 +173,9 @@ def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
         != REGISTRY_SOURCE_LOCATOR
     ):
         raise AssertionError("installed acquisition registry authority locator drift")
+    runtime_registry = acquisition_module._target_registry()
+    if runtime_registry.digest != registry_digest:
+        raise AssertionError("J-Quants acquisition runtime registry digest drift")
 
     route_digests: dict[str, dict[str, str]] = {}
     rows = registry.get("datasets")
@@ -158,6 +203,15 @@ def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
             raise AssertionError(f"SourceCapability route digest drift: {dataset_id}")
         if coverage_digest != registry_coverage_digest:
             raise AssertionError(f"Coverage route digest drift: {dataset_id}")
+        runtime_route = runtime_registry.routes.get(dataset_id)
+        if (
+            runtime_route is None
+            or runtime_route.source_capability_digest != source_digest
+            or runtime_route.coverage_policy_digest != coverage_digest
+        ):
+            raise AssertionError(
+                f"J-Quants acquisition runtime route digest drift: {dataset_id}"
+            )
         route_digests[dataset_id] = {
             "source_capability_digest": source_digest,
             "coverage_policy_digest": coverage_digest,
@@ -176,22 +230,25 @@ def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
 
 
 def _run(command: list[str], *, cwd: Path, capture: bool = False) -> str:
-    completed = subprocess.run(
-        command,
-        cwd=cwd,
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.PIPE if capture else None,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.PIPE if capture else None,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+    except subprocess.CalledProcessError as exc:
+        details = "\n".join(
+            part.strip()
+            for part in (exc.stdout, exc.stderr)
+            if isinstance(part, str) and part.strip()
+        )
+        suffix = f"\n{details[-8000:]}" if details else ""
+        raise RuntimeError(f"wheel verification subprocess failed{suffix}") from exc
     return completed.stdout if capture else ""
-
-
-def _venv_python(venv: Path) -> Path:
-    if os.name == "nt":
-        return venv / "Scripts" / "python.exe"
-    return venv / "bin" / "python"
 
 
 def _copy_tracked_source(destination: Path) -> None:
@@ -243,15 +300,18 @@ def _verify_wheel(*, uv: Path, python: Path) -> None:
         temporary = Path(raw)
         source = temporary / "source"
         dist = temporary / "dist"
-        venv = temporary / "venv"
+        installed = temporary / "installed-wheel"
         empty_cwd = temporary / "empty-cwd"
         decoy_cwd = temporary / "malicious-decoy-cwd"
         source.mkdir()
         dist.mkdir()
+        installed.mkdir()
         empty_cwd.mkdir()
         _copy_tracked_source(source)
         (decoy_cwd / "tests").mkdir(parents=True)
         (decoy_cwd / "specs" / "source_capability").mkdir(parents=True)
+        (decoy_cwd / "specs" / "coverage_transition").mkdir(parents=True)
+        (decoy_cwd / "specs" / "receipts").mkdir(parents=True)
         (decoy_cwd / "packages" / "data_plane" / "data_contracts" /
          "source_capability_contracts").mkdir(parents=True)
         (decoy_cwd / "pyproject.toml").write_text(
@@ -260,6 +320,8 @@ def _verify_wheel(*, uv: Path, python: Path) -> None:
         )
         for decoy in (
             decoy_cwd / "specs" / "source_capability" / "equities_bars_daily.json",
+            decoy_cwd / "specs" / "coverage_transition" / "public_keys.json",
+            decoy_cwd / "specs" / "receipts" / "signed_receipt_claims.schema.json",
             decoy_cwd / "packages" / "data_plane" / "data_contracts" /
             "source_capability_contracts" / "equities_bars_daily.json",
         ):
@@ -285,18 +347,15 @@ def _verify_wheel(*, uv: Path, python: Path) -> None:
         if len(wheels) != 1:
             raise AssertionError(f"expected one built wheel, found {len(wheels)}")
         _run(
-            [str(python), "-m", "venv", "--without-pip", str(venv)],
-            cwd=temporary,
-        )
-        installed_python = _venv_python(venv)
-        _run(
             [
                 str(uv),
                 "pip",
                 "install",
                 "--quiet",
                 "--python",
-                str(installed_python),
+                str(python),
+                "--target",
+                str(installed),
                 "--no-deps",
                 "--no-index",
                 str(wheels[0]),
@@ -304,19 +363,19 @@ def _verify_wheel(*, uv: Path, python: Path) -> None:
             cwd=temporary,
         )
         empty_result = _probe_subprocess(
-            installed_python=installed_python,
+            installed_python=python,
             cwd=empty_cwd,
-            expected_prefix=venv,
+            expected_prefix=installed,
         )
         decoy_result = _probe_subprocess(
-            installed_python=installed_python,
+            installed_python=python,
             cwd=decoy_cwd,
-            expected_prefix=venv,
+            expected_prefix=installed,
         )
         if empty_result != decoy_result:
             raise AssertionError("malicious CWD changed installed authority loading")
         print(
-            "SourceCapability installed-wheel authority: "
+            "Installed-wheel acquisition and contract authorities: "
             f"ok ({empty_result['contract_count']} contracts, "
             f"{len(empty_result['route_digests'])} active route digests)"
         )
@@ -336,7 +395,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.uv is None or args.python is None:
         parser.error("wheel verification requires --uv and --python")
-    _verify_wheel(uv=args.uv.resolve(), python=args.python.resolve())
+    _verify_wheel(
+        uv=Path(os.path.abspath(args.uv)),
+        python=Path(os.path.abspath(args.python)),
+    )
     return 0
 
 

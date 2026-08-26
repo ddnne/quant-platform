@@ -91,7 +91,7 @@ echo "==> J-Quants acquisition target registry"
 "$py" scripts/generate_jquants_acquisition_registry.py
 echo "==> installed SourceCapability wheel authority"
 "$py" scripts/verify_source_capability_wheel.py \
-  --uv "$uv_cmd" --python "$host_py"
+  --uv "$uv_cmd" --python "$py"
 WORKERS=()
 while IFS= read -r worker_dir; do
   [[ -n "$worker_dir" ]] || continue
