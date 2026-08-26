@@ -40,6 +40,9 @@ PARALLEL_PROTOCOL_SCHEMAS: dict[str, Path] = {
     "receipt_verify_public_keys": (
         ROOT / "specs" / "receipts" / "receipt_verify_public_keys.schema.json"
     ),
+    "jquants_acquisition_collection": (
+        ROOT / "specs" / "receipts" / "jquants_acquisition_collection.schema.json"
+    ),
     "exact_four_authority_protocol": (
         ROOT / "specs" / "ready" / "exact_four_authority_protocol.schema.json"
     ),
@@ -289,7 +292,7 @@ EXPECTED_RESIDUAL_RISK = "cloudflare_workers_scripts_write_account_scope"
 # contains its own body digest; this independent code pin prevents a caller from
 # changing the contract and merely recomputing that self-declared digest.
 PINNED_MANIFEST_DIGEST = (
-    "sha256:5aef1519860e1503c20c88196b8d7169c2dfb37e39f2330022127fdc9e85ab85"
+    "sha256:8c76f9d5764dd3ea860e349eae0b1b1f89e6f7cfd5a53c4536c1c33cc58e01be"
 )
 
 _BROAD_CAPABILITY_TOKENS = frozenset(

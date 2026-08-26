@@ -2,7 +2,7 @@
   "schema_version": "authority-principal-manifest/v1",
   "generation": 1,
   "activation_status": "PENDING",
-  "schema_digest": "sha256:268fa9258443f40e00e1367268e4eb44764a4e40e9aafad6e1910ef9788305ed",
+  "schema_digest": "sha256:09c28d54c1a6c877fe5f3d87c5d12dc13d71543aaba5ad9e2ab011aec0f0d142",
   "protocol_schema_digests": {
     "frozen_mirror_request": "sha256:d0d20ba5094f7b6e5bb3f6b68792cf975956c05a2acbdbb18f50edf2f98cfe21",
     "frozen_mirror_handoff": "sha256:4041b2eef7f848dcc66addb14e3a5f6e8572fb5ac91e9e239dd66a29067779a5",
@@ -13,6 +13,7 @@
   },
   "parallel_protocol_schema_digests": {
     "receipt_verify_public_keys": "sha256:ddd0537fd643cec7698ea089ce4e4fdae34b61423a03c586b6b683740e7b5626",
+    "jquants_acquisition_collection": "sha256:f0cdf6b30067b170a7e4d821e8090a8f9859fd190432f5b3bd2836d1e4ee36ca",
     "exact_four_authority_protocol": "sha256:5654d2e8c5e19ac96de7eda23fcb54ded9194e533c68bb1fe4fbdd14cdb12b53",
     "exact_four_result_manifest": "sha256:01ceaab94741e1c2f29c530a6af0208b10e10bf1d24b176ea9b8d8a6afada0bd"
   },
@@ -656,5 +657,5 @@
       }
     }
   },
-  "manifest_digest": "sha256:5aef1519860e1503c20c88196b8d7169c2dfb37e39f2330022127fdc9e85ab85"
+  "manifest_digest": "sha256:8c76f9d5764dd3ea860e349eae0b1b1f89e6f7cfd5a53c4536c1c33cc58e01be"
 }

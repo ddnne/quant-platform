@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from jsonschema import Draft202012Validator, FormatChecker
+from referencing import Registry, Resource
 import pytest
 
 
@@ -32,6 +33,26 @@ def _schema(name: str) -> dict[str, object]:
 def _validate_schema(name: str, document: dict[str, object]) -> None:
     Draft202012Validator(
         _schema(name), format_checker=FormatChecker()
+    ).validate(document)
+
+
+def _validate_jquants_collection(document: dict[str, object]) -> None:
+    rpc_schema = _schema("jquants_acquisition_rpc.schema.json")
+    collection_schema = json.loads(
+        (
+            ROOT
+            / "specs"
+            / "receipts"
+            / "jquants_acquisition_collection.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    registry = Registry().with_resource(
+        str(rpc_schema["$id"]), Resource.from_contents(rpc_schema)
+    )
+    Draft202012Validator(
+        collection_schema,
+        registry=registry,
+        format_checker=FormatChecker(),
     ).validate(document)
 
 
@@ -126,6 +147,84 @@ def _jquants_response_headers(metadata: dict[str, object]) -> dict[str, object]:
         "x-quant-acquisition-upstream-status": _header_value(
             metadata["upstream_http_status"]
         ),
+    }
+
+
+def _jquants_initial_request() -> dict[str, object]:
+    return {
+        "schema_version": "jquants-acquisition-rpc-request/v2",
+        "environment": "production",
+        "operation": "fetch_governed_page",
+        "dataset_id": "equities_bars_daily",
+        "segment_id": "2026-07",
+        "segment_start": "2026-07-01",
+        "segment_end": "2026-07-31",
+        "acquisition_nonce": "a" * 64,
+        "source_capability_digest": _digest("1"),
+        "dataset_contract_digest": _digest("2"),
+        "coverage_policy_digest": _digest("3"),
+        "query_contract_digest": _digest("4"),
+        "target_registry_digest": _digest("5"),
+        "continuation_token": None,
+    }
+
+
+def _jquants_raw_page_metadata() -> dict[str, object]:
+    return {
+        "schema_version": "jquants-acquisition-rpc-response-metadata/v2",
+        "evidence_state": "RAW_PAGE",
+        "environment": "production",
+        "dataset_id": "equities_bars_daily",
+        "segment_id": "2026-07",
+        "segment_start": "2026-07-01",
+        "segment_end": "2026-07-31",
+        "request_digest": _digest("6"),
+        "request_identity_digest": _digest("7"),
+        "previous_request_digest": None,
+        "acquisition_id": "hmac-sha256:" + "8" * 64,
+        "acquisition_issued_at": "2026-08-26T00:00:00.000Z",
+        "acquisition_expires_at": "2026-08-26T06:00:00.000Z",
+        "target_registry_digest": _digest("5"),
+        "source_capability_digest": _digest("1"),
+        "dataset_contract_digest": _digest("2"),
+        "coverage_policy_digest": _digest("3"),
+        "query_contract_digest": _digest("4"),
+        "cursor_key_id": "hmac-sha256:" + "9" * 64,
+        "slice_date": "2026-07-31",
+        "query_digest": _digest("a"),
+        "page_ordinal": 0,
+        "slice_ordinal": 30,
+        "provider_page_ordinal": 0,
+        "provider_pagination_state": "EXHAUSTED",
+        "upstream_http_status": 200,
+        "body_digest": _digest("b"),
+        "body_kind": "UPSTREAM_EXACT_BYTES",
+        "pagination_state": "EXHAUSTED",
+        "continuation_token": None,
+        "content_type": "application/json",
+        "redirect_count": 0,
+        "previous_chain_digest": _digest("c"),
+        "chain_digest": _digest("d"),
+    }
+
+
+def _jquants_collection() -> dict[str, object]:
+    metadata = _jquants_raw_page_metadata()
+    return {
+        "schema_version": "jquants-acquisition-collection/v2",
+        "capture_mode": "LIVE_SERVICE_BINDING_RESPONSE",
+        "initial_request": _jquants_initial_request(),
+        "pages": [
+            {
+                "raw_path": "raw/jquants/equities_bars_daily/2026-07/page-0000.json",
+                "raw_size": 19,
+                "raw_digest": metadata["body_digest"],
+                "response_status": 200,
+                "headers": _jquants_response_headers(metadata),
+                "metadata": metadata,
+            }
+        ],
+        "collection_digest": _digest("f"),
     }
 
 
@@ -688,6 +787,95 @@ def test_jquants_rpc_raw_metadata_requires_target_authority_fields() -> None:
     raw_only["upstream_http_status"] = None
     with pytest.raises(Exception):
         _validate_schema("jquants_acquisition_rpc.schema.json", raw_only)
+
+
+def test_jquants_collection_is_closed_over_live_rpc_evidence() -> None:
+    collection = _jquants_collection()
+    _validate_jquants_collection(collection)
+
+    rpc_headers = _schema("jquants_acquisition_rpc.schema.json")["$defs"][
+        "response_headers"
+    ]
+    headers = collection["pages"][0]["headers"]
+    assert len(headers) == 37
+    assert set(headers) == set(rpc_headers["required"])
+
+
+def test_jquants_collection_initial_request_is_not_resumable() -> None:
+    collection = _jquants_collection()
+    collection["initial_request"]["continuation_token"] = "jqa2.AA.AA"
+    with pytest.raises(Exception):
+        _validate_jquants_collection(collection)
+
+
+@pytest.mark.parametrize(
+    ("scope", "field", "value"),
+    [
+        ("collection", "url", "https://example.invalid"),
+        ("collection", "query", {"date": "2026-07-01"}),
+        ("collection", "cursor", "caller-cursor"),
+        ("collection", "raw_count", 1),
+        ("collection", "pagination_exhausted", True),
+        ("initial_request", "url", "https://example.invalid"),
+        ("initial_request", "query", {"date": "2026-07-01"}),
+        ("initial_request", "headers", {"authorization": "secret"}),
+        ("initial_request", "method", "GET"),
+        ("initial_request", "token", "secret"),
+        ("initial_request", "cursor", "caller-cursor"),
+        ("initial_request", "count", 1),
+        ("initial_request", "exhaustion", True),
+        ("page", "url", "https://example.invalid"),
+        ("page", "query", {"date": "2026-07-01"}),
+        ("page", "cursor", "caller-cursor"),
+        ("page", "count", 1),
+        ("page", "exhaustion", True),
+    ],
+)
+def test_jquants_collection_forbids_caller_claims(
+    scope: str, field: str, value: object
+) -> None:
+    collection = _jquants_collection()
+    target = collection
+    if scope == "initial_request":
+        target = collection["initial_request"]
+    elif scope == "page":
+        target = collection["pages"][0]
+    target[field] = value
+    with pytest.raises(Exception):
+        _validate_jquants_collection(collection)
+
+
+def test_jquants_collection_requires_exact_target_headers_and_raw_evidence() -> None:
+    missing_header = _jquants_collection()
+    del missing_header["pages"][0]["headers"]["cache-control"]
+    with pytest.raises(Exception):
+        _validate_jquants_collection(missing_header)
+
+    upstream_header = _jquants_collection()
+    upstream_header["pages"][0]["headers"]["etag"] = "must-not-pass-through"
+    with pytest.raises(Exception):
+        _validate_jquants_collection(upstream_header)
+
+    target_error = _jquants_collection()
+    metadata = target_error["pages"][0]["metadata"]
+    metadata.update(
+        evidence_state="FAILED",
+        upstream_http_status=None,
+        body_kind="TARGET_ERROR_JSON",
+        provider_pagination_state="NOT_APPLICABLE",
+        pagination_state="NOT_APPLICABLE",
+        chain_digest=None,
+    )
+    target_error["pages"][0]["headers"] = _jquants_response_headers(metadata)
+    with pytest.raises(Exception):
+        _validate_jquants_collection(target_error)
+
+
+def test_jquants_collection_capture_mode_is_live_service_binding_only() -> None:
+    collection = _jquants_collection()
+    collection["capture_mode"] = "CALLER_RECONSTRUCTED"
+    with pytest.raises(Exception):
+        _validate_jquants_collection(collection)
 
 
 def test_parallel_protocol_digest_cannot_be_self_declared() -> None:
