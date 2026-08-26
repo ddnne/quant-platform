@@ -16,10 +16,13 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
+import stat
 import subprocess
 import sys
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import quote
 from uuid import uuid4
@@ -38,6 +41,11 @@ from _bootstrap import ensure_repo_root  # noqa: E402
 ROOT = ensure_repo_root()
 
 from ops.projection_content import build_projection_content_manifest  # noqa: E402
+from ops.projection_candidate import (  # noqa: E402
+    UNSIGNED_CANDIDATE_SCHEMA,
+    UnsignedOpsProjectionCandidate,
+    _freeze_unsigned_projection_candidate,
+)
 
 PROJECTION_VERSION = "ops_projection/v4"
 DEFAULT_MAX_AGE_SECONDS = 86_400
@@ -69,6 +77,19 @@ class ProjectionBundle:
     metadata: Mapping[str, Any]
     envelope: Mapping[str, Any]
     signed_envelope: Mapping[str, Any] | None
+    activation_included: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ConnectionSnapshotDescriptor:
+    descriptor_path: str
+    device: int
+    inode: int
+    size: int
+    mtime_ns: int
+    schema_version: int
+    data_version: int
+    total_changes: int
 
 
 def _now() -> str:
@@ -800,7 +821,7 @@ def _tag(rows: Iterable[Mapping[str, Any]], generation_id: str) -> list[dict[str
 
 
 def _render_projection_bundle(
-    db_path: str | Path,
+    source: str | Path | sqlite3.Connection,
     *,
     snapshot_dir: str | Path | None = None,
     max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
@@ -814,29 +835,47 @@ def _render_projection_bundle(
     source_cursor: int | None = None,
     export_cursor: int | None = None,
     storage_hot_cutoff: str | None = None,
+    _generated_at: str | None = None,
+    _seal_and_activate: bool = True,
 ) -> ProjectionBundle:
-    """Render an append-only projection and a pointer-last activation guard."""
+    """Canonical renderer over one SQLite read connection/snapshot.
+
+    Path callers are compatibility-only: this function opens one read-only
+    connection and then uses the same connection-owned query path.  The C4
+    candidate boundary passes the already-authenticated connection directly.
+    """
     from data_contracts.coverage import (
         all_coverage_contracts,
         coverage_policy_binding,
         coverage_policy_set_binding,
     )
-    from ops.projection_meta import build_projection_metadata
+    from ops.projection_meta import _build_projection_metadata_from_connection
 
-    path = Path(db_path).resolve()
-    if not path.is_file():
-        raise FileNotFoundError(path)
     gen = generation_id or "projgen-" + uuid4().hex
     commit_sha = _git_sha(producer_commit_sha)
     contract_digest, registry_digest = _contract_digests()
-    generated_at = _now()
-
-    conn = sqlite3.connect("file:" + quote(str(path)) + "?mode=ro", uri=True)
+    generated_at = _generated_at or _now()
+    owns_connection = type(source) is not sqlite3.Connection
+    if owns_connection:
+        path = Path(source).resolve()
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        conn = sqlite3.connect(
+            "file:" + quote(str(path)) + "?mode=ro",
+            uri=True,
+        )
+        conn.execute("PRAGMA query_only=ON")
+    else:
+        conn = source
+        if type(conn) is not sqlite3.Connection:
+            raise TypeError("projection source must be one exact SQLite connection")
+    original_row_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
     try:
         # Freeze every source query (coverage, receipts, cursors, READY and
         # evidence digests) to one SQLite read snapshot.
-        conn.execute("BEGIN")
+        if not conn.in_transaction:
+            conn.execute("BEGIN")
         coverage = _rows(
             conn,
             "dataset_coverage",
@@ -894,8 +933,9 @@ def _render_projection_bundle(
                     f"expected={expected_policy['policy_version']!r}"
                 )
 
-        metadata = build_projection_metadata(
-            path,
+        metadata = _build_projection_metadata_from_connection(
+            conn,
+            generated_at=generated_at,
             max_age_seconds=max_age_seconds,
             refresh_status=refresh_status,
             refresh_error=refresh_error,
@@ -906,6 +946,9 @@ def _render_projection_bundle(
             producer_commit_sha=commit_sha,
             contract_digest=contract_digest,
             registry_digest=registry_digest,
+            request_now=datetime.fromisoformat(
+                generated_at.replace("Z", "+00:00")
+            ),
         )
         status = str(metadata.get("status") or "UNKNOWN")
         if status not in {"FRESH", "STALE", "FAILED", "UNKNOWN"}:
@@ -951,7 +994,12 @@ def _render_projection_bundle(
             hot_cutoff=storage_hot_cutoff,
         )
     finally:
-        conn.close()
+        if owns_connection:
+            if conn.in_transaction:
+                conn.rollback()
+            conn.close()
+        else:
+            conn.row_factory = original_row_factory
 
     lag = (
         None
@@ -1189,23 +1237,24 @@ def _render_projection_bundle(
             "AND current_meta.export_cursor=current_meta.applied_cursor "
             f"AND current_meta.applied_cursor<={source_cursor}))"
         )
-    statements.append(
-        "UPDATE ops_projection_generation "
-        f"SET status='SEALED',sealed_at={_sql_literal(generated)} "
-        f"WHERE generation_id={_sql_literal(gen)} AND status='OPEN' AND {guard};"
-    )
-    # Deliberately last: partial imports leave an unreferenced OPEN generation
-    # but cannot seal it or make it visible to an MCP query.
-    statements.append(
-        "INSERT INTO ops_projection_active (singleton,generation_id,activated_at) "
-        f"SELECT 1,{_sql_literal(gen)},{_sql_literal(generated)} "
-        "FROM ops_projection_generation "
-        f"WHERE generation_id={_sql_literal(gen)} AND status='SEALED' "
-        f"AND {guard} AND {cursor_guard} "
-        "ON CONFLICT(singleton) DO UPDATE SET "
-        "generation_id=excluded.generation_id,activated_at=excluded.activated_at "
-        f"WHERE {cursor_guard};"
-    )
+    if _seal_and_activate:
+        statements.append(
+            "UPDATE ops_projection_generation "
+            f"SET status='SEALED',sealed_at={_sql_literal(generated)} "
+            f"WHERE generation_id={_sql_literal(gen)} AND status='OPEN' AND {guard};"
+        )
+        # Deliberately last: partial imports leave an unreferenced OPEN generation
+        # but cannot seal it or make it visible to an MCP query.
+        statements.append(
+            "INSERT INTO ops_projection_active (singleton,generation_id,activated_at) "
+            f"SELECT 1,{_sql_literal(gen)},{_sql_literal(generated)} "
+            "FROM ops_projection_generation "
+            f"WHERE generation_id={_sql_literal(gen)} AND status='SEALED' "
+            f"AND {guard} AND {cursor_guard} "
+            "ON CONFLICT(singleton) DO UPDATE SET "
+            "generation_id=excluded.generation_id,activated_at=excluded.activated_at "
+            f"WHERE {cursor_guard};"
+        )
     if use_sql_transaction:
         statements.append("COMMIT;")
     return ProjectionBundle(
@@ -1218,6 +1267,7 @@ def _render_projection_bundle(
         metadata=metadata_row,
         envelope=envelope,
         signed_envelope=signed_envelope,
+        activation_included=_seal_and_activate,
     )
 
 
@@ -1238,8 +1288,8 @@ def render_projection_bundle(
     """Render an unsigned diagnostic projection from a caller-selected DB.
 
     Production cursor pins and signing authority are intentionally absent from
-    this public API. The publisher uses the private trusted entrypoint after it
-    validates the authenticated local-sync audit.
+    this public API.  Publication remains fail-closed until the private trusted
+    entrypoint has a separately provisioned C4 signing authority.
     """
     return _render_projection_bundle(
         db_path,
@@ -1256,11 +1306,250 @@ def render_projection_bundle(
     )
 
 
+_SYNC_IDENTITY_FIELDS = frozenset(
+    {
+        "audit_digest",
+        "issuer_key_id",
+        "export_digest",
+        "source_change_seq",
+        "applied_change_seq",
+        "source_content_digest",
+        "local_content_digest",
+        "source_schema_digest",
+        "schema_digest",
+        "table_counts",
+    }
+)
+
+
+def _freeze_authenticated_sync_identity(
+    identity: Mapping[str, object],
+) -> dict[str, Any]:
+    """Copy the closed, immutable identity supplied by the mirror authority."""
+
+    if type(identity) is not MappingProxyType or set(identity) != _SYNC_IDENTITY_FIELDS:
+        raise RuntimeError("Ops Projection sync identity is not authority-frozen")
+    source_cursor = identity.get("source_change_seq")
+    applied_cursor = identity.get("applied_change_seq")
+    if (
+        type(source_cursor) is not int
+        or source_cursor <= 0
+        or type(applied_cursor) is not int
+        or applied_cursor != source_cursor
+    ):
+        raise RuntimeError("Ops Projection sync cursor identity is invalid")
+    digest_fields = (
+        "audit_digest",
+        "export_digest",
+        "source_content_digest",
+        "local_content_digest",
+        "source_schema_digest",
+        "schema_digest",
+    )
+    for field in digest_fields:
+        value = identity.get(field)
+        if (
+            type(value) is not str
+            or len(value) != 71
+            or not value.startswith("sha256:")
+            or any(character not in "0123456789abcdef" for character in value[7:])
+        ):
+            raise RuntimeError(f"Ops Projection sync {field} is invalid")
+    if identity["source_content_digest"] != identity["local_content_digest"]:
+        raise RuntimeError("Ops Projection source/local sync content differs")
+    issuer_key_id = identity.get("issuer_key_id")
+    if type(issuer_key_id) is not str or not issuer_key_id:
+        raise RuntimeError("Ops Projection sync issuer is invalid")
+    counts = identity.get("table_counts")
+    if type(counts) is not MappingProxyType or not counts:
+        raise RuntimeError("Ops Projection sync inventory is not authority-frozen")
+    if any(
+        type(table) is not str
+        or not table
+        or type(count) is not int
+        or count < 0
+        for table, count in counts.items()
+    ):
+        raise RuntimeError("Ops Projection sync inventory is invalid")
+    return {
+        "audit_digest": identity["audit_digest"],
+        "issuer_key_id": issuer_key_id,
+        "export_digest": identity["export_digest"],
+        "source_change_seq": source_cursor,
+        "applied_change_seq": applied_cursor,
+        "source_content_digest": identity["source_content_digest"],
+        "local_content_digest": identity["local_content_digest"],
+        "source_schema_digest": identity["source_schema_digest"],
+        "schema_digest": identity["schema_digest"],
+        "table_counts": dict(counts),
+    }
+
+
+def _measure_connection_snapshot(
+    conn: sqlite3.Connection,
+) -> _ConnectionSnapshotDescriptor:
+    """Prove the renderer still owns one descriptor-bound read snapshot."""
+
+    if type(conn) is not sqlite3.Connection:
+        raise RuntimeError("Ops Projection requires one exact SQLite connection")
+    if not conn.in_transaction:
+        raise RuntimeError("Ops Projection cannot hold one SQLite read snapshot")
+    query_only = conn.execute("PRAGMA query_only").fetchone()
+    if query_only is None or tuple(query_only) != (1,):
+        raise RuntimeError("Ops Projection source connection is writable")
+    journal_mode = conn.execute("PRAGMA journal_mode").fetchone()
+    if journal_mode is None or tuple(journal_mode) != ("delete",):
+        raise RuntimeError("Ops Projection source connection is not frozen")
+    databases = [tuple(row) for row in conn.execute("PRAGMA database_list")]
+    main_rows = [row for row in databases if len(row) == 3 and row[1] == "main"]
+    other_rows = [row for row in databases if row not in main_rows]
+    if len(main_rows) != 1 or other_rows not in ([], [(1, "temp", "")]):
+        raise RuntimeError("Ops Projection source connection is not descriptor-bound")
+    descriptor_path = main_rows[0][2]
+    descriptor_roots = ("/dev/fd/", "/proc/self/fd/")
+    if (
+        type(descriptor_path) is not str
+        or not any(descriptor_path.startswith(root) for root in descriptor_roots)
+        or not descriptor_path.rsplit("/", 1)[-1].isdigit()
+    ):
+        raise RuntimeError("Ops Projection source connection is not descriptor-bound")
+    try:
+        descriptor_stat = os.stat(descriptor_path)
+    except OSError as exc:
+        raise RuntimeError("Ops Projection source descriptor disappeared") from exc
+    if not stat.S_ISREG(descriptor_stat.st_mode):
+        raise RuntimeError("Ops Projection source descriptor is not a regular file")
+    schema_row = conn.execute("PRAGMA main.schema_version").fetchone()
+    data_row = conn.execute("PRAGMA main.data_version").fetchone()
+    if schema_row is None or data_row is None:
+        raise RuntimeError("Ops Projection source snapshot identity is unavailable")
+    return _ConnectionSnapshotDescriptor(
+        descriptor_path=descriptor_path,
+        device=int(descriptor_stat.st_dev),
+        inode=int(descriptor_stat.st_ino),
+        size=int(descriptor_stat.st_size),
+        mtime_ns=int(descriptor_stat.st_mtime_ns),
+        schema_version=int(schema_row[0]),
+        data_version=int(data_row[0]),
+        total_changes=int(conn.total_changes),
+    )
+
+
+def _render_projection_candidate_from_connection(
+    conn: sqlite3.Connection,
+    sync_identity: Mapping[str, object],
+) -> UnsignedOpsProjectionCandidate:
+    """Render one unsigned candidate from an authority-owned source snapshot.
+
+    There is intentionally no path, signer, envelope, count, digest, cursor,
+    clock, generation, READY directory, or activation argument on this API.
+    """
+
+    initial_snapshot = _measure_connection_snapshot(conn)
+    frozen_sync_identity = _freeze_authenticated_sync_identity(sync_identity)
+    generated_at = _now()
+    generation_id = "projgen-candidate-" + _content_digest(
+        {
+            "sync_identity": frozen_sync_identity,
+            "generated_at": generated_at,
+        }
+    ).removeprefix("sha256:")[:32]
+    source_cursor = frozen_sync_identity["source_change_seq"]
+    applied_cursor = frozen_sync_identity["applied_change_seq"]
+    assert type(source_cursor) is int
+    assert type(applied_cursor) is int
+    bundle = _render_projection_bundle(
+        conn,
+        generation_id=generation_id,
+        producer_commit_sha=None,
+        refresh_status=None,
+        source_cursor=source_cursor,
+        export_cursor=source_cursor,
+        storage_hot_cutoff=None,
+        _generated_at=generated_at,
+        _seal_and_activate=False,
+    )
+    final_snapshot = _measure_connection_snapshot(conn)
+    if final_snapshot != initial_snapshot:
+        raise RuntimeError("Ops Projection source snapshot changed during render")
+    rendered_cursors = (
+        bundle.envelope.get("source_cursor"),
+        bundle.envelope.get("export_cursor"),
+        bundle.envelope.get("applied_cursor"),
+    )
+    if rendered_cursors != (source_cursor, source_cursor, applied_cursor):
+        raise RuntimeError("Ops Projection candidate cursor identity changed")
+    if bundle.signed_envelope is not None:
+        raise RuntimeError("Ops Projection candidate unexpectedly acquired a signer")
+    if bundle.activation_included:
+        raise RuntimeError("Ops Projection candidate cannot publish or activate")
+    envelope = dict(bundle.envelope)
+    metadata = dict(bundle.metadata)
+    row_counts = dict(bundle.row_counts)
+    sync_identity_digest = _content_digest(frozen_sync_identity)
+    candidate_document = {
+        "schema_version": UNSIGNED_CANDIDATE_SCHEMA,
+        "authority_status": "PENDING",
+        "sync_identity": frozen_sync_identity,
+        "sync_identity_digest": sync_identity_digest,
+        "projection": {
+            "sql": bundle.sql,
+            "generation_id": bundle.generation_id,
+            "source_db_digest": bundle.source_db_digest,
+            "content_digest": bundle.content_digest,
+            "producer_commit_sha": str(envelope["producer_commit_sha"]),
+            "contract_digest": str(envelope["contract_digest"]),
+            "registry_digest": str(envelope["registry_digest"]),
+            "source_cursor": source_cursor,
+            "export_cursor": source_cursor,
+            "applied_cursor": applied_cursor,
+            "metadata": metadata,
+            "envelope": envelope,
+            "row_counts": row_counts,
+            "complete_coverage_segments": bundle.complete_coverage_segments,
+            "activation_included": bundle.activation_included,
+        },
+    }
+    return _freeze_unsigned_projection_candidate(
+        candidate_document,
+        {
+            "sync_identity_digest": sync_identity_digest,
+            "generation_id": bundle.generation_id,
+            "source_db_digest": bundle.source_db_digest,
+            "content_digest": bundle.content_digest,
+            "producer_commit_sha": str(envelope["producer_commit_sha"]),
+            "contract_digest": str(envelope["contract_digest"]),
+            "registry_digest": str(envelope["registry_digest"]),
+            "source_cursor": source_cursor,
+            "export_cursor": source_cursor,
+            "applied_cursor": applied_cursor,
+        },
+    )
+
+
+def _render_trusted_projection_candidate(
+    applied_mirror: Any,
+) -> UnsignedOpsProjectionCandidate:
+    """Consume one opaque mirror and return an unsigned PENDING candidate."""
+    from scripts.sync_d1_to_sqlite import _consume_authenticated_applied_mirror
+
+    return _consume_authenticated_applied_mirror(
+        applied_mirror,
+        _render_projection_candidate_from_connection,
+    )
+
+
 def _render_trusted_projection_bundle(
     applied_mirror: Any,
     **_kwargs: Any,
 ) -> ProjectionBundle:
-    """Consume the opaque source once, then fail closed while C4 is PENDING."""
+    """Preserve the production publication gate while C4 remains PENDING.
+
+    The publisher still calls this entrypoint.  It deliberately cannot turn an
+    unsigned candidate into a publishable bundle or accept a signing service.
+    Consuming the positive source capability before failing prevents replay
+    through a later, differently configured path.
+    """
     from scripts.sync_d1_to_sqlite import _consume_authenticated_applied_mirror
 
     def pending_authority(
