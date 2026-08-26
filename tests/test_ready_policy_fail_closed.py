@@ -603,6 +603,38 @@ def test_signed_projection_verifier_derives_only_exact_closure_evidence(
         evidence.rows[binding.required_datasets[0]] = {}  # type: ignore[index]
 
 
+def test_verified_projection_result_is_opaque_final_and_alias_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = load_exact_four_pilot_ready_binding()
+    signed, registry = _signed_projection_evidence(binding.required_datasets)
+    _configure_projection_registry_for_test(monkeypatch, registry)
+    evidence_type = ready_module._VerifiedProductionProjectionEvidence
+
+    with pytest.raises(RuntimeError, match="no public constructor"):
+        evidence_type()
+    with pytest.raises(TypeError, match="is final"):
+        class ForgedEvidence(evidence_type):
+            pass
+
+    forged = object.__new__(evidence_type)
+    with pytest.raises(RuntimeError, match="not verifier-minted"):
+        _ = forged.rows
+
+    evidence = _verified_production_projection_evidence(
+        signed, binding.required_datasets
+    )
+    victim = binding.required_datasets[0]
+    expected_status = evidence.rows[victim]["status"]
+    signed["envelope"]["dataset_coverage"][victim]["status"] = "PARTIAL"  # type: ignore[index]
+
+    assert evidence.rows[victim]["status"] == expected_status == "COMPLETE"
+    with pytest.raises(AttributeError, match="immutable"):
+        evidence.rows = {}  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        object.__setattr__(evidence, "_rows", {})
+
+
 def test_ready_rejects_dataset_identifier_coercion_and_container_subclasses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

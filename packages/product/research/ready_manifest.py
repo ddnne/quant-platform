@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from weakref import WeakKeyDictionary
 
 from qp_paths import repo_root
 from selection.budget_ledger import MassResearchDisabledError
@@ -54,15 +55,6 @@ GENERATION_PIN_FIELDS: tuple[str, ...] = (
 )
 
 _SCHEMA: dict[str, Any] | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class _VerifiedProductionProjectionEvidence:
-    """Deep-immutable result owned by one successful Ops verification."""
-
-    rows: Mapping[str, Mapping[str, Any]]
-    signed_document_digest: str
-    issuer_key_id: str
 
 
 def _now() -> datetime:
@@ -1498,10 +1490,10 @@ def _verify_exact_four_pit_dependency_scope(
     return {**body, "proof_digest": canonical_digest(body)}
 
 
-def _verified_production_projection_evidence(
+def _verify_production_projection_evidence_facts(
     signed_document: dict[str, Any] | bytes | str | None,
     required_datasets: tuple[str, ...] | list[str],
-) -> _VerifiedProductionProjectionEvidence:
+) -> tuple[Mapping[str, Mapping[str, Any]], str, str]:
     """Verify one signed Ops envelope and derive the bounded READY input.
 
     Raw ``OPS_PROJECTION_DB`` rows and caller-created JSON mappings are never
@@ -1636,11 +1628,99 @@ def _verified_production_projection_evidence(
         raise MassResearchDisabledError(
             "signed Ops Projection evidence is outside the freshness SLA"
         )
-    return _VerifiedProductionProjectionEvidence(
-        rows=evidence,
-        signed_document_digest=next(iter(document_digests)),
-        issuer_key_id=next(iter(issuer_key_ids)),
+    return (
+        evidence,
+        next(iter(document_digests)),
+        next(iter(issuer_key_ids)),
     )
+
+
+def _build_verified_projection_evidence_authority(
+    facts_verifier: Any,
+):
+    """Close verified-result minting over one process-private state registry."""
+
+    states: WeakKeyDictionary[
+        object,
+        tuple[Mapping[str, Mapping[str, Any]], str, str],
+    ] = WeakKeyDictionary()
+
+    class _VerifiedProductionProjectionEvidence:
+        """Opaque deep-immutable value from one successful Ops verification."""
+
+        __slots__ = ("__weakref__",)
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError(
+                "verified production projection evidence has no public constructor"
+            )
+
+        def __init_subclass__(cls, **_kwargs: object) -> None:
+            raise TypeError(
+                "verified production projection evidence is final"
+            )
+
+        def __setattr__(self, _name: str, _value: object) -> None:
+            raise AttributeError(
+                "verified production projection evidence is immutable"
+            )
+
+        def __delattr__(self, _name: str) -> None:
+            raise AttributeError(
+                "verified production projection evidence is immutable"
+            )
+
+        def _state(
+            self,
+        ) -> tuple[Mapping[str, Mapping[str, Any]], str, str]:
+            if type(self) is not _VerifiedProductionProjectionEvidence:
+                raise RuntimeError(
+                    "production projection evidence was not verifier-minted"
+                )
+            try:
+                return states[self]
+            except KeyError as exc:
+                raise RuntimeError(
+                    "production projection evidence was not verifier-minted"
+                ) from exc
+
+        @property
+        def rows(self) -> Mapping[str, Mapping[str, Any]]:
+            return self._state()[0]
+
+        @property
+        def signed_document_digest(self) -> str:
+            return self._state()[1]
+
+        @property
+        def issuer_key_id(self) -> str:
+            return self._state()[2]
+
+    def verified_production_projection_evidence(
+        signed_document: dict[str, Any] | bytes | str | None,
+        required_datasets: tuple[str, ...] | list[str],
+    ) -> _VerifiedProductionProjectionEvidence:
+        rows, document_digest, issuer_key_id = (
+            facts_verifier(signed_document, required_datasets)
+        )
+        verified = object.__new__(_VerifiedProductionProjectionEvidence)
+        states[verified] = (rows, document_digest, issuer_key_id)
+        return verified
+
+    return (
+        _VerifiedProductionProjectionEvidence,
+        verified_production_projection_evidence,
+    )
+
+
+(
+    _VerifiedProductionProjectionEvidence,
+    _verified_production_projection_evidence,
+) = _build_verified_projection_evidence_authority(
+    _verify_production_projection_evidence_facts
+)
+del _build_verified_projection_evidence_authority
+del _verify_production_projection_evidence_facts
 
 
 def _publish_exact_four_pilot_ready_snapshot_impl(
