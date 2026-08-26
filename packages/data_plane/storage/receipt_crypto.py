@@ -25,10 +25,18 @@ _PINNED_VERIFY_KEYS_PATH = (
     / "receipt_verify_public_keys.json"
 )
 PINNED_RECEIPT_REGISTRY_RAW_DIGEST = (
-    "sha256:de08e72ea133bf4ab876944e27520a5aa7207e7bdfee412b8866131b9e7b1c90"
+    "sha256:dc6095db1d09bf775f972cb428944a1ba5bc47fefa0af19e77c3f3a157ae47f5"
 )
 PINNED_RECEIPT_REGISTRY_DOCUMENT_DIGEST = (
+    "sha256:188c39c9833802026ff614a2de6ad3c48e7c83e628c43958b00f003097a36516"
+)
+PINNED_RECEIPT_REGISTRY_GENERATION = 2
+PINNED_RECEIPT_AUTHORITY_STATUS = "PENDING"
+PINNED_RECEIPT_PRIOR_REGISTRY_DIGEST = (
     "sha256:087cfea679c27c267c4e79aaa7518097778d3b44d251c931e5bb6fd2803a2465"
+)
+PINNED_RECEIPT_REGISTRY_BODY_DIGEST = (
+    "sha256:7dbf4eae91e927d74bd7075bc69210232030bb9077052d55853dc09f0c7bb921"
 )
 
 
@@ -172,45 +180,93 @@ class ReceiptVerifyKey:
             return False
 
 
+@dataclass(frozen=True)
+class _ReceiptVerifyRegistry:
+    generation: int
+    authority_status: str
+    prior_registry_digest: str | None
+    registry_digest: str
+    active_keys: tuple[ReceiptVerifyKey, ...]
+    audit_keys: tuple[ReceiptVerifyKey, ...]
+
+
+_REGISTRY_FIELDS = {
+    "schema_version",
+    "purpose",
+    "generation",
+    "authority_status",
+    "prior_registry_digest",
+    "keys",
+    "registry_digest",
+}
+_REGISTRY_KEY_FIELDS = {
+    "key_id",
+    "algorithm",
+    "public_key_base64",
+    "status",
+}
+
+
+def _registry_body_digest(document: Mapping[str, Any]) -> str:
+    body = {
+        key: value
+        for key, value in document.items()
+        if key != "registry_digest"
+    }
+    return body_digest(_canonical_registry_bytes(body))
+
+
 @lru_cache(maxsize=8)
-def _parse_verify_key_document(raw: bytes) -> tuple[ReceiptVerifyKey, ...]:
+def _parse_registry_document(raw: bytes) -> _ReceiptVerifyRegistry:
     """Parse one exact registry byte string; content, not stat, keys the cache."""
     doc = _strict_json_document(raw)
-    if set(doc) != {"schema_version", "purpose", "keys"}:
+    if set(doc) != _REGISTRY_FIELDS:
         raise ReceiptKeyConfigurationError(
             "pinned receipt public-key registry is invalid"
         )
     if (
         type(doc["schema_version"]) is not int
-        or doc["schema_version"] != 1
+        or doc["schema_version"] != 2
         or type(doc["purpose"]) is not str
         or doc["purpose"] != "receipt_verification"
+        or type(doc["generation"]) is not int
+        or doc["generation"] < 1
+        or type(doc["authority_status"]) is not str
+        or doc["authority_status"] not in {"ACTIVE", "PENDING"}
+        or (
+            doc["generation"] == 1
+            and doc["prior_registry_digest"] is not None
+        )
+        or (
+            doc["generation"] > 1
+            and (
+                type(doc["prior_registry_digest"]) is not str
+                or not _is_sha256_digest(doc["prior_registry_digest"])
+            )
+        )
+        or type(doc["registry_digest"]) is not str
+        or not _is_sha256_digest(doc["registry_digest"])
         or type(doc["keys"]) is not list
+        or len(doc["keys"]) < 1
         or len(doc["keys"]) > 16
     ):
         raise ReceiptKeyConfigurationError(
             "pinned receipt public-key registry is invalid"
         )
-    out: dict[str, ReceiptVerifyKey] = {}
+    if _registry_body_digest(doc) != doc["registry_digest"]:
+        raise ReceiptKeyConfigurationError(
+            "pinned receipt registry body digest mismatch"
+        )
+    active: dict[str, ReceiptVerifyKey] = {}
+    audit: dict[str, ReceiptVerifyKey] = {}
     seen_ids: set[str] = set()
-    active_count = 0
-    base_fields = {"key_id", "algorithm", "public_key_b64", "status"}
-    allowed_row_fields = (
-        base_fields,
-        base_fields | {"note"},
-    )
+    pending_count = 0
     for row in doc["keys"]:
-        if type(row) is not dict or all(
-            set(row) != fields for fields in allowed_row_fields
-        ):
+        if type(row) is not dict or set(row) != _REGISTRY_KEY_FIELDS:
             raise ReceiptKeyConfigurationError(
                 "pinned receipt registry row is not closed"
             )
-        if "note" in row and (type(row["note"]) is not str or not row["note"]):
-            raise ReceiptKeyConfigurationError(
-                "pinned receipt registry note is invalid"
-            )
-        if any(type(row[field]) is not str for field in base_fields):
+        if any(type(row[field]) is not str for field in _REGISTRY_KEY_FIELDS):
             raise ReceiptKeyConfigurationError(
                 "pinned receipt registry fields must be exact strings"
             )
@@ -225,25 +281,65 @@ def _parse_verify_key_document(raw: bytes) -> tuple[ReceiptVerifyKey, ...]:
                 "pinned receipt registry requires Ed25519 entries"
             )
         status = row["status"]
-        if status not in {"active", "revoked"}:
+        if status not in {"active", "pending", "revoked"}:
             raise ReceiptKeyConfigurationError(
-                "pinned receipt registry requires an explicit active/revoked status"
+                "pinned receipt registry requires an explicit key status"
             )
         try:
-            raw_key = base64.b64decode(row["public_key_b64"], validate=True)
+            raw_key = base64.b64decode(row["public_key_base64"], validate=True)
+            if (
+                base64.b64encode(raw_key).decode("ascii")
+                != row["public_key_base64"]
+            ):
+                raise ValueError("receipt public key is not canonical base64")
             public_key = Ed25519PublicKey.from_public_bytes(raw_key)
         except (TypeError, ValueError) as exc:
             raise ReceiptKeyConfigurationError(
                 f"invalid pinned receipt public key: {key_id}"
             ) from exc
+        verify_key = ReceiptVerifyKey(key_id=key_id, public_key=public_key)
         if status == "active":
-            active_count += 1
-            out[key_id] = ReceiptVerifyKey(key_id=key_id, public_key=public_key)
-    if active_count > 1:
+            active[key_id] = verify_key
+            audit[key_id] = verify_key
+        elif status == "revoked":
+            audit[key_id] = verify_key
+        else:
+            pending_count += 1
+    expected_active = 1 if doc["authority_status"] == "ACTIVE" else 0
+    if len(active) != expected_active:
         raise ReceiptKeyConfigurationError(
-            "pinned receipt registry permits at most one active key"
+            "pinned receipt registry active keys do not match authority status"
         )
-    return tuple(out.values())
+    if pending_count > 1:
+        raise ReceiptKeyConfigurationError(
+            "pinned receipt registry permits at most one pending key"
+        )
+    return _ReceiptVerifyRegistry(
+        generation=doc["generation"],
+        authority_status=doc["authority_status"],
+        prior_registry_digest=doc["prior_registry_digest"],
+        registry_digest=doc["registry_digest"],
+        active_keys=tuple(active.values()),
+        audit_keys=tuple(audit.values()),
+    )
+
+
+def _is_sha256_digest(value: str) -> bool:
+    return (
+        len(value) == 71
+        and value.startswith("sha256:")
+        and all(char in "0123456789abcdef" for char in value[7:])
+    )
+
+
+def _parse_verify_key_document(raw: bytes) -> tuple[ReceiptVerifyKey, ...]:
+    """Return only ACTIVE keys; PENDING and revoked keys cannot grant COMPLETE."""
+    return _parse_registry_document(raw).active_keys
+
+
+def _parse_audit_key_document(raw: bytes) -> tuple[ReceiptVerifyKey, ...]:
+    """Return ACTIVE/revoked public keys for explicitly audit-only verification."""
+    return _parse_registry_document(raw).audit_keys
 
 
 def _load_verify_key_file(
@@ -260,8 +356,8 @@ def _load_verify_key_file(
     return _parse_verify_key_document(raw)
 
 
-def load_verify_keys() -> dict[str, ReceiptVerifyKey]:
-    """Load only the committed receipt verifier registry."""
+def _load_pinned_registry() -> _ReceiptVerifyRegistry:
+    """Load and pin the complete committed receipt verifier registry."""
     keys_path = _PINNED_VERIFY_KEYS_PATH
     try:
         raw = keys_path.read_bytes()
@@ -280,8 +376,28 @@ def load_verify_keys() -> dict[str, ReceiptVerifyKey]:
         raise ReceiptKeyConfigurationError(
             "pinned receipt registry document digest mismatch"
         )
-    rows = _parse_verify_key_document(raw)
-    return {row.key_id: row for row in rows}
+    registry = _parse_registry_document(raw)
+    if (
+        registry.generation != PINNED_RECEIPT_REGISTRY_GENERATION
+        or registry.authority_status != PINNED_RECEIPT_AUTHORITY_STATUS
+        or registry.prior_registry_digest
+        != PINNED_RECEIPT_PRIOR_REGISTRY_DIGEST
+        or registry.registry_digest != PINNED_RECEIPT_REGISTRY_BODY_DIGEST
+    ):
+        raise ReceiptKeyConfigurationError(
+            "pinned receipt registry generation chain mismatch"
+        )
+    return registry
+
+
+def load_verify_keys() -> dict[str, ReceiptVerifyKey]:
+    """Load only ACTIVE keys eligible to verify a COMPLETE receipt."""
+    return {row.key_id: row for row in _load_pinned_registry().active_keys}
+
+
+def load_audit_verify_keys() -> dict[str, ReceiptVerifyKey]:
+    """Load ACTIVE/revoked keys for audit; never use this result for COMPLETE."""
+    return {row.key_id: row for row in _load_pinned_registry().audit_keys}
 
 
 def partition_extra_digests(extra_digests: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -336,6 +452,20 @@ def verify_receipt_signature_values(
     return False if vk is None else vk.verify(body, signature)
 
 
+def verify_receipt_signature_values_for_audit(
+    *, body: bytes, signature: str, key_id: str
+) -> bool:
+    """Verify with ACTIVE/revoked public keys without granting eligibility."""
+    if (
+        type(body) is not bytes
+        or type(signature) is not str
+        or type(key_id) is not str
+    ):
+        return False
+    vk = load_audit_verify_keys().get(key_id)
+    return False if vk is None else vk.verify(body, signature)
+
+
 __all__ = [
     "PARSER_NORMALIZER_VERSION",
     "LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION",
@@ -343,12 +473,18 @@ __all__ = [
     "STANDARD_CLAIM_KEYS",
     "ReceiptKeyConfigurationError",
     "ReceiptVerifyKey",
+    "PINNED_RECEIPT_AUTHORITY_STATUS",
+    "PINNED_RECEIPT_PRIOR_REGISTRY_DIGEST",
+    "PINNED_RECEIPT_REGISTRY_BODY_DIGEST",
     "PINNED_RECEIPT_REGISTRY_DOCUMENT_DIGEST",
+    "PINNED_RECEIPT_REGISTRY_GENERATION",
     "PINNED_RECEIPT_REGISTRY_RAW_DIGEST",
     "canonical_evidence_digest",
     "canonical_receipt_body",
+    "load_audit_verify_keys",
     "load_verify_keys",
     "partition_extra_digests",
     "verify_receipt_signature",
     "verify_receipt_signature_values",
+    "verify_receipt_signature_values_for_audit",
 ]

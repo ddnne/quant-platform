@@ -123,26 +123,33 @@ def generate_test_receipt_keypair(
 
 
 def write_test_receipt_registry(
-    path: Path, *, key_id: str, public_raw: bytes
+    path: Path,
+    *,
+    key_id: str,
+    public_raw: bytes,
+    status: str = "active",
 ) -> Path:
     """Write one ephemeral verifier registry for adversarial tests."""
-    path.write_text(
-        json.dumps(
+    if status not in {"active", "pending", "revoked"}:
+        raise ValueError("unsupported test receipt key status")
+    document = {
+        "schema_version": 2,
+        "purpose": "receipt_verification",
+        "generation": 1,
+        "authority_status": "ACTIVE" if status == "active" else "PENDING",
+        "prior_registry_digest": None,
+        "keys": [
             {
-                "schema_version": 1,
-                "purpose": "receipt_verification",
-                "keys": [
-                    {
-                        "key_id": key_id,
-                        "public_key_b64": base64.b64encode(public_raw).decode("ascii"),
-                        "algorithm": "Ed25519",
-                        "status": "active",
-                    }
-                ],
-            },
-            indent=2,
-        )
-        + "\n",
+                "key_id": key_id,
+                "algorithm": "Ed25519",
+                "public_key_base64": base64.b64encode(public_raw).decode("ascii"),
+                "status": status,
+            }
+        ],
+    }
+    document["registry_digest"] = canonical_evidence_digest(document)
+    path.write_text(
+        json.dumps(document, indent=2) + "\n",
         encoding="utf-8",
     )
     return path
@@ -189,6 +196,26 @@ def configure_test_receipt_authority(
         crypto,
         "PINNED_RECEIPT_REGISTRY_DOCUMENT_DIGEST",
         "sha256:" + hashlib.sha256(canonical_registry).hexdigest(),
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_REGISTRY_GENERATION",
+        registry_document["generation"],
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_AUTHORITY_STATUS",
+        registry_document["authority_status"],
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_PRIOR_REGISTRY_DIGEST",
+        registry_document["prior_registry_digest"],
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_RECEIPT_REGISTRY_BODY_DIGEST",
+        registry_document["registry_digest"],
     )
     monkeypatch.delenv("QUANT_RECEIPT_SIGNING_KEY_PEM", raising=False)
     monkeypatch.delenv("QUANT_RECEIPT_VERIFY_KEYS", raising=False)

@@ -25,6 +25,7 @@ from storage.receipt_crypto import (
     body_digest,
     canonical_evidence_digest,
     verify_receipt_signature_values,
+    verify_receipt_signature_values_for_audit,
 )
 
 
@@ -528,7 +529,7 @@ def audit_signed_receipt_claims(
     frozen = _materialize_receipt_input(receipt)
     digests = frozen.digests
     claims = frozen.claims
-    if not verify_receipt_signature_values(
+    if not verify_receipt_signature_values_for_audit(
         body=frozen.signed_body,
         signature=digests["signature"],
         key_id=digests["issuer_key_id"],
