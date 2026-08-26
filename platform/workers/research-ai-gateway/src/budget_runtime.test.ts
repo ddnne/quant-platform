@@ -1516,6 +1516,54 @@ describe("BudgetLedger in the Workers runtime", () => {
     }
   }, 15_000);
 
+  it("rejects cached reservation overclaim before uncertain full-reservation charge", async () => {
+    const namespace = runtimeEnv.BUDGET_LEDGER;
+    if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");
+    const stub = namespace.get(namespace.idFromName("cached-reservation-subset"));
+    const rpc = stub as BudgetLedgerRpcStub;
+
+    expect(await rpc.reserve({
+      idempotency_key: "runtime-cached-overclaim",
+      request_digest: testDigest("runtime-cached-overclaim"),
+      amounts: { model_calls: 1, input_tokens: 4, cached_tokens: 5 },
+      acquire_lease: true,
+    })).toEqual({
+      ok: false,
+      error: "cached_tokens must be a subset of input_tokens",
+    });
+
+    const key = "runtime-cached-persisted-overclaim";
+    const digest = testDigest(key);
+    const reserved = await rpc.reserve({
+      idempotency_key: key,
+      request_digest: digest,
+      amounts: { model_calls: 1, input_tokens: 4, cached_tokens: 4 },
+      acquire_lease: true,
+    });
+    const started = await rpc.markProviderStarted({
+      idempotency_key: key,
+      request_digest: digest,
+      lease_id: reserved.lease!.lease_id,
+    });
+
+    const settled = await rpc.settleUncertain({
+      idempotency_key: key,
+      request_digest: digest,
+      lease_id: reserved.lease!.lease_id,
+      settlement_capability: started.settlement_capability as string,
+      reason: "provider_error",
+    });
+    expect(settled).toMatchObject({
+      ok: true,
+      used: { input_tokens: 4, model_calls: 1 },
+      reservation: { actual: { input_tokens: 4, cached_tokens: 4 } },
+    });
+    expect(await (await stub.fetch("https://budget/snapshot")).json()).toMatchObject({
+      used: { input_tokens: 4, cached_tokens: 4 },
+      reserved: { input_tokens: 0, cached_tokens: 0 },
+    });
+  }, 15_000);
+
   it("charges the reserved maximum for missing, unknown, or non-unit actual usage", async () => {
     const namespace = runtimeEnv.BUDGET_LEDGER;
     if (!namespace) throw new Error("BUDGET_LEDGER test binding missing");

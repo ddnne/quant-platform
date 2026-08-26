@@ -424,6 +424,9 @@ export function parseAmounts(raw: unknown): BudgetResult<{ amounts: Counters }> 
     amounts[name] =
       name === "cost_usd" ? usdMicros(rawValue) / 1_000_000 : rawValue;
   }
+  if (amounts.cached_tokens > amounts.input_tokens) {
+    return { ok: false, error: "cached_tokens must be a subset of input_tokens" };
+  }
   return { ok: true, amounts };
 }
 
@@ -578,6 +581,11 @@ function requirePersistedCounters(raw: unknown, label: string): Counters {
       throw new PersistedBudgetStateError(`${label}:${name}_invalid`);
     }
     out[name] = name === "cost_usd" ? usdMicros(value) / 1_000_000 : value;
+  }
+  if (out.cached_tokens > out.input_tokens) {
+    throw new PersistedBudgetStateError(
+      `${label}:cached_tokens_not_input_subset`,
+    );
   }
   return out;
 }

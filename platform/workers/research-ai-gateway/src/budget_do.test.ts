@@ -201,6 +201,76 @@ describe("budget ledger algebra", () => {
     }
   });
 
+  it("rejects cached reservation overclaim and malformed persisted uncertain charge", async () => {
+    const storage = new MemoryBudgetStorage();
+    const invalid = await reserveBudget(
+      storage,
+      leased("cached-reserve-overclaim", {
+        model_calls: 1,
+        input_tokens: 4,
+        cached_tokens: 5,
+      }),
+      T0,
+    );
+    expect(invalid).toEqual({
+      ok: false,
+      error: "cached_tokens must be a subset of input_tokens",
+    });
+    expect(await snapshotBudget(storage, T0)).toMatchObject({
+      ok: true,
+      used: { model_calls: 0, input_tokens: 0, cached_tokens: 0 },
+      reserved: { model_calls: 0, input_tokens: 0, cached_tokens: 0 },
+    });
+
+    const digest = testDigest("cached-persisted-overclaim");
+    const reserved = await reserveBudget(
+      storage,
+      leased(
+        "cached-persisted-overclaim",
+        {
+          model_calls: 1,
+          input_tokens: 4,
+          cached_tokens: 4,
+        },
+        digest,
+      ),
+      T0 + 1,
+    );
+    if (!reserved.ok || !reserved.lease) throw new Error("lease");
+    const started = await markProviderStarted(
+      storage,
+      {
+        idempotency_key: "cached-persisted-overclaim",
+        request_digest: digest,
+        lease_id: reserved.lease.lease_id,
+      },
+      T0 + 2,
+    );
+    if (!started.ok || !started.settlement_capability) throw new Error("start");
+
+    const persisted = await storage.get<Record<string, any>>("ledger");
+    if (!persisted) throw new Error("ledger");
+    persisted.reservations["cached-persisted-overclaim"].amounts.cached_tokens = 5;
+    persisted.reserved.cached_tokens = 5;
+    await storage.commit("ledger", persisted, null);
+
+    await expect(
+      settleUncertainBudget(
+        storage,
+        {
+          idempotency_key: "cached-persisted-overclaim",
+          request_digest: digest,
+          lease_id: reserved.lease.lease_id,
+          settlement_capability: started.settlement_capability,
+          reason: "provider_error",
+        },
+        T0 + 3,
+      ),
+    ).rejects.toThrow(
+      /persisted_budget_state_invalid:ledger\.reserved:cached_tokens_not_input_subset/,
+    );
+  });
+
   it("same idempotency key returns the same reservation without double-spend", async () => {
     const storage = new MemoryBudgetStorage();
     const a = await reserveBudget(
