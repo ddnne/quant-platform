@@ -1086,6 +1086,9 @@ def _build_authenticated_export_authority():
                 )
             source = self._source_conn
             baseline = json.loads(self._baseline_json)
+            policy_before = require_canonical_snapshot_policy(
+                local, require_building=True
+            )
             observed_content, observed_schema, observed_counts = (
                 governed_content_identity(source, GOVERNED_D1_SYNC_TABLES)
             )
@@ -1138,6 +1141,12 @@ def _build_authenticated_export_authority():
             _require_connection_file_identity(
                 source, self._materialized_identity
             )
+            if require_canonical_snapshot_policy(
+                local, require_building=True
+            ) != policy_before:
+                raise ValueError(
+                    "local snapshot policy changed during D1 reconciliation"
+                )
             facts = {
                 "sync_kind": sync_kind,
                 "export_digest": self.export_digest,

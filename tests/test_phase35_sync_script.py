@@ -1131,14 +1131,15 @@ def test_pinned_export_reuses_one_connection_and_rejects_path_replacement(
     with pytest.raises(RuntimeError, match="source is single-use"):
         acquired.open_source()
 
-    local = sqlite3.connect(":memory:")
+    local_store = SqliteStore(tmp_path / "local-reconciliation.sqlite")
+    local = local_store._conn  # noqa: SLF001
+    sync_module._ensure_control_tables(local)
     local.execute(
-        "CREATE TABLE sync_change_state "
-        "(feed TEXT PRIMARY KEY,last_applied_change_seq INTEGER,updated_at TEXT)"
+        "INSERT OR REPLACE INTO main.sync_change_state "
+        "(feed,last_applied_change_seq,updated_at) "
+        "VALUES ('jquants_records',0,'now')"
     )
-    local.execute(
-        "INSERT INTO sync_change_state VALUES ('jquants_records',0,'now')"
-    )
+    local.commit()
 
     def reconcile_same_connection(source, observed_local, tables):
         assert source is opened
@@ -1172,7 +1173,7 @@ def test_pinned_export_reuses_one_connection_and_rejects_path_replacement(
         "SELECT json_extract(payload, '$.Close') FROM main.jquants_records"
     ).fetchone()[0] == 100
     opened.close()
-    local.close()
+    local_store.close()
 
     second_dir = tmp_path / "second-acquisition"
     second_dir.mkdir()
@@ -1188,6 +1189,26 @@ def test_pinned_export_reuses_one_connection_and_rejects_path_replacement(
                 prior_audit_digest=None,
             )
     opened.close()
+
+    third_dir = tmp_path / "third-acquisition"
+    third_dir.mkdir()
+    acquired = sync_module._private_export.acquire_pinned_wrangler_export(third_dir)
+    opened = acquired.open_source()
+    local_store = SqliteStore(tmp_path / "local-reconciliation.sqlite")
+    local_store._conn.execute(  # noqa: SLF001
+        "UPDATE main.local_snapshot_policy SET require_manifest=0 "
+        "WHERE singleton=1"
+    )
+    local_store._conn.commit()  # noqa: SLF001
+    with pytest.raises(ValueError, match="snapshot policy"):
+        acquired.authenticate_local(
+            local_store._conn,  # noqa: SLF001
+            governed_tables,
+            sync_kind="FULL",
+            prior_audit_digest=None,
+        )
+    opened.close()
+    local_store.close()
 
 
 def test_publish_ops_flag_default_off(sync_module):
