@@ -217,6 +217,35 @@ def test_staging_binding_identity_cannot_alias_production() -> None:
     with pytest.raises(ValueError, match="staging external binding targets overlap"):
         manifest_module.validate_manifest(drifted)
 
+    for table, row in (
+        ("tail_consumers", {"service": "quant-platform-ingestion-premium"}),
+        (
+            "durable_objects",
+            {
+                "name": "SHADOW_DO",
+                "class_name": "Shadow",
+                "script_name": "quant-platform-ingestion-premium",
+            },
+        ),
+    ):
+        drifted = copy.deepcopy(manifest)
+        drifted["workers"]["ingestion-jsda"]["staging"][table] = [row]
+        with pytest.raises(
+            ValueError, match="staging external binding targets overlap"
+        ):
+            manifest_module.validate_manifest(drifted)
+
+
+def test_staging_surfaces_reject_custom_routes() -> None:
+    manifest = manifest_module.build_manifest()
+    drifted = copy.deepcopy(manifest)
+    drifted["workers"]["ingestion-jsda"]["staging"]["route"] = {
+        "pattern": "staging.example/*",
+        "zone_name": "staging.example",
+    }
+    with pytest.raises(ValueError, match="staging routes must be empty"):
+        manifest_module.validate_manifest(drifted)
+
     production_kv = manifest["workers"]["quant-ops-mcp"]["production"][
         "kv_namespaces"
     ][0]["id"]

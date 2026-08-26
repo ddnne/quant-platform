@@ -342,15 +342,18 @@ def _ordered_json_rows(value: Any, *, field: str) -> list[dict[str, Any]]:
 def _external_binding_targets(surface: dict[str, Any]) -> set[tuple[str, str]]:
     """Return resource identities that must not cross environment boundaries."""
     targets: set[tuple[str, str]] = set()
+    worker_name = surface.get("name")
+    if worker_name is not None and str(worker_name):
+        targets.add(("worker", str(worker_name)))
     tables = {
         "d1_databases": ("d1", ("database_id",)),
         "kv_namespaces": ("kv", ("id",)),
         "r2_buckets": ("r2", ("bucket_name",)),
         "queue_producers": ("queue", ("queue",)),
         "queue_consumers": ("queue", ("queue", "dead_letter_queue")),
-        "services": ("service", ("service", "environment")),
-        "tail_consumers": ("tail_service", ("service", "environment")),
-        "durable_objects": ("do_script", ("script_name", "environment")),
+        "services": ("worker", ("service",)),
+        "tail_consumers": ("worker", ("service",)),
+        "durable_objects": ("worker", ("script_name",)),
         "ratelimits": ("ratelimit", ("namespace_id",)),
     }
     for table, (kind, fields) in tables.items():
@@ -358,7 +361,8 @@ def _external_binding_targets(surface: dict[str, Any]) -> set[tuple[str, str]]:
             for field in fields:
                 value = row.get(field)
                 if value is not None and str(value):
-                    targets.add((f"{kind}.{field}", str(value)))
+                    identity_kind = "worker" if kind == "worker" else f"{kind}.{field}"
+                    targets.add((identity_kind, str(value)))
     return targets
 
 
@@ -608,6 +612,11 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                             f"{worker}/test: {table}.{field} is not test-isolated: "
                             f"{value}"
                         )
+                target_environment = row.get("environment")
+                if target_environment is not None and target_environment != "test":
+                    raise ValueError(
+                        f"{worker}/test: {table}.environment must be test"
+                    )
         forbidden_test_targets = production_targets | staging_targets
         test_overlap = _external_binding_targets(surface) & forbidden_test_targets
         if test_overlap:
@@ -662,6 +671,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         staging = environments["staging"]
         if not str(staging["name"]).endswith("-staging"):
             raise ValueError(f"{worker}: staging Worker name must end in -staging")
+        if staging.get("route") is not None or staging.get("routes") != []:
+            raise ValueError(f"{worker}: staging routes must be empty")
         if staging["secret_names"]:
             raise ValueError(f"{worker}: production secret names leaked into staging policy")
         for table, fields in {
@@ -670,6 +681,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             "queue_producers": ("queue",),
             "queue_consumers": ("queue", "dead_letter_queue"),
             "services": ("service",),
+            "tail_consumers": ("service",),
+            "durable_objects": ("script_name",),
         }.items():
             for row in staging[table]:
                 for field in fields:
@@ -678,6 +691,11 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                         raise ValueError(
                             f"{worker}/staging: {table}.{field} is not staging-isolated: {value}"
                         )
+                target_environment = row.get("environment")
+                if target_environment is not None and target_environment != "staging":
+                    raise ValueError(
+                        f"{worker}/staging: {table}.environment must be staging"
+                    )
 
     service = workers["research-mass-eval"]["production"]["services"]
     if service != [
