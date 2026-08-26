@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
+import gc
 import inspect
 import json
 from pathlib import Path
@@ -130,10 +132,22 @@ def _target() -> sqlite3.Connection:
 
 
 def _opaque_source(path: Path, marker: str) -> None:
-    with sqlite3.connect(path) as conn:
+    conn = sqlite3.connect(path)
+    try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("CREATE TABLE opaque_source_marker (value TEXT NOT NULL)")
         conn.execute("INSERT INTO opaque_source_marker VALUES (?)", (marker,))
+        conn.commit()
+        assert conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone() == (
+            0,
+            0,
+            0,
+        )
+        assert conn.execute("PRAGMA journal_mode=DELETE").fetchone() == (
+            "delete",
+        )
+    finally:
+        conn.close()
 
 
 def _test_mirror_identity(
@@ -834,6 +848,74 @@ def test_authenticated_mirror_releases_writer_lock_after_consumer_error(
         writer.execute("UPDATE opaque_source_marker SET value='unlocked'")
 
 
+def test_authenticated_mirror_gc_releases_descriptor_and_writer_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(),
+    )
+    handle = sync_script.open_authenticated_applied_mirror(source)
+    with sqlite3.connect(source, timeout=0) as writer:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            writer.execute("UPDATE opaque_source_marker SET value='blocked'")
+        writer.rollback()
+    del handle
+    gc.collect()
+    with sqlite3.connect(source, timeout=0) as writer:
+        writer.execute("UPDATE opaque_source_marker SET value='released'")
+
+
+@pytest.mark.parametrize("attack", ["symlink", "stale_sidecar", "live_wal"])
+def test_authenticated_mirror_rejects_nonfrozen_path_aliases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    attack: str,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(),
+    )
+    target = source
+    writer = None
+    if attack == "symlink":
+        target = tmp_path / "alias.sqlite"
+        target.symlink_to(source)
+    elif attack == "stale_sidecar":
+        Path(f"{source}-wal").touch()
+    else:
+        writer = sqlite3.connect(source)
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        writer.execute("UPDATE opaque_source_marker SET value='hot'")
+        writer.commit()
+    try:
+        with pytest.raises(ValueError, match="not authoritative|not an authenticated"):
+            sync_script.open_authenticated_applied_mirror(target)
+    finally:
+        if writer is not None:
+            writer.close()
+
+
+@pytest.mark.parametrize("flag", ["O_NOFOLLOW", "O_CLOEXEC"])
+def test_authenticated_mirror_fails_closed_without_secure_descriptor_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flag: str,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    monkeypatch.delattr(sync_script.os, flag)
+    with pytest.raises(ValueError, match="not an authenticated current"):
+        sync_script.open_authenticated_applied_mirror(source)
+
+
 def test_authenticated_mirror_preserves_distinct_source_schema_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1092,6 +1174,60 @@ def test_remote_publish_rejects_unknown_or_regressing_active_cursor(
     assert publisher.main([f"--db={source}", "--apply-remote"]) == 7
 
 
+@pytest.mark.parametrize(
+    ("attack", "expected"),
+    [("cursor_second_view", 7), ("complete_count_regression", 3)],
+)
+def test_remote_guards_use_exact_descriptor_render_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    attack: str,
+    expected: int,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    base = exporter.render_projection_bundle(source)
+    cursor = 8 if attack == "cursor_second_view" else 7
+    trusted = replace(
+        base,
+        complete_coverage_segments=2,
+        envelope={
+            **base.envelope,
+            "source_cursor": cursor,
+            "export_cursor": cursor,
+            "applied_cursor": cursor,
+        },
+    )
+    monkeypatch.setattr(publisher, "GOVERNED_LOCAL_DB", source.resolve())
+    monkeypatch.setattr(
+        publisher, "_authenticated_export_cursor_chain", lambda _path: (7, 7)
+    )
+    monkeypatch.setattr(
+        publisher,
+        "open_ops_projection_signing_service",
+        lambda: TestOpsProjectionSigningKey(
+            "ops-projection-test-v1", Ed25519PrivateKey.generate()
+        ),
+    )
+    monkeypatch.setattr(publisher, "read_remote_active_cursor", lambda: 7)
+    monkeypatch.setattr(
+        publisher, "open_authenticated_applied_mirror", lambda _path: object()
+    )
+    monkeypatch.setattr(
+        publisher, "_render_trusted_projection_bundle", lambda *_a, **_k: trusted
+    )
+    remote_count_calls: list[bool] = []
+
+    def remote_count(**_kwargs):
+        remote_count_calls.append(True)
+        return 3
+
+    monkeypatch.setattr(publisher, "count_remote_complete", remote_count)
+    assert publisher.main([f"--db={source}", "--apply-remote"]) == expected
+    assert remote_count_calls == ([] if attack == "cursor_second_view" else [True])
+    assert not hasattr(publisher, "count_local_complete")
+
+
 def test_production_projection_package_is_verify_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1243,7 +1379,6 @@ def test_failed_refresh_never_publishes_fresh_or_applies(
         publisher, "_authenticated_export_cursor_chain", lambda _path: (1, 1)
     )
     monkeypatch.setattr("storage.coverage_ledger.refresh_coverage_ledger", fail)
-    monkeypatch.setattr(publisher, "count_local_complete", lambda _path: 0)
     monkeypatch.setattr(publisher, "count_remote_complete", lambda **_kwargs: 0)
     monkeypatch.setattr(publisher, "read_remote_active_cursor", lambda: 1)
     monkeypatch.setattr(
@@ -1259,6 +1394,47 @@ def test_failed_refresh_never_publishes_fresh_or_applies(
         [
             f"--db={source}", f"--output={output}", f"--meta-output={meta}",
             "--refresh-coverage", "--apply-remote",
+        ]
+    ) == 4
+    assert not output.exists()
+    assert not meta.exists()
+
+
+def test_successful_refresh_must_reverify_and_freeze_same_owner_before_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    monkeypatch.setattr(publisher, "GOVERNED_LOCAL_DB", source.resolve())
+    monkeypatch.setattr(
+        publisher, "_authenticated_export_cursor_chain", lambda _path: (1, 1)
+    )
+    monkeypatch.setattr(
+        "storage.coverage_ledger.refresh_coverage_ledger",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        publisher,
+        "_freeze_authenticated_current_applied_mirror",
+        lambda _store: (_ for _ in ()).throw(RuntimeError("audit drift")),
+    )
+    monkeypatch.setattr(publisher, "read_remote_active_cursor", lambda: 1)
+    monkeypatch.setattr(
+        publisher,
+        "open_ops_projection_signing_service",
+        lambda: TestOpsProjectionSigningKey(
+            "ops-projection-test-v1", Ed25519PrivateKey.generate()
+        ),
+    )
+    output = tmp_path / "ops/projection.sql"
+    meta = tmp_path / "ops/projection.json"
+    assert publisher.main(
+        [
+            f"--db={source}",
+            f"--output={output}",
+            f"--meta-output={meta}",
+            "--refresh-coverage",
+            "--apply-remote",
         ]
     ) == 4
     assert not output.exists()

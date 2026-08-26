@@ -4,7 +4,9 @@ import base64
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
+import shutil
 import sqlite3
 from types import MappingProxyType
 
@@ -684,6 +686,7 @@ def test_real_sqlite_signed_chain_retains_deep_immutable_projection_identity(
         ),
     )
     store._conn.commit()  # noqa: SLF001
+    sync._freeze_authenticated_current_applied_mirror(store)
     store.close()
 
     handle = sync.open_authenticated_applied_mirror(path)
@@ -716,6 +719,127 @@ def test_real_sqlite_signed_chain_retains_deep_immutable_projection_identity(
         )
     with pytest.raises(ValueError, match="not an authenticated current"):
         sync.open_authenticated_applied_mirror(path)
+
+
+def test_applied_mirror_binds_path_connections_to_initial_file_bytes(
+    tmp_path, monkeypatch
+):
+    """Two valid A/B mirrors cannot substitute B during both SQLite opens."""
+    from scripts import sync_d1_to_sqlite as sync
+    from storage.sqlite_store import SqliteStore
+
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+
+    def build(path: Path, label: str) -> str:
+        store = SqliteStore(path)
+        sync._ensure_control_tables(store._conn)  # noqa: SLF001
+        sync._ensure_export_sync_audit(store)
+        sync._record_change_seq(store, 7)
+        existing = {
+            row[0]
+            for row in store._conn.execute(  # noqa: SLF001
+                "SELECT name FROM main.sqlite_master WHERE type='table'"
+            )
+        }
+        for table in sync.DEFAULT_TABLES:
+            if table not in existing:
+                store._conn.execute(  # noqa: SLF001
+                    f'CREATE TABLE "{table}" (placeholder TEXT)'
+                )
+        store._conn.execute(  # noqa: SLF001
+            "INSERT INTO main.jquants_records("
+            "source,dataset,natural_key,event_time,available_at,ingested_at,payload) "
+            "VALUES('jquants','equities_bars_daily','{}','2026-08-25',"
+            "'2026-08-25','2026-08-25',?)",
+            (json.dumps({"label": label}),),
+        )
+        store._conn.commit()  # noqa: SLF001
+        content, schema, counts = sync._private_export.governed_content_identity(
+            store._conn, sync.DEFAULT_TABLES  # noqa: SLF001
+        )
+        document = _signed_document(private, registry, issued_at=now)
+        document["envelope"].update(
+            {
+                "source_content_digest": content,
+                "local_content_digest": content,
+                "source_schema_digest": schema,
+                "schema_digest": schema,
+                "table_counts": counts,
+            }
+        )
+        _resign(private, document)
+        _install_test_sealed_audit(monkeypatch, document)
+        sync._mark_authenticated_export_complete(store, object())
+        sync._freeze_authenticated_current_applied_mirror(store)
+        store.close()
+        return content
+
+    path_a = (tmp_path / "a.sqlite").resolve()
+    path_b = (tmp_path / "b.sqlite").resolve()
+    digest_a = build(path_a, "A")
+    digest_b = build(path_b, "B")
+    assert digest_a != digest_b
+
+    real_open = sync.os.open
+    hits: list[str] = []
+    attack_enabled = True
+
+    def swapped_open(database, *args, **kwargs):
+        if not attack_enabled or Path(os.fspath(database)) != path_a:
+            return real_open(database, *args, **kwargs)
+        saved_a = tmp_path / "saved-a.sqlite"
+        os.replace(path_a, saved_a)
+        os.replace(path_b, path_a)
+        try:
+            descriptor = real_open(database, *args, **kwargs)
+            hits.append(os.fspath(database))
+        finally:
+            os.replace(path_a, path_b)
+            os.replace(saved_a, path_a)
+        return descriptor
+
+    monkeypatch.setattr(sync.os, "open", swapped_open)
+    with pytest.raises(ValueError, match="not an authenticated current"):
+        sync.open_authenticated_applied_mirror(path_a)
+    assert hits == [os.fspath(path_a)]
+
+    # An exact byte clone defeats content-only binding, but cannot satisfy the
+    # retained descriptor's independently pinned inode.
+    attack_enabled = False
+    path_b.unlink()
+    shutil.copy2(path_a, path_b)
+    assert path_a.read_bytes() == path_b.read_bytes()
+    attack_enabled = True
+    with pytest.raises(ValueError, match="not an authenticated current"):
+        sync.open_authenticated_applied_mirror(path_a)
+    assert hits == [os.fspath(path_a), os.fspath(path_a)]
+
+    # Without substitution, that exact descriptor must lock original A for
+    # the entire consumer lifetime.
+    attack_enabled = False
+    handle = sync.open_authenticated_applied_mirror(path_a)
+    writer = sqlite3.connect(path_a, timeout=0)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            writer.execute(
+                "UPDATE main.local_snapshot_policy SET require_manifest=0 "
+                "WHERE singleton=1"
+            )
+        writer.rollback()
+    finally:
+        writer.close()
+    assert sync._consume_authenticated_applied_mirror(
+        handle,
+        lambda conn, _identity: conn.execute(
+            "SELECT require_manifest FROM main.local_snapshot_policy "
+            "WHERE singleton=1"
+        ).fetchone()[0],
+    ) == 1
+    assert hits == [os.fspath(path_a), os.fspath(path_a)]
 
 
 def test_strict_json_rejects_duplicate_and_nonfinite_signed_documents(

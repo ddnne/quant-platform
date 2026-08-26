@@ -48,6 +48,7 @@ from scripts.export_ops_projection import (  # noqa: E402
 )
 from scripts.sync_d1_to_sqlite import (  # noqa: E402
     _authenticated_export_cursor_chain,
+    _freeze_authenticated_current_applied_mirror,
     open_authenticated_applied_mirror,
 )
 
@@ -99,22 +100,6 @@ def _validated_ops_wrangler() -> tuple[str, Path]:
 def load_otc_index_text(path: Path | None) -> str | None:
     """Read official OTC index HTML. Missing path or file is None, not calendar."""
     return read_local_index_text(path, missing_ok=True)
-
-
-def count_local_complete(db_path: Path) -> int:
-    """Count COMPLETE coverage_segments in a local SQLite ops/research DB.
-
-    Raises sqlite3.Error if the table is missing — callers must surface that
-    rather than silently treating an unprobed DB as zero (fail-closed).
-    """
-    conn = sqlite3.connect(str(db_path))
-    try:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM coverage_segments WHERE status = 'COMPLETE'"
-        ).fetchone()
-        return int(row[0]) if row else 0
-    finally:
-        conn.close()
 
 
 def count_remote_complete(
@@ -487,6 +472,11 @@ def main(argv: list[str] | None = None) -> int:
                 index_text=index_text,
             )
             store._conn.commit()  # noqa: SLF001
+            # SqliteStore enters WAL on open.  Refresh is authoritative only
+            # when the resulting governed content still matches the current
+            # signed audit and the same owner connection can freeze it back to
+            # the descriptor-lockable DELETE handoff contract.
+            _freeze_authenticated_current_applied_mirror(store)
             refresh_status = "success"
             last_success_at = _now()
             print("coverage ledger refresh ok")
@@ -505,24 +495,6 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 4
-
-    # Fail-closed guard before spending time on full SQL export when apply is requested.
-    # 対象: 完全 publish のみ (dry-run / targeted reeval は対象外)
-    if args.apply_remote and not args.dry_run:
-        local_n = count_local_complete(args.db)
-        remote_n = count_remote_complete()
-        guard_err = enforce_complete_count_guard(
-            local_complete=local_n,
-            remote_complete=remote_n,
-        )
-        if guard_err:
-            print(f"ERROR: {guard_err}", file=sys.stderr)
-            print(
-                f"guard_detail local_complete={local_n} remote_complete={remote_n}",
-                file=sys.stderr,
-            )
-            return 3
-        print(f"complete_count_guard ok local={local_n} remote={remote_n}")
 
     render_kwargs = {
         "snapshot_dir": args.snapshot_dir,
@@ -547,6 +519,47 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         bundle = render_projection_bundle(db_path, **render_kwargs)
+    if has_trusted_cursor_chain:
+        rendered_cursors = (
+            bundle.envelope.get("source_cursor"),
+            bundle.envelope.get("export_cursor"),
+            bundle.envelope.get("applied_cursor"),
+        )
+        guarded_cursor = trusted_cursor_chain[0]
+        if (
+            type(guarded_cursor) is not int
+            or guarded_cursor <= 0
+            or rendered_cursors
+            != (guarded_cursor, guarded_cursor, guarded_cursor)
+        ):
+            print(
+                "ERROR: authenticated projection changed after cursor guard",
+                file=sys.stderr,
+            )
+            return 7
+    # The production COMPLETE regression guard consumes the count measured in
+    # the exact descriptor-bound render view.  It must never reopen db_path.
+    if args.apply_remote and not args.dry_run:
+        local_n = bundle.complete_coverage_segments
+        if type(local_n) is not int or local_n < 0:
+            print(
+                "ERROR: authenticated projection COMPLETE count is invalid",
+                file=sys.stderr,
+            )
+            return 3
+        remote_n = count_remote_complete()
+        guard_err = enforce_complete_count_guard(
+            local_complete=local_n,
+            remote_complete=remote_n,
+        )
+        if guard_err:
+            print(f"ERROR: {guard_err}", file=sys.stderr)
+            print(
+                f"guard_detail local_complete={local_n} remote_complete={remote_n}",
+                file=sys.stderr,
+            )
+            return 3
+        print(f"complete_count_guard ok local={local_n} remote={remote_n}")
     sql = bundle.sql
     meta = dict(bundle.metadata)
     meta["publisher"] = "scripts/publish_ops_projection.py"

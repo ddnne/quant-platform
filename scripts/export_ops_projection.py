@@ -65,6 +65,7 @@ class ProjectionBundle:
     source_db_digest: str
     content_digest: str
     row_counts: Mapping[str, int]
+    complete_coverage_segments: int | None
     metadata: Mapping[str, Any]
     envelope: Mapping[str, Any]
     signed_envelope: Mapping[str, Any] | None
@@ -1213,6 +1214,7 @@ def _render_projection_bundle(
         source_db_digest=source_db_digest,
         content_digest=content_digest,
         row_counts=row_counts,
+        complete_coverage_segments=storage["counts"]["complete_segments"],
         metadata=metadata_row,
         envelope=envelope,
         signed_envelope=signed_envelope,

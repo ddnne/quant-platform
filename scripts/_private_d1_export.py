@@ -190,6 +190,44 @@ def _measure_regular_file(path: Path) -> _PinnedFileIdentity:
     )
 
 
+def _measure_open_regular_file(handle: BinaryIO) -> _PinnedFileIdentity:
+    """Hash one retained descriptor without resolving its pathname again."""
+    digest = hashlib.sha256()
+    size = 0
+    before = os.fstat(handle.fileno())
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError("retained D1 mirror descriptor is not a regular file")
+    handle.seek(0)
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        if type(chunk) is not bytes:
+            raise ValueError("retained D1 mirror bytes are not canonical")
+        digest.update(chunk)
+        size += len(chunk)
+    after = os.fstat(handle.fileno())
+    handle.seek(0)
+    if (
+        (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+        or after.st_size != before.st_size
+        or after.st_mtime_ns != before.st_mtime_ns
+        or size != after.st_size
+    ):
+        raise ValueError("retained D1 mirror descriptor changed while hashing")
+    return _PinnedFileIdentity(
+        device=before.st_dev,
+        inode=before.st_ino,
+        size=size,
+        digest=f"sha256:{digest.hexdigest()}",
+    )
+
+
+def _require_open_file_identity(
+    handle: BinaryIO,
+    expected: _PinnedFileIdentity,
+) -> None:
+    if _measure_open_regular_file(handle) != expected:
+        raise ValueError("retained D1 mirror descriptor identity changed")
+
+
 def _file_sha256(path: Path) -> tuple[str, int]:
     identity = _measure_regular_file(path)
     return identity.digest, identity.size

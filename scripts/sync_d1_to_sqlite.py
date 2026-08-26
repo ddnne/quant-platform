@@ -24,12 +24,13 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
 import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Callable, Mapping, TypeVar
+from typing import BinaryIO, Callable, Mapping, TypeVar
 from urllib.parse import quote, urlencode
 from weakref import WeakKeyDictionary, WeakSet
 
@@ -1216,6 +1217,57 @@ def _verified_sync_envelope_from_row(
     return envelope
 
 
+def _freeze_authenticated_applied_mirror_storage(
+    conn: sqlite3.Connection,
+) -> None:
+    """Checkpoint the owner view into one descriptor-lockable DELETE file."""
+    if conn.in_transaction:
+        raise ValueError("D1 applied mirror freeze requires a committed owner view")
+    checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    checkpoint_row = None if checkpoint is None else tuple(checkpoint)
+    if (
+        checkpoint_row not in {(0, 0, 0), (0, -1, -1)}
+        or any(type(value) is not int for value in checkpoint_row)
+    ):
+        raise ValueError("D1 applied mirror WAL checkpoint did not converge")
+    mode = conn.execute("PRAGMA journal_mode=DELETE").fetchone()
+    if (
+        mode is None
+        or len(mode) != 1
+        or type(mode[0]) is not str
+        or mode[0] != "delete"
+    ):
+        raise ValueError("D1 applied mirror could not enter DELETE journal mode")
+    observed = conn.execute("PRAGMA journal_mode").fetchone()
+    if (
+        observed is None
+        or len(observed) != 1
+        or type(observed[0]) is not str
+        or observed[0] != "delete"
+    ):
+        raise ValueError("D1 applied mirror journal mode is not frozen")
+    databases = [tuple(row) for row in conn.execute("PRAGMA database_list")]
+    main_rows = [row for row in databases if len(row) == 3 and row[1] == "main"]
+    other_rows = [row for row in databases if row not in main_rows]
+    if (
+        len(main_rows) != 1
+        or type(main_rows[0][0]) is not int
+        or main_rows[0][0] != 0
+        or type(main_rows[0][1]) is not str
+        or type(main_rows[0][2]) is not str
+        or not main_rows[0][2]
+        or other_rows not in ([], [(1, "temp", "")])
+    ):
+        raise ValueError("D1 applied mirror owner path is not canonical")
+    path = Path(main_rows[0][2]).resolve()
+    if any(Path(f"{path}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal")):
+        raise ValueError("D1 applied mirror has a live journal sidecar")
+    file_identity = _private_export._measure_regular_file(path)  # noqa: SLF001
+    _private_export._require_connection_file_identity(  # noqa: SLF001
+        conn, file_identity
+    )
+
+
 def _mark_authenticated_export_complete(
     store: SqliteStore,
     authenticated_export,
@@ -1453,6 +1505,18 @@ def _latest_trusted_sync_audit(
     except (ValueError, TypeError, RuntimeError, json.JSONDecodeError, sqlite3.Error):
         return None
     return row, envelope
+
+
+def _freeze_authenticated_current_applied_mirror(store: SqliteStore) -> None:
+    """Freeze and reverify the final owner view immediately before handoff."""
+    if _latest_trusted_sync_audit(store) is None:
+        raise ValueError("D1 applied mirror has no current authenticated audit")
+    conn = store._conn  # noqa: SLF001
+    conn.commit()
+    _freeze_authenticated_applied_mirror_storage(conn)
+    if _latest_trusted_sync_audit(store) is None:
+        raise ValueError("D1 applied mirror changed while freezing handoff")
+    _freeze_authenticated_applied_mirror_storage(conn)
 
 
 def _require_trusted_incremental_base(
@@ -1974,6 +2038,13 @@ def main(argv=None) -> int:
                 token=token or "",
             )
         _finalize_sync_policy(store, args, failures, source_mode=source_mode)
+        if authenticated_acquisition is not None and not failures:
+            try:
+                _freeze_authenticated_current_applied_mirror(store)
+            except Exception as exc:  # noqa: BLE001 - operational handoff gate
+                message = f"applied_mirror_freeze: {exc}"
+                failures.append(message)
+                print(f"[sync] applied mirror freeze FAILED: {exc}", file=sys.stderr)
     finally:
         store.close()
         if source_conn is not None:
@@ -2169,18 +2240,65 @@ def _authenticated_export_cursor_chain(
     evidence. The applied cursor must equal the immutable export's measured
     source maximum before the projection publisher receives either value.
     """
-    path = Path(db_path).resolve()
-    if not path.is_file():
-        return None, None
-    uri = f"file:{quote(str(path), safe='/')}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True)
     try:
-        conn.execute("BEGIN")
-        return _authenticated_export_cursor_chain_from_conn(conn)
+        handle = open_authenticated_applied_mirror(db_path)
+        return _consume_authenticated_applied_mirror(
+            handle,
+            lambda conn, _identity: _authenticated_export_cursor_chain_from_conn(
+                conn
+            ),
+        )
     except (ValueError, TypeError, RuntimeError, json.JSONDecodeError, sqlite3.Error):
         return None, None
-    finally:
-        conn.close()
+
+
+def _require_frozen_applied_mirror_path(
+    path: Path,
+    expected: _private_export._PinnedFileIdentity,  # noqa: SLF001
+) -> None:
+    try:
+        current = path.stat()
+    except OSError as exc:
+        raise RuntimeError("authenticated applied mirror path disappeared") from exc
+    if (current.st_dev, current.st_ino) != (expected.device, expected.inode):
+        raise RuntimeError("authenticated applied mirror path was replaced")
+    if any(
+        Path(f"{path}{suffix}").exists()
+        for suffix in ("-wal", "-shm", "-journal")
+    ):
+        raise RuntimeError("authenticated applied mirror has a live journal sidecar")
+
+
+def _require_descriptor_sqlite_connection(
+    conn: sqlite3.Connection,
+    *,
+    descriptor_path: str,
+    expected: _private_export._PinnedFileIdentity,  # noqa: SLF001
+) -> None:
+    databases = [tuple(row) for row in conn.execute("PRAGMA database_list")]
+    main_rows = [row for row in databases if len(row) == 3 and row[1] == "main"]
+    other_rows = [row for row in databases if row not in main_rows]
+    if (
+        len(main_rows) != 1
+        or type(main_rows[0][0]) is not int
+        or main_rows[0][0] != 0
+        or type(main_rows[0][1]) is not str
+        or type(main_rows[0][2]) is not str
+        or main_rows[0][2] != descriptor_path
+        or other_rows not in ([], [(1, "temp", "")])
+    ):
+        raise ValueError("applied mirror SQLite connection is not descriptor-bound")
+    mode = conn.execute("PRAGMA journal_mode").fetchone()
+    if (
+        mode is None
+        or len(mode) != 1
+        or type(mode[0]) is not str
+        or mode[0] != "delete"
+    ):
+        raise ValueError("applied mirror SQLite connection is not frozen")
+    _private_export._require_connection_file_identity(  # noqa: SLF001
+        conn, expected
+    )
 
 
 def _build_applied_mirror_authority():
@@ -2190,7 +2308,9 @@ def _build_applied_mirror_authority():
         object,
         tuple[
             Path,
-            tuple[int, int],
+            _private_export._PinnedFileIdentity,  # noqa: SLF001
+            BinaryIO,
+            str,
             sqlite3.Connection,
             sqlite3.Connection,
             str,
@@ -2216,26 +2336,34 @@ def _build_applied_mirror_authority():
             live_mirrors.discard(self)
             (
                 db_path,
-                path_identity,
+                initial_file_identity,
+                descriptor_owner,
+                descriptor_path,
                 lock_conn,
                 read_conn,
                 identity_json,
             ) = mirror_states.pop(self)
             try:
-                try:
-                    current = db_path.stat()
-                except OSError as exc:
-                    raise RuntimeError(
-                        "authenticated applied mirror path disappeared"
-                    ) from exc
-                if (current.st_dev, current.st_ino) != path_identity:
-                    raise RuntimeError(
-                        "authenticated applied mirror path was replaced"
-                    )
+                _require_frozen_applied_mirror_path(
+                    db_path, initial_file_identity
+                )
+                _private_export._require_open_file_identity(  # noqa: SLF001
+                    descriptor_owner, initial_file_identity
+                )
                 if not lock_conn.in_transaction or not read_conn.in_transaction:
                     raise RuntimeError(
                         "authenticated applied mirror lock was released"
                     )
+                _require_descriptor_sqlite_connection(
+                    lock_conn,
+                    descriptor_path=descriptor_path,
+                    expected=initial_file_identity,
+                )
+                _require_descriptor_sqlite_connection(
+                    read_conn,
+                    descriptor_path=descriptor_path,
+                    expected=initial_file_identity,
+                )
                 locked_identity = _canonical_applied_mirror_identity_json(
                     _authenticated_applied_mirror_identity_from_conn(lock_conn)
                 )
@@ -2246,11 +2374,9 @@ def _build_applied_mirror_authority():
                     raise RuntimeError(
                         "authenticated applied mirror identity changed"
                     )
-                current = db_path.stat()
-                if (current.st_dev, current.st_ino) != path_identity:
-                    raise RuntimeError(
-                        "authenticated applied mirror path was replaced"
-                    )
+                _require_frozen_applied_mirror_path(
+                    db_path, initial_file_identity
+                )
                 restored = json.loads(identity_json)
                 immutable_identity = _deep_immutable_json(restored)
                 assert isinstance(immutable_identity, Mapping)
@@ -2259,11 +2385,22 @@ def _build_applied_mirror_authority():
                     raise RuntimeError(
                         "authenticated applied mirror lock was released"
                     )
-                current = db_path.stat()
-                if (current.st_dev, current.st_ino) != path_identity:
-                    raise RuntimeError(
-                        "authenticated applied mirror path was replaced"
-                    )
+                _require_frozen_applied_mirror_path(
+                    db_path, initial_file_identity
+                )
+                _private_export._require_open_file_identity(  # noqa: SLF001
+                    descriptor_owner, initial_file_identity
+                )
+                _require_descriptor_sqlite_connection(
+                    lock_conn,
+                    descriptor_path=descriptor_path,
+                    expected=initial_file_identity,
+                )
+                _require_descriptor_sqlite_connection(
+                    read_conn,
+                    descriptor_path=descriptor_path,
+                    expected=initial_file_identity,
+                )
                 if _canonical_applied_mirror_identity_json(
                     _authenticated_applied_mirror_identity_from_conn(lock_conn)
                 ) != identity_json or _canonical_applied_mirror_identity_json(
@@ -2285,7 +2422,10 @@ def _build_applied_mirror_authority():
                         lock_conn.rollback()
                     except sqlite3.Error:
                         pass
-                    lock_conn.close()
+                    try:
+                        lock_conn.close()
+                    finally:
+                        descriptor_owner.close()
 
     def _consume_authenticated_applied_mirror(
         handle: object,
@@ -2302,22 +2442,89 @@ def _build_applied_mirror_authority():
     def open_authenticated_applied_mirror(
         db_path: str | Path,
     ) -> _AuthenticatedAppliedMirror:
-        path = Path(db_path).resolve()
+        requested_path = Path(db_path).expanduser()
+        try:
+            requested_mode = requested_path.lstat().st_mode
+        except OSError as exc:
+            raise ValueError(
+                "applied mirror is not an authenticated current D1 export"
+            ) from exc
+        if stat.S_ISLNK(requested_mode):
+            raise ValueError("applied mirror symlinks are not authoritative")
+        # Keep the authority pathname absolute without resolving its final
+        # component; O_NOFOLLOW must remain effective across lstat/open races.
+        path = requested_path.absolute()
         if not path.is_file():
             raise ValueError("applied mirror is not an authenticated current D1 export")
-        stat = path.stat()
+        if any(
+            Path(f"{path}{suffix}").exists()
+            for suffix in ("-wal", "-shm", "-journal")
+        ):
+            raise ValueError("applied mirror is not an authenticated current D1 export")
+        initial_file_identity: _private_export._PinnedFileIdentity | None = (  # noqa: SLF001
+            None
+        )
+        descriptor_owner: BinaryIO | None = None
+        descriptor_path = ""
         lock_conn: sqlite3.Connection | None = None
         read_conn: sqlite3.Connection | None = None
         try:
-            lock_conn = sqlite3.connect(path, timeout=5.0)
-            lock_conn.execute("BEGIN IMMEDIATE")
-            current = path.stat()
-            if (current.st_dev, current.st_ino) != (stat.st_dev, stat.st_ino):
-                raise RuntimeError("authenticated applied mirror path was replaced")
-            uri = f"file:{quote(str(path), safe='/')}?mode=ro"
-            read_conn = sqlite3.connect(uri, uri=True)
+            if not hasattr(os, "O_CLOEXEC") or not hasattr(os, "O_NOFOLLOW"):
+                raise ValueError("secure SQLite descriptor flags are unavailable")
+            flags = os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW
+            descriptor = os.open(path, flags)
+            try:
+                descriptor_owner = os.fdopen(descriptor, "r+b", buffering=0)
+            except Exception:
+                os.close(descriptor)
+                raise
+            initial_file_identity = (  # noqa: SLF001
+                _private_export._measure_open_regular_file(descriptor_owner)
+            )
+            if os.get_inheritable(descriptor_owner.fileno()):
+                raise ValueError("SQLite descriptor is inheritable")
+            _require_frozen_applied_mirror_path(path, initial_file_identity)
+            descriptor_path = next(
+                (
+                    f"{root}/{descriptor_owner.fileno()}"
+                    for root in ("/dev/fd", "/proc/self/fd")
+                    if Path(f"{root}/{descriptor_owner.fileno()}").exists()
+                ),
+                "",
+            )
+            if not descriptor_path:
+                raise ValueError("SQLite descriptor handoff is unavailable")
+            lock_uri = f"file:{quote(descriptor_path, safe='/')}?mode=rw"
+            read_uri = f"file:{quote(descriptor_path, safe='/')}?mode=ro"
+            lock_conn = sqlite3.connect(lock_uri, uri=True, timeout=5.0)
+            _require_descriptor_sqlite_connection(
+                lock_conn,
+                descriptor_path=descriptor_path,
+                expected=initial_file_identity,
+            )
+            read_conn = sqlite3.connect(read_uri, uri=True, timeout=5.0)
             read_conn.execute("PRAGMA query_only=ON")
+            _require_descriptor_sqlite_connection(
+                read_conn,
+                descriptor_path=descriptor_path,
+                expected=initial_file_identity,
+            )
+            lock_conn.execute("BEGIN IMMEDIATE")
             read_conn.execute("BEGIN")
+            _private_export._require_open_file_identity(  # noqa: SLF001
+                descriptor_owner, initial_file_identity
+            )
+            _require_descriptor_sqlite_connection(
+                lock_conn,
+                descriptor_path=descriptor_path,
+                expected=initial_file_identity,
+            )
+            _require_descriptor_sqlite_connection(
+                read_conn,
+                descriptor_path=descriptor_path,
+                expected=initial_file_identity,
+            )
+            _require_frozen_applied_mirror_path(path, initial_file_identity)
             locked_json = _canonical_applied_mirror_identity_json(
                 _authenticated_applied_mirror_identity_from_conn(lock_conn)
             )
@@ -2328,14 +2535,16 @@ def _build_applied_mirror_authority():
                 raise RuntimeError(
                     "authenticated applied mirror lock/read identity differs"
                 )
-            current = path.stat()
-            if (current.st_dev, current.st_ino) != (stat.st_dev, stat.st_ino):
-                raise RuntimeError("authenticated applied mirror path was replaced")
+            _require_frozen_applied_mirror_path(path, initial_file_identity)
+            _private_export._require_open_file_identity(  # noqa: SLF001
+                descriptor_owner, initial_file_identity
+            )
         except (
             ValueError,
             TypeError,
             RuntimeError,
             json.JSONDecodeError,
+            OSError,
             sqlite3.Error,
         ) as exc:
             if read_conn is not None:
@@ -2346,6 +2555,8 @@ def _build_applied_mirror_authority():
                 except sqlite3.Error:
                     pass
                 lock_conn.close()
+            if descriptor_owner is not None:
+                descriptor_owner.close()
             raise ValueError(
                 "applied mirror is not an authenticated current D1 export"
             ) from exc
@@ -2358,12 +2569,22 @@ def _build_applied_mirror_authority():
                 except sqlite3.Error:
                     pass
                 lock_conn.close()
+            if descriptor_owner is not None:
+                descriptor_owner.close()
             raise
-        assert lock_conn is not None and read_conn is not None
+        assert (
+            initial_file_identity is not None
+            and descriptor_path
+            and descriptor_owner is not None
+            and lock_conn is not None
+            and read_conn is not None
+        )
         handle = object.__new__(_AuthenticatedAppliedMirror)
         mirror_states[handle] = (
             path,
-            (stat.st_dev, stat.st_ino),
+            initial_file_identity,
+            descriptor_owner,
+            descriptor_path,
             lock_conn,
             read_conn,
             identity_json,
