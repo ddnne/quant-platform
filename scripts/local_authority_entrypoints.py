@@ -20,10 +20,12 @@ import sqlite3
 import stat
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -87,6 +89,856 @@ _D1_RECONCILED_FACT_FIELDS = {
     "prior_audit_digest",
     "exported_at",
 }
+_D1_SYNC_JOURNAL_FORMAT = "d1-sync-atomic-replace/v1"
+_D1_SYNC_JOURNAL_MAX_AGE_SECONDS = 60 * 60
+_D1_SYNC_PHASES = (
+    "PREPARED",
+    "ACQUIRED",
+    "TEMP_APPLIED",
+    "SIGNED_AUDIT",
+    "FILE_FSYNCED",
+    "COMMITTED",
+)
+_D1_SYNC_FILE_IDENTITY_FIELDS = {
+    "owner_uid",
+    "owner_gid",
+    "device",
+    "inode",
+    "size",
+    "mtime_ns",
+    "mode",
+    "nlink",
+    "content_digest",
+}
+_D1_SYNC_JOURNAL_FIELDS = {
+    "format",
+    "operation_id",
+    "phase",
+    "environment",
+    "resource_identity",
+    "governed_db_path",
+    "prior_applied_cursor",
+    "prior_mirror_identity",
+    "prior_sync_identity",
+    "policy_digest",
+    "tool_digest",
+    "source_sha",
+    "candidate_path",
+    "export_digest",
+    "artifact_format",
+    "candidate_file_identity",
+    "candidate_sync_identity",
+    "sync_result",
+    "prepared_at",
+    "updated_at",
+    "previous_record_digest",
+    "record_digest",
+}
+_D1_SYNC_RESULT_FIELDS = {
+    "status",
+    "prior_applied_cursor",
+    "source_change_seq",
+    "applied_change_seq",
+    "audit_digest",
+    "export_digest",
+    "issuer_key_id",
+    "seen",
+    "registered",
+    "skipped",
+}
+
+
+def _d1_sync_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _is_sha256_digest(value: object) -> bool:
+    return (
+        type(value) is str
+        and value.startswith("sha256:")
+        and len(value) == 71
+        and all(character in "0123456789abcdef" for character in value[7:])
+    )
+
+
+def _d1_sync_paths(governed_db_path: Path) -> tuple[Path, Path]:
+    name = governed_db_path.name
+    return (
+        governed_db_path.with_name(f".{name}.d1-sync-journal.json"),
+        governed_db_path.with_name(f".{name}.d1-sync.lock"),
+    )
+
+
+def _fsync_directory(directory: Path) -> None:
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        fd = os.open(directory, flags)
+    except OSError as exc:
+        raise LocalAuthorityError("D1 sync parent directory is unavailable") from exc
+    try:
+        os.fsync(fd)
+    except OSError as exc:
+        raise LocalAuthorityError("D1 sync parent directory fsync failed") from exc
+    finally:
+        os.close(fd)
+
+
+def _require_d1_sync_parent(directory: Path) -> None:
+    try:
+        info = directory.lstat()
+    except OSError as exc:
+        raise LocalAuthorityError("D1 sync parent directory is unavailable") from exc
+    if (
+        not directory.is_absolute()
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) & 0o022
+    ):
+        raise LocalAuthorityError("D1 sync parent directory is unsafe")
+
+
+@contextmanager
+def _exclusive_d1_sync_lock(lock_path: Path):
+    """Serialize recovery and replacement without using the product DB."""
+
+    _require_d1_sync_parent(lock_path.parent)
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        fd = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise LocalAuthorityError("D1 sync operation lock is unavailable") from exc
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_nlink != 1
+            or stat.S_IMODE(info.st_mode) != 0o600
+        ):
+            raise LocalAuthorityError("D1 sync operation lock is unsafe")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise LocalAuthorityPending("another governed D1 sync is in progress") from exc
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _measure_d1_sync_file(path: Path) -> dict[str, Any]:
+    """Bind one protected path to stable bytes and one exact inode."""
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise LocalAuthorityError("D1 sync mirror cannot be opened") from exc
+    try:
+        before = os.fstat(fd)
+        path_before = path.lstat()
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_size <= 0
+            or (path_before.st_dev, path_before.st_ino)
+            != (before.st_dev, before.st_ino)
+        ):
+            raise LocalAuthorityError("D1 sync mirror identity is unsafe")
+        digest = hashlib.sha256()
+        offset = 0
+        while offset < before.st_size:
+            chunk = os.pread(fd, min(1024 * 1024, before.st_size - offset), offset)
+            if not chunk:
+                raise LocalAuthorityError("D1 sync mirror changed while hashing")
+            digest.update(chunk)
+            offset += len(chunk)
+        after = os.fstat(fd)
+        path_after = path.lstat()
+        stable = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+            before.st_nlink,
+        )
+        if stable != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+            after.st_nlink,
+        ) or (path_after.st_dev, path_after.st_ino) != (
+            before.st_dev,
+            before.st_ino,
+        ):
+            raise LocalAuthorityError("D1 sync mirror changed while hashing")
+        return {
+            "owner_uid": int(after.st_uid),
+            "owner_gid": int(after.st_gid),
+            "device": int(after.st_dev),
+            "inode": int(after.st_ino),
+            "size": int(after.st_size),
+            "mtime_ns": int(after.st_mtime_ns),
+            "mode": stat.S_IMODE(after.st_mode),
+            "nlink": int(after.st_nlink),
+            "content_digest": "sha256:" + digest.hexdigest(),
+        }
+    finally:
+        os.close(fd)
+
+
+def _require_no_sqlite_sidecars(path: Path) -> None:
+    if any(Path(f"{path}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal")):
+        raise LocalAuthorityError("D1 sync mirror has a live SQLite sidecar")
+
+
+def _read_prior_d1_sync_identity(
+    path: Path, *, expected_applied_cursor: int
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Read the prior mirror without creating tables, WAL, or policy state."""
+
+    _require_no_sqlite_sidecars(path)
+    before = _measure_d1_sync_file(path)
+    uri = f"file:{quote(str(path), safe='/')}?mode=ro&immutable=1"
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error as exc:
+        raise LocalAuthorityError("governed D1 mirror is not readable SQLite") from exc
+    try:
+        integrity = conn.execute("PRAGMA integrity_check").fetchall()
+        if integrity != [("ok",)]:
+            raise LocalAuthorityError("governed D1 mirror integrity check failed")
+        has_cursor = conn.execute(
+            "SELECT 1 FROM main.sqlite_schema WHERE type='table' "
+            "AND name='sync_change_state'"
+        ).fetchone()
+        if has_cursor is None:
+            observed_cursor = 0
+        else:
+            row = conn.execute(
+                "SELECT last_applied_change_seq FROM main.sync_change_state "
+                "WHERE feed='jquants_records'"
+            ).fetchone()
+            observed_cursor = int(row[0]) if row is not None else 0
+        if observed_cursor != expected_applied_cursor:
+            raise LocalAuthorityError(
+                "D1 sync expected applied cursor does not match the governed mirror"
+            )
+        sync_identity = None
+        if observed_cursor > 0:
+            sync_identity = _json_materialize(
+                sync_d1_to_sqlite._authenticated_applied_mirror_identity_from_conn(
+                    conn
+                )
+            )
+            if type(sync_identity) is not dict:
+                raise LocalAuthorityError("prior D1 sync identity is invalid")
+    except sqlite3.Error as exc:
+        raise LocalAuthorityError("governed D1 mirror cannot be inspected") from exc
+    finally:
+        conn.close()
+    after = _measure_d1_sync_file(path)
+    if after != before:
+        raise LocalAuthorityError("governed D1 mirror changed during preparation")
+    return before, sync_identity
+
+
+def _copy_prior_mirror_to_candidate(
+    governed_db_path: Path,
+    candidate_path: Path,
+    *,
+    prior_identity: Mapping[str, Any],
+) -> None:
+    """Create a same-directory O_EXCL SQLite backup; never edit the live DB."""
+
+    if candidate_path.parent != governed_db_path.parent:
+        raise LocalAuthorityError("D1 sync candidate is not in the mirror directory")
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        fd = os.open(candidate_path, flags, 0o600)
+    except FileExistsError as exc:
+        raise LocalAuthorityError("D1 sync candidate already exists") from exc
+    except OSError as exc:
+        raise LocalAuthorityError("D1 sync candidate cannot be created") from exc
+    else:
+        os.close(fd)
+    source_uri = f"file:{quote(str(governed_db_path), safe='/')}?mode=ro&immutable=1"
+    source: sqlite3.Connection | None = None
+    target: sqlite3.Connection | None = None
+    try:
+        source = sqlite3.connect(source_uri, uri=True)
+        target = sqlite3.connect(str(candidate_path))
+        source.backup(target)
+        target.commit()
+        target.close()
+        target = None
+        source.close()
+        source = None
+        if _measure_d1_sync_file(governed_db_path) != dict(prior_identity):
+            raise LocalAuthorityError("governed D1 mirror changed during backup")
+        _fsync_file(candidate_path)
+    except BaseException:
+        if target is not None:
+            target.close()
+        if source is not None:
+            source.close()
+        _remove_d1_sync_candidate(candidate_path, allow_missing=True)
+        raise
+
+
+def _fsync_file(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(
+        os, "O_NOFOLLOW", 0
+    )
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise LocalAuthorityError("D1 sync candidate cannot be opened for fsync") from exc
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_nlink != 1
+            or stat.S_IMODE(info.st_mode) != 0o600
+        ):
+            raise LocalAuthorityError("D1 sync candidate fsync identity is unsafe")
+        os.fsync(fd)
+    except OSError as exc:
+        raise LocalAuthorityError("D1 sync candidate fsync failed") from exc
+    finally:
+        os.close(fd)
+
+
+def _remove_d1_sync_candidate(path: Path, *, allow_missing: bool) -> None:
+    removed = False
+    for selected in (Path(f"{path}-wal"), Path(f"{path}-shm"), Path(f"{path}-journal"), path):
+        try:
+            info = selected.lstat()
+        except FileNotFoundError:
+            if selected == path and not allow_missing:
+                raise LocalAuthorityError("D1 sync candidate is missing")
+            continue
+        except OSError as exc:
+            raise LocalAuthorityError("D1 sync candidate cleanup failed") from exc
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_nlink != 1
+        ):
+            raise LocalAuthorityError("D1 sync candidate cleanup identity is unsafe")
+        try:
+            selected.unlink()
+        except OSError as exc:
+            raise LocalAuthorityError("D1 sync candidate cleanup failed") from exc
+        removed = True
+    if removed:
+        _fsync_directory(path.parent)
+
+
+def _strict_d1_sync_json(raw: bytes) -> dict[str, Any]:
+    def reject_duplicate(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise LocalAuthorityError("D1 sync journal contains duplicate keys")
+            result[key] = value
+        return result
+
+    def reject_number(value: str) -> None:
+        raise LocalAuthorityError(f"D1 sync journal contains forbidden number {value}")
+
+    try:
+        document = json.loads(
+            raw,
+            object_pairs_hook=reject_duplicate,
+            parse_float=reject_number,
+            parse_constant=reject_number,
+        )
+    except LocalAuthorityError:
+        raise
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise LocalAuthorityError("D1 sync journal is invalid JSON") from exc
+    if type(document) is not dict:
+        raise LocalAuthorityError("D1 sync journal must be one object")
+    return document
+
+
+def _d1_sync_record_digest(document: Mapping[str, Any]) -> str:
+    return sha256_digest(
+        {key: value for key, value in document.items() if key != "record_digest"}
+    )
+
+
+def _validate_d1_sync_journal(document: dict[str, Any]) -> dict[str, Any]:
+    if set(document) != _D1_SYNC_JOURNAL_FIELDS:
+        raise LocalAuthorityError("D1 sync journal fields are not closed")
+    if (
+        document["format"] != _D1_SYNC_JOURNAL_FORMAT
+        or document["phase"] not in _D1_SYNC_PHASES
+        or type(document["operation_id"]) is not str
+        or not document["operation_id"].startswith("d1-sync-")
+        or type(document["governed_db_path"]) is not str
+        or not Path(document["governed_db_path"]).is_absolute()
+        or type(document["candidate_path"]) is not str
+        or not Path(document["candidate_path"]).is_absolute()
+        or type(document["prior_applied_cursor"]) is not int
+        or document["prior_applied_cursor"] < 0
+        or type(document["prior_mirror_identity"]) is not dict
+        or set(document["prior_mirror_identity"])
+        != _D1_SYNC_FILE_IDENTITY_FIELDS
+        or type(document["prior_sync_identity"]) not in {dict, type(None)}
+        or not all(
+            _is_sha256_digest(document[field])
+            for field in ("policy_digest", "tool_digest", "source_sha")
+        )
+        or type(document["prepared_at"]) is not str
+        or type(document["updated_at"]) is not str
+        or type(document["previous_record_digest"]) not in {str, type(None)}
+        or (
+            document["phase"] == "PREPARED"
+            and document["previous_record_digest"] is not None
+        )
+        or (
+            document["phase"] != "PREPARED"
+            and not _is_sha256_digest(document["previous_record_digest"])
+        )
+        or not _is_sha256_digest(document["record_digest"])
+        or document["record_digest"] != _d1_sync_record_digest(document)
+    ):
+        raise LocalAuthorityError("D1 sync journal identity is invalid")
+    expected_candidate = Path(document["governed_db_path"]).with_name(
+        f".{Path(document['governed_db_path']).name}."
+        f"{document['operation_id']}.sqlite3"
+    )
+    if Path(document["candidate_path"]) != expected_candidate:
+        raise LocalAuthorityError("D1 sync journal candidate identity is invalid")
+    try:
+        prepared = datetime.fromisoformat(document["prepared_at"].replace("Z", "+00:00"))
+        updated = datetime.fromisoformat(document["updated_at"].replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise LocalAuthorityError("D1 sync journal timestamp is invalid") from exc
+    now = _d1_sync_now()
+    if (
+        prepared.tzinfo is None
+        or updated.tzinfo is None
+        or updated < prepared
+        or updated > now + timedelta(seconds=60)
+        or (
+            document["phase"] != "COMMITTED"
+            and now - updated
+            > timedelta(seconds=_D1_SYNC_JOURNAL_MAX_AGE_SECONDS)
+        )
+    ):
+        raise LocalAuthorityError("D1 sync journal is stale")
+    phase_index = _D1_SYNC_PHASES.index(document["phase"])
+    acquired = phase_index >= _D1_SYNC_PHASES.index("ACQUIRED")
+    signed = phase_index >= _D1_SYNC_PHASES.index("SIGNED_AUDIT")
+    fsynced = phase_index >= _D1_SYNC_PHASES.index("FILE_FSYNCED")
+    result = document["sync_result"]
+    if (
+        (acquired and not _is_sha256_digest(document["export_digest"]))
+        or (not acquired and document["export_digest"] is not None)
+        or (acquired and document["artifact_format"] not in {"sql", "sqlite"})
+        or (not acquired and document["artifact_format"] is not None)
+        or (signed and type(document["candidate_sync_identity"]) is not dict)
+        or (not signed and document["candidate_sync_identity"] is not None)
+        or (signed and type(document["sync_result"]) is not dict)
+        or (not signed and document["sync_result"] is not None)
+        or (
+            type(result) is dict
+            and (
+                set(result) != _D1_SYNC_RESULT_FIELDS
+                or result.get("status") != "SYNCED"
+                or result.get("prior_applied_cursor")
+                != document["prior_applied_cursor"]
+                or type(result.get("source_change_seq")) is not int
+                or result.get("source_change_seq", -1) < 0
+                or result.get("applied_change_seq")
+                != result.get("source_change_seq")
+                or result.get("export_digest") != document["export_digest"]
+                or not _is_sha256_digest(result.get("audit_digest"))
+                or type(result.get("issuer_key_id")) is not str
+                or not result.get("issuer_key_id")
+                or any(
+                    type(result.get(field)) is not int
+                    or result.get(field, -1) < 0
+                    for field in ("seen", "registered", "skipped")
+                )
+            )
+        )
+        or (fsynced and type(document["candidate_file_identity"]) is not dict)
+        or (not fsynced and document["candidate_file_identity"] is not None)
+        or (
+            type(document["candidate_file_identity"]) is dict
+            and set(document["candidate_file_identity"])
+            != _D1_SYNC_FILE_IDENTITY_FIELDS
+        )
+    ):
+        raise LocalAuthorityError("D1 sync journal phase evidence is invalid")
+    return document
+
+
+def _read_d1_sync_journal(path: Path) -> dict[str, Any] | None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise LocalAuthorityError("D1 sync journal is unavailable") from exc
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or info.st_nlink != 1
+        or stat.S_IMODE(info.st_mode) != 0o600
+        or info.st_size <= 0
+        or info.st_size > 1024 * 1024
+    ):
+        raise LocalAuthorityError("D1 sync journal metadata is unsafe")
+    try:
+        protected = read_protected_authority_file(
+            path,
+            expected_owner_uids={os.geteuid()},
+            allowed_modes={0o600},
+            max_bytes=1024 * 1024,
+        )
+    except ProtectedAuthorityFileError as exc:
+        raise LocalAuthorityError("D1 sync journal changed while read") from exc
+    return _validate_d1_sync_journal(_strict_d1_sync_json(protected.raw))
+
+
+def _write_d1_sync_journal(
+    path: Path, document: Mapping[str, Any], *, create_only: bool
+) -> dict[str, Any]:
+    body = dict(document)
+    body["record_digest"] = _d1_sync_record_digest(body)
+    frozen = _validate_d1_sync_journal(body)
+    raw = json.dumps(
+        frozen,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8") + b"\n"
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    selected = path if create_only else path.with_name(
+        f".{path.name}.{uuid4().hex}.tmp"
+    )
+    try:
+        fd = os.open(selected, flags, 0o600)
+    except FileExistsError as exc:
+        raise LocalAuthorityError("D1 sync journal already exists") from exc
+    except OSError as exc:
+        raise LocalAuthorityError("D1 sync journal cannot be created") from exc
+    try:
+        offset = 0
+        while offset < len(raw):
+            offset += os.write(fd, raw[offset:])
+        os.fsync(fd)
+        os.fchmod(fd, 0o600)
+    except BaseException:
+        os.close(fd)
+        selected.unlink(missing_ok=True)
+        raise
+    else:
+        os.close(fd)
+    try:
+        if not create_only:
+            os.replace(selected, path)
+        _fsync_directory(path.parent)
+    except BaseException:
+        if selected != path:
+            selected.unlink(missing_ok=True)
+        raise
+    return frozen
+
+
+def _advance_d1_sync_journal(
+    path: Path,
+    current: Mapping[str, Any],
+    *,
+    phase: str,
+    **updates: Any,
+) -> dict[str, Any]:
+    observed = _read_d1_sync_journal(path)
+    if observed is None or observed["record_digest"] != current["record_digest"]:
+        raise LocalAuthorityError("D1 sync journal changed during operation")
+    if (
+        phase not in _D1_SYNC_PHASES
+        or _D1_SYNC_PHASES.index(phase) <= _D1_SYNC_PHASES.index(current["phase"])
+    ):
+        raise LocalAuthorityError("D1 sync journal phase did not advance")
+    if not set(updates).issubset(_D1_SYNC_JOURNAL_FIELDS - {"record_digest"}):
+        raise LocalAuthorityError("D1 sync journal update fields are invalid")
+    next_document = dict(current)
+    next_document.update(updates)
+    next_document["phase"] = phase
+    next_document["updated_at"] = _d1_sync_now().isoformat()
+    next_document["previous_record_digest"] = current["record_digest"]
+    next_document["record_digest"] = None
+    return _write_d1_sync_journal(path, next_document, create_only=False)
+
+
+def _remove_d1_sync_journal(path: Path, *, expected_digest: str) -> None:
+    current = _read_d1_sync_journal(path)
+    if current is None or current["record_digest"] != expected_digest:
+        raise LocalAuthorityError("D1 sync journal changed before completion")
+    try:
+        path.unlink()
+    except OSError as exc:
+        raise LocalAuthorityError("D1 sync journal cleanup failed") from exc
+    _fsync_directory(path.parent)
+
+
+def _read_candidate_sync_identity(
+    path: Path, *, require_fresh: bool = True
+) -> dict[str, Any]:
+    _require_no_sqlite_sidecars(path)
+    uri = f"file:{quote(str(path), safe='/')}?mode=ro&immutable=1"
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error as exc:
+        raise LocalAuthorityError("D1 sync candidate is not readable SQLite") from exc
+    try:
+        if require_fresh:
+            identity = _json_materialize(
+                sync_d1_to_sqlite._authenticated_applied_mirror_identity_from_conn(
+                    conn
+                )
+            )
+        else:
+            row = sync_d1_to_sqlite._latest_export_sync_row(conn)
+            if row is None:
+                raise ValueError("D1 sync candidate has no signed audit")
+            envelope = sync_d1_to_sqlite._verified_sync_envelope_from_row(
+                conn,
+                row,
+                recompute_local=True,
+                require_fresh=False,
+            )
+            identity = _json_materialize(
+                {
+                    "environment": envelope["environment"],
+                    "resource_identity": dict(envelope["resource_identity"]),
+                    "audit_digest": row.get("audit_digest"),
+                    "issuer_key_id": row.get("issuer_key_id"),
+                    "export_digest": envelope["export_digest"],
+                    "source_change_seq": envelope["source_change_seq"],
+                    "applied_change_seq": envelope["applied_change_seq"],
+                    "source_content_digest": envelope["source_content_digest"],
+                    "local_content_digest": envelope["local_content_digest"],
+                    "source_schema_digest": envelope["source_schema_digest"],
+                    "schema_digest": envelope["schema_digest"],
+                    "table_counts": dict(envelope["table_counts"]),
+                }
+            )
+    except (sqlite3.Error, ValueError, TypeError, RuntimeError) as exc:
+        raise LocalAuthorityError("D1 sync candidate audit is invalid") from exc
+    finally:
+        conn.close()
+    if type(identity) is not dict:
+        raise LocalAuthorityError("D1 sync candidate identity is invalid")
+    return identity
+
+
+def _d1_sync_policy_digest(
+    *, environment: str, source_sha: str, tool_digest: str
+) -> str:
+    return sha256_digest(
+        {
+            "format": "d1-sync-atomic-policy/v1",
+            "environment": environment,
+            "resource_identity": dict(trust_domain.d1_resource_identity(environment)),
+            "inventory": list(sync_d1_to_sqlite.DEFAULT_TABLES),
+            "page_limit": sync_d1_to_sqlite.DEFAULT_PAGE_LIMIT,
+            "max_pages": sync_d1_to_sqlite.DEFAULT_MAX_PAGES,
+            "registry_digest": d1_sync_signing.registry_document_digest(environment),
+            "journal_format": _D1_SYNC_JOURNAL_FORMAT,
+            "source_sha": source_sha,
+            "tool_digest": tool_digest,
+        }
+    )
+
+
+def _observe_d1_sync_tool_digest(resources: Mapping[str, Any]) -> str:
+    """Remeasure every activation-pinned Wrangler resource before each use."""
+
+    from scripts.local_authority_activation import (
+        ActivationStateError,
+        observe_runtime_resource_bindings,
+    )
+
+    try:
+        observed = observe_runtime_resource_bindings(
+            authority_id="d1_sync",
+            resources=resources,
+            expected_owner_uid=0,
+        )
+    except ActivationStateError as exc:
+        raise LocalAuthorityError(
+            "D1 sync Wrangler tool binding cannot be remeasured"
+        ) from exc
+    return _d1_sync_tool_bindings_digest(observed)
+
+
+def _d1_sync_tool_bindings_digest(bindings: object) -> str:
+    materialized = _json_materialize(bindings)
+    if type(materialized) is not list:
+        raise LocalAuthorityError("D1 sync tool bindings are not one exact list")
+    return sha256_digest(
+        {
+            "format": "d1-sync-tool-bindings/v1",
+            "bindings": materialized,
+        }
+    )
+
+
+def _recover_d1_sync_journal(
+    *,
+    journal_path: Path,
+    governed_db_path: Path,
+    expected_applied_cursor: int,
+    environment: str,
+    source_sha: str,
+    tool_digest: str,
+    policy_digest: str,
+) -> Mapping[str, Any] | None:
+    """Roll back an unfinished candidate or finish one exact durable replace."""
+
+    journal = _read_d1_sync_journal(journal_path)
+    if journal is None:
+        return None
+    expected_resource = dict(trust_domain.d1_resource_identity(environment))
+    bindings = {
+        "environment": environment,
+        "resource_identity": expected_resource,
+        "governed_db_path": str(governed_db_path),
+        "source_sha": source_sha,
+        "tool_digest": tool_digest,
+        "policy_digest": policy_digest,
+    }
+    for field, expected in bindings.items():
+        if journal[field] != expected:
+            raise LocalAuthorityError(f"D1 sync journal {field} binding differs")
+    committed = journal["phase"] == "COMMITTED"
+    final_cursor = (
+        journal["sync_result"].get("applied_change_seq")
+        if type(journal["sync_result"]) is dict
+        else None
+    )
+    allowed_cursors = (
+        {journal["prior_applied_cursor"], final_cursor}
+        if committed
+        else {journal["prior_applied_cursor"]}
+    )
+    if expected_applied_cursor not in allowed_cursors:
+        raise LocalAuthorityError(
+            "D1 sync journal prior_applied_cursor binding differs"
+        )
+    candidate_path = Path(journal["candidate_path"])
+    live_identity = _measure_d1_sync_file(governed_db_path)
+    prior_identity = journal["prior_mirror_identity"]
+    if journal["phase"] not in {"FILE_FSYNCED", "COMMITTED"}:
+        if live_identity != prior_identity:
+            raise LocalAuthorityError("D1 sync recovery found an ambiguous live mirror")
+        _remove_d1_sync_candidate(candidate_path, allow_missing=True)
+        _remove_d1_sync_journal(
+            journal_path, expected_digest=journal["record_digest"]
+        )
+        return None
+
+    candidate_exists = candidate_path.exists()
+    expected_candidate_file = journal["candidate_file_identity"]
+    expected_candidate_sync = journal["candidate_sync_identity"]
+    if committed:
+        if candidate_exists or live_identity != expected_candidate_file:
+            raise LocalAuthorityError("D1 sync committed mirror identity differs")
+        live_sync = _read_candidate_sync_identity(
+            governed_db_path, require_fresh=False
+        )
+        if live_sync != expected_candidate_sync:
+            raise LocalAuthorityError("D1 sync committed mirror audit differs")
+        _fsync_directory(governed_db_path.parent)
+        result = dict(journal["sync_result"])
+        _remove_d1_sync_journal(
+            journal_path, expected_digest=journal["record_digest"]
+        )
+        return (
+            result
+            if expected_applied_cursor == journal["prior_applied_cursor"]
+            else None
+        )
+    if candidate_exists:
+        candidate_file = _measure_d1_sync_file(candidate_path)
+        if candidate_file != expected_candidate_file:
+            raise LocalAuthorityError("D1 sync recovery candidate identity differs")
+        candidate_sync = _read_candidate_sync_identity(candidate_path)
+        if (
+            candidate_sync != expected_candidate_sync
+            or candidate_sync.get("export_digest") != journal["export_digest"]
+        ):
+            raise LocalAuthorityError("D1 sync recovery candidate identity differs")
+    if live_identity == prior_identity:
+        if not candidate_exists:
+            _remove_d1_sync_journal(
+                journal_path, expected_digest=journal["record_digest"]
+            )
+            return None
+        os.replace(candidate_path, governed_db_path)
+        _fsync_directory(governed_db_path.parent)
+    elif live_identity == expected_candidate_file:
+        if candidate_exists:
+            raise LocalAuthorityError("D1 sync recovery has duplicate candidate identity")
+        live_sync = _read_candidate_sync_identity(governed_db_path)
+        if live_sync != expected_candidate_sync:
+            raise LocalAuthorityError("D1 sync replaced mirror audit identity differs")
+        _fsync_directory(governed_db_path.parent)
+    else:
+        raise LocalAuthorityError("D1 sync recovery found an ambiguous live mirror")
+    committed_file = _measure_d1_sync_file(governed_db_path)
+    committed_sync = _read_candidate_sync_identity(governed_db_path)
+    if (
+        committed_file != expected_candidate_file
+        or committed_sync != expected_candidate_sync
+    ):
+        raise LocalAuthorityError("D1 sync replacement postcondition differs")
+    committed_journal = _advance_d1_sync_journal(
+        journal_path,
+        journal,
+        phase="COMMITTED",
+    )
+    return dict(committed_journal["sync_result"])
 
 
 def _require_payload_fields(
@@ -850,99 +1702,322 @@ def _execute_governed_remote_sync(
     wrangler_config_path: Path,
     sealer: _D1SyncAuditSealer,
     environment: str,
+    source_sha: str,
+    tool_digest: str,
+    _fault_inject: Callable[[str], None] | None = None,
 ) -> Mapping[str, Any]:
-    """Acquire the pinned D1, reconcile, sign, persist and freeze one mirror."""
+    """Build one signed candidate and atomically replace the governed mirror.
+
+    Remote acquisition and reconciliation never hold a transaction on the
+    live mirror.  A protected phase journal makes every crash point either an
+    exact rollback to the prior inode or completion of one already-fsynced,
+    signed candidate.
+    """
 
     from types import SimpleNamespace
 
     from storage.sqlite_store import SqliteStore
 
-    store = SqliteStore(governed_db_path)
-    temporary: tempfile.TemporaryDirectory[str] | None = None
-    source_conn: sqlite3.Connection | None = None
-    try:
-        sync_d1_to_sqlite._ensure_control_tables(store._conn)
-        sync_d1_to_sqlite._ensure_export_sync_audit(store)
-        store._conn.commit()
-        observed_cursor = sync_d1_to_sqlite._last_change_seq(store)
-        if observed_cursor != expected_applied_cursor:
-            raise LocalAuthorityError(
-                "D1 sync expected applied cursor does not match the governed mirror"
+    environment = trust_domain.require_environment(environment)
+    if not _is_sha256_digest(source_sha) or not _is_sha256_digest(tool_digest):
+        raise LocalAuthorityError("D1 sync runtime source/tool identity is invalid")
+    governed_db_path = governed_db_path.absolute()
+    journal_path, lock_path = _d1_sync_paths(governed_db_path)
+    policy_digest = _d1_sync_policy_digest(
+        environment=environment,
+        source_sha=source_sha,
+        tool_digest=tool_digest,
+    )
+
+    def fault(point: str) -> None:
+        if _fault_inject is not None:
+            _fault_inject(point)
+
+    with _exclusive_d1_sync_lock(lock_path):
+        recovered = _recover_d1_sync_journal(
+            journal_path=journal_path,
+            governed_db_path=governed_db_path,
+            expected_applied_cursor=expected_applied_cursor,
+            environment=environment,
+            source_sha=source_sha,
+            tool_digest=tool_digest,
+            policy_digest=policy_digest,
+        )
+        if recovered is not None:
+            return recovered
+
+        prior_file_identity, prior_sync_identity = _read_prior_d1_sync_identity(
+            governed_db_path,
+            expected_applied_cursor=expected_applied_cursor,
+        )
+        operation_id = "d1-sync-" + uuid4().hex
+        candidate_path = governed_db_path.with_name(
+            f".{governed_db_path.name}.{operation_id}.sqlite3"
+        )
+        prepared_at = _d1_sync_now().isoformat()
+        journal = _write_d1_sync_journal(
+            journal_path,
+            {
+                "format": _D1_SYNC_JOURNAL_FORMAT,
+                "operation_id": operation_id,
+                "phase": "PREPARED",
+                "environment": environment,
+                "resource_identity": dict(
+                    trust_domain.d1_resource_identity(environment)
+                ),
+                "governed_db_path": str(governed_db_path),
+                "prior_applied_cursor": expected_applied_cursor,
+                "prior_mirror_identity": prior_file_identity,
+                "prior_sync_identity": prior_sync_identity,
+                "policy_digest": policy_digest,
+                "tool_digest": tool_digest,
+                "source_sha": source_sha,
+                "candidate_path": str(candidate_path),
+                "export_digest": None,
+                "artifact_format": None,
+                "candidate_file_identity": None,
+                "candidate_sync_identity": None,
+                "sync_result": None,
+                "prepared_at": prepared_at,
+                "updated_at": prepared_at,
+                "previous_record_digest": None,
+                "record_digest": None,
+            },
+            create_only=True,
+        )
+        fault("after_prepared")
+
+        store: SqliteStore | None = None
+        temporary: tempfile.TemporaryDirectory[str] | None = None
+        source_conn: sqlite3.Connection | None = None
+        try:
+            _copy_prior_mirror_to_candidate(
+                governed_db_path,
+                candidate_path,
+                prior_identity=prior_file_identity,
             )
-        incremental = sync_d1_to_sqlite._latest_trusted_sync_audit(store) is not None
-        sealer.preflight()
-        temporary = tempfile.TemporaryDirectory(prefix="quant-authority-d1-sync-")
-        acquired = (
-            sync_d1_to_sqlite._private_export.
-            _acquire_pinned_wrangler_export_with_preflight(
-                Path(temporary.name),
-                authority_preflight=sealer.preflight,
-                credential_token=credential_token,
-                authority_node_path=node_executable_path,
-                authority_wrangler_cli_path=wrangler_cli_path,
-                authority_wrangler_config_path=wrangler_config_path,
-                authority_environment=environment,
+            sealer.preflight()
+            temporary = tempfile.TemporaryDirectory(
+                prefix="quant-authority-d1-sync-"
             )
-        )
-        source_conn = acquired.open_source()
-        args = SimpleNamespace(
-            table=None,
-            incremental=incremental,
-            since=None,
-            page_limit=sync_d1_to_sqlite.DEFAULT_PAGE_LIMIT,
-            max_pages=sync_d1_to_sqlite.DEFAULT_MAX_PAGES,
-            pilot_ready_evidence=None,
-            snapshot_dir=None,
-            db=str(governed_db_path),
-        )
-        begin_snapshot_sync(
-            store._conn,
-            started_at=datetime.now(UTC).isoformat(),
-        )
-        seen, registered, skipped, failures = (
-            sync_d1_to_sqlite._run_private_export_sync(
-                store,
-                source_conn,
-                list(sync_d1_to_sqlite.DEFAULT_TABLES),
-                args,
+            acquired = (
+                sync_d1_to_sqlite._private_export.
+                _acquire_pinned_wrangler_export_with_preflight(
+                    Path(temporary.name),
+                    authority_preflight=sealer.preflight,
+                    credential_token=credential_token,
+                    authority_node_path=node_executable_path,
+                    authority_wrangler_cli_path=wrangler_cli_path,
+                    authority_wrangler_config_path=wrangler_config_path,
+                    authority_environment=environment,
+                )
+            )
+            if (
+                not _is_sha256_digest(acquired.export_digest)
+                or acquired.artifact_format not in {"sql", "sqlite"}
+            ):
+                raise LocalAuthorityError("acquired D1 export identity is invalid")
+            journal = _advance_d1_sync_journal(
+                journal_path,
+                journal,
+                phase="ACQUIRED",
                 export_digest=acquired.export_digest,
                 artifact_format=acquired.artifact_format,
-                authenticated_acquisition=acquired,
-                seal_authenticated_export=sealer,
             )
-        )
-        sync_d1_to_sqlite._finalize_sync_policy(
-            store,
-            args,
-            failures,
-            source_mode="WRANGLER_REMOTE",
-        )
-        if failures:
-            raise LocalAuthorityError(
-                "governed D1 reconciliation failed: " + "; ".join(failures)
+            fault("after_acquisition")
+
+            source_conn = acquired.open_source()
+            store = SqliteStore(candidate_path)
+            sync_d1_to_sqlite._ensure_control_tables(store._conn)
+            sync_d1_to_sqlite._ensure_export_sync_audit(store)
+            store._conn.commit()
+            if sync_d1_to_sqlite._last_change_seq(store) != expected_applied_cursor:
+                raise LocalAuthorityError(
+                    "D1 sync candidate cursor differs from its prior mirror"
+                )
+            incremental = (
+                sync_d1_to_sqlite._latest_trusted_sync_audit(store) is not None
             )
-        sync_d1_to_sqlite._freeze_authenticated_current_applied_mirror(store)
-        identity = sync_d1_to_sqlite._authenticated_applied_mirror_identity_from_conn(
-            store._conn
-        )
-        return {
-            "status": "SYNCED",
-            "prior_applied_cursor": expected_applied_cursor,
-            "source_change_seq": identity["source_change_seq"],
-            "applied_change_seq": identity["applied_change_seq"],
-            "audit_digest": identity["audit_digest"],
-            "export_digest": identity["export_digest"],
-            "issuer_key_id": identity["issuer_key_id"],
-            "seen": seen,
-            "registered": registered,
-            "skipped": skipped,
-        }
-    finally:
-        store.close()
-        if source_conn is not None:
+            args = SimpleNamespace(
+                table=None,
+                incremental=incremental,
+                since=None,
+                page_limit=sync_d1_to_sqlite.DEFAULT_PAGE_LIMIT,
+                max_pages=sync_d1_to_sqlite.DEFAULT_MAX_PAGES,
+                pilot_ready_evidence=None,
+                snapshot_dir=None,
+                db=str(candidate_path),
+            )
+            begin_snapshot_sync(
+                store._conn,
+                started_at=_d1_sync_now().isoformat(),
+            )
+            seal_invoked = False
+
+            def seal_after_temp_apply(capability: object) -> _SealedD1SyncAudit:
+                nonlocal journal, seal_invoked
+                if seal_invoked:
+                    raise LocalAuthorityError(
+                        "D1 sync candidate requested more than one signed audit"
+                    )
+                seal_invoked = True
+                journal = _advance_d1_sync_journal(
+                    journal_path,
+                    journal,
+                    phase="TEMP_APPLIED",
+                )
+                fault("after_temp_apply")
+                return sealer(capability)
+
+            seen, registered, skipped, failures = (
+                sync_d1_to_sqlite._run_private_export_sync(
+                    store,
+                    source_conn,
+                    list(sync_d1_to_sqlite.DEFAULT_TABLES),
+                    args,
+                    export_digest=acquired.export_digest,
+                    artifact_format=acquired.artifact_format,
+                    authenticated_acquisition=acquired,
+                    seal_authenticated_export=seal_after_temp_apply,
+                )
+            )
+            if failures:
+                raise LocalAuthorityError(
+                    "governed D1 reconciliation failed: " + "; ".join(failures)
+                )
+            identity = _json_materialize(
+                sync_d1_to_sqlite._authenticated_applied_mirror_identity_from_conn(
+                    store._conn
+                )
+            )
+            if type(identity) is not dict:
+                raise LocalAuthorityError("signed D1 candidate identity is invalid")
+            result = {
+                "status": "SYNCED",
+                "prior_applied_cursor": expected_applied_cursor,
+                "source_change_seq": identity["source_change_seq"],
+                "applied_change_seq": identity["applied_change_seq"],
+                "audit_digest": identity["audit_digest"],
+                "export_digest": identity["export_digest"],
+                "issuer_key_id": identity["issuer_key_id"],
+                "seen": seen,
+                "registered": registered,
+                "skipped": skipped,
+            }
+            if not seal_invoked:
+                if (
+                    prior_sync_identity is None
+                    or identity != prior_sync_identity
+                    or identity["source_change_seq"] != expected_applied_cursor
+                ):
+                    raise LocalAuthorityError(
+                        "D1 sync completed without one signed candidate audit"
+                    )
+                store.close()
+                store = None
+                source_conn.close()
+                source_conn = None
+                _remove_d1_sync_candidate(candidate_path, allow_missing=False)
+                _remove_d1_sync_journal(
+                    journal_path, expected_digest=journal["record_digest"]
+                )
+                return result
+            if identity["export_digest"] != acquired.export_digest:
+                raise LocalAuthorityError(
+                    "signed D1 candidate does not bind the acquired export"
+                )
+            journal = _advance_d1_sync_journal(
+                journal_path,
+                journal,
+                phase="SIGNED_AUDIT",
+                candidate_sync_identity=identity,
+                sync_result=result,
+            )
+            fault("after_signed_audit")
+
+            sync_d1_to_sqlite._finalize_sync_policy(
+                store,
+                args,
+                failures,
+                source_mode="WRANGLER_REMOTE",
+            )
+            sync_d1_to_sqlite._freeze_authenticated_current_applied_mirror(store)
+            final_identity = _json_materialize(
+                sync_d1_to_sqlite._authenticated_applied_mirror_identity_from_conn(
+                    store._conn
+                )
+            )
+            if final_identity != identity:
+                raise LocalAuthorityError(
+                    "D1 sync candidate identity changed while freezing"
+                )
+            store.close()
+            store = None
             source_conn.close()
-        if temporary is not None:
-            temporary.cleanup()
+            source_conn = None
+            _require_no_sqlite_sidecars(candidate_path)
+            _fsync_file(candidate_path)
+            candidate_file_identity = _measure_d1_sync_file(candidate_path)
+            if _read_candidate_sync_identity(candidate_path) != identity:
+                raise LocalAuthorityError(
+                    "D1 sync candidate changed after durable close"
+                )
+            journal = _advance_d1_sync_journal(
+                journal_path,
+                journal,
+                phase="FILE_FSYNCED",
+                candidate_file_identity=candidate_file_identity,
+            )
+            fault("after_file_fsync")
+
+            if _measure_d1_sync_file(governed_db_path) != prior_file_identity:
+                raise LocalAuthorityError(
+                    "governed D1 mirror changed before atomic replacement"
+                )
+            _require_no_sqlite_sidecars(governed_db_path)
+            os.replace(candidate_path, governed_db_path)
+            fault("after_replace_before_dir_fsync")
+            _fsync_directory(governed_db_path.parent)
+            if (
+                _measure_d1_sync_file(governed_db_path)
+                != candidate_file_identity
+                or _read_candidate_sync_identity(governed_db_path) != identity
+            ):
+                raise LocalAuthorityError(
+                    "governed D1 replacement postcondition differs"
+                )
+            journal = _advance_d1_sync_journal(
+                journal_path,
+                journal,
+                phase="COMMITTED",
+            )
+            return result
+        except Exception:
+            if store is not None:
+                store.close()
+                store = None
+            if source_conn is not None:
+                source_conn.close()
+                source_conn = None
+            recovered_after_error = _recover_d1_sync_journal(
+                journal_path=journal_path,
+                governed_db_path=governed_db_path,
+                expected_applied_cursor=expected_applied_cursor,
+                environment=environment,
+                source_sha=source_sha,
+                tool_digest=tool_digest,
+                policy_digest=policy_digest,
+            )
+            if recovered_after_error is not None:
+                return recovered_after_error
+            raise
+        finally:
+            if store is not None:
+                store.close()
+            if source_conn is not None:
+                source_conn.close()
+            if temporary is not None:
+                temporary.cleanup()
 
 
 class D1SyncNow:
@@ -958,9 +2033,13 @@ class D1SyncNow:
         cloudflare_token_path: str | Path,
         node_executable_path: str | Path,
         wrangler_cli_path: str | Path,
+        wrangler_cli_tree_path: str | Path,
         wrangler_config_path: str | Path,
+        wrangler_lock_path: str | Path,
         custody: FileEd25519KeyCustody,
         expected_uid: int,
+        source_sha: str,
+        tool_digest: str,
         executor: Callable[..., Mapping[str, Any]] = _execute_governed_remote_sync,
     ) -> None:
         self.environment = trust_domain.require_environment(environment)
@@ -968,9 +2047,17 @@ class D1SyncNow:
         self.cloudflare_token_path = Path(cloudflare_token_path).absolute()
         self.node_executable_path = Path(node_executable_path).absolute()
         self.wrangler_cli_path = Path(wrangler_cli_path).absolute()
+        self.wrangler_cli_tree_path = Path(wrangler_cli_tree_path).absolute()
         self.wrangler_config_path = Path(wrangler_config_path).absolute()
+        self.wrangler_lock_path = Path(wrangler_lock_path).absolute()
         self.custody = custody
         self.expected_uid = expected_uid
+        self.source_sha = source_sha
+        self.tool_digest = tool_digest
+        if not _is_sha256_digest(self.source_sha) or not _is_sha256_digest(
+            self.tool_digest
+        ):
+            raise LocalAuthorityError("D1 sync runtime binding digest is invalid")
         self.executor = executor
 
     def __call__(
@@ -1000,6 +2087,17 @@ class D1SyncNow:
             or stat.S_IMODE(info.st_mode) & 0o077
         ):
             raise LocalAuthorityError("governed D1 mirror ownership is unsafe")
+        observed_tool_digest = _observe_d1_sync_tool_digest(
+            {
+                "node_executable_path": str(self.node_executable_path),
+                "wrangler_cli_path": str(self.wrangler_cli_path),
+                "wrangler_cli_tree_path": str(self.wrangler_cli_tree_path),
+                "wrangler_config_path": str(self.wrangler_config_path),
+                "wrangler_lock_path": str(self.wrangler_lock_path),
+            }
+        )
+        if observed_tool_digest != self.tool_digest:
+            raise LocalAuthorityError("D1 sync Wrangler tool binding changed")
         token = _read_protected_cloudflare_token(
             self.cloudflare_token_path,
             expected_uid=self.expected_uid,
@@ -1015,6 +2113,8 @@ class D1SyncNow:
                 self.custody, environment=self.environment
             ),
             environment=self.environment,
+            source_sha=self.source_sha,
+            tool_digest=self.tool_digest,
         )
         if type(result) is not dict or result.get("status") != "SYNCED":
             raise LocalAuthorityError("D1 sync executor returned invalid evidence")

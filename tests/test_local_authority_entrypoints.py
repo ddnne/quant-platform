@@ -8,8 +8,10 @@ import json
 import os
 import socket
 import sqlite3
+import stat
 import struct
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from types import MappingProxyType
 
@@ -21,6 +23,7 @@ from storage.coverage_transition import CoverageTransitionPublicKeyRegistry
 
 from scripts import authority_protocol_runtime as protocol
 from scripts import export_ops_projection as exporter
+from scripts import local_authority_entrypoints as entrypoints
 from scripts import local_authority_service as service_runtime
 from scripts import sync_d1_to_sqlite as sync_runtime
 from scripts.local_authority_entrypoints import (
@@ -31,8 +34,14 @@ from scripts.local_authority_entrypoints import (
     OpsProjectionRenderAndSign,
     ReadyPublishProfilePlanBound,
     _D1SyncAuditSealer,
+    _advance_d1_sync_journal,
+    _d1_sync_paths,
+    _d1_sync_record_digest,
+    _execute_governed_remote_sync,
     _hash_regular_fd,
     _owned_mirror_evidence,
+    _read_d1_sync_journal,
+    _write_d1_sync_journal,
 )
 from tests.test_coverage_transition_authority import (
     _BUILD_ID,
@@ -168,6 +177,7 @@ def _fake_mirror_authority(
 
 def test_d1_sync_entrypoint_uses_only_configured_resources_and_exact_cursor(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database = tmp_path / "governed.sqlite"
     sqlite3.connect(database).close()
@@ -192,10 +202,19 @@ def test_d1_sync_entrypoint_uses_only_configured_resources_and_exact_cursor(
         cloudflare_token_path=credential,
         node_executable_path="/protected/node",
         wrangler_cli_path="/protected/wrangler.js",
+        wrangler_cli_tree_path="/protected/wrangler-tree",
         wrangler_config_path="/protected/wrangler.toml",
+        wrangler_lock_path="/protected/package-lock.json",
         custody=custody,
         expected_uid=os.geteuid(),
+        source_sha="sha256:" + "1" * 64,
+        tool_digest="sha256:" + "2" * 64,
         executor=executor,
+    )
+    monkeypatch.setattr(
+        entrypoints,
+        "_observe_d1_sync_tool_digest",
+        lambda _resources: "sha256:" + "2" * 64,
     )
     result = handler(
         _context(
@@ -211,6 +230,8 @@ def test_d1_sync_entrypoint_uses_only_configured_resources_and_exact_cursor(
     assert observed["expected_applied_cursor"] == 7
     assert observed["credential_token"] == "x" * 32
     assert observed["node_executable_path"] == Path("/protected/node")
+    assert observed["source_sha"] == "sha256:" + "1" * 64
+    assert observed["tool_digest"] == "sha256:" + "2" * 64
     assert isinstance(observed["sealer"], _D1SyncAuditSealer)
     assert "credential_token" not in result
 
@@ -222,6 +243,22 @@ def test_d1_sync_entrypoint_uses_only_configured_resources_and_exact_cursor(
                 purpose="sync_current",
             ),
             {"expected_applied_cursor": 7, "environment": "production"},
+            (),
+        )
+
+    monkeypatch.setattr(
+        entrypoints,
+        "_observe_d1_sync_tool_digest",
+        lambda _resources: "sha256:" + "9" * 64,
+    )
+    with pytest.raises(service_runtime.LocalAuthorityError, match="tool binding changed"):
+        handler(
+            _context(
+                caller="ops_scheduler",
+                operation=D1SyncNow.operation,
+                purpose="sync_current",
+            ),
+            {"expected_applied_cursor": 7},
             (),
         )
 
@@ -283,6 +320,319 @@ def test_d1_sync_sealer_rejects_forged_evidence_and_signs_only_bound_facts(
     )[
         "applied_change_seq"
     ] == 7
+
+
+class _SimulatedD1SyncCrash(BaseException):
+    """Bypass ordinary exception cleanup exactly like process termination."""
+
+
+class _FakeD1SyncSealer:
+    def preflight(self) -> None:
+        return None
+
+    def __call__(self, _capability: object) -> object:
+        return object()
+
+
+def _read_atomic_marker(path: Path) -> str:
+    with sqlite3.connect(path) as conn:
+        row = conn.execute("SELECT value FROM atomic_sync_marker").fetchone()
+    assert row is not None
+    return str(row[0])
+
+
+def _install_atomic_sync_harness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Callable[..., object], dict[str, int]]:
+    live = tmp_path / "governed.sqlite3"
+    with sqlite3.connect(live) as conn:
+        conn.execute("CREATE TABLE atomic_sync_marker (value TEXT NOT NULL)")
+        conn.execute("INSERT INTO atomic_sync_marker VALUES ('old')")
+    live.chmod(0o600)
+    export_digest = "sha256:" + "e" * 64
+    calls = {"acquire": 0}
+
+    class Acquired:
+        artifact_format = "sql"
+
+        def __init__(self) -> None:
+            self.export_digest = export_digest
+            self._source = sqlite3.connect(":memory:")
+            self._opened = False
+
+        def open_source(self) -> sqlite3.Connection:
+            assert not self._opened
+            self._opened = True
+            return self._source
+
+    def acquire(*_args, **_kwargs):
+        calls["acquire"] += 1
+        return Acquired()
+
+    def run_sync(
+        store,
+        _source,
+        _tables,
+        _args,
+        *,
+        seal_authenticated_export,
+        **_kwargs,
+    ):
+        store._conn.execute("UPDATE atomic_sync_marker SET value='new'")
+        store._conn.commit()
+        seal_authenticated_export(object())
+        return 9, 8, 1, []
+
+    def identity(conn: sqlite3.Connection) -> dict[str, object]:
+        marker = conn.execute("SELECT value FROM atomic_sync_marker").fetchone()
+        assert marker is not None and marker[0] == "new"
+        return {
+            "environment": "production",
+            "resource_identity": {"test": "governed-d1"},
+            "audit_digest": "sha256:" + "a" * 64,
+            "issuer_key_id": "d1-sync-test-v1",
+            "export_digest": export_digest,
+            "source_change_seq": 1,
+            "applied_change_seq": 1,
+            "source_content_digest": "sha256:" + "b" * 64,
+            "local_content_digest": "sha256:" + "b" * 64,
+            "source_schema_digest": "sha256:" + "c" * 64,
+            "schema_digest": "sha256:" + "d" * 64,
+            "table_counts": {"atomic_sync_marker": 1},
+        }
+
+    def freeze(store) -> None:
+        store._conn.commit()
+        sync_runtime._freeze_authenticated_applied_mirror_storage(store._conn)
+
+    monkeypatch.setattr(
+        sync_runtime._private_export,
+        "_acquire_pinned_wrangler_export_with_preflight",
+        acquire,
+    )
+    monkeypatch.setattr(sync_runtime, "_run_private_export_sync", run_sync)
+    monkeypatch.setattr(sync_runtime, "_finalize_sync_policy", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        sync_runtime,
+        "_freeze_authenticated_current_applied_mirror",
+        freeze,
+    )
+    monkeypatch.setattr(
+        sync_runtime,
+        "_authenticated_applied_mirror_identity_from_conn",
+        identity,
+    )
+
+    def read_candidate(path: Path, *, require_fresh: bool = True):
+        del require_fresh
+        with sqlite3.connect(path) as conn:
+            return identity(conn)
+
+    monkeypatch.setattr(entrypoints, "_read_candidate_sync_identity", read_candidate)
+
+    def execute(
+        *,
+        environment: str = "production",
+        source_sha: str = "sha256:" + "1" * 64,
+        tool_digest: str = "sha256:" + "2" * 64,
+        fault=None,
+    ):
+        return _execute_governed_remote_sync(
+            governed_db_path=live,
+            expected_applied_cursor=0,
+            credential_token="x" * 32,
+            node_executable_path=tmp_path / "node",
+            wrangler_cli_path=tmp_path / "wrangler.js",
+            wrangler_config_path=tmp_path / "wrangler.toml",
+            sealer=_FakeD1SyncSealer(),
+            environment=environment,
+            source_sha=source_sha,
+            tool_digest=tool_digest,
+            _fault_inject=fault,
+        )
+
+    return live, execute, calls
+
+
+@pytest.mark.parametrize(
+    "crash_point,live_after_crash,expected_acquisitions",
+    [
+        ("after_prepared", "old", 1),
+        ("after_acquisition", "old", 2),
+        ("after_temp_apply", "old", 2),
+        ("after_signed_audit", "old", 2),
+        ("after_file_fsync", "old", 1),
+        ("after_replace_before_dir_fsync", "new", 1),
+    ],
+)
+def test_d1_sync_crash_recovery_preserves_or_completes_exact_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    crash_point: str,
+    live_after_crash: str,
+    expected_acquisitions: int,
+) -> None:
+    live, execute, calls = _install_atomic_sync_harness(tmp_path, monkeypatch)
+
+    def crash(point: str) -> None:
+        if point == crash_point:
+            raise _SimulatedD1SyncCrash(point)
+
+    with pytest.raises(_SimulatedD1SyncCrash, match=crash_point):
+        execute(fault=crash)
+    assert _read_atomic_marker(live) == live_after_crash
+
+    result = execute()
+    assert result == {
+        "status": "SYNCED",
+        "prior_applied_cursor": 0,
+        "source_change_seq": 1,
+        "applied_change_seq": 1,
+        "audit_digest": "sha256:" + "a" * 64,
+        "export_digest": "sha256:" + "e" * 64,
+        "issuer_key_id": "d1-sync-test-v1",
+        "seen": 9,
+        "registered": 8,
+        "skipped": 1,
+    }
+    assert _read_atomic_marker(live) == "new"
+    assert calls["acquire"] == expected_acquisitions
+    journal, _lock = _d1_sync_paths(live)
+    assert _read_d1_sync_journal(journal)["phase"] == "COMMITTED"
+    assert execute() == result
+    assert not journal.exists()
+    assert not list(tmp_path.glob(f".{live.name}.d1-sync-*.sqlite3"))
+
+
+def _rewrite_sync_journal(path: Path, **updates: object) -> None:
+    journal = _read_d1_sync_journal(path)
+    assert journal is not None
+    journal.update(updates)
+    journal["record_digest"] = None
+    _write_d1_sync_journal(path, journal, create_only=False)
+
+
+def test_d1_sync_journal_transition_orders_file_fsync_replace_and_dir_fsync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live, execute, _calls = _install_atomic_sync_harness(tmp_path, monkeypatch)
+
+    def crash(point: str) -> None:
+        if point == "after_prepared":
+            raise _SimulatedD1SyncCrash(point)
+
+    with pytest.raises(_SimulatedD1SyncCrash):
+        execute(fault=crash)
+    journal_path, _lock_path = _d1_sync_paths(live)
+    journal = _read_d1_sync_journal(journal_path)
+    assert journal is not None
+
+    events: list[str] = []
+    real_fsync = os.fsync
+    real_replace = os.replace
+
+    def traced_fsync(fd: int) -> None:
+        kind = "dir-fsync" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file-fsync"
+        events.append(kind)
+        real_fsync(fd)
+
+    def traced_replace(source, destination) -> None:
+        events.append("replace")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(entrypoints.os, "fsync", traced_fsync)
+    monkeypatch.setattr(entrypoints.os, "replace", traced_replace)
+    _advance_d1_sync_journal(
+        journal_path,
+        journal,
+        phase="ACQUIRED",
+        export_digest="sha256:" + "e" * 64,
+        artifact_format="sql",
+    )
+    assert events == ["file-fsync", "replace", "dir-fsync"]
+
+
+@pytest.mark.parametrize(
+    "tamper,expected_message",
+    [
+        ("environment", "environment binding differs"),
+        ("source", "source_sha binding differs"),
+        ("tool", "tool_digest binding differs"),
+        ("policy", "policy_digest binding differs"),
+        ("export", "candidate identity differs"),
+        ("live", "ambiguous live mirror"),
+        ("candidate", "candidate identity differs"),
+        ("stale", "journal is stale"),
+    ],
+)
+def test_d1_sync_recovery_rejects_stale_or_cross_bound_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper: str,
+    expected_message: str,
+) -> None:
+    live, execute, _calls = _install_atomic_sync_harness(tmp_path, monkeypatch)
+
+    def crash(point: str) -> None:
+        if point == "after_file_fsync":
+            raise _SimulatedD1SyncCrash(point)
+
+    with pytest.raises(_SimulatedD1SyncCrash):
+        execute(fault=crash)
+    journal_path, _lock_path = _d1_sync_paths(live)
+    journal = _read_d1_sync_journal(journal_path)
+    assert journal is not None
+    candidate = Path(journal["candidate_path"])
+
+    kwargs: dict[str, object] = {}
+    if tamper == "environment":
+        kwargs["environment"] = "staging"
+    elif tamper == "source":
+        kwargs["source_sha"] = "sha256:" + "3" * 64
+    elif tamper == "tool":
+        kwargs["tool_digest"] = "sha256:" + "4" * 64
+    elif tamper == "policy":
+        monkeypatch.setattr(
+            "scripts.local_authority_entrypoints._d1_sync_policy_digest",
+            lambda **_kwargs: "sha256:" + "5" * 64,
+        )
+    elif tamper == "export":
+        tampered_result = dict(journal["sync_result"])
+        tampered_result["export_digest"] = "sha256:" + "6" * 64
+        _rewrite_sync_journal(
+            journal_path,
+            export_digest="sha256:" + "6" * 64,
+            sync_result=tampered_result,
+        )
+    elif tamper == "live":
+        with sqlite3.connect(live) as conn:
+            conn.execute("UPDATE atomic_sync_marker SET value='tampered-live'")
+    elif tamper == "candidate":
+        with sqlite3.connect(candidate) as conn:
+            conn.execute("UPDATE atomic_sync_marker SET value='tampered-candidate'")
+    elif tamper == "stale":
+        stale = "2000-01-01T00:00:00+00:00"
+        journal.update(prepared_at=stale, updated_at=stale)
+        journal["record_digest"] = _d1_sync_record_digest(journal)
+        journal_path.write_text(
+            json.dumps(
+                journal,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    else:  # pragma: no cover - closed parametrization
+        raise AssertionError(tamper)
+
+    with pytest.raises(service_runtime.LocalAuthorityError, match=expected_message):
+        execute(**kwargs)
+    assert journal_path.exists()
+    assert _read_atomic_marker(live) in {"old", "tampered-live"}
 
 
 def test_d1_owned_ops_flow_renders_and_signs_exact_received_inode(

@@ -39,6 +39,7 @@ from scripts.local_authority_entrypoints import (
     D1SyncNow,
     OpsProjectionRenderAndSign,
     ReadyPublishProfilePlanBound,
+    _d1_sync_tool_bindings_digest,
 )
 from scripts.local_authority_service import (
     DEFAULT_PROCESSING_TIMEOUT_SECONDS,
@@ -260,9 +261,15 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
                 cloudflare_token_path=resources["cloudflare_token_path"],
                 node_executable_path=resources["node_executable_path"],
                 wrangler_cli_path=resources["wrangler_cli_path"],
+                wrangler_cli_tree_path=resources["wrangler_cli_tree_path"],
                 wrangler_config_path=resources["wrangler_config_path"],
+                wrangler_lock_path=resources["wrangler_lock_path"],
                 custody=custody,
                 expected_uid=uid,
+                source_sha=activation["runtime_bundle_digest"],
+                tool_digest=_d1_sync_tool_bindings_digest(
+                    activation["runtime_resource_bindings"]
+                ),
             ),
             D1FreezeAndRenderOpsProjection.operation: (
                 D1FreezeAndRenderOpsProjection(
