@@ -359,6 +359,12 @@ describe("Receipt Evidence Authority in workerd", () => {
       ...request,
       request_nonce: "d".repeat(64),
     })).rejects.toThrow("PENDING activation");
+
+    await expect(executeReceiptRequest(withAcquisition(), {
+      ...request,
+      operation: "recover_issue",
+      request_nonce: "a".repeat(64),
+    })).rejects.toThrow("no issued envelope to recover");
   });
 
   it("rejects a forged terminal header while immutable raw has a provider cursor", async () => {
