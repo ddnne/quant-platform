@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 import os
+import sqlite3
 import stat
+import urllib.parse
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -64,6 +68,381 @@ CONTROLLED_EXECUTION_ACTIVATION_PATH = Path(
 
 _MAX_FRAME_BYTES = 1024 * 1024
 _MAX_HANDOFF_BYTES = 1024 * 1024
+_CONTROLLED_STORE_TABLES = frozenset(
+    {
+        "controlled_authority_metadata",
+        "controlled_credential_counters",
+        "controlled_handoffs",
+        "controlled_execution_attempts",
+        "controlled_artifacts",
+        "controlled_writer_events",
+        "controlled_manifests",
+    }
+)
+_CONTROLLED_STORE_SCHEMA_DIGEST = (
+    "sha256:c39c435e89cba63db7ea1b5ca81805c5e12d985d3025c674cf517c53ccc2ab68"
+)
+_CONTROLLED_STORE_TRIGGERS = frozenset(
+    {
+        "controlled_metadata_no_update",
+        "controlled_metadata_no_delete",
+        "controlled_counters_no_delete",
+        "controlled_handoffs_no_update",
+        "controlled_handoffs_no_delete",
+        "controlled_attempts_no_update",
+        "controlled_attempts_no_delete",
+        "controlled_artifacts_no_update",
+        "controlled_artifacts_no_delete",
+        "controlled_writer_events_no_update",
+        "controlled_writer_events_no_delete",
+        "controlled_manifests_no_update",
+        "controlled_manifests_no_delete",
+    }
+)
+
+
+def _require_live_controlled_store_identity_v2(
+    path: Path,
+    *,
+    expected_uid: int,
+    allow_missing: bool,
+) -> tuple[int, int] | None:
+    """Return one exact live-store identity without following a final symlink."""
+
+    try:
+        observed = path.lstat()
+    except FileNotFoundError:
+        if allow_missing:
+            return None
+        raise ExactFourAuthorityPending(
+            "Controlled protected store is not provisioned"
+        ) from None
+    except OSError as exc:
+        raise ExactFourAuthorityPending(
+            "Controlled protected store identity cannot be observed"
+        ) from exc
+    if (
+        not stat.S_ISREG(observed.st_mode)
+        or observed.st_uid != expected_uid
+        or stat.S_IMODE(observed.st_mode) != 0o600
+        or observed.st_nlink != 1
+    ):
+        raise ExactFourAuthorityPending(
+            "Controlled store is not a private single-link service store"
+        )
+    return observed.st_dev, observed.st_ino
+
+
+def _provision_live_controlled_store_v2(
+    path: Path,
+    *,
+    expected_uid: int,
+) -> tuple[int, int]:
+    """Create the missing live store inode without exposing a permissive file."""
+
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileExistsError:
+        identity = _require_live_controlled_store_identity_v2(
+            path,
+            expected_uid=expected_uid,
+            allow_missing=False,
+        )
+        if identity is None:  # pragma: no cover - closed by allow_missing=False
+            raise ExactFourAuthorityPending(
+                "Controlled protected store race was not resolved"
+            )
+        return identity
+    except OSError as exc:
+        raise ExactFourAuthorityPending(
+            "Controlled protected store cannot be provisioned"
+        ) from exc
+    try:
+        os.fchmod(descriptor, 0o600)
+        observed = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(observed.st_mode)
+            or observed.st_uid != expected_uid
+            or stat.S_IMODE(observed.st_mode) != 0o600
+            or observed.st_nlink != 1
+        ):
+            raise ExactFourAuthorityPending(
+                "Controlled protected store creation identity drifted"
+            )
+        os.fsync(descriptor)
+        identity = (observed.st_dev, observed.st_ino)
+    finally:
+        os.close(descriptor)
+    parent_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        parent_descriptor = os.open(path.parent, parent_flags)
+    except OSError as exc:
+        raise ExactFourAuthorityPending(
+            "Controlled store directory cannot be synchronized"
+        ) from exc
+    try:
+        os.fsync(parent_descriptor)
+    finally:
+        os.close(parent_descriptor)
+    return identity
+
+
+def _audit_live_controlled_store_read_only_v2(
+    path: Path,
+    *,
+    environment: str,
+    trader_uid: int,
+    signer_key_id: str,
+    relying_parties: ExactFourTraderRelyingPartyRegistryV2,
+    credentials: ExactFourTraderCredentialRegistryV2,
+    expected_uid: int,
+) -> dict[str, Any]:
+    """Audit the already-provisioned Controlled store without writable open."""
+
+    sidecars = (
+        Path(f"{path}-wal"),
+        Path(f"{path}-shm"),
+        Path(f"{path}-journal"),
+    )
+
+    def sidecar_present() -> bool:
+        return any(os.path.lexists(item) for item in sidecars)
+
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        raise ExactFourAuthorityPending(
+            "Controlled protected store is not provisioned"
+        ) from exc
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_uid != expected_uid
+        or stat.S_IMODE(before.st_mode) != 0o600
+        or before.st_nlink != 1
+        or sidecar_present()
+    ):
+        raise ExactFourAuthorityPending(
+            "Controlled protected store is not an inactive private SQLite store"
+        )
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ExactFourAuthorityPending(
+            "Controlled protected store cannot be pinned"
+        ) from exc
+    pinned_before = os.fstat(descriptor)
+    if (pinned_before.st_dev, pinned_before.st_ino) != (
+        before.st_dev,
+        before.st_ino,
+    ):
+        os.close(descriptor)
+        raise ExactFourAuthorityPending("Controlled store changed before audit")
+    try:
+        header = os.pread(descriptor, 100, 0)
+    except OSError as exc:
+        os.close(descriptor)
+        raise ExactFourAuthorityPending(
+            "Controlled store header cannot be read"
+        ) from exc
+    if (
+        len(header) < 20
+        or header[:16] != b"SQLite format 3\x00"
+        or header[18:20] != b"\x01\x01"
+    ):
+        os.close(descriptor)
+        raise ExactFourAuthorityPending(
+            "Controlled store is not a pinned DELETE-mode SQLite database"
+        )
+    target = (
+        "file:"
+        + urllib.parse.quote(f"/dev/fd/{descriptor}", safe="/")
+        + "?mode=ro&immutable=1"
+    )
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(
+            target,
+            isolation_level=None,
+            timeout=10.0,
+            uri=True,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("PRAGMA trusted_schema=OFF")
+        connection.execute("PRAGMA temp_store=MEMORY")
+        if str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower() != (
+            "delete"
+        ):
+            raise ExactFourAuthorityPending(
+                "Controlled store journal mode is not DELETE"
+            )
+        if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise ExactFourAuthorityPending("Controlled store integrity check failed")
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise ExactFourAuthorityPending("Controlled store foreign keys are invalid")
+        objects = connection.execute(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master "
+            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
+        ).fetchall()
+        schema_inventory = [
+            [
+                row["type"],
+                row["name"],
+                row["tbl_name"],
+                " ".join(str(row["sql"]).split()),
+            ]
+            for row in objects
+        ]
+        schema_digest = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    schema_inventory,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+        )
+        tables = {row["name"] for row in objects if row["type"] == "table"}
+        triggers = {
+            row["name"]: row["sql"] for row in objects if row["type"] == "trigger"
+        }
+        if (
+            schema_digest != _CONTROLLED_STORE_SCHEMA_DIGEST
+            or tables != _CONTROLLED_STORE_TABLES
+            or set(triggers) != _CONTROLLED_STORE_TRIGGERS
+            or any(row["type"] not in {"table", "trigger"} for row in objects)
+        ):
+            raise ExactFourAuthorityPending("Controlled store schema inventory drifted")
+        for name, sql in triggers.items():
+            operation = "UPDATE" if name.endswith("_update") else "DELETE"
+            normalized = " ".join(str(sql).upper().split())
+            if (
+                f"BEFORE {operation} ON" not in normalized
+                or "RAISE(ABORT" not in normalized
+            ):
+                raise ExactFourAuthorityPending(
+                    "Controlled immutability trigger drifted"
+                )
+        rp = relying_parties.require(environment)
+        expected_metadata = (
+            environment,
+            trader_uid,
+            relying_parties.registry_digest,
+            credentials.registry_digest,
+            signer_key_id,
+        )
+        metadata = connection.execute(
+            "SELECT environment,trader_uid,rp_registry_digest,"
+            "credential_registry_digest,writer_key_id "
+            "FROM controlled_authority_metadata ORDER BY environment"
+        ).fetchall()
+        if [tuple(row) for row in metadata] != [expected_metadata]:
+            raise ExactFourAuthorityPending(
+                "Controlled store authority identity drifted"
+            )
+        expected_credentials = {
+            credential.credential_id_base64url: credential
+            for credential in credentials.credentials
+            if credential.environment == environment
+            and credential.rp_policy_digest == rp.policy_digest
+        }
+        counters = connection.execute(
+            "SELECT credential_id,public_key_digest,registry_digest,counter_mode,"
+            "sign_count FROM controlled_credential_counters WHERE environment=? "
+            "ORDER BY credential_id",
+            (environment,),
+        ).fetchall()
+        if {row["credential_id"] for row in counters} != set(expected_credentials):
+            raise ExactFourAuthorityPending("Controlled credential inventory drifted")
+        for row in counters:
+            credential = expected_credentials[row["credential_id"]]
+            if (
+                row["public_key_digest"] != credential.public_key_digest
+                or row["registry_digest"] != credentials.registry_digest
+                or row["counter_mode"] != credential.counter_mode
+                or type(row["sign_count"]) is not int
+                or row["sign_count"] < credential.initial_sign_count
+            ):
+                raise ExactFourAuthorityPending(
+                    "Controlled credential identity drifted"
+                )
+        counts = {
+            name: int(
+                connection.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
+            )
+            for name in (
+                "controlled_handoffs",
+                "controlled_execution_attempts",
+                "controlled_artifacts",
+                "controlled_writer_events",
+                "controlled_manifests",
+            )
+        }
+    except sqlite3.Error as exc:
+        raise ExactFourAuthorityPending(
+            "Controlled store read-only audit failed"
+        ) from exc
+    finally:
+        if connection is not None:
+            connection.close()
+        pinned_after = os.fstat(descriptor)
+        os.close(descriptor)
+    try:
+        after = path.lstat()
+    except OSError as exc:
+        raise ExactFourAuthorityPending(
+            "Controlled store changed during audit"
+        ) from exc
+    stable_fields = (
+        "st_dev",
+        "st_ino",
+        "st_size",
+        "st_mtime_ns",
+        "st_ctime_ns",
+        "st_nlink",
+    )
+    if (
+        any(
+            getattr(pinned_before, field) != getattr(pinned_after, field)
+            for field in stable_fields
+        )
+        or any(
+            getattr(before, field) != getattr(after, field) for field in stable_fields
+        )
+        or (after.st_dev, after.st_ino)
+        != (
+            pinned_after.st_dev,
+            pinned_after.st_ino,
+        )
+        or sidecar_present()
+    ):
+        raise ExactFourAuthorityPending(
+            "Controlled store changed during read-only audit"
+        )
+    return {
+        "schema": "exact-four-controlled-writer-store/v2",
+        "environment": environment,
+        "trader_uid": trader_uid,
+        "rp_registry_digest": relying_parties.registry_digest,
+        "credential_registry_digest": credentials.registry_digest,
+        "writer_key_id": signer_key_id,
+        "credential_count": len(expected_credentials),
+        **counts,
+    }
 
 
 def _activation_absolute_path(document: dict[str, Any], field: str) -> Path:
@@ -284,16 +663,11 @@ def _load_live_controlled_execution_writer_material_v2() -> tuple[
         raise ExactFourAuthorityPending(
             "Controlled store directory is not service-owned mode 0700"
         )
-    if store_path.exists():
-        stored = store_path.lstat()
-        if (
-            not stat.S_ISREG(stored.st_mode)
-            or stored.st_uid != service_uid
-            or stored.st_mode & 0o077
-        ):
-            raise ExactFourAuthorityPending(
-                "Controlled store is not service-owned and private"
-            )
+    _require_live_controlled_store_identity_v2(
+        store_path,
+        expected_uid=service_uid,
+        allow_missing=True,
+    )
     try:
         key_bytes = read_pinned_authority_file_v2(
             key_path,
@@ -343,6 +717,36 @@ def _preflight_live_controlled_execution_writer_v2() -> tuple[
     return environment, store_path, signer.key_id, public, trader_uid
 
 
+def _preflight_inactive_canary_controlled_execution_writer_v2() -> tuple[
+    str,
+    Path,
+    str,
+    str,
+    int,
+]:
+    """Canary-only audit; normal WAL restart semantics remain unchanged."""
+
+    environment, store_path, signer, trader_uid, rps, credentials = (
+        _load_live_controlled_execution_writer_material_v2()
+    )
+    _audit_live_controlled_store_read_only_v2(
+        store_path,
+        environment=environment,
+        trader_uid=trader_uid,
+        signer_key_id=signer.key_id,
+        relying_parties=rps,
+        credentials=credentials,
+        expected_uid=os.geteuid(),
+    )
+    public = base64.b64encode(
+        signer.private_key.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
+    ).decode("ascii")
+    return environment, store_path, signer.key_id, public, trader_uid
+
+
 def _load_live_controlled_execution_writer_v2(
     *, server_bound: bool
 ) -> SQLiteControlledExecutionWriterV2:
@@ -351,7 +755,18 @@ def _load_live_controlled_execution_writer_v2(
     environment, store_path, signer, trader_uid, rps, credentials = (
         _load_live_controlled_execution_writer_material_v2()
     )
-    return SQLiteControlledExecutionWriterV2(
+    service_uid = os.geteuid()
+    identity = _require_live_controlled_store_identity_v2(
+        store_path,
+        expected_uid=service_uid,
+        allow_missing=True,
+    )
+    if identity is None:
+        identity = _provision_live_controlled_store_v2(
+            store_path,
+            expected_uid=service_uid,
+        )
+    writer = SQLiteControlledExecutionWriterV2(
         store_path,
         environment=environment,
         signer=signer,
@@ -363,6 +778,16 @@ def _load_live_controlled_execution_writer_v2(
         test_mode=False,
         _token=_WRITER_CONSTRUCTION_TOKEN,
     )
+    initialized_identity = _require_live_controlled_store_identity_v2(
+        store_path,
+        expected_uid=service_uid,
+        allow_missing=False,
+    )
+    if initialized_identity != identity:
+        raise ExactFourAuthorityPending(
+            "Controlled store identity changed during live writer initialization"
+        )
+    return writer
 
 
 def _load_live_controlled_execution_runtime_v2() -> ControlledExecutionRuntimeV2:

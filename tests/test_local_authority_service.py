@@ -8,9 +8,9 @@ import os
 import socket
 import sqlite3
 import struct
+import tempfile
 import threading
 import time
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -128,7 +128,7 @@ def test_ledger_rejects_request_id_rewrap_and_tampered_chain(tmp_path: Path) -> 
             "UPDATE authority_events SET event_digest=?", ("sha256:" + "0" * 64,)
         )
         conn.commit()
-    with pytest.raises(authority.AuthorityLedgerError, match="event digest mismatch"):
+    with pytest.raises(authority.AuthorityLedgerError, match="schema is invalid"):
         ledger.execute_once(
             request=_request("request-2"),
             caller="ready_publisher",
@@ -136,6 +136,46 @@ def test_ledger_rejects_request_id_rewrap_and_tampered_chain(tmp_path: Path) -> 
             purpose="profile_plan_closure_ready",
             produce=lambda: {"status": "MUST_NOT_RUN"},
         )
+
+
+def test_read_only_ledger_audit_rejects_wal_header_without_mutation(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path)
+    with sqlite3.connect(ledger.path) as connection:
+        assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        connection.execute("PRAGMA user_version=7")
+        connection.commit()
+    for suffix in ("-wal", "-shm", "-journal"):
+        sidecar = Path(f"{ledger.path}{suffix}")
+        if os.path.lexists(sidecar):
+            sidecar.unlink()
+    before = (ledger.path.read_bytes(), ledger.path.stat())
+    assert before[0][18:20] == b"\x02\x02"
+    with pytest.raises(authority.AuthorityLedgerError, match="rollback-journal SQLite"):
+        ledger.audit_read_only()
+    after = (ledger.path.read_bytes(), ledger.path.stat())
+    assert after[0] == before[0]
+    assert (after[1].st_ino, after[1].st_size, after[1].st_mtime_ns) == (
+        before[1].st_ino,
+        before[1].st_size,
+        before[1].st_mtime_ns,
+    )
+    assert not any(
+        os.path.lexists(Path(f"{ledger.path}{suffix}"))
+        for suffix in ("-wal", "-shm", "-journal")
+    )
+
+
+def test_read_only_ledger_audit_rejects_dangling_rollback_sidecar(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path)
+    rollback = Path(f"{ledger.path}-journal")
+    rollback.symlink_to(tmp_path / "missing")
+    with pytest.raises(authority.AuthorityLedgerError, match="sidecar is present"):
+        ledger.audit_read_only()
+    assert rollback.is_symlink()
 
 
 def test_file_key_custody_requires_single_protected_owner_path(tmp_path: Path) -> None:

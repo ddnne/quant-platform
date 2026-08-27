@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import grp
 import os
 import re
 import stat
@@ -34,6 +35,7 @@ from execution.trader_webauthn_registry_v2 import (
     ExactFourTraderRelyingPartyV2,
 )
 from scripts.finding_ledger_gate import require_pinned_finding_ledger_gate
+from scripts.local_authority_bootstrap_common import _deployments
 
 TRADER_RP_REGISTRY_FORMAT = "exact-four-trader-rp-registry/v2"
 TRADER_CREDENTIAL_REGISTRY_FORMAT = "exact-four-trader-credential-registry/v2"
@@ -161,10 +163,28 @@ def _preflight_live_exact_four_trader_authority_v2() -> tuple[
         raise ExactFourAuthorityPending(
             "controlled execution socket is not observed"
         ) from exc
+    controlled_rows = [
+        row
+        for row in _deployments(environment)
+        if row["authority_id"] == "controlled_execution"
+    ]
+    if len(controlled_rows) != 1:
+        raise ExactFourAuthorityPending(
+            "controlled execution governed deployment is not unique"
+        )
+    try:
+        controlled_caller_gid = grp.getgrnam(controlled_rows[0]["caller_group"]).gr_gid
+    except KeyError as exc:
+        raise ExactFourAuthorityPending(
+            "controlled execution caller group is not provisioned"
+        ) from exc
+    if controlled_caller_gid <= 0:
+        raise ExactFourAuthorityPending("controlled execution caller group is unsafe")
     if (
         not stat.S_ISSOCK(controlled_socket_stat.st_mode)
         or controlled_socket_stat.st_uid != controlled_uid
-        or controlled_socket_stat.st_mode & 0o002
+        or controlled_socket_stat.st_gid != controlled_caller_gid
+        or stat.S_IMODE(controlled_socket_stat.st_mode) != 0o660
     ):
         raise ExactFourAuthorityPending(
             "controlled execution socket identity or permissions are invalid"

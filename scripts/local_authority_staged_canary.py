@@ -1,10 +1,11 @@
 """Root-orchestrated, research-ineligible local-authority startup canaries.
 
-This module is deliberately not a second release gate.  It can execute exactly
-one code-pinned inactive preflight for one of the six local OS principals and
-write the result only to a canonical root-owned journal.  It cannot activate a
-registry, write the normal activation state, call a product handler, publish
-READY, issue a COMPLETE receipt, or authorize Controlled execution.
+This module is deliberately not a second release gate. It can execute exactly
+one code-pinned inactive preflight for one of five signed local OS principals
+and return evidence only to the root manager, which may commit the canonical
+journal. It cannot activate a registry, write the normal activation state, call
+a product handler, publish READY, issue a COMPLETE receipt, or authorize
+Controlled execution.
 
 The public CLI exposes only ``plan``, ``audit`` and the atomic ``run`` workflow.
 There is no public permit/mint/claim/complete API and no path, owner, action,
@@ -67,7 +68,7 @@ POLICY_PATH = (
     ROOT / "specs" / "authorities" / "local-authority-staged-canary-policy.json"
 )
 POLICY_DIGEST = (
-    "sha256:03f18c5e87ef7f57b52734f9015073145364ce3b6dbfc1e1b333199be67bfc36"
+    "sha256:f904f24657bcd06ae37e5606e6a5395a06fda52a6e9ed0c7a2ebdc93c3120f65"
 )
 POLICY_FORMAT = "local-authority-staged-canary-policy/v1"
 CHALLENGE_FORMAT = "local-authority-staged-canary-challenge/v1"
@@ -123,6 +124,26 @@ _ACTION_FIELDS = {
     "resource_roles",
 }
 _EXCLUDED_FIELDS = {"authority_id", "reason"}
+_CONTROLLED_ACTIVATION_FIELDS = {
+    "format",
+    "environment",
+    "service_uid",
+    "trader_uid",
+    "store_path",
+    "signer_key_id",
+    "private_key_path",
+    "budget_id",
+    "budget_ledger_path",
+    "immutable_snapshot_path",
+    "signed_projection_path",
+    "provider_socket_path",
+    "provider_uid",
+    "provider_timeout_seconds",
+    "protected_store_observed",
+    "protected_signing_key_observed",
+    "rp_registry",
+    "credential_registry",
+}
 _CHALLENGE_FIELDS = {
     "format",
     "classification",
@@ -158,6 +179,7 @@ _CANARY_BODY_FIELDS = {
     "finding_ledger_digest",
     "open_p0_ids",
     "resource_digest",
+    "protocol_digest",
     "challenge_digest",
     "nonce",
     "observed_at",
@@ -222,19 +244,6 @@ _EXPECTED_ACTIONS = MappingProxyType(
                 "snapshot_root",
             ),
         ),
-        "trader": (
-            "trader:inactive_webauthn_registry_preflight",
-            "ROOT_EXEC_EXACT_UID_WEBAUTHN_REGISTRY_PREFLIGHT",
-            (
-                "service_identity",
-                "runtime_bundle_source_sha",
-                "runtime_config",
-                "authority_event_ledger",
-                "root_owned_webauthn_activation",
-                "trader_store",
-                "controlled_execution_socket_identity",
-            ),
-        ),
         "controlled_execution": (
             "controlled_execution:inactive_signing_preflight",
             "ED25519_PROTECTED_KEY_PREFLIGHT",
@@ -245,10 +254,43 @@ _EXPECTED_ACTIONS = MappingProxyType(
                 "protected_signing_key_public_identity",
                 "authority_event_ledger",
                 "root_owned_controlled_activation",
+                "controlled_store",
             ),
         ),
     }
 )
+_EXPECTED_PROTOCOL_OPERATIONS = MappingProxyType(
+    {
+        "d1_sync": (
+            "d1_sync:sync_now",
+            "d1_sync:freeze_and_render_ops_projection",
+            "d1_sync:freeze_authorize_apply_coverage",
+        ),
+        "ops_projection": ("ops_projection:render_and_sign",),
+        "coverage_transition": ("coverage_transition:authorize",),
+        "ready": ("ready:publish_profile_plan_bound",),
+        "controlled_execution": ("controlled_execution:consume_trader_handoff",),
+    }
+)
+
+
+def _expected_protocol_descriptor(
+    *, authority_id: str, environment: str
+) -> Mapping[str, Any]:
+    if authority_id not in _EXPECTED_PROTOCOL_OPERATIONS or environment not in {
+        "staging",
+        "production",
+    }:
+        raise StagedCanaryError("inactive protocol descriptor is not declared")
+    return MappingProxyType(
+        {
+            "format": "local-authority-inactive-protocol-preflight/v1",
+            "authority_id": authority_id,
+            "environment": environment,
+            "action": load_policy().actions[authority_id].action,
+            "operations": list(_EXPECTED_PROTOCOL_OPERATIONS[authority_id]),
+        }
+    )
 
 
 class StagedCanaryError(RuntimeError):
@@ -345,7 +387,7 @@ def _evaluate_policy_bytes(raw: bytes) -> CanaryPolicy:
     if (
         document["schema_version"] != POLICY_FORMAT
         or document["classification"] != CLASSIFICATION
-        or document["scope"] != "LOCAL_OS_AUTHORITIES_ONLY"
+        or document["scope"] != "SIGNED_LOCAL_OS_AUTHORITIES_ONLY"
         or document["principal_manifest_digest"] != PINNED_MANIFEST_DIGEST
         or document["state_root"] != str(CANONICAL_STATE_ROOT)
         or document["journal_path"] != str(CANONICAL_JOURNAL_PATH)
@@ -394,22 +436,37 @@ def _evaluate_policy_bytes(raw: bytes) -> CanaryPolicy:
             proof_kind=expected[1],
             resource_roles=expected[2],
         )
-    if set(actions) != set(LOCAL_OS_PRINCIPALS) or set(actions) != set(
-        _EXPECTED_ACTIONS
-    ):
+    if set(actions) != set(_EXPECTED_ACTIONS):
         raise StagedCanaryError("staged canary local authority inventory drifted")
     excluded = document["excluded_authorities"]
-    if type(excluded) is not list or len(excluded) != 1:
+    if type(excluded) is not list or len(excluded) != 2:
         raise StagedCanaryError("staged canary exclusion inventory drifted")
-    receipt = _exact(
-        excluded[0], _EXCLUDED_FIELDS, label="staged canary excluded receipt"
-    )
+    excluded_by_authority: dict[str, dict[str, Any]] = {}
+    for index, raw_exclusion in enumerate(excluded):
+        exclusion = _exact(
+            raw_exclusion,
+            _EXCLUDED_FIELDS,
+            label=f"staged canary exclusions[{index}]",
+        )
+        authority_id = exclusion.get("authority_id")
+        if type(authority_id) is not str or authority_id in excluded_by_authority:
+            raise StagedCanaryError("staged canary exclusion identity drifted")
+        excluded_by_authority[authority_id] = exclusion
+    receipt = excluded_by_authority.get("receipt")
+    trader = excluded_by_authority.get("trader")
     if (
-        receipt["authority_id"] != "receipt"
+        receipt is None
+        or receipt["authority_id"] != "receipt"
         or "Service Binding" not in receipt["reason"]
         or "caller-supplied evidence is forbidden" not in receipt["reason"]
+        or trader is None
+        or "Unsigned local WebAuthn preflight output" not in trader["reason"]
+        or "authority-held attestation key" not in trader["reason"]
+        or "caller-supplied evidence is forbidden" not in trader["reason"]
+        or set(actions) | set(excluded_by_authority)
+        != set(LOCAL_OS_PRINCIPALS) | {"receipt"}
     ):
-        raise StagedCanaryError("Receipt exclusion rationale drifted")
+        raise StagedCanaryError("staged canary exclusion rationale drifted")
     return CanaryPolicy(digest=POLICY_DIGEST, actions=MappingProxyType(actions))
 
 
@@ -555,6 +612,36 @@ def _safe_observation(
             info = after
         finally:
             os.close(descriptor)
+    stable_fields = (
+        "st_dev",
+        "st_ino",
+        "st_mode",
+        "st_uid",
+        "st_gid",
+        "st_size",
+        "st_mtime_ns",
+        "st_ctime_ns",
+        "st_nlink",
+    )
+    try:
+        final_lexical_target = path.lstat()
+        final_resolved = path.resolve(strict=True)
+        final_info = final_resolved.lstat()
+    except OSError as exc:
+        raise StagedCanaryError(f"{label} changed after observation") from exc
+    if (
+        final_resolved != resolved
+        or any(
+            getattr(final_lexical_target, field) != getattr(lexical_target, field)
+            for field in stable_fields
+        )
+        or any(
+            getattr(final_info, field) != getattr(info, field)
+            for field in stable_fields
+        )
+    ):
+        raise StagedCanaryError(f"{label} path changed during observation")
+    info = final_info
     return {
         "path": str(path),
         "resolved_path": str(resolved),
@@ -591,8 +678,10 @@ def _deployment(authority_id: str, environment: str) -> dict[str, Any]:
 def _observe_runtime_resources(
     *,
     authority_id: str,
+    environment: str,
     resources: Mapping[str, Any],
     service_uid: int,
+    service_dir: Path,
 ) -> list[dict[str, Any]]:
     observed: list[dict[str, Any]] = []
     if authority_id == "d1_sync":
@@ -669,17 +758,75 @@ def _observe_runtime_resources(
                 ),
             }
         )
-    elif authority_id in {"trader", "controlled_execution"}:
+    elif authority_id == "controlled_execution":
+        activation_path = Path(resources["activation_document_path"])
         observed.append(
             {
                 "name": "activation_document_path",
                 "sensitivity": "ROOT_OWNED_ACTIVATION_DOCUMENT",
                 **_safe_observation(
-                    Path(resources["activation_document_path"]),
+                    activation_path,
                     label=f"{authority_id} activation document",
                     owner_uids={0},
                     kinds={"file"},
                     allowed_modes={0o400, 0o440, 0o444, 0o600, 0o640, 0o644},
+                    include_digest=True,
+                ),
+            }
+        )
+        try:
+            activation_raw = read_protected_authority_file(
+                activation_path,
+                expected_owner_uids={0},
+                allowed_modes={0o400, 0o440, 0o444, 0o600, 0o640, 0o644},
+                max_bytes=1024 * 1024,
+            ).raw
+            activation = _strict_json(
+                activation_raw,
+                label=f"{authority_id} activation resource identity",
+            )
+        except ProtectedAuthorityFileError as exc:
+            raise StagedCanaryError(
+                f"{authority_id} activation resource identity is unavailable"
+            ) from exc
+        if (
+            set(activation) != _CONTROLLED_ACTIVATION_FIELDS
+            or activation.get("format")
+            != "exact-four-controlled-execution-activation/v2"
+            or activation.get("environment") != environment
+            or activation.get("service_uid") != service_uid
+            or activation.get("protected_store_observed") is not True
+            or type(activation.get("store_path")) is not str
+        ):
+            raise StagedCanaryError(
+                f"{authority_id} activation resource identity drifted"
+            )
+        store_path = Path(activation["store_path"])
+        try:
+            store_parent = store_path.parent.resolve(strict=True)
+            expected_parent = service_dir.resolve(strict=True)
+        except OSError as exc:
+            raise StagedCanaryError(
+                f"{authority_id} store parent is unavailable"
+            ) from exc
+        if (
+            not store_path.is_absolute()
+            or store_parent != expected_parent
+            or os.path.lexists(Path(f"{store_path}-wal"))
+            or os.path.lexists(Path(f"{store_path}-shm"))
+            or os.path.lexists(Path(f"{store_path}-journal"))
+        ):
+            raise StagedCanaryError(f"{authority_id} inactive store identity is unsafe")
+        observed.append(
+            {
+                "name": "controlled_store",
+                "sensitivity": "INACTIVE_PRODUCT_SQLITE_STORE",
+                **_safe_observation(
+                    store_path,
+                    label=f"{authority_id} product store",
+                    owner_uids={service_uid},
+                    kinds={"file"},
+                    allowed_modes={0o600},
                     include_digest=True,
                 ),
             }
@@ -807,12 +954,14 @@ def observe_preflight_resources(
                 raise StagedCanaryError(
                     "protected authority key differs from public metadata"
                 )
-    elif authority_id != "trader":
+    else:
         raise StagedCanaryError("unexpected non-file local signing backend")
     resources = _observe_runtime_resources(
         authority_id=authority_id,
+        environment=environment,
         resources=config["resources"],
         service_uid=account.pw_uid,
+        service_dir=Path(row["service_dir"]),
     )
     snapshot = {
         "format": "local-authority-staged-canary-resources/v1",
@@ -1032,46 +1181,13 @@ def _run_authority_specific_inactive_adapter(
             raise StagedCanaryError(
                 "authority-specific inactive handler preflight failed"
             ) from exc
-    elif authority_id == "trader":
-        from execution.trader_webauthn_activation_v2 import (
-            _preflight_live_exact_four_trader_authority_v2,
-        )
-
-        try:
-            (
-                observed_environment,
-                store_path,
-                _relying_parties,
-                _credentials,
-                controlled_uid,
-                controlled_socket_path,
-            ) = _preflight_live_exact_four_trader_authority_v2()
-        except Exception as exc:
-            raise StagedCanaryError("Trader read-only preflight failed") from exc
-        expected_controlled_uid = _service_uid_from_manifest(
-            manifest,
-            authority_id="controlled_execution",
-            environment=environment,
-        )
-        expected_socket = Path(
-            manifest["principals"]["controlled_execution"]["deployments"][environment][
-                "socket_path"
-            ]
-        )
-        if (
-            observed_environment != environment
-            or controlled_uid != expected_controlled_uid
-            or controlled_socket_path != expected_socket
-            or store_path.parent.resolve()
-            != Path(row["service_dir"]).resolve(strict=True)
-        ):
-            raise StagedCanaryError(
-                "Trader preflight is not bound to its peer, socket, and store"
-            )
-        expected_operations = ("trader:authorize_exact_four",)
     elif authority_id == "controlled_execution":
         from execution.controlled_execution_activation_v2 import (
-            _preflight_live_controlled_execution_writer_v2,
+            _preflight_inactive_canary_controlled_execution_writer_v2,
+        )
+
+        from scripts.execution_authority_entrypoints import (
+            CONTROLLED_TRADER_HANDOFF_OPERATION,
         )
 
         try:
@@ -1081,7 +1197,7 @@ def _run_authority_specific_inactive_adapter(
                 signer_key_id,
                 signer_public_key,
                 trader_uid,
-            ) = _preflight_live_controlled_execution_writer_v2()
+            ) = _preflight_inactive_canary_controlled_execution_writer_v2()
         except Exception as exc:
             raise StagedCanaryError("Controlled read-only preflight failed") from exc
         metadata = _load_public_metadata(row, expected_uid=account.pw_uid)
@@ -1101,21 +1217,19 @@ def _run_authority_specific_inactive_adapter(
             raise StagedCanaryError(
                 "Controlled preflight is not bound to its peer, store, and key"
             )
-        expected_operations = ("controlled_execution:consume_trader_handoff",)
+        expected_operations = (CONTROLLED_TRADER_HANDOFF_OPERATION,)
     else:  # closed policy inventory
         raise StagedCanaryError("authority has no inactive protocol adapter")
     operations = tuple(getattr(handler, "operation", None) for handler in handlers)
     if handlers and operations != expected_operations:
         raise StagedCanaryError("inactive handler operation dispatch drifted")
-    return MappingProxyType(
-        {
-            "format": "local-authority-inactive-protocol-preflight/v1",
-            "authority_id": authority_id,
-            "environment": environment,
-            "action": load_policy().actions[authority_id].action,
-            "operations": list(expected_operations),
-        }
+    expected = _expected_protocol_descriptor(
+        authority_id=authority_id,
+        environment=environment,
     )
+    if tuple(expected["operations"]) != expected_operations:
+        raise StagedCanaryError("inactive protocol operation contract drifted")
+    return expected
 
 
 def _validate_challenge(
@@ -1167,7 +1281,7 @@ def _validate_challenge(
     return value
 
 
-def run_exact_inactive_preflight(
+def _run_exact_inactive_preflight(
     challenge_raw: bytes,
     *,
     expected_authority_id: str,
@@ -1175,10 +1289,11 @@ def run_exact_inactive_preflight(
 ) -> Mapping[str, Any]:
     """Authority-UID runner; invoked only from the protected runtime bundle.
 
-    The function accepts only a server-generated challenge.  It derives its
-    authority/environment/action/resource identity from that closed challenge
-    and independently remeasures the same fixed manifests and paths.  It has no
+    The function validates one closed challenge. It derives its authority,
+    environment, action, and resource identity from that challenge and
+    independently remeasures the same fixed manifests and paths. It has no
     facility for a caller to supply counts, digests, stores, owners, or paths.
+    Only the root manager's journal commit can make the response canonical.
     """
 
     if (
@@ -1233,18 +1348,13 @@ def run_exact_inactive_preflight(
     issuer_key_id: str | None = None
     issuer_public_key_base64: str | None = None
     signature: str | None = None
-    if action.proof_kind == "ED25519_PROTECTED_KEY_PREFLIGHT":
-        key = resources["key"]
-        if type(key) is not dict:
-            raise StagedCanaryError("file-backed canary has no observed key")
-        issuer_key_id = key["key_id"]
-        issuer_public_key_base64 = key["public_key_base64"]
-    elif action.proof_kind == "ROOT_EXEC_EXACT_UID_WEBAUTHN_REGISTRY_PREFLIGHT":
-        # The authority-specific adapter above validated the root-owned
-        # WebAuthn registry, peer UID/socket and store without opening SQLite.
-        pass
-    else:  # code-pinned closed set
+    if action.proof_kind != "ED25519_PROTECTED_KEY_PREFLIGHT":
         raise StagedCanaryError("canary proof kind is unsupported")
+    key = resources["key"]
+    if type(key) is not dict:
+        raise StagedCanaryError("file-backed canary has no observed key")
+    issuer_key_id = key["key_id"]
+    issuer_public_key_base64 = key["public_key_base64"]
     body = {
         "format": CANARY_FORMAT,
         "classification": CLASSIFICATION,
@@ -1260,6 +1370,7 @@ def run_exact_inactive_preflight(
         "finding_ledger_digest": validated["finding_ledger_digest"],
         "open_p0_ids": list(validated["open_p0_ids"]),
         "resource_digest": resources["resource_digest"],
+        "protocol_digest": _digest(protocol),
         "challenge_digest": _digest(canonical_json_bytes(validated)),
         "nonce": validated["nonce"],
         "observed_at": observed_at,
@@ -1267,14 +1378,13 @@ def run_exact_inactive_preflight(
         "issuer_key_id": issuer_key_id,
         "issuer_public_key_base64": issuer_public_key_base64,
     }
-    if action.proof_kind == "ED25519_PROTECTED_KEY_PREFLIGHT":
-        row = _deployment(authority_id, environment)
-        custody = FileEd25519KeyCustody(
-            row["key_path"],
-            key_id=issuer_key_id or "",
-            expected_uid=os.geteuid(),
-        )
-        signature = custody.sign(canonical_json_bytes(body))
+    row = _deployment(authority_id, environment)
+    custody = FileEd25519KeyCustody(
+        row["key_path"],
+        key_id=issuer_key_id,
+        expected_uid=os.geteuid(),
+    )
+    signature = custody.sign(canonical_json_bytes(body))
     if time.monotonic_ns() >= validated["deadline_monotonic_ns"]:
         raise StagedCanaryError("canary preflight crossed its monotonic deadline")
     evidence = {**body, "signature": signature}
@@ -1287,13 +1397,13 @@ def run_exact_inactive_preflight(
 
 
 def runner_main(*, authority_id: str, environment: str) -> int:
-    """Read one challenge from stdin and emit one canonical canary or fail."""
+    """Read one challenge and emit noncanonical signed evidence or fail."""
 
     try:
         if sys.flags.isolated != 1:
             raise StagedCanaryError("inactive canary runner requires Python -I")
         raw = sys.stdin.buffer.read(MAX_CANARY_BYTES + 1)
-        result = run_exact_inactive_preflight(
+        result = _run_exact_inactive_preflight(
             raw,
             expected_authority_id=authority_id,
             expected_environment=environment,

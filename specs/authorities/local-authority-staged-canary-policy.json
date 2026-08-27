@@ -1,7 +1,7 @@
 {
   "schema_version": "local-authority-staged-canary-policy/v1",
   "classification": "CANARY_NOT_RESEARCH_ELIGIBLE",
-  "scope": "LOCAL_OS_AUTHORITIES_ONLY",
+  "scope": "SIGNED_LOCAL_OS_AUTHORITIES_ONLY",
   "principal_manifest_digest": "sha256:f1ce07989ee97c87690b3341f14b0cad7a27eb2a62eff489d330420647aeb0b0",
   "state_root": "/Library/Application Support/quant-platform/authorities/staged-canary",
   "journal_path": "/Library/Application Support/quant-platform/authorities/staged-canary/journal.sqlite3",
@@ -84,21 +84,6 @@
       ]
     },
     {
-      "authority_id": "trader",
-      "action": "trader:inactive_webauthn_registry_preflight",
-      "environments": ["staging", "production"],
-      "proof_kind": "ROOT_EXEC_EXACT_UID_WEBAUTHN_REGISTRY_PREFLIGHT",
-      "resource_roles": [
-        "service_identity",
-        "runtime_bundle_source_sha",
-        "runtime_config",
-        "authority_event_ledger",
-        "root_owned_webauthn_activation",
-        "trader_store",
-        "controlled_execution_socket_identity"
-      ]
-    },
-    {
       "authority_id": "controlled_execution",
       "action": "controlled_execution:inactive_signing_preflight",
       "environments": ["staging", "production"],
@@ -109,7 +94,8 @@
         "runtime_config",
         "protected_signing_key_public_identity",
         "authority_event_ledger",
-        "root_owned_controlled_activation"
+        "root_owned_controlled_activation",
+        "controlled_store"
       ]
     }
   ],
@@ -117,6 +103,10 @@
     {
       "authority_id": "receipt",
       "reason": "Cloudflare Service Binding and deployed-version identity require a separately authenticated Cloudflare canary protocol; caller-supplied evidence is forbidden"
+    },
+    {
+      "authority_id": "trader",
+      "reason": "Unsigned local WebAuthn preflight output cannot prove authority-run provenance; kernel-authenticated IPC or an authority-held attestation key is required and caller-supplied evidence is forbidden"
     }
   ]
 }

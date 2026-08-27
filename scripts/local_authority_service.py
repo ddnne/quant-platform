@@ -23,6 +23,7 @@ import struct
 import sys
 import threading
 import time
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -47,6 +48,9 @@ from scripts.finding_ledger_gate import (
 REQUEST_FORMAT = "local-authority-request/v1"
 RESPONSE_FORMAT = "local-authority-response/v1"
 LEDGER_SCHEMA_VERSION = 1
+_LEDGER_SCHEMA_DIGEST = (
+    "sha256:77898b76bba1708ba178137fbc26ba41954302ff8b1297a1a242faf52911b370"
+)
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 MAX_FILE_DESCRIPTORS = 1
 DEFAULT_IO_TIMEOUT_SECONDS = 5.0
@@ -296,8 +300,7 @@ class AuthorityRequestContext:
             or type(self.accepted_at_monotonic_ns) is not int
             or self.accepted_at_monotonic_ns <= 0
             or type(self.processing_deadline_monotonic_ns) is not int
-            or self.processing_deadline_monotonic_ns
-            <= self.accepted_at_monotonic_ns
+            or self.processing_deadline_monotonic_ns <= self.accepted_at_monotonic_ns
         ):
             raise PeerAuthenticationError("authority request context is invalid")
 
@@ -326,9 +329,7 @@ class ExactMethodAcl:
             if row.get("authentication") in {
                 "local_peer_credentials",
                 "local_peer_credentials_and_webauthn",
-            } and environment in row.get(
-                "environments", []
-            ):
+            } and environment in row.get("environments", []):
                 grants.add(
                     MethodGrant(
                         caller=row["authenticated_caller"],
@@ -537,6 +538,31 @@ class SQLiteAuthorityEventLedger:
         return conn
 
     def _validate_chain(self, conn: sqlite3.Connection) -> None:
+        schema_rows = conn.execute(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master "
+            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
+        ).fetchall()
+        schema_inventory = [
+            [
+                row["type"],
+                row["name"],
+                row["tbl_name"],
+                " ".join(str(row["sql"]).split()),
+            ]
+            for row in schema_rows
+        ]
+        schema_digest = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    schema_inventory,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+        )
+        if schema_digest != _LEDGER_SCHEMA_DIGEST:
+            raise AuthorityLedgerError("authority ledger schema is invalid")
         meta = conn.execute(
             "SELECT schema_version,authority_id,environment "
             "FROM authority_ledger_meta WHERE singleton=1"
@@ -599,21 +625,58 @@ class SQLiteAuthorityEventLedger:
         """
 
         self._require_file_metadata()
+        sidecars = tuple(
+            Path(f"{self.path}{suffix}") for suffix in ("-wal", "-shm", "-journal")
+        )
+        if any(os.path.lexists(path) for path in sidecars):
+            raise AuthorityLedgerError("authority ledger sidecar is present")
+        before = self.path.lstat()
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(self.path, flags)
+        except OSError as exc:
+            raise AuthorityLedgerError("authority ledger cannot be pinned") from exc
+        pinned_before = os.fstat(descriptor)
+        try:
+            header = os.read(descriptor, 20)
+        except OSError:
+            os.close(descriptor)
+            raise
+        if (
+            (pinned_before.st_dev, pinned_before.st_ino)
+            != (before.st_dev, before.st_ino)
+            or len(header) != 20
+            or header[:16] != b"SQLite format 3\x00"
+            or header[18:20] != b"\x01\x01"
+        ):
+            os.close(descriptor)
+            raise AuthorityLedgerError(
+                "authority ledger is not rollback-journal SQLite"
+            )
+        target = (
+            "file:"
+            + urllib.parse.quote(f"/dev/fd/{descriptor}", safe="/")
+            + "?mode=ro&immutable=1"
+        )
+        conn: sqlite3.Connection | None = None
         try:
             conn = sqlite3.connect(
-                f"file:{self.path}?mode=ro",
+                target,
                 uri=True,
                 isolation_level=None,
                 timeout=5.0,
             )
         except sqlite3.Error as exc:
+            os.close(descriptor)
             raise AuthorityLedgerError(
                 "authority ledger cannot be opened read-only"
             ) from exc
+        assert conn is not None
         conn.row_factory = sqlite3.Row
         try:
             conn.execute("PRAGMA query_only=ON")
             conn.execute("PRAGMA trusted_schema=OFF")
+            conn.execute("PRAGMA temp_store=MEMORY")
             self._validate_chain(conn)
             rows = conn.execute(
                 "SELECT sequence,event_digest FROM authority_events ORDER BY sequence"
@@ -626,7 +689,7 @@ class SQLiteAuthorityEventLedger:
                 "event_count": len(rows),
                 "tail_event_digest": tail,
             }
-            return MappingProxyType(
+            result = MappingProxyType(
                 {
                     **evidence,
                     "chain_digest": sha256_digest(evidence),
@@ -638,6 +701,32 @@ class SQLiteAuthorityEventLedger:
             ) from exc
         finally:
             conn.close()
+            pinned_after = os.fstat(descriptor)
+            os.close(descriptor)
+        try:
+            after = self.path.lstat()
+        except OSError as exc:
+            raise AuthorityLedgerError(
+                "authority ledger changed during read-only audit"
+            ) from exc
+        stable_fields = (
+            "st_dev",
+            "st_ino",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+            "st_nlink",
+        )
+        if any(
+            getattr(before, field) != getattr(pinned_before, field)
+            or getattr(pinned_before, field) != getattr(pinned_after, field)
+            or getattr(pinned_after, field) != getattr(after, field)
+            for field in stable_fields
+        ) or any(os.path.lexists(path) for path in sidecars):
+            raise AuthorityLedgerError(
+                "authority ledger changed during read-only audit"
+            )
+        return result
 
     def execute_once(
         self,
@@ -802,9 +891,7 @@ class SQLiteAuthorityEventLedger:
                 result_digest,
             )
             if observed != expected:
-                raise AuthorityLedgerError(
-                    "authority committed event identity differs"
-                )
+                raise AuthorityLedgerError("authority committed event identity differs")
             return True
         finally:
             conn.close()
@@ -962,9 +1049,7 @@ def _call_unix_authority(
                 )
             channel.sendall(header + body)
         else:
-            _validate_read_only_transfer_fd(
-                read_only_fd, policy=descriptor_policy
-            )
+            _validate_read_only_transfer_fd(read_only_fd, policy=descriptor_policy)
             rights = array.array("i", [read_only_fd])
             sent = channel.sendmsg(
                 [header],
@@ -994,7 +1079,7 @@ def _call_unix_authority(
             suffix = error_type if type(error_type) is str else "malformed"
             raise LocalAuthorityError(f"authority response rejected: {suffix}")
         return MappingProxyType(response["result"])
-    except socket.timeout as exc:
+    except TimeoutError as exc:
         raise LocalAuthorityError("authority call I/O deadline exceeded") from exc
     except OSError as exc:
         raise LocalAuthorityError("authority call transport failed") from exc
@@ -1035,11 +1120,9 @@ def call_controlled_execution_with_trader_handoff(
     payload = request.get("payload") if type(request) is dict else None
     if (
         type(request) is not dict
-        or set(request)
-        != {"format", "request_id", "operation", "purpose", "payload"}
+        or set(request) != {"format", "request_id", "operation", "purpose", "payload"}
         or request.get("format") != REQUEST_FORMAT
-        or request.get("operation")
-        != "controlled_execution:consume_trader_handoff"
+        or request.get("operation") != "controlled_execution:consume_trader_handoff"
         or request.get("purpose") != "exact_four_one_shot_execution"
         or type(payload) is not dict
         or set(payload) != {"handoff_id", "handoff_digest"}
@@ -1167,7 +1250,7 @@ class UnixAuthorityService:
                 "status": "COMMITTED",
                 "result": dict(result),
             }
-        except (LocalAuthorityError, FindingLedgerError, socket.timeout) as exc:
+        except (TimeoutError, LocalAuthorityError, FindingLedgerError) as exc:
             response = {
                 "format": RESPONSE_FORMAT,
                 "request_id": request_id,
@@ -1180,7 +1263,7 @@ class UnixAuthorityService:
         channel.settimeout(self.io_timeout_seconds)
         try:
             _send_frame(channel, response)
-        except (OSError, socket.timeout):
+        except (TimeoutError, OSError):
             # Abandoned/non-reading peers cannot hold the daemon and transport
             # failure never creates a positive authority event.
             return
@@ -1227,7 +1310,7 @@ class UnixAuthorityConnectionServer:
         while stop_event is None or not stop_event.is_set():
             try:
                 channel, _ = listener.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             if not self._slots.acquire(blocking=False):
                 channel.close()
