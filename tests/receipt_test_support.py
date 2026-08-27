@@ -53,6 +53,56 @@ _JQUANTS_MASTER_CALENDAR_EXTRA_DIGESTS = (
 )
 
 
+def canonical_test_authority_extra_digests(
+    *,
+    source: str,
+    dataset: str,
+    segment_id: str,
+    run_id: int,
+    extra_digests: Mapping[str, Any] | None = None,
+    include_jquants_acquisition_digests: bool = True,
+    include_master_calendar_digests: bool = True,
+) -> dict[str, Any]:
+    """Merge the production authority inventory into test-only claims.
+
+    Explicit test evidence always wins.  The switches exist only for
+    adversarial verifier tests that intentionally mint a signed regression.
+    """
+    extras = partition_extra_digests(extra_digests)
+    if source == "jquants" and include_jquants_acquisition_digests:
+        for name in _JQUANTS_ACQUISITION_EXTRA_DIGESTS:
+            extras.setdefault(
+                name,
+                canonical_evidence_digest(
+                    {
+                        "schema_version": "test-jquants-authority-evidence/v1",
+                        "field": name,
+                        "dataset": dataset,
+                        "segment_id": segment_id,
+                        "run_id": run_id,
+                    }
+                ),
+            )
+    if (
+        source == "jquants"
+        and dataset == "equities_master"
+        and include_master_calendar_digests
+    ):
+        for name in _JQUANTS_MASTER_CALENDAR_EXTRA_DIGESTS:
+            extras.setdefault(
+                name,
+                canonical_evidence_digest(
+                    {
+                        "schema_version": "test-jquants-calendar-evidence/v1",
+                        "field": name,
+                        "segment_id": segment_id,
+                        "run_id": run_id,
+                    }
+                ),
+            )
+    return extras
+
+
 @dataclass(frozen=True)
 class TestReceiptSigningKey:
     """Ephemeral private material confined to the test tree."""
@@ -434,38 +484,17 @@ def reconcile_test_evidence(
         raise ValueError("test receipt requires at least one raw page")
     if not raw_rows:
         raise ValueError("zero-row SUCCESS is not trusted")
-    extras = partition_extra_digests(extra_evidence)
-    if required.source == "jquants" and include_jquants_acquisition_digests:
-        for name in _JQUANTS_ACQUISITION_EXTRA_DIGESTS:
-            extras.setdefault(
-                name,
-                canonical_evidence_digest(
-                    {
-                        "schema_version": "test-jquants-authority-evidence/v1",
-                        "field": name,
-                        "dataset": required.dataset,
-                        "segment_id": required.segment_id,
-                        "run_id": run_id,
-                    }
-                ),
-            )
-    if (
-        required.source == "jquants"
-        and required.dataset == "equities_master"
-        and include_master_calendar_digests
-    ):
-        for name in _JQUANTS_MASTER_CALENDAR_EXTRA_DIGESTS:
-            extras.setdefault(
-                name,
-                canonical_evidence_digest(
-                    {
-                        "schema_version": "test-jquants-calendar-evidence/v1",
-                        "field": name,
-                        "segment_id": required.segment_id,
-                        "run_id": run_id,
-                    }
-                ),
-            )
+    extras = canonical_test_authority_extra_digests(
+        source=required.source,
+        dataset=required.dataset,
+        segment_id=required.segment_id,
+        run_id=run_id,
+        extra_digests=extra_evidence,
+        include_jquants_acquisition_digests=(
+            include_jquants_acquisition_digests
+        ),
+        include_master_calendar_digests=include_master_calendar_digests,
+    )
     manifest = [
         {
             "index": index,

@@ -25,7 +25,10 @@ from storage.receipt_crypto import (
     canonical_evidence_digest,
 )
 from storage.sqlite_store import SqliteStore
-from tests.receipt_test_support import build_test_signed_digest_fields
+from tests.receipt_test_support import (
+    build_test_signed_digest_fields,
+    canonical_test_authority_extra_digests,
+)
 
 _REPO = Path(__file__).resolve().parents[1]
 
@@ -153,7 +156,13 @@ def _signed_digests(
         "scope_digest": canonical_evidence_digest(scope),
         "run_id": run_id,
         "checked_at": checked_at,
-        "extra_digests": extra_digests or {},
+        "extra_digests": canonical_test_authority_extra_digests(
+            source=source,
+            dataset=dataset,
+            segment_id=segment_id,
+            run_id=run_id,
+            extra_digests=extra_digests,
+        ),
     }
     claims["observation_digest"] = canonical_evidence_digest(claims)
     signed = build_test_signed_digest_fields(
