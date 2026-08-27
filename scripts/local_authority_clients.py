@@ -11,6 +11,7 @@ and strict release gate permit the corresponding daemons to load.
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import pwd
 import re
@@ -20,14 +21,24 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from cryptography.exceptions import InvalidSignature
+from ops import projection_signing
 from ops.trust_domain import require_environment
 
 from scripts.authority_principal_manifest import load_and_validate_manifest
+from scripts.local_ready_registry import (
+    LocalReadyRegistryError,
+    derive_ready_authority_resource_digest,
+    load_scoped_ready_public_keys,
+    ready_authority_instance_id,
+)
 from scripts.local_authority_service import (
     LocalAuthorityError,
     LocalAuthorityPending,
     REQUEST_FORMAT,
     call_unix_authority,
+    canonical_json_bytes,
+    decode_strict_json,
     sha256_digest,
 )
 
@@ -42,6 +53,88 @@ def _exact_result(
     if result.get("status") != status:
         raise LocalAuthorityError("local authority returned a non-positive result")
     return result
+
+
+def _decode_result_document(
+    encoded: object, *, expected_digest: object, field: str
+) -> bytes:
+    if type(encoded) is not str or type(expected_digest) is not str:
+        raise LocalAuthorityError(f"{field} identity is invalid")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (TypeError, ValueError) as exc:
+        raise LocalAuthorityError(f"{field} is not canonical base64") from exc
+    if "sha256:" + hashlib.sha256(raw).hexdigest() != expected_digest:
+        raise LocalAuthorityError(f"{field} digest mismatch")
+    return raw
+
+
+def _verify_ready_authority_result(
+    result: Mapping[str, Any],
+    *,
+    expected_environment: str,
+    expected_snapshot_id: str,
+    signed_projection_document: bytes,
+) -> None:
+    instance = ready_authority_instance_id(expected_environment)
+    if (
+        result["environment"] != expected_environment
+        or result["snapshot_id"] != expected_snapshot_id
+        or result["authority_instance_id"] != instance
+        or result["signed_projection_document_digest"]
+        != "sha256:" + hashlib.sha256(signed_projection_document).hexdigest()
+    ):
+        raise LocalAuthorityError("READY response trust-domain binding mismatch")
+    raw = _decode_result_document(
+        result["attestation_base64"],
+        expected_digest=result["attestation_digest"],
+        field="READY attestation",
+    )
+    document = decode_strict_json(raw, field="READY attestation")
+    if (
+        document.get("environment") != expected_environment
+        or document.get("authority_instance_id") != instance
+        or document.get("snapshot_id") != expected_snapshot_id
+        or document.get("authority_resource_digest")
+        != result["authority_resource_digest"]
+        or document.get("attestation_id") != result["attestation_id"]
+        or document.get("ready_manifest_digest")
+        != result["ready_manifest_digest"]
+        or document.get("immutable_db_digest")
+        != result["immutable_db_digest"]
+        or document.get("key_id") != result["issuer_key_id"]
+    ):
+        raise LocalAuthorityError("READY response and signed body differ")
+    expected_resource = derive_ready_authority_resource_digest(
+        environment=expected_environment,
+        snapshot_id=expected_snapshot_id,
+        immutable_db_digest=result["immutable_db_digest"],
+        ready_manifest_digest=result["ready_manifest_digest"],
+        signed_projection_document_digest=result[
+            "signed_projection_document_digest"
+        ],
+    )
+    if result["authority_resource_digest"] != expected_resource:
+        raise LocalAuthorityError("READY authority resource digest mismatch")
+    signature = document.get("signature")
+    if type(signature) is not str or not signature.startswith("ed25519:"):
+        raise LocalAuthorityError("READY response signature is invalid")
+    try:
+        key = load_scoped_ready_public_keys(
+            expected_environment=expected_environment
+        ).get((expected_environment, instance, result["issuer_key_id"]))
+        if key is None:
+            raise LocalAuthorityPending("READY response issuer is not active")
+        signed_body = dict(document)
+        signed_body.pop("signature")
+        key.verify(
+            base64.b64decode(signature.removeprefix("ed25519:"), validate=True),
+            canonical_json_bytes(signed_body),
+        )
+    except LocalReadyRegistryError as exc:
+        raise LocalAuthorityPending("READY verifier registry is unavailable") from exc
+    except (InvalidSignature, TypeError, ValueError) as exc:
+        raise LocalAuthorityError("READY response signature is invalid") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,7 +270,7 @@ class OpsSchedulerAuthorityClient:
             purpose="sync_current",
             payload={"expected_applied_cursor": expected_applied_cursor},
         )
-        return _exact_result(
+        closed = _exact_result(
             result,
             fields={
                 "status",
@@ -193,6 +286,15 @@ class OpsSchedulerAuthorityClient:
             },
             status="SYNCED",
         )
+        if (
+            closed["prior_applied_cursor"] != expected_applied_cursor
+            or type(closed["source_change_seq"]) is not int
+            or type(closed["applied_change_seq"]) is not int
+            or closed["source_change_seq"] <= 0
+            or closed["source_change_seq"] != closed["applied_change_seq"]
+        ):
+            raise LocalAuthorityError("D1 sync response cursor binding is invalid")
+        return closed
 
     def render_current_projection(self, *, event_id: str) -> Mapping[str, Any]:
         result = self._client.call(
@@ -201,7 +303,7 @@ class OpsSchedulerAuthorityClient:
             purpose="ops_projection_from_owned_mirror",
             payload={},
         )
-        return _exact_result(
+        closed = _exact_result(
             result,
             fields={
                 "status",
@@ -213,6 +315,20 @@ class OpsSchedulerAuthorityClient:
             },
             status="SIGNED",
         )
+        signed = _decode_result_document(
+            closed["signed_document_base64"],
+            expected_digest=closed["signed_document_digest"],
+            field="signed Ops projection",
+        )
+        try:
+            verified = projection_signing._verify_pinned_document(
+                signed, expected_environment=self._client.environment
+            )
+        except projection_signing.OpsProjectionSignatureError as exc:
+            raise LocalAuthorityError("signed Ops projection is not trusted") from exc
+        if verified.issuer_key_id != closed["issuer_key_id"]:
+            raise LocalAuthorityError("signed Ops projection issuer mismatch")
+        return closed
 
 
 class CoverageSchedulerAuthorityClient:
@@ -249,7 +365,7 @@ class CoverageSchedulerAuthorityClient:
             purpose="coverage_transition_from_owned_mirror",
             payload={"build_id": build_id, "datasets": selected},
         )
-        return _exact_result(
+        closed = _exact_result(
             result,
             fields={
                 "status",
@@ -262,6 +378,9 @@ class CoverageSchedulerAuthorityClient:
             },
             status="COMPLETE",
         )
+        if closed["build_id"] != build_id:
+            raise LocalAuthorityError("Coverage apply response build mismatch")
+        return closed
 
 
 class ReadyPublisherAuthorityClient:
@@ -299,7 +418,7 @@ class ReadyPublisherAuthorityClient:
                 ).decode("ascii"),
             },
         )
-        return _exact_result(
+        closed = _exact_result(
             result,
             fields={
                 "status",
@@ -317,6 +436,13 @@ class ReadyPublisherAuthorityClient:
             },
             status="SIGNED",
         )
+        _verify_ready_authority_result(
+            closed,
+            expected_environment=self._client.environment,
+            expected_snapshot_id=snapshot_id,
+            signed_projection_document=signed_projection_document,
+        )
+        return closed
 
 
 __all__ = [

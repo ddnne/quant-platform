@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import os
+import hashlib
 from types import SimpleNamespace
+import base64
+import json
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from scripts import local_authority_clients as clients
 
@@ -34,6 +38,19 @@ def test_fixed_clients_emit_only_manifest_granted_operations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _activate_declared_test_identities(monkeypatch)
+    monkeypatch.setattr(
+        clients.projection_signing,
+        "_verify_pinned_document",
+        lambda _raw, *, expected_environment: SimpleNamespace(
+            issuer_key_id="ops-production-v1",
+            environment=expected_environment,
+        ),
+    )
+    monkeypatch.setattr(
+        clients,
+        "_verify_ready_authority_result",
+        lambda _result, **_expected: None,
+    )
     calls: list[tuple[object, dict[str, object], int]] = []
 
     def call(path, request, *, expected_server_uid):
@@ -58,7 +75,8 @@ def test_fixed_clients_emit_only_manifest_granted_operations(
                 "signed_artifact": "projection.json",
                 "signed_store_digest": "sha256:" + "3" * 64,
                 "signed_document_base64": "e30=",
-                "signed_document_digest": "sha256:" + "4" * 64,
+                "signed_document_digest": "sha256:"
+                + hashlib.sha256(b"{}").hexdigest(),
                 "issuer_key_id": "ops-production-v1",
             }
         if operation == "d1_sync:freeze_authorize_apply_coverage":
@@ -139,3 +157,75 @@ def test_client_identity_and_result_shape_fail_closed(
     monkeypatch.setattr(clients.os, "geteuid", lambda: original_uid + 2)
     with pytest.raises(clients.LocalAuthorityError, match="declared isolated"):
         clients.ReadyPublisherAuthorityClient(environment="production")
+
+
+def test_ready_client_reverifies_scoped_signature_and_resource_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = Ed25519PrivateKey.generate()
+    environment = "production"
+    instance = clients.ready_authority_instance_id(environment)
+    snapshot_id = "sha256:" + "1" * 64
+    immutable_db_digest = "sha256:" + "2" * 64
+    manifest_digest = "sha256:" + "3" * 64
+    projection = b'{"signed":"projection"}'
+    projection_digest = "sha256:" + hashlib.sha256(projection).hexdigest()
+    resource_digest = clients.derive_ready_authority_resource_digest(
+        environment=environment,
+        snapshot_id=snapshot_id,
+        immutable_db_digest=immutable_db_digest,
+        ready_manifest_digest=manifest_digest,
+        signed_projection_document_digest=projection_digest,
+    )
+    key_id = "ready-production-v1"
+    body = {
+        "format": "verified-readiness-attestation/v1",
+        "environment": environment,
+        "authority_instance_id": instance,
+        "authority_resource_digest": resource_digest,
+        "snapshot_id": snapshot_id,
+        "attestation_id": "sha256:" + "4" * 64,
+        "ready_manifest_digest": manifest_digest,
+        "immutable_db_digest": immutable_db_digest,
+        "key_id": key_id,
+    }
+    body["signature"] = "ed25519:" + base64.b64encode(
+        private.sign(clients.canonical_json_bytes(body))
+    ).decode("ascii")
+    raw = clients.canonical_json_bytes(body)
+    result = {
+        "status": "SIGNED",
+        "snapshot_id": snapshot_id,
+        "environment": environment,
+        "authority_instance_id": instance,
+        "authority_resource_digest": resource_digest,
+        "attestation_id": body["attestation_id"],
+        "attestation_base64": base64.b64encode(raw).decode("ascii"),
+        "attestation_digest": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "ready_manifest_digest": manifest_digest,
+        "immutable_db_digest": immutable_db_digest,
+        "signed_projection_document_digest": projection_digest,
+        "issuer_key_id": key_id,
+    }
+    monkeypatch.setattr(
+        clients,
+        "load_scoped_ready_public_keys",
+        lambda *, expected_environment: {
+            (expected_environment, instance, key_id): private.public_key()
+        },
+    )
+    clients._verify_ready_authority_result(
+        result,
+        expected_environment=environment,
+        expected_snapshot_id=snapshot_id,
+        signed_projection_document=projection,
+    )
+    spliced = json.loads(json.dumps(result))
+    spliced["environment"] = "staging"
+    with pytest.raises(clients.LocalAuthorityError, match="trust-domain"):
+        clients._verify_ready_authority_result(
+            spliced,
+            expected_environment=environment,
+            expected_snapshot_id=snapshot_id,
+            signed_projection_document=projection,
+        )
