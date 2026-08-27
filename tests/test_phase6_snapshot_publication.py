@@ -402,6 +402,7 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(
     assert publication["publication_scope"] == "FIXTURE"
     assert publication["readiness_attestation"] is None
     assert publication["readiness_attestation_digest"] is None
+    assert publication["readiness_attestation_id"] is None
     assert publication_path.stat().st_mode & 0o222 == 0
     assert (snapshot_dir / "latest-ready.json").stat().st_mode & 0o222 == 0
     assert ready.snapshot_id == ready.manifest["snapshot_id"]

@@ -2682,6 +2682,306 @@ def _load_ready_snapshot(
         os.close(fd)
 
 
+def _copy_open_snapshot(fd: int, destination: Path) -> None:
+    """Copy one descriptor-pinned SQLite artifact into authority-owned scratch."""
+
+    before = os.fstat(fd)
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    output = os.open(destination, flags, 0o600)
+    try:
+        offset = 0
+        while offset < before.st_size:
+            chunk = os.pread(fd, min(1024 * 1024, before.st_size - offset), offset)
+            if not chunk:
+                raise LocalAuthorityError("READY snapshot copy ended unexpectedly")
+            written = 0
+            while written < len(chunk):
+                written += os.write(output, chunk[written:])
+            offset += len(chunk)
+        os.fsync(output)
+        os.fchmod(output, 0o600)
+    finally:
+        os.close(output)
+    after = os.fstat(fd)
+    if (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    ) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ):
+        destination.unlink(missing_ok=True)
+        raise LocalAuthorityError("READY snapshot changed during pinned copy")
+
+
+def _recompute_exact_four_ready_authority_proof(
+    snapshot_path: Path,
+    outer: Mapping[str, Any],
+    retained_manifest: Mapping[str, Any],
+    signed_projection: bytes,
+    *,
+    environment: str,
+) -> tuple[dict[str, Any], Any]:
+    """Independently replay every READY proof from one pinned snapshot copy.
+
+    Caller-retained proof rows are comparison targets only.  The authority
+    compiles the governed exact-four binding, verifies the signed projection,
+    resolves the daily PIT universe and receipt/product closure, and replays
+    Coverage, raw, validation, natural-key, B0, B4 and cursor policy on its own
+    writable scratch copy before accepting the embedded ReadyManifest.
+    """
+
+    from cf_platform.ingest_premium.coverage import run_coverage, summarize
+    from data_contracts.coverage import coverage_policy_set_binding
+    from paper_runtime.ready_policy import ReadyPublicationPolicy
+    from paper_runtime.snapshot import (
+        QUALITY_POLICY_VERSION,
+        _latest_complete_run,
+        _watermarks_for,
+    )
+    from paper_runtime.snapshot_coverage_proof import (
+        _coverage_rows_for,
+        require_persisted_coverage_proof,
+    )
+    from paper_runtime.snapshot_publish_policy import _raw_manifests_for
+    from research.ready_manifest import (
+        _verified_projection_evidence,
+        _verify_exact_four_pit_dependency_scope,
+        build_profile_bound_ready_manifest_from_snapshot_document,
+        load_exact_four_pilot_ready_binding,
+    )
+    from research.research_data_profile import profile_ready
+
+    binding = load_exact_four_pilot_ready_binding()
+    required = tuple(binding.required_datasets)
+    if (
+        tuple(sorted(str(item) for item in outer.get("required_datasets", ())))
+        != tuple(sorted(required))
+        or set(retained_manifest.get("dataset_ids", ())) != set(required)
+    ):
+        raise LocalAuthorityError(
+            "READY snapshot does not match the governed exact-four dependency set"
+        )
+    projection = _verified_projection_evidence(
+        signed_projection,
+        list(required),
+        expected_environment=environment,
+    )
+    if set(projection.rows) != set(required):
+        raise LocalAuthorityError("READY projection dependency membership mismatch")
+    projection_rows: dict[str, dict[str, Any]] = {}
+    for dataset_id, signed_row in projection.rows.items():
+        projection_rows[dataset_id] = dict(signed_row)
+    for profile in binding.profiles:
+        if not profile_ready(profile, projection_rows):
+            raise LocalAuthorityError(
+                f"READY projection is incomplete for governed plan {profile.plan_id}"
+            )
+    for dataset_id in required:
+        row = projection_rows[dataset_id]
+        scopes = [
+            dict(scope)
+            for profile in binding.profiles
+            for scope in profile.dataset_scopes
+            if scope.get("dataset_id") == dataset_id
+        ]
+        required_start = min(str(scope["period_start"]) for scope in scopes)
+        required_end = max(str(scope["period_end"]) for scope in scopes)
+        observed_start = str(row.get("observed_start") or "")[:10]
+        observed_end = str(row.get("observed_end") or "")[:10]
+        if (
+            not observed_start
+            or not observed_end
+            or observed_start > required_start
+            or observed_end < required_end
+        ):
+            raise LocalAuthorityError(
+                f"READY projection does not span governed period for {dataset_id}"
+            )
+
+    dependency_scope = _verify_exact_four_pit_dependency_scope(
+        snapshot_path,
+        binding,
+    )
+    build_id = outer.get("build_id")
+    snapshot_id = outer.get("snapshot_id")
+    if type(build_id) is not str or not build_id or type(snapshot_id) is not str:
+        raise LocalAuthorityError("READY snapshot build identity is missing")
+
+    # The copied SQLite retains the immutable artifact's original absolute
+    # locator.  Rebind only that transport locator on authority-owned scratch;
+    # lifecycle, manifest and proof rows remain untouched.  All policy and
+    # proof evaluation below then runs query-only against READY state.
+    transport = sqlite3.connect(str(snapshot_path))
+    try:
+        transport.execute("BEGIN IMMEDIATE")
+        rows = transport.execute(
+            "SELECT state,snapshot_id,manifest_json FROM snapshot_publications "
+            "WHERE build_id=?",
+            (build_id,),
+        ).fetchall()
+        if (
+            len(rows) != 1
+            or rows[0][0] != "READY"
+            or rows[0][1] != snapshot_id
+            or json.loads(str(rows[0][2])) != dict(outer)
+        ):
+            raise LocalAuthorityError(
+                "READY scratch transport cannot bind the exact publication"
+            )
+        transport.execute(
+            "UPDATE snapshot_publications SET artifact_path=? WHERE build_id=?",
+            (str(snapshot_path.resolve()), build_id),
+        )
+        transport.commit()
+    except BaseException:
+        transport.rollback()
+        raise
+    finally:
+        transport.close()
+    connection = sqlite3.connect(
+        "file:" + quote(str(snapshot_path.resolve())) + "?mode=ro&immutable=1",
+        uri=True,
+    )
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA query_only=ON")
+    try:
+        coverage_proof_id = outer.get("coverage_proof_id")
+        run_id, run_detail, validations = _latest_complete_run(
+            connection,
+            required,
+        )
+        raw_manifests = _raw_manifests_for(connection, run_id, required)
+        coverage_rows = _coverage_rows_for(connection, required)
+        verified_coverage = require_persisted_coverage_proof(
+            connection,
+            required,
+            coverage_proof_id,
+            build_id=build_id,
+        )
+        coverage_proof = dict(verified_coverage.proof)
+        publication_cutoff = verified_coverage.publication_cutoff
+        policy = ReadyPublicationPolicy()
+        ready_bundle = policy.evaluate(
+            connection,
+            snapshot_path,
+            required,
+            run_id=run_id,
+            build_id=build_id,
+            coverage_proof_id=coverage_proof_id,
+        )
+        if not ready_bundle.passed:
+            detail = "; ".join(
+                f"{item.name}: {item.reason}"
+                for item in ready_bundle.failures()
+            )
+            raise LocalAuthorityError(
+                "READY independent publication policy failed: " + detail
+            )
+        ready_evidence = ready_bundle.to_dict()
+        quality_checks = run_coverage(
+            snapshot_path,
+            tier="daily",
+            datasets=required,
+            today=publication_cutoff,
+            workers=1,
+            strict_live_gates=True,
+        )
+        quality_summary = summarize(quality_checks)
+        quality_results = [check.as_log_dict() for check in quality_checks]
+        quality_failures = [
+            row for row in quality_results if row.get("status") == "fail"
+        ]
+        if quality_failures:
+            raise LocalAuthorityError(
+                "READY independent B0/B4 quality replay failed"
+            )
+        watermarks = _watermarks_for(
+            connection,
+            required,
+            coverage_rows,
+        )
+    except (sqlite3.Error, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise LocalAuthorityError("READY independent policy replay failed") from exc
+    finally:
+        connection.close()
+    if not isinstance(quality_results, list) or not quality_results:
+        raise LocalAuthorityError("READY recomputed B0/B4 evidence is empty")
+    policy_set = coverage_policy_set_binding(list(required))
+    recomputed_fields: dict[str, Any] = {
+        "source_run": {
+            "id": run_id,
+            "started_at": run_detail.get("startedAt"),
+            "finished_at": run_detail.get("finishedAt"),
+        },
+        "coverage_policy_version": policy_set["policy_version"],
+        "coverage_policy_digest": policy_set["policy_digest"],
+        "quality_policy_version": QUALITY_POLICY_VERSION,
+        "required_datasets": list(required),
+        "dataset_watermarks": watermarks,
+        "coverage": [
+            {
+                key: row[key]
+                for key in (
+                    "dataset",
+                    "status",
+                    "history_target_start",
+                    "history_target_end_rule",
+                    "coverage_mode",
+                    "expected_frequency",
+                    "universe_rule",
+                    "governance_tier",
+                    "observed_start",
+                    "observed_end",
+                    "row_count",
+                )
+            }
+            for row in coverage_rows
+        ],
+        "coverage_proof": coverage_proof,
+        "coverage_proof_id": coverage_proof_id,
+        "quality": {
+            "status": "PASS",
+            "summary": quality_summary,
+            "failures": quality_failures,
+            "results": quality_results,
+        },
+        "ready_evidence": ready_evidence,
+        "raw_manifests": raw_manifests,
+        "validations": validations,
+        "profile_coverage_evidence": projection_rows,
+        "dependency_scope_evidence": dependency_scope,
+    }
+    for field, recomputed in recomputed_fields.items():
+        if outer.get(field) != recomputed:
+            raise LocalAuthorityError(
+                f"READY retained {field} differs from independent evidence"
+            )
+    authoritative_document = dict(outer)
+    authoritative_document.update(recomputed_fields)
+    expected_manifest = build_profile_bound_ready_manifest_from_snapshot_document(
+        authoritative_document,
+        profile=binding,
+    ).to_dict()
+    if dict(retained_manifest) != expected_manifest:
+        raise LocalAuthorityError(
+            "READY embedded manifest differs from independently recomputed proof"
+        )
+    return expected_manifest, projection
+
+
 class ReadyPublishProfilePlanBound:
     """R5: independently reopen exact-four artifact/evidence and sign READY."""
 
@@ -2700,7 +3000,7 @@ class ReadyPublishProfilePlanBound:
 
     def __call__(
         self,
-        _context: AuthorityRequestContext,
+        request_context: AuthorityRequestContext,
         payload: Mapping[str, Any],
         fds: Sequence[int],
     ) -> Mapping[str, Any]:
@@ -2722,36 +3022,71 @@ class ReadyPublishProfilePlanBound:
             self.snapshot_root,
             snapshot_id,
         )
-        from research.ready_manifest import _verified_projection_evidence
+        from paper_runtime.snapshot import _artifact_stem
 
-        verified_projection = _verified_projection_evidence(
-            signed_projection,
-            list(manifest["dataset_ids"]),
-            expected_environment=self.environment,
+        artifact_path = self.snapshot_root / (
+            _artifact_stem(snapshot_id) + ".sqlite"
         )
-        retained_rows = outer.get("profile_coverage_evidence")
-        if type(retained_rows) is not dict or set(retained_rows) != set(
-            verified_projection.rows
-        ):
-            raise LocalAuthorityError("READY retained projection membership mismatch")
-        for dataset_id, signed_row in verified_projection.rows.items():
-            retained = retained_rows.get(dataset_id)
-            if type(retained) is not dict:
-                raise LocalAuthorityError("READY retained projection row is missing")
-            expected = dict(signed_row)
-            expected["applied_sync_generation"] = expected["applied_cursor"]
-            if any(retained.get(key) != value for key, value in expected.items()):
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            artifact_fd = os.open(artifact_path, flags)
+        except OSError as exc:
+            raise LocalAuthorityError(
+                "READY snapshot cannot be pinned for independent replay"
+            ) from exc
+        try:
+            pinned_digest, pinned_info = _hash_open_file(artifact_fd)
+            pinned_identity = (
+                pinned_info.st_dev,
+                pinned_info.st_ino,
+                pinned_info.st_size,
+                pinned_info.st_mtime_ns,
+            )
+            if (
+                pinned_digest != artifact_digest
+                or pinned_identity != initial_identity
+            ):
                 raise LocalAuthorityError(
-                    f"READY retained projection evidence mismatch: {dataset_id}"
+                    "READY snapshot changed before independent replay"
                 )
-        if any(
-            row.get("signed_projection_document_digest")
-            != verified_projection.signed_document_digest
-            or row.get("signed_projection_issuer_key_id")
-            != verified_projection.issuer_key_id
-            for row in retained_rows.values()
-        ):
-            raise LocalAuthorityError("READY signed projection identity mismatch")
+            with tempfile.TemporaryDirectory(
+                prefix="quant-ready-authority-"
+            ) as scratch:
+                scratch_snapshot = Path(scratch) / "snapshot.sqlite"
+                _copy_open_snapshot(artifact_fd, scratch_snapshot)
+                try:
+                    manifest, verified_projection = (
+                        _recompute_exact_four_ready_authority_proof(
+                            scratch_snapshot,
+                            outer,
+                            manifest,
+                            signed_projection,
+                            environment=self.environment,
+                        )
+                    )
+                except LocalAuthorityError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - authority fail-closed
+                    raise LocalAuthorityError(
+                        "READY independent proof recomputation rejected"
+                    ) from exc
+            replay_digest, replay_info = _hash_open_file(artifact_fd)
+            replay_identity = (
+                replay_info.st_dev,
+                replay_info.st_ino,
+                replay_info.st_size,
+                replay_info.st_mtime_ns,
+            )
+            if replay_digest != artifact_digest or replay_identity != initial_identity:
+                raise LocalAuthorityError(
+                    "READY snapshot changed during independent replay"
+                )
+        finally:
+            os.close(artifact_fd)
 
         verified_at = datetime.now(UTC)
         expires_at = verified_at + timedelta(seconds=_READY_TTL_SECONDS)
@@ -2816,10 +3151,6 @@ class ReadyPublishProfilePlanBound:
         document["signed_projection_document_digest"] = (
             verified_projection.signed_document_digest
         )
-        document["signature"] = self.custody.sign(
-            readiness_attestation._canonical_bytes(document)
-        )
-        attestation_bytes = readiness_attestation._canonical_bytes(document)
         try:
             scoped_keys = load_scoped_ready_public_keys(
                 expected_environment=self.environment
@@ -2847,6 +3178,11 @@ class ReadyPublishProfilePlanBound:
         )
         if final_digest != artifact_digest or final_identity != initial_identity:
             raise LocalAuthorityError("READY snapshot changed before issuance")
+        request_context.require_within_processing_deadline()
+        document["signature"] = self.custody.sign(
+            readiness_attestation._canonical_bytes(document)
+        )
+        attestation_bytes = readiness_attestation._canonical_bytes(document)
         return {
             "status": "SIGNED",
             "snapshot_id": snapshot_id,

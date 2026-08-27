@@ -534,6 +534,29 @@ def load_verified_pilot_readiness(
         raise MassResearchDisabledError(
             f"cannot load pilot readiness sidecar: {source}"
         ) from exc
+    return _load_verified_pilot_readiness_bytes(
+        raw_document,
+        expected_environment=expected_environment,
+        expected_snapshot_id=expected_snapshot_id,
+        expected_ready_manifest_digest=expected_ready_manifest_digest,
+        expected_authority_resource_digest=expected_authority_resource_digest,
+    )
+
+
+def _load_verified_pilot_readiness_bytes(
+    raw_document: bytes,
+    *,
+    expected_environment: str,
+    expected_snapshot_id: str | None = None,
+    expected_ready_manifest_digest: str | None = None,
+    expected_authority_resource_digest: str | None = None,
+) -> VerifiedPilotReadiness:
+    """Verify descriptor-pinned sidecar bytes without reopening a pathname."""
+
+    if type(raw_document) is not bytes or not raw_document:
+        raise MassResearchDisabledError(
+            "pilot readiness sidecar must be exact non-empty bytes"
+        )
     from paper_runtime.readiness_attestation import (
         ReadyAttestationVerificationError,
         decode_strict_ready_json,

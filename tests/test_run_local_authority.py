@@ -95,9 +95,9 @@ def test_d1_runtime_requires_governed_mirror_credential_and_pinned_cli_paths() -
         )
 
 
-def test_only_d1_sync_receives_the_extended_processing_lease() -> None:
+def test_long_running_authorities_receive_bounded_processing_leases() -> None:
     assert runner._processing_timeout_seconds("d1_sync") == 900.0
-    assert runner._processing_timeout_seconds("ready") == 30.0
+    assert runner._processing_timeout_seconds("ready") == 900.0
     assert runner._processing_timeout_seconds("trader") == 1800.0
     assert runner._processing_timeout_seconds("controlled_execution") == 1800.0
 

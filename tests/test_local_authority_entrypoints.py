@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import array
 import base64
+import hashlib
 import json
 import os
 import socket
@@ -13,7 +14,7 @@ import struct
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -1489,6 +1490,333 @@ def test_ready_authority_rejects_caller_paths_and_unsigned_projection(
             {
                 "snapshot_id": "sha256:" + "1" * 64,
                 "signed_projection_base64": base64.b64encode(b"{}").decode(),
+            },
+            (),
+        )
+
+
+def test_ready_authority_replays_ready_state_and_rejects_forged_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The closed verifier accepts exact replay and rejects caller proof drift."""
+
+    from cf_platform.ingest_premium import coverage as quality_runtime
+    from data_contracts.coverage import coverage_policy_set_binding
+    from paper_runtime import ready_policy, snapshot as snapshot_runtime
+    from paper_runtime import snapshot_coverage_proof as coverage_runtime
+    from paper_runtime import snapshot_publish_policy as publish_runtime
+    from research import ready_manifest as manifest_runtime
+    from research import research_data_profile as profile_runtime
+
+    binding = manifest_runtime.load_exact_four_pilot_ready_binding()
+    required = tuple(binding.required_datasets)
+    projection_rows = {
+        dataset_id: {
+            "status": "COMPLETE",
+            "observed_start": "1900-01-01",
+            "observed_end": "9999-12-31",
+            "source_generation": "7",
+            "export_cursor": "7",
+            "applied_cursor": "7",
+        }
+        for dataset_id in required
+    }
+    projection = SimpleNamespace(
+        rows=projection_rows,
+        signed_document_digest="sha256:" + "91" * 32,
+    )
+    dependency_scope = {
+        "proof_digest": "sha256:" + "92" * 32,
+        "universe_rule_digest": "sha256:" + "93" * 32,
+        "resolved_universe_digest": "sha256:" + "94" * 32,
+        "product_materialization_digest": "sha256:" + "95" * 32,
+    }
+    coverage_rows = [
+        {
+            "dataset": dataset_id,
+            "status": "COMPLETE",
+            "history_target_start": "1900-01-01",
+            "history_target_end_rule": "tip",
+            "coverage_mode": "TIP",
+            "expected_frequency": "daily",
+            "universe_rule": "governed",
+            "governance_tier": "governed",
+            "observed_start": "1900-01-01",
+            "observed_end": "9999-12-31",
+            "row_count": 1,
+        }
+        for dataset_id in required
+    ]
+    watermarks = [
+        {
+            "dataset": dataset_id,
+            "last_event_date": "2026-08-25",
+            "last_ingested_at": "2026-08-25T00:00:00Z",
+        }
+        for dataset_id in required
+    ]
+    coverage_proof = {
+        "status": "COMPLETE",
+        "proof_digest": "sha256:" + "96" * 32,
+    }
+    coverage_proof_id = "sha256:" + "97" * 32
+    validations = [{"dataset": dataset_id, "status": "PASS"} for dataset_id in required]
+    raw_manifests = {
+        dataset_id: {"dataset": dataset_id, "completeness": "ACQUIRED"}
+        for dataset_id in required
+    }
+    quality_results = [
+        {"check_id": "B0", "dataset": "all", "status": "pass"},
+        {"check_id": "B4", "dataset": "all", "status": "pass"},
+    ]
+    quality_summary = {"pass": 2, "fail": 0}
+    ready_evidence = {"passed": True, "items": []}
+    policy_set = coverage_policy_set_binding(list(required))
+    build_id = "build-ready-replay"
+    snapshot_id = "sha256:" + "98" * 32
+    outer = {
+        "build_id": build_id,
+        "snapshot_id": snapshot_id,
+        "source_run": {
+            "id": 11,
+            "started_at": "2026-08-25T00:00:00Z",
+            "finished_at": "2026-08-25T00:01:00Z",
+        },
+        "coverage_policy_version": policy_set["policy_version"],
+        "coverage_policy_digest": policy_set["policy_digest"],
+        "quality_policy_version": snapshot_runtime.QUALITY_POLICY_VERSION,
+        "required_datasets": list(required),
+        "dataset_watermarks": watermarks,
+        "coverage": coverage_rows,
+        "coverage_proof": coverage_proof,
+        "coverage_proof_id": coverage_proof_id,
+        "quality": {
+            "status": "PASS",
+            "summary": quality_summary,
+            "failures": [],
+            "results": quality_results,
+        },
+        "ready_evidence": ready_evidence,
+        "raw_manifests": raw_manifests,
+        "validations": validations,
+        "profile_coverage_evidence": projection_rows,
+        "dependency_scope_evidence": dependency_scope,
+    }
+    retained_manifest = {
+        "dataset_ids": list(required),
+        "manifest_digest": "sha256:" + "99" * 32,
+    }
+    scratch = tmp_path / "ready-replay.sqlite"
+    with sqlite3.connect(scratch) as connection:
+        connection.execute(
+            "CREATE TABLE snapshot_publications ("
+            "build_id TEXT PRIMARY KEY,state TEXT,snapshot_id TEXT,"
+            "manifest_json TEXT,artifact_path TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO snapshot_publications VALUES (?,?,?,?,?)",
+            (
+                build_id,
+                "READY",
+                snapshot_id,
+                json.dumps(outer, sort_keys=True),
+                "/original/immutable.sqlite",
+            ),
+        )
+
+    monkeypatch.setattr(
+        manifest_runtime,
+        "load_exact_four_pilot_ready_binding",
+        lambda: binding,
+    )
+    monkeypatch.setattr(
+        manifest_runtime,
+        "_verified_projection_evidence",
+        lambda *_args, **_kwargs: projection,
+    )
+    monkeypatch.setattr(
+        manifest_runtime,
+        "_verify_exact_four_pit_dependency_scope",
+        lambda *_args, **_kwargs: dependency_scope,
+    )
+    monkeypatch.setattr(
+        manifest_runtime,
+        "build_profile_bound_ready_manifest_from_snapshot_document",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            to_dict=lambda: retained_manifest
+        ),
+    )
+    monkeypatch.setattr(profile_runtime, "profile_ready", lambda *_args: True)
+    monkeypatch.setattr(
+        snapshot_runtime,
+        "_latest_complete_run",
+        lambda *_args: (
+            11,
+            {
+                "startedAt": "2026-08-25T00:00:00Z",
+                "finishedAt": "2026-08-25T00:01:00Z",
+            },
+            validations,
+        ),
+    )
+    monkeypatch.setattr(snapshot_runtime, "_watermarks_for", lambda *_args: watermarks)
+    monkeypatch.setattr(
+        publish_runtime,
+        "_raw_manifests_for",
+        lambda *_args: raw_manifests,
+    )
+    monkeypatch.setattr(
+        coverage_runtime,
+        "_coverage_rows_for",
+        lambda *_args: coverage_rows,
+    )
+    monkeypatch.setattr(
+        coverage_runtime,
+        "require_persisted_coverage_proof",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            proof=coverage_proof,
+            publication_cutoff="2026-08-25",
+        ),
+    )
+
+    class _PolicyBundle:
+        passed = True
+
+        @staticmethod
+        def failures() -> list[object]:
+            return []
+
+        @staticmethod
+        def to_dict() -> dict[str, object]:
+            return ready_evidence
+
+    class _Policy:
+        @staticmethod
+        def evaluate(*_args, **_kwargs) -> _PolicyBundle:
+            return _PolicyBundle()
+
+    class _QualityCheck:
+        def __init__(self, row: dict[str, str]) -> None:
+            self._row = row
+
+        def as_log_dict(self) -> dict[str, str]:
+            return dict(self._row)
+
+    monkeypatch.setattr(ready_policy, "ReadyPublicationPolicy", _Policy)
+    monkeypatch.setattr(
+        quality_runtime,
+        "run_coverage",
+        lambda *_args, **_kwargs: [_QualityCheck(row) for row in quality_results],
+    )
+    monkeypatch.setattr(
+        quality_runtime,
+        "summarize",
+        lambda _checks: quality_summary,
+    )
+
+    replayed, observed_projection = (
+        entrypoints._recompute_exact_four_ready_authority_proof(
+            scratch,
+            outer,
+            retained_manifest,
+            b"signed-projection",
+            environment="production",
+        )
+    )
+    assert replayed == retained_manifest
+    assert observed_projection is projection
+    with sqlite3.connect(scratch) as connection:
+        state, locator = connection.execute(
+            "SELECT state,artifact_path FROM snapshot_publications"
+        ).fetchone()
+    assert state == "READY"
+    assert Path(locator) == scratch.resolve()
+
+    forged = json.loads(json.dumps(outer))
+    forged["dependency_scope_evidence"]["proof_digest"] = "sha256:" + "aa" * 32
+    with sqlite3.connect(scratch) as connection:
+        connection.execute(
+            "UPDATE snapshot_publications SET manifest_json=?",
+            (json.dumps(forged, sort_keys=True),),
+        )
+    with pytest.raises(
+        service_runtime.LocalAuthorityError,
+        match="dependency_scope_evidence differs",
+    ):
+        entrypoints._recompute_exact_four_ready_authority_proof(
+            scratch,
+            forged,
+            retained_manifest,
+            b"signed-projection",
+            environment="production",
+        )
+
+
+def test_ready_handler_rejects_forged_proof_before_custody_sign(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot_id = "sha256:" + "ad" * 32
+    artifact = tmp_path / f"sha256_{'ad' * 32}.sqlite"
+    with sqlite3.connect(artifact) as connection:
+        connection.execute("CREATE TABLE retained(value TEXT)")
+    artifact.chmod(0o444)
+    raw = artifact.read_bytes()
+    digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+    info = artifact.stat()
+    identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+    forged_outer = {
+        "dependency_scope_evidence": {"proof_digest": "sha256:" + "fe" * 32}
+    }
+    retained_manifest = {"dataset_ids": ["caller-forged"]}
+
+    monkeypatch.setattr(
+        entrypoints,
+        "_load_ready_snapshot",
+        lambda *_args: (forged_outer, retained_manifest, digest, identity),
+    )
+
+    def reject_forgery(*_args, **_kwargs):
+        raise service_runtime.LocalAuthorityError(
+            "READY retained dependency_scope_evidence differs"
+        )
+
+    monkeypatch.setattr(
+        entrypoints,
+        "_recompute_exact_four_ready_authority_proof",
+        reject_forgery,
+    )
+
+    def forbidden_sign(*_args, **_kwargs):
+        raise AssertionError("custody must not sign caller-generated proof")
+
+    monkeypatch.setattr(
+        service_runtime.FileEd25519KeyCustody,
+        "sign",
+        forbidden_sign,
+    )
+    custody, _ = _custody(tmp_path, key_id="ready-forge-test-v1")
+    handler = ReadyPublishProfilePlanBound(
+        environment="production",
+        snapshot_root=tmp_path,
+        custody=custody,
+    )
+    with pytest.raises(
+        service_runtime.LocalAuthorityError,
+        match="dependency_scope_evidence differs",
+    ):
+        handler(
+            _context(
+                caller="ready_publisher",
+                operation=ReadyPublishProfilePlanBound.operation,
+                purpose="profile_plan_closure_ready",
+            ),
+            {
+                "snapshot_id": snapshot_id,
+                "signed_projection_base64": base64.b64encode(
+                    b"signed projection"
+                ).decode("ascii"),
             },
             (),
         )

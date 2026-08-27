@@ -622,11 +622,15 @@ class VerifiedPilotReadyPublication:
 
     def __post_init__(self) -> None:
         from paper_runtime.snapshot import ReadySnapshot, _file_sha256
+        from paper_runtime.snapshot_read import (
+            _read_immutable_regular_file,
+            describe_snapshot,
+        )
 
         from research.readiness import (
             ReadyPublicationAuthorityPending,
             VerifiedPilotReadiness,
-            load_verified_pilot_readiness,
+            _load_verified_pilot_readiness_bytes,
         )
 
         if type(self.snapshot) is not ReadySnapshot or type(
@@ -635,21 +639,57 @@ class VerifiedPilotReadyPublication:
             raise ReadyPublicationAuthorityPending(
                 "READY publication PENDING; caller cannot construct the result"
             )
-        manifest = ready_manifest_from_snapshot_document(self.snapshot.manifest)
+        try:
+            reopened = describe_snapshot(
+                self.snapshot.db_path.parent,
+                self.snapshot.snapshot_id,
+            )
+        except Exception as exc:
+            raise ReadyPublicationAuthorityPending(
+                "READY publication marker cannot be independently reopened"
+            ) from exc
+        if (
+            reopened.db_path != self.snapshot.db_path
+            or reopened.manifest_path != self.snapshot.manifest_path
+            or reopened.manifest != self.snapshot.manifest
+        ):
+            raise MassResearchDisabledError(
+                "caller snapshot differs from independently reopened publication"
+            )
+        manifest = ready_manifest_from_snapshot_document(reopened.manifest)
         path = Path(self.readiness_path)
-        reloaded = load_verified_pilot_readiness(
-            path,
+        marker_path = reopened.readiness_path
+        marker_digest = reopened.readiness_digest
+        marker_attestation_id = reopened.readiness_attestation_id
+        marker_bytes = reopened.readiness_bytes
+        if (
+            not isinstance(marker_path, Path)
+            or path != marker_path
+            or type(marker_digest) is not str
+            or not _SHA256_RE.fullmatch(marker_digest)
+            or type(marker_attestation_id) is not str
+            or not marker_attestation_id
+            or type(marker_bytes) is not bytes
+            or not marker_bytes
+            or "sha256:" + hashlib.sha256(marker_bytes).hexdigest()
+            != marker_digest
+        ):
+            raise MassResearchDisabledError(
+                "published snapshot marker has no exact readiness bytes"
+            )
+        reloaded = _load_verified_pilot_readiness_bytes(
+            marker_bytes,
             expected_environment="production",
-            expected_snapshot_id=self.snapshot.snapshot_id,
+            expected_snapshot_id=reopened.snapshot_id,
             expected_ready_manifest_digest=manifest.manifest_digest,
-            expected_authority_resource_digest=(
-                self.readiness.authority_resource_digest
-            ),
         )
         if (
             reloaded.to_dict() != self.readiness.to_dict()
-            or self.readiness.immutable_db_digest != _file_sha256(self.snapshot.db_path)
-            or path.parent.resolve() != self.snapshot.db_path.parent.resolve()
+            or reloaded.attestation_id != marker_attestation_id
+            or self.readiness.immutable_db_digest != _file_sha256(reopened.db_path)
+            or path.parent.resolve() != reopened.db_path.parent.resolve()
+            or _read_immutable_regular_file(path, label="READY attestation")
+            != marker_bytes
             or path.stat().st_mode & 0o222
         ):
             raise MassResearchDisabledError(

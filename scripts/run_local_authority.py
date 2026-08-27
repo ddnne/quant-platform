@@ -72,6 +72,7 @@ from scripts.local_authority_service import (
 )
 
 D1_SYNC_PROCESSING_TIMEOUT_SECONDS = 900.0
+READY_PROCESSING_TIMEOUT_SECONDS = 900.0
 EXECUTION_PROCESSING_TIMEOUT_SECONDS = 1800.0
 
 
@@ -80,6 +81,8 @@ def _processing_timeout_seconds(authority_id: str) -> float:
 
     if authority_id == "d1_sync":
         return D1_SYNC_PROCESSING_TIMEOUT_SECONDS
+    if authority_id == "ready":
+        return READY_PROCESSING_TIMEOUT_SECONDS
     if authority_id in {"trader", "controlled_execution"}:
         return EXECUTION_PROCESSING_TIMEOUT_SECONDS
     return DEFAULT_PROCESSING_TIMEOUT_SECONDS

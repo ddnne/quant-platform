@@ -47,6 +47,7 @@ from scripts.local_ready_registry import (
 _EVENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}\Z")
 _PINNED_CALL_TIMEOUT_SECONDS = {
     ("d1_sync:sync_now", "sync_current"): 905.0,
+    ("ready:publish_profile_plan_bound", "profile_plan_closure_ready"): 905.0,
 }
 
 

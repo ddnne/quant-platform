@@ -137,7 +137,7 @@ def test_fixed_clients_emit_only_manifest_granted_operations(
         "profile_plan_closure_ready",
     ]
     assert all(item[2] == os.geteuid() + 1000 for item in calls)
-    assert [item[3] for item in calls] == [905.0, 5.0, 5.0, 5.0]
+    assert [item[3] for item in calls] == [905.0, 5.0, 5.0, 905.0]
 
 
 def test_client_identity_and_result_shape_fail_closed(

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import stat
 from pathlib import Path
@@ -24,6 +25,55 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return "sha256:" + digest.hexdigest()
+
+
+def _read_immutable_regular_file(path: Path, *, label: str) -> bytes:
+    """Read one exact non-symlink, non-writable file identity."""
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise RuntimeError(f"{label} no-follow support is unavailable")
+    try:
+        fd = os.open(path, os.O_RDONLY | nofollow)
+    except OSError as exc:
+        raise RuntimeError(f"{label} cannot be opened without following links") from exc
+    try:
+        before = os.fstat(fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size <= 0
+            or before.st_size > 1024 * 1024
+            or before.st_mode
+            & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            raise RuntimeError(f"{label} is not an immutable regular file")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(fd)
+        before_identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_mode,
+        )
+        after_identity = (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_mode,
+        )
+        if before_identity != after_identity:
+            raise RuntimeError(f"{label} changed while it was read")
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
 
 
 def _embedded_research_manifest(
@@ -118,6 +168,7 @@ def _describe_snapshot_for_scope(
         "publication_scope",
         "readiness_attestation",
         "readiness_attestation_digest",
+        "readiness_attestation_id",
         "publication_digest",
     }
     if not isinstance(publication, dict) or set(publication) != publication_fields:
@@ -189,6 +240,9 @@ def _describe_snapshot_for_scope(
         )
     attestation_name = publication.get("readiness_attestation")
     attestation_digest = publication.get("readiness_attestation_digest")
+    attestation_id = publication.get("readiness_attestation_id")
+    attestation_path: Path | None = None
+    attestation_bytes: bytes | None = None
     if publication_scope == "PRODUCTION":
         if not isinstance(attestation_name, str) or not attestation_name:
             raise RuntimeError("production READY publication has no attestation")
@@ -198,6 +252,16 @@ def _describe_snapshot_for_scope(
             or len(attestation_digest) != 71
         ):
             raise RuntimeError("production READY attestation digest is invalid")
+        if (
+            type(attestation_id) is not str
+            or not attestation_id
+            or Path(attestation_id).name != attestation_id
+            or attestation_name
+            != f"{stem}.{attestation_id}.readiness.json"
+        ):
+            raise RuntimeError(
+                "production READY marker does not bind the exact attestation id"
+            )
     if attestation_name is not None:
         if (
             not isinstance(attestation_name, str)
@@ -205,16 +269,13 @@ def _describe_snapshot_for_scope(
         ):
             raise RuntimeError("READY attestation path is invalid")
         attestation_path = directory / attestation_name
-        if not attestation_path.is_file():
-            raise RuntimeError("READY attestation is missing")
-        attestation_bytes = attestation_path.read_bytes()
+        attestation_bytes = _read_immutable_regular_file(
+            attestation_path,
+            label="READY attestation",
+        )
         digest = hashlib.sha256(attestation_bytes).hexdigest()
         if attestation_digest != "sha256:" + digest:
             raise RuntimeError("READY attestation digest mismatch")
-        if attestation_path.stat().st_mode & (
-            stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
-        ):
-            raise RuntimeError("READY attestation is writable")
         if publication_scope == "PRODUCTION":
             try:
                 from paper_runtime.readiness_attestation import (
@@ -226,21 +287,27 @@ def _describe_snapshot_for_scope(
                     raise RuntimeError(
                         "production READY snapshot has no embedded ReadyManifest"
                     )
-                verify_pinned_pilot_snapshot_attestation(
+                verified_attestation = verify_pinned_pilot_snapshot_attestation(
                     attestation_bytes,
                     snapshot_id=snapshot_id,
                     ready_manifest=nested_manifest,
                     immutable_db_digest=artifact_digest,
                     expected_environment="production",
                 )
+                if verified_attestation.get("attestation_id") != attestation_id:
+                    raise RuntimeError(
+                        "production READY attestation id does not match marker"
+                    )
             except Exception as exc:
                 raise RuntimeError(
                     "production READY attestation is not trusted"
                 ) from exc
-    elif attestation_digest is not None:
-        raise RuntimeError("READY attestation digest has no artifact")
+    elif attestation_digest is not None or attestation_id is not None:
+        raise RuntimeError("READY attestation identity has no artifact")
     if publication_scope == "FIXTURE" and (
-        attestation_name is not None or attestation_digest is not None
+        attestation_name is not None
+        or attestation_digest is not None
+        or attestation_id is not None
     ):
         raise RuntimeError("fixture publication cannot carry READY authority")
     # Product data-snapshot identity reopens the production v2 Coverage proof.
@@ -252,7 +319,21 @@ def _describe_snapshot_for_scope(
         and _immutable_data_snapshot_id(artifact_path) != snapshot_id
     ):
         raise RuntimeError("embedded snapshot manifest does not match sidecar")
-    return ReadySnapshot(snapshot_id, artifact_path, manifest_path, manifest)
+    return ReadySnapshot(
+        snapshot_id,
+        artifact_path,
+        manifest_path,
+        manifest,
+        publication_path=publication_path,
+        readiness_path=attestation_path,
+        readiness_digest=(
+            str(attestation_digest) if attestation_digest is not None else None
+        ),
+        readiness_attestation_id=(
+            str(attestation_id) if attestation_id is not None else None
+        ),
+        readiness_bytes=attestation_bytes,
+    )
 
 
 def describe_snapshot(

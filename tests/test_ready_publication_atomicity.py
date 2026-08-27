@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import sqlite3
 from pathlib import Path
@@ -19,10 +20,12 @@ from paper_runtime.snapshot_coverage_proof import (
 )
 from paper_runtime.snapshot_read import describe_snapshot, latest_ready_snapshot
 from research.ready_manifest import (
+    VerifiedPilotReadyPublication,
     build_profile_bound_ready_manifest_from_snapshot_document,
     load_exact_four_pilot_ready_binding,
     ready_manifest_from_snapshot_document,
 )
+from selection.budget_ledger import MassResearchDisabledError
 from research.research_data_profile import official_mode
 from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
 from tests.readiness_test_support import (
@@ -313,7 +316,9 @@ def test_production_reader_binds_nested_ready_manifest_and_artifact_bytes(
         immutable_db_digest=artifact_digest,
         profile_binding=binding,
     )
-    attestation_path = artifact_path.with_suffix(".readiness.json")
+    attestation_path = artifact_path.with_name(
+        f"{artifact_path.stem}.{readiness.attestation_id}.readiness.json"
+    )
     snapshot_module._atomic_json(
         attestation_path,
         readiness.to_dict(),
@@ -329,6 +334,7 @@ def test_production_reader_binds_nested_ready_manifest_and_artifact_bytes(
         "publication_scope": "PRODUCTION",
         "readiness_attestation": attestation_path.name,
         "readiness_attestation_digest": _sha256_file(attestation_path),
+        "readiness_attestation_id": readiness.attestation_id,
     }
     publication = {
         **publication_body,
@@ -360,7 +366,85 @@ def test_production_reader_binds_nested_ready_manifest_and_artifact_bytes(
 
     observed = describe_snapshot(snapshot_dir, outer["snapshot_id"])
     assert observed.snapshot_id == outer["snapshot_id"]
+    assert observed.readiness_path == attestation_path
+    assert observed.readiness_attestation_id == readiness.attestation_id
+    assert observed.readiness_digest == _sha256_file(attestation_path)
+    assert observed.readiness_bytes == attestation_path.read_bytes()
     assert latest_ready_snapshot(snapshot_dir).snapshot_id == outer["snapshot_id"]
+
+    alternate = mint_pilot_readiness(
+        nested,
+        publisher=signer,
+        immutable_db_digest=artifact_digest,
+        profile_binding=binding,
+        signed_projection_document_digest="sha256:" + "ab" * 32,
+    )
+    alternate_path = artifact_path.with_name(
+        f"{artifact_path.stem}.{alternate.attestation_id}.readiness.json"
+    )
+    snapshot_module._atomic_json(alternate_path, alternate.to_dict(), mode=0o444)
+    snapshot_module._atomic_json(
+        attestation_path,
+        alternate.to_dict(),
+        mode=0o444,
+    )
+    with pytest.raises(
+        MassResearchDisabledError,
+        match="cannot be independently reopened",
+    ):
+        VerifiedPilotReadyPublication(
+            snapshot=observed,
+            readiness=readiness,
+            readiness_path=attestation_path,
+        )
+    snapshot_module._atomic_json(
+        attestation_path,
+        readiness.to_dict(),
+        mode=0o444,
+    )
+    forged_snapshot = snapshot_module.ReadySnapshot(
+        observed.snapshot_id,
+        observed.db_path,
+        observed.manifest_path,
+        observed.manifest,
+        publication_path=observed.publication_path,
+        readiness_path=alternate_path,
+        readiness_digest=_sha256_file(alternate_path),
+        readiness_attestation_id=alternate.attestation_id,
+        readiness_bytes=alternate_path.read_bytes(),
+    )
+    with pytest.raises(
+        MassResearchDisabledError,
+        match="exact readiness bytes",
+    ):
+        VerifiedPilotReadyPublication(
+            snapshot=forged_snapshot,
+            readiness=alternate,
+            readiness_path=alternate_path,
+        )
+
+    mismatched_body = {
+        **publication_body,
+        "readiness_attestation": alternate_path.name,
+        "readiness_attestation_digest": _sha256_file(alternate_path),
+    }
+    snapshot_module._atomic_json(
+        artifact_path.with_suffix(".publication.json"),
+        {
+            **mismatched_body,
+            "publication_digest": snapshot_module._canonical_digest(
+                mismatched_body
+            ),
+        },
+        mode=0o444,
+    )
+    with pytest.raises(RuntimeError, match="exact attestation id"):
+        describe_snapshot(snapshot_dir, outer["snapshot_id"])
+    snapshot_module._atomic_json(
+        artifact_path.with_suffix(".publication.json"),
+        publication,
+        mode=0o444,
+    )
 
     rewritten = dict(outer)
     rewritten["committed_at"] = "2099-12-31T23:59:59+00:00"
@@ -446,6 +530,16 @@ def test_fixture_gate_cannot_publish_a_production_scope(tmp_path: Path) -> None:
     assert not snapshot_dir.exists()
     assert not list(tmp_path.glob("**/*.publication.json"))
     assert not list(tmp_path.glob("**/latest-ready.json"))
+    assert not hasattr(snapshot_module, "_snapshot_candidate_engine")
+    assert not hasattr(
+        snapshot_module,
+        "_publish_exact_four_pilot_ready_snapshot_via_authority_impl",
+    )
+    assert set(
+        inspect.signature(
+            snapshot_module._publish_exact_four_pilot_ready_snapshot_via_authority
+        ).parameters
+    ) == {"staging_db", "snapshot_dir", "signed_projection_document"}
 
 
 def test_publication_marker_post_replace_failure_is_not_discoverable(
