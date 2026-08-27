@@ -26,6 +26,7 @@ from research.ready_manifest import (
     VerifiedPilotReadyPublication,
     build_profile_bound_ready_manifest_from_snapshot_document,
     load_exact_four_pilot_ready_binding,
+    publish_exact_four_pilot_ready_snapshot,
     ready_manifest_from_snapshot_document,
 )
 from selection.budget_ledger import MassResearchDisabledError
@@ -622,7 +623,7 @@ def test_fixture_gate_cannot_publish_a_production_scope(tmp_path: Path) -> None:
     )
     assert set(
         inspect.signature(
-            snapshot_module._publish_exact_four_pilot_ready_snapshot_via_authority
+            publish_exact_four_pilot_ready_snapshot
         ).parameters
     ) == {"staging_db", "snapshot_dir", "signed_projection_document"}
 

@@ -112,6 +112,26 @@ class ReadySnapshot:
         return str(self.manifest["committed_at"])
 
 
+@dataclass(frozen=True)
+class _ReadyPublicationProductApi:
+    """Product-plane operations required by the READY publication runner.
+
+    ``paper_runtime`` owns the immutable snapshot transaction, while the
+    product plane owns plan/profile/readiness policy.  Keeping those operations
+    explicit prevents the reusable runtime from importing back into the
+    product plane.
+    """
+
+    load_verified_pilot_readiness_bytes: Callable[..., Any]
+    verified_publication_type: Callable[..., Any]
+    verified_projection_evidence: Callable[..., Any]
+    build_profile_bound_manifest: Callable[..., Any]
+    load_exact_four_binding: Callable[..., Any]
+    ready_manifest_from_document: Callable[..., Any]
+    profile_ready: Callable[..., bool]
+    verify_exact_four_pit_scope: Callable[..., Mapping[str, Any]]
+
+
 def _connect_readonly(
     path: Path, *, immutable: bool = False
 ) -> sqlite3.Connection:
@@ -1082,26 +1102,18 @@ def _publish_exact_four_pilot_ready_snapshot_via_authority_impl(
     *,
     signed_projection_document: object,
     _candidate_engine: Callable[..., ReadySnapshot],
+    _product_api: _ReadyPublicationProductApi,
 ) -> Any:
     """Publish the canonical pilot only through the isolated READY service.
 
-    The callable accepts no signer, registry, profile, dataset membership,
-    manifest builder, or fixture policy.  It preflights the pinned local
-    authority before inspecting caller evidence, creates an undiscoverable
-    immutable candidate, and asks the authority to independently reopen and
-    sign that exact snapshot.  Publication markers are written only after the
-    returned signature has been verified and retained byte-for-byte.
+    The public product callable accepts no caller-selected signer, registry,
+    profile, dataset membership, manifest builder, or fixture policy.  Its
+    internal product adapter is not an authority: this runner preflights the
+    pinned local authority before inspecting caller evidence, creates an
+    undiscoverable immutable candidate, and asks the authority to independently
+    reopen and sign that exact snapshot.  Publication markers are written only
+    after the returned signature has been verified and retained byte-for-byte.
     """
-
-    from research.readiness import _load_verified_pilot_readiness_bytes
-    from research.ready_manifest import (
-        VerifiedPilotReadyPublication,
-        _verified_projection_evidence,
-        build_profile_bound_ready_manifest_from_snapshot_document,
-        load_exact_four_pilot_ready_binding,
-        ready_manifest_from_snapshot_document,
-    )
-    from research.research_data_profile import profile_ready
 
     from scripts.local_authority_clients import ReadyPublisherAuthorityClient
     from scripts.local_authority_service import LocalAuthorityError
@@ -1113,8 +1125,8 @@ def _publish_exact_four_pilot_ready_snapshot_via_authority_impl(
     if type(signed_projection_document) is not bytes or not signed_projection_document:
         raise SnapshotRejected("signed Ops projection must be exact non-empty bytes")
     signed_projection = signed_projection_document
-    governed = load_exact_four_pilot_ready_binding()
-    evidence = _verified_projection_evidence(
+    governed = _product_api.load_exact_four_binding()
+    evidence = _product_api.verified_projection_evidence(
         signed_projection,
         list(governed.required_datasets),
         expected_environment="production",
@@ -1124,7 +1136,7 @@ def _publish_exact_four_pilot_ready_snapshot_via_authority_impl(
             "pilot READY evidence must exactly match the dependency closure"
         )
     for profile in governed.profiles:
-        if not profile_ready(profile, evidence.rows):
+        if not _product_api.profile_ready(profile, evidence.rows):
             raise SnapshotRejected(
                 f"pilot READY evidence is incomplete for {profile.plan_id}"
             )
@@ -1161,20 +1173,18 @@ def _publish_exact_four_pilot_ready_snapshot_via_authority_impl(
                 f"required={required_start}..{required_end}"
             )
 
-    from research.ready_manifest import _verify_exact_four_pit_dependency_scope
-
-    scope_proof = _verify_exact_four_pit_dependency_scope(staging_db, governed)
+    scope_proof = _product_api.verify_exact_four_pit_scope(staging_db, governed)
 
     def build_manifest(document: Mapping[str, Any]) -> Mapping[str, Any]:
-        return build_profile_bound_ready_manifest_from_snapshot_document(
+        return _product_api.build_profile_bound_manifest(
             document, profile=governed
         ).to_dict()
 
     signed_result: dict[str, Any] = {}
 
     def request_attestation(ready: ReadySnapshot) -> Path:
-        manifest = ready_manifest_from_snapshot_document(ready.manifest)
-        immutable_scope = _verify_exact_four_pit_dependency_scope(
+        manifest = _product_api.ready_manifest_from_document(ready.manifest)
+        immutable_scope = _product_api.verify_exact_four_pit_scope(
             ready.db_path, governed
         )
         if (
@@ -1240,7 +1250,7 @@ def _publish_exact_four_pilot_ready_snapshot_via_authority_impl(
     result = signed_result["result"]
     readiness_path = reopened.readiness_path
     readiness_bytes = reopened.readiness_bytes
-    ready_manifest = ready_manifest_from_snapshot_document(reopened.manifest)
+    ready_manifest = _product_api.ready_manifest_from_document(reopened.manifest)
     if (
         not isinstance(readiness_path, Path)
         or type(readiness_bytes) is not bytes
@@ -1252,13 +1262,13 @@ def _publish_exact_four_pilot_ready_snapshot_via_authority_impl(
         raise SnapshotRejected(
             "published marker does not pin the authority's exact attestation"
         )
-    readiness = _load_verified_pilot_readiness_bytes(
+    readiness = _product_api.load_verified_pilot_readiness_bytes(
         readiness_bytes,
         expected_environment="production",
         expected_snapshot_id=reopened.snapshot_id,
         expected_ready_manifest_digest=ready_manifest.manifest_digest,
     )
-    return VerifiedPilotReadyPublication(
+    return _product_api.verified_publication_type(
         snapshot=reopened,
         readiness=readiness,
         readiness_path=readiness_path,
@@ -1310,12 +1320,14 @@ def _bind_snapshot_candidate_publishers(
         snapshot_dir: str | Path,
         *,
         signed_projection_document: object,
+        _product_api: _ReadyPublicationProductApi,
     ) -> Any:
         return exact_four_impl(
             staging_db,
             snapshot_dir,
             signed_projection_document=signed_projection_document,
             _candidate_engine=engine,
+            _product_api=_product_api,
         )
 
     return fixture_candidate, exact_four_candidate

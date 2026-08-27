@@ -1960,9 +1960,14 @@ def _publish_exact_four_pilot_ready_snapshot_impl(
     """Use the closed local READY client; no signer or fallback is accepted."""
 
     from paper_runtime.snapshot import (
+        _ReadyPublicationProductApi,
         _publish_exact_four_pilot_ready_snapshot_via_authority,
     )
-    from research.readiness import ReadyPublicationAuthorityPending
+    from research.readiness import (
+        ReadyPublicationAuthorityPending,
+        _load_verified_pilot_readiness_bytes,
+    )
+    from research.research_data_profile import profile_ready
     from scripts.local_authority_service import (
         LocalAuthorityError,
         LocalAuthorityPending,
@@ -1973,6 +1978,24 @@ def _publish_exact_four_pilot_ready_snapshot_impl(
             staging_db,
             snapshot_dir,
             signed_projection_document=signed_projection_document,
+            _product_api=_ReadyPublicationProductApi(
+                load_verified_pilot_readiness_bytes=(
+                    _load_verified_pilot_readiness_bytes
+                ),
+                verified_publication_type=VerifiedPilotReadyPublication,
+                verified_projection_evidence=_verified_projection_evidence,
+                build_profile_bound_manifest=(
+                    build_profile_bound_ready_manifest_from_snapshot_document
+                ),
+                load_exact_four_binding=load_exact_four_pilot_ready_binding,
+                ready_manifest_from_document=(
+                    ready_manifest_from_snapshot_document
+                ),
+                profile_ready=profile_ready,
+                verify_exact_four_pit_scope=(
+                    _verify_exact_four_pit_dependency_scope
+                ),
+            ),
         )
     except (LocalAuthorityPending, LocalAuthorityError) as exc:
         raise ReadyPublicationAuthorityPending(
