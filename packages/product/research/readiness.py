@@ -22,6 +22,11 @@ from uuid import uuid4
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from paper_runtime.readiness_attestation import (
+    ReadyAttestationVerificationError,
+    derive_ready_authority_resource_digest as _derive_ready_authority_resource_digest,
+    ready_authority_instance_id as _ready_authority_instance_id,
+)
 
 from selection.budget_ledger import (
     MassResearchDisabledError,
@@ -131,11 +136,12 @@ def _canonical_bytes(body: Mapping[str, Any]) -> bytes:
 def ready_authority_instance_id(environment: str) -> str:
     """Return the sole governed READY authority instance for an environment."""
 
-    if type(environment) is not str or environment not in _READY_ENVIRONMENTS:
+    try:
+        return _ready_authority_instance_id(environment)
+    except ReadyAttestationVerificationError as exc:
         raise MassResearchDisabledError(
             "READY authority environment must be staging or production"
-        )
-    return f"ready-authority/{environment}/{READY_AUTHORITY_INSTANCE_SUFFIX}"
+        ) from exc
 
 
 def derive_ready_authority_resource_digest(
@@ -149,34 +155,19 @@ def derive_ready_authority_resource_digest(
 ) -> str:
     """Bind one signed READY decision to its environment and immutable inputs."""
 
-    expected_instance = ready_authority_instance_id(environment)
-    if authority_instance_id != expected_instance:
-        raise MassResearchDisabledError(
-            "READY authority instance is not canonical for the environment"
+    try:
+        return _derive_ready_authority_resource_digest(
+            environment=environment,
+            authority_instance_id=authority_instance_id,
+            snapshot_id=snapshot_id,
+            immutable_db_digest=immutable_db_digest,
+            ready_manifest_digest=ready_manifest_digest,
+            signed_projection_document_digest=signed_projection_document_digest,
         )
-    values = (
-        snapshot_id,
-        immutable_db_digest,
-        ready_manifest_digest,
-        signed_projection_document_digest,
-    )
-    if any(not _is_sha256(value) for value in values):
+    except ReadyAttestationVerificationError as exc:
         raise MassResearchDisabledError(
-            "READY authority resource inputs require canonical sha256 digests"
-        )
-    return _digest(
-        {
-            "format": READY_AUTHORITY_RESOURCE_FORMAT,
-            "environment": environment,
-            "authority_instance_id": authority_instance_id,
-            "snapshot_id": snapshot_id,
-            "immutable_db_digest": immutable_db_digest,
-            "ready_manifest_digest": ready_manifest_digest,
-            "signed_projection_document_digest": (
-                signed_projection_document_digest
-            ),
-        }
-    )
+            "READY authority resource identity is invalid"
+        ) from exc
 
 
 def _decode_signature(signature: str) -> bytes:
@@ -357,6 +348,7 @@ class _VerifiedReadiness:
     environment: str
     authority_instance_id: str
     authority_resource_digest: str
+    signed_projection_document_digest: str
     readiness_scope: str
     snapshot_id: str
     profile_id: str
@@ -403,11 +395,15 @@ class _VerifiedReadiness:
         authority_resource_digest = object.__getattribute__(
             self, "authority_resource_digest"
         )
+        signed_projection_document_digest = object.__getattribute__(
+            self, "signed_projection_document_digest"
+        )
         if (
             type(environment) is not str
             or environment not in _READY_ENVIRONMENTS
             or authority_instance_id != ready_authority_instance_id(environment)
             or not _is_sha256(authority_resource_digest)
+            or not _is_sha256(signed_projection_document_digest)
         ):
             raise ValueError("readiness authority environment/resource scope is invalid")
         readiness_scope = object.__getattribute__(self, "readiness_scope")
@@ -424,6 +420,9 @@ class _VerifiedReadiness:
             "environment": self.environment,
             "authority_instance_id": self.authority_instance_id,
             "authority_resource_digest": self.authority_resource_digest,
+            "signed_projection_document_digest": (
+                self.signed_projection_document_digest
+            ),
             "readiness_scope": self.readiness_scope,
             "snapshot_id": self.snapshot_id,
             "profile_id": self.profile_id,
@@ -665,6 +664,9 @@ def _canonical_pilot_body(values: Mapping[str, Any]) -> dict[str, Any]:
         "environment": values["environment"],
         "authority_instance_id": values["authority_instance_id"],
         "authority_resource_digest": values["authority_resource_digest"],
+        "signed_projection_document_digest": values[
+            "signed_projection_document_digest"
+        ],
         "readiness_scope": values["readiness_scope"],
         "snapshot_id": values["snapshot_id"],
         "profile_id": values["profile_id"],
@@ -769,9 +771,20 @@ def _verify_exact_pilot_readiness_values(
         "b4_quality_proof_digest",
         "evidence_digest",
         "authority_resource_digest",
+        "signed_projection_document_digest",
     )
     if any(not _is_sha256(values[field]) for field in digest_fields):
         raise MassResearchDisabledError("readiness proof digest is malformed")
+    derived_authority_resource_digest = derive_ready_authority_resource_digest(
+        environment=expected_environment,
+        authority_instance_id=values["authority_instance_id"],
+        snapshot_id=values["snapshot_id"],
+        immutable_db_digest=values["immutable_db_digest"],
+        ready_manifest_digest=values["ready_manifest_digest"],
+        signed_projection_document_digest=values[
+            "signed_projection_document_digest"
+        ],
+    )
     if (
         values["readiness_scope"] != "PILOT"
         or values["environment"] != expected_environment
@@ -789,6 +802,8 @@ def _verify_exact_pilot_readiness_values(
         or values["dataset_ids"] != binding.required_datasets
         or values["source_generation"] != values["export_cursor"]
         or values["export_cursor"] != values["applied_cursor"]
+        or values["authority_resource_digest"]
+        != derived_authority_resource_digest
         or (
             expected_snapshot_id is not None
             and values["snapshot_id"] != expected_snapshot_id

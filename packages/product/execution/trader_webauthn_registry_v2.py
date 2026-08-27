@@ -251,12 +251,12 @@ def verify_ready_authority_response_v2(
             authority_instance_id=ready_authority_instance_id(
                 expected_environment
             ),
-            snapshot_id=verified.snapshot_id,
-            immutable_db_digest=verified.immutable_db_digest,
-            ready_manifest_digest=verified.ready_manifest_digest,
-            signed_projection_document_digest=result.get(
-                "signed_projection_document_digest"
-            ),
+        snapshot_id=verified.snapshot_id,
+        immutable_db_digest=verified.immutable_db_digest,
+        ready_manifest_digest=verified.ready_manifest_digest,
+        signed_projection_document_digest=(
+            verified.signed_projection_document_digest
+        ),
         )
     except MassResearchDisabledError as exc:
         raise ExactFourTraderAuthorityV2Error(
@@ -271,6 +271,8 @@ def verify_ready_authority_response_v2(
         != verified.authority_instance_id
         or verified.authority_resource_digest != expected_resource_digest
         or result.get("authority_resource_digest") != expected_resource_digest
+        or result.get("signed_projection_document_digest")
+        != verified.signed_projection_document_digest
         or verified.attestation_id != result.get("attestation_id")
         or verified.snapshot_id != result.get("snapshot_id")
         or verified.ready_manifest_digest != result.get("ready_manifest_digest")

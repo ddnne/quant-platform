@@ -302,7 +302,9 @@ def test_production_reader_binds_nested_ready_manifest_and_artifact_bytes(
     )
     assert outer["manifest_digest"] != nested.to_dict()["manifest_digest"]
 
-    signer = make_readiness_signer(key_id="r7-production-reader-test")
+    signer = make_readiness_signer(
+        key_id="r7-production-reader-test", environment="production"
+    )
     artifact_digest = _sha256_file(artifact_path)
     readiness = mint_pilot_readiness(
         nested,

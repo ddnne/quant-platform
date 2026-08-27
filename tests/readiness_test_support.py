@@ -68,8 +68,13 @@ class _TestReadinessSigner:
         )
 
     def public_keys(
-        self,
+        self, *, expected_environment: str | None = None
     ) -> dict[tuple[str, str, str], Ed25519PublicKey]:
+        if (
+            expected_environment is not None
+            and expected_environment != self.environment
+        ):
+            return {}
         return {
             (self.environment, self.authority_instance_id, self.key_id): (
                 self._private_key.public_key()
@@ -149,6 +154,7 @@ def mint_pilot_readiness(
             ready_manifest_digest=manifest.to_dict()["manifest_digest"],
             signed_projection_document_digest=projection_digest,
         ),
+        "signed_projection_document_digest": projection_digest,
         "readiness_scope": VerifiedPilotReadiness.EXPECTED_SCOPE,
         "snapshot_id": manifest.snapshot_id,
         "profile_id": manifest.profile_id,

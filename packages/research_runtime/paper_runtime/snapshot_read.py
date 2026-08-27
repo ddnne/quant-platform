@@ -231,6 +231,7 @@ def _describe_snapshot_for_scope(
                     snapshot_id=snapshot_id,
                     ready_manifest=nested_manifest,
                     immutable_db_digest=artifact_digest,
+                    expected_environment="production",
                 )
             except Exception as exc:
                 raise RuntimeError(

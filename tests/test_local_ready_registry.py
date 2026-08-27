@@ -6,6 +6,8 @@ import json
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from paper_runtime import readiness_attestation as runtime_readiness
+from research import readiness as product_readiness
 
 from scripts import local_ready_registry as registry
 
@@ -71,3 +73,36 @@ def test_staging_ready_key_cannot_enter_production_scope(tmp_path, monkeypatch):
         "ready-staging-v1",
     ) in staged
     assert production_keys == {}
+
+
+def test_ready_authority_resource_digest_has_one_canonical_implementation():
+    values = {
+        "snapshot_id": "sha256:" + "11" * 32,
+        "immutable_db_digest": "sha256:" + "22" * 32,
+        "ready_manifest_digest": "sha256:" + "33" * 32,
+        "signed_projection_document_digest": "sha256:" + "44" * 32,
+    }
+    for environment in ("staging", "production"):
+        instance = runtime_readiness.ready_authority_instance_id(environment)
+        expected = runtime_readiness.derive_ready_authority_resource_digest(
+            environment=environment,
+            authority_instance_id=instance,
+            **values,
+        )
+        assert product_readiness.ready_authority_instance_id(environment) == instance
+        assert registry.ready_authority_instance_id(environment) == instance
+        assert (
+            product_readiness.derive_ready_authority_resource_digest(
+                environment=environment,
+                authority_instance_id=instance,
+                **values,
+            )
+            == expected
+        )
+        assert (
+            registry.derive_ready_authority_resource_digest(
+                environment=environment,
+                **values,
+            )
+            == expected
+        )

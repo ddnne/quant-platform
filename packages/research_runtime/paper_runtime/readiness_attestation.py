@@ -28,7 +28,10 @@ READINESS_SIGNATURE_ALGORITHM = "Ed25519"
 MIN_READY_ATTESTATION_TTL_SECONDS = 60
 MAX_READY_ATTESTATION_TTL_SECONDS = 86_400
 PINNED_READINESS_REGISTRY_DOCUMENT_DIGEST = (
-    "sha256:b9319bbab39681c845c5e6b3cb5f178dde48657bdfc96df3f08aa4d31d160283"
+    "sha256:17c2978493dc3be0d72f3b94dbefd09aaff91c021f9e3d109464b6a7edcefa50"
+)
+PINNED_STAGING_READINESS_REGISTRY_DOCUMENT_DIGEST = (
+    "sha256:30a7a04c4cca8ed96f0813423e1ceb049d4d80c36c0db62c01e327354e5c8aae"
 )
 _PINNED_READINESS_REGISTRY_PATH = (
     Path(__file__).resolve().parents[3]
@@ -36,6 +39,13 @@ _PINNED_READINESS_REGISTRY_PATH = (
     / "ready"
     / "readiness_verify_public_keys.json"
 )
+_PINNED_STAGING_READINESS_REGISTRY_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "specs"
+    / "ready"
+    / "readiness_verify_public_keys.staging.json"
+)
+_READY_ENVIRONMENTS = frozenset({"staging", "production"})
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 # Compile-time consumer pin for the sole accepted pilot lineage.  Updating any
@@ -104,6 +114,10 @@ _READY_MANIFEST_FIELDS = {
 _ATTESTATION_FIELDS = {
     "format",
     "attestation_id",
+    "environment",
+    "authority_instance_id",
+    "authority_resource_digest",
+    "signed_projection_document_digest",
     "readiness_scope",
     "snapshot_id",
     "profile_id",
@@ -252,12 +266,80 @@ def _is_sha256(value: Any) -> bool:
     return type(value) is str and bool(_SHA256_RE.fullmatch(value))
 
 
-def _load_pinned_readiness_public_keys() -> dict[str, Ed25519PublicKey]:
+def _require_environment(value: object) -> str:
+    if type(value) is not str or value not in _READY_ENVIRONMENTS:
+        raise ReadyAttestationVerificationError(
+            "READY verifier requires an explicit staging or production environment"
+        )
+    return value
+
+
+def ready_authority_instance_id(environment: str) -> str:
+    return f"ready-authority/{_require_environment(environment)}/v1"
+
+
+def derive_ready_authority_resource_digest(
+    *,
+    environment: str,
+    authority_instance_id: str,
+    snapshot_id: str,
+    immutable_db_digest: str,
+    ready_manifest_digest: str,
+    signed_projection_document_digest: str,
+) -> str:
+    selected = _require_environment(environment)
+    if authority_instance_id != ready_authority_instance_id(selected):
+        raise ReadyAttestationVerificationError(
+            "READY authority instance crosses the expected environment"
+        )
+    values = (
+        snapshot_id,
+        immutable_db_digest,
+        ready_manifest_digest,
+        signed_projection_document_digest,
+    )
+    if any(not _is_sha256(value) for value in values):
+        raise ReadyAttestationVerificationError(
+            "READY authority resource inputs require canonical sha256 digests"
+        )
+    return _digest(
+        {
+            "format": "ready-authority-resource/v1",
+            "environment": selected,
+            "authority_instance_id": authority_instance_id,
+            "snapshot_id": snapshot_id,
+            "immutable_db_digest": immutable_db_digest,
+            "ready_manifest_digest": ready_manifest_digest,
+            "signed_projection_document_digest": (
+                signed_projection_document_digest
+            ),
+        }
+    )
+
+
+def _registry_contract(environment: str) -> tuple[Path, str]:
+    selected = _require_environment(environment)
+    if selected == "staging":
+        return (
+            _PINNED_STAGING_READINESS_REGISTRY_PATH,
+            PINNED_STAGING_READINESS_REGISTRY_DOCUMENT_DIGEST,
+        )
+    return (
+        _PINNED_READINESS_REGISTRY_PATH,
+        PINNED_READINESS_REGISTRY_DOCUMENT_DIGEST,
+    )
+
+
+def _load_pinned_readiness_public_keys(
+    *, expected_environment: str
+) -> dict[tuple[str, str, str], Ed25519PublicKey]:
     """Load the exact committed registry generation; no path/env injection."""
 
+    selected = _require_environment(expected_environment)
+    registry_path, registry_digest = _registry_contract(selected)
     try:
         document = decode_strict_ready_json(
-            _PINNED_READINESS_REGISTRY_PATH.read_bytes()
+            registry_path.read_bytes()
         )
     except (OSError, ReadyAttestationVerificationError) as exc:
         raise ReadyAttestationVerificationError(
@@ -267,21 +349,30 @@ def _load_pinned_readiness_public_keys() -> dict[str, Ed25519PublicKey]:
         raise ReadyAttestationVerificationError(
             "pinned readiness public-key registry is not an object"
         )
-    if _digest(document) != PINNED_READINESS_REGISTRY_DOCUMENT_DIGEST:
+    if _digest(document) != registry_digest:
         raise ReadyAttestationVerificationError(
             "pinned readiness public-key registry digest mismatch"
         )
     if (
-        set(document) != {"schema_version", "purpose", "keys"}
-        or document.get("schema_version") != 1
+        set(document)
+        != {
+            "schema_version",
+            "purpose",
+            "environment",
+            "authority_instance_id",
+            "keys",
+        }
+        or document.get("schema_version") != 2
         or document.get("purpose") != "readiness_attestation_verification"
+        or document.get("environment") != selected
+        or document.get("authority_instance_id")
+        != ready_authority_instance_id(selected)
         or type(document.get("keys")) is not list
-        or not document["keys"]
     ):
         raise ReadyAttestationVerificationError(
             "pinned readiness public-key registry is invalid"
         )
-    keys: dict[str, Ed25519PublicKey] = {}
+    keys: dict[tuple[str, str, str], Ed25519PublicKey] = {}
     seen: set[str] = set()
     for row in document["keys"]:
         if (
@@ -309,7 +400,7 @@ def _load_pinned_readiness_public_keys() -> dict[str, Ed25519PublicKey]:
                 f"invalid pinned readiness public key: {key_id}"
             ) from exc
         if row["status"] == "active":
-            keys[key_id] = public_key
+            keys[(selected, document["authority_instance_id"], key_id)] = public_key
     if len(keys) > 1:
         raise ReadyAttestationVerificationError(
             "pinned readiness registry has multiple active keys"
@@ -317,10 +408,16 @@ def _load_pinned_readiness_public_keys() -> dict[str, Ed25519PublicKey]:
     return keys
 
 
-def load_pinned_readiness_public_keys() -> Mapping[str, Ed25519PublicKey]:
+def load_pinned_readiness_public_keys(
+    *, expected_environment: str
+) -> Mapping[tuple[str, str, str], Ed25519PublicKey]:
     """Return a copy of the code-pinned verify-only key registry."""
 
-    return dict(_load_pinned_readiness_public_keys())
+    return dict(
+        _load_pinned_readiness_public_keys(
+            expected_environment=expected_environment
+        )
+    )
 
 
 def _validate_exact_four_ready_manifest(
@@ -454,6 +551,7 @@ def verify_pinned_pilot_snapshot_attestation(
     snapshot_id: str,
     ready_manifest: Mapping[str, Any],
     immutable_db_digest: str,
+    expected_environment: str,
 ) -> Mapping[str, Any]:
     """Verify one exact sidecar byte string against immutable snapshot facts.
 
@@ -462,6 +560,7 @@ def verify_pinned_pilot_snapshot_attestation(
     between the publication-digest check and signature verification.
     """
 
+    selected_environment = _require_environment(expected_environment)
     if type(attestation_bytes) is not bytes:
         raise ReadyAttestationVerificationError(
             "READY attestation must be one immutable byte string"
@@ -483,6 +582,9 @@ def verify_pinned_pilot_snapshot_attestation(
         )
     if (
         document.get("format") != READINESS_ATTESTATION_FORMAT
+        or document.get("environment") != selected_environment
+        or document.get("authority_instance_id")
+        != ready_authority_instance_id(selected_environment)
         or document.get("readiness_scope") != "PILOT"
         or document.get("ready_state") != "READY"
         or document.get("issuer") != "ReadyPublicationService/v3"
@@ -543,6 +645,8 @@ def verify_pinned_pilot_snapshot_attestation(
         "b0_quality_proof_digest",
         "b4_quality_proof_digest",
         "evidence_digest",
+        "authority_resource_digest",
+        "signed_projection_document_digest",
     )
     if any(not _is_sha256(document.get(field)) for field in digest_fields):
         raise ReadyAttestationVerificationError(
@@ -554,6 +658,20 @@ def verify_pinned_pilot_snapshot_attestation(
     if document.get("evidence_digest") != expected_evidence_digest:
         raise ReadyAttestationVerificationError(
             "READY attestation evidence digest is invalid"
+        )
+    expected_authority_resource_digest = derive_ready_authority_resource_digest(
+        environment=selected_environment,
+        authority_instance_id=document["authority_instance_id"],
+        snapshot_id=snapshot_id,
+        immutable_db_digest=immutable_db_digest,
+        ready_manifest_digest=document["ready_manifest_digest"],
+        signed_projection_document_digest=document[
+            "signed_projection_document_digest"
+        ],
+    )
+    if document["authority_resource_digest"] != expected_authority_resource_digest:
+        raise ReadyAttestationVerificationError(
+            "READY attestation authority resource digest is invalid"
         )
     if (
         document.get("plan_ids") != list(EXACT_FOUR_PLAN_IDS)
@@ -603,7 +721,9 @@ def verify_pinned_pilot_snapshot_attestation(
         raise ReadyAttestationVerificationError(
             "READY attestation signing identity is invalid"
         )
-    key = _load_pinned_readiness_public_keys().get(key_id)
+    key = _load_pinned_readiness_public_keys(
+        expected_environment=selected_environment
+    ).get((selected_environment, document["authority_instance_id"], key_id))
     if key is None or not signature.startswith("ed25519:"):
         raise ReadyAttestationVerificationError(
             "READY attestation issuer is not trusted"
@@ -636,6 +756,8 @@ __all__ = [
     "READINESS_ATTESTATION_FORMAT",
     "ReadyAttestationVerificationError",
     "decode_strict_ready_json",
+    "derive_ready_authority_resource_digest",
     "load_pinned_readiness_public_keys",
+    "ready_authority_instance_id",
     "verify_pinned_pilot_snapshot_attestation",
 ]

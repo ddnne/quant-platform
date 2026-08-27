@@ -1325,6 +1325,9 @@ class ReadyPublishProfilePlanBound:
                 verified_projection.signed_document_digest
             ),
         )
+        document["signed_projection_document_digest"] = (
+            verified_projection.signed_document_digest
+        )
         document["signature"] = self.custody.sign(
             readiness_attestation._canonical_bytes(document)
         )

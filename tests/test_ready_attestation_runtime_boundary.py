@@ -80,7 +80,9 @@ def _signed_sidecar(
         created_at=(published_at - timedelta(minutes=1)).isoformat(),
         published_at=published_at.isoformat(),
     )
-    signer = make_readiness_signer(key_id="runtime-boundary-test")
+    signer = make_readiness_signer(
+        key_id="runtime-boundary-test", environment="production"
+    )
     readiness = mint_pilot_readiness(
         manifest,
         publisher=signer,
@@ -138,7 +140,9 @@ def test_caller_registry_replacement_cannot_self_root_runtime_verifier(
         runtime_attestation.ReadyAttestationVerificationError,
         match="digest mismatch",
     ):
-        runtime_attestation.load_pinned_readiness_public_keys()
+        runtime_attestation.load_pinned_readiness_public_keys(
+            expected_environment="production"
+        )
 
 
 def test_pending_authority_does_not_inspect_or_mutate_caller_inputs(
@@ -230,6 +234,7 @@ def test_runtime_verifier_has_no_caller_clock_and_accepts_bounded_ttl(
         snapshot_id=digest,
         ready_manifest=manifest,
         immutable_db_digest=digest,
+        expected_environment="production",
     )
     assert verified["snapshot_id"] == digest
     assert type(verified["plan_ids"]) is tuple
@@ -243,6 +248,7 @@ def test_runtime_verifier_has_no_caller_clock_and_accepts_bounded_ttl(
             snapshot_id=digest,
             ready_manifest=manifest,
             immutable_db_digest=digest,
+            expected_environment="production",
             now=clock,
         )  # type: ignore[call-arg]
 
@@ -304,6 +310,7 @@ def test_runtime_manifest_rejects_equality_confused_scope_with_valid_signature(
             snapshot_id=digest,
             ready_manifest=manifest,
             immutable_db_digest=digest,
+            expected_environment="production",
         )
 
 
@@ -350,6 +357,7 @@ def test_runtime_manifest_rejects_nested_container_subclasses_before_use(
                 snapshot_id=digest,
                 ready_manifest=hostile,
                 immutable_db_digest=digest,
+                expected_environment="production",
             )
 
 
@@ -378,6 +386,7 @@ def test_runtime_verifier_rejects_unbounded_ttl(
             snapshot_id=digest,
             ready_manifest=manifest,
             immutable_db_digest=digest,
+            expected_environment="production",
         )
 
 
@@ -416,4 +425,5 @@ def test_runtime_verifier_rejects_future_manifest_or_attestation_time(
             snapshot_id=digest,
             ready_manifest=manifest,
             immutable_db_digest=digest,
+            expected_environment="production",
         )

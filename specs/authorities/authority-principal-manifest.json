@@ -2,7 +2,7 @@
   "schema_version": "authority-principal-manifest/v1",
   "generation": 1,
   "activation_status": "PENDING",
-  "schema_digest": "sha256:dcca69a282ac207d957ade5a65a956bd3b91b4b8e118ccc88e826e6cd78d58e9",
+  "schema_digest": "sha256:4364a468017e66388676be6bce9587a82ce499bf1fa8494cff64e79b32680b61",
   "protocol_schema_digests": {
     "frozen_mirror_request": "sha256:d0d20ba5094f7b6e5bb3f6b68792cf975956c05a2acbdbb18f50edf2f98cfe21",
     "frozen_mirror_handoff": "sha256:4041b2eef7f848dcc66addb14e3a5f6e8572fb5ac91e9e239dd66a29067779a5",
@@ -14,9 +14,9 @@
   "parallel_protocol_schema_digests": {
     "receipt_verify_public_keys": "sha256:ddd0537fd643cec7698ea089ce4e4fdae34b61423a03c586b6b683740e7b5626",
     "jquants_acquisition_collection": "sha256:f0cdf6b30067b170a7e4d821e8090a8f9859fd190432f5b3bd2836d1e4ee36ca",
-    "exact_four_authority_protocol": "sha256:5654d2e8c5e19ac96de7eda23fcb54ded9194e533c68bb1fe4fbdd14cdb12b53",
+    "exact_four_authority_protocol": "sha256:a7b68cdb782a0b90f0a56860b0ab3762c30548f137b4af3405292f63b0d14cac",
     "exact_four_result_manifest": "sha256:01ceaab94741e1c2f29c530a6af0208b10e10bf1d24b176ea9b8d8a6afada0bd",
-    "exact_four_trader_authorization_v2": "sha256:7bd30bbe97b0bac99c0b41877442a62f92712a504b249afecb70a96f65966386"
+    "exact_four_trader_authorization_v2": "sha256:d08e8b65af9c458e20fc71d810e7834c51277128d30f0b80a056e26c13fc141d"
   },
   "residual_risks": {
     "cloudflare_workers_scripts_write_account_scope": {
@@ -813,5 +813,5 @@
       }
     }
   },
-  "manifest_digest": "sha256:6e6706ce769025eeca1b1ba5b55ce1303096f22197e39ffc72acf2fb31a88a13"
+  "manifest_digest": "sha256:5217997c4394b48ca7eb513afd960329c37c9fcaff2b1d388450e30a062d3c99"
 }

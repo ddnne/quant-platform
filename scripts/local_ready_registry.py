@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Mapping
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from paper_runtime.readiness_attestation import (
+    derive_ready_authority_resource_digest as _derive_ready_authority_resource_digest,
+    ready_authority_instance_id as _ready_authority_instance_id,
+)
 
 from ops.trust_domain import require_environment
 
@@ -32,7 +36,7 @@ class LocalReadyRegistryError(RuntimeError):
 
 def ready_authority_instance_id(environment: str) -> str:
     selected = require_environment(environment)
-    return f"ready-authority/{selected}/v1"
+    return _ready_authority_instance_id(selected)
 
 
 def _canonical(value: object) -> bytes:
@@ -50,16 +54,14 @@ def derive_ready_authority_resource_digest(
     signed_projection_document_digest: str,
 ) -> str:
     selected = require_environment(environment)
-    body = {
-        "format": "ready-authority-resource/v1",
-        "environment": selected,
-        "authority_instance_id": ready_authority_instance_id(selected),
-        "snapshot_id": snapshot_id,
-        "immutable_db_digest": immutable_db_digest,
-        "ready_manifest_digest": ready_manifest_digest,
-        "signed_projection_document_digest": signed_projection_document_digest,
-    }
-    return "sha256:" + hashlib.sha256(_canonical(body)).hexdigest()
+    return _derive_ready_authority_resource_digest(
+        environment=selected,
+        authority_instance_id=ready_authority_instance_id(selected),
+        snapshot_id=snapshot_id,
+        immutable_db_digest=immutable_db_digest,
+        ready_manifest_digest=ready_manifest_digest,
+        signed_projection_document_digest=signed_projection_document_digest,
+    )
 
 
 def load_scoped_ready_public_keys(
