@@ -41,7 +41,7 @@ from scripts.local_authority_service import (
     REQUEST_FORMAT,
     AuthorityRequestContext,
     LocalAuthorityError,
-    call_unix_authority,
+    call_controlled_execution_with_trader_handoff,
 )
 
 
@@ -230,11 +230,11 @@ class TraderAuthorizeExactFourBatchHumanPresentV2:
                     },
                 }
                 controlled = dict(
-                    call_unix_authority(
+                    call_controlled_execution_with_trader_handoff(
                         self.controlled_socket_path,
                         controlled_request,
                         expected_server_uid=self.controlled_execution_uid,
-                        read_only_fd=descriptor,
+                        unlinked_read_only_fd=descriptor,
                     )
                 )
             finally:
