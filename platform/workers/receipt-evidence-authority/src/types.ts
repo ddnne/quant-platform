@@ -122,6 +122,138 @@ export type ReceiptIssueResultV1 = {
   receipt: CollectionReceiptV3;
 };
 
+type ReceiptAuditRecoveryCanaryRequestBaseV1 = {
+  schema_version: "receipt-audit-recovery-canary-request/v1";
+  purpose: "receipt_authority_recovery_canary";
+  eligibility: "AUDIT_ONLY";
+  environment: "staging";
+  caller_source_sha: string;
+  caller_worker_version_id: string;
+  caller_worker_version_tag: string;
+  request_nonce: string;
+};
+
+export type ReceiptAuditRecoveryCanaryBeginRequestV1 =
+  ReceiptAuditRecoveryCanaryRequestBaseV1 & {
+    operation: "begin_audit_recovery_canary";
+  };
+
+export type ReceiptAuditRecoveryCanaryRecoverRequestV1 =
+  ReceiptAuditRecoveryCanaryRequestBaseV1 & {
+    operation: "recover_audit_recovery_canary";
+  };
+
+export type ReceiptAuditRecoveryInitialResultV1 = {
+  schema_version: "receipt-audit-recovery-initial-result/v1";
+  purpose: "receipt_authority_recovery_canary";
+  eligibility: "AUDIT_ONLY";
+  environment: "staging";
+  operation_id: string;
+  request_nonce: string;
+  state: "RECOVERY_REQUIRED";
+  initial_state_digest: string;
+  created_at: string;
+};
+
+export type ReceiptAuditRecoveryBeginResultV1 = {
+  schema_version: "receipt-audit-recovery-begin-result/v1";
+  purpose: "receipt_authority_recovery_canary";
+  eligibility: "AUDIT_ONLY";
+  operation_id: string;
+  initial_result_digest: string;
+  initial_result: ReceiptAuditRecoveryInitialResultV1;
+  rpc_replayed: boolean;
+};
+
+export type ReceiptAuditRecoveryAttestationClaimsV1 = {
+  schema_version: "receipt-audit-recovery-attestation-claims/v1";
+  purpose: "receipt_authority_recovery_canary";
+  eligibility: "AUDIT_ONLY";
+  environment: "staging";
+  authority_instance_digest: string;
+  authority_source_sha: string;
+  authority_worker_version_id: string;
+  authority_worker_version_tag: string;
+  caller_source_sha: string;
+  caller_worker_version_id: string;
+  caller_worker_version_tag: string;
+  operation_id: string;
+  request_nonce: string;
+  initial_state: "RECOVERY_REQUIRED";
+  initial_state_digest: string;
+  initial_result_digest: string;
+  initial_created_at: string;
+  recovery_event: "RECOVERY_COMPLETED";
+  recovery_event_digest: string;
+  recovery_event_tail_digest: string;
+  recovered_at: string;
+  first_recovery_state: "RECOVERED_PENDING_REPLAY";
+  first_recovery_result_digest: string;
+  replay_event: "REPLAY_CONFIRMED";
+  replay_event_digest: string;
+  replay_event_tail_digest: string;
+  replay_confirmed_at: string;
+  replayed: true;
+  final_state: "AUDIT_FINALIZED";
+  issuer_key_id: string;
+  issued_at: string;
+};
+
+export type ReceiptAuditFirstRecoveryResultV1 = {
+  schema_version: "receipt-audit-first-recovery-result/v1";
+  purpose: "receipt_authority_recovery_canary";
+  eligibility: "AUDIT_ONLY";
+  environment: "staging";
+  operation_id: string;
+  request_nonce: string;
+  initial_state_digest: string;
+  initial_result_digest: string;
+  recovery_event_digest: string;
+  recovery_event_tail_digest: string;
+  recovered_at: string;
+  state: "RECOVERED_PENDING_REPLAY";
+};
+
+export type ReceiptAuditRecoveryPendingReplayResultV1 = {
+  schema_version: "receipt-audit-recovery-pending-replay-result/v1";
+  purpose: "receipt_authority_recovery_canary";
+  eligibility: "AUDIT_ONLY";
+  operation_id: string;
+  state: "RECOVERED_PENDING_REPLAY";
+  first_recovery_result_digest: string;
+  first_recovery_result: ReceiptAuditFirstRecoveryResultV1;
+  rpc_replayed: false;
+};
+
+export type ReceiptAuditRecoveryAttestationV1 = {
+  schema_version: "receipt-audit-recovery-attestation/v1";
+  purpose: "receipt_authority_recovery_canary";
+  eligibility: "AUDIT_ONLY";
+  environment: "staging";
+  issuer_class: "ReceiptEvidenceAuthorityAuditSigner";
+  issuer_key_id: string;
+  authority_instance_digest: string;
+  signed_claims_base64: string;
+  signed_claims_digest: string;
+  signature: string;
+  issued_at: string;
+};
+
+export type ReceiptAuditRecoveryResultV1 = {
+  schema_version: "receipt-audit-recovery-result/v1";
+  purpose: "receipt_authority_recovery_canary";
+  eligibility: "AUDIT_ONLY";
+  operation_id: string;
+  final_state: "AUDIT_FINALIZED";
+  signed_attestation_digest: string;
+  signed_attestation: ReceiptAuditRecoveryAttestationV1;
+  rpc_replayed: true;
+};
+
+export type ReceiptAuditRecoveryCanaryResultV1 =
+  | ReceiptAuditRecoveryPendingReplayResultV1
+  | ReceiptAuditRecoveryResultV1;
+
 export type ReceiptAuthorityOperationState =
   | "COLLECTING"
   | "ISSUED_PENDING_FINALIZE"
@@ -160,7 +292,13 @@ export type ReceiptPublicKeyRegistrationV1 = {
   purpose: "receipt_verification";
   environment: AuthorityEnvironment;
   authority_instance_digest: string;
+  authority_resource_digest: string;
   authority_status: "PENDING";
+  action: "public_key_registration";
+  deployment_source_sha: string;
+  authority_worker_version_id: string;
+  authority_worker_version_tag: string;
+  operation_binding_digest: string;
   key_id: string;
   key_generation: number;
   algorithm: "Ed25519";
@@ -174,6 +312,12 @@ export type ReceiptPublicKeyRegistrationV1 = {
 export interface ReceiptEvidenceAuthorityRpc {
   issue_for_segment(request: ReceiptIssueRequestV1): Promise<ReceiptIssueResultV1>;
   recover_issue(request: ReceiptRecoveryRequestV1): Promise<ReceiptIssueResultV1>;
+  begin_audit_recovery_canary(
+    request: ReceiptAuditRecoveryCanaryBeginRequestV1,
+  ): Promise<ReceiptAuditRecoveryBeginResultV1>;
+  recover_audit_recovery_canary(
+    request: ReceiptAuditRecoveryCanaryRecoverRequestV1,
+  ): Promise<ReceiptAuditRecoveryCanaryResultV1>;
   public_key_registration(): Promise<ReceiptPublicKeyRegistrationV1>;
 }
 

@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   arrayBufferToBase64,
+  base64ToBytes,
   canonicalDigest,
   canonicalJson,
   isSha256,
@@ -8,6 +9,11 @@ import {
   sha256Digest,
   utf8Base64,
 } from "./canonical";
+import {
+  beginAuditRecoveryCanary,
+  initializeAuditRecoveryStore,
+  recoverAuditRecoveryCanary,
+} from "./audit_recovery_store";
 import { requireDerivedClaims } from "./claims_validation";
 import { authorityInstanceScope } from "./authority_instance";
 import {
@@ -20,6 +26,10 @@ import type {
   ReceiptAuthorityEnv,
   ReceiptAuthorityIssuedRecord,
   ReceiptAuthorityOperationSnapshot,
+  ReceiptAuditRecoveryBeginResultV1,
+  ReceiptAuditRecoveryCanaryBeginRequestV1,
+  ReceiptAuditRecoveryCanaryResultV1,
+  ReceiptAuditRecoveryCanaryRecoverRequestV1,
   ReceiptIssueRequestV1,
   ReceiptIssueResultV1,
   ReceiptPublicKeyRegistrationV1,
@@ -30,6 +40,50 @@ import type {
 } from "./types";
 
 const PARSER_NORMALIZER_VERSION = "coverage-receipt/v4-ed25519-closure";
+
+function pendingDeploymentProvenance(
+  env: ReceiptAuthorityEnv,
+): { sourceSha: string; versionId: string; versionTag: string } {
+  const metadata = env.CF_VERSION_METADATA;
+  const environmentCode = env.ENVIRONMENT === "staging" ? "s" : "p";
+  const match = new RegExp(`^rp-${environmentCode}-r-([0-9a-f]{40})$`).exec(
+    metadata?.tag ?? "",
+  );
+  if (
+    metadata === undefined ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(metadata.id) ||
+    match === null
+  ) {
+    throw new Error("Receipt authority deployment provenance is invalid");
+  }
+  return {
+    sourceSha: match[1]!,
+    versionId: metadata.id,
+    versionTag: metadata.tag,
+  };
+}
+
+function activeStagingDeploymentProvenance(
+  env: ReceiptAuthorityEnv,
+): { sourceSha: string; versionId: string; versionTag: string } {
+  const metadata = env.CF_VERSION_METADATA;
+  const match = /^ra-s-r-([0-9a-f]{40})$/.exec(metadata?.tag ?? "");
+  if (
+    env.ENVIRONMENT !== "staging" || env.AUTHORITY_MODE !== "ACTIVE" ||
+    metadata === undefined ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(metadata.id) ||
+    match === null
+  ) {
+    throw new Error("Receipt audit recovery deployment provenance is invalid");
+  }
+  return {
+    sourceSha: match[1]!,
+    versionId: metadata.id,
+    versionTag: metadata.tag,
+  };
+}
 
 type OperationState =
   | "COLLECTING"
@@ -128,11 +182,12 @@ function rowToSnapshot(
 }
 
 export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv> {
-  private keyPromise: Promise<KeyMaterial> | null = null;
+  #keyPromise: Promise<KeyMaterial> | null = null;
 
   constructor(ctx: DurableObjectState, env: ReceiptAuthorityEnv) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
+      initializeAuditRecoveryStore(this.ctx.storage);
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS authority_operations (
           operation_id TEXT PRIMARY KEY,
@@ -357,28 +412,28 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     });
   }
 
-  private operation(operationId: string): OperationRow | null {
+  #operation(operationId: string): OperationRow | null {
     return this.ctx.storage.sql.exec<OperationRow>(
       "SELECT * FROM authority_operations WHERE operation_id=?",
       operationId,
     ).toArray()[0] ?? null;
   }
 
-  private requireOperation(
+  #requireOperation(
     operationId: string,
     requestDigest: string,
   ): OperationRow {
     if (!isSha256(operationId) || operationId !== requestDigest) {
       throw new TypeError("operation identity must equal the request digest");
     }
-    const row = this.operation(operationId);
+    const row = this.#operation(operationId);
     if (row === null || row.request_digest !== requestDigest) {
       throw new Error("receipt authority operation is absent or substituted");
     }
     return row;
   }
 
-  private latestCaptureAttempt(operationId: string): CaptureAttemptRow | null {
+  #latestCaptureAttempt(operationId: string): CaptureAttemptRow | null {
     return this.ctx.storage.sql.exec<CaptureAttemptRow>(
       `SELECT * FROM authority_capture_attempts
         WHERE operation_id=? ORDER BY attempt_ordinal DESC LIMIT 1`,
@@ -386,7 +441,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     ).toArray()[0] ?? null;
   }
 
-  private captureAttempt(
+  #captureAttempt(
     operationId: string,
     attemptId: string,
   ): CaptureAttemptRow | null {
@@ -398,17 +453,17 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     ).toArray()[0] ?? null;
   }
 
-  private requireLatestCaptureAttempt(row: OperationRow): CaptureAttemptRow {
-    const existing = this.latestCaptureAttempt(row.operation_id);
+  #requireLatestCaptureAttempt(row: OperationRow): CaptureAttemptRow {
+    const existing = this.#latestCaptureAttempt(row.operation_id);
     if (existing !== null) return existing;
     throw new Error("receipt authority capture attempt is absent");
   }
 
-  private operationSnapshot(row: OperationRow): ReceiptAuthorityOperationSnapshot {
-    return rowToSnapshot(row, this.requireLatestCaptureAttempt(row));
+  #operationSnapshot(row: OperationRow): ReceiptAuthorityOperationSnapshot {
+    return rowToSnapshot(row, this.#requireLatestCaptureAttempt(row));
   }
 
-  private event(input: AuthorityEventInput): AuthorityEventRow | null {
+  #event(input: AuthorityEventInput): AuthorityEventRow | null {
     return this.ctx.storage.sql.exec<AuthorityEventRow>(
       `SELECT sequence,operation_id,event_type,payload_digest,
               prior_event_digest,event_digest,observed_at
@@ -420,10 +475,10 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     ).toArray()[0] ?? null;
   }
 
-  private async requireExistingEvents(
+  async #requireExistingEvents(
     inputs: readonly AuthorityEventInput[],
   ): Promise<boolean> {
-    const rows = inputs.map((input) => this.event(input));
+    const rows = inputs.map((input) => this.#event(input));
     const present = rows.filter((row) => row !== null).length;
     if (present === 0) return false;
     if (present !== inputs.length) {
@@ -451,16 +506,16 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     return true;
   }
 
-  private async requireEvent(
+  async #requireEvent(
     input: AuthorityEventInput,
   ): Promise<AuthorityEventRow> {
-    if (!await this.requireExistingEvents([input])) {
+    if (!await this.#requireExistingEvents([input])) {
       throw new Error("receipt authority required event is absent");
     }
-    return this.event(input)!;
+    return this.#event(input)!;
   }
 
-  private async transactEvents(
+  async #transactEvents(
     inputs: readonly AuthorityEventInput[],
     mutation: () => void,
   ): Promise<void> {
@@ -473,7 +528,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       }
     }
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      if (await this.requireExistingEvents(inputs)) return;
+      if (await this.#requireExistingEvents(inputs)) return;
       const head = this.ctx.storage.sql.exec<{
         sequence: number;
         event_digest: string;
@@ -517,7 +572,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
           (current?.sequence ?? 0) !== (head?.sequence ?? 0) ||
           (current?.event_digest ?? null) !== (head?.event_digest ?? null)
         ) return false;
-        if (inputs.some((input) => this.event(input) !== null)) return false;
+        if (inputs.some((input) => this.#event(input) !== null)) return false;
         mutation();
         for (const row of rows) {
           this.ctx.storage.sql.exec(
@@ -540,7 +595,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     throw new Error("receipt authority event transaction contention");
   }
 
-  private async requireValidEventChain(): Promise<void> {
+  async #requireValidEventChain(): Promise<void> {
     const rows = this.ctx.storage.sql.exec<AuthorityEventRow>(
       `SELECT sequence,operation_id,event_type,payload_digest,
               prior_event_digest,event_digest,observed_at
@@ -568,7 +623,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     }
   }
 
-  private captureAttempts(operationId: string): CaptureAttemptRow[] {
+  #captureAttempts(operationId: string): CaptureAttemptRow[] {
     return this.ctx.storage.sql.exec<CaptureAttemptRow>(
       `SELECT * FROM authority_capture_attempts
         WHERE operation_id=? ORDER BY attempt_ordinal`,
@@ -576,14 +631,14 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     ).toArray();
   }
 
-  private async requireAuditedOperation(row: OperationRow): Promise<void> {
+  async #requireAuditedOperation(row: OperationRow): Promise<void> {
     const required: AuthorityEventInput[] = [{
       operationId: row.operation_id,
       eventType: "COLLECTION_STARTED",
       payloadDigest: row.request_digest,
       observedAt: row.created_at,
     }];
-    const attempts = this.captureAttempts(row.operation_id);
+    const attempts = this.#captureAttempts(row.operation_id);
     if (attempts.length === 0) {
       throw new Error("receipt authority audited capture history is absent");
     }
@@ -654,13 +709,13 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     }
     let priorSequence = 0;
     for (const event of required) {
-      const row = await this.requireEvent(event);
+      const row = await this.#requireEvent(event);
       if (row.sequence <= priorSequence) {
         throw new Error("receipt authority lifecycle event order is corrupt");
       }
       priorSequence = row.sequence;
     }
-    await this.requireValidEventChain();
+    await this.#requireValidEventChain();
   }
 
   async #beginOperation(
@@ -671,30 +726,30 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       throw new TypeError("operation identity must equal the request digest");
     }
     const now = new Date().toISOString();
-    const existing = this.operation(operationId);
+    const existing = this.#operation(operationId);
     if (existing !== null) {
       if (existing.request_digest !== requestDigest) {
         throw new Error("receipt authority operation replay was substituted");
       }
-      await this.requireEvent({
+      await this.#requireEvent({
         operationId,
         eventType: "COLLECTION_STARTED",
         payloadDigest: requestDigest,
         observedAt: existing.created_at,
       });
-      this.requireLatestCaptureAttempt(existing);
-      await this.requireAuditedOperation(existing);
-      return this.operationSnapshot(existing);
+      this.#requireLatestCaptureAttempt(existing);
+      await this.#requireAuditedOperation(existing);
+      return this.#operationSnapshot(existing);
     }
     const nonce = randomHex(32);
     const attemptId = randomHex(32);
-    await this.transactEvents([{
+    await this.#transactEvents([{
       operationId,
       eventType: "COLLECTION_STARTED",
       payloadDigest: requestDigest,
       observedAt: now,
     }], () => {
-      const replay = this.operation(operationId);
+      const replay = this.#operation(operationId);
       if (replay !== null) {
         throw new Error("receipt authority operation appeared during begin");
       }
@@ -719,17 +774,17 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
         now,
       );
     });
-    const row = this.requireOperation(operationId, requestDigest);
-    await this.requireAuditedOperation(row);
-    return this.operationSnapshot(row);
+    const row = this.#requireOperation(operationId, requestDigest);
+    await this.#requireAuditedOperation(row);
+    return this.#operationSnapshot(row);
   }
 
   async #recoverOperation(
     operationId: string,
     requestDigest: string,
   ): Promise<ReceiptAuthorityOperationSnapshot> {
-    const row = this.requireOperation(operationId, requestDigest);
-    let attempt = this.requireLatestCaptureAttempt(row);
+    const row = this.#requireOperation(operationId, requestDigest);
+    let attempt = this.#requireLatestCaptureAttempt(row);
     if (row.state === "COLLECTING" && attempt.state === "OPEN") {
       const now = new Date().toISOString();
       const nextOrdinal = attempt.attempt_ordinal + 1;
@@ -743,7 +798,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
         attempt_id: nextAttemptId,
         attempt_ordinal: nextOrdinal,
       });
-      await this.transactEvents([{
+      await this.#transactEvents([{
         operationId,
         eventType: "CAPTURE_ATTEMPT_ABANDONED",
         payloadDigest: abandonedDigest,
@@ -754,7 +809,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
         payloadDigest: startedDigest,
         observedAt: now,
       }], () => {
-        const current = this.latestCaptureAttempt(operationId);
+        const current = this.#latestCaptureAttempt(operationId);
         if (
           current === null || current.attempt_id !== attempt.attempt_id ||
           current.state !== "OPEN"
@@ -779,14 +834,14 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
           now,
         );
       });
-      attempt = this.latestCaptureAttempt(operationId)!;
+      attempt = this.#latestCaptureAttempt(operationId)!;
       if (
         attempt.attempt_id !== nextAttemptId ||
         attempt.attempt_ordinal !== nextOrdinal ||
         attempt.created_at !== now
       ) throw new Error("receipt authority capture recovery did not commit");
     }
-    await this.requireAuditedOperation(row);
+    await this.#requireAuditedOperation(row);
     return rowToSnapshot(row, attempt);
   }
 
@@ -797,7 +852,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     captureKey: string,
     captureDigest: string,
   ): Promise<ReceiptAuthorityOperationSnapshot> {
-    const row = this.requireOperation(operationId, requestDigest);
+    const row = this.#requireOperation(operationId, requestDigest);
     if (row.state !== "COLLECTING") {
       throw new Error("receipt authority cannot append capture after issuance");
     }
@@ -808,7 +863,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       !captureKey.includes(`/${operationId.slice(7)}/attempt-${attemptId}/`) ||
       !captureKey.endsWith("/capture-state.json")
     ) throw new Error("receipt authority capture reference is invalid");
-    const storedAttempt = this.captureAttempt(operationId, attemptId);
+    const storedAttempt = this.#captureAttempt(operationId, attemptId);
     if (storedAttempt === null) {
       throw new Error("receipt authority capture attempt is absent");
     }
@@ -817,27 +872,27 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
         storedAttempt.capture_digest !== captureDigest ||
         storedAttempt.capture_key !== captureKey
       ) throw new Error("receipt authority capture replay was substituted");
-      await this.requireEvent({
+      await this.#requireEvent({
         operationId,
         eventType: "CAPTURE_COMMITTED",
         payloadDigest: captureDigest,
         observedAt: storedAttempt.updated_at,
       });
-      await this.requireAuditedOperation(row);
-      return this.operationSnapshot(row);
+      await this.#requireAuditedOperation(row);
+      return this.#operationSnapshot(row);
     }
     if (storedAttempt.state !== "OPEN") {
       throw new Error("receipt authority capture attempt was abandoned");
     }
     const observedAt = new Date().toISOString();
-    await this.transactEvents([{
+    await this.#transactEvents([{
       operationId,
       eventType: "CAPTURE_COMMITTED",
       payloadDigest: captureDigest,
       observedAt,
     }], () => {
-      const attempt = this.captureAttempt(operationId, attemptId);
-      const latest = this.latestCaptureAttempt(operationId);
+      const attempt = this.#captureAttempt(operationId, attemptId);
+      const latest = this.#latestCaptureAttempt(operationId);
       if (attempt === null || latest?.attempt_id !== attemptId) {
         throw new Error("receipt authority capture attempt was superseded");
       }
@@ -855,20 +910,20 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
         attemptId,
       );
     });
-    const committed = this.captureAttempt(operationId, attemptId);
+    const committed = this.#captureAttempt(operationId, attemptId);
     if (
       committed?.state !== "CAPTURED" ||
       committed.capture_key !== captureKey ||
       committed.capture_digest !== captureDigest
     ) throw new Error("receipt authority capture transaction did not commit");
-    await this.requireAuditedOperation(row);
-    return this.operationSnapshot(
-      this.requireOperation(operationId, requestDigest),
+    await this.#requireAuditedOperation(row);
+    return this.#operationSnapshot(
+      this.#requireOperation(operationId, requestDigest),
     );
   }
 
-  private async loadOrCreateKey(): Promise<KeyMaterial> {
-    const generation = this.keyGeneration();
+  async #loadOrCreateKey(): Promise<KeyMaterial> {
+    const generation = this.#keyGeneration();
     const metadata = this.ctx.storage.sql.exec<{
       key_generation: number;
       key_id: string;
@@ -887,6 +942,13 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       if (metadata.wrap_algorithm !== "AES-GCM") {
         throw new Error("receipt authority wrapped key storage is corrupt");
       }
+      const publicKey = base64ToBytes(metadata.public_key_base64);
+      const publicDigest = await sha256Digest(publicKey);
+      const expectedKeyId =
+        `receipt-${this.env.ENVIRONMENT}-${publicDigest.slice(7, 23)}`;
+      if (publicKey.length !== 32 || metadata.key_id !== expectedKeyId) {
+        throw new Error("receipt authority public-key identity is corrupt");
+      }
       const privateKey = await unwrapEd25519PrivateKey({
         wrapped: {
           wrap_algorithm: "AES-GCM",
@@ -894,13 +956,13 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
           wrapped_private_key_base64: metadata.wrapped_private_key_base64,
         },
         wrappingSecret: this.env.RECEIPT_KEY_WRAP_KEY,
-        aad: this.keyWrapAad(
+        aad: this.#keyWrapAad(
           metadata.key_generation,
           metadata.key_id,
           metadata.public_key_base64,
         ),
       });
-      this.requireOperationalPrivateKey(privateKey);
+      this.#requireOperationalPrivateKey(privateKey);
       return {
         keyId: metadata.key_id,
         generation: metadata.key_generation,
@@ -939,14 +1001,14 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     const wrapped = await wrapEd25519PrivateKey({
       privateKey: pair.privateKey,
       wrappingSecret: this.env.RECEIPT_KEY_WRAP_KEY,
-      aad: this.keyWrapAad(generation, keyId, publicKeyBase64),
+      aad: this.#keyWrapAad(generation, keyId, publicKeyBase64),
     });
     const privateKey = await unwrapEd25519PrivateKey({
       wrapped,
       wrappingSecret: this.env.RECEIPT_KEY_WRAP_KEY,
-      aad: this.keyWrapAad(generation, keyId, publicKeyBase64),
+      aad: this.#keyWrapAad(generation, keyId, publicKeyBase64),
     });
-    this.requireOperationalPrivateKey(privateKey);
+    this.#requireOperationalPrivateKey(privateKey);
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(
         `INSERT INTO authority_key_metadata
@@ -970,14 +1032,14 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     };
   }
 
-  private keyGeneration(): number {
+  #keyGeneration(): number {
     if (!/^[1-9][0-9]{0,8}$/.test(this.env.RECEIPT_KEY_GENERATION)) {
       throw new Error("receipt key generation is absent or invalid");
     }
     return Number(this.env.RECEIPT_KEY_GENERATION);
   }
 
-  private keyWrapAad(
+  #keyWrapAad(
     generation: number,
     keyId: string,
     publicKeyBase64: string,
@@ -993,7 +1055,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     });
   }
 
-  private requireOperationalPrivateKey(key: CryptoKey): void {
+  #requireOperationalPrivateKey(key: CryptoKey): void {
     if (
       key.type !== "private" || key.extractable !== false ||
       key.algorithm.name !== "Ed25519" ||
@@ -1001,13 +1063,13 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     ) throw new Error("receipt authority private key invariant failed");
   }
 
-  private ensureKey(): Promise<KeyMaterial> {
-    this.keyPromise ??= this.loadOrCreateKey();
-    return this.keyPromise;
+  #ensureKey(): Promise<KeyMaterial> {
+    this.#keyPromise ??= this.#loadOrCreateKey();
+    return this.#keyPromise;
   }
 
-  private async requireSigningKey(): Promise<KeyMaterial> {
-    const key = await this.ensureKey();
+  async #requireSigningKey(): Promise<KeyMaterial> {
+    const key = await this.#ensureKey();
     if (
       this.env.AUTHORITY_MODE !== "ACTIVE" ||
       !this.env.ACTIVATED_KEY_ID ||
@@ -1027,14 +1089,34 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
         "receipt public-key registration requires unactivated PENDING mode",
       );
     }
-    const key = await this.ensureKey();
+    const key = await this.#ensureKey();
     const scope = await authorityInstanceScope(this.env);
+    const deployment = pendingDeploymentProvenance(this.env);
+    const operationBindingDigest = await canonicalDigest({
+      schema_version: "receipt-registration-operation/v1",
+      authority: "receipt-evidence-authority",
+      action: "public_key_registration",
+      environment: this.env.ENVIRONMENT,
+      authority_resource_digest: scope.authorityInstanceDigest,
+      deployment_source_sha: deployment.sourceSha,
+      authority_worker_version_id: deployment.versionId,
+      authority_worker_version_tag: deployment.versionTag,
+      key_id: key.keyId,
+      key_generation: key.generation,
+      generated_at: key.generatedAt,
+    });
     const body = {
       schema_version: "receipt-public-key-registration/v1" as const,
       purpose: "receipt_verification" as const,
       environment: this.env.ENVIRONMENT,
       authority_instance_digest: scope.authorityInstanceDigest,
+      authority_resource_digest: scope.authorityInstanceDigest,
       authority_status: "PENDING" as const,
+      action: "public_key_registration" as const,
+      deployment_source_sha: deployment.sourceSha,
+      authority_worker_version_id: deployment.versionId,
+      authority_worker_version_tag: deployment.versionTag,
+      operation_binding_digest: operationBindingDigest,
       key_id: key.keyId,
       key_generation: key.generation,
       algorithm: "Ed25519" as const,
@@ -1062,7 +1144,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     ) {
       throw new Error("receipt claims are not bound to this authority instance");
     }
-    const row = this.requireOperation(operationId, requestDigest);
+    const row = this.#requireOperation(operationId, requestDigest);
     const claimsJson = canonicalJson(claims);
     const claimsDigest = await sha256Digest(claimsJson);
     if (row.claims_digest !== null && row.claims_digest !== claimsDigest) {
@@ -1080,21 +1162,21 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       if (envelope === null || storedClaims === null || row.envelope_digest === null) {
         throw new Error("receipt authority issued state is incomplete");
       }
-      await this.requireAuditedOperation(row);
+      await this.#requireAuditedOperation(row);
       return { claims: storedClaims, envelope, envelope_digest: row.envelope_digest };
     }
 
-    const key = await this.requireSigningKey();
+    const key = await this.#requireSigningKey();
     let reserved: OperationRow;
     if (row.claims_digest === null) {
       const issuedAt = new Date().toISOString();
-      await this.transactEvents([{
+      await this.#transactEvents([{
         operationId,
         eventType: "CLAIMS_RESERVED",
         payloadDigest: claimsDigest,
         observedAt: issuedAt,
       }], () => {
-        const current = this.requireOperation(operationId, requestDigest);
+        const current = this.#requireOperation(operationId, requestDigest);
         if (current.claims_digest !== null) {
           throw new Error("receipt authority claims reservation raced");
         }
@@ -1109,12 +1191,12 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
           operationId,
         );
       });
-      reserved = this.requireOperation(operationId, requestDigest);
+      reserved = this.#requireOperation(operationId, requestDigest);
     } else {
       if (row.claims_json !== claimsJson || row.issued_at === null) {
         throw new Error("receipt authority claims reservation replay drifted");
       }
-      await this.requireEvent({
+      await this.#requireEvent({
         operationId,
         eventType: "CLAIMS_RESERVED",
         payloadDigest: claimsDigest,
@@ -1128,7 +1210,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     ) {
       throw new Error("receipt authority issue reservation failed");
     }
-    await this.requireAuditedOperation(reserved);
+    await this.#requireAuditedOperation(reserved);
 
     const signedClaims: SignedReceiptClaimsV3 = {
       ...claims,
@@ -1168,13 +1250,13 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     };
     const envelopeJson = canonicalJson(envelope);
     const envelopeDigest = await sha256Digest(envelopeJson);
-    await this.transactEvents([{
+    await this.#transactEvents([{
       operationId,
       eventType: "RECEIPT_ISSUED_PENDING_FINALIZE",
       payloadDigest: envelopeDigest,
       observedAt: reserved.issued_at,
     }], () => {
-      const current = this.requireOperation(operationId, requestDigest);
+      const current = this.#requireOperation(operationId, requestDigest);
       if (current.envelope_digest !== null) {
         throw new Error("receipt authority signature reservation raced");
       }
@@ -1195,12 +1277,12 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
         operationId,
       );
     });
-    const issued = this.requireOperation(operationId, requestDigest);
+    const issued = this.#requireOperation(operationId, requestDigest);
     if (
       issued.envelope_digest !== envelopeDigest ||
       issued.envelope_json !== envelopeJson
     ) throw new Error("receipt authority signature replay was substituted");
-    await this.requireAuditedOperation(issued);
+    await this.#requireAuditedOperation(issued);
     return { claims, envelope, envelope_digest: envelopeDigest };
   }
 
@@ -1212,28 +1294,28 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
   ): Promise<ReceiptIssueResultV1> {
     if (!isSha256(receiptDigest)) throw new TypeError("receipt digest required");
     const resultJson = canonicalJson(result);
-    const before = this.requireOperation(operationId, requestDigest);
+    const before = this.#requireOperation(operationId, requestDigest);
     if (before.state === "FINALIZED") {
       if (
         before.receipt_digest !== receiptDigest || before.result_json !== resultJson
       ) throw new Error("receipt authority finalized replay was substituted");
-      await this.requireEvent({
+      await this.#requireEvent({
         operationId,
         eventType: "RECEIPT_FINALIZED",
         payloadDigest: receiptDigest,
         observedAt: before.updated_at,
       });
-      await this.requireAuditedOperation(before);
+      await this.#requireAuditedOperation(before);
       return result;
     }
     const observedAt = new Date().toISOString();
-    await this.transactEvents([{
+    await this.#transactEvents([{
       operationId,
       eventType: "RECEIPT_FINALIZED",
       payloadDigest: receiptDigest,
       observedAt,
     }], () => {
-      const current = this.requireOperation(operationId, requestDigest);
+      const current = this.#requireOperation(operationId, requestDigest);
       if (current.state === "FINALIZED") {
         throw new Error("receipt authority finalization raced");
       }
@@ -1253,13 +1335,13 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
         operationId,
       );
     });
-    const finalized = this.requireOperation(operationId, requestDigest);
+    const finalized = this.#requireOperation(operationId, requestDigest);
     if (
       finalized.state !== "FINALIZED" ||
       finalized.receipt_digest !== receiptDigest ||
       finalized.result_json !== resultJson
     ) throw new Error("receipt authority finalization did not commit");
-    await this.requireAuditedOperation(finalized);
+    await this.#requireAuditedOperation(finalized);
     return result;
   }
 
@@ -1315,5 +1397,29 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     request: ReceiptRecoveryRequestV1,
   ): Promise<ReceiptIssueResultV1> {
     return executeReceiptRequest(this.env, request, this.#internalAuthority());
+  }
+
+  begin_audit_recovery_canary(
+    request: ReceiptAuditRecoveryCanaryBeginRequestV1,
+  ): Promise<ReceiptAuditRecoveryBeginResultV1> {
+    activeStagingDeploymentProvenance(this.env);
+    return beginAuditRecoveryCanary(this.ctx.storage, request);
+  }
+
+  async recover_audit_recovery_canary(
+    request: ReceiptAuditRecoveryCanaryRecoverRequestV1,
+  ): Promise<ReceiptAuditRecoveryCanaryResultV1> {
+    const deployment = activeStagingDeploymentProvenance(this.env);
+    const key = await this.#requireSigningKey();
+    const scope = await authorityInstanceScope(this.env);
+    return recoverAuditRecoveryCanary(this.ctx.storage, request, {
+      authorityInstanceDigest: scope.authorityInstanceDigest,
+      sourceSha: deployment.sourceSha,
+      workerVersionId: deployment.versionId,
+      workerVersionTag: deployment.versionTag,
+      keyId: key.keyId,
+      privateKey: key.privateKey,
+      publicKeyBase64: key.publicKeyBase64,
+    });
   }
 }
