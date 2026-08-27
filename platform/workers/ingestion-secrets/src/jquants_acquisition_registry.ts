@@ -7,7 +7,10 @@ import type {
 type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
-export type QueryMode = "calendar_month_sliced" | "calendar_month_range";
+export type QueryMode =
+  | "calendar_month_sliced"
+  | "calendar_month_range"
+  | "official_business_day_sliced";
 
 export type GovernedRoute = {
   datasetId: string;
@@ -22,6 +25,7 @@ export type GovernedRoute = {
   registryDigest: string;
   paginationParameters: ReadonlyMap<string, string>;
   allowedIgnoredResponseFields: ReadonlySet<string>;
+  requiresOfficialCalendar: boolean;
 };
 
 export type ResolvedGovernedRequest = {
@@ -177,7 +181,7 @@ async function registryRows(): Promise<{
     requireObject(requireObject(item, "registry_row").canonical_dataset, "registry_canonical").dataset_id,
   );
   const expectedActive = [
-    "equities_bars_daily", "fins_details", "fins_dividend",
+    "equities_bars_daily", "equities_master", "fins_details", "fins_dividend",
     "fins_earnings_date", "fins_summary", "indices_bars_daily_topix",
     "markets_calendar",
   ];
@@ -243,10 +247,33 @@ async function resolveRoute(datasetId: string): Promise<GovernedRoute> {
   const queryMode = query.mode;
   const dayParameter = query.day_parameter;
   if (
-    (queryMode !== "calendar_month_sliced" && queryMode !== "calendar_month_range") ||
-    (queryMode === "calendar_month_sliced" && dayParameter !== "date") ||
+    (queryMode !== "calendar_month_sliced" && queryMode !== "calendar_month_range" &&
+      queryMode !== "official_business_day_sliced") ||
+    ((queryMode === "calendar_month_sliced" ||
+      queryMode === "official_business_day_sliced") && dayParameter !== "date") ||
     (queryMode === "calendar_month_range" && dayParameter !== null)
   ) throw new AcquisitionRequestRejected("registry_query");
+  const calendarBinding = query.official_calendar_binding;
+  const requiresOfficialCalendar = queryMode === "official_business_day_sliced";
+  if (requiresOfficialCalendar) {
+    const binding = requireObject(calendarBinding, "registry_official_calendar");
+    if (!exactKeys(binding, [
+      "authority", "path", "ordered_parameters", "response_data_field",
+      "date_field", "holiday_division_field", "tse_business_day_values",
+      "complete_calendar_day_sequence_required", "cross_segment_resolution",
+    ]) || binding.authority !== "target-and-receipt-independent-reproof/v1" ||
+      binding.path !== "/v2/markets/calendar" ||
+      canonicalJson(binding.ordered_parameters) !== canonicalJson(["from", "to"]) ||
+      binding.response_data_field !== "data" || binding.date_field !== "Date" ||
+      binding.holiday_division_field !== "HolDiv" ||
+      canonicalJson(binding.tse_business_day_values) !== canonicalJson(["1", "2"]) ||
+      binding.complete_calendar_day_sequence_required !== true ||
+      binding.cross_segment_resolution !== "FORBIDDEN") {
+      throw new AcquisitionRequestRejected("registry_official_calendar");
+    }
+  } else if (calendarBinding !== undefined) {
+    throw new AcquisitionRequestRejected("registry_official_calendar");
+  }
 
   const paginationParameters = new Map<string, string>();
   if (!Array.isArray(query.pagination)) throw new AcquisitionRequestRejected("registry_pagination");
@@ -269,7 +296,7 @@ async function resolveRoute(datasetId: string): Promise<GovernedRoute> {
     throw new AcquisitionRequestRejected("registry_response_fields");
   }
 
-  const typedDayParameter: "date" | null = queryMode === "calendar_month_sliced"
+  const typedDayParameter: "date" | null = queryMode !== "calendar_month_range"
     ? "date"
     : null;
   return {
@@ -282,6 +309,7 @@ async function resolveRoute(datasetId: string): Promise<GovernedRoute> {
     registryDigest: registry.digest,
     paginationParameters,
     allowedIgnoredResponseFields: ignored,
+    requiresOfficialCalendar,
   };
 }
 

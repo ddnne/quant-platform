@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date, timedelta
 import json
 from pathlib import Path
 
@@ -44,6 +45,241 @@ def _service(receipt_ed25519_keys, clock=None):
         signing_key=receipt_ed25519_keys.signing_key,
         clock=clock or (lambda: "2026-08-11T09:00:00+09:00"),
     )
+
+
+def _official_calendar_raw(
+    start: str,
+    end: str,
+    *,
+    business_dates: set[str],
+    half_days: set[str] = frozenset(),
+    non_business_division: str = "0",
+) -> bytes:
+    cursor = date.fromisoformat(start)
+    terminal = date.fromisoformat(end)
+    rows = []
+    while cursor <= terminal:
+        rendered = cursor.isoformat()
+        division = (
+            "2"
+            if rendered in half_days
+            else "1" if rendered in business_dates else non_business_division
+        )
+        rows.append({"Date": rendered, "HolDiv": division})
+        cursor += timedelta(days=1)
+    return json.dumps(
+        {"data": rows}, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+
+
+def test_equities_master_uses_exact_official_business_dates_and_terminal_day(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    required = _required("equities_master", "2008-05-31")
+    assert required.segment_start == "2008-05-07"
+    assert required.segment_end == "2008-05-31"
+    business = {
+        "2008-05-07",
+        "2008-05-08",
+        "2008-05-09",
+        "2008-05-12",
+        "2008-05-13",
+        "2008-05-14",
+        "2008-05-15",
+        "2008-05-16",
+        "2008-05-19",
+        "2008-05-20",
+        "2008-05-21",
+        "2008-05-22",
+        "2008-05-23",
+        "2008-05-26",
+        "2008-05-27",
+        "2008-05-28",
+        "2008-05-29",
+        "2008-05-30",
+    }
+    calendar_raw = _official_calendar_raw(
+        required.segment_start,
+        required.segment_end,
+        business_dates=business,
+        half_days={"2008-05-30"},
+    )
+    service = _service(receipt_ed25519_keys)
+    fixture = support.build_live_acquisition(
+        tmp_path=tmp_path,
+        service=service,
+        required=required,
+        official_calendar_raw=calendar_raw,
+    )
+    observed = [
+        page["metadata"]["slice_date"] for page in fixture.document["pages"]
+    ]
+    assert observed == sorted(business)
+    assert "2008-05-10" not in observed  # weekend
+    assert "2008-05-31" not in observed  # terminal weekend
+    assert fixture.document["pages"][-1]["metadata"]["slice_date"] == "2008-05-30"
+    assert fixture.document["pages"][-1]["metadata"]["pagination_state"] == "EXHAUSTED"
+    assert support.verify_live_acquisition(
+        fixture, service=service, required=required
+    )
+
+
+def test_equities_master_rejects_calendar_drift_even_when_dates_are_unchanged(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    required = _required("equities_master", "2024-02-29")
+    business = {"2024-02-01", "2024-02-02", "2024-02-05"}
+    receipt_raw = _official_calendar_raw(
+        required.segment_start,
+        required.segment_end,
+        business_dates=business,
+        non_business_division="0",
+    )
+    target_raw = _official_calendar_raw(
+        required.segment_start,
+        required.segment_end,
+        business_dates=business,
+        non_business_division="3",
+    )
+    service = _service(receipt_ed25519_keys)
+    fixture = support.build_live_acquisition(
+        tmp_path=tmp_path,
+        service=service,
+        required=required,
+        official_calendar_raw=receipt_raw,
+        target_calendar_raw=target_raw,
+    )
+    with pytest.raises(ValueError, match="chain predecessor"):
+        support.verify_live_acquisition(
+            fixture, service=service, required=required
+        )
+
+
+def test_equities_master_rejects_calendar_tamper_and_missing_reproof(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    from ingestion.jquants import acquisition_collection as acquisition
+
+    required = _required("equities_master", "2024-02-29")
+    raw = _official_calendar_raw(
+        required.segment_start,
+        required.segment_end,
+        business_dates={"2024-02-01", "2024-02-02"},
+    )
+    service = _service(receipt_ed25519_keys)
+    missing = support.build_live_acquisition(
+        tmp_path=tmp_path / "missing",
+        service=service,
+        required=required,
+        official_calendar_raw=raw,
+    )
+    with acquisition._CAPABILITY_LOCK:
+        acquisition._LIVE_CAPTURES[missing.capture]["official_calendar_path"] = None
+        acquisition._LIVE_CAPTURES[missing.capture]["official_calendar_size"] = None
+        acquisition._LIVE_CAPTURES[missing.capture]["official_calendar_digest"] = None
+    with pytest.raises(ValueError, match="PENDING"):
+        support.verify_live_acquisition(missing, service=service, required=required)
+
+    tampered = support.build_live_acquisition(
+        tmp_path=tmp_path / "tampered",
+        service=service,
+        required=required,
+        official_calendar_raw=raw,
+    )
+    assert tampered.official_calendar_path is not None
+    tampered.official_calendar_path.chmod(0o644)
+    tampered.official_calendar_path.write_bytes(raw + b"\n")
+    tampered.official_calendar_path.chmod(0o444)
+    with pytest.raises(ValueError, match="(size differs|digest differs)"):
+        support.verify_live_acquisition(tampered, service=service, required=required)
+
+
+def test_equities_master_stays_pending_without_opaque_receipt_reproof(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    from ingestion.jquants import acquisition_collection as acquisition
+
+    required = _required("equities_master", "2024-02-29")
+    registry = acquisition._target_registry()
+    assert "equities_master" in registry.excluded
+    raw = _official_calendar_raw(
+        required.segment_start,
+        required.segment_end,
+        business_dates={"2024-02-01"},
+    )
+    fixture = support.build_live_acquisition(
+        tmp_path=tmp_path,
+        service=_service(receipt_ed25519_keys),
+        required=required,
+        official_calendar_raw=raw,
+    )
+    with pytest.raises(ValueError, match="PENDING"):
+        acquisition._validate_request(
+            fixture.document["initial_request"], required=required
+        )
+
+
+def test_equities_master_rejects_caller_slice_and_cross_segment_resolution(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    required = _required("equities_master", "2024-02-29")
+    raw = _official_calendar_raw(
+        required.segment_start,
+        required.segment_end,
+        business_dates={"2024-02-01", "2024-02-02"},
+    )
+    service = _service(receipt_ed25519_keys)
+
+    def cross_segment(document):
+        last = document["pages"][-1]
+        last["metadata"]["slice_date"] = "2024-03-01"
+        last["headers"] = support._metadata_headers(last["metadata"])
+
+    fixture = support.build_live_acquisition(
+        tmp_path=tmp_path,
+        service=service,
+        required=required,
+        official_calendar_raw=raw,
+        mutate_document=cross_segment,
+    )
+    with pytest.raises(ValueError, match="slice date"):
+        support.verify_live_acquisition(fixture, service=service, required=required)
+
+
+@pytest.mark.parametrize(
+    "mutator, message",
+    (
+        (
+            lambda rows: rows.pop(3),
+            "complete range",
+        ),
+        (
+            lambda rows: rows.__setitem__(
+                2, {"Date": rows[1]["Date"], "HolDiv": "1"}
+            ),
+            "missing, duplicate, reordered",
+        ),
+    ),
+)
+def test_official_calendar_requires_complete_ordered_calendar_day_sequence(
+    mutator, message
+) -> None:
+    from ingestion.jquants.official_business_calendar import (
+        derive_official_business_calendar,
+    )
+
+    raw = _official_calendar_raw(
+        "2024-02-01",
+        "2024-02-05",
+        business_dates={"2024-02-01", "2024-02-02", "2024-02-05"},
+    )
+    document = json.loads(raw)
+    mutator(document["data"])
+    changed = json.dumps(document, separators=(",", ":")).encode()
+    with pytest.raises(ValueError, match=message):
+        derive_official_business_calendar(
+            changed, segment_start="2024-02-01", segment_end="2024-02-05"
+        )
 
 
 def test_rpc_surface_is_available_from_packaged_registry_without_specs() -> None:

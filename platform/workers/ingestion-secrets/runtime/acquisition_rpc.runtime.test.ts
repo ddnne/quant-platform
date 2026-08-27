@@ -18,6 +18,10 @@ import type {
   JquantsAcquisitionRequestV2,
   JquantsAcquisitionRpc,
 } from "../src/jquants_acquisition_types";
+import {
+  deriveOfficialBusinessCalendar,
+  officialMasterQueryDigest,
+} from "../src/jquants_official_business_calendar";
 
 const API_KEY = "jq-runtime-api-key-not-for-live";
 const PROXY_TOKEN = "jq-runtime-proxy-token-not-for-live";
@@ -104,6 +108,12 @@ function bytes(value: string): Uint8Array {
   return new TextEncoder().encode(value);
 }
 
+function base64Url(value: Uint8Array): string {
+  let binary = "";
+  for (const item of value) binary += String.fromCharCode(item);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 function upstream(
   body: Uint8Array | string,
   status = 200,
@@ -115,6 +125,26 @@ function upstream(
     status,
     headers: { "content-type": contentType, ...extraHeaders },
   });
+}
+
+function officialCalendarBody(
+  start: string,
+  end: string,
+  businessDates: ReadonlySet<string>,
+  halfDays: ReadonlySet<string> = new Set(),
+): Uint8Array {
+  const rows: Array<{ Date: string; HolDiv: string }> = [];
+  let cursor = new Date(`${start}T00:00:00Z`);
+  const terminal = new Date(`${end}T00:00:00Z`);
+  while (cursor <= terminal) {
+    const rendered = cursor.toISOString().slice(0, 10);
+    rows.push({
+      Date: rendered,
+      HolDiv: halfDays.has(rendered) ? "2" : businessDates.has(rendered) ? "1" : "0",
+    });
+    cursor = new Date(cursor.getTime() + 86_400_000);
+  }
+  return bytes(JSON.stringify({ data: rows }));
 }
 
 function nullable(value: string | null): string | null {
@@ -305,6 +335,177 @@ describe("governed J-Quants WorkerEntrypoint RPC", () => {
       "https://api.jquants.com/v2/fins/summary?date=2024-02-01",
       "https://api.jquants.com/v2/fins/summary?date=2024-02-02",
     ]);
+  });
+
+  it("derives equities_master slices only from the exact official calendar", async () => {
+    const businessDates = new Set([
+      "2024-06-03", "2024-06-04", "2024-06-05", "2024-06-06", "2024-06-07",
+      "2024-06-10", "2024-06-11", "2024-06-12", "2024-06-13", "2024-06-14",
+      "2024-06-17", "2024-06-18", "2024-06-19", "2024-06-21",
+      "2024-06-24", "2024-06-25", "2024-06-26", "2024-06-27", "2024-06-28",
+    ]);
+    const calendarRaw = officialCalendarBody(
+      "2024-06-01", "2024-06-30", businessDates, new Set(["2024-06-28"]),
+    );
+    const urls: string[] = [];
+    const fetchMock = installFetch(async (input, init) => {
+      urls.push(String(input));
+      expect(new Headers(init?.headers).get("x-api-key")).toBe(API_KEY);
+      return fetchMock.mock.calls.length === 1
+        ? upstream(calendarRaw)
+        : upstream('{"data":[]}');
+    });
+    const initial = await requestFor("equities_master", "2024-06");
+    let request = initial;
+    const observed: AcquisitionResponseMetadataV2[] = [];
+    while (true) {
+      const response = await rpc.fetch_governed_page(request);
+      expect(response.status).toBe(200);
+      const item = await metadata(response);
+      observed.push(item);
+      if (item.continuation_token === null) break;
+      request = { ...initial, continuation_token: item.continuation_token };
+    }
+
+    expect(urls[0]).toBe(
+      "https://api.jquants.com/v2/markets/calendar?from=2024-06-01&to=2024-06-30",
+    );
+    expect(urls.slice(1)).toEqual(
+      [...businessDates].map((day) =>
+        `https://api.jquants.com/v2/equities/master?date=${day}`),
+    );
+    expect(observed.map((item) => item.slice_date)).toEqual([...businessDates]);
+    expect(observed.map((item) => item.slice_ordinal)).toEqual(
+      [...businessDates].map((_, index) => index),
+    );
+    expect(observed.some((item) => item.slice_date === "2024-06-20")).toBe(false);
+    expect(observed.at(-1)).toMatchObject({
+      slice_date: "2024-06-28",
+      pagination_state: "EXHAUSTED",
+      continuation_token: null,
+    });
+    const calendar = await deriveOfficialBusinessCalendar(
+      calendarRaw, "2024-06-01", "2024-06-30",
+    );
+    expect(observed[0]!.query_digest).toBe(await officialMasterQueryDigest({
+      path: "/v2/equities/master",
+      sliceDate: "2024-06-03",
+      providerCursor: null,
+      calendar,
+    }));
+  });
+
+  it("clamps the first partial master month before calendar acquisition", async () => {
+    const calendarRaw = officialCalendarBody(
+      "2008-05-07", "2008-05-31", new Set(["2008-05-07", "2008-05-30"]),
+    );
+    const urls: string[] = [];
+    const fetchMock = installFetch(async (input) => {
+      urls.push(String(input));
+      return fetchMock.mock.calls.length === 1
+        ? upstream(calendarRaw)
+        : upstream('{"data":[]}');
+    });
+    const initial = await requestFor("equities_master", "2008-05");
+    const first = await rpc.fetch_governed_page(initial);
+    const firstMeta = await metadata(first);
+    expect(urls).toEqual([
+      "https://api.jquants.com/v2/markets/calendar?from=2008-05-07&to=2008-05-31",
+      "https://api.jquants.com/v2/equities/master?date=2008-05-07",
+    ]);
+    expect(firstMeta).toMatchObject({
+      segment_start: "2008-05-07",
+      slice_date: "2008-05-07",
+      pagination_state: "CONTINUATION",
+    });
+  });
+
+  it("keeps provider pagination on one official master slice before advancing", async () => {
+    const calendarRaw = officialCalendarBody(
+      "2024-02-01", "2024-02-29", new Set(["2024-02-01", "2024-02-02"]),
+    );
+    const urls: string[] = [];
+    const fetchMock = installFetch(async (input) => {
+      urls.push(String(input));
+      if (fetchMock.mock.calls.length === 1) return upstream(calendarRaw);
+      if (fetchMock.mock.calls.length === 2) {
+        return upstream('{"data":[],"pagination_key":"master-next"}');
+      }
+      return upstream('{"data":[]}');
+    });
+    const initial = await requestFor("equities_master", "2024-02");
+    const first = await rpc.fetch_governed_page(initial);
+    const firstMeta = await metadata(first);
+    const second = await rpc.fetch_governed_page({
+      ...initial, continuation_token: firstMeta.continuation_token,
+    });
+    const secondMeta = await metadata(second);
+    const third = await rpc.fetch_governed_page({
+      ...initial, continuation_token: secondMeta.continuation_token,
+    });
+    const thirdMeta = await metadata(third);
+    expect(urls).toEqual([
+      "https://api.jquants.com/v2/markets/calendar?from=2024-02-01&to=2024-02-29",
+      "https://api.jquants.com/v2/equities/master?date=2024-02-01",
+      "https://api.jquants.com/v2/equities/master?date=2024-02-01&pagination_key=master-next",
+      "https://api.jquants.com/v2/equities/master?date=2024-02-02",
+    ]);
+    expect([firstMeta, secondMeta, thirdMeta].map((item) => [
+      item.slice_date, item.slice_ordinal, item.provider_page_ordinal,
+      item.pagination_state,
+    ])).toEqual([
+      ["2024-02-01", 0, 0, "CONTINUATION"],
+      ["2024-02-01", 0, 1, "CONTINUATION"],
+      ["2024-02-02", 1, 0, "EXHAUSTED"],
+    ]);
+  });
+
+  it("HMAC-authenticates the exact official business-date list", async () => {
+    const calendarRaw = officialCalendarBody(
+      "2024-02-01", "2024-02-29", new Set(["2024-02-01", "2024-02-02"]),
+    );
+    const fetchMock = installFetch(async () =>
+      fetchMock.mock.calls.length === 1 ? upstream(calendarRaw) : upstream('{"data":[]}')
+    );
+    const initial = await requestFor("equities_master", "2024-02");
+    const first = await rpc.fetch_governed_page(initial);
+    const token = (await metadata(first)).continuation_token!;
+    const parts = token.split(".");
+    const padded = parts[1]!.replace(/-/g, "+").replace(/_/g, "/") +
+      "=".repeat((4 - parts[1]!.length % 4) % 4);
+    const payload = JSON.parse(atob(padded)) as Record<string, unknown>;
+    payload.official_business_dates = ["2024-02-01", "2024-02-05"];
+    parts[1] = base64Url(bytes(JSON.stringify(payload)));
+    const rejected = await rpc.fetch_governed_page({
+      ...initial, continuation_token: parts.join("."),
+    });
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toEqual({ error: "request_rejected" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      name: "missing day",
+      body: bytes('{"data":[{"Date":"2024-02-01","HolDiv":"1"}]}'),
+    },
+    {
+      name: "caller-style legacy field",
+      body: bytes('{"data":[{"Date":"2024-02-01","HolidayDivision":"1"}]}'),
+    },
+    {
+      name: "duplicate escaped row key",
+      body: bytes('{"data":[{"Date":"2024-02-01","\\u0044ate":"2024-02-01","HolDiv":"1"}]}'),
+    },
+  ])("rejects incomplete or tampered official calendar: $name", async ({ body }) => {
+    const fetchMock = installFetch(async () => upstream(body));
+    const response = await rpc.fetch_governed_page(
+      await requestFor("equities_master", "2024-02"),
+    );
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: "official_calendar_failed" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]![0])).toContain("/v2/markets/calendar?");
   });
 
   it("keeps uncertain pagination and non-canonical HTTP envelopes RAW_ONLY", async () => {

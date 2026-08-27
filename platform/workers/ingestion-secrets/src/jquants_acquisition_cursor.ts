@@ -1,11 +1,13 @@
 import {
   AcquisitionRequestRejected,
+  canonicalDigest,
   canonicalJson,
   sha256Digest,
   type ResolvedGovernedRequest,
   type TargetRegistryLimits,
 } from "./jquants_acquisition_registry";
 import type { AcquisitionEnvironment } from "./jquants_acquisition_types";
+import type { OfficialBusinessCalendarBinding } from "./jquants_official_business_calendar";
 
 type CursorPayload = {
   schema_version: "jquants-acquisition-continuation/v2";
@@ -33,6 +35,11 @@ type CursorPayload = {
   provider_cursor: string | null;
   previous_chain_digest: string;
   previous_request_digest: string;
+  official_calendar_raw_body_digest: string | null;
+  official_calendar_query_digest: string | null;
+  official_business_dates_digest: string | null;
+  official_calendar_binding_digest: string | null;
+  official_business_dates: readonly string[] | null;
 };
 
 export type AcquisitionSession = {
@@ -49,6 +56,7 @@ export type AcquisitionSession = {
   providerCursor: string | null;
   previousChainDigest: string;
   previousRequestDigest: string | null;
+  officialCalendar: OfficialBusinessCalendarBinding | null;
 };
 
 const CURSOR_KEYS = [
@@ -61,6 +69,9 @@ const CURSOR_KEYS = [
   "page_ordinal", "slice_date", "slice_ordinal", "provider_page_ordinal",
   "continuation_parameter", "provider_cursor", "previous_chain_digest",
   "previous_request_digest",
+  "official_calendar_raw_body_digest", "official_calendar_query_digest",
+  "official_business_dates_digest", "official_calendar_binding_digest",
+  "official_business_dates",
 ] as const;
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
 const HMAC_RE = /^hmac-sha256:[0-9a-f]{64}$/;
@@ -145,12 +156,17 @@ async function acquisitionId(
   requestIdentityDigest: string,
   targetSessionNonce: string,
   issuedAt: string,
+  officialCalendar: OfficialBusinessCalendarBinding | null,
 ): Promise<string> {
   return hmacDigest(key, canonicalJson({
     schema_version: "jquants-acquisition-id/v2",
     request_identity_digest: requestIdentityDigest,
     target_session_nonce: targetSessionNonce,
     acquisition_issued_at: issuedAt,
+    official_calendar_binding_digest: officialCalendar?.bindingDigest ?? null,
+    official_calendar_raw_body_digest: officialCalendar?.rawBodyDigest ?? null,
+    official_business_dates_digest: officialCalendar?.businessDatesDigest ?? null,
+    official_business_dates: officialCalendar?.businessDates ?? null,
   }));
 }
 
@@ -159,6 +175,7 @@ export async function initialAcquisitionSession(
   resolved: ResolvedGovernedRequest,
   now: Date,
   limits: TargetRegistryLimits,
+  officialCalendar: OfficialBusinessCalendarBinding | null = null,
 ): Promise<AcquisitionSession> {
   const key = await importHmacKey(secret);
   const issuedAt = now.toISOString();
@@ -170,7 +187,28 @@ export async function initialAcquisitionSession(
   ).join("");
   const id = await acquisitionId(
     key, resolved.requestIdentityDigest, targetSessionNonce, issuedAt,
+    officialCalendar,
   );
+  if (resolved.route.requiresOfficialCalendar !== (officialCalendar !== null)) {
+    throw new AcquisitionRequestRejected("official_calendar_session");
+  }
+  const genesis: Record<string, unknown> = {
+    schema_version: officialCalendar === null
+      ? "jquants-acquisition-chain-genesis/v2"
+      : "jquants-acquisition-chain-genesis/v3",
+    acquisition_id: id,
+    request_identity_digest: resolved.requestIdentityDigest,
+    cursor_key_id: keyId,
+    acquisition_issued_at: issuedAt,
+    acquisition_expires_at: expiresAt,
+  };
+  if (officialCalendar !== null) {
+    genesis.official_calendar_binding_digest = officialCalendar.bindingDigest;
+    genesis.official_calendar_raw_body_digest = officialCalendar.rawBodyDigest;
+    genesis.official_calendar_query_digest = officialCalendar.calendarQueryDigest;
+    genesis.official_business_dates_digest = officialCalendar.businessDatesDigest;
+    genesis.official_business_dates = officialCalendar.businessDates;
+  }
   return {
     acquisitionId: id,
     targetSessionNonce,
@@ -178,21 +216,93 @@ export async function initialAcquisitionSession(
     issuedAt,
     expiresAt,
     pageOrdinal: 0,
-    sliceDate: resolved.route.queryMode === "calendar_month_sliced" ? resolved.segmentStart : null,
+    sliceDate: resolved.route.queryMode === "calendar_month_range"
+      ? null
+      : officialCalendar?.businessDates[0] ?? resolved.segmentStart,
     sliceOrdinal: 0,
     providerPageOrdinal: 0,
     continuationParameter: null,
     providerCursor: null,
-    previousChainDigest: await sha256Digest(canonicalJson({
-      schema_version: "jquants-acquisition-chain-genesis/v2",
-      acquisition_id: id,
-      request_identity_digest: resolved.requestIdentityDigest,
-      cursor_key_id: keyId,
-      acquisition_issued_at: issuedAt,
-      acquisition_expires_at: expiresAt,
-    })),
+    previousChainDigest: await sha256Digest(canonicalJson(genesis)),
     previousRequestDigest: null,
+    officialCalendar,
   };
+}
+
+function decodeOfficialCalendar(
+  value: Record<string, unknown>,
+): OfficialBusinessCalendarBinding | null {
+  const fields = [
+    value.official_calendar_raw_body_digest,
+    value.official_calendar_query_digest,
+    value.official_business_dates_digest,
+    value.official_calendar_binding_digest,
+    value.official_business_dates,
+  ];
+  if (fields.every((item) => item === null)) return null;
+  if (typeof value.official_calendar_raw_body_digest !== "string" ||
+    !SHA256_RE.test(value.official_calendar_raw_body_digest) ||
+    typeof value.official_calendar_query_digest !== "string" ||
+    !SHA256_RE.test(value.official_calendar_query_digest) ||
+    typeof value.official_business_dates_digest !== "string" ||
+    !SHA256_RE.test(value.official_business_dates_digest) ||
+    typeof value.official_calendar_binding_digest !== "string" ||
+    !SHA256_RE.test(value.official_calendar_binding_digest) ||
+    !Array.isArray(value.official_business_dates) ||
+    value.official_business_dates.length < 1 || value.official_business_dates.length > 31 ||
+    !value.official_business_dates.every((item) =>
+      typeof item === "string" && DATE_RE.test(item))) {
+    throw new AcquisitionRequestRejected("continuation_official_calendar");
+  }
+  const dates = value.official_business_dates as string[];
+  if (new Set(dates).size !== dates.length ||
+    dates.some((item, index) => index > 0 && item <= dates[index - 1]!)) {
+    throw new AcquisitionRequestRejected("continuation_official_calendar");
+  }
+  return {
+    rawBodyDigest: value.official_calendar_raw_body_digest,
+    calendarQueryDigest: value.official_calendar_query_digest,
+    businessDatesDigest: value.official_business_dates_digest,
+    bindingDigest: value.official_calendar_binding_digest,
+    businessDates: Object.freeze([...dates]),
+  };
+}
+
+async function verifyOfficialCalendarBinding(
+  calendar: OfficialBusinessCalendarBinding,
+  segmentStart: string,
+  segmentEnd: string,
+): Promise<void> {
+  if (calendar.businessDates[0]! < segmentStart ||
+    calendar.businessDates.at(-1)! > segmentEnd) {
+    throw new AcquisitionRequestRejected("continuation_official_calendar");
+  }
+  const orderedQuery = [["from", segmentStart], ["to", segmentEnd]];
+  const expectedQuery = await canonicalDigest({
+    schema_version: "jquants-acquisition-query/v2",
+    path: "/v2/markets/calendar",
+    ordered_query: orderedQuery,
+  });
+  const expectedDates = await canonicalDigest({
+    schema_version: "jquants-official-business-dates/v1",
+    segment_start: segmentStart,
+    segment_end: segmentEnd,
+    dates: calendar.businessDates,
+  });
+  const expectedBinding = await canonicalDigest({
+    schema_version: "jquants-official-business-calendar-binding/v1",
+    path: "/v2/markets/calendar",
+    ordered_query: orderedQuery,
+    raw_body_digest: calendar.rawBodyDigest,
+    calendar_query_digest: calendar.calendarQueryDigest,
+    business_dates_digest: calendar.businessDatesDigest,
+    business_dates: calendar.businessDates,
+  });
+  if (calendar.calendarQueryDigest !== expectedQuery ||
+    calendar.businessDatesDigest !== expectedDates ||
+    calendar.bindingDigest !== expectedBinding) {
+    throw new AcquisitionRequestRejected("continuation_official_calendar");
+  }
 }
 
 function decodePayload(bytes: Uint8Array): CursorPayload {
@@ -229,6 +339,7 @@ function decodePayload(bytes: Uint8Array): CursorPayload {
     typeof value.previous_chain_digest !== "string" || !SHA256_RE.test(value.previous_chain_digest) ||
     typeof value.previous_request_digest !== "string" || !SHA256_RE.test(value.previous_request_digest)
   ) throw new AcquisitionRequestRejected("continuation_payload");
+  decodeOfficialCalendar(value);
   return value as CursorPayload;
 }
 
@@ -273,7 +384,16 @@ export async function consumeContinuationToken(
     resolved.requestIdentityDigest,
     payload.target_session_nonce,
     payload.acquisition_issued_at,
+    decodeOfficialCalendar(payload as unknown as Record<string, unknown>),
   );
+  const officialCalendar = decodeOfficialCalendar(
+    payload as unknown as Record<string, unknown>,
+  );
+  if (officialCalendar !== null) {
+    await verifyOfficialCalendarBinding(
+      officialCalendar, resolved.segmentStart, resolved.segmentEnd,
+    );
+  }
   if (
     payload.environment !== resolved.request.environment ||
     payload.dataset_id !== resolved.request.dataset_id ||
@@ -291,6 +411,7 @@ export async function consumeContinuationToken(
     payload.provider_page_ordinal >= limits.maximumProviderPagesPerSlice ||
     (payload.continuation_parameter !== null &&
       resolved.route.paginationParameters.get(payload.continuation_parameter) !== payload.continuation_parameter)
+    || resolved.route.requiresOfficialCalendar !== (officialCalendar !== null)
   ) throw new AcquisitionRequestRejected("continuation_identity");
   const issued = Date.parse(payload.acquisition_issued_at);
   const expires = Date.parse(payload.acquisition_expires_at);
@@ -313,6 +434,7 @@ export async function consumeContinuationToken(
     providerCursor: payload.provider_cursor,
     previousChainDigest: payload.previous_chain_digest,
     previousRequestDigest: payload.previous_request_digest,
+    officialCalendar,
   };
 }
 
@@ -355,5 +477,10 @@ export function continuationPayload(input: {
     provider_cursor: input.providerCursor,
     previous_chain_digest: input.previousChainDigest,
     previous_request_digest: input.previousRequestDigest,
+    official_calendar_raw_body_digest: session.officialCalendar?.rawBodyDigest ?? null,
+    official_calendar_query_digest: session.officialCalendar?.calendarQueryDigest ?? null,
+    official_business_dates_digest: session.officialCalendar?.businessDatesDigest ?? null,
+    official_calendar_binding_digest: session.officialCalendar?.bindingDigest ?? null,
+    official_business_dates: session.officialCalendar?.businessDates ?? null,
   };
 }

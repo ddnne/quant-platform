@@ -59,6 +59,13 @@ _ROUTES: dict[str, dict[str, Any]] = {
                      f"{_CLIENT_ROOT}/jquantsapi/client_v2.py"],
         "pagination": True, "ignored_response_fields": [],
     },
+    "equities_master": {
+        "mode": "official_business_day_sliced", "day_parameter": "date",
+        "disposition": "TARGET_OFFICIAL_CALENDAR_ROUTE_SELECTED",
+        "evidence": [f"{_CLIENT_ROOT}/jquantsapi/apis/v2/equities.py",
+                     f"{_CLIENT_ROOT}/jquantsapi/apis/v2/markets.py"],
+        "pagination": True, "ignored_response_fields": [],
+    },
     "fins_details": {
         "mode": "calendar_month_sliced", "day_parameter": "date",
         "disposition": "MATCHED",
@@ -154,7 +161,9 @@ def _query_resolution(dataset_id: str, capability: dict[str, Any]) -> dict[str, 
         raise ValueError(f"malformed SourceCapability query contract: {dataset_id}")
     if window.get("grain") != "calendar_month":
         raise ValueError(f"historical route is not calendar_month: {dataset_id}")
-    if route["mode"] == "calendar_month_sliced" and "date" not in supported:
+    if route["mode"] in {
+        "calendar_month_sliced", "official_business_day_sliced"
+    } and "date" not in supported:
         raise ValueError(f"daily route lacks date capability: {dataset_id}")
     if route["mode"] == "calendar_month_range" and not {"from", "to"} <= set(supported):
         raise ValueError(f"range route lacks bounds capability: {dataset_id}")
@@ -172,7 +181,7 @@ def _query_resolution(dataset_id: str, capability: dict[str, Any]) -> dict[str, 
     pagination = ([{"response_field": "pagination_key",
                     "query_parameter": "pagination_key"}]
                   if route["pagination"] else [])
-    return {
+    result = {
         "authority": "target-reviewed-route/v2",
         "coverage_segment_granularity": "calendar_month",
         "mode": route["mode"],
@@ -184,6 +193,19 @@ def _query_resolution(dataset_id: str, capability: dict[str, Any]) -> dict[str, 
         "official_client_evidence": route["evidence"],
         "omitted_optional_parameter_mismatches": mismatches,
     }
+    if dataset_id == "equities_master":
+        result["official_calendar_binding"] = {
+            "authority": "target-and-receipt-independent-reproof/v1",
+            "path": "/v2/markets/calendar",
+            "ordered_parameters": ["from", "to"],
+            "response_data_field": "data",
+            "date_field": "Date",
+            "holiday_division_field": "HolDiv",
+            "tse_business_day_values": ["1", "2"],
+            "complete_calendar_day_sequence_required": True,
+            "cross_segment_resolution": "FORBIDDEN",
+        }
+    return result
 
 
 def _closed_rpc_surface(schema: dict[str, Any]) -> dict[str, list[str]]:
@@ -265,10 +287,14 @@ def build_registry() -> dict[str, Any]:
             continue
         if dataset_id == "equities_master":
             exclusions.append({
-                "dataset_id": dataset_id, "status": "PENDING",
-                "reason": "official date lookup may resolve non-business dates to the next business day; verified JPX calendar capability is required to prevent cross-segment raw mixing",
+                "dataset_id": dataset_id,
+                "status": "PENDING",
+                "reason": (
+                    "official-calendar-bound target route is implemented but "
+                    "activation awaits a governed Receipt acquisition capability "
+                    "that independently persists opaque calendar reproof bytes"
+                ),
             })
-            continue
         if dataset_id not in _ROUTES:
             continue
 

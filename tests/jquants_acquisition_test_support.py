@@ -14,6 +14,10 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from ingestion.jquants import acquisition_collection as acquisition
+from ingestion.jquants.official_business_calendar import (
+    derive_official_business_calendar,
+    master_query_digest,
+)
 from storage.coverage_ledger import RequiredCoverageSegment
 
 
@@ -111,6 +115,7 @@ class TestLiveAcquisition:
     manifest_path: Path
     raw_paths: tuple[Path, ...]
     document: Mapping[str, Any]
+    official_calendar_path: Path | None
 
 
 TestLiveAcquisition.__test__ = False
@@ -124,6 +129,8 @@ def build_live_acquisition(
     raw_pages: Sequence[bytes] | None = None,
     page_slices: Sequence[str | None] | None = None,
     provider_states: Sequence[str] | None = None,
+    official_calendar_raw: bytes | None = None,
+    target_calendar_raw: bytes | None = None,
     issued_at: str = "2026-08-11T00:00:00.000Z",
     expires_at: str = "2026-08-11T06:00:00.000Z",
     mutate_document: Callable[[dict[str, Any]], None] | None = None,
@@ -152,23 +159,62 @@ def build_live_acquisition(
     request_identity_digest = _digest(identity)
     acquisition_id = "hmac-sha256:" + "2" * 64
     cursor_key_id = "hmac-sha256:" + "3" * 64
-    previous_chain = _digest(
-        {
-            "schema_version": "jquants-acquisition-chain-genesis/v2",
-            "acquisition_id": acquisition_id,
-            "request_identity_digest": request_identity_digest,
-            "cursor_key_id": cursor_key_id,
-            "acquisition_issued_at": issued_at,
-            "acquisition_expires_at": expires_at,
-        }
-    )
     start = date.fromisoformat(required.segment_start)
     end = date.fromisoformat(required.segment_end)
+    receipt_calendar = None
+    target_calendar = None
+    calendar_path: Path | None = None
+    if route.requires_official_calendar:
+        if official_calendar_raw is None:
+            raise ValueError(
+                "equities_master fixture requires exact official calendar bytes"
+            )
+        receipt_calendar = derive_official_business_calendar(
+            official_calendar_raw,
+            segment_start=required.segment_start,
+            segment_end=required.segment_end,
+        )
+        target_calendar = derive_official_business_calendar(
+            target_calendar_raw or official_calendar_raw,
+            segment_start=required.segment_start,
+            segment_end=required.segment_end,
+        )
+        calendar_path = (tmp_path / "receipt-official-calendar.json").resolve()
+        calendar_path.write_bytes(official_calendar_raw)
+        calendar_path.chmod(0o444)
+    genesis: dict[str, Any] = {
+        "schema_version": (
+            "jquants-acquisition-chain-genesis/v3"
+            if target_calendar is not None
+            else "jquants-acquisition-chain-genesis/v2"
+        ),
+        "acquisition_id": acquisition_id,
+        "request_identity_digest": request_identity_digest,
+        "cursor_key_id": cursor_key_id,
+        "acquisition_issued_at": issued_at,
+        "acquisition_expires_at": expires_at,
+    }
+    if target_calendar is not None:
+        genesis.update(
+            {
+                "official_calendar_binding_digest": target_calendar.binding_digest,
+                "official_calendar_raw_body_digest": target_calendar.raw_body_digest,
+                "official_calendar_query_digest": target_calendar.calendar_query_digest,
+                "official_business_dates_digest": target_calendar.business_dates_digest,
+                "official_business_dates": list(target_calendar.business_dates),
+            }
+        )
+    previous_chain = _digest(genesis)
     bodies = list(raw_pages or ())
     if page_slices is not None:
         page_dates = [
             None if item is None else date.fromisoformat(item)
             for item in page_slices
+        ]
+    elif route.requires_official_calendar:
+        assert target_calendar is not None
+        page_dates = [
+            date.fromisoformat(item) for item in target_calendar.business_dates
         ]
     elif route.mode == "calendar_month_sliced":
         page_dates: list[date | None] = []
@@ -201,6 +247,7 @@ def build_live_acquisition(
             else (
                 "EXHAUSTED"
                 if terminal or route.mode == "calendar_month_sliced"
+                or route.requires_official_calendar
                 else "CONTINUATION"
             )
         )
@@ -227,6 +274,29 @@ def build_live_acquisition(
         segment_state = "EXHAUSTED" if terminal else "CONTINUATION"
         continuation = None if terminal else _token(index + 1)
         body_digest = _digest(raw)
+        query_digest = (
+            master_query_digest(
+                path=route.path,
+                slice_date=slice_day.isoformat(),
+                provider_cursor=(
+                    prior_provider_cursor if provider_page_ordinal > 0 else None
+                ),
+                calendar=target_calendar,
+            )
+            if target_calendar is not None and slice_day is not None
+            else _digest(
+                {
+                    "schema_version": "jquants-acquisition-query/v2",
+                    "path": route.path,
+                    "ordered_query": ordered_query,
+                }
+            )
+        )
+        slice_ordinal = (
+            target_calendar.business_dates.index(slice_day.isoformat())
+            if target_calendar is not None and slice_day is not None
+            else (0 if slice_day is None else (slice_day - start).days)
+        )
         metadata = {
             "schema_version": "jquants-acquisition-rpc-response-metadata/v2",
             "evidence_state": "RAW_PAGE",
@@ -248,15 +318,9 @@ def build_live_acquisition(
             "query_contract_digest": route.query_contract_digest,
             "cursor_key_id": cursor_key_id,
             "slice_date": None if slice_day is None else slice_day.isoformat(),
-            "query_digest": _digest(
-                {
-                    "schema_version": "jquants-acquisition-query/v2",
-                    "path": route.path,
-                    "ordered_query": ordered_query,
-                }
-            ),
+            "query_digest": query_digest,
             "page_ordinal": index,
-            "slice_ordinal": 0 if slice_day is None else (slice_day - start).days,
+            "slice_ordinal": slice_ordinal,
             "provider_page_ordinal": provider_page_ordinal,
             "provider_pagination_state": provider_state,
             "upstream_http_status": 200,
@@ -269,8 +333,12 @@ def build_live_acquisition(
             "previous_chain_digest": previous_chain,
             "chain_digest": None,
         }
-        link = {
-            "schema_version": "jquants-acquisition-chain-link/v2",
+        link: dict[str, Any] = {
+            "schema_version": (
+                "jquants-acquisition-chain-link/v3"
+                if target_calendar is not None
+                else "jquants-acquisition-chain-link/v2"
+            ),
             "acquisition_id": acquisition_id,
             "cursor_key_id": cursor_key_id,
             "acquisition_issued_at": issued_at,
@@ -290,6 +358,16 @@ def build_live_acquisition(
             "provider_pagination_state": provider_state,
             "pagination_state": segment_state,
         }
+        if target_calendar is not None:
+            link.update(
+                {
+                    "official_calendar_binding_digest": target_calendar.binding_digest,
+                    "official_calendar_raw_body_digest": target_calendar.raw_body_digest,
+                    "official_calendar_query_digest": target_calendar.calendar_query_digest,
+                    "official_business_dates_digest": target_calendar.business_dates_digest,
+                    "official_business_dates": list(target_calendar.business_dates),
+                }
+            )
         metadata["chain_digest"] = _digest(link)
         raw_path = (tmp_path / f"page-{index:04d}.json").resolve()
         raw_path.write_bytes(raw)
@@ -350,6 +428,13 @@ def build_live_acquisition(
             "manifest_path": manifest_path,
             "manifest_size": manifest_path.stat().st_size,
             "manifest_digest": _digest(manifest_path.read_bytes()),
+            "official_calendar_path": calendar_path,
+            "official_calendar_size": (
+                None if calendar_path is None else calendar_path.stat().st_size
+            ),
+            "official_calendar_digest": (
+                None if receipt_calendar is None else receipt_calendar.raw_body_digest
+            ),
             "consumed": False,
         }
     return TestLiveAcquisition(
@@ -357,6 +442,7 @@ def build_live_acquisition(
         manifest_path=manifest_path,
         raw_paths=tuple(raw_paths),
         document=document,
+        official_calendar_path=calendar_path,
     )
 
 

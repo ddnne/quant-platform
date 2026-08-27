@@ -35,6 +35,12 @@ from weakref import WeakKeyDictionary
 
 from storage.receipt_crypto import body_digest
 
+from ingestion.jquants.official_business_calendar import (
+    OfficialBusinessCalendar,
+    derive_official_business_calendar,
+    master_query_digest,
+)
+
 if TYPE_CHECKING:
     from storage.coverage_ledger import RequiredCoverageSegment
 
@@ -85,6 +91,7 @@ class _RoutePin:
     dataset_contract_digest: str
     coverage_policy_digest: str
     query_contract_digest: str
+    requires_official_calendar: bool
 
 
 @dataclass(frozen=True)
@@ -138,6 +145,10 @@ class _VerifiedState:
     raw_paths: tuple[Path, ...]
     raw_digests: tuple[str, ...]
     raw_sizes: tuple[int, ...]
+    official_calendar_path: Path | None
+    official_calendar_size: int | None
+    official_calendar_digest: str | None
+    official_business_dates_digest: str | None
     manifest_path: Path
     manifest_file_size: int
     manifest_file_digest: str
@@ -371,7 +382,11 @@ def _target_registry() -> _TargetRegistry:
         if dataset in routes or capability.get("dataset_id") != dataset:
             raise ValueError("J-Quants target registry dataset identity drift")
         mode = query.get("mode")
-        if mode not in {"calendar_month_sliced", "calendar_month_range"}:
+        if mode not in {
+            "calendar_month_sliced",
+            "calendar_month_range",
+            "official_business_day_sliced",
+        }:
             raise ValueError("J-Quants target registry query mode drift")
         earliest = _parse_date(
             capability.get("earliest_official_availability"),
@@ -407,6 +422,38 @@ def _target_registry() -> _TargetRegistry:
             != (dataset in {"fins_details", "fins_summary"})
         ):
             raise ValueError("J-Quants target registry ignored response fields drift")
+        calendar_binding = query.get("official_calendar_binding")
+        requires_official_calendar = mode == "official_business_day_sliced"
+        if requires_official_calendar:
+            if (
+                type(calendar_binding) is not dict
+                or set(calendar_binding)
+                != {
+                    "authority",
+                    "path",
+                    "ordered_parameters",
+                    "response_data_field",
+                    "date_field",
+                    "holiday_division_field",
+                    "tse_business_day_values",
+                    "complete_calendar_day_sequence_required",
+                    "cross_segment_resolution",
+                }
+                or calendar_binding.get("authority")
+                != "target-and-receipt-independent-reproof/v1"
+                or calendar_binding.get("path") != "/v2/markets/calendar"
+                or calendar_binding.get("ordered_parameters") != ["from", "to"]
+                or calendar_binding.get("response_data_field") != "data"
+                or calendar_binding.get("date_field") != "Date"
+                or calendar_binding.get("holiday_division_field") != "HolDiv"
+                or calendar_binding.get("tse_business_day_values") != ["1", "2"]
+                or calendar_binding.get("complete_calendar_day_sequence_required")
+                is not True
+                or calendar_binding.get("cross_segment_resolution") != "FORBIDDEN"
+            ):
+                raise ValueError("J-Quants official calendar contract drift")
+        elif calendar_binding is not None:
+            raise ValueError("unexpected official calendar contract")
         routes[dataset] = _RoutePin(
             mode=mode,
             earliest=earliest,
@@ -419,6 +466,7 @@ def _target_registry() -> _TargetRegistry:
             ),
             coverage_policy_digest=_digest(coverage),
             query_contract_digest=_digest(query),
+            requires_official_calendar=requires_official_calendar,
         )
     excluded: set[str] = set()
     for item in exclusions:
@@ -434,6 +482,7 @@ def _target_registry() -> _TargetRegistry:
         excluded.add(dataset)
     expected_active = {
         "equities_bars_daily",
+        "equities_master",
         "fins_details",
         "fins_dividend",
         "fins_earnings_date",
@@ -625,7 +674,7 @@ def _canonical_required_segment(
         raise TypeError("required must be RequiredCoverageSegment")
     registry = _target_registry()
     pinned_route = route or registry.routes.get(required.dataset)
-    if pinned_route is None or required.dataset in registry.excluded:
+    if pinned_route is None:
         raise ValueError("dataset is PENDING outside the closed historical RPC")
     if coverage_policy_digest(required.dataset) != pinned_route.coverage_policy_digest:
         raise ValueError("local Coverage policy differs from target registry pin")
@@ -658,6 +707,7 @@ def _validate_request(
     value: Any,
     *,
     required: RequiredCoverageSegment,
+    allow_pending_calendar_reproof: bool = False,
 ) -> tuple[dict[str, Any], _RoutePin, RequiredCoverageSegment, str, str]:
     if type(value) is not dict:
         raise ValueError("initial_request must be an object")
@@ -672,11 +722,18 @@ def _validate_request(
         raise ValueError("initial_request operation is not governed")
     dataset = _require_string(request["dataset_id"], "dataset_id")
     registry = _target_registry()
-    if dataset in registry.excluded or dataset not in registry.routes:
+    route = registry.routes.get(dataset)
+    if route is None or (
+        dataset in registry.excluded
+        and not (
+            allow_pending_calendar_reproof
+            and route.requires_official_calendar
+            and dataset == "equities_master"
+        )
+    ):
         raise ValueError("dataset is PENDING outside the closed historical RPC")
     if required.source != "jquants" or required.dataset != dataset:
         raise ValueError("initial_request source/dataset differs from required")
-    route = registry.routes[dataset]
     canonical_required = _canonical_required_segment(required, route=route)
     if request["segment_id"] != required.segment_id:
         raise ValueError("initial_request segment differs from required")
@@ -863,6 +920,7 @@ def _validate_state_machine(
     request: dict[str, Any],
     route: _RoutePin,
     pages: list[tuple[Path, bytes, dict[str, Any], _ParsedProviderPage]],
+    official_calendar: OfficialBusinessCalendar | None,
     now: datetime,
 ) -> tuple[str, str, str, str]:
     jst = now.astimezone(timezone(timedelta(hours=9)))
@@ -894,7 +952,20 @@ def _validate_state_machine(
     seen_provider_cursors: set[str] = set()
     expected_request = dict(request)
     expected_previous_request: str | None = None
-    expected_slice_date = request["segment_start"] if route.mode == "calendar_month_sliced" else None
+    if route.requires_official_calendar:
+        if official_calendar is None:
+            raise ValueError("equities_master requires independent official calendar reproof")
+        official_slices = official_calendar.business_dates
+        expected_slice_date: str | None = official_slices[0]
+    else:
+        if official_calendar is not None:
+            raise ValueError("official calendar reproof supplied for an unrelated route")
+        official_slices = ()
+        expected_slice_date = (
+            request["segment_start"]
+            if route.mode == "calendar_month_sliced"
+            else None
+        )
     expected_slice_ordinal = 0
     expected_provider_ordinal = 0
     expected_provider_cursor: str | None = None
@@ -932,16 +1003,39 @@ def _validate_state_machine(
                 raise ValueError("live acquisition is outside its target session window")
             if expires <= issued or (expires - issued).total_seconds() > _MAX_ACQUISITION_SECONDS:
                 raise ValueError("target acquisition lifetime exceeds the pinned bound")
-            expected_previous_chain = _digest(
-                {
-                    "schema_version": _CHAIN_GENESIS_SCHEMA,
-                    "acquisition_id": metadata["acquisition_id"],
-                    "request_identity_digest": request_identity_digest,
-                    "cursor_key_id": metadata["cursor_key_id"],
-                    "acquisition_issued_at": metadata["acquisition_issued_at"],
-                    "acquisition_expires_at": metadata["acquisition_expires_at"],
-                }
-            )
+            genesis: dict[str, Any] = {
+                "schema_version": (
+                    "jquants-acquisition-chain-genesis/v3"
+                    if official_calendar is not None
+                    else _CHAIN_GENESIS_SCHEMA
+                ),
+                "acquisition_id": metadata["acquisition_id"],
+                "request_identity_digest": request_identity_digest,
+                "cursor_key_id": metadata["cursor_key_id"],
+                "acquisition_issued_at": metadata["acquisition_issued_at"],
+                "acquisition_expires_at": metadata["acquisition_expires_at"],
+            }
+            if official_calendar is not None:
+                genesis.update(
+                    {
+                        "official_calendar_binding_digest": (
+                            official_calendar.binding_digest
+                        ),
+                        "official_calendar_raw_body_digest": (
+                            official_calendar.raw_body_digest
+                        ),
+                        "official_calendar_query_digest": (
+                            official_calendar.calendar_query_digest
+                        ),
+                        "official_business_dates_digest": (
+                            official_calendar.business_dates_digest
+                        ),
+                        "official_business_dates": list(
+                            official_calendar.business_dates
+                        ),
+                    }
+                )
+            expected_previous_chain = _digest(genesis)
         elif current_stable != stable:
             raise ValueError("acquisition session identity changed between pages")
         if metadata["previous_chain_digest"] != expected_previous_chain:
@@ -969,12 +1063,21 @@ def _validate_state_machine(
             ordered_query.append(["pagination_key", expected_provider_cursor])
         elif expected_provider_cursor is not None:
             raise ValueError("initial provider page unexpectedly has a cursor")
-        expected_query_digest = _digest(
-            {
-                "schema_version": "jquants-acquisition-query/v2",
-                "path": route.path,
-                "ordered_query": ordered_query,
-            }
+        expected_query_digest = (
+            master_query_digest(
+                path=route.path,
+                slice_date=str(expected_slice_date),
+                provider_cursor=expected_provider_cursor,
+                calendar=official_calendar,
+            )
+            if official_calendar is not None
+            else _digest(
+                {
+                    "schema_version": "jquants-acquisition-query/v2",
+                    "path": route.path,
+                    "ordered_query": ordered_query,
+                }
+            )
         )
         if metadata["query_digest"] != expected_query_digest:
             raise ValueError("target query digest differs from receipt-side resolution")
@@ -999,12 +1102,23 @@ def _validate_state_machine(
             next_provider_ordinal = expected_provider_ordinal + 1
             next_provider_cursor = parsed_page.cursor
         else:
-            if route.mode == "calendar_month_sliced" and expected_slice_date != request["segment_end"]:
+            has_next_slice = (
+                route.mode == "calendar_month_sliced"
+                and expected_slice_date != request["segment_end"]
+            ) or (
+                route.requires_official_calendar
+                and expected_slice_ordinal + 1 < len(official_slices)
+            )
+            if has_next_slice:
                 if segment != "CONTINUATION":
                     raise ValueError("segment terminated before the final calendar slice")
                 continuation = _require_continuation(token)
                 assert expected_slice_date is not None
-                next_slice_date = _next_date(expected_slice_date)
+                next_slice_date = (
+                    official_slices[expected_slice_ordinal + 1]
+                    if route.requires_official_calendar
+                    else _next_date(expected_slice_date)
+                )
                 next_slice_ordinal = expected_slice_ordinal + 1
                 next_provider_ordinal = 0
                 next_provider_cursor = None
@@ -1025,8 +1139,12 @@ def _validate_state_machine(
                 raise ValueError("continuation state repeated within acquisition")
             seen_tokens.add(continuation)
 
-        link = {
-            "schema_version": _CHAIN_LINK_SCHEMA,
+        link: dict[str, Any] = {
+            "schema_version": (
+                "jquants-acquisition-chain-link/v3"
+                if official_calendar is not None
+                else _CHAIN_LINK_SCHEMA
+            ),
             "acquisition_id": metadata["acquisition_id"],
             "cursor_key_id": metadata["cursor_key_id"],
             "acquisition_issued_at": metadata["acquisition_issued_at"],
@@ -1046,6 +1164,26 @@ def _validate_state_machine(
             "provider_pagination_state": provider,
             "pagination_state": segment,
         }
+        if official_calendar is not None:
+            link.update(
+                {
+                    "official_calendar_binding_digest": (
+                        official_calendar.binding_digest
+                    ),
+                    "official_calendar_raw_body_digest": (
+                        official_calendar.raw_body_digest
+                    ),
+                    "official_calendar_query_digest": (
+                        official_calendar.calendar_query_digest
+                    ),
+                    "official_business_dates_digest": (
+                        official_calendar.business_dates_digest
+                    ),
+                    "official_business_dates": list(
+                        official_calendar.business_dates
+                    ),
+                }
+            )
         actual_chain = _digest(link)
         if metadata["chain_digest"] != actual_chain:
             raise ValueError("acquisition chain digest does not reconcile")
@@ -1077,8 +1215,13 @@ def _verify_manifest(
     expected_manifest_size: int,
     expected_manifest_digest: str,
     required: RequiredCoverageSegment,
+    official_calendar_path: Path | None,
+    official_calendar_size: int | None,
+    official_calendar_digest: str | None,
     clock: Callable[[], str],
 ) -> _VerifiedState:
+    if not manifest_path.is_absolute() or manifest_path.resolve() != manifest_path:
+        raise ValueError("live collection manifest path must be canonical and absolute")
     manifest_bytes = _read_immutable_file(
         manifest_path,
         label="live collection manifest",
@@ -1104,8 +1247,57 @@ def _verify_manifest(
     if claimed_collection_digest != _digest(body):
         raise ValueError("collection manifest canonical digest does not reconcile")
     request, route, canonical_required, identity_digest, _initial_digest = _validate_request(
-        document["initial_request"], required=required
+        document["initial_request"],
+        required=required,
+        allow_pending_calendar_reproof=(
+            required.dataset == "equities_master"
+            and official_calendar_path is not None
+            and official_calendar_size is not None
+            and official_calendar_digest is not None
+        ),
     )
+    official_calendar: OfficialBusinessCalendar | None = None
+    if route.requires_official_calendar:
+        if (
+            not isinstance(official_calendar_path, Path)
+            or type(official_calendar_size) is not int
+            or type(official_calendar_digest) is not str
+        ):
+            raise ValueError(
+                "equities_master requires receipt-authority official calendar capture"
+            )
+        if (
+            not official_calendar_path.is_absolute()
+            or official_calendar_path.resolve() != official_calendar_path
+            or official_calendar_path == manifest_path
+        ):
+            raise ValueError(
+                "official calendar capture path must be distinct, canonical, and absolute"
+            )
+        calendar_raw = _read_immutable_file(
+            official_calendar_path,
+            label="receipt-authority official calendar",
+            expected_size=official_calendar_size,
+            maximum_size=_MAX_RAW_PAGE_BYTES,
+        )
+        if _require_digest(
+            official_calendar_digest, "official_calendar_digest"
+        ) != _digest(calendar_raw):
+            raise ValueError("official calendar capture digest differs from exact bytes")
+        official_calendar = derive_official_business_calendar(
+            calendar_raw,
+            segment_start=request["segment_start"],
+            segment_end=request["segment_end"],
+        )
+    elif any(
+        value is not None
+        for value in (
+            official_calendar_path,
+            official_calendar_size,
+            official_calendar_digest,
+        )
+    ):
+        raise ValueError("official calendar capture is not valid for this route")
     entries = document["pages"]
     if type(entries) is not list or not 1 <= len(entries) <= _MAX_COLLECTION_PAGES:
         raise ValueError("collection manifest must enumerate a bounded non-empty page list")
@@ -1126,7 +1318,12 @@ def _verify_manifest(
         if len(raw_path_text) > 2048 or not Path(raw_path_text).is_absolute():
             raise ValueError("raw_path must be a bounded absolute path")
         raw_path = Path(raw_path_text).resolve()
-        if str(raw_path) != raw_path_text or raw_path in seen_paths:
+        if (
+            str(raw_path) != raw_path_text
+            or raw_path in seen_paths
+            or raw_path == manifest_path
+            or raw_path == official_calendar_path
+        ):
             raise ValueError("raw_path is non-canonical or duplicated")
         seen_paths.add(raw_path)
         size = _require_int(entry["raw_size"], "raw_size", maximum=_MAX_RAW_PAGE_BYTES)
@@ -1169,6 +1366,7 @@ def _verify_manifest(
         request=request,
         route=route,
         pages=pages,
+        official_calendar=official_calendar,
         now=verification_now,
     )
     verified_at = _parse_clock(str(clock()))
@@ -1184,6 +1382,14 @@ def _verify_manifest(
         raw_paths=tuple(paths),
         raw_digests=tuple(raw_digests),
         raw_sizes=tuple(raw_sizes),
+        official_calendar_path=official_calendar_path,
+        official_calendar_size=official_calendar_size,
+        official_calendar_digest=official_calendar_digest,
+        official_business_dates_digest=(
+            None
+            if official_calendar is None
+            else official_calendar.business_dates_digest
+        ),
         manifest_path=manifest_path,
         manifest_file_size=expected_manifest_size,
         manifest_file_digest=expected_manifest_digest,
@@ -1220,11 +1426,17 @@ def _verify_live_jquants_capture(
         manifest_path = capture_state["manifest_path"]
         manifest_size = capture_state["manifest_size"]
         manifest_digest = capture_state["manifest_digest"]
+        official_calendar_path = capture_state.get("official_calendar_path")
+        official_calendar_size = capture_state.get("official_calendar_size")
+        official_calendar_digest = capture_state.get("official_calendar_digest")
     state = _verify_manifest(
         manifest_path=manifest_path,
         expected_manifest_size=manifest_size,
         expected_manifest_digest=manifest_digest,
         required=required,
+        official_calendar_path=official_calendar_path,
+        official_calendar_size=official_calendar_size,
+        official_calendar_digest=official_calendar_digest,
         clock=clock,
     )
     verified = _VerifiedJQuantsAcquisitionCollection(
@@ -1312,6 +1524,27 @@ def _reread_verified_jquants_state(
         if _digest(raw) != expected_digest:
             raise ValueError("verified raw page changed after verification")
         pages.append(raw)
+    if state.official_calendar_path is not None:
+        if (
+            state.official_calendar_size is None
+            or state.official_calendar_digest is None
+        ):
+            raise TypeError("verified official calendar state is incomplete")
+        calendar_raw = _read_immutable_file(
+            state.official_calendar_path,
+            label="verified receipt-authority official calendar",
+            expected_size=state.official_calendar_size,
+            maximum_size=_MAX_RAW_PAGE_BYTES,
+        )
+        if _digest(calendar_raw) != state.official_calendar_digest:
+            raise ValueError("verified official calendar changed after verification")
+        calendar = derive_official_business_calendar(
+            calendar_raw,
+            segment_start=state.required.segment_start,
+            segment_end=state.required.segment_end,
+        )
+        if calendar.business_dates_digest != state.official_business_dates_digest:
+            raise ValueError("verified official business dates changed after verification")
     return tuple(pages)
 
 

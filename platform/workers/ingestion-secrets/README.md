@@ -13,12 +13,22 @@ target owns the official origin, path, query mode, pagination mapping,
 credentials, redirect policy, and target registry. Public HTTP cannot invoke
 or tunnel this method.
 
-The first reviewed registry supports seven closed historical month routes:
+The reviewed target registry implements eight closed historical month routes:
 daily bars, financial summary/details/dividend/earnings-date, TOPIX daily bars,
-and market calendar. It deliberately leaves the following `PENDING`:
+market calendar, and equities master. Equities master first fetches the official
+`/v2/markets/calendar?from=&to=` response with the same bound API credential,
+requires an exact row for every calendar date, and selects only `HolDiv` values
+`1` and `2`. The exact calendar bytes, query, derived date list, and their
+digests are bound into the acquisition identity, HMAC continuation state,
+metadata query digest, and page chain. It never derives dates from weekdays.
 
-- `equities_master`, until a verified JPX business-day authority prevents
-  non-business-date next-day results from crossing the governed month;
+The registry still deliberately leaves the following closure dependencies
+`PENDING`:
+
+- `equities_master` COMPLETE/reproof activation, until a governed production
+  Receipt acquisition capability independently captures and create-only
+  persists the official calendar bytes. The Python verifier supports that
+  opaque evidence, but no production capture writer currently mints it;
 - `equities_bars_daily_am` and `equities_earnings_calendar`, until a
   target-owned trading-calendar/session-cutoff authority can derive tip
   identity without trusting a caller date;
@@ -41,12 +51,13 @@ metadata, independently reconcile them, and issue its own Ed25519 receipt.
 Persisted target headers alone remain `RAW_ONLY` after a crash unless a future
 closed verification capability is added.
 
-No live `JQUANTS_ACQUISITION` caller binding or production HMAC key is
-provisioned by this change. Staging intentionally has zero secret names, so the
-RPC returns `rpc_unavailable`; production activation, caller/reconciler support,
-receipt signing, registry activation, and historical reproof all remain
-`PENDING`. The existing downstream reconciler also does not yet model daily
-sub-slices within a governed monthly segment or multiple provider chains.
+No live `JQUANTS_ACQUISITION` caller binding, Receipt capture writer, or
+production HMAC key is provisioned by this change. Staging intentionally has
+zero secret names, so the RPC returns `rpc_unavailable`; production activation,
+Receipt-authority capture, receipt signing, registry activation, and historical
+reproof all remain `PENDING`. The verifier models the equities-master official
+daily slice sequence and provider pagination independently, but it cannot turn
+caller-authored paths or headers into a positive capture capability.
 
 ## Authority boundary
 

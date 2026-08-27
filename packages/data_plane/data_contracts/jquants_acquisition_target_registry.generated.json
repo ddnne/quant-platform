@@ -169,6 +169,204 @@
           "ingestion": "cf_platform",
           "primary": "jquants_premium_core"
         },
+        "dataset_id": "equities_master",
+        "display_name": "Equities Master",
+        "enabled": true,
+        "governance_tier": "governed",
+        "inventory_status": "GOVERNED",
+        "sla": {
+          "expected_after": null,
+          "freshness_policy": "trading_day",
+          "usable_by": null
+        },
+        "source": "jquants_premium_core"
+      },
+      "coverage_policy": {
+        "collection_scope": "jquants_premium_core",
+        "coverage_mode": "scd2_event_sourcing",
+        "dataset_id": "equities_master",
+        "earliest_official_availability": null,
+        "empty_success_policy": "never_complete",
+        "expected_frequency": "trading_day",
+        "governance_tier": "governed",
+        "history_mode": "bounded_history",
+        "history_target_end_rule": "latest_published_before_collection_cutoff",
+        "history_target_start": "2008-05-07",
+        "not_historical_required_start": null,
+        "official_mode": null,
+        "policy_version": "collection-coverage/v3",
+        "raw_retention_required": true,
+        "required_domain_basis": "calendar_months_from_official_start",
+        "segment_granularity": "calendar_month",
+        "structured_reconciliation_required": true,
+        "universe_rule": "all_listed_equities_at_event_date",
+        "vendor_data_provision_citation": "https://jpx-jquants.com/en/spec/eq-master",
+        "vendor_data_provision_start": "2008-05-07",
+        "vendor_history_policy": null,
+        "vendor_history_policy_citation": null
+      },
+      "premium_contract": {
+        "assumption": "Date is the snapshot observation day, not an evidenced publication instant.",
+        "availability_field": null,
+        "available_at_policy": "ingest_time_conservative",
+        "bulk": "api",
+        "code_param": true,
+        "dataset_id": "equities_master",
+        "date_mode": "today",
+        "event_time_fields": [
+          "Date"
+        ],
+        "event_time_policy": "observation_date",
+        "fallback_policy": "ingest_time_conservative",
+        "group": "core",
+        "known_publication_lag": null,
+        "natural_key_fields": [
+          "Code",
+          "Date"
+        ],
+        "observation_grain": "issuer_snapshot_day",
+        "params": [
+          "code",
+          "date"
+        ],
+        "path": "/v2/equities/master"
+      },
+      "query_resolution": {
+        "allowed_ignored_response_fields": [],
+        "authority": "target-reviewed-route/v2",
+        "coverage_segment_granularity": "calendar_month",
+        "day_parameter": "date",
+        "mode": "official_business_day_sliced",
+        "official_calendar_binding": {
+          "authority": "target-and-receipt-independent-reproof/v1",
+          "complete_calendar_day_sequence_required": true,
+          "cross_segment_resolution": "FORBIDDEN",
+          "date_field": "Date",
+          "holiday_division_field": "HolDiv",
+          "ordered_parameters": [
+            "from",
+            "to"
+          ],
+          "path": "/v2/markets/calendar",
+          "response_data_field": "data",
+          "tse_business_day_values": [
+            "1",
+            "2"
+          ]
+        },
+        "official_client_evidence": [
+          "https://github.com/J-Quants/jquants-api-client-python/blob/e38614ea3d66c4420597ff148c4848693692d6d9/jquantsapi/apis/v2/equities.py",
+          "https://github.com/J-Quants/jquants-api-client-python/blob/e38614ea3d66c4420597ff148c4848693692d6d9/jquantsapi/apis/v2/markets.py"
+        ],
+        "omitted_optional_parameter_mismatches": [],
+        "pagination": [
+          {
+            "query_parameter": "pagination_key",
+            "response_field": "pagination_key"
+          }
+        ],
+        "pagination_evidence": "https://github.com/J-Quants/jquants-api-client-python/blob/e38614ea3d66c4420597ff148c4848693692d6d9/jquantsapi/apis/v2/equities.py",
+        "premium_parameter_disposition": "TARGET_OFFICIAL_CALENDAR_ROUTE_SELECTED"
+      },
+      "source_capability": {
+        "available_at": {
+          "field": null,
+          "policy": "ingest_time_conservative"
+        },
+        "collection_window": {
+          "close": "latest_published_before_collection_cutoff",
+          "grain": "calendar_month",
+          "open": "2008-05-07",
+          "pit_history_start": "2008-05-07",
+          "query_before_official_start": {
+            "behavior": "clamp_to_earliest_official_availability",
+            "clamped_date": "2008-05-07",
+            "classification": "vendor_misdate_clamp",
+            "not_missing_backfill": true
+          },
+          "required_domain_start": "2008-05-07",
+          "required_segment_start_month": "2008-05"
+        },
+        "dataset_id": "equities_master",
+        "earliest_official_availability": "2008-05-07",
+        "entitlement_semantics": {
+          "clamp_before_earliest": true,
+          "not_historical_required_start": "2006-08-13",
+          "official_data_provision_start": "2008-05-07",
+          "plan": "premium",
+          "subscription_entitlement_floor": "2006-08-13",
+          "subscription_entitlement_floor_live": "2006-08-19",
+          "subscription_floor": null,
+          "subscription_floor_is_not_historical_required_start": true
+        },
+        "event_time": {
+          "fields": [
+            "Date"
+          ],
+          "grain": "issuer_snapshot_day",
+          "policy": "observation_date"
+        },
+        "freshness_sla": {
+          "expected_after": "17:30",
+          "next_business_day_after": "17:30",
+          "policy": "trading_day",
+          "rule": "trading_day",
+          "same_day": true,
+          "timezone": "Asia/Tokyo",
+          "usable_by": "next_business_day_08:00"
+        },
+        "historical_research_eligible": true,
+        "history_mode": "bounded_history",
+        "official_evidence_url": "https://jpx-jquants.com/en/spec/eq-master",
+        "policy_version": "source-capability/v3",
+        "publication_calendar": {
+          "as_of_current_day": true,
+          "as_of_next_business_day": true,
+          "as_of_past": true,
+          "kind": "jpx_business_day",
+          "next_business_day_available_after": "17:30",
+          "non_business_day_resolution": "next_business_day",
+          "timezone": "Asia/Tokyo"
+        },
+        "required_domain_semantics": {
+          "basis": "calendar_months_from_official_start",
+          "empty_success_policy": "never_complete"
+        },
+        "research_profile_eligibility": {
+          "dataset_complete_claim": false,
+          "exclude_from": [],
+          "exclusion_reason": "none",
+          "historical_research": true,
+          "include_in": [
+            "core",
+            "core_historical"
+          ],
+          "pit_history_start": "2008-05-07",
+          "tip_ops": true
+        },
+        "revision_semantics": {
+          "corrections_not_visible_before_available_at": true,
+          "generation_on_revision": true,
+          "kind": "scd2_event_sourcing",
+          "policy": "scd2_event_sourcing"
+        },
+        "source": "jquants_premium_core",
+        "supported_query_parameters": [
+          "code",
+          "date",
+          "pagination_key"
+        ],
+        "tip_only_operational": false,
+        "upstream_locator": "/v2/equities/master"
+      }
+    },
+    {
+      "canonical_dataset": {
+        "contracts": {
+          "coverage": "collection_coverage/v2",
+          "ingestion": "cf_platform",
+          "primary": "jquants_premium_core"
+        },
         "dataset_id": "fins_details",
         "display_name": "Financial Details",
         "enabled": true,
@@ -1166,7 +1364,7 @@
     },
     {
       "dataset_id": "equities_master",
-      "reason": "official date lookup may resolve non-business dates to the next business day; verified JPX calendar capability is required to prevent cross-segment raw mixing",
+      "reason": "official-calendar-bound target route is implemented but activation awaits a governed Receipt acquisition capability that independently persists opaque calendar reproof bytes",
       "status": "PENDING"
     }
   ],
@@ -1175,7 +1373,7 @@
   "maximum_redirects": 0,
   "maximum_segment_pages": 8192,
   "official_origin": "https://api.jquants.com",
-  "registry_digest": "sha256:a781ee4cf6e000b692fe40f41d4ab809f3de80e16f6d09034252a6f12d172a35",
+  "registry_digest": "sha256:c1e869c95b0426926fc6db92a8438b327ed980abc8188deb096cc0a982c9c3c8",
   "rpc_surface": {
     "request_fields": [
       "schema_version",

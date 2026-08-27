@@ -81,6 +81,12 @@ _JQUANTS_ACQUISITION_EXTRA_DIGESTS = frozenset(
         "acquisition_terminal_chain_digest",
     }
 )
+_JQUANTS_MASTER_CALENDAR_EXTRA_DIGESTS = frozenset(
+    {
+        "acquisition_official_calendar_raw_digest",
+        "acquisition_official_business_dates_digest",
+    }
+)
 
 
 class ReceiptEvidenceAuthorityPending(RuntimeError):
@@ -723,6 +729,19 @@ class _GovernedReceiptService:
                     "acquisition_collection_digest": verified_state.collection_digest,
                     "acquisition_terminal_chain_digest": (
                         verified_state.terminal_chain_digest
+                    ),
+                    **(
+                        {
+                            "acquisition_official_calendar_raw_digest": (
+                                verified_state.official_calendar_digest
+                            ),
+                            "acquisition_official_business_dates_digest": (
+                                verified_state.official_business_dates_digest
+                            ),
+                        }
+                        if verified_state.official_calendar_digest is not None
+                        and verified_state.official_business_dates_digest is not None
+                        else {}
                     ),
                 }
             )
@@ -1673,7 +1692,12 @@ def _measure_collection_claims(
     extras = dict(_trusted_extra_evidence(required, extra_evidence))
     authority_extras = dict(trusted_extra_evidence or {})
     if required.source == "jquants":
-        if set(authority_extras) != _JQUANTS_ACQUISITION_EXTRA_DIGESTS:
+        expected_authority_extras = _JQUANTS_ACQUISITION_EXTRA_DIGESTS | (
+            _JQUANTS_MASTER_CALENDAR_EXTRA_DIGESTS
+            if required.dataset == "equities_master"
+            else frozenset()
+        )
+        if set(authority_extras) != expected_authority_extras:
             raise ValueError("verified J-Quants acquisition digest set is incomplete")
         if any(
             not isinstance(value, str) or not value.startswith("sha256:")

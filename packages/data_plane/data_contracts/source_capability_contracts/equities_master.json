@@ -8,7 +8,7 @@
   "earliest_official_availability": "2008-05-07",
   "historical_research_eligible": true,
   "tip_only_operational": false,
-  "supported_query_parameters": ["code", "date"],
+  "supported_query_parameters": ["code", "date", "pagination_key"],
   "publication_calendar": {
     "kind": "jpx_business_day",
     "timezone": "Asia/Tokyo",

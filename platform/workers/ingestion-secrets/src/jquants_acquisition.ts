@@ -24,6 +24,12 @@ import {
   inspectStrictJsonObject,
   type StrictJsonTopLevelValue,
 } from "./strict_json";
+import {
+  deriveOfficialBusinessCalendar,
+  OFFICIAL_CALENDAR_PATH,
+  officialMasterQueryDigest,
+  type OfficialBusinessCalendarBinding,
+} from "./jquants_official_business_calendar";
 
 export type AcquisitionEnv = {
   ENVIRONMENT?: string;
@@ -390,11 +396,22 @@ function validateSession(resolved: ResolvedGovernedRequest, session: Acquisition
     if (session.sliceDate !== null || session.sliceOrdinal !== 0) {
       throw new AcquisitionRequestRejected("continuation_slice");
     }
-  } else {
+  } else if (resolved.route.queryMode === "calendar_month_sliced") {
     const expected = addDays(resolved.segmentStart, session.sliceOrdinal);
     if (session.sliceDate !== expected || expected > resolved.segmentEnd) {
       throw new AcquisitionRequestRejected("continuation_slice");
     }
+  } else {
+    const calendar = session.officialCalendar;
+    const expected = calendar?.businessDates[session.sliceOrdinal];
+    if (calendar === null || expected === undefined || session.sliceDate !== expected ||
+      calendar.businessDates[0]! < resolved.segmentStart ||
+      calendar.businessDates.at(-1)! > resolved.segmentEnd) {
+      throw new AcquisitionRequestRejected("continuation_official_calendar_slice");
+    }
+  }
+  if (resolved.route.requiresOfficialCalendar !== (session.officialCalendar !== null)) {
+    throw new AcquisitionRequestRejected("continuation_official_calendar");
   }
   if (
     (session.providerPageOrdinal === 0 &&
@@ -419,11 +436,18 @@ async function buildPageQuery(
   if (session.continuationParameter !== null && session.providerCursor !== null) {
     query.set(session.continuationParameter, session.providerCursor);
   }
-  const queryDigest = await canonicalDigest({
-    schema_version: "jquants-acquisition-query/v2",
-    path: resolved.route.path,
-    ordered_query: [...query.entries()],
-  });
+  const queryDigest = session.officialCalendar === null
+    ? await canonicalDigest({
+      schema_version: "jquants-acquisition-query/v2",
+      path: resolved.route.path,
+      ordered_query: [...query.entries()],
+    })
+    : await officialMasterQueryDigest({
+      path: resolved.route.path,
+      sliceDate: session.sliceDate!,
+      providerCursor: session.providerCursor,
+      calendar: session.officialCalendar,
+    });
   return { sliceDate: session.sliceDate, query, queryDigest };
 }
 
@@ -437,8 +461,10 @@ async function pageChainDigest(input: {
   providerState: AcquisitionPaginationState;
   segmentState: AcquisitionPaginationState;
 }): Promise<string> {
-  return canonicalDigest({
-    schema_version: "jquants-acquisition-chain-link/v2",
+  const link: Record<string, unknown> = {
+    schema_version: input.session.officialCalendar === null
+      ? "jquants-acquisition-chain-link/v2"
+      : "jquants-acquisition-chain-link/v3",
     acquisition_id: input.session.acquisitionId,
     cursor_key_id: input.session.cursorKeyId,
     acquisition_issued_at: input.session.issuedAt,
@@ -457,7 +483,42 @@ async function pageChainDigest(input: {
     evidence_state: input.evidenceState,
     provider_pagination_state: input.providerState,
     pagination_state: input.segmentState,
-  });
+  };
+  if (input.session.officialCalendar !== null) {
+    link.official_calendar_binding_digest = input.session.officialCalendar.bindingDigest;
+    link.official_calendar_raw_body_digest = input.session.officialCalendar.rawBodyDigest;
+    link.official_calendar_query_digest = input.session.officialCalendar.calendarQueryDigest;
+    link.official_business_dates_digest = input.session.officialCalendar.businessDatesDigest;
+    link.official_business_dates = input.session.officialCalendar.businessDates;
+  }
+  return canonicalDigest(link);
+}
+
+async function captureOfficialCalendar(
+  resolved: ResolvedGovernedRequest,
+  apiKey: string,
+  limits: TargetRegistryLimits,
+): Promise<OfficialBusinessCalendarBinding> {
+  if (!resolved.route.requiresOfficialCalendar) {
+    throw new AcquisitionRequestRejected("official_calendar_route");
+  }
+  const target = new URL(OFFICIAL_CALENDAR_PATH, limits.officialOrigin);
+  target.search = new URLSearchParams([
+    ["from", resolved.segmentStart],
+    ["to", resolved.segmentEnd],
+  ]).toString();
+  const response = await governedFetch(target, apiKey, limits);
+  if (response.status !== 200 || normalizedContentType(response) !== "application/json") {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Provider-controlled cancellation cannot turn an invalid calendar into
+      // a usable master session.
+    }
+    throw new AcquisitionRequestRejected("official_calendar_response");
+  }
+  const raw = await readBoundedBody(response, limits.maximumPageBytes);
+  return deriveOfficialBusinessCalendar(raw, resolved.segmentStart, resolved.segmentEnd);
 }
 
 function audit(
@@ -501,22 +562,57 @@ export async function fetchGovernedPage(
     return response;
   }
   const limits = targetRegistryLimits();
-  let session: AcquisitionSession;
+  let session: AcquisitionSession | null = null;
   try {
-    session = resolved.request.continuation_token === null
-      ? await initialAcquisitionSession(env.JQUANTS_RPC_CURSOR_HMAC_KEY, resolved, now, limits)
-      : await consumeContinuationToken(
+    if (resolved.request.continuation_token !== null) {
+      session = await consumeContinuationToken(
         env.JQUANTS_RPC_CURSOR_HMAC_KEY,
         resolved.request.continuation_token,
         resolved,
         now,
         limits,
       );
-    validateSession(resolved, session);
+      validateSession(resolved, session);
+    } else if (!resolved.route.requiresOfficialCalendar) {
+      session = await initialAcquisitionSession(
+        env.JQUANTS_RPC_CURSOR_HMAC_KEY, resolved, now, limits,
+      );
+      validateSession(resolved, session);
+    }
   } catch {
     const response = await errorResponse("request_rejected", 400, environment, "REJECTED", resolved);
     audit(resolved, null, "REJECTED", response.status);
     return response;
+  }
+
+  try {
+    const rate = await env.PROXY_RATE_LIMITER.limit({ key: "jquants-acquisition-rpc-v2" });
+    if (!rate.success) {
+      const response = await errorResponse("rate_limited", 429, environment, "FAILED", resolved, session);
+      audit(resolved, session?.acquisitionId ?? null, "FAILED", response.status);
+      return response;
+    }
+  } catch {
+    const response = await errorResponse("rpc_unavailable", 503, environment, "FAILED", resolved, session);
+    audit(resolved, session?.acquisitionId ?? null, "FAILED", response.status);
+    return response;
+  }
+  if (session === null) {
+    try {
+      const calendar = await captureOfficialCalendar(
+        resolved, env.JQUANTS_API_KEY, limits,
+      );
+      session = await initialAcquisitionSession(
+        env.JQUANTS_RPC_CURSOR_HMAC_KEY, resolved, now, limits, calendar,
+      );
+      validateSession(resolved, session);
+    } catch {
+      const response = await errorResponse(
+        "official_calendar_failed", 502, environment, "FAILED", resolved,
+      );
+      audit(resolved, null, "FAILED", response.status);
+      return response;
+    }
   }
 
   let page: PageQuery;
@@ -525,18 +621,6 @@ export async function fetchGovernedPage(
   } catch {
     const response = await errorResponse("request_rejected", 400, environment, "REJECTED", resolved, session);
     audit(resolved, session.acquisitionId, "REJECTED", response.status);
-    return response;
-  }
-  try {
-    const rate = await env.PROXY_RATE_LIMITER.limit({ key: "jquants-acquisition-rpc-v2" });
-    if (!rate.success) {
-      const response = await errorResponse("rate_limited", 429, environment, "FAILED", resolved, session);
-      audit(resolved, session.acquisitionId, "FAILED", response.status);
-      return response;
-    }
-  } catch {
-    const response = await errorResponse("rpc_unavailable", 503, environment, "FAILED", resolved, session);
-    audit(resolved, session.acquisitionId, "FAILED", response.status);
     return response;
   }
 
@@ -597,11 +681,16 @@ export async function fetchGovernedPage(
       cursor: provider.cursor,
     };
   } else if (provider.state === "EXHAUSTED" &&
-    resolved.route.queryMode === "calendar_month_sliced" &&
-    session.sliceDate !== null && session.sliceDate < resolved.segmentEnd) {
+    resolved.route.queryMode !== "calendar_month_range" &&
+    session.sliceDate !== null &&
+    (resolved.route.queryMode === "calendar_month_sliced"
+      ? session.sliceDate < resolved.segmentEnd
+      : session.sliceOrdinal + 1 < session.officialCalendar!.businessDates.length)) {
     segmentState = "CONTINUATION";
     next = {
-      sliceDate: addDays(session.sliceDate, 1),
+      sliceDate: resolved.route.queryMode === "calendar_month_sliced"
+        ? addDays(session.sliceDate, 1)
+        : session.officialCalendar!.businessDates[session.sliceOrdinal + 1]!,
       sliceOrdinal: session.sliceOrdinal + 1,
       providerPageOrdinal: 0,
       parameter: null,
