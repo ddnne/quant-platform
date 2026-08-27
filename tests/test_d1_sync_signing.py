@@ -842,6 +842,45 @@ def test_applied_mirror_binds_path_connections_to_initial_file_bytes(
     assert hits == [os.fspath(path_a), os.fspath(path_a)]
 
 
+def test_descriptor_connection_accepts_only_same_inode_when_sqlite_rewrites_path(
+    tmp_path,
+):
+    """Linux may report a backing path for a /dev/fd URI; inode is authority."""
+
+    from scripts import sync_d1_to_sqlite as sync
+
+    source = (tmp_path / "source.sqlite").resolve()
+    with sqlite3.connect(source) as setup:
+        setup.execute("CREATE TABLE proof (value TEXT NOT NULL)")
+        setup.execute("INSERT INTO proof VALUES ('same-inode')")
+    alias = tmp_path / "source-alias.sqlite"
+    alias.symlink_to(source)
+    expected = sync._private_export._measure_regular_file(source)  # noqa: SLF001
+
+    same = sqlite3.connect(f"file:{alias}?mode=rw", uri=True)
+    try:
+        sync._require_descriptor_sqlite_connection(  # noqa: SLF001
+            same,
+            descriptor_path=str(source),
+            expected=expected,
+        )
+    finally:
+        same.close()
+
+    substituted = tmp_path / "substituted.sqlite"
+    shutil.copy2(source, substituted)
+    other = sqlite3.connect(f"file:{substituted}?mode=rw", uri=True)
+    try:
+        with pytest.raises(ValueError, match="changed inode"):
+            sync._require_descriptor_sqlite_connection(  # noqa: SLF001
+                other,
+                descriptor_path=str(source),
+                expected=expected,
+            )
+    finally:
+        other.close()
+
+
 def test_strict_json_rejects_duplicate_and_nonfinite_signed_documents(
     tmp_path, monkeypatch
 ):

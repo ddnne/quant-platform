@@ -1642,19 +1642,44 @@ def _measure_connection_snapshot(
     if len(main_rows) != 1 or other_rows not in ([], [(1, "temp", "")]):
         raise RuntimeError("Ops Projection source connection is not descriptor-bound")
     descriptor_path = main_rows[0][2]
-    descriptor_roots = ("/dev/fd/", "/proc/self/fd/")
     if (
         type(descriptor_path) is not str
-        or not any(descriptor_path.startswith(root) for root in descriptor_roots)
-        or not descriptor_path.rsplit("/", 1)[-1].isdigit()
+        or not descriptor_path
+        or not Path(descriptor_path).is_absolute()
     ):
         raise RuntimeError("Ops Projection source connection is not descriptor-bound")
+    # SQLite reports /dev/fd/N on macOS but canonicalizes the same retained
+    # descriptor to its backing pathname on Linux.  Trust the private one-shot
+    # authority registration, then prove the reported path still names the
+    # exact inode that authority pinned; pathname spelling is not a capability.
+    from scripts.sync_d1_to_sqlite import (
+        _authenticated_applied_mirror_connection_identity,
+    )
+
+    expected = _authenticated_applied_mirror_connection_identity(conn)
+    if expected is None:
+        raise RuntimeError("Ops Projection source connection is not descriptor-bound")
     try:
-        descriptor_stat = os.stat(descriptor_path)
+        descriptor_fd = os.open(
+            descriptor_path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0),
+        )
+        try:
+            descriptor_stat = os.fstat(descriptor_fd)
+        finally:
+            os.close(descriptor_fd)
     except OSError as exc:
         raise RuntimeError("Ops Projection source descriptor disappeared") from exc
-    if not stat.S_ISREG(descriptor_stat.st_mode):
-        raise RuntimeError("Ops Projection source descriptor is not a regular file")
+    if (
+        not stat.S_ISREG(descriptor_stat.st_mode)
+        or (
+            int(descriptor_stat.st_dev),
+            int(descriptor_stat.st_ino),
+            int(descriptor_stat.st_size),
+        )
+        != (expected.device, expected.inode, expected.size)
+    ):
+        raise RuntimeError("Ops Projection source descriptor changed inode")
     schema_row = conn.execute("PRAGMA main.schema_version").fetchone()
     data_row = conn.execute("PRAGMA main.data_version").fetchone()
     if schema_row is None or data_row is None:

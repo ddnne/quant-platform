@@ -2284,10 +2284,37 @@ def _require_descriptor_sqlite_connection(
         or main_rows[0][0] != 0
         or type(main_rows[0][1]) is not str
         or type(main_rows[0][2]) is not str
-        or main_rows[0][2] != descriptor_path
+        or not main_rows[0][2]
+        or not Path(main_rows[0][2]).is_absolute()
         or other_rows not in ([], [(1, "temp", "")])
     ):
         raise ValueError("applied mirror SQLite connection is not descriptor-bound")
+    # SQLite preserves /dev/fd/N on macOS but canonicalizes the same opened
+    # descriptor to its backing pathname on Linux.  The textual spelling is
+    # not the capability: require the connection-reported path to name the
+    # exact retained inode, then verify the serialized bytes below.
+    opened: list[int] = []
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        opened.append(os.open(main_rows[0][2], flags))
+        opened.append(os.open(descriptor_path, flags))
+        connected = os.fstat(opened[0])
+        descriptor = os.fstat(opened[1])
+    except OSError as exc:
+        raise ValueError(
+            "applied mirror SQLite connection path is unavailable"
+        ) from exc
+    finally:
+        for opened_fd in opened:
+            os.close(opened_fd)
+    if (
+        not stat.S_ISREG(connected.st_mode)
+        or (connected.st_dev, connected.st_ino, connected.st_size)
+        != (expected.device, expected.inode, expected.size)
+        or (descriptor.st_dev, descriptor.st_ino, descriptor.st_size)
+        != (expected.device, expected.inode, expected.size)
+    ):
+        raise ValueError("applied mirror SQLite connection changed inode")
     mode = conn.execute("PRAGMA journal_mode").fetchone()
     if (
         mode is None
@@ -2304,6 +2331,13 @@ def _require_descriptor_sqlite_connection(
 def _build_applied_mirror_authority():
     """Mint one-shot handles over one writer-locked SQLite read snapshot."""
     live_mirrors = WeakSet()
+    trusted_projection_connections: dict[
+        int,
+        tuple[
+            sqlite3.Connection,
+            _private_export._PinnedFileIdentity,  # noqa: SLF001
+        ],
+    ] = {}
     mirror_states: WeakKeyDictionary[
         object,
         tuple[
@@ -2380,7 +2414,25 @@ def _build_applied_mirror_authority():
                 restored = json.loads(identity_json)
                 immutable_identity = _deep_immutable_json(restored)
                 assert isinstance(immutable_identity, Mapping)
-                result = consumer(read_conn, immutable_identity)
+                connection_key = id(read_conn)
+                if connection_key in trusted_projection_connections:
+                    raise RuntimeError(
+                        "authenticated applied mirror connection is already active"
+                    )
+                trusted_projection_connections[connection_key] = (
+                    read_conn,
+                    initial_file_identity,
+                )
+                try:
+                    result = consumer(read_conn, immutable_identity)
+                finally:
+                    registered = trusted_projection_connections.pop(
+                        connection_key, None
+                    )
+                    if registered is None or registered[0] is not read_conn:
+                        raise RuntimeError(
+                            "authenticated applied mirror connection registry changed"
+                        )
                 if not lock_conn.in_transaction or not read_conn.in_transaction:
                     raise RuntimeError(
                         "authenticated applied mirror lock was released"
@@ -2438,6 +2490,16 @@ def _build_applied_mirror_authority():
                 "Ops projection requires an authenticated applied mirror handle"
             )
         return handle._consume_for_projection(consumer)
+
+    def _authenticated_applied_mirror_connection_identity(
+        conn: sqlite3.Connection,
+    ) -> _private_export._PinnedFileIdentity | None:  # noqa: SLF001
+        """Return identity only while the one-shot authority owns this connection."""
+
+        registered = trusted_projection_connections.get(id(conn))
+        if registered is None or registered[0] is not conn:
+            return None
+        return registered[1]
 
     def open_authenticated_applied_mirror(
         db_path: str | Path,
@@ -2596,6 +2658,7 @@ def _build_applied_mirror_authority():
         _AuthenticatedAppliedMirror,
         open_authenticated_applied_mirror,
         _consume_authenticated_applied_mirror,
+        _authenticated_applied_mirror_connection_identity,
     )
 
 
@@ -2603,6 +2666,7 @@ def _build_applied_mirror_authority():
     _AuthenticatedAppliedMirror,
     open_authenticated_applied_mirror,
     _consume_authenticated_applied_mirror,
+    _authenticated_applied_mirror_connection_identity,
 ) = _build_applied_mirror_authority()
 del _build_applied_mirror_authority
 
