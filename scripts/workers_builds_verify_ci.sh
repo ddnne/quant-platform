@@ -52,4 +52,9 @@ venv_py="$ROOT/.venv/bin/python"
 python_has_ci_runtime "$venv_py" || \
   fail "created .venv must preserve the Python and SQLite runtime contract"
 
+# verify_ci.sh deliberately discovers its host interpreter from PATH.  Keep the
+# just-proven distribution interpreter ahead of Cloudflare's asdf shims: those
+# shims may point at a Python build without the optional _sqlite3 extension.
+export PATH="$ROOT/.venv/bin:$PATH"
+
 exec bash "$ROOT/scripts/verify_ci.sh"
