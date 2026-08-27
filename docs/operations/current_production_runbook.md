@@ -79,82 +79,84 @@ secret-name set. It reads names and binding kinds only; values are never
 requested or printed. Missing authentication, missing names, and unexpected
 names all fail closed. Wrangler is `4.125.0`.
 
-## 2. Apply D1 migrations through canonical owners
+## 2. D1 migration policy: source-only HOLD
 
-Do not hand-loop a subset of SQL files. Do not apply Ops projection SQL to
-`quant-ingest`. `ingestion-premium` owns `quant-ingest`; `quant-ops-mcp` owns
-`quant-ops-projection` and `quant-ops-quota`.
+Do not hand-loop SQL files or run a remote D1 migration command from this
+revision. `ingestion-premium` remains the source owner for `quant-ingest`, and
+`quant-ops-mcp` remains the source owner for `quant-ops-projection` and
+`quant-ops-quota`, but source ownership is not remote mutation authority. The
+frozen manifest deliberately sets the `quant-ingest` owner command to `null`,
+remote mutation to `false`, and both staging and production to `HOLD`.
 
-### quant-ingest guarded 0011-0018 sequence
+Migration 0012 copies the populated v2 JSDA graph into a separately constrained
+v3 graph, installs v2-to-v3 bridge triggers before copying, and never drops v2
+data. Every statement is resumable, but neither a migration-history row nor a
+local file proves exact remote schema, data preservation, exclusion, or the
+source SHA that executed.
 
-Do **not** run generic `wrangler d1 migrations apply quant-ingest` for this
-chain. Migration 0012 now copies the populated v2 JSDA graph into a separately
-constrained v3 graph, installs v2-to-v3 bridge triggers before copying, and
-never drops v2 data. Every statement is resumable, but a migration-history row
-alone still does not prove exact schema or data preservation. The canonical
-owner is `scripts/apply_ingestion_d1_migrations.py`; it orchestrates all of the
-following against the same authenticated D1 identity:
-
-1. bind `environment`, binding, database name, and database ID to the canonical
-   manifest rather than caller input;
-2. create and verify a recoverable encrypted backup plus the provider restore
-   bookmark before any apply;
-3. run exact preflight with no attached/TEMP deputy, accepting only absent or
-   exact canonical `sqlite_master`/PRAGMA structure;
-4. simulate every pending canonical migration on a local copy of the remote
-   export, including interruption recovery and v2/v3 preservation;
-5. preflight all local paths as resolve-distinct, private, create-only paths,
-   publish PREPARED evidence, and occupy the final evidence pathname with a
-   durable `REMOTE_APPLY_AUTHORIZED_STATE_UNKNOWN_UNTIL_FINALIZED` reservation;
-6. apply the exact manifest chain through the pinned local Wrangler;
-7. take a second independent remote export and require exact schema, exact
-   migration history, empty FK check, and v2/v3 row preservation;
-8. atomically replace only the unchanged reservation with evidence binding the
-   bookmark, encrypted backup checksum, pre/post digests, source SHA, manifest,
-   database, and environment. If apply or postflight fails, the reservation is
-   retained as an auditable remote-state-unknown marker and retry is refused.
-
-[`scripts/d1_specialized_schema_validation.py`](../../scripts/d1_specialized_schema_validation.py)
-remains the narrow 0013 semantic contract. The guarded owner additionally uses
 [`scripts/d1_ingestion_migration_validation.py`](../../scripts/d1_ingestion_migration_validation.py)
-for the complete chain. Both production and staging database name/ID and
-migration table come only from the canonical manifest; caller-supplied database
-identity is not accepted. Production also cross-binds staging top-level,
-preflight, postflight, encrypted-backup database identity, manifest digest, and
-backup restore source SHA; a valid old backup cannot be relabelled for a newer
-source SHA.
+provides exact local preflight/postflight validation. The current
+[`scripts/apply_ingestion_d1_migrations.py`](../../scripts/apply_ingestion_d1_migrations.py)
+is a fail-closed observation/HOLD and recovery implementation despite its
+legacy filename; it publishes no authorized remote apply path. In particular:
+
+1. the canonical reservation identity is exactly environment, canonical D1
+   database ID, source SHA, and canonical manifest digest;
+2. a local `O_EXCL` reservation is only a crash/audit marker on one host. It is
+   not a durable cross-host lock and never authorizes remote mutation;
+3. staging remains `HOLD` until a trusted remote lock supplies cross-host
+   exclusion and a control-plane attestation binds the executing source SHA;
+4. production obtains staging evidence by independently querying and exporting
+   the canonical staging D1 binding. It accepts no caller staging JSON, path,
+   encrypted backup, or key, and remains `HOLD` even when staging is exact until
+   the same trusted control plane attests the staging source SHA;
+5. Time Travel bookmarks and verified AES-256-GCM exports are rollback material
+   only. A backup, its key, restore result, or digest is never migration or
+   staging authority;
+6. exact preflight, simulated canonical replay, exact postflight, empty FK
+   check, exact history, and v2/v3 preservation remain mandatory after a future
+   authority is added. They do not substitute for that authority.
+
+The recovery command classifies a fresh canonical observation with exactly
+these semantics:
+
+- `APPLIED` (`RECOVERED_APPLIED_EXACT`): exact canonical postflight and zero
+  pending migrations;
+- `NOT_APPLIED` (`RECOVERED_NOT_APPLIED`): the live identity, bookmark,
+  validation result, and pending inventory exactly match the recorded preflight
+  baseline;
+- `UNKNOWN`: every unavailable, changed, partial, malformed, or otherwise
+  ambiguous state.
+
+Recovery classification does not prove which source SHA performed an earlier
+mutation, grant mutation authority, initiate rollback, or authorize a blind
+retry. `UNKNOWN` remains `HOLD` for manual investigation. Before publishing any
+remote apply procedure, implement and independently review a trusted remote
+lock/control-plane service keyed by the canonical reservation identity and
+capable of producing a source-SHA attestation.
+
+The source-manifest consistency check does not contact or mutate Cloudflare:
 
 ```bash
 .venv/bin/python scripts/cloudflare_d1_migration_manifest.py
+```
 
-cd platform/workers/ingestion-premium
-npm ci
-cd ../../..
+If a prior HOLD observation already created the canonical `UNKNOWN`
+reservation for the exact clean source SHA and manifest, the following recovery
+command is permitted. It performs read-only live D1 queries/exports and changes
+only that canonical local reservation; it accepts no caller path, database,
+backup, key, evidence, run ID, or source SHA. It never applies or rolls back a
+remote migration:
 
-# First: distinct staging account/resources and a staging-only backup key.
+```bash
 .venv/bin/python scripts/apply_ingestion_d1_migrations.py \
   --environment staging \
-  --backup-target /secure/private/quant-ingest-staging.preapply.sql.enc \
-  --backup-key /secure/private/d1_staging_backup_aes256.key \
-  --prepare-evidence-target /secure/private/quant-ingest-staging.prepared.json \
-  --evidence-target /secure/private/quant-ingest-staging.migration.json
-
-# Review staging postflight, then use the exact same merged source SHA.
-.venv/bin/python scripts/apply_ingestion_d1_migrations.py \
-  --environment production \
-  --backup-target /secure/private/quant-ingest.preapply.sql.enc \
-  --backup-key /secure/private/d1_production_backup_aes256.key \
-  --prepare-evidence-target /secure/private/quant-ingest.prepared.json \
-  --evidence-target /secure/private/quant-ingest.migration.json \
-  --staging-evidence /secure/private/quant-ingest-staging.migration.json \
-  --staging-backup /secure/private/quant-ingest-staging.preapply.sql.enc \
-  --staging-backup-key /secure/private/d1_staging_backup_aes256.key
-
-cd platform/workers/quant-ops-mcp
-npx wrangler d1 migrations apply quant-ops-projection --remote --env production
-npx wrangler d1 migrations apply quant-ops-quota --remote --env production
-cd ../../..
+  --recover
 ```
+
+Use `--environment production` only to classify an existing production
+reservation. A terminal recovery result remains evidence, not remote mutation
+authority. Any error leaves `UNKNOWN` in place and blocks retry/promotion.
 
 JSDA observation identity lives in
 `platform/workers/ingestion-premium/migrations/0012_jsda_observation_identity.sql`
@@ -162,32 +164,33 @@ and precedes migration 0013 in the canonical `quant-ingest` chain. The Worker
 reads/writes v3 after this source revision. Do not roll it back to a v2-only
 Worker while retaining post-cutover D1 state. A rollback across this boundary
 is coordinated: stop writers, restore the recorded Time Travel bookmark (or
-verified encrypted export), then restore the old Worker. A failed unrecorded
-prefix should instead be resumed only through the same guarded owner; a
-recorded-but-partial or malformed state fails closed and requires review.
+verified encrypted export), then restore the old Worker. AES material supports
+that rollback only; it does not authorize it. Any unrecorded prefix,
+recorded-but-partial state, or malformed state is `UNKNOWN`, remains `HOLD`, and
+requires review rather than automatic resume.
 
-Migration success intentionally leaves `jsda_v3_cutover_control.phase` at
-`bridge`. The v3 Worker returns/retries `JSDA_V3_CUTOVER_PENDING` and the v2
-bridge rejects stale updates that would overwrite newer v3 state. Do not hand
-edit the singleton. Activation requires a separate reviewed authority that
-proves Cron/producer/consumer disablement, zero in-flight leases, the deployed
-v3 source SHA, and an immutable drain-evidence digest before setting
-`v3_active`; the database then aborts any late v2 insert/update. That activation
-authority is not part of this migration apply command or the production Worker
-entrypoint. The production entrypoint uses an explicitly disabled verifier:
-even a hand-written, formally valid `v3_active` row reports
-`AUTHORITY_DISABLED` and cannot enable product work. A future change must add
-and review signed, authority-bound activation verification and wire that
-positive capability before product readiness can become true. Source migration
-readiness is therefore not a claim that production JSDA is already cut over.
+When a future trusted authority applies the migration, it intentionally leaves
+`jsda_v3_cutover_control.phase` at `bridge`. The v3 Worker returns/retries
+`JSDA_V3_CUTOVER_PENDING` and the v2 bridge rejects stale updates that would
+overwrite newer v3 state. Do not hand edit the singleton. Activation requires a
+separate reviewed authority that proves Cron/producer/consumer disablement,
+zero in-flight leases, the deployed v3 source SHA, and an immutable
+drain-evidence digest before setting `v3_active`; the database then aborts any
+late v2 insert/update. That activation authority is not implemented by the
+HOLD/recovery script or the production Worker entrypoint. The production
+entrypoint uses an explicitly disabled verifier: even a hand-written, formally
+valid `v3_active` row reports `AUTHORITY_DISABLED` and cannot enable product
+work. Source migration readiness is therefore not a claim that production JSDA
+is already cut over.
 
 `GET /health` is liveness only and reports `product_ready` plus the observed
 cutover phase. It must never be used as the JSDA product smoke. Deployment
 acceptance must call `GET /health/ready` and require HTTP 200,
-`product_ready:true`, and `cutover:"V3_ACTIVE"` for the deployed version. HTTP
-503 with `PENDING` or `AUTHORITY_DISABLED` is the expected fail-closed result
-until the separate signed cutover authority exists and completes; it is not a
-successful product deployment.
+`product_ready:true`, and `cutover:"V3_ACTIVE"` for the deployed source SHA and
+version. The canonical release observation must bind its response digest to the
+collector provenance digest. A generic `GET /health` `PASS`, a mismatched
+digest, or HTTP 503 with `PENDING`/`AUTHORITY_DISABLED` is not a successful
+product deployment.
 
 ## 3. Publish the signed Ops projection
 

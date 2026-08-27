@@ -57,33 +57,43 @@ Phase 6 hardening utilities:
   removed by default. Any restore/schema/encryption failure retains the source
   and leaves the target unpublished. Retention requires the explicit unsafe
   `--keep-source` opt-in. The raw 32-byte key stays outside the repository with
-  mode `0600`; neither SQL contents nor key material is logged.
+  mode `0600`; neither SQL contents nor key material is logged. The encrypted
+  artifact is rollback material only. Its header, restore verification, key,
+  or digest never attests the executing source SHA and never grants migration
+  or staging authority.
 - `d1_ingestion_migration_validation.py` — restore a remote export locally,
   require canonical migration-history prefix and FK/integrity checks, replay
   pending 0011-0018 on an isolated copy, and prove exact final schema plus
   populated v2-to-v3 JSDA preservation. Recorded partial/malformed states fail.
-- `apply_ingestion_d1_migrations.py` — the canonical remote Wrangler owner for
-  `quant-ingest`: manifest-bound identity, Time Travel bookmark, encrypted
-  preflight backup/checksum, exact pre/post exports, staging first, and
-  same-source staging evidence plus its authenticated encrypted backup before
-  production. It publishes create-only PREPARED evidence before any apply (so
-  the bookmark and backup survive a crash), reserves the final evidence path
-  before remote mutation, and atomically finalizes only that unchanged
-  reservation after exact postflight. A failed/ambiguous apply leaves the
-  reservation auditable and blocks blind retry. Production cross-binds staging
-  database/manifest/preflight/postflight/source SHA to the authenticated backup
-  restore evidence. It never accepts caller-selected database name/ID.
+- `apply_ingestion_d1_migrations.py` — a source-only fail-closed D1
+  observation/HOLD and recovery implementation; its legacy filename does not
+  make it a remote mutation authority. The canonical reservation identity is
+  environment + canonical database ID + source SHA + canonical manifest
+  digest. Local create-only/`O_EXCL` files are single-host crash markers, not a
+  cross-host lock, so both staging and production remain `HOLD` until a trusted
+  remote lock and control-plane source-SHA attestation exist. Production
+  independently re-observes the canonical staging D1 and accepts no caller
+  staging JSON, path, backup, or key. Recovery classifies
+  `RECOVERED_APPLIED_EXACT` as `APPLIED` only for exact canonical postflight
+  with zero pending, and `RECOVERED_NOT_APPLIED` as `NOT_APPLIED` only when a
+  fresh live observation exactly matches the recorded baseline; every other
+  state stays `UNKNOWN`. No recovery result grants mutation authority or
+  permits a blind retry. This revision publishes no remote apply command.
 - `build_release_evidence.py` — validate normalized post-deploy observations
-  and emit a content-addressed, read-only, non-secret v3 manifest suitable for
+  and emit a content-addressed, read-only, non-secret v4 manifest suitable for
   a GitHub Release. Every check/build/deployment/migration/smoke/MCP observation
   has a closed collector-provenance record (evidence ID, UTC timestamp, response
   digest, source SHA). Nested extra fields, local paths, provider-token shapes,
   unverified backup metadata, non-canonical migrations, unproven Pilot `GO`,
   and Mass `GO` are rejected. The exact pinned finding-ledger byte digest and
   OPEN-P0 inventory are part of the content-addressed payload and cannot be
-  caller-substituted.
+  caller-substituted. JSDA acceptance specifically requires `/health/ready`,
+  HTTP 200, `product_ready:true`, `cutover:"V3_ACTIVE"`, the deployed source
+  SHA/version, and a response digest equal to its provenance response digest;
+  generic `/health` `PASS` evidence is rejected.
 
-Production backup example (timestamps and final SHA must be the observed values):
+Rollback-only production backup example (timestamps and final SHA must be the
+observed values):
 
 ```bash
 uv run python scripts/encrypt_d1_backup.py encrypt \
