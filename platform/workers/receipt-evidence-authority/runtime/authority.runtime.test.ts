@@ -211,6 +211,182 @@ afterEach(() => {
 });
 
 describe("Receipt Evidence Authority in workerd", () => {
+  it.each([
+    {
+      eventType: "COLLECTION_STARTED",
+      expectedState: null,
+      expectedClaims: null,
+      expectedEnvelope: null,
+      expectedReceipt: null,
+      expectedEvents: 0,
+    },
+    {
+      eventType: "CAPTURE_COMMITTED",
+      expectedState: "COLLECTING",
+      expectedClaims: null,
+      expectedEnvelope: null,
+      expectedReceipt: null,
+      expectedEvents: 1,
+    },
+    {
+      eventType: "CLAIMS_RESERVED",
+      expectedState: "COLLECTING",
+      expectedClaims: null,
+      expectedEnvelope: null,
+      expectedReceipt: null,
+      expectedEvents: 2,
+    },
+    {
+      eventType: "RECEIPT_ISSUED_PENDING_FINALIZE",
+      expectedState: "COLLECTING",
+      expectedClaims: "present",
+      expectedEnvelope: null,
+      expectedReceipt: null,
+      expectedEvents: 3,
+    },
+    {
+      eventType: "RECEIPT_FINALIZED",
+      expectedState: "ISSUED_PENDING_FINALIZE",
+      expectedClaims: "present",
+      expectedEnvelope: "present",
+      expectedReceipt: null,
+      expectedEvents: 4,
+    },
+  ])("rolls back the state paired with $eventType when event append fails", async ({
+    eventType,
+    expectedState,
+    expectedClaims,
+    expectedEnvelope,
+    expectedReceipt,
+    expectedEvents,
+  }) => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec(
+        `CREATE TRIGGER reject_test_event
+         BEFORE INSERT ON authority_events
+         WHEN NEW.event_type = '${eventType}'
+         BEGIN
+           SELECT RAISE(ABORT, 'injected event failure');
+         END`,
+      );
+    });
+    const faultRequest = {
+      ...request,
+      request_nonce: eventType.charCodeAt(0).toString(16).padStart(64, "0"),
+    };
+    await expect(runInDurableObject(
+      stub,
+      (instance) => instance.issue_for_segment(faultRequest),
+    )).rejects.toThrow("injected event failure");
+    const operationId = await canonicalDigest(faultRequest);
+    const observed = await runInDurableObject(
+      stub,
+      async (_instance, state) => {
+        const operation = state.storage.sql.exec<{
+          state: string;
+          claims_digest: string | null;
+          envelope_digest: string | null;
+          receipt_digest: string | null;
+        }>(
+          `SELECT state,claims_digest,envelope_digest,receipt_digest
+             FROM authority_operations WHERE operation_id=?`,
+          operationId,
+        ).toArray()[0] ?? null;
+        const attempt = state.storage.sql.exec<{
+          state: string;
+          capture_digest: string | null;
+        }>(
+          `SELECT state,capture_digest FROM authority_capture_attempts
+            WHERE operation_id=? ORDER BY attempt_ordinal DESC LIMIT 1`,
+          operationId,
+        ).toArray()[0] ?? null;
+        const count = state.storage.sql.exec<{ count: number }>(
+          "SELECT COUNT(*) AS count FROM authority_events",
+        ).one().count;
+        return { operation, attempt, count };
+      },
+    );
+    expect(observed.operation?.state ?? null).toBe(expectedState);
+    expect(observed.operation?.claims_digest ? "present" : null).toBe(
+      expectedClaims,
+    );
+    expect(observed.operation?.envelope_digest ? "present" : null).toBe(
+      expectedEnvelope,
+    );
+    expect(observed.operation?.receipt_digest ? "present" : null).toBe(
+      expectedReceipt,
+    );
+    expect(observed.count).toBe(expectedEvents);
+    if (eventType === "CAPTURE_COMMITTED") {
+      expect(observed.attempt).toEqual({ state: "OPEN", capture_digest: null });
+    }
+  });
+
+  it("rolls back abandonment when the paired replacement-start event fails", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const faultRequest = {
+      ...request,
+      request_nonce: "b".repeat(64),
+    };
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec(
+        `CREATE TRIGGER reject_test_event
+         BEFORE INSERT ON authority_events
+         WHEN NEW.event_type = 'CAPTURE_COMMITTED'
+         BEGIN
+           SELECT RAISE(ABORT, 'injected capture event failure');
+         END`,
+      );
+    });
+    await expect(runInDurableObject(
+      stub,
+      (instance) => instance.issue_for_segment(faultRequest),
+    )).rejects.toThrow("injected capture event failure");
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("DROP TRIGGER reject_test_event");
+      state.storage.sql.exec(
+        `CREATE TRIGGER reject_test_event
+         BEFORE INSERT ON authority_events
+         WHEN NEW.event_type = 'CAPTURE_ATTEMPT_STARTED'
+         BEGIN
+           SELECT RAISE(ABORT, 'injected replacement event failure');
+         END`,
+      );
+    });
+    await expect(runInDurableObject(
+      stub,
+      (instance) => instance.recover_issue({
+        ...faultRequest,
+        operation: "recover_issue",
+      }),
+    )).rejects.toThrow("injected replacement event failure");
+    const operationId = await canonicalDigest(faultRequest);
+    const observed = await runInDurableObject(
+      stub,
+      async (_instance, state) => ({
+        attempts: state.storage.sql.exec<{
+          attempt_ordinal: number;
+          state: string;
+        }>(
+          `SELECT attempt_ordinal,state FROM authority_capture_attempts
+            WHERE operation_id=? ORDER BY attempt_ordinal`,
+          operationId,
+        ).toArray(),
+        events: state.storage.sql.exec<{ event_type: string }>(
+          "SELECT event_type FROM authority_events ORDER BY sequence",
+        ).toArray(),
+      }),
+    );
+    expect(observed.attempts).toEqual([{
+      attempt_ordinal: 1,
+      state: "OPEN",
+    }]);
+    expect(observed.events).toEqual([{ event_type: "COLLECTION_STARTED" }]);
+  });
+
   it("renders the cross-language product JSONL vector in UTF-8 key order", async () => {
     const rows = ["z-key", "a-key"].map((naturalKey) => ({
       source: "jquants" as const,
@@ -359,6 +535,36 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(replay.replayed).toBe(true);
     expect(replay.receipt_digest).toBe(recovered.receipt_digest);
     expect(replay.receipt).toEqual(recovered.receipt);
+  });
+
+  it("rejects a finalized replay whose lifecycle-start event is absent", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const replayRequest = {
+      ...request,
+      request_nonce: "c".repeat(64),
+    };
+    const issued = await stub.issue_for_segment(replayRequest);
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("DROP TRIGGER authority_events_no_delete");
+      state.storage.sql.exec(
+        `DELETE FROM authority_events
+          WHERE operation_id=? AND event_type='COLLECTION_STARTED'`,
+        issued.operation_id,
+      );
+    });
+    await expect(runInDurableObject(
+      stub,
+      (instance) => instance.recover_issue({
+        ...replayRequest,
+        operation: "recover_issue",
+      }),
+    )).rejects.toThrow("required event is absent");
+    expect(await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM authority_events",
+      ).one().count
+    )).toBe(4);
   });
 
   it("resumes the same COLLECTING operation after a pre-sign D1 failure", async () => {
@@ -785,6 +991,46 @@ describe("Receipt Evidence Authority in workerd", () => {
         WHERE table_name='jquants_records'
           AND dataset='indices_bars_daily_topix'`,
     ).first<{ count: number }>()).toEqual({ count: 1 });
+
+    const history = await runInDurableObject(
+      stub,
+      async (_instance, state) => state.storage.sql.exec<{
+        sequence: number;
+        operation_id: string;
+        event_type: string;
+        payload_digest: string;
+        prior_event_digest: string | null;
+        event_digest: string;
+        observed_at: string;
+      }>(
+        `SELECT sequence,operation_id,event_type,payload_digest,
+                prior_event_digest,event_digest,observed_at
+           FROM authority_events ORDER BY sequence`,
+      ).toArray(),
+    );
+    expect(history.map((event) => event.event_type)).toEqual([
+      "COLLECTION_STARTED",
+      "CAPTURE_COMMITTED",
+      "CLAIMS_RESERVED",
+      "RECEIPT_ISSUED_PENDING_FINALIZE",
+      "RECEIPT_FINALIZED",
+    ]);
+    let priorEventDigest: string | null = null;
+    for (let index = 0; index < history.length; index += 1) {
+      const event = history[index];
+      expect(event.sequence).toBe(index + 1);
+      expect(event.prior_event_digest).toBe(priorEventDigest);
+      expect(event.event_digest).toBe(await canonicalDigest({
+        schema_version: "receipt-authority-event/v1",
+        sequence: event.sequence,
+        operation_id: event.operation_id,
+        event_type: event.event_type,
+        payload_digest: event.payload_digest,
+        prior_event_digest: event.prior_event_digest,
+        observed_at: event.observed_at,
+      }));
+      priorEventDigest = event.event_digest;
+    }
 
     await expect(runtimeEnv.DB.prepare(
       `UPDATE receipt_authority_structured_rows SET payload='{}'

@@ -63,6 +63,23 @@ type CaptureAttemptRow = {
   updated_at: string;
 };
 
+type AuthorityEventInput = {
+  operationId: string;
+  eventType: string;
+  payloadDigest: string;
+  observedAt: string;
+};
+
+type AuthorityEventRow = {
+  sequence: number;
+  operation_id: string;
+  event_type: string;
+  payload_digest: string;
+  prior_event_digest: string | null;
+  event_digest: string;
+  observed_at: string;
+};
+
 type KeyMaterial = {
   keyId: string;
   generation: number;
@@ -380,98 +397,269 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     ).toArray()[0] ?? null;
   }
 
-  private ensureInitialCaptureAttempt(row: OperationRow): CaptureAttemptRow {
+  private requireLatestCaptureAttempt(row: OperationRow): CaptureAttemptRow {
     const existing = this.latestCaptureAttempt(row.operation_id);
     if (existing !== null) return existing;
-    const attemptId = randomHex(32);
-    this.ctx.storage.sql.exec(
-      `INSERT OR IGNORE INTO authority_capture_attempts
-       (operation_id,attempt_ordinal,attempt_id,acquisition_nonce,state,
-        created_at,updated_at) VALUES (?,1,?,?,'OPEN',?,?)`,
-      row.operation_id,
-      attemptId,
-      row.acquisition_nonce,
-      row.created_at,
-      row.created_at,
-    );
-    const inserted = this.latestCaptureAttempt(row.operation_id);
-    if (inserted === null) {
-      throw new Error("receipt authority capture attempt allocation failed");
-    }
-    return inserted;
+    throw new Error("receipt authority capture attempt is absent");
   }
 
   private operationSnapshot(row: OperationRow): ReceiptAuthorityOperationSnapshot {
-    return rowToSnapshot(row, this.ensureInitialCaptureAttempt(row));
+    return rowToSnapshot(row, this.requireLatestCaptureAttempt(row));
   }
 
-  private async ensureEvent(input: {
-    operationId: string;
-    eventType: string;
-    payloadDigest: string;
-    observedAt: string;
-  }): Promise<void> {
-    const existing = this.ctx.storage.sql.exec<{ event_digest: string }>(
-      `SELECT event_digest FROM authority_events
-       WHERE operation_id=? AND event_type=? AND payload_digest=?`,
+  private event(input: AuthorityEventInput): AuthorityEventRow | null {
+    return this.ctx.storage.sql.exec<AuthorityEventRow>(
+      `SELECT sequence,operation_id,event_type,payload_digest,
+              prior_event_digest,event_digest,observed_at
+         FROM authority_events
+        WHERE operation_id=? AND event_type=? AND payload_digest=?`,
       input.operationId,
       input.eventType,
       input.payloadDigest,
-    ).toArray()[0];
-    if (existing !== undefined) return;
+    ).toArray()[0] ?? null;
+  }
 
+  private async requireExistingEvents(
+    inputs: readonly AuthorityEventInput[],
+  ): Promise<boolean> {
+    const rows = inputs.map((input) => this.event(input));
+    const present = rows.filter((row) => row !== null).length;
+    if (present === 0) return false;
+    if (present !== inputs.length) {
+      throw new Error("receipt authority event transition is partial");
+    }
+    for (let index = 0; index < inputs.length; index += 1) {
+      const input = inputs[index];
+      const row = rows[index]!;
+      if (
+        row.operation_id !== input.operationId ||
+        row.event_type !== input.eventType ||
+        row.payload_digest !== input.payloadDigest ||
+        row.observed_at !== input.observedAt ||
+        row.event_digest !== await canonicalDigest({
+          schema_version: "receipt-authority-event/v1",
+          sequence: row.sequence,
+          operation_id: row.operation_id,
+          event_type: row.event_type,
+          payload_digest: row.payload_digest,
+          prior_event_digest: row.prior_event_digest,
+          observed_at: row.observed_at,
+        })
+      ) throw new Error("receipt authority event replay is corrupt");
+    }
+    return true;
+  }
+
+  private async requireEvent(
+    input: AuthorityEventInput,
+  ): Promise<AuthorityEventRow> {
+    if (!await this.requireExistingEvents([input])) {
+      throw new Error("receipt authority required event is absent");
+    }
+    return this.event(input)!;
+  }
+
+  private async transactEvents(
+    inputs: readonly AuthorityEventInput[],
+    mutation: () => void,
+  ): Promise<void> {
+    if (inputs.length === 0) {
+      throw new TypeError("receipt authority event transaction is empty");
+    }
+    for (const input of inputs) {
+      if (!isSha256(input.operationId) || !isSha256(input.payloadDigest)) {
+        throw new TypeError("receipt authority event identity is invalid");
+      }
+    }
     for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (await this.requireExistingEvents(inputs)) return;
       const head = this.ctx.storage.sql.exec<{
         sequence: number;
         event_digest: string;
       }>(
         "SELECT sequence,event_digest FROM authority_events ORDER BY sequence DESC LIMIT 1",
       ).toArray()[0];
-      const sequence = (head?.sequence ?? 0) + 1;
-      const prior = head?.event_digest ?? null;
-      const eventDigest = await canonicalDigest({
-        schema_version: "receipt-authority-event/v1",
-        sequence,
-        operation_id: input.operationId,
-        event_type: input.eventType,
-        payload_digest: input.payloadDigest,
-        prior_event_digest: prior,
-        observed_at: input.observedAt,
-      });
-      const inserted = this.ctx.storage.transactionSync(() => {
+      let sequence = (head?.sequence ?? 0) + 1;
+      let prior = head?.event_digest ?? null;
+      const rows: AuthorityEventRow[] = [];
+      for (const input of inputs) {
+        const row = {
+          sequence,
+          operation_id: input.operationId,
+          event_type: input.eventType,
+          payload_digest: input.payloadDigest,
+          prior_event_digest: prior,
+          event_digest: "",
+          observed_at: input.observedAt,
+        };
+        row.event_digest = await canonicalDigest({
+          schema_version: "receipt-authority-event/v1",
+          sequence: row.sequence,
+          operation_id: row.operation_id,
+          event_type: row.event_type,
+          payload_digest: row.payload_digest,
+          prior_event_digest: row.prior_event_digest,
+          observed_at: row.observed_at,
+        });
+        rows.push(row);
+        sequence += 1;
+        prior = row.event_digest;
+      }
+      const committed = this.ctx.storage.transactionSync(() => {
         const current = this.ctx.storage.sql.exec<{
           sequence: number;
           event_digest: string;
         }>(
           "SELECT sequence,event_digest FROM authority_events ORDER BY sequence DESC LIMIT 1",
         ).toArray()[0];
-        if ((current?.sequence ?? 0) !== (head?.sequence ?? 0) ||
-          (current?.event_digest ?? null) !== prior) return false;
-        this.ctx.storage.sql.exec(
-          `INSERT OR IGNORE INTO authority_events
-           (sequence,operation_id,event_type,payload_digest,prior_event_digest,
-            event_digest,observed_at) VALUES (?,?,?,?,?,?,?)`,
-          sequence,
-          input.operationId,
-          input.eventType,
-          input.payloadDigest,
-          prior,
-          eventDigest,
-          input.observedAt,
-        );
+        if (
+          (current?.sequence ?? 0) !== (head?.sequence ?? 0) ||
+          (current?.event_digest ?? null) !== (head?.event_digest ?? null)
+        ) return false;
+        if (inputs.some((input) => this.event(input) !== null)) return false;
+        mutation();
+        for (const row of rows) {
+          this.ctx.storage.sql.exec(
+            `INSERT INTO authority_events
+             (sequence,operation_id,event_type,payload_digest,prior_event_digest,
+              event_digest,observed_at) VALUES (?,?,?,?,?,?,?)`,
+            row.sequence,
+            row.operation_id,
+            row.event_type,
+            row.payload_digest,
+            row.prior_event_digest,
+            row.event_digest,
+            row.observed_at,
+          );
+        }
         return true;
       });
-      if (inserted) return;
-      const replay = this.ctx.storage.sql.exec<{ event_digest: string }>(
-        `SELECT event_digest FROM authority_events
-         WHERE operation_id=? AND event_type=? AND payload_digest=?`,
-        input.operationId,
-        input.eventType,
-        input.payloadDigest,
-      ).toArray()[0];
-      if (replay !== undefined) return;
+      if (committed) return;
     }
-    throw new Error("receipt authority event append contention");
+    throw new Error("receipt authority event transaction contention");
+  }
+
+  private async requireValidEventChain(): Promise<void> {
+    const rows = this.ctx.storage.sql.exec<AuthorityEventRow>(
+      `SELECT sequence,operation_id,event_type,payload_digest,
+              prior_event_digest,event_digest,observed_at
+         FROM authority_events ORDER BY sequence`,
+    ).toArray();
+    let prior: string | null = null;
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      if (
+        row.sequence !== index + 1 ||
+        row.prior_event_digest !== prior ||
+        !isSha256(row.operation_id) ||
+        !isSha256(row.payload_digest) ||
+        row.event_digest !== await canonicalDigest({
+          schema_version: "receipt-authority-event/v1",
+          sequence: row.sequence,
+          operation_id: row.operation_id,
+          event_type: row.event_type,
+          payload_digest: row.payload_digest,
+          prior_event_digest: row.prior_event_digest,
+          observed_at: row.observed_at,
+        })
+      ) throw new Error("receipt authority event chain is corrupt");
+      prior = row.event_digest;
+    }
+  }
+
+  private captureAttempts(operationId: string): CaptureAttemptRow[] {
+    return this.ctx.storage.sql.exec<CaptureAttemptRow>(
+      `SELECT * FROM authority_capture_attempts
+        WHERE operation_id=? ORDER BY attempt_ordinal`,
+      operationId,
+    ).toArray();
+  }
+
+  private async requireAuditedOperation(row: OperationRow): Promise<void> {
+    const required: AuthorityEventInput[] = [{
+      operationId: row.operation_id,
+      eventType: "COLLECTION_STARTED",
+      payloadDigest: row.request_digest,
+      observedAt: row.created_at,
+    }];
+    const attempts = this.captureAttempts(row.operation_id);
+    if (attempts.length === 0) {
+      throw new Error("receipt authority audited capture history is absent");
+    }
+    for (const attempt of attempts) {
+      const attemptDigest = await canonicalDigest({
+        attempt_id: attempt.attempt_id,
+        attempt_ordinal: attempt.attempt_ordinal,
+      });
+      if (attempt.attempt_ordinal > 1) {
+        required.push({
+          operationId: row.operation_id,
+          eventType: "CAPTURE_ATTEMPT_STARTED",
+          payloadDigest: attemptDigest,
+          observedAt: attempt.created_at,
+        });
+      }
+      if (attempt.state === "ABANDONED") {
+        required.push({
+          operationId: row.operation_id,
+          eventType: "CAPTURE_ATTEMPT_ABANDONED",
+          payloadDigest: attemptDigest,
+          observedAt: attempt.updated_at,
+        });
+      } else if (attempt.state === "CAPTURED") {
+        if (attempt.capture_digest === null) {
+          throw new Error("receipt authority audited capture digest is absent");
+        }
+        required.push({
+          operationId: row.operation_id,
+          eventType: "CAPTURE_COMMITTED",
+          payloadDigest: attempt.capture_digest,
+          observedAt: attempt.updated_at,
+        });
+      }
+    }
+    if (row.claims_digest !== null && attempts.at(-1)?.state !== "CAPTURED") {
+      throw new Error("receipt authority claims lack a captured terminal attempt");
+    }
+    if (row.claims_digest !== null) {
+      if (row.issued_at === null) {
+        throw new Error("receipt authority audited issue time is absent");
+      }
+      required.push({
+        operationId: row.operation_id,
+        eventType: "CLAIMS_RESERVED",
+        payloadDigest: row.claims_digest,
+        observedAt: row.issued_at,
+      });
+    }
+    if (row.envelope_digest !== null) {
+      if (row.issued_at === null) {
+        throw new Error("receipt authority audited envelope time is absent");
+      }
+      required.push({
+        operationId: row.operation_id,
+        eventType: "RECEIPT_ISSUED_PENDING_FINALIZE",
+        payloadDigest: row.envelope_digest,
+        observedAt: row.issued_at,
+      });
+    }
+    if (row.receipt_digest !== null) {
+      required.push({
+        operationId: row.operation_id,
+        eventType: "RECEIPT_FINALIZED",
+        payloadDigest: row.receipt_digest,
+        observedAt: row.updated_at,
+      });
+    }
+    let priorSequence = 0;
+    for (const event of required) {
+      const row = await this.requireEvent(event);
+      if (row.sequence <= priorSequence) {
+        throw new Error("receipt authority lifecycle event order is corrupt");
+      }
+      priorSequence = row.sequence;
+    }
+    await this.requireValidEventChain();
   }
 
   async #beginOperation(
@@ -487,17 +675,27 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       if (existing.request_digest !== requestDigest) {
         throw new Error("receipt authority operation replay was substituted");
       }
+      await this.requireEvent({
+        operationId,
+        eventType: "COLLECTION_STARTED",
+        payloadDigest: requestDigest,
+        observedAt: existing.created_at,
+      });
+      this.requireLatestCaptureAttempt(existing);
+      await this.requireAuditedOperation(existing);
       return this.operationSnapshot(existing);
     }
     const nonce = randomHex(32);
     const attemptId = randomHex(32);
-    this.ctx.storage.transactionSync(() => {
+    await this.transactEvents([{
+      operationId,
+      eventType: "COLLECTION_STARTED",
+      payloadDigest: requestDigest,
+      observedAt: now,
+    }], () => {
       const replay = this.operation(operationId);
       if (replay !== null) {
-        if (replay.request_digest !== requestDigest) {
-          throw new Error("receipt authority operation replay was substituted");
-        }
-        return;
+        throw new Error("receipt authority operation appeared during begin");
       }
       this.ctx.storage.sql.exec(
         `INSERT INTO authority_operations
@@ -521,12 +719,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       );
     });
     const row = this.requireOperation(operationId, requestDigest);
-    await this.ensureEvent({
-      operationId,
-      eventType: "COLLECTION_STARTED",
-      payloadDigest: requestDigest,
-      observedAt: row.created_at,
-    });
+    await this.requireAuditedOperation(row);
     return this.operationSnapshot(row);
   }
 
@@ -535,13 +728,31 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     requestDigest: string,
   ): Promise<ReceiptAuthorityOperationSnapshot> {
     const row = this.requireOperation(operationId, requestDigest);
-    let attempt = this.ensureInitialCaptureAttempt(row);
+    let attempt = this.requireLatestCaptureAttempt(row);
     if (row.state === "COLLECTING" && attempt.state === "OPEN") {
       const now = new Date().toISOString();
       const nextOrdinal = attempt.attempt_ordinal + 1;
       const nextAttemptId = randomHex(32);
       const nextNonce = randomHex(32);
-      this.ctx.storage.transactionSync(() => {
+      const abandonedDigest = await canonicalDigest({
+        attempt_id: attempt.attempt_id,
+        attempt_ordinal: attempt.attempt_ordinal,
+      });
+      const startedDigest = await canonicalDigest({
+        attempt_id: nextAttemptId,
+        attempt_ordinal: nextOrdinal,
+      });
+      await this.transactEvents([{
+        operationId,
+        eventType: "CAPTURE_ATTEMPT_ABANDONED",
+        payloadDigest: abandonedDigest,
+        observedAt: now,
+      }, {
+        operationId,
+        eventType: "CAPTURE_ATTEMPT_STARTED",
+        payloadDigest: startedDigest,
+        observedAt: now,
+      }], () => {
         const current = this.latestCaptureAttempt(operationId);
         if (
           current === null || current.attempt_id !== attempt.attempt_id ||
@@ -567,26 +778,14 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
           now,
         );
       });
-      await this.ensureEvent({
-        operationId,
-        eventType: "CAPTURE_ATTEMPT_ABANDONED",
-        payloadDigest: await canonicalDigest({
-          attempt_id: attempt.attempt_id,
-          attempt_ordinal: attempt.attempt_ordinal,
-        }),
-        observedAt: now,
-      });
       attempt = this.latestCaptureAttempt(operationId)!;
-      await this.ensureEvent({
-        operationId,
-        eventType: "CAPTURE_ATTEMPT_STARTED",
-        payloadDigest: await canonicalDigest({
-          attempt_id: attempt.attempt_id,
-          attempt_ordinal: attempt.attempt_ordinal,
-        }),
-        observedAt: attempt.created_at,
-      });
+      if (
+        attempt.attempt_id !== nextAttemptId ||
+        attempt.attempt_ordinal !== nextOrdinal ||
+        attempt.created_at !== now
+      ) throw new Error("receipt authority capture recovery did not commit");
     }
+    await this.requireAuditedOperation(row);
     return rowToSnapshot(row, attempt);
   }
 
@@ -608,19 +807,38 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       !captureKey.includes(`/${operationId.slice(7)}/attempt-${attemptId}/`) ||
       !captureKey.endsWith("/capture-state.json")
     ) throw new Error("receipt authority capture reference is invalid");
-    const now = new Date().toISOString();
-    this.ctx.storage.transactionSync(() => {
+    const storedAttempt = this.captureAttempt(operationId, attemptId);
+    if (storedAttempt === null) {
+      throw new Error("receipt authority capture attempt is absent");
+    }
+    if (storedAttempt.state === "CAPTURED") {
+      if (
+        storedAttempt.capture_digest !== captureDigest ||
+        storedAttempt.capture_key !== captureKey
+      ) throw new Error("receipt authority capture replay was substituted");
+      await this.requireEvent({
+        operationId,
+        eventType: "CAPTURE_COMMITTED",
+        payloadDigest: captureDigest,
+        observedAt: storedAttempt.updated_at,
+      });
+      await this.requireAuditedOperation(row);
+      return this.operationSnapshot(row);
+    }
+    if (storedAttempt.state !== "OPEN") {
+      throw new Error("receipt authority capture attempt was abandoned");
+    }
+    const observedAt = new Date().toISOString();
+    await this.transactEvents([{
+      operationId,
+      eventType: "CAPTURE_COMMITTED",
+      payloadDigest: captureDigest,
+      observedAt,
+    }], () => {
       const attempt = this.captureAttempt(operationId, attemptId);
       const latest = this.latestCaptureAttempt(operationId);
       if (attempt === null || latest?.attempt_id !== attemptId) {
         throw new Error("receipt authority capture attempt was superseded");
-      }
-      if (attempt.state === "CAPTURED") {
-        if (
-          attempt.capture_digest !== captureDigest ||
-          attempt.capture_key !== captureKey
-        ) throw new Error("receipt authority capture replay was substituted");
-        return;
       }
       if (attempt.state !== "OPEN") {
         throw new Error("receipt authority capture attempt was abandoned");
@@ -631,18 +849,21 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
           WHERE operation_id=? AND attempt_id=? AND state='OPEN'`,
         captureKey,
         captureDigest,
-        now,
+        observedAt,
         operationId,
         attemptId,
       );
     });
-    await this.ensureEvent({
-      operationId,
-      eventType: "CAPTURE_COMMITTED",
-      payloadDigest: captureDigest,
-      observedAt: now,
-    });
-    return this.operationSnapshot(this.requireOperation(operationId, requestDigest));
+    const committed = this.captureAttempt(operationId, attemptId);
+    if (
+      committed?.state !== "CAPTURED" ||
+      committed.capture_key !== captureKey ||
+      committed.capture_digest !== captureDigest
+    ) throw new Error("receipt authority capture transaction did not commit");
+    await this.requireAuditedOperation(row);
+    return this.operationSnapshot(
+      this.requireOperation(operationId, requestDigest),
+    );
   }
 
   private async loadOrCreateKey(): Promise<KeyMaterial> {
@@ -841,17 +1062,24 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       if (envelope === null || storedClaims === null || row.envelope_digest === null) {
         throw new Error("receipt authority issued state is incomplete");
       }
+      await this.requireAuditedOperation(row);
       return { claims: storedClaims, envelope, envelope_digest: row.envelope_digest };
     }
 
     const key = await this.requireSigningKey();
-    const issuedAt = row.issued_at ?? new Date().toISOString();
-    this.ctx.storage.transactionSync(() => {
-      const current = this.requireOperation(operationId, requestDigest);
-      if (current.claims_digest !== null && current.claims_digest !== claimsDigest) {
-        throw new Error("receipt authority claims replay was substituted");
-      }
-      if (current.claims_digest === null) {
+    let reserved: OperationRow;
+    if (row.claims_digest === null) {
+      const issuedAt = new Date().toISOString();
+      await this.transactEvents([{
+        operationId,
+        eventType: "CLAIMS_RESERVED",
+        payloadDigest: claimsDigest,
+        observedAt: issuedAt,
+      }], () => {
+        const current = this.requireOperation(operationId, requestDigest);
+        if (current.claims_digest !== null) {
+          throw new Error("receipt authority claims reservation raced");
+        }
         this.ctx.storage.sql.exec(
           `UPDATE authority_operations
            SET claims_digest=?,claims_json=?,issued_at=?,updated_at=?
@@ -862,15 +1090,27 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
           issuedAt,
           operationId,
         );
+      });
+      reserved = this.requireOperation(operationId, requestDigest);
+    } else {
+      if (row.claims_json !== claimsJson || row.issued_at === null) {
+        throw new Error("receipt authority claims reservation replay drifted");
       }
-    });
-    const reserved = this.requireOperation(operationId, requestDigest);
+      await this.requireEvent({
+        operationId,
+        eventType: "CLAIMS_RESERVED",
+        payloadDigest: claimsDigest,
+        observedAt: row.issued_at,
+      });
+      reserved = row;
+    }
     if (
       reserved.claims_digest !== claimsDigest || reserved.claims_json !== claimsJson ||
       reserved.issued_at === null
     ) {
       throw new Error("receipt authority issue reservation failed");
     }
+    await this.requireAuditedOperation(reserved);
 
     const signedClaims: SignedReceiptClaimsV2 = {
       ...claims,
@@ -908,16 +1148,15 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     };
     const envelopeJson = canonicalJson(envelope);
     const envelopeDigest = await sha256Digest(envelopeJson);
-    this.ctx.storage.transactionSync(() => {
+    await this.transactEvents([{
+      operationId,
+      eventType: "RECEIPT_ISSUED_PENDING_FINALIZE",
+      payloadDigest: envelopeDigest,
+      observedAt: reserved.issued_at,
+    }], () => {
       const current = this.requireOperation(operationId, requestDigest);
       if (current.envelope_digest !== null) {
-        if (
-          current.envelope_digest !== envelopeDigest ||
-          current.envelope_json !== envelopeJson
-        ) {
-          throw new Error("receipt authority signature replay was substituted");
-        }
-        return;
+        throw new Error("receipt authority signature reservation raced");
       }
       if (
         current.state !== "COLLECTING" ||
@@ -936,12 +1175,12 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
         operationId,
       );
     });
-    await this.ensureEvent({
-      operationId,
-      eventType: "RECEIPT_ISSUED_PENDING_FINALIZE",
-      payloadDigest: envelopeDigest,
-      observedAt: reserved.issued_at,
-    });
+    const issued = this.requireOperation(operationId, requestDigest);
+    if (
+      issued.envelope_digest !== envelopeDigest ||
+      issued.envelope_json !== envelopeJson
+    ) throw new Error("receipt authority signature replay was substituted");
+    await this.requireAuditedOperation(issued);
     return { claims, envelope, envelope_digest: envelopeDigest };
   }
 
@@ -953,17 +1192,30 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
   ): Promise<ReceiptIssueResultV1> {
     if (!isSha256(receiptDigest)) throw new TypeError("receipt digest required");
     const resultJson = canonicalJson(result);
-    const now = new Date().toISOString();
-    this.ctx.storage.transactionSync(() => {
+    const before = this.requireOperation(operationId, requestDigest);
+    if (before.state === "FINALIZED") {
+      if (
+        before.receipt_digest !== receiptDigest || before.result_json !== resultJson
+      ) throw new Error("receipt authority finalized replay was substituted");
+      await this.requireEvent({
+        operationId,
+        eventType: "RECEIPT_FINALIZED",
+        payloadDigest: receiptDigest,
+        observedAt: before.updated_at,
+      });
+      await this.requireAuditedOperation(before);
+      return result;
+    }
+    const observedAt = new Date().toISOString();
+    await this.transactEvents([{
+      operationId,
+      eventType: "RECEIPT_FINALIZED",
+      payloadDigest: receiptDigest,
+      observedAt,
+    }], () => {
       const current = this.requireOperation(operationId, requestDigest);
       if (current.state === "FINALIZED") {
-        if (
-          current.receipt_digest !== receiptDigest ||
-          current.result_json !== resultJson
-        ) {
-          throw new Error("receipt authority finalized replay was substituted");
-        }
-        return;
+        throw new Error("receipt authority finalization raced");
       }
       if (
         current.state !== "ISSUED_PENDING_FINALIZE" ||
@@ -977,16 +1229,17 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
          WHERE operation_id=? AND state='ISSUED_PENDING_FINALIZE'`,
         receiptDigest,
         resultJson,
-        now,
+        observedAt,
         operationId,
       );
     });
-    await this.ensureEvent({
-      operationId,
-      eventType: "RECEIPT_FINALIZED",
-      payloadDigest: receiptDigest,
-      observedAt: now,
-    });
+    const finalized = this.requireOperation(operationId, requestDigest);
+    if (
+      finalized.state !== "FINALIZED" ||
+      finalized.receipt_digest !== receiptDigest ||
+      finalized.result_json !== resultJson
+    ) throw new Error("receipt authority finalization did not commit");
+    await this.requireAuditedOperation(finalized);
     return result;
   }
 

@@ -167,9 +167,9 @@ Deploy ACTIVE to staging first, retain its immutable evidence, then repeat the
 review for production. A smoke reconciliation may pass only `dataset` and
 `segment`; callers cannot supply counts, digests, pagination state, natural
 keys, raw keys, or signatures. Verify the public key ID and signature against
-the deployed registry, the operation event chain, the immutable raw and
-structured objects, exact D1 natural-key readback, and terminal pagination
-proof.
+the deployed registry, the operation event chain, the immutable raw and signed
+product objects in `quant-receipt-evidence`, exact D1 natural-key readback, and
+terminal pagination proof.
 
 After production activation, re-prove the intended dataset segments through
 this governed path. The previously reported 22 `COMPLETE` datasets do not
@@ -191,6 +191,12 @@ shadow rows, governed product row, change-log row, and materialization index
 must also reconcile before signing. A crash after signature issuance but
 before caller finalization must recover the same receipt rather than mint a
 second one.
+
+Every Durable Object state transition and its audit event or paired events are
+committed in one synchronous SQLite transaction. Event-append failure rolls
+back the state mutation. Begin/recovery replay, signing, and finalization all
+recompute the complete chained event history and reject a missing, partial, or
+corrupt required event.
 
 The acquisition context still expires fail-closed. Recovery does not overwrite
 old raw bytes, accept changed upstream bytes, extend an expired acquisition, or
@@ -222,8 +228,8 @@ The repository contains the inactive implementation and test evidence only.
 Staging and production remain PENDING and unprovisioned. The first deployment,
 secret installation, public registration capture, registry review, ACTIVE
 deployment, segment re-proof, and final operational sign-off remain explicit
-human/account-authorized actions. The shared-product R2 version/etag or
-authority-exclusive immutability design and live refetch verification must also
-be reviewed and implemented before D2 can close; the current exported
-`artifact_body` detects downstream export/sync/projection mutation but is not
-evidence that the shared live object remained unchanged after initial readback.
+human/account-authorized actions. The source Worker now has only the dedicated
+authority bucket and no shared `quant-structured` binding. D2 remains
+operationally open until environment/resource-bound claims and registry are
+activated with a fresh key and every eligible segment is re-proved through the
+deployed authority path.
