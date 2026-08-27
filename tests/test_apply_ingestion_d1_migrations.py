@@ -218,7 +218,21 @@ def test_live_observation_queries_only_canonical_staging_and_validates_export(
     assert validated and validated[0][1:] == ("staging", "postflight")
     assert any(args[1:3] == ("d1", "info") for args in calls)
     assert any(args[1:4] == ("d1", "time-travel", "info") for args in calls)
-    assert any(args[1:3] == ("d1", "export") for args in calls)
+    export_calls = [args for args in calls if args[1:3] == ("d1", "export")]
+    assert len(export_calls) == 1
+    export_args = export_calls[0]
+    assert export_args[:6] == (
+        "wrangler",
+        "d1",
+        "export",
+        binding["database_name"],
+        "--remote",
+        "--skip-confirmation",
+    )
+    assert "--yes" not in export_args
+    assert export_args[export_args.index("--config") + 1] == str(
+        owner.ROOT / binding["config"]
+    )
     assert any(args[1:4] == ("d1", "migrations", "list") for args in calls)
 
 
@@ -519,10 +533,12 @@ def test_staging_backup_is_rollback_only_and_cross_host_lock_keeps_apply_on_hold
     monkeypatch.setattr(owner, "encrypt_backup", encrypt)
     monkeypatch.setattr(owner, "verify_encrypted", lambda *_args: backup)
     remote_apply_seen = False
+    calls: list[tuple[str, ...]] = []
 
     def runner(argv: Sequence[str], _cwd: Path) -> subprocess.CompletedProcess[str]:
         nonlocal remote_apply_seen
         args = tuple(argv)
+        calls.append(args)
         if args == ("wrangler", "--version"):
             return subprocess.CompletedProcess(args, 0, owner.WRANGLER_VERSION, "")
         if args[1:3] == ("d1", "info"):
@@ -558,6 +574,17 @@ def test_staging_backup_is_rollback_only_and_cross_host_lock_keeps_apply_on_hold
     assert reservation["reason"] == "CROSS_HOST_EXCLUSION_UNPROVEN"
     assert reservation["rollback_backup_digest"] == backup["ciphertext_digest"]
     assert owner._read_exact_evidence(paths["evidence_target"])["status"] == "HOLD"
+    export_calls = [args for args in calls if args[1:3] == ("d1", "export")]
+    assert len(export_calls) == 1
+    assert export_calls[0][:6] == (
+        "wrangler",
+        "d1",
+        "export",
+        binding["database_name"],
+        "--remote",
+        "--skip-confirmation",
+    )
+    assert "--yes" not in export_calls[0]
 
 
 def _reserve_for_recovery(
