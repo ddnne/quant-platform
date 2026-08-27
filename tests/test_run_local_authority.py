@@ -89,3 +89,8 @@ def test_d1_runtime_requires_governed_mirror_credential_and_pinned_cli_paths() -
             authority_id="d1_sync",
             environment="production",
         )
+
+
+def test_only_d1_sync_receives_the_extended_processing_lease() -> None:
+    assert runner._processing_timeout_seconds("d1_sync") == 900.0
+    assert runner._processing_timeout_seconds("ready") == 30.0

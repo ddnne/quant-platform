@@ -10,6 +10,7 @@ import json
 import hashlib
 import os
 import sqlite3
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, unquote, urlparse
@@ -823,6 +824,7 @@ def test_wrangler_export_uses_argv_and_withholds_provider_output(
     assert "--skip-confirmation" in argv
     assert kwargs["stdin"] is not None
     assert kwargs["stdout"] is not None
+    assert kwargs["timeout"] == 600
     assert kwargs["stderr"] is not None
     assert "shell" not in kwargs
 
@@ -831,6 +833,65 @@ def test_wrangler_export_uses_argv_and_withholds_provider_output(
             output_path=tmp_path / "cannot-inject.sql",
             runner=failed_runner,
         )
+
+
+def test_wrangler_export_has_a_hard_processing_deadline(
+    tmp_path, sync_module, monkeypatch
+):
+    config = tmp_path / "wrangler.toml"
+    config.write_text("# reviewed test config\n", encoding="utf-8")
+    observed = {}
+    monkeypatch.setattr(
+        sync_module._private_export,
+        "_validated_governed_wrangler",
+        lambda: ("/protected/wrangler", config),
+    )
+
+    def timeout(_argv, **kwargs):
+        observed.update(kwargs)
+        raise subprocess.TimeoutExpired(cmd="wrangler", timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(sync_module._private_export.subprocess, "run", timeout)
+    with pytest.raises(RuntimeError, match="failed to start"):
+        sync_module._private_export.run_wrangler_d1_export(
+            output_path=tmp_path / "remote.sql"
+        )
+    assert observed["timeout"] == 600
+
+
+def test_authority_wrangler_export_has_a_hard_processing_deadline(
+    tmp_path, sync_module, monkeypatch
+):
+    config = tmp_path / "wrangler.toml"
+    config.write_text("# activated test config\n", encoding="utf-8")
+    observed = {}
+    monkeypatch.setattr(
+        sync_module._private_export,
+        "_validated_authority_wrangler",
+        lambda **_kwargs: (
+            ("/protected/node", "/protected/wrangler.js"),
+            config,
+            ("--env", "production"),
+            "quant-ingest",
+        ),
+    )
+
+    def timeout(_argv, **kwargs):
+        observed.update(kwargs)
+        raise subprocess.TimeoutExpired(cmd="wrangler", timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(sync_module._private_export.subprocess, "run", timeout)
+    with pytest.raises(RuntimeError, match="failed to start authority"):
+        sync_module._private_export._run_authority_wrangler_d1_export(
+            output_path=tmp_path / "remote.sql",
+            credential_token="x" * 32,
+            node_path=tmp_path / "node",
+            cli_path=tmp_path / "wrangler.js",
+            config_path=config,
+            environment="production",
+        )
+    assert observed["timeout"] == 600
+    assert observed["env"]["CLOUDFLARE_API_TOKEN"] == "x" * 32
 
 
 @pytest.mark.parametrize(

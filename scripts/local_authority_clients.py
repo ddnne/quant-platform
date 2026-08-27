@@ -33,6 +33,7 @@ from scripts.local_ready_registry import (
     ready_authority_instance_id,
 )
 from scripts.local_authority_service import (
+    DEFAULT_IO_TIMEOUT_SECONDS,
     LocalAuthorityError,
     LocalAuthorityPending,
     REQUEST_FORMAT,
@@ -43,6 +44,9 @@ from scripts.local_authority_service import (
 )
 
 _EVENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}\Z")
+_PINNED_CALL_TIMEOUT_SECONDS = {
+    ("d1_sync:sync_now", "sync_current"): 905.0,
+}
 
 
 def _exact_result(
@@ -243,6 +247,9 @@ class _PinnedLocalAuthorityClient:
             self.socket_path,
             request,
             expected_server_uid=self.server_uid,
+            timeout_seconds=_PINNED_CALL_TIMEOUT_SECONDS.get(
+                (operation, purpose), DEFAULT_IO_TIMEOUT_SECONDS
+            ),
         )
 
 

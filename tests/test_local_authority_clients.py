@@ -51,10 +51,10 @@ def test_fixed_clients_emit_only_manifest_granted_operations(
         "_verify_ready_authority_result",
         lambda _result, **_expected: None,
     )
-    calls: list[tuple[object, dict[str, object], int]] = []
+    calls: list[tuple[object, dict[str, object], int, float]] = []
 
-    def call(path, request, *, expected_server_uid):
-        calls.append((path, request, expected_server_uid))
+    def call(path, request, *, expected_server_uid, timeout_seconds):
+        calls.append((path, request, expected_server_uid, timeout_seconds))
         operation = request["operation"]
         if operation == "d1_sync:sync_now":
             return {
@@ -136,6 +136,7 @@ def test_fixed_clients_emit_only_manifest_granted_operations(
         "profile_plan_closure_ready",
     ]
     assert all(item[2] == os.geteuid() + 1000 for item in calls)
+    assert [item[3] for item in calls] == [905.0, 5.0, 5.0, 5.0]
 
 
 def test_client_identity_and_result_shape_fail_closed(

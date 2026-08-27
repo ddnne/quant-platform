@@ -43,6 +43,8 @@ DEFAULT_WRANGLER_BIN = (
     / "wrangler"
 )
 PINNED_WRANGLER_VERSION = "4.125.0"
+NODE_PROBE_TIMEOUT_SECONDS = 10
+WRANGLER_EXPORT_TIMEOUT_SECONDS = 600
 GOVERNED_D1_NAME = "quant-ingest"
 GOVERNED_D1_ID = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 GOVERNED_WRANGLER_ENV = "production"
@@ -160,8 +162,9 @@ def _validated_authority_wrangler(
             stderr=subprocess.PIPE,
             check=False,
             text=True,
+            timeout=NODE_PROBE_TIMEOUT_SECONDS,
         )
-    except OSError as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError("cannot execute authority Node runtime") from exc
     if node_version.returncode != 0 or not node_version.stdout.startswith("v"):
         raise RuntimeError("authority Node runtime version is unavailable")
@@ -235,8 +238,9 @@ def _run_authority_wrangler_d1_export(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
+            timeout=WRANGLER_EXPORT_TIMEOUT_SECONDS,
         )
-    except OSError as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError("failed to start authority Wrangler export") from exc
     if completed.returncode != 0:
         raise RuntimeError(
@@ -281,8 +285,9 @@ def run_wrangler_d1_export(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
+            timeout=WRANGLER_EXPORT_TIMEOUT_SECONDS,
         )
-    except OSError as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError("failed to start Wrangler D1 export") from exc
     returncode = getattr(completed, "returncode", None)
     if returncode != 0:

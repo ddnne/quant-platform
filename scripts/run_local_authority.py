@@ -41,6 +41,7 @@ from scripts.local_authority_entrypoints import (
     ReadyPublishProfilePlanBound,
 )
 from scripts.local_authority_service import (
+    DEFAULT_PROCESSING_TIMEOUT_SECONDS,
     FileEd25519KeyCustody,
     LocalAuthorityError,
     PeerPrincipalRegistry,
@@ -49,6 +50,17 @@ from scripts.local_authority_service import (
     UnixAuthorityService,
     require_declared_service_identity,
 )
+
+D1_SYNC_PROCESSING_TIMEOUT_SECONDS = 900.0
+
+
+def _processing_timeout_seconds(authority_id: str) -> float:
+    """Return the code-pinned processing lease for one authority."""
+
+    if authority_id == "d1_sync":
+        return D1_SYNC_PROCESSING_TIMEOUT_SECONDS
+    return DEFAULT_PROCESSING_TIMEOUT_SECONDS
+
 
 RUNTIME_CONFIG_FORMAT = "local-authority-runtime-config/v1"
 _TOP_LEVEL_FIELDS = {
@@ -315,6 +327,7 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
         peers=PeerPrincipalRegistry.from_usernames(config["peer_callers"]),
         ledger=ledger,
         handlers=handlers,
+        processing_timeout_seconds=_processing_timeout_seconds(authority_id),
     )
 
 
