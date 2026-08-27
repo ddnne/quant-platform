@@ -300,10 +300,6 @@
         {
           "binding": "AUTHORITY_EVIDENCE_BUCKET",
           "bucket_name": "quant-receipt-evidence-test"
-        },
-        {
-          "binding": "PRODUCT_MATERIALIZATION_BUCKET",
-          "bucket_name": "quant-structured-receipt-test"
         }
       ],
       "ratelimits": [],
@@ -1410,10 +1406,6 @@
           {
             "binding": "AUTHORITY_EVIDENCE_BUCKET",
             "bucket_name": "quant-receipt-evidence"
-          },
-          {
-            "binding": "PRODUCT_MATERIALIZATION_BUCKET",
-            "bucket_name": "quant-structured"
           }
         ],
         "ratelimits": [],
@@ -1490,10 +1482,6 @@
           {
             "binding": "AUTHORITY_EVIDENCE_BUCKET",
             "bucket_name": "quant-receipt-evidence"
-          },
-          {
-            "binding": "PRODUCT_MATERIALIZATION_BUCKET",
-            "bucket_name": "quant-structured"
           }
         ],
         "ratelimits": [],
@@ -1570,10 +1558,6 @@
           {
             "binding": "AUTHORITY_EVIDENCE_BUCKET",
             "bucket_name": "quant-receipt-evidence-staging"
-          },
-          {
-            "binding": "PRODUCT_MATERIALIZATION_BUCKET",
-            "bucket_name": "quant-structured-staging"
           }
         ],
         "ratelimits": [],

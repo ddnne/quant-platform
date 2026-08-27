@@ -761,13 +761,19 @@ describe("Receipt Evidence Authority in workerd", () => {
       result.receipt.digests.structured_digest,
     );
     expect(product!.row_count).toBe(result.receipt.structured_row_count);
-    const artifact = await runtimeEnv.PRODUCT_MATERIALIZATION_BUCKET.get(
+    expect(product!.artifact_key).toMatch(
+      /^product\/receipt-authority\/production\//,
+    );
+    expect(product!.manifest_key).toMatch(
+      /^product\/receipt-authority\/production\//,
+    );
+    const artifact = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(
       product!.artifact_key,
     );
     expect(artifact).not.toBeNull();
     expect(await sha256Digest(new Uint8Array(await artifact!.arrayBuffer())))
       .toBe(product!.artifact_digest);
-    expect(await runtimeEnv.PRODUCT_MATERIALIZATION_BUCKET.get(
+    expect(await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(
       product!.manifest_key,
     )).not.toBeNull();
     expect(await runtimeEnv.DB.prepare(

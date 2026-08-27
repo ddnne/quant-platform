@@ -25,8 +25,8 @@ JavaScript. Wrong wrapping key, AAD, ciphertext, or generation fails closed.
 
 Its append-only event state is SQLite Durable Object storage; callers receive
 only the closed typed Service Binding capability. The Worker owns the exact
-quant-ingest, RAW create-only/read, STRUCTURED create-only/read, Durable Object,
-and outgoing typed
+quant-ingest, dedicated authority R2 create-only/readback, Durable Object, and
+outgoing typed
 `JQUANTS_ACQUISITION` capabilities. `RECEIPT_EVIDENCE_AUTHORITY` belongs to the
 caller-side inventory, not to the authority's outgoing resource graph. The
 Worker has `workers_dev=false`, `preview_urls=false`, no routes, only the one

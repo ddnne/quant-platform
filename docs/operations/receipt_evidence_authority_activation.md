@@ -10,15 +10,13 @@ The implementation commit does not provision Cloudflare resources, install a
 secret, run a migration, deploy a Worker, register a key, or make an existing
 receipt eligible for `COMPLETE`.
 
-The authority's dedicated evidence bucket and the shared research product
-bucket are different capabilities. `RECEIPT_EVIDENCE_BUCKET` holds
-authority-owned reconciliation evidence. `PRODUCT_MATERIALIZATION_BUCKET`
-points at shared `quant-structured`; other product-plane bindings can write to
-that bucket, so it is neither authority-exclusive nor a create-only capability.
-The source pipeline performs an exact write/readback and carries those exact
-bytes through export, sync, Ops projection, and READY, but it does not yet
-refetch the live R2 object at READY time. Post-write R2 replacement detection
-therefore remains a D2 activation blocker.
+`AUTHORITY_EVIDENCE_BUCKET` is the authority's sole R2 capability. Immutable
+raw pages, reconciliation evidence, and the signed product artifact use
+disjoint prefixes in that dedicated bucket. Every object is written with an
+atomic create-only condition and immediately read back byte-for-byte before
+issuance. The Receipt Worker has no binding to shared `quant-structured`, so an
+active product-plane Worker cannot replace authority evidence. Account-wide
+Cloudflare administration remains the separately declared residual risk.
 
 ## Safety boundary
 

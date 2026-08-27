@@ -247,8 +247,9 @@ async function requireExactObject(
 
 /**
  * Materialize the actual `jquants_records/v1` product artifact.  The returned
- * digest is the SHA-256 of the exact bytes placed in the research structured
- * plane; it is not a digest of the reconciliation shadow table.
+ * digest is the SHA-256 of the exact bytes placed in the authority-owned
+ * immutable product prefix; it is not a digest of the reconciliation shadow
+ * table.
  */
 export async function materializeProduct(
   env: ReceiptAuthorityEnv,
@@ -275,10 +276,10 @@ export async function materializeProduct(
   const dataset = input.capture.initialRequest.dataset_id;
   const segmentId = input.capture.initialRequest.segment_id;
   const prefix =
-    `structured/jsonl/${dataset}/receipt_segment=${segmentId}/run=${input.runId}`;
+    `product/receipt-authority/${env.ENVIRONMENT}/${dataset}/${segmentId}/run-${input.runId}`;
   const artifactKey = `${prefix}-${input.operationId.slice(7, 23)}.jsonl`;
   await putCreateOnly(
-    env.PRODUCT_MATERIALIZATION_BUCKET,
+    env.AUTHORITY_EVIDENCE_BUCKET,
     artifactKey,
     bytes,
     {
@@ -292,7 +293,7 @@ export async function materializeProduct(
     },
   );
   await requireExactObject(
-    env.PRODUCT_MATERIALIZATION_BUCKET,
+    env.AUTHORITY_EVIDENCE_BUCKET,
     artifactKey,
     bytes,
     artifactDigest,
@@ -333,7 +334,7 @@ export async function materializeProduct(
   const manifestDigest = await sha256Digest(manifestBytes);
   const manifestKey = `${prefix}-${input.operationId.slice(7, 23)}.manifest.json`;
   await putCreateOnly(
-    env.PRODUCT_MATERIALIZATION_BUCKET,
+    env.AUTHORITY_EVIDENCE_BUCKET,
     manifestKey,
     manifestBytes,
     {
@@ -344,7 +345,7 @@ export async function materializeProduct(
     },
   );
   await requireExactObject(
-    env.PRODUCT_MATERIALIZATION_BUCKET,
+    env.AUTHORITY_EVIDENCE_BUCKET,
     manifestKey,
     manifestBytes,
     manifestDigest,

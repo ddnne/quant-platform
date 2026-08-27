@@ -161,7 +161,6 @@
         "jquants_acquisition:fetch_governed_page",
         "authority_evidence_r2:create_only_readback",
         "product_materialization_d1:write_exact",
-        "product_materialization_r2:write_readback",
         "structured_natural_key:segment_read",
         "ingestion_evidence:append_run_raw",
         "receipt_ledger:append",
@@ -206,12 +205,6 @@
               "kind": "r2",
               "resource_ref": "cloudflare:staging:r2:quant-receipt-evidence-staging",
               "access": "authority_evidence_create_only_readback"
-            },
-            {
-              "provider": "cloudflare",
-              "kind": "r2",
-              "resource_ref": "cloudflare:staging:r2:quant-structured-staging",
-              "access": "shared_product_write_readback_nonexclusive"
             },
             {
               "provider": "cloudflare",
@@ -265,12 +258,6 @@
               "kind": "r2",
               "resource_ref": "cloudflare:production:r2:quant-receipt-evidence",
               "access": "authority_evidence_create_only_readback"
-            },
-            {
-              "provider": "cloudflare",
-              "kind": "r2",
-              "resource_ref": "cloudflare:production:r2:quant-structured",
-              "access": "shared_product_write_readback_nonexclusive"
             },
             {
               "provider": "cloudflare",
@@ -815,5 +802,5 @@
       }
     }
   },
-  "manifest_digest": "sha256:bcc348be7ae2fa0f81d0dba7bc36a82bc4acf3ba9bda7266d69b9a059a77c6ff"
+  "manifest_digest": "sha256:48fe3f20ba0ca7635c3a61af84319c420950975cd64d1483fb2b3c56dd190187"
 }

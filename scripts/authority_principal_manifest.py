@@ -326,7 +326,6 @@ EXPECTED_CAPABILITIES = {
         "jquants_acquisition:fetch_governed_page",
         "authority_evidence_r2:create_only_readback",
         "product_materialization_d1:write_exact",
-        "product_materialization_r2:write_readback",
         "structured_natural_key:segment_read",
         "ingestion_evidence:append_run_raw",
         "receipt_ledger:append",
@@ -428,7 +427,7 @@ EXPECTED_RESIDUAL_RISK = "cloudflare_workers_scripts_write_account_scope"
 # contains its own body digest; this independent code pin prevents a caller from
 # changing the contract and merely recomputing that self-declared digest.
 PINNED_MANIFEST_DIGEST = (
-    "sha256:bcc348be7ae2fa0f81d0dba7bc36a82bc4acf3ba9bda7266d69b9a059a77c6ff"
+    "sha256:48fe3f20ba0ca7635c3a61af84319c420950975cd64d1483fb2b3c56dd190187"
 )
 
 _BROAD_CAPABILITY_TOKENS = frozenset(
@@ -557,14 +556,6 @@ def _expected_cloudflare_resources(
                     f"cloudflare:{environment}:r2:quant-receipt-evidence{suffix}"
                 ),
                 "access": "authority_evidence_create_only_readback",
-            },
-            {
-                "provider": "cloudflare",
-                "kind": "r2",
-                "resource_ref": (
-                    f"cloudflare:{environment}:r2:quant-structured{suffix}"
-                ),
-                "access": "shared_product_write_readback_nonexclusive",
             },
             {
                 "provider": "cloudflare",

@@ -178,7 +178,6 @@ export type ReceiptAuthorityEnv = Omit<
   | "AUTHORITY_MODE"
   | "JQUANTS_ACQUISITION"
   | "AUTHORITY_EVIDENCE_BUCKET"
-  | "PRODUCT_MATERIALIZATION_BUCKET"
   | "RECEIPT_EVIDENCE_AUTHORITY_DO"
 > & {
   ENVIRONMENT: AuthorityEnvironment;
@@ -187,7 +186,6 @@ export type ReceiptAuthorityEnv = Omit<
   RECEIPT_KEY_WRAP_KEY: string;
   RECEIPT_KEY_GENERATION: string;
   AUTHORITY_EVIDENCE_BUCKET: R2Bucket;
-  PRODUCT_MATERIALIZATION_BUCKET: R2Bucket;
   // Keep the generated binding surface while narrowing the recursive class
   // stub to the only RPC methods this entrypoint is allowed to invoke.
   RECEIPT_EVIDENCE_AUTHORITY_DO: {

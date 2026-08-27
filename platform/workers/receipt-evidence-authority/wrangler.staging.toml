@@ -16,10 +16,6 @@ RECEIPT_KEY_GENERATION = "1"
 binding = "AUTHORITY_EVIDENCE_BUCKET"
 bucket_name = "quant-receipt-evidence-staging"
 
-[[r2_buckets]]
-binding = "PRODUCT_MATERIALIZATION_BUCKET"
-bucket_name = "quant-structured-staging"
-
 [[d1_databases]]
 binding = "DB"
 database_name = "quant-ingest-staging"

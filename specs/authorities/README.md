@@ -25,12 +25,11 @@ workerd, so the runtime generates Ed25519, AES-256-GCM-wraps it with a random
 96-bit IV and canonical authority/environment/generation AAD, stores only the
 wrapped ciphertext, then imports the operational key as non-extractable. The
 secret inventory is exactly `RECEIPT_KEY_WRAP_KEY`; wrong key, AAD, ciphertext,
-or generation fails closed. Its R2 bindings are deliberately distinct: the
-dedicated `quant-receipt-evidence` bucket receives create-only authority raw
-and reconciliation evidence, while shared `quant-structured` receives the
-research product artifact with exact initial readback. The shared bucket is not
-authority-exclusive or an immutable/create-only capability; post-write live
-object verification remains an activation blocker. It also owns the scoped
+or generation fails closed. Its sole R2 binding is the dedicated
+`quant-receipt-evidence` bucket. Authority raw, reconciliation evidence, and
+signed product artifacts use disjoint prefixes; each object is created
+conditionally and read back exactly before issuance. The signer has no binding
+to shared `quant-structured`. It also owns the scoped
 quant-ingest run/raw/product/receipt evidence operations, Durable Object, and
 outgoing `JQUANTS_ACQUISITION` capabilities.
 The caller-side `RECEIPT_EVIDENCE_AUTHORITY` binding is recorded separately as

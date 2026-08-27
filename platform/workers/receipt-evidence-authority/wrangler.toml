@@ -16,10 +16,6 @@ RECEIPT_KEY_GENERATION = "1"
 binding = "AUTHORITY_EVIDENCE_BUCKET"
 bucket_name = "quant-receipt-evidence"
 
-[[r2_buckets]]
-binding = "PRODUCT_MATERIALIZATION_BUCKET"
-bucket_name = "quant-structured"
-
 [[d1_databases]]
 binding = "DB"
 database_name = "quant-ingest"
@@ -61,10 +57,6 @@ RECEIPT_KEY_GENERATION = "1"
 [[env.production.r2_buckets]]
 binding = "AUTHORITY_EVIDENCE_BUCKET"
 bucket_name = "quant-receipt-evidence"
-
-[[env.production.r2_buckets]]
-binding = "PRODUCT_MATERIALIZATION_BUCKET"
-bucket_name = "quant-structured"
 
 [[env.production.d1_databases]]
 binding = "DB"
