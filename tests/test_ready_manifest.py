@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from cryptography.hazmat.primitives import serialization
 
 from data_contracts.source_capability import specs_dir
@@ -306,6 +307,27 @@ def test_ready_private_key_and_mint_are_not_public_control_plane_api() -> None:
         "UNKNOWN",
         "DISABLED",
     )
+    with pytest.raises(ReadyPublicationAuthorityPending, match="PENDING"):
+        require_ready_publication_authority()
+
+
+def test_passive_ready_socket_preflight_never_claims_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import local_authority_clients as clients
+
+    monkeypatch.setattr(
+        clients,
+        "ReadyPublisherAuthorityClient",
+        lambda *, environment: type(
+            "AvailableReadyClient",
+            (),
+            {"require_available": lambda self: "ready-production-v1"},
+        )(),
+    )
+    status = ready_publication_authority_status()
+    assert (status.state, status.evidence_state) == ("PENDING", "UNKNOWN")
+    assert "liveness" in status.reason
     with pytest.raises(ReadyPublicationAuthorityPending, match="PENDING"):
         require_ready_publication_authority()
 

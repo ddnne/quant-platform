@@ -79,13 +79,14 @@ class ReadyPublicationAuthorityStatus:
 
 
 def ready_publication_authority_status() -> ReadyPublicationAuthorityStatus:
-    """Report ACTIVE only from the exact provisioned publisher process.
+    """Report operational truth without mistaking filesystem preflight for liveness.
 
     Product code intentionally has no private-key type, private-key loader,
     signer factory, or issuer injection hook.  The positive observation is a
-    pinned public registry plus launchd socket preflight from the declared
-    publisher UID; the service still reauthenticates every call by kernel UID
-    and independently reopens all evidence before signing.
+    pinned public registry plus launchd socket metadata is only a preflight: it
+    cannot prove a live listener or authenticate its kernel peer.  Only an
+    actual publication call can do that, so this passive status remains
+    PENDING/UNKNOWN even when the preflight material is present.
     """
 
     try:
@@ -94,17 +95,16 @@ def ready_publication_authority_status() -> ReadyPublicationAuthorityStatus:
 
         ReadyPublisherAuthorityClient(environment="production").require_available()
     except LocalAuthorityError:
-        state = "PENDING"
-        evidence_state = "UNKNOWN"
         reason = "dedicated READY publication authority is not provisioned"
     else:
-        state = "ACTIVE"
-        evidence_state = "VERIFIED"
-        reason = "pinned local READY authority endpoint is available"
+        reason = (
+            "pinned READY registry and socket metadata are present; "
+            "listener liveness and peer identity are unverified until a call"
+        )
 
     return ReadyPublicationAuthorityStatus(
-        state=state,
-        evidence_state=evidence_state,
+        state="PENDING",
+        evidence_state="UNKNOWN",
         contract_version=READY_PUBLICATION_AUTHORITY_CONTRACT,
         required_checks=READY_PUBLICATION_REQUIRED_CHECKS,
         mass_state="DISABLED",
@@ -113,14 +113,13 @@ def ready_publication_authority_status() -> ReadyPublicationAuthorityStatus:
 
 
 def require_ready_publication_authority() -> None:
-    """Require the verified local endpoint; never load a private signing key."""
+    """Never mint a positive capability from passive endpoint metadata."""
 
     status = ready_publication_authority_status()
-    if status.state != "ACTIVE" or status.evidence_state != "VERIFIED":
-        raise ReadyPublicationAuthorityPending(
-            f"READY authority {status.state}; evidence {status.evidence_state}; "
-            f"contract={status.contract_version}; Mass={status.mass_state}"
-        )
+    raise ReadyPublicationAuthorityPending(
+        f"READY authority {status.state}; evidence {status.evidence_state}; "
+        f"contract={status.contract_version}; Mass={status.mass_state}"
+    )
 
 
 def _is_sha256(value: Any) -> bool:
