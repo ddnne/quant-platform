@@ -6,6 +6,7 @@ import calendar
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 import json
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Iterable, Mapping, Sequence
@@ -1422,14 +1423,33 @@ def validation_coverage_cutoff_for_build(
     publication = publications[0]
     policy = policies[0]
     staging_path = str(publication[1])
+    try:
+        descriptor_prefix = next(
+            (
+                prefix
+                for prefix in ("/dev/fd/", "/proc/self/fd/")
+                if main_path.startswith(prefix)
+            ),
+            None,
+        )
+        main_info = (
+            os.fstat(int(main_path.removeprefix(descriptor_prefix)))
+            if descriptor_prefix is not None
+            else Path(main_path).stat()
+        )
+        main_matches_staging = os.path.samestat(main_info, Path(staging_path).stat())
+        main_matches_governed = os.path.samestat(main_info, Path(db_path).stat())
+    except (OSError, ValueError):
+        main_matches_staging = False
+        main_matches_governed = False
     if (
         str(publication[0]) != "VALIDATING"
         or str(policy[0]) != "VALIDATING"
         or int(policy[1]) != 0
         or policy[2] != build_id
         or not main_path
-        or Path(main_path).resolve() != Path(staging_path).resolve()
-        or Path(main_path).resolve() != Path(db_path).resolve()
+        or not main_matches_staging
+        or not main_matches_governed
     ):
         raise CoveragePublicationCutoffError(
             "Coverage refresh build is not the unique active VALIDATING build"

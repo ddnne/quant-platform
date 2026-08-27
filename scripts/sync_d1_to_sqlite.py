@@ -1271,6 +1271,8 @@ def _freeze_authenticated_applied_mirror_storage(
 def _mark_authenticated_export_complete(
     store: SqliteStore,
     authenticated_export,
+    *,
+    seal_authenticated_export: Callable[[object], object] | None = None,
 ) -> Mapping[str, object]:
     """Persist one single-use capability; there is no caller evidence input."""
     from ops.d1_sync_signing import (
@@ -1279,7 +1281,8 @@ def _mark_authenticated_export_complete(
     )
 
     _ensure_export_sync_audit(store)
-    sealed = _seal_authenticated_wrangler_export(authenticated_export)
+    sealer = seal_authenticated_export or _seal_authenticated_wrangler_export
+    sealed = sealer(authenticated_export)
     audit_digest, issuer_key_id, signature, document = (
         sealed._consume_for_persistence()  # noqa: SLF001
     )
@@ -1555,6 +1558,7 @@ def _run_private_export_sync(
     export_digest: str,
     artifact_format: str,
     authenticated_acquisition=None,
+    seal_authenticated_export: Callable[[object], object] | None = None,
 ) -> tuple[int, int, int, list[str]]:
     total_seen = total_registered = total_skipped = 0
     failures: list[str] = []
@@ -1755,7 +1759,11 @@ def _run_private_export_sync(
                 sync_kind=sync_kind,
                 prior_audit_digest=prior_audit_digest,
             )
-            _mark_authenticated_export_complete(store, authenticated_export)
+            _mark_authenticated_export_complete(
+                store,
+                authenticated_export,
+                seal_authenticated_export=seal_authenticated_export,
+            )
             if audit_export_digest != export_digest:
                 store._conn.execute(  # noqa: SLF001
                     "DELETE FROM main.local_d1_export_sync_runs "

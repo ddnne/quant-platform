@@ -856,6 +856,43 @@ def build_coverage_transition_request(
     conn, path, identity = _open_db(db_path, readonly=True)
     try:
         conn.execute("BEGIN")
+        request = build_coverage_transition_request_from_owned_connection(
+            conn,
+            governed_db_path=path,
+            build_id=build_id,
+            datasets=selected,
+            issued_at=issued_at,
+            expires_at=expires_at,
+        )
+        _assert_db_path_identity(path, identity)
+        return request
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.close()
+
+
+def build_coverage_transition_request_from_owned_connection(
+    conn: sqlite3.Connection,
+    *,
+    governed_db_path: str | Path,
+    build_id: str,
+    datasets: Sequence[str],
+    issued_at: str,
+    expires_at: str,
+) -> Mapping[str, Any]:
+    """Derive unsigned evidence from an already-frozen descriptor transaction."""
+    if type(conn) is not sqlite3.Connection or not conn.in_transaction:
+        raise CoverageTransitionError(
+            "Coverage transition requires an owned frozen read transaction"
+        )
+    path = Path(governed_db_path)
+    if not path.is_absolute():
+        raise CoverageTransitionError("Coverage governed database path is not absolute")
+    selected = _normalize_datasets(datasets)
+    previous_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
         body = _derive_transition_body(
             conn,
             path,
@@ -864,12 +901,9 @@ def build_coverage_transition_request(
             issued_at=issued_at,
             expires_at=expires_at,
         )
-        _assert_db_path_identity(path, identity)
-        return MappingProxyType(_unsigned_request(body))
     finally:
-        if conn.in_transaction:
-            conn.rollback()
-        conn.close()
+        conn.row_factory = previous_factory
+    return MappingProxyType(_unsigned_request(body))
 
 
 def _validate_signed_document(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -1436,5 +1470,6 @@ __all__ = [
     "MAX_AUTHORIZATION_SECONDS",
     "apply_signed_coverage_transition",
     "build_coverage_transition_request",
+    "build_coverage_transition_request_from_owned_connection",
     "coverage_transition_availability",
 ]

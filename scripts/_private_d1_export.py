@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Callable
 from urllib.parse import quote
 from weakref import WeakSet
 
@@ -99,6 +99,142 @@ def _validated_governed_wrangler() -> tuple[str, Path]:
     if bindings != [expected]:
         raise RuntimeError("production Wrangler config is not bound to governed D1")
     return str(executable), config
+
+
+def _require_protected_authority_file(
+    path: Path, *, executable: bool = False
+) -> Path:
+    if not path.is_absolute():
+        raise RuntimeError("authority Wrangler runtime path is not absolute")
+    try:
+        resolved = path.resolve(strict=True)
+        info = resolved.lstat()
+    except OSError as exc:
+        raise RuntimeError("authority Wrangler runtime is unavailable") from exc
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != 0
+        or info.st_nlink != 1
+        or stat.S_IMODE(info.st_mode) & 0o022
+        or (executable and not stat.S_IMODE(info.st_mode) & 0o111)
+    ):
+        raise RuntimeError("authority Wrangler runtime file is unsafe")
+    for parent in (resolved.parent, *resolved.parents):
+        parent_info = parent.lstat()
+        if (
+            not stat.S_ISDIR(parent_info.st_mode)
+            or parent_info.st_uid != 0
+            or stat.S_IMODE(parent_info.st_mode) & 0o022
+        ):
+            raise RuntimeError("authority Wrangler runtime path is user-writable")
+    return resolved
+
+
+def _validated_authority_wrangler(
+    *, node_path: Path, cli_path: Path, config_path: Path
+) -> tuple[tuple[str, str], Path]:
+    """Validate an activation-pinned, root-owned Node/Wrangler runtime."""
+
+    node = _require_protected_authority_file(node_path, executable=True)
+    cli = _require_protected_authority_file(cli_path)
+    config = _require_protected_authority_file(config_path)
+    package_json = cli.parents[1] / "package.json"
+    try:
+        installed_version = str(
+            json.loads(package_json.read_text(encoding="utf-8"))["version"]
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("cannot verify authority Wrangler package") from exc
+    _require_protected_authority_file(package_json)
+    if installed_version != PINNED_WRANGLER_VERSION:
+        raise RuntimeError("authority Wrangler version does not match policy")
+    try:
+        node_version = subprocess.run(
+            [str(node), "--version"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            text=True,
+        )
+    except OSError as exc:
+        raise RuntimeError("cannot execute authority Node runtime") from exc
+    if node_version.returncode != 0 or not node_version.stdout.startswith("v"):
+        raise RuntimeError("authority Node runtime version is unavailable")
+    try:
+        document = tomllib.loads(config.read_text(encoding="utf-8"))
+        bindings = document["env"][GOVERNED_WRANGLER_ENV]["d1_databases"]
+    except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
+        raise RuntimeError("cannot verify authority governed D1 binding") from exc
+    if bindings != [
+        {
+            "binding": "DB",
+            "database_name": GOVERNED_D1_NAME,
+            "database_id": GOVERNED_D1_ID,
+        }
+    ]:
+        raise RuntimeError("authority Wrangler config is not bound to governed D1")
+    return (str(node), str(cli)), config
+
+
+def _run_authority_wrangler_d1_export(
+    *,
+    output_path: Path,
+    credential_token: str,
+    node_path: Path,
+    cli_path: Path,
+    config_path: Path,
+) -> None:
+    command_prefix, config = _validated_authority_wrangler(
+        node_path=node_path,
+        cli_path=cli_path,
+        config_path=config_path,
+    )
+    if (
+        type(credential_token) is not str
+        or not 20 <= len(credential_token) <= 512
+        or any(character.isspace() for character in credential_token)
+    ):
+        raise RuntimeError("explicit Cloudflare credential is invalid")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        *command_prefix,
+        "d1",
+        "export",
+        GOVERNED_D1_NAME,
+        "--remote",
+        "--output",
+        str(output_path),
+        "--config",
+        str(config),
+        "--env",
+        GOVERNED_WRANGLER_ENV,
+        "--skip-confirmation",
+    ]
+    child_environment = {
+        "CLOUDFLARE_API_TOKEN": credential_token,
+        "LANG": "C.UTF-8",
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+    }
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(config.parent),
+            env=child_environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError as exc:
+        raise RuntimeError("failed to start authority Wrangler export") from exc
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "authority Wrangler D1 export failed; provider output withheld"
+        )
+    if not output_path.is_file() or output_path.stat().st_size == 0:
+        raise RuntimeError("authority Wrangler D1 export produced no SQL artifact")
+    output_path.chmod(0o600)
 
 
 def run_wrangler_d1_export(
@@ -1245,16 +1381,44 @@ def _build_authenticated_export_authority():
             acquired_exports.discard(self)
             return authenticated
 
-    def acquire_pinned_wrangler_export(directory: Path) -> _PinnedWranglerExport:
-        """Acquire, materialize, and bind one governed remote D1 export."""
-        from ops.d1_sync_signing import (
-            _preflight_d1_sync_signing_authority,
-            _utc_now,
-        )
+    def _acquire_pinned_wrangler_export_with_preflight(
+        directory: Path,
+        *,
+        authority_preflight: Callable[[], None],
+        credential_token: str | None = None,
+        authority_node_path: Path | None = None,
+        authority_wrangler_cli_path: Path | None = None,
+        authority_wrangler_config_path: Path | None = None,
+    ) -> _PinnedWranglerExport:
+        """Acquire after an authority-owned preflight, never a caller flag."""
 
-        _preflight_d1_sync_signing_authority()
+        from ops.d1_sync_signing import _utc_now
+
+        if not callable(authority_preflight):
+            raise TypeError("D1 acquisition authority preflight is required")
+        authority_preflight()
         raw_artifact = directory / "remote-export.sql"
-        run_wrangler_d1_export(output_path=raw_artifact)
+        authority_runtime = (
+            authority_node_path,
+            authority_wrangler_cli_path,
+            authority_wrangler_config_path,
+        )
+        if any(item is not None for item in authority_runtime):
+            if any(item is None for item in authority_runtime) or credential_token is None:
+                raise RuntimeError("authority Wrangler runtime is incomplete")
+            _run_authority_wrangler_d1_export(
+                output_path=raw_artifact,
+                credential_token=credential_token,
+                node_path=authority_node_path,
+                cli_path=authority_wrangler_cli_path,
+                config_path=authority_wrangler_config_path,
+            )
+        else:
+            if credential_token is not None:
+                raise RuntimeError(
+                    "explicit credential requires authority Wrangler runtime"
+                )
+            run_wrangler_d1_export(output_path=raw_artifact)
         materialized = directory / "remote-export.sqlite"
         (
             export_digest,
@@ -1304,6 +1468,16 @@ def _build_authenticated_export_authority():
         acquired_exports.add(acquired)
         return acquired
 
+    def acquire_pinned_wrangler_export(directory: Path) -> _PinnedWranglerExport:
+        """Legacy CLI acquisition remains closed without a separate authority."""
+
+        from ops.d1_sync_signing import _preflight_d1_sync_signing_authority
+
+        return _acquire_pinned_wrangler_export_with_preflight(
+            directory,
+            authority_preflight=_preflight_d1_sync_signing_authority,
+        )
+
     from ops.d1_sync_signing import _bind_authenticated_export_authority
 
     _bind_authenticated_export_authority(
@@ -1313,6 +1487,8 @@ def _build_authenticated_export_authority():
         _AuthenticatedWranglerExport,
         _PinnedWranglerExport,
         acquire_pinned_wrangler_export,
+        _acquire_pinned_wrangler_export_with_preflight,
+        _consume_authenticated_export,
     )
 
 
@@ -1320,5 +1496,7 @@ def _build_authenticated_export_authority():
     _AuthenticatedWranglerExport,
     _PinnedWranglerExport,
     acquire_pinned_wrangler_export,
+    _acquire_pinned_wrangler_export_with_preflight,
+    _consume_authenticated_export_for_authority,
 ) = _build_authenticated_export_authority()
 del _build_authenticated_export_authority
