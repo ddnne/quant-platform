@@ -596,7 +596,7 @@
           "const": "PENDING_NO_KEY"
         },
         "worker_ref": {
-          "const": "platform/workers/ingestion-premium"
+          "const": "platform/workers/receipt-evidence-authority"
         },
         "worker_name": {
           "type": "string",
@@ -626,10 +626,10 @@
         },
         "secret_names": {
           "type": "array",
-          "maxItems": 0
+          "const": ["RECEIPT_KEY_WRAP_KEY"]
         },
         "key_backend": {
-          "const": "durable_object_webcrypto_non_extractable"
+          "const": "durable_object_aes_gcm_wrapped_webcrypto_non_extractable"
         },
         "approval_backend": {
           "const": "service_policy"
@@ -639,7 +639,7 @@
         },
         "private_key_ref": {
           "type": "string",
-          "pattern": "^durable-object-webcrypto://(staging|production)/receipt/ed25519-non-extractable-key$"
+          "pattern": "^durable-object-sqlite-wrapped://(staging|production)/receipt/ed25519-generation-1$"
         },
         "readable_private_key_refs": {
           "type": "array",
@@ -647,7 +647,7 @@
           "uniqueItems": true,
           "items": {
             "type": "string",
-            "pattern": "^durable-object-webcrypto://(staging|production)/receipt/ed25519-non-extractable-key$"
+            "pattern": "^durable-object-sqlite-wrapped://(staging|production)/receipt/ed25519-generation-1$"
           }
         },
         "event_store_ref": {

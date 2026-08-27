@@ -12,15 +12,25 @@ entrypoint.
 
 `receipt` runs as the separate
 `quant-platform-receipt-evidence-authority` Cloudflare Worker, built from the
-shared `ingestion-premium` package. Its Ed25519 key is a non-extractable
-WebCrypto key held by `ReceiptEvidenceAuthority`; its append-only event state is
-SQLite Durable Object storage; callers receive only the closed typed Service
-Binding capability. The Worker owns the exact quant-ingest, RAW create-only/read,
-STRUCTURED create-only/read, Durable Object, and outgoing typed
+dedicated `platform/workers/receipt-evidence-authority` package. Workerd cannot
+serialize a `CryptoKey` into Durable Object storage: the runtime acceptance test
+observes `DataCloneError: Could not serialize object of type CryptoKey`.
+Therefore the Worker generates Ed25519 inside workerd, calls WebCrypto
+`wrapKey("pkcs8")` with an AES-256-GCM key supplied only as the
+`RECEIPT_KEY_WRAP_KEY` secret, and persists only ciphertext plus a random
+96-bit IV. Canonical AAD binds authority, environment, schema, generation,
+key id, algorithm, and public key. Every signing use performs authenticated
+`unwrapKey(..., extractable=false)`; PKCS#8 bytes are never exposed to
+JavaScript. Wrong wrapping key, AAD, ciphertext, or generation fails closed.
+
+Its append-only event state is SQLite Durable Object storage; callers receive
+only the closed typed Service Binding capability. The Worker owns the exact
+quant-ingest, RAW create-only/read, STRUCTURED create-only/read, Durable Object,
+and outgoing typed
 `JQUANTS_ACQUISITION` capabilities. `RECEIPT_EVIDENCE_AUTHORITY` belongs to the
 caller-side inventory, not to the authority's outgoing resource graph. The
-Worker has `workers_dev=false`, `preview_urls=false`, no routes, no secret names,
-and a fixed 404 public fetch surface.
+Worker has `workers_dev=false`, `preview_urls=false`, no routes, only the one
+wrapping-key secret, and a fixed 404 public fetch surface.
 
 The remaining six principals run as separate local OS services. Each deployment
 has a unique service user, protected key or credential reference, event store,
@@ -36,9 +46,10 @@ READY publication is profile/plan/closure-bound, Trader authorization is one
 human-present exact-four batch, and controlled execution is one exact-four
 one-shot; generic publish, authorize, and execute operations are absent.
 
-All checked-in deployments remain `PENDING_NO_KEY`. Test keys, real OS users,
-Cloudflare resources, bindings, migrations, and registry activation are outside
-this contract-freeze commit.
+All checked-in deployments remain `PENDING_NO_KEY`. The test harness uses only
+a conspicuous dummy wrapping value. Real OS users, Cloudflare resources and
+secret values, migration application, deployment, and registry activation are
+outside this code change; binding and migration declarations are checked in.
 
 Authorization is method-scoped rather than a caller-by-operation Cartesian
 product. Each row fixes authenticated caller, target operation, purpose,
@@ -49,8 +60,8 @@ digests. Staging and production have different D1 identities.
 The closed typed v2 `JQUANTS_ACQUISITION` WorkerEntrypoint target is implemented
 and tested in workerd, including a separate-isolate test Service Binding. The
 legacy `X-Ingestion-Token` HTTP path remains during migration. Receipt
-activation is still blocked: the live caller binding and dedicated HMAC key are
-unprovisioned. A receipt-side candidate now verifies runtime-registered live
+activation is still blocked: the declared live caller binding and dedicated
+HMAC/wrapping keys are unprovisioned. The Receipt Worker verifies governed live
 captures, exact raw and 37-header metadata, target/request/query/chain identity,
 raw-derived provider pagination, full closed-month slice order, and canonical
 Coverage scope. The verifier pins capture completion from its authority clock;
@@ -66,13 +77,21 @@ audit/recovery-only. Target HMAC continuation state is live navigation state;
 the response metadata itself is not HMAC-authenticated and is not standalone
 COMPLETE evidence.
 
-This is containment, not D2/D3 closure. The production live-capture caller,
-Receipt-side create-only raw ledger, Receipt Worker/DO, Ed25519 key and reproof
-remain unprovisioned. Structured state must be committed before the external
-issuer is called, so a truthful envelope may exist when the later local
-receipt/status transaction fails. An authority-owned append/finalize ledger and
-recovery protocol are required before activation. Master, tip-only and
-current/partial-month acquisition remain explicitly PENDING.
+This is containment, not operational D2/D3 closure. The deployable Worker,
+authenticated caller route, typed acquisition/caller bindings, create-only
+raw/structured ledger, independently measured pagination transitions, SQLite
+authority event ledger, and append/issue/finalize/recover protocol now exist in
+code. A crash after signature issue and before receipt finalization recovers the
+byte-identical envelope by operation digest. D1 rows, committed receipt
+evidence, caller requests, DO operations, key metadata, and event history have
+monotonic or append-only triggers.
+
+Cloudflare resources, the wrapping secret, migration application, PENDING
+deployment, runtime public-key registration, registry review, exact key-id
+activation, and the 22-dataset reproof remain unprovisioned. Master, tip-only,
+and current/partial-month acquisition remain explicitly PENDING. The two-deploy
+activation procedure is frozen in
+`docs/operations/receipt_evidence_authority_activation.md`.
 
 ## Enforcement
 
@@ -104,6 +123,16 @@ zero, while counterless mode is valid only when both stored and new counters
 are zero. Until the OS peer credential, transactional ledgers, staging signer,
 and human-approval services exist, the public activation entrypoints fail with
 explicit `PENDING`; shape validation is diagnostic only.
+
+The normal ACTIVE deploy gate remains strict. To avoid a circular dependency
+where no public key can exist before the first deploy, a narrower
+closure-provisioning acceptance permits only the first PENDING deployment. It
+requires the frozen binding manifest, applied migrations, wrapping secret,
+`AUTHORITY_MODE=PENDING`, no `ACTIVATED_KEY_ID`, public 404, and a demonstrated
+signing rejection. It authorizes key generation and public registration only;
+it cannot issue a receipt, change Coverage, or satisfy D2/D3. The second ACTIVE
+deployment is forbidden until the public registry review and every ordinary P0
+activation gate pass.
 
 ## Residual risk
 

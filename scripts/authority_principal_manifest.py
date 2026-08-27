@@ -107,7 +107,19 @@ EXPECTED_METHOD_ACL = {
             "receipt:issue_for_segment",
             "trusted_collection_receipt",
             "cloudflare_typed_service_binding",
-        )
+        ),
+        _acl(
+            "governed_ingestion",
+            "receipt:recover_issue",
+            "trusted_collection_receipt_recovery",
+            "cloudflare_typed_service_binding",
+        ),
+        _acl(
+            "governed_ingestion",
+            "receipt:public_key_registration",
+            "receipt_key_registry_proposal",
+            "cloudflare_typed_service_binding",
+        ),
     ],
     "d1_sync": [
         _acl("ops_scheduler", "d1_sync:sync_now", "sync_current"),
@@ -167,14 +179,17 @@ EXPECTED_METHOD_ACL = {
 EXPECTED_PENDING_DEPENDENCIES = {
     "receipt": [
         {
-            "dependency_id": "jquants_acquisition_typed_rpc",
+            "dependency_id": "receipt_authority_operational_activation",
             "status": "PENDING",
             "required_contract": (
-                "WorkerEntrypoint.fetch_governed_page over JQUANTS_ACQUISITION"
+                "PENDING deploy, wrapped-key public registration, reviewed registry "
+                "activation, then exact ACTIVE key-id deploy"
             ),
             "observed_implementation": (
-                "typed v2 target present; Receipt caller binding, live HMAC key, "
-                "raw persistence/reconciliation, and authority activation unprovisioned"
+                "Worker, typed caller/acquisition bindings, append/finalize/recover "
+                "ledgers, runtime tests, and migrations are present; Cloudflare "
+                "resources, wrap secret, migration apply, registration review, ACTIVE "
+                "deploy, and dataset reproof remain unprovisioned"
             ),
             "activation_blocked": True,
         }
@@ -274,7 +289,11 @@ EXPECTED_PENDING_DEPENDENCIES = {
     },
 }
 EXPECTED_PROVIDES = {
-    "receipt": ("receipt:issue_for_segment",),
+    "receipt": (
+        "receipt:issue_for_segment",
+        "receipt:recover_issue",
+        "receipt:public_key_registration",
+    ),
     "d1_sync": (
         "d1_sync:sync_now",
         "frozen_mirror:readonly_handoff",
@@ -294,6 +313,7 @@ EXPECTED_CAPABILITIES = {
         "structured_natural_key:segment_read",
         "receipt_ledger:append",
         "receipt_signature:sign",
+        "receipt_key_registration:export_public",
     ),
     "d1_sync": (
         "cloudflare_d1:quant_ingest_export",
@@ -390,7 +410,7 @@ EXPECTED_RESIDUAL_RISK = "cloudflare_workers_scripts_write_account_scope"
 # contains its own body digest; this independent code pin prevents a caller from
 # changing the contract and merely recomputing that self-declared digest.
 PINNED_MANIFEST_DIGEST = (
-    "sha256:fef9e5bbfc01512d7c194156fa2137504af7ef8c3994f222f5b3a9b9ad00bfd5"
+    "sha256:d6afc3fddc29a12b5472213b06acb64d881f9cd63fe91a001c3c273a5428cb84"
 )
 
 _BROAD_CAPABILITY_TOKENS = frozenset(
@@ -548,7 +568,7 @@ def _expected_cloudflare_resources(
                     f"cloudflare:{environment}:service_binding:"
                     f"quant-platform-ingestion-secrets{suffix}"
                 ),
-                "access": "pending_typed_jquants_acquisition_rpc",
+                "access": "typed_jquants_acquisition_rpc",
                 "binding_name": "JQUANTS_ACQUISITION",
             },
         ]
@@ -642,7 +662,7 @@ def _validate_receipt_deployment(
     deployment: Mapping[str, Any], *, environment: str
 ) -> None:
     suffix = "-staging" if environment == "staging" else ""
-    if deployment.get("worker_ref") != "platform/workers/ingestion-premium":
+    if deployment.get("worker_ref") != "platform/workers/receipt-evidence-authority":
         raise ValueError(f"receipt/{environment}: Worker package drift")
     if deployment.get("worker_name") != (
         f"quant-platform-receipt-evidence-authority{suffix}"
@@ -662,7 +682,9 @@ def _validate_receipt_deployment(
         raise ValueError(f"receipt/{environment}: Durable Object binding drift")
     if deployment.get("durable_object_class") != "ReceiptEvidenceAuthority":
         raise ValueError(f"receipt/{environment}: Durable Object class drift")
-    if deployment.get("key_backend") != "durable_object_webcrypto_non_extractable":
+    if deployment.get("key_backend") != (
+        "durable_object_aes_gcm_wrapped_webcrypto_non_extractable"
+    ):
         raise ValueError(f"receipt/{environment}: extractable Receipt key is forbidden")
     if deployment.get("approval_backend") != "service_policy":
         raise ValueError(f"receipt/{environment}: approval backend drift")
@@ -671,10 +693,10 @@ def _validate_receipt_deployment(
         or deployment.get("preview_urls") is not False
         or deployment.get("routes") != []
         or deployment.get("public_fetch_behavior") != "NOT_FOUND_404"
-        or deployment.get("secret_names") != []
+        or deployment.get("secret_names") != ["RECEIPT_KEY_WRAP_KEY"]
     ):
-        raise ValueError(f"receipt/{environment}: private no-secret Worker surface drift")
-    key_prefix = f"durable-object-webcrypto://{environment}/receipt/"
+        raise ValueError(f"receipt/{environment}: private wrapped-key Worker surface drift")
+    key_prefix = f"durable-object-sqlite-wrapped://{environment}/receipt/"
     store_prefix = f"durable-object-sqlite://{environment}/receipt/"
     if not str(deployment.get("private_key_ref", "")).startswith(key_prefix):
         raise ValueError(f"receipt/{environment}: WebCrypto key custody drift")

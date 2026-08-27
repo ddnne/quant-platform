@@ -2,7 +2,7 @@
   "schema_version": "authority-principal-manifest/v1",
   "generation": 1,
   "activation_status": "PENDING",
-  "schema_digest": "sha256:9283bd383fe1ff0f357b9c6413f0628e8adacdeb84047107c4488e28fb5dd1dd",
+  "schema_digest": "sha256:8b2dd7bc823a55cbab5f1d845c857bf2656b5b1ae9c268f28dad4504ec3170c4",
   "protocol_schema_digests": {
     "frozen_mirror_request": "sha256:d0d20ba5094f7b6e5bb3f6b68792cf975956c05a2acbdbb18f50edf2f98cfe21",
     "frozen_mirror_handoff": "sha256:4041b2eef7f848dcc66addb14e3a5f6e8572fb5ac91e9e239dd66a29067779a5",
@@ -35,7 +35,9 @@
       "registry_path": "packages/data_plane/data_contracts/receipt_verify_public_keys.json",
       "service_entrypoint": "receipt.issue_for_segment",
       "provides": [
-        "receipt:issue_for_segment"
+        "receipt:issue_for_segment",
+        "receipt:recover_issue",
+        "receipt:public_key_registration"
       ],
       "allowed_callers": [
         "governed_ingestion"
@@ -50,14 +52,34 @@
             "production"
           ],
           "authentication": "cloudflare_typed_service_binding"
+        },
+        {
+          "authenticated_caller": "governed_ingestion",
+          "target_operation": "receipt:recover_issue",
+          "purpose": "trusted_collection_receipt_recovery",
+          "environments": [
+            "staging",
+            "production"
+          ],
+          "authentication": "cloudflare_typed_service_binding"
+        },
+        {
+          "authenticated_caller": "governed_ingestion",
+          "target_operation": "receipt:public_key_registration",
+          "purpose": "receipt_key_registry_proposal",
+          "environments": [
+            "staging",
+            "production"
+          ],
+          "authentication": "cloudflare_typed_service_binding"
         }
       ],
       "pending_dependencies": [
         {
-          "dependency_id": "jquants_acquisition_typed_rpc",
+          "dependency_id": "receipt_authority_operational_activation",
           "status": "PENDING",
-          "required_contract": "WorkerEntrypoint.fetch_governed_page over JQUANTS_ACQUISITION",
-          "observed_implementation": "typed v2 target present; Receipt caller binding, live HMAC key, raw persistence/reconciliation, and authority activation unprovisioned",
+          "required_contract": "PENDING deploy, wrapped-key public registration, reviewed registry activation, then exact ACTIVE key-id deploy",
+          "observed_implementation": "Worker, typed caller/acquisition bindings, append/finalize/recover ledgers, runtime tests, and migrations are present; Cloudflare resources, wrap secret, migration apply, registration review, ACTIVE deploy, and dataset reproof remain unprovisioned",
           "activation_blocked": true
         }
       ],
@@ -67,7 +89,8 @@
         "structured_immutable:create_only",
         "structured_natural_key:segment_read",
         "receipt_ledger:append",
-        "receipt_signature:sign"
+        "receipt_signature:sign",
+        "receipt_key_registration:export_public"
       ],
       "forbidden_capabilities": [
         "other_signer_private_key:read",
@@ -78,7 +101,7 @@
       "deployments": {
         "staging": {
           "mode": "PENDING_NO_KEY",
-          "worker_ref": "platform/workers/ingestion-premium",
+          "worker_ref": "platform/workers/receipt-evidence-authority",
           "worker_name": "quant-platform-receipt-evidence-authority-staging",
           "incoming_service_binding": {
             "binding_name": "RECEIPT_EVIDENCE_AUTHORITY",
@@ -92,11 +115,13 @@
           "preview_urls": false,
           "routes": [],
           "public_fetch_behavior": "NOT_FOUND_404",
-          "secret_names": [],
-          "key_backend": "durable_object_webcrypto_non_extractable",
+          "secret_names": [
+            "RECEIPT_KEY_WRAP_KEY"
+          ],
+          "key_backend": "durable_object_aes_gcm_wrapped_webcrypto_non_extractable",
           "approval_backend": "service_policy",
           "private_key_state": "ABSENT_UNTIL_ACTIVATION",
-          "private_key_ref": "durable-object-webcrypto://staging/receipt/ed25519-non-extractable-key",
+          "private_key_ref": "durable-object-sqlite-wrapped://staging/receipt/ed25519-generation-1",
           "readable_private_key_refs": [],
           "event_store_ref": "durable-object-sqlite://staging/receipt/authority-events",
           "cloudflare_resources": [
@@ -128,14 +153,14 @@
               "provider": "cloudflare",
               "kind": "service_binding",
               "resource_ref": "cloudflare:staging:service_binding:quant-platform-ingestion-secrets-staging",
-              "access": "pending_typed_jquants_acquisition_rpc",
+              "access": "typed_jquants_acquisition_rpc",
               "binding_name": "JQUANTS_ACQUISITION"
             }
           ]
         },
         "production": {
           "mode": "PENDING_NO_KEY",
-          "worker_ref": "platform/workers/ingestion-premium",
+          "worker_ref": "platform/workers/receipt-evidence-authority",
           "worker_name": "quant-platform-receipt-evidence-authority",
           "incoming_service_binding": {
             "binding_name": "RECEIPT_EVIDENCE_AUTHORITY",
@@ -149,11 +174,13 @@
           "preview_urls": false,
           "routes": [],
           "public_fetch_behavior": "NOT_FOUND_404",
-          "secret_names": [],
-          "key_backend": "durable_object_webcrypto_non_extractable",
+          "secret_names": [
+            "RECEIPT_KEY_WRAP_KEY"
+          ],
+          "key_backend": "durable_object_aes_gcm_wrapped_webcrypto_non_extractable",
           "approval_backend": "service_policy",
           "private_key_state": "ABSENT_UNTIL_ACTIVATION",
-          "private_key_ref": "durable-object-webcrypto://production/receipt/ed25519-non-extractable-key",
+          "private_key_ref": "durable-object-sqlite-wrapped://production/receipt/ed25519-generation-1",
           "readable_private_key_refs": [],
           "event_store_ref": "durable-object-sqlite://production/receipt/authority-events",
           "cloudflare_resources": [
@@ -185,7 +212,7 @@
               "provider": "cloudflare",
               "kind": "service_binding",
               "resource_ref": "cloudflare:production:service_binding:quant-platform-ingestion-secrets",
-              "access": "pending_typed_jquants_acquisition_rpc",
+              "access": "typed_jquants_acquisition_rpc",
               "binding_name": "JQUANTS_ACQUISITION"
             }
           ]
@@ -708,5 +735,5 @@
       }
     }
   },
-  "manifest_digest": "sha256:fef9e5bbfc01512d7c194156fa2137504af7ef8c3994f222f5b3a9b9ad00bfd5"
+  "manifest_digest": "sha256:d6afc3fddc29a12b5472213b06acb64d881f9cd63fe91a001c3c273a5428cb84"
 }

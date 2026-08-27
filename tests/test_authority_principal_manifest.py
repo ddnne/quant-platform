@@ -317,7 +317,7 @@ def test_runtime_and_key_backend_discriminants_are_frozen() -> None:
     assert principals["receipt"]["runtime"] == "cloudflare_worker"
     assert (
         principals["receipt"]["deployments"]["production"]["key_backend"]
-        == "durable_object_webcrypto_non_extractable"
+        == "durable_object_aes_gcm_wrapped_webcrypto_non_extractable"
     )
     for principal in manifest_module.LOCAL_OS_PRINCIPALS - {"trader"}:
         assert principals[principal]["runtime"] == "local_os_service"
@@ -336,7 +336,7 @@ def test_receipt_worker_resource_graph_and_private_surface_are_exact() -> None:
     assert deployment["workers_dev"] is False
     assert deployment["preview_urls"] is False
     assert deployment["routes"] == []
-    assert deployment["secret_names"] == []
+    assert deployment["secret_names"] == ["RECEIPT_KEY_WRAP_KEY"]
     assert deployment["public_fetch_behavior"] == "NOT_FOUND_404"
     assert deployment["incoming_service_binding"]["binding_name"] == (
         "RECEIPT_EVIDENCE_AUTHORITY"
@@ -472,18 +472,21 @@ def test_method_acl_prevents_caller_operation_cartesian_product() -> None:
         manifest_module.validate_manifest(drifted)
 
 
-def test_receipt_typed_acquisition_is_explicitly_pending() -> None:
+def test_receipt_operational_activation_is_explicitly_pending() -> None:
     receipt = _manifest()["principals"]["receipt"]
     assert receipt["pending_dependencies"] == [
         {
-            "dependency_id": "jquants_acquisition_typed_rpc",
+            "dependency_id": "receipt_authority_operational_activation",
             "status": "PENDING",
             "required_contract": (
-                "WorkerEntrypoint.fetch_governed_page over JQUANTS_ACQUISITION"
+                "PENDING deploy, wrapped-key public registration, reviewed registry "
+                "activation, then exact ACTIVE key-id deploy"
             ),
             "observed_implementation": (
-                "typed v2 target present; Receipt caller binding, live HMAC key, "
-                "raw persistence/reconciliation, and authority activation unprovisioned"
+                "Worker, typed caller/acquisition bindings, append/finalize/recover "
+                "ledgers, runtime tests, and migrations are present; Cloudflare "
+                "resources, wrap secret, migration apply, registration review, ACTIVE "
+                "deploy, and dataset reproof remain unprovisioned"
             ),
             "activation_blocked": True,
         }

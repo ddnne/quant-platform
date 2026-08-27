@@ -19,13 +19,17 @@ Parallel lanes may extend `parallel_protocol_schema_digests` only by adding the
 reviewed schema path to the validator in the same commit.
 
 `receipt` is the sole Cloudflare-hosted signer. It is a separate
-`quant-platform-receipt-evidence-authority` Worker built from the shared
-`ingestion-premium` package and uses a SQLite Durable Object plus a
-non-extractable WebCrypto key. It owns only the exact quant-ingest, RAW,
+`quant-platform-receipt-evidence-authority` Worker in its own package and uses
+a SQLite Durable Object. Direct `CryptoKey` persistence is not available in
+workerd, so the runtime generates Ed25519, AES-256-GCM-wraps it with a random
+96-bit IV and canonical authority/environment/generation AAD, stores only the
+wrapped ciphertext, then imports the operational key as non-extractable. The
+secret inventory is exactly `RECEIPT_KEY_WRAP_KEY`; wrong key, AAD, ciphertext,
+or generation fails closed. It owns only the exact quant-ingest, RAW,
 STRUCTURED, Durable Object, and outgoing `JQUANTS_ACQUISITION` capabilities.
 The caller-side `RECEIPT_EVIDENCE_AUTHORITY` binding is recorded separately as
-an inbound relationship. The Worker has no public URL, route, or secret binding,
-and public `fetch` is fixed to 404. The other six authorities are separate local
+an inbound relationship. The Worker has no public URL or route, and public
+`fetch` is fixed to 404. The other six authorities are separate local
 OS services. `trader` is additionally constrained to a WebAuthn platform or
 hardware credential with user presence; it may not use a file-backed signer.
 
@@ -49,15 +53,16 @@ authority event store, and controlled v2 consumer are all still `PENDING`.
 
 The `ingestion-secrets` package now contains the closed typed v2
 `JQUANTS_ACQUISITION` target alongside its time-bounded legacy HTTP proxy. The
-manifest still records an activation-blocking `PENDING` dependency: no live
-Receipt caller Service Binding, dedicated cursor-HMAC key, raw persistence and
-reconciliation path, or authority activation is provisioned. The target HMAC
+manifest still records an activation-blocking `PENDING` dependency: the typed
+caller/acquisition bindings and reconciliation protocol are implemented, but no
+live binding, cursor-HMAC/wrapping secret, migration, or authority activation is
+provisioned. The target HMAC
 authenticates only opaque live continuation state; response headers and metadata
 are not standalone receipt proof.
 
-The Python data plane contains a fail-closed candidate receipt-side verifier for
-`jquants-acquisition-collection/v2`. It accepts only a runtime-registered live
-Service Binding capture, independently rechecks the closed request, exact 37
+The dedicated Worker contains the production fail-closed receipt-side verifier.
+It accepts only a typed live Service Binding capture, independently rechecks the
+closed request, exact 37
 headers, immutable raw bytes, provider pagination/query transitions, chain and
 closed-month Coverage identity, then pins the authority clock only after that
 verification completes. Only a subsequently created transaction context may
@@ -73,13 +78,17 @@ tick must be nondecreasing from verified capture completion onward; the existing
 future-skew allowance cannot authorize a clock rollback. The returned envelope
 is public-key verified.
 
-This foundation does not activate D2 or D3. No production live-capture caller,
-Receipt Worker/DO, Service Binding, signing key, or authority ledger is
-provisioned. A signature can also be truthfully issued after the structured
-commit while the later local receipt/final-status transaction fails; the
-cross-service append/finalize recovery protocol is still PENDING. Persisted HMAC
-headers after a crash remain RAW_ONLY, and master, tip-only, current/partial-month
-acquisition plus the 22-dataset reproof remain outside this candidate.
+This foundation does not activate D2 or D3. Worker/caller code, typed bindings,
+append/finalize/recover ledgers, immutable D1 triggers, migrations, and workerd
+tests exist, including crash-after-issue recovery and Premium-to-Receipt RPC.
+No production resource, wrapping secret, migration application, PENDING deploy,
+public-key registry activation, signing authorization, or reproof is provisioned.
+The authenticated Premium registration operation returns only the PENDING
+public-key registration; it never returns private material. Persisted HMAC
+headers after a crash remain RAW_ONLY, and master, tip-only,
+current/partial-month acquisition plus the 22-dataset reproof remain pending.
+The exact two-deploy runbook and limited closure-provisioning acceptance are in
+`docs/operations/receipt_evidence_authority_activation.md`.
 
 The frozen-mirror v2 protocols bind environment, authenticated caller, exact
 method and purpose, request digest, D1 identity, signed audit, immutable mirror
