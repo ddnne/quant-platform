@@ -68,15 +68,20 @@ def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> 
                 "recover_issue",
             ],
         }],
-        "ingestion-premium": [{
-            "name": "PremiumReceiptOperatorService",
-            "handlers": ["class"],
-            "fetch_reserved_special": False,
-            "rpc_methods": [
-                "pending_public_key_registration",
-                "staging_recovery_audit_evidence",
-            ],
-        }],
+        "ingestion-premium": [
+            {
+                "name": "PremiumReceiptOperatorService",
+                "handlers": ["class"],
+                "fetch_reserved_special": False,
+                "rpc_methods": ["pending_public_key_registration"],
+            },
+            {
+                "name": "PremiumReceiptAuditEvidenceService",
+                "handlers": ["class"],
+                "fetch_reserved_special": False,
+                "rpc_methods": ["staging_recovery_audit_evidence"],
+            },
+        ],
         "research-ai-gateway": [{
             "name": "GatewayService",
             "handlers": ["class"],
@@ -264,7 +269,7 @@ def test_receipt_activation_observer_is_staging_only_and_capability_minimal() ->
     assert staging["preview_urls"] is False
     assert staging["services"] == [{
         "binding": "PREMIUM_RECEIPT_OPERATOR",
-        "entrypoint": "PremiumReceiptOperatorService",
+        "entrypoint": "PremiumReceiptAuditEvidenceService",
         "service": "quant-platform-ingestion-premium-staging",
     }]
     assert staging["worker_entrypoints"] == []

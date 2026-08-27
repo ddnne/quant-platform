@@ -318,7 +318,10 @@ _PINNED_PACKAGE_SCRIPTS = {
     "ingestion-premium": {
         **_COMMON_PACKAGE_SCRIPTS,
         "cf-typegen": _WRANGLER_PACKAGE_SCRIPT_POLICY["cf-typegen"],
-        "test": "vitest run",
+        "test": (
+            "vitest run --config vitest.config.ts && "
+            "vitest run --config vitest.runtime.config.ts"
+        ),
     },
     "ingestion-secrets": {
         **_COMMON_PACKAGE_SCRIPTS,
@@ -414,10 +417,11 @@ WORKER_ENTRYPOINT_RPC_POLICY: dict[
     "ingestion-premium": {
         "PremiumReceiptOperatorService": (
             False,
-            (
-                "pending_public_key_registration",
-                "staging_recovery_audit_evidence",
-            ),
+            ("pending_public_key_registration",),
+        ),
+        "PremiumReceiptAuditEvidenceService": (
+            False,
+            ("staging_recovery_audit_evidence",),
         ),
     },
     "research-ai-gateway": {
@@ -1237,7 +1241,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     observer_staging = workers["receipt-activation-observer"]["staging"]
     if observer_staging["workers_dev"] is not True or observer_staging["services"] != [{
         "binding": "PREMIUM_RECEIPT_OPERATOR",
-        "entrypoint": "PremiumReceiptOperatorService",
+        "entrypoint": "PremiumReceiptAuditEvidenceService",
         "service": "quant-platform-ingestion-premium-staging",
     }]:
         raise ValueError(

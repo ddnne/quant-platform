@@ -143,6 +143,85 @@
       "worker_entrypoints": [],
       "workers_dev": false
     },
+    "ingestion-premium": {
+      "account_id": null,
+      "ai": {},
+      "compatibility_date": "2026-08-01",
+      "compatibility_flags": [],
+      "config": "platform/workers/ingestion-premium/wrangler.test.toml",
+      "crons": [],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_id": "00000000-0000-0000-0000-000000000019",
+          "database_name": "quant-ingest-premium-audit-test"
+        }
+      ],
+      "default_handler": {
+        "fetch_reserved_special": true
+      },
+      "durable_object_class_handlers": [],
+      "durable_objects": [],
+      "kv_namespaces": [],
+      "main": "runtime/receipt_audit_rpc_harness.ts",
+      "migrations": [],
+      "name": "quant-platform-ingestion-premium-test",
+      "observability": {},
+      "placement": {},
+      "preview_urls": false,
+      "queue_consumers": [],
+      "queue_producers": [],
+      "r2_buckets": [],
+      "ratelimits": [],
+      "route": null,
+      "routes": [],
+      "secret_names": [],
+      "services": [
+        {
+          "binding": "AUDIT_ONLY",
+          "entrypoint": "PremiumReceiptAuditEvidenceService",
+          "service": "quant-platform-ingestion-premium-test"
+        }
+      ],
+      "tail_consumers": [],
+      "toolchain": {
+        "@cloudflare/vitest-plugin": "1.0.0",
+        "@cloudflare/workers-types": "5.20260825.1",
+        "typescript": "5.9.2",
+        "vitest": "4.1.11",
+        "wrangler": "4.125.0"
+      },
+      "vars": {
+        "RECEIPT_AUTHORITY_ENVIRONMENT": "staging",
+        "RECEIPT_AUTHORITY_OPERATION_MODE": "ACTIVE"
+      },
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      },
+      "worker_entrypoints": [
+        {
+          "fetch_reserved_special": false,
+          "handlers": [
+            "class"
+          ],
+          "name": "PremiumReceiptOperatorService",
+          "rpc_methods": [
+            "pending_public_key_registration"
+          ]
+        },
+        {
+          "fetch_reserved_special": false,
+          "handlers": [
+            "class"
+          ],
+          "name": "PremiumReceiptAuditEvidenceService",
+          "rpc_methods": [
+            "staging_recovery_audit_evidence"
+          ]
+        }
+      ],
+      "workers_dev": false
+    },
     "ingestion-secrets": {
       "account_id": null,
       "ai": {},
@@ -675,7 +754,7 @@
     "ingestion-premium": {
       "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
       "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
-      "test": "vitest run",
+      "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",
       "typecheck": "tsc --noEmit",
       "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
     },
@@ -1070,7 +1149,16 @@
             ],
             "name": "PremiumReceiptOperatorService",
             "rpc_methods": [
-              "pending_public_key_registration",
+              "pending_public_key_registration"
+            ]
+          },
+          {
+            "fetch_reserved_special": false,
+            "handlers": [
+              "class"
+            ],
+            "name": "PremiumReceiptAuditEvidenceService",
+            "rpc_methods": [
               "staging_recovery_audit_evidence"
             ]
           }
@@ -1159,7 +1247,16 @@
             ],
             "name": "PremiumReceiptOperatorService",
             "rpc_methods": [
-              "pending_public_key_registration",
+              "pending_public_key_registration"
+            ]
+          },
+          {
+            "fetch_reserved_special": false,
+            "handlers": [
+              "class"
+            ],
+            "name": "PremiumReceiptAuditEvidenceService",
+            "rpc_methods": [
               "staging_recovery_audit_evidence"
             ]
           }
@@ -1246,7 +1343,16 @@
             ],
             "name": "PremiumReceiptOperatorService",
             "rpc_methods": [
-              "pending_public_key_registration",
+              "pending_public_key_registration"
+            ]
+          },
+          {
+            "fetch_reserved_special": false,
+            "handlers": [
+              "class"
+            ],
+            "name": "PremiumReceiptAuditEvidenceService",
+            "rpc_methods": [
               "staging_recovery_audit_evidence"
             ]
           }
@@ -2081,7 +2187,7 @@
         "services": [
           {
             "binding": "PREMIUM_RECEIPT_OPERATOR",
-            "entrypoint": "PremiumReceiptOperatorService",
+            "entrypoint": "PremiumReceiptAuditEvidenceService",
             "service": "quant-platform-ingestion-premium-staging"
           }
         ],

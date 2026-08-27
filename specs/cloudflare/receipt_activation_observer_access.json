@@ -10,7 +10,8 @@
     "scope": "worker"
   },
   "endpoint": {
-    "hostname": "PENDING"
+    "hostname": "PENDING",
+    "url": "PENDING"
   },
   "application": {
     "id": "PENDING",

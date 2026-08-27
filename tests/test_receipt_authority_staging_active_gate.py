@@ -28,6 +28,7 @@ ACCESS_POLICY_ID = "30000000-0000-4000-8000-000000000002"
 ACCESS_TOKEN_ID = "30000000-0000-4000-8000-000000000003"
 ACCESS_CLIENT_ID = "5" * 32 + ".access"
 ACCESS_DOMAIN = "receipt-activation-observer.example.workers.dev"
+ACCESS_URL = f"https://{ACCESS_DOMAIN}"
 ACCESS_WORKER_ID = "4" * 32
 
 
@@ -71,6 +72,7 @@ def _access_manifest(path: Path) -> Path:
     })
     document["worker"]["id"] = ACCESS_WORKER_ID
     document["endpoint"]["hostname"] = ACCESS_DOMAIN
+    document["endpoint"]["url"] = ACCESS_URL
     document["policy"]["id"] = ACCESS_POLICY_ID
     document["policy"]["include"] = [{
         "service_token": {"token_id": ACCESS_TOKEN_ID}
@@ -85,6 +87,11 @@ def _access_snapshot() -> dict[str, Any]:
         "worker": {
             "id": ACCESS_WORKER_ID,
             "name": "quant-platform-receipt-activation-observer-staging",
+            "subdomain": {
+                "enabled": True,
+                "previews_enabled": False,
+                "url": ACCESS_URL,
+            },
         },
         "application": {
             "id": ACCESS_APP_ID,
@@ -123,6 +130,8 @@ def _access_api_inventory(
     additional_app: dict[str, Any] | None = None,
     selected_app_updates: dict[str, Any] | None = None,
     policy_updates: dict[str, Any] | None = None,
+    worker_updates: dict[str, Any] | None = None,
+    observed_paths: list[str] | None = None,
 ) -> Callable[..., tuple[Any, Any]]:
     selected_app = {
         "id": manifest["application"]["id"],
@@ -154,13 +163,22 @@ def _access_api_inventory(
         "updated_at": "2026-08-28T00:00:00Z",
         "client_secret_version": 1,
     }
+    worker = {
+        "id": manifest["worker"]["id"],
+        "name": manifest["worker"]["script_name"],
+        "subdomain": {
+            "enabled": True,
+            "previews_enabled": False,
+            "url": manifest["endpoint"]["url"],
+        },
+    }
+    worker.update(copy.deepcopy(worker_updates or {}))
 
     def request(path: str, **_arguments: Any) -> tuple[Any, Any]:
+        if observed_paths is not None:
+            observed_paths.append(path)
         if "/workers/workers/" in path:
-            return ({
-                "id": manifest["worker"]["id"],
-                "name": manifest["worker"]["script_name"],
-            }, None)
+            return copy.deepcopy(worker), None
         if "/access/apps?" in path:
             return applications, {"total_count": len(applications)}
         if "/policies?" in path:
@@ -1074,13 +1092,20 @@ def test_access_inventory_requires_exact_worker_app_policy_token(
 ) -> None:
     manifest_path = _access_manifest(tmp_path / "access.json")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    observed_paths: list[str] = []
     monkeypatch.setenv(active.ACCESS_CLIENT_ID_ENV, ACCESS_CLIENT_ID)
-    monkeypatch.setattr(active, "_cloudflare_api", _access_api_inventory(manifest))
+    monkeypatch.setattr(
+        active,
+        "_cloudflare_api",
+        _access_api_inventory(manifest, observed_paths=observed_paths),
+    )
     assert active._collect_access_snapshot(
         account_id=ACCOUNT,
         api_token="opaque",
         access_manifest=manifest,
     ) == _access_snapshot()
+    assert observed_paths[0].endswith(f"/workers/workers/{ACCESS_WORKER_ID}")
+    assert manifest["worker"]["script_name"] not in observed_paths[0]
 
     monkeypatch.setenv(active.ACCESS_CLIENT_ID_ENV, "wrong-client-id")
     with pytest.raises(active.ReceiptStagingActiveGateError, match="credential identity"):
@@ -1114,6 +1139,66 @@ def test_access_inventory_requires_exact_worker_app_policy_token(
             api_token="opaque",
             access_manifest=manifest,
         )
+
+
+@pytest.mark.parametrize(
+    "worker_updates",
+    [
+        {"id": "6" * 32},
+        {"name": "different-observer"},
+        {
+            "subdomain": {
+                "enabled": False,
+                "previews_enabled": False,
+                "url": ACCESS_URL,
+            }
+        },
+        {
+            "subdomain": {
+                "enabled": True,
+                "previews_enabled": True,
+                "url": ACCESS_URL,
+            }
+        },
+        {
+            "subdomain": {
+                "enabled": True,
+                "previews_enabled": False,
+                "url": "https://different-observer.example.workers.dev",
+            }
+        },
+    ],
+)
+def test_access_inventory_rejects_worker_or_subdomain_endpoint_substitution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_updates: dict[str, Any],
+) -> None:
+    manifest_path = _access_manifest(tmp_path / "access.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    monkeypatch.setenv(active.ACCESS_CLIENT_ID_ENV, ACCESS_CLIENT_ID)
+    monkeypatch.setattr(
+        active,
+        "_cloudflare_api",
+        _access_api_inventory(manifest, worker_updates=worker_updates),
+    )
+    with pytest.raises(active.ReceiptStagingActiveGateError, match="endpoint drifted"):
+        active._collect_access_snapshot(
+            account_id=ACCOUNT,
+            api_token="opaque",
+            access_manifest=manifest,
+        )
+
+
+def test_access_manifest_rejects_endpoint_hostname_url_substitution(
+    tmp_path: Path,
+) -> None:
+    manifest_path = _access_manifest(tmp_path / "access.json")
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    document["endpoint"]["hostname"] = "different-observer.example.workers.dev"
+    manifest_path.write_bytes(active._canonical_bytes(document))
+    with pytest.raises(active.ReceiptStagingActiveGateError, match="exact Service Auth"):
+        active._load_access_manifest(manifest_path, account_id=ACCOUNT)
 
 
 @pytest.mark.parametrize(

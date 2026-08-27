@@ -726,6 +726,9 @@ export interface PremiumReceiptOperatorRpc {
    * the governed ingestion transaction and its durable cron recovery sweep.
    */
   pending_public_key_registration(): Promise<ReceiptOperatorRegistrationV1>;
+}
+
+export interface PremiumReceiptAuditEvidenceRpc {
   /** Return exact D1 bytes plus verified immutable AUDIT_ONLY evidence. */
   staging_recovery_audit_evidence(): Promise<ReceiptOperatorAuditEvidenceV1>;
 }
@@ -892,7 +895,15 @@ export class PremiumReceiptOperatorService
       registration,
     };
   }
+}
 
+/**
+ * Read-only staging audit capability. This named entrypoint intentionally has
+ * no fetch handler and no registration or positive Receipt RPC.
+ */
+export class PremiumReceiptAuditEvidenceService
+  extends WorkerEntrypoint<Env>
+  implements PremiumReceiptAuditEvidenceRpc {
   staging_recovery_audit_evidence(): Promise<ReceiptOperatorAuditEvidenceV1> {
     return readStagingReceiptAuditRecoveryEvidence(this.env);
   }

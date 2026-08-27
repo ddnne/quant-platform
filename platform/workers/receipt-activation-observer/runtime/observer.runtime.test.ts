@@ -183,7 +183,7 @@ describe("Receipt activation observer runtime boundary", () => {
       services: [{
         binding: "PREMIUM_RECEIPT_OPERATOR",
         service: "quant-platform-ingestion-premium-staging",
-        entrypoint: "PremiumReceiptOperatorService",
+        entrypoint: "PremiumReceiptAuditEvidenceService",
       }],
       secret_names: [],
       worker_entrypoints: [],

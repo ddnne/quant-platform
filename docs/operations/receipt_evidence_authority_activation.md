@@ -34,9 +34,10 @@ event transactions, operation lookup and every other internal helper use
 JavaScript `#private` methods, not TypeScript-only `private`; workerd rejects the
 former helper names before key, Durable Object, D1 or R2 state can change.
 
-`PremiumReceiptOperatorService` is a named, typed Service Binding entrypoint
-with no `fetch()` method. It exposes exactly two no-body RPCs: the argument-free
-`pending_public_key_registration()` proposal and the argument-free,
+Premium exports two disjoint named Service Binding entrypoints with no
+`fetch()` methods. `PremiumReceiptOperatorService` exposes only the
+argument-free `pending_public_key_registration()` proposal;
+`PremiumReceiptAuditEvidenceService` exposes only the argument-free,
 SELECT-only `staging_recovery_audit_evidence()` observation. The authority
 derives and the Premium entrypoint revalidates the action, environment,
 complete deployment source SHA, Worker versions, authority resource digest,
@@ -49,7 +50,7 @@ wrapped PKCS#8 ciphertext, or an unwrapped private key.
 The only source-defined caller for the read RPC is the staging-only
 `receipt-activation-observer`. Its base and production configurations have no
 route and `workers_dev=false`; staging has `preview_urls=false` and exactly one
-named Service Binding to `PremiumReceiptOperatorService`. It has no D1, R2,
+named Service Binding to `PremiumReceiptAuditEvidenceService`. It has no D1, R2,
 KV, Queue, Durable Object, AI, or secret binding. Its sole successful HTTP
 shape is an exact random-challenge GET protected by the official Workers
 Access context. The observer binds the exact Access application AUD into its
@@ -77,8 +78,9 @@ Before either deployment:
 7. Production and staging wrapping secrets and Durable Object namespaces are
    treated as distinct authority domains.
 8. Before the staging observer is accepted, its Access manifest must be
-   reviewed from `PENDING` to `ACTIVE` with the immutable Worker ID, the exact
-   worker destination, application ID/AUD, one `non_identity` Service Auth
+   reviewed from `PENDING` to `ACTIVE` with the immutable Worker ID, its exact
+   enabled non-preview Workers Beta `subdomain.url`, the exact worker
+   destination, application ID/AUD, one `non_identity` Service Auth
    policy, and one exact service-token ID. An Access API error `9999` is an
    operational hold, not authorization to substitute bearer-header auth.
 
@@ -268,9 +270,9 @@ calls ordinary `issue_for_segment`/`recover_issue`, never writes
 `collection_receipts`, Coverage, product raw/structured state or authority R2,
 and cannot produce `TRUSTED_COLLECTION`. Premium D1 stores only the canonical
 signed audit attestation and its separately named whole-envelope digest. The
-ACTIVE audit method can only read that attestation; the only other exact RPC is
-the argument-free PENDING registration proposal. Neither operator method can
-initiate a positive Receipt operation.
+ACTIVE audit entrypoint can only read that attestation; the separate operator
+entrypoint has only the argument-free PENDING registration proposal. Neither
+entrypoint can initiate a positive Receipt operation.
 
 The public gate owns the pinned Access manifest and staging key registry; only
 its private test core accepts mappings or alternate paths. It generates a
@@ -283,10 +285,13 @@ AUD observed from the Cloudflare API.
 
 The gate remeasures the exact four-Worker deployment bracket, immutable module
 bytes, bindings, Durable Object migration tag, secret-name/public surfaces,
-Workers Beta immutable observer ID, Access app/policy/token inventory, and the
+Workers Beta immutable observer ID plus its enabled non-preview subdomain URL,
+Access app/policy/token inventory, and the
 Premium D1 migration-0019 schema plus exact stored attestation TEXT before and
 after the observer request. Worker-level Access must have exactly
-`destinations=[{type:"worker",worker_id:<immutable-id>}]`; any covering worker,
+`destinations=[{type:"worker",worker_id:<immutable-id>}]`. The HTTPS endpoint
+is derived from the same ID-addressed Worker API response and must equal the
+pinned manifest URL and hostname; any covering worker,
 preview-worker, all-workers, public, wildcard, or legacy hostname application
 fails closed. It verifies the complete initial/first-recovery/replay-
 confirmation chain with the real Ed25519 key from the pinned staging registry.
@@ -426,7 +431,8 @@ The repository contains the inactive implementation and test evidence only.
 Staging and production remain PENDING and unprovisioned. The checked-in Access
 manifest intentionally retains `PENDING` placeholders, so the ACTIVE gate
 returns an operational hold until the account-specific Worker, application,
-AUD, policy, token, and hostname identities are independently recorded and
+AUD, policy, token, and ID-derived subdomain URL/hostname identities are
+independently recorded and
 reviewed. No service-token value is checked in. The source-only observer,
 ACTIVE validator, migration, and Cron recovery canary have not been deployed or
 measured, and no live observer-to-Premium Service Binding has been accepted.

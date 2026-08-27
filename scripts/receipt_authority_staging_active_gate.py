@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import (
     HTTPRedirectHandler,
     HTTPSHandler,
@@ -498,11 +498,12 @@ def _load_access_manifest(
         or worker.get("scope") != "worker"
         or re.fullmatch(r"[0-9a-f]{32}", str(worker.get("id"))) is None
         or type(endpoint) is not dict
-        or set(endpoint) != {"hostname"}
+        or set(endpoint) != {"hostname", "url"}
         or re.fullmatch(
             r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.workers\.dev",
             str(endpoint.get("hostname")),
         ) is None
+        or endpoint.get("url") != f"https://{endpoint.get('hostname')}"
         or type(application) is not dict
         or set(application) != {
             "id", "aud", "type", "destinations", "decision", "decision_label"
@@ -570,6 +571,11 @@ def _validate_access_snapshot(
         or value["worker"] != {
             "id": manifest["worker"]["id"],
             "name": manifest["worker"]["script_name"],
+            "subdomain": {
+                "enabled": True,
+                "previews_enabled": False,
+                "url": manifest["endpoint"]["url"],
+            },
         }
         or
         application != {
@@ -1394,9 +1400,55 @@ def _collect_access_snapshot(
     application_id = quote(str(access_manifest["application"]["id"]), safe="")
     worker_result, _ = _cloudflare_api(
         f"/accounts/{account}/workers/workers/"
-        f"{quote(str(access_manifest['worker']['script_name']), safe='')}",
+        f"{quote(str(access_manifest['worker']['id']), safe='')}",
         api_token=api_token,
     )
+    worker_subdomain = (
+        worker_result.get("subdomain") if type(worker_result) is dict else None
+    )
+    worker_snapshot = {
+        "id": worker_result.get("id") if type(worker_result) is dict else None,
+        "name": worker_result.get("name") if type(worker_result) is dict else None,
+        "subdomain": {
+            "enabled": (
+                worker_subdomain.get("enabled")
+                if type(worker_subdomain) is dict else None
+            ),
+            "previews_enabled": (
+                worker_subdomain.get("previews_enabled")
+                if type(worker_subdomain) is dict else None
+            ),
+            "url": (
+                worker_subdomain.get("url")
+                if type(worker_subdomain) is dict else None
+            ),
+        },
+    }
+    expected_worker_snapshot = {
+        "id": access_manifest["worker"]["id"],
+        "name": access_manifest["worker"]["script_name"],
+        "subdomain": {
+            "enabled": True,
+            "previews_enabled": False,
+            "url": access_manifest["endpoint"]["url"],
+        },
+    }
+    endpoint_url = str(worker_snapshot["subdomain"]["url"])
+    parsed_endpoint = urlsplit(endpoint_url)
+    if (
+        worker_snapshot != expected_worker_snapshot
+        or parsed_endpoint.scheme != "https"
+        or parsed_endpoint.hostname != access_manifest["endpoint"]["hostname"]
+        or parsed_endpoint.username is not None
+        or parsed_endpoint.password is not None
+        or parsed_endpoint.port is not None
+        or parsed_endpoint.path != ""
+        or parsed_endpoint.query != ""
+        or parsed_endpoint.fragment != ""
+    ):
+        raise ReceiptStagingActiveGateError(
+            "Receipt observer Worker identity or subdomain endpoint drifted"
+        )
     applications, info = _cloudflare_api(
         f"/accounts/{account}/access/apps?{urlencode({'page': 1, 'per_page': 1000})}",
         api_token=api_token,
@@ -1447,7 +1499,8 @@ def _collect_access_snapshot(
         raise ReceiptStagingActiveGateError(
             "Cloudflare Access service-token credential identity drifted"
         )
-    endpoint = str(access_manifest["endpoint"]["hostname"])
+    endpoint = parsed_endpoint.hostname
+    assert endpoint is not None
     if _legacy_app_host_scopes(app):
         raise ReceiptStagingActiveGateError(
             "Receipt observer Access app also relies on a hostname scope"
@@ -1482,10 +1535,7 @@ def _collect_access_snapshot(
             ):
                 covering.append(str(row.get("id")))
     snapshot = {
-        "worker": {
-            "id": worker_result.get("id") if type(worker_result) is dict else None,
-            "name": worker_result.get("name") if type(worker_result) is dict else None,
-        },
+        "worker": worker_snapshot,
         "application": {
             "id": app.get("id"),
             "aud": app.get("aud"),
@@ -1597,9 +1647,9 @@ def _fetch_observer_response(
         raise ReceiptStagingActiveGateError(
             "Receipt observer Access credentials are required in process environment"
         )
-    domain = access_manifest["endpoint"]["hostname"]
+    endpoint = access_manifest["endpoint"]["url"]
     url = (
-        f"https://{domain}/v1/receipt-authority/audit-evidence?"
+        f"{endpoint}/v1/receipt-authority/audit-evidence?"
         + urlencode({"challenge": challenge})
     )
     opener = _pinned_https_opener()

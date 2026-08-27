@@ -73,9 +73,13 @@ is still required, and adding a public Premium route is prohibited.
 is the staging-only, audit-only activation observer gate. It accepts only the
 reviewed source SHA, account ID, and Cloudflare API token; the Access manifest,
 staging key registry, and output directory are fixed. The gate independently
-brackets four live deployments, Access's immutable Worker destination,
-application AUD, exact `non_identity` Service Auth policy/token, and Premium
-D1 schema/attestation row. It then makes an unauthenticated rejection probe and
+brackets four live deployments, GETs the observer by its immutable Workers
+Beta ID, binds its enabled non-preview `subdomain.url` to the exact HTTPS
+endpoint, checks Access's exact Worker destination, application AUD and
+`non_identity` Service Auth policy/token, and verifies the Premium D1
+schema/attestation row. The observer Service Binding targets only
+`PremiumReceiptAuditEvidenceService`, which has no registration RPC. The gate
+then makes an unauthenticated rejection probe and
 one random-challenge HTTPS request to the Access-protected observer. Access
 client ID/secret values come only from
 `RECEIPT_OBSERVER_ACCESS_CLIENT_ID` and
