@@ -12,6 +12,8 @@ verify the Phase 3 handoff's engine-level guarantees:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 import pit
@@ -546,6 +548,70 @@ def test_fixed_allowlist_is_intersected_with_daily_pit_membership(
     ]
     assert all(set(ctx.master) == set(ctx.universe) for ctx in rec.ctxs)
     assert result.metadata["fixed_allowlist"] == ["1332", "7203", "9999"]
+
+
+def test_resolved_daily_universe_recomputes_membership_digest(tmp_path):
+    from research.universe_contract import ResolvedUniverseMembership
+
+    db = seed_db(tmp_path, codes=["1332", "7203"])
+    resolved = ResolvedUniverseMembership(
+        period_start=START,
+        period_end=END,
+        decision_memberships=tuple(
+            (decision_date, ("1332",)) for decision_date in TRADING_DAYS
+        ),
+    )
+    recorder = Recorder()
+    result = run_backtest(
+        recorder,
+        START,
+        END,
+        db_path=db,
+        universe=resolved,
+    )
+    assert [context.universe for context in recorder.ctxs] == [
+        ("1332",),
+    ] * len(TRADING_DAYS)
+    assert (
+        result.metadata["resolved_universe_digest"]
+        == resolved.resolved_membership_digest
+    )
+
+
+def test_resolved_daily_universe_rejects_self_reported_digest(tmp_path):
+    from research.universe_contract import ResolvedUniverseMembership
+
+    db = seed_db(tmp_path, codes=["1332", "7203"])
+    resolved = ResolvedUniverseMembership(
+        period_start=START,
+        period_end=END,
+        decision_memberships=tuple(
+            (decision_date, ("1332",)) for decision_date in TRADING_DAYS
+        ),
+    )
+    substituted_membership = dict(resolved.membership_by_date)
+    substituted_membership[TRADING_DAYS[-1]] = ("7203",)
+    forged = SimpleNamespace(
+        membership_by_date=substituted_membership,
+        resolved_membership_digest=resolved.resolved_membership_digest,
+        membership_proof=resolved.membership_proof,
+        rule_id=resolved.rule_id,
+        rule_version=resolved.rule_version,
+        rule_digest=resolved.rule_digest,
+        period_start=resolved.period_start,
+        period_end=resolved.period_end,
+    )
+    with pytest.raises(
+        RawFixedUniverseError,
+        match="membership digest does not match its map",
+    ):
+        run_backtest(
+            Recorder(),
+            START,
+            END,
+            db_path=db,
+            universe=forged,
+        )
 
 
 def test_next_close_pending_order_is_cancelled_after_membership_exit(
