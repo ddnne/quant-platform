@@ -283,6 +283,22 @@ def _validate_bindings(
     return normalized, namespace_id
 
 
+def _expected_named_handlers(surface: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Derive the deployed class export surface from frozen DO bindings."""
+
+    return [
+        {"name": row["class_name"], "handlers": ["class"]}
+        for row in surface["durable_objects"]
+    ]
+
+
+def _expected_migration_tag(surface: Mapping[str, Any]) -> str | None:
+    """Return the final frozen Durable Object migration tag, when present."""
+
+    migrations = surface["migrations"]
+    return migrations[-1]["tag"] if migrations else None
+
+
 def _validate_deployment(
     value: Any,
     *,
@@ -370,9 +386,17 @@ def _validate_version(
     script = _mapping(resources.get("script"), label=f"{role} script resource")
     handlers = script.get("handlers")
     expected_handlers = ["fetch"] + (["scheduled"] if surface["crons"] else [])
+    expected_named_handlers = _expected_named_handlers(surface)
+    expected_script_keys = {"etag", "handlers", "last_deployed_from"}
+    if expected_named_handlers:
+        expected_script_keys.add("named_handlers")
     if (
-        set(script) != {"etag", "handlers", "last_deployed_from"}
+        set(script) != expected_script_keys
         or handlers != expected_handlers
+        or (
+            expected_named_handlers
+            and script.get("named_handlers") != expected_named_handlers
+        )
         or script.get("last_deployed_from") != "wrangler"
         or type(script.get("etag")) is not str
         or _ETAG.fullmatch(script["etag"]) is None
@@ -386,12 +410,19 @@ def _validate_version(
     expected_runtime_keys = {"compatibility_date", "usage_model"}
     if surface["compatibility_flags"]:
         expected_runtime_keys.add("compatibility_flags")
+    expected_migration_tag = _expected_migration_tag(surface)
+    if expected_migration_tag is not None:
+        expected_runtime_keys.add("migration_tag")
     if (
         set(runtime) != expected_runtime_keys
         or runtime.get("compatibility_date") != surface["compatibility_date"]
         or list(runtime.get("compatibility_flags") or [])
         != surface["compatibility_flags"]
         or runtime.get("usage_model") != "standard"
+        or (
+            expected_migration_tag is not None
+            and runtime.get("migration_tag") != expected_migration_tag
+        )
     ):
         raise ReceiptPendingLiveAcceptanceError(
             f"{role} compatibility runtime drifted"

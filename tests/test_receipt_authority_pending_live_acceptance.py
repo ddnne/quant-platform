@@ -44,6 +44,21 @@ def _documents(environment: str) -> tuple[
                 materialized["namespace_id"] = f"{ordinal:x}" * 32
             bindings.append(materialized)
         handlers = ["fetch"] + (["scheduled"] if surface["crons"] else [])
+        script_resource: dict[str, Any] = {
+            "etag": f"{ordinal:x}" * 64,
+            "handlers": handlers,
+            "last_deployed_from": "wrangler",
+        }
+        named_handlers = live._expected_named_handlers(surface)  # noqa: SLF001
+        if named_handlers:
+            script_resource["named_handlers"] = copy.deepcopy(named_handlers)
+        script_runtime: dict[str, Any] = {
+            "compatibility_date": surface["compatibility_date"],
+            "usage_model": "standard",
+        }
+        migration_tag = live._expected_migration_tag(surface)  # noqa: SLF001
+        if migration_tag is not None:
+            script_runtime["migration_tag"] = migration_tag
         versions[role] = {
             "id": version_id,
             "annotations": {
@@ -57,15 +72,8 @@ def _documents(environment: str) -> tuple[
                 "has_preview": False,
             },
             "resources": {
-                "script": {
-                    "etag": f"{ordinal:x}" * 64,
-                    "handlers": handlers,
-                    "last_deployed_from": "wrangler",
-                },
-                "script_runtime": {
-                    "compatibility_date": surface["compatibility_date"],
-                    "usage_model": "standard",
-                },
+                "script": script_resource,
+                "script_runtime": script_runtime,
                 "bindings": bindings,
             },
         }
@@ -297,6 +305,80 @@ def test_live_chain_rejects_nested_and_extra_version_capabilities(
     deployments, versions, public, source_provenance = _documents("staging")
     mutate(versions, public)
     with pytest.raises(live.ReceiptPendingLiveAcceptanceError, match=match):
+        live.validate_live_pending_receipt_chain(
+            environment="staging",
+            source_sha=SHA,
+            account_id=ACCOUNT,
+            deployments=deployments,
+            versions=versions,
+            public_surfaces=public,
+            source_provenance=source_provenance,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutate,match",
+    [
+        (
+            lambda script, _runtime: script.pop("named_handlers"),
+            "script handler, source, or etag drifted",
+        ),
+        (
+            lambda script, _runtime: script["named_handlers"][0].update(
+                name="CallerSelectedAuthority"
+            ),
+            "script handler, source, or etag drifted",
+        ),
+        (
+            lambda script, _runtime: script["named_handlers"].append(
+                {"name": "UnexpectedAuthority", "handlers": ["class"]}
+            ),
+            "script handler, source, or etag drifted",
+        ),
+        (
+            lambda _script, runtime: runtime.pop("migration_tag"),
+            "compatibility runtime drifted",
+        ),
+        (
+            lambda _script, runtime: runtime.update(migration_tag="caller-v2"),
+            "compatibility runtime drifted",
+        ),
+        (
+            lambda _script, runtime: runtime.update(unknown_runtime_field="v1"),
+            "compatibility runtime drifted",
+        ),
+    ],
+)
+def test_live_chain_requires_exact_named_handlers_and_migration_tag(
+    mutate,
+    match: str,
+) -> None:
+    deployments, versions, public, source_provenance = _documents("staging")
+    authority = versions["authority"]["resources"]
+    mutate(authority["script"], authority["script_runtime"])
+    with pytest.raises(live.ReceiptPendingLiveAcceptanceError, match=match):
+        live.validate_live_pending_receipt_chain(
+            environment="staging",
+            source_sha=SHA,
+            account_id=ACCOUNT,
+            deployments=deployments,
+            versions=versions,
+            public_surfaces=public,
+            source_provenance=source_provenance,
+        )
+
+
+@pytest.mark.parametrize("role", ["acquisition", "caller"])
+def test_live_chain_rejects_named_handlers_or_migration_tag_without_manifest_authority(
+    role: str,
+) -> None:
+    deployments, versions, public, source_provenance = _documents("staging")
+    resources = versions[role]["resources"]
+    resources["script"]["named_handlers"] = [
+        {"name": "UnexpectedAuthority", "handlers": ["class"]}
+    ]
+    resources["script_runtime"]["migration_tag"] = "v1"
+    with pytest.raises(live.ReceiptPendingLiveAcceptanceError):
         live.validate_live_pending_receipt_chain(
             environment="staging",
             source_sha=SHA,
