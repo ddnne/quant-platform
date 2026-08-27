@@ -34,6 +34,25 @@ def _atomic_json(path: Path, payload: dict[str, Any], *, mode: int) -> None:
         raise
 
 
+def _atomic_bytes(path: Path, payload: bytes, *, mode: int) -> None:
+    """Replace one immutable sidecar with its already-verified exact bytes."""
+
+    if type(payload) is not bytes or not payload:
+        raise TypeError("atomic byte payload must be exact non-empty bytes")
+    fd, raw_path = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
+    temp_path = Path(raw_path)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_path, mode)
+        os.replace(temp_path, path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
 def _copy_sqlite(source: sqlite3.Connection, target_path: Path) -> None:
     target = sqlite3.connect(str(target_path))
     try:

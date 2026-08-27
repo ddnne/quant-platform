@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import math
@@ -9,8 +10,8 @@ import os
 import re
 import sqlite3
 import tempfile
-from datetime import datetime, timezone
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import quote
@@ -27,6 +28,7 @@ from paper_runtime.snapshot_coverage_proof import (
     _verify_coverage_manifest,
 )
 from paper_runtime.snapshot_persist import (
+    _atomic_bytes,
     _atomic_json,
     _copy_sqlite,
     _persist_building_publication,
@@ -36,6 +38,7 @@ from paper_runtime.snapshot_persist import (
 from paper_runtime.snapshot_publish_policy import (
     READY_MANIFEST_SCHEMA,
     _transition_policy,
+    evaluate_ready_publication,
 )
 from paper_runtime.snapshot_read import (
     _describe_fixture_snapshot,
@@ -527,17 +530,25 @@ def _publish_ready_snapshot_impl(
     _ready_attestation_builder: Callable[[ReadySnapshot], Path | None] | None = None,
     publication_gate: Callable[..., tuple[Any, ...]],
     fixture_compatibility: bool,
+    _production_authority_capability: object | None = None,
 ) -> ReadySnapshot:
     """Gate a staging DB and atomically publish a read-only snapshot.
 
     The product-owned READY(P) bridge may supply retained profile evidence and
     a closed ReadyManifest builder. Both must be present together.
     """
-    if fixture_compatibility is not True:
+    if fixture_compatibility is True and _production_authority_capability is None:
+        publication_scope = "FIXTURE"
+    elif (
+        fixture_compatibility is False
+        and _production_authority_capability is _PRODUCTION_READY_CAPABILITY
+        and publication_gate is evaluate_ready_publication
+    ):
+        publication_scope = "PRODUCTION"
+    else:
         raise SnapshotRejected(
             "local production READY publication is disabled; authority is PENDING"
         )
-    publication_scope = "FIXTURE"
     staging_path = Path(staging_db).resolve()
     if not staging_path.is_file():
         raise FileNotFoundError(f"staging database does not exist: {staging_path}")
@@ -992,6 +1003,184 @@ def _publish_ready_snapshot_impl(
         raise
     finally:
         conn.close()
+
+
+_PRODUCTION_READY_CAPABILITY = object()
+
+
+def _publish_exact_four_pilot_ready_snapshot_via_authority(
+    staging_db: str | Path,
+    snapshot_dir: str | Path,
+    *,
+    signed_projection_document: object,
+) -> Any:
+    """Publish the canonical pilot only through the isolated READY service.
+
+    The callable accepts no signer, registry, profile, dataset membership,
+    manifest builder, or fixture policy.  It preflights the pinned local
+    authority before inspecting caller evidence, creates an undiscoverable
+    immutable candidate, and asks the authority to independently reopen and
+    sign that exact snapshot.  Publication markers are written only after the
+    returned signature has been verified and retained byte-for-byte.
+    """
+
+    from research.readiness import load_verified_pilot_readiness
+    from research.ready_manifest import (
+        VerifiedPilotReadyPublication,
+        _verified_projection_evidence,
+        build_profile_bound_ready_manifest_from_snapshot_document,
+        load_exact_four_pilot_ready_binding,
+        ready_manifest_from_snapshot_document,
+    )
+    from research.research_data_profile import profile_ready
+
+    from scripts.local_authority_clients import ReadyPublisherAuthorityClient
+    from scripts.local_authority_service import LocalAuthorityError
+
+    # Bind the exact production caller UID, active public registry, and launchd
+    # socket before reading or mutating caller-provided publication material.
+    client = ReadyPublisherAuthorityClient(environment="production")
+    client.require_available()
+    if type(signed_projection_document) is not bytes or not signed_projection_document:
+        raise SnapshotRejected("signed Ops projection must be exact non-empty bytes")
+    signed_projection = signed_projection_document
+    governed = load_exact_four_pilot_ready_binding()
+    evidence = _verified_projection_evidence(
+        signed_projection,
+        list(governed.required_datasets),
+        expected_environment="production",
+    )
+    if set(evidence.rows) != set(governed.required_datasets):
+        raise SnapshotRejected(
+            "pilot READY evidence must exactly match the dependency closure"
+        )
+    for profile in governed.profiles:
+        if not profile_ready(profile, evidence.rows):
+            raise SnapshotRejected(
+                f"pilot READY evidence is incomplete for {profile.plan_id}"
+            )
+    for dataset_id in governed.required_datasets:
+        row = evidence.rows[dataset_id]
+        source = str(row.get("source_generation") or "").strip()
+        exported = str(row.get("export_cursor") or "").strip()
+        applied = str(
+            row.get("applied_sync_generation") or row.get("applied_cursor") or ""
+        ).strip()
+        if not source or source != exported or exported != applied:
+            raise SnapshotRejected(
+                f"pilot READY cursor chain is missing or not current for {dataset_id}"
+            )
+        scopes = [
+            dict(scope)
+            for profile in governed.profiles
+            for scope in profile.dataset_scopes
+            if scope.get("dataset_id") == dataset_id
+        ]
+        required_start = min(str(scope["period_start"]) for scope in scopes)
+        required_end = max(str(scope["period_end"]) for scope in scopes)
+        observed_start = str(row.get("observed_start") or "")[:10]
+        observed_end = str(row.get("observed_end") or "")[:10]
+        if (
+            not observed_start
+            or not observed_end
+            or observed_start > required_start
+            or observed_end < required_end
+        ):
+            raise SnapshotRejected(
+                "pilot READY Coverage does not span the dependency period for "
+                f"{dataset_id}: observed={observed_start}..{observed_end}, "
+                f"required={required_start}..{required_end}"
+            )
+
+    from research.ready_manifest import _verify_exact_four_pit_dependency_scope
+
+    scope_proof = _verify_exact_four_pit_dependency_scope(staging_db, governed)
+
+    def build_manifest(document: Mapping[str, Any]) -> Mapping[str, Any]:
+        return build_profile_bound_ready_manifest_from_snapshot_document(
+            document, profile=governed
+        ).to_dict()
+
+    signed_result: dict[str, Any] = {}
+
+    def request_attestation(ready: ReadySnapshot) -> Path:
+        manifest = ready_manifest_from_snapshot_document(ready.manifest)
+        immutable_scope = _verify_exact_four_pit_dependency_scope(
+            ready.db_path, governed
+        )
+        if (
+            manifest.pit_contract_digests.get("dependency_scope")
+            != immutable_scope["proof_digest"]
+        ):
+            raise SnapshotRejected(
+                "immutable snapshot PIT dependency scope drifted before authority call"
+            )
+        event_id = (
+            "ready-publish:"
+            + ready.snapshot_id
+            + ":"
+            + evidence.signed_document_digest
+        )
+        try:
+            result = dict(
+                client.publish_profile_plan_bound(
+                    event_id=event_id,
+                    snapshot_id=ready.snapshot_id,
+                    signed_projection_document=signed_projection,
+                )
+            )
+        except LocalAuthorityError as exc:
+            raise SnapshotRejected("isolated READY authority rejected publication") from exc
+        try:
+            raw = base64.b64decode(result["attestation_base64"], validate=True)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SnapshotRejected("READY authority returned invalid attestation bytes") from exc
+        if "sha256:" + hashlib.sha256(raw).hexdigest() != result.get(
+            "attestation_digest"
+        ):
+            raise SnapshotRejected("READY authority attestation digest mismatch")
+        path = ready.db_path.with_name(
+            f"{ready.db_path.stem}.{result['attestation_id']}.readiness.json"
+        )
+        try:
+            _atomic_bytes(path, raw, mode=0o444)
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
+        signed_result.update(result=result, path=path)
+        return path
+
+    snapshot = _publish_ready_snapshot_impl(
+        staging_db,
+        snapshot_dir,
+        required_datasets=governed.required_datasets,
+        _profile_coverage_evidence=evidence.rows,
+        _dependency_scope_evidence=scope_proof,
+        _ready_manifest_builder=build_manifest,
+        _ready_attestation_builder=request_attestation,
+        publication_gate=evaluate_ready_publication,
+        fixture_compatibility=False,
+        _production_authority_capability=_PRODUCTION_READY_CAPABILITY,
+    )
+    if set(signed_result) != {"result", "path"}:
+        raise SnapshotRejected("isolated READY authority produced no attestation")
+    # Reopen through the public production reader after the publication marker
+    # is durable, then materialize the nominal capability from the signed file.
+    reopened = describe_snapshot(snapshot_dir, snapshot.snapshot_id)
+    result = signed_result["result"]
+    readiness_path = Path(signed_result["path"])
+    readiness = load_verified_pilot_readiness(
+        readiness_path,
+        expected_environment="production",
+        expected_snapshot_id=reopened.snapshot_id,
+        expected_ready_manifest_digest=result["ready_manifest_digest"],
+        expected_authority_resource_digest=result["authority_resource_digest"],
+    )
+    return VerifiedPilotReadyPublication(
+        snapshot=reopened,
+        readiness=readiness,
+        readiness_path=readiness_path,
+    )
 
 
 def _manifest_snapshot_state(

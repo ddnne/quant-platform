@@ -79,32 +79,48 @@ class ReadyPublicationAuthorityStatus:
 
 
 def ready_publication_authority_status() -> ReadyPublicationAuthorityStatus:
-    """Report PENDING/UNKNOWN until a separately isolated issuer exists.
+    """Report ACTIVE only from the exact provisioned publisher process.
 
     Product code intentionally has no private-key type, private-key loader,
-    signer factory, or issuer injection hook.  Activating this contract needs
-    a different OS principal or remote service that independently reopens and
-    remeasures every item in ``required_checks`` before it signs anything.
+    signer factory, or issuer injection hook.  The positive observation is a
+    pinned public registry plus launchd socket preflight from the declared
+    publisher UID; the service still reauthenticates every call by kernel UID
+    and independently reopens all evidence before signing.
     """
 
+    try:
+        from scripts.local_authority_clients import ReadyPublisherAuthorityClient
+        from scripts.local_authority_service import LocalAuthorityError
+
+        ReadyPublisherAuthorityClient(environment="production").require_available()
+    except LocalAuthorityError:
+        state = "PENDING"
+        evidence_state = "UNKNOWN"
+        reason = "dedicated READY publication authority is not provisioned"
+    else:
+        state = "ACTIVE"
+        evidence_state = "VERIFIED"
+        reason = "pinned local READY authority endpoint is available"
+
     return ReadyPublicationAuthorityStatus(
-        state="PENDING",
-        evidence_state="UNKNOWN",
+        state=state,
+        evidence_state=evidence_state,
         contract_version=READY_PUBLICATION_AUTHORITY_CONTRACT,
         required_checks=READY_PUBLICATION_REQUIRED_CHECKS,
         mass_state="DISABLED",
-        reason="dedicated READY publication authority is not provisioned",
+        reason=reason,
     )
 
 
 def require_ready_publication_authority() -> None:
-    """Fail before publication mutation while the external issuer is absent."""
+    """Require the verified local endpoint; never load a private signing key."""
 
     status = ready_publication_authority_status()
-    raise ReadyPublicationAuthorityPending(
-        f"READY authority {status.state}; evidence {status.evidence_state}; "
-        f"contract={status.contract_version}; Mass={status.mass_state}"
-    )
+    if status.state != "ACTIVE" or status.evidence_state != "VERIFIED":
+        raise ReadyPublicationAuthorityPending(
+            f"READY authority {status.state}; evidence {status.evidence_state}; "
+            f"contract={status.contract_version}; Mass={status.mass_state}"
+        )
 
 
 def _is_sha256(value: Any) -> bool:
