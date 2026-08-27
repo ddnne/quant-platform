@@ -100,6 +100,13 @@ type Capture = {
   acquisitionExpiresAt: string;
 };
 
+type RawPageEvidence = {
+  rows: Record<string, unknown>[];
+  providerState: "CONTINUATION" | "EXHAUSTED";
+  continuationParameter: "pagination_key" | null;
+  providerCursor: string | null;
+};
+
 type D1Operation = {
   operation_id: string;
   request_digest: string;
@@ -252,6 +259,11 @@ function decodeBase64Url(value: string): Uint8Array {
     "=".repeat((4 - value.length % 4) % 4);
   const binary = atob(padded);
   const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const canonical = btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+  if (canonical !== value) throw new Error("continuation encoding is not canonical");
   return bytes;
 }
 
@@ -260,6 +272,9 @@ function continuationPayload(token: string): Record<string, unknown> {
   if (parts.length !== 3 || parts[0] !== "jqa2") {
     throw new Error("continuation token format invalid");
   }
+  if (decodeBase64Url(parts[2]!).byteLength !== 32) {
+    throw new Error("continuation signature shape invalid");
+  }
   const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false })
     .decode(decodeBase64Url(parts[1]!));
   inspectStrictJsonObject(text);
@@ -267,7 +282,28 @@ function continuationPayload(token: string): Record<string, unknown> {
   if (!isPlainObject(value) || !exactKeys(value, CURSOR_KEYS)) {
     throw new Error("continuation payload is not closed");
   }
+  if (canonicalJson(value) !== text) {
+    throw new Error("continuation payload is not canonical");
+  }
   return value;
+}
+
+function addDays(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) throw new Error("acquisition date is invalid");
+  return new Date(date.getTime() + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+function validProviderCursor(value: unknown): value is string {
+  if (typeof value !== "string" || value.length < 1 || value.length > 2048) {
+    return false;
+  }
+  const bytes = new TextEncoder().encode(value);
+  return bytes.byteLength <= 2048 &&
+    new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes) === value &&
+    !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 async function expectedQueryDigest(
@@ -355,7 +391,7 @@ async function expectedChainDigest(
   });
 }
 
-function strictRows(bytes: Uint8Array, route: GovernedRoute): Record<string, unknown>[] {
+function strictPage(bytes: Uint8Array, route: GovernedRoute): RawPageEvidence {
   const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
   const shape = inspectStrictJsonObject(text);
   if (shape.get("data")?.kind !== "array") throw new Error("raw data envelope missing");
@@ -376,7 +412,230 @@ function strictRows(bytes: Uint8Array, route: GovernedRoute): Record<string, unk
     if (!isPlainObject(row)) throw new Error("raw data row is not an object");
     rows.push(row);
   }
-  return rows;
+  let informationalCursorPresent = false;
+  for (const key of route.allowedIgnoredResponseFields) {
+    if (!(key in parsed)) continue;
+    const value = parsed[key];
+    if (value === null) continue;
+    if (!validProviderCursor(value)) {
+      throw new Error("raw informational cursor is invalid");
+    }
+    informationalCursorPresent = true;
+  }
+  const recognized = [...route.paginationParameters.keys()].filter(
+    (field) => field in parsed,
+  );
+  if (recognized.length === 0) {
+    return {
+      rows,
+      providerState: "EXHAUSTED",
+      continuationParameter: null,
+      providerCursor: null,
+    };
+  }
+  if (recognized.length !== 1) {
+    throw new Error("raw pagination field is ambiguous");
+  }
+  const field = recognized[0]!;
+  const cursor = parsed[field];
+  if (cursor === null) {
+    return {
+      rows,
+      providerState: "EXHAUSTED",
+      continuationParameter: null,
+      providerCursor: null,
+    };
+  }
+  if (informationalCursorPresent || !validProviderCursor(cursor)) {
+    throw new Error("raw provider continuation is not authoritative");
+  }
+  const parameter = route.paginationParameters.get(field);
+  if (parameter !== "pagination_key") {
+    throw new Error("raw provider continuation parameter drifted");
+  }
+  return {
+    rows,
+    providerState: "CONTINUATION",
+    continuationParameter: "pagination_key",
+    providerCursor: cursor,
+  };
+}
+
+function requireCursorPayloadMatches(
+  payload: Record<string, unknown>,
+  expected: Record<string, unknown>,
+  label: string,
+): void {
+  for (const [key, value] of Object.entries(expected)) {
+    if (payload[key] !== value) {
+      throw new Error(`${label} continuation ${key} drifted`);
+    }
+  }
+}
+
+function validatePaginationTransition(input: {
+  request: JquantsAcquisitionRequestV2;
+  route: GovernedRoute;
+  metadata: AcquisitionResponseMetadataV2;
+  raw: RawPageEvidence;
+}): void {
+  const { request, route, metadata, raw } = input;
+  if (
+    metadata.page_ordinal === null || metadata.slice_ordinal === null ||
+    metadata.provider_page_ordinal === null ||
+    metadata.acquisition_id === null || metadata.cursor_key_id === null ||
+    metadata.acquisition_issued_at === null ||
+    metadata.acquisition_expires_at === null ||
+    metadata.request_identity_digest === null || metadata.request_digest === null ||
+    metadata.chain_digest === null
+  ) throw new Error("acquisition pagination identity is incomplete");
+  if (metadata.provider_pagination_state !== raw.providerState) {
+    throw new Error("provider pagination state differs from immutable raw bytes");
+  }
+  if (route.queryMode === "calendar_month_range") {
+    if (metadata.slice_date !== null || metadata.slice_ordinal !== 0) {
+      throw new Error("range pagination carried a slice identity");
+    }
+  } else {
+    const expectedDate = addDays(request.segment_start, metadata.slice_ordinal);
+    if (
+      metadata.slice_date !== expectedDate ||
+      expectedDate > request.segment_end
+    ) throw new Error("sliced pagination date/ordinal drifted");
+  }
+
+  let currentPayload: Record<string, unknown> | null = null;
+  if (request.continuation_token === null) {
+    if (
+      metadata.page_ordinal !== 0 || metadata.slice_ordinal !== 0 ||
+      metadata.provider_page_ordinal !== 0 ||
+      (route.queryMode === "calendar_month_sliced" &&
+        metadata.slice_date !== request.segment_start)
+    ) throw new Error("initial acquisition pagination identity drifted");
+  } else {
+    currentPayload = continuationPayload(request.continuation_token);
+    requireCursorPayloadMatches(currentPayload, {
+      schema_version: "jquants-acquisition-continuation/v2",
+      environment: request.environment,
+      dataset_id: request.dataset_id,
+      segment_id: request.segment_id,
+      segment_start: request.segment_start,
+      segment_end: request.segment_end,
+      source_capability_digest: request.source_capability_digest,
+      dataset_contract_digest: request.dataset_contract_digest,
+      coverage_policy_digest: request.coverage_policy_digest,
+      query_contract_digest: request.query_contract_digest,
+      target_registry_digest: request.target_registry_digest,
+      request_identity_digest: metadata.request_identity_digest,
+      acquisition_id: metadata.acquisition_id,
+      cursor_key_id: metadata.cursor_key_id,
+      acquisition_issued_at: metadata.acquisition_issued_at,
+      acquisition_expires_at: metadata.acquisition_expires_at,
+      page_ordinal: metadata.page_ordinal,
+      slice_date: metadata.slice_date,
+      slice_ordinal: metadata.slice_ordinal,
+      provider_page_ordinal: metadata.provider_page_ordinal,
+      previous_chain_digest: metadata.previous_chain_digest,
+      previous_request_digest: metadata.previous_request_digest,
+    }, "request");
+    if (
+      typeof currentPayload.target_session_nonce !== "string" ||
+      !/^[0-9a-f]{64}$/.test(currentPayload.target_session_nonce)
+    ) throw new Error("request continuation target session nonce is invalid");
+    if (
+      (metadata.provider_page_ordinal === 0 &&
+        (currentPayload.continuation_parameter !== null ||
+          currentPayload.provider_cursor !== null)) ||
+      (metadata.provider_page_ordinal > 0 &&
+        (currentPayload.continuation_parameter !== "pagination_key" ||
+          !validProviderCursor(currentPayload.provider_cursor)))
+    ) throw new Error("request continuation provider cursor/ordinal drifted");
+  }
+
+  let next: {
+    sliceDate: string | null;
+    sliceOrdinal: number;
+    providerPageOrdinal: number;
+    continuationParameter: "pagination_key" | null;
+    providerCursor: string | null;
+  } | null = null;
+  if (raw.providerState === "CONTINUATION") {
+    if (metadata.pagination_state !== "CONTINUATION") {
+      throw new Error("provider continuation cannot terminate the segment");
+    }
+    next = {
+      sliceDate: metadata.slice_date,
+      sliceOrdinal: metadata.slice_ordinal,
+      providerPageOrdinal: metadata.provider_page_ordinal + 1,
+      continuationParameter: raw.continuationParameter,
+      providerCursor: raw.providerCursor,
+    };
+  } else if (
+    route.queryMode === "calendar_month_sliced" &&
+    metadata.slice_date !== null && metadata.slice_date < request.segment_end
+  ) {
+    if (metadata.pagination_state !== "CONTINUATION") {
+      throw new Error("sliced acquisition terminated before the final date");
+    }
+    next = {
+      sliceDate: addDays(metadata.slice_date, 1),
+      sliceOrdinal: metadata.slice_ordinal + 1,
+      providerPageOrdinal: 0,
+      continuationParameter: null,
+      providerCursor: null,
+    };
+  } else if (metadata.pagination_state !== "EXHAUSTED") {
+    throw new Error("terminal provider page did not exhaust the segment");
+  }
+
+  if (next === null) {
+    if (metadata.continuation_token !== null) {
+      throw new Error("terminal segment returned a continuation token");
+    }
+    if (
+      metadata.provider_pagination_state !== "EXHAUSTED" ||
+      (route.queryMode === "calendar_month_sliced" &&
+        metadata.slice_date !== request.segment_end)
+    ) throw new Error("segment exhaustion is not at the authoritative terminal");
+    return;
+  }
+  if (metadata.continuation_token === null) {
+    throw new Error("non-terminal segment omitted continuation token");
+  }
+  const responsePayload = continuationPayload(metadata.continuation_token);
+  const targetSessionNonce = currentPayload?.target_session_nonce ??
+    responsePayload.target_session_nonce;
+  if (
+    typeof targetSessionNonce !== "string" ||
+    !/^[0-9a-f]{64}$/.test(targetSessionNonce)
+  ) throw new Error("continuation target session nonce is invalid");
+  requireCursorPayloadMatches(responsePayload, {
+    schema_version: "jquants-acquisition-continuation/v2",
+    environment: request.environment,
+    dataset_id: request.dataset_id,
+    segment_id: request.segment_id,
+    segment_start: request.segment_start,
+    segment_end: request.segment_end,
+    source_capability_digest: request.source_capability_digest,
+    dataset_contract_digest: request.dataset_contract_digest,
+    coverage_policy_digest: request.coverage_policy_digest,
+    query_contract_digest: request.query_contract_digest,
+    target_registry_digest: request.target_registry_digest,
+    request_identity_digest: metadata.request_identity_digest,
+    target_session_nonce: targetSessionNonce,
+    acquisition_id: metadata.acquisition_id,
+    cursor_key_id: metadata.cursor_key_id,
+    acquisition_issued_at: metadata.acquisition_issued_at,
+    acquisition_expires_at: metadata.acquisition_expires_at,
+    page_ordinal: metadata.page_ordinal + 1,
+    slice_date: next.sliceDate,
+    slice_ordinal: next.sliceOrdinal,
+    provider_page_ordinal: next.providerPageOrdinal,
+    continuation_parameter: next.continuationParameter,
+    provider_cursor: next.providerCursor,
+    previous_chain_digest: metadata.chain_digest,
+    previous_request_digest: metadata.request_digest,
+  }, "response");
 }
 
 async function validatePage(input: {
@@ -438,8 +697,14 @@ async function validatePage(input: {
     !["CONTINUATION", "EXHAUSTED"].includes(metadata.pagination_state) ||
     !["CONTINUATION", "EXHAUSTED"].includes(metadata.provider_pagination_state)
   ) throw new Error("acquisition exhaustion state is not authoritative");
-  const rows = strictRows(input.body, resolved.route);
-  return { headers, metadata, rows };
+  const raw = strictPage(input.body, resolved.route);
+  validatePaginationTransition({
+    request: input.request,
+    route: resolved.route,
+    metadata,
+    raw,
+  });
+  return { headers, metadata, rows: raw.rows };
 }
 
 async function putCreateOnly(
@@ -765,7 +1030,7 @@ async function reconcileStructured(
       input.capture.initialRequest.environment,
       new Date(input.checkedAt),
     );
-    const rawRows = strictRows(bytes, resolved.route);
+    const rawRows = strictPage(bytes, resolved.route).rows;
     if (rawRows.length !== page.rowCount) {
       throw new Error("persisted raw row count differs from live capture");
     }
@@ -1064,13 +1329,9 @@ export async function executeReceiptRequest(
       true,
     );
   }
-  if (env.AUTHORITY_MODE !== "ACTIVE" && env.AUTHORITY_MODE !== "ACTIVE_TEST") {
+  if (env.AUTHORITY_MODE !== "ACTIVE") {
     throw new Error("receipt evidence authority is PENDING activation");
   }
-  if (request.operation === "recover_issue") {
-    throw new Error("receipt recovery has no issued envelope to recover");
-  }
-
   const capture = await captureCollection(
     env,
     identity,

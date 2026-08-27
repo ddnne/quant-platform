@@ -97,7 +97,12 @@ export async function writeCollectionReceipt(
     evidence.observedItems,
     evidence.rawPageCount, evidence.rawRowCount, evidence.structuredRowCount,
     evidence.paginationExhausted ? 1 : 0,
-    JSON.stringify({ raw: evidence.rawDigest, manifest: evidence.manifestKey }),
+    JSON.stringify({
+      eligibility: "RECOVERED_RAW_ONLY",
+      issuer_class: "UnsignedIngestionAudit",
+      raw: evidence.rawDigest,
+      manifest: evidence.manifestKey,
+    }),
     runId, evidence.status, evidence.error, toJstIso(new Date()),
   ).run();
 }

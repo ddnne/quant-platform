@@ -17,7 +17,7 @@ export type Env = AcquisitionEnv & LegacyHttpEnv & {
   ENVIRONMENT?: "production" | "staging";
 };
 
-export default class IngestionSecretsWorker
+export class IngestionSecretsService
   extends WorkerEntrypoint<Env>
   implements JquantsAcquisitionRpc {
   override fetch(request: Request): Promise<Response> {
@@ -28,3 +28,5 @@ export default class IngestionSecretsWorker
     return fetchGovernedPage(request, this.env);
   }
 }
+
+export default IngestionSecretsService;

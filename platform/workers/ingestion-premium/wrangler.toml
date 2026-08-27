@@ -54,6 +54,11 @@ binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
+[[services]]
+binding = "RECEIPT_EVIDENCE_AUTHORITY"
+service = "quant-platform-receipt-evidence-authority"
+entrypoint = "ReceiptAuthorityService"
+
 # Secrets bound via `wrangler secret put` (never in this file):
 # - JQUANTS_API_KEY            (required for fetch)
 # - INGESTION_RUN_TOKEN        (manual run and migration rebuild only)
@@ -62,6 +67,7 @@ database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 [vars]
 # Parallel dataset ingest; shared RateLimiter still enforces ~500/min upstream.
 INGEST_CONCURRENCY = "6"
+RECEIPT_AUTHORITY_ENVIRONMENT = "production"
 # MASTER_SCD2_ONLY = "1"  # optional: route equities_master structured to R2 only
 
 [triggers]
@@ -96,8 +102,14 @@ binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
+[[env.production.services]]
+binding = "RECEIPT_EVIDENCE_AUTHORITY"
+service = "quant-platform-receipt-evidence-authority"
+entrypoint = "ReceiptAuthorityService"
+
 [env.production.vars]
 INGEST_CONCURRENCY = "6"
+RECEIPT_AUTHORITY_ENVIRONMENT = "production"
 
 [env.production.triggers]
 # Named environments do not inherit top-level triggers.

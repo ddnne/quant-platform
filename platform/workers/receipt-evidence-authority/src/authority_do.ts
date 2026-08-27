@@ -220,6 +220,120 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
           wrapped_private_key_base64 TEXT NOT NULL,
           generated_at TEXT NOT NULL
         );
+        CREATE TRIGGER IF NOT EXISTS authority_events_no_update
+        BEFORE UPDATE ON authority_events
+        BEGIN
+          SELECT RAISE(ABORT, 'authority events are append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS authority_events_no_delete
+        BEFORE DELETE ON authority_events
+        BEGIN
+          SELECT RAISE(ABORT, 'authority events are append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS authority_key_metadata_no_update
+        BEFORE UPDATE ON authority_key_metadata
+        BEGIN
+          SELECT RAISE(ABORT, 'authority key metadata is append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS authority_key_metadata_no_delete
+        BEFORE DELETE ON authority_key_metadata
+        BEGIN
+          SELECT RAISE(ABORT, 'authority key metadata is append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS authority_operations_no_delete
+        BEFORE DELETE ON authority_operations
+        BEGIN
+          SELECT RAISE(ABORT, 'authority operations are append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS authority_operations_identity_immutable
+        BEFORE UPDATE ON authority_operations
+        WHEN OLD.operation_id IS NOT NEW.operation_id
+          OR OLD.request_digest IS NOT NEW.request_digest
+          OR OLD.acquisition_nonce IS NOT NEW.acquisition_nonce
+          OR OLD.created_at IS NOT NEW.created_at
+          OR NEW.updated_at < OLD.updated_at
+        BEGIN
+          SELECT RAISE(ABORT, 'authority operation identity is immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS authority_operations_monotonic
+        BEFORE UPDATE ON authority_operations
+        WHEN NOT (
+          (
+            OLD.state = 'COLLECTING'
+            AND NEW.state = 'COLLECTING'
+            AND NEW.envelope_digest IS NULL
+            AND NEW.envelope_json IS NULL
+            AND NEW.receipt_digest IS NULL
+            AND NEW.result_json IS NULL
+            AND (
+              (
+                OLD.claims_digest IS NULL
+                AND OLD.claims_json IS NULL
+                AND OLD.issued_at IS NULL
+                AND NEW.claims_digest IS NOT NULL
+                AND NEW.claims_json IS NOT NULL
+                AND NEW.issued_at IS NOT NULL
+              )
+              OR (
+                NEW.claims_digest IS OLD.claims_digest
+                AND NEW.claims_json IS OLD.claims_json
+                AND NEW.issued_at IS OLD.issued_at
+              )
+            )
+          )
+          OR (
+            OLD.state = 'COLLECTING'
+            AND NEW.state = 'ISSUED_PENDING_FINALIZE'
+            AND OLD.claims_digest IS NOT NULL
+            AND NEW.claims_digest IS OLD.claims_digest
+            AND NEW.claims_json IS OLD.claims_json
+            AND NEW.issued_at IS OLD.issued_at
+            AND OLD.envelope_digest IS NULL
+            AND OLD.envelope_json IS NULL
+            AND NEW.envelope_digest IS NOT NULL
+            AND NEW.envelope_json IS NOT NULL
+            AND NEW.receipt_digest IS NULL
+            AND NEW.result_json IS NULL
+          )
+          OR (
+            OLD.state = 'ISSUED_PENDING_FINALIZE'
+            AND NEW.state = 'ISSUED_PENDING_FINALIZE'
+            AND NEW.claims_digest IS OLD.claims_digest
+            AND NEW.claims_json IS OLD.claims_json
+            AND NEW.issued_at IS OLD.issued_at
+            AND NEW.envelope_digest IS OLD.envelope_digest
+            AND NEW.envelope_json IS OLD.envelope_json
+            AND NEW.receipt_digest IS OLD.receipt_digest
+            AND NEW.result_json IS OLD.result_json
+          )
+          OR (
+            OLD.state = 'ISSUED_PENDING_FINALIZE'
+            AND NEW.state = 'FINALIZED'
+            AND NEW.claims_digest IS OLD.claims_digest
+            AND NEW.claims_json IS OLD.claims_json
+            AND NEW.issued_at IS OLD.issued_at
+            AND NEW.envelope_digest IS OLD.envelope_digest
+            AND NEW.envelope_json IS OLD.envelope_json
+            AND OLD.receipt_digest IS NULL
+            AND OLD.result_json IS NULL
+            AND NEW.receipt_digest IS NOT NULL
+            AND NEW.result_json IS NOT NULL
+          )
+          OR (
+            OLD.state = 'FINALIZED'
+            AND NEW.state = 'FINALIZED'
+            AND NEW.claims_digest IS OLD.claims_digest
+            AND NEW.claims_json IS OLD.claims_json
+            AND NEW.issued_at IS OLD.issued_at
+            AND NEW.envelope_digest IS OLD.envelope_digest
+            AND NEW.envelope_json IS OLD.envelope_json
+            AND NEW.receipt_digest IS OLD.receipt_digest
+            AND NEW.result_json IS OLD.result_json
+          )
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'authority operation transition is not monotonic');
+        END;
       `);
     });
   }
@@ -416,8 +530,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       throw new Error("receipt key generation is absent or skips history");
     }
     if (
-      current !== null && this.env.AUTHORITY_MODE !== "PENDING" &&
-      this.env.AUTHORITY_MODE !== "ACTIVE_TEST"
+      current !== null && this.env.AUTHORITY_MODE !== "PENDING"
     ) throw new Error("receipt key rotation requires PENDING mode");
 
     const pair = await crypto.subtle.generateKey(
@@ -508,7 +621,6 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
 
   private async requireSigningKey(): Promise<KeyMaterial> {
     const key = await this.ensureKey();
-    if (this.env.AUTHORITY_MODE === "ACTIVE_TEST") return key;
     if (
       this.env.AUTHORITY_MODE !== "ACTIVE" ||
       !this.env.ACTIVATED_KEY_ID ||

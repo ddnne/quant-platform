@@ -38,6 +38,7 @@ new_sqlite_classes = ["ReceiptEvidenceAuthority"]
 [[services]]
 binding = "JQUANTS_ACQUISITION"
 service = "quant-platform-ingestion-secrets"
+entrypoint = "IngestionSecretsService"
 
 [observability]
 enabled = true
@@ -81,6 +82,7 @@ class_name = "ReceiptEvidenceAuthority"
 [[env.production.services]]
 binding = "JQUANTS_ACQUISITION"
 service = "quant-platform-ingestion-secrets"
+entrypoint = "IngestionSecretsService"
 
 [env.production.observability]
 enabled = true

@@ -157,6 +157,10 @@ describe("writeCollectionReceipt", () => {
     expect(row.args[12]).toBe(42);
     expect(row.args[13]).toBe("SUCCESS");
     expect(row.args[14]).toBeNull();
+    expect(JSON.parse(String(row.args[11]))).toMatchObject({
+      eligibility: "RECOVERED_RAW_ONLY",
+      issuer_class: "UnsignedIngestionAudit",
+    });
     expect(JSON.stringify(row.args)).not.toContain("COMPLETE");
     expect(JSON.stringify(row)).not.toContain("COMPLETE");
   });

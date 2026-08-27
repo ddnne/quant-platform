@@ -38,6 +38,7 @@ new_sqlite_classes = ["ReceiptEvidenceAuthority"]
 [[services]]
 binding = "JQUANTS_ACQUISITION"
 service = "quant-platform-ingestion-secrets-staging"
+entrypoint = "IngestionSecretsService"
 
 [observability]
 enabled = true

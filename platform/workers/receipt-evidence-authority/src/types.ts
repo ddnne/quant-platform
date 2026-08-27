@@ -1,7 +1,7 @@
 import type IngestionSecretsWorker from "../../ingestion-secrets/src/index";
 
 export type AuthorityEnvironment = "staging" | "production";
-export type AuthorityMode = "PENDING" | "ACTIVE" | "ACTIVE_TEST";
+export type AuthorityMode = "PENDING" | "ACTIVE";
 
 export type ReceiptIssueRequestV1 = {
   schema_version: "receipt-evidence-issue-request/v1";

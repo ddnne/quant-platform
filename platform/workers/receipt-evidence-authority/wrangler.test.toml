@@ -6,7 +6,8 @@ preview_urls = false
 
 [vars]
 ENVIRONMENT = "production"
-AUTHORITY_MODE = "ACTIVE_TEST"
+AUTHORITY_MODE = "ACTIVE"
+ACTIVATED_KEY_ID = "receipt-test-runtime-registration-required"
 RECEIPT_KEY_WRAP_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 RECEIPT_KEY_GENERATION = "1"
 
