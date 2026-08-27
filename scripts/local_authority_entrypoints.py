@@ -274,7 +274,7 @@ def _validate_owned_mirror(
     environment: str,
     purpose: str,
     expected_d1_uid: int,
-) -> tuple[sqlite3.Connection, dict[str, Any], str]:
+) -> tuple[sqlite3.Connection, dict[str, Any], str, tuple[int, int, int]]:
     values = _require_payload_fields(
         payload,
         fields={"owned_mirror_evidence", "selector"},
@@ -333,7 +333,12 @@ def _validate_owned_mirror(
     except BaseException:
         conn.close()
         raise
-    return conn, dict(values["selector"]), evidence["governed_db_path"]
+    return (
+        conn,
+        dict(values["selector"]),
+        evidence["governed_db_path"],
+        (int(info.st_dev), int(info.st_ino), int(info.st_size)),
+    )
 
 
 class OpsProjectionRenderAndSign:
@@ -362,7 +367,7 @@ class OpsProjectionRenderAndSign:
         payload: Mapping[str, Any],
         fds: Sequence[int],
     ) -> Mapping[str, Any]:
-        conn, selector, _ = _validate_owned_mirror(
+        conn, selector, _, authority_file_identity = _validate_owned_mirror(
             payload,
             fds,
             environment=self.environment,
@@ -380,9 +385,10 @@ class OpsProjectionRenderAndSign:
                 sync_identity
             )
             candidate = (
-                export_ops_projection._render_projection_candidate_from_connection(
+                export_ops_projection._render_projection_candidate_from_authority_connection(
                     conn,
                     frozen_sync_identity,
+                    authority_file_identity=authority_file_identity,
                 )
             )
         finally:
@@ -456,7 +462,7 @@ class CoverageTransitionAuthorize:
         payload: Mapping[str, Any],
         fds: Sequence[int],
     ) -> Mapping[str, Any]:
-        conn, selector, governed_db_path = _validate_owned_mirror(
+        conn, selector, governed_db_path, _ = _validate_owned_mirror(
             payload,
             fds,
             environment=self.environment,

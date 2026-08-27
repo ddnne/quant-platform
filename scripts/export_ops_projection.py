@@ -1622,6 +1622,8 @@ def _freeze_authenticated_sync_identity(
 
 def _measure_connection_snapshot(
     conn: sqlite3.Connection,
+    *,
+    _authority_file_identity: tuple[int, int, int] | None = None,
 ) -> _ConnectionSnapshotDescriptor:
     """Prove the renderer still owns one descriptor-bound read snapshot."""
 
@@ -1652,13 +1654,28 @@ def _measure_connection_snapshot(
     # descriptor to its backing pathname on Linux.  Trust the private one-shot
     # authority registration, then prove the reported path still names the
     # exact inode that authority pinned; pathname spelling is not a capability.
-    from scripts.sync_d1_to_sqlite import (
-        _authenticated_applied_mirror_connection_identity,
-    )
+    if _authority_file_identity is None:
+        from scripts.sync_d1_to_sqlite import (
+            _authenticated_applied_mirror_connection_identity,
+        )
 
-    expected = _authenticated_applied_mirror_connection_identity(conn)
-    if expected is None:
-        raise RuntimeError("Ops Projection source connection is not descriptor-bound")
+        registered = _authenticated_applied_mirror_connection_identity(conn)
+        if registered is None:
+            raise RuntimeError(
+                "Ops Projection source connection is not descriptor-bound"
+            )
+        expected = (registered.device, registered.inode, registered.size)
+    else:
+        if (
+            type(_authority_file_identity) is not tuple
+            or len(_authority_file_identity) != 3
+            or any(
+                type(value) is not int or value < 0
+                for value in _authority_file_identity
+            )
+        ):
+            raise RuntimeError("Ops Projection authority identity is invalid")
+        expected = _authority_file_identity
     try:
         descriptor_fd = os.open(
             descriptor_path,
@@ -1677,7 +1694,7 @@ def _measure_connection_snapshot(
             int(descriptor_stat.st_ino),
             int(descriptor_stat.st_size),
         )
-        != (expected.device, expected.inode, expected.size)
+        != expected
     ):
         raise RuntimeError("Ops Projection source descriptor changed inode")
     schema_row = conn.execute("PRAGMA main.schema_version").fetchone()
@@ -1699,6 +1716,8 @@ def _measure_connection_snapshot(
 def _render_projection_candidate_from_connection(
     conn: sqlite3.Connection,
     sync_identity: Mapping[str, object],
+    *,
+    _authority_file_identity: tuple[int, int, int] | None = None,
 ) -> UnsignedOpsProjectionCandidate:
     """Render one unsigned candidate from an authority-owned source snapshot.
 
@@ -1706,7 +1725,14 @@ def _render_projection_candidate_from_connection(
     clock, generation, READY directory, or activation argument on this API.
     """
 
-    initial_snapshot = _measure_connection_snapshot(conn)
+    initial_snapshot = (
+        _measure_connection_snapshot(conn)
+        if _authority_file_identity is None
+        else _measure_connection_snapshot(
+            conn,
+            _authority_file_identity=_authority_file_identity,
+        )
+    )
     frozen_sync_identity = _freeze_authenticated_sync_identity(sync_identity)
     generated_at = _now()
     generation_id = "projgen-candidate-" + d1_sync_digest(
@@ -1730,7 +1756,14 @@ def _render_projection_candidate_from_connection(
         _generated_at=generated_at,
         _seal_and_activate=False,
     )
-    final_snapshot = _measure_connection_snapshot(conn)
+    final_snapshot = (
+        _measure_connection_snapshot(conn)
+        if _authority_file_identity is None
+        else _measure_connection_snapshot(
+            conn,
+            _authority_file_identity=_authority_file_identity,
+        )
+    )
     if final_snapshot != initial_snapshot:
         raise RuntimeError("Ops Projection source snapshot changed during render")
     rendered_cursors = (
@@ -1785,6 +1818,26 @@ def _render_projection_candidate_from_connection(
             "export_cursor": source_cursor,
             "applied_cursor": applied_cursor,
         },
+    )
+
+
+def _render_projection_candidate_from_authority_connection(
+    conn: sqlite3.Connection,
+    sync_identity: Mapping[str, object],
+    *,
+    authority_file_identity: tuple[int, int, int],
+) -> UnsignedOpsProjectionCandidate:
+    """Render inside an OS-isolated authority after its FD/peer verification.
+
+    The returned object remains unsigned and non-publishable.  The caller is
+    the key-custody service itself, which must sign before returning anything
+    across its socket boundary.
+    """
+
+    return _render_projection_candidate_from_connection(
+        conn,
+        sync_identity,
+        _authority_file_identity=authority_file_identity,
     )
 
 
