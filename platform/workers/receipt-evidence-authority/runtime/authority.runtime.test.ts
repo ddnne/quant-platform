@@ -13,7 +13,7 @@ import {
 import type {
   AcquisitionResponseMetadataV2,
 } from "../../ingestion-secrets/src/jquants_acquisition_types";
-import { canonicalDigest, sha256Digest } from "../src/canonical";
+import { canonicalDigest, canonicalJson, sha256Digest } from "../src/canonical";
 import { ReceiptEvidenceAuthority } from "../src/authority_do";
 import { authorityInstanceDigest } from "../src/authority_instance";
 import {
@@ -85,6 +85,116 @@ function installSinglePageUpstream(
       headers: { "content-type": "application/json" },
     });
   }) as typeof fetch;
+}
+
+function installTopixContinuationUpstream(): void {
+  let calls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get("x-api-key")).toBe(
+      "jq-runtime-api-key-not-for-live",
+    );
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    calls += 1;
+    if (calls === 1) {
+      expect(url.searchParams.get("pagination_key")).toBeNull();
+      return new Response(
+        '{"data":[{"Date":"2024-02-01","Open":1,"Close":2}],"pagination_key":"topix-page-2"}',
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    expect(calls).toBe(2);
+    expect(url.searchParams.get("pagination_key")).toBe("topix-page-2");
+    return new Response(
+      '{"data":[{"Date":"2024-02-02","Open":2,"Close":3}],"pagination_key":null}',
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+}
+
+function officialCalendarBody(
+  segmentStart: string,
+  segmentEnd: string,
+  businessDates: readonly string[],
+): string {
+  const business = new Set(businessDates);
+  const rows: Array<{ Date: string; HolDiv: string }> = [];
+  let current = new Date(`${segmentStart}T00:00:00Z`);
+  const terminal = new Date(`${segmentEnd}T00:00:00Z`);
+  while (current <= terminal) {
+    const date = current.toISOString().slice(0, 10);
+    rows.push({ Date: date, HolDiv: business.has(date) ? "1" : "0" });
+    current = new Date(current.getTime() + 86_400_000);
+  }
+  return JSON.stringify({ data: rows });
+}
+
+function installMasterCalendarUpstream(): void {
+  const businessDates = ["2024-02-01", "2024-02-02"];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get("x-api-key")).toBe(
+      "jq-runtime-api-key-not-for-live",
+    );
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    if (url.pathname === "/v2/markets/calendar") {
+      expect(url.searchParams.get("from")).toBe("2024-02-01");
+      expect(url.searchParams.get("to")).toBe("2024-02-29");
+      return new Response(
+        officialCalendarBody("2024-02-01", "2024-02-29", businessDates),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    expect(url.pathname).toBe("/v2/equities/master");
+    const date = url.searchParams.get("date");
+    expect(businessDates).toContain(date);
+    return new Response(
+      JSON.stringify({
+        data: [{ Code: date === "2024-02-01" ? "1301" : "1302", Date: date }],
+        pagination_key: null,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+}
+
+function decodeBase64UrlForTest(value: string): string {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/") +
+    "=".repeat((4 - value.length % 4) % 4);
+  return new TextDecoder().decode(
+    Uint8Array.from(atob(padded), (character) => character.charCodeAt(0)),
+  );
+}
+
+function encodeBase64UrlForTest(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function rewriteContinuationPayload(
+  response: Response,
+  mutate: (payload: Record<string, unknown>) => void | Promise<void>,
+): Promise<Response> {
+  const body = await response.arrayBuffer();
+  const headers = new Headers(response.headers);
+  const token = headers.get("x-quant-acquisition-continuation");
+  if (token === null || token === "NONE") throw new Error("test continuation absent");
+  const parts = token.split(".");
+  if (parts.length !== 3 || parts[0] !== "jqa2") {
+    throw new Error("test continuation malformed");
+  }
+  const payload = JSON.parse(decodeBase64UrlForTest(parts[1]!)) as Record<string, unknown>;
+  await mutate(payload);
+  headers.set(
+    "x-quant-acquisition-continuation",
+    `jqa2.${encodeBase64UrlForTest(canonicalJson(payload))}.${parts[2]}`,
+  );
+  const metadata = acquisitionMetadata(headers);
+  headers.set(
+    "x-quant-acquisition-metadata-digest",
+    await canonicalDigest(metadata),
+  );
+  return new Response(body, { status: response.status, headers });
 }
 
 function nullHeader(value: string): string | null {
@@ -934,6 +1044,120 @@ describe("Receipt Evidence Authority in workerd", () => {
         request_nonce: "f".repeat(64),
       })
     )).rejects.toThrow("sliced acquisition terminated before the final date");
+  });
+
+  it("accepts a normal TOPIX continuation only with null calendar fields", async () => {
+    installTopixContinuationUpstream();
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const issued = await runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment({
+        ...request,
+        request_nonce: "1".repeat(64),
+      })
+    );
+    expect(issued.receipt).toMatchObject({
+      dataset: "indices_bars_daily_topix",
+      raw_page_count: 2,
+      raw_row_count: 2,
+      structured_row_count: 2,
+      status: "SUCCESS",
+    });
+  });
+
+  it("rejects any non-null calendar field on a non-calendar continuation", async () => {
+    installTopixContinuationUpstream();
+    installAuthorityAcquisition((response) =>
+      rewriteContinuationPayload(response, (payload) => {
+        payload.official_calendar_raw_body_digest = "sha256:" + "0".repeat(64);
+      })
+    );
+    const { stub } = await activateRegisteredTestKey();
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment({
+        ...request,
+        request_nonce: "5".repeat(64),
+      })
+    )).rejects.toThrow("unauthorized official calendar");
+  });
+
+  it("independently rederives the official-calendar master chain", async () => {
+    installMasterCalendarUpstream();
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const issued = await runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment({
+        ...request,
+        dataset_id: "equities_master",
+        request_nonce: "2".repeat(64),
+      })
+    );
+    expect(issued.receipt).toMatchObject({
+      dataset: "equities_master",
+      raw_page_count: 2,
+      raw_row_count: 2,
+      structured_row_count: 2,
+      status: "SUCCESS",
+    });
+  });
+
+  it("rejects a tampered master official-calendar cursor", async () => {
+    installMasterCalendarUpstream();
+    installAuthorityAcquisition((response) =>
+      rewriteContinuationPayload(response, (payload) => {
+        payload.official_business_dates = ["2024-02-01", "2024-02-05"];
+      })
+    );
+    const { stub } = await activateRegisteredTestKey();
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment({
+        ...request,
+        dataset_id: "equities_master",
+        request_nonce: "3".repeat(64),
+      })
+    )).rejects.toThrow("official calendar digest chain drifted");
+  });
+
+  it("rejects a self-consistent official calendar transplanted across segments", async () => {
+    installMasterCalendarUpstream();
+    installAuthorityAcquisition((response) =>
+      rewriteContinuationPayload(response, async (payload) => {
+        const businessDates = ["2024-03-01", "2024-03-04"];
+        const orderedQuery = [["from", "2024-03-01"], ["to", "2024-03-31"]];
+        const calendarQueryDigest = await canonicalDigest({
+          schema_version: "jquants-acquisition-query/v2",
+          path: "/v2/markets/calendar",
+          ordered_query: orderedQuery,
+        });
+        const businessDatesDigest = await canonicalDigest({
+          schema_version: "jquants-official-business-dates/v1",
+          segment_start: "2024-03-01",
+          segment_end: "2024-03-31",
+          dates: businessDates,
+        });
+        const rawBodyDigest = payload.official_calendar_raw_body_digest;
+        payload.official_calendar_query_digest = calendarQueryDigest;
+        payload.official_business_dates_digest = businessDatesDigest;
+        payload.official_business_dates = businessDates;
+        payload.official_calendar_binding_digest = await canonicalDigest({
+          schema_version: "jquants-official-business-calendar-binding/v1",
+          path: "/v2/markets/calendar",
+          ordered_query: orderedQuery,
+          raw_body_digest: rawBodyDigest,
+          calendar_query_digest: calendarQueryDigest,
+          business_dates_digest: businessDatesDigest,
+          business_dates: businessDates,
+        });
+      })
+    );
+    const { stub } = await activateRegisteredTestKey();
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment({
+        ...request,
+        dataset_id: "equities_master",
+        request_nonce: "4".repeat(64),
+      })
+    )).rejects.toThrow("official calendar crosses its segment");
   });
 
   it("rejects an exact-key poisoned preinsert instead of self-digesting it", async () => {

@@ -25,7 +25,33 @@ const CURSOR_KEYS = [
   "acquisition_expires_at", "page_ordinal", "slice_date", "slice_ordinal",
   "provider_page_ordinal", "continuation_parameter", "provider_cursor",
   "previous_chain_digest", "previous_request_digest",
+  "official_calendar_raw_body_digest", "official_calendar_query_digest",
+  "official_business_dates_digest", "official_calendar_binding_digest",
+  "official_business_dates",
 ] as const;
+
+const OFFICIAL_CALENDAR_CURSOR_KEYS = [
+  "official_calendar_raw_body_digest",
+  "official_calendar_query_digest",
+  "official_business_dates_digest",
+  "official_calendar_binding_digest",
+  "official_business_dates",
+] as const;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+type OfficialCalendarProof = {
+  rawBodyDigest: string;
+  calendarQueryDigest: string;
+  businessDatesDigest: string;
+  bindingDigest: string;
+  businessDates: readonly string[];
+};
+
+type CursorProof = {
+  currentPayload: Record<string, unknown> | null;
+  responsePayload: Record<string, unknown> | null;
+  officialCalendar: OfficialCalendarProof | null;
+};
 
 export type RawPageEvidence = {
   rows: Record<string, unknown>[];
@@ -145,6 +171,137 @@ function continuationPayload(token: string): Record<string, unknown> {
   return value;
 }
 
+function validDate(value: unknown): value is string {
+  if (typeof value !== "string" || !DATE_RE.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function officialCalendarFields(
+  calendar: OfficialCalendarProof | null,
+): Record<(typeof OFFICIAL_CALENDAR_CURSOR_KEYS)[number], unknown> {
+  return {
+    official_calendar_raw_body_digest: calendar?.rawBodyDigest ?? null,
+    official_calendar_query_digest: calendar?.calendarQueryDigest ?? null,
+    official_business_dates_digest: calendar?.businessDatesDigest ?? null,
+    official_calendar_binding_digest: calendar?.bindingDigest ?? null,
+    official_business_dates: calendar?.businessDates ?? null,
+  };
+}
+
+async function validateOfficialCalendarPayload(
+  payload: Record<string, unknown>,
+  request: JquantsAcquisitionRequestV2,
+  route: GovernedRoute,
+  label: string,
+): Promise<OfficialCalendarProof | null> {
+  const values = OFFICIAL_CALENDAR_CURSOR_KEYS.map((key) => payload[key]);
+  if (!route.requiresOfficialCalendar) {
+    if (!values.every((value) => value === null)) {
+      throw new Error(`${label} continuation carried an unauthorized official calendar`);
+    }
+    return null;
+  }
+  const rawBodyDigest = payload.official_calendar_raw_body_digest;
+  const calendarQueryDigest = payload.official_calendar_query_digest;
+  const businessDatesDigest = payload.official_business_dates_digest;
+  const bindingDigest = payload.official_calendar_binding_digest;
+  const businessDatesValue = payload.official_business_dates;
+  if (
+    request.dataset_id !== "equities_master" ||
+    !isSha256(rawBodyDigest) ||
+    !isSha256(calendarQueryDigest) ||
+    !isSha256(businessDatesDigest) ||
+    !isSha256(bindingDigest) ||
+    !Array.isArray(businessDatesValue) ||
+    businessDatesValue.length < 1 ||
+    businessDatesValue.length > 31 ||
+    !businessDatesValue.every(validDate)
+  ) {
+    throw new Error(`${label} continuation official calendar is invalid`);
+  }
+  const businessDates = businessDatesValue as string[];
+  if (
+    new Set(businessDates).size !== businessDates.length ||
+    businessDates.some((value, index) =>
+      value < request.segment_start ||
+      value > request.segment_end ||
+      (index > 0 && value <= businessDates[index - 1]!)
+    )
+  ) {
+    throw new Error(`${label} continuation official calendar crosses its segment`);
+  }
+  const orderedQuery = [["from", request.segment_start], ["to", request.segment_end]];
+  const expectedCalendarQueryDigest = await canonicalDigest({
+    schema_version: "jquants-acquisition-query/v2",
+    path: "/v2/markets/calendar",
+    ordered_query: orderedQuery,
+  });
+  const expectedBusinessDatesDigest = await canonicalDigest({
+    schema_version: "jquants-official-business-dates/v1",
+    segment_start: request.segment_start,
+    segment_end: request.segment_end,
+    dates: businessDates,
+  });
+  const expectedBindingDigest = await canonicalDigest({
+    schema_version: "jquants-official-business-calendar-binding/v1",
+    path: "/v2/markets/calendar",
+    ordered_query: orderedQuery,
+    raw_body_digest: rawBodyDigest,
+    calendar_query_digest: calendarQueryDigest,
+    business_dates_digest: businessDatesDigest,
+    business_dates: businessDates,
+  });
+  if (
+    calendarQueryDigest !== expectedCalendarQueryDigest ||
+    businessDatesDigest !== expectedBusinessDatesDigest ||
+    bindingDigest !== expectedBindingDigest
+  ) {
+    throw new Error(`${label} continuation official calendar digest chain drifted`);
+  }
+  return {
+    rawBodyDigest,
+    calendarQueryDigest,
+    businessDatesDigest,
+    bindingDigest,
+    businessDates: Object.freeze([...businessDates]),
+  };
+}
+
+async function cursorProof(
+  request: JquantsAcquisitionRequestV2,
+  route: GovernedRoute,
+  metadata: AcquisitionResponseMetadataV2,
+): Promise<CursorProof> {
+  const currentPayload = request.continuation_token === null
+    ? null
+    : continuationPayload(request.continuation_token);
+  const responsePayload = metadata.continuation_token === null
+    ? null
+    : continuationPayload(metadata.continuation_token);
+  const currentCalendar = currentPayload === null
+    ? null
+    : await validateOfficialCalendarPayload(currentPayload, request, route, "request");
+  const responseCalendar = responsePayload === null
+    ? null
+    : await validateOfficialCalendarPayload(responsePayload, request, route, "response");
+  if (!route.requiresOfficialCalendar) {
+    return { currentPayload, responsePayload, officialCalendar: null };
+  }
+  const officialCalendar = currentCalendar ?? responseCalendar;
+  if (officialCalendar === null) {
+    throw new Error("official calendar proof is absent from the acquisition chain");
+  }
+  if (
+    currentCalendar !== null && responseCalendar !== null &&
+    canonicalJson(officialCalendarFields(currentCalendar)) !==
+      canonicalJson(officialCalendarFields(responseCalendar))
+  ) {
+    throw new Error("official calendar changed across the acquisition chain");
+  }
+  return { currentPayload, responsePayload, officialCalendar };
+}
+
 function addDays(value: string, days: number): string {
   const date = new Date(`${value}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) throw new Error("acquisition date is invalid");
@@ -167,6 +324,7 @@ async function expectedQueryDigest(
   request: JquantsAcquisitionRequestV2,
   route: GovernedRoute,
   metadata: AcquisitionResponseMetadataV2,
+  proof: CursorProof,
 ): Promise<string> {
   const ordered: [string, string][] = [];
   if (route.queryMode === "calendar_month_range") {
@@ -175,8 +333,8 @@ async function expectedQueryDigest(
     if (metadata.slice_date === null) throw new Error("sliced acquisition omitted date");
     ordered.push(["date", metadata.slice_date]);
   }
-  if (request.continuation_token !== null) {
-    const payload = continuationPayload(request.continuation_token);
+  if (proof.currentPayload !== null) {
+    const payload = proof.currentPayload;
     if (
       payload.environment !== request.environment ||
       payload.dataset_id !== request.dataset_id ||
@@ -197,6 +355,28 @@ async function expectedQueryDigest(
       throw new Error("continuation cursor is unpaired");
     }
   }
+  if (route.requiresOfficialCalendar) {
+    const calendar = proof.officialCalendar;
+    if (
+      calendar === null ||
+      metadata.slice_date === null ||
+      !calendar.businessDates.includes(metadata.slice_date)
+    ) {
+      throw new Error("official calendar does not authorize the acquisition slice");
+    }
+    return canonicalDigest({
+      schema_version: "jquants-acquisition-query/v3",
+      path: route.path,
+      ordered_query: ordered,
+      official_calendar_binding: {
+        binding_digest: calendar.bindingDigest,
+        raw_body_digest: calendar.rawBodyDigest,
+        calendar_query_digest: calendar.calendarQueryDigest,
+        business_dates_digest: calendar.businessDatesDigest,
+        business_dates: calendar.businessDates,
+      },
+    });
+  }
   return canonicalDigest({
     schema_version: "jquants-acquisition-query/v2",
     path: route.path,
@@ -206,6 +386,7 @@ async function expectedQueryDigest(
 
 async function expectedPreviousChain(
   metadata: AcquisitionResponseMetadataV2,
+  calendar: OfficialCalendarProof | null,
 ): Promise<string> {
   if (
     metadata.acquisition_id === null || metadata.request_identity_digest === null ||
@@ -213,20 +394,26 @@ async function expectedPreviousChain(
     metadata.acquisition_expires_at === null
   ) throw new Error("acquisition genesis identity missing");
   return canonicalDigest({
-    schema_version: "jquants-acquisition-chain-genesis/v2",
+    schema_version: calendar === null
+      ? "jquants-acquisition-chain-genesis/v2"
+      : "jquants-acquisition-chain-genesis/v3",
     acquisition_id: metadata.acquisition_id,
     request_identity_digest: metadata.request_identity_digest,
     cursor_key_id: metadata.cursor_key_id,
     acquisition_issued_at: metadata.acquisition_issued_at,
     acquisition_expires_at: metadata.acquisition_expires_at,
+    ...(calendar === null ? {} : officialCalendarFields(calendar)),
   });
 }
 
 async function expectedChainDigest(
   metadata: AcquisitionResponseMetadataV2,
+  calendar: OfficialCalendarProof | null,
 ): Promise<string> {
   return canonicalDigest({
-    schema_version: "jquants-acquisition-chain-link/v2",
+    schema_version: calendar === null
+      ? "jquants-acquisition-chain-link/v2"
+      : "jquants-acquisition-chain-link/v3",
     acquisition_id: metadata.acquisition_id,
     cursor_key_id: metadata.cursor_key_id,
     acquisition_issued_at: metadata.acquisition_issued_at,
@@ -245,6 +432,7 @@ async function expectedChainDigest(
     evidence_state: metadata.evidence_state,
     provider_pagination_state: metadata.provider_pagination_state,
     pagination_state: metadata.pagination_state,
+    ...(calendar === null ? {} : officialCalendarFields(calendar)),
   });
 }
 
@@ -327,7 +515,13 @@ function requireCursorPayloadMatches(
   label: string,
 ): void {
   for (const [key, value] of Object.entries(expected)) {
-    if (payload[key] !== value) {
+    const actual = payload[key];
+    const matches = Array.isArray(value)
+      ? Array.isArray(actual) &&
+        actual.length === value.length &&
+        actual.every((item, index) => item === value[index])
+      : actual === value;
+    if (!matches) {
       throw new Error(`${label} continuation ${key} drifted`);
     }
   }
@@ -338,8 +532,9 @@ function validatePaginationTransition(input: {
   route: GovernedRoute;
   metadata: AcquisitionResponseMetadataV2;
   raw: RawPageEvidence;
+  proof: CursorProof;
 }): void {
-  const { request, route, metadata, raw } = input;
+  const { request, route, metadata, raw, proof } = input;
   if (
     metadata.page_ordinal === null || metadata.slice_ordinal === null ||
     metadata.provider_page_ordinal === null ||
@@ -356,6 +551,11 @@ function validatePaginationTransition(input: {
     if (metadata.slice_date !== null || metadata.slice_ordinal !== 0) {
       throw new Error("range pagination carried a slice identity");
     }
+  } else if (route.requiresOfficialCalendar) {
+    const expectedDate = proof.officialCalendar?.businessDates[metadata.slice_ordinal];
+    if (expectedDate === undefined || metadata.slice_date !== expectedDate) {
+      throw new Error("official calendar slice date/ordinal drifted");
+    }
   } else {
     const expectedDate = addDays(request.segment_start, metadata.slice_ordinal);
     if (
@@ -370,10 +570,13 @@ function validatePaginationTransition(input: {
       metadata.page_ordinal !== 0 || metadata.slice_ordinal !== 0 ||
       metadata.provider_page_ordinal !== 0 ||
       (route.queryMode === "calendar_month_sliced" &&
-        metadata.slice_date !== request.segment_start)
+        metadata.slice_date !== request.segment_start) ||
+      (route.requiresOfficialCalendar &&
+        metadata.slice_date !== proof.officialCalendar?.businessDates[0])
     ) throw new Error("initial acquisition pagination identity drifted");
   } else {
-    currentPayload = continuationPayload(request.continuation_token);
+    currentPayload = proof.currentPayload;
+    if (currentPayload === null) throw new Error("request continuation proof missing");
     requireCursorPayloadMatches(currentPayload, {
       schema_version: "jquants-acquisition-continuation/v2",
       environment: request.environment,
@@ -397,6 +600,7 @@ function validatePaginationTransition(input: {
       provider_page_ordinal: metadata.provider_page_ordinal,
       previous_chain_digest: metadata.previous_chain_digest,
       previous_request_digest: metadata.previous_request_digest,
+      ...officialCalendarFields(proof.officialCalendar),
     }, "request");
     if (
       typeof currentPayload.target_session_nonce !== "string" ||
@@ -444,6 +648,21 @@ function validatePaginationTransition(input: {
       continuationParameter: null,
       providerCursor: null,
     };
+  } else if (
+    route.requiresOfficialCalendar &&
+    proof.officialCalendar !== null &&
+    metadata.slice_ordinal < proof.officialCalendar.businessDates.length - 1
+  ) {
+    if (metadata.pagination_state !== "CONTINUATION") {
+      throw new Error("official-calendar acquisition terminated before its final slice");
+    }
+    next = {
+      sliceDate: proof.officialCalendar.businessDates[metadata.slice_ordinal + 1]!,
+      sliceOrdinal: metadata.slice_ordinal + 1,
+      providerPageOrdinal: 0,
+      continuationParameter: null,
+      providerCursor: null,
+    };
   } else if (metadata.pagination_state !== "EXHAUSTED") {
     throw new Error("terminal provider page did not exhaust the segment");
   }
@@ -455,14 +674,17 @@ function validatePaginationTransition(input: {
     if (
       metadata.provider_pagination_state !== "EXHAUSTED" ||
       (route.queryMode === "calendar_month_sliced" &&
-        metadata.slice_date !== request.segment_end)
+        metadata.slice_date !== request.segment_end) ||
+      (route.requiresOfficialCalendar &&
+        metadata.slice_date !== proof.officialCalendar?.businessDates.at(-1))
     ) throw new Error("segment exhaustion is not at the authoritative terminal");
     return;
   }
   if (metadata.continuation_token === null) {
     throw new Error("non-terminal segment omitted continuation token");
   }
-  const responsePayload = continuationPayload(metadata.continuation_token);
+  const responsePayload = proof.responsePayload;
+  if (responsePayload === null) throw new Error("response continuation proof missing");
   const targetSessionNonce = currentPayload?.target_session_nonce ??
     responsePayload.target_session_nonce;
   if (
@@ -495,6 +717,7 @@ function validatePaginationTransition(input: {
     provider_cursor: next.providerCursor,
     previous_chain_digest: metadata.chain_digest,
     previous_request_digest: metadata.request_digest,
+    ...officialCalendarFields(proof.officialCalendar),
   }, "response");
 }
 
@@ -514,6 +737,7 @@ export async function validateAcquisitionPage(input: {
   const headers = responseHeaders(input.response);
   const metadata = metadataFromHeaders(headers);
   const resolved = await resolveGovernedRequest(input.request, input.environment, input.now);
+  const proof = await cursorProof(input.request, resolved.route, metadata);
   if (
     input.response.status !== 200 || metadata.upstream_http_status !== 200 ||
     metadata.evidence_state !== "RAW_PAGE" ||
@@ -533,17 +757,21 @@ export async function validateAcquisitionPage(input: {
     metadata.dataset_contract_digest !== resolved.route.datasetContractDigest ||
     metadata.coverage_policy_digest !== resolved.route.coveragePolicyDigest ||
     metadata.query_contract_digest !== resolved.route.queryContractDigest ||
-    metadata.query_digest !== await expectedQueryDigest(input.request, resolved.route, metadata) ||
+    metadata.query_digest !== await expectedQueryDigest(
+      input.request, resolved.route, metadata, proof,
+    ) ||
     metadata.body_digest !== await sha256Digest(input.body) ||
     headers["x-quant-acquisition-metadata-digest"] !== await canonicalDigest(metadata) ||
     !isSha256(metadata.chain_digest) ||
-    metadata.chain_digest !== await expectedChainDigest(metadata)
+    metadata.chain_digest !== await expectedChainDigest(metadata, proof.officialCalendar)
   ) throw new Error("acquisition page failed independent reconciliation");
 
   if (input.prior === null) {
     if (
       metadata.previous_request_digest !== null ||
-      metadata.previous_chain_digest !== await expectedPreviousChain(metadata)
+      metadata.previous_chain_digest !== await expectedPreviousChain(
+        metadata, proof.officialCalendar,
+      )
     ) throw new Error("acquisition genesis chain drifted");
   } else if (
     metadata.previous_request_digest !== input.prior.metadata.request_digest ||
@@ -567,6 +795,7 @@ export async function validateAcquisitionPage(input: {
     route: resolved.route,
     metadata,
     raw,
+    proof,
   });
   return { headers, metadata, rows: raw.rows };
 }
