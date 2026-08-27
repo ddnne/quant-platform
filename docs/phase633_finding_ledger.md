@@ -8,10 +8,13 @@
 Policy: [`architecture/adr_review_findings_sot.md`](architecture/adr_review_findings_sot.md).
 Status vocabulary: **OPEN** / **FIXED** / **DEFERRED** / **HOLD**.
 
-The merge gate is fail-closed: every P0 row must be `FIXED` and an independent
-review of the final candidate must report unresolved P0 = 0. A candidate patch
-does not change an `OPEN` row until its regression test and independent review
-pass.
+`OPEN` is the operational release state. A fail-closed inactive source
+implementation may merge, but remains `OPEN` until live provisioning,
+activation, reproof, and independent acceptance are evidenced. The pinned
+source-integration validator runs in required CI and does not authorize a
+release. The production release/positive-operation gate is fail-closed: every
+P0 row must be `FIXED` and independent review of the final candidate must report
+unresolved P0 = 0.
 
 ## Data / PIT / Receipt
 
@@ -20,8 +23,8 @@ pass.
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
 | D1 | Fixed allowlists were intersected with PIT master only on the first day | FIXED | `d99083f4`; daily listing/delisting invariant tests |
-| D2 | COMPLETE issuer accepted caller-originated parsed rows, counts, digests, and exhaustion state | OPEN | The source candidate removes the claims DTO/RPC seam, reparses authority-acquired raw, exact-compares D1 product rows, signs the product artifact digest, and rehashes the same exported bytes through sync, Ops projection, and READY. The shared `quant-structured` product bucket is not authority-exclusive or create-only, however, and READY does not yet refetch the live R2 object, so a post-write replacement remains undetected. Closure still requires an authority-owned immutable/versioned product evidence surface (or exact live object version/etag refetch), a fresh activated key, and eligible-dataset reproof. |
-| D3 | A same-UID importable signing oracle could mint signed SUCCESS outside governed ingestion | OPEN | The source candidate exposes only a closed dataset/segment request and keeps signing/finalization inside the authority-owned pipeline. Operational closure still requires the dedicated evidence-authority principal, fresh key activation, non-COMPLETE recovery path, and D2 product-object immutability proof. |
+| D2 | COMPLETE issuer accepted caller-originated parsed rows, counts, digests, and exhaustion state | OPEN | **SOURCE-CLOSED (inactive):** `9823744e`, `65454330`, `2bed5ea1`, `cbfaf6df`; no caller claims DTO; authority reacquires raw, canonical-parses/normalizes, exact-compares D1, and persists raw and product evidence create-only in its sole dedicated R2 bucket before atomic state/event recording. **OPERATIONAL-OPEN:** register/activate fresh environment-scoped keys, deploy distinct production/staging resources, reprove exact dependency segments, and verify the complete export/sync/projection/READY chain; v1/v2 and old receipts remain audit-only. |
+| D3 | A same-UID importable signing oracle could mint signed SUCCESS outside governed ingestion | OPEN | **SOURCE-CLOSED (inactive):** the closed Service Binding accepts only environment/dataset/segment/nonce; private Ed25519 minting/finalization remains inside the DO and no production importable signer exists. **OPERATIONAL-OPEN:** deploy the isolated no-public-route Worker/DO/binding, provision a fresh secret/key, activate a reviewed registry entry, retire legacy signers, and pass recovery smoke. |
 | D4 | JSDA publication labels were used as quote-effective dates | FIXED | `56d4fcf9`; `2002-08-02 -> 2002-08-01`, `2002-08-05 -> 2002-08-02` |
 | D7 | Signed receipt closure inputs could change between verification and serialization | FIXED | `3836f069`; exact receipt, digest and claims are frozen once before signing; independent review P0/P1=0 |
 
@@ -42,10 +45,10 @@ pass.
 | R2 | READY/coherence paths hard-coded one global V2 policy and rejected valid per-dataset V3 evidence | FIXED | `590a71d2`, `76d21575`; exact per-dataset policy triplets plus content-addressed local proof ID reverified from current ledgers/receipts/generation; independent review P0/P1=0 |
 | R3 | ExperimentPlan embedded `ready_snapshot_id=not-declared`, making later immutable snapshot equality circular | FIXED | `76240e89`; plan identity is snapshot-free and immutable snapshot binding occurs only in authorization; independent review passed |
 | R4 | exact-four bindings were caller-overridable | FIXED | `76240e89`; only the checked-in canonical four plans and exact plan/closure/profile digests reach the scheduler; independent attack tests passed |
-| R5 | Generic READY publication and a same-UID arbitrary READY signer remained reachable | OPEN | `fa01ff3c` removes product mint/sign/private-key paths, pins every consumer to the exact-four verify-only trust root, and verifies the same immutable sidecar bytes; the registry has zero active keys, so a dedicated READY authority must still independently recheck the authenticated mirror, exact closure and immutable copy before activation; Mass stays disabled |
+| R5 | Generic READY publication and a same-UID arbitrary READY signer remained reachable | OPEN | **SOURCE-CLOSED (inactive):** `fa01ff3c`, `2b582aee`; product is verify-only, exact-four consumers require an immutable sidecar plus caller-owned expected environment/resource, and the registry has zero active keys. **OPERATIONAL-OPEN:** provision the dedicated READY UID/socket/key/store, independently recheck the authenticated current mirror/closure/copy, and publish and verify one immutable exact-four READY; Mass stays disabled. |
 | R6 | Missing natural-key ledger could pass through fixture compatibility | FIXED | `d6a49e24`; production collector has no fixture/quality/raw override, exact run/build evidence is re-read fail-closed, fixture helpers are tests-only, and independent review reported P0/P1=0 |
-| R10 | Trader authorization remained a same-UID HOME-key signing oracle over caller-constructed approval decisions | OPEN | `4f9decc1` makes the product boundary verify-only and exact-binds READY/plan/closure/universe/spec/period/cost/gross/issued/expiry values; the registry has zero active keys, so the old key must still be retired and a separately permissioned human-approval authority provisioned |
-| R11 | Controlled execution duplicated authority lineage into a caller-writable HOME store | OPEN | `811d500c`, `b89cc23c`, `3601815e` verify the separate writer domain, exact four non-empty content digests and retained immutable bytes as evidence-only, with execution/promotion disabled; the canonical external writer principal/store is still unprovisioned |
+| R10 | Trader authorization remained a same-UID HOME-key signing oracle over caller-constructed approval decisions | OPEN | **SOURCE-CLOSED (inactive):** `4f9decc1`, `f1d377eb`; product is verify-only, WebAuthn challenge/signature/one-use/counter handling is atomic, `fmt=none` enrollment is honestly `UNATTESTED/PENDING_TRUST_REVIEW`, and active keys=0. **OPERATIONAL-OPEN:** bind a human/root-reviewed witness or trusted attestation to the exact registration/environment/RP, provision Trader UID/store, retire the HOME key, activate the credential, and pass human-approval smoke. |
+| R11 | Controlled execution duplicated authority lineage into a caller-writable HOME store | OPEN | **SOURCE-CLOSED (inactive):** `811d500c`, `b89cc23c`, `3601815e`; exact writer-domain/digest/immutable-byte checks hold, execution and promotion are false, and no active writer exists. **OPERATIONAL-OPEN:** provision the external writer UID/socket/fresh key/protected canonical store and accept one authorized Pilot artifact chain. |
 
 ### P1
 
@@ -65,9 +68,9 @@ pass.
 | C1 | Ops MCP was bound directly to production ingestion D1 | FIXED | `dbd5dc74`, `ca9c4410`; dedicated signed projection and quota D1 bindings |
 | C2 | Mass-to-Gateway authorization copied a shared bearer secret | FIXED | `de7915d1`; typed Service Binding RPC capability |
 | C3 | Caller-supplied CI receipts could impersonate the required gate | FIXED | `6421d89b`; native Cloudflare required check is authoritative |
-| C4 | Ops Projection signer accepted a publisher-authored evidence envelope | OPEN | `5fb40304` removes product signer injection and binds a one-shot read-only source handle to path/inode/schema/count/digest/cursor identity; a dedicated principal must still own the renderer/signing authority and independently recompute the full projection |
+| C4 | Ops Projection signer accepted a publisher-authored evidence envelope | OPEN | **SOURCE-CLOSED (inactive):** `5fb40304`; signer injection is removed and the dedicated renderer recomputes from a one-shot authenticated descriptor-bound mirror. **OPERATIONAL-OPEN:** first close A2's D1-sync recovery gap, then provision distinct D1-sync/Ops-projection UIDs, keys and stores and accept an independently rendered signed FRESH projection. |
 | C9 | Coverage V3 transition could omit required or failed segments and mark the remaining subset COMPLETE | FIXED | `18c2595d`; exact-five V3 inventory is regenerated at the authoritative build cutoff, every expected segment must bind one selected signed receipt, generic refresh/sync cannot mint first COMPLETE, and independent adversarial review reported P0/P1=0 |
-| C10 | Domain-separated production Coverage transition authority was not provisioned or callable | OPEN | `071a0022`, `faf326a5` provide a fail-closed verify/apply boundary with independent in-transaction V3 inventory/receipt remeasurement, full-state CAS, immutable tombstone, postcondition and pre-commit expiry checks; the public registry has zero active keys and the external signing principal/store remain unprovisioned |
+| C10 | Domain-separated production Coverage transition authority was not provisioned or callable | OPEN | **SOURCE-CLOSED (inactive):** `071a0022`, `faf326a5`; verify-only in-transaction exact V3 inventory/receipt remeasurement, full-state CAS, tombstone, postcondition and expiry checks hold, and active keys=0. **OPERATIONAL-OPEN:** provision the transition UID/key/rollback-resistant store, activate the registry, and run exact-five transition smoke against the trusted current mirror. |
 | C11 | Signed D1 or Ops document A could authorize a different downstream verified envelope B | FIXED | `80080d79`, `bf41f97b`, `222b9bd6`, `66f36ff4`; signed projection and READY evidence is frozen into exact one-shot opaque results; trusted renderer/signing remains PENDING under C4 |
 | C13 | Authenticated SQLite acquisition, import, schema, or path identity could switch from database A to B | FIXED | `c0008890`, `8c61f840`, `f6538eb4`, `e4ec03e1`, `ac2cb420`, `c72bda77`, `7997670e`, `6c048274`; retained `O_NOFOLLOW` descriptor, exact schema/content identity, DELETE journal and writer lock; independent review `cfc377b4` / tree `075ddb4a` P0/P1=0; same-UID raw pwrite remains unresolved under A2 |
 | C14 | COMPLETE publication could outlive final freshness, cursor, count, or policy postconditions | FIXED | `c7836bf4`, `ac2cb420`, `c72bda77`, `6c048274`; final descriptor-rendered state and exact policy postconditions are rechecked before publication; independent review `cfc377b4` / tree `075ddb4a` P0/P1=0 |
@@ -90,8 +93,8 @@ pass.
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
 | A1 | JSDA Queue repeatedly selected only the newest year/files and could not converge on history | FIXED | `7afffade`; stable child segment identity, cursor progress, retry/DLQ evidence |
-| A2 | Receipt, D1, Ops, READY, Trader, transition and execution keys had filenames but no complete principal/evidence-authority isolation | OPEN | 2026-08-26 read-only audit: 0/7 authorities provisioned; Receipt/D1/Ops/READY/Trader are contract-only `PARTIAL`, Coverage transition/Controlled execution are `NOT_PROVISIONED`; no dedicated account/service/socket/root-owned store or authority Cloudflare binding exists, all checked registries have active keys=0, and legacy PEM filenames are same-UID only; admin bootstrap, fresh in-authority keys and scoped identities remain required |
-| A7 | Release workflows did not consume the machine-readable P0 finding gate | FIXED | `6a8fc1f9`; one strict repo-pinned gate now runs before CI, deployment acceptance, and release evidence; the v3 evidence payload binds the exact ledger digest and OPEN-P0 inventory; focused behavioral tests cover duplicate/nonfinite JSON, closed schema/ID/severity/parity/policy attacks, and all four entrypoints |
+| A2 | Receipt, D1, Ops, READY, Trader, transition and execution keys had filenames but no complete principal/evidence-authority isolation | OPEN | **SOURCE-PARTIAL / OPERATIONAL-OPEN:** manifests/bootstrap/descriptor isolation and strict positive gate exist; 0/7 OS authorities are provisioned and all registries have active keys=0. D1 sync still couples a generic ledger transaction to remote/live-mirror side effects and is not crash-recoverable. First implement a phased short-transaction, same-directory temporary backup/apply/sign/fsync/atomic-replace and identity-based recovery; then an administrator bootstraps seven UIDs/sockets/root-owned stores/fresh in-authority keys and independently accepts each protocol. |
+| A7 | Release workflows did not consume the machine-readable P0 finding gate | FIXED | `6a8fc1f9`; the pinned source-integration validator runs before required CI; the strict gate runs before authenticated deployment acceptance, release evidence, authority activation/positive operations, READY/Trader/Controlled execution. The v3 evidence payload binds the exact ledger digest and OPEN-P0 inventory. |
 
 ### P1
 
@@ -104,24 +107,19 @@ pass.
 
 ## Integration gate
 
-The latest independent adversarial reviews accepted the code boundaries for D7,
-R3, R4, R5, R6, R7, R10, R11, R12, C9, C10, C11, C12, C13, C14 and C15.
-R5/R10/R11/C10 remain `OPEN` because verify-only containment with zero active
-keys is not an operational authority.
-A7 is structurally fixed by the single pinned finding-ledger authority and its
-four fail-closed release entrypoints. The Coverage/READY candidate still has P0
-rows D2, D3, R5, R10, R11, C4, C10 and A2 unresolved. D7 and the
-C11/C13/C14 descriptor boundary fixes do not substitute for the dedicated
-Receipt or trusted renderer/signing principals required by D2/D3/C4/A2. The
-source candidate's digest-preserving D1/R2 export chain does not make the shared
-`quant-structured` bucket authority-exclusive and cannot detect replacement of
-the live R2 object after its initial readback; that residual remains part of D2.
-Raw
-same-inode same-UID pwrite and private-consumer isolation remain under A2; C9
-and C12 likewise do not close the separately provisioned transition authority
-required by C10. Release, publication and Controlled Pilot remain blocked.
+The latest independent adversarial reviews accepted the fail-closed source
+boundaries listed above. That source-versus-operational distinction is prose in
+the v1 ledger, not a second machine-enforced status. D2, D3, R5, R10, R11, C4,
+C10 and A2 remain operationally `OPEN`; required source-integration CI may
+merge an inactive candidate, while the strict production/positive-operation
+gate rejects it. The D1-sync crash-atomicity gap is explicitly part of A2 and C4
+depends on it. Receipt uses a sole dedicated create-only/readback R2 evidence
+surface; live environment-scoped key activation and reproof still remain.
+Release, publication and Controlled Pilot remain blocked.
 R7's authority-owned append-only history and
 sidecar-retention residuals remain tracked by R5/A2 rather than reopening the
-fail-closed publication row. After all P0 rows are closed, run a fresh
+fail-closed publication row. PENDING service bootstrap needs a separately
+reviewed narrow gate; it must not be achieved by marking operational rows
+`FIXED` early or bypassing the strict gate. After all P0 rows are closed, run a fresh
 independent review against one immutable SHA, then run the full native
 CI-equivalent suite. Only that reviewed SHA may be pushed for the release PR.
