@@ -896,6 +896,7 @@ describe("Receipt Evidence Authority in workerd", () => {
     await runtimeEnv.DB.prepare(
       "DROP TRIGGER inject_master_pre_sign_failure",
     ).run();
+    await evictDurableObject(stub);
     globalThis.fetch = (async () => {
       throw new Error("recovery must not reacquire official calendar evidence");
     }) as typeof fetch;
