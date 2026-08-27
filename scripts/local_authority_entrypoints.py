@@ -197,7 +197,12 @@ def _hash_regular_fd(fd: int) -> tuple[str, os.stat_result]:
         before = os.fstat(fd)
     except OSError as exc:
         raise LocalAuthorityError("owned mirror descriptor is unavailable") from exc
-    if flags != os.O_RDONLY or not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
+    if (
+        flags != os.O_RDONLY
+        or not stat.S_ISREG(before.st_mode)
+        or before.st_size <= 0
+        or before.st_nlink != 1
+    ):
         raise LocalAuthorityError("owned mirror descriptor is not read-only SQLite")
     digest = hashlib.sha256()
     offset = 0
@@ -214,12 +219,14 @@ def _hash_regular_fd(fd: int) -> tuple[str, os.stat_result]:
         before.st_size,
         before.st_mtime_ns,
         before.st_ctime_ns,
+        before.st_nlink,
     ) != (
         after.st_dev,
         after.st_ino,
         after.st_size,
         after.st_mtime_ns,
         after.st_ctime_ns,
+        after.st_nlink,
     ):
         raise LocalAuthorityError("owned mirror descriptor changed while hashing")
     return "sha256:" + digest.hexdigest(), after
@@ -236,6 +243,7 @@ def _open_d1_owned_readonly_fd(db_path: Path) -> int:
         not stat.S_ISREG(info.st_mode)
         or info.st_uid != os.geteuid()
         or stat.S_IMODE(info.st_mode) & 0o077
+        or info.st_nlink != 1
     ):
         os.close(fd)
         raise LocalAuthorityError("d1_sync governed mirror ownership is unsafe")

@@ -31,6 +31,7 @@ from scripts.local_authority_entrypoints import (
     OpsProjectionRenderAndSign,
     ReadyPublishProfilePlanBound,
     _D1SyncAuditSealer,
+    _hash_regular_fd,
     _owned_mirror_evidence,
 )
 from tests.test_coverage_transition_authority import (
@@ -43,6 +44,20 @@ from tests.test_coverage_transition_authority import (
 from tests.test_d1_sync_signing import _install_external_key_registry
 from tests.test_ops_projection_connection_renderer import FIXED_NOW, _projection_source
 from tests.test_ops_projection_publish import _test_mirror_identity
+
+
+def test_owned_mirror_descriptor_rejects_hardlinked_file(tmp_path: Path) -> None:
+    mirror = tmp_path / "mirror.sqlite3"
+    mirror.write_bytes(b"governed mirror")
+    mirror.chmod(0o600)
+    hardlink = tmp_path / "mirror-copy.sqlite3"
+    os.link(mirror, hardlink)
+    fd = os.open(mirror, os.O_RDONLY)
+    try:
+        with pytest.raises(service_runtime.LocalAuthorityError, match="read-only SQLite"):
+            _hash_regular_fd(fd)
+    finally:
+        os.close(fd)
 
 
 def _custody(
@@ -100,6 +115,8 @@ def _context(
         ),
         request_id="direct-handler-test",
         request_digest="sha256:" + "0" * 64,
+        accepted_at_monotonic_ns=1,
+        processing_deadline_monotonic_ns=2**63 - 1,
     )
 
 

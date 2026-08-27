@@ -21,6 +21,8 @@ import sqlite3
 import stat
 import struct
 import sys
+import threading
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -46,6 +48,10 @@ RESPONSE_FORMAT = "local-authority-response/v1"
 LEDGER_SCHEMA_VERSION = 1
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 MAX_FILE_DESCRIPTORS = 1
+DEFAULT_IO_TIMEOUT_SECONDS = 5.0
+DEFAULT_PROCESSING_TIMEOUT_SECONDS = 30.0
+DEFAULT_ACCEPT_POLL_SECONDS = 0.5
+DEFAULT_MAX_CONCURRENT_CONNECTIONS = 16
 
 
 class LocalAuthorityError(RuntimeError):
@@ -269,6 +275,8 @@ class AuthorityRequestContext:
     grant: MethodGrant
     request_id: str
     request_digest: str
+    accepted_at_monotonic_ns: int
+    processing_deadline_monotonic_ns: int
 
     def __post_init__(self) -> None:
         if (
@@ -277,8 +285,19 @@ class AuthorityRequestContext:
             or not self.request_id
             or type(self.request_digest) is not str
             or not self.request_digest.startswith("sha256:")
+            or type(self.accepted_at_monotonic_ns) is not int
+            or self.accepted_at_monotonic_ns <= 0
+            or type(self.processing_deadline_monotonic_ns) is not int
+            or self.processing_deadline_monotonic_ns
+            <= self.accepted_at_monotonic_ns
         ):
             raise PeerAuthenticationError("authority request context is invalid")
+
+    def require_within_processing_deadline(self) -> None:
+        """Reject work that crossed the server-minted processing deadline."""
+
+        if time.monotonic_ns() >= self.processing_deadline_monotonic_ns:
+            raise LocalAuthorityError("authority processing deadline exceeded")
 
 
 class ExactMethodAcl:
@@ -747,13 +766,21 @@ def call_unix_authority(
     *,
     expected_server_uid: int,
     read_only_fd: int | None = None,
+    timeout_seconds: float = DEFAULT_IO_TIMEOUT_SECONDS,
 ) -> Mapping[str, Any]:
     """Call one authority while authenticating the server by kernel UID."""
 
     path = Path(socket_path)
     if path.is_symlink():
         raise PeerAuthenticationError("authority socket cannot be a symlink")
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or timeout_seconds <= 0
+    ):
+        raise LocalAuthorityError("authority call timeout is invalid")
     channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    channel.settimeout(float(timeout_seconds))
     try:
         channel.connect(str(path))
         peer = peer_identity(channel)
@@ -773,9 +800,13 @@ def call_unix_authority(
                 raise LocalAuthorityError(
                     "authority descriptor is unavailable"
                 ) from exc
-            if flags != os.O_RDONLY or not stat.S_ISREG(info.st_mode):
+            if (
+                flags != os.O_RDONLY
+                or not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+            ):
                 raise LocalAuthorityError(
-                    "authority descriptor must be read-only regular file"
+                    "authority descriptor must be one-link read-only regular file"
                 )
             rights = array.array("i", [read_only_fd])
             sent = channel.sendmsg(
@@ -806,6 +837,10 @@ def call_unix_authority(
             suffix = error_type if type(error_type) is str else "malformed"
             raise LocalAuthorityError(f"authority response rejected: {suffix}")
         return MappingProxyType(response["result"])
+    except socket.timeout as exc:
+        raise LocalAuthorityError("authority call I/O deadline exceeded") from exc
+    except OSError as exc:
+        raise LocalAuthorityError("authority call transport failed") from exc
     finally:
         channel.close()
 
@@ -826,11 +861,25 @@ class UnixAuthorityService:
         peers: PeerPrincipalRegistry,
         ledger: SQLiteAuthorityEventLedger,
         handlers: Mapping[str, AuthorityHandler],
+        io_timeout_seconds: float = DEFAULT_IO_TIMEOUT_SECONDS,
+        processing_timeout_seconds: float = DEFAULT_PROCESSING_TIMEOUT_SECONDS,
     ) -> None:
         self.authority_id = authority_id
         self.environment = environment
         self.peers = peers
         self.ledger = ledger
+        for name, value in {
+            "I/O": io_timeout_seconds,
+            "processing": processing_timeout_seconds,
+        }.items():
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or value <= 0
+            ):
+                raise LocalAuthorityError(f"authority {name} timeout is invalid")
+        self.io_timeout_seconds = float(io_timeout_seconds)
+        self.processing_timeout_ns = int(float(processing_timeout_seconds) * 1e9)
         self.acl = ExactMethodAcl(
             authority_id=authority_id,
             environment=environment,
@@ -845,6 +894,8 @@ class UnixAuthorityService:
         self.handlers = MappingProxyType(frozen_handlers)
 
     def serve_connection(self, channel: socket.socket) -> None:
+        accepted_at = time.monotonic_ns()
+        channel.settimeout(self.io_timeout_seconds)
         fds: tuple[int, ...] = ()
         request_id = "UNKNOWN"
         try:
@@ -871,13 +922,27 @@ class UnixAuthorityService:
                 grant=grant,
                 request_id=request.request_id,
                 request_digest=sha256_digest(dict(request.raw)),
+                accepted_at_monotonic_ns=accepted_at,
+                processing_deadline_monotonic_ns=(
+                    accepted_at + self.processing_timeout_ns
+                ),
             )
+
+            def produce() -> Mapping[str, Any]:
+                context.require_within_processing_deadline()
+                produced = handler(context, request.payload, fds)
+                # A result that outlived its processing lease is neither
+                # committed nor returned. Handlers receive this unforgeable
+                # context for checks around their own blocking side effects.
+                context.require_within_processing_deadline()
+                return produced
+
             result = self.ledger.execute_once(
                 request=dict(request.raw),
                 caller=caller,
                 operation=request.operation,
                 purpose=request.purpose,
-                produce=lambda: handler(context, request.payload, fds),
+                produce=produce,
             )
             response = {
                 "format": RESPONSE_FORMAT,
@@ -885,7 +950,7 @@ class UnixAuthorityService:
                 "status": "COMMITTED",
                 "result": dict(result),
             }
-        except (LocalAuthorityError, FindingLedgerError) as exc:
+        except (LocalAuthorityError, FindingLedgerError, socket.timeout) as exc:
             response = {
                 "format": RESPONSE_FORMAT,
                 "request_id": request_id,
@@ -895,7 +960,67 @@ class UnixAuthorityService:
         finally:
             for fd in fds:
                 os.close(fd)
-        _send_frame(channel, response)
+        channel.settimeout(self.io_timeout_seconds)
+        try:
+            _send_frame(channel, response)
+        except (OSError, socket.timeout):
+            # Abandoned/non-reading peers cannot hold the daemon and transport
+            # failure never creates a positive authority event.
+            return
+
+
+class UnixAuthorityConnectionServer:
+    """Bounded connection dispatcher with peer-level failure isolation."""
+
+    def __init__(
+        self,
+        service: UnixAuthorityService,
+        *,
+        max_concurrent_connections: int = DEFAULT_MAX_CONCURRENT_CONNECTIONS,
+        accept_poll_seconds: float = DEFAULT_ACCEPT_POLL_SECONDS,
+    ) -> None:
+        if (
+            type(max_concurrent_connections) is not int
+            or max_concurrent_connections <= 0
+            or isinstance(accept_poll_seconds, bool)
+            or not isinstance(accept_poll_seconds, (int, float))
+            or accept_poll_seconds <= 0
+        ):
+            raise LocalAuthorityError("authority connection limits are invalid")
+        self.service = service
+        self.accept_poll_seconds = float(accept_poll_seconds)
+        self._slots = threading.BoundedSemaphore(max_concurrent_connections)
+
+    def _serve_isolated(self, channel: socket.socket) -> None:
+        try:
+            self.service.serve_connection(channel)
+        finally:
+            channel.close()
+            self._slots.release()
+
+    def serve(
+        self,
+        listener: socket.socket,
+        *,
+        stop_event: threading.Event | None = None,
+    ) -> None:
+        if listener.family != socket.AF_UNIX:
+            raise LocalAuthorityError("authority listener must be AF_UNIX")
+        listener.settimeout(self.accept_poll_seconds)
+        while stop_event is None or not stop_event.is_set():
+            try:
+                channel, _ = listener.accept()
+            except socket.timeout:
+                continue
+            if not self._slots.acquire(blocking=False):
+                channel.close()
+                continue
+            threading.Thread(
+                target=self._serve_isolated,
+                args=(channel,),
+                name=f"{self.service.authority_id}-authority-peer",
+                daemon=True,
+            ).start()
 
 
 def require_declared_service_identity(

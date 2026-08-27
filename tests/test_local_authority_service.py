@@ -9,6 +9,7 @@ import socket
 import sqlite3
 import struct
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -359,3 +360,84 @@ def test_group_connectable_unix_socket_still_rejects_unmapped_peer_uid(
     assert response["status"] == "REJECTED"
     assert response["request_id"] == "UNKNOWN"
     assert called is False
+
+
+def test_partial_authorized_peer_cannot_stall_another_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        authority, "require_pinned_finding_ledger_gate", lambda: object()
+    )
+    socket_path = Path("/tmp") / f"qp-auth-isolated-{os.getpid()}.sock"
+    socket_path.unlink(missing_ok=True)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.listen(4)
+    service = authority.UnixAuthorityService(
+        authority_id="ready",
+        environment="staging",
+        peers=authority.PeerPrincipalRegistry({os.geteuid(): "ready_publisher"}),
+        ledger=_ledger(tmp_path),
+        handlers={
+            "ready:publish_profile_plan_bound": lambda _context, payload, _fds: {
+                "status": "SIGNED",
+                "snapshot_id": payload["snapshot_id"],
+            }
+        },
+        io_timeout_seconds=0.2,
+        processing_timeout_seconds=1.0,
+    )
+    stop = threading.Event()
+    dispatcher = authority.UnixAuthorityConnectionServer(
+        service, max_concurrent_connections=2, accept_poll_seconds=0.01
+    )
+    server = threading.Thread(
+        target=dispatcher.serve, args=(listener,), kwargs={"stop_event": stop}
+    )
+    server.start()
+    partial = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        partial.connect(str(socket_path))
+        partial.sendall(b"\x00\x00")
+        result = authority.call_unix_authority(
+            socket_path,
+            _request("independent-request"),
+            expected_server_uid=os.geteuid(),
+            timeout_seconds=1.0,
+        )
+        assert result["status"] == "SIGNED"
+    finally:
+        partial.close()
+        stop.set()
+        server.join(timeout=2)
+        listener.close()
+        socket_path.unlink(missing_ok=True)
+    assert not server.is_alive()
+
+
+def test_processing_deadline_rejects_result_without_ledger_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        authority, "require_pinned_finding_ledger_gate", lambda: object()
+    )
+    ledger = _ledger(tmp_path)
+
+    def delayed_handler(_context, _payload, _fds):
+        time.sleep(0.03)
+        return {"status": "MUST_NOT_COMMIT"}
+
+    service = authority.UnixAuthorityService(
+        authority_id="ready",
+        environment="staging",
+        peers=authority.PeerPrincipalRegistry({os.geteuid(): "ready_publisher"}),
+        ledger=ledger,
+        handlers={"ready:publish_profile_plan_bound": delayed_handler},
+        io_timeout_seconds=1.0,
+        processing_timeout_seconds=0.01,
+    )
+    response = _serve_one(service, _request("expired-processing"))
+    assert response["status"] == "REJECTED"
+    assert response["error"] == "LocalAuthorityError"
+    with sqlite3.connect(ledger.path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM authority_events").fetchone() == (0,)

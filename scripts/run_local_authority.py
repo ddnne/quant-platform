@@ -41,6 +41,7 @@ from scripts.local_authority_service import (
     LocalAuthorityError,
     PeerPrincipalRegistry,
     SQLiteAuthorityEventLedger,
+    UnixAuthorityConnectionServer,
     UnixAuthorityService,
     require_declared_service_identity,
 )
@@ -335,12 +336,8 @@ def serve_forever(*, authority_id: str, environment: str) -> NoReturn:
         "socket_path"
     ]
     listener = launchd_listener(expected_socket_path=socket_path)
-    while True:
-        channel, _ = listener.accept()
-        try:
-            service.serve_connection(channel)
-        finally:
-            channel.close()
+    UnixAuthorityConnectionServer(service).serve(listener)
+    raise AssertionError("authority connection server returned unexpectedly")
 
 
 def main(argv: list[str] | None = None) -> int:
