@@ -59,7 +59,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:6ba1ee2ccf0c5723a77f4a0461a3683fca57fdf566d77a7fd4a4489780f020a9",
+  "manifest_digest": "sha256:cc4df6f2e4836dce36f0f19dcc0067f23b8deda761ea45591d7c7b3f4381e6d5",
   "schema_version": "cloudflare-active-worker-bindings/v8",
   "test_harness_surfaces": {
     "ingestion-jsda": {
