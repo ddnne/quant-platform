@@ -7,10 +7,12 @@ import json
 import os
 import plistlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from scripts import bootstrap_local_authorities as bootstrap
+from scripts import local_authority_provisioning as provisioning
 
 
 def test_default_plan_is_non_mutating_and_covers_six_local_principals() -> None:
@@ -40,6 +42,117 @@ def test_default_plan_is_non_mutating_and_covers_six_local_principals() -> None:
         "service_user": "qp_production_controlled_pilot_orchestrator",
         "runtime": "local_os_disabled_service",
     }
+    controlled = next(
+        row
+        for row in plan["deployments"]
+        if row["authority_id"] == "controlled_execution"
+    )
+    assert controlled["custody_reader_group"] == (
+        "qp_production_controlled_execution_readers"
+    )
+    assert "ensure_controlled_only_custody_reader_group" in controlled["actions"]
+    assert all(
+        row["custody_reader_group"] is None
+        for row in plan["deployments"]
+        if row["authority_id"] != "controlled_execution"
+    )
+
+
+def test_prepare_users_provisions_controlled_only_custody_reader_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = {
+        "authority_id": "controlled_execution",
+        "environment": "staging",
+        "service_user": "qp_controlled",
+        "caller_group": "qp_staging_controlled_execution_callers",
+        "custody_reader_group": "qp_staging_controlled_execution_readers",
+        "service_dir": "/protected/controlled",
+        "declared_mode": "PENDING_NO_KEY",
+    }
+    account = SimpleNamespace(
+        pw_name="qp_controlled",
+        pw_uid=503,
+        pw_gid=20,
+        pw_dir="/var/empty",
+        pw_shell="/usr/bin/false",
+    )
+    memberships: list[tuple[str, tuple[str, ...], str]] = []
+    monkeypatch.setattr(provisioning, "_require_human_root", lambda: None)
+    monkeypatch.setattr(provisioning, "_deployments", lambda _selected: [row])
+    monkeypatch.setattr(provisioning, "_local_peer_rows", lambda _selected: [])
+    monkeypatch.setattr(provisioning, "_ensure_group", lambda: 20)
+    monkeypatch.setattr(provisioning, "_used_ids", lambda *_args: set())
+    monkeypatch.setattr(
+        provisioning, "_ensure_directory", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(provisioning, "_ensure_user", lambda *_args, **_kwargs: 503)
+    monkeypatch.setattr(
+        provisioning, "_ensure_caller_group", lambda *_args, **_kwargs: 30
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "_ensure_custody_reader_group",
+        lambda *_args, **_kwargs: 40,
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "_set_exact_group_members",
+        lambda name, *, usernames, purpose: memberships.append(
+            (name, usernames, purpose)
+        ),
+    )
+    monkeypatch.setattr(provisioning.pwd, "getpwnam", lambda _name: account)
+    monkeypatch.setattr(
+        provisioning,
+        "require_controlled_custody_reader_group",
+        lambda **_kwargs: None,
+    )
+
+    result = provisioning.apply_plan("staging")
+
+    assert memberships == [
+        (
+            "qp_staging_controlled_execution_readers",
+            ("qp_controlled",),
+            "custody reader",
+        )
+    ]
+    assert result["deployments"][0]["custody_reader_group_gid"] == 40
+
+
+def test_prepare_users_rejects_shared_gid_for_custody_reader_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = {
+        "authority_id": "controlled_execution",
+        "environment": "staging",
+        "service_user": "qp_controlled",
+        "caller_group": "qp_staging_controlled_execution_callers",
+        "custody_reader_group": "qp_staging_controlled_execution_readers",
+        "service_dir": "/protected/controlled",
+        "declared_mode": "PENDING_NO_KEY",
+    }
+    monkeypatch.setattr(provisioning, "_require_human_root", lambda: None)
+    monkeypatch.setattr(provisioning, "_deployments", lambda _selected: [row])
+    monkeypatch.setattr(provisioning, "_local_peer_rows", lambda _selected: [])
+    monkeypatch.setattr(provisioning, "_ensure_group", lambda: 20)
+    monkeypatch.setattr(provisioning, "_used_ids", lambda *_args: set())
+    monkeypatch.setattr(
+        provisioning, "_ensure_directory", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(provisioning, "_ensure_user", lambda *_args, **_kwargs: 503)
+    monkeypatch.setattr(
+        provisioning, "_ensure_caller_group", lambda *_args, **_kwargs: 30
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "_ensure_custody_reader_group",
+        lambda *_args, **_kwargs: 20,
+    )
+
+    with pytest.raises(bootstrap.BootstrapError, match="reuses another capability"):
+        provisioning.apply_plan("staging")
 
 
 def test_cli_defaults_to_json_dry_run(capsys: pytest.CaptureFixture[str]) -> None:

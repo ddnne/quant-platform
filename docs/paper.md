@@ -96,10 +96,17 @@ execution は root-owned snapshot/projection を一度だけ開いて保持す�
 `PinnedControlledSnapshotV2` activation path に限定する。READY manifest の
 `snapshot_id` が `data_snapshot_id` になる。
 
-Quant Data adapter には現在も describe した READY の `db_path` を再度開く別 read plane が
-あり、`VerifiedPilotReadyPublication` も shallow object/path を公開する。このため一般的な
-production read integrity は主張しない。READY から Controlled store への root-owned atomic
-install と full authority-chain acceptance は A2/R5/R11 の OPEN 条件である。publication
+Quant Data adapter の database-reading method は、検証済み READY inode を descriptor で保持し、
+read 後の identity/digest 再検証が終わるまで結果を返さない。`VerifiedPilotReadyPublication`
+自体は shallow object/path を公開し、同一 UID が保持済み writable descriptor で一時改変する
+脅威までは排除しないため、一般的な production read integrity はまだ主張しない。READY から
+Controlled への root-only create-only/content-addressed atomic custody installer と activation-v3
+manifest verifier は source に存在する。install/activation の双方で保存済み projection を current
+verifier へ再投入し、attestation/document/file digest の一致を要求する。custody の mode `0440`
+group は共有 service primary group や Trader も属する Controlled caller group ではなく、
+Controlled service user だけを exact member とする canonical supplementary reader group に
+固定する。実 UID/GID 下の install と full authority-chain
+acceptance は未実施であり A2/R5/R11 の OPEN 条件である。publication
 lifecycle、coverage ledger、strict quality gate は
 [`phase6_snapshot_publication.md`](phase6_snapshot_publication.md) を参照。
 

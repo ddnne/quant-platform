@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import grp
 import os
 import platform
+import pwd
 import stat
 import subprocess
 from collections.abc import Iterable
@@ -58,6 +60,72 @@ def _environments(selected: str) -> tuple[str, ...]:
     return ("staging", "production") if selected == "all" else (selected,)
 
 
+def controlled_custody_reader_group(environment: str) -> str:
+    """Return the one supplementary group allowed to read Controlled custody."""
+
+    if environment not in {"staging", "production"}:
+        raise BootstrapError("Controlled custody environment is not declared")
+    return f"qp_{environment}_controlled_execution_readers"
+
+
+def require_controlled_custody_reader_group(
+    *,
+    row: dict[str, Any],
+    service_account: pwd.struct_passwd,
+) -> tuple[grp.struct_group, grp.struct_group, grp.struct_group]:
+    """Resolve the exact service, socket, and custody groups fail closed.
+
+    Custody is a supplementary capability held only by the Controlled service
+    user.  It must never reuse either the authorities' shared primary group or
+    the Controlled socket caller group, whose membership also includes Trader.
+    """
+
+    environment = row.get("environment")
+    expected_reader_name = (
+        controlled_custody_reader_group(environment)
+        if type(environment) is str
+        else None
+    )
+    if (
+        row.get("authority_id") != "controlled_execution"
+        or row.get("service_user") != service_account.pw_name
+        or type(row.get("caller_group")) is not str
+        or row.get("custody_reader_group") != expected_reader_name
+    ):
+        raise BootstrapError("Controlled custody reader declaration drifted")
+    try:
+        service_group = grp.getgrnam(SERVICE_GROUP)
+        caller_group = grp.getgrnam(row["caller_group"])
+        reader_group = grp.getgrnam(row["custody_reader_group"])
+    except KeyError as exc:
+        raise BootstrapError(
+            "Controlled custody reader group is not provisioned"
+        ) from exc
+    if (
+        type(service_group.gr_gid) is not int
+        or type(caller_group.gr_gid) is not int
+        or type(reader_group.gr_gid) is not int
+        or min(service_group.gr_gid, caller_group.gr_gid, reader_group.gr_gid) <= 0
+        or len(
+            {service_group.gr_gid, caller_group.gr_gid, reader_group.gr_gid}
+        ) != 3
+        or service_account.pw_uid <= 0
+        or service_account.pw_gid != service_group.gr_gid
+        or reader_group.gr_name != expected_reader_name
+        or set(reader_group.gr_mem) != {service_account.pw_name}
+    ):
+        raise BootstrapError(
+            "Controlled custody reader group is not an isolated exact membership"
+        )
+    try:
+        reader_by_gid = grp.getgrgid(reader_group.gr_gid)
+    except KeyError as exc:
+        raise BootstrapError("Controlled custody reader GID is not resolvable") from exc
+    if reader_by_gid.gr_name != expected_reader_name:
+        raise BootstrapError("Controlled custody reader GID reverse mapping drifted")
+    return service_group, caller_group, reader_group
+
+
 def _deployments(selected: str) -> list[dict[str, Any]]:
     manifest = load_and_validate_manifest()
     rows: list[dict[str, Any]] = []
@@ -110,6 +178,11 @@ def _deployments(selected: str) -> list[dict[str, Any]]:
                         / f"{authority_id}.json"
                     ),
                     "caller_group": (f"qp_{environment}_{authority_id}_callers"),
+                    "custody_reader_group": (
+                        controlled_custody_reader_group(environment)
+                        if authority_id == "controlled_execution"
+                        else None
+                    ),
                     "launchd_label": (
                         f"com.quant-platform.{environment}.{authority_id}"
                     ),
@@ -174,6 +247,11 @@ def build_plan(selected: str) -> dict[str, Any]:
                     "ensure_disabled_service_user",
                     "ensure_service_owned_mode_0700_directory",
                     "reserve_launchd_socket_parent_only",
+                    *(
+                        ["ensure_controlled_only_custody_reader_group"]
+                        if row["custody_reader_group"] is not None
+                        else []
+                    ),
                 ],
             }
             for row in rows

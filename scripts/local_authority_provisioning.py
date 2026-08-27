@@ -46,6 +46,7 @@ from scripts.local_authority_bootstrap_common import (
     _safe_file_state,
     _write_exclusive,
     _write_root_owned_file,
+    require_controlled_custody_reader_group,
 )
 from scripts.local_authority_runtime_bundle import _load_runtime_bundle_manifest
 from scripts.local_authority_service import SQLiteAuthorityEventLedger
@@ -134,11 +135,29 @@ def _ensure_caller_group(name: str, *, used_ids: set[int]) -> int:
     return entry.gr_gid
 
 
-def _set_exact_caller_group_members(
-    group_name: str, *, usernames: tuple[str, ...]
+def _ensure_custody_reader_group(name: str, *, used_ids: set[int]) -> int:
+    if not _record_exists("Groups", name):
+        group_id = _next_id(used_ids)
+        path = f"/Groups/{name}"
+        _dscl_create(path, "PrimaryGroupID", str(group_id))
+        _dscl_create(path, "RealName", f"quant-platform custody readers {name}")
+        _dscl_create(path, "Password", "*")
+    try:
+        entry = grp.getgrnam(name)
+    except KeyError as exc:
+        raise BootstrapError(f"custody reader group was not visible: {name}") from exc
+    if _dscl_values("Groups", name, "PrimaryGroupID") != (
+        str(entry.gr_gid),
+    ) or _dscl_values("Groups", name, "Password") != ("*",):
+        raise BootstrapError(f"existing custody reader group is unsafe: {name}")
+    return entry.gr_gid
+
+
+def _set_exact_group_members(
+    group_name: str, *, usernames: tuple[str, ...], purpose: str
 ) -> None:
     if not usernames or len(set(usernames)) != len(usernames):
-        raise BootstrapError("caller group membership is invalid")
+        raise BootstrapError(f"{purpose} group membership is invalid")
     result = _run(
         [
             "/usr/bin/dscl",
@@ -150,9 +169,23 @@ def _set_exact_caller_group_members(
         ]
     )
     if result.returncode != 0:
-        raise BootstrapError(f"cannot set exact caller group membership: {group_name}")
+        raise BootstrapError(
+            f"cannot set exact {purpose} group membership: {group_name}"
+        )
     if set(_dscl_values("Groups", group_name, "GroupMembership")) != set(usernames):
-        raise BootstrapError(f"caller group membership did not converge: {group_name}")
+        raise BootstrapError(
+            f"{purpose} group membership did not converge: {group_name}"
+        )
+
+
+def _set_exact_caller_group_members(
+    group_name: str, *, usernames: tuple[str, ...]
+) -> None:
+    _set_exact_group_members(
+        group_name,
+        usernames=usernames,
+        purpose="caller",
+    )
 
 
 def _ensure_user(username: str, *, group_id: int, used_ids: set[int]) -> int:
@@ -209,6 +242,24 @@ def apply_plan(selected: str) -> dict[str, Any]:
         caller_group_id = _ensure_caller_group(
             row["caller_group"], used_ids=used_group_ids
         )
+        custody_reader_group_id = None
+        if row["custody_reader_group"] is not None:
+            custody_reader_group_id = _ensure_custody_reader_group(
+                row["custody_reader_group"], used_ids=used_group_ids
+            )
+            if custody_reader_group_id in {group_id, caller_group_id}:
+                raise BootstrapError(
+                    "Controlled custody reader group reuses another capability GID"
+                )
+            _set_exact_group_members(
+                row["custody_reader_group"],
+                usernames=(row["service_user"],),
+                purpose="custody reader",
+            )
+            require_controlled_custody_reader_group(
+                row=row,
+                service_account=pwd.getpwnam(row["service_user"]),
+            )
         _ensure_directory(
             PROTECTED_ROOT / row["environment"],
             uid=0,
@@ -229,6 +280,8 @@ def apply_plan(selected: str) -> dict[str, Any]:
                 "uid": uid,
                 "caller_group": row["caller_group"],
                 "caller_group_gid": caller_group_id,
+                "custody_reader_group": row["custody_reader_group"],
+                "custody_reader_group_gid": custody_reader_group_id,
                 "service_directory_prepared": True,
                 "key_created": False,
                 "launchd_loaded": False,
@@ -643,13 +696,31 @@ def install_runtime_configs(
                 raise BootstrapError(
                     f"runtime governed resource is absent: {resource_path}"
                 ) from exc
-        _ensure_caller_group(
+        caller_group_id = _ensure_caller_group(
             row["caller_group"], used_ids=_used_ids("Groups", "PrimaryGroupID")
         )
         _set_exact_caller_group_members(
             row["caller_group"],
             usernames=tuple(sorted({row["service_user"], *peer_usernames})),
         )
+        if row["custody_reader_group"] is not None:
+            custody_reader_group_id = _ensure_custody_reader_group(
+                row["custody_reader_group"],
+                used_ids=_used_ids("Groups", "PrimaryGroupID"),
+            )
+            if custody_reader_group_id in {group_id, caller_group_id}:
+                raise BootstrapError(
+                    "Controlled custody reader group reuses another capability GID"
+                )
+            _set_exact_group_members(
+                row["custody_reader_group"],
+                usernames=(row["service_user"],),
+                purpose="custody reader",
+            )
+            require_controlled_custody_reader_group(
+                row=row,
+                service_account=authority_entry,
+            )
         content = canonical_json_bytes(config) + b"\n"
         changed = _write_root_owned_file(
             Path(row["runtime_config_path"]),
@@ -869,6 +940,17 @@ def load_plists(selected: str, *, apply: bool) -> dict[str, Any]:
     _require_positive_activation()
     bundle = _load_runtime_bundle_manifest()
     for row, job in zip(rows, result["jobs"], strict=True):
+        if row["custody_reader_group"] is not None:
+            try:
+                service_account = pwd.getpwnam(row["service_user"])
+            except KeyError as exc:
+                raise BootstrapError(
+                    "Controlled service user is absent before launchd load"
+                ) from exc
+            require_controlled_custody_reader_group(
+                row=row,
+                service_account=service_account,
+            )
         installed = Path(row["installed_plist_path"])
         if installed.read_bytes() != _render_plist(row, bundle):
             raise BootstrapError("installed launchd plist differs from reviewed render")
