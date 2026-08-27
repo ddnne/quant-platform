@@ -171,6 +171,9 @@ _ATTEMPT_EVIDENCE_SET_FORMAT = (
     "local-authority-staged-canary-attempt-evidence-set/v1"
 )
 _ANCHOR_CANDIDATE_FORMAT = "local-authority-staged-canary-anchor-candidate/v2"
+_CONTROLLED_QUIESCENCE_BLOCKER = (
+    "CONTROLLED_WAL_QUIESCENCE_SOURCE_READY_NOT_OPERATIONALLY_ACCEPTED"
+)
 _RESOURCE_TOP_FIELDS = {
     "format",
     "authority_id",
@@ -1353,7 +1356,7 @@ def _operational_hold(*, authority_id: str, environment: str) -> Mapping[str, An
         )
     blockers = ["EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED"]
     if authority_id == "controlled_execution":
-        blockers.append("CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED")
+        blockers.append(_CONTROLLED_QUIESCENCE_BLOCKER)
     raise StagedCanaryError("staged canary operational HOLD: " + ",".join(blockers))
 
 
@@ -1370,9 +1373,7 @@ def plan(*, authority_id: str, environment: str) -> Mapping[str, Any]:
         )
     operational_blockers = ["EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED"]
     if authority_id == "controlled_execution":
-        operational_blockers.append(
-            "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED"
-        )
+        operational_blockers.append(_CONTROLLED_QUIESCENCE_BLOCKER)
     return {
         "format": "local-authority-staged-canary-plan/v1",
         "mode": "DRY_RUN",
@@ -1508,7 +1509,7 @@ def audit() -> Mapping[str, Any]:
             "operational_state": "HOLD",
             "operational_blockers": [
                 "EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED",
-                "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED",
+                _CONTROLLED_QUIESCENCE_BLOCKER,
             ],
             "strict_boundaries": dict(STRICT_BOUNDARIES),
             "canonical_journal_path": str(CANONICAL_JOURNAL_PATH),

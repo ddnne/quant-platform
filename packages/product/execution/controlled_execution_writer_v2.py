@@ -1,6 +1,6 @@
 """Stable facade for split Controlled validation, IPC, store, and activation."""
 
-from execution.exact_four_codec import _strict_json_loads
+from execution.exact_four_codec import ExactFourAuthorityPending, _strict_json_loads
 from scripts.finding_ledger_gate import require_pinned_finding_ledger_gate
 
 from execution.controlled_execution_activation_v2 import (
@@ -23,22 +23,28 @@ from execution.controlled_execution_types_v2 import (
 
 
 def open_live_controlled_execution_writer_v2() -> SQLiteControlledExecutionWriterV2:
-    """Observe activated state; the returned object cannot launch positive ops."""
+    """Reject the legacy public opener before activation or SQLite access."""
 
-    return _load_live_controlled_execution_writer_v2(server_bound=False)
+    raise ExactFourAuthorityPending(CONTROLLED_WRITER_LIVE_STATE)
 
 
 def _open_server_bound_controlled_execution_writer_v2(
+    *, lifecycle: object | None = None
 ) -> SQLiteControlledExecutionWriterV2:
     """Execution adapter hook used only inside UnixAuthorityService."""
 
-    return _load_live_controlled_execution_writer_v2(server_bound=True)
+    return _load_live_controlled_execution_writer_v2(
+        server_bound=True,
+        lifecycle=lifecycle,
+    )
 
 
-def _open_server_bound_controlled_execution_runtime_v2():
+def _open_server_bound_controlled_execution_runtime_v2(
+    *, lifecycle: object | None = None
+):
     """Build the server-only sealed budget/snapshot/provider runtime."""
 
-    return _load_live_controlled_execution_runtime_v2()
+    return _load_live_controlled_execution_runtime_v2(lifecycle=lifecycle)
 
 
 __all__ = [

@@ -602,7 +602,7 @@ def test_public_cli_has_no_generic_permit_completion_or_identity_inputs() -> Non
     )
     assert controlled["operational_blockers"] == [
         "EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED",
-        "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED",
+        "CONTROLLED_WAL_QUIESCENCE_SOURCE_READY_NOT_OPERATIONALLY_ACCEPTED",
     ]
 
 
@@ -795,12 +795,14 @@ def test_public_run_is_hold_for_every_declared_authority(
     ) as exc_info:
         manager.run_canary(authority_id=authority_id, environment="staging")
     if authority_id == "controlled_execution":
-        assert "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED" in str(
-            exc_info.value
+        assert (
+            "CONTROLLED_WAL_QUIESCENCE_SOURCE_READY_NOT_OPERATIONALLY_ACCEPTED"
+            in str(exc_info.value)
         )
     else:
-        assert "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED" not in str(
-            exc_info.value
+        assert (
+            "CONTROLLED_WAL_QUIESCENCE_SOURCE_READY_NOT_OPERATIONALLY_ACCEPTED"
+            not in str(exc_info.value)
         )
     assert not isolated_journal.exists()
 
@@ -1519,7 +1521,7 @@ def test_audit_opens_the_existing_canonical_journal_in_sqlite_read_only_mode(
     assert result["operational_state"] == "HOLD"
     assert result["operational_blockers"] == [
         "EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED",
-        "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED",
+        "CONTROLLED_WAL_QUIESCENCE_SOURCE_READY_NOT_OPERATIONALLY_ACCEPTED",
     ]
 
 
@@ -1826,7 +1828,8 @@ def test_controlled_inactive_canary_audits_exact_store_via_pinned_descriptor(
         relying_parties=relying_parties,
         credentials=credentials,
         server_bound=False,
-        test_mode=False,
+        test_mode=True,
+        lifecycle=None,
         _token=_WRITER_CONSTRUCTION_TOKEN,
     )
     __import__("gc").collect()
@@ -1930,9 +1933,11 @@ def test_controlled_live_writer_rejects_unsafe_store_before_writer_construction(
     unsafe_kind: str,
 ) -> None:
     from execution import controlled_execution_activation_v2 as activation
+    from execution import controlled_execution_quiescence_v2 as quiescence
 
     store = tmp_path / "controlled.sqlite3"
     target = tmp_path / "attacker.sqlite3"
+    tmp_path.chmod(0o700)
     target.write_bytes(b"attacker")
     target.chmod(0o600)
     if unsafe_kind == "symlink":
@@ -1966,8 +1971,22 @@ def test_controlled_live_writer_rejects_unsafe_store_before_writer_construction(
         "SQLiteControlledExecutionWriterV2",
         unexpected_writer,
     )
-    with pytest.raises(Exception, match="private single-link"):
-        activation._load_live_controlled_execution_writer_v2(server_bound=False)
+    lease = quiescence._acquire_lifecycle_lock(
+        quiescence._ControlledStoreIdentityV2(
+            environment="staging",
+            service_uid=os.geteuid(),
+            store_path=store,
+        ),
+        require_marker_absent=True,
+    )
+    try:
+        with pytest.raises(Exception, match="private single-link"):
+            activation._load_live_controlled_execution_writer_v2(
+                server_bound=True,
+                lifecycle=lease,
+            )
+    finally:
+        lease.close()
     assert opened is False
 
 
@@ -1976,8 +1995,10 @@ def test_controlled_live_writer_provisions_private_store_and_pins_initial_inode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from execution import controlled_execution_activation_v2 as activation
+    from execution import controlled_execution_quiescence_v2 as quiescence
 
     store = tmp_path / "controlled.sqlite3"
+    tmp_path.chmod(0o700)
     material = (
         "staging",
         store,
@@ -2006,27 +2027,47 @@ def test_controlled_live_writer_provisions_private_store_and_pins_initial_inode(
         "SQLiteControlledExecutionWriterV2",
         observe_private_store,
     )
-    assert (
-        activation._load_live_controlled_execution_writer_v2(server_bound=False)
-        is marker
+    lease = quiescence._acquire_lifecycle_lock(
+        quiescence._ControlledStoreIdentityV2(
+            environment="staging",
+            service_uid=os.geteuid(),
+            store_path=store,
+        ),
+        require_marker_absent=True,
     )
+    try:
+        assert (
+            activation._load_live_controlled_execution_writer_v2(
+                server_bound=True,
+                lifecycle=lease,
+            )
+            is marker
+        )
 
-    initial = store.lstat()
+        initial = store.lstat()
 
-    def swap_store(*_args: object, **_kwargs: object) -> object:
-        store.unlink()
-        store.write_bytes(b"replacement")
-        store.chmod(0o600)
-        return marker
+        def swap_store(*_args: object, **_kwargs: object) -> object:
+            store.unlink()
+            store.write_bytes(b"replacement")
+            store.chmod(0o600)
+            return marker
 
-    monkeypatch.setattr(
-        activation,
-        "SQLiteControlledExecutionWriterV2",
-        swap_store,
-    )
-    with pytest.raises(Exception, match="changed during live writer initialization"):
-        activation._load_live_controlled_execution_writer_v2(server_bound=False)
-    assert store.lstat().st_ino != initial.st_ino
+        monkeypatch.setattr(
+            activation,
+            "SQLiteControlledExecutionWriterV2",
+            swap_store,
+        )
+        with pytest.raises(
+            Exception,
+            match="changed during live writer initialization",
+        ):
+            activation._load_live_controlled_execution_writer_v2(
+                server_bound=True,
+                lifecycle=lease,
+            )
+        assert store.lstat().st_ino != initial.st_ino
+    finally:
+        lease.close()
 
 
 @pytest.mark.parametrize(

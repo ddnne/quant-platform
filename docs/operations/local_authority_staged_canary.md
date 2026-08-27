@@ -41,7 +41,8 @@ therefore inside this diagnostic's trust boundary. `plan` and `audit` report
 hash chain cannot upgrade that assurance; an external high-water anchor is
 required before any operational ceremony. The machine-readable plan/audit
 therefore remains `operational_state:HOLD`, names the absent external anchor,
-and also names the missing WAL-quiescence transition for Controlled.
+and also marks the Controlled WAL-quiescence source as not operationally
+accepted.
 
 Journal schema v3 retains every challenge, resource snapshot, lease identity,
 boot identity, deadline, and acquisition time in an immutable per-attempt row.
@@ -62,11 +63,11 @@ The manager exposes `plan`, `audit`, and a fail-closed `run` surface. Public
 `run` and the public Python `run_canary` callable always reject with
 `operational HOLD`; they cannot acquire a lease, execute an authority, or
 create a journal. Every declared authority names the absent external anchor;
-Controlled additionally names the missing quiescence transition. The former
-lease/start/execute/commit implementation is intentionally absent rather than
-retained as unreachable production code. A reviewed executable workflow must
-be introduced only after both applicable blockers have real authorities and
-tests. Audit opens
+Controlled additionally names the quiescence transition as source-ready but
+not operationally accepted. The former lease/start/execute/commit
+implementation is intentionally absent rather than retained as unreachable
+production code. A reviewed executable workflow must be introduced only after
+both applicable blockers have real authorities and tests. Audit opens
 the journal with SQLite `mode=ro`. WAL headers and WAL/SHM sidecars are rejected
 before SQLite opens the file. A write-side open can recover only a protected
 same-directory DELETE-mode rollback journal, and must remove it before full
@@ -98,15 +99,28 @@ another root-writable path does not meet this requirement.
 
 Controlled's product writer normally uses WAL, while its canary audit requires
 a sidecar-free DELETE-mode database. Before Controlled can enter this ceremony,
-a separately reviewed authority-owned transition must: stop new IPC and prove
-the writer quiescent; retain the same pinned database inode; acquire an
-exclusive SQLite lock as the Controlled UID; run a truncating checkpoint and
-require the exact successful empty result; switch to DELETE mode; close and
-fsync the database and parent directory; prove WAL, SHM, and rollback sidecars
-absent; run the bounded canary; and only then resume the writer. Root deleting
-sidecars, copying the main file, or changing `journal_mode` while a writer can
-still run is forbidden. This transition is not yet implemented, so the
-Controlled operational canary remains HOLD.
+source now provides one authority-owned transition boundary. The Controlled
+daemon acquires a service-owned lifecycle lock before `build_service` or any
+product SQLite open and retains it for its process lifetime. The transition,
+running as that same UID and deriving its store only from the protected
+activation, acquires the lock exclusively, pins the existing mode-0600
+single-link database inode, durably creates a restart-forbidden marker, obtains
+SQLite exclusive locking, requires `wal_checkpoint(TRUNCATE)` to return exactly
+`(0,0,0)`, switches to exact DELETE mode, closes SQLite, fsyncs the database and
+parent directory, and requires WAL, SHM, and rollback sidecars to be absent.
+It never unlinks a SQLite sidecar: a retained sidecar or any partial failure
+leaves the marker in place and the daemon refuses to resume.
+
+The retained same-inode session exposes an explicit WAL-restore method, but it
+is structurally fail-closed until an externally anchored bounded-completion
+verifier is wired; a same-UID Python object or caller digest is not accepted as
+a completion capability. Consequently there is no public transition/restore
+CLI, the source has not been exercised under the six distinct real service
+principals, and no operational completion claim is made. Root deleting
+sidecars, copying the main file, removing the marker, or changing
+`journal_mode` while a writer can still run remains forbidden. Controlled's
+blocker is `SOURCE_READY_NOT_OPERATIONALLY_ACCEPTED`, and its operational
+canary remains HOLD.
 
 Trader is not actionable in this canary plane. Its inactive WebAuthn preflight
 has no authority-held signature, so a Python/root orchestrator could otherwise

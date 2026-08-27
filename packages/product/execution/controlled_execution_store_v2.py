@@ -114,6 +114,7 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
         "_trader_uid",
         "_rps",
         "_credentials",
+        "_lifecycle",
         "_server_bound",
         "_test_mode",
     )
@@ -130,6 +131,7 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
         credentials: ExactFourTraderCredentialRegistryV2,
         server_bound: bool,
         test_mode: bool,
+        lifecycle: object | None,
         _token: object,
     ) -> None:
         if _token is not _WRITER_CONSTRUCTION_TOKEN:
@@ -148,6 +150,15 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
             raise ControlledExecutionWriterV2Error(
                 "Controlled AuthorityServer binding is invalid"
             )
+        if test_mode:
+            if lifecycle is not None:
+                raise ControlledExecutionWriterV2Error(
+                    "test Controlled writer cannot accept a live lifecycle lease"
+                )
+        elif server_bound is not True:
+            raise ExactFourAuthorityPending(
+                "live Controlled writer construction requires AuthorityServer binding"
+            )
         rp = relying_parties.require(environment)
         for credential in credentials.credentials:
             if credential.environment == environment and (
@@ -163,11 +174,27 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
         self._trader_uid = trader_uid
         self._rps = relying_parties
         self._credentials = credentials
+        self._lifecycle = lifecycle
         self._server_bound = server_bound
         self._test_mode = test_mode
+        self._require_live_lifecycle()
         self._initialize()
 
+    def _require_live_lifecycle(self) -> None:
+        if self._test_mode:
+            return
+        from execution.controlled_execution_quiescence_v2 import (
+            require_held_controlled_writer_lifecycle_v2,
+        )
+
+        require_held_controlled_writer_lifecycle_v2(
+            self._lifecycle,
+            expected_environment=self.environment,
+            expected_store_path=self._path,
+        )
+
     def _require_positive_operation(self) -> None:
+        self._require_live_lifecycle()
         if self._server_bound is not True:
             raise ExactFourAuthorityPending(
                 "positive Controlled operations require the local AuthorityServer "
@@ -183,15 +210,23 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
         return self._signer.private_key.public_key()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            str(self._path),
-            isolation_level=None,
-            timeout=10.0,
-        )
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 10000")
-        return connection
+        self._require_live_lifecycle()
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = sqlite3.connect(
+                str(self._path),
+                isolation_level=None,
+                timeout=10.0,
+            )
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA busy_timeout = 10000")
+            self._require_live_lifecycle()
+            return connection
+        except BaseException:
+            if connection is not None:
+                connection.close()
+            raise
 
     def _initialize(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -1142,6 +1177,7 @@ def _create_test_controlled_execution_writer_v2(
         credentials=credentials,
         server_bound=server_bound,
         test_mode=True,
+        lifecycle=None,
         _token=_WRITER_CONSTRUCTION_TOKEN,
     )
 
