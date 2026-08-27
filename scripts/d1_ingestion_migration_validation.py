@@ -373,11 +373,14 @@ def validate_preflight_connection(
     binding = canonical_binding(environment)
     _integrity_and_fk(conn)
     history = _history_names(conn, binding["migrations_table"])
+    _target, manifest_digest = _canonical_target()
     if len(history) == len(MIGRATIONS):
         postflight = validate_postflight_connection(conn, environment=environment)
         return {
             "status": "ALREADY_EXACT",
             "environment": environment,
+            "database": binding,
+            "canonical_manifest_digest": manifest_digest,
             "applied_migrations": list(history),
             "pending_migrations": [],
             "simulated_postflight": postflight,
@@ -420,6 +423,7 @@ def validate_preflight_connection(
         "status": "RESUMABLE_EXACT_PREFIX",
         "environment": environment,
         "database": binding,
+        "canonical_manifest_digest": manifest_digest,
         "applied_migrations": list(history),
         "pending_migrations": list(MIGRATION_NAMES[len(history) :]),
         "observed_schema_digest": _digest(initial_inventory),

@@ -19,6 +19,8 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
+import stat
 import subprocess
 import tempfile
 from typing import Any, Callable, Mapping, Sequence
@@ -30,7 +32,11 @@ from scripts.d1_ingestion_migration_validation import (
     canonical_binding,
     validate_export,
 )
-from scripts.encrypt_d1_backup import encrypt_backup, verify_encrypted
+from scripts.encrypt_d1_backup import (
+    _governed_database,
+    encrypt_backup,
+    verify_encrypted,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -189,6 +195,7 @@ def validate_staging_acceptance(
         "backup",
         "pre_apply_bookmark",
         "prepared_evidence_digest",
+        "reservation_digest",
         "live_identity_digest",
         "time_travel_response_digest",
         "wrangler_pending_digest",
@@ -200,14 +207,43 @@ def validate_staging_acceptance(
     unsigned = {key: raw[key] for key in raw if key != "evidence_digest"}
     if raw.get("evidence_digest") != _digest(unsigned):
         raise GuardedMigrationError("staging migration evidence digest is invalid")
+    binding = canonical_binding("staging")
+    backup_identity = _governed_database("staging")
+    backup = raw.get("backup")
+    restore = backup.get("restore") if isinstance(backup, Mapping) else None
+    preflight = raw.get("preflight")
+    simulated = (
+        preflight.get("simulated_postflight")
+        if isinstance(preflight, Mapping)
+        else None
+    )
+    postflight = raw.get("postflight")
     if (
         raw.get("status") != "APPLIED_EXACT"
         or raw.get("environment") != "staging"
         or raw.get("source_sha") != source_sha
         or raw.get("canonical_manifest_digest") != manifest_digest
-        or not isinstance(raw.get("postflight"), Mapping)
-        or raw["postflight"].get("status") != "EXACT_POSTFLIGHT"
-        or raw["postflight"].get("applied_migrations") != list(MIGRATION_NAMES)
+        or raw.get("database") != binding
+        or not isinstance(backup, Mapping)
+        or backup.get("database") != backup_identity
+        or not isinstance(restore, Mapping)
+        or restore.get("source_sha") != source_sha
+        or not isinstance(preflight, Mapping)
+        or preflight.get("status")
+        not in {"RESUMABLE_EXACT_PREFIX", "ALREADY_EXACT"}
+        or preflight.get("environment") != "staging"
+        or preflight.get("database") != binding
+        or preflight.get("canonical_manifest_digest") != manifest_digest
+        or not isinstance(simulated, Mapping)
+        or simulated.get("environment") != "staging"
+        or simulated.get("database") != binding
+        or simulated.get("canonical_manifest_digest") != manifest_digest
+        or not isinstance(postflight, Mapping)
+        or postflight.get("status") != "EXACT_POSTFLIGHT"
+        or postflight.get("environment") != "staging"
+        or postflight.get("database") != binding
+        or postflight.get("canonical_manifest_digest") != manifest_digest
+        or postflight.get("applied_migrations") != list(MIGRATION_NAMES)
     ):
         raise GuardedMigrationError(
             "production requires exact same-source staging migration acceptance"
@@ -220,6 +256,8 @@ def validate_staging_artifact(
     *,
     encrypted: Path,
     key: Path,
+    source_sha: str,
+    manifest_digest: str,
 ) -> Mapping[str, Any]:
     observed = verify_encrypted(encrypted, key)
     if observed != evidence.get("backup"):
@@ -227,8 +265,16 @@ def validate_staging_artifact(
             "staging evidence does not match the authenticated backup artifact"
         )
     database = observed.get("database")
-    if not isinstance(database, Mapping) or database.get("environment") != "staging":
-        raise GuardedMigrationError("staging backup artifact is environment-misbound")
+    restore = observed.get("restore")
+    if (
+        database != _governed_database("staging")
+        or not isinstance(restore, Mapping)
+        or restore.get("source_sha") != source_sha
+        or evidence.get("source_sha") != source_sha
+        or evidence.get("canonical_manifest_digest") != manifest_digest
+        or evidence.get("database") != canonical_binding("staging")
+    ):
+        raise GuardedMigrationError("staging backup artifact cross-binding is invalid")
     return observed
 
 
@@ -251,6 +297,162 @@ def _requires_exact_cutover(preflight: Mapping[str, Any]) -> bool:
     return "0012_jsda_observation_identity.sql" in pending
 
 
+def _secure_create_target(path: Path, *, label: str) -> Path:
+    absolute = path.expanduser().absolute()
+    parent = absolute.parent
+    if (
+        not parent.is_dir()
+        or parent.is_symlink()
+        or parent.resolve() != parent
+    ):
+        raise GuardedMigrationError(f"{label} parent must be a real directory")
+    metadata = parent.stat()
+    if metadata.st_uid != os.getuid() or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise GuardedMigrationError(f"{label} parent permissions are unsafe")
+    if absolute.exists() or absolute.is_symlink():
+        raise GuardedMigrationError(f"{label} target already exists")
+    return absolute
+
+
+def _secure_input(path: Path, *, label: str) -> Path:
+    absolute = path.expanduser().absolute()
+    if (
+        not absolute.is_file()
+        or absolute.is_symlink()
+        or absolute.resolve() != absolute
+        or absolute.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    ):
+        raise GuardedMigrationError(f"{label} must be a protected regular file")
+    return absolute
+
+
+def _preflight_local_paths(
+    *,
+    environment: str,
+    backup_target: Path,
+    backup_key: Path,
+    prepare_evidence_target: Path,
+    evidence_target: Path,
+    staging_evidence: Path | None,
+    staging_backup: Path | None,
+    staging_backup_key: Path | None,
+) -> dict[str, Path | None]:
+    paths: dict[str, Path | None] = {
+        "backup_target": _secure_create_target(
+            backup_target, label="backup"
+        ),
+        "backup_key": _secure_input(backup_key, label="backup key"),
+        "prepare_evidence_target": _secure_create_target(
+            prepare_evidence_target, label="prepared evidence"
+        ),
+        "evidence_target": _secure_create_target(
+            evidence_target, label="final evidence"
+        ),
+        "staging_evidence": None,
+        "staging_backup": None,
+        "staging_backup_key": None,
+    }
+    staging_values = (staging_evidence, staging_backup, staging_backup_key)
+    if environment == "production":
+        if any(value is None for value in staging_values):
+            raise GuardedMigrationError(
+                "production requires staging evidence, backup, and key"
+            )
+        assert staging_evidence is not None
+        assert staging_backup is not None
+        assert staging_backup_key is not None
+        paths["staging_evidence"] = _secure_input(
+            staging_evidence, label="staging evidence"
+        )
+        paths["staging_backup"] = _secure_input(
+            staging_backup, label="staging backup"
+        )
+        paths["staging_backup_key"] = _secure_input(
+            staging_backup_key, label="staging backup key"
+        )
+    elif any(value is not None for value in staging_values):
+        raise GuardedMigrationError("staging does not accept production evidence")
+
+    present = [path for path in paths.values() if path is not None]
+    if len(present) != len(set(present)):
+        raise GuardedMigrationError(
+            "backup, evidence, key, and staging paths must be resolve-distinct"
+        )
+    return paths
+
+
+def _read_exact_evidence(path: Path) -> Mapping[str, Any]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise GuardedMigrationError("reserved final evidence is unreadable") from exc
+    if not isinstance(raw, Mapping):
+        raise GuardedMigrationError("reserved final evidence is malformed")
+    return raw
+
+
+def _reserve_final_evidence(
+    path: Path,
+    *,
+    environment: str,
+    source_sha: str,
+    manifest_digest: str,
+    prepared_evidence_digest: str,
+    backup_digest: str,
+    pre_apply_bookmark: str,
+) -> dict[str, Any]:
+    unsigned = {
+        "schema_version": "quant-ingest-guarded-migration-reservation/v1",
+        "status": "REMOTE_APPLY_AUTHORIZED_STATE_UNKNOWN_UNTIL_FINALIZED",
+        "environment": environment,
+        "source_sha": source_sha,
+        "canonical_manifest_digest": manifest_digest,
+        "prepared_evidence_digest": prepared_evidence_digest,
+        "backup_digest": backup_digest,
+        "pre_apply_bookmark": pre_apply_bookmark,
+        "reservation_nonce": secrets.token_hex(32),
+        "reserved_at": _utc_now(),
+    }
+    reservation = {**unsigned, "reservation_digest": _digest(unsigned)}
+    _publish_evidence(path, reservation)
+    return reservation
+
+
+def _finalize_reserved_evidence(
+    path: Path,
+    *,
+    reservation: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> None:
+    if _read_exact_evidence(path) != reservation:
+        raise GuardedMigrationError("final evidence reservation was replaced or modified")
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.{reservation['reservation_nonce']}.",
+        suffix=".finalizing",
+    )
+    temporary = Path(temporary_name)
+    os.chmod(temporary, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(_canonical_bytes(payload) + b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        if _read_exact_evidence(path) != reservation:
+            raise GuardedMigrationError(
+                "final evidence reservation changed during finalization"
+            )
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 def _publish_evidence(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -259,6 +461,11 @@ def _publish_evidence(path: Path, payload: Mapping[str, Any]) -> None:
             handle.write(_canonical_bytes(payload) + b"\n")
             handle.flush()
             os.fsync(handle.fileno())
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     except BaseException:
         path.unlink(missing_ok=True)
         raise
@@ -276,6 +483,27 @@ def apply_guarded(
     staging_backup_key: Path | None = None,
     runner: Runner = _default_runner,
 ) -> dict[str, Any]:
+    local_paths = _preflight_local_paths(
+        environment=environment,
+        backup_target=backup_target,
+        backup_key=backup_key,
+        prepare_evidence_target=prepare_evidence_target,
+        evidence_target=evidence_target,
+        staging_evidence=staging_evidence,
+        staging_backup=staging_backup,
+        staging_backup_key=staging_backup_key,
+    )
+    backup_target = local_paths["backup_target"]  # type: ignore[assignment]
+    backup_key = local_paths["backup_key"]  # type: ignore[assignment]
+    prepare_evidence_target = local_paths["prepare_evidence_target"]  # type: ignore[assignment]
+    evidence_target = local_paths["evidence_target"]  # type: ignore[assignment]
+    staging_evidence = local_paths["staging_evidence"]
+    staging_backup = local_paths["staging_backup"]
+    staging_backup_key = local_paths["staging_backup_key"]
+    assert isinstance(backup_target, Path)
+    assert isinstance(backup_key, Path)
+    assert isinstance(prepare_evidence_target, Path)
+    assert isinstance(evidence_target, Path)
     prefix, binding = _wrangler_prefix(environment)
     source_sha = _source_sha(runner)
     _target, manifest_digest = _canonical_target()
@@ -297,13 +525,9 @@ def apply_guarded(
             accepted_staging,
             encrypted=staging_backup,
             key=staging_backup_key,
+            source_sha=source_sha,
+            manifest_digest=manifest_digest,
         )
-    elif any(
-        value is not None
-        for value in (staging_evidence, staging_backup, staging_backup_key)
-    ):
-        raise GuardedMigrationError("staging does not accept production evidence")
-
     version = runner((*prefix, "--version"), WORKER)
     if version.returncode != 0 or version.stdout.strip() != WRANGLER_VERSION:
         raise GuardedMigrationError("pinned Wrangler version is not active")
@@ -390,6 +614,15 @@ def apply_guarded(
             "evidence_digest": _digest(prepared_unsigned),
         }
         _publish_evidence(prepare_evidence_target, prepared)
+        reservation = _reserve_final_evidence(
+            evidence_target,
+            environment=environment,
+            source_sha=source_sha,
+            manifest_digest=manifest_digest,
+            prepared_evidence_digest=str(prepared["evidence_digest"]),
+            backup_digest=str(backup["ciphertext_digest"]),
+            pre_apply_bookmark=pre_apply_bookmark,
+        )
 
         _run(
             runner,
@@ -453,13 +686,18 @@ def apply_guarded(
         "backup": backup,
         "pre_apply_bookmark": pre_apply_bookmark,
         "prepared_evidence_digest": prepared["evidence_digest"],
+        "reservation_digest": reservation["reservation_digest"],
         "live_identity_digest": _digest(identity),
         "time_travel_response_digest": _digest(bookmark_json),
         "wrangler_pending_digest": pending_digest,
         "observed_at": _utc_now(),
     }
     payload = {**unsigned, "evidence_digest": _digest(unsigned)}
-    _publish_evidence(evidence_target, payload)
+    _finalize_reserved_evidence(
+        evidence_target,
+        reservation=reservation,
+        payload=payload,
+    )
     return payload
 
 

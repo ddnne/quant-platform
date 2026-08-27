@@ -67,8 +67,12 @@ Phase 6 hardening utilities:
   preflight backup/checksum, exact pre/post exports, staging first, and
   same-source staging evidence plus its authenticated encrypted backup before
   production. It publishes create-only PREPARED evidence before any apply (so
-  the bookmark and backup survive a crash), then separate exact postflight
-  evidence. It never accepts caller-selected database name/ID.
+  the bookmark and backup survive a crash), reserves the final evidence path
+  before remote mutation, and atomically finalizes only that unchanged
+  reservation after exact postflight. A failed/ambiguous apply leaves the
+  reservation auditable and blocks blind retry. Production cross-binds staging
+  database/manifest/preflight/postflight/source SHA to the authenticated backup
+  restore evidence. It never accepts caller-selected database name/ID.
 - `build_release_evidence.py` — validate normalized post-deploy observations
   and emit a content-addressed, read-only, non-secret v3 manifest suitable for
   a GitHub Release. Every check/build/deployment/migration/smoke/MCP observation

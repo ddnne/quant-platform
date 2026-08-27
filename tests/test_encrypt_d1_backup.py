@@ -333,6 +333,27 @@ def test_key_permissions_and_target_overwrite_fail_closed(tmp_path: Path) -> Non
         backup.encrypt_backup(source, target, key_path, **identity_kwargs())
 
 
+def test_racing_target_creation_is_never_overwritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = governed_d1_export(tmp_path, suffix="-race")
+    original_source = source.read_bytes()
+    target = tmp_path / "race.enc"
+    key_path = key(tmp_path)
+    real_link = backup.os.link
+
+    def racing_link(source_path, target_path, **kwargs):
+        Path(target_path).write_bytes(b"racing-owner")
+        return real_link(source_path, target_path, **kwargs)
+
+    monkeypatch.setattr(backup.os, "link", racing_link)
+    with pytest.raises(FileExistsError):
+        backup.encrypt_backup(source, target, key_path, **identity_kwargs())
+    assert target.read_bytes() == b"racing-owner"
+    assert source.read_bytes() == original_source
+    assert not list(tmp_path.glob(f".{target.name}.*.partial"))
+
+
 def test_key_generation_refuses_overwrite(tmp_path: Path) -> None:
     key_path = key(tmp_path)
     original = key_path.read_bytes()

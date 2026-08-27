@@ -688,7 +688,11 @@ def encrypt_backup(
             or observed["authenticated_metadata_digest"] != _digest_bytes(header_bytes)
         ):
             raise ValueError("encrypted backup verification did not reproduce the source")
-        os.replace(temporary, target)
+        # Publish create-only.  os.replace() could overwrite a target created
+        # after the initial existence check; a hard link in the same directory
+        # gives the final pathname O_EXCL semantics.
+        os.link(temporary, target, follow_symlinks=False)
+        temporary.unlink()
         _fsync_directory(target.parent)
         if delete_source:
             source.unlink()
