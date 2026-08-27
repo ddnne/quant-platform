@@ -962,7 +962,11 @@ def _run_authority_specific_inactive_adapter(
                         expected_uid=account.pw_uid,
                         source_sha=_runtime_binding()["bundle_digest"],
                         tool_digest=_d1_sync_tool_bindings_digest(
-                            row["runtime_resource_bindings"]
+                            observe_runtime_resource_bindings(
+                                authority_id="d1_sync",
+                                resources=resources,
+                                expected_owner_uid=0,
+                            )
                         ),
                         event_ledger=ledger,
                     ),

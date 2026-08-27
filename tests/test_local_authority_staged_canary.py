@@ -1058,7 +1058,6 @@ def test_file_authority_protocol_adapter_fails_if_exact_handler_wiring_fails(
         "ledger_path": str(service_dir / "events.sqlite3"),
         "service_dir": str(service_dir),
         "key_path": str(service_dir / "key"),
-        "runtime_resource_bindings": {},
     }
     resources = {
         "d1_sync": {
@@ -1095,6 +1094,11 @@ def test_file_authority_protocol_adapter_fails_if_exact_handler_wiring_fails(
     monkeypatch.setattr(canary, "_deployment", lambda *_a, **_k: row)
     monkeypatch.setattr(canary, "load_and_validate_manifest", lambda: manifest)
     monkeypatch.setattr(canary, "_runtime_binding", _fake_binding)
+    monkeypatch.setattr(
+        canary,
+        "observe_runtime_resource_bindings",
+        lambda **_kwargs: [],
+    )
     monkeypatch.setattr(
         canary.pwd,
         "getpwnam",
