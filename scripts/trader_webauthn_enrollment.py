@@ -2,9 +2,10 @@
 """Print non-activating Trader WebAuthn request/proposal JSON to stdout.
 
 The CLI never writes an activation file and never requests or accepts private
-credential material.  Between ``request`` and ``propose-activation`` an
-operator must run the indicated browser/OS WebAuthn creation prompt with human
-presence and save only its machine-readable public output.
+credential material.  It does durably record expiring one-use challenges in
+the explicitly selected enrollment ledger.  Between ``request`` and
+``propose-activation`` an operator must run the indicated browser/OS WebAuthn
+creation prompt with human presence and save its raw registration response.
 """
 
 from __future__ import annotations
@@ -58,14 +59,20 @@ def _parser() -> argparse.ArgumentParser:
     request.add_argument("--rp-id", required=True)
     request.add_argument("--origin", required=True)
     request.add_argument("--rp-effective-at", required=True)
+    request.add_argument(
+        "--counter-mode", choices=("COUNTING", "COUNTERLESS"), required=True
+    )
+    request.add_argument("--enrollment-ledger", type=Path, required=True)
+    request.add_argument("--ttl-seconds", type=int, default=300)
     request.add_argument("--created-at")
 
     proposal = commands.add_parser(
         "propose-activation",
-        help="validate public ceremony output and print a root-review proposal",
+        help="verify a raw registration response and print a root-review proposal",
     )
     proposal.add_argument("--request-json", type=Path, required=True)
-    proposal.add_argument("--ceremony-public-json", type=Path, required=True)
+    proposal.add_argument("--registration-response-json", type=Path, required=True)
+    proposal.add_argument("--enrollment-ledger", type=Path, required=True)
     proposal.add_argument("--service-uid", type=int, required=True)
     proposal.add_argument("--controlled-execution-uid", type=int, required=True)
     proposal.add_argument("--controlled-execution-socket", type=Path, required=True)
@@ -89,12 +96,16 @@ def main(argv: list[str] | None = None) -> int:
             result = build_trader_webauthn_enrollment_request_v2(
                 environment=args.environment,
                 relying_party=rp,
+                counter_mode=args.counter_mode,
+                enrollment_ledger_path=args.enrollment_ledger,
                 created_at=_timestamp(args.created_at),
+                ttl_seconds=args.ttl_seconds,
             )
         else:
             result = build_trader_root_activation_proposal_v2(
                 args.request_json.read_bytes(),
-                args.ceremony_public_json.read_bytes(),
+                args.registration_response_json.read_bytes(),
+                enrollment_ledger_path=args.enrollment_ledger,
                 service_uid=args.service_uid,
                 controlled_execution_uid=args.controlled_execution_uid,
                 controlled_execution_socket_path=(

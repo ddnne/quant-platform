@@ -33,21 +33,29 @@ writer registry intentionally has zero active keys, so verification currently
 reports
 `UNKNOWN: CONTROLLED_ARTIFACT_AUTHORITY_UNPROVISIONED`.
 
-The future production Trader v2 wire contract is separately frozen. Its
-audit-only compiler derives a deterministic pre-approval subject from unsigned
-READY claims; a distinct positive entrypoint accepts only the unavailable
-`VerifiedPilotReadinessV2` capability. The structural envelope binds governed
-RP and credential evidence, canonical WebAuthn bytes, one atomic one-use and
-counter transaction, and the shared append-only `authority-event/v2` shape.
-The final lifetime is derived exactly from the committed authority observation
-and bound challenge expiry. A sequence-independent decision/idempotency key
-gives the future store one atomic uniqueness key for retries and ledger reuse.
-The former unsigned `TraderAuthorizationClaimsV2` remains only for historical
-result-manifest replay and cannot satisfy the positive Trader or controlled
-execution gates. No governed CSPRNG challenge generator, active RP/credential
-registry, signature verifier, transactional ledger, authority event store, or
-controlled v2 consumer is provisioned, so Trader v2 remains unconditionally
-`PENDING`.
+The production Trader v2 wire contract is frozen and implemented but inactive.
+Its authority-server handler accepts only server-minted peer context, a signed
+environment/resource-scoped READY response, and a real WebAuthn assertion. It
+binds governed RP and credential evidence, canonical WebAuthn bytes, one atomic
+challenge/counter/event transaction, and the shared append-only
+`authority-event/v2` shape. The Controlled authority independently revalidates
+the handed-off bytes and peer UID; product code cannot mint a reusable positive
+Trader capability.
+
+Enrollment is also fail-closed. The CLI records a CSPRNG challenge in a durable,
+expiring one-use SQLite ledger and prints browser/OS creation parameters. Its
+proposal command accepts only a raw WebAuthn registration response: it verifies
+`clientDataJSON`, parses `attestationObject` and authenticator-data CBOR, checks
+RP hash plus UP/UV, derives an exact COSE ES256 public key, and binds the verified
+transcript digest into the root activation proposal. Caller-supplied SPKI,
+counter, or human-presence claims have no enrollment path. The browser/OS prompt
+is the sole external human-presence step; no private credential is obtained.
+
+Both environments remain `PENDING`: checked-in registries have no active live
+credential, protected principals/stores are not observed, and the strict P0
+gate blocks every positive operation. Enrollment/bootstrap may prepare a
+root-review proposal, but cannot activate Trader, Controlled Pilot, promotion,
+Mass Research, or live trading.
 
 ## Allowed imports
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import stat
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,6 +50,7 @@ _CHALLENGE_BYTES = 32
 TRADER_AUTHORITY_ACTIVATION_PATH = Path(
     "/etc/quant-platform/authorities/trader/activation.json"
 )
+_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 def _load_live_activation_document() -> dict[str, Any]:
     path = TRADER_AUTHORITY_ACTIVATION_PATH
@@ -75,6 +77,7 @@ def _load_live_activation_document() -> dict[str, Any]:
         "store_path",
         "human_enrollment_observed",
         "protected_store_observed",
+        "enrollment_transcript_digest",
         "rp_registry",
         "credential_registry",
     }
@@ -110,6 +113,8 @@ def _load_live_exact_four_trader_authority_v2(
         or type(controlled_socket_text) is not str
         or document["human_enrollment_observed"] is not True
         or document["protected_store_observed"] is not True
+        or type(document["enrollment_transcript_digest"]) is not str
+        or not _SHA256_RE.fullmatch(document["enrollment_transcript_digest"])
     ):
         raise ExactFourAuthorityPending(
             "Trader principal, enrollment, or controlled peer is not observed"
