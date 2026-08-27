@@ -37,10 +37,13 @@ remote apply results only in immutable release evidence.
   V3 AM is tip-scoped. Residual PARTIAL rows are not permission to mint empty
   COMPLETE receipts.
 - **Authority reachability:** the manifest covers one Cloudflare Receipt
-  authority and six local OS principals, but this is not seven runnable local
-  daemons. READY has a local handler/client but no product publisher call site;
-  Trader and Controlled have handler factories but no production runner. R5,
-  R10, R11 and A2 therefore remain `SOURCE-PARTIAL` and `OPEN`.
+  authority and six local OS principals. All six local principals now have
+  source-level runner, runtime-config, distinct UID/socket/store/key-backend and
+  launchd/bootstrap paths; READY publication is client-only and Trader and
+  Controlled are bound to fixed root-owned activation documents. This is not
+  operational activation: passive READY preflight is `PENDING/UNKNOWN`, zero
+  local principals are provisioned, active keys/credentials remain zero, and
+  R5, R10, R11 and A2 remain `OPEN`.
 - **Staged activation:** the current all-P0 strict gate correctly rejects a
   release, but it also blocks the positive smoke needed to close the same OPEN
   rows. Do not add a general bypass or execute ACTIVE instructions yet. The
