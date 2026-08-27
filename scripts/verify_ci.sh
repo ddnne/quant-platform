@@ -65,12 +65,21 @@ echo "==> secret/path scan"
 "$host_py" "$ROOT/scripts/verify_secret_paths.py"
 
 UV_VERSION="0.11.26"
+VIRTUALENV_VERSION="21.7.4"
 uv_cmd="$(command -v uv 2>/dev/null || true)"
 if [[ -z "$uv_cmd" ]] || \
   [[ "$("$uv_cmd" --version)" != "uv $UV_VERSION "* && \
      "$("$uv_cmd" --version)" != "uv $UV_VERSION" ]]; then
   echo "==> bootstrap uv $UV_VERSION"
-  "$host_py" -m venv "$ROOT/.ci-uv"
+  if command -v pipx >/dev/null 2>&1; then
+    # Ubuntu's distribution Python can have sqlite3 while omitting ensurepip.
+    # virtualenv carries its own seed packages, so it remains usable on the
+    # documented Workers Builds image without installing OS packages.
+    pipx run --spec "virtualenv==$VIRTUALENV_VERSION" virtualenv \
+      --python "$host_py" --clear "$ROOT/.ci-uv"
+  else
+    "$host_py" -m venv --clear "$ROOT/.ci-uv"
+  fi
   "$ROOT/.ci-uv/bin/python" -m pip install "uv==$UV_VERSION"
   uv_cmd="$ROOT/.ci-uv/bin/uv"
 fi
