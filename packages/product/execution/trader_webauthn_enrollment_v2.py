@@ -30,7 +30,6 @@ from execution.exact_four_codec import (
 )
 from execution.exact_four_trader_v2 import _decode_canonical_base64url
 from execution.trader_webauthn_authority_v2 import (
-    ExactFourTraderCredentialV2,
     ExactFourTraderRelyingPartyV2,
 )
 from execution.trader_webauthn_enrollment_ledger_v2 import (
@@ -180,7 +179,7 @@ def _decode_one_cbor(raw: bytes, *, label: str) -> Any:
     return value
 
 
-def build_trader_webauthn_enrollment_request_v2(
+def _build_trader_webauthn_enrollment_request_at_v2(
     *,
     environment: str,
     relying_party: ExactFourTraderRelyingPartyV2,
@@ -256,6 +255,47 @@ def build_trader_webauthn_enrollment_request_v2(
     except TraderWebAuthnEnrollmentLedgerV2Error as exc:
         raise TraderWebAuthnEnrollmentV2Error(str(exc)) from exc
     return _canonical_bytes(request)
+
+
+def build_trader_webauthn_enrollment_request_v2(
+    *,
+    environment: str,
+    relying_party: ExactFourTraderRelyingPartyV2,
+    counter_mode: str,
+    enrollment_ledger_path: Path,
+    ttl_seconds: int = 300,
+) -> bytes:
+    """Issue a request using only the module-owned current UTC clock."""
+
+    return _build_trader_webauthn_enrollment_request_at_v2(
+        environment=environment,
+        relying_party=relying_party,
+        counter_mode=counter_mode,
+        enrollment_ledger_path=enrollment_ledger_path,
+        created_at=datetime.now(timezone.utc),
+        ttl_seconds=ttl_seconds,
+    )
+
+
+def _build_test_trader_webauthn_enrollment_request_v2(
+    *,
+    environment: str,
+    relying_party: ExactFourTraderRelyingPartyV2,
+    counter_mode: str,
+    enrollment_ledger_path: Path,
+    created_at: datetime,
+    ttl_seconds: int = 300,
+) -> bytes:
+    """Test-distribution seam for deterministic expiry behavior."""
+
+    return _build_trader_webauthn_enrollment_request_at_v2(
+        environment=environment,
+        relying_party=relying_party,
+        counter_mode=counter_mode,
+        enrollment_ledger_path=enrollment_ledger_path,
+        created_at=created_at,
+        ttl_seconds=ttl_seconds,
+    )
 
 
 def _parse_enrollment_request(raw: bytes | str) -> dict[str, Any]:
@@ -518,8 +558,11 @@ def _verify_registration_response(
         "credential_public_key_digest": _sha256_bytes(public_der),
         "aaguid_base64url": _b64url(aaguid),
         "authenticator_flags": flags,
-        "attested_sign_count": sign_count,
+        "authenticator_data_sign_count": sign_count,
         "counter_mode": request["counter_mode"],
+        "registration_payload_validated": True,
+        "attestation_format": "none",
+        "attestation_state": "UNATTESTED",
         "user_presence_flag_set": True,
         "user_verification_flag_set": True,
     }
@@ -535,7 +578,7 @@ def _verify_registration_response(
     }
 
 
-def build_trader_root_activation_proposal_v2(
+def _build_trader_root_activation_proposal_at_v2(
     enrollment_request_raw: bytes | str,
     registration_response_raw: bytes | str,
     *,
@@ -571,15 +614,6 @@ def build_trader_root_activation_proposal_v2(
         raise TraderWebAuthnEnrollmentV2Error(
             "enrollment request RP policy digest changed"
         )
-    credential = ExactFourTraderCredentialV2(
-        environment=request["environment"],
-        credential_id=verified["credential_id"],
-        public_key=verified["public_key"],
-        rp_policy_digest=relying_party.policy_digest,
-        effective_at=generated_text,
-        initial_sign_count=verified["sign_count"],
-        counter_mode=request["counter_mode"],
-    )
     if (
         type(service_uid) is not int
         or service_uid <= 0
@@ -598,16 +632,16 @@ def build_trader_root_activation_proposal_v2(
     rp_row.pop("format")
     key_text = base64.b64encode(verified["public_key_der"]).decode("ascii")
     credential_row = {
-        "environment": credential.environment,
-        "credential_id_base64url": credential.credential_id_base64url,
+        "environment": request["environment"],
+        "credential_id_base64url": _b64url(verified["credential_id"]),
         "public_key_spki_der_base64": key_text,
-        "rp_policy_digest": credential.rp_policy_digest,
-        "effective_at": credential.effective_at,
-        "initial_sign_count": credential.initial_sign_count,
-        "counter_mode": credential.counter_mode,
-        "status": credential.status,
-        "algorithm": credential.algorithm,
-        "key_backend": credential.key_backend,
+        "rp_policy_digest": relying_party.policy_digest,
+        "effective_at": generated_text,
+        "initial_sign_count": verified["sign_count"],
+        "counter_mode": request["counter_mode"],
+        "status": "PENDING_TRUST_REVIEW",
+        "algorithm": "ES256",
+        "key_backend": "UNATTESTED",
     }
     transcript = verified["transcript"]
     root_activation_document = {
@@ -617,10 +651,12 @@ def build_trader_root_activation_proposal_v2(
         "controlled_execution_uid": controlled_execution_uid,
         "controlled_execution_socket_path": str(controlled_execution_socket_path),
         "store_path": str(store_path),
-        # fmt=none proves RP/challenge/key consistency and exposes UP/UV flags,
-        # but supplies no trusted attestation root for the human ceremony.
-        "browser_registration_verified": True,
-        "human_enrollment_observed": False,
+        # fmt=none validates the registration payload, not an authenticator
+        # backend, a human ceremony, or a trusted attestation chain.
+        "registration_payload_validated": True,
+        "attestation_state": "UNATTESTED",
+        "human_enrollment_witness_digest": None,
+        "trusted_attestation_evidence_digest": None,
         "protected_store_observed": False,
         "enrollment_transcript_digest": transcript["transcript_digest"],
         "rp_registry": {"generation": 1, "entries": [rp_row]},
@@ -646,7 +682,9 @@ def build_trader_root_activation_proposal_v2(
         "human_presence_required_for_only_external_step": True,
         "next_admin_actions": [
             "verify the WebAuthn transcript digest and public credential",
-            "observe the required human ceremony and set human_enrollment_observed true",
+            "observe the human ceremony and record its canonical witness evidence digest",
+            "keep key_backend UNATTESTED unless trusted attestation evidence proves otherwise",
+            "set credential status ACTIVE only after witness or trusted attestation review",
             "provision the dedicated Trader principal and mode-0700 store",
             "verify the controlled_execution AF_UNIX peer and UID",
             "install a root-owned non-group/world-writable activation document",
@@ -676,6 +714,55 @@ def build_trader_root_activation_proposal_v2(
     except TraderWebAuthnEnrollmentLedgerV2Error as exc:
         raise TraderWebAuthnEnrollmentV2Error(str(exc)) from exc
     return _canonical_bytes(proposal)
+
+
+def build_trader_root_activation_proposal_v2(
+    enrollment_request_raw: bytes | str,
+    registration_response_raw: bytes | str,
+    *,
+    enrollment_ledger_path: Path,
+    service_uid: int,
+    controlled_execution_uid: int,
+    controlled_execution_socket_path: Path,
+    store_path: Path,
+) -> bytes:
+    """Build a proposal using only the module-owned current UTC clock."""
+
+    return _build_trader_root_activation_proposal_at_v2(
+        enrollment_request_raw,
+        registration_response_raw,
+        enrollment_ledger_path=enrollment_ledger_path,
+        service_uid=service_uid,
+        controlled_execution_uid=controlled_execution_uid,
+        controlled_execution_socket_path=controlled_execution_socket_path,
+        store_path=store_path,
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+def _build_test_trader_root_activation_proposal_v2(
+    enrollment_request_raw: bytes | str,
+    registration_response_raw: bytes | str,
+    *,
+    enrollment_ledger_path: Path,
+    service_uid: int,
+    controlled_execution_uid: int,
+    controlled_execution_socket_path: Path,
+    store_path: Path,
+    generated_at: datetime,
+) -> bytes:
+    """Test-distribution seam for deterministic expiry behavior."""
+
+    return _build_trader_root_activation_proposal_at_v2(
+        enrollment_request_raw,
+        registration_response_raw,
+        enrollment_ledger_path=enrollment_ledger_path,
+        service_uid=service_uid,
+        controlled_execution_uid=controlled_execution_uid,
+        controlled_execution_socket_path=controlled_execution_socket_path,
+        store_path=store_path,
+        generated_at=generated_at,
+    )
 
 
 __all__ = [

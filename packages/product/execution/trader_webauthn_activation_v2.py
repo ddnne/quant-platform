@@ -76,8 +76,10 @@ def _load_live_activation_document() -> dict[str, Any]:
         "controlled_execution_uid",
         "controlled_execution_socket_path",
         "store_path",
-        "browser_registration_verified",
-        "human_enrollment_observed",
+        "registration_payload_validated",
+        "attestation_state",
+        "human_enrollment_witness_digest",
+        "trusted_attestation_evidence_digest",
         "protected_store_observed",
         "enrollment_transcript_digest",
         "rp_registry",
@@ -103,6 +105,17 @@ def _load_live_exact_four_trader_authority_v2(
     controlled_uid = document["controlled_execution_uid"]
     store_text = document["store_path"]
     controlled_socket_text = document["controlled_execution_socket_path"]
+    attestation_state = document["attestation_state"]
+    witness_digest = document["human_enrollment_witness_digest"]
+    trusted_attestation_digest = document["trusted_attestation_evidence_digest"]
+    witness_verified = (
+        type(witness_digest) is str and _SHA256_RE.fullmatch(witness_digest) is not None
+    )
+    trusted_attestation_verified = (
+        attestation_state == "TRUSTED"
+        and type(trusted_attestation_digest) is str
+        and _SHA256_RE.fullmatch(trusted_attestation_digest) is not None
+    )
     if (
         environment not in {"staging", "production"}
         or type(service_uid) is not int
@@ -113,8 +126,23 @@ def _load_live_exact_four_trader_authority_v2(
         or os.geteuid() != service_uid
         or type(store_text) is not str
         or type(controlled_socket_text) is not str
-        or document["browser_registration_verified"] is not True
-        or document["human_enrollment_observed"] is not True
+        or document["registration_payload_validated"] is not True
+        or attestation_state not in {"UNATTESTED", "TRUSTED"}
+        or (
+            witness_digest is not None
+            and not witness_verified
+        )
+        or (
+            trusted_attestation_digest is not None
+            and type(trusted_attestation_digest) is not str
+        )
+        or (
+            type(trusted_attestation_digest) is str
+            and _SHA256_RE.fullmatch(trusted_attestation_digest) is None
+        )
+        or (attestation_state == "UNATTESTED" and trusted_attestation_digest is not None)
+        or (attestation_state == "TRUSTED" and not trusted_attestation_verified)
+        or not (witness_verified or trusted_attestation_verified)
         or document["protected_store_observed"] is not True
         or type(document["enrollment_transcript_digest"]) is not str
         or not _SHA256_RE.fullmatch(document["enrollment_transcript_digest"])
@@ -218,6 +246,15 @@ def _load_live_exact_four_trader_authority_v2(
         if type(row) is not dict or set(row) != required_fields:
             raise ExactFourAuthorityPending(
                 "Trader credential activation row is not closed"
+            )
+        expected_backend = (
+            "UNATTESTED"
+            if attestation_state == "UNATTESTED"
+            else "webauthn_platform_or_hardware"
+        )
+        if row.get("status") != "ACTIVE" or row.get("key_backend") != expected_backend:
+            raise ExactFourAuthorityPending(
+                "Trader credential is not active under the reviewed enrollment trust"
             )
         try:
             credential_id = _decode_canonical_base64url(

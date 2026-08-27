@@ -11,7 +11,6 @@ creation prompt with human presence and save its raw registration response.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
@@ -30,15 +29,6 @@ from execution.trader_webauthn_enrollment_v2 import (  # noqa: E402
     build_trader_root_activation_proposal_v2,
     build_trader_webauthn_enrollment_request_v2,
 )
-
-
-def _timestamp(value: str | None) -> datetime:
-    if value is None:
-        return datetime.now(timezone.utc)
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError("timestamp must include an explicit timezone")
-    return parsed
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -64,7 +54,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     request.add_argument("--enrollment-ledger", type=Path, required=True)
     request.add_argument("--ttl-seconds", type=int, default=300)
-    request.add_argument("--created-at")
 
     proposal = commands.add_parser(
         "propose-activation",
@@ -77,7 +66,6 @@ def _parser() -> argparse.ArgumentParser:
     proposal.add_argument("--controlled-execution-uid", type=int, required=True)
     proposal.add_argument("--controlled-execution-socket", type=Path, required=True)
     proposal.add_argument("--store-path", type=Path, required=True)
-    proposal.add_argument("--generated-at")
     return parser
 
 
@@ -98,7 +86,6 @@ def main(argv: list[str] | None = None) -> int:
                 relying_party=rp,
                 counter_mode=args.counter_mode,
                 enrollment_ledger_path=args.enrollment_ledger,
-                created_at=_timestamp(args.created_at),
                 ttl_seconds=args.ttl_seconds,
             )
         else:
@@ -112,7 +99,6 @@ def main(argv: list[str] | None = None) -> int:
                     args.controlled_execution_socket
                 ),
                 store_path=args.store_path,
-                generated_at=_timestamp(args.generated_at),
             )
     except (OSError, TypeError, ValueError, TraderWebAuthnEnrollmentV2Error) as exc:
         print(f"Trader enrollment proposal rejected: {exc}", file=sys.stderr)

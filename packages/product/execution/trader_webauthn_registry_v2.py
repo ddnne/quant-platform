@@ -439,7 +439,7 @@ class ExactFourTraderCredentialV2:
     counter_mode: str = "COUNTING"
     status: str = "ACTIVE"
     algorithm: str = "ES256"
-    key_backend: str = "webauthn_platform_or_hardware"
+    key_backend: str = "UNATTESTED"
 
     def __post_init__(self) -> None:
         _require_exact_text(self.environment, "credential environment")
@@ -474,7 +474,8 @@ class ExactFourTraderCredentialV2:
             )
             or self.status != "ACTIVE"
             or self.algorithm != "ES256"
-            or self.key_backend != "webauthn_platform_or_hardware"
+            or self.key_backend
+            not in {"UNATTESTED", "webauthn_platform_or_hardware"}
         ):
             raise ExactFourTraderAuthorityV2Error(
                 "credential status, counter, algorithm, or backend is invalid"

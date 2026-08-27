@@ -15,12 +15,18 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 import pytest
 
-from execution.exact_four_codec import canonical_authority_digest
+from execution.exact_four_codec import (
+    ExactFourAuthorityPending,
+    canonical_authority_digest,
+)
+import execution.trader_webauthn_activation_v2 as activation_module
 from execution.trader_webauthn_authority_v2 import ExactFourTraderRelyingPartyV2
 from execution.trader_webauthn_enrollment_v2 import (
     TRADER_ENROLLMENT_HUMAN_ACTION,
     TRADER_REGISTRATION_RESPONSE_FORMAT,
     TraderWebAuthnEnrollmentV2Error,
+    _build_test_trader_root_activation_proposal_v2,
+    _build_test_trader_webauthn_enrollment_request_v2,
     build_trader_root_activation_proposal_v2,
     build_trader_webauthn_enrollment_request_v2,
 )
@@ -82,7 +88,7 @@ def _rp(now: datetime) -> ExactFourTraderRelyingPartyV2:
 
 
 def _request(now: datetime, ledger: Path, *, ttl_seconds: int = 300) -> bytes:
-    return build_trader_webauthn_enrollment_request_v2(
+    return _build_test_trader_webauthn_enrollment_request_v2(
         environment="staging",
         relying_party=_rp(now),
         counter_mode="COUNTING",
@@ -165,7 +171,7 @@ def _proposal(
     ledger: Path,
     generated_at: datetime,
 ) -> bytes:
-    return build_trader_root_activation_proposal_v2(
+    return _build_test_trader_root_activation_proposal_v2(
         request_raw,
         response_raw,
         enrollment_ledger_path=ledger,
@@ -236,15 +242,91 @@ def test_raw_registration_derives_key_and_binds_transcript_into_activation(
     assert activation["enrollment_transcript_digest"] == transcript[
         "transcript_digest"
     ]
-    assert activation["browser_registration_verified"] is True
-    assert activation["human_enrollment_observed"] is False
+    assert transcript["registration_payload_validated"] is True
+    assert transcript["attestation_state"] == "UNATTESTED"
+    assert activation["registration_payload_validated"] is True
+    assert activation["attestation_state"] == "UNATTESTED"
+    assert activation["human_enrollment_witness_digest"] is None
+    assert activation["trusted_attestation_evidence_digest"] is None
     assert activation["protected_store_observed"] is False
+    assert credential["status"] == "PENDING_TRUST_REVIEW"
+    assert credential["key_backend"] == "UNATTESTED"
     assert proposal["root_activation_document_digest"] == canonical_authority_digest(
         activation
     )
     body = dict(proposal)
     assert body.pop("proposal_digest") == canonical_authority_digest(body)
     assert proposal["private_credential_material_obtained"] is False
+
+
+def test_unattested_proposal_cannot_be_used_as_positive_activation_without_review(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    ledger = (tmp_path / "enrollment.sqlite3").resolve()
+    request_raw = _request(now, ledger)
+    response_raw, _ = _registration(json.loads(request_raw))
+    proposal = json.loads(
+        _proposal(request_raw, response_raw, ledger, now + timedelta(seconds=1))
+    )
+    activation = proposal["root_activation_document"]
+    activation["service_uid"] = 5011
+    activation["controlled_execution_uid"] = 5012
+    activation["protected_store_observed"] = True
+    monkeypatch.setattr(activation_module.os, "geteuid", lambda: 5011)
+    monkeypatch.setattr(
+        activation_module,
+        "_load_live_activation_document",
+        lambda: activation,
+    )
+    with pytest.raises(ExactFourAuthorityPending, match="enrollment"):
+        activation_module._load_live_exact_four_trader_authority_v2(
+            server_bound=True
+        )
+
+    # A root-reviewed human witness may preserve the honest UNATTESTED
+    # backend. It passes the trust gate, then fails on the intentionally absent
+    # protected peer before any positive authority is constructed.
+    activation["human_enrollment_witness_digest"] = "sha256:" + "a" * 64
+    credential = activation["credential_registry"]["credentials"][0]
+    credential["status"] = "ACTIVE"
+    with pytest.raises(ExactFourAuthorityPending, match="socket is not observed"):
+        activation_module._load_live_exact_four_trader_authority_v2(
+            server_bound=True
+        )
+
+    activation["attestation_state"] = "TRUSTED"
+    activation["human_enrollment_witness_digest"] = None
+    activation["trusted_attestation_evidence_digest"] = "sha256:" + "b" * 64
+    credential["key_backend"] = "webauthn_platform_or_hardware"
+    with pytest.raises(ExactFourAuthorityPending, match="socket is not observed"):
+        activation_module._load_live_exact_four_trader_authority_v2(
+            server_bound=True
+        )
+
+
+def test_production_builders_reject_caller_supplied_timestamps(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    with pytest.raises(TypeError, match="created_at"):
+        build_trader_webauthn_enrollment_request_v2(
+            environment="staging",
+            relying_party=_rp(now),
+            counter_mode="COUNTING",
+            enrollment_ledger_path=(tmp_path / "request.sqlite3").resolve(),
+            created_at=now,  # type: ignore[call-arg]
+        )
+    with pytest.raises(TypeError, match="generated_at"):
+        build_trader_root_activation_proposal_v2(
+            b"{}",
+            b"{}",
+            enrollment_ledger_path=(tmp_path / "proposal.sqlite3").resolve(),
+            service_uid=5011,
+            controlled_execution_uid=5012,
+            controlled_execution_socket_path=Path("/tmp/controlled.sock"),
+            store_path=Path("/tmp/trader.sqlite3"),
+            generated_at=now,  # type: ignore[call-arg]
+        )
 
 
 def test_same_verified_registration_can_be_consumed_only_once(
@@ -372,8 +454,6 @@ def test_cli_prints_request_and_writes_only_expiring_ledger(tmp_path: Path) -> N
             "COUNTING",
             "--enrollment-ledger",
             str(enrollment_ledger),
-            "--created-at",
-            now.isoformat(),
         ],
         cwd=ROOT,
         check=False,
@@ -391,3 +471,76 @@ def test_cli_prints_request_and_writes_only_expiring_ledger(tmp_path: Path) -> N
         else None
     )
     assert after == before
+
+
+@pytest.mark.parametrize(
+    ("arguments", "removed_flag"),
+    (
+        (
+            [
+                "request",
+                "--environment",
+                "staging",
+                "--policy-id",
+                "exact-four-trader-staging-rp/v2",
+                "--policy-generation",
+                "1",
+                "--rp-id",
+                "trader.staging.quant-platform.local",
+                "--origin",
+                "https://pilot.trader.staging.quant-platform.local",
+                "--rp-effective-at",
+                "2026-01-01T00:00:00+00:00",
+                "--counter-mode",
+                "COUNTING",
+                "--enrollment-ledger",
+                "/tmp/trader-enrollment-invalid.sqlite3",
+                "--created-at",
+                "2026-01-01T00:00:00+00:00",
+            ],
+            "--created-at",
+        ),
+        (
+            [
+                "propose-activation",
+                "--request-json",
+                "/tmp/request-invalid.json",
+                "--registration-response-json",
+                "/tmp/registration-invalid.json",
+                "--enrollment-ledger",
+                "/tmp/trader-enrollment-invalid.sqlite3",
+                "--service-uid",
+                "5011",
+                "--controlled-execution-uid",
+                "5012",
+                "--controlled-execution-socket",
+                "/tmp/controlled-invalid.sock",
+                "--store-path",
+                "/tmp/trader-invalid.sqlite3",
+                "--generated-at",
+                "2026-01-01T00:00:00+00:00",
+            ],
+            "--generated-at",
+        ),
+    ),
+)
+def test_cli_rejects_removed_caller_timestamp_options(
+    arguments: list[str],
+    removed_flag: str,
+) -> None:
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "--frozen",
+            "python",
+            "scripts/trader_webauthn_enrollment.py",
+            *arguments,
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert f"unrecognized arguments: {removed_flag}" in result.stderr

@@ -228,7 +228,9 @@
         "credential_id_base64url": { "$ref": "#/$defs/base64url" },
         "credential_public_key_digest": { "$ref": "#/$defs/digest" },
         "credential_algorithm": { "enum": ["ES256", "EdDSA"] },
-        "key_backend": { "const": "webauthn_platform_or_hardware" },
+        "key_backend": {
+          "enum": ["UNATTESTED", "webauthn_platform_or_hardware"]
+        },
         "counter_mode": { "enum": ["COUNTING", "COUNTERLESS"] },
         "stored_sign_count": { "type": "integer", "minimum": 0 },
         "effective_at": { "type": "string", "format": "date-time" },
@@ -407,7 +409,9 @@
         "authorization_decision_id": { "$ref": "#/$defs/digest" },
         "issuer_key_id": { "$ref": "#/$defs/base64url" },
         "issuer_key_algorithm": { "enum": ["ES256", "EdDSA"] },
-        "issuer_key_backend": { "const": "webauthn_platform_or_hardware" },
+        "issuer_key_backend": {
+          "enum": ["UNATTESTED", "webauthn_platform_or_hardware"]
+        },
         "issuer_key_registry_generation": { "type": "integer", "minimum": 1 },
         "issuer_key_registry_digest": { "$ref": "#/$defs/digest" },
         "issuer_backend_id": {
