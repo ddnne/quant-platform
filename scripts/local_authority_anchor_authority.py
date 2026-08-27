@@ -267,4 +267,3 @@ class ReferenceExternalAnchorAuthority:
                 "signature": _sign(self._remote_private_key, body),
             }
             return canonical_json_bytes(response)
-
