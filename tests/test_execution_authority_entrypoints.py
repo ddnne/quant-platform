@@ -10,6 +10,7 @@ import socket
 import struct
 import tempfile
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -533,6 +534,7 @@ def test_context_digest_is_bound_to_payload_before_controlled_execution(
         purpose=CONTROLLED_TRADER_HANDOFF_PURPOSE,
         payload=original_payload,
     )
+    accepted_at = time.monotonic_ns()
     context = local_service_module.AuthorityRequestContext(
         peer=local_service_module.PeerIdentity(os.geteuid(), os.getegid(), None),
         caller="trader",
@@ -544,6 +546,8 @@ def test_context_digest_is_bound_to_payload_before_controlled_execution(
         ),
         request_id=handoff.handoff_id,
         request_digest=canonical_authority_digest(request),
+        accepted_at_monotonic_ns=accepted_at,
+        processing_deadline_monotonic_ns=accepted_at + 30_000_000_000,
     )
     swapped = dict(original_payload)
     swapped["handoff_digest"] = canonical_authority_digest({"swapped": True})

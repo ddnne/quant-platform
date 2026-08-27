@@ -50,6 +50,10 @@ MAX_FRAME_BYTES = 4 * 1024 * 1024
 MAX_FILE_DESCRIPTORS = 1
 DEFAULT_IO_TIMEOUT_SECONDS = 5.0
 DEFAULT_PROCESSING_TIMEOUT_SECONDS = 30.0
+_UNLINKED_DESCRIPTOR_METHOD = (
+    "controlled_execution:consume_trader_handoff",
+    "exact_four_one_shot_execution",
+)
 DEFAULT_ACCEPT_POLL_SECONDS = 0.5
 DEFAULT_MAX_CONCURRENT_CONNECTIONS = 16
 
@@ -800,13 +804,20 @@ def call_unix_authority(
                 raise LocalAuthorityError(
                     "authority descriptor is unavailable"
                 ) from exc
+            operation = request.get("operation")
+            purpose = request.get("purpose")
+            expected_nlink = (
+                0
+                if (operation, purpose) == _UNLINKED_DESCRIPTOR_METHOD
+                else 1
+            )
             if (
                 flags != os.O_RDONLY
                 or not stat.S_ISREG(info.st_mode)
-                or info.st_nlink != 1
+                or info.st_nlink != expected_nlink
             ):
                 raise LocalAuthorityError(
-                    "authority descriptor must be one-link read-only regular file"
+                    "authority descriptor link identity is invalid for the method"
                 )
             rights = array.array("i", [read_only_fd])
             sent = channel.sendmsg(
