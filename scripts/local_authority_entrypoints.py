@@ -38,6 +38,10 @@ from scripts.local_ready_registry import (
     load_scoped_ready_public_keys,
     ready_authority_instance_id,
 )
+from scripts.local_authority_files import (
+    ProtectedAuthorityFileError,
+    read_protected_authority_file,
+)
 from scripts.local_authority_service import (
     REQUEST_FORMAT,
     AuthorityRequestContext,
@@ -151,8 +155,13 @@ def _append_content_addressed(
         fd = os.open(path, flags, 0o440)
     except FileExistsError:
         try:
-            existing = path.read_bytes()
-        except OSError as exc:
+            existing = read_protected_authority_file(
+                path,
+                expected_owner_uids={os.geteuid()},
+                allowed_modes={0o440},
+                max_bytes=len(content),
+            ).raw
+        except ProtectedAuthorityFileError as exc:
             raise LocalAuthorityError(
                 "authority artifact collision is unreadable"
             ) from exc
@@ -1102,7 +1111,11 @@ class D1FreezeAuthorizeApplyCoverage:
 
 def _hash_open_file(fd: int) -> tuple[str, os.stat_result]:
     before = os.fstat(fd)
-    if not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_size <= 0
+        or before.st_nlink != 1
+    ):
         raise LocalAuthorityError("READY snapshot artifact is not a regular file")
     digest = hashlib.sha256()
     offset = 0
@@ -1113,8 +1126,22 @@ def _hash_open_file(fd: int) -> tuple[str, os.stat_result]:
         digest.update(chunk)
         offset += len(chunk)
     after = os.fstat(fd)
-    identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-    if identity != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+    identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+        before.st_nlink,
+    )
+    if identity != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+        after.st_nlink,
+    ):
         raise LocalAuthorityError("READY snapshot changed while hashing")
     return "sha256:" + digest.hexdigest(), after
 
@@ -1163,15 +1190,18 @@ def _load_ready_snapshot(
             rows[0][1].encode("utf-8"), field="embedded research manifest"
         )
         try:
-            external_raw = manifest_path.read_bytes()
-        except OSError as exc:
+            manifest_file = read_protected_authority_file(
+                manifest_path,
+                expected_owner_uids={info.st_uid},
+                allowed_modes={0o400, 0o440, 0o444},
+                max_bytes=4 * 1024 * 1024,
+            )
+            external_raw = manifest_file.raw
+        except ProtectedAuthorityFileError as exc:
             raise LocalAuthorityError(
                 "READY external research manifest is missing"
             ) from exc
         external = decode_strict_json(external_raw, field="external research manifest")
-        manifest_info = manifest_path.lstat()
-        if stat.S_IMODE(manifest_info.st_mode) & 0o222:
-            raise LocalAuthorityError("READY research manifest is writable")
         if external != embedded:
             raise LocalAuthorityError("READY embedded/external manifest mismatch")
         if (

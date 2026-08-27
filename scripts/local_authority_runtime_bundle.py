@@ -33,6 +33,10 @@ from scripts.local_authority_bootstrap_common import (
     _safe_file_state,
     _write_root_owned_file,
 )
+from scripts.local_authority_files import (
+    ProtectedAuthorityFileError,
+    read_protected_authority_file,
+)
 
 
 def _require_root_owned_executable(path: Path) -> Path:
@@ -230,8 +234,18 @@ def _load_runtime_bundle_manifest() -> dict[str, Any]:
     if not _safe_file_state(RUNTIME_BUNDLE_MANIFEST_PATH, uid=0, modes=(0o440, 0o444)):
         raise BootstrapError("root-owned runtime bundle manifest is absent or unsafe")
     try:
-        document = json.loads(RUNTIME_BUNDLE_MANIFEST_PATH.read_bytes())
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raw = read_protected_authority_file(
+            RUNTIME_BUNDLE_MANIFEST_PATH,
+            expected_owner_uids={0},
+            allowed_modes={0o440, 0o444},
+            max_bytes=1024 * 1024,
+        ).raw
+        document = json.loads(raw)
+    except (
+        ProtectedAuthorityFileError,
+        UnicodeError,
+        json.JSONDecodeError,
+    ) as exc:
         raise BootstrapError("runtime bundle manifest is invalid JSON") from exc
     expected_fields = {
         "format",
@@ -420,4 +434,3 @@ def install_runtime_bundle(
         }
     )
     return plan
-
