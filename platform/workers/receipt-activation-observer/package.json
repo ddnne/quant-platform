@@ -1,0 +1,21 @@
+{
+  "name": "quant-platform-receipt-activation-observer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Access-protected staging observer for Receipt authority activation evidence",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.runtime.config.ts",
+    "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
+    "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
+    "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.0.0",
+    "@cloudflare/workers-types": "5.20260825.1",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11",
+    "wrangler": "4.125.0"
+  }
+}

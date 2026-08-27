@@ -85,6 +85,10 @@ def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> 
         }],
     }
     for environment in ("base", "production", "staging"):
+        for worker in manifest_module.ACTIVE_WORKERS:
+            assert manifest["workers"][worker][environment]["default_handler"] == {
+                "fetch_reserved_special": True,
+            }
         for worker, inventory in expected.items():
             assert manifest["workers"][worker][environment][
                 "worker_entrypoints"
@@ -241,6 +245,48 @@ def test_manifest_digest_covers_the_complete_binding_policy() -> None:
         "DAILY_ROW_QUOTA"
     ] = "25001"
     with pytest.raises(ValueError, match="binding manifest digest drift"):
+        manifest_module.validate_manifest(drifted)
+
+
+def test_receipt_activation_observer_is_staging_only_and_capability_minimal() -> None:
+    observer = manifest_module.build_manifest()["workers"][
+        "receipt-activation-observer"
+    ]
+    for environment in ("base", "production"):
+        surface = observer[environment]
+        assert surface["workers_dev"] is False
+        assert surface["services"] == []
+        assert surface["secret_names"] == []
+        assert surface["route"] is None
+        assert surface["routes"] == []
+    staging = observer["staging"]
+    assert staging["workers_dev"] is True
+    assert staging["preview_urls"] is False
+    assert staging["services"] == [{
+        "binding": "PREMIUM_RECEIPT_OPERATOR",
+        "entrypoint": "PremiumReceiptOperatorService",
+        "service": "quant-platform-ingestion-premium-staging",
+    }]
+    assert staging["worker_entrypoints"] == []
+    assert staging["durable_object_class_handlers"] == []
+    for field in (
+        "d1_databases",
+        "r2_buckets",
+        "kv_namespaces",
+        "queue_producers",
+        "queue_consumers",
+        "durable_objects",
+    ):
+        assert staging[field] == []
+
+
+def test_default_fetch_reserved_special_drift_fails_closed() -> None:
+    manifest = manifest_module.build_manifest()
+    drifted = copy.deepcopy(manifest)
+    drifted["workers"]["receipt-activation-observer"]["staging"][
+        "default_handler"
+    ]["fetch_reserved_special"] = False
+    with pytest.raises(ValueError, match="default fetch reserved-special drift"):
         manifest_module.validate_manifest(drifted)
 
 
@@ -869,11 +915,13 @@ def test_missing_version_metadata_binding_fails_closed() -> None:
         manifest_module.validate_manifest(drifted)
 
 
-def test_staging_surfaces_are_private_and_have_exact_separate_secret_policy() -> None:
+def test_staging_surfaces_have_exact_workers_dev_and_secret_policy() -> None:
     manifest = manifest_module.build_manifest()
     for worker, environments in manifest["workers"].items():
         staging = environments["staging"]
-        assert staging["workers_dev"] is False
+        assert staging["workers_dev"] is (
+            worker == "receipt-activation-observer"
+        )
         assert staging["preview_urls"] is False
         assert staging["secret_names"] == sorted(
             manifest_module.STAGING_SECRET_NAMES.get(worker, ())

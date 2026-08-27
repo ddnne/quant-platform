@@ -4,6 +4,7 @@
     "ingestion-premium",
     "ingestion-secrets",
     "quant-ops-mcp",
+    "receipt-activation-observer",
     "receipt-evidence-authority",
     "research-ai-gateway",
     "research-mass-eval"
@@ -58,7 +59,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:f26519b17d3ee5ef1d047ae7c2b15ff22cadc5830f46deca32ff7c1ac1d1bac5",
+  "manifest_digest": "sha256:6ba1ee2ccf0c5723a77f4a0461a3683fca57fdf566d77a7fd4a4489780f020a9",
   "schema_version": "cloudflare-active-worker-bindings/v8",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -76,6 +77,9 @@
           "migrations_dir": "../ingestion-premium/migrations"
         }
       ],
+      "default_handler": {
+        "fetch_reserved_special": true
+      },
       "durable_object_class_handlers": [],
       "durable_objects": [],
       "kv_namespaces": [],
@@ -147,6 +151,9 @@
       "config": "platform/workers/ingestion-secrets/wrangler.test.toml",
       "crons": [],
       "d1_databases": [],
+      "default_handler": {
+        "fetch_reserved_special": true
+      },
       "durable_object_class_handlers": [],
       "durable_objects": [],
       "kv_namespaces": [],
@@ -227,6 +234,9 @@
           "migrations_table": "d1_migrations_ops_quota"
         }
       ],
+      "default_handler": {
+        "fetch_reserved_special": true
+      },
       "durable_object_class_handlers": [
         {
           "framework_rpc_inventory": {
@@ -351,6 +361,54 @@
       "worker_entrypoints": [],
       "workers_dev": false
     },
+    "receipt-activation-observer": {
+      "account_id": null,
+      "ai": {},
+      "compatibility_date": "2026-08-01",
+      "compatibility_flags": [],
+      "config": "platform/workers/receipt-activation-observer/wrangler.test.toml",
+      "crons": [],
+      "d1_databases": [],
+      "default_handler": {
+        "fetch_reserved_special": true
+      },
+      "durable_object_class_handlers": [],
+      "durable_objects": [],
+      "kv_namespaces": [],
+      "main": "src/index.ts",
+      "migrations": [],
+      "name": "quant-platform-receipt-activation-observer-test",
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1
+      },
+      "placement": {},
+      "preview_urls": false,
+      "queue_consumers": [],
+      "queue_producers": [],
+      "r2_buckets": [],
+      "ratelimits": [],
+      "route": null,
+      "routes": [],
+      "secret_names": [],
+      "services": [],
+      "tail_consumers": [],
+      "toolchain": {
+        "@cloudflare/vitest-plugin": "1.0.0",
+        "@cloudflare/workers-types": "5.20260825.1",
+        "typescript": "5.9.2",
+        "vitest": "4.1.11",
+        "wrangler": "4.125.0"
+      },
+      "vars": {
+        "ENVIRONMENT": "staging"
+      },
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      },
+      "worker_entrypoints": [],
+      "workers_dev": false
+    },
     "receipt-evidence-authority": {
       "account_id": null,
       "ai": {},
@@ -365,6 +423,9 @@
           "database_name": "quant-ingest-receipt-test"
         }
       ],
+      "default_handler": {
+        "fetch_reserved_special": true
+      },
       "durable_object_class_handlers": [
         {
           "handlers": [
@@ -457,6 +518,9 @@
       "config": "platform/workers/research-ai-gateway/wrangler.test.toml",
       "crons": [],
       "d1_databases": [],
+      "default_handler": {
+        "fetch_reserved_special": true
+      },
       "durable_object_class_handlers": [
         {
           "alarm_reserved_special": true,
@@ -538,6 +602,9 @@
       "config": "platform/workers/research-mass-eval/wrangler.test.toml",
       "crons": [],
       "d1_databases": [],
+      "default_handler": {
+        "fetch_reserved_special": true
+      },
       "durable_object_class_handlers": [],
       "durable_objects": [],
       "kv_namespaces": [],
@@ -626,6 +693,13 @@
       "typecheck": "tsc --noEmit",
       "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
     },
+    "receipt-activation-observer": {
+      "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
+      "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
+      "test": "vitest run --config vitest.runtime.config.ts",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
+    },
     "receipt-evidence-authority": {
       "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
       "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
@@ -668,6 +742,9 @@
             "database_name": "quant-ingest"
           }
         ],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
@@ -753,6 +830,9 @@
             "database_name": "quant-ingest"
           }
         ],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
@@ -836,6 +916,9 @@
             "database_name": "quant-ingest-staging"
           }
         ],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
@@ -921,6 +1004,9 @@
             "database_name": "quant-ingest"
           }
         ],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
@@ -1007,6 +1093,9 @@
             "database_name": "quant-ingest"
           }
         ],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
@@ -1093,6 +1182,9 @@
             "migrations_table": "d1_migrations_ingestion"
           }
         ],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
@@ -1171,6 +1263,9 @@
         "config": "platform/workers/ingestion-secrets/wrangler.toml",
         "crons": [],
         "d1_databases": [],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
@@ -1240,6 +1335,9 @@
         "config": "platform/workers/ingestion-secrets/wrangler.toml",
         "crons": [],
         "d1_databases": [],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
@@ -1309,6 +1407,9 @@
         "config": "platform/workers/ingestion-secrets/wrangler.staging.toml",
         "crons": [],
         "d1_databases": [],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
@@ -1396,6 +1497,9 @@
             "migrations_table": "d1_migrations_ops_quota"
           }
         ],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [
           {
             "framework_rpc_inventory": {
@@ -1554,6 +1658,9 @@
             "migrations_table": "d1_migrations_ops_quota"
           }
         ],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [
           {
             "framework_rpc_inventory": {
@@ -1712,6 +1819,9 @@
             "migrations_table": "d1_migrations_ops_quota"
           }
         ],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [
           {
             "framework_rpc_inventory": {
@@ -1841,6 +1951,158 @@
         "workers_dev": false
       }
     },
+    "receipt-activation-observer": {
+      "base": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/receipt-activation-observer/wrangler.toml",
+        "crons": [],
+        "d1_databases": [],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
+        "durable_object_class_handlers": [],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-receipt-activation-observer",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "ENVIRONMENT": "disabled"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "worker_entrypoints": [],
+        "workers_dev": false
+      },
+      "production": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/receipt-activation-observer/wrangler.toml",
+        "crons": [],
+        "d1_databases": [],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
+        "durable_object_class_handlers": [],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-receipt-activation-observer",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "ENVIRONMENT": "disabled"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "worker_entrypoints": [],
+        "workers_dev": false
+      },
+      "staging": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/receipt-activation-observer/wrangler.staging.toml",
+        "crons": [],
+        "d1_databases": [],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
+        "durable_object_class_handlers": [],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-receipt-activation-observer-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [],
+        "services": [
+          {
+            "binding": "PREMIUM_RECEIPT_OPERATOR",
+            "entrypoint": "PremiumReceiptOperatorService",
+            "service": "quant-platform-ingestion-premium-staging"
+          }
+        ],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "ENVIRONMENT": "staging"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "worker_entrypoints": [],
+        "workers_dev": true
+      }
+    },
     "receipt-evidence-authority": {
       "base": {
         "account_id": null,
@@ -1856,6 +2118,9 @@
             "database_name": "quant-ingest"
           }
         ],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [
           {
             "handlers": [
@@ -1963,6 +2228,9 @@
             "database_name": "quant-ingest"
           }
         ],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [
           {
             "handlers": [
@@ -2070,6 +2338,9 @@
             "database_name": "quant-ingest-staging"
           }
         ],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [
           {
             "handlers": [
@@ -2175,6 +2446,9 @@
         "config": "platform/workers/research-ai-gateway/wrangler.toml",
         "crons": [],
         "d1_databases": [],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [
           {
             "alarm_reserved_special": true,
@@ -2265,6 +2539,9 @@
         "config": "platform/workers/research-ai-gateway/wrangler.toml",
         "crons": [],
         "d1_databases": [],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [
           {
             "alarm_reserved_special": true,
@@ -2355,6 +2632,9 @@
         "config": "platform/workers/research-ai-gateway/wrangler.staging.toml",
         "crons": [],
         "d1_databases": [],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [
           {
             "alarm_reserved_special": true,
@@ -2443,6 +2723,9 @@
         "config": "platform/workers/research-mass-eval/wrangler.toml",
         "crons": [],
         "d1_databases": [],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
@@ -2508,6 +2791,9 @@
         "config": "platform/workers/research-mass-eval/wrangler.toml",
         "crons": [],
         "d1_databases": [],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
@@ -2573,6 +2859,9 @@
         "config": "platform/workers/research-mass-eval/wrangler.staging.toml",
         "crons": [],
         "d1_databases": [],
+        "default_handler": {
+          "fetch_reserved_special": true
+        },
         "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],

@@ -1,0 +1,20 @@
+name = "quant-platform-receipt-activation-observer-staging"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+workers_dev = true
+preview_urls = false
+
+[vars]
+ENVIRONMENT = "staging"
+
+[[services]]
+binding = "PREMIUM_RECEIPT_OPERATOR"
+service = "quant-platform-ingestion-premium-staging"
+entrypoint = "PremiumReceiptOperatorService"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"
