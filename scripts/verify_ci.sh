@@ -114,6 +114,60 @@ if [[ "${#WORKERS[@]}" -eq 0 ]]; then
   echo "active Worker inventory is empty" >&2
   exit 1
 fi
+if ! command -v npm >/dev/null 2>&1; then
+  echo "npm not found" >&2
+  exit 1
+fi
+
+# Python integration tests exercise the repository-pinned Wrangler boundary.
+# Install every active Worker's locked graph before pytest, once, and reuse it
+# for the parallel runtime/typecheck/dry-run lanes below.
+ci_log_dir="$(mktemp -d "${TMPDIR:-/tmp}/quant-platform-ci.XXXXXX")"
+trap 'rm -rf -- "$ci_log_dir"' EXIT
+
+prepare_worker_dependencies() {
+  local dir="$1" name
+  name="$(basename "$dir")"
+  if [[ ! -d "$dir" ]]; then
+    echo "worker $name: missing directory ($dir)" >&2
+    exit 1
+  fi
+  if [[ ! -f "$dir/package.json" ]]; then
+    echo "worker $name: missing package.json ($dir)" >&2
+    exit 1
+  fi
+  if [[ ! -f "$dir/package-lock.json" ]]; then
+    echo "worker $name: missing package-lock.json ($dir)" >&2
+    exit 1
+  fi
+  echo "==> npm ci ($name)"
+  # Do not use npm ci --legacy-peer-deps.
+  (cd "$dir" && npm ci)
+}
+
+echo "==> active Worker dependency graphs (parallel, locked)"
+dependency_pids=()
+dependency_names=()
+for dir in "${WORKERS[@]}"; do
+  name="$(basename "$dir")"
+  dependency_names+=("$name")
+  (prepare_worker_dependencies "$dir") \
+    >"$ci_log_dir/install-$name.log" 2>&1 &
+  dependency_pids+=("$!")
+done
+dependency_failed=0
+for i in "${!dependency_pids[@]}"; do
+  name="${dependency_names[$i]}"
+  if ! wait "${dependency_pids[$i]}"; then
+    dependency_failed=1
+    echo "worker dependency install failed: $name" >&2
+  fi
+  cat "$ci_log_dir/install-$name.log"
+done
+if [[ "$dependency_failed" -ne 0 ]]; then
+  echo "one or more active Worker dependency installs failed" >&2
+  exit 1
+fi
 
 echo "==> Cloudflare canonical D1 migration manifest"
 "$py" scripts/cloudflare_d1_migration_manifest.py
@@ -220,11 +274,6 @@ if n == 0:
     raise SystemExit(f"Evaluation IR golden is empty: {golden_path}")
 '
 
-if ! command -v npm >/dev/null 2>&1; then
-  echo "npm not found" >&2
-  exit 1
-fi
-
 verify_worker() {
   local dir="$1" name
   name="$(basename "$dir")"
@@ -240,9 +289,6 @@ verify_worker() {
     echo "worker $name: missing package-lock.json ($dir)" >&2
     exit 1
   fi
-  echo "==> npm ci ($name)"
-  # Do not use npm ci --legacy-peer-deps
-  (cd "$dir" && npm ci)
   echo "==> npm test ($name)"
   (cd "$dir" && npm test)
   echo "==> npm run typecheck ($name)"
@@ -309,8 +355,6 @@ verify_worker() {
 }
 
 echo "==> active Worker lanes (parallel, fail-closed aggregation)"
-ci_log_dir="$(mktemp -d "${TMPDIR:-/tmp}/quant-platform-ci.XXXXXX")"
-trap 'rm -rf -- "$ci_log_dir"' EXIT
 worker_pids=()
 worker_names=()
 for dir in "${WORKERS[@]}"; do

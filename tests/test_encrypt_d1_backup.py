@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import sqlite3
 import struct
+import sys
 
 import pytest
 from cryptography.exceptions import InvalidTag
@@ -18,6 +19,50 @@ SPEC.loader.exec_module(backup)
 
 SHA = "a" * 40
 EXPORTED_AT = "2026-08-25T06:00:00Z"
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_sqlite3_cli(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    """Exercise the CLI boundary without depending on the CI host image.
+
+    Production still fails closed when the real ``sqlite3`` executable is
+    absent.  The test process supplies a closed argv-compatible executable so
+    restore, streaming, error, and publication behavior remain deterministic
+    on both macOS and the Ubuntu Workers Builds image.
+    """
+
+    executable = tmp_path / "sqlite3-test-cli"
+    executable.write_text(
+        f"""#!{sys.executable}
+import sqlite3
+import sys
+
+if len(sys.argv) != 4 or sys.argv[1:3] != ["-batch", "-bail"]:
+    raise SystemExit(2)
+connection = sqlite3.connect(sys.argv[3])
+try:
+    connection.executescript(sys.stdin.read())
+    connection.commit()
+except (OSError, sqlite3.Error):
+    connection.close()
+    raise SystemExit(1)
+connection.close()
+""",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+    original_which = backup.shutil.which
+
+    def which(name: str) -> str | None:
+        if name == "sqlite3":
+            return str(executable)
+        return original_which(name)
+
+    monkeypatch.setattr(backup.shutil, "which", which)
+    return executable
 
 
 def _quoted(column: str) -> str:
@@ -154,6 +199,20 @@ def test_empty_arbitrary_and_invalid_sql_fail_before_target_publication(
         assert source.read_bytes() == body
         assert not target.exists()
         assert not list(tmp_path.glob(f".{target.name}.*.partial"))
+
+
+def test_missing_sqlite_cli_fails_closed_before_target_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = governed_d1_export(tmp_path)
+    target = tmp_path / "missing-cli.enc"
+    key_path = key(tmp_path)
+    monkeypatch.setattr(backup.shutil, "which", lambda _name: None)
+    with pytest.raises(ValueError, match="sqlite3 CLI is required"):
+        backup.encrypt_backup(source, target, key_path, **identity_kwargs())
+    assert source.is_file()
+    assert not target.exists()
 
 
 def test_wrong_database_identity_or_schema_fails_closed(tmp_path: Path) -> None:
