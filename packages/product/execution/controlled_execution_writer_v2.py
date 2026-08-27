@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Mapping, NoReturn
+from typing import Any, Callable, Mapping, NoReturn, Sequence
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
@@ -79,6 +79,7 @@ from execution.trader_webauthn_authority_v2 import (
     ExactFourTraderRelyingPartyV2,
 )
 from scripts.finding_ledger_gate import require_pinned_finding_ledger_gate
+from scripts.local_authority_service import AuthorityRequestContext
 
 
 CONTROLLED_WRITER_MANIFEST_FORMAT = "controlled-exact-four-artifact-manifest/v2"
@@ -574,6 +575,7 @@ class SQLiteControlledExecutionWriterV2:
         "_trader_uid",
         "_rps",
         "_credentials",
+        "_server_bound",
     )
 
     def __init__(
@@ -586,6 +588,7 @@ class SQLiteControlledExecutionWriterV2:
         trader_uid: int,
         relying_parties: ExactFourTraderRelyingPartyRegistryV2,
         credentials: ExactFourTraderCredentialRegistryV2,
+        server_bound: bool,
         _token: object,
     ) -> None:
         if _token is not _WRITER_CONSTRUCTION_TOKEN:
@@ -600,6 +603,10 @@ class SQLiteControlledExecutionWriterV2:
             )
         if type(trader_uid) is not int or trader_uid < 0:
             raise ControlledExecutionWriterV2Error("Trader peer UID is invalid")
+        if type(server_bound) is not bool:
+            raise ControlledExecutionWriterV2Error(
+                "Controlled AuthorityServer binding is invalid"
+            )
         rp = relying_parties.require(environment)
         for credential in credentials.credentials:
             if credential.environment == environment and (
@@ -615,7 +622,16 @@ class SQLiteControlledExecutionWriterV2:
         self._trader_uid = trader_uid
         self._rps = relying_parties
         self._credentials = credentials
+        self._server_bound = server_bound
         self._initialize()
+
+    def _require_positive_operation(self) -> None:
+        if self._server_bound is not True:
+            raise ExactFourAuthorityPending(
+                "positive Controlled operations require the local AuthorityServer "
+                "entrypoint"
+            )
+        require_pinned_finding_ledger_gate()
 
     @property
     def public_key(self) -> Ed25519PublicKey:
@@ -667,7 +683,9 @@ class SQLiteControlledExecutionWriterV2:
                     prior_sign_count INTEGER NOT NULL,
                     result_sign_count INTEGER NOT NULL,
                     consume_request_digest TEXT NOT NULL UNIQUE,
+                    authority_request_digest TEXT NOT NULL UNIQUE,
                     authenticated_trader_uid INTEGER NOT NULL,
+                    authenticated_trader_caller TEXT NOT NULL,
                     canonical_handoff BLOB NOT NULL,
                     status TEXT NOT NULL CHECK(status = 'CONSUMED'),
                     consumed_at TEXT NOT NULL,
@@ -1511,9 +1529,19 @@ class SQLiteControlledExecutionWriterV2:
         self,
         *,
         peer_uid: int,
+        authenticated_caller: str,
+        authority_request_digest: str,
         handoff: Mapping[str, Any],
         canonical_handoff: bytes,
     ) -> WrittenExactFourControlledArtifactsV2 | None:
+        if (
+            authenticated_caller != "trader"
+            or type(authority_request_digest) is not str
+            or not authority_request_digest.startswith("sha256:")
+        ):
+            raise ControlledExecutionWriterV2Error(
+                "Controlled handoff requires the authenticated Trader request"
+            )
         handoff_digest = _sha256_bytes(canonical_handoff)
         trader_event_digest = handoff["_controlled_event_digest"]
         consume_body = {
@@ -1522,7 +1550,9 @@ class SQLiteControlledExecutionWriterV2:
             "handoff_id": handoff["handoff_id"],
             "handoff_digest": handoff_digest,
             "trader_event_digest": trader_event_digest,
+            "authority_request_digest": authority_request_digest,
             "authenticated_trader_uid": peer_uid,
+            "authenticated_trader_caller": authenticated_caller,
         }
         consume_digest = canonical_authority_digest(consume_body)
         consumed_at = _aware_utc(
@@ -1533,7 +1563,9 @@ class SQLiteControlledExecutionWriterV2:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 "SELECT handoff_digest, trader_event_digest, "
-                "consume_request_digest, authenticated_trader_uid, canonical_handoff "
+                "consume_request_digest, authority_request_digest, "
+                "authenticated_trader_uid, authenticated_trader_caller, "
+                "canonical_handoff "
                 "FROM controlled_handoffs WHERE environment = ? AND handoff_id = ?",
                 (self.environment, handoff["handoff_id"]),
             ).fetchone()
@@ -1542,7 +1574,11 @@ class SQLiteControlledExecutionWriterV2:
                     existing["handoff_digest"] != handoff_digest
                     or existing["trader_event_digest"] != trader_event_digest
                     or existing["consume_request_digest"] != consume_digest
+                    or existing["authority_request_digest"]
+                    != authority_request_digest
                     or existing["authenticated_trader_uid"] != peer_uid
+                    or existing["authenticated_trader_caller"]
+                    != authenticated_caller
                     or bytes(existing["canonical_handoff"]) != canonical_handoff
                 ):
                     raise ControlledExecutionWriterV2Error(
@@ -1597,7 +1633,8 @@ class SQLiteControlledExecutionWriterV2:
                     )
             connection.execute(
                 "INSERT INTO controlled_handoffs VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONSUMED', ?)",
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "'CONSUMED', ?)",
                 (
                     self.environment,
                     handoff["handoff_id"],
@@ -1610,7 +1647,9 @@ class SQLiteControlledExecutionWriterV2:
                     trader_event["prior_sign_count"],
                     trader_event["result_sign_count"],
                     consume_digest,
+                    authority_request_digest,
                     peer_uid,
+                    authenticated_caller,
                     canonical_handoff,
                     consumed_at,
                 ),
@@ -1832,16 +1871,116 @@ class SQLiteControlledExecutionWriterV2:
         finally:
             connection.close()
 
+    def _execute_authenticated_handoff(
+        self,
+        *,
+        peer_uid: int,
+        authenticated_caller: str,
+        authority_request_digest: str,
+        request_id: str,
+        payload: Mapping[str, Any],
+        handoff_bytes: bytes,
+        bounded_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+    ) -> WrittenExactFourControlledArtifactsV2:
+        if (
+            peer_uid != self._trader_uid
+            or authenticated_caller != "trader"
+            or type(payload) not in {dict, MappingProxyType}
+            or set(payload) != {"handoff_id", "handoff_digest"}
+            or request_id != payload.get("handoff_id")
+            or payload.get("handoff_digest") != _sha256_bytes(handoff_bytes)
+        ):
+            raise ControlledExecutionWriterV2Error(
+                "authenticated Trader request or handoff digest is invalid"
+            )
+        _require_digest(payload["handoff_id"], "Trader handoff_id")
+        handoff = self._verify_handoff(
+            handoff_bytes,
+            expected_handoff_id=payload["handoff_id"],
+        )
+        stored = self._reserve_handoff(
+            peer_uid=peer_uid,
+            authenticated_caller=authenticated_caller,
+            authority_request_digest=authority_request_digest,
+            handoff=handoff,
+            canonical_handoff=handoff_bytes,
+        )
+        if stored is not None:
+            return stored
+        context = self._execution_context(
+            handoff,
+            canonical_handoff=handoff_bytes,
+        )
+        one_call = _OneCallControlledPilotAuthorizationV2(context)
+        try:
+            raw_output = one_call.invoke(bounded_executor)
+            output = self._verify_executor_output(raw_output, context=context)
+            return self._commit_verified_handoff(
+                handoff=handoff,
+                canonical_handoff=handoff_bytes,
+                output=output,
+            )
+        except BaseException as exc:
+            self._record_failed_attempt(handoff["handoff_id"], exc)
+            raise
+
+    def consume_authority_server_handoff(
+        self,
+        context: AuthorityRequestContext,
+        payload: Mapping[str, Any],
+        fds: Sequence[int],
+        bounded_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+    ) -> WrittenExactFourControlledArtifactsV2:
+        """Consume only a server-authenticated Trader request and one SCM FD."""
+
+        self._require_positive_operation()
+        if (
+            type(context) is not AuthorityRequestContext
+            or context.caller != "trader"
+            or context.peer.uid != self._trader_uid
+            or context.grant.caller != "trader"
+            or context.grant.operation != CONTROLLED_TRADER_HANDOFF_OPERATION
+            or context.grant.purpose != CONTROLLED_TRADER_HANDOFF_PURPOSE
+            or context.grant.environment != self.environment
+            or len(fds) != 1
+        ):
+            raise ControlledExecutionWriterV2Error(
+                "Controlled handoff lacks the exact server-authenticated Trader context"
+            )
+        exact_payload = dict(payload)
+        reconstructed_request = {
+            "format": "local-authority-request/v1",
+            "request_id": context.request_id,
+            "operation": context.grant.operation,
+            "purpose": context.grant.purpose,
+            "payload": exact_payload,
+        }
+        if canonical_authority_digest(reconstructed_request) != context.request_digest:
+            raise ControlledExecutionWriterV2Error(
+                "Controlled server request context digest is inconsistent"
+            )
+        handoff_bytes = _read_unlinked_readonly_descriptor(
+            fds[0],
+            expected_uid=context.peer.uid,
+        )
+        return self._execute_authenticated_handoff(
+            peer_uid=context.peer.uid,
+            authenticated_caller=context.caller,
+            authority_request_digest=context.request_digest,
+            request_id=context.request_id,
+            payload=exact_payload,
+            handoff_bytes=handoff_bytes,
+            bounded_executor=bounded_executor,
+        )
+
     def receive_and_execute(
         self,
         channel: socket.socket,
         bounded_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]],
     ) -> WrittenExactFourControlledArtifactsV2:
-        """Reserve a verified handoff, then invoke one bounded executor exactly once."""
+        """Compatibility transport used by tests; live launch requires the server."""
 
-        # Test factories remain test-only, but even their positive operation is
-        # under the same strict all-P0 ledger gate as the production server.
-        require_pinned_finding_ledger_gate()
+        self._require_positive_operation()
         peer_uid = _unix_peer_uid(channel)
         if peer_uid != self._trader_uid:
             raise ControlledExecutionWriterV2Error(
@@ -1866,41 +2005,19 @@ class SQLiteControlledExecutionWriterV2:
             or request.get("operation") != CONTROLLED_TRADER_HANDOFF_OPERATION
             or request.get("purpose") != CONTROLLED_TRADER_HANDOFF_PURPOSE
             or type(payload) is not dict
-            or set(payload) != {"handoff_id", "handoff_digest"}
-            or request.get("request_id") != payload.get("handoff_id")
-            or payload.get("handoff_digest") != _sha256_bytes(handoff_bytes)
         ):
             raise ControlledExecutionWriterV2Error(
-                "Trader local-authority request or handoff digest is invalid"
+                "Trader local-authority request fields are invalid"
             )
-        _require_digest(payload["handoff_id"], "Trader handoff_id")
-        handoff = self._verify_handoff(
-            handoff_bytes,
-            expected_handoff_id=payload["handoff_id"],
-        )
-        stored = self._reserve_handoff(
+        return self._execute_authenticated_handoff(
             peer_uid=peer_uid,
-            handoff=handoff,
-            canonical_handoff=handoff_bytes,
+            authenticated_caller="trader",
+            authority_request_digest=canonical_authority_digest(request),
+            request_id=request["request_id"],
+            payload=payload,
+            handoff_bytes=handoff_bytes,
+            bounded_executor=bounded_executor,
         )
-        if stored is not None:
-            return stored
-        context = self._execution_context(
-            handoff,
-            canonical_handoff=handoff_bytes,
-        )
-        one_call = _OneCallControlledPilotAuthorizationV2(context)
-        try:
-            raw_output = one_call.invoke(bounded_executor)
-            output = self._verify_executor_output(raw_output, context=context)
-            return self._commit_verified_handoff(
-                handoff=handoff,
-                canonical_handoff=handoff_bytes,
-                output=output,
-            )
-        except BaseException as exc:
-            self._record_failed_attempt(handoff["handoff_id"], exc)
-            raise
 
     def artifact_count(self) -> int:
         with self._connect() as connection:
@@ -1960,6 +2077,7 @@ def _create_test_controlled_execution_writer_v2(
     credentials: ExactFourTraderCredentialRegistryV2,
     trader_uid: int | None = None,
     key_id: str = "test-controlled-writer.invalid/v2",
+    server_bound: bool = True,
 ) -> SQLiteControlledExecutionWriterV2:
     """Construct a test-environment writer with an ephemeral Controlled key."""
 
@@ -1981,6 +2099,7 @@ def _create_test_controlled_execution_writer_v2(
         trader_uid=os.geteuid() if trader_uid is None else trader_uid,
         relying_parties=relying_parties,
         credentials=credentials,
+        server_bound=server_bound,
         _token=_WRITER_CONSTRUCTION_TOKEN,
     )
 
@@ -2121,8 +2240,10 @@ def _activation_registries(
     return rps, registry
 
 
-def open_live_controlled_execution_writer_v2() -> SQLiteControlledExecutionWriterV2:
-    """Open only after fixed root-owned activation and protected state exist."""
+def _load_live_controlled_execution_writer_v2(
+    *, server_bound: bool
+) -> SQLiteControlledExecutionWriterV2:
+    """Load fixed activation for observation or the AuthorityServer entrypoint."""
 
     document = _load_root_owned_activation()
     environment = document["environment"]
@@ -2208,8 +2329,22 @@ def open_live_controlled_execution_writer_v2() -> SQLiteControlledExecutionWrite
         trader_uid=trader_uid,
         relying_parties=rps,
         credentials=credentials,
+        server_bound=server_bound,
         _token=_WRITER_CONSTRUCTION_TOKEN,
     )
+
+
+def open_live_controlled_execution_writer_v2() -> SQLiteControlledExecutionWriterV2:
+    """Observe activated state; the returned object cannot launch positive ops."""
+
+    return _load_live_controlled_execution_writer_v2(server_bound=False)
+
+
+def _open_server_bound_controlled_execution_writer_v2(
+) -> SQLiteControlledExecutionWriterV2:
+    """Execution adapter hook used only inside UnixAuthorityService."""
+
+    return _load_live_controlled_execution_writer_v2(server_bound=True)
 
 
 __all__ = [
