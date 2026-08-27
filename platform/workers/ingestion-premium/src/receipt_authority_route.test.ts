@@ -168,7 +168,7 @@ describe("Receipt positive-operation boundary", () => {
         .sort(),
     ).toEqual([
       "pending_public_key_registration",
-      "staging_recovery_audit_attestation",
+      "staging_recovery_audit_evidence",
     ]);
   });
 

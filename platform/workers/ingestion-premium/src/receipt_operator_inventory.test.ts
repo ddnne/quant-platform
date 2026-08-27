@@ -30,7 +30,7 @@ describe("Premium Receipt operator manifest-bound RPC inventory", () => {
       fetch_reserved_special: false,
       rpc_methods: [
         "pending_public_key_registration",
-        "staging_recovery_audit_attestation",
+        "staging_recovery_audit_evidence",
       ],
     });
     expect(

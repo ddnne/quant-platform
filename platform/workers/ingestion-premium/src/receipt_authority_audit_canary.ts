@@ -5,6 +5,7 @@ import type {
   ReceiptEvidenceAuthorityRpc,
 } from "../../receipt-evidence-authority/src/types";
 import {
+  bytesToBase64,
   canonicalDigest,
   canonicalJson,
   isPlainObject,
@@ -65,11 +66,89 @@ type AuditReservation = {
   signed_attestation_json: string | null;
 };
 
-async function requireStoredAuditAttestation(
+type RecoveryAuditSchemaRow = {
+  type: "table" | "trigger";
+  name: string;
+  tbl_name: string;
+  sql: string;
+};
+
+export type ReceiptOperatorAuditEvidenceV1 = {
+  schema_version: "receipt-operator-audit-evidence/v1";
+  purpose: "receipt_authority_recovery_canary";
+  eligibility: "AUDIT_ONLY";
+  environment: "staging";
+  caller_source_sha: string;
+  caller_worker_version_id: string;
+  caller_worker_version_tag: string;
+  d1_schema_digest: string;
+  reservation_id: string;
+  authority_operation_id: string;
+  request_nonce: string;
+  signed_attestation_digest: string;
+  signed_attestation_json_utf8_base64: string;
+  signed_attestation_json_utf8_length: number;
+  evidence_digest: string;
+};
+
+const RECOVERY_AUDIT_SCHEMA_DIGEST =
+  "sha256:fba0bdada764ff2dc67caa5c11b3a31b2c3c28d673a25712a853e0b0566b5259";
+const RECOVERY_AUDIT_SCHEMA_NAMES = [
+  "receipt_authority_recovery_audit_attestations",
+  "receipt_authority_recovery_audit_monotonic",
+  "receipt_authority_recovery_audit_no_delete",
+] as const;
+
+async function recoveryAuditSchemaDigest(db: D1Database): Promise<string> {
+  const result = await db.prepare(
+    `SELECT type,name,tbl_name,sql FROM sqlite_schema
+      WHERE name IN (?,?,?) ORDER BY type,name`,
+  ).bind(...RECOVERY_AUDIT_SCHEMA_NAMES).all<RecoveryAuditSchemaRow>();
+  if (result.results.length !== RECOVERY_AUDIT_SCHEMA_NAMES.length) {
+    throw new Error("staging Receipt audit schema inventory drifted");
+  }
+  const rows: RecoveryAuditSchemaRow[] = [];
+  for (const row of result.results) {
+    if (
+      !isPlainObject(row) ||
+      Object.keys(row).sort().join("\n") !==
+        ["type", "name", "tbl_name", "sql"].sort().join("\n") ||
+      (row.type !== "table" && row.type !== "trigger") ||
+      !RECOVERY_AUDIT_SCHEMA_NAMES.includes(
+        row.name as typeof RECOVERY_AUDIT_SCHEMA_NAMES[number],
+      ) ||
+      row.tbl_name !== "receipt_authority_recovery_audit_attestations" ||
+      typeof row.sql !== "string" || row.sql.length === 0
+    ) throw new Error("staging Receipt audit schema inventory drifted");
+    rows.push(row as RecoveryAuditSchemaRow);
+  }
+  const digest = await canonicalDigest({
+    schema_version: "receipt-recovery-audit-sqlite-schema/v1",
+    objects: rows,
+  });
+  if (digest !== RECOVERY_AUDIT_SCHEMA_DIGEST) {
+    throw new Error("staging Receipt audit schema digest drifted");
+  }
+  return digest;
+}
+
+async function verifyStoredAuditAttestation(
   reservation: AuditReservation,
   provenance: ReturnType<typeof activeStagingProvenance>,
-): Promise<ReceiptAuditRecoveryAttestationV1> {
+) {
+  const expectedReservationId = await canonicalDigest({
+    schema_version: "staging-receipt-audit-reservation/v1",
+    purpose: "receipt_authority_recovery_canary",
+    eligibility: "AUDIT_ONLY",
+    source_sha: provenance.sourceSha,
+    caller_worker_version_id: provenance.versionId,
+  });
   if (
+    reservation.reservation_id !== expectedReservationId ||
+    reservation.source_sha !== provenance.sourceSha ||
+    reservation.caller_worker_version_id !== provenance.versionId ||
+    !isSha256(reservation.authority_operation_id) ||
+    !/^[0-9a-f]{64}$/.test(reservation.request_nonce) ||
     reservation.state !== "ATTESTED" ||
     !isSha256(reservation.signed_attestation_digest) ||
     reservation.signed_attestation_json === null
@@ -94,7 +173,14 @@ async function requireStoredAuditAttestation(
     verified.claims.authority_worker_version_tag !==
       `ra-s-r-${provenance.sourceSha}`
   ) throw new Error("staging Receipt audit attestation was substituted");
-  return verified.attestation;
+  return { ...verified, exactJson: reservation.signed_attestation_json };
+}
+
+async function requireStoredAuditAttestation(
+  reservation: AuditReservation,
+  provenance: ReturnType<typeof activeStagingProvenance>,
+): Promise<ReceiptAuditRecoveryAttestationV1> {
+  return (await verifyStoredAuditAttestation(reservation, provenance)).attestation;
 }
 
 function requireAuditResultEnvelope(value: unknown): asserts value is {
@@ -423,4 +509,43 @@ export async function readStagingReceiptAuditRecoveryAttestation(
   ).bind(provenance.sourceSha, provenance.versionId).first<AuditReservation>();
   if (row === null) throw new Error("staging Receipt audit attestation is absent");
   return requireStoredAuditAttestation(row, provenance);
+}
+
+/**
+ * Read-only activation evidence for the isolated staging observer. The two D1
+ * statements are SELECT-only, and the exact stored TEXT bytes are returned
+ * without reserialization.
+ */
+export async function readStagingReceiptAuditRecoveryEvidence(
+  env: ReceiptAuthorityAuditCanaryEnv,
+): Promise<ReceiptOperatorAuditEvidenceV1> {
+  const provenance = activeStagingProvenance(env);
+  const schemaDigest = await recoveryAuditSchemaDigest(env.DB);
+  const row = await env.DB.prepare(
+    `SELECT reservation_id,source_sha,caller_worker_version_id,
+            authority_operation_id,request_nonce,state,
+            signed_attestation_digest,signed_attestation_json
+       FROM receipt_authority_recovery_audit_attestations
+      WHERE source_sha=? AND caller_worker_version_id=?`,
+  ).bind(provenance.sourceSha, provenance.versionId).first<AuditReservation>();
+  if (row === null) throw new Error("staging Receipt audit attestation is absent");
+  const verified = await verifyStoredAuditAttestation(row, provenance);
+  const exactBytes = new TextEncoder().encode(verified.exactJson);
+  const body = {
+    schema_version: "receipt-operator-audit-evidence/v1" as const,
+    purpose: "receipt_authority_recovery_canary" as const,
+    eligibility: "AUDIT_ONLY" as const,
+    environment: "staging" as const,
+    caller_source_sha: provenance.sourceSha,
+    caller_worker_version_id: provenance.versionId,
+    caller_worker_version_tag: provenance.versionTag,
+    d1_schema_digest: schemaDigest,
+    reservation_id: row.reservation_id,
+    authority_operation_id: row.authority_operation_id,
+    request_nonce: row.request_nonce,
+    signed_attestation_digest: row.signed_attestation_digest!,
+    signed_attestation_json_utf8_base64: bytesToBase64(exactBytes),
+    signed_attestation_json_utf8_length: exactBytes.length,
+  };
+  return { ...body, evidence_digest: await canonicalDigest(body) };
 }

@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type {
   ReceiptAuditRecoveryAttestationClaimsV1,
@@ -8,6 +12,7 @@ import type {
   ReceiptIssueResultV1,
 } from "../../receipt-evidence-authority/src/types";
 import {
+  base64ToBytes,
   bytesToBase64,
   canonicalDigest,
   canonicalJson,
@@ -32,10 +37,26 @@ import {
   type ReceiptAuthorityClientEnv,
 } from "./receipt_authority_client";
 import {
+  readStagingReceiptAuditRecoveryEvidence,
   readStagingReceiptAuditRecoveryAttestation,
   runStagingReceiptAuditRecoveryCanary,
   type ReceiptAuthorityAuditCanaryEnv,
 } from "./receipt_authority_audit_canary";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const auditSchema = new DatabaseSync(":memory:");
+auditSchema.exec(readFileSync(
+  join(here, "..", "migrations", "0019_receipt_authority_recovery_smoke.sql"),
+  "utf8",
+));
+const AUDIT_SCHEMA_ROWS = auditSchema.prepare(
+  `SELECT type,name,tbl_name,sql FROM sqlite_schema
+    WHERE name IN (?,?,?) ORDER BY type,name`,
+).all(
+  "receipt_authority_recovery_audit_attestations",
+  "receipt_authority_recovery_audit_monotonic",
+  "receipt_authority_recovery_audit_no_delete",
+) as Record<string, unknown>[];
 
 type AuditRow = {
   reservation_id: string;
@@ -51,8 +72,11 @@ type AuditRow = {
 function fakeEnv() {
   const rows = new Map<string, Record<string, unknown>>();
   const auditRows = new Map<string, AuditRow>();
+  const preparedSql: string[] = [];
+  const runSql: string[] = [];
   const db = {
     prepare(sql: string) {
+      preparedSql.push(sql);
       let args: unknown[] = [];
       const statement = {
         bind(...values: unknown[]) {
@@ -60,6 +84,7 @@ function fakeEnv() {
           return statement;
         },
         async run() {
+          runSql.push(sql);
           if (sql.includes("INSERT OR IGNORE INTO receipt_authority_requests")) {
             const operationId = String(args[0]);
             if (!rows.has(operationId)) {
@@ -123,6 +148,9 @@ function fakeEnv() {
           return (rows.get(String(args[0])) ?? null) as T | null;
         },
         async all<T>() {
+          if (sql.includes("FROM sqlite_schema")) {
+            return { results: AUDIT_SCHEMA_ROWS as T[], success: true };
+          }
           return {
             results: [...rows.values()]
               .filter((row) => row.state === "PREPARED")
@@ -366,6 +394,8 @@ function fakeEnv() {
     recoverAudit,
     rows,
     auditRows,
+    preparedSql,
+    runSql,
   };
 }
 
@@ -483,6 +513,41 @@ describe("Receipt Evidence Authority client", () => {
     expect(await readStagingReceiptAuditRecoveryAttestation(env)).toEqual(first);
     expect(beginAudit).toHaveBeenCalledOnce();
     expect(recoverAudit).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads exact D1 TEXT bytes and pinned schema with SELECT-only evidence RPC", async () => {
+    const { env, preparedSql, runSql } = fakeEnv();
+    activateAudit(env);
+    const attestation = await runStagingReceiptAuditRecoveryCanary(env);
+    const preparedBefore = preparedSql.length;
+    const runsBefore = runSql.length;
+
+    const evidence = await readStagingReceiptAuditRecoveryEvidence(env);
+    const exactBytes = base64ToBytes(
+      evidence.signed_attestation_json_utf8_base64,
+    );
+    expect(new TextDecoder().decode(exactBytes)).toBe(canonicalJson(attestation));
+    expect(evidence).toMatchObject({
+      schema_version: "receipt-operator-audit-evidence/v1",
+      purpose: "receipt_authority_recovery_canary",
+      eligibility: "AUDIT_ONLY",
+      environment: "staging",
+      caller_source_sha: "1".repeat(40),
+      caller_worker_version_id: "10000000-0000-4000-8000-000000000003",
+      caller_worker_version_tag: `ra-s-c-${"1".repeat(40)}`,
+      d1_schema_digest:
+        "sha256:fba0bdada764ff2dc67caa5c11b3a31b2c3c28d673a25712a853e0b0566b5259",
+      signed_attestation_json_utf8_length: exactBytes.length,
+      signed_attestation_digest: await canonicalDigest(attestation),
+      evidence_digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    });
+    const { evidence_digest: suppliedDigest, ...body } = evidence;
+    expect(suppliedDigest).toBe(await canonicalDigest(body));
+    expect(preparedSql.slice(preparedBefore)).toHaveLength(2);
+    expect(preparedSql.slice(preparedBefore).every((sql) =>
+      /^\s*SELECT\b/i.test(sql)
+    )).toBe(true);
+    expect(runSql).toHaveLength(runsBefore);
   });
 
   it("creates a new immutable audit row after a coordinated caller redeploy", async () => {

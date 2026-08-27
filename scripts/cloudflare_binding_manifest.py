@@ -409,7 +409,7 @@ WORKER_ENTRYPOINT_RPC_POLICY: dict[
             False,
             (
                 "pending_public_key_registration",
-                "staging_recovery_audit_attestation",
+                "staging_recovery_audit_evidence",
             ),
         ),
     },

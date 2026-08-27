@@ -44,7 +44,6 @@ import { fetchDataset } from "./fetch_jq";
 import { todayJst, toJstIso } from "./identity";
 import { sha256HexFromString } from "./sha256";
 import type {
-  ReceiptAuditRecoveryAttestationV1,
   ReceiptEvidenceAuthorityRpc,
   ReceiptPublicKeyRegistrationV1,
 } from "../../receipt-evidence-authority/src/types";
@@ -62,8 +61,9 @@ import {
   type ReceiptAuthorityEnvironment,
 } from "./receipt_authority_client";
 import {
-  readStagingReceiptAuditRecoveryAttestation,
+  readStagingReceiptAuditRecoveryEvidence,
   runStagingReceiptAuditRecoveryCanary,
+  type ReceiptOperatorAuditEvidenceV1,
 } from "./receipt_authority_audit_canary";
 
 /** Generated bindings plus secret/optional var refinements only. */
@@ -726,10 +726,8 @@ export interface PremiumReceiptOperatorRpc {
    * the governed ingestion transaction and its durable cron recovery sweep.
    */
   pending_public_key_registration(): Promise<ReceiptOperatorRegistrationV1>;
-  /** Return only the immutable Cron-produced AUDIT_ONLY signed attestation. */
-  staging_recovery_audit_attestation(): Promise<
-    ReceiptAuditRecoveryAttestationV1
-  >;
+  /** Return exact D1 bytes plus verified immutable AUDIT_ONLY evidence. */
+  staging_recovery_audit_evidence(): Promise<ReceiptOperatorAuditEvidenceV1>;
 }
 
 const RECEIPT_REGISTRATION_FIELDS = [
@@ -895,10 +893,8 @@ export class PremiumReceiptOperatorService
     };
   }
 
-  staging_recovery_audit_attestation(): Promise<
-    ReceiptAuditRecoveryAttestationV1
-  > {
-    return readStagingReceiptAuditRecoveryAttestation(this.env);
+  staging_recovery_audit_evidence(): Promise<ReceiptOperatorAuditEvidenceV1> {
+    return readStagingReceiptAuditRecoveryEvidence(this.env);
   }
 }
 

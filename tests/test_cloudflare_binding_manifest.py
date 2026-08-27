@@ -74,7 +74,7 @@ def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> 
             "fetch_reserved_special": False,
             "rpc_methods": [
                 "pending_public_key_registration",
-                "staging_recovery_audit_attestation",
+                "staging_recovery_audit_evidence",
             ],
         }],
         "research-ai-gateway": [{
