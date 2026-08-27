@@ -13,13 +13,16 @@ the dedicated OS principal, protected store, and human enrollment are observed.
 
 from __future__ import annotations
 
+import array
 import base64
 import fcntl
 import hashlib
 import os
 import secrets
+import socket
 import sqlite3
 import stat
+import struct
 import tempfile
 import uuid
 from dataclasses import dataclass, fields
@@ -52,6 +55,7 @@ from research.readiness import (
     VerifiedPilotReadiness,
     verify_pinned_pilot_readiness,
 )
+from scripts.finding_ledger_gate import require_pinned_finding_ledger_gate
 from selection.budget_ledger import MassResearchDisabledError
 
 
@@ -99,6 +103,36 @@ _ASSERTION_FIELDS = frozenset(
         "assertion_digest",
     }
 )
+
+
+def _unix_peer_uid(channel: socket.socket) -> int:
+    if type(channel) is not socket.socket or channel.family != socket.AF_UNIX:
+        raise ExactFourTraderAuthorityV2Error(
+            "authority handoff requires an exact AF_UNIX socket"
+        )
+    getpeereid = getattr(channel, "getpeereid", None)
+    if callable(getpeereid):
+        uid, _gid = getpeereid()
+        return int(uid)
+    if hasattr(socket, "SO_PEERCRED"):
+        raw = channel.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+        _pid, uid, _gid = struct.unpack("3i", raw)
+        return int(uid)
+    local_peercred = getattr(socket, "LOCAL_PEERCRED", None)
+    if local_peercred is not None:
+        try:
+            raw = channel.getsockopt(0, local_peercred, 128)
+            version, uid, group_count = struct.unpack_from("=IIh", raw, 0)
+            if version != 0 or not 1 <= group_count <= 16:
+                raise ValueError("Darwin peer credential group count is invalid")
+        except (OSError, struct.error, ValueError) as exc:
+            raise ExactFourTraderAuthorityV2Error(
+                "Darwin AF_UNIX peer credentials are invalid"
+            ) from exc
+        return int(uid)
+    raise ExactFourAuthorityPending(
+        "platform cannot authenticate AF_UNIX peer credentials"
+    )
 
 
 class ExactFourTraderAuthorityV2Error(ExactFourAuthorityContractError):
@@ -1061,6 +1095,9 @@ class ExactFourTraderWebAuthnAuthorityV2:
         "_credentials",
         "_ledger",
         "_clock",
+        "_controlled_execution_uid",
+        "_server_bound",
+        "_positive_gate",
     )
 
     def __init__(
@@ -1071,6 +1108,9 @@ class ExactFourTraderWebAuthnAuthorityV2:
         credentials: ExactFourTraderCredentialRegistryV2,
         ledger: SQLiteExactFourTraderLedgerV2,
         clock: Callable[[], datetime],
+        controlled_execution_uid: int,
+        server_bound: bool,
+        positive_gate: Callable[[], object],
         _token: object,
     ) -> None:
         if _token is not _AUTHORITY_CONSTRUCTION_TOKEN:
@@ -1088,6 +1128,24 @@ class ExactFourTraderWebAuthnAuthorityV2:
         self._credentials = credentials
         self._ledger = ledger
         self._clock = clock
+        if type(controlled_execution_uid) is not int or controlled_execution_uid < 0:
+            raise ExactFourTraderAuthorityV2Error(
+                "controlled execution peer UID is invalid"
+            )
+        self._controlled_execution_uid = controlled_execution_uid
+        if type(server_bound) is not bool or not callable(positive_gate):
+            raise ExactFourTraderAuthorityV2Error(
+                "Trader positive operation gate configuration is invalid"
+            )
+        self._server_bound = server_bound
+        self._positive_gate = positive_gate
+
+    def _require_positive_operation(self) -> None:
+        if self._server_bound is not True:
+            raise ExactFourAuthorityPending(
+                "positive Trader operations require the local AuthorityServer entrypoint"
+            )
+        self._positive_gate()
 
     @property
     def ledger(self) -> SQLiteExactFourTraderLedgerV2:
@@ -1097,6 +1155,7 @@ class ExactFourTraderWebAuthnAuthorityV2:
         self,
         readiness: VerifiedReadyAuthorityEvidenceV2,
     ) -> IssuedExactFourTraderChallengeV2:
+        self._require_positive_operation()
         verified_ready = _require_ready_authority_evidence_v2(readiness)
         subject = verified_ready.subject
         now = self._clock()
@@ -1147,6 +1206,7 @@ class ExactFourTraderWebAuthnAuthorityV2:
         challenge: IssuedExactFourTraderChallengeV2,
         assertion_raw: bytes | str,
     ) -> CommittedExactFourTraderHandoffV2:
+        self._require_positive_operation()
         verified_ready = _require_ready_authority_evidence_v2(readiness)
         subject = verified_ready.subject
         if type(challenge) is not IssuedExactFourTraderChallengeV2:
@@ -1346,6 +1406,50 @@ class ExactFourTraderWebAuthnAuthorityV2:
             if readonly_fd is not None:
                 os.close(readonly_fd)
 
+    def send_handoff(
+        self,
+        channel: socket.socket,
+        handoff: CommittedExactFourTraderHandoffV2,
+    ) -> None:
+        """Authenticate controlled_execution and send exactly one read-only FD."""
+
+        self._require_positive_operation()
+        peer_uid = _unix_peer_uid(channel)
+        if peer_uid != self._controlled_execution_uid:
+            raise ExactFourTraderAuthorityV2Error(
+                "controlled execution AF_UNIX peer UID mismatch"
+            )
+        descriptor = self.open_handoff_descriptor(handoff)
+        try:
+            request = {
+                "format": "local-authority-request/v1",
+                "request_id": handoff.handoff_id,
+                "operation": "controlled_execution:consume_trader_handoff",
+                "purpose": "exact_four_one_shot_execution",
+                "payload": {
+                    "handoff_id": handoff.handoff_id,
+                    "handoff_digest": _sha256_bytes(handoff.canonical_bytes),
+                },
+            }
+            payload = _canonical_bytes(request)
+            frame = struct.pack("!I", len(payload)) + payload
+            sent = channel.sendmsg(
+                [frame],
+                [
+                    (
+                        socket.SOL_SOCKET,
+                        socket.SCM_RIGHTS,
+                        array.array("i", [descriptor]),
+                    )
+                ],
+            )
+            if sent != len(frame):
+                raise ExactFourTraderAuthorityV2Error(
+                    "controlled execution handoff frame was not sent atomically"
+                )
+        finally:
+            os.close(descriptor)
+
 
 def _create_test_exact_four_trader_authority_v2(
     *,
@@ -1353,6 +1457,8 @@ def _create_test_exact_four_trader_authority_v2(
     relying_parties: ExactFourTraderRelyingPartyRegistryV2,
     credentials: ExactFourTraderCredentialRegistryV2,
     clock: Callable[[], datetime],
+    positive_gate: Callable[[], object] = lambda: object(),
+    server_bound: bool = True,
 ) -> ExactFourTraderWebAuthnAuthorityV2:
     """Construct an intentionally non-activatable authority for behavior tests."""
 
@@ -1374,6 +1480,9 @@ def _create_test_exact_four_trader_authority_v2(
         credentials=credentials,
         ledger=ledger,
         clock=clock,
+        controlled_execution_uid=os.geteuid(),
+        server_bound=server_bound,
+        positive_gate=positive_gate,
         _token=_AUTHORITY_CONSTRUCTION_TOKEN,
     )
 
@@ -1415,8 +1524,10 @@ def _load_live_activation_document() -> dict[str, Any]:
     return document
 
 
-def open_live_exact_four_trader_authority_v2() -> ExactFourTraderWebAuthnAuthorityV2:
-    """Open only from fixed root-owned activation and observed OS/store state."""
+def _load_live_exact_four_trader_authority_v2(
+    *, server_bound: bool
+) -> ExactFourTraderWebAuthnAuthorityV2:
+    """Load fixed activation for either observation or the server entrypoint."""
 
     document = _load_live_activation_document()
     environment = document["environment"]
@@ -1584,8 +1695,24 @@ def open_live_exact_four_trader_authority_v2() -> ExactFourTraderWebAuthnAuthori
         credentials=credentials,
         ledger=ledger,
         clock=lambda: datetime.now(timezone.utc),
+        controlled_execution_uid=controlled_uid,
+        server_bound=server_bound,
+        positive_gate=require_pinned_finding_ledger_gate,
         _token=_AUTHORITY_CONSTRUCTION_TOKEN,
     )
+
+
+def open_live_exact_four_trader_authority_v2() -> ExactFourTraderWebAuthnAuthorityV2:
+    """Observe activated state; the returned object cannot launch positive ops."""
+
+    return _load_live_exact_four_trader_authority_v2(server_bound=False)
+
+
+def _open_server_bound_exact_four_trader_authority_v2(
+) -> ExactFourTraderWebAuthnAuthorityV2:
+    """Execution-specific adapter hook used only inside UnixAuthorityService."""
+
+    return _load_live_exact_four_trader_authority_v2(server_bound=True)
 
 
 __all__ = [

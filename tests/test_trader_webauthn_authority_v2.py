@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import os
+import socket
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ from execution.trader_webauthn_authority_v2 import (
     open_live_exact_four_trader_authority_v2,
     verify_ready_authority_response_v2,
 )
+import execution.trader_webauthn_authority_v2 as trader_authority_module
 from research.ready_manifest import (
     build_ready_manifest,
     load_exact_four_pilot_ready_binding,
@@ -134,6 +136,9 @@ def _ready_evidence(
 def _authority(
     tmp_path: Path,
     now_box: list[datetime],
+    *,
+    positive_gate: Any = lambda: object(),
+    server_bound: bool = True,
 ) -> tuple[Any, ec.EllipticCurvePrivateKey, Any, Any]:
     private_key = ec.generate_private_key(ec.SECP256R1())
     rp = ExactFourTraderRelyingPartyV2(
@@ -161,6 +166,8 @@ def _authority(
         relying_parties=rps,
         credentials=credentials,
         clock=lambda: now_box[0],
+        positive_gate=positive_gate,
+        server_bound=server_bound,
     )
     return authority, private_key, rp, credential
 
@@ -399,3 +406,90 @@ def test_event_insert_failure_rolls_back_one_use_and_counter_atomically(
         assertion_raw=_canonical(assertion),
     )
     assert authority.ledger.event_count() == 1
+
+
+def test_positive_issue_authorize_and_handoff_all_require_the_strict_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now_box = [datetime.now(timezone.utc) - timedelta(seconds=3)]
+    allowed_dir = tmp_path / "allowed"
+    blocked_dir = tmp_path / "blocked"
+    allowed_dir.mkdir()
+    blocked_dir.mkdir()
+    allowed, private_key, _rp, credential = _authority(allowed_dir, now_box)
+    ready = _ready_evidence(now_box[0], monkeypatch)
+    challenge = allowed.issue_challenge(ready)
+    now_box[0] += timedelta(seconds=1)
+    assertion = _assertion(
+        challenge=challenge,
+        private_key=private_key,
+        credential=credential,
+        now=now_box[0],
+        sign_count=7,
+    )
+    handoff = allowed.authorize(
+        readiness=ready,
+        challenge=challenge,
+        assertion_raw=_canonical(assertion),
+    )
+
+    gate_calls = 0
+
+    def blocked_gate() -> object:
+        nonlocal gate_calls
+        gate_calls += 1
+        raise ExactFourAuthorityPending("strict all-P0 finding gate is OPEN")
+
+    blocked, _blocked_private, _blocked_rp, _blocked_credential = _authority(
+        blocked_dir,
+        now_box,
+        positive_gate=blocked_gate,
+    )
+    with pytest.raises(ExactFourAuthorityPending, match="all-P0"):
+        blocked.issue_challenge(ready)
+    with pytest.raises(ExactFourAuthorityPending, match="all-P0"):
+        blocked.authorize(
+            readiness=ready,
+            challenge=challenge,
+            assertion_raw=_canonical(assertion),
+        )
+    trader_side, controlled_side = socket.socketpair(
+        socket.AF_UNIX, socket.SOCK_STREAM
+    )
+    try:
+        with pytest.raises(ExactFourAuthorityPending, match="all-P0"):
+            blocked.send_handoff(trader_side, handoff)
+    finally:
+        trader_side.close()
+        controlled_side.close()
+    assert gate_calls == 3
+    assert blocked.ledger.event_count() == 0
+
+
+def test_public_live_opener_is_observation_only_not_a_positive_launcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now_box = [datetime.now(timezone.utc) - timedelta(seconds=2)]
+    observed, _private, _rp, _credential = _authority(
+        tmp_path,
+        now_box,
+        server_bound=False,
+    )
+    seen: list[bool] = []
+
+    def fake_loader(*, server_bound: bool) -> Any:
+        seen.append(server_bound)
+        return observed
+
+    monkeypatch.setattr(
+        trader_authority_module,
+        "_load_live_exact_four_trader_authority_v2",
+        fake_loader,
+    )
+    returned = trader_authority_module.open_live_exact_four_trader_authority_v2()
+    assert returned is observed
+    assert seen == [False]
+    with pytest.raises(ExactFourAuthorityPending, match="AuthorityServer"):
+        returned.issue_challenge(object())  # type: ignore[arg-type]
