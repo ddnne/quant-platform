@@ -50,7 +50,7 @@ Before either deployment:
 2. The active-binding manifest is clean for base, production, and staging.
 3. A D1 backup and checksum evidence exist for the target environment.
 4. Canonical ingestion migrations through
-   `0016_receipt_authority_immutability.sql` have been reviewed and applied by
+   `0018_receipt_product_materialization.sql` have been reviewed and applied by
    the single ingestion migration owner.
 5. The target D1/R2 bindings, Durable Object migration, and typed acquisition
    and receipt Service Bindings match the reviewed manifest.

@@ -57,6 +57,12 @@ from storage.receipt_policy import (  # noqa: E402
     is_recovered_only_digests,
     receipt_source_for_canonical_source,
 )
+from storage.coverage_ledger import CollectionReceipt  # noqa: E402
+from storage.verified_receipt import (  # noqa: E402
+    ReceiptVerificationError,
+    audit_signed_receipt_claims,
+    verify_collection_closure,
+)
 
 PROJECTION_VERSION = "ops_projection/v4"
 DEFAULT_MAX_AGE_SECONDS = 86_400
@@ -854,39 +860,130 @@ def _read_receipt_product_materializations(
 ) -> list[dict[str, Any]]:
     receipt_columns = {
         "source", "dataset", "segment_id", "segment_start", "segment_end",
-        "run_id", "structured_row_count", "digests_json",
+        "expected_scope", "expected_items", "observed_items", "raw_page_count",
+        "raw_row_count", "structured_row_count", "pagination_exhausted",
+        "digests_json", "run_id", "status", "error", "checked_at",
     }
     if not receipt_columns <= _columns(conn, "collection_receipts"):
         return []
     conn.row_factory = sqlite3.Row
-    trusted_receipts: dict[tuple[str, str, str, int], dict[str, Any]] = {}
+    all_receipt_identities: set[tuple[str, str, str, int]] = set()
+    eligible_by_segment: dict[
+        tuple[str, str, str],
+        tuple[tuple[int, int], tuple[str, str, str, int], dict[str, Any]],
+    ] = {}
     for row in conn.execute(
-        "SELECT source,dataset,segment_id,segment_start,segment_end,run_id,"
-        "structured_row_count,digests_json "
-        "FROM main.collection_receipts"
+        "SELECT " + ",".join(sorted(receipt_columns))
+        + " FROM main.collection_receipts ORDER BY source,dataset,segment_id,run_id"
     ).fetchall():
+        if (
+            type(row["source"]) is not str
+            or type(row["dataset"]) is not str
+            or type(row["segment_id"]) is not str
+            or type(row["run_id"]) is not int
+            or row["run_id"] <= 0
+        ):
+            raise RuntimeError("trusted receipt identity is not canonical")
         digests = _decode_receipt_digests(
             row["digests_json"],
-            dataset=str(row["dataset"]),
-            run_id=int(row["run_id"]),
+            dataset=row["dataset"],
+            run_id=row["run_id"],
         )
+        identity = (
+            row["source"],
+            row["dataset"],
+            row["segment_id"],
+            row["run_id"],
+        )
+        all_receipt_identities.add(identity)
         if not (
             digests.get("eligibility") == "TRUSTED_COLLECTION"
             and digests.get("issuer_class") == "SignedReceiptAuthority"
         ):
             continue
-        identity = (
-            str(row["source"]),
-            str(row["dataset"]),
-            str(row["segment_id"]),
-            int(row["run_id"]),
+
+        try:
+            if type(row["expected_scope"]) is not str:
+                raise TypeError("expected_scope must be text")
+            expected_scope = json.loads(row["expected_scope"])
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "trusted receipt expected_scope is invalid: "
+                + "/".join(map(str, identity))
+            ) from exc
+        if type(expected_scope) is not dict:
+            raise RuntimeError(
+                "trusted receipt expected_scope is not an object: "
+                + "/".join(map(str, identity))
+            )
+        pagination_exhausted = row["pagination_exhausted"]
+        if type(pagination_exhausted) is not int or pagination_exhausted not in {0, 1}:
+            raise RuntimeError(
+                "trusted receipt pagination state is invalid: "
+                + "/".join(map(str, identity))
+            )
+        receipt = CollectionReceipt(
+            source=row["source"],
+            dataset=row["dataset"],
+            segment_id=row["segment_id"],
+            segment_start=row["segment_start"],
+            segment_end=row["segment_end"],
+            expected_scope=expected_scope,
+            expected_items=row["expected_items"],
+            observed_items=row["observed_items"],
+            raw_page_count=row["raw_page_count"],
+            raw_row_count=row["raw_row_count"],
+            structured_row_count=row["structured_row_count"],
+            pagination_exhausted=bool(pagination_exhausted),
+            digests=digests,
+            run_id=row["run_id"],
+            status=row["status"],
+            error=row["error"],
+            checked_at=row["checked_at"],
         )
-        trusted_receipts[identity] = {
+        try:
+            closure = verify_collection_closure(receipt)
+        except ReceiptVerificationError:
+            # A correctly signed receipt from a revoked/prior key remains
+            # audit history but is no longer COMPLETE/product eligible.  A
+            # forged or corrupt row must still stop projection rather than be
+            # silently treated as historical evidence.
+            try:
+                audit_signed_receipt_claims(receipt)
+            except ReceiptVerificationError as audit_error:
+                raise RuntimeError(
+                    "trusted-marked receipt is neither active nor valid audit evidence: "
+                    + "/".join(map(str, identity))
+                ) from audit_error
+            continue
+        if (
+            closure.run_id != identity[3]
+            or closure.structured_generation != identity[3]
+        ):
+            raise RuntimeError(
+                "trusted receipt generation is not the monotonic governed run: "
+                + "/".join(map(str, identity))
+            )
+        candidate = {
             "digests": digests,
             "structured_row_count": int(row["structured_row_count"]),
             "segment_start": str(row["segment_start"]),
             "segment_end": str(row["segment_end"]),
         }
+        segment = identity[:3]
+        rank = (closure.structured_generation, closure.run_id)
+        prior = eligible_by_segment.get(segment)
+        if prior is not None and prior[0] == rank and prior[1] != identity:
+            raise RuntimeError(
+                "trusted receipt generation is equivocal for one segment: "
+                + "/".join(segment)
+            )
+        if prior is None or rank > prior[0]:
+            eligible_by_segment[segment] = (rank, identity, candidate)
+
+    trusted_receipts = {
+        selected[1]: selected[2] for selected in eligible_by_segment.values()
+    }
     if not trusted_receipts:
         return []
 
@@ -921,11 +1018,17 @@ def _read_receipt_product_materializations(
             raise RuntimeError("product materialization identity is invalid") from exc
         if identity in observed:
             raise RuntimeError("duplicate product materialization identity")
-        if identity not in trusted_receipts:
+        if identity not in all_receipt_identities:
             raise RuntimeError(
                 "product materialization has no exact trusted receipt: "
                 + "/".join(map(str, identity))
             )
+        if identity not in trusted_receipts:
+            # Superseded and revoked generations remain in the ingestion audit
+            # history.  They are deliberately absent from the current research
+            # projection and are never compared with a later mutable current
+            # product generation.
+            continue
         receipt = trusted_receipts[identity]
         digests = receipt["digests"]
         structured_count = receipt["structured_row_count"]

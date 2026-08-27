@@ -8,7 +8,7 @@ import gc
 import json
 from pathlib import Path
 import sqlite3
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -292,6 +292,205 @@ def _insert_raw_manifest(
             "2026-08-25T00:00:00Z",
         ),
     )
+
+
+def _receipt_product_projection_source() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE collection_receipts (
+          source TEXT, dataset TEXT, segment_id TEXT, segment_start TEXT,
+          segment_end TEXT, expected_scope TEXT, expected_items INTEGER,
+          observed_items INTEGER, raw_page_count INTEGER, raw_row_count INTEGER,
+          structured_row_count INTEGER, pagination_exhausted INTEGER,
+          digests_json TEXT, run_id INTEGER, status TEXT, error TEXT,
+          checked_at TEXT
+        );
+        CREATE TABLE receipt_product_materializations (
+          operation_id TEXT, run_id INTEGER, source TEXT, dataset TEXT,
+          segment_id TEXT, artifact_key TEXT, artifact_digest TEXT,
+          artifact_body TEXT, row_count INTEGER, byte_count INTEGER,
+          manifest_key TEXT, manifest_digest TEXT, raw_manifest_key TEXT,
+          raw_manifest_digest TEXT, raw_page_count INTEGER,
+          raw_row_count INTEGER, raw_bytes INTEGER, committed_at TEXT
+        );
+        CREATE TABLE ingestion_run_log (
+          id INTEGER, source TEXT, runtime TEXT, status TEXT,
+          authority_operation_id TEXT
+        );
+        CREATE TABLE raw_retention_manifests (
+          dataset TEXT, run_id INTEGER, manifest_key TEXT, page_count INTEGER,
+          row_count INTEGER, raw_bytes INTEGER, data_digest TEXT
+        );
+        CREATE TABLE jquants_records (
+          source TEXT, dataset TEXT, natural_key TEXT, event_time TEXT,
+          available_at TEXT, ingested_at TEXT, payload TEXT, raw_payload TEXT
+        );
+        """
+    )
+    return conn
+
+
+def _insert_product_receipt_candidate(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    segment_id: str = "2024-02",
+) -> None:
+    digests = {
+        "eligibility": "TRUSTED_COLLECTION",
+        "issuer_class": "SignedReceiptAuthority",
+        "structured_digest": f"sha256:{run_id:064x}",
+        "raw_manifest_digest": f"sha256:{run_id + 1000:064x}",
+    }
+    conn.execute(
+        "INSERT INTO collection_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "jquants",
+            "indices_bars_daily_topix",
+            segment_id,
+            "2024-02-01",
+            "2024-02-29",
+            "{}",
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            json.dumps(digests, sort_keys=True, separators=(",", ":")),
+            run_id,
+            "SUCCESS",
+            None,
+            f"2026-08-25T00:00:{run_id % 60:02d}Z",
+        ),
+    )
+
+
+def _insert_current_product_materialization(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+) -> None:
+    row = {
+        "source": "jquants",
+        "dataset": "indices_bars_daily_topix",
+        "natural_key": '{"Date":"2024-02-01"}',
+        "event_time": "2024-02-01T00:00:00Z",
+        "available_at": "2024-02-01T00:00:00Z",
+        "ingested_at": "2026-08-25T00:00:00Z",
+        "payload": '{"Close":2,"Date":"2024-02-01","Open":1}',
+        "raw_payload": '{"Date":"2024-02-01","Open":1,"Close":2}',
+    }
+    body = exporter.canonical_product_artifact_bytes([row]).decode("utf-8")
+    digest = exporter.product_artifact_body_digest(body)
+    raw_digest = f"sha256:{run_id + 1000:064x}"
+    operation_id = f"sha256:{run_id:064x}"
+    conn.execute(
+        "UPDATE collection_receipts SET digests_json=? WHERE run_id=?",
+        (
+            json.dumps(
+                {
+                    "eligibility": "TRUSTED_COLLECTION",
+                    "issuer_class": "SignedReceiptAuthority",
+                    "structured_digest": digest,
+                    "raw_manifest_digest": raw_digest,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            run_id,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO receipt_product_materializations VALUES "
+        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            operation_id,
+            run_id,
+            row["source"],
+            row["dataset"],
+            "2024-02",
+            f"structured/{run_id}.jsonl",
+            digest,
+            body,
+            1,
+            len(body.encode("utf-8")),
+            f"structured/{run_id}.manifest.json",
+            f"sha256:{run_id + 2000:064x}",
+            f"raw/{run_id}.manifest.json",
+            raw_digest,
+            1,
+            1,
+            100,
+            f"2026-08-25T00:00:{run_id % 60:02d}Z",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO ingestion_run_log VALUES (?,?,?,?,?)",
+        (run_id, "jquants", "receipt-evidence-authority", "SUCCESS", operation_id),
+    )
+    conn.execute(
+        "INSERT INTO raw_retention_manifests VALUES (?,?,?,?,?,?,?)",
+        (row["dataset"], run_id, f"raw/{run_id}.manifest.json", 1, 1, 100, raw_digest),
+    )
+    conn.execute(
+        "INSERT INTO jquants_records VALUES (?,?,?,?,?,?,?,?)",
+        tuple(row.values()),
+    )
+
+
+def test_product_projection_selects_only_latest_active_receipt_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _receipt_product_projection_source()
+    _insert_product_receipt_candidate(conn, run_id=101)
+    _insert_product_receipt_candidate(conn, run_id=102)
+    _insert_current_product_materialization(conn, run_id=102)
+
+    def verify(receipt: object) -> SimpleNamespace:
+        run_id = object.__getattribute__(receipt, "run_id")
+        return SimpleNamespace(run_id=run_id, structured_generation=run_id)
+
+    monkeypatch.setattr(exporter, "verify_collection_closure", verify)
+    rows = exporter._read_receipt_product_materializations(conn, "generation")
+    assert [row["run_id"] for row in rows] == [102]
+    conn.close()
+
+
+def test_product_projection_keeps_revoked_receipt_audit_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _receipt_product_projection_source()
+    _insert_product_receipt_candidate(conn, run_id=101)
+
+    def inactive(_receipt: object) -> None:
+        raise exporter.ReceiptVerificationError("key is not active")
+
+    monkeypatch.setattr(exporter, "verify_collection_closure", inactive)
+    monkeypatch.setattr(
+        exporter,
+        "audit_signed_receipt_claims",
+        lambda _receipt: MappingProxyType({"version": "signed-receipt-claims/v2"}),
+    )
+    assert exporter._read_receipt_product_materializations(conn, "generation") == []
+    conn.close()
+
+
+def test_product_projection_rejects_forged_trusted_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _receipt_product_projection_source()
+    _insert_product_receipt_candidate(conn, run_id=101)
+
+    def rejected(_receipt: object) -> None:
+        raise exporter.ReceiptVerificationError("invalid signature")
+
+    monkeypatch.setattr(exporter, "verify_collection_closure", rejected)
+    monkeypatch.setattr(exporter, "audit_signed_receipt_claims", rejected)
+    with pytest.raises(RuntimeError, match="neither active nor valid audit evidence"):
+        exporter._read_receipt_product_materializations(conn, "generation")
+    conn.close()
 
 
 def _recreate_evidence_table_without_constraints(

@@ -291,6 +291,22 @@ def test_prior_v3_receipt_remains_audit_only_and_loses_complete_eligibility(
     assert not is_complete_eligible_receipt(prior_v3)
 
 
+def test_signed_body_cannot_gain_eligibility_from_a_caller_issuer_class(
+    receipt_ed25519_keys: SimpleNamespace,
+) -> None:
+    receipt = _issue(
+        _SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key),
+        _calendar_required(),
+    )
+    mutated = replace(
+        receipt,
+        digests={**receipt.digests, "issuer_class": "CallerSuppliedAuthority"},
+    )
+    with pytest.raises(ReceiptVerificationError, match="issuer class"):
+        verify(mutated, required=_calendar_required())
+    assert not is_complete_eligible_receipt(mutated)
+
+
 def _calendar_required() -> RequiredCoverageSegment:
     return RequiredCoverageSegment(
         source="jquants",

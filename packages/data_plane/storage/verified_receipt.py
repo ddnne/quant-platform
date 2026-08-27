@@ -571,6 +571,8 @@ def verify_collection_closure(
         raise ReceiptVerificationError("synthetic receipts are not verifiable")
     if digests.get("eligibility") != "TRUSTED_COLLECTION":
         raise ReceiptVerificationError("receipt is not a trusted collection")
+    if digests.get("issuer_class") != "SignedReceiptAuthority":
+        raise ReceiptVerificationError("receipt issuer class is not trusted")
     if not verify_receipt_signature_values(
         body=frozen.signed_body,
         signature=digests["signature"],
