@@ -7,7 +7,10 @@ import { datasetById } from "./catalog";
 
 export type ReceiptAuthorityClientEnv = {
   DB: D1Database;
-  RECEIPT_EVIDENCE_AUTHORITY: ReceiptEvidenceAuthorityRpc;
+  RECEIPT_EVIDENCE_AUTHORITY: Pick<
+    ReceiptEvidenceAuthorityRpc,
+    "issue_for_segment" | "recover_issue"
+  >;
 };
 
 export type ReceiptAuthorityEnvironment = "staging" | "production";
@@ -151,6 +154,26 @@ export async function issueGovernedReceipt(
 ): Promise<{ requestNonce: string; result: ReceiptIssueResultV1 }> {
   requireSegment(datasetId, segmentId);
   const requestNonce = randomNonce();
+  return issueGovernedReceiptWithNonce(
+    env,
+    environment,
+    datasetId,
+    segmentId,
+    requestNonce,
+  );
+}
+
+async function issueGovernedReceiptWithNonce(
+  env: ReceiptAuthorityClientEnv,
+  environment: ReceiptAuthorityEnvironment,
+  datasetId: string,
+  segmentId: string,
+  requestNonce: string,
+): Promise<{ requestNonce: string; result: ReceiptIssueResultV1 }> {
+  requireSegment(datasetId, segmentId);
+  if (!/^[0-9a-f]{64}$/.test(requestNonce)) {
+    throw new TypeError("receipt issue nonce is invalid");
+  }
   const prepared = await prepareRequest(
     env,
     environment,

@@ -32,6 +32,7 @@ entrypoint = "ReceiptAuthorityService"
 [vars]
 INGEST_CONCURRENCY = "2"
 RECEIPT_AUTHORITY_ENVIRONMENT = "staging"
+RECEIPT_AUTHORITY_OPERATION_MODE = "PENDING"
 
 [observability]
 enabled = true

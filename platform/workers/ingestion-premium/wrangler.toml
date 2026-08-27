@@ -68,6 +68,7 @@ entrypoint = "ReceiptAuthorityService"
 # Parallel dataset ingest; shared RateLimiter still enforces ~500/min upstream.
 INGEST_CONCURRENCY = "6"
 RECEIPT_AUTHORITY_ENVIRONMENT = "production"
+RECEIPT_AUTHORITY_OPERATION_MODE = "PENDING"
 # MASTER_SCD2_ONLY = "1"  # optional: route equities_master structured to R2 only
 
 [triggers]
@@ -110,6 +111,7 @@ entrypoint = "ReceiptAuthorityService"
 [env.production.vars]
 INGEST_CONCURRENCY = "6"
 RECEIPT_AUTHORITY_ENVIRONMENT = "production"
+RECEIPT_AUTHORITY_OPERATION_MODE = "PENDING"
 
 [env.production.triggers]
 # Named environments do not inherit top-level triggers.
