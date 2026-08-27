@@ -319,6 +319,24 @@ def test_public_builder_never_treats_even_invalid_json_as_evidence() -> None:
         release.build_envelope({"collector": "caller-self-claim"})
 
 
+def test_writer_guard_is_independent_of_a_replaced_builder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "release"
+    monkeypatch.setattr(
+        release,
+        "build_envelope",
+        lambda payload: {
+            "schema_version": release.SCHEMA_VERSION,
+            "evidence_digest": release.payload_digest(payload),
+            "payload": dict(payload),
+        },
+    )
+    with pytest.raises(release.ReleaseObservationAuthorityUnavailable):
+        release.write_envelope({"collector": "caller-self-claim"}, output)
+    assert not output.exists()
+
+
 def test_pending_authority_contract_matches_missing_jsda_collector_transport() -> None:
     contract = json.loads(
         (ROOT / "specs/cloudflare/release_observation_authority.json").read_text(

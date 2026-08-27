@@ -923,19 +923,12 @@ def build_envelope(payload: Mapping[str, Any]) -> dict[str, Any]:
     _require_signed_release_observation_authority()
 
 
-def write_envelope(payload: Mapping[str, Any], output_dir: Path) -> Path:
-    envelope = build_envelope(payload)
-    digest_hex = envelope["evidence_digest"].removeprefix("sha256:")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    target = output_dir / f"quant-platform-release-evidence-{digest_hex}.json"
-    rendered = json.dumps(envelope, ensure_ascii=False, indent=2) + "\n"
-    if target.exists():
-        if target.read_text(encoding="utf-8") != rendered:
-            raise ValueError(f"content-addressed evidence collision: {target.name}")
-        return target
-    target.write_text(rendered, encoding="utf-8")
-    target.chmod(0o444)
-    return target
+def write_envelope(payload: Mapping[str, Any], output_dir: Path) -> NoReturn:
+    # Guard this public disk-writing boundary independently. In particular,
+    # replacing or wrapping ``build_envelope`` must not resurrect the legacy
+    # unsigned artifact writer while the observation authority is PENDING.
+    del payload, output_dir
+    _require_signed_release_observation_authority()
 
 
 def main(argv: list[str] | None = None) -> int:
