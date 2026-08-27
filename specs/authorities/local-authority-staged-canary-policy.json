@@ -13,6 +13,7 @@
   },
   "lease_seconds": 120,
   "maximum_attempts": 3,
+  "attempt_family": "AUTHORITY_ENVIRONMENT_ACTION_SOURCE_SHA",
   "strict_boundaries": {
     "release": false,
     "ready_publication": false,

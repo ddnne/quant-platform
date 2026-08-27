@@ -6,7 +6,7 @@ import base64
 import os
 import re
 import stat
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,13 +19,13 @@ from execution.exact_four_codec import (
 from execution.exact_four_trader_v2 import (
     _decode_canonical_base64url,
 )
-from scripts.finding_ledger_gate import require_pinned_finding_ledger_gate
+from execution.secure_authority_files_v2 import read_pinned_authority_file_v2
 from execution.trader_webauthn_authority_core_v2 import (
     ExactFourTraderWebAuthnAuthorityV2,
 )
 from execution.trader_webauthn_ledger_v2 import (
-    SQLiteExactFourTraderLedgerV2,
     _AUTHORITY_CONSTRUCTION_TOKEN,
+    SQLiteExactFourTraderLedgerV2,
 )
 from execution.trader_webauthn_registry_v2 import (
     ExactFourTraderCredentialRegistryV2,
@@ -33,8 +33,7 @@ from execution.trader_webauthn_registry_v2 import (
     ExactFourTraderRelyingPartyRegistryV2,
     ExactFourTraderRelyingPartyV2,
 )
-from execution.secure_authority_files_v2 import read_pinned_authority_file_v2
-
+from scripts.finding_ledger_gate import require_pinned_finding_ledger_gate
 
 TRADER_RP_REGISTRY_FORMAT = "exact-four-trader-rp-registry/v2"
 TRADER_CREDENTIAL_REGISTRY_FORMAT = "exact-four-trader-credential-registry/v2"
@@ -44,14 +43,13 @@ TRADER_LEDGER_EVENT_FORMAT = "exact-four-trader-ledger-event/v2"
 TRADER_COMMITTED_HANDOFF_FORMAT = "exact-four-trader-committed-handoff/v2"
 TRADER_VERIFIER_BACKEND = "ExactFourTraderWebAuthnVerifier/v2"
 TRADER_LEDGER_BACKEND = "ExactFourTraderOneUseCounterEventLedger/v2"
-TRADER_AUTHORITY_LIVE_STATE = (
-    "PENDING_HUMAN_ENROLLMENT_AND_PROTECTED_PRINCIPAL_STORE"
-)
+TRADER_AUTHORITY_LIVE_STATE = "PENDING_HUMAN_ENROLLMENT_AND_PROTECTED_PRINCIPAL_STORE"
 _CHALLENGE_BYTES = 32
 TRADER_AUTHORITY_ACTIVATION_PATH = Path(
     "/etc/quant-platform/authorities/trader/activation.json"
 )
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+
 
 def _load_live_activation_document() -> dict[str, Any]:
     path = TRADER_AUTHORITY_ACTIVATION_PATH
@@ -61,9 +59,7 @@ def _load_live_activation_document() -> dict[str, Any]:
             chain_root=Path("/"),
             directory_owner_uids={0},
             expected_file_uid=0,
-            allowed_file_modes=frozenset(
-                {0o400, 0o440, 0o444, 0o600, 0o640, 0o644}
-            ),
+            allowed_file_modes=frozenset({0o400, 0o440, 0o444, 0o600, 0o640, 0o644}),
             max_bytes=1024 * 1024,
         )
     except OSError as exc:
@@ -94,10 +90,15 @@ def _load_live_activation_document() -> dict[str, Any]:
     return document
 
 
-def _load_live_exact_four_trader_authority_v2(
-    *, server_bound: bool
-) -> ExactFourTraderWebAuthnAuthorityV2:
-    """Load fixed activation for either observation or the server entrypoint."""
+def _preflight_live_exact_four_trader_authority_v2() -> tuple[
+    str,
+    Path,
+    ExactFourTraderRelyingPartyRegistryV2,
+    ExactFourTraderCredentialRegistryV2,
+    int,
+    Path,
+]:
+    """Validate fixed activation without opening or initializing its ledger."""
 
     document = _load_live_activation_document()
     environment = document["environment"]
@@ -128,10 +129,7 @@ def _load_live_exact_four_trader_authority_v2(
         or type(controlled_socket_text) is not str
         or document["registration_payload_validated"] is not True
         or attestation_state not in {"UNATTESTED", "TRUSTED"}
-        or (
-            witness_digest is not None
-            and not witness_verified
-        )
+        or (witness_digest is not None and not witness_verified)
         or (
             trusted_attestation_digest is not None
             and type(trusted_attestation_digest) is not str
@@ -140,7 +138,9 @@ def _load_live_exact_four_trader_authority_v2(
             type(trusted_attestation_digest) is str
             and _SHA256_RE.fullmatch(trusted_attestation_digest) is None
         )
-        or (attestation_state == "UNATTESTED" and trusted_attestation_digest is not None)
+        or (
+            attestation_state == "UNATTESTED" and trusted_attestation_digest is not None
+        )
         or (attestation_state == "TRUSTED" and not trusted_attestation_verified)
         or not (witness_verified or trusted_attestation_verified)
         or document["protected_store_observed"] is not True
@@ -213,9 +213,7 @@ def _load_live_exact_four_trader_authority_v2(
             "user_presence_required",
             "user_verification_required",
         }:
-            raise ExactFourAuthorityPending(
-                "Trader RP activation row is not closed"
-            )
+            raise ExactFourAuthorityPending("Trader RP activation row is not closed")
         rp_entries.append(ExactFourTraderRelyingPartyV2(**row))
     relying_parties = ExactFourTraderRelyingPartyRegistryV2(
         tuple(rp_entries), generation=rp_document["generation"]
@@ -291,6 +289,29 @@ def _load_live_exact_four_trader_authority_v2(
         generation=credential_document["generation"],
         registry_id=credential_document["registry_id"],
     )
+    return (
+        environment,
+        store_path,
+        relying_parties,
+        credentials,
+        controlled_uid,
+        controlled_socket_path,
+    )
+
+
+def _load_live_exact_four_trader_authority_v2(
+    *, server_bound: bool
+) -> ExactFourTraderWebAuthnAuthorityV2:
+    """Load fixed activation for either observation or the server entrypoint."""
+
+    (
+        environment,
+        store_path,
+        relying_parties,
+        credentials,
+        controlled_uid,
+        _controlled_socket_path,
+    ) = _preflight_live_exact_four_trader_authority_v2()
     ledger = SQLiteExactFourTraderLedgerV2(
         store_path,
         environment=environment,
@@ -302,7 +323,7 @@ def _load_live_exact_four_trader_authority_v2(
         relying_parties=relying_parties,
         credentials=credentials,
         ledger=ledger,
-        clock=lambda: datetime.now(timezone.utc),
+        clock=lambda: datetime.now(UTC),
         controlled_execution_uid=controlled_uid,
         server_bound=server_bound,
         positive_gate=require_pinned_finding_ledger_gate,
@@ -316,8 +337,9 @@ def open_live_exact_four_trader_authority_v2() -> ExactFourTraderWebAuthnAuthori
     return _load_live_exact_four_trader_authority_v2(server_bound=False)
 
 
-def _open_server_bound_exact_four_trader_authority_v2(
-) -> ExactFourTraderWebAuthnAuthorityV2:
+def _open_server_bound_exact_four_trader_authority_v2() -> (
+    ExactFourTraderWebAuthnAuthorityV2
+):
     """Execution-specific adapter hook used only inside UnixAuthorityService."""
 
     return _load_live_exact_four_trader_authority_v2(server_bound=True)

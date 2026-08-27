@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import os
 import stat
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -47,9 +47,7 @@ CONTROLLED_WRITER_MANIFEST_FORMAT = "controlled-exact-four-artifact-manifest/v2"
 CONTROLLED_WRITER_ARTIFACT_FORMAT = "controlled-exact-four-artifact/v2"
 CONTROLLED_WRITER_EVENT_FORMAT = "controlled-execution-authority-event/v2"
 CONTROLLED_WRITER_ISSUER = "ControlledExactFourExecutionWriter/v2"
-CONTROLLED_TRADER_HANDOFF_OPERATION = (
-    "controlled_execution:consume_trader_handoff"
-)
+CONTROLLED_TRADER_HANDOFF_OPERATION = "controlled_execution:consume_trader_handoff"
 CONTROLLED_TRADER_HANDOFF_PURPOSE = "exact_four_one_shot_execution"
 CONTROLLED_WRITER_LIVE_STATE = (
     "PENDING_PROTECTED_CONTROLLED_EXECUTION_PRINCIPAL_KEY_STORE_AND_TRADER_PEER"
@@ -104,9 +102,7 @@ def _load_root_owned_activation() -> dict[str, Any]:
             chain_root=Path("/"),
             directory_owner_uids={0},
             expected_file_uid=0,
-            allowed_file_modes=frozenset(
-                {0o400, 0o440, 0o444, 0o600, 0o640, 0o644}
-            ),
+            allowed_file_modes=frozenset({0o400, 0o440, 0o444, 0o600, 0o640, 0o644}),
             max_bytes=1024 * 1024,
         )
     except OSError as exc:
@@ -168,7 +164,9 @@ def _activation_registries(
     }
     for row in rp_document["entries"]:
         if type(row) is not dict or set(row) != rp_fields:
-            raise ExactFourAuthorityPending("Controlled RP activation row is not closed")
+            raise ExactFourAuthorityPending(
+                "Controlled RP activation row is not closed"
+            )
         rp_rows.append(ExactFourTraderRelyingPartyV2(**row))
     rps = ExactFourTraderRelyingPartyRegistryV2(
         tuple(rp_rows), generation=rp_document["generation"]
@@ -239,10 +237,15 @@ def _activation_registries(
     return rps, registry
 
 
-def _load_live_controlled_execution_writer_v2(
-    *, server_bound: bool
-) -> SQLiteControlledExecutionWriterV2:
-    """Load fixed activation for observation or the AuthorityServer entrypoint."""
+def _load_live_controlled_execution_writer_material_v2() -> tuple[
+    str,
+    Path,
+    _ControlledWriterSignerV2,
+    int,
+    ExactFourTraderRelyingPartyRegistryV2,
+    ExactFourTraderCredentialRegistryV2,
+]:
+    """Validate fixed activation material without opening its product store."""
 
     document = _load_root_owned_activation()
     environment = document["environment"]
@@ -309,11 +312,50 @@ def _load_live_controlled_execution_writer_v2(
     if type(key_id) is not str or not key_id or key_id != key_id.strip():
         raise ExactFourAuthorityPending("Controlled signer key id is invalid")
     rps, credentials = _activation_registries(document)
+    return (
+        environment,
+        store_path,
+        _ControlledWriterSignerV2(key_id=key_id, private_key=private_key),
+        trader_uid,
+        rps,
+        credentials,
+    )
+
+
+def _preflight_live_controlled_execution_writer_v2() -> tuple[
+    str,
+    Path,
+    str,
+    str,
+    int,
+]:
+    """Return only non-secret identity after a read-only activation preflight."""
+
+    environment, store_path, signer, trader_uid, _rps, _credentials = (
+        _load_live_controlled_execution_writer_material_v2()
+    )
+    public = base64.b64encode(
+        signer.private_key.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
+    ).decode("ascii")
+    return environment, store_path, signer.key_id, public, trader_uid
+
+
+def _load_live_controlled_execution_writer_v2(
+    *, server_bound: bool
+) -> SQLiteControlledExecutionWriterV2:
+    """Load fixed activation for either observation or the server entrypoint."""
+
+    environment, store_path, signer, trader_uid, rps, credentials = (
+        _load_live_controlled_execution_writer_material_v2()
+    )
     return SQLiteControlledExecutionWriterV2(
         store_path,
         environment=environment,
-        signer=_ControlledWriterSignerV2(key_id=key_id, private_key=private_key),
-        clock=lambda: datetime.now(timezone.utc),
+        signer=signer,
+        clock=lambda: datetime.now(UTC),
         trader_uid=trader_uid,
         relying_parties=rps,
         credentials=credentials,
@@ -366,9 +408,7 @@ def _load_live_controlled_execution_runtime_v2() -> ControlledExecutionRuntimeV2
     try:
         provider_metadata = provider_socket.lstat()
     except OSError as exc:
-        raise ExactFourAuthorityPending(
-            "Controlled provider socket is absent"
-        ) from exc
+        raise ExactFourAuthorityPending("Controlled provider socket is absent") from exc
     if (
         not stat.S_ISSOCK(provider_metadata.st_mode)
         or provider_metadata.st_uid != provider_uid
@@ -401,7 +441,7 @@ def _load_live_controlled_execution_runtime_v2() -> ControlledExecutionRuntimeV2
         ledger_path=budget_path,
         limits=OfflineExperimentBudget(),
     )
-    clock = lambda: datetime.now(timezone.utc)
+    clock = lambda: datetime.now(UTC)
     budget_ledger = ControlledPersistentBudgetLedgerV2(
         budget=budget,
         environment=environment,
@@ -434,15 +474,17 @@ def open_live_controlled_execution_writer_v2() -> SQLiteControlledExecutionWrite
     return _load_live_controlled_execution_writer_v2(server_bound=False)
 
 
-def _open_server_bound_controlled_execution_writer_v2(
-) -> SQLiteControlledExecutionWriterV2:
+def _open_server_bound_controlled_execution_writer_v2() -> (
+    SQLiteControlledExecutionWriterV2
+):
     """Execution adapter hook used only inside UnixAuthorityService."""
 
     return _load_live_controlled_execution_writer_v2(server_bound=True)
 
 
-def _open_server_bound_controlled_execution_runtime_v2(
-) -> ControlledExecutionRuntimeV2:
+def _open_server_bound_controlled_execution_runtime_v2() -> (
+    ControlledExecutionRuntimeV2
+):
     """Provider runtime hook used only by the local AuthorityServer adapter."""
 
     return _load_live_controlled_execution_runtime_v2()

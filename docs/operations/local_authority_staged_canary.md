@@ -34,8 +34,15 @@ validates the preflight, remeasures source/resources, rechecks the monotonic
 deadline again under the write lock, and commits a hash-chained event. A crash
 leaves a recoverable lease; a later run may reclaim it after the same-boot
 monotonic deadline or a boot-identity change, up to three attempts.
+The retry family is fixed by authority, environment, action, and source SHA;
+changing resource metadata cannot reset the three-attempt bound. Audit opens
+the journal with SQLite `mode=ro`.
 
-File-backed authorities sign only the closed
+Each file-backed authority first constructs its exact inactive handler wiring
+(including peer UIDs, sockets and stores) without calling a product operation.
+Trader and Controlled use dedicated read-only activation preflights which do
+not construct their SQLite ledgers/writers and therefore cannot initialize or
+migrate product state. File-backed authorities then sign only the closed
 `local-authority-staged-canary-evidence/v1` body. Trader performs an exact-UID
 load of the root-owned WebAuthn registration/RP/store preflight and explicitly
 does not claim a signature or a human-present authorization. Every result is
@@ -56,7 +63,7 @@ show the interface; replace the paths with `runtime-bundle.json`'s protected
 `python_path`, `bundle_path`, and manager file.
 
 ```sh
-python -I -m scripts.manage_local_authority_staged_canary \
+python scripts/manage_local_authority_staged_canary.py \
   plan --authority ready --environment staging
 
 sudo /PROTECTED/PYTHON -I \

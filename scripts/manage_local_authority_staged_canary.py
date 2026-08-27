@@ -24,6 +24,7 @@ import stat
 import subprocess
 import sys
 import time
+import urllib.parse
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -96,6 +97,7 @@ CREATE TABLE IF NOT EXISTS staged_canary_runs (
   source_sha TEXT NOT NULL,
   runtime_bundle_digest TEXT NOT NULL,
   resource_digest TEXT NOT NULL,
+  resource_json TEXT NOT NULL,
   state TEXT NOT NULL CHECK(state IN
     ('RUNNING','FAILED_RETRYABLE','FAILED_FINAL','COMMITTED')),
   attempt_count INTEGER NOT NULL CHECK(attempt_count BETWEEN 1 AND 3),
@@ -269,23 +271,31 @@ def _create_journal_file() -> None:
         os.close(directory)
 
 
-def _connect_journal(*, create: bool) -> sqlite3.Connection:
+def _connect_journal(*, create: bool, read_only: bool = False) -> sqlite3.Connection:
     policy = load_policy()
+    if create and read_only:
+        raise StagedCanaryError("read-only journal cannot be created")
     if create:
         _prepare_canonical_state_root()
         _create_journal_file()
     else:
         _require_exact_directory(CANONICAL_STATE_ROOT, mode=0o700)
     _require_journal_metadata()
+    target = str(CANONICAL_JOURNAL_PATH)
+    if read_only:
+        target = "file:" + urllib.parse.quote(target, safe="/") + "?mode=ro"
     connection = sqlite3.connect(
-        str(CANONICAL_JOURNAL_PATH),
+        target,
         isolation_level=None,
         timeout=10.0,
+        uri=read_only,
     )
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA trusted_schema=OFF")
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute("PRAGMA busy_timeout=10000")
+    if read_only:
+        connection.execute("PRAGMA query_only=ON")
     if create:
         connection.executescript(_SCHEMA)
         connection.execute("BEGIN IMMEDIATE")
@@ -384,15 +394,22 @@ def _validate_journal(connection: sqlite3.Connection, *, policy_digest: str) -> 
             if type(row["challenge_json"]) is str
             else None
         )
+        resources = (
+            _strict_json(
+                row["resource_json"].encode("utf-8"),
+                label="stored staged canary resources",
+            )
+            if type(row["resource_json"]) is str
+            else None
+        )
         expected_canary_id = _digest(
             {
-                "format": "local-authority-staged-canary-id/v1",
+                "format": "local-authority-staged-canary-attempt-family/v1",
                 "authority_id": row["authority_id"],
                 "environment": row["environment"],
                 "action": row["action"],
                 "source_sha": row["source_sha"],
                 "runtime_bundle_digest": row["runtime_bundle_digest"],
-                "resource_digest": row["resource_digest"],
                 "policy_digest": policy_digest,
             }
         )
@@ -402,6 +419,17 @@ def _validate_journal(connection: sqlite3.Connection, *, policy_digest: str) -> 
             or row["attempt_count"] > MAXIMUM_ATTEMPTS
             or canary_id != expected_canary_id
             or challenge is None
+            or resources is None
+            or canonical_json_bytes(resources).decode("utf-8") != row["resource_json"]
+            or resources.get("resource_digest") != row["resource_digest"]
+            or _digest(
+                {
+                    name: value
+                    for name, value in resources.items()
+                    if name != "resource_digest"
+                }
+            )
+            != row["resource_digest"]
             or set(challenge) != _CHALLENGE_FIELDS
             or challenge["authority_id"] != row["authority_id"]
             or challenge["environment"] != row["environment"]
@@ -440,6 +468,48 @@ def _validate_journal(connection: sqlite3.Connection, *, policy_digest: str) -> 
             )
         ):
             raise StagedCanaryError("staged canary run state is invalid")
+        by_attempt: dict[int, list[str]] = {}
+        for event in events:
+            by_attempt.setdefault(int(event["attempt"]), []).append(
+                str(event["event_type"])
+            )
+        if set(by_attempt) != set(range(1, int(row["attempt_count"]) + 1)):
+            raise StagedCanaryError("staged canary attempt history is not contiguous")
+        for attempt in range(1, int(row["attempt_count"]) + 1):
+            history = by_attempt[attempt]
+            if attempt == 1:
+                prefix = ["LEASE_ACQUIRED"]
+            elif history and history[0] == "EXPIRED_LEASE_RECOVERED":
+                prefix = ["EXPIRED_LEASE_RECOVERED", "LEASE_ACQUIRED"]
+            else:
+                prefix = ["LEASE_ACQUIRED"]
+            if history[: len(prefix)] != prefix:
+                raise StagedCanaryError(
+                    "staged canary attempt did not acquire one lease"
+                )
+            suffix = history[len(prefix) :]
+            if suffix and suffix[0] == "ACTION_STARTED":
+                suffix = suffix[1:]
+            if (
+                len(suffix) > 1
+                or suffix
+                and suffix[0]
+                not in {
+                    "ACTION_FAILED_RETRYABLE",
+                    "ACTION_FAILED_FINAL",
+                    "CANARY_COMMITTED",
+                }
+            ):
+                raise StagedCanaryError("staged canary attempt history is invalid")
+            if attempt < row["attempt_count"]:
+                next_history = by_attempt[attempt + 1]
+                crashed = next_history[0] == "EXPIRED_LEASE_RECOVERED"
+                if crashed and suffix:
+                    raise StagedCanaryError("recovered canary attempt was not stranded")
+                if not crashed and suffix != ["ACTION_FAILED_RETRYABLE"]:
+                    raise StagedCanaryError(
+                        "retried canary attempt did not fail retryably"
+                    )
         if row["state"] == "COMMITTED":
             result = _strict_json(
                 row["result_json"].encode("utf-8"),
@@ -448,13 +518,16 @@ def _validate_journal(connection: sqlite3.Connection, *, policy_digest: str) -> 
             if (
                 canonical_json_bytes(result).decode("utf-8") != row["result_json"]
                 or _digest(row["result_json"].encode("utf-8")) != row["result_digest"]
-                or result.get("format") != CANARY_FORMAT
-                or result.get("classification") != CLASSIFICATION
-                or result.get("research_eligible") is not False
-                or result.get("strict_boundaries") != dict(STRICT_BOUNDARIES)
                 or events[-1]["detail_digest"] != row["result_digest"]
+                or by_attempt[int(row["attempt_count"])][-2:]
+                != ["ACTION_STARTED", "CANARY_COMMITTED"]
             ):
                 raise StagedCanaryError("committed staged canary result is invalid")
+            _validate_canary(
+                row["result_json"].encode("utf-8"),
+                challenge=challenge,
+                resources=resources,
+            )
 
 
 def _append_event(
@@ -565,17 +638,15 @@ def _canary_id(
     action: str,
     source_sha: str,
     runtime_bundle_digest: str,
-    resource_digest: str,
 ) -> str:
     return _digest(
         {
-            "format": "local-authority-staged-canary-id/v1",
+            "format": "local-authority-staged-canary-attempt-family/v1",
             "authority_id": authority_id,
             "environment": environment,
             "action": action,
             "source_sha": source_sha,
             "runtime_bundle_digest": runtime_bundle_digest,
-            "resource_digest": resource_digest,
             "policy_digest": load_policy().digest,
         }
     )
@@ -599,7 +670,6 @@ def _acquire_lease(
         action=action.action,
         source_sha=binding["source_sha"],
         runtime_bundle_digest=binding["bundle_digest"],
-        resource_digest=resources["resource_digest"],
     )
     token = secrets.token_hex(32)
     boot_id = _boot_id()
@@ -615,6 +685,7 @@ def _acquire_lease(
         deadline_monotonic_ns=deadline_ns,
     )
     challenge_json = canonical_json_bytes(challenge).decode("utf-8")
+    resource_json = canonical_json_bytes(dict(resources)).decode("utf-8")
     connection = _connect_journal(create=True)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -623,6 +694,8 @@ def _acquire_lease(
             "SELECT * FROM staged_canary_runs WHERE canary_id=?", (canary_id,)
         ).fetchone()
         if row is not None and row["state"] == "COMMITTED":
+            if row["resource_digest"] != resources["resource_digest"]:
+                raise StagedCanaryError("committed canary resource generation changed")
             result = _strict_json(
                 row["result_json"].encode("utf-8"), label="stored staged canary"
             )
@@ -644,6 +717,7 @@ def _acquire_lease(
             binding["source_sha"],
             binding["bundle_digest"],
             resources["resource_digest"],
+            resource_json,
             "RUNNING",
             attempt,
             token,
@@ -660,13 +734,13 @@ def _acquire_lease(
         if row is None:
             connection.execute(
                 "INSERT INTO staged_canary_runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,"
-                "?,?,?,?,?,?)",
+                "?,?,?,?,?,?,?)",
                 (canary_id, *values[:-1]),
             )
         else:
             connection.execute(
                 "UPDATE staged_canary_runs SET authority_id=?,environment=?,action=?,"
-                "source_sha=?,runtime_bundle_digest=?,resource_digest=?,state=?,"
+                "source_sha=?,runtime_bundle_digest=?,resource_digest=?,resource_json=?,state=?,"
                 "attempt_count=?,lease_token=?,lease_boot_id=?,deadline_monotonic_ns=?,"
                 "lease_expires_at=?,challenge_json=?,result_json=?,result_digest=?,"
                 "failure_class=?,updated_at=? WHERE canary_id=?",
@@ -729,6 +803,18 @@ def _mark_action_started(*, canary_id: str, token: str) -> None:
         row = _require_live_lease_under_lock(
             connection, canary_id=canary_id, token=token
         )
+        tail = connection.execute(
+            "SELECT event_type,attempt,lease_token_digest FROM staged_canary_events "
+            "WHERE canary_id=? ORDER BY sequence DESC LIMIT 1",
+            (canary_id,),
+        ).fetchone()
+        if (
+            tail is None
+            or tail["event_type"] != "LEASE_ACQUIRED"
+            or tail["attempt"] != row["attempt_count"]
+            or tail["lease_token_digest"] != _digest(token.encode("ascii"))
+        ):
+            raise StagedCanaryError("staged canary action is not after one exact lease")
         _append_event(
             connection,
             canary_id=canary_id,
@@ -900,6 +986,18 @@ def _mark_failed(*, canary_id: str, token: str, failure_class: str) -> None:
         ).fetchone()
         if row is None or row["state"] != "RUNNING" or row["lease_token"] != token:
             raise StagedCanaryError("failed canary no longer owns its exact lease")
+        tail = connection.execute(
+            "SELECT event_type,attempt,lease_token_digest FROM staged_canary_events "
+            "WHERE canary_id=? ORDER BY sequence DESC LIMIT 1",
+            (canary_id,),
+        ).fetchone()
+        if (
+            tail is None
+            or tail["event_type"] not in {"LEASE_ACQUIRED", "ACTION_STARTED"}
+            or tail["attempt"] != row["attempt_count"]
+            or tail["lease_token_digest"] != _digest(token.encode("ascii"))
+        ):
+            raise StagedCanaryError("failed canary has no current action lease")
         final = row["attempt_count"] >= MAXIMUM_ATTEMPTS
         state = "FAILED_FINAL" if final else "FAILED_RETRYABLE"
         event = "ACTION_FAILED_FINAL" if final else "ACTION_FAILED_RETRYABLE"
@@ -926,13 +1024,13 @@ def _mark_failed(*, canary_id: str, token: str, failure_class: str) -> None:
         connection.close()
 
 
-def _commit_canary(
+def _commit_verified_runner_output(
     *,
     canary_id: str,
     token: str,
     challenge: Mapping[str, Any],
-    result: Mapping[str, Any],
-) -> None:
+    runner_output: bytes,
+) -> dict[str, Any]:
     connection = _connect_journal(create=False)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -940,13 +1038,31 @@ def _commit_canary(
         row = _require_live_lease_under_lock(
             connection, canary_id=canary_id, token=token
         )
+        tail = connection.execute(
+            "SELECT event_type,attempt,lease_token_digest FROM staged_canary_events "
+            "WHERE canary_id=? ORDER BY sequence DESC LIMIT 1",
+            (canary_id,),
+        ).fetchone()
+        if (
+            tail is None
+            or tail["event_type"] != "ACTION_STARTED"
+            or tail["attempt"] != row["attempt_count"]
+            or tail["lease_token_digest"] != _digest(token.encode("ascii"))
+        ):
+            raise StagedCanaryError(
+                "verified runner output has no exact started action"
+            )
         final_resources = observe_preflight_resources(
             authority_id=row["authority_id"],
             environment=row["environment"],
         )
         if final_resources["resource_digest"] != row["resource_digest"]:
             raise StagedCanaryError("authority resources changed before commit")
-        if _runtime_binding()["source_sha"] != row["source_sha"]:
+        binding = _runtime_binding()
+        if (
+            binding["source_sha"] != row["source_sha"]
+            or binding["bundle_digest"] != row["runtime_bundle_digest"]
+        ):
             raise StagedCanaryError("authority source SHA changed before commit")
         if (
             canonical_json_bytes(dict(challenge)).decode("utf-8")
@@ -961,9 +1077,17 @@ def _commit_canary(
             or "A2" not in ledger.open_p0_ids
         ):
             raise StagedCanaryError("finding ledger changed before canary commit")
+        stored_resources = canonical_json_bytes(dict(final_resources)).decode("utf-8")
+        if stored_resources != row["resource_json"]:
+            raise StagedCanaryError("authority resource evidence changed before commit")
+        result = _validate_canary(
+            runner_output,
+            challenge=challenge,
+            resources=final_resources,
+        )
         # Deadline is rechecked under the write lock immediately before the
         # durable state transition; no blocking work follows this check.
-        result_json = canonical_json_bytes(dict(result)).decode("utf-8")
+        result_json = canonical_json_bytes(result).decode("utf-8")
         result_digest = _digest(result_json.encode("utf-8"))
         if time.monotonic_ns() >= row["deadline_monotonic_ns"]:
             raise StagedCanaryError("authority canary expired before commit")
@@ -991,6 +1115,7 @@ def _commit_canary(
         raise
     finally:
         connection.close()
+    return result
 
 
 def run_canary(*, authority_id: str, environment: str) -> Mapping[str, Any]:
@@ -1019,12 +1144,11 @@ def run_canary(*, authority_id: str, environment: str) -> Mapping[str, Any]:
             environment=environment,
             challenge=challenge,
         )
-        result = _validate_canary(raw, challenge=challenge, resources=resources)
-        _commit_canary(
+        result = _commit_verified_runner_output(
             canary_id=canary_id,
             token=token,
             challenge=challenge,
-            result=result,
+            runner_output=raw,
         )
     except BaseException as exc:
         failure_class = type(exc).__name__
@@ -1066,6 +1190,7 @@ def plan(*, authority_id: str, environment: str) -> Mapping[str, Any]:
         "caller_selectable_source_sha": False,
         "caller_selectable_resource_digest": False,
         "maximum_attempts": MAXIMUM_ATTEMPTS,
+        "attempt_family": "AUTHORITY_ENVIRONMENT_ACTION_SOURCE_SHA",
         "lease_seconds": LEASE_SECONDS,
         "classification": CLASSIFICATION,
         "research_eligible": False,
@@ -1074,9 +1199,8 @@ def plan(*, authority_id: str, environment: str) -> Mapping[str, Any]:
 
 
 def audit() -> Mapping[str, Any]:
-    connection = _connect_journal(create=False)
+    connection = _connect_journal(create=False, read_only=True)
     try:
-        connection.execute("PRAGMA query_only=ON")
         _validate_journal(connection, policy_digest=load_policy().digest)
         rows = [
             {
