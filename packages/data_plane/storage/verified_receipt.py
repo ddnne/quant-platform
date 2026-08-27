@@ -84,6 +84,27 @@ _SIGNED_ENVELOPE_FIELDS = frozenset(
 _V3_SIGNED_ENVELOPE_FIELDS = _SIGNED_ENVELOPE_FIELDS | frozenset(
     {"environment", "authority_instance_digest"}
 )
+_JQUANTS_ACQUISITION_EXTRA_DIGEST_FIELDS = frozenset(
+    {
+        "acquisition_collection_manifest_file_digest",
+        "acquisition_collection_digest",
+        "acquisition_terminal_chain_digest",
+    }
+)
+_JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS = frozenset(
+    {
+        "official_calendar_evidence_digest",
+        "official_calendar_raw_body_digest",
+        "official_calendar_query_digest",
+        "official_business_dates_digest",
+        "official_calendar_binding_digest",
+    }
+)
+_JQUANTS_AUTHORITY_EXTRA_DIGEST_FIELDS = (
+    _JQUANTS_ACQUISITION_EXTRA_DIGEST_FIELDS
+    | _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS
+)
+_SCHEMA_ONLY_DIGEST = "sha256:" + "0" * 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -483,6 +504,77 @@ def _validate_schema(claims: Mapping[str, Any]) -> None:
         ) from exc
 
 
+def _validate_v3_dataset_digest_inventory(claims: Mapping[str, Any]) -> None:
+    """Require the source/dataset-specific evidence emitted by the v3 authority."""
+    extras = claims.get("extra_digests")
+    if type(extras) is not dict:
+        raise ReceiptVerificationError("signed extra_digests must be an exact object")
+    present = frozenset(extras) & _JQUANTS_AUTHORITY_EXTRA_DIGEST_FIELDS
+    expected = frozenset()
+    if claims.get("source") == "jquants":
+        expected = _JQUANTS_ACQUISITION_EXTRA_DIGEST_FIELDS
+        if claims.get("dataset") == "equities_master":
+            expected |= _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS
+    if present != expected:
+        raise ReceiptVerificationError(
+            "signed J-Quants authority digest inventory does not match source/dataset"
+        )
+    for name in expected:
+        value = extras[name]
+        if (
+            type(value) is not str
+            or len(value) != 71
+            or not value.startswith("sha256:")
+            or any(character not in "0123456789abcdef" for character in value[7:])
+        ):
+            raise ReceiptVerificationError(
+                f"signed J-Quants authority digest {name!r} is not sha256"
+            )
+
+
+def _normalize_legacy_claims_for_schema(
+    claims: Mapping[str, Any],
+    *,
+    expected_environment: str,
+    expected_authority_instance_digest: str,
+) -> dict[str, Any]:
+    """Exercise the current schema without upgrading audit-only evidence.
+
+    v1/v2 receipts predate dataset-conditional calendar claims.  Synthetic
+    values exist only in this throw-away schema input; signature and digest
+    checks continue to use the exact historical claims.
+    """
+    normalized = dict(claims)
+    normalized["version"] = SIGNED_RECEIPT_CLAIMS_VERSION
+    normalized.setdefault("environment", expected_environment)
+    normalized.setdefault(
+        "authority_instance_digest", expected_authority_instance_digest
+    )
+    extras = dict(normalized.get("extra_digests", {}))
+    if normalized.get("source") == "jquants":
+        extras.update(
+            {
+                name: _SCHEMA_ONLY_DIGEST
+                for name in _JQUANTS_ACQUISITION_EXTRA_DIGEST_FIELDS
+            }
+        )
+        if normalized.get("dataset") == "equities_master":
+            extras.update(
+                {
+                    name: _SCHEMA_ONLY_DIGEST
+                    for name in _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS
+                }
+            )
+        else:
+            for name in _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS:
+                extras.pop(name, None)
+    else:
+        for name in _JQUANTS_AUTHORITY_EXTRA_DIGEST_FIELDS:
+            extras.pop(name, None)
+    normalized["extra_digests"] = extras
+    return normalized
+
+
 def _same(left: Any, right: Any) -> bool:
     if isinstance(left, Mapping) and isinstance(right, Mapping):
         return dict(left) == dict(right)
@@ -602,15 +694,17 @@ def _validate_bound_closure_fields(
     claims = frozen.claims
     digests = frozen.digests
     outer = frozen.outer
-    schema_claims = dict(claims)
-    if not environment_scoped:
+    if environment_scoped:
+        schema_claims = dict(claims)
+        _validate_v3_dataset_digest_inventory(claims)
+    else:
         # Historical v1/v2 signatures predate the authority scope fields. Add
         # caller-owned audit context only to exercise today's closed schema;
         # never use this normalized document for digest or signature checks.
-        schema_claims["version"] = SIGNED_RECEIPT_CLAIMS_VERSION
-        schema_claims.setdefault("environment", expected_environment)
-        schema_claims.setdefault(
-            "authority_instance_digest", expected_authority_instance_digest
+        schema_claims = _normalize_legacy_claims_for_schema(
+            claims,
+            expected_environment=expected_environment,
+            expected_authority_instance_digest=expected_authority_instance_digest,
         )
     _validate_schema(schema_claims)
     _validate_digest_chain(claims, environment_scoped=environment_scoped)

@@ -39,6 +39,18 @@ from storage.receipt_crypto import (
 
 _TEST_EVIDENCE_SEAL = object()
 _TEST_EVIDENCE: WeakSet[Any] = WeakSet()
+_JQUANTS_ACQUISITION_EXTRA_DIGESTS = (
+    "acquisition_collection_manifest_file_digest",
+    "acquisition_collection_digest",
+    "acquisition_terminal_chain_digest",
+)
+_JQUANTS_MASTER_CALENDAR_EXTRA_DIGESTS = (
+    "official_calendar_evidence_digest",
+    "official_calendar_raw_body_digest",
+    "official_calendar_query_digest",
+    "official_business_dates_digest",
+    "official_calendar_binding_digest",
+)
 
 
 @dataclass(frozen=True)
@@ -411,6 +423,8 @@ def reconcile_test_evidence(
     structured_digest: str | None = None,
     environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
     authority_instance_digest: str = PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+    include_jquants_acquisition_digests: bool = True,
+    include_master_calendar_digests: bool = True,
 ) -> TestReconciledEvidence:
     """Build closed claims strictly for verifier/policy unit tests."""
     pages = tuple(bytes(page) for page in raw_pages)
@@ -421,6 +435,37 @@ def reconcile_test_evidence(
     if not raw_rows:
         raise ValueError("zero-row SUCCESS is not trusted")
     extras = partition_extra_digests(extra_evidence)
+    if required.source == "jquants" and include_jquants_acquisition_digests:
+        for name in _JQUANTS_ACQUISITION_EXTRA_DIGESTS:
+            extras.setdefault(
+                name,
+                canonical_evidence_digest(
+                    {
+                        "schema_version": "test-jquants-authority-evidence/v1",
+                        "field": name,
+                        "dataset": required.dataset,
+                        "segment_id": required.segment_id,
+                        "run_id": run_id,
+                    }
+                ),
+            )
+    if (
+        required.source == "jquants"
+        and required.dataset == "equities_master"
+        and include_master_calendar_digests
+    ):
+        for name in _JQUANTS_MASTER_CALENDAR_EXTRA_DIGESTS:
+            extras.setdefault(
+                name,
+                canonical_evidence_digest(
+                    {
+                        "schema_version": "test-jquants-calendar-evidence/v1",
+                        "field": name,
+                        "segment_id": required.segment_id,
+                        "run_id": run_id,
+                    }
+                ),
+            )
     manifest = [
         {
             "index": index,

@@ -93,6 +93,16 @@
     "extra_digests": {
       "type": "object",
       "additionalProperties": true,
+      "properties": {
+        "acquisition_collection_manifest_file_digest": { "$ref": "#/$defs/digest" },
+        "acquisition_collection_digest": { "$ref": "#/$defs/digest" },
+        "acquisition_terminal_chain_digest": { "$ref": "#/$defs/digest" },
+        "official_calendar_evidence_digest": { "$ref": "#/$defs/digest" },
+        "official_calendar_raw_body_digest": { "$ref": "#/$defs/digest" },
+        "official_calendar_query_digest": { "$ref": "#/$defs/digest" },
+        "official_business_dates_digest": { "$ref": "#/$defs/digest" },
+        "official_calendar_binding_digest": { "$ref": "#/$defs/digest" }
+      },
       "propertyNames": {
         "not": {
           "enum": [
@@ -139,5 +149,81 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "source": { "const": "jquants" }
+        },
+        "required": ["source"]
+      },
+      "then": {
+        "properties": {
+          "extra_digests": {
+            "required": [
+              "acquisition_collection_manifest_file_digest",
+              "acquisition_collection_digest",
+              "acquisition_terminal_chain_digest"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "extra_digests": {
+            "not": {
+              "anyOf": [
+                { "required": ["acquisition_collection_manifest_file_digest"] },
+                { "required": ["acquisition_collection_digest"] },
+                { "required": ["acquisition_terminal_chain_digest"] },
+                { "required": ["official_calendar_evidence_digest"] },
+                { "required": ["official_calendar_raw_body_digest"] },
+                { "required": ["official_calendar_query_digest"] },
+                { "required": ["official_business_dates_digest"] },
+                { "required": ["official_calendar_binding_digest"] }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "source": { "const": "jquants" },
+          "dataset": { "const": "equities_master" }
+        },
+        "required": ["source", "dataset"]
+      },
+      "then": {
+        "properties": {
+          "extra_digests": {
+            "required": [
+              "official_calendar_evidence_digest",
+              "official_calendar_raw_body_digest",
+              "official_calendar_query_digest",
+              "official_business_dates_digest",
+              "official_calendar_binding_digest"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "extra_digests": {
+            "not": {
+              "anyOf": [
+                { "required": ["official_calendar_evidence_digest"] },
+                { "required": ["official_calendar_raw_body_digest"] },
+                { "required": ["official_calendar_query_digest"] },
+                { "required": ["official_business_dates_digest"] },
+                { "required": ["official_calendar_binding_digest"] }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
 }
