@@ -344,8 +344,8 @@ def _load_live_controlled_execution_runtime_v2() -> ControlledExecutionRuntimeV2
         or type(budget_id) is not str
         or not budget_id
         or budget_id != budget_id.strip()
-        or type(timeout_seconds) not in {int, float}
-        or not 0 < float(timeout_seconds) <= 300
+        or type(timeout_seconds) is not int
+        or not 0 < timeout_seconds <= 300
         or document["protected_store_observed"] is not True
     ):
         raise ExactFourAuthorityPending(
