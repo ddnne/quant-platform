@@ -31,7 +31,7 @@ except ModuleNotFoundError:  # Direct ``python scripts/...`` execution.
     )
 
 
-SCHEMA_VERSION = "quant-platform-release-evidence/v3"
+SCHEMA_VERSION = "quant-platform-release-evidence/v4"
 OBSERVATION_SCHEMA_VERSION = "quant-platform-release-observation/v1"
 REQUIRED_FIELDS = (
     "source_sha",
@@ -71,6 +71,8 @@ _ACTIVE_WORKERS = frozenset(
         "quant-platform-research-mass-eval",
     }
 )
+_JSDA_WORKER = "quant-platform-ingestion-jsda"
+_JSDA_READY_ENDPOINT = "/health/ready"
 _MIGRATION_TARGETS = frozenset(
     {"quant-ingest", "quant-ops-projection", "quant-ops-quota"}
 )
@@ -195,10 +197,20 @@ def _walk(value: Any, path: tuple[str, ...] = ()) -> None:
         raise ValueError(
             f"release evidence contains secret-shaped material at {'.'.join(path)}"
         )
+    is_jsda_smoke_endpoint = (
+        len(path) == 4
+        and path[0] == "smoke"
+        and path[1] in {"staging", "production"}
+        and path[2] == _JSDA_WORKER
+        and path[3] == "endpoint"
+    )
     if (
-        value.startswith(("~/", "~\\", "file://"))
-        or PurePosixPath(value).is_absolute()
-        or PureWindowsPath(value).is_absolute()
+        not is_jsda_smoke_endpoint
+        and (
+            value.startswith(("~/", "~\\", "file://"))
+            or PurePosixPath(value).is_absolute()
+            or PureWindowsPath(value).is_absolute()
+        )
     ):
         raise ValueError(
             f"release evidence contains a local absolute path at {'.'.join(path)}"
@@ -440,10 +452,26 @@ def _validate_smoke(payload: Mapping[str, Any]) -> None:
             )
         for worker, raw_row in workers.items():
             label = f"smoke.{environment}.{worker}"
+            expected_fields = {
+                "result",
+                "source_sha",
+                "deployment_version_id",
+                "provenance",
+            }
+            if worker == _JSDA_WORKER:
+                expected_fields.update(
+                    {
+                        "endpoint",
+                        "http_status",
+                        "product_ready",
+                        "cutover",
+                        "response_digest",
+                    }
+                )
             row = _exact_mapping(
                 raw_row,
                 label,
-                {"result", "source_sha", "deployment_version_id", "provenance"},
+                expected_fields,
             )
             if (
                 row["result"] != "PASS"
@@ -452,12 +480,25 @@ def _validate_smoke(payload: Mapping[str, Any]) -> None:
                 != deployments[worker][environment]["version_id"]
             ):
                 raise ValueError(f"{label} is not a PASS for the deployed source/version")
-            _validate_provenance(
+            provenance = _validate_provenance(
                 row["provenance"],
                 f"{label}.provenance",
                 expected_collector="release-smoke-runner/v1",
                 source_sha=source_sha,
             )
+            if worker == _JSDA_WORKER:
+                _require_digest(row["response_digest"], f"{label}.response_digest")
+                if (
+                    row["endpoint"] != _JSDA_READY_ENDPOINT
+                    or row["http_status"] != 200
+                    or row["product_ready"] is not True
+                    or row["cutover"] != "V3_ACTIVE"
+                    or row["response_digest"] != provenance["response_digest"]
+                ):
+                    raise ValueError(
+                        f"{label} must prove HTTP 200 product readiness from "
+                        f"{_JSDA_READY_ENDPOINT} with a provenance-bound response"
+                    )
 
 
 def _validate_quant_mcp(payload: Mapping[str, Any]) -> None:

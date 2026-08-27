@@ -158,6 +158,17 @@ def payload() -> dict[str, object]:
                     "result": "PASS",
                     "source_sha": SHA,
                     "deployment_version_id": version,
+                    **(
+                        {
+                            "endpoint": "/health/ready",
+                            "http_status": 200,
+                            "product_ready": True,
+                            "cutover": "V3_ACTIVE",
+                            "response_digest": "sha256:" + "e" * 64,
+                        }
+                        if worker == "quant-platform-ingestion-jsda"
+                        else {}
+                    ),
                     "provenance": provenance(
                         "release-smoke-runner/v1",
                         f"smoke:{environment}:{worker}",
@@ -389,6 +400,48 @@ def test_release_evidence_requires_check_build_deploy_and_smoke_identity() -> No
         "deployment_version_id"
     ] = "99999999-9999-4999-8999-999999999999"
     with pytest.raises(ValueError, match="deployed source/version"):
+        release.build_envelope(facts)
+
+    facts = payload()
+    facts["smoke"]["production"]["quant-platform-ingestion-jsda"][  # type: ignore[index]
+        "source_sha"
+    ] = "f" * 40
+    with pytest.raises(ValueError, match="deployed source/version"):
+        release.build_envelope(facts)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("endpoint", "/health"),
+        ("http_status", 503),
+        ("product_ready", False),
+        ("cutover", "PENDING"),
+        ("response_digest", "sha256:" + "d" * 64),
+    ],
+)
+def test_jsda_smoke_requires_ready_endpoint_and_bound_ready_response(
+    field: str, value: object
+) -> None:
+    facts = payload()
+    jsda = facts["smoke"]["production"]["quant-platform-ingestion-jsda"]  # type: ignore[index]
+    jsda[field] = value
+    with pytest.raises(ValueError, match="must prove HTTP 200 product readiness"):
+        release.build_envelope(facts)
+
+
+def test_jsda_smoke_rejects_generic_health_pass_schema() -> None:
+    facts = payload()
+    jsda = facts["smoke"]["production"]["quant-platform-ingestion-jsda"]  # type: ignore[index]
+    for field in (
+        "endpoint",
+        "http_status",
+        "product_ready",
+        "cutover",
+        "response_digest",
+    ):
+        del jsda[field]
+    with pytest.raises(ValueError, match="schema drift"):
         release.build_envelope(facts)
 
 
