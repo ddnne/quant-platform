@@ -62,7 +62,7 @@ include = [
 exclude = ["tests*", "scripts*", "docs*", "platform*"]
 
 [tool.setuptools]
-py-modules = ["qp_paths"]
+py-modules = ["qp_paths", "qp_ofd_continuity"]
 
 [tool.setuptools.package-data]
 data_contracts = ["*.json", "source_capability_contracts/*.json"]

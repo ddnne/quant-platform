@@ -30,10 +30,8 @@ import {
   unwrapEd25519PrivateKey,
   wrapEd25519PrivateKey,
 } from "../src/key_crypto";
-import premiumWorker, {
-  type Env as PremiumEnv,
-} from "../../ingestion-premium/src/index";
 import type {
+  ReceiptAuditRecoveryCanaryBeginRequestV1,
   ReceiptAuthorityEnv,
   ReceiptEvidenceAuthorityRpc,
   ReceiptIssueRequestV1,
@@ -460,6 +458,13 @@ function legacyFlatCaptureLoaderWouldAccept(value: unknown): boolean {
 
 beforeEach(async () => {
   await reset();
+  (runtimeEnv as unknown as { ENVIRONMENT: string }).ENVIRONMENT = "production";
+  (runtimeEnv as unknown as { CF_VERSION_METADATA: WorkerVersionMetadata })
+    .CF_VERSION_METADATA = {
+      id: "10000000-0000-4000-8000-000000000002",
+      tag: `rp-p-r-${"1".repeat(40)}`,
+      timestamp: "2026-08-27T08:00:00.000Z",
+    };
   (runtimeEnv as unknown as { AUTHORITY_MODE: string }).AUTHORITY_MODE = "ACTIVE";
   (runtimeEnv as unknown as { ACTIVATED_KEY_ID?: string }).ACTIVATED_KEY_ID =
     undefined;
@@ -472,6 +477,108 @@ afterEach(() => {
 });
 
 describe("Receipt Evidence Authority in workerd", () => {
+  it("exposes only five public Durable Object RPC methods", async () => {
+    expect(
+      Reflect.ownKeys(ReceiptEvidenceAuthority.prototype)
+        .map(String)
+        .filter((name) => name !== "constructor")
+        .sort(),
+    ).toEqual([
+      "begin_audit_recovery_canary",
+      "issue_for_segment",
+      "public_key_registration",
+      "recover_audit_recovery_canary",
+      "recover_issue",
+    ]);
+
+    const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
+      "receipt:private-rpc-negative",
+    );
+    const snapshot = async () => ({
+      durable: await runInDurableObject(stub, async (_instance, state) => ({
+        operations: state.storage.sql.exec<{ count: number }>(
+          "SELECT COUNT(*) AS count FROM authority_operations",
+        ).one().count,
+        attempts: state.storage.sql.exec<{ count: number }>(
+          "SELECT COUNT(*) AS count FROM authority_capture_attempts",
+        ).one().count,
+        events: state.storage.sql.exec<{ count: number }>(
+          "SELECT COUNT(*) AS count FROM authority_events",
+        ).one().count,
+        keys: state.storage.sql.exec<{ count: number }>(
+          "SELECT COUNT(*) AS count FROM authority_key_metadata",
+        ).one().count,
+        auditOperations: state.storage.sql.exec<{ count: number }>(
+          "SELECT COUNT(*) AS count FROM authority_audit_recovery_operations",
+        ).one().count,
+        auditEvents: state.storage.sql.exec<{ count: number }>(
+          "SELECT COUNT(*) AS count FROM authority_audit_recovery_events",
+        ).one().count,
+      })),
+      d1: await runtimeEnv.DB.prepare(
+        `SELECT
+          (SELECT COUNT(*) FROM collection_receipts) AS receipts,
+          (SELECT COUNT(*) FROM receipt_authority_operations) AS operations,
+          (SELECT COUNT(*) FROM receipt_authority_structured_rows) AS rows,
+          (SELECT COUNT(*) FROM receipt_product_materializations) AS products`,
+      ).first(),
+      r2: (await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list()).objects
+        .map((object) => object.key)
+        .sort(),
+    });
+    const before = await snapshot();
+    const formerPrivateMethods = [
+      "operation",
+      "requireOperation",
+      "latestCaptureAttempt",
+      "captureAttempt",
+      "requireLatestCaptureAttempt",
+      "operationSnapshot",
+      "event",
+      "requireExistingEvents",
+      "requireEvent",
+      "transactEvents",
+      "requireValidEventChain",
+      "captureAttempts",
+      "requireAuditedOperation",
+      "loadOrCreateKey",
+      "keyGeneration",
+      "keyWrapAad",
+      "requireOperationalPrivateKey",
+      "ensureKey",
+      "requireSigningKey",
+    ] as const;
+    expect(await runInDurableObject(stub, (instance) => {
+      const untypedInstance = instance as unknown as Record<string, unknown>;
+      return formerPrivateMethods.map((method) => ({
+        method,
+        type: typeof untypedInstance[method],
+      }));
+    })).toEqual(formerPrivateMethods.map((method) => ({
+      method,
+      type: "undefined",
+    })));
+
+    // `ensureKey` was the highest-impact confirmed exploit: it created key
+    // metadata without going through public registration. Keep one real stub
+    // denial to exercise workerd's RPC dispatcher; exact prototype equality
+    // above covers the complete former-private inventory without 19 noisy
+    // remote errors.
+    const untypedStub = stub as unknown as {
+      ensureKey(): Promise<unknown>;
+    };
+    let rejected = false;
+    try {
+      await untypedStub.ensureKey();
+    } catch (error) {
+      rejected = true;
+      expect(error).toBeInstanceOf(TypeError);
+      expect(String(error)).toContain('does not implement "ensureKey"');
+    }
+    expect(rejected).toBe(true);
+    expect(await snapshot()).toEqual(before);
+  });
+
   it.each([
     {
       eventType: "COLLECTION_STARTED",
@@ -716,7 +823,13 @@ describe("Receipt Evidence Authority in workerd", () => {
         purpose: registration.purpose,
         environment: registration.environment,
         authority_instance_digest: registration.authority_instance_digest,
+        authority_resource_digest: registration.authority_resource_digest,
         authority_status: registration.authority_status,
+        action: registration.action,
+        deployment_source_sha: registration.deployment_source_sha,
+        authority_worker_version_id: registration.authority_worker_version_id,
+        authority_worker_version_tag: registration.authority_worker_version_tag,
+        operation_binding_digest: registration.operation_binding_digest,
         key_id: registration.key_id,
         key_generation: registration.key_generation,
         algorithm: registration.algorithm,
@@ -726,6 +839,12 @@ describe("Receipt Evidence Authority in workerd", () => {
         generated_at: registration.generated_at,
       }),
     );
+    expect(registration.key_id).toBe(
+      `receipt-production-${
+        (await sha256Digest(decodeBase64(registration.public_key_base64)))
+          .slice(7, 23)
+      }`,
+    );
     await runInDurableObject(stub, async (instance) => {
       const internal = instance as unknown as { env: ReceiptAuthorityEnv };
       internal.env.AUTHORITY_MODE = "ACTIVE";
@@ -734,6 +853,201 @@ describe("Receipt Evidence Authority in workerd", () => {
         "requires unactivated PENDING mode",
       );
     });
+  });
+
+  it("uses a dedicated signed AUDIT_ONLY state machine for staging recovery", async () => {
+    const sourceSha = "2".repeat(40);
+    const callerVersionId = "20000000-0000-4000-8000-000000000002";
+    const authorityVersionId = "30000000-0000-4000-8000-000000000003";
+    const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
+      "receipt:staging",
+    );
+    const registration = await runInDurableObject(stub, async (instance) => {
+      const internal = instance as unknown as { env: ReceiptAuthorityEnv };
+      internal.env.ENVIRONMENT = "staging";
+      internal.env.AUTHORITY_MODE = "PENDING";
+      internal.env.ACTIVATED_KEY_ID = undefined;
+      internal.env.CF_VERSION_METADATA = {
+        id: authorityVersionId,
+        tag: `rp-s-r-${sourceSha}`,
+        timestamp: "2026-08-28T00:00:00.000Z",
+      };
+      const pending = await instance.public_key_registration();
+      internal.env.AUTHORITY_MODE = "ACTIVE";
+      internal.env.ACTIVATED_KEY_ID = pending.key_id;
+      internal.env.CF_VERSION_METADATA = {
+        id: authorityVersionId,
+        tag: `ra-s-r-${sourceSha}`,
+        timestamp: "2026-08-28T00:01:00.000Z",
+      };
+      return pending;
+    });
+    const beginRequest: ReceiptAuditRecoveryCanaryBeginRequestV1 = {
+      schema_version: "receipt-audit-recovery-canary-request/v1",
+      purpose: "receipt_authority_recovery_canary",
+      eligibility: "AUDIT_ONLY",
+      operation: "begin_audit_recovery_canary",
+      environment: "staging",
+      caller_source_sha: sourceSha,
+      caller_worker_version_id: callerVersionId,
+      caller_worker_version_tag: `ra-s-c-${sourceSha}`,
+      request_nonce: "c".repeat(64),
+    };
+    const productBefore = await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS count FROM collection_receipts",
+    ).first<{ count: number }>();
+    const bucketBefore = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list();
+
+    const begun = await runInDurableObject(
+      stub,
+      (instance) => instance.begin_audit_recovery_canary(beginRequest),
+    );
+    expect(begun).toMatchObject({
+      eligibility: "AUDIT_ONLY",
+      rpc_replayed: false,
+      initial_result: { state: "RECOVERY_REQUIRED" },
+    });
+    const repeatedBegin = await runInDurableObject(
+      stub,
+      (instance) => instance.begin_audit_recovery_canary(beginRequest),
+    );
+    expect(repeatedBegin).toEqual({ ...begun, rpc_replayed: true });
+
+    const recoverRequest = {
+      ...beginRequest,
+      operation: "recover_audit_recovery_canary" as const,
+    };
+    const firstRecovery = await runInDurableObject(
+      stub,
+      (instance) => instance.recover_audit_recovery_canary(recoverRequest),
+    );
+    expect(firstRecovery).toMatchObject({
+      schema_version: "receipt-audit-recovery-pending-replay-result/v1",
+      eligibility: "AUDIT_ONLY",
+      state: "RECOVERED_PENDING_REPLAY",
+      rpc_replayed: false,
+    });
+    if (
+      firstRecovery.schema_version !==
+        "receipt-audit-recovery-pending-replay-result/v1"
+    ) throw new Error("test expected first recovery to remain unsigned");
+    expect(firstRecovery).not.toHaveProperty("signed_attestation");
+    expect(await runInDurableObject(stub, async (_instance, state) => ({
+      state: state.storage.sql.exec<{ state: string }>(
+        `SELECT state FROM authority_audit_recovery_operations
+          WHERE operation_id=?`,
+        begun.operation_id,
+      ).one().state,
+      events: state.storage.sql.exec<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM authority_audit_recovery_events
+          WHERE operation_id=?`,
+        begun.operation_id,
+      ).one().count,
+      signed: state.storage.sql.exec<{ signed: string | null }>(
+        `SELECT signed_attestation_json AS signed
+           FROM authority_audit_recovery_operations WHERE operation_id=?`,
+        begun.operation_id,
+      ).one().signed,
+    }))).toEqual({
+      state: "RECOVERED_PENDING_REPLAY",
+      events: 2,
+      signed: null,
+    });
+
+    const recovered = await runInDurableObject(
+      stub,
+      (instance) => instance.recover_audit_recovery_canary(recoverRequest),
+    );
+    expect(recovered).toMatchObject({
+      eligibility: "AUDIT_ONLY",
+      final_state: "AUDIT_FINALIZED",
+      rpc_replayed: true,
+      signed_attestation: {
+        eligibility: "AUDIT_ONLY",
+        issuer_class: "ReceiptEvidenceAuthorityAuditSigner",
+      },
+    });
+    if (recovered.schema_version !== "receipt-audit-recovery-result/v1") {
+      throw new Error("test expected replay-confirmed attestation");
+    }
+    const replay = await runInDurableObject(
+      stub,
+      (instance) => instance.recover_audit_recovery_canary(recoverRequest),
+    );
+    expect(replay).toEqual(recovered);
+
+    const publicKey = await crypto.subtle.importKey(
+      "raw",
+      decodeBase64(registration.public_key_base64),
+      { name: "Ed25519" },
+      false,
+      ["verify"],
+    );
+    const signedClaimsBytes = decodeBase64(
+      recovered.signed_attestation.signed_claims_base64,
+    );
+    expect(await crypto.subtle.verify(
+      "Ed25519",
+      publicKey,
+      decodeBase64(
+        recovered.signed_attestation.signature.replace(/^ed25519:/, ""),
+      ),
+      signedClaimsBytes,
+    )).toBe(true);
+    const claims = JSON.parse(
+      new TextDecoder().decode(signedClaimsBytes),
+    ) as Record<string, unknown>;
+    expect(claims).toMatchObject({
+      eligibility: "AUDIT_ONLY",
+      environment: "staging",
+      authority_source_sha: sourceSha,
+      authority_worker_version_id: authorityVersionId,
+      authority_worker_version_tag: `ra-s-r-${sourceSha}`,
+      caller_source_sha: sourceSha,
+      caller_worker_version_id: callerVersionId,
+      caller_worker_version_tag: `ra-s-c-${sourceSha}`,
+      operation_id: begun.operation_id,
+      request_nonce: beginRequest.request_nonce,
+      initial_state: "RECOVERY_REQUIRED",
+      initial_result_digest: begun.initial_result_digest,
+      recovery_event: "RECOVERY_COMPLETED",
+      first_recovery_state: "RECOVERED_PENDING_REPLAY",
+      first_recovery_result_digest: firstRecovery.first_recovery_result_digest,
+      replay_event: "REPLAY_CONFIRMED",
+      replayed: true,
+      final_state: "AUDIT_FINALIZED",
+    });
+
+    const auditRows = await runInDurableObject(stub, async (_instance, state) => ({
+      operations: state.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM authority_audit_recovery_operations",
+      ).one().count,
+      events: state.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM authority_audit_recovery_events",
+      ).one().count,
+      productOperations: state.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM authority_operations",
+      ).one().count,
+    }));
+    expect(auditRows).toEqual({ operations: 1, events: 3, productOperations: 0 });
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS count FROM collection_receipts",
+    ).first<{ count: number }>()).toEqual(productBefore);
+    expect((await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list()).objects).toEqual(
+      bucketBefore.objects,
+    );
+
+    const concurrentRequest = {
+      ...beginRequest,
+      request_nonce: "d".repeat(64),
+    };
+    const concurrent = await Promise.all([
+      stub.begin_audit_recovery_canary(concurrentRequest),
+      stub.begin_audit_recovery_canary(concurrentRequest),
+    ]);
+    expect(concurrent[0].operation_id).toBe(concurrent[1].operation_id);
+    expect(concurrent[0].initial_result).toEqual(concurrent[1].initial_result);
+    expect(concurrent.map((row) => row.rpc_replayed).sort()).toEqual([false, true]);
   });
 
   it("replays a durable receipt after eviction without a claims RPC seam", async () => {
@@ -1856,46 +2170,6 @@ describe("Receipt Evidence Authority in workerd", () => {
     })).rejects.toThrow("append-only");
   });
 
-  it("executes the authenticated Premium route through the live typed RPC export", async () => {
-    await activateRegisteredTestKey();
-    const acquisition = withAcquisition().JQUANTS_ACQUISITION;
-    (runtimeEnv as unknown as Record<string, unknown>).JQUANTS_ACQUISITION =
-      acquisition;
-    const rpc = workerExports.default as unknown as ReceiptEvidenceAuthorityRpc;
-    const premiumEnv = {
-      ...runtimeEnv,
-      RECEIPT_AUTHORITY_ENVIRONMENT: "production",
-      INGESTION_RUN_TOKEN: "workerd-premium-receipt-route-token",
-      JQUANTS_API_KEY: "unused-by-receipt-route",
-      RECEIPT_EVIDENCE_AUTHORITY: rpc,
-    } as unknown as PremiumEnv;
-    const response = await premiumWorker.fetch(new Request(
-      "https://premium.invalid/v1/admin/receipt-evidence/reconcile" +
-        "?dataset=indices_bars_daily_topix&segment=2024-02",
-      {
-        method: "POST",
-        headers: {
-          "x-ingestion-token": "workerd-premium-receipt-route-token",
-        },
-      },
-    ), premiumEnv);
-    expect(response.status).toBe(200);
-    const payload = await response.json<Record<string, unknown>>();
-    expect(payload).toMatchObject({ ok: true, state: "FINALIZED" });
-    expect(payload).not.toHaveProperty("receipt");
-    expect(await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS count FROM receipt_authority_requests
-        WHERE operation_id=? AND state='FINALIZED'`,
-    ).bind(payload.operation_id).first<{ count: number }>()).toEqual({ count: 1 });
-    await expect(runtimeEnv.DB.prepare(
-      `UPDATE receipt_authority_requests SET dataset='substituted'
-        WHERE operation_id=?`,
-    ).bind(payload.operation_id).run()).rejects.toThrow("monotonic");
-    await expect(runtimeEnv.DB.prepare(
-      `DELETE FROM receipt_authority_requests WHERE operation_id=?`,
-    ).bind(payload.operation_id).run()).rejects.toThrow("append-only");
-  });
-
   it("authenticates the wrap key, AAD, ciphertext, and key generation", async () => {
     const pair = await crypto.subtle.generateKey(
       { name: "Ed25519" },
@@ -1942,23 +2216,26 @@ describe("Receipt Evidence Authority in workerd", () => {
       internal.env.ACTIVATED_KEY_ID = undefined;
       return instance.public_key_registration();
     });
-    const rotated = await runInDurableObject(stub, async (instance) => {
-      const internal = instance as unknown as {
-        env: ReceiptAuthorityEnv;
-        keyPromise: null;
-      };
-      internal.env.AUTHORITY_MODE = "PENDING";
-      internal.env.RECEIPT_KEY_GENERATION = "2";
-      internal.keyPromise = null;
-      return instance.public_key_registration();
-    });
+    (runtimeEnv as unknown as {
+      AUTHORITY_MODE: string;
+      ACTIVATED_KEY_ID?: string;
+      RECEIPT_KEY_GENERATION: string;
+    }).AUTHORITY_MODE = "PENDING";
+    runtimeEnv.ACTIVATED_KEY_ID = undefined;
+    (runtimeEnv as unknown as { RECEIPT_KEY_GENERATION: string })
+      .RECEIPT_KEY_GENERATION = "2";
+    await evictDurableObject(stub);
+    const rotated = await runInDurableObject(
+      stub,
+      (instance) => instance.public_key_registration(),
+    );
     expect(rotated.key_generation).toBe(2);
     expect(rotated.key_id).not.toBe(first.key_id);
-    const repeated = await runInDurableObject(stub, async (instance) => {
-      const internal = instance as unknown as { keyPromise: null };
-      internal.keyPromise = null;
-      return instance.public_key_registration();
-    });
+    await evictDurableObject(stub);
+    const repeated = await runInDurableObject(
+      stub,
+      (instance) => instance.public_key_registration(),
+    );
     expect(repeated).toEqual(rotated);
     const keyRows = await runInDurableObject(stub, async (_instance, state) =>
       state.storage.sql.exec<{ key_generation: number }>(

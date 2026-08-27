@@ -32,6 +32,12 @@ for import_root in reversed(_IMPORT_ROOTS):
     if str(import_root) not in sys.path:
         sys.path.insert(0, str(import_root))
 
+from execution.controlled_execution_quiescence_v2 import (
+    ControlledExecutionQuiescenceV2Error,
+    ControlledWriterLifecycleLeaseV2,
+    acquire_live_controlled_writer_lifecycle_v2,
+    require_held_controlled_writer_lifecycle_v2,
+)
 from execution.exact_four_codec import ExactFourAuthorityPending
 
 from scripts.authority_principal_manifest import load_and_validate_manifest
@@ -353,7 +359,21 @@ def _load_public_metadata(
     return document
 
 
-def build_service(*, authority_id: str, environment: str) -> UnixAuthorityService:
+def build_service(
+    *,
+    authority_id: str,
+    environment: str,
+    lifecycle: ControlledWriterLifecycleLeaseV2 | None = None,
+) -> UnixAuthorityService:
+    if authority_id == "controlled_execution":
+        require_held_controlled_writer_lifecycle_v2(
+            lifecycle,
+            expected_environment=environment,
+        )
+    elif lifecycle is not None:
+        raise AuthorityRunnerError(
+            "a Controlled lifecycle lease cannot be used by another authority"
+        )
     manifest = load_and_validate_manifest()
     if authority_id == "trader":
         uid, config, service_dir, ledger_path = _require_trader_service_identity(
@@ -382,6 +402,11 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
         service_dir = Path(activation["key_path"]).parent
         ledger_path = Path(activation["ledger_path"])
     resources = config["resources"]
+    if authority_id == "controlled_execution":
+        require_held_controlled_writer_lifecycle_v2(
+            lifecycle,
+            expected_environment=environment,
+        )
     ledger = SQLiteAuthorityEventLedger(
         ledger_path,
         authority_id=authority_id,
@@ -389,6 +414,11 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
         expected_uid=uid,
     )
     ledger.initialize()
+    if authority_id == "controlled_execution":
+        require_held_controlled_writer_lifecycle_v2(
+            lifecycle,
+            expected_environment=environment,
+        )
 
     def service_uid(principal_id: str) -> int:
         deployment = manifest["principals"][principal_id]["deployments"][environment]
@@ -508,7 +538,10 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
             resources=resources,
         )
         try:
-            handler = open_live_controlled_execution_handler_v2()
+            assert lifecycle is not None
+            handler = open_live_controlled_execution_handler_v2(
+                lifecycle=lifecycle
+            )
         except ExactFourAuthorityPending as exc:
             raise LocalAuthorityPending(
                 "Controlled execution activation is PENDING"
@@ -534,6 +567,11 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
             raise AuthorityRunnerError(
                 "Controlled activation is not bound to its UID, peer, store, and key"
             )
+        require_held_controlled_writer_lifecycle_v2(
+            lifecycle,
+            expected_environment=environment,
+            expected_store_path=writer._path,
+        )
         handlers = {CONTROLLED_TRADER_HANDOFF_OPERATION: handler}
     else:  # validated by load_runtime_config; defensive for future manifest rows
         raise AuthorityRunnerError("authority has no reviewed local handler set")
@@ -583,14 +621,45 @@ def launchd_listener(*, expected_socket_path: str) -> socket.socket:
 
 
 def serve_forever(*, authority_id: str, environment: str) -> NoReturn:
-    service = build_service(authority_id=authority_id, environment=environment)
-    manifest = load_and_validate_manifest()
-    socket_path = manifest["principals"][authority_id]["deployments"][environment][
-        "socket_path"
-    ]
-    listener = launchd_listener(expected_socket_path=socket_path)
-    UnixAuthorityConnectionServer(service).serve(listener)
-    raise AssertionError("authority connection server returned unexpectedly")
+    lifecycle: ControlledWriterLifecycleLeaseV2 | None = None
+    try:
+        if authority_id == "controlled_execution":
+            # This must precede build_service: that call initializes the outer
+            # event ledger, the Controlled writer and its budget/runtime stores.
+            lifecycle = acquire_live_controlled_writer_lifecycle_v2(
+                expected_environment=environment
+            )
+        service = build_service(
+            authority_id=authority_id,
+            environment=environment,
+            lifecycle=lifecycle,
+        )
+        if lifecycle is not None:
+            handler = service.handlers.get(CONTROLLED_TRADER_HANDOFF_OPERATION)
+            writer = getattr(handler, "writer", None)
+            if (
+                writer is None
+                or writer._path != lifecycle.store_path
+                or writer.environment != lifecycle.environment
+            ):
+                raise AuthorityRunnerError(
+                    "Controlled daemon lifecycle differs from its opened writer"
+                )
+            lifecycle._require_held()
+        manifest = load_and_validate_manifest()
+        socket_path = manifest["principals"][authority_id]["deployments"][environment][
+            "socket_path"
+        ]
+        listener = launchd_listener(expected_socket_path=socket_path)
+        UnixAuthorityConnectionServer(service).serve(listener)
+        raise AssertionError("authority connection server returned unexpectedly")
+    except ControlledExecutionQuiescenceV2Error as exc:
+        raise AuthorityRunnerError(
+            "Controlled writer lifecycle acquisition rejected startup"
+        ) from exc
+    finally:
+        if lifecycle is not None:
+            lifecycle.close()
 
 
 def main(argv: list[str] | None = None) -> int:

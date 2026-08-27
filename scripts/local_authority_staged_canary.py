@@ -68,12 +68,12 @@ POLICY_PATH = (
     ROOT / "specs" / "authorities" / "local-authority-staged-canary-policy.json"
 )
 POLICY_DIGEST = (
-    "sha256:f904f24657bcd06ae37e5606e6a5395a06fda52a6e9ed0c7a2ebdc93c3120f65"
+    "sha256:53dcc5cef4182250b89fa8348a14112c8d0cf5646d464018e7a4573af36c66ec"
 )
 POLICY_FORMAT = "local-authority-staged-canary-policy/v1"
 CHALLENGE_FORMAT = "local-authority-staged-canary-challenge/v1"
 CANARY_FORMAT = "local-authority-staged-canary-evidence/v1"
-JOURNAL_FORMAT = "local-authority-staged-canary-journal/v3"
+JOURNAL_FORMAT = "local-authority-staged-canary-journal/v4"
 CLASSIFICATION = "CANARY_NOT_RESEARCH_ELIGIBLE"
 CANONICAL_STATE_ROOT = Path(
     "/Library/Application Support/quant-platform/authorities/staged-canary"

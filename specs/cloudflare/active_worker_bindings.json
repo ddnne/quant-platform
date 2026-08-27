@@ -58,7 +58,8 @@
     ],
     "unclassified": "REJECT"
   },
-  "schema_version": "cloudflare-active-worker-bindings/v4",
+  "manifest_digest": "sha256:f26519b17d3ee5ef1d047ae7c2b15ff22cadc5830f46deca32ff7c1ac1d1bac5",
+  "schema_version": "cloudflare-active-worker-bindings/v8",
   "test_harness_surfaces": {
     "ingestion-jsda": {
       "account_id": null,
@@ -75,6 +76,7 @@
           "migrations_dir": "../ingestion-premium/migrations"
         }
       ],
+      "durable_object_class_handlers": [],
       "durable_objects": [],
       "kv_namespaces": [],
       "main": "src/testing.ts",
@@ -134,6 +136,7 @@
         "USER_AGENT": "quant-platform-jsda-runtime-test/0.1"
       },
       "version_metadata": {},
+      "worker_entrypoints": [],
       "workers_dev": false
     },
     "ingestion-secrets": {
@@ -144,6 +147,7 @@
       "config": "platform/workers/ingestion-secrets/wrangler.test.toml",
       "crons": [],
       "d1_databases": [],
+      "durable_object_class_handlers": [],
       "durable_objects": [],
       "kv_namespaces": [],
       "main": "src/index.ts",
@@ -184,6 +188,18 @@
         "JQUANTS_RPC_CURSOR_HMAC_KEY": "jq-runtime-cursor-hmac-key-not-for-live-00000000000000000000000000000000"
       },
       "version_metadata": {},
+      "worker_entrypoints": [
+        {
+          "fetch_reserved_special": true,
+          "handlers": [
+            "class"
+          ],
+          "name": "IngestionSecretsService",
+          "rpc_methods": [
+            "fetch_governed_page"
+          ]
+        }
+      ],
       "workers_dev": false
     },
     "quant-ops-mcp": {
@@ -209,6 +225,80 @@
           "database_name": "quant-ops-quota-test",
           "migrations_dir": "migrations/quota",
           "migrations_table": "d1_migrations_ops_quota"
+        }
+      ],
+      "durable_object_class_handlers": [
+        {
+          "framework_rpc_inventory": {
+            "constructor_prototype_copy": {
+              "copied_method_count": 17,
+              "observed": true,
+              "post_construction_own_method_count": 18
+            },
+            "dependency": {
+              "integrity": "sha512-K6YRbpD3VcwdTOPBlDgI4dILAwkhXo5cdxTlVF0IvUwQEKfMPawmH8E/QMXTN8CPGHqVYgYFACxTyk6nKlK+vg==",
+              "package": "agents",
+              "package_lock": "platform/workers/quant-ops-mcp/package-lock.json",
+              "package_lock_digest": "sha256:fd583b8f3c1a75f5511c4abe0422274529c987e0512c0b724e63733a588af52f",
+              "requested": "0.17.4",
+              "resolved": "https://registry.npmjs.org/agents/-/agents-0.17.4.tgz",
+              "resolved_version": "0.17.4"
+            },
+            "framework_class": "McpAgent",
+            "own_custom_pre_init_rpc_methods": [
+              "init"
+            ],
+            "policy_kind": "framework-prototype-inventory/v1",
+            "post_construction_prototype": {
+              "canonicalization": "prototype-descriptors/v1",
+              "descriptor_digest": "sha256:077694dde17e90c2ac702c71652a53f9f69b3c8143197de0c8ccaff3afc34d1f",
+              "descriptor_row_count": 345,
+              "owner_inventories": [
+                {
+                  "descriptor_digest": "sha256:311e5b28b8a5edafc1cf4d26fba62616b5f7f0c2331e8b25b8c20225c30af126",
+                  "descriptor_row_count": 18,
+                  "owner": "QuantOpsMcpAgent"
+                },
+                {
+                  "descriptor_digest": "sha256:f82cfc1fc012c399a9f4356e27352f8dbaa88ea541e8f405c9eff95e1fad17a3",
+                  "descriptor_row_count": 21,
+                  "owner": "McpAgent"
+                },
+                {
+                  "descriptor_digest": "sha256:916d6fd9f21ed584b8e862432831ddbdabe92055201211f2593337f4a86917f0",
+                  "descriptor_row_count": 284,
+                  "owner": "Agent"
+                },
+                {
+                  "descriptor_digest": "sha256:2d7f8feda2717b89fad0bd6ef6df7b4071dd5e526a60ccee9d2302657f3c5d5a",
+                  "descriptor_row_count": 22,
+                  "owner": "Server"
+                }
+              ],
+              "owner_order": [
+                "QuantOpsMcpAgent",
+                "McpAgent",
+                "Agent",
+                "Server"
+              ],
+              "unique_getter_count": 6,
+              "unique_method_count": 310,
+              "unique_ordinary_method_count": 305,
+              "unique_reserved_special_count": 5,
+              "unique_setter_count": 0
+            },
+            "reserved_specials": {
+              "alarm": true,
+              "fetch": true,
+              "webSocketClose": true,
+              "webSocketError": true,
+              "webSocketMessage": true
+            }
+          },
+          "handlers": [
+            "class"
+          ],
+          "name": "QuantOpsMcpAgent"
         }
       ],
       "durable_objects": [
@@ -258,6 +348,7 @@
         "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.test"
       },
       "version_metadata": {},
+      "worker_entrypoints": [],
       "workers_dev": false
     },
     "receipt-evidence-authority": {
@@ -272,6 +363,21 @@
           "binding": "DB",
           "database_id": "00000000-0000-0000-0000-000000000014",
           "database_name": "quant-ingest-receipt-test"
+        }
+      ],
+      "durable_object_class_handlers": [
+        {
+          "handlers": [
+            "class"
+          ],
+          "name": "ReceiptEvidenceAuthority",
+          "rpc_methods": [
+            "begin_audit_recovery_canary",
+            "issue_for_segment",
+            "public_key_registration",
+            "recover_audit_recovery_canary",
+            "recover_issue"
+          ]
         }
       ],
       "durable_objects": [
@@ -325,6 +431,22 @@
       "version_metadata": {
         "binding": "CF_VERSION_METADATA"
       },
+      "worker_entrypoints": [
+        {
+          "fetch_reserved_special": true,
+          "handlers": [
+            "class"
+          ],
+          "name": "ReceiptAuthorityService",
+          "rpc_methods": [
+            "begin_audit_recovery_canary",
+            "issue_for_segment",
+            "public_key_registration",
+            "recover_audit_recovery_canary",
+            "recover_issue"
+          ]
+        }
+      ],
       "workers_dev": false
     },
     "research-ai-gateway": {
@@ -335,6 +457,27 @@
       "config": "platform/workers/research-ai-gateway/wrangler.test.toml",
       "crons": [],
       "d1_databases": [],
+      "durable_object_class_handlers": [
+        {
+          "alarm_reserved_special": true,
+          "fetch_reserved_special": true,
+          "handlers": [
+            "class"
+          ],
+          "name": "BudgetLedger",
+          "rpc_methods": [
+            "cancelPreProvider",
+            "finalizeExact",
+            "heartbeat",
+            "markProviderStarted",
+            "release",
+            "reserve",
+            "reserveOwned",
+            "settleUncertain",
+            "snapshot"
+          ]
+        }
+      ],
       "durable_objects": [
         {
           "class_name": "BudgetLedger",
@@ -373,6 +516,18 @@
       },
       "vars": {},
       "version_metadata": {},
+      "worker_entrypoints": [
+        {
+          "fetch_reserved_special": false,
+          "handlers": [
+            "class"
+          ],
+          "name": "GatewayService",
+          "rpc_methods": [
+            "complete"
+          ]
+        }
+      ],
       "workers_dev": false
     },
     "research-mass-eval": {
@@ -383,6 +538,7 @@
       "config": "platform/workers/research-mass-eval/wrangler.test.toml",
       "crons": [],
       "d1_databases": [],
+      "durable_object_class_handlers": [],
       "durable_objects": [],
       "kv_namespaces": [],
       "main": "src/index.ts",
@@ -429,6 +585,7 @@
         "READY_DECLARED": "false"
       },
       "version_metadata": {},
+      "worker_entrypoints": [],
       "workers_dev": false
     }
   },
@@ -511,6 +668,7 @@
             "database_name": "quant-ingest"
           }
         ],
+        "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -576,6 +734,7 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [],
         "workers_dev": false
       },
       "production": {
@@ -594,6 +753,7 @@
             "database_name": "quant-ingest"
           }
         ],
+        "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -659,6 +819,7 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [],
         "workers_dev": false
       },
       "staging": {
@@ -675,6 +836,7 @@
             "database_name": "quant-ingest-staging"
           }
         ],
+        "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -738,6 +900,7 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [],
         "workers_dev": false
       }
     },
@@ -758,6 +921,7 @@
             "database_name": "quant-ingest"
           }
         ],
+        "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -806,11 +970,25 @@
         },
         "vars": {
           "INGEST_CONCURRENCY": "6",
-          "RECEIPT_AUTHORITY_ENVIRONMENT": "production"
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "production",
+          "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING"
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": false,
+            "handlers": [
+              "class"
+            ],
+            "name": "PremiumReceiptOperatorService",
+            "rpc_methods": [
+              "pending_public_key_registration",
+              "staging_recovery_audit_attestation"
+            ]
+          }
+        ],
         "workers_dev": false
       },
       "production": {
@@ -829,6 +1007,7 @@
             "database_name": "quant-ingest"
           }
         ],
+        "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -877,11 +1056,25 @@
         },
         "vars": {
           "INGEST_CONCURRENCY": "6",
-          "RECEIPT_AUTHORITY_ENVIRONMENT": "production"
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "production",
+          "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING"
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": false,
+            "handlers": [
+              "class"
+            ],
+            "name": "PremiumReceiptOperatorService",
+            "rpc_methods": [
+              "pending_public_key_registration",
+              "staging_recovery_audit_attestation"
+            ]
+          }
+        ],
         "workers_dev": false
       },
       "staging": {
@@ -900,6 +1093,7 @@
             "migrations_table": "d1_migrations_ingestion"
           }
         ],
+        "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -946,11 +1140,25 @@
         },
         "vars": {
           "INGEST_CONCURRENCY": "2",
-          "RECEIPT_AUTHORITY_ENVIRONMENT": "staging"
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "staging",
+          "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING"
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": false,
+            "handlers": [
+              "class"
+            ],
+            "name": "PremiumReceiptOperatorService",
+            "rpc_methods": [
+              "pending_public_key_registration",
+              "staging_recovery_audit_attestation"
+            ]
+          }
+        ],
         "workers_dev": false
       }
     },
@@ -963,6 +1171,7 @@
         "config": "platform/workers/ingestion-secrets/wrangler.toml",
         "crons": [],
         "d1_databases": [],
+        "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -1009,6 +1218,18 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "IngestionSecretsService",
+            "rpc_methods": [
+              "fetch_governed_page"
+            ]
+          }
+        ],
         "workers_dev": true
       },
       "production": {
@@ -1019,6 +1240,7 @@
         "config": "platform/workers/ingestion-secrets/wrangler.toml",
         "crons": [],
         "d1_databases": [],
+        "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -1065,6 +1287,18 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "IngestionSecretsService",
+            "rpc_methods": [
+              "fetch_governed_page"
+            ]
+          }
+        ],
         "workers_dev": true
       },
       "staging": {
@@ -1075,6 +1309,7 @@
         "config": "platform/workers/ingestion-secrets/wrangler.staging.toml",
         "crons": [],
         "d1_databases": [],
+        "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -1120,6 +1355,18 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "IngestionSecretsService",
+            "rpc_methods": [
+              "fetch_governed_page"
+            ]
+          }
+        ],
         "workers_dev": false
       }
     },
@@ -1149,6 +1396,80 @@
             "migrations_table": "d1_migrations_ops_quota"
           }
         ],
+        "durable_object_class_handlers": [
+          {
+            "framework_rpc_inventory": {
+              "constructor_prototype_copy": {
+                "copied_method_count": 17,
+                "observed": true,
+                "post_construction_own_method_count": 18
+              },
+              "dependency": {
+                "integrity": "sha512-K6YRbpD3VcwdTOPBlDgI4dILAwkhXo5cdxTlVF0IvUwQEKfMPawmH8E/QMXTN8CPGHqVYgYFACxTyk6nKlK+vg==",
+                "package": "agents",
+                "package_lock": "platform/workers/quant-ops-mcp/package-lock.json",
+                "package_lock_digest": "sha256:fd583b8f3c1a75f5511c4abe0422274529c987e0512c0b724e63733a588af52f",
+                "requested": "0.17.4",
+                "resolved": "https://registry.npmjs.org/agents/-/agents-0.17.4.tgz",
+                "resolved_version": "0.17.4"
+              },
+              "framework_class": "McpAgent",
+              "own_custom_pre_init_rpc_methods": [
+                "init"
+              ],
+              "policy_kind": "framework-prototype-inventory/v1",
+              "post_construction_prototype": {
+                "canonicalization": "prototype-descriptors/v1",
+                "descriptor_digest": "sha256:077694dde17e90c2ac702c71652a53f9f69b3c8143197de0c8ccaff3afc34d1f",
+                "descriptor_row_count": 345,
+                "owner_inventories": [
+                  {
+                    "descriptor_digest": "sha256:311e5b28b8a5edafc1cf4d26fba62616b5f7f0c2331e8b25b8c20225c30af126",
+                    "descriptor_row_count": 18,
+                    "owner": "QuantOpsMcpAgent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:f82cfc1fc012c399a9f4356e27352f8dbaa88ea541e8f405c9eff95e1fad17a3",
+                    "descriptor_row_count": 21,
+                    "owner": "McpAgent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:916d6fd9f21ed584b8e862432831ddbdabe92055201211f2593337f4a86917f0",
+                    "descriptor_row_count": 284,
+                    "owner": "Agent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:2d7f8feda2717b89fad0bd6ef6df7b4071dd5e526a60ccee9d2302657f3c5d5a",
+                    "descriptor_row_count": 22,
+                    "owner": "Server"
+                  }
+                ],
+                "owner_order": [
+                  "QuantOpsMcpAgent",
+                  "McpAgent",
+                  "Agent",
+                  "Server"
+                ],
+                "unique_getter_count": 6,
+                "unique_method_count": 310,
+                "unique_ordinary_method_count": 305,
+                "unique_reserved_special_count": 5,
+                "unique_setter_count": 0
+              },
+              "reserved_specials": {
+                "alarm": true,
+                "fetch": true,
+                "webSocketClose": true,
+                "webSocketError": true,
+                "webSocketMessage": true
+              }
+            },
+            "handlers": [
+              "class"
+            ],
+            "name": "QuantOpsMcpAgent"
+          }
+        ],
         "durable_objects": [
           {
             "class_name": "QuantOpsMcpAgent",
@@ -1205,6 +1526,7 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [],
         "workers_dev": true
       },
       "production": {
@@ -1232,6 +1554,80 @@
             "migrations_table": "d1_migrations_ops_quota"
           }
         ],
+        "durable_object_class_handlers": [
+          {
+            "framework_rpc_inventory": {
+              "constructor_prototype_copy": {
+                "copied_method_count": 17,
+                "observed": true,
+                "post_construction_own_method_count": 18
+              },
+              "dependency": {
+                "integrity": "sha512-K6YRbpD3VcwdTOPBlDgI4dILAwkhXo5cdxTlVF0IvUwQEKfMPawmH8E/QMXTN8CPGHqVYgYFACxTyk6nKlK+vg==",
+                "package": "agents",
+                "package_lock": "platform/workers/quant-ops-mcp/package-lock.json",
+                "package_lock_digest": "sha256:fd583b8f3c1a75f5511c4abe0422274529c987e0512c0b724e63733a588af52f",
+                "requested": "0.17.4",
+                "resolved": "https://registry.npmjs.org/agents/-/agents-0.17.4.tgz",
+                "resolved_version": "0.17.4"
+              },
+              "framework_class": "McpAgent",
+              "own_custom_pre_init_rpc_methods": [
+                "init"
+              ],
+              "policy_kind": "framework-prototype-inventory/v1",
+              "post_construction_prototype": {
+                "canonicalization": "prototype-descriptors/v1",
+                "descriptor_digest": "sha256:077694dde17e90c2ac702c71652a53f9f69b3c8143197de0c8ccaff3afc34d1f",
+                "descriptor_row_count": 345,
+                "owner_inventories": [
+                  {
+                    "descriptor_digest": "sha256:311e5b28b8a5edafc1cf4d26fba62616b5f7f0c2331e8b25b8c20225c30af126",
+                    "descriptor_row_count": 18,
+                    "owner": "QuantOpsMcpAgent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:f82cfc1fc012c399a9f4356e27352f8dbaa88ea541e8f405c9eff95e1fad17a3",
+                    "descriptor_row_count": 21,
+                    "owner": "McpAgent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:916d6fd9f21ed584b8e862432831ddbdabe92055201211f2593337f4a86917f0",
+                    "descriptor_row_count": 284,
+                    "owner": "Agent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:2d7f8feda2717b89fad0bd6ef6df7b4071dd5e526a60ccee9d2302657f3c5d5a",
+                    "descriptor_row_count": 22,
+                    "owner": "Server"
+                  }
+                ],
+                "owner_order": [
+                  "QuantOpsMcpAgent",
+                  "McpAgent",
+                  "Agent",
+                  "Server"
+                ],
+                "unique_getter_count": 6,
+                "unique_method_count": 310,
+                "unique_ordinary_method_count": 305,
+                "unique_reserved_special_count": 5,
+                "unique_setter_count": 0
+              },
+              "reserved_specials": {
+                "alarm": true,
+                "fetch": true,
+                "webSocketClose": true,
+                "webSocketError": true,
+                "webSocketMessage": true
+              }
+            },
+            "handlers": [
+              "class"
+            ],
+            "name": "QuantOpsMcpAgent"
+          }
+        ],
         "durable_objects": [
           {
             "class_name": "QuantOpsMcpAgent",
@@ -1288,6 +1684,7 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [],
         "workers_dev": true
       },
       "staging": {
@@ -1313,6 +1710,80 @@
             "database_name": "quant-ops-quota-staging",
             "migrations_dir": "migrations/quota",
             "migrations_table": "d1_migrations_ops_quota"
+          }
+        ],
+        "durable_object_class_handlers": [
+          {
+            "framework_rpc_inventory": {
+              "constructor_prototype_copy": {
+                "copied_method_count": 17,
+                "observed": true,
+                "post_construction_own_method_count": 18
+              },
+              "dependency": {
+                "integrity": "sha512-K6YRbpD3VcwdTOPBlDgI4dILAwkhXo5cdxTlVF0IvUwQEKfMPawmH8E/QMXTN8CPGHqVYgYFACxTyk6nKlK+vg==",
+                "package": "agents",
+                "package_lock": "platform/workers/quant-ops-mcp/package-lock.json",
+                "package_lock_digest": "sha256:fd583b8f3c1a75f5511c4abe0422274529c987e0512c0b724e63733a588af52f",
+                "requested": "0.17.4",
+                "resolved": "https://registry.npmjs.org/agents/-/agents-0.17.4.tgz",
+                "resolved_version": "0.17.4"
+              },
+              "framework_class": "McpAgent",
+              "own_custom_pre_init_rpc_methods": [
+                "init"
+              ],
+              "policy_kind": "framework-prototype-inventory/v1",
+              "post_construction_prototype": {
+                "canonicalization": "prototype-descriptors/v1",
+                "descriptor_digest": "sha256:077694dde17e90c2ac702c71652a53f9f69b3c8143197de0c8ccaff3afc34d1f",
+                "descriptor_row_count": 345,
+                "owner_inventories": [
+                  {
+                    "descriptor_digest": "sha256:311e5b28b8a5edafc1cf4d26fba62616b5f7f0c2331e8b25b8c20225c30af126",
+                    "descriptor_row_count": 18,
+                    "owner": "QuantOpsMcpAgent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:f82cfc1fc012c399a9f4356e27352f8dbaa88ea541e8f405c9eff95e1fad17a3",
+                    "descriptor_row_count": 21,
+                    "owner": "McpAgent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:916d6fd9f21ed584b8e862432831ddbdabe92055201211f2593337f4a86917f0",
+                    "descriptor_row_count": 284,
+                    "owner": "Agent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:2d7f8feda2717b89fad0bd6ef6df7b4071dd5e526a60ccee9d2302657f3c5d5a",
+                    "descriptor_row_count": 22,
+                    "owner": "Server"
+                  }
+                ],
+                "owner_order": [
+                  "QuantOpsMcpAgent",
+                  "McpAgent",
+                  "Agent",
+                  "Server"
+                ],
+                "unique_getter_count": 6,
+                "unique_method_count": 310,
+                "unique_ordinary_method_count": 305,
+                "unique_reserved_special_count": 5,
+                "unique_setter_count": 0
+              },
+              "reserved_specials": {
+                "alarm": true,
+                "fetch": true,
+                "webSocketClose": true,
+                "webSocketError": true,
+                "webSocketMessage": true
+              }
+            },
+            "handlers": [
+              "class"
+            ],
+            "name": "QuantOpsMcpAgent"
           }
         ],
         "durable_objects": [
@@ -1366,6 +1837,7 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [],
         "workers_dev": false
       }
     },
@@ -1384,6 +1856,21 @@
             "database_name": "quant-ingest"
           }
         ],
+        "durable_object_class_handlers": [
+          {
+            "handlers": [
+              "class"
+            ],
+            "name": "ReceiptEvidenceAuthority",
+            "rpc_methods": [
+              "begin_audit_recovery_canary",
+              "issue_for_segment",
+              "public_key_registration",
+              "recover_audit_recovery_canary",
+              "recover_issue"
+            ]
+          }
+        ],
         "durable_objects": [
           {
             "class_name": "ReceiptEvidenceAuthority",
@@ -1444,6 +1931,22 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "ReceiptAuthorityService",
+            "rpc_methods": [
+              "begin_audit_recovery_canary",
+              "issue_for_segment",
+              "public_key_registration",
+              "recover_audit_recovery_canary",
+              "recover_issue"
+            ]
+          }
+        ],
         "workers_dev": false
       },
       "production": {
@@ -1460,6 +1963,21 @@
             "database_name": "quant-ingest"
           }
         ],
+        "durable_object_class_handlers": [
+          {
+            "handlers": [
+              "class"
+            ],
+            "name": "ReceiptEvidenceAuthority",
+            "rpc_methods": [
+              "begin_audit_recovery_canary",
+              "issue_for_segment",
+              "public_key_registration",
+              "recover_audit_recovery_canary",
+              "recover_issue"
+            ]
+          }
+        ],
         "durable_objects": [
           {
             "class_name": "ReceiptEvidenceAuthority",
@@ -1520,6 +2038,22 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "ReceiptAuthorityService",
+            "rpc_methods": [
+              "begin_audit_recovery_canary",
+              "issue_for_segment",
+              "public_key_registration",
+              "recover_audit_recovery_canary",
+              "recover_issue"
+            ]
+          }
+        ],
         "workers_dev": false
       },
       "staging": {
@@ -1534,6 +2068,21 @@
             "binding": "DB",
             "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
             "database_name": "quant-ingest-staging"
+          }
+        ],
+        "durable_object_class_handlers": [
+          {
+            "handlers": [
+              "class"
+            ],
+            "name": "ReceiptEvidenceAuthority",
+            "rpc_methods": [
+              "begin_audit_recovery_canary",
+              "issue_for_segment",
+              "public_key_registration",
+              "recover_audit_recovery_canary",
+              "recover_issue"
+            ]
           }
         ],
         "durable_objects": [
@@ -1596,6 +2145,22 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "ReceiptAuthorityService",
+            "rpc_methods": [
+              "begin_audit_recovery_canary",
+              "issue_for_segment",
+              "public_key_registration",
+              "recover_audit_recovery_canary",
+              "recover_issue"
+            ]
+          }
+        ],
         "workers_dev": false
       }
     },
@@ -1610,6 +2175,27 @@
         "config": "platform/workers/research-ai-gateway/wrangler.toml",
         "crons": [],
         "d1_databases": [],
+        "durable_object_class_handlers": [
+          {
+            "alarm_reserved_special": true,
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "BudgetLedger",
+            "rpc_methods": [
+              "cancelPreProvider",
+              "finalizeExact",
+              "heartbeat",
+              "markProviderStarted",
+              "release",
+              "reserve",
+              "reserveOwned",
+              "settleUncertain",
+              "snapshot"
+            ]
+          }
+        ],
         "durable_objects": [
           {
             "class_name": "BudgetLedger",
@@ -1655,6 +2241,18 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": false,
+            "handlers": [
+              "class"
+            ],
+            "name": "GatewayService",
+            "rpc_methods": [
+              "complete"
+            ]
+          }
+        ],
         "workers_dev": false
       },
       "production": {
@@ -1667,6 +2265,27 @@
         "config": "platform/workers/research-ai-gateway/wrangler.toml",
         "crons": [],
         "d1_databases": [],
+        "durable_object_class_handlers": [
+          {
+            "alarm_reserved_special": true,
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "BudgetLedger",
+            "rpc_methods": [
+              "cancelPreProvider",
+              "finalizeExact",
+              "heartbeat",
+              "markProviderStarted",
+              "release",
+              "reserve",
+              "reserveOwned",
+              "settleUncertain",
+              "snapshot"
+            ]
+          }
+        ],
         "durable_objects": [
           {
             "class_name": "BudgetLedger",
@@ -1712,6 +2331,18 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": false,
+            "handlers": [
+              "class"
+            ],
+            "name": "GatewayService",
+            "rpc_methods": [
+              "complete"
+            ]
+          }
+        ],
         "workers_dev": false
       },
       "staging": {
@@ -1724,6 +2355,27 @@
         "config": "platform/workers/research-ai-gateway/wrangler.staging.toml",
         "crons": [],
         "d1_databases": [],
+        "durable_object_class_handlers": [
+          {
+            "alarm_reserved_special": true,
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "BudgetLedger",
+            "rpc_methods": [
+              "cancelPreProvider",
+              "finalizeExact",
+              "heartbeat",
+              "markProviderStarted",
+              "release",
+              "reserve",
+              "reserveOwned",
+              "settleUncertain",
+              "snapshot"
+            ]
+          }
+        ],
         "durable_objects": [
           {
             "class_name": "BudgetLedger",
@@ -1767,6 +2419,18 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": false,
+            "handlers": [
+              "class"
+            ],
+            "name": "GatewayService",
+            "rpc_methods": [
+              "complete"
+            ]
+          }
+        ],
         "workers_dev": false
       }
     },
@@ -1779,6 +2443,7 @@
         "config": "platform/workers/research-mass-eval/wrangler.toml",
         "crons": [],
         "d1_databases": [],
+        "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -1832,6 +2497,7 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [],
         "workers_dev": false
       },
       "production": {
@@ -1842,6 +2508,7 @@
         "config": "platform/workers/research-mass-eval/wrangler.toml",
         "crons": [],
         "d1_databases": [],
+        "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -1895,6 +2562,7 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [],
         "workers_dev": false
       },
       "staging": {
@@ -1905,6 +2573,7 @@
         "config": "platform/workers/research-mass-eval/wrangler.staging.toml",
         "crons": [],
         "d1_databases": [],
+        "durable_object_class_handlers": [],
         "durable_objects": [],
         "kv_namespaces": [],
         "main": "src/index.ts",
@@ -1956,6 +2625,7 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
+        "worker_entrypoints": [],
         "workers_dev": false
       }
     }

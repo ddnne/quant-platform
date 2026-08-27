@@ -55,6 +55,9 @@ PARALLEL_PROTOCOL_SCHEMAS: dict[str, Path] = {
         / "ready"
         / "exact_four_trader_authorization_v2.schema.json"
     ),
+    "local_authority_high_water_anchor": (
+        AUTHORITY_SPECS / "local-authority-anchor-protocol.schema.json"
+    ),
 }
 
 PRINCIPALS = (
@@ -427,7 +430,7 @@ EXPECTED_RESIDUAL_RISK = "cloudflare_workers_scripts_write_account_scope"
 # contains its own body digest; this independent code pin prevents a caller from
 # changing the contract and merely recomputing that self-declared digest.
 PINNED_MANIFEST_DIGEST = (
-    "sha256:f1ce07989ee97c87690b3341f14b0cad7a27eb2a62eff489d330420647aeb0b0"
+    "sha256:479d4e7058295c7f33c5ec7406806fe0ca1d41702d82eedf6f8653856c8c4bc9"
 )
 
 _BROAD_CAPABILITY_TOKENS = frozenset(

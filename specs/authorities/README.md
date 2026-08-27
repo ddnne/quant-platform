@@ -111,3 +111,32 @@ The local-only staged bootstrap canary contract is frozen in
 product authority or satisfy the all-P0 release/READY/Pilot gate. Receipt is
 not accepted through this local journal because a caller file cannot prove a
 Cloudflare Service Binding or deployed version.
+
+The external high-water protocol, deployment manifest, and public-key registry
+are separately digest-pinned in `local_authority_anchor_contract.py`. The
+checked-in deployment deliberately selects no provider or endpoint and has no
+active key, so the fixed collector remains operational HOLD. Its reference
+compare-and-swap authority is a protocol test model only; it is not a remote
+resource, admin-separation claim, or release authority. The closed commit
+protocol requires a remotely rehashed event suffix plus only new immutable
+attempts and new or changed runs relative to the remote's retained prior
+snapshot. The remote merges that delta and rederives the complete attempt-set
+and run-state digests, so the payload does not grow with accepted history. A
+pinned atomic `/resolve` decision makes a lost response recoverable
+and makes a never-received expired commit permanently `NOT_ACCEPTED` before the
+local audit advances its attempt ordinal. This high-water proof detects journal
+lineage forks; it does not transport or independently verify the underlying
+service signatures and is not by itself authority-provenance evidence.
+The v1 registries are static-key only: changing either the remote key or local
+client key makes historical audit verification fail closed. Operators must
+retain both exact keys permanently; a reviewed active-plus-verify-only key
+history is required before any rotation and remains an explicit operational
+blocker.
+
+The source dependency direction is deliberately one-way. Canonical wire,
+signature, manifest and lineage validation lives in
+`local_authority_anchor_contract.py`; the in-memory reference authority and the
+HTTPS/local-audit store independently consume that contract; and
+`local_authority_anchor_protocol.py` contains the fixed collector plus the
+four-name public facade only. The reference authority is never imported by the
+collector. Behavioral import-order coverage rejects dependency cycles.

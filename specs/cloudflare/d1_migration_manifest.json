@@ -210,6 +210,13 @@
           "checksum": "sha256:75f98077836325a2e9e746bc9e38d0495a91f11e8fb8b338ac4a06d9480e1cde",
           "order": 18,
           "depends_on": "quant-ingest:0017_receipt_authority_run_evidence"
+        },
+        {
+          "migration_id": "quant-ingest:0019_receipt_authority_recovery_smoke",
+          "path": "platform/workers/ingestion-premium/migrations/0019_receipt_authority_recovery_smoke.sql",
+          "checksum": "sha256:34b05bcfcf9e5f33d631d8876a51ee325fd15d0303e56c396d8c5aa87c9f12ce",
+          "order": 19,
+          "depends_on": "quant-ingest:0018_receipt_product_materialization"
         }
       ]
     },

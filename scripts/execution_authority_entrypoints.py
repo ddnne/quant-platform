@@ -26,6 +26,10 @@ from execution.controlled_execution_writer_v2 import (
     _open_server_bound_controlled_execution_writer_v2,
 )
 from execution.controlled_execution_runtime_v2 import ControlledExecutionRuntimeV2
+from execution.controlled_execution_quiescence_v2 import (
+    ControlledWriterLifecycleLeaseV2,
+    require_held_controlled_writer_lifecycle_v2,
+)
 from execution.exact_four_codec import (
     ExactFourAuthorityContractError,
     _canonical_bytes,
@@ -365,12 +369,37 @@ def open_live_trader_authority_handler_v2(
 
 
 def open_live_controlled_execution_handler_v2(
+    *, lifecycle: ControlledWriterLifecycleLeaseV2 | None = None
 ) -> ControlledExecutionConsumeTraderHandoffV2:
     """Build the positive Controlled handler only for UnixAuthorityService."""
 
+    require_held_controlled_writer_lifecycle_v2(
+        lifecycle,
+        expected_environment=None,
+    )
+    writer = _open_server_bound_controlled_execution_writer_v2(
+        lifecycle=lifecycle
+    )
+    require_held_controlled_writer_lifecycle_v2(
+        lifecycle,
+        expected_environment=writer.environment,
+        expected_store_path=writer._path,
+    )
+    execution_runtime = _open_server_bound_controlled_execution_runtime_v2(
+        lifecycle=lifecycle
+    )
+    require_held_controlled_writer_lifecycle_v2(
+        lifecycle,
+        expected_environment=writer.environment,
+        expected_store_path=writer._path,
+    )
+    if execution_runtime._environment != writer.environment:
+        raise ExactFourAuthorityContractError(
+            "Controlled writer and runtime environments differ"
+        )
     return ControlledExecutionConsumeTraderHandoffV2(
-        writer=_open_server_bound_controlled_execution_writer_v2(),
-        execution_runtime=_open_server_bound_controlled_execution_runtime_v2(),
+        writer=writer,
+        execution_runtime=execution_runtime,
     )
 
 

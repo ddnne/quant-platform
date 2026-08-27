@@ -37,6 +37,17 @@ remote apply results only in immutable release evidence.
   Service Binding RPC `GatewayService`. `GATEWAY_TOKEN` is HTTP defense in
   depth if a closed route is attached later; it is not a shared Mass
   credential.
+- **Quant Ops legacy agent:** `QuantOpsMcpAgent` remains on deprecated,
+  feature-frozen `McpAgent` for un-inventoried legacy `/sse` compatibility.
+  Source CI pins `agents` and the lock bytes and measures the complete
+  post-construction workerd prototype. Exact module-byte acceptance is the live
+  identity and transitively binds the embedded binding-manifest digest. It also
+  brackets all active production Worker versions and rejects any live binding,
+  handler, migration or runtime drift, including external Quant Ops Service
+  Bindings and Durable Object stubs. The lockfile itself is not claimed as a
+  live API observation. No deploy or legacy client drain has occurred. Follow
+  [`../architecture/adr_quant_ops_mcpagent_migration.md`](../architecture/adr_quant_ops_mcpagent_migration.md): migrate `/mcp` to `createMcpHandler`, then drain
+  `/sse` only after a real client inventory.
 - **AM history:** do not treat V2 monthly AM completeness as a current target.
   V3 AM is tip-scoped. Residual PARTIAL rows are not permission to mint empty
   COMPLETE receipts.
@@ -48,12 +59,30 @@ remote apply results only in immutable release evidence.
   operational activation: passive READY preflight is `PENDING/UNKNOWN`, zero
   local principals are provisioned, active keys/credentials remain zero, and
   R5, R10, R11 and A2 remain `OPEN`.
-- **Staged activation:** the current all-P0 strict gate correctly rejects a
-  release, but it also blocks the positive smoke needed to close the same OPEN
-  rows. Do not add a general bypass or execute ACTIVE instructions yet. The
-  next PR must introduce a narrowly scoped, expiring
-  authority/action/environment/SHA/resource-bound staged gate and mark every
-  canary output research-ineligible. The all-P0 gate remains mandatory for
+- **Staged activation:** source now includes a narrow Receipt staging ACTIVE
+  validator and a Cron-only `AUDIT_ONLY` recovery canary whose operator RPC is
+  read-only. The canary has dedicated Durable Object state/events, never calls
+  ordinary Receipt issue/recover, and stores only its signed attestation in the
+  Premium D1. The validator checks exact source/module/deployment/binding/
+  migration/secret names, the pinned one-key registry, the real Ed25519
+  signature and the complete initial/first-recovery/replay-confirmation digest
+  chain. The first recover call remains unsigned and pending; only a second
+  identical recover call appends the authority-owned replay event and signs the
+  final attestation. It remains
+  research-ineligible and cannot create Coverage or `TRUSTED_COLLECTION`.
+  The gate binds an immutable authority-version/caller-version/key/registry
+  pair. Every authority deploy, key rotation or registry change therefore
+  requires a coordinated Premium redeploy after the authority and a new
+  version-scoped D1 audit row. Old rows and attestations are never mutated or
+  reused; the gate rejects an old authority attestation and rejects a new one
+  until the newer Premium caller version is selected.
+  The Receipt Durable Object's exact five-method RPC inventory is frozen in the
+  binding manifest; internal key/state/event helpers are JavaScript-private and
+  unavailable to workerd RPC. All four named WorkerEntrypoints separately pin
+  ordinary RPC methods and the reserved `fetch` special.
+  This is still operational HOLD: the operator caller principal, active key,
+  migration, deploy and live evidence are absent. Do not add a general bypass
+  or execute ACTIVE instructions yet. The all-P0 gate remains mandatory for
   final release, READY eligibility and Controlled Pilot.
 - **Equities master:** the closed acquisition route is available only as
   `ACTIVE_RAW_ONLY`; COMPLETE/reproof eligibility remains

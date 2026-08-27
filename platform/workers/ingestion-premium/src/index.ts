@@ -14,6 +14,8 @@
  *   GET  /v1/export/changes?after_seq=..&limit=..
  */
 
+import { WorkerEntrypoint } from "cloudflare:workers";
+
 import { PREMIUM_CORE_DATASETS, isPremiumCore, datasetById, type DatasetSpec } from "./catalog";
 import {
   naturalKeyMigrationStatus,
@@ -41,21 +43,39 @@ import {
 import { fetchDataset } from "./fetch_jq";
 import { todayJst, toJstIso } from "./identity";
 import { sha256HexFromString } from "./sha256";
-import type { ReceiptEvidenceAuthorityRpc } from "../../receipt-evidence-authority/src/types";
+import type {
+  ReceiptAuditRecoveryAttestationV1,
+  ReceiptEvidenceAuthorityRpc,
+  ReceiptPublicKeyRegistrationV1,
+} from "../../receipt-evidence-authority/src/types";
 import {
-  issueGovernedReceipt,
-  recoverPreparedReceipt,
+  base64ToBytes,
+  bytesToBase64,
+  canonicalDigest,
+  exactKeys,
+  isPlainObject,
+  isSha256,
+  sha256Digest,
+} from "../../receipt-evidence-authority/src/canonical";
+import {
   recoverPreparedReceipts,
   type ReceiptAuthorityEnvironment,
 } from "./receipt_authority_client";
+import {
+  readStagingReceiptAuditRecoveryAttestation,
+  runStagingReceiptAuditRecoveryCanary,
+} from "./receipt_authority_audit_canary";
 
 /** Generated bindings plus secret/optional var refinements only. */
 export type Env = Omit<
   Cloudflare.Env,
-  "RECEIPT_EVIDENCE_AUTHORITY" | "RECEIPT_AUTHORITY_ENVIRONMENT"
+  | "RECEIPT_EVIDENCE_AUTHORITY"
+  | "RECEIPT_AUTHORITY_ENVIRONMENT"
+  | "RECEIPT_AUTHORITY_OPERATION_MODE"
 > & {
   RECEIPT_EVIDENCE_AUTHORITY: ReceiptEvidenceAuthorityRpc;
   RECEIPT_AUTHORITY_ENVIRONMENT: ReceiptAuthorityEnvironment;
+  RECEIPT_AUTHORITY_OPERATION_MODE: "PENDING" | "ACTIVE";
   JQUANTS_API_KEY: string;
   INGESTION_RUN_TOKEN?: string;
   DATA_EXPORT_TOKEN?: string;
@@ -681,25 +701,6 @@ async function handleRun(
   return json({ ok: summary.status !== "fail", summary });
 }
 
-function exactQuery(
-  url: URL,
-  names: readonly string[],
-): Record<string, string> | null {
-  const actual = [...url.searchParams.keys()].sort();
-  const expected = [...names].sort();
-  if (
-    actual.length !== expected.length ||
-    actual.some((name, index) => name !== expected[index])
-  ) return null;
-  const result: Record<string, string> = {};
-  for (const name of names) {
-    const values = url.searchParams.getAll(name);
-    if (values.length !== 1 || values[0] === "") return null;
-    result[name] = values[0]!;
-  }
-  return result;
-}
-
 function receiptEnvironment(env: Env): ReceiptAuthorityEnvironment {
   if (
     env.RECEIPT_AUTHORITY_ENVIRONMENT !== "production" &&
@@ -708,102 +709,196 @@ function receiptEnvironment(env: Env): ReceiptAuthorityEnvironment {
   return env.RECEIPT_AUTHORITY_ENVIRONMENT;
 }
 
-async function requireAuthenticatedEmptyPost(
-  env: Env,
-  request: Request,
-): Promise<Response | null> {
-  if (request.method !== "POST") return json({ error: "POST required" }, 405);
-  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
-    return json({ error: "unauthorized" }, 401);
-  }
-  if ((await request.arrayBuffer()).byteLength !== 0) {
-    return json({ error: "request body is forbidden" }, 400);
-  }
-  return null;
+export type ReceiptOperatorRegistrationV1 = {
+  schema_version: "receipt-operator-registration/v1";
+  authority: "receipt-evidence-authority";
+  action: "public_key_registration";
+  environment: ReceiptAuthorityEnvironment;
+  caller_worker_version_id: string;
+  caller_worker_version_tag: string;
+  registration: ReceiptPublicKeyRegistrationV1;
+};
+
+export interface PremiumReceiptOperatorRpc {
+  /**
+   * PENDING-only registry proposal.  There is deliberately no issue/recover
+   * method on this operator surface: positive Receipt operations remain inside
+   * the governed ingestion transaction and its durable cron recovery sweep.
+   */
+  pending_public_key_registration(): Promise<ReceiptOperatorRegistrationV1>;
+  /** Return only the immutable Cron-produced AUDIT_ONLY signed attestation. */
+  staging_recovery_audit_attestation(): Promise<
+    ReceiptAuditRecoveryAttestationV1
+  >;
 }
 
-async function handleReceiptReconcile(
+const RECEIPT_REGISTRATION_FIELDS = [
+  "schema_version",
+  "purpose",
+  "environment",
+  "authority_instance_digest",
+  "authority_resource_digest",
+  "authority_status",
+  "action",
+  "deployment_source_sha",
+  "authority_worker_version_id",
+  "authority_worker_version_tag",
+  "operation_binding_digest",
+  "key_id",
+  "key_generation",
+  "algorithm",
+  "public_key_base64",
+  "private_key_extractable",
+  "status",
+  "generated_at",
+  "registration_digest",
+] as const;
+
+async function requirePendingReceiptRegistration(
+  value: unknown,
+  expected: {
+    environment: ReceiptAuthorityEnvironment;
+    sourceSha: string;
+  },
+): Promise<ReceiptPublicKeyRegistrationV1> {
+  if (!isPlainObject(value) || !exactKeys(value, RECEIPT_REGISTRATION_FIELDS)) {
+    throw new Error("Receipt authority returned an invalid PENDING registration");
+  }
+  const registration = value;
+  const { environment, sourceSha } = expected;
+  const environmentCode = environment === "staging" ? "s" : "p";
+  const expectedAuthorityTag = `rp-${environmentCode}-r-${sourceSha}`;
+  const generatedAt = typeof registration.generated_at === "string"
+    ? new Date(registration.generated_at)
+    : null;
+  let publicKeyIsCanonical = false;
+  let derivedKeyId: string | null = null;
+  if (typeof registration.public_key_base64 === "string") {
+    try {
+      const bytes = base64ToBytes(registration.public_key_base64);
+      publicKeyIsCanonical = bytes.length === 32 &&
+        bytesToBase64(bytes) === registration.public_key_base64;
+      if (publicKeyIsCanonical) {
+        const digest = await sha256Digest(bytes);
+        derivedKeyId = `receipt-${environment}-${digest.slice(7, 23)}`;
+      }
+    } catch {
+      publicKeyIsCanonical = false;
+    }
+  }
+  if (
+    registration.schema_version !== "receipt-public-key-registration/v1" ||
+    registration.purpose !== "receipt_verification" ||
+    registration.environment !== environment ||
+    !isSha256(registration.authority_instance_digest) ||
+    !isSha256(registration.authority_resource_digest) ||
+    registration.authority_resource_digest !==
+      registration.authority_instance_digest ||
+    registration.authority_status !== "PENDING" ||
+    registration.action !== "public_key_registration" ||
+    registration.deployment_source_sha !== sourceSha ||
+    typeof registration.authority_worker_version_id !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(registration.authority_worker_version_id) ||
+    registration.authority_worker_version_tag !== expectedAuthorityTag ||
+    typeof registration.operation_binding_digest !== "string" ||
+    !isSha256(registration.operation_binding_digest) ||
+    typeof registration.key_id !== "string" ||
+    !new RegExp(`^receipt-${environment}-[0-9a-f]{16}$`).test(
+      registration.key_id,
+    ) ||
+    registration.key_id !== derivedKeyId ||
+    typeof registration.key_generation !== "number" ||
+    !Number.isSafeInteger(registration.key_generation) ||
+    registration.key_generation <= 0 ||
+    registration.algorithm !== "Ed25519" ||
+    !publicKeyIsCanonical ||
+    registration.private_key_extractable !== false ||
+    registration.status !== "pending" ||
+    generatedAt === null ||
+    Number.isNaN(generatedAt.getTime()) ||
+    generatedAt.toISOString() !== registration.generated_at ||
+    typeof registration.registration_digest !== "string" ||
+    !isSha256(registration.registration_digest)
+  ) {
+    throw new Error("Receipt authority returned an invalid PENDING registration");
+  }
+
+  const expectedOperationBindingDigest = await canonicalDigest({
+    schema_version: "receipt-registration-operation/v1",
+    authority: "receipt-evidence-authority",
+    action: "public_key_registration",
+    environment,
+    authority_resource_digest: registration.authority_resource_digest,
+    deployment_source_sha: registration.deployment_source_sha,
+    authority_worker_version_id: registration.authority_worker_version_id,
+    authority_worker_version_tag: registration.authority_worker_version_tag,
+    key_id: registration.key_id,
+    key_generation: registration.key_generation,
+    generated_at: registration.generated_at,
+  });
+  const { registration_digest: _suppliedDigest, ...registrationBody } =
+    registration;
+  if (
+    registration.operation_binding_digest !== expectedOperationBindingDigest ||
+    registration.registration_digest !== await canonicalDigest(registrationBody)
+  ) {
+    throw new Error("Receipt authority returned an invalid PENDING registration");
+  }
+  return registration as ReceiptPublicKeyRegistrationV1;
+}
+
+function receiptOperatorVersion(
   env: Env,
-  request: Request,
-): Promise<Response> {
-  const rejected = await requireAuthenticatedEmptyPost(env, request);
-  if (rejected !== null) return rejected;
-  const query = exactQuery(new URL(request.url), ["dataset", "segment"]);
-  if (query === null) return json({ error: "exact dataset and segment required" }, 400);
-  try {
-    const issued = await issueGovernedReceipt(
-      env,
-      receiptEnvironment(env),
-      query.dataset!,
-      query.segment!,
+): { id: string; tag: string; sourceSha: string } {
+  const metadata = env.CF_VERSION_METADATA;
+  const environment = receiptEnvironment(env);
+  const environmentCode = environment === "staging" ? "s" : "p";
+  const match = new RegExp(`^rp-${environmentCode}-c-([0-9a-f]{40})$`).exec(
+    metadata?.tag ?? "",
+  );
+  if (
+    metadata === undefined ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(metadata.id) ||
+    match === null
+  ) {
+    throw new Error("Premium Receipt operator deployment provenance is invalid");
+  }
+  return { id: metadata.id, tag: metadata.tag, sourceSha: match[1]! };
+}
+
+/**
+ * Closed operator capability.  It is exported only as a named Service Binding
+ * entrypoint and has no fetch handler.  Binding possession, not a bearer
+ * header, is the caller authority.  Registration is non-positive and remains
+ * PENDING-only at the Receipt authority itself.
+ */
+export class PremiumReceiptOperatorService
+  extends WorkerEntrypoint<Env>
+  implements PremiumReceiptOperatorRpc {
+  async pending_public_key_registration(): Promise<ReceiptOperatorRegistrationV1> {
+    const environment = receiptEnvironment(this.env);
+    const version = receiptOperatorVersion(this.env);
+    const registration = await requirePendingReceiptRegistration(
+      await this.env.RECEIPT_EVIDENCE_AUTHORITY.public_key_registration(),
+      { environment, sourceSha: version.sourceSha },
     );
-    return json({
-      ok: true,
-      operation_id: issued.result.operation_id,
-      receipt_digest: issued.result.receipt_digest,
-      state: issued.result.state,
-    });
-  } catch (error) {
-    console.error(JSON.stringify({
-      event: "receipt_authority_request",
-      operation: "issue_for_segment",
-      dataset: query.dataset,
-      segment_id: query.segment,
-      result: "FAILED",
-      reason: error instanceof Error ? error.message : "unknown",
-    }));
-    return json({ error: "receipt authority unavailable" }, 409);
+    return {
+      schema_version: "receipt-operator-registration/v1",
+      authority: "receipt-evidence-authority",
+      action: "public_key_registration",
+      environment,
+      caller_worker_version_id: version.id,
+      caller_worker_version_tag: version.tag,
+      registration,
+    };
   }
-}
 
-async function handleReceiptRecovery(
-  env: Env,
-  request: Request,
-): Promise<Response> {
-  const rejected = await requireAuthenticatedEmptyPost(env, request);
-  if (rejected !== null) return rejected;
-  const query = exactQuery(new URL(request.url), ["operation_id"]);
-  if (query === null) return json({ error: "exact operation_id required" }, 400);
-  try {
-    const result = await recoverPreparedReceipt(env, query.operation_id!);
-    return json({
-      ok: true,
-      operation_id: result.operation_id,
-      receipt_digest: result.receipt_digest,
-      state: result.state,
-    });
-  } catch (error) {
-    console.error(JSON.stringify({
-      event: "receipt_authority_request",
-      operation: "recover_issue",
-      operation_id: query.operation_id,
-      result: "FAILED",
-      reason: error instanceof Error ? error.message : "unknown",
-    }));
-    return json({ error: "receipt authority recovery unavailable" }, 409);
-  }
-}
-
-async function handleReceiptPublicKeyRegistration(
-  env: Env,
-  request: Request,
-): Promise<Response> {
-  const rejected = await requireAuthenticatedEmptyPost(env, request);
-  if (rejected !== null) return rejected;
-  if (exactQuery(new URL(request.url), []) === null) {
-    return json({ error: "query parameters are forbidden" }, 400);
-  }
-  try {
-    const registration = await env.RECEIPT_EVIDENCE_AUTHORITY
-      .public_key_registration();
-    return json({ ok: true, registration });
-  } catch (error) {
-    console.error(JSON.stringify({
-      event: "receipt_authority_key_registration",
-      result: "FAILED",
-      reason: error instanceof Error ? error.message : "unknown",
-    }));
-    return json({ error: "receipt key registration unavailable" }, 409);
+  staging_recovery_audit_attestation(): Promise<
+    ReceiptAuditRecoveryAttestationV1
+  > {
+    return readStagingReceiptAuditRecoveryAttestation(this.env);
   }
 }
 
@@ -818,15 +913,6 @@ export default {
       return handleNaturalKeyRebuild(env, request);
     }
     if (url.pathname === "/v1/run") return handleRun(env, request, fetch);
-    if (url.pathname === "/v1/admin/receipt-evidence/reconcile") {
-      return handleReceiptReconcile(env, request);
-    }
-    if (url.pathname === "/v1/admin/receipt-evidence/recover") {
-      return handleReceiptRecovery(env, request);
-    }
-    if (url.pathname === "/v1/admin/receipt-evidence/public-key-registration") {
-      return handleReceiptPublicKeyRegistration(env, request);
-    }
     const exportResponse = await handleExportPaths(request, env);
     if (exportResponse) return exportResponse;
     if (url.pathname === "/v1/ops/archive-cold") {
@@ -849,5 +935,9 @@ export default {
   ): Promise<void> {
     ctx.waitUntil(runIngestion(env, {}, "cron", fetch));
     ctx.waitUntil(recoverPreparedReceipts(env));
+    if (
+      env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE" &&
+      env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging"
+    ) ctx.waitUntil(runStagingReceiptAuditRecoveryCanary(env));
   },
 };

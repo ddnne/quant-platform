@@ -131,4 +131,15 @@ run_with_cloudflare_credentials \
   "$py" "$ROOT/scripts/verify_cloudflare_secret_inventory.py" \
   --require-api-token
 
+accepted_source_sha="$(
+  run_without_cloudflare_credentials \
+    /usr/bin/git -C "$ROOT" rev-parse HEAD
+)"
+run_with_cloudflare_credentials \
+  "$py" "$ROOT/scripts/quant_ops_mcp_live_module_acceptance.py" \
+  --environment production \
+  --expected-source-sha "$accepted_source_sha" \
+  --expected-account-id "$cloudflare_account_id" \
+  --json
+
 echo "cloudflare deployment acceptance: ok"

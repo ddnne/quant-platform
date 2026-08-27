@@ -15,6 +15,8 @@ import hashlib
 import json
 import os
 import platform
+import re
+import secrets
 import sqlite3
 import stat
 import sys
@@ -80,8 +82,9 @@ PRAGMA synchronous=FULL;
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS staged_canary_meta (
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-  schema_version INTEGER NOT NULL CHECK(schema_version=3),
+  schema_version INTEGER NOT NULL CHECK(schema_version=4),
   journal_format TEXT NOT NULL,
+  journal_instance_id TEXT NOT NULL UNIQUE,
   policy_digest TEXT NOT NULL,
   principal_manifest_digest TEXT NOT NULL,
   canonical_path TEXT NOT NULL
@@ -164,13 +167,77 @@ WHEN EXISTS (
 BEGIN SELECT RAISE(ABORT, 'immutable staged canary attempt'); END;
 """
 _JOURNAL_SCHEMA_DIGEST = (
-    "sha256:5097d123a9d265f206b9118a76eca5d142289629e88f503646f66aca779bb4c0"
+    "sha256:68862153f50473b1e8319ed781e9699e14c0e5bc2ced455c8a4c956a75de6bfc"
 )
 _ATTEMPT_EVIDENCE_FORMAT = "local-authority-staged-canary-attempt-evidence/v1"
 _ATTEMPT_EVIDENCE_SET_FORMAT = (
     "local-authority-staged-canary-attempt-evidence-set/v1"
 )
-_ANCHOR_CANDIDATE_FORMAT = "local-authority-staged-canary-anchor-candidate/v2"
+_ANCHOR_CANDIDATE_FORMAT = "local-authority-staged-canary-anchor-candidate/v3"
+_ANCHOR_SNAPSHOT_FORMAT = "local-authority-staged-canary-anchor-snapshot/v1"
+_ANCHOR_RUN_STATE_FORMAT = "local-authority-staged-canary-run-state/v1"
+_JOURNAL_INSTANCE_RE = re.compile(r"journal-instance:[0-9a-f]{64}\Z")
+_ANCHOR_ENVIRONMENT_SET = ("production", "staging")
+_ANCHOR_CANDIDATE_FIELDS = {
+    "format",
+    "journal_schema_version",
+    "journal_format",
+    "journal_instance_id",
+    "environment_set",
+    "policy_digest",
+    "principal_manifest_digest",
+    "event_count",
+    "tail_event_sequence",
+    "tail_event_digest",
+    "attempt_evidence_count",
+    "attempt_evidence_set_digest",
+    "run_state_digest",
+}
+_ANCHOR_EVENT_RECORD_FIELDS = {
+    "sequence",
+    "canary_id",
+    "event_type",
+    "attempt",
+    "observed_at",
+    "lease_token_digest",
+    "detail_digest",
+    "prior_event_digest",
+    "event_digest",
+}
+_ANCHOR_ATTEMPT_RECORD_FIELDS = {
+    "canary_id",
+    "attempt",
+    "challenge_digest",
+    "resource_digest",
+    "lease_token_digest",
+    "lease_boot_id",
+    "deadline_monotonic_ns",
+    "lease_expires_at",
+    "acquired_at",
+    "attempt_evidence_digest",
+}
+_ANCHOR_RUN_RECORD_FIELDS = {
+    "canary_id",
+    "authority_id",
+    "environment",
+    "action",
+    "source_sha",
+    "runtime_bundle_digest",
+    "resource_digest",
+    "state",
+    "attempt_count",
+    "lease_token_digest",
+    "lease_boot_id",
+    "deadline_monotonic_ns",
+    "lease_expires_at",
+    "challenge_digest",
+    "result_digest",
+    "failure_class",
+    "updated_at",
+}
+_CONTROLLED_QUIESCENCE_BLOCKER = (
+    "CONTROLLED_WAL_QUIESCENCE_SOURCE_READY_NOT_OPERATIONALLY_ACCEPTED"
+)
 _RESOURCE_TOP_FIELDS = {
     "format",
     "authority_id",
@@ -503,18 +570,24 @@ def _connect_journal(*, create: bool, read_only: bool = False) -> sqlite3.Connec
                 "SELECT * FROM staged_canary_meta WHERE singleton=1"
             ).fetchone()
             expected = (
-                3,
+                4,
                 JOURNAL_FORMAT,
+                "journal-instance:" + secrets.token_hex(32),
                 policy.digest,
                 PINNED_MANIFEST_DIGEST,
                 str(CANONICAL_JOURNAL_PATH),
             )
             if row is None:
                 connection.execute(
-                    "INSERT INTO staged_canary_meta VALUES(1,?,?,?,?,?)",
+                    "INSERT INTO staged_canary_meta VALUES(1,?,?,?,?,?,?)",
                     expected,
                 )
-            elif tuple(row)[1:] != expected:
+            elif (
+                tuple(row)[1:3] != expected[:2]
+                or type(row["journal_instance_id"]) is not str
+                or _JOURNAL_INSTANCE_RE.fullmatch(row["journal_instance_id"]) is None
+                or tuple(row)[4:] != expected[3:]
+            ):
                 raise StagedCanaryError("canonical canary journal identity drifted")
             connection.commit()
         # The first schema read makes SQLite recover a legitimate hot DELETE
@@ -872,19 +945,22 @@ def _validate_journal(connection: sqlite3.Connection, *, policy_digest: str) -> 
     if policy.digest != policy_digest:
         raise StagedCanaryError("canonical canary policy identity is invalid")
     meta = connection.execute(
-        "SELECT schema_version,journal_format,policy_digest,"
+        "SELECT schema_version,journal_format,journal_instance_id,policy_digest,"
         "principal_manifest_digest,canonical_path "
         "FROM staged_canary_meta WHERE singleton=1"
     ).fetchall()
-    if [tuple(row) for row in meta] != [
-        (
-            3,
-            JOURNAL_FORMAT,
+    if (
+        len(meta) != 1
+        or tuple(meta[0])[:2] != (4, JOURNAL_FORMAT)
+        or type(meta[0]["journal_instance_id"]) is not str
+        or _JOURNAL_INSTANCE_RE.fullmatch(meta[0]["journal_instance_id"]) is None
+        or tuple(meta[0])[3:]
+        != (
             policy_digest,
             PINNED_MANIFEST_DIGEST,
             str(CANONICAL_JOURNAL_PATH),
         )
-    ]:
+    ):
         raise StagedCanaryError("canonical canary journal metadata is invalid")
     runs = {
         row["canary_id"]: row
@@ -1353,7 +1429,7 @@ def _operational_hold(*, authority_id: str, environment: str) -> Mapping[str, An
         )
     blockers = ["EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED"]
     if authority_id == "controlled_execution":
-        blockers.append("CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED")
+        blockers.append(_CONTROLLED_QUIESCENCE_BLOCKER)
     raise StagedCanaryError("staged canary operational HOLD: " + ",".join(blockers))
 
 
@@ -1370,9 +1446,7 @@ def plan(*, authority_id: str, environment: str) -> Mapping[str, Any]:
         )
     operational_blockers = ["EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED"]
     if authority_id == "controlled_execution":
-        operational_blockers.append(
-            "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED"
-        )
+        operational_blockers.append(_CONTROLLED_QUIESCENCE_BLOCKER)
     return {
         "format": "local-authority-staged-canary-plan/v1",
         "mode": "DRY_RUN",
@@ -1383,7 +1457,7 @@ def plan(*, authority_id: str, environment: str) -> Mapping[str, Any]:
         "proof_kind": action.proof_kind,
         "policy_digest": policy.digest,
         "canonical_journal_path": str(CANONICAL_JOURNAL_PATH),
-        "journal_schema_version": 3,
+        "journal_schema_version": 4,
         "anchor_candidate_format": _ANCHOR_CANDIDATE_FORMAT,
         "caller_selectable_path": False,
         "caller_selectable_owner": False,
@@ -1407,21 +1481,217 @@ def plan(*, authority_id: str, environment: str) -> Mapping[str, Any]:
     }
 
 
+def _validate_anchor_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    value = _exact(
+        dict(candidate),
+        _ANCHOR_CANDIDATE_FIELDS,
+        label="staged canary anchor candidate",
+    )
+    event_count = value["event_count"]
+    attempt_count = value["attempt_evidence_count"]
+    if (
+        value["format"] != _ANCHOR_CANDIDATE_FORMAT
+        or value["journal_schema_version"] != 4
+        or value["journal_format"] != JOURNAL_FORMAT
+        or type(value["journal_instance_id"]) is not str
+        or _JOURNAL_INSTANCE_RE.fullmatch(value["journal_instance_id"]) is None
+        or value["environment_set"] != list(_ANCHOR_ENVIRONMENT_SET)
+        or value["policy_digest"] != load_policy().digest
+        or value["principal_manifest_digest"] != PINNED_MANIFEST_DIGEST
+        or type(event_count) is not int
+        or event_count < 0
+        or type(attempt_count) is not int
+        or attempt_count < 0
+    ):
+        raise StagedCanaryError("staged canary anchor candidate identity is invalid")
+    for name in (
+        "policy_digest",
+        "principal_manifest_digest",
+        "attempt_evidence_set_digest",
+        "run_state_digest",
+    ):
+        _require_digest(value[name], label=f"anchor candidate {name}")
+    if event_count == 0:
+        if (
+            value["tail_event_sequence"] is not None
+            or value["tail_event_digest"] is not None
+        ):
+            raise StagedCanaryError("empty anchor candidate has an event tail")
+    elif (
+        value["tail_event_sequence"] != event_count
+        or type(value["tail_event_digest"]) is not str
+        or _DIGEST_RE.fullmatch(value["tail_event_digest"]) is None
+    ):
+        raise StagedCanaryError("anchor candidate event tail is invalid")
+    return value
+
+
+def _anchor_attempt_record(row: sqlite3.Row) -> dict[str, Any]:
+    """Return the bounded immutable fields the remote can independently rehash."""
+
+    return {name: row[name] for name in _ANCHOR_ATTEMPT_RECORD_FIELDS}
+
+
+def _anchor_run_record(row: sqlite3.Row) -> dict[str, Any]:
+    """Project complete mutable run state without disclosing a live lease token."""
+
+    lease_token = row["lease_token"]
+    return {
+        "canary_id": row["canary_id"],
+        "authority_id": row["authority_id"],
+        "environment": row["environment"],
+        "action": row["action"],
+        "source_sha": row["source_sha"],
+        "runtime_bundle_digest": row["runtime_bundle_digest"],
+        "resource_digest": row["resource_digest"],
+        "state": row["state"],
+        "attempt_count": row["attempt_count"],
+        "lease_token_digest": (
+            None
+            if lease_token is None
+            else _digest(str(lease_token).encode("ascii", "strict"))
+        ),
+        "lease_boot_id": row["lease_boot_id"],
+        "deadline_monotonic_ns": row["deadline_monotonic_ns"],
+        "lease_expires_at": row["lease_expires_at"],
+        "challenge_digest": _digest(
+            str(row["challenge_json"]).encode("utf-8", "strict")
+        ),
+        "result_digest": row["result_digest"],
+        "failure_class": row["failure_class"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _derive_anchor_candidate_in_snapshot(
+    connection: sqlite3.Connection, *, policy_digest: str
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    """Rederive every high-water field from one already-open read snapshot."""
+
+    if not connection.in_transaction:
+        raise StagedCanaryError("anchor candidate requires one explicit read snapshot")
+    _validate_journal(connection, policy_digest=policy_digest)
+    meta = connection.execute(
+        "SELECT journal_instance_id FROM staged_canary_meta WHERE singleton=1"
+    ).fetchone()
+    if meta is None:
+        raise StagedCanaryError("anchor candidate journal instance is absent")
+    raw_run_rows = list(
+        connection.execute("SELECT * FROM staged_canary_runs ORDER BY canary_id")
+    )
+    complete_run_rows = [dict(row) for row in raw_run_rows]
+    run_records = [_anchor_run_record(row) for row in raw_run_rows]
+    event_count = connection.execute(
+        "SELECT COUNT(*) FROM staged_canary_events"
+    ).fetchone()[0]
+    raw_attempt_rows = list(
+        connection.execute(
+            "SELECT * FROM staged_canary_attempts ORDER BY canary_id,attempt"
+        )
+    )
+    attempt_records = [_anchor_attempt_record(row) for row in raw_attempt_rows]
+    attempt_rows = [
+        {
+            "canary_id": row["canary_id"],
+            "attempt": row["attempt"],
+            "attempt_evidence_digest": row["attempt_evidence_digest"],
+        }
+        for row in attempt_records
+    ]
+    event_records = [
+        {name: row[name] for name in _ANCHOR_EVENT_RECORD_FIELDS}
+        for row in connection.execute(
+            "SELECT * FROM staged_canary_events ORDER BY sequence"
+        )
+    ]
+    tail = connection.execute(
+        "SELECT sequence,event_digest FROM staged_canary_events "
+        "ORDER BY sequence DESC LIMIT 1"
+    ).fetchone()
+    if (tail is None and event_count != 0) or (
+        tail is not None and int(tail["sequence"]) != event_count
+    ):
+        raise StagedCanaryError(
+            "staged canary audit snapshot event count and tail disagree"
+        )
+    candidate = {
+        "format": _ANCHOR_CANDIDATE_FORMAT,
+        "journal_schema_version": 4,
+        "journal_format": JOURNAL_FORMAT,
+        "journal_instance_id": str(meta["journal_instance_id"]),
+        "environment_set": list(_ANCHOR_ENVIRONMENT_SET),
+        "policy_digest": policy_digest,
+        "principal_manifest_digest": PINNED_MANIFEST_DIGEST,
+        "event_count": event_count,
+        "tail_event_sequence": None if tail is None else int(tail["sequence"]),
+        "tail_event_digest": None if tail is None else str(tail["event_digest"]),
+        "attempt_evidence_count": len(attempt_rows),
+        "attempt_evidence_set_digest": _digest(
+            {"format": _ATTEMPT_EVIDENCE_SET_FORMAT, "attempts": attempt_rows}
+        ),
+        "run_state_digest": _digest(
+            {"format": _ANCHOR_RUN_STATE_FORMAT, "runs": run_records}
+        ),
+    }
+    snapshot = {
+        "format": _ANCHOR_SNAPSHOT_FORMAT,
+        "candidate": _validate_anchor_candidate(candidate),
+        "events": event_records,
+        "attempts": attempt_records,
+        "runs": run_records,
+    }
+    return snapshot["candidate"], complete_run_rows, snapshot
+
+
+def anchor_candidate_snapshot() -> Mapping[str, Any]:
+    """Read the fixed journal and return only its canonical candidate."""
+
+    policy = load_policy()
+    connection = _connect_journal(create=False, read_only=True)
+    try:
+        connection.execute("BEGIN")
+        candidate, _, _ = _derive_anchor_candidate_in_snapshot(
+            connection, policy_digest=policy.digest
+        )
+        connection.commit()
+        return candidate
+    except BaseException:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def anchor_lineage_snapshot() -> Mapping[str, Any]:
+    """Return one validated candidate and its bounded remote-verifiable material."""
+
+    policy = load_policy()
+    connection = _connect_journal(create=False, read_only=True)
+    try:
+        connection.execute("BEGIN")
+        _, _, snapshot = _derive_anchor_candidate_in_snapshot(
+            connection, policy_digest=policy.digest
+        )
+        connection.commit()
+        return snapshot
+    except BaseException:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def audit() -> Mapping[str, Any]:
     policy = load_policy()
     connection = _connect_journal(create=False, read_only=True)
     try:
-        # Every field in the anchor candidate must describe one SQLite read
-        # snapshot.  Autocommit SELECTs could otherwise combine a pre-write
-        # count with a post-write tail while a concurrent writer commits.
+        # Candidate and presentation rows share one SQLite read snapshot.
         connection.execute("BEGIN")
-        _validate_journal(connection, policy_digest=policy.digest)
-        complete_run_rows = [
-            dict(row)
-            for row in connection.execute(
-                "SELECT * FROM staged_canary_runs ORDER BY canary_id"
-            )
-        ]
+        anchor_candidate, complete_run_rows, _ = _derive_anchor_candidate_in_snapshot(
+            connection, policy_digest=policy.digest
+        )
         rows = [
             {
                 "canary_id": row["canary_id"],
@@ -1447,52 +1717,13 @@ def audit() -> Mapping[str, Any]:
                 ),
             )
         ]
-        event_count = connection.execute(
-            "SELECT COUNT(*) FROM staged_canary_events"
-        ).fetchone()[0]
-        attempt_rows = [
-            {
-                "canary_id": row["canary_id"],
-                "attempt": row["attempt"],
-                "attempt_evidence_digest": row["attempt_evidence_digest"],
-            }
-            for row in connection.execute(
-                "SELECT canary_id,attempt,attempt_evidence_digest "
-                "FROM staged_canary_attempts ORDER BY canary_id,attempt"
-            )
+        event_count = anchor_candidate["event_count"]
+        tail_sequence = anchor_candidate["tail_event_sequence"]
+        tail_digest = anchor_candidate["tail_event_digest"]
+        attempt_evidence_count = anchor_candidate["attempt_evidence_count"]
+        attempt_evidence_set_digest = anchor_candidate[
+            "attempt_evidence_set_digest"
         ]
-        attempt_evidence_count = len(attempt_rows)
-        attempt_evidence_set_digest = _digest(
-            {
-                "format": _ATTEMPT_EVIDENCE_SET_FORMAT,
-                "attempts": attempt_rows,
-            }
-        )
-        tail = connection.execute(
-            "SELECT sequence,event_digest FROM staged_canary_events "
-            "ORDER BY sequence DESC LIMIT 1"
-        ).fetchone()
-        if (tail is None and event_count != 0) or (
-            tail is not None and int(tail["sequence"]) != event_count
-        ):
-            raise StagedCanaryError(
-                "staged canary audit snapshot event count and tail disagree"
-            )
-        tail_sequence = None if tail is None else int(tail["sequence"])
-        tail_digest = None if tail is None else str(tail["event_digest"])
-        anchor_candidate = {
-            "format": _ANCHOR_CANDIDATE_FORMAT,
-            "journal_schema_version": 3,
-            "journal_format": JOURNAL_FORMAT,
-            "policy_digest": policy.digest,
-            "principal_manifest_digest": PINNED_MANIFEST_DIGEST,
-            "event_count": event_count,
-            "tail_event_sequence": tail_sequence,
-            "tail_event_digest": tail_digest,
-            "attempt_evidence_count": attempt_evidence_count,
-            "attempt_evidence_set_digest": attempt_evidence_set_digest,
-            "run_state_digest": _digest({"runs": complete_run_rows}),
-        }
         result = {
             "format": "local-authority-staged-canary-audit/v1",
             "mutation_performed": False,
@@ -1508,11 +1739,11 @@ def audit() -> Mapping[str, Any]:
             "operational_state": "HOLD",
             "operational_blockers": [
                 "EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED",
-                "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED",
+                _CONTROLLED_QUIESCENCE_BLOCKER,
             ],
             "strict_boundaries": dict(STRICT_BOUNDARIES),
             "canonical_journal_path": str(CANONICAL_JOURNAL_PATH),
-            "journal_schema_version": 3,
+            "journal_schema_version": 4,
             "event_count": event_count,
             "tail_event_sequence": tail_sequence,
             "tail_event_digest": tail_digest,
@@ -1532,9 +1763,44 @@ def audit() -> Mapping[str, Any]:
         connection.close()
 
 
+def initialize_journal() -> Mapping[str, Any]:
+    """Create or validate only the fixed v4 journal; never execute a canary."""
+
+    _require_human_root()
+    existed = os.path.lexists(CANONICAL_JOURNAL_PATH)
+    connection = _connect_journal(create=True)
+    try:
+        row = connection.execute(
+            "SELECT schema_version,journal_instance_id FROM staged_canary_meta "
+            "WHERE singleton=1"
+        ).fetchone()
+        if (
+            row is None
+            or row["schema_version"] != 4
+            or type(row["journal_instance_id"]) is not str
+            or _JOURNAL_INSTANCE_RE.fullmatch(row["journal_instance_id"]) is None
+        ):
+            raise StagedCanaryError("fresh v4 journal initialization did not verify")
+        return {
+            "format": "local-authority-staged-canary-journal-initialization/v1",
+            "journal_schema_version": 4,
+            "journal_instance_id": row["journal_instance_id"],
+            "canonical_journal_path": str(CANONICAL_JOURNAL_PATH),
+            "status": "ALREADY_PRESENT_VERIFIED" if existed else "CREATED_VERIFIED",
+            "canary_executed": False,
+            "authority_operation_executed": False,
+            "research_eligible": False,
+            "operational_state": "HOLD",
+        }
+    finally:
+        connection.close()
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("plan", "audit", "run"))
+    parser.add_argument(
+        "command", choices=("plan", "audit", "run", "initialize-journal")
+    )
     parser.add_argument("--authority", choices=sorted(LOCAL_OS_PRINCIPALS))
     parser.add_argument("--environment", choices=("staging", "production"))
     return parser
@@ -1547,10 +1813,10 @@ def main(argv: list[str] | None = None) -> int:
     ):
         print("plan/run require --authority and --environment", file=sys.stderr)
         return 2
-    if args.command == "audit" and (
+    if args.command in {"audit", "initialize-journal"} and (
         args.authority is not None or args.environment is not None
     ):
-        print("audit does not accept selectors", file=sys.stderr)
+        print(f"{args.command} does not accept selectors", file=sys.stderr)
         return 2
     try:
         if args.command == "plan":
@@ -1560,6 +1826,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "audit":
             result = audit()
+        elif args.command == "initialize-journal":
+            result = initialize_journal()
         else:
             result = run_canary(
                 authority_id=args.authority,

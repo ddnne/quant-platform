@@ -47,6 +47,234 @@ def test_receipt_authority_uses_dedicated_evidence_and_premium_owned_migrations(
         assert "migrations_table" not in surface["d1_databases"][0]
 
 
+def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> None:
+    manifest = manifest_module.build_manifest()
+    expected = {
+        "ingestion-secrets": [{
+            "name": "IngestionSecretsService",
+            "handlers": ["class"],
+            "fetch_reserved_special": True,
+            "rpc_methods": ["fetch_governed_page"],
+        }],
+        "receipt-evidence-authority": [{
+            "name": "ReceiptAuthorityService",
+            "handlers": ["class"],
+            "fetch_reserved_special": True,
+            "rpc_methods": [
+                "begin_audit_recovery_canary",
+                "issue_for_segment",
+                "public_key_registration",
+                "recover_audit_recovery_canary",
+                "recover_issue",
+            ],
+        }],
+        "ingestion-premium": [{
+            "name": "PremiumReceiptOperatorService",
+            "handlers": ["class"],
+            "fetch_reserved_special": False,
+            "rpc_methods": [
+                "pending_public_key_registration",
+                "staging_recovery_audit_attestation",
+            ],
+        }],
+        "research-ai-gateway": [{
+            "name": "GatewayService",
+            "handlers": ["class"],
+            "fetch_reserved_special": False,
+            "rpc_methods": ["complete"],
+        }],
+    }
+    for environment in ("base", "production", "staging"):
+        for worker, inventory in expected.items():
+            assert manifest["workers"][worker][environment][
+                "worker_entrypoints"
+            ] == inventory
+        premium = manifest["workers"]["ingestion-premium"][environment]
+        assert premium["durable_object_class_handlers"] == []
+        assert premium["workers_dev"] is False
+        assert premium["preview_urls"] is False
+        assert premium["route"] is None
+        assert premium["routes"] == []
+    assert manifest["workers"]["receipt-evidence-authority"]["staging"][
+        "durable_object_class_handlers"
+    ] == [{
+        "name": "ReceiptEvidenceAuthority",
+        "handlers": ["class"],
+        "rpc_methods": [
+            "begin_audit_recovery_canary",
+            "issue_for_segment",
+            "public_key_registration",
+            "recover_audit_recovery_canary",
+            "recover_issue",
+        ],
+    }]
+    budget_ledger = {
+        "name": "BudgetLedger",
+        "handlers": ["class"],
+        "fetch_reserved_special": True,
+        "alarm_reserved_special": True,
+        "rpc_methods": [
+            "cancelPreProvider",
+            "finalizeExact",
+            "heartbeat",
+            "markProviderStarted",
+            "release",
+            "reserve",
+            "reserveOwned",
+            "settleUncertain",
+            "snapshot",
+        ],
+    }
+    for environment in ("base", "production", "staging"):
+        assert manifest["workers"]["research-ai-gateway"][environment][
+            "durable_object_class_handlers"
+        ] == [budget_ledger]
+    assert manifest["test_harness_surfaces"]["research-ai-gateway"][
+        "durable_object_class_handlers"
+    ] == [budget_ledger]
+
+
+def test_quant_ops_framework_inventory_and_dependency_are_exact() -> None:
+    manifest = manifest_module.build_manifest()
+    expected = manifest_module.FRAMEWORK_DURABLE_OBJECT_POLICY["quant-ops-mcp"][
+        "QuantOpsMcpAgent"
+    ]
+    for environment in ("base", "production", "staging"):
+        handlers = manifest["workers"]["quant-ops-mcp"][environment][
+            "durable_object_class_handlers"
+        ]
+        assert handlers == [{
+            "name": "QuantOpsMcpAgent",
+            "handlers": ["class"],
+            "framework_rpc_inventory": expected,
+        }]
+    assert manifest["test_harness_surfaces"]["quant-ops-mcp"][
+        "durable_object_class_handlers"
+    ] == [{
+        "name": "QuantOpsMcpAgent",
+        "handlers": ["class"],
+        "framework_rpc_inventory": expected,
+    }]
+    assert expected["own_custom_pre_init_rpc_methods"] == ["init"]
+    assert expected["constructor_prototype_copy"] == {
+        "observed": True,
+        "copied_method_count": 17,
+        "post_construction_own_method_count": 18,
+    }
+    assert expected["reserved_specials"] == {
+        "fetch": True,
+        "alarm": True,
+        "webSocketMessage": True,
+        "webSocketClose": True,
+        "webSocketError": True,
+    }
+    assert expected["dependency"] == manifest_module.QUANT_OPS_AGENTS_DEPENDENCY_POLICY
+
+
+def test_every_active_durable_object_needs_exactly_one_inventory_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = manifest_module.build_manifest()
+    observed = {
+        (worker, row["class_name"])
+        for worker, environments in manifest["workers"].items()
+        for row in environments["production"]["durable_objects"]
+    }
+    governed = {
+        (worker, class_name)
+        for worker, classes in manifest_module.DURABLE_OBJECT_RPC_POLICY.items()
+        for class_name in classes
+    } | {
+        (worker, class_name)
+        for worker, classes in manifest_module.FRAMEWORK_DURABLE_OBJECT_POLICY.items()
+        for class_name in classes
+    }
+    assert observed == governed
+
+    without_quant_ops = copy.deepcopy(
+        manifest_module.FRAMEWORK_DURABLE_OBJECT_POLICY
+    )
+    del without_quant_ops["quant-ops-mcp"]["QuantOpsMcpAgent"]
+    monkeypatch.setattr(
+        manifest_module,
+        "FRAMEWORK_DURABLE_OBJECT_POLICY",
+        without_quant_ops,
+    )
+    with pytest.raises(ValueError, match="needs exactly one explicit RPC or framework"):
+        manifest_module.build_manifest()
+
+
+def test_quant_ops_mcp_object_capability_is_self_only() -> None:
+    manifest = manifest_module.build_manifest()
+    for environment in ("base", "production", "staging"):
+        surface = manifest["workers"]["quant-ops-mcp"][environment]
+        assert surface["durable_objects"] == [{
+            "class_name": "QuantOpsMcpAgent",
+            "name": "MCP_OBJECT",
+        }]
+        assert surface["services"] == []
+
+    drifted = copy.deepcopy(manifest)
+    drifted["workers"]["ingestion-jsda"]["production"]["services"] = [{
+        "binding": "OPS_AGENT",
+        "service": "quant-platform-ops-read-mcp",
+    }]
+    with pytest.raises(ValueError, match="must not be distributed"):
+        manifest_module.validate_manifest(drifted)
+
+    stub_distributed = copy.deepcopy(manifest)
+    stub_distributed["workers"]["ingestion-jsda"]["production"][
+        "durable_objects"
+    ] = [{
+        "name": "OPS_AGENT",
+        "class_name": "FrameworkAlias",
+        "script_name": "quant-platform-ops-read-mcp",
+    }]
+    with pytest.raises(ValueError, match="must not be distributed"):
+        manifest_module.validate_manifest(stub_distributed)
+
+
+def test_manifest_digest_covers_the_complete_binding_policy() -> None:
+    manifest = manifest_module.build_manifest()
+    drifted = copy.deepcopy(manifest)
+    drifted["workers"]["quant-ops-mcp"]["production"]["vars"][
+        "DAILY_ROW_QUOTA"
+    ] = "25001"
+    with pytest.raises(ValueError, match="binding manifest digest drift"):
+        manifest_module.validate_manifest(drifted)
+
+
+def test_rpc_inventory_rejects_method_or_reserved_special_drift() -> None:
+    manifest = manifest_module.build_manifest()
+    mutated = copy.deepcopy(manifest)
+    mutated["workers"]["ingestion-premium"]["staging"][
+        "worker_entrypoints"
+    ][0]["rpc_methods"].append("unexpected_positive_rpc")
+    with pytest.raises(ValueError, match="WorkerEntrypoint RPC surface drifted"):
+        manifest_module.validate_manifest(mutated)
+
+    mutated = copy.deepcopy(manifest)
+    mutated["workers"]["ingestion-secrets"]["production"][
+        "worker_entrypoints"
+    ][0]["fetch_reserved_special"] = False
+    with pytest.raises(ValueError, match="WorkerEntrypoint RPC surface drifted"):
+        manifest_module.validate_manifest(mutated)
+
+    mutated = copy.deepcopy(manifest)
+    mutated["workers"]["receipt-evidence-authority"]["base"][
+        "durable_object_class_handlers"
+    ][0]["rpc_methods"].append("ensureKey")
+    with pytest.raises(ValueError, match="Durable Object class handlers drifted"):
+        manifest_module.validate_manifest(mutated)
+
+    mutated = copy.deepcopy(manifest)
+    mutated["workers"]["research-ai-gateway"]["production"][
+        "durable_object_class_handlers"
+    ][0]["alarm_reserved_special"] = False
+    with pytest.raises(ValueError, match="Durable Object class handlers drifted"):
+        manifest_module.validate_manifest(mutated)
+
+
 def test_canonical_inventory_equals_every_deployable_worker_directory() -> None:
     assert manifest_module._deployable_worker_directories() == (  # noqa: SLF001
         manifest_module.ACTIVE_WORKERS

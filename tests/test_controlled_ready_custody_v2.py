@@ -988,6 +988,11 @@ def test_runtime_requires_exact_custody_manifest_before_opening_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     document = _activation_document()
+    monkeypatch.setattr(
+        activation,
+        "require_held_controlled_writer_lifecycle_v2",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(activation, "_load_root_owned_activation", lambda: document)
     monkeypatch.setattr(
         activation,

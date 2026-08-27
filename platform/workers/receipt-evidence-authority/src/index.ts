@@ -1,6 +1,10 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type {
   ReceiptAuthorityEnv,
+  ReceiptAuditRecoveryBeginResultV1,
+  ReceiptAuditRecoveryCanaryBeginRequestV1,
+  ReceiptAuditRecoveryCanaryResultV1,
+  ReceiptAuditRecoveryCanaryRecoverRequestV1,
   ReceiptEvidenceAuthorityRpc,
   ReceiptIssueRequestV1,
   ReceiptIssueResultV1,
@@ -53,6 +57,34 @@ export class ReceiptAuthorityService
     }
     const authority = receiptAuthorityStub(this.env);
     return authority.recover_issue(request);
+  }
+
+  begin_audit_recovery_canary(
+    request: ReceiptAuditRecoveryCanaryBeginRequestV1,
+  ): Promise<ReceiptAuditRecoveryBeginResultV1> {
+    if (
+      this.env.ENVIRONMENT !== "staging" ||
+      this.env.AUTHORITY_MODE !== "ACTIVE"
+    ) {
+      return Promise.reject(
+        new Error("Receipt audit recovery canary is not ACTIVE staging"),
+      );
+    }
+    return receiptAuthorityStub(this.env).begin_audit_recovery_canary(request);
+  }
+
+  recover_audit_recovery_canary(
+    request: ReceiptAuditRecoveryCanaryRecoverRequestV1,
+  ): Promise<ReceiptAuditRecoveryCanaryResultV1> {
+    if (
+      this.env.ENVIRONMENT !== "staging" ||
+      this.env.AUTHORITY_MODE !== "ACTIVE"
+    ) {
+      return Promise.reject(
+        new Error("Receipt audit recovery canary is not ACTIVE staging"),
+      );
+    }
+    return receiptAuthorityStub(this.env).recover_audit_recovery_canary(request);
   }
 
   async public_key_registration(): Promise<ReceiptPublicKeyRegistrationV1> {

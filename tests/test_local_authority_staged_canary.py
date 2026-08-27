@@ -576,7 +576,7 @@ def test_public_cli_has_no_generic_permit_completion_or_identity_inputs() -> Non
     command = next(
         action for action in manager._parser()._actions if action.dest == "command"
     )
-    assert set(command.choices) == {"plan", "audit", "run"}
+    assert set(command.choices) == {"plan", "audit", "run", "initialize-journal"}
     assert not hasattr(manager, "issue_permit")
     assert not hasattr(manager, "complete_permit")
     plan = manager.plan(authority_id="ready", environment="staging")
@@ -602,7 +602,7 @@ def test_public_cli_has_no_generic_permit_completion_or_identity_inputs() -> Non
     )
     assert controlled["operational_blockers"] == [
         "EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED",
-        "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED",
+        "CONTROLLED_WAL_QUIESCENCE_SOURCE_READY_NOT_OPERATIONALLY_ACCEPTED",
     ]
 
 
@@ -795,12 +795,14 @@ def test_public_run_is_hold_for_every_declared_authority(
     ) as exc_info:
         manager.run_canary(authority_id=authority_id, environment="staging")
     if authority_id == "controlled_execution":
-        assert "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED" in str(
-            exc_info.value
+        assert (
+            "CONTROLLED_WAL_QUIESCENCE_SOURCE_READY_NOT_OPERATIONALLY_ACCEPTED"
+            in str(exc_info.value)
         )
     else:
-        assert "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED" not in str(
-            exc_info.value
+        assert (
+            "CONTROLLED_WAL_QUIESCENCE_SOURCE_READY_NOT_OPERATIONALLY_ACCEPTED"
+            not in str(exc_info.value)
         )
     assert not isolated_journal.exists()
 
@@ -819,6 +821,65 @@ def test_public_cli_run_returns_hold_without_mutation(
     assert "staged authority canary rejected: operational HOLD" in captured.err
     assert captured.out == ""
     assert not isolated_journal.exists()
+
+
+def test_root_initializer_creates_only_one_fresh_v4_journal(
+    isolated_journal: Path,
+) -> None:
+    first = manager.initialize_journal()
+    assert first["status"] == "CREATED_VERIFIED"
+    assert first["journal_schema_version"] == 4
+    assert first["canary_executed"] is False
+    assert first["authority_operation_executed"] is False
+    assert first["research_eligible"] is False
+    assert first["operational_state"] == "HOLD"
+    instance = first["journal_instance_id"]
+    assert instance.startswith("journal-instance:")
+    second = manager.initialize_journal()
+    assert second["status"] == "ALREADY_PRESENT_VERIFIED"
+    assert second["journal_instance_id"] == instance
+    with sqlite3.connect(isolated_journal) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM staged_canary_runs"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT schema_version,journal_format FROM staged_canary_meta"
+        ).fetchone() == (4, canary.JOURNAL_FORMAT)
+
+
+def test_journal_initializer_requires_root_before_creating_any_path(
+    isolated_journal: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        manager,
+        "_require_human_root",
+        lambda: (_ for _ in ()).throw(
+            canary.StagedCanaryError("human root is required")
+        ),
+    )
+    with pytest.raises(canary.StagedCanaryError, match="root"):
+        manager.initialize_journal()
+    assert not isolated_journal.exists()
+
+
+def test_initialize_journal_cli_has_no_selectors_and_never_runs_canary(
+    isolated_journal: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        manager,
+        "run_canary",
+        lambda **_kwargs: pytest.fail("initializer must not dispatch a canary"),
+    )
+    assert manager.main(["initialize-journal"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "CREATED_VERIFIED"
+    assert result["canary_executed"] is False
+    assert manager.main(
+        ["initialize-journal", "--authority", "ready"]
+    ) == 2
+    assert "does not accept selectors" in capsys.readouterr().err
 
 
 
@@ -1338,21 +1399,21 @@ def test_journal_exact_schema_rejects_an_extra_object(
         manager.audit()
 
 
-def test_pre_v3_journal_identity_fails_closed_without_in_place_upgrade(
+def test_pre_v4_journal_identity_fails_closed_without_in_place_upgrade(
     isolated_journal: Path,
 ) -> None:
     manager._prepare_canonical_state_root()
     legacy_schema = manager._SCHEMA.replace(
+        "CHECK(schema_version=4)",
         "CHECK(schema_version=3)",
-        "CHECK(schema_version=2)",
-    )
+    ).replace("  journal_instance_id TEXT NOT NULL UNIQUE,\n", "")
     with sqlite3.connect(isolated_journal) as connection:
         connection.executescript(legacy_schema)
         connection.execute(
             "INSERT INTO staged_canary_meta VALUES(1,?,?,?,?,?)",
             (
-                2,
-                "local-authority-staged-canary-journal/v2",
+                3,
+                "local-authority-staged-canary-journal/v3",
                 canary.load_policy().digest,
                 canary.PINNED_MANIFEST_DIGEST,
                 str(isolated_journal),
@@ -1519,7 +1580,7 @@ def test_audit_opens_the_existing_canonical_journal_in_sqlite_read_only_mode(
     assert result["operational_state"] == "HOLD"
     assert result["operational_blockers"] == [
         "EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED",
-        "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED",
+        "CONTROLLED_WAL_QUIESCENCE_SOURCE_READY_NOT_OPERATIONALLY_ACCEPTED",
     ]
 
 
@@ -1826,7 +1887,8 @@ def test_controlled_inactive_canary_audits_exact_store_via_pinned_descriptor(
         relying_parties=relying_parties,
         credentials=credentials,
         server_bound=False,
-        test_mode=False,
+        test_mode=True,
+        lifecycle=None,
         _token=_WRITER_CONSTRUCTION_TOKEN,
     )
     __import__("gc").collect()
@@ -1930,9 +1992,11 @@ def test_controlled_live_writer_rejects_unsafe_store_before_writer_construction(
     unsafe_kind: str,
 ) -> None:
     from execution import controlled_execution_activation_v2 as activation
+    from execution import controlled_execution_quiescence_v2 as quiescence
 
     store = tmp_path / "controlled.sqlite3"
     target = tmp_path / "attacker.sqlite3"
+    tmp_path.chmod(0o700)
     target.write_bytes(b"attacker")
     target.chmod(0o600)
     if unsafe_kind == "symlink":
@@ -1966,8 +2030,22 @@ def test_controlled_live_writer_rejects_unsafe_store_before_writer_construction(
         "SQLiteControlledExecutionWriterV2",
         unexpected_writer,
     )
-    with pytest.raises(Exception, match="private single-link"):
-        activation._load_live_controlled_execution_writer_v2(server_bound=False)
+    lease = quiescence._acquire_lifecycle_lock(
+        quiescence._ControlledStoreIdentityV2(
+            environment="staging",
+            service_uid=os.geteuid(),
+            store_path=store,
+        ),
+        require_marker_absent=True,
+    )
+    try:
+        with pytest.raises(Exception, match="private single-link"):
+            activation._load_live_controlled_execution_writer_v2(
+                server_bound=True,
+                lifecycle=lease,
+            )
+    finally:
+        lease.close()
     assert opened is False
 
 
@@ -1976,8 +2054,10 @@ def test_controlled_live_writer_provisions_private_store_and_pins_initial_inode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from execution import controlled_execution_activation_v2 as activation
+    from execution import controlled_execution_quiescence_v2 as quiescence
 
     store = tmp_path / "controlled.sqlite3"
+    tmp_path.chmod(0o700)
     material = (
         "staging",
         store,
@@ -2006,27 +2086,47 @@ def test_controlled_live_writer_provisions_private_store_and_pins_initial_inode(
         "SQLiteControlledExecutionWriterV2",
         observe_private_store,
     )
-    assert (
-        activation._load_live_controlled_execution_writer_v2(server_bound=False)
-        is marker
+    lease = quiescence._acquire_lifecycle_lock(
+        quiescence._ControlledStoreIdentityV2(
+            environment="staging",
+            service_uid=os.geteuid(),
+            store_path=store,
+        ),
+        require_marker_absent=True,
     )
+    try:
+        assert (
+            activation._load_live_controlled_execution_writer_v2(
+                server_bound=True,
+                lifecycle=lease,
+            )
+            is marker
+        )
 
-    initial = store.lstat()
+        initial = store.lstat()
 
-    def swap_store(*_args: object, **_kwargs: object) -> object:
-        store.unlink()
-        store.write_bytes(b"replacement")
-        store.chmod(0o600)
-        return marker
+        def swap_store(*_args: object, **_kwargs: object) -> object:
+            store.unlink()
+            store.write_bytes(b"replacement")
+            store.chmod(0o600)
+            return marker
 
-    monkeypatch.setattr(
-        activation,
-        "SQLiteControlledExecutionWriterV2",
-        swap_store,
-    )
-    with pytest.raises(Exception, match="changed during live writer initialization"):
-        activation._load_live_controlled_execution_writer_v2(server_bound=False)
-    assert store.lstat().st_ino != initial.st_ino
+        monkeypatch.setattr(
+            activation,
+            "SQLiteControlledExecutionWriterV2",
+            swap_store,
+        )
+        with pytest.raises(
+            Exception,
+            match="changed during live writer initialization",
+        ):
+            activation._load_live_controlled_execution_writer_v2(
+                server_bound=True,
+                lifecycle=lease,
+            )
+        assert store.lstat().st_ino != initial.st_ino
+    finally:
+        lease.close()
 
 
 @pytest.mark.parametrize(

@@ -22,6 +22,10 @@ from selection.screen import OfflineExperimentBudget
 from execution.controlled_execution_budget_v2 import (
     ControlledPersistentBudgetLedgerV2,
 )
+from execution.controlled_execution_quiescence_v2 import (
+    ControlledWriterLifecycleLeaseV2,
+    require_held_controlled_writer_lifecycle_v2,
+)
 from execution.controlled_execution_runtime_v2 import (
     ControlledExecutionRuntimeV2,
     UnixControlledExecutionProviderV2,
@@ -847,12 +851,28 @@ def _preflight_inactive_canary_controlled_execution_writer_v2() -> tuple[
 
 
 def _load_live_controlled_execution_writer_v2(
-    *, server_bound: bool
+    *,
+    server_bound: bool,
+    lifecycle: ControlledWriterLifecycleLeaseV2 | None = None,
 ) -> SQLiteControlledExecutionWriterV2:
-    """Load fixed activation for either observation or the server entrypoint."""
+    """Load the fixed writer only under the daemon's held lifecycle lease."""
+
+    if server_bound is not True:
+        raise ExactFourAuthorityPending(
+            "live Controlled writer loading requires AuthorityServer binding"
+        )
+    require_held_controlled_writer_lifecycle_v2(
+        lifecycle,
+        expected_environment=None,
+    )
 
     environment, store_path, signer, trader_uid, rps, credentials = (
         _load_live_controlled_execution_writer_material_v2()
+    )
+    require_held_controlled_writer_lifecycle_v2(
+        lifecycle,
+        expected_environment=environment,
+        expected_store_path=store_path,
     )
     service_uid = os.geteuid()
     pinned_descriptor, identity = _open_or_provision_pinned_live_controlled_store_v2(
@@ -860,6 +880,11 @@ def _load_live_controlled_execution_writer_v2(
         expected_uid=service_uid,
     )
     try:
+        require_held_controlled_writer_lifecycle_v2(
+            lifecycle,
+            expected_environment=environment,
+            expected_store_path=store_path,
+        )
         pinned = os.fstat(pinned_descriptor)
         if (
             (pinned.st_dev, pinned.st_ino) != identity
@@ -881,7 +906,13 @@ def _load_live_controlled_execution_writer_v2(
             credentials=credentials,
             server_bound=server_bound,
             test_mode=False,
+            lifecycle=lifecycle,
             _token=_WRITER_CONSTRUCTION_TOKEN,
+        )
+        require_held_controlled_writer_lifecycle_v2(
+            lifecycle,
+            expected_environment=environment,
+            expected_store_path=store_path,
         )
         initialized_identity = _require_live_controlled_store_identity_v2(
             store_path,
@@ -902,12 +933,19 @@ def _load_live_controlled_execution_writer_v2(
     return writer
 
 
-def _load_live_controlled_execution_runtime_v2() -> ControlledExecutionRuntimeV2:
+def _load_live_controlled_execution_runtime_v2(
+    *, lifecycle: ControlledWriterLifecycleLeaseV2 | None = None
+) -> ControlledExecutionRuntimeV2:
     """Build the fixed provider/budget/snapshot runtime from root activation."""
 
+    require_held_controlled_writer_lifecycle_v2(
+        lifecycle,
+        expected_environment=None,
+    )
     document = _load_root_owned_activation()
     environment = document["environment"]
     service_uid = document["service_uid"]
+    store_path = _activation_absolute_path(document, "store_path")
     provider_uid = document["provider_uid"]
     budget_id = document["budget_id"]
     budget_path = _activation_absolute_path(document, "budget_ledger_path")
@@ -941,12 +979,22 @@ def _load_live_controlled_execution_runtime_v2() -> ControlledExecutionRuntimeV2
         raise ExactFourAuthorityPending(
             "Controlled runtime principal, budget, snapshot, or provider is absent"
         )
+    require_held_controlled_writer_lifecycle_v2(
+        lifecycle,
+        expected_environment=environment,
+        expected_store_path=store_path,
+    )
     _require_controlled_reader_group_v2(
         environment=environment,
         service_uid=service_uid,
         claimed_gid=controlled_reader_gid,
     )
     try:
+        require_held_controlled_writer_lifecycle_v2(
+            lifecycle,
+            expected_environment=environment,
+            expected_store_path=store_path,
+        )
         custody = load_controlled_ready_custody_v2(
             custody_manifest_path,
             expected_environment=environment,
@@ -961,6 +1009,11 @@ def _load_live_controlled_execution_runtime_v2() -> ControlledExecutionRuntimeV2
         raise ExactFourAuthorityPending(
             "Controlled READY custody manifest digest differs from activation"
         )
+    require_held_controlled_writer_lifecycle_v2(
+        lifecycle,
+        expected_environment=environment,
+        expected_store_path=store_path,
+    )
     snapshot_path = custody.snapshot_path
     projection_path = custody.projection_path
     for path, label in (
@@ -1009,18 +1062,38 @@ def _load_live_controlled_execution_runtime_v2() -> ControlledExecutionRuntimeV2
         limits=OfflineExperimentBudget(),
     )
     clock = lambda: datetime.now(UTC)
+    require_held_controlled_writer_lifecycle_v2(
+        lifecycle,
+        expected_environment=environment,
+        expected_store_path=store_path,
+    )
     budget_ledger = ControlledPersistentBudgetLedgerV2(
         budget=budget,
         environment=environment,
         clock=clock,
     )
+    require_held_controlled_writer_lifecycle_v2(
+        lifecycle,
+        expected_environment=environment,
+        expected_store_path=store_path,
+    )
     # Startup never retries work with an unknown provider outcome.
     budget_ledger.recover_unfinished()
+    require_held_controlled_writer_lifecycle_v2(
+        lifecycle,
+        expected_environment=environment,
+        expected_store_path=store_path,
+    )
     snapshot = open_pinned_controlled_snapshot_v2(
         snapshot_path=str(snapshot_path),
         projection_path=str(projection_path),
         expected_uid=0,
         chain_root="/",
+    )
+    require_held_controlled_writer_lifecycle_v2(
+        lifecycle,
+        expected_environment=environment,
+        expected_store_path=store_path,
     )
     provider = UnixControlledExecutionProviderV2(
         socket_path=str(provider_socket),
@@ -1036,25 +1109,32 @@ def _load_live_controlled_execution_runtime_v2() -> ControlledExecutionRuntimeV2
 
 
 def open_live_controlled_execution_writer_v2() -> SQLiteControlledExecutionWriterV2:
-    """Observe activated state; the returned object cannot launch positive ops."""
+    """Reject the legacy public opener before activation or SQLite access."""
 
-    return _load_live_controlled_execution_writer_v2(server_bound=False)
+    raise ExactFourAuthorityPending(CONTROLLED_WRITER_LIVE_STATE)
 
 
-def _open_server_bound_controlled_execution_writer_v2() -> (
+def _open_server_bound_controlled_execution_writer_v2(
+    *, lifecycle: ControlledWriterLifecycleLeaseV2 | None = None
+) -> (
     SQLiteControlledExecutionWriterV2
 ):
     """Execution adapter hook used only inside UnixAuthorityService."""
 
-    return _load_live_controlled_execution_writer_v2(server_bound=True)
+    return _load_live_controlled_execution_writer_v2(
+        server_bound=True,
+        lifecycle=lifecycle,
+    )
 
 
-def _open_server_bound_controlled_execution_runtime_v2() -> (
+def _open_server_bound_controlled_execution_runtime_v2(
+    *, lifecycle: ControlledWriterLifecycleLeaseV2 | None = None
+) -> (
     ControlledExecutionRuntimeV2
 ):
     """Provider runtime hook used only by the local AuthorityServer adapter."""
 
-    return _load_live_controlled_execution_runtime_v2()
+    return _load_live_controlled_execution_runtime_v2(lifecycle=lifecycle)
 
 
 __all__ = [

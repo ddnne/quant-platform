@@ -2,7 +2,7 @@
   "schema_version": "local-authority-staged-canary-policy/v1",
   "classification": "CANARY_NOT_RESEARCH_ELIGIBLE",
   "scope": "SIGNED_LOCAL_OS_AUTHORITIES_ONLY",
-  "principal_manifest_digest": "sha256:f1ce07989ee97c87690b3341f14b0cad7a27eb2a62eff489d330420647aeb0b0",
+  "principal_manifest_digest": "sha256:479d4e7058295c7f33c5ec7406806fe0ca1d41702d82eedf6f8653856c8c4bc9",
   "state_root": "/Library/Application Support/quant-platform/authorities/staged-canary",
   "journal_path": "/Library/Application Support/quant-platform/authorities/staged-canary/journal.sqlite3",
   "source_sha_binding": {

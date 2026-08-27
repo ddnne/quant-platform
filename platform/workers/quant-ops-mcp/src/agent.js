@@ -12,6 +12,10 @@ import { DurableDailyQuota, quotaCost, QuotaExceeded } from "./quota.js";
 import { acceptedOpsToolSchemaDigest } from "./tool_schema_digest.js";
 
 export const OPS_TOOL_SCHEMA_META_KEY = "quant-platform/tool-schema-digest";
+export const BINDING_MANIFEST_SCHEMA_VERSION =
+  "cloudflare-active-worker-bindings/v8";
+export const BINDING_MANIFEST_DIGEST =
+  "sha256:f26519b17d3ee5ef1d047ae7c2b15ff22cadc5830f46deca32ff7c1ac1d1bac5";
 
 /** @param {Record<string, unknown>} schema */
 function zodFromJsonSchema(schema) {
@@ -101,6 +105,12 @@ export async function buildOpsMcpServer(env, props) {
 }
 
 export class QuantOpsMcpAgent extends McpAgent {
+  // These static fields are shipped in the Worker module without becoming DO
+  // RPC methods. Exact-byte live module acceptance therefore binds the active
+  // bundle to the reviewed binding-manifest version and digest.
+  static bindingManifestSchemaVersion = BINDING_MANIFEST_SCHEMA_VERSION;
+  static bindingManifestDigest = BINDING_MANIFEST_DIGEST;
+
   server = new McpServer({
     name: "quant-ops-read",
     version: "0.2.0",
