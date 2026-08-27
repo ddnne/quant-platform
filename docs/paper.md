@@ -89,10 +89,18 @@ Phase 6 の multi-experiment で安価に入力状態を区別するための ID
 runtime は run 前に一度 snapshot ID を決定して result に保存し、run 後に再計算する。
 両者が異なる場合は実行中に入力状態が変更されたとみなし、fail closed とする。
 
-Production research は mutable な sync/staging DB を直接使わず、content-addressed な
-READY artifact を `paper_runtime.latest_ready_snapshot` /
-`open_ready_snapshot` で解決する。READY manifest の `snapshot_id` がそのまま
-`data_snapshot_id` になる。publication lifecycle、coverage ledger、strict quality gate は
+Controlled Pilot は mutable な sync/staging DB を直接使わない。READY publication の
+`paper_runtime.latest_ready_snapshot` / `describe_snapshot` は検証済み metadata を返すが、
+SQLite connection capability ではない。公開 production opener は削除され、Controlled
+execution は root-owned snapshot/projection を一度だけ開いて保持する
+`PinnedControlledSnapshotV2` activation path に限定する。READY manifest の
+`snapshot_id` が `data_snapshot_id` になる。
+
+Quant Data adapter には現在も describe した READY の `db_path` を再度開く別 read plane が
+あり、`VerifiedPilotReadyPublication` も shallow object/path を公開する。このため一般的な
+production read integrity は主張しない。READY から Controlled store への root-owned atomic
+install と full authority-chain acceptance は A2/R5/R11 の OPEN 条件である。publication
+lifecycle、coverage ledger、strict quality gate は
 [`phase6_snapshot_publication.md`](phase6_snapshot_publication.md) を参照。
 
 ### Experiment, run, lifecycle

@@ -1,7 +1,8 @@
 """Presentation / read helpers for verified paper data snapshots.
 
 READY stays fail-closed. Empty DB and PARTIAL coverage cannot publish READY.
-This module describes and opens verified READY artifacts; it does not decide READY.
+This module describes production READY metadata and opens test fixtures; it does
+not provide a production SQLite connection or decide READY.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING, Iterator, NoReturn
 from urllib.parse import quote
 
 if TYPE_CHECKING:
@@ -642,30 +643,23 @@ def _latest_fixture_snapshot(snapshot_dir: str | Path) -> ReadySnapshot:
 
 def open_ready_snapshot(
     snapshot_dir: str | Path, snapshot_id: str | None = None
-) -> sqlite3.Connection:
-    """Open the exact inode verified by the production READY reader."""
-    ready = (
-        latest_ready_snapshot(snapshot_dir)
-        if snapshot_id is None
-        else describe_snapshot(snapshot_dir, snapshot_id)
-    )
-    if (
-        type(ready.artifact_digest) is not str
-        or ready.artifact_identity is None
-    ):
-        raise RuntimeError("READY snapshot has no pinned artifact identity")
-    return _open_verified_snapshot_connection(
-        ready,
-        label="READY snapshot artifact",
+) -> NoReturn:
+    """Fail closed for legacy direct imports of the production SQLite opener."""
+
+    from paper_runtime.snapshot import SnapshotRejected
+
+    raise SnapshotRejected(
+        "public production READY SQLite open is disabled; Controlled execution "
+        "requires the root-owned PinnedControlledSnapshotV2 path"
     )
 
 
-def _open_verified_snapshot_connection(
+def _open_fixture_snapshot_connection(
     ready: ReadySnapshot,
     *,
     label: str,
 ) -> sqlite3.Connection:
-    """Reopen, remeasure, and transfer one pinned inode to SQLite."""
+    """Reopen and transfer one verified test-fixture inode to SQLite."""
 
     conn: sqlite3.Connection | None = None
     try:
@@ -706,7 +700,7 @@ def _open_fixture_snapshot(
         or ready.artifact_identity is None
     ):
         raise RuntimeError("fixture snapshot has no pinned artifact identity")
-    return _open_verified_snapshot_connection(
+    return _open_fixture_snapshot_connection(
         ready,
         label="fixture snapshot artifact",
     )

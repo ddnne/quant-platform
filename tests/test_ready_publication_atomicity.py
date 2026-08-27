@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import paper_runtime
 import paper_runtime.snapshot as snapshot_module
 import paper_runtime.snapshot_read as snapshot_read_module
 from data_contracts.coverage import coverage_policy_binding
@@ -50,107 +51,88 @@ def _sha256_file(path: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def _marker_database(path: Path, marker: str) -> None:
+def _writable_database(path: Path) -> None:
     conn = sqlite3.connect(path)
     try:
         conn.execute("CREATE TABLE marker(value TEXT NOT NULL)")
-        conn.execute("INSERT INTO marker(value) VALUES (?)", (marker,))
+        conn.execute("INSERT INTO marker(value) VALUES ('verified-A')")
         conn.commit()
     finally:
         conn.close()
-    path.chmod(0o444)
 
 
-def _measured_ready_artifact(path: Path) -> snapshot_module.ReadySnapshot:
-    snapshot_id = "sha256:" + "ab" * 32
-    manifest_path = path.with_suffix(".manifest.json")
-    manifest_path.write_text("{}\n", encoding="utf-8")
-    manifest_path.chmod(0o444)
-    with snapshot_read_module._open_immutable_regular_file(
-        path,
-        label="READY snapshot artifact",
-        max_bytes=snapshot_read_module._READY_ARTIFACT_MAX_BYTES,
-    ) as pinned:
-        digest = snapshot_read_module._hash_pinned_file(pinned)
-        identity = pinned.identity.as_tuple()
-    return snapshot_module.ReadySnapshot(
-        snapshot_id,
-        path,
-        manifest_path,
-        {},
-        artifact_digest=digest,
-        artifact_identity=identity,
-    )
-
-
-def test_open_ready_snapshot_rejects_same_path_swap_after_validation(
+def test_public_ready_sqlite_open_stays_closed_with_retained_writer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     snapshot_dir = tmp_path / "snapshots"
     snapshot_dir.mkdir()
     artifact = snapshot_dir / "verified.sqlite"
-    replacement = snapshot_dir / "attacker.sqlite"
-    _marker_database(artifact, "verified-A")
-    _marker_database(replacement, "attacker-B")
-    ready = _measured_ready_artifact(artifact)
+    _writable_database(artifact)
+    retained_writer = os.open(
+        artifact,
+        os.O_RDWR | getattr(os, "O_CLOEXEC", 0),
+    )
+    artifact.chmod(0o444)
+    fake_connection = sqlite3.connect(":memory:")
+    calls: list[str] = []
 
-    def describe_then_swap(_directory, _snapshot_id):
-        os.replace(replacement, artifact)
-        return ready
+    def patched_builder(*_args, **_kwargs):
+        calls.append("builder")
+        return object()
+
+    def patched_opener(*_args, **_kwargs):
+        calls.append("opener")
+        return fake_connection
 
     monkeypatch.setattr(
         snapshot_read_module,
-        "describe_snapshot",
-        describe_then_swap,
+        "latest_ready_snapshot",
+        patched_builder,
     )
-    with pytest.raises(RuntimeError, match="identity drifted after validation"):
-        snapshot_read_module.open_ready_snapshot(
-            snapshot_dir,
-            ready.snapshot_id,
-        )
-
-
-def test_open_ready_snapshot_rejects_path_swap_during_descriptor_transfer(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    snapshot_dir = tmp_path / "snapshots"
-    snapshot_dir.mkdir()
-    artifact = snapshot_dir / "verified.sqlite"
-    replacement = snapshot_dir / "attacker.sqlite"
-    displaced = snapshot_dir / "verified.displaced.sqlite"
-    _marker_database(artifact, "verified-A")
-    _marker_database(replacement, "attacker-B")
-    ready = _measured_ready_artifact(artifact)
     monkeypatch.setattr(
         snapshot_read_module,
         "describe_snapshot",
-        lambda _directory, _snapshot_id: ready,
+        patched_builder,
     )
-    real_hash = snapshot_read_module._hash_pinned_file
-    swapped = False
+    monkeypatch.setattr(
+        snapshot_read_module,
+        "_open_fixture_snapshot_connection",
+        patched_opener,
+    )
+    monkeypatch.setattr(
+        snapshot_read_module,
+        "_open_pinned_sqlite",
+        patched_opener,
+    )
 
-    def hash_then_swap(pinned):
-        nonlocal swapped
-        digest = real_hash(pinned)
-        if not swapped:
-            os.replace(artifact, displaced)
-            os.replace(replacement, artifact)
-            swapped = True
-        return digest
-
-    monkeypatch.setattr(snapshot_read_module, "_hash_pinned_file", hash_then_swap)
-    with pytest.raises(RuntimeError, match="changed while it was pinned"):
-        snapshot_read_module.open_ready_snapshot(
-            snapshot_dir,
-            ready.snapshot_id,
-        )
-    direct = sqlite3.connect(artifact)
     try:
-        assert direct.execute("SELECT value FROM marker").fetchone()[0] == "attacker-B"
+        assert artifact.stat().st_mode & 0o777 == 0o444
+        offset = artifact.stat().st_size - 1
+        original = os.pread(retained_writer, 1, offset)
+        assert len(original) == 1
+        changed = bytes([original[0] ^ 1])
+        assert os.pwrite(retained_writer, changed, offset) == 1
+        assert os.pread(retained_writer, 1, offset) == changed
+        assert os.pwrite(retained_writer, original, offset) == 1
+        os.fsync(retained_writer)
+
+        with pytest.raises(
+            SnapshotRejected,
+            match="public production READY SQLite open is disabled",
+        ):
+            snapshot_read_module.open_ready_snapshot(
+                snapshot_dir,
+                "sha256:" + "ab" * 32,
+            )
+
+        assert calls == []
+        assert not hasattr(paper_runtime, "open_ready_snapshot")
+        assert not hasattr(snapshot_module, "open_ready_snapshot")
+        assert fake_connection.execute("SELECT 1").fetchone() == (1,)
     finally:
-        direct.close()
+        fake_connection.close()
+        os.close(retained_writer)
 
 
 def _replace_fixture_with_coherent_exact_four_artifact(ready, binding):
@@ -372,8 +354,6 @@ def test_rejected_pointer_finalization_removes_already_minted_sidecar(
     assert snapshot_module.list_ready_snapshots(snapshot_dir) == []
     with pytest.raises(FileNotFoundError, match="no READY"):
         snapshot_module.latest_ready_snapshot(snapshot_dir)
-    with pytest.raises(FileNotFoundError, match="no READY"):
-        snapshot_module.open_ready_snapshot(snapshot_dir)
     assert not list(snapshot_dir.glob("sha256_*.sqlite"))
     assert not list(snapshot_dir.glob("sha256_*.manifest.json"))
     assert not list(snapshot_dir.glob("sha256_*.publication.json"))
@@ -788,8 +768,6 @@ def test_database_publication_failure_aborts_before_readiness_is_minted(
     assert snapshot_module.list_ready_snapshots(snapshot_dir) == []
     with pytest.raises(FileNotFoundError, match="no READY"):
         snapshot_module.latest_ready_snapshot(snapshot_dir)
-    with pytest.raises(FileNotFoundError, match="no READY"):
-        snapshot_module.open_ready_snapshot(snapshot_dir)
     assert not list(snapshot_dir.glob("sha256_*.sqlite"))
     assert not list(snapshot_dir.glob("sha256_*.manifest.json"))
     assert not list(snapshot_dir.glob("sha256_*.publication.json"))
@@ -797,15 +775,6 @@ def test_database_publication_failure_aborts_before_readiness_is_minted(
     assert len(quarantined) == 1
     assert len(list(quarantined[0].glob("sha256_*.sqlite"))) == 1
     assert len(list(quarantined[0].glob("sha256_*.manifest.json"))) == 1
-    rejected_manifest = json.loads(
-        next(quarantined[0].glob("sha256_*.manifest.json")).read_text(
-            encoding="utf-8"
-        )
-    )
-    with pytest.raises(FileNotFoundError, match="publication marker"):
-        snapshot_module.open_ready_snapshot(
-            snapshot_dir, rejected_manifest["snapshot_id"]
-        )
     source = sqlite3.connect(staging)
     try:
         publication = source.execute(

@@ -4,7 +4,7 @@ Research data is published from a mutable staging SQLite database into a
 content-addressed READY directory. Staging is the only ingestion target and is
 never a research input after publication.
 
-## Lifecycle and sole read path
+## Lifecycle and execution read boundary
 
 The publication state machine is:
 
@@ -18,10 +18,23 @@ SQLite with the backup API, embeds the READY manifest, checks SQLite integrity,
 changes the copy to mode `0444`, and atomically renames it to
 `sha256_<digest>.sqlite`. Generic publication is private and test-only and
 cannot emit a production readiness capability. The immutable database and its
-manifest must both verify before `latest_ready_snapshot`, `describe_snapshot`,
-or `open_ready_snapshot` will return it. SQLite reads use
-`mode=ro&immutable=1`. `latest-ready.json` is only a replaceable pointer; it
-cannot make an incomplete artifact READY.
+manifest must both verify before `latest_ready_snapshot` or
+`describe_snapshot` returns publication metadata. Those metadata APIs expose a
+path and are not an execution-safe database capability. The package exports no
+production READY SQLite opener; the legacy direct-module entry rejects before
+resolution or descriptor transfer. This is necessary because changing an
+artifact to mode `0444` cannot revoke a same-UID `O_RDWR` descriptor retained
+before that change.
+
+The sole accepted Controlled Pilot SQLite path is the Controlled activation
+service: it opens the root-owned snapshot and signed projection with no-follow
+checks and retains them as `PinnedControlledSnapshotV2` descriptors for the
+execution runtime. The Quant Data adapter still describes READY and then reads
+the returned pathname; it is a separate, non-Controlled read plane and is not
+evidence of general production read integrity. An end-to-end, root-owned atomic
+READY-to-Controlled install and accepted authority chain remain open under
+A2/R5/R11. `latest-ready.json` is only a replaceable pointer; it cannot make an
+incomplete artifact READY.
 
 The mutable staging policy intentionally remains `snapshot_ready=0` after a
 successful publication. Fact and revision-table insert/update/delete triggers
@@ -41,7 +54,8 @@ The manifest binds the profile id/version/digest, exact-four plan-set digest,
 dependency-closure digest, dataset membership digest, per-dataset Coverage
 policy-set digest, raw/receipt/validation/B0/B4 proof digests,
 source/export/applied cursor, immutable snapshot id/digest, and publication
-time. Opening a READY artifact rebuilds and re-verifies those bindings.
+time. Describing a production READY publication rebuilds and re-verifies those
+bindings, but does not mint a database-read capability.
 
 ## Collection coverage policy
 

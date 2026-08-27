@@ -8,7 +8,6 @@ Lives **outside** `strategies` so strategy code stays isolated from storage.
 
 ```python
 from paper_runtime import (
-    open_ready_snapshot,
     latest_ready_snapshot,
     check_ready_coherence,
     ExperimentIndex,
@@ -24,6 +23,12 @@ Production READY publication is exposed only through the plan/profile-bound
 exact-four bridge. It returns the immutable snapshot together with the signed
 `VerifiedPilotReadiness` sidecar. The generic publisher is private and
 test-fixture-only.
+
+The package deliberately does not export a production READY SQLite opener.
+`latest_ready_snapshot` and `describe_snapshot` expose verified publication
+metadata, not an execution-safe database capability. Controlled Pilot reads
+only through the root-owned `PinnedControlledSnapshotV2` activation path. The
+remaining fixture SQLite opener is private and tests-only.
 
 ## Allowed imports
 

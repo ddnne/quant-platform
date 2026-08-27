@@ -45,7 +45,6 @@ from paper_runtime.snapshot_read import (
     describe_snapshot,
     latest_ready_snapshot,
     list_ready_snapshots,
-    open_ready_snapshot,
 )
 
 
@@ -579,7 +578,7 @@ def _snapshot_candidate_engine(
 
     This core is not signing authority.  A production marker is usable only
     after the independently recomputing READY service returns a pinned signed
-    attestation that the production reader verifies.
+    attestation that the production metadata verifier accepts.
     """
 
     if (fixture_compatibility, publication_scope) not in {
@@ -1234,8 +1233,9 @@ def _publish_exact_four_pilot_ready_snapshot_via_authority_impl(
     )
     if set(signed_result) != {"result", "path"}:
         raise SnapshotRejected("isolated READY authority produced no attestation")
-    # Reopen through the public production reader after the publication marker
-    # is durable, then materialize the nominal capability from the signed file.
+    # Re-describe through the production metadata verifier after the
+    # publication marker is durable. The result is not a database-read
+    # capability.
     reopened = describe_snapshot(snapshot_dir, snapshot.snapshot_id)
     result = signed_result["result"]
     readiness_path = reopened.readiness_path
@@ -1273,7 +1273,8 @@ def _bind_snapshot_candidate_publishers(
 
     Python closure introspection is not a security boundary and can recover
     ``engine``.  Safety instead comes from the fact that the engine cannot mint
-    the isolated authority signature required by the production reader.
+    the isolated authority signature required by the production metadata
+    verifier.
     """
 
     def fixture_candidate(
@@ -1474,5 +1475,4 @@ __all__ = [
     "fail_snapshot_sync",
     "latest_ready_snapshot",
     "list_ready_snapshots",
-    "open_ready_snapshot",
 ]
