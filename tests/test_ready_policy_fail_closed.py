@@ -48,6 +48,7 @@ from research.ready_manifest import (
     canonical_digest,
     load_exact_four_pilot_ready_binding,
     publish_exact_four_pilot_ready_snapshot,
+    _verified_projection_evidence,
     _verified_production_projection_evidence,
     _verify_exact_four_pit_dependency_scope,
 )
@@ -608,6 +609,27 @@ def test_signed_projection_verifier_derives_only_exact_closure_evidence(
     )
     with pytest.raises(TypeError):
         evidence.rows[binding.required_datasets[0]] = {}  # type: ignore[index]
+
+
+def test_ready_projection_verifier_requires_the_authority_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = load_exact_four_pilot_ready_binding()
+    signed, registry = _signed_projection_evidence(binding.required_datasets)
+    _configure_projection_registry_for_test(monkeypatch, registry)
+
+    production = _verified_projection_evidence(
+        signed,
+        binding.required_datasets,
+        expected_environment="production",
+    )
+    assert set(production.rows) == set(binding.required_datasets)
+    with pytest.raises(MassResearchDisabledError, match="environment mismatch"):
+        _verified_projection_evidence(
+            signed,
+            binding.required_datasets,
+            expected_environment="staging",
+        )
 
 
 def test_verified_projection_result_is_opaque_final_and_alias_free(

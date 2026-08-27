@@ -1598,9 +1598,11 @@ def _verify_exact_four_pit_dependency_scope(
     return {**body, "proof_digest": canonical_digest(body)}
 
 
-def _verify_production_projection_evidence_facts(
+def _verify_projection_evidence_facts(
     signed_document: dict[str, Any] | bytes | str | None,
     required_datasets: tuple[str, ...] | list[str],
+    *,
+    expected_environment: str,
 ) -> tuple[Mapping[str, Mapping[str, Any]], str, str]:
     """Verify one signed Ops envelope and derive the bounded READY input.
 
@@ -1642,7 +1644,7 @@ def _verify_production_projection_evidence_facts(
         envelope, evidence = verified_pinned_ops_projection_dataset_evidence(
             signed_document,
             selected_datasets,
-            expected_environment="production",
+            expected_environment=expected_environment,
         )
     except OpsProjectionSignatureError as exc:
         raise MassResearchDisabledError(
@@ -1805,12 +1807,18 @@ def _build_verified_projection_evidence_authority(
         def issuer_key_id(self) -> str:
             return self._state()[2]
 
-    def verified_production_projection_evidence(
+    def verified_projection_evidence(
         signed_document: dict[str, Any] | bytes | str | None,
         required_datasets: tuple[str, ...] | list[str],
+        *,
+        expected_environment: str,
     ) -> _VerifiedProductionProjectionEvidence:
         rows, document_digest, issuer_key_id = (
-            facts_verifier(signed_document, required_datasets)
+            facts_verifier(
+                signed_document,
+                required_datasets,
+                expected_environment=expected_environment,
+            )
         )
         verified = object.__new__(_VerifiedProductionProjectionEvidence)
         states[verified] = (rows, document_digest, issuer_key_id)
@@ -1818,18 +1826,31 @@ def _build_verified_projection_evidence_authority(
 
     return (
         _VerifiedProductionProjectionEvidence,
-        verified_production_projection_evidence,
+        verified_projection_evidence,
     )
 
 
 (
     _VerifiedProductionProjectionEvidence,
-    _verified_production_projection_evidence,
+    _verified_projection_evidence,
 ) = _build_verified_projection_evidence_authority(
-    _verify_production_projection_evidence_facts
+    _verify_projection_evidence_facts
 )
 del _build_verified_projection_evidence_authority
-del _verify_production_projection_evidence_facts
+del _verify_projection_evidence_facts
+
+
+def _verified_production_projection_evidence(
+    signed_document: dict[str, Any] | bytes | str | None,
+    required_datasets: tuple[str, ...] | list[str],
+) -> _VerifiedProductionProjectionEvidence:
+    """Compatibility wrapper for the production-only product publisher."""
+
+    return _verified_projection_evidence(
+        signed_document,
+        required_datasets,
+        expected_environment="production",
+    )
 
 
 def _publish_exact_four_pilot_ready_snapshot_impl(

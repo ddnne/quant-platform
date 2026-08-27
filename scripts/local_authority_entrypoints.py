@@ -1273,11 +1273,12 @@ class ReadyPublishProfilePlanBound:
             self.snapshot_root,
             snapshot_id,
         )
-        from research.ready_manifest import _verified_production_projection_evidence
+        from research.ready_manifest import _verified_projection_evidence
 
-        verified_projection = _verified_production_projection_evidence(
+        verified_projection = _verified_projection_evidence(
             signed_projection,
             list(manifest["dataset_ids"]),
+            expected_environment=self.environment,
         )
         retained_rows = outer.get("profile_coverage_evidence")
         if type(retained_rows) is not dict or set(retained_rows) != set(
