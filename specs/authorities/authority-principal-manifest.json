@@ -16,7 +16,7 @@
     "jquants_acquisition_collection": "sha256:f0cdf6b30067b170a7e4d821e8090a8f9859fd190432f5b3bd2836d1e4ee36ca",
     "exact_four_authority_protocol": "sha256:a7b68cdb782a0b90f0a56860b0ab3762c30548f137b4af3405292f63b0d14cac",
     "exact_four_result_manifest": "sha256:01ceaab94741e1c2f29c530a6af0208b10e10bf1d24b176ea9b8d8a6afada0bd",
-    "exact_four_trader_authorization_v2": "sha256:d08e8b65af9c458e20fc71d810e7834c51277128d30f0b80a056e26c13fc141d"
+    "exact_four_trader_authorization_v2": "sha256:aa194409d8408a506db249e743fc36d9e74afa16c52b944ccad4160f7c04ff0f"
   },
   "residual_risks": {
     "cloudflare_workers_scripts_write_account_scope": {
@@ -815,5 +815,5 @@
       }
     }
   },
-  "manifest_digest": "sha256:2fa6f242d266ca832bcd446ac3349e71536049463f40804d6ae2ec17ad39c982"
+  "manifest_digest": "sha256:bcc348be7ae2fa0f81d0dba7bc36a82bc4acf3ba9bda7266d69b9a059a77c6ff"
 }
