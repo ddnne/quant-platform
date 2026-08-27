@@ -687,6 +687,77 @@ class SQLiteAuthorityEventLedger:
         finally:
             conn.close()
 
+    def has_exact_committed_event(
+        self,
+        *,
+        request_id: str,
+        caller: str,
+        operation: str,
+        purpose: str,
+        request_digest: str,
+        result_digest: str,
+    ) -> bool:
+        """Prove that one exact request/result event is durably committed.
+
+        This read is deliberately separate from ``execute_once``.  A handler
+        may use it to acknowledge an earlier cross-store effect only after the
+        corresponding append-only event is visible in the outer ledger.  A
+        missing row is not an error; a colliding row is.
+        """
+
+        def is_sha256(value: object) -> bool:
+            return (
+                type(value) is str
+                and value.startswith("sha256:")
+                and len(value) == 71
+                and all(character in "0123456789abcdef" for character in value[7:])
+            )
+
+        if (
+            type(request_id) is not str
+            or not request_id
+            or type(caller) is not str
+            or not caller
+            or type(operation) is not str
+            or not operation
+            or type(purpose) is not str
+            or not purpose
+            or not is_sha256(request_digest)
+            or not is_sha256(result_digest)
+        ):
+            raise AuthorityLedgerError("authority event lookup identity is invalid")
+        conn = self._connect()
+        try:
+            self._validate_chain(conn)
+            row = conn.execute(
+                "SELECT caller,operation,purpose,request_digest,result_digest "
+                "FROM authority_events WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            observed = (
+                row["caller"],
+                row["operation"],
+                row["purpose"],
+                row["request_digest"],
+                row["result_digest"],
+            )
+            expected = (
+                caller,
+                operation,
+                purpose,
+                request_digest,
+                result_digest,
+            )
+            if observed != expected:
+                raise AuthorityLedgerError(
+                    "authority committed event identity differs"
+                )
+            return True
+        finally:
+            conn.close()
+
 
 @dataclass(frozen=True, slots=True)
 class AuthorityRequest:

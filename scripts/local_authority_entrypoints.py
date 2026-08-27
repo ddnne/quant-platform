@@ -50,8 +50,10 @@ from scripts.local_authority_service import (
     FileEd25519KeyCustody,
     LocalAuthorityError,
     LocalAuthorityPending,
+    SQLiteAuthorityEventLedger,
     call_unix_authority,
     decode_strict_json,
+    require_declared_service_identity,
     sha256_digest,
 )
 
@@ -89,7 +91,8 @@ _D1_RECONCILED_FACT_FIELDS = {
     "prior_audit_digest",
     "exported_at",
 }
-_D1_SYNC_JOURNAL_FORMAT = "d1-sync-atomic-replace/v1"
+_D1_SYNC_OPERATION = "d1_sync:sync_now"
+_D1_SYNC_JOURNAL_FORMAT = "d1-sync-atomic-replace/v2"
 _D1_SYNC_JOURNAL_MAX_AGE_SECONDS = 60 * 60
 _D1_SYNC_PHASES = (
     "PREPARED",
@@ -123,6 +126,12 @@ _D1_SYNC_JOURNAL_FIELDS = {
     "policy_digest",
     "tool_digest",
     "source_sha",
+    "outer_request_id",
+    "outer_request_digest",
+    "outer_caller",
+    "outer_operation",
+    "outer_purpose",
+    "outer_result_digest",
     "candidate_path",
     "export_digest",
     "artifact_format",
@@ -167,6 +176,12 @@ def _d1_sync_paths(governed_db_path: Path) -> tuple[Path, Path]:
         governed_db_path.with_name(f".{name}.d1-sync-journal.json"),
         governed_db_path.with_name(f".{name}.d1-sync.lock"),
     )
+
+
+def _d1_sync_create_staging_path(journal_path: Path) -> Path:
+    """Return the one protocol-reserved unpublished journal pathname."""
+
+    return journal_path.with_name(f"{journal_path.name}.create.tmp")
 
 
 def _fsync_directory(directory: Path) -> None:
@@ -307,7 +322,19 @@ def _measure_d1_sync_file(path: Path) -> dict[str, Any]:
 
 
 def _require_no_sqlite_sidecars(path: Path) -> None:
-    if any(Path(f"{path}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal")):
+    for suffix in ("-wal", "-shm", "-journal"):
+        sidecar = Path(f"{path}{suffix}")
+        try:
+            sidecar.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise LocalAuthorityError(
+                "D1 sync mirror sidecar state is unavailable"
+            ) from exc
+        # ``Path.exists`` follows links and therefore misses a dangling
+        # symlink.  Any directory entry here means the pathname is not one
+        # closed, immutable SQLite file and must block handoff/recovery.
         raise LocalAuthorityError("D1 sync mirror has a live SQLite sidecar")
 
 
@@ -517,6 +544,14 @@ def _validate_d1_sync_journal(document: dict[str, Any]) -> dict[str, Any]:
             _is_sha256_digest(document[field])
             for field in ("policy_digest", "tool_digest", "source_sha")
         )
+        or type(document["outer_request_id"]) is not str
+        or not document["outer_request_id"]
+        or not _is_sha256_digest(document["outer_request_digest"])
+        or type(document["outer_caller"]) is not str
+        or not document["outer_caller"]
+        or document["outer_operation"] != _D1_SYNC_OPERATION
+        or type(document["outer_purpose"]) is not str
+        or not document["outer_purpose"]
         or type(document["prepared_at"]) is not str
         or type(document["updated_at"]) is not str
         or type(document["previous_record_digest"]) not in {str, type(None)}
@@ -570,6 +605,8 @@ def _validate_d1_sync_journal(document: dict[str, Any]) -> dict[str, Any]:
         or (not signed and document["candidate_sync_identity"] is not None)
         or (signed and type(document["sync_result"]) is not dict)
         or (not signed and document["sync_result"] is not None)
+        or (signed and not _is_sha256_digest(document["outer_result_digest"]))
+        or (not signed and document["outer_result_digest"] is not None)
         or (
             type(result) is dict
             and (
@@ -591,6 +628,10 @@ def _validate_d1_sync_journal(document: dict[str, Any]) -> dict[str, Any]:
                     for field in ("seen", "registered", "skipped")
                 )
             )
+        )
+        or (
+            type(result) is dict
+            and document["outer_result_digest"] != sha256_digest(result)
         )
         or (fsynced and type(document["candidate_file_identity"]) is not dict)
         or (not fsynced and document["candidate_file_identity"] is not None)
@@ -632,6 +673,120 @@ def _read_d1_sync_journal(path: Path) -> dict[str, Any] | None:
     return _validate_d1_sync_journal(_strict_d1_sync_json(protected.raw))
 
 
+def _remove_unpublished_d1_sync_journal(path: Path) -> None:
+    """Remove only the reserved, never-published create staging inode."""
+
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise LocalAuthorityError(
+            "D1 sync journal create staging is unavailable"
+        ) from exc
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or info.st_nlink != 1
+        or stat.S_IMODE(info.st_mode) != 0o600
+    ):
+        raise LocalAuthorityError("D1 sync journal create staging is unsafe")
+    try:
+        path.unlink()
+    except OSError as exc:
+        raise LocalAuthorityError(
+            "D1 sync journal create staging cleanup failed"
+        ) from exc
+    _fsync_directory(path.parent)
+
+
+def _recover_d1_sync_journal_publication(path: Path) -> None:
+    """Finish or discard only an unpublished PREPARED journal.
+
+    Initial creation never writes the canonical pathname.  The fully-fsynced
+    staging inode is first made durable, then hard-linked create-only to the
+    canonical name.  These two names make every power-loss point recoverable
+    without ever exposing a partial canonical journal.
+    """
+
+    staging = _d1_sync_create_staging_path(path)
+    try:
+        staging_info = staging.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise LocalAuthorityError(
+            "D1 sync journal create staging is unavailable"
+        ) from exc
+    try:
+        journal_info = path.lstat()
+    except FileNotFoundError:
+        journal_info = None
+    except OSError as exc:
+        raise LocalAuthorityError("D1 sync journal is unavailable") from exc
+
+    if journal_info is not None:
+        if (
+            not stat.S_ISREG(staging_info.st_mode)
+            or not stat.S_ISREG(journal_info.st_mode)
+            or staging_info.st_uid != os.geteuid()
+            or journal_info.st_uid != os.geteuid()
+            or stat.S_IMODE(staging_info.st_mode) != 0o600
+            or stat.S_IMODE(journal_info.st_mode) != 0o600
+            or (staging_info.st_dev, staging_info.st_ino)
+            != (journal_info.st_dev, journal_info.st_ino)
+            or staging_info.st_nlink != 2
+            or journal_info.st_nlink != 2
+        ):
+            raise LocalAuthorityError(
+                "D1 sync journal create publication is ambiguous"
+            )
+        try:
+            staging.unlink()
+        except OSError as exc:
+            raise LocalAuthorityError(
+                "D1 sync journal create publication cleanup failed"
+            ) from exc
+        _fsync_directory(path.parent)
+        # Validate only after returning the canonical inode to its required
+        # single-link state.  Our publisher never links before a successful
+        # file fsync, so an invalid body remains fail-closed.
+        if _read_d1_sync_journal(path) is None:  # pragma: no cover - defensive
+            raise LocalAuthorityError("D1 sync journal publication disappeared")
+        return
+
+    try:
+        staged = _read_d1_sync_journal(staging)
+    except LocalAuthorityError:
+        # A crash while writing/fsyncing the unpublished inode cannot have
+        # created a candidate or touched the live DB.  The reserved staging
+        # pathname may therefore be discarded after strict inode checks.
+        _remove_unpublished_d1_sync_journal(staging)
+        return
+    if staged["phase"] != "PREPARED":
+        raise LocalAuthorityError(
+            "D1 sync unpublished journal phase is not PREPARED"
+        )
+    try:
+        os.link(staging, path, follow_symlinks=False)
+    except FileExistsError as exc:
+        raise LocalAuthorityError(
+            "D1 sync journal create publication raced"
+        ) from exc
+    except OSError as exc:
+        raise LocalAuthorityError(
+            "D1 sync journal create publication failed"
+        ) from exc
+    _fsync_directory(path.parent)
+    try:
+        staging.unlink()
+    except OSError as exc:
+        raise LocalAuthorityError(
+            "D1 sync journal create publication cleanup failed"
+        ) from exc
+    _fsync_directory(path.parent)
+
+
 def _write_d1_sync_journal(
     path: Path, document: Mapping[str, Any], *, create_only: bool
 ) -> dict[str, Any]:
@@ -652,8 +807,10 @@ def _write_d1_sync_journal(
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
-    selected = path if create_only else path.with_name(
-        f".{path.name}.{uuid4().hex}.tmp"
+    selected = (
+        _d1_sync_create_staging_path(path)
+        if create_only
+        else path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     )
     try:
         fd = os.open(selected, flags, 0o600)
@@ -665,8 +822,8 @@ def _write_d1_sync_journal(
         offset = 0
         while offset < len(raw):
             offset += os.write(fd, raw[offset:])
-        os.fsync(fd)
         os.fchmod(fd, 0o600)
+        os.fsync(fd)
     except BaseException:
         os.close(fd)
         selected.unlink(missing_ok=True)
@@ -674,7 +831,14 @@ def _write_d1_sync_journal(
     else:
         os.close(fd)
     try:
-        if not create_only:
+        if create_only:
+            # Persist the only recoverable pre-publication name before making
+            # the canonical journal visible.  The link itself is O_EXCL.
+            _fsync_directory(path.parent)
+            os.link(selected, path, follow_symlinks=False)
+            _fsync_directory(path.parent)
+            selected.unlink()
+        else:
             os.replace(selected, path)
         _fsync_directory(path.parent)
     except BaseException:
@@ -812,6 +976,35 @@ def _observe_d1_sync_tool_digest(resources: Mapping[str, Any]) -> str:
     return _d1_sync_tool_bindings_digest(observed)
 
 
+def _observe_d1_sync_activation_identity(
+    *,
+    environment: str,
+    expected_uid: int,
+) -> dict[str, str]:
+    """Remeasure the root-pinned runtime bundle, tools, registry, and policy."""
+
+    uid, activation = require_declared_service_identity(
+        authority_id="d1_sync", environment=environment
+    )
+    if uid != expected_uid:
+        raise LocalAuthorityError("D1 sync activation service identity changed")
+    source_sha = activation.get("runtime_bundle_digest")
+    tool_digest = _d1_sync_tool_bindings_digest(
+        activation.get("runtime_resource_bindings")
+    )
+    if not _is_sha256_digest(source_sha) or not _is_sha256_digest(tool_digest):
+        raise LocalAuthorityError("D1 sync activation digest is invalid")
+    return {
+        "source_sha": source_sha,
+        "tool_digest": tool_digest,
+        "policy_digest": _d1_sync_policy_digest(
+            environment=environment,
+            source_sha=source_sha,
+            tool_digest=tool_digest,
+        ),
+    }
+
+
 def _d1_sync_tool_bindings_digest(bindings: object) -> str:
     materialized = _json_materialize(bindings)
     if type(materialized) is not list:
@@ -824,6 +1017,50 @@ def _d1_sync_tool_bindings_digest(bindings: object) -> str:
     )
 
 
+def _d1_sync_request_binding(
+    context: AuthorityRequestContext, *, environment: str
+) -> dict[str, str]:
+    if (
+        type(context) is not AuthorityRequestContext
+        or context.grant.environment != environment
+        or context.grant.operation != _D1_SYNC_OPERATION
+        or context.caller != context.grant.caller
+        or not _is_sha256_digest(context.request_digest)
+    ):
+        raise LocalAuthorityError("D1 sync request context binding is invalid")
+    return {
+        "outer_request_id": context.request_id,
+        "outer_request_digest": context.request_digest,
+        "outer_caller": context.caller,
+        "outer_operation": context.grant.operation,
+        "outer_purpose": context.grant.purpose,
+    }
+
+
+def _require_d1_sync_runtime_identity(
+    observer: Callable[[], Mapping[str, Any]],
+    *,
+    source_sha: str,
+    tool_digest: str,
+    policy_digest: str,
+) -> None:
+    try:
+        observed = dict(observer())
+    except LocalAuthorityError:
+        raise
+    except Exception as exc:
+        raise LocalAuthorityError(
+            "D1 sync activation identity cannot be remeasured"
+        ) from exc
+    expected = {
+        "source_sha": source_sha,
+        "tool_digest": tool_digest,
+        "policy_digest": policy_digest,
+    }
+    if observed != expected:
+        raise LocalAuthorityError("D1 sync activation identity changed")
+
+
 def _recover_d1_sync_journal(
     *,
     journal_path: Path,
@@ -833,6 +1070,9 @@ def _recover_d1_sync_journal(
     source_sha: str,
     tool_digest: str,
     policy_digest: str,
+    request_context: AuthorityRequestContext,
+    runtime_identity_observer: Callable[[], Mapping[str, Any]],
+    committed_event_verifier: Callable[..., bool],
 ) -> Mapping[str, Any] | None:
     """Roll back an unfinished candidate or finish one exact durable replace."""
 
@@ -851,6 +1091,12 @@ def _recover_d1_sync_journal(
     for field, expected in bindings.items():
         if journal[field] != expected:
             raise LocalAuthorityError(f"D1 sync journal {field} binding differs")
+    request_binding = _d1_sync_request_binding(
+        request_context, environment=environment
+    )
+    same_outer_request = all(
+        journal[field] == expected for field, expected in request_binding.items()
+    )
     committed = journal["phase"] == "COMMITTED"
     final_cursor = (
         journal["sync_result"].get("applied_change_seq")
@@ -896,14 +1142,34 @@ def _recover_d1_sync_journal(
             raise LocalAuthorityError("D1 sync committed mirror audit differs")
         _fsync_directory(governed_db_path.parent)
         result = dict(journal["sync_result"])
-        if expected_applied_cursor == journal["prior_applied_cursor"]:
+        if (
+            same_outer_request
+            and expected_applied_cursor == journal["prior_applied_cursor"]
+        ):
             # The governed mirror and this receipt commit before the outer
             # authority event ledger.  A crash in that gap can repeat any
-            # number of times, so an old-cursor replay must never consume the
-            # only durable receipt.  A later request presenting the committed
-            # cursor acknowledges the handoff and may clear it before starting
-            # the next acquisition.
+            # number of times.  Only the exact original request may replay the
+            # durable receipt while its outer event is absent.
             return result
+        try:
+            outer_committed = committed_event_verifier(
+                request_id=journal["outer_request_id"],
+                caller=journal["outer_caller"],
+                operation=journal["outer_operation"],
+                purpose=journal["outer_purpose"],
+                request_digest=journal["outer_request_digest"],
+                result_digest=journal["outer_result_digest"],
+            )
+        except LocalAuthorityError:
+            raise
+        except Exception as exc:
+            raise LocalAuthorityError(
+                "D1 sync outer event commitment cannot be verified"
+            ) from exc
+        if outer_committed is not True:
+            raise LocalAuthorityPending(
+                "prior D1 sync result awaits its exact outer event commit"
+            )
         _remove_d1_sync_journal(
             journal_path, expected_digest=journal["record_digest"]
         )
@@ -930,6 +1196,13 @@ def _recover_d1_sync_journal(
                 "D1 sync recovery found an ambiguous live mirror"
             )
         _require_no_sqlite_sidecars(governed_db_path)
+        _require_d1_sync_runtime_identity(
+            runtime_identity_observer,
+            source_sha=source_sha,
+            tool_digest=tool_digest,
+            policy_digest=policy_digest,
+        )
+        request_context.require_within_processing_deadline()
         os.replace(candidate_path, governed_db_path)
         _fsync_directory(governed_db_path.parent)
     elif live_identity == expected_candidate_file:
@@ -1719,6 +1992,9 @@ def _execute_governed_remote_sync(
     environment: str,
     source_sha: str,
     tool_digest: str,
+    request_context: AuthorityRequestContext,
+    runtime_identity_observer: Callable[[], Mapping[str, Any]],
+    committed_event_verifier: Callable[..., bool],
     _fault_inject: Callable[[str], None] | None = None,
 ) -> Mapping[str, Any]:
     """Build one signed candidate and atomically replace the governed mirror.
@@ -1736,6 +2012,9 @@ def _execute_governed_remote_sync(
     environment = trust_domain.require_environment(environment)
     if not _is_sha256_digest(source_sha) or not _is_sha256_digest(tool_digest):
         raise LocalAuthorityError("D1 sync runtime source/tool identity is invalid")
+    request_binding = _d1_sync_request_binding(
+        request_context, environment=environment
+    )
     governed_db_path = governed_db_path.absolute()
     journal_path, lock_path = _d1_sync_paths(governed_db_path)
     policy_digest = _d1_sync_policy_digest(
@@ -1749,6 +2028,7 @@ def _execute_governed_remote_sync(
             _fault_inject(point)
 
     with _exclusive_d1_sync_lock(lock_path):
+        _recover_d1_sync_journal_publication(journal_path)
         recovered = _recover_d1_sync_journal(
             journal_path=journal_path,
             governed_db_path=governed_db_path,
@@ -1757,6 +2037,9 @@ def _execute_governed_remote_sync(
             source_sha=source_sha,
             tool_digest=tool_digest,
             policy_digest=policy_digest,
+            request_context=request_context,
+            runtime_identity_observer=runtime_identity_observer,
+            committed_event_verifier=committed_event_verifier,
         )
         if recovered is not None:
             return recovered
@@ -1787,6 +2070,8 @@ def _execute_governed_remote_sync(
                 "policy_digest": policy_digest,
                 "tool_digest": tool_digest,
                 "source_sha": source_sha,
+                **request_binding,
+                "outer_result_digest": None,
                 "candidate_path": str(candidate_path),
                 "export_digest": None,
                 "artifact_format": None,
@@ -1805,6 +2090,7 @@ def _execute_governed_remote_sync(
         store: SqliteStore | None = None
         temporary: tempfile.TemporaryDirectory[str] | None = None
         source_conn: sqlite3.Connection | None = None
+        handoff_guard_failed = False
         try:
             _copy_prior_mirror_to_candidate(
                 governed_db_path,
@@ -1832,6 +2118,12 @@ def _execute_governed_remote_sync(
                 or acquired.artifact_format not in {"sql", "sqlite"}
             ):
                 raise LocalAuthorityError("acquired D1 export identity is invalid")
+            _require_d1_sync_runtime_identity(
+                runtime_identity_observer,
+                source_sha=source_sha,
+                tool_digest=tool_digest,
+                policy_digest=policy_digest,
+            )
             journal = _advance_d1_sync_journal(
                 journal_path,
                 journal,
@@ -1947,6 +2239,7 @@ def _execute_governed_remote_sync(
                 phase="SIGNED_AUDIT",
                 candidate_sync_identity=identity,
                 sync_result=result,
+                outer_result_digest=sha256_digest(result),
             )
             fault("after_signed_audit")
 
@@ -1985,11 +2278,25 @@ def _execute_governed_remote_sync(
             )
             fault("after_file_fsync")
 
-            if _measure_d1_sync_file(governed_db_path) != prior_file_identity:
-                raise LocalAuthorityError(
-                    "governed D1 mirror changed before atomic replacement"
+            try:
+                if _measure_d1_sync_file(governed_db_path) != prior_file_identity:
+                    raise LocalAuthorityError(
+                        "governed D1 mirror changed before atomic replacement"
+                    )
+                _require_no_sqlite_sidecars(governed_db_path)
+                _require_d1_sync_runtime_identity(
+                    runtime_identity_observer,
+                    source_sha=source_sha,
+                    tool_digest=tool_digest,
+                    policy_digest=policy_digest,
                 )
-            _require_no_sqlite_sidecars(governed_db_path)
+                request_context.require_within_processing_deadline()
+            except Exception:
+                # Once a live-handoff guard has observed drift or lease expiry,
+                # this invocation must not turn that rejection into a replace
+                # by immediately entering generic recovery.
+                handoff_guard_failed = True
+                raise
             os.replace(candidate_path, governed_db_path)
             fault("after_replace_before_dir_fsync")
             _fsync_directory(governed_db_path.parent)
@@ -2014,6 +2321,8 @@ def _execute_governed_remote_sync(
             if source_conn is not None:
                 source_conn.close()
                 source_conn = None
+            if handoff_guard_failed:
+                raise
             recovered_after_error = _recover_d1_sync_journal(
                 journal_path=journal_path,
                 governed_db_path=governed_db_path,
@@ -2022,6 +2331,9 @@ def _execute_governed_remote_sync(
                 source_sha=source_sha,
                 tool_digest=tool_digest,
                 policy_digest=policy_digest,
+                request_context=request_context,
+                runtime_identity_observer=runtime_identity_observer,
+                committed_event_verifier=committed_event_verifier,
             )
             if recovered_after_error is not None:
                 return recovered_after_error
@@ -2038,7 +2350,7 @@ def _execute_governed_remote_sync(
 class D1SyncNow:
     """Sync only the configured D1 through authenticated acquisition/reconciliation."""
 
-    operation = "d1_sync:sync_now"
+    operation = _D1_SYNC_OPERATION
 
     def __init__(
         self,
@@ -2055,6 +2367,7 @@ class D1SyncNow:
         expected_uid: int,
         source_sha: str,
         tool_digest: str,
+        event_ledger: SQLiteAuthorityEventLedger,
         executor: Callable[..., Mapping[str, Any]] = _execute_governed_remote_sync,
     ) -> None:
         self.environment = trust_domain.require_environment(environment)
@@ -2069,6 +2382,9 @@ class D1SyncNow:
         self.expected_uid = expected_uid
         self.source_sha = source_sha
         self.tool_digest = tool_digest
+        if type(event_ledger) is not SQLiteAuthorityEventLedger:
+            raise LocalAuthorityError("D1 sync outer event ledger is invalid")
+        self.event_ledger = event_ledger
         if not _is_sha256_digest(self.source_sha) or not _is_sha256_digest(
             self.tool_digest
         ):
@@ -2130,6 +2446,12 @@ class D1SyncNow:
             environment=self.environment,
             source_sha=self.source_sha,
             tool_digest=self.tool_digest,
+            request_context=_context,
+            runtime_identity_observer=lambda: _observe_d1_sync_activation_identity(
+                environment=self.environment,
+                expected_uid=self.expected_uid,
+            ),
+            committed_event_verifier=self.event_ledger.has_exact_committed_event,
         )
         if type(result) is not dict or result.get("status") != "SYNCED":
             raise LocalAuthorityError("D1 sync executor returned invalid evidence")

@@ -109,7 +109,14 @@ def _ledger(
 
 
 def _context(
-    *, caller: str, operation: str, purpose: str
+    *,
+    caller: str,
+    operation: str,
+    purpose: str,
+    request_id: str = "direct-handler-test",
+    request_digest: str = "sha256:" + "0" * 64,
+    deadline_monotonic_ns: int = 2**63 - 1,
+    environment: str = "production",
 ) -> service_runtime.AuthorityRequestContext:
     return service_runtime.AuthorityRequestContext(
         peer=service_runtime.PeerIdentity(
@@ -120,12 +127,12 @@ def _context(
             caller=caller,
             operation=operation,
             purpose=purpose,
-            environment="production",
+            environment=environment,
         ),
-        request_id="direct-handler-test",
-        request_digest="sha256:" + "0" * 64,
+        request_id=request_id,
+        request_digest=request_digest,
         accepted_at_monotonic_ns=1,
-        processing_deadline_monotonic_ns=2**63 - 1,
+        processing_deadline_monotonic_ns=deadline_monotonic_ns,
     )
 
 
@@ -209,6 +216,7 @@ def test_d1_sync_entrypoint_uses_only_configured_resources_and_exact_cursor(
         expected_uid=os.geteuid(),
         source_sha="sha256:" + "1" * 64,
         tool_digest="sha256:" + "2" * 64,
+        event_ledger=_ledger(tmp_path, "d1_sync"),
         executor=executor,
     )
     monkeypatch.setattr(
@@ -441,8 +449,36 @@ def _install_atomic_sync_harness(
         source_sha: str = "sha256:" + "1" * 64,
         tool_digest: str = "sha256:" + "2" * 64,
         expected_applied_cursor: int = 0,
+        request_context: service_runtime.AuthorityRequestContext | None = None,
+        runtime_identity_observer: Callable[[], object] | None = None,
+        committed_event_verifier: Callable[..., bool] | None = None,
         fault=None,
     ):
+        request = {
+            "format": service_runtime.REQUEST_FORMAT,
+            "request_id": f"atomic-sync-{expected_applied_cursor}",
+            "operation": "d1_sync:sync_now",
+            "purpose": "sync_current",
+            "payload": {"expected_applied_cursor": expected_applied_cursor},
+        }
+        context = request_context or _context(
+            caller="ops_scheduler",
+            operation="d1_sync:sync_now",
+            purpose="sync_current",
+            request_id=request["request_id"],
+            request_digest=service_runtime.sha256_digest(request),
+        )
+        observer = runtime_identity_observer or (
+            lambda: {
+                "source_sha": source_sha,
+                "tool_digest": tool_digest,
+                "policy_digest": entrypoints._d1_sync_policy_digest(
+                    environment=environment,
+                    source_sha=source_sha,
+                    tool_digest=tool_digest,
+                ),
+            }
+        )
         return _execute_governed_remote_sync(
             governed_db_path=live,
             expected_applied_cursor=expected_applied_cursor,
@@ -454,6 +490,11 @@ def _install_atomic_sync_harness(
             environment=environment,
             source_sha=source_sha,
             tool_digest=tool_digest,
+            request_context=context,
+            runtime_identity_observer=observer,
+            committed_event_verifier=(
+                committed_event_verifier or (lambda **_kwargs: True)
+            ),
             _fault_inject=fault,
         )
 
@@ -514,6 +555,218 @@ def test_d1_sync_crash_recovery_preserves_or_completes_exact_candidate(
     assert not list(tmp_path.glob(f".{live.name}.d1-sync-*.sqlite3"))
 
 
+@pytest.mark.parametrize("publication_state", ["unpublished", "linked"])
+def test_d1_sync_recovers_every_initial_journal_publication_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    publication_state: str,
+) -> None:
+    live, execute, calls = _install_atomic_sync_harness(tmp_path, monkeypatch)
+
+    def crash(point: str) -> None:
+        if point == "after_prepared":
+            raise _SimulatedD1SyncCrash(point)
+
+    with pytest.raises(_SimulatedD1SyncCrash):
+        execute(fault=crash)
+    journal, _lock = _d1_sync_paths(live)
+    staging = entrypoints._d1_sync_create_staging_path(journal)
+    if publication_state == "unpublished":
+        os.replace(journal, staging)
+    else:
+        os.link(journal, staging)
+    entrypoints._fsync_directory(tmp_path)
+
+    assert execute()["applied_change_seq"] == 1
+    assert _read_atomic_marker(live) == "new"
+    assert not staging.exists()
+    assert calls["acquire"] == 1
+
+
+def test_d1_sync_discards_torn_unpublished_journal_without_touching_live(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live, execute, calls = _install_atomic_sync_harness(tmp_path, monkeypatch)
+    journal, _lock = _d1_sync_paths(live)
+    staging = entrypoints._d1_sync_create_staging_path(journal)
+    staging.write_bytes(b'{"format":"d1-sync-atomic-replace/v2"')
+    staging.chmod(0o600)
+    entrypoints._fsync_file(staging)
+    entrypoints._fsync_directory(tmp_path)
+
+    assert _read_atomic_marker(live) == "old"
+    assert execute()["applied_change_seq"] == 1
+    assert _read_atomic_marker(live) == "new"
+    assert not staging.exists()
+    assert calls["acquire"] == 1
+
+
+@pytest.mark.parametrize("changed_field", ["source_sha", "tool_digest", "policy_digest"])
+def test_d1_sync_rejects_activation_drift_after_acquisition_without_live_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    changed_field: str,
+) -> None:
+    live, execute, calls = _install_atomic_sync_harness(tmp_path, monkeypatch)
+    expected = {
+        "source_sha": "sha256:" + "1" * 64,
+        "tool_digest": "sha256:" + "2" * 64,
+        "policy_digest": entrypoints._d1_sync_policy_digest(
+            environment="production",
+            source_sha="sha256:" + "1" * 64,
+            tool_digest="sha256:" + "2" * 64,
+        ),
+    }
+
+    def drifted() -> dict[str, str]:
+        observed = dict(expected)
+        observed[changed_field] = "sha256:" + "9" * 64
+        return observed
+
+    with pytest.raises(
+        service_runtime.LocalAuthorityError, match="activation identity changed"
+    ):
+        execute(runtime_identity_observer=drifted)
+    assert _read_atomic_marker(live) == "old"
+    journal, _lock = _d1_sync_paths(live)
+    assert not journal.exists()
+    assert calls["acquire"] == 1
+
+
+def test_d1_sync_rechecks_activation_and_deadline_at_irreversible_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live, execute, _calls = _install_atomic_sync_harness(tmp_path, monkeypatch)
+    source_sha = "sha256:" + "1" * 64
+    tool_digest = "sha256:" + "2" * 64
+    expected = {
+        "source_sha": source_sha,
+        "tool_digest": tool_digest,
+        "policy_digest": entrypoints._d1_sync_policy_digest(
+            environment="production",
+            source_sha=source_sha,
+            tool_digest=tool_digest,
+        ),
+    }
+    observations = 0
+
+    def drift_before_handoff() -> dict[str, str]:
+        nonlocal observations
+        observations += 1
+        observed = dict(expected)
+        if observations == 2:
+            observed["policy_digest"] = "sha256:" + "8" * 64
+        return observed
+
+    with pytest.raises(
+        service_runtime.LocalAuthorityError, match="activation identity changed"
+    ):
+        execute(runtime_identity_observer=drift_before_handoff)
+    assert _read_atomic_marker(live) == "old"
+    journal, _lock = _d1_sync_paths(live)
+    assert _read_d1_sync_journal(journal)["phase"] == "FILE_FSYNCED"
+    assert observations == 2
+
+    clock = {"now": 2}
+    monkeypatch.setattr(
+        service_runtime.time, "monotonic_ns", lambda: clock["now"]
+    )
+    request = {
+        "format": service_runtime.REQUEST_FORMAT,
+        "request_id": "atomic-sync-0",
+        "operation": "d1_sync:sync_now",
+        "purpose": "sync_current",
+        "payload": {"expected_applied_cursor": 0},
+    }
+    expired = _context(
+        caller="ops_scheduler",
+        operation="d1_sync:sync_now",
+        purpose="sync_current",
+        request_id=request["request_id"],
+        request_digest=service_runtime.sha256_digest(request),
+        deadline_monotonic_ns=100,
+    )
+    clock["now"] = 101
+    with pytest.raises(
+        service_runtime.LocalAuthorityError, match="processing deadline exceeded"
+    ):
+        execute(request_context=expired)
+    assert _read_atomic_marker(live) == "old"
+    assert _read_d1_sync_journal(journal)["phase"] == "FILE_FSYNCED"
+
+
+def test_d1_sync_main_handoff_rejects_expired_request_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live, execute, _calls = _install_atomic_sync_harness(tmp_path, monkeypatch)
+    clock = {"now": 2}
+    monkeypatch.setattr(
+        service_runtime.time, "monotonic_ns", lambda: clock["now"]
+    )
+    request = {
+        "format": service_runtime.REQUEST_FORMAT,
+        "request_id": "atomic-sync-0",
+        "operation": "d1_sync:sync_now",
+        "purpose": "sync_current",
+        "payload": {"expected_applied_cursor": 0},
+    }
+    context = _context(
+        caller="ops_scheduler",
+        operation="d1_sync:sync_now",
+        purpose="sync_current",
+        request_id=request["request_id"],
+        request_digest=service_runtime.sha256_digest(request),
+        deadline_monotonic_ns=100,
+    )
+
+    def expire_after_file_fsync(point: str) -> None:
+        if point == "after_file_fsync":
+            clock["now"] = 101
+
+    with pytest.raises(
+        service_runtime.LocalAuthorityError, match="processing deadline exceeded"
+    ):
+        execute(request_context=context, fault=expire_after_file_fsync)
+    assert _read_atomic_marker(live) == "old"
+    journal, _lock = _d1_sync_paths(live)
+    assert _read_d1_sync_journal(journal)["phase"] == "FILE_FSYNCED"
+
+
+@pytest.mark.parametrize("target", ["live", "candidate"])
+def test_d1_sync_rejects_dangling_sqlite_sidecar_symlinks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    live, execute, calls = _install_atomic_sync_harness(tmp_path, monkeypatch)
+    journal, _lock = _d1_sync_paths(live)
+    if target == "candidate":
+        def crash(point: str) -> None:
+            if point == "after_file_fsync":
+                raise _SimulatedD1SyncCrash(point)
+
+        with pytest.raises(_SimulatedD1SyncCrash):
+            execute(fault=crash)
+        record = _read_d1_sync_journal(journal)
+        assert record is not None
+        sidecar_base = Path(record["candidate_path"])
+    else:
+        sidecar_base = live
+    dangling = Path(f"{sidecar_base}-wal")
+    dangling.symlink_to(tmp_path / "does-not-exist")
+
+    with pytest.raises(
+        service_runtime.LocalAuthorityError, match="live SQLite sidecar"
+    ):
+        execute()
+    assert os.path.lexists(dangling)
+    assert _read_atomic_marker(live) == "old"
+    assert calls["acquire"] == (1 if target == "candidate" else 0)
+
+
 def test_d1_sync_committed_replay_survives_repeated_outer_ledger_crashes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -527,9 +780,33 @@ def test_d1_sync_committed_replay_survives_repeated_outer_ledger_crashes(
         "purpose": "sync_current",
         "payload": {"expected_applied_cursor": 0},
     }
+    context = _context(
+        caller="ops_scheduler",
+        operation="d1_sync:sync_now",
+        purpose="sync_current",
+        request_id=request["request_id"],
+        request_digest=service_runtime.sha256_digest(request),
+    )
+    next_request = {
+        "format": service_runtime.REQUEST_FORMAT,
+        "request_id": "d1-sync-after-outer-crash",
+        "operation": "d1_sync:sync_now",
+        "purpose": "sync_current",
+        "payload": {"expected_applied_cursor": 1},
+    }
+    next_context = _context(
+        caller="ops_scheduler",
+        operation="d1_sync:sync_now",
+        purpose="sync_current",
+        request_id=next_request["request_id"],
+        request_digest=service_runtime.sha256_digest(next_request),
+    )
 
     def crash_after_handler_effect() -> object:
-        execute()
+        execute(
+            request_context=context,
+            committed_event_verifier=ledger.has_exact_committed_event,
+        )
         raise _SimulatedD1SyncCrash("after handler effect")
 
     for _attempt in range(3):
@@ -544,20 +821,54 @@ def test_d1_sync_committed_replay_survives_repeated_outer_ledger_crashes(
         journal, _lock = _d1_sync_paths(live)
         assert _read_d1_sync_journal(journal)["phase"] == "COMMITTED"
 
+    # A different request cannot use the new cursor as a forged acknowledgement
+    # while A's outer transaction is still absent.
+    with pytest.raises(
+        service_runtime.LocalAuthorityPending,
+        match="awaits its exact outer event commit",
+    ):
+        ledger.execute_once(
+            request=next_request,
+            caller="ops_scheduler",
+            operation="d1_sync:sync_now",
+            purpose="sync_current",
+            produce=lambda: execute(
+                expected_applied_cursor=1,
+                request_context=next_context,
+                committed_event_verifier=ledger.has_exact_committed_event,
+            ),
+        )
+    assert _read_d1_sync_journal(journal)["phase"] == "COMMITTED"
+    assert _read_atomic_marker(live) == "new"
+
     result = ledger.execute_once(
         request=request,
         caller="ops_scheduler",
         operation="d1_sync:sync_now",
         purpose="sync_current",
-        produce=execute,
+        produce=lambda: execute(
+            request_context=context,
+            committed_event_verifier=ledger.has_exact_committed_event,
+        ),
     )
     assert result["applied_change_seq"] == 1
     assert calls["acquire"] == 1
     assert _read_d1_sync_journal(journal)["phase"] == "COMMITTED"
 
-    # A distinct request presenting the committed cursor is the durable ack.
-    # Its no-change acquisition can then consume the old receipt safely.
-    execute(expected_applied_cursor=1)
+    # Once A's exact request/result event is committed, B may consume the
+    # receipt and perform its own no-change acquisition.
+    next_result = ledger.execute_once(
+        request=next_request,
+        caller="ops_scheduler",
+        operation="d1_sync:sync_now",
+        purpose="sync_current",
+        produce=lambda: execute(
+            expected_applied_cursor=1,
+            request_context=next_context,
+            committed_event_verifier=ledger.has_exact_committed_event,
+        ),
+    )
+    assert next_result["applied_change_seq"] == 1
     assert not journal.exists()
 
 
@@ -683,6 +994,22 @@ def test_d1_sync_recovery_rejects_stale_or_cross_bound_state(
     kwargs: dict[str, object] = {}
     if tamper == "environment":
         kwargs["environment"] = "staging"
+        kwargs["request_context"] = _context(
+            caller="ops_scheduler",
+            operation="d1_sync:sync_now",
+            purpose="sync_current",
+            request_id="atomic-sync-0",
+            request_digest=service_runtime.sha256_digest(
+                {
+                    "format": service_runtime.REQUEST_FORMAT,
+                    "request_id": "atomic-sync-0",
+                    "operation": "d1_sync:sync_now",
+                    "purpose": "sync_current",
+                    "payload": {"expected_applied_cursor": 0},
+                }
+            ),
+            environment="staging",
+        )
     elif tamper == "source":
         kwargs["source_sha"] = "sha256:" + "3" * 64
     elif tamper == "tool":
@@ -699,6 +1026,7 @@ def test_d1_sync_recovery_rejects_stale_or_cross_bound_state(
             journal_path,
             export_digest="sha256:" + "6" * 64,
             sync_result=tampered_result,
+            outer_result_digest=service_runtime.sha256_digest(tampered_result),
         )
     elif tamper == "live":
         with sqlite3.connect(live) as conn:

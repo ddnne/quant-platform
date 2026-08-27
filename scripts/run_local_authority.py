@@ -243,6 +243,13 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
     )
     resources = config["resources"]
     manifest = load_and_validate_manifest()
+    ledger = SQLiteAuthorityEventLedger(
+        activation["ledger_path"],
+        authority_id=authority_id,
+        environment=environment,
+        expected_uid=uid,
+    )
+    ledger.initialize()
 
     def service_uid(principal_id: str) -> int:
         deployment = manifest["principals"][principal_id]["deployments"][environment]
@@ -270,6 +277,7 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
                 tool_digest=_d1_sync_tool_bindings_digest(
                     activation["runtime_resource_bindings"]
                 ),
+                event_ledger=ledger,
             ),
             D1FreezeAndRenderOpsProjection.operation: (
                 D1FreezeAndRenderOpsProjection(
@@ -321,13 +329,6 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
         }
     else:  # validated by load_runtime_config; defensive for future manifest rows
         raise AuthorityRunnerError("authority has no reviewed local handler set")
-    ledger = SQLiteAuthorityEventLedger(
-        activation["ledger_path"],
-        authority_id=authority_id,
-        environment=environment,
-        expected_uid=uid,
-    )
-    ledger.initialize()
     return UnixAuthorityService(
         authority_id=authority_id,
         environment=environment,
