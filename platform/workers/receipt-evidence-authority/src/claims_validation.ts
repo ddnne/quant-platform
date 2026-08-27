@@ -1,7 +1,9 @@
 import { exactKeys, isPlainObject, isSha256 } from "./canonical";
-import type { UnsignedReceiptClaimsV2 } from "./types";
+import type { UnsignedReceiptClaimsV3 } from "./types";
 
 const UNSIGNED_CLAIM_KEYS = [
+  "environment",
+  "authority_instance_digest",
   "coverage_policy_version",
   "source",
   "dataset",
@@ -37,7 +39,7 @@ const REQUIRED_ACQUISITION_DIGESTS = [
 ] as const;
 
 /** Validate only DO-derived claims immediately before signing. */
-export function requireDerivedClaims(value: unknown): UnsignedReceiptClaimsV2 {
+export function requireDerivedClaims(value: unknown): UnsignedReceiptClaimsV3 {
   if (!isPlainObject(value) || !exactKeys(value, UNSIGNED_CLAIM_KEYS)) {
     throw new TypeError("receipt authority claims are not closed");
   }
@@ -53,6 +55,8 @@ export function requireDerivedClaims(value: unknown): UnsignedReceiptClaimsV2 {
     "run_id",
   ] as const;
   if (
+    (value.environment !== "production" && value.environment !== "staging") ||
+    !isSha256(value.authority_instance_digest) ||
     value.coverage_policy_version !== "collection-coverage/v3" ||
     value.source !== "jquants" ||
     typeof value.dataset !== "string" || value.dataset.length === 0 ||
@@ -83,5 +87,5 @@ export function requireDerivedClaims(value: unknown): UnsignedReceiptClaimsV2 {
   ) {
     throw new TypeError("receipt authority claims failed invariant validation");
   }
-  return value as UnsignedReceiptClaimsV2;
+  return value as UnsignedReceiptClaimsV3;
 }

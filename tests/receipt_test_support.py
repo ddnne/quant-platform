@@ -26,11 +26,14 @@ from data_contracts import coverage_contract_for
 from storage.coverage_ledger import CollectionReceipt, RequiredCoverageSegment
 from storage.receipt_crypto import (
     PARSER_NORMALIZER_VERSION,
+    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+    PRODUCTION_RECEIPT_ENVIRONMENT,
     SIGNED_RECEIPT_CLAIMS_VERSION,
     body_digest,
     canonical_evidence_digest,
     canonical_receipt_body,
     partition_extra_digests,
+    receipt_authority_instance_digest,
 )
 
 
@@ -86,6 +89,8 @@ def build_test_signed_digest_fields(
         "issuer_class": "SignedReceiptAuthority",
         "issuer_key_id": signing_key.key_id,
         "issuer_id": signing_key.key_id,
+        "environment": body_fields["environment"],
+        "authority_instance_digest": body_fields["authority_instance_digest"],
         "parser_normalizer_version": PARSER_NORMALIZER_VERSION,
         "signed_body_b64": base64.b64encode(body).decode("ascii"),
         "signature": signing_key.sign(body),
@@ -155,11 +160,49 @@ def write_test_receipt_registry(
     return path
 
 
+def write_test_scoped_receipt_registry(
+    path: Path,
+    *,
+    key_id: str,
+    public_raw: bytes,
+    environment: str,
+    authority_instance_digest: str,
+    status: str = "active",
+) -> Path:
+    """Write one environment/authority-scoped v3 verifier registry."""
+    if environment not in {"production", "staging"}:
+        raise ValueError("unsupported test receipt environment")
+    if status not in {"active", "pending", "revoked"}:
+        raise ValueError("unsupported test receipt key status")
+    document = {
+        "schema_version": 3,
+        "purpose": "receipt_verification",
+        "generation": 1,
+        "authority_status": "ACTIVE" if status == "active" else "PENDING",
+        "environment": environment,
+        "authority_instance_digest": authority_instance_digest,
+        "prior_registry_digest": None,
+        "keys": [
+            {
+                "key_id": key_id,
+                "algorithm": "Ed25519",
+                "public_key_base64": base64.b64encode(public_raw).decode("ascii"),
+                "status": status,
+            }
+        ],
+    }
+    document["registry_digest"] = canonical_evidence_digest(document)
+    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
 def configure_test_receipt_authority(
     *,
     tmp_path: Path,
     monkeypatch: Any,
     key_id: str = "test-receipt-v1",
+    environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
+    authority_instance_digest: str = PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
 ) -> SimpleNamespace:
     """Pin one ephemeral registry/key pair for a pytest process scope.
 
@@ -177,7 +220,36 @@ def configure_test_receipt_authority(
         key_id=resolved_key_id,
         public_raw=public_raw,
     )
+    scoped_paths: dict[str, Path] = {}
+    for scoped_environment in ("production", "staging"):
+        scoped_digest = (
+            authority_instance_digest
+            if scoped_environment == environment
+            else receipt_authority_instance_digest(scoped_environment)
+        )
+        scoped_paths[scoped_environment] = write_test_scoped_receipt_registry(
+            tmp_path / f"receipt_verify_public_keys.{scoped_environment}.json",
+            key_id=resolved_key_id,
+            public_raw=public_raw,
+            environment=scoped_environment,
+            authority_instance_digest=scoped_digest,
+        )
+    scoped_registry_path = scoped_paths[environment]
     monkeypatch.setattr(crypto, "_PINNED_VERIFY_KEYS_PATH", registry_path)
+    monkeypatch.setattr(
+        crypto,
+        "_PINNED_SCOPED_VERIFY_KEYS_PATHS",
+        scoped_paths,
+    )
+    monkeypatch.setattr(
+        crypto,
+        "PINNED_SCOPED_RECEIPT_REGISTRY_RAW_DIGESTS",
+        {
+            scoped_environment: body_digest(scoped_path.read_bytes())
+            for scoped_environment, scoped_path in scoped_paths.items()
+        },
+    )
+    crypto._parse_scoped_registry_document.cache_clear()
     raw_registry = registry_path.read_bytes()
     registry_document = json.loads(raw_registry)
     canonical_registry = json.dumps(
@@ -224,6 +296,7 @@ def configure_test_receipt_authority(
     assert isinstance(private, Ed25519PrivateKey)
     return SimpleNamespace(
         path=registry_path,
+        scoped_path=scoped_registry_path,
         key_id=resolved_key_id,
         private_pem=private_pem,
         public_raw=public_raw,
@@ -336,6 +409,8 @@ def reconcile_test_evidence(
     source_request: Mapping[str, Any] | None = None,
     extra_evidence: Mapping[str, Any] | None = None,
     structured_digest: str | None = None,
+    environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
+    authority_instance_digest: str = PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
 ) -> TestReconciledEvidence:
     """Build closed claims strictly for verifier/policy unit tests."""
     pages = tuple(bytes(page) for page in raw_pages)
@@ -361,6 +436,8 @@ def reconcile_test_evidence(
     )
     policy = coverage_contract_for(required.dataset)
     scope = {
+        "environment": environment,
+        "authority_instance_digest": authority_instance_digest,
         "coverage_policy_version": policy.policy_version,
         "source": required.source,
         "dataset": required.dataset,

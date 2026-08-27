@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from cryptography.exceptions import InvalidSignature
@@ -27,6 +28,39 @@ _PINNED_VERIFY_KEYS_PATH = (
 _PINNED_PRIOR_VERIFY_KEYS_PATH = _PINNED_VERIFY_KEYS_PATH.with_name(
     "receipt_verify_public_keys.generation-1.json"
 )
+_AUTHORITY_INSTANCES_PATH = _PINNED_VERIFY_KEYS_PATH.with_name(
+    "receipt_authority_instances.json"
+)
+_PINNED_SCOPED_VERIFY_KEYS_PATHS = {
+    "production": _PINNED_VERIFY_KEYS_PATH.with_name(
+        "receipt_verify_public_keys.production.json"
+    ),
+    "staging": _PINNED_VERIFY_KEYS_PATH.with_name(
+        "receipt_verify_public_keys.staging.json"
+    ),
+}
+PINNED_RECEIPT_AUTHORITY_INSTANCES_RAW_DIGEST = (
+    "sha256:8b7cee2f0fb8d992b28ede1e6ad843381245d78e1cd64b4fc0e1b1ee06462574"
+)
+PINNED_RECEIPT_AUTHORITY_INSTANCES_DOCUMENT_DIGEST = (
+    "sha256:46e764657aa1f9e71250ca17bda538a68ecf3836cde650f643110236287d3123"
+)
+PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS = {
+    "production": (
+        "sha256:a63f439bbf478ce25795ed2c80ed6e88ddcd344a4c8538713a20410ac58b8f8c"
+    ),
+    "staging": (
+        "sha256:0fa133cf345bdd1f979beebb18e3873fbad88ac7631fc7d5b07ffaca34e68ac7"
+    ),
+}
+PINNED_SCOPED_RECEIPT_REGISTRY_RAW_DIGESTS = {
+    "production": (
+        "sha256:3c1237ad4ea822531523ebb1a88339b4d196458ac38a2c0f263ca81c9a456a62"
+    ),
+    "staging": (
+        "sha256:ed4adfef43009c1e8c0801deb7099dc33ff0d50cf5e9fb131eb5313afd2e9db8"
+    ),
+}
 PINNED_RECEIPT_REGISTRY_RAW_DIGEST = (
     "sha256:dc6095db1d09bf775f972cb428944a1ba5bc47fefa0af19e77c3f3a157ae47f5"
 )
@@ -56,13 +90,20 @@ class ReceiptKeyConfigurationError(RuntimeError):
 
 
 PARSER_NORMALIZER_VERSION = "coverage-receipt/v4-ed25519-closure"
-SIGNED_RECEIPT_CLAIMS_VERSION = "signed-receipt-claims/v2"
+SIGNED_RECEIPT_CLAIMS_VERSION = "signed-receipt-claims/v3"
+AUDIT_SIGNED_RECEIPT_CLAIMS_VERSION_V2 = "signed-receipt-claims/v2"
 LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION = "signed-receipt-claims/v1"
+PRODUCTION_RECEIPT_ENVIRONMENT = "production"
+PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST = (
+    PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[PRODUCTION_RECEIPT_ENVIRONMENT]
+)
 
 # Closed claim names plus envelope aliases. extra_digests cannot occupy these.
 STANDARD_CLAIM_KEYS = frozenset(
     {
         "version",
+        "environment",
+        "authority_instance_digest",
         "coverage_policy_version",
         "dataset",
         "source",
@@ -208,6 +249,8 @@ class _ReceiptVerifyRegistryEntry:
 class _ReceiptVerifyRegistry:
     generation: int
     authority_status: str
+    environment: str | None
+    authority_instance_digest: str | None
     prior_registry_digest: str | None
     registry_digest: str
     entries: tuple[_ReceiptVerifyRegistryEntry, ...]
@@ -237,6 +280,10 @@ _REGISTRY_KEY_FIELDS = {
     "algorithm",
     "public_key_base64",
     "status",
+}
+_SCOPED_REGISTRY_FIELDS = _REGISTRY_FIELDS | {
+    "environment",
+    "authority_instance_digest",
 }
 _PRIOR_REGISTRY_FIELDS = {
     "schema_version",
@@ -400,6 +447,8 @@ def _parse_registry_document(raw: bytes) -> _ReceiptVerifyRegistry:
     return _ReceiptVerifyRegistry(
         generation=doc["generation"],
         authority_status=doc["authority_status"],
+        environment=None,
+        authority_instance_digest=None,
         prior_registry_digest=doc["prior_registry_digest"],
         registry_digest=doc["registry_digest"],
         entries=tuple(entries),
@@ -481,6 +530,241 @@ def _is_sha256_digest(value: str) -> bool:
         and value.startswith("sha256:")
         and all(char in "0123456789abcdef" for char in value[7:])
     )
+
+
+@lru_cache(maxsize=1)
+def _load_pinned_authority_instances() -> Mapping[str, Mapping[str, Any]]:
+    """Load the exact environment/resource authority contract."""
+    try:
+        raw = _AUTHORITY_INSTANCES_PATH.read_bytes()
+    except OSError as exc:
+        raise ReceiptKeyConfigurationError(
+            "cannot read the pinned receipt authority instance contract"
+        ) from exc
+    if body_digest(raw) != PINNED_RECEIPT_AUTHORITY_INSTANCES_RAW_DIGEST:
+        raise ReceiptKeyConfigurationError(
+            "pinned receipt authority instance raw digest mismatch"
+        )
+    document = _strict_json_document(raw)
+    if (
+        body_digest(_canonical_registry_bytes(document))
+        != PINNED_RECEIPT_AUTHORITY_INSTANCES_DOCUMENT_DIGEST
+        or set(document) != {"schema_version", "instances"}
+        or document.get("schema_version") != "receipt-authority-instances/v1"
+        or type(document.get("instances")) is not dict
+        or set(document["instances"]) != {"production", "staging"}
+    ):
+        raise ReceiptKeyConfigurationError(
+            "pinned receipt authority instance contract is invalid"
+        )
+    instances: dict[str, Mapping[str, Any]] = {}
+    resource_shapes = {
+        "d1": {"binding", "database_name", "database_id"},
+        "authority_evidence_r2": {
+            "binding", "bucket_name", "raw_prefix", "product_prefix"
+        },
+        "durable_object": {"binding", "class_name"},
+        "acquisition_service": {"binding", "service", "entrypoint"},
+    }
+    for environment in ("production", "staging"):
+        instance = document["instances"].get(environment)
+        if (
+            type(instance) is not dict
+            or set(instance)
+            != {"environment", "authority_id", "worker_name", "resources"}
+            or instance.get("environment") != environment
+            or instance.get("authority_id") != "receipt-evidence-authority"
+            or type(instance.get("worker_name")) is not str
+            or not instance["worker_name"]
+            or type(instance.get("resources")) is not dict
+            or set(instance["resources"]) != set(resource_shapes)
+        ):
+            raise ReceiptKeyConfigurationError(
+                "pinned receipt authority instance is invalid"
+            )
+        for resource_name, fields in resource_shapes.items():
+            resource = instance["resources"].get(resource_name)
+            if (
+                type(resource) is not dict
+                or set(resource) != fields
+                or any(type(resource[field]) is not str or not resource[field]
+                       for field in fields)
+            ):
+                raise ReceiptKeyConfigurationError(
+                    "pinned receipt authority resource binding is invalid"
+                )
+        digest = canonical_evidence_digest(instance)
+        if digest != PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[environment]:
+            raise ReceiptKeyConfigurationError(
+                "pinned receipt authority instance digest mismatch"
+            )
+        instances[environment] = instance
+    return MappingProxyType(instances)
+
+
+def receipt_authority_instance_digest(environment: str) -> str:
+    """Return the pinned resource-authority digest for one exact environment."""
+    if type(environment) is not str or environment not in {"production", "staging"}:
+        raise ReceiptKeyConfigurationError(
+            "receipt authority environment must be production or staging"
+        )
+    _load_pinned_authority_instances()
+    return PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[environment]
+
+
+@lru_cache(maxsize=8)
+def _parse_scoped_registry_document(raw: bytes) -> _ReceiptVerifyRegistry:
+    """Parse a v3 key registry bound to one environment/resource instance."""
+    doc = _strict_json_document(raw)
+    if (
+        set(doc) != _SCOPED_REGISTRY_FIELDS
+        or doc.get("schema_version") != 3
+        or doc.get("purpose") != "receipt_verification"
+        or type(doc.get("generation")) is not int
+        or doc["generation"] < 1
+        or doc.get("authority_status") not in {"ACTIVE", "PENDING"}
+        or doc.get("environment") not in {"production", "staging"}
+        or type(doc.get("authority_instance_digest")) is not str
+        or not _is_sha256_digest(doc["authority_instance_digest"])
+        or (
+            doc["generation"] == 1 and doc.get("prior_registry_digest") is not None
+        )
+        or (
+            doc["generation"] > 1
+            and (
+                type(doc.get("prior_registry_digest")) is not str
+                or not _is_sha256_digest(doc["prior_registry_digest"])
+            )
+        )
+        or type(doc.get("registry_digest")) is not str
+        or not _is_sha256_digest(doc["registry_digest"])
+        or type(doc.get("keys")) is not list
+        or len(doc["keys"]) > 16
+        or _registry_body_digest(doc) != doc["registry_digest"]
+    ):
+        raise ReceiptKeyConfigurationError(
+            "pinned scoped receipt public-key registry is invalid"
+        )
+    if (
+        doc["authority_instance_digest"]
+        != receipt_authority_instance_digest(doc["environment"])
+    ):
+        raise ReceiptKeyConfigurationError(
+            "scoped receipt registry authority instance mismatch"
+        )
+    active: dict[str, ReceiptVerifyKey] = {}
+    audit: dict[str, ReceiptVerifyKey] = {}
+    entries: list[_ReceiptVerifyRegistryEntry] = []
+    seen_ids: set[str] = set()
+    seen_public_key_status: dict[bytes, str] = {}
+    pending_count = 0
+    for row in doc["keys"]:
+        if type(row) is not dict or set(row) != _REGISTRY_KEY_FIELDS:
+            raise ReceiptKeyConfigurationError(
+                "scoped receipt registry row is not closed"
+            )
+        if any(type(row[field]) is not str for field in _REGISTRY_KEY_FIELDS):
+            raise ReceiptKeyConfigurationError(
+                "scoped receipt registry fields must be exact strings"
+            )
+        key_id = row["key_id"]
+        if key_id != key_id.strip() or not key_id or key_id in seen_ids:
+            raise ReceiptKeyConfigurationError(
+                "scoped receipt registry key ids must be trimmed and unique"
+            )
+        seen_ids.add(key_id)
+        if row["algorithm"] != "Ed25519" or row["status"] not in {
+            "active", "pending", "revoked"
+        }:
+            raise ReceiptKeyConfigurationError(
+                "scoped receipt registry key lifecycle is invalid"
+            )
+        raw_key = _decode_canonical_base64(
+            row["public_key_base64"], expected_length=32
+        )
+        if raw_key is None:
+            raise ReceiptKeyConfigurationError(
+                f"invalid scoped receipt public key: {key_id}"
+            )
+        prior_status = seen_public_key_status.get(raw_key)
+        if prior_status is not None and (
+            prior_status != "revoked" or row["status"] != "revoked"
+        ):
+            raise ReceiptKeyConfigurationError(
+                "active or pending scoped receipt keys must not reuse bytes"
+            )
+        seen_public_key_status[raw_key] = row["status"]
+        entry = _ReceiptVerifyRegistryEntry(
+            key_id=key_id,
+            public_key_bytes=raw_key,
+            status=row["status"],
+        )
+        entries.append(entry)
+        verify_key = ReceiptVerifyKey(
+            key_id=key_id,
+            public_key=Ed25519PublicKey.from_public_bytes(raw_key),
+        )
+        if row["status"] == "active":
+            active[key_id] = verify_key
+            audit[key_id] = verify_key
+        elif row["status"] == "revoked":
+            audit[key_id] = verify_key
+        else:
+            pending_count += 1
+    expected_active = 1 if doc["authority_status"] == "ACTIVE" else 0
+    if len(active) != expected_active or pending_count > 1:
+        raise ReceiptKeyConfigurationError(
+            "scoped receipt registry keys do not match authority status"
+        )
+    return _ReceiptVerifyRegistry(
+        generation=doc["generation"],
+        authority_status=doc["authority_status"],
+        environment=doc["environment"],
+        authority_instance_digest=doc["authority_instance_digest"],
+        prior_registry_digest=doc["prior_registry_digest"],
+        registry_digest=doc["registry_digest"],
+        entries=tuple(entries),
+        active_keys=tuple(active.values()),
+        audit_keys=tuple(audit.values()),
+    )
+
+
+def _load_pinned_scoped_registry(
+    *, expected_environment: str, expected_authority_instance_digest: str
+) -> _ReceiptVerifyRegistry:
+    if (
+        type(expected_environment) is not str
+        or expected_environment not in {"production", "staging"}
+        or type(expected_authority_instance_digest) is not str
+        or expected_authority_instance_digest
+        != receipt_authority_instance_digest(expected_environment)
+    ):
+        raise ReceiptKeyConfigurationError(
+            "receipt verifier expected authority scope is not pinned"
+        )
+    path = _PINNED_SCOPED_VERIFY_KEYS_PATHS[expected_environment]
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ReceiptKeyConfigurationError(
+            "cannot read the pinned scoped receipt public-key registry"
+        ) from exc
+    if body_digest(raw) != PINNED_SCOPED_RECEIPT_REGISTRY_RAW_DIGESTS[
+        expected_environment
+    ]:
+        raise ReceiptKeyConfigurationError(
+            "pinned scoped receipt registry raw digest mismatch"
+        )
+    registry = _parse_scoped_registry_document(raw)
+    if (
+        registry.environment != expected_environment
+        or registry.authority_instance_digest
+        != expected_authority_instance_digest
+    ):
+        raise ReceiptKeyConfigurationError(
+            "pinned scoped receipt registry selection mismatch"
+        )
+    return registry
 
 
 def _parse_verify_key_document(raw: bytes) -> tuple[ReceiptVerifyKey, ...]:
@@ -606,13 +890,38 @@ def _validate_registry_chain(
 
 
 def load_verify_keys() -> dict[str, ReceiptVerifyKey]:
-    """Load only ACTIVE keys eligible to verify a COMPLETE receipt."""
+    """Load legacy v1/v2 registry keys for compatibility diagnostics only.
+
+    COMPLETE eligibility never calls this unscoped loader.
+    """
     return {row.key_id: row for row in _load_pinned_registry().active_keys}
+
+
+def load_scoped_verify_keys(
+    *, expected_environment: str, expected_authority_instance_digest: str
+) -> dict[str, ReceiptVerifyKey]:
+    """Load ACTIVE v3 keys from one exact environment/authority registry."""
+    registry = _load_pinned_scoped_registry(
+        expected_environment=expected_environment,
+        expected_authority_instance_digest=expected_authority_instance_digest,
+    )
+    return {row.key_id: row for row in registry.active_keys}
 
 
 def load_audit_verify_keys() -> dict[str, ReceiptVerifyKey]:
     """Load ACTIVE/revoked keys for audit; never use this result for COMPLETE."""
     return {row.key_id: row for row in _load_pinned_registry().audit_keys}
+
+
+def load_scoped_audit_verify_keys(
+    *, expected_environment: str, expected_authority_instance_digest: str
+) -> dict[str, ReceiptVerifyKey]:
+    """Load v3 ACTIVE/revoked keys for audit within one exact authority scope."""
+    registry = _load_pinned_scoped_registry(
+        expected_environment=expected_environment,
+        expected_authority_instance_digest=expected_authority_instance_digest,
+    )
+    return {row.key_id: row for row in registry.audit_keys}
 
 
 def receipt_verify_key_status(key_id: str) -> str | None:
@@ -636,6 +945,27 @@ def receipt_verify_key_status(key_id: str) -> str | None:
     return matches[0] if matches else None
 
 
+def scoped_receipt_verify_key_status(
+    key_id: str,
+    *,
+    expected_environment: str,
+    expected_authority_instance_digest: str,
+) -> str | None:
+    """Return one key lifecycle state only inside an exact v3 authority scope."""
+    if type(key_id) is not str or not key_id or key_id != key_id.strip():
+        return None
+    registry = _load_pinned_scoped_registry(
+        expected_environment=expected_environment,
+        expected_authority_instance_digest=expected_authority_instance_digest,
+    )
+    matches = [entry.status for entry in registry.entries if entry.key_id == key_id]
+    if len(matches) > 1:
+        raise ReceiptKeyConfigurationError(
+            "scoped receipt registry contains a duplicate key id"
+        )
+    return matches[0] if matches else None
+
+
 def partition_extra_digests(extra_digests: Mapping[str, Any] | None) -> dict[str, Any]:
     """Copy extra_digests excluding standard claims and envelope aliases."""
     if extra_digests is None:
@@ -651,8 +981,11 @@ def partition_extra_digests(extra_digests: Mapping[str, Any] | None) -> dict[str
 
 def verify_receipt_signature(
     digests: Mapping[str, Any],
+    *,
+    expected_environment: str,
+    expected_authority_instance_digest: str,
 ) -> bool:
-    """True iff digests carry a valid Ed25519 signature over the body."""
+    """Verify only inside an exact caller-owned environment/authority scope."""
     if type(digests) is not dict:
         return False
     frozen = dict(digests)
@@ -670,13 +1003,20 @@ def verify_receipt_signature(
         body=body,
         signature=signature,
         key_id=key_id,
+        expected_environment=expected_environment,
+        expected_authority_instance_digest=expected_authority_instance_digest,
     )
 
 
 def verify_receipt_signature_values(
-    *, body: bytes, signature: str, key_id: str
+    *,
+    body: bytes,
+    signature: str,
+    key_id: str,
+    expected_environment: str,
+    expected_authority_instance_digest: str,
 ) -> bool:
-    """Verify one already-materialized receipt body and signature."""
+    """Verify one body inside an exact caller-owned authority scope."""
     if (
         type(body) is not bytes
         or type(signature) is not str
@@ -685,12 +1025,20 @@ def verify_receipt_signature_values(
         or key_id != key_id.strip()
     ):
         return False
-    vk = load_verify_keys().get(key_id)
+    vk = load_scoped_verify_keys(
+        expected_environment=expected_environment,
+        expected_authority_instance_digest=expected_authority_instance_digest,
+    ).get(key_id)
     return False if vk is None else vk.verify(body, signature)
 
 
 def verify_receipt_signature_values_for_audit(
-    *, body: bytes, signature: str, key_id: str
+    *,
+    body: bytes,
+    signature: str,
+    key_id: str,
+    expected_environment: str | None = None,
+    expected_authority_instance_digest: str | None = None,
 ) -> bool:
     """Verify with ACTIVE/revoked public keys without granting eligibility."""
     if (
@@ -701,14 +1049,28 @@ def verify_receipt_signature_values_for_audit(
         or key_id != key_id.strip()
     ):
         return False
-    vk = load_audit_verify_keys().get(key_id)
+    if expected_environment is None and expected_authority_instance_digest is None:
+        vk = load_audit_verify_keys().get(key_id)
+    elif (
+        expected_environment is not None
+        and expected_authority_instance_digest is not None
+    ):
+        vk = load_scoped_audit_verify_keys(
+            expected_environment=expected_environment,
+            expected_authority_instance_digest=expected_authority_instance_digest,
+        ).get(key_id)
+    else:
+        return False
     return False if vk is None else vk.verify(body, signature)
 
 
 __all__ = [
     "PARSER_NORMALIZER_VERSION",
+    "AUDIT_SIGNED_RECEIPT_CLAIMS_VERSION_V2",
     "LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION",
     "SIGNED_RECEIPT_CLAIMS_VERSION",
+    "PRODUCTION_RECEIPT_ENVIRONMENT",
+    "PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST",
     "STANDARD_CLAIM_KEYS",
     "ReceiptKeyConfigurationError",
     "ReceiptVerifyKey",
@@ -726,8 +1088,12 @@ __all__ = [
     "canonical_receipt_body",
     "decode_canonical_signed_body",
     "load_audit_verify_keys",
+    "load_scoped_audit_verify_keys",
+    "load_scoped_verify_keys",
     "load_verify_keys",
     "partition_extra_digests",
+    "receipt_authority_instance_digest",
+    "scoped_receipt_verify_key_status",
     "verify_receipt_signature",
     "verify_receipt_signature_values",
     "verify_receipt_signature_values_for_audit",

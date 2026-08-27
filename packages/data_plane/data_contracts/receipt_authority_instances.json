@@ -1,0 +1,59 @@
+{
+  "schema_version": "receipt-authority-instances/v1",
+  "instances": {
+    "production": {
+      "environment": "production",
+      "authority_id": "receipt-evidence-authority",
+      "worker_name": "quant-platform-receipt-evidence-authority",
+      "resources": {
+        "d1": {
+          "binding": "DB",
+          "database_name": "quant-ingest",
+          "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+        },
+        "authority_evidence_r2": {
+          "binding": "AUTHORITY_EVIDENCE_BUCKET",
+          "bucket_name": "quant-receipt-evidence",
+          "raw_prefix": "raw/receipt-authority/production/",
+          "product_prefix": "product/receipt-authority/production/"
+        },
+        "durable_object": {
+          "binding": "RECEIPT_EVIDENCE_AUTHORITY_DO",
+          "class_name": "ReceiptEvidenceAuthority"
+        },
+        "acquisition_service": {
+          "binding": "JQUANTS_ACQUISITION",
+          "service": "quant-platform-ingestion-secrets",
+          "entrypoint": "IngestionSecretsService"
+        }
+      }
+    },
+    "staging": {
+      "environment": "staging",
+      "authority_id": "receipt-evidence-authority",
+      "worker_name": "quant-platform-receipt-evidence-authority-staging",
+      "resources": {
+        "d1": {
+          "binding": "DB",
+          "database_name": "quant-ingest-staging",
+          "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
+        },
+        "authority_evidence_r2": {
+          "binding": "AUTHORITY_EVIDENCE_BUCKET",
+          "bucket_name": "quant-receipt-evidence-staging",
+          "raw_prefix": "raw/receipt-authority/staging/",
+          "product_prefix": "product/receipt-authority/staging/"
+        },
+        "durable_object": {
+          "binding": "RECEIPT_EVIDENCE_AUTHORITY_DO",
+          "class_name": "ReceiptEvidenceAuthority"
+        },
+        "acquisition_service": {
+          "binding": "JQUANTS_ACQUISITION",
+          "service": "quant-platform-ingestion-secrets-staging",
+          "entrypoint": "IngestionSecretsService"
+        }
+      }
+    }
+  }
+}

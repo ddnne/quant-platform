@@ -19,7 +19,11 @@ from storage import (
     record_collection_receipt,
 )
 from storage.coverage_ledger import EXPECTED_EMPTY_WITH_EVIDENCE
-from storage.receipt_crypto import canonical_evidence_digest
+from storage.receipt_crypto import (
+    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+    PRODUCTION_RECEIPT_ENVIRONMENT,
+    canonical_evidence_digest,
+)
 from storage.sqlite_store import SqliteStore
 from tests.receipt_test_support import build_test_signed_digest_fields
 
@@ -118,6 +122,8 @@ def _signed_digests(
     assert _SIGNED_KEY is not None
     sha_empty = "sha256:" + "0" * 64
     scope = {
+        "environment": PRODUCTION_RECEIPT_ENVIRONMENT,
+        "authority_instance_digest": PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
         "coverage_policy_version": coverage_contract_for(dataset).policy_version,
         "dataset": dataset,
         "segment_id": segment_id,

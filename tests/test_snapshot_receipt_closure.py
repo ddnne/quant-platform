@@ -13,6 +13,7 @@ from data_contracts.coverage import coverage_contract_for, coverage_policy_bindi
 from tests.receipt_test_support import (
     _SignedReceiptAuthority,
     _reconcile_collection_evidence,
+    write_test_scoped_receipt_registry,
 )
 from paper_runtime.snapshot import SnapshotRejected
 from paper_runtime.ready_policy import CoverageEvidence, collect_typed_evidence
@@ -29,13 +30,19 @@ from storage.coverage_ledger import (
     record_required_segments,
 )
 from storage.receipt_crypto import (
+    AUDIT_SIGNED_RECEIPT_CLAIMS_VERSION_V2,
     LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION,
+    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+    PRODUCTION_RECEIPT_ENVIRONMENT,
     body_digest,
+    canonical_evidence_digest,
     canonical_receipt_body,
+    receipt_authority_instance_digest,
 )
 from storage.sqlite_store import SqliteStore
 from storage.verified_receipt import (
     ReceiptVerificationError,
+    audit_collection_closure,
     audit_signed_receipt_claims,
     require_verified_collection_closure,
 )
@@ -659,26 +666,81 @@ def test_snapshot_proof_hashes_verified_closure_and_rejects_outer_mutation(
     store.close()
 
 
-def test_snapshot_proof_rejects_validly_signed_legacy_v1(
-    tmp_path, receipt_ed25519_keys
+@pytest.mark.parametrize(
+    "audit_version",
+    [
+        LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION,
+        AUDIT_SIGNED_RECEIPT_CLAIMS_VERSION_V2,
+    ],
+)
+def test_snapshot_proof_rejects_validly_signed_audit_version(
+    tmp_path, receipt_ed25519_keys, audit_version
 ):
     store, receipt, coverage_rows = _seed_closed_segment(
         tmp_path, receipt_ed25519_keys
     )
     digests = dict(receipt.digests)
     claims = json.loads(base64.b64decode(digests["signed_body_b64"]))
-    claims["version"] = LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION
+    claims["version"] = audit_version
+    claims.pop("environment")
+    claims.pop("authority_instance_digest")
+    legacy_scope = {
+        key: claims[key]
+        for key in (
+            "coverage_policy_version",
+            "source",
+            "dataset",
+            "segment_id",
+            "segment_start",
+            "segment_end",
+            "expected_scope",
+            "expected_items",
+        )
+    }
+    claims["scope_digest"] = canonical_evidence_digest(legacy_scope)
+    legacy_observation = {
+        key: value
+        for key, value in claims.items()
+        if key not in {
+            "version",
+            "parser_normalizer_version",
+            "issuer_id",
+            "issued_at",
+            "observation_digest",
+        }
+    }
+    claims["observation_digest"] = canonical_evidence_digest(legacy_observation)
     legacy_body = canonical_receipt_body(claims)
     digests["signed_body_b64"] = base64.b64encode(legacy_body).decode("ascii")
     digests["signature"] = receipt_ed25519_keys.signing_key.sign(legacy_body)
     digests["body_digest"] = body_digest(legacy_body)
+    digests.pop("environment")
+    digests.pop("authority_instance_digest")
+    digests["scope_digest"] = claims["scope_digest"]
+    digests["observation_digest"] = claims["observation_digest"]
     legacy_receipt = replace(receipt, digests=digests)
     assert (
         audit_signed_receipt_claims(legacy_receipt)["version"]
-        == LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION
+        == audit_version
+    )
+    assert (
+        audit_collection_closure(
+            legacy_receipt,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=(
+                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ),
+        )["version"]
+        == audit_version
     )
     with pytest.raises(ReceiptVerificationError, match="audit-only"):
-        require_verified_collection_closure(legacy_receipt)
+        require_verified_collection_closure(
+            legacy_receipt,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=(
+                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ),
+        )
 
     conn = store._conn  # noqa: SLF001
     conn.execute(
@@ -694,7 +756,7 @@ def test_snapshot_proof_rejects_validly_signed_legacy_v1(
     )
     conn.commit()
     with pytest.raises(
-        SnapshotRejected, match="v1 is audit-only and not COMPLETE-eligible"
+        SnapshotRejected, match="is audit-only and not COMPLETE-eligible"
     ):
         _coverage_proof(
             conn,
@@ -702,4 +764,100 @@ def test_snapshot_proof_rejects_validly_signed_legacy_v1(
             coverage_rows,
             publication_cutoff=_PUBLICATION_CUTOFF,
         )
+    store.close()
+
+
+def test_production_verifier_rejects_staging_receipt(
+    receipt_ed25519_keys,
+):
+    required = plan_required_segments(
+        coverage_contract_for(_DATASET),
+        _PUBLICATION_CUTOFF,
+        source="jquants",
+    )[0]
+    evidence = _reconcile_collection_evidence(
+        required=required,
+        run_id=991,
+        raw_pages=(b'{"data":[{"Date":"2008-01-01"}]}',),
+        raw_records=({"Date": "2008-01-01"},),
+        structured_records=({"Date": "2008-01-01"},),
+        checked_at=_CHECKED_AT,
+        environment="staging",
+        authority_instance_digest=receipt_authority_instance_digest("staging"),
+    )
+    receipt = _SignedReceiptAuthority(
+        receipt_ed25519_keys.signing_key
+    ).issue(evidence)
+    with pytest.raises(ReceiptVerificationError, match="signed environment"):
+        require_verified_collection_closure(
+            receipt,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=receipt_authority_instance_digest(
+                PRODUCTION_RECEIPT_ENVIRONMENT
+            ),
+        )
+
+
+def test_revoked_v3_audit_rejects_outer_and_digest_pointer_mutation(
+    tmp_path, receipt_ed25519_keys, monkeypatch
+):
+    import storage.receipt_crypto as crypto
+
+    store, receipt, _coverage_rows = _seed_closed_segment(
+        tmp_path, receipt_ed25519_keys
+    )
+    production_path = write_test_scoped_receipt_registry(
+        receipt_ed25519_keys.scoped_path,
+        key_id=receipt_ed25519_keys.key_id,
+        public_raw=receipt_ed25519_keys.public_raw,
+        environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+        authority_instance_digest=PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+        status="revoked",
+    )
+    raw_pins = dict(crypto.PINNED_SCOPED_RECEIPT_REGISTRY_RAW_DIGESTS)
+    raw_pins[PRODUCTION_RECEIPT_ENVIRONMENT] = body_digest(
+        production_path.read_bytes()
+    )
+    monkeypatch.setattr(
+        crypto, "PINNED_SCOPED_RECEIPT_REGISTRY_RAW_DIGESTS", raw_pins
+    )
+    crypto._parse_scoped_registry_document.cache_clear()
+
+    with pytest.raises(ReceiptVerificationError, match="signature is invalid"):
+        require_verified_collection_closure(
+            receipt,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=(
+                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ),
+        )
+    audited = audit_collection_closure(
+        receipt,
+        expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+        expected_authority_instance_digest=(
+            PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+        ),
+    )
+    assert audited["version"] == "signed-receipt-claims/v3"
+
+    mutations = (
+        replace(receipt, raw_row_count=receipt.raw_row_count + 1),
+        replace(receipt, status="FAILED", error="mutated"),
+        replace(
+            receipt,
+            digests={
+                **receipt.digests,
+                "structured_digest": "sha256:" + "f" * 64,
+            },
+        ),
+    )
+    for mutated in mutations:
+        with pytest.raises(ReceiptVerificationError):
+            audit_collection_closure(
+                mutated,
+                expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+                expected_authority_instance_digest=(
+                    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+                ),
+            )
     store.close()

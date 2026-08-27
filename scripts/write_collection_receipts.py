@@ -10,7 +10,7 @@ Two modes:
 
 * **RECOVERY** (default): reads ``--raw-file`` bytes from disk, computes the
   real digest, and records untrusted audit evidence. Manual counts cannot mint
-  a v2 closure and therefore never become Coverage COMPLETE. Use governed
+  an environment-bound v3 closure and therefore never become Coverage COMPLETE. Use governed
   ingestion to reparse, normalize, reconcile, and sign concrete artifacts.
 
 * **SYNTHETIC** (``--synthetic``): OFFLINE FIXTURE DATABASES ONLY. Requires the
@@ -368,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(
         "This receipt is audit-only and cannot make coverage COMPLETE. "
-        "Run the governed ingestion path to issue a verified v2 closure.",
+        "Run the governed ingestion path to issue a verified v3 closure.",
     )
     return 0
 

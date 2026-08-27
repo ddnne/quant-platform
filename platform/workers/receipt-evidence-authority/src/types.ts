@@ -29,8 +29,10 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export type SignedReceiptClaimsV2 = {
-  version: "signed-receipt-claims/v2";
+export type SignedReceiptClaimsV3 = {
+  version: "signed-receipt-claims/v3";
+  environment: AuthorityEnvironment;
+  authority_instance_digest: string;
   coverage_policy_version: "collection-coverage/v3";
   source: "jquants";
   dataset: string;
@@ -62,16 +64,18 @@ export type SignedReceiptClaimsV2 = {
   extra_digests: Record<string, string>;
 };
 
-export type UnsignedReceiptClaimsV2 = Omit<
-  SignedReceiptClaimsV2,
+export type UnsignedReceiptClaimsV3 = Omit<
+  SignedReceiptClaimsV3,
   "version" | "parser_normalizer_version" | "issuer_id" | "issued_at"
 >;
 
-export type SignedReceiptEnvelopeV2 = {
+export type SignedReceiptEnvelopeV3 = {
   eligibility: "TRUSTED_COLLECTION";
   issuer_class: "SignedReceiptAuthority";
   issuer_key_id: string;
   issuer_id: string;
+  environment: AuthorityEnvironment;
+  authority_instance_digest: string;
   parser_normalizer_version: "coverage-receipt/v4-ed25519-closure";
   signed_body_b64: string;
   signature: string;
@@ -89,7 +93,7 @@ export type SignedReceiptEnvelopeV2 = {
   [extraDigest: string]: JsonValue;
 };
 
-export type CollectionReceiptV2 = {
+export type CollectionReceiptV3 = {
   source: "jquants";
   dataset: string;
   segment_id: string;
@@ -102,7 +106,7 @@ export type CollectionReceiptV2 = {
   raw_row_count: number;
   structured_row_count: number;
   pagination_exhausted: true;
-  digests: SignedReceiptEnvelopeV2;
+  digests: SignedReceiptEnvelopeV3;
   run_id: number;
   status: "SUCCESS";
   error: null;
@@ -115,7 +119,7 @@ export type ReceiptIssueResultV1 = {
   state: "FINALIZED";
   replayed: boolean;
   receipt_digest: string;
-  receipt: CollectionReceiptV2;
+  receipt: CollectionReceiptV3;
 };
 
 export type ReceiptAuthorityOperationState =
@@ -138,16 +142,16 @@ export type ReceiptAuthorityOperationSnapshot = {
   capture_key: string | null;
   capture_digest: string | null;
   state: ReceiptAuthorityOperationState;
-  claims: UnsignedReceiptClaimsV2 | null;
-  envelope: SignedReceiptEnvelopeV2 | null;
+  claims: UnsignedReceiptClaimsV3 | null;
+  envelope: SignedReceiptEnvelopeV3 | null;
   envelope_digest: string | null;
   receipt_digest: string | null;
   result: ReceiptIssueResultV1 | null;
 };
 
 export type ReceiptAuthorityIssuedRecord = {
-  claims: UnsignedReceiptClaimsV2;
-  envelope: SignedReceiptEnvelopeV2;
+  claims: UnsignedReceiptClaimsV3;
+  envelope: SignedReceiptEnvelopeV3;
   envelope_digest: string;
 };
 
@@ -155,6 +159,7 @@ export type ReceiptPublicKeyRegistrationV1 = {
   schema_version: "receipt-public-key-registration/v1";
   purpose: "receipt_verification";
   environment: AuthorityEnvironment;
+  authority_instance_digest: string;
   authority_status: "PENDING";
   key_id: string;
   key_generation: number;

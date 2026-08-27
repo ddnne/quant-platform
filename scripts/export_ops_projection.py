@@ -57,11 +57,16 @@ from storage.receipt_policy import (  # noqa: E402
     is_recovered_only_digests,
     receipt_source_for_canonical_source,
 )
-from storage.receipt_crypto import receipt_verify_key_status  # noqa: E402
+from storage.receipt_crypto import (  # noqa: E402
+    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+    PRODUCTION_RECEIPT_ENVIRONMENT,
+    receipt_verify_key_status,
+    scoped_receipt_verify_key_status,
+)
 from storage.coverage_ledger import CollectionReceipt  # noqa: E402
 from storage.verified_receipt import (  # noqa: E402
     ReceiptVerificationError,
-    audit_signed_receipt_claims,
+    audit_collection_closure,
     verify_collection_closure,
 )
 
@@ -943,19 +948,47 @@ def _read_receipt_product_materializations(
             checked_at=row["checked_at"],
         )
         try:
-            closure = verify_collection_closure(receipt)
+            closure = verify_collection_closure(
+                receipt,
+                expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+                expected_authority_instance_digest=(
+                    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+                ),
+            )
         except ReceiptVerificationError as closure_error:
             # A correctly signed receipt from a revoked/prior key remains
             # audit history but is no longer COMPLETE/product eligible.  A
             # forged or corrupt row must still stop projection rather than be
             # silently treated as historical evidence.
-            if receipt_verify_key_status(digests.get("issuer_key_id")) != "revoked":
+            if (
+                digests.get("environment") == PRODUCTION_RECEIPT_ENVIRONMENT
+                and digests.get("authority_instance_digest")
+                == PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ):
+                key_status = scoped_receipt_verify_key_status(
+                    digests.get("issuer_key_id"),
+                    expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+                    expected_authority_instance_digest=(
+                        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+                    ),
+                )
+            else:
+                key_status = receipt_verify_key_status(
+                    digests.get("issuer_key_id")
+                )
+            if key_status != "revoked":
                 raise RuntimeError(
                     "active or non-revoked trusted receipt failed closure: "
                     + "/".join(map(str, identity))
                 ) from closure_error
             try:
-                audit_signed_receipt_claims(receipt)
+                audit_collection_closure(
+                    receipt,
+                    expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+                    expected_authority_instance_digest=(
+                        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+                    ),
+                )
             except ReceiptVerificationError as audit_error:
                 raise RuntimeError(
                     "trusted-marked receipt is neither active nor valid audit evidence: "

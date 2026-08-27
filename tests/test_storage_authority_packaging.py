@@ -17,7 +17,7 @@ _COVERAGE_CANONICAL_DIGEST = (
     "sha256:9e6c239cf85ab09999ef4aa90881a55abdcc246488df2c1ded9e9d2a5947de49"
 )
 _RECEIPT_SCHEMA_RAW_DIGEST = (
-    "123cbb43180aa7d22e41541589cc28bf0da27f120533b796458c831fb655f261"
+    "03338c4e59f07a6807c83030a72c000da3fd3d75dc28f6ab693fd3ee305496aa"
 )
 
 
@@ -52,7 +52,7 @@ def test_signed_receipt_schema_is_package_owned_and_digest_stable() -> None:
     assert _raw_digest(path) == _RECEIPT_SCHEMA_RAW_DIGEST
     document = json.loads(path.read_text(encoding="utf-8"))
     assert document["$id"] == "specs/receipts/signed_receipt_claims.schema.json"
-    assert document["title"] == "SignedCollectionClosureClaimsV2"
+    assert document["title"] == "SignedCollectionClosureClaimsV3"
     assert not (
         _ROOT / "specs/receipts/signed_receipt_claims.schema.json"
     ).exists()

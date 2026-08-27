@@ -27,7 +27,7 @@ import type {
   ReceiptIssueResultV1,
   ReceiptRecoveryRequestV1,
   ReceiptRequestV1,
-  UnsignedReceiptClaimsV2,
+  UnsignedReceiptClaimsV3,
 } from "./types";
 
 const REQUEST_KEYS = [
@@ -59,7 +59,7 @@ export type InternalReceiptAuthority = {
   appendDerived(
     operationId: string,
     requestDigest: string,
-    claims: UnsignedReceiptClaimsV2,
+    claims: UnsignedReceiptClaimsV3,
   ): Promise<ReceiptAuthorityIssuedRecord>;
   finalizeCommitted(
     operationId: string,
@@ -251,6 +251,7 @@ export async function executeReceiptRequest(
     throw new Error("receipt reconciliation context expired before issuance");
   }
   const claims = await measuredClaims({
+    env,
     requestDigest,
     runId: operation.runId,
     spec,

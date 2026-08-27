@@ -9,6 +9,7 @@ import {
   utf8Base64,
 } from "./canonical";
 import { requireDerivedClaims } from "./claims_validation";
+import { authorityInstanceScope } from "./authority_instance";
 import {
   unwrapEd25519PrivateKey,
   wrapEd25519PrivateKey,
@@ -23,9 +24,9 @@ import type {
   ReceiptIssueResultV1,
   ReceiptPublicKeyRegistrationV1,
   ReceiptRecoveryRequestV1,
-  SignedReceiptClaimsV2,
-  SignedReceiptEnvelopeV2,
-  UnsignedReceiptClaimsV2,
+  SignedReceiptClaimsV3,
+  SignedReceiptEnvelopeV3,
+  UnsignedReceiptClaimsV3,
 } from "./types";
 
 const PARSER_NORMALIZER_VERSION = "coverage-receipt/v4-ed25519-closure";
@@ -118,8 +119,8 @@ function rowToSnapshot(
     capture_key: attempt.capture_key,
     capture_digest: attempt.capture_digest,
     state: row.state,
-    claims: parseStored<UnsignedReceiptClaimsV2>(row.claims_json, "claims"),
-    envelope: parseStored<SignedReceiptEnvelopeV2>(row.envelope_json, "envelope"),
+    claims: parseStored<UnsignedReceiptClaimsV3>(row.claims_json, "claims"),
+    envelope: parseStored<SignedReceiptEnvelopeV3>(row.envelope_json, "envelope"),
     envelope_digest: row.envelope_digest,
     receipt_digest: row.receipt_digest,
     result: parseStored<ReceiptIssueResultV1>(row.result_json, "result"),
@@ -1019,10 +1020,12 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
 
   async public_key_registration(): Promise<ReceiptPublicKeyRegistrationV1> {
     const key = await this.ensureKey();
+    const scope = await authorityInstanceScope(this.env);
     const body = {
       schema_version: "receipt-public-key-registration/v1" as const,
       purpose: "receipt_verification" as const,
       environment: this.env.ENVIRONMENT,
+      authority_instance_digest: scope.authorityInstanceDigest,
       authority_status: "PENDING" as const,
       key_id: key.keyId,
       key_generation: key.generation,
@@ -1041,9 +1044,16 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
   async #appendIssued(
     operationId: string,
     requestDigest: string,
-    rawClaims: UnsignedReceiptClaimsV2,
+    rawClaims: UnsignedReceiptClaimsV3,
   ): Promise<ReceiptAuthorityIssuedRecord> {
     const claims = requireDerivedClaims(rawClaims);
+    const authorityScope = await authorityInstanceScope(this.env);
+    if (
+      claims.environment !== authorityScope.environment ||
+      claims.authority_instance_digest !== authorityScope.authorityInstanceDigest
+    ) {
+      throw new Error("receipt claims are not bound to this authority instance");
+    }
     const row = this.requireOperation(operationId, requestDigest);
     const claimsJson = canonicalJson(claims);
     const claimsDigest = await sha256Digest(claimsJson);
@@ -1051,11 +1061,11 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       throw new Error("receipt authority claims replay was substituted");
     }
     if (row.envelope_json !== null) {
-      const envelope = parseStored<SignedReceiptEnvelopeV2>(
+      const envelope = parseStored<SignedReceiptEnvelopeV3>(
         row.envelope_json,
         "envelope",
       );
-      const storedClaims = parseStored<UnsignedReceiptClaimsV2>(
+      const storedClaims = parseStored<UnsignedReceiptClaimsV3>(
         row.claims_json,
         "claims",
       );
@@ -1112,9 +1122,9 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     }
     await this.requireAuditedOperation(reserved);
 
-    const signedClaims: SignedReceiptClaimsV2 = {
+    const signedClaims: SignedReceiptClaimsV3 = {
       ...claims,
-      version: "signed-receipt-claims/v2",
+      version: "signed-receipt-claims/v3",
       parser_normalizer_version: PARSER_NORMALIZER_VERSION,
       issuer_id: key.keyId,
       issued_at: reserved.issued_at,
@@ -1125,11 +1135,13 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       key.privateKey,
       new TextEncoder().encode(body),
     ));
-    const envelope: SignedReceiptEnvelopeV2 = {
+    const envelope: SignedReceiptEnvelopeV3 = {
       eligibility: "TRUSTED_COLLECTION",
       issuer_class: "SignedReceiptAuthority",
       issuer_key_id: key.keyId,
       issuer_id: key.keyId,
+      environment: claims.environment,
+      authority_instance_digest: claims.authority_instance_digest,
       parser_normalizer_version: PARSER_NORMALIZER_VERSION,
       signed_body_b64: utf8Base64(body),
       signature: `ed25519:${arrayBufferToBase64(signature.buffer)}`,
@@ -1269,7 +1281,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       appendDerived: (
         operationId: string,
         requestDigest: string,
-        claims: UnsignedReceiptClaimsV2,
+        claims: UnsignedReceiptClaimsV3,
       ) => this.#appendIssued(operationId, requestDigest, claims),
       finalizeCommitted: (
         operationId: string,

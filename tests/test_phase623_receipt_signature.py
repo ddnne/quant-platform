@@ -20,7 +20,23 @@ from tests.receipt_test_support import (
     _SignedReceiptAuthority,
     _reconcile_collection_evidence,
 )
-from storage.verified_receipt import ReceiptVerificationError, verify
+from storage.receipt_crypto import (
+    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+    PRODUCTION_RECEIPT_ENVIRONMENT,
+)
+from storage.verified_receipt import ReceiptVerificationError, verify as _verify
+
+
+def verify(receipt, **kwargs):
+    """Tests exercise the explicit production verifier scope."""
+    return _verify(
+        receipt,
+        expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+        expected_authority_instance_digest=(
+            PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+        ),
+        **kwargs,
+    )
 
 
 def _issue(

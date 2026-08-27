@@ -2,7 +2,7 @@
 
 Persisted ``CollectionReceipt`` fields are untrusted mirrors.  This module is
 the only constructor of ``VerifiedCollectionClosure`` and binds every field
-used by COMPLETE policy to signed-receipt-claims/v2.
+used by COMPLETE policy to environment-bound signed-receipt-claims/v3.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from weakref import WeakSet
 
 from storage.coverage_receipts import compute_raw_digest
 from storage.receipt_crypto import (
+    AUDIT_SIGNED_RECEIPT_CLAIMS_VERSION_V2,
     LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION,
     PARSER_NORMALIZER_VERSION,
     SIGNED_RECEIPT_CLAIMS_VERSION,
@@ -79,6 +80,9 @@ _SIGNED_ENVELOPE_FIELDS = frozenset(
         "observation_digest",
         "extra_digests",
     }
+)
+_V3_SIGNED_ENVELOPE_FIELDS = _SIGNED_ENVELOPE_FIELDS | frozenset(
+    {"environment", "authority_instance_digest"}
 )
 
 
@@ -211,7 +215,12 @@ def _materialize_receipt_input(receipt: Any) -> _FrozenReceiptInput:
     extras = claims.get("extra_digests")
     if type(extras) is not dict:
         raise ReceiptVerificationError("signed extra_digests must be an exact object")
-    expected_envelope_fields = _SIGNED_ENVELOPE_FIELDS | frozenset(extras)
+    envelope_contract = (
+        _V3_SIGNED_ENVELOPE_FIELDS
+        if claims.get("version") == SIGNED_RECEIPT_CLAIMS_VERSION
+        else _SIGNED_ENVELOPE_FIELDS
+    )
+    expected_envelope_fields = envelope_contract | frozenset(extras)
     if set(digests) != expected_envelope_fields:
         missing = sorted(expected_envelope_fields - set(digests))
         extra = sorted(set(digests) - expected_envelope_fields)
@@ -219,7 +228,7 @@ def _materialize_receipt_input(receipt: Any) -> _FrozenReceiptInput:
             "signed receipt envelope fields are not closed: "
             f"missing={missing}, extra={extra}"
         )
-    string_envelope_fields = _SIGNED_ENVELOPE_FIELDS - {
+    string_envelope_fields = envelope_contract - {
         "structured_generation",
         "extra_digests",
     }
@@ -298,6 +307,14 @@ class VerifiedCollectionClosure:
     @property
     def coverage_policy_version(self) -> str:
         return str(self._value("coverage_policy_version"))
+
+    @property
+    def environment(self) -> str:
+        return str(self._value("environment"))
+
+    @property
+    def authority_instance_digest(self) -> str:
+        return str(self._value("authority_instance_digest"))
 
     @property
     def source(self) -> str:
@@ -406,6 +423,8 @@ class VerifiedCollectionClosure:
         """Bound fields retained by the READY coverage proof."""
         return {
             "receipt_digest": self.receipt_digest,
+            "environment": self.environment,
+            "authority_instance_digest": self.authority_instance_digest,
             "coverage_policy_version": self.coverage_policy_version,
             "source": self.source,
             "dataset": self.dataset,
@@ -437,7 +456,7 @@ def _claims_schema() -> dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def _claims_validator() -> Any:
-    """Compile the closed v2 schema once for large snapshot inventories."""
+    """Compile the closed v3 schema once for large snapshot inventories."""
     try:
         import jsonschema
     except ImportError as exc:
@@ -479,7 +498,9 @@ def _require_same(label: str, signed_value: Any, outer_value: Any) -> None:
         )
 
 
-def _validate_digest_chain(claims: Mapping[str, Any]) -> None:
+def _validate_digest_chain(
+    claims: Mapping[str, Any], *, environment_scoped: bool
+) -> None:
     """Recompute the signed scope -> observation digest chain."""
     scope = {
         "coverage_policy_version": claims["coverage_policy_version"],
@@ -491,6 +512,12 @@ def _validate_digest_chain(claims: Mapping[str, Any]) -> None:
         "expected_scope": claims["expected_scope"],
         "expected_items": claims["expected_items"],
     }
+    if environment_scoped:
+        scope = {
+            "environment": claims["environment"],
+            "authority_instance_digest": claims["authority_instance_digest"],
+            **scope,
+        }
     _require_same(
         "scope_digest chain",
         claims["scope_digest"],
@@ -526,25 +553,31 @@ def _validate_digest_chain(claims: Mapping[str, Any]) -> None:
 def audit_signed_receipt_claims(
     receipt: Any,
 ) -> Mapping[str, Any]:
-    """Decode a valid v1/v2 signature for audit without granting COMPLETE."""
+    """Decode a valid v1/v2/v3 signature for audit without granting COMPLETE."""
     frozen = _materialize_receipt_input(receipt)
     digests = frozen.digests
     claims = frozen.claims
+    version = claims.get("version")
+    if version not in {
+        LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION,
+        AUDIT_SIGNED_RECEIPT_CLAIMS_VERSION_V2,
+        SIGNED_RECEIPT_CLAIMS_VERSION,
+    }:
+        raise ReceiptVerificationError("unsupported signed claims version")
+    scoped = version == SIGNED_RECEIPT_CLAIMS_VERSION
     if not verify_receipt_signature_values_for_audit(
         body=frozen.signed_body,
         signature=digests["signature"],
         key_id=digests["issuer_key_id"],
+        expected_environment=(claims.get("environment") if scoped else None),
+        expected_authority_instance_digest=(
+            claims.get("authority_instance_digest") if scoped else None
+        ),
     ):
         raise ReceiptVerificationError("Ed25519 signature is invalid")
     declared = digests.get("body_digest")
     if declared is not None and declared != body_digest(frozen.signed_body):
         raise ReceiptVerificationError("signed body_digest mismatch")
-    version = claims.get("version")
-    if version not in {
-        LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION,
-        SIGNED_RECEIPT_CLAIMS_VERSION,
-    }:
-        raise ReceiptVerificationError("unsupported signed claims version")
     key_id = digests.get("issuer_key_id")
     if claims.get("issuer_id") != key_id:
         raise ReceiptVerificationError("signed audit issuer_id mismatch")
@@ -554,41 +587,33 @@ def audit_signed_receipt_claims(
     return _deep_freeze(claims)
 
 
-def verify_collection_closure(
-    receipt: Any,
+def _validate_bound_closure_fields(
+    frozen: _FrozenReceiptInput,
     *,
+    expected_environment: str,
+    expected_authority_instance_digest: str,
+    environment_scoped: bool,
     required: Any = None,
     expected_policy_version: str | None = None,
     raw: bytes | None = None,
     structured_digest: str | None = None,
-) -> VerifiedCollectionClosure:
-    """Return an opaque v2 closure or fail without a partial trust result."""
-    frozen = _materialize_receipt_input(receipt)
-    digests = frozen.digests
+) -> None:
+    """Validate the same closed structure for active and audit-only keys."""
     claims = frozen.claims
+    digests = frozen.digests
     outer = frozen.outer
-    if digests.get("synthetic"):
-        raise ReceiptVerificationError("synthetic receipts are not verifiable")
-    if digests.get("eligibility") != "TRUSTED_COLLECTION":
-        raise ReceiptVerificationError("receipt is not a trusted collection")
-    if digests.get("issuer_class") != "SignedReceiptAuthority":
-        raise ReceiptVerificationError("receipt issuer class is not trusted")
-    if not verify_receipt_signature_values(
-        body=frozen.signed_body,
-        signature=digests["signature"],
-        key_id=digests["issuer_key_id"],
-    ):
-        raise ReceiptVerificationError("Ed25519 signature is invalid")
-
-    version = claims.get("version")
-    if version == LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION:
-        raise ReceiptVerificationError(
-            "signed-receipt-claims/v1 is audit-only and not COMPLETE-eligible"
+    schema_claims = dict(claims)
+    if not environment_scoped:
+        # Historical v1/v2 signatures predate the authority scope fields. Add
+        # caller-owned audit context only to exercise today's closed schema;
+        # never use this normalized document for digest or signature checks.
+        schema_claims["version"] = SIGNED_RECEIPT_CLAIMS_VERSION
+        schema_claims.setdefault("environment", expected_environment)
+        schema_claims.setdefault(
+            "authority_instance_digest", expected_authority_instance_digest
         )
-    if version != SIGNED_RECEIPT_CLAIMS_VERSION:
-        raise ReceiptVerificationError("unsupported signed claims version")
-    _validate_schema(claims)
-    _validate_digest_chain(claims)
+    _validate_schema(schema_claims)
+    _validate_digest_chain(claims, environment_scoped=environment_scoped)
     if body_digest(frozen.signed_body) != digests.get("body_digest"):
         raise ReceiptVerificationError("signed body_digest mismatch")
 
@@ -600,6 +625,13 @@ def verify_collection_closure(
         )
     if claims["parser_normalizer_version"] != PARSER_NORMALIZER_VERSION:
         raise ReceiptVerificationError("parser_normalizer_version mismatch")
+    if environment_scoped:
+        _require_same("environment", claims["environment"], expected_environment)
+        _require_same(
+            "authority_instance_digest",
+            claims["authority_instance_digest"],
+            expected_authority_instance_digest,
+        )
 
     outer_bindings = {
         "source": outer["source"],
@@ -633,6 +665,12 @@ def verify_collection_closure(
         "observation_digest": digests.get("observation_digest"),
         "issued_at": digests.get("issued_at"),
     }
+    if environment_scoped:
+        envelope_bindings = {
+            "environment": digests.get("environment"),
+            "authority_instance_digest": digests.get("authority_instance_digest"),
+            **envelope_bindings,
+        }
     for name, outer_value in envelope_bindings.items():
         _require_same(name, claims[name], outer_value)
     issuer_id = claims["issuer_id"]
@@ -650,21 +688,13 @@ def verify_collection_closure(
         from storage.coverage_ledger import RequiredCoverageSegment
 
         if type(required) is not RequiredCoverageSegment:
-            raise ReceiptVerificationError(
-                "exact RequiredCoverageSegment required"
-            )
+            raise ReceiptVerificationError("exact RequiredCoverageSegment required")
         required_names = (
-            "source",
-            "dataset",
-            "segment_id",
-            "segment_start",
-            "segment_end",
-            "expected_scope",
-            "expected_items",
+            "source", "dataset", "segment_id", "segment_start", "segment_end",
+            "expected_scope", "expected_items",
         )
         required_values = {
-            name: object.__getattribute__(required, name)
-            for name in required_names
+            name: object.__getattribute__(required, name) for name in required_names
         }
         required_scope = _copy_exact_json(
             required_values["expected_scope"], field="required.expected_scope"
@@ -721,6 +751,109 @@ def verify_collection_closure(
             "structured evidence", claims["structured_digest"], structured_digest
         )
 
+
+def audit_collection_closure(
+    receipt: Any,
+    *,
+    expected_environment: str,
+    expected_authority_instance_digest: str,
+    required: Any = None,
+    expected_policy_version: str | None = None,
+    raw: bytes | None = None,
+    structured_digest: str | None = None,
+) -> Mapping[str, Any]:
+    """Fully bind an audit-only closure without granting COMPLETE capability."""
+    frozen = _materialize_receipt_input(receipt)
+    digests = frozen.digests
+    claims = frozen.claims
+    if digests.get("synthetic"):
+        raise ReceiptVerificationError("synthetic receipts are not auditable")
+    if digests.get("eligibility") != "TRUSTED_COLLECTION":
+        raise ReceiptVerificationError("receipt is not a trusted collection")
+    if digests.get("issuer_class") != "SignedReceiptAuthority":
+        raise ReceiptVerificationError("receipt issuer class is not trusted")
+    version = claims.get("version")
+    if version not in {
+        LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION,
+        AUDIT_SIGNED_RECEIPT_CLAIMS_VERSION_V2,
+        SIGNED_RECEIPT_CLAIMS_VERSION,
+    }:
+        raise ReceiptVerificationError("unsupported signed claims version")
+    environment_scoped = version == SIGNED_RECEIPT_CLAIMS_VERSION
+    if not verify_receipt_signature_values_for_audit(
+        body=frozen.signed_body,
+        signature=digests["signature"],
+        key_id=digests["issuer_key_id"],
+        expected_environment=(
+            expected_environment if environment_scoped else None
+        ),
+        expected_authority_instance_digest=(
+            expected_authority_instance_digest if environment_scoped else None
+        ),
+    ):
+        raise ReceiptVerificationError("Ed25519 audit signature is invalid")
+    _validate_bound_closure_fields(
+        frozen,
+        expected_environment=expected_environment,
+        expected_authority_instance_digest=expected_authority_instance_digest,
+        environment_scoped=environment_scoped,
+        required=required,
+        expected_policy_version=expected_policy_version,
+        raw=raw,
+        structured_digest=structured_digest,
+    )
+    return _deep_freeze(claims)
+
+
+def verify_collection_closure(
+    receipt: Any,
+    *,
+    expected_environment: str,
+    expected_authority_instance_digest: str,
+    required: Any = None,
+    expected_policy_version: str | None = None,
+    raw: bytes | None = None,
+    structured_digest: str | None = None,
+) -> VerifiedCollectionClosure:
+    """Return an opaque environment-bound v3 closure or fail closed."""
+    frozen = _materialize_receipt_input(receipt)
+    digests = frozen.digests
+    claims = frozen.claims
+    if digests.get("synthetic"):
+        raise ReceiptVerificationError("synthetic receipts are not verifiable")
+    if digests.get("eligibility") != "TRUSTED_COLLECTION":
+        raise ReceiptVerificationError("receipt is not a trusted collection")
+    if digests.get("issuer_class") != "SignedReceiptAuthority":
+        raise ReceiptVerificationError("receipt issuer class is not trusted")
+    version = claims.get("version")
+    if version in {
+        LEGACY_SIGNED_RECEIPT_CLAIMS_VERSION,
+        AUDIT_SIGNED_RECEIPT_CLAIMS_VERSION_V2,
+    }:
+        raise ReceiptVerificationError(
+            f"{version} is audit-only and not COMPLETE-eligible"
+        )
+    if version != SIGNED_RECEIPT_CLAIMS_VERSION:
+        raise ReceiptVerificationError("unsupported signed claims version")
+    if not verify_receipt_signature_values(
+        body=frozen.signed_body,
+        signature=digests["signature"],
+        key_id=digests["issuer_key_id"],
+        expected_environment=expected_environment,
+        expected_authority_instance_digest=expected_authority_instance_digest,
+    ):
+        raise ReceiptVerificationError("Ed25519 signature is invalid")
+    _validate_bound_closure_fields(
+        frozen,
+        expected_environment=expected_environment,
+        expected_authority_instance_digest=expected_authority_instance_digest,
+        environment_scoped=True,
+        required=required,
+        expected_policy_version=expected_policy_version,
+        raw=raw,
+        structured_digest=structured_digest,
+    )
+
     closure = VerifiedCollectionClosure(
         _seal=_VERIFIED_CLOSURE,
         _claims=_deep_freeze(claims),
@@ -746,6 +879,7 @@ require_verified_receipt = require_verified_collection_closure
 __all__ = [
     "ReceiptVerificationError",
     "VerifiedCollectionClosure",
+    "audit_collection_closure",
     "audit_signed_receipt_claims",
     "require_verified_collection_closure",
     "verify_collection_closure",

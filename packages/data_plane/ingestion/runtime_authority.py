@@ -26,7 +26,12 @@ from storage.coverage_ledger import (
     RequiredCoverageSegment,
     record_collection_receipt,
 )
-from storage.receipt_crypto import STANDARD_CLAIM_KEYS, canonical_evidence_digest
+from storage.receipt_crypto import (
+    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+    PRODUCTION_RECEIPT_ENVIRONMENT,
+    STANDARD_CLAIM_KEYS,
+    canonical_evidence_digest,
+)
 
 from ingestion.jquants.acquisition_collection import (
     _LiveJQuantsAcquisitionCapture,
@@ -1039,12 +1044,18 @@ def _verify_issued_receipt_matches_measurement(
 
     closure = require_verified_collection_closure(
         receipt,
+        expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+        expected_authority_instance_digest=(
+            PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+        ),
         required=required,
         expected_policy_version=str(claims["coverage_policy_version"]),
         structured_digest=str(claims["structured_digest"]),
     )
     proof = closure.to_proof_dict()
     expected = {
+        "environment": claims["environment"],
+        "authority_instance_digest": claims["authority_instance_digest"],
         "coverage_policy_version": claims["coverage_policy_version"],
         "source": claims["source"],
         "dataset": claims["dataset"],
@@ -1200,7 +1211,14 @@ def _prior_verified_available_at(
             error=None if row["error"] is None else str(row["error"]),
             checked_at=str(row["checked_at"]),
         )
-        closure = require_verified_collection_closure(receipt, required=required)
+        closure = require_verified_collection_closure(
+            receipt,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=(
+                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ),
+            required=required,
+        )
         page_manifest = [
             {"index": index, "digest": _digest(page), "size": len(page)}
             for index, page in enumerate(raw_pages)
@@ -1738,6 +1756,8 @@ def _measure_collection_claims(
             "raw and structured records do not reconcile under dataset policy"
         )
     scope = {
+        "environment": PRODUCTION_RECEIPT_ENVIRONMENT,
+        "authority_instance_digest": PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
         "coverage_policy_version": policy.policy_version,
         "source": required.source,
         "dataset": required.dataset,

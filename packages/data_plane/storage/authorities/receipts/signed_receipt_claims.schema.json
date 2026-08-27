@@ -1,12 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "specs/receipts/signed_receipt_claims.schema.json",
-  "title": "SignedCollectionClosureClaimsV2",
+  "title": "SignedCollectionClosureClaimsV3",
   "description": "Closed signed claims for a COMPLETE-eligible collection closure. Persisted CollectionReceipt columns are untrusted mirrors; every value used by coverage policy is signed here.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "version",
+    "environment",
+    "authority_instance_digest",
     "coverage_policy_version",
     "source",
     "dataset",
@@ -52,7 +54,9 @@
     }
   },
   "properties": {
-    "version": { "const": "signed-receipt-claims/v2" },
+    "version": { "const": "signed-receipt-claims/v3" },
+    "environment": { "enum": ["production", "staging"] },
+    "authority_instance_digest": { "$ref": "#/$defs/digest" },
     "coverage_policy_version": { "$ref": "#/$defs/nonempty" },
     "source": { "$ref": "#/$defs/nonempty" },
     "dataset": { "$ref": "#/$defs/nonempty" },
@@ -93,6 +97,8 @@
         "not": {
           "enum": [
             "body_digest",
+            "environment",
+            "authority_instance_digest",
             "checked_at",
             "coverage_policy_version",
             "dataset",

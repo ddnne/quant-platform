@@ -33,6 +33,8 @@ from storage.receipt_crypto import (
     PINNED_RECEIPT_REGISTRY_DOCUMENT_DIGEST as COMMITTED_DOCUMENT_DIGEST,
     PINNED_RECEIPT_REGISTRY_GENERATION as COMMITTED_REGISTRY_GENERATION,
     PINNED_RECEIPT_REGISTRY_RAW_DIGEST as COMMITTED_RAW_DIGEST,
+    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+    PRODUCTION_RECEIPT_ENVIRONMENT,
     ReceiptKeyConfigurationError,
     load_verify_keys,
     verify_receipt_signature,
@@ -217,6 +219,15 @@ def test_production_receipt_module_exposes_no_minting_primitive() -> None:
     assert not hasattr(crypto, "load_signing_key")
     assert not hasattr(crypto, "build_signed_digest_fields")
     assert not hasattr(crypto, "Ed25519PrivateKey")
+
+
+def test_positive_signature_verifier_requires_caller_owned_authority_scope() -> None:
+    with pytest.raises(TypeError, match="expected_environment"):
+        verify_receipt_signature({})  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="expected_environment"):
+        verify_receipt_signature_values(  # type: ignore[call-arg]
+            body=b"body", signature="ed25519:invalid", key_id="key"
+        )
 
 
 def test_verify_registry_env_and_loader_arguments_cannot_self_root(
@@ -455,7 +466,13 @@ def test_revoked_receipt_key_is_cryptographic_audit_only(
     signature = "ed25519:" + base64.b64encode(private.sign(body)).decode("ascii")
 
     assert not verify_receipt_signature_values(
-        body=body, signature=signature, key_id=key_id
+        body=body,
+        signature=signature,
+        key_id=key_id,
+        expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+        expected_authority_instance_digest=(
+            PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+        ),
     )
     assert verify_receipt_signature_values_for_audit(
         body=body, signature=signature, key_id=key_id
@@ -472,6 +489,10 @@ def test_receipt_envelope_rejects_noncanonical_base64_and_signature_lengths(
         body=body,
         signature=signature,
         key_id=receipt_ed25519_keys.key_id,
+        expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+        expected_authority_instance_digest=(
+            PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+        ),
     )
 
     noncanonical_signature = "ed25519:" + _noncanonical_base64_spelling(
@@ -481,6 +502,10 @@ def test_receipt_envelope_rejects_noncanonical_base64_and_signature_lengths(
         body=body,
         signature=noncanonical_signature,
         key_id=receipt_ed25519_keys.key_id,
+        expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+        expected_authority_instance_digest=(
+            PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+        ),
     )
     raw_signature = base64.b64decode(encoded_signature, validate=True)
     for invalid_raw in (raw_signature[:-1], raw_signature + b"\x00"):
@@ -488,6 +513,10 @@ def test_receipt_envelope_rejects_noncanonical_base64_and_signature_lengths(
             body=body,
             signature="ed25519:" + base64.b64encode(invalid_raw).decode("ascii"),
             key_id=receipt_ed25519_keys.key_id,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=(
+                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ),
         )
 
     canonical_body = base64.b64encode(body).decode("ascii")
@@ -496,9 +525,21 @@ def test_receipt_envelope_rejects_noncanonical_base64_and_signature_lengths(
         "signature": signature,
         "issuer_key_id": receipt_ed25519_keys.key_id,
     }
-    assert verify_receipt_signature(envelope)
+    assert verify_receipt_signature(
+        envelope,
+        expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+        expected_authority_instance_digest=(
+            PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+        ),
+    )
     envelope["signed_body_b64"] = _noncanonical_base64_spelling(canonical_body)
-    assert not verify_receipt_signature(envelope)
+    assert not verify_receipt_signature(
+        envelope,
+        expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+        expected_authority_instance_digest=(
+            PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+        ),
+    )
 
 
 def test_strict_receipt_materializer_rejects_noncanonical_signed_body() -> None:

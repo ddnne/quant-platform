@@ -113,6 +113,8 @@ evidence. Confirm independently that:
 - `algorithm` is exactly `Ed25519`;
 - `authority_status` is exactly `PENDING`;
 - `environment` matches the target environment;
+- `authority_instance_digest` matches the reviewed canonical D1, dedicated R2,
+  Durable Object, and acquisition Service Binding instance for that environment;
 - `key_id`, `public_key_base64`, and `registration_digest` match the canonical
   registration encoding;
 - a repeat call returns the same generation, key ID, public key, and digest.
@@ -127,14 +129,18 @@ durable representation.
 ## Registry review
 
 Prepare a normal reviewed change to
-`packages/data_plane/data_contracts/receipt_verify_public_keys.json` using the
-captured public registration only:
+`packages/data_plane/data_contracts/receipt_verify_public_keys.<environment>.json`
+using the captured public registration only. The unscoped v1/v2 registry is
+historical audit evidence and cannot activate v3 COMPLETE eligibility:
 
 1. Add exactly one `pending` Ed25519 key for the target authority.
 2. Advance the registry generation and prior-registry digest chain.
 3. Recompute and validate the canonical registry digest.
 4. Confirm no other key became active and no revoked key was revived.
-5. Merge the registry change through the required Cloudflare check.
+5. Confirm `environment` and `authority_instance_digest` exactly match
+   `receipt_authority_instances.json`; never copy a staging key/receipt into the
+   production registry.
+6. Merge the registry change through the required Cloudflare check.
 
 No operator may infer or manually choose the activated key ID. It must equal
 the exact `key_id` returned by the PENDING authority and merged into the
@@ -162,6 +168,10 @@ exception no longer applies. At minimum, require:
 5. Staging activation, exact-segment reconciliation, recovery, signature
    verification, and post-sign immutability smoke tests pass.
 6. Rollback ownership and monitoring are live.
+
+Both checked-in scoped registries remain `PENDING` with no active key. This
+runbook does not authorize changing either registry or Worker to `ACTIVE` while
+any receipt-authority P0 remains unresolved.
 
 Deploy ACTIVE to staging first, retain its immutable evidence, then repeat the
 review for production. A smoke reconciliation may pass only `dataset` and

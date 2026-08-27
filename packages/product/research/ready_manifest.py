@@ -18,6 +18,10 @@ from weakref import WeakKeyDictionary
 
 from qp_paths import repo_root
 from selection.budget_ledger import MassResearchDisabledError
+from storage.receipt_crypto import (
+    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+    PRODUCTION_RECEIPT_ENVIRONMENT,
+)
 
 READY_MANIFEST_FORMAT: str = "ready-manifest/v1"
 SCHEMA_REL: Path = Path("specs") / "ready" / "ready_manifest.schema.json"
@@ -1425,6 +1429,10 @@ def _verify_exact_four_pit_dependency_scope(
                 )
                 closure = require_verified_collection_closure(
                     receipt,
+                    expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+                    expected_authority_instance_digest=(
+                        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+                    ),
                     expected_policy_version=coverage_contract_for(
                         dataset_id
                     ).policy_version,

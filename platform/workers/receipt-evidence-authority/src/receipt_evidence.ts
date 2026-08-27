@@ -5,12 +5,13 @@ import {
 import type { JquantsAcquisitionRequestV2 } from "../../ingestion-secrets/src/jquants_acquisition_types";
 import type { DatasetSpec } from "../../ingestion-premium/src/catalog";
 import type { Capture } from "./raw_capture";
+import { authorityInstanceScope } from "./authority_instance";
 import type {
-  CollectionReceiptV2,
+  CollectionReceiptV3,
   JsonValue,
   ReceiptAuthorityEnv,
   ReceiptAuthorityIssuedRecord,
-  UnsignedReceiptClaimsV2,
+  UnsignedReceiptClaimsV3,
 } from "./types";
 
 function expectedScope(spec: DatasetSpec, initial: JquantsAcquisitionRequestV2): {
@@ -33,6 +34,7 @@ function expectedScope(spec: DatasetSpec, initial: JquantsAcquisitionRequestV2):
 }
 
 export async function measuredClaims(input: {
+  env: ReceiptAuthorityEnv;
   requestDigest: string;
   runId: number;
   spec: DatasetSpec;
@@ -40,7 +42,8 @@ export async function measuredClaims(input: {
   structuredCount: number;
   structuredDigest: string;
   checkedAt: string;
-}): Promise<UnsignedReceiptClaimsV2> {
+}): Promise<UnsignedReceiptClaimsV3> {
+  const authorityScope = await authorityInstanceScope(input.env);
   const { scope, expectedItems } = expectedScope(input.spec, input.capture.initialRequest);
   const rawCount = input.capture.pages.reduce((total, page) => total + page.rowCount, 0);
   if (rawCount !== input.structuredCount) {
@@ -50,6 +53,8 @@ export async function measuredClaims(input: {
     throw new Error("receipt authority accepts only Coverage V3");
   }
   const scopeBody = {
+    environment: authorityScope.environment,
+    authority_instance_digest: authorityScope.authorityInstanceDigest,
     coverage_policy_version: "collection-coverage/v3" as const,
     source: "jquants" as const,
     dataset: input.spec.id,
@@ -93,7 +98,7 @@ export async function measuredClaims(input: {
 
 export function receiptFromIssued(
   issued: ReceiptAuthorityIssuedRecord,
-): CollectionReceiptV2 {
+): CollectionReceiptV3 {
   const claims = issued.claims;
   return {
     source: "jquants",
@@ -119,7 +124,7 @@ export function receiptFromIssued(
 export async function commitReceipt(
   env: ReceiptAuthorityEnv,
   operationId: string,
-  receipt: CollectionReceiptV2,
+  receipt: CollectionReceiptV3,
 ): Promise<string> {
   const receiptDigest = await canonicalDigest(receipt);
   const operation = await env.DB.prepare(
@@ -250,7 +255,7 @@ export async function commitReceipt(
     receipt.run_id,
   ).first<Record<string, unknown>>();
   if (row === null) throw new Error("receipt D1 insert disappeared");
-  const restored: CollectionReceiptV2 = {
+  const restored: CollectionReceiptV3 = {
     source: String(row.source) as "jquants",
     dataset: String(row.dataset),
     segment_id: String(row.segment_id),
@@ -263,7 +268,7 @@ export async function commitReceipt(
     raw_row_count: Number(row.raw_row_count),
     structured_row_count: Number(row.structured_row_count),
     pagination_exhausted: Boolean(row.pagination_exhausted) as true,
-    digests: JSON.parse(String(row.digests_json)) as CollectionReceiptV2["digests"],
+    digests: JSON.parse(String(row.digests_json)) as CollectionReceiptV3["digests"],
     run_id: Number(row.run_id),
     status: String(row.status) as "SUCCESS",
     error: row.error === null ? null : String(row.error) as never,

@@ -310,7 +310,11 @@ def test_emit_segment_receipt_records_verified_signature(
 ):
     from ingestion.jquants.receipts import emit_segment_receipt
     from storage.coverage_ledger import is_complete_eligible_receipt
-    from storage.receipt_crypto import verify_receipt_signature
+    from storage.receipt_crypto import (
+        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+        PRODUCTION_RECEIPT_ENVIRONMENT,
+        verify_receipt_signature,
+    )
 
     store = SqliteStore(tmp_path / "t.sqlite")
     policy = coverage_contract_for("markets_calendar")
@@ -333,7 +337,13 @@ def test_emit_segment_receipt_records_verified_signature(
     assert receipt.status == "SUCCESS"
     assert receipt.digests.get("eligibility") == "TRUSTED_COLLECTION"
     assert str(receipt.digests.get("signature") or "").startswith("ed25519:")
-    assert verify_receipt_signature(receipt.digests)
+    assert verify_receipt_signature(
+        receipt.digests,
+        expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+        expected_authority_instance_digest=(
+            PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+        ),
+    )
     assert is_complete_eligible_receipt(receipt)
     n = store._conn.execute("select count(*) from collection_receipts").fetchone()[0]
     assert n == 1

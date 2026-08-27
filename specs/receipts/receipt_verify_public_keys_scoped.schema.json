@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "specs/receipts/receipt_verify_public_keys_scoped.schema.json",
+  "title": "ScopedReceiptVerifyPublicKeyRegistryV3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "purpose",
+    "generation",
+    "authority_status",
+    "environment",
+    "authority_instance_digest",
+    "prior_registry_digest",
+    "keys",
+    "registry_digest"
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "activeKey": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {"status": {"const": "active"}}
+    }
+  },
+  "properties": {
+    "schema_version": {"const": 3},
+    "purpose": {"const": "receipt_verification"},
+    "generation": {"type": "integer", "minimum": 1},
+    "authority_status": {"enum": ["ACTIVE", "PENDING"]},
+    "environment": {"enum": ["production", "staging"]},
+    "authority_instance_digest": {"$ref": "#/$defs/digest"},
+    "prior_registry_digest": {
+      "oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]
+    },
+    "keys": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key_id", "algorithm", "public_key_base64", "status"],
+        "properties": {
+          "key_id": {"type": "string", "minLength": 1},
+          "algorithm": {"const": "Ed25519"},
+          "public_key_base64": {
+            "type": "string",
+            "minLength": 44,
+            "maxLength": 44,
+            "pattern": "^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$"
+          },
+          "status": {"enum": ["active", "pending", "revoked"]}
+        }
+      }
+    },
+    "registry_digest": {"$ref": "#/$defs/digest"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"generation": {"const": 1}}, "required": ["generation"]},
+      "then": {"properties": {"prior_registry_digest": {"type": "null"}}},
+      "else": {"properties": {"prior_registry_digest": {"$ref": "#/$defs/digest"}}}
+    },
+    {
+      "if": {"properties": {"authority_status": {"const": "ACTIVE"}}},
+      "then": {
+        "properties": {
+          "keys": {
+            "minItems": 1,
+            "contains": {"$ref": "#/$defs/activeKey"},
+            "minContains": 1,
+            "maxContains": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {"keys": {"not": {"contains": {"$ref": "#/$defs/activeKey"}}}}
+      }
+    }
+  ]
+}

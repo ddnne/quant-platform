@@ -55,6 +55,10 @@ from storage.receipt_policy import (
     is_recovered_only_digests,
     receipt_source_for_canonical_source,
 )
+from storage.receipt_crypto import (
+    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+    PRODUCTION_RECEIPT_ENVIRONMENT,
+)
 
 
 def _now() -> str:
@@ -708,6 +712,10 @@ def _evaluate_segment_with_closure(
 
         closure = require_verified_collection_closure(
             receipt,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=(
+                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ),
             required=required,
             expected_policy_version=policy.policy_version,
         )
@@ -826,7 +834,7 @@ def _date_prefix(value: str | None) -> str | None:
 def _receipt_observed_window(
     receipts: Sequence[CollectionReceipt],
 ) -> tuple[str | None, str | None, int]:
-    """Observed calendar span from verified v2 closures with retained rows."""
+    """Observed calendar span from verified v3 closures with retained rows."""
     from storage.verified_receipt import (
         ReceiptVerificationError,
         require_verified_collection_closure,
@@ -837,7 +845,13 @@ def _receipt_observed_window(
     raw_total = 0
     for receipt in receipts:
         try:
-            closure = require_verified_collection_closure(receipt)
+            closure = require_verified_collection_closure(
+                receipt,
+                expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+                expected_authority_instance_digest=(
+                    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+                ),
+            )
         except ReceiptVerificationError:
             continue
         raw_n = closure.raw_row_count
@@ -1340,6 +1354,10 @@ def _latest_complete_receipt_for_required(
         try:
             closure = require_verified_collection_closure(
                 receipt,
+                expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+                expected_authority_instance_digest=(
+                    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+                ),
                 required=required,
                 expected_policy_version=policy.policy_version,
             )
@@ -1805,6 +1823,10 @@ def _refresh_coverage_ledger_in_transaction(
 
                 selected_run_id = require_verified_collection_closure(
                     receipt,
+                    expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+                    expected_authority_instance_digest=(
+                        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+                    ),
                     required=required_segment,
                     expected_policy_version=policy.policy_version,
                 ).run_id
@@ -2388,14 +2410,20 @@ def is_synthetic_receipt(receipt: CollectionReceipt) -> bool:
 
 
 def receipt_eligibility(receipt: CollectionReceipt) -> str:
-    """TRUSTED_COLLECTION only with a v2 closure, never issuer strings."""
+    """TRUSTED_COLLECTION only with a scoped v3 closure, never issuer strings."""
     from storage.verified_receipt import (
         ReceiptVerificationError,
         require_verified_collection_closure,
     )
 
     try:
-        require_verified_collection_closure(receipt)
+        require_verified_collection_closure(
+            receipt,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=(
+                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ),
+        )
     except ReceiptVerificationError:
         return "RECOVERED_RAW_ONLY"
     return "TRUSTED_COLLECTION"
@@ -2412,14 +2440,20 @@ def _has_nonempty_trusted_raw_evidence(closure: Any) -> bool:
 
 
 def is_complete_eligible_receipt(receipt: CollectionReceipt) -> bool:
-    """COMPLETE only with a verified v2 closure and trusted raw evidence."""
+    """COMPLETE only with a verified scoped v3 closure and trusted raw evidence."""
     from storage.verified_receipt import (
         ReceiptVerificationError,
         require_verified_collection_closure,
     )
 
     try:
-        closure = require_verified_collection_closure(receipt)
+        closure = require_verified_collection_closure(
+            receipt,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=(
+                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ),
+        )
     except ReceiptVerificationError:
         return False
     return _has_nonempty_trusted_raw_evidence(closure)

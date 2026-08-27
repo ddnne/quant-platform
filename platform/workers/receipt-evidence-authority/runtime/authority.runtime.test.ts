@@ -15,6 +15,7 @@ import type {
 } from "../../ingestion-secrets/src/jquants_acquisition_types";
 import { canonicalDigest, sha256Digest } from "../src/canonical";
 import { ReceiptEvidenceAuthority } from "../src/authority_do";
+import { authorityInstanceDigest } from "../src/authority_instance";
 import {
   canonicalProductBody,
   compareUtf8Text,
@@ -435,6 +436,7 @@ describe("Receipt Evidence Authority in workerd", () => {
       schema_version: "receipt-public-key-registration/v1",
       purpose: "receipt_verification",
       environment: "production",
+      authority_instance_digest: await authorityInstanceDigest("production"),
       authority_status: "PENDING",
       algorithm: "Ed25519",
       private_key_extractable: false,
@@ -445,6 +447,7 @@ describe("Receipt Evidence Authority in workerd", () => {
         schema_version: registration.schema_version,
         purpose: registration.purpose,
         environment: registration.environment,
+        authority_instance_digest: registration.authority_instance_digest,
         authority_status: registration.authority_status,
         key_id: registration.key_id,
         key_generation: registration.key_generation,
@@ -530,6 +533,20 @@ describe("Receipt Evidence Authority in workerd", () => {
       signature,
       decodeBase64(recovered.receipt.digests.signed_body_b64),
     )).toBe(true);
+    const signedClaims = JSON.parse(
+      new TextDecoder().decode(
+        decodeBase64(recovered.receipt.digests.signed_body_b64),
+      ),
+    ) as Record<string, unknown>;
+    expect(signedClaims).toMatchObject({
+      version: "signed-receipt-claims/v3",
+      environment: "production",
+      authority_instance_digest: await authorityInstanceDigest("production"),
+    });
+    expect(recovered.receipt.digests.environment).toBe("production");
+    expect(recovered.receipt.digests.authority_instance_digest).toBe(
+      await authorityInstanceDigest("production"),
+    );
 
     const replay = await stub.issue_for_segment(request);
     expect(replay.replayed).toBe(true);
@@ -565,6 +582,15 @@ describe("Receipt Evidence Authority in workerd", () => {
         "SELECT COUNT(*) AS count FROM authority_events",
       ).one().count
     )).toBe(4);
+  });
+
+  it("shares canonical environment/resource authority digests with verifiers", async () => {
+    expect(await authorityInstanceDigest("production")).toBe(
+      "sha256:a63f439bbf478ce25795ed2c80ed6e88ddcd344a4c8538713a20410ac58b8f8c",
+    );
+    expect(await authorityInstanceDigest("staging")).toBe(
+      "sha256:0fa133cf345bdd1f979beebb18e3873fbad88ac7631fc7d5b07ffaca34e68ac7",
+    );
   });
 
   it("resumes the same COLLECTING operation after a pre-sign D1 failure", async () => {

@@ -12,7 +12,11 @@ from datetime import datetime
 from ingestion.common.http import HttpResponse
 from ingestion.pipeline import run_jquants
 from storage import read_collection_receipts
-from storage.receipt_crypto import verify_receipt_signature
+from storage.receipt_crypto import (
+    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+    PRODUCTION_RECEIPT_ENVIRONMENT,
+    verify_receipt_signature,
+)
 from storage.sqlite_store import SqliteStore
 
 
@@ -41,7 +45,13 @@ def _assert_verified_success_receipts(store, *, dataset: str | None = None) -> N
         digests = json.loads(row["digests_json"])
         assert digests.get("eligibility") == "TRUSTED_COLLECTION"
         assert str(digests.get("signature") or "").startswith("ed25519:")
-        assert verify_receipt_signature(digests)
+        assert verify_receipt_signature(
+            digests,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=(
+                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ),
+        )
 
 
 class _CatalogHttp:
@@ -182,7 +192,13 @@ def test_run_jquants_catalog_incremental_default_window(
         # envelope is deliberately ineligible for Coverage COMPLETE.
         assert digests.get("eligibility") == "RECOVERED_RAW_ONLY"
         assert str(digests.get("signature") or "").startswith("ed25519:")
-        assert verify_receipt_signature(digests)
+        assert verify_receipt_signature(
+            digests,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=(
+                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ),
+        )
     store.close()
 
 

@@ -448,7 +448,7 @@ def test_product_projection_selects_only_latest_active_receipt_generation(
     _insert_product_receipt_candidate(conn, run_id=102)
     _insert_current_product_materialization(conn, run_id=102)
 
-    def verify(receipt: object) -> SimpleNamespace:
+    def verify(receipt: object, **_scope: object) -> SimpleNamespace:
         run_id = object.__getattribute__(receipt, "run_id")
         return SimpleNamespace(run_id=run_id, structured_generation=run_id)
 
@@ -464,7 +464,7 @@ def test_product_projection_keeps_revoked_receipt_audit_only(
     conn = _receipt_product_projection_source()
     _insert_product_receipt_candidate(conn, run_id=101)
 
-    def inactive(_receipt: object) -> None:
+    def inactive(_receipt: object, **_scope: object) -> None:
         raise exporter.ReceiptVerificationError("key is not active")
 
     monkeypatch.setattr(exporter, "verify_collection_closure", inactive)
@@ -473,8 +473,10 @@ def test_product_projection_keeps_revoked_receipt_audit_only(
     )
     monkeypatch.setattr(
         exporter,
-        "audit_signed_receipt_claims",
-        lambda _receipt: MappingProxyType({"version": "signed-receipt-claims/v2"}),
+        "audit_collection_closure",
+        lambda _receipt, **_scope: MappingProxyType(
+            {"version": "signed-receipt-claims/v2"}
+        ),
     )
     assert exporter._read_receipt_product_materializations(conn, "generation") == []
     conn.close()
@@ -486,7 +488,7 @@ def test_product_projection_rejects_forged_trusted_marker(
     conn = _receipt_product_projection_source()
     _insert_product_receipt_candidate(conn, run_id=101)
 
-    def rejected(_receipt: object) -> None:
+    def rejected(_receipt: object, **_scope: object) -> None:
         raise exporter.ReceiptVerificationError("invalid signature")
 
     monkeypatch.setattr(exporter, "verify_collection_closure", rejected)
@@ -504,11 +506,11 @@ def test_product_projection_rejects_corrupt_revoked_receipt(
     conn = _receipt_product_projection_source()
     _insert_product_receipt_candidate(conn, run_id=101)
 
-    def rejected(_receipt: object) -> None:
+    def rejected(_receipt: object, **_scope: object) -> None:
         raise exporter.ReceiptVerificationError("invalid signature")
 
     monkeypatch.setattr(exporter, "verify_collection_closure", rejected)
-    monkeypatch.setattr(exporter, "audit_signed_receipt_claims", rejected)
+    monkeypatch.setattr(exporter, "audit_collection_closure", rejected)
     monkeypatch.setattr(
         exporter, "receipt_verify_key_status", lambda _key_id: "revoked"
     )
