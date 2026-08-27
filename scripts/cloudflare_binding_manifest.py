@@ -8,6 +8,7 @@ secret-name policy. It contains names only; secret values are never read.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -453,6 +454,145 @@ DURABLE_OBJECT_RESERVED_SPECIAL_POLICY: dict[
     },
 }
 
+QUANT_OPS_AGENTS_DEPENDENCY_POLICY = {
+    "package": "agents",
+    "requested": "0.17.4",
+    "resolved_version": "0.17.4",
+    "resolved": "https://registry.npmjs.org/agents/-/agents-0.17.4.tgz",
+    "integrity": (
+        "sha512-K6YRbpD3VcwdTOPBlDgI4dILAwkhXo5cdxTlVF0IvUwQEKfMPawmH8E/"
+        "QMXTN8CPGHqVYgYFACxTyk6nKlK+vg=="
+    ),
+    "package_lock": "platform/workers/quant-ops-mcp/package-lock.json",
+    "package_lock_digest": (
+        "sha256:fd583b8f3c1a75f5511c4abe0422274529c987e0512c0b724e63733a588af52f"
+    ),
+}
+
+# McpAgent is a framework-owned legacy Durable Object. Its dependency copies
+# inherited prototype methods onto the application class during construction,
+# so a short explicit method list would hide the real RPC surface. Freeze the
+# exact post-construction workerd descriptor inventory instead. The descriptor
+# digest is over canonical rows ordered by prototype owner, property name and
+# accessor kind; each row includes owner/order/name/kind plus the enumerable,
+# configurable and writable flags.
+FRAMEWORK_DURABLE_OBJECT_POLICY: dict[str, dict[str, dict[str, Any]]] = {
+    "quant-ops-mcp": {
+        "QuantOpsMcpAgent": {
+            "policy_kind": "framework-prototype-inventory/v1",
+            "framework_class": "McpAgent",
+            "own_custom_pre_init_rpc_methods": ["init"],
+            "constructor_prototype_copy": {
+                "observed": True,
+                "copied_method_count": 17,
+                "post_construction_own_method_count": 18,
+            },
+            "post_construction_prototype": {
+                "canonicalization": "prototype-descriptors/v1",
+                "owner_order": ["QuantOpsMcpAgent", "McpAgent", "Agent", "Server"],
+                "owner_inventories": [
+                    {
+                        "owner": "QuantOpsMcpAgent",
+                        "descriptor_row_count": 18,
+                        "descriptor_digest": (
+                            "sha256:311e5b28b8a5edafc1cf4d26fba62616b5f7f0c2331e8b25b8c20225c30af126"
+                        ),
+                    },
+                    {
+                        "owner": "McpAgent",
+                        "descriptor_row_count": 21,
+                        "descriptor_digest": (
+                            "sha256:f82cfc1fc012c399a9f4356e27352f8dbaa88ea541e8f405c9eff95e1fad17a3"
+                        ),
+                    },
+                    {
+                        "owner": "Agent",
+                        "descriptor_row_count": 284,
+                        "descriptor_digest": (
+                            "sha256:916d6fd9f21ed584b8e862432831ddbdabe92055201211f2593337f4a86917f0"
+                        ),
+                    },
+                    {
+                        "owner": "Server",
+                        "descriptor_row_count": 22,
+                        "descriptor_digest": (
+                            "sha256:2d7f8feda2717b89fad0bd6ef6df7b4071dd5e526a60ccee9d2302657f3c5d5a"
+                        ),
+                    },
+                ],
+                "descriptor_row_count": 345,
+                "descriptor_digest": (
+                    "sha256:077694dde17e90c2ac702c71652a53f9f69b3c8143197de0c8ccaff3afc34d1f"
+                ),
+                "unique_method_count": 310,
+                "unique_ordinary_method_count": 305,
+                "unique_getter_count": 6,
+                "unique_setter_count": 0,
+                "unique_reserved_special_count": 5,
+            },
+            "reserved_specials": {
+                "fetch": True,
+                "alarm": True,
+                "webSocketMessage": True,
+                "webSocketClose": True,
+                "webSocketError": True,
+            },
+            "dependency": QUANT_OPS_AGENTS_DEPENDENCY_POLICY,
+        },
+    },
+}
+
+
+def _canonical_digest(value: Any) -> str:
+    rendered = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(rendered).hexdigest()
+
+
+def _quant_ops_agents_dependency() -> dict[str, str]:
+    policy = QUANT_OPS_AGENTS_DEPENDENCY_POLICY
+    package_path = WORKER_ROOT / "quant-ops-mcp" / "package.json"
+    lock_path = ROOT / policy["package_lock"]
+    try:
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+        lock_raw = lock_path.read_bytes()
+        lock = json.loads(lock_raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("quant-ops-mcp agents dependency metadata is unreadable") from exc
+    if (
+        not isinstance(package, dict)
+        or not isinstance(package.get("dependencies"), dict)
+        or package["dependencies"].get("agents") != policy["requested"]
+    ):
+        raise ValueError("quant-ops-mcp agents dependency must be an exact pin")
+    if (
+        not isinstance(lock, dict)
+        or lock.get("lockfileVersion") != 3
+        or not isinstance(lock.get("packages"), dict)
+    ):
+        raise ValueError("quant-ops-mcp package-lock is not exact npm lockfile v3")
+    root = lock["packages"].get("")
+    resolved = lock["packages"].get("node_modules/agents")
+    if (
+        not isinstance(root, dict)
+        or not isinstance(root.get("dependencies"), dict)
+        or root["dependencies"].get("agents") != policy["requested"]
+        or not isinstance(resolved, dict)
+        or resolved.get("version") != policy["resolved_version"]
+        or resolved.get("resolved") != policy["resolved"]
+        or resolved.get("integrity") != policy["integrity"]
+    ):
+        raise ValueError("quant-ops-mcp resolved agents dependency drifted")
+    digest = "sha256:" + hashlib.sha256(lock_raw).hexdigest()
+    if digest != policy["package_lock_digest"]:
+        raise ValueError("quant-ops-mcp package-lock byte digest drifted")
+    return dict(policy)
+
 _MODELED_CONFIG_KEYS = (
     "account_id",
     "ai",
@@ -726,34 +866,37 @@ def _effective_surface(
             )
         ],
         "durable_object_class_handlers": [
-            {
-                "name": row["class_name"],
-                "handlers": ["class"],
-                **(
-                    {
-                        "fetch_reserved_special": reserved_specials[0],
-                        "alarm_reserved_special": reserved_specials[1],
-                    }
-                    if (
-                        reserved_specials := DURABLE_OBJECT_RESERVED_SPECIAL_POLICY.get(
-                            worker, {}
-                        ).get(row["class_name"])
-                    ) is not None
-                    else {}
-                ),
-                **(
-                    {"rpc_methods": list(rpc_methods)}
-                    if (
-                        rpc_methods := DURABLE_OBJECT_RPC_POLICY.get(
-                            worker, {}
-                        ).get(row["class_name"])
-                    ) is not None
-                    else {}
-                ),
-            }
+            _durable_object_inventory(worker, row["class_name"])
             for row in _json_rows(durable_objects.get("bindings"))
         ],
     }
+
+
+def _durable_object_inventory(worker: str, class_name: str) -> dict[str, Any]:
+    rpc_methods = DURABLE_OBJECT_RPC_POLICY.get(worker, {}).get(class_name)
+    framework = FRAMEWORK_DURABLE_OBJECT_POLICY.get(worker, {}).get(class_name)
+    if (rpc_methods is None) == (framework is None):
+        raise ValueError(
+            f"{worker}/{class_name}: Durable Object needs exactly one explicit "
+            "RPC or framework inventory policy"
+        )
+    row: dict[str, Any] = {"name": class_name, "handlers": ["class"]}
+    if rpc_methods is not None:
+        reserved_specials = DURABLE_OBJECT_RESERVED_SPECIAL_POLICY.get(
+            worker, {}
+        ).get(class_name)
+        if reserved_specials is not None:
+            row.update({
+                "fetch_reserved_special": reserved_specials[0],
+                "alarm_reserved_special": reserved_specials[1],
+            })
+        row["rpc_methods"] = list(rpc_methods)
+        return row
+    assert framework is not None
+    rendered = json.loads(json.dumps(framework, sort_keys=True))
+    rendered["dependency"] = _quant_ops_agents_dependency()
+    row["framework_rpc_inventory"] = rendered
+    return row
 
 
 def build_manifest() -> dict[str, Any]:
@@ -793,8 +936,8 @@ def build_manifest() -> dict[str, Any]:
         for worker in ACTIVE_WORKERS
         if (WORKER_ROOT / worker / "wrangler.test.toml").is_file()
     }
-    manifest = {
-        "schema_version": "cloudflare-active-worker-bindings/v7",
+    body = {
+        "schema_version": "cloudflare-active-worker-bindings/v8",
         "active_workers": list(ACTIVE_WORKERS),
         "config_key_policy": CONFIG_KEY_POLICY,
         "test_harness_surfaces": test_harness_surfaces,
@@ -804,6 +947,7 @@ def build_manifest() -> dict[str, Any]:
         },
         "workers": workers,
     }
+    manifest = {**body, "manifest_digest": _canonical_digest(body)}
     validate_manifest(manifest)
     return manifest
 
@@ -812,6 +956,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     if set(manifest) != {
         "active_workers",
         "config_key_policy",
+        "manifest_digest",
         "schema_version",
         "test_harness_surfaces",
         "toolchain_policy",
@@ -819,7 +964,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "workers",
     }:
         raise ValueError("binding manifest fields are not closed")
-    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v7":
+    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v8":
         raise ValueError("binding manifest schema_version drift")
     if manifest["config_key_policy"] != CONFIG_KEY_POLICY:
         raise ValueError("Wrangler config-key policy drift")
@@ -967,31 +1112,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             )
         ]
         expected_do_handlers = [
-            {
-                "name": row["class_name"],
-                "handlers": ["class"],
-                **(
-                    {
-                        "fetch_reserved_special": reserved_specials[0],
-                        "alarm_reserved_special": reserved_specials[1],
-                    }
-                    if (
-                        reserved_specials := DURABLE_OBJECT_RESERVED_SPECIAL_POLICY.get(
-                            worker, {}
-                        ).get(row["class_name"])
-                    ) is not None
-                    else {}
-                ),
-                **(
-                    {"rpc_methods": list(rpc_methods)}
-                    if (
-                        rpc_methods := DURABLE_OBJECT_RPC_POLICY.get(
-                            worker, {}
-                        ).get(row["class_name"])
-                    ) is not None
-                    else {}
-                ),
-            }
+            _durable_object_inventory(worker, row["class_name"])
             for row in staging["durable_objects"]
         ]
         for target in ("base", "production", "staging"):
@@ -1152,7 +1273,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         },
     }
     for environment, expected in expected_ops_databases.items():
-        databases = workers["quant-ops-mcp"][environment]["d1_databases"]
+        ops_surface = workers["quant-ops-mcp"][environment]
+        databases = ops_surface["d1_databases"]
         actual = {
             (
                 str(row.get("binding")),
@@ -1166,6 +1288,52 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 f"quant-ops-mcp/{environment}: dedicated projection/quota "
                 f"bindings drifted: {sorted(actual)}"
             )
+        if ops_surface["durable_objects"] != [{
+            "class_name": "QuantOpsMcpAgent",
+            "name": "MCP_OBJECT",
+        }]:
+            raise ValueError(
+                f"quant-ops-mcp/{environment}: MCP_OBJECT must be a self-only "
+                "QuantOpsMcpAgent namespace"
+            )
+        if ops_surface["services"] != []:
+            raise ValueError(
+                f"quant-ops-mcp/{environment}: MCP_OBJECT Worker must not "
+                "receive Service Binding capabilities"
+            )
+
+    ops_test = manifest["test_harness_surfaces"].get("quant-ops-mcp")
+    if not isinstance(ops_test, dict):
+        raise ValueError("quant-ops-mcp: governed test-harness surface is required")
+    if ops_test["durable_objects"] != [{
+        "class_name": "QuantOpsMcpAgent",
+        "name": "MCP_OBJECT",
+    }] or ops_test["services"] != []:
+        raise ValueError(
+            "quant-ops-mcp/test: MCP_OBJECT must be self-only without Service Bindings"
+        )
+
+    ops_worker_names = {
+        workers["quant-ops-mcp"][environment]["name"]
+        for environment in ("base", "production", "staging")
+    }
+    for worker, environments in workers.items():
+        if worker == "quant-ops-mcp":
+            continue
+        for environment, surface in environments.items():
+            if any(
+                row.get("name") == "MCP_OBJECT"
+                or row.get("class_name") == "QuantOpsMcpAgent"
+                or row.get("script_name") in ops_worker_names
+                for row in surface["durable_objects"]
+            ) or any(
+                row.get("service") in ops_worker_names
+                for row in surface["services"]
+            ):
+                raise ValueError(
+                    f"{worker}/{environment}: QuantOps MCP_OBJECT capability "
+                    "must not be distributed to another Worker"
+                )
 
     for environment in ("base", "production"):
         ratelimits = workers["ingestion-secrets"][environment]["ratelimits"]
@@ -1173,6 +1341,10 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError(
                 f"ingestion-secrets/{environment}: PROXY_RATE_LIMITER binding required"
             )
+
+    body = {key: value for key, value in manifest.items() if key != "manifest_digest"}
+    if manifest["manifest_digest"] != _canonical_digest(body):
+        raise ValueError("binding manifest digest drift")
 
 
 def _render(manifest: dict[str, Any]) -> str:

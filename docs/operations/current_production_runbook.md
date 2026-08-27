@@ -37,6 +37,15 @@ remote apply results only in immutable release evidence.
   Service Binding RPC `GatewayService`. `GATEWAY_TOKEN` is HTTP defense in
   depth if a closed route is attached later; it is not a shared Mass
   credential.
+- **Quant Ops legacy agent:** `QuantOpsMcpAgent` remains on deprecated,
+  feature-frozen `McpAgent` for un-inventoried legacy `/sse` compatibility.
+  Source CI pins `agents` and the lock bytes and measures the complete
+  post-construction workerd prototype. Exact module-byte acceptance is the live
+  identity and transitively binds the embedded binding-manifest digest; the
+  lockfile itself is not claimed as a live API observation. No deploy or legacy
+  client drain has occurred. Follow
+  [`../architecture/adr_quant_ops_mcpagent_migration.md`](../architecture/adr_quant_ops_mcpagent_migration.md): migrate `/mcp` to `createMcpHandler`, then drain
+  `/sse` only after a real client inventory.
 - **AM history:** do not treat V2 monthly AM completeness as a current target.
   V3 AM is tip-scoped. Residual PARTIAL rows are not permission to mint empty
   COMPLETE receipts.

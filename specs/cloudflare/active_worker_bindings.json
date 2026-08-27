@@ -58,7 +58,8 @@
     ],
     "unclassified": "REJECT"
   },
-  "schema_version": "cloudflare-active-worker-bindings/v7",
+  "manifest_digest": "sha256:f26519b17d3ee5ef1d047ae7c2b15ff22cadc5830f46deca32ff7c1ac1d1bac5",
+  "schema_version": "cloudflare-active-worker-bindings/v8",
   "test_harness_surfaces": {
     "ingestion-jsda": {
       "account_id": null,
@@ -228,6 +229,72 @@
       ],
       "durable_object_class_handlers": [
         {
+          "framework_rpc_inventory": {
+            "constructor_prototype_copy": {
+              "copied_method_count": 17,
+              "observed": true,
+              "post_construction_own_method_count": 18
+            },
+            "dependency": {
+              "integrity": "sha512-K6YRbpD3VcwdTOPBlDgI4dILAwkhXo5cdxTlVF0IvUwQEKfMPawmH8E/QMXTN8CPGHqVYgYFACxTyk6nKlK+vg==",
+              "package": "agents",
+              "package_lock": "platform/workers/quant-ops-mcp/package-lock.json",
+              "package_lock_digest": "sha256:fd583b8f3c1a75f5511c4abe0422274529c987e0512c0b724e63733a588af52f",
+              "requested": "0.17.4",
+              "resolved": "https://registry.npmjs.org/agents/-/agents-0.17.4.tgz",
+              "resolved_version": "0.17.4"
+            },
+            "framework_class": "McpAgent",
+            "own_custom_pre_init_rpc_methods": [
+              "init"
+            ],
+            "policy_kind": "framework-prototype-inventory/v1",
+            "post_construction_prototype": {
+              "canonicalization": "prototype-descriptors/v1",
+              "descriptor_digest": "sha256:077694dde17e90c2ac702c71652a53f9f69b3c8143197de0c8ccaff3afc34d1f",
+              "descriptor_row_count": 345,
+              "owner_inventories": [
+                {
+                  "descriptor_digest": "sha256:311e5b28b8a5edafc1cf4d26fba62616b5f7f0c2331e8b25b8c20225c30af126",
+                  "descriptor_row_count": 18,
+                  "owner": "QuantOpsMcpAgent"
+                },
+                {
+                  "descriptor_digest": "sha256:f82cfc1fc012c399a9f4356e27352f8dbaa88ea541e8f405c9eff95e1fad17a3",
+                  "descriptor_row_count": 21,
+                  "owner": "McpAgent"
+                },
+                {
+                  "descriptor_digest": "sha256:916d6fd9f21ed584b8e862432831ddbdabe92055201211f2593337f4a86917f0",
+                  "descriptor_row_count": 284,
+                  "owner": "Agent"
+                },
+                {
+                  "descriptor_digest": "sha256:2d7f8feda2717b89fad0bd6ef6df7b4071dd5e526a60ccee9d2302657f3c5d5a",
+                  "descriptor_row_count": 22,
+                  "owner": "Server"
+                }
+              ],
+              "owner_order": [
+                "QuantOpsMcpAgent",
+                "McpAgent",
+                "Agent",
+                "Server"
+              ],
+              "unique_getter_count": 6,
+              "unique_method_count": 310,
+              "unique_ordinary_method_count": 305,
+              "unique_reserved_special_count": 5,
+              "unique_setter_count": 0
+            },
+            "reserved_specials": {
+              "alarm": true,
+              "fetch": true,
+              "webSocketClose": true,
+              "webSocketError": true,
+              "webSocketMessage": true
+            }
+          },
           "handlers": [
             "class"
           ],
@@ -1331,6 +1398,72 @@
         ],
         "durable_object_class_handlers": [
           {
+            "framework_rpc_inventory": {
+              "constructor_prototype_copy": {
+                "copied_method_count": 17,
+                "observed": true,
+                "post_construction_own_method_count": 18
+              },
+              "dependency": {
+                "integrity": "sha512-K6YRbpD3VcwdTOPBlDgI4dILAwkhXo5cdxTlVF0IvUwQEKfMPawmH8E/QMXTN8CPGHqVYgYFACxTyk6nKlK+vg==",
+                "package": "agents",
+                "package_lock": "platform/workers/quant-ops-mcp/package-lock.json",
+                "package_lock_digest": "sha256:fd583b8f3c1a75f5511c4abe0422274529c987e0512c0b724e63733a588af52f",
+                "requested": "0.17.4",
+                "resolved": "https://registry.npmjs.org/agents/-/agents-0.17.4.tgz",
+                "resolved_version": "0.17.4"
+              },
+              "framework_class": "McpAgent",
+              "own_custom_pre_init_rpc_methods": [
+                "init"
+              ],
+              "policy_kind": "framework-prototype-inventory/v1",
+              "post_construction_prototype": {
+                "canonicalization": "prototype-descriptors/v1",
+                "descriptor_digest": "sha256:077694dde17e90c2ac702c71652a53f9f69b3c8143197de0c8ccaff3afc34d1f",
+                "descriptor_row_count": 345,
+                "owner_inventories": [
+                  {
+                    "descriptor_digest": "sha256:311e5b28b8a5edafc1cf4d26fba62616b5f7f0c2331e8b25b8c20225c30af126",
+                    "descriptor_row_count": 18,
+                    "owner": "QuantOpsMcpAgent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:f82cfc1fc012c399a9f4356e27352f8dbaa88ea541e8f405c9eff95e1fad17a3",
+                    "descriptor_row_count": 21,
+                    "owner": "McpAgent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:916d6fd9f21ed584b8e862432831ddbdabe92055201211f2593337f4a86917f0",
+                    "descriptor_row_count": 284,
+                    "owner": "Agent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:2d7f8feda2717b89fad0bd6ef6df7b4071dd5e526a60ccee9d2302657f3c5d5a",
+                    "descriptor_row_count": 22,
+                    "owner": "Server"
+                  }
+                ],
+                "owner_order": [
+                  "QuantOpsMcpAgent",
+                  "McpAgent",
+                  "Agent",
+                  "Server"
+                ],
+                "unique_getter_count": 6,
+                "unique_method_count": 310,
+                "unique_ordinary_method_count": 305,
+                "unique_reserved_special_count": 5,
+                "unique_setter_count": 0
+              },
+              "reserved_specials": {
+                "alarm": true,
+                "fetch": true,
+                "webSocketClose": true,
+                "webSocketError": true,
+                "webSocketMessage": true
+              }
+            },
             "handlers": [
               "class"
             ],
@@ -1423,6 +1556,72 @@
         ],
         "durable_object_class_handlers": [
           {
+            "framework_rpc_inventory": {
+              "constructor_prototype_copy": {
+                "copied_method_count": 17,
+                "observed": true,
+                "post_construction_own_method_count": 18
+              },
+              "dependency": {
+                "integrity": "sha512-K6YRbpD3VcwdTOPBlDgI4dILAwkhXo5cdxTlVF0IvUwQEKfMPawmH8E/QMXTN8CPGHqVYgYFACxTyk6nKlK+vg==",
+                "package": "agents",
+                "package_lock": "platform/workers/quant-ops-mcp/package-lock.json",
+                "package_lock_digest": "sha256:fd583b8f3c1a75f5511c4abe0422274529c987e0512c0b724e63733a588af52f",
+                "requested": "0.17.4",
+                "resolved": "https://registry.npmjs.org/agents/-/agents-0.17.4.tgz",
+                "resolved_version": "0.17.4"
+              },
+              "framework_class": "McpAgent",
+              "own_custom_pre_init_rpc_methods": [
+                "init"
+              ],
+              "policy_kind": "framework-prototype-inventory/v1",
+              "post_construction_prototype": {
+                "canonicalization": "prototype-descriptors/v1",
+                "descriptor_digest": "sha256:077694dde17e90c2ac702c71652a53f9f69b3c8143197de0c8ccaff3afc34d1f",
+                "descriptor_row_count": 345,
+                "owner_inventories": [
+                  {
+                    "descriptor_digest": "sha256:311e5b28b8a5edafc1cf4d26fba62616b5f7f0c2331e8b25b8c20225c30af126",
+                    "descriptor_row_count": 18,
+                    "owner": "QuantOpsMcpAgent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:f82cfc1fc012c399a9f4356e27352f8dbaa88ea541e8f405c9eff95e1fad17a3",
+                    "descriptor_row_count": 21,
+                    "owner": "McpAgent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:916d6fd9f21ed584b8e862432831ddbdabe92055201211f2593337f4a86917f0",
+                    "descriptor_row_count": 284,
+                    "owner": "Agent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:2d7f8feda2717b89fad0bd6ef6df7b4071dd5e526a60ccee9d2302657f3c5d5a",
+                    "descriptor_row_count": 22,
+                    "owner": "Server"
+                  }
+                ],
+                "owner_order": [
+                  "QuantOpsMcpAgent",
+                  "McpAgent",
+                  "Agent",
+                  "Server"
+                ],
+                "unique_getter_count": 6,
+                "unique_method_count": 310,
+                "unique_ordinary_method_count": 305,
+                "unique_reserved_special_count": 5,
+                "unique_setter_count": 0
+              },
+              "reserved_specials": {
+                "alarm": true,
+                "fetch": true,
+                "webSocketClose": true,
+                "webSocketError": true,
+                "webSocketMessage": true
+              }
+            },
             "handlers": [
               "class"
             ],
@@ -1515,6 +1714,72 @@
         ],
         "durable_object_class_handlers": [
           {
+            "framework_rpc_inventory": {
+              "constructor_prototype_copy": {
+                "copied_method_count": 17,
+                "observed": true,
+                "post_construction_own_method_count": 18
+              },
+              "dependency": {
+                "integrity": "sha512-K6YRbpD3VcwdTOPBlDgI4dILAwkhXo5cdxTlVF0IvUwQEKfMPawmH8E/QMXTN8CPGHqVYgYFACxTyk6nKlK+vg==",
+                "package": "agents",
+                "package_lock": "platform/workers/quant-ops-mcp/package-lock.json",
+                "package_lock_digest": "sha256:fd583b8f3c1a75f5511c4abe0422274529c987e0512c0b724e63733a588af52f",
+                "requested": "0.17.4",
+                "resolved": "https://registry.npmjs.org/agents/-/agents-0.17.4.tgz",
+                "resolved_version": "0.17.4"
+              },
+              "framework_class": "McpAgent",
+              "own_custom_pre_init_rpc_methods": [
+                "init"
+              ],
+              "policy_kind": "framework-prototype-inventory/v1",
+              "post_construction_prototype": {
+                "canonicalization": "prototype-descriptors/v1",
+                "descriptor_digest": "sha256:077694dde17e90c2ac702c71652a53f9f69b3c8143197de0c8ccaff3afc34d1f",
+                "descriptor_row_count": 345,
+                "owner_inventories": [
+                  {
+                    "descriptor_digest": "sha256:311e5b28b8a5edafc1cf4d26fba62616b5f7f0c2331e8b25b8c20225c30af126",
+                    "descriptor_row_count": 18,
+                    "owner": "QuantOpsMcpAgent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:f82cfc1fc012c399a9f4356e27352f8dbaa88ea541e8f405c9eff95e1fad17a3",
+                    "descriptor_row_count": 21,
+                    "owner": "McpAgent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:916d6fd9f21ed584b8e862432831ddbdabe92055201211f2593337f4a86917f0",
+                    "descriptor_row_count": 284,
+                    "owner": "Agent"
+                  },
+                  {
+                    "descriptor_digest": "sha256:2d7f8feda2717b89fad0bd6ef6df7b4071dd5e526a60ccee9d2302657f3c5d5a",
+                    "descriptor_row_count": 22,
+                    "owner": "Server"
+                  }
+                ],
+                "owner_order": [
+                  "QuantOpsMcpAgent",
+                  "McpAgent",
+                  "Agent",
+                  "Server"
+                ],
+                "unique_getter_count": 6,
+                "unique_method_count": 310,
+                "unique_ordinary_method_count": 305,
+                "unique_reserved_special_count": 5,
+                "unique_setter_count": 0
+              },
+              "reserved_specials": {
+                "alarm": true,
+                "fetch": true,
+                "webSocketClose": true,
+                "webSocketError": true,
+                "webSocketMessage": true
+              }
+            },
             "handlers": [
               "class"
             ],

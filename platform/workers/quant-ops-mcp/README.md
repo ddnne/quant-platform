@@ -97,7 +97,7 @@ caller-selected policy until it is backed by a governed configuration.
 ## Verify and deploy
 
 ```bash
-npm install
+npm ci
 npm test
 npm run typecheck
 npm run types
@@ -105,6 +105,25 @@ npx wrangler deploy --dry-run --env=""
 npx wrangler deploy --dry-run --env=production
 npx wrangler deploy --dry-run --config=wrangler.staging.toml
 ```
+
+`QuantOpsMcpAgent` remains on the feature-frozen, deprecated `McpAgent`
+framework only for legacy session compatibility. `agents` is pinned to exact
+version `0.17.4`; the lockfile bytes, resolved package integrity and actual
+post-construction workerd prototype inventory are frozen in the active binding
+manifest. The framework constructor copies inherited methods onto the product
+prototype, so CI compares the complete descriptor chain rather than assuming
+that `init` is the only RPC-visible method. Public MCP routing still exposes
+only registered MCP methods: inherited `sql`, `agent` and `server` names return
+JSON-RPC method-not-found and do not mutate the agent SQLite store.
+
+Exact downloaded Worker-module bytes are the live deployment identity. Static
+manifest version/digest fields embedded in that module bind those bytes to the
+reviewed RPC and dependency inventory. The npm lockfile is therefore a
+source/build input proved transitively through `npm ci`, the runtime bundle and
+the exact module bytes; it is not claimed to be independently observable from
+Cloudflare's live version API. No live acceptance or deploy is implied by these
+source checks. See
+[`docs/architecture/adr_quant_ops_mcpagent_migration.md`](../../../docs/architecture/adr_quant_ops_mcpagent_migration.md).
 
 Production MCP URL:
 
