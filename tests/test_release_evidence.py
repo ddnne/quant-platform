@@ -380,7 +380,7 @@ def test_release_evidence_requires_check_build_deploy_and_smoke_identity() -> No
 
     facts = payload()
     facts["deployments"].pop("quant-platform-ingestion-jsda")  # type: ignore[union-attr]
-    with pytest.raises(ValueError, match="exactly the six active Workers"):
+    with pytest.raises(ValueError, match="exactly the active Worker inventory"):
         release.build_envelope(facts)
 
     facts = payload()

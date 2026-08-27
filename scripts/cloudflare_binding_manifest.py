@@ -264,8 +264,13 @@ PRODUCTION_SECRET_NAMES: dict[str, tuple[str, ...]] = {
         "GITHUB_CLIENT_SECRET",
         "STATE_SECRET",
     ),
+    "receipt-evidence-authority": ("RECEIPT_KEY_WRAP_KEY",),
     "research-ai-gateway": ("GATEWAY_TOKEN",),
     "research-mass-eval": ("MASS_EVAL_TOKEN",),
+}
+
+STAGING_SECRET_NAMES: dict[str, tuple[str, ...]] = {
+    "receipt-evidence-authority": ("RECEIPT_KEY_WRAP_KEY",),
 }
 
 
@@ -324,6 +329,11 @@ _PINNED_PACKAGE_SCRIPTS = {
             "vitest run --config vitest.runtime.config.ts && "
             "vitest run --config vitest.harness.config.ts"
         ),
+    },
+    "receipt-evidence-authority": {
+        **_COMMON_PACKAGE_SCRIPTS,
+        "cf-typegen": _WRANGLER_PACKAGE_SCRIPT_POLICY["cf-typegen"],
+        "test": "vitest run --config vitest.runtime.config.ts",
     },
     "research-ai-gateway": {
         **_COMMON_PACKAGE_SCRIPTS,
@@ -780,10 +790,10 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
 
     for worker, environments in workers.items():
         for environment, surface in environments.items():
-            expected_secrets = (
-                []
+            expected_secrets = sorted(
+                STAGING_SECRET_NAMES.get(worker, ())
                 if environment == "staging"
-                else sorted(PRODUCTION_SECRET_NAMES[worker])
+                else PRODUCTION_SECRET_NAMES[worker]
             )
             if surface["secret_names"] != expected_secrets:
                 raise ValueError(
@@ -826,8 +836,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError(f"{worker}: staging Worker name must end in -staging")
         if staging.get("route") is not None or staging.get("routes") != []:
             raise ValueError(f"{worker}: staging routes must be empty")
-        if staging["secret_names"]:
-            raise ValueError(f"{worker}: production secret names leaked into staging policy")
+        if staging["secret_names"] != sorted(STAGING_SECRET_NAMES.get(worker, ())):
+            raise ValueError(f"{worker}: staging secret-name policy drifted")
         for table, fields in {
             "d1_databases": ("database_name",),
             "r2_buckets": ("bucket_name", "preview_bucket_name"),
@@ -859,6 +869,76 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         }
     ]:
         raise ValueError("mass-eval must use the typed GatewayService binding")
+
+    receipt_names = {
+        "base": "quant-platform-receipt-evidence-authority",
+        "production": "quant-platform-receipt-evidence-authority",
+        "staging": "quant-platform-receipt-evidence-authority-staging",
+    }
+    acquisition_targets = {
+        "base": "quant-platform-ingestion-secrets",
+        "production": "quant-platform-ingestion-secrets",
+        "staging": "quant-platform-ingestion-secrets-staging",
+    }
+    caller_targets = {
+        "base": "quant-platform-receipt-evidence-authority",
+        "production": "quant-platform-receipt-evidence-authority",
+        "staging": "quant-platform-receipt-evidence-authority-staging",
+    }
+    for environment in ("base", "production", "staging"):
+        receipt = workers["receipt-evidence-authority"][environment]
+        if (
+            receipt["name"] != receipt_names[environment]
+            or receipt["workers_dev"] is not False
+            or receipt["preview_urls"] is not False
+            or receipt["route"] is not None
+            or receipt["routes"] != []
+        ):
+            raise ValueError(
+                f"receipt-evidence-authority/{environment}: public surface drift"
+            )
+        if receipt["vars"] != {
+            "AUTHORITY_MODE": "PENDING",
+            "ENVIRONMENT": "staging" if environment == "staging" else "production",
+            "RECEIPT_KEY_GENERATION": "1",
+        }:
+            raise ValueError(
+                f"receipt-evidence-authority/{environment}: PENDING key policy drift"
+            )
+        if receipt["durable_objects"] != [{
+            "class_name": "ReceiptEvidenceAuthority",
+            "name": "RECEIPT_EVIDENCE_AUTHORITY_DO",
+        }]:
+            raise ValueError(
+                f"receipt-evidence-authority/{environment}: authority DO drift"
+            )
+        if receipt["services"] != [{
+            "binding": "JQUANTS_ACQUISITION",
+            "entrypoint": "IngestionSecretsService",
+            "service": acquisition_targets[environment],
+        }]:
+            raise ValueError(
+                f"receipt-evidence-authority/{environment}: acquisition binding drift"
+            )
+        caller = workers["ingestion-premium"][environment]["services"]
+        if caller != [{
+            "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+            "entrypoint": "ReceiptAuthorityService",
+            "service": caller_targets[environment],
+        }]:
+            raise ValueError(
+                f"ingestion-premium/{environment}: typed Receipt binding drift"
+            )
+        premium_vars = workers["ingestion-premium"][environment]["vars"]
+        if premium_vars != {
+            "INGEST_CONCURRENCY": "2" if environment == "staging" else "6",
+            "RECEIPT_AUTHORITY_ENVIRONMENT": (
+                "staging" if environment == "staging" else "production"
+            ),
+        }:
+            raise ValueError(
+                f"ingestion-premium/{environment}: Receipt environment policy drift"
+            )
 
     expected_ops_databases = {
         "base": {

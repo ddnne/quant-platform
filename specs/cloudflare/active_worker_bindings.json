@@ -4,6 +4,7 @@
     "ingestion-premium",
     "ingestion-secrets",
     "quant-ops-mcp",
+    "receipt-evidence-authority",
     "research-ai-gateway",
     "research-mass-eval"
   ],
@@ -259,6 +260,77 @@
       "version_metadata": {},
       "workers_dev": false
     },
+    "receipt-evidence-authority": {
+      "account_id": null,
+      "ai": {},
+      "compatibility_date": "2026-08-01",
+      "compatibility_flags": [],
+      "config": "platform/workers/receipt-evidence-authority/wrangler.test.toml",
+      "crons": [],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_id": "00000000-0000-0000-0000-000000000014",
+          "database_name": "quant-ingest-receipt-test",
+          "migrations_dir": "../ingestion-premium/migrations",
+          "migrations_table": "d1_migrations_ingestion"
+        }
+      ],
+      "durable_objects": [
+        {
+          "class_name": "ReceiptEvidenceAuthority",
+          "name": "RECEIPT_EVIDENCE_AUTHORITY_DO"
+        }
+      ],
+      "kv_namespaces": [],
+      "main": "src/index.ts",
+      "migrations": [
+        {
+          "new_sqlite_classes": [
+            "ReceiptEvidenceAuthority"
+          ],
+          "tag": "v1"
+        }
+      ],
+      "name": "quant-platform-receipt-evidence-authority-test",
+      "observability": {},
+      "placement": {},
+      "preview_urls": false,
+      "queue_consumers": [],
+      "queue_producers": [],
+      "r2_buckets": [
+        {
+          "binding": "RAW_BUCKET",
+          "bucket_name": "quant-raw-receipt-test"
+        },
+        {
+          "binding": "STRUCTURED_BUCKET",
+          "bucket_name": "quant-structured-receipt-test"
+        }
+      ],
+      "ratelimits": [],
+      "route": null,
+      "routes": [],
+      "secret_names": [],
+      "services": [],
+      "tail_consumers": [],
+      "toolchain": {
+        "@cloudflare/vitest-plugin": "1.0.0",
+        "@cloudflare/workers-types": "5.20260825.1",
+        "typescript": "5.9.2",
+        "vitest": "4.1.11",
+        "wrangler": "4.125.0"
+      },
+      "vars": {
+        "ACTIVATED_KEY_ID": "receipt-test-runtime-registration-required",
+        "AUTHORITY_MODE": "ACTIVE",
+        "ENVIRONMENT": "production",
+        "RECEIPT_KEY_GENERATION": "1",
+        "RECEIPT_KEY_WRAP_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "version_metadata": {},
+      "workers_dev": false
+    },
     "research-ai-gateway": {
       "account_id": null,
       "ai": {},
@@ -398,6 +470,13 @@
       "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
       "deploy": "wrangler deploy --config=wrangler.toml --env=production",
       "test": "node --experimental-test-module-mocks --test test/*.test.mjs && vitest run --config vitest.runtime.config.ts && vitest run --config vitest.harness.config.ts",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
+    },
+    "receipt-evidence-authority": {
+      "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
+      "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
+      "test": "vitest run --config vitest.runtime.config.ts",
       "typecheck": "tsc --noEmit",
       "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
     },
@@ -714,7 +793,13 @@
           "INGESTION_RUN_TOKEN",
           "JQUANTS_API_KEY"
         ],
-        "services": [],
+        "services": [
+          {
+            "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+            "entrypoint": "ReceiptAuthorityService",
+            "service": "quant-platform-receipt-evidence-authority"
+          }
+        ],
         "tail_consumers": [],
         "toolchain": {
           "@cloudflare/vitest-plugin": "1.0.0",
@@ -724,7 +809,8 @@
           "wrangler": "4.125.0"
         },
         "vars": {
-          "INGEST_CONCURRENCY": "6"
+          "INGEST_CONCURRENCY": "6",
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "production"
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
@@ -778,7 +864,13 @@
           "INGESTION_RUN_TOKEN",
           "JQUANTS_API_KEY"
         ],
-        "services": [],
+        "services": [
+          {
+            "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+            "entrypoint": "ReceiptAuthorityService",
+            "service": "quant-platform-receipt-evidence-authority"
+          }
+        ],
         "tail_consumers": [],
         "toolchain": {
           "@cloudflare/vitest-plugin": "1.0.0",
@@ -788,7 +880,8 @@
           "wrangler": "4.125.0"
         },
         "vars": {
-          "INGEST_CONCURRENCY": "6"
+          "INGEST_CONCURRENCY": "6",
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "production"
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
@@ -838,7 +931,13 @@
         "route": null,
         "routes": [],
         "secret_names": [],
-        "services": [],
+        "services": [
+          {
+            "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+            "entrypoint": "ReceiptAuthorityService",
+            "service": "quant-platform-receipt-evidence-authority-staging"
+          }
+        ],
         "tail_consumers": [],
         "toolchain": {
           "@cloudflare/vitest-plugin": "1.0.0",
@@ -848,7 +947,8 @@
           "wrangler": "4.125.0"
         },
         "vars": {
-          "INGEST_CONCURRENCY": "2"
+          "INGEST_CONCURRENCY": "2",
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "staging"
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
@@ -1261,6 +1361,254 @@
         "vars": {
           "ALLOWED_LOGIN": "ddnne",
           "DAILY_ROW_QUOTA": "25000"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      }
+    },
+    "receipt-evidence-authority": {
+      "base": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/receipt-evidence-authority/wrangler.toml",
+        "crons": [],
+        "d1_databases": [
+          {
+            "binding": "DB",
+            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+            "database_name": "quant-ingest",
+            "migrations_dir": "../ingestion-premium/migrations",
+            "migrations_table": "d1_migrations_ingestion"
+          }
+        ],
+        "durable_objects": [
+          {
+            "class_name": "ReceiptEvidenceAuthority",
+            "name": "RECEIPT_EVIDENCE_AUTHORITY_DO"
+          }
+        ],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [
+          {
+            "new_sqlite_classes": [
+              "ReceiptEvidenceAuthority"
+            ],
+            "tag": "v1"
+          }
+        ],
+        "name": "quant-platform-receipt-evidence-authority",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw"
+          },
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "RECEIPT_KEY_WRAP_KEY"
+        ],
+        "services": [
+          {
+            "binding": "JQUANTS_ACQUISITION",
+            "entrypoint": "IngestionSecretsService",
+            "service": "quant-platform-ingestion-secrets"
+          }
+        ],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "AUTHORITY_MODE": "PENDING",
+          "ENVIRONMENT": "production",
+          "RECEIPT_KEY_GENERATION": "1"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      },
+      "production": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/receipt-evidence-authority/wrangler.toml",
+        "crons": [],
+        "d1_databases": [
+          {
+            "binding": "DB",
+            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+            "database_name": "quant-ingest",
+            "migrations_dir": "../ingestion-premium/migrations",
+            "migrations_table": "d1_migrations_ingestion"
+          }
+        ],
+        "durable_objects": [
+          {
+            "class_name": "ReceiptEvidenceAuthority",
+            "name": "RECEIPT_EVIDENCE_AUTHORITY_DO"
+          }
+        ],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [
+          {
+            "new_sqlite_classes": [
+              "ReceiptEvidenceAuthority"
+            ],
+            "tag": "v1"
+          }
+        ],
+        "name": "quant-platform-receipt-evidence-authority",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw"
+          },
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "RECEIPT_KEY_WRAP_KEY"
+        ],
+        "services": [
+          {
+            "binding": "JQUANTS_ACQUISITION",
+            "entrypoint": "IngestionSecretsService",
+            "service": "quant-platform-ingestion-secrets"
+          }
+        ],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "AUTHORITY_MODE": "PENDING",
+          "ENVIRONMENT": "production",
+          "RECEIPT_KEY_GENERATION": "1"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      },
+      "staging": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/receipt-evidence-authority/wrangler.staging.toml",
+        "crons": [],
+        "d1_databases": [
+          {
+            "binding": "DB",
+            "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
+            "database_name": "quant-ingest-staging",
+            "migrations_dir": "../ingestion-premium/migrations",
+            "migrations_table": "d1_migrations_ingestion"
+          }
+        ],
+        "durable_objects": [
+          {
+            "class_name": "ReceiptEvidenceAuthority",
+            "name": "RECEIPT_EVIDENCE_AUTHORITY_DO"
+          }
+        ],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [
+          {
+            "new_sqlite_classes": [
+              "ReceiptEvidenceAuthority"
+            ],
+            "tag": "v1"
+          }
+        ],
+        "name": "quant-platform-receipt-evidence-authority-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw-staging"
+          },
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured-staging"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "RECEIPT_KEY_WRAP_KEY"
+        ],
+        "services": [
+          {
+            "binding": "JQUANTS_ACQUISITION",
+            "entrypoint": "IngestionSecretsService",
+            "service": "quant-platform-ingestion-secrets-staging"
+          }
+        ],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "AUTHORITY_MODE": "PENDING",
+          "ENVIRONMENT": "staging",
+          "RECEIPT_KEY_GENERATION": "1"
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"

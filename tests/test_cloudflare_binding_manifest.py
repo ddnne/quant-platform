@@ -466,7 +466,7 @@ def test_authoritative_ci_dry_runs_test_harness_configs() -> None:
             "--config=wrangler.toml",
             "--env=production",
         ],
-        ["deploy", "--dry-run", "--config=wrangler.staging.toml", "--env="],
+        ["deploy", "--dry-run", "--config=wrangler.staging.toml"],
         ["deploy", "--dry-run", "--config=wrangler.test.toml", "--env="],
         ["types", "--config=wrangler.toml", "--env="],
         [
@@ -487,7 +487,6 @@ def test_authoritative_ci_dry_runs_test_harness_configs() -> None:
             "types",
             "$staging_types",
             "--config=wrangler.staging.toml",
-            "--env=",
             "--include-runtime=false",
         ],
     ]
@@ -621,13 +620,15 @@ def test_missing_version_metadata_binding_fails_closed() -> None:
         manifest_module.validate_manifest(drifted)
 
 
-def test_staging_surfaces_are_private_and_have_no_production_secret_policy() -> None:
+def test_staging_surfaces_are_private_and_have_exact_separate_secret_policy() -> None:
     manifest = manifest_module.build_manifest()
-    for environments in manifest["workers"].values():
+    for worker, environments in manifest["workers"].items():
         staging = environments["staging"]
         assert staging["workers_dev"] is False
         assert staging["preview_urls"] is False
-        assert staging["secret_names"] == []
+        assert staging["secret_names"] == sorted(
+            manifest_module.STAGING_SECRET_NAMES.get(worker, ())
+        )
         assert staging["name"].endswith("-staging")
 
 

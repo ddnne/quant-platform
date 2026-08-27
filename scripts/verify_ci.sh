@@ -255,7 +255,7 @@ verify_worker() {
     --config=wrangler.toml --env=production)
   echo "==> wrangler deploy --dry-run --config=wrangler.staging.toml ($name)"
   (cd "$dir" && npx --no-install wrangler deploy --dry-run \
-    --config=wrangler.staging.toml --env="")
+    --config=wrangler.staging.toml)
   if [[ -f "$dir/wrangler.test.toml" ]]; then
     echo "==> wrangler deploy --dry-run --config=wrangler.test.toml ($name)"
     (cd "$dir" && npx --no-install wrangler deploy --dry-run \
@@ -285,7 +285,7 @@ verify_worker() {
     --config=wrangler.toml --env=production --include-runtime=false)
   echo "==> wrangler types --config=wrangler.staging.toml ($name)"
   (cd "$dir" && npx --no-install wrangler types "$staging_types" \
-    --config=wrangler.staging.toml --env="" --include-runtime=false)
+    --config=wrangler.staging.toml --include-runtime=false)
   local environment generated assertion env_tsconfig
   for environment in $("$py" "$ROOT/scripts/verify_generated_worker_env.py" \
     --list-environments); do

@@ -66,6 +66,7 @@ _ACTIVE_WORKERS = frozenset(
         "quant-platform-ingestion-premium",
         "quant-platform-ingestion-jsda",
         "quant-platform-ops-read-mcp",
+        "quant-platform-receipt-evidence-authority",
         "quant-platform-research-ai-gateway",
         "quant-platform-research-mass-eval",
     }
@@ -356,7 +357,7 @@ def _validate_deployments(payload: Mapping[str, Any]) -> None:
     source_sha = str(payload["source_sha"])
     deployments = _require_mapping(payload["deployments"], "deployments")
     if set(deployments) != _ACTIVE_WORKERS:
-        raise ValueError("deployments must contain exactly the six active Workers")
+        raise ValueError("deployments must contain exactly the active Worker inventory")
     for worker, raw in deployments.items():
         environments = _require_mapping(raw, f"deployments.{worker}")
         if set(environments) != {"staging", "production"}:
@@ -435,7 +436,7 @@ def _validate_smoke(payload: Mapping[str, Any]) -> None:
         workers = _require_mapping(workers_raw, f"smoke.{environment}")
         if set(workers) != _ACTIVE_WORKERS:
             raise ValueError(
-                f"smoke.{environment} must cover exactly the six active Workers"
+                f"smoke.{environment} must cover exactly the active Worker inventory"
             )
         for worker, raw_row in workers.items():
             label = f"smoke.{environment}.{worker}"

@@ -73,6 +73,7 @@ def test_every_active_worker_environment_is_covered_without_generic_erasure() ->
     assert workers == {
         "ingestion-jsda",
         "ingestion-premium",
+        "receipt-evidence-authority",
         "ingestion-secrets",
         "quant-ops-mcp",
         "research-ai-gateway",

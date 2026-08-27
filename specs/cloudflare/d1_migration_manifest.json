@@ -127,9 +127,23 @@
         {
           "migration_id": "quant-ingest:0014_receipt_authority_reconciliation",
           "path": "platform/workers/ingestion-premium/migrations/0014_receipt_authority_reconciliation.sql",
-          "checksum": "sha256:178ab86016c86965234e51bb48186febb1443c03047c3c01e729db559f81e68b",
+          "checksum": "sha256:9c6cc9098c7e5926cf0b01ebda1ace20bd96570a851417e8fdadb58b2455247c",
           "order": 14,
           "depends_on": "quant-ingest:0013_restore_specialized_jquants_schema"
+        },
+        {
+          "migration_id": "quant-ingest:0015_receipt_authority_requests",
+          "path": "platform/workers/ingestion-premium/migrations/0015_receipt_authority_requests.sql",
+          "checksum": "sha256:44daab1660ec5ba86ac41f4d160b74746ee06a9a9cc26afaeed8ec2087364c25",
+          "order": 15,
+          "depends_on": "quant-ingest:0014_receipt_authority_reconciliation"
+        },
+        {
+          "migration_id": "quant-ingest:0016_receipt_authority_immutability",
+          "path": "platform/workers/ingestion-premium/migrations/0016_receipt_authority_immutability.sql",
+          "checksum": "sha256:c528888f58d7c11a764485d0a54d5470137bcbf266144c070307bfb38ba84a98",
+          "order": 16,
+          "depends_on": "quant-ingest:0015_receipt_authority_requests"
         }
       ]
     },
