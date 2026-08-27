@@ -132,23 +132,11 @@ Schema migration: ``platform/workers/ingestion-premium/migrations/0001_init.sql`
 
 ## Deploy (runbook)
 
-```bash
-cd platform/workers/ingestion-premium
-
-# One-time resources
-npx wrangler r2 bucket create quant-raw
-npx wrangler r2 bucket create quant-structured
-npx wrangler d1 create quant-ingest
-# Paste the printed database_id into wrangler.toml.
-npx wrangler d1 execute quant-ingest --remote --file=migrations/0001_init.sql
-
-# Secrets (same values as the secrets-proxy worker — DO NOT reissue the key)
-printf '%s' "$JQUANTS_API_KEY" | npx wrangler secret put JQUANTS_API_KEY -c wrangler.toml
-printf '%s' "$INGESTION_PROXY_TOKEN" | npx wrangler secret put INGESTION_PROXY_TOKEN -c wrangler.toml
-
-# Deploy
-npx wrangler deploy -c wrangler.toml
-```
+Historical live mutation commands have been removed. This file records the old
+Phase 3.5 design; it is not an executable deployment authority. The current
+canonical runbook is
+[`operations/current_production_runbook.md`](operations/current_production_runbook.md),
+whose D1 policy is observation/HOLD with remote mutation disabled.
 
 ## Local sync (S6)
 

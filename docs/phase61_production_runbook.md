@@ -53,15 +53,10 @@ sqlite3 data/structured/ingestion.sqlite \
   'SELECT version,name FROM schema_migrations ORDER BY version;'
 ```
 
-Apply D1 migrations in filename order. Migration `0005` intentionally closes
-J-Quants writes/exports until the application rebuild reaches READY.
-
-```bash
-cd platform/workers/ingestion-premium
-for migration in migrations/000{1,2,3,4,5,6,7}_*.sql; do
-  npx wrangler d1 execute quant-ingest --remote --file="$migration" || exit 1
-done
-```
+The former direct remote D1 loop has been removed. This document is historical
+and non-executable; current source policy authorizes no remote mutation. See
+[`operations/current_production_runbook.md`](operations/current_production_runbook.md)
+for the canonical observation/HOLD and recovery-only path.
 
 Deploy ingestion-premium, rebuild v2 natural keys, then verify READY before
 starting an ingest or export:
@@ -88,16 +83,9 @@ the immutable release evidence after each apply.
 .venv/bin/python scripts/cloudflare_d1_migration_manifest.py
 ```
 
-```bash
-cd ../quant-ops-mcp
-npx wrangler d1 migrations apply quant-ops-projection --remote \
-  --config=wrangler.toml
-npx wrangler d1 migrations apply quant-ops-quota --remote \
-  --config=wrangler.toml
-cd ../../..
-```
-
-All migration files are idempotent, but do not reorder them.
+The former direct Ops D1 apply commands have also been removed. Idempotent SQL
+does not itself grant remote mutation authority; follow the current canonical
+manifest and runbook.
 
 ## 3. J-Quants Coverage V2 backfill
 

@@ -116,27 +116,14 @@ TDnet) are **not** in the schedule.
 
 ## Deploy
 
-```bash
-# Resources (one-time)
-npx wrangler r2 bucket create quant-raw
-npx wrangler r2 bucket create quant-structured
-npx wrangler d1 create quant-ingest
-# Paste the printed database_id into wrangler.toml.
-npx wrangler d1 execute quant-ingest --remote --file=migrations/0001_init.sql
-
-# Secrets (JQUANTS_API_KEY already exists on the secrets-proxy worker — but
-# ingestion-premium needs its own binding. Re-put the SAME value, do NOT
-# reissue the key.)
-printf '%s' "$JQUANTS_API_KEY" | npx wrangler secret put JQUANTS_API_KEY -c platform/workers/ingestion-premium/wrangler.toml
-printf '%s' "$INGESTION_RUN_TOKEN" | npx wrangler secret put INGESTION_RUN_TOKEN -c platform/workers/ingestion-premium/wrangler.toml
-printf '%s' "$DATA_EXPORT_TOKEN" | npx wrangler secret put DATA_EXPORT_TOKEN -c platform/workers/ingestion-premium/wrangler.toml
-
-# Deploy
-npx wrangler deploy -c platform/workers/ingestion-premium/wrangler.toml
-```
-
-> **Do not reissue** the J-Quants key. Reuse the existing value (held on the
-> secrets-proxy worker) by re-putting it as a secret on this worker.
+This component README is not a remote-mutation runbook. Do not initialize or
+migrate D1, put secrets, or deploy from commands copied from historical docs.
+The canonical migration manifest currently authorizes no remote mutation and
+keeps staging and production on HOLD pending cross-host exclusion and trusted
+source-SHA attestation. Use
+[`docs/operations/current_production_runbook.md`](../../../docs/operations/current_production_runbook.md)
+for the current preconditions and HOLD state. Dry-run/typecheck commands remain
+safe; live changes require a future reviewed authority path.
 
 ## Local sync (Phase 3.5 S6)
 

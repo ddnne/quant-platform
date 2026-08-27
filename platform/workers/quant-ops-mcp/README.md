@@ -52,23 +52,20 @@ closed on unreviewed schema drift.
 
 ## Migrations
 
-```bash
-cd platform/workers/quant-ops-mcp
+This component README does not authorize remote D1 mutation. The canonical
+manifest currently has no owner command for either target; staging and
+production application needs a reviewed authority path and immutable remote
+evidence. See
+[`docs/operations/current_production_runbook.md`](../../../docs/operations/current_production_runbook.md).
 
-npx wrangler d1 migrations apply quant-ops-projection --remote \
-  --config=wrangler.toml
-npx wrangler d1 migrations apply quant-ops-quota --remote \
-  --config=wrangler.toml
-```
-
-Wrangler resolves the independent migration directories from each binding:
+Wrangler resolves the independent source migration directories from each binding:
 
 - `migrations/projection/`
 - `migrations/quota/`
 
-Apply staging first with `wrangler.staging.toml`. Back up `quant-ingest` before
-the release migration/deploy sequence even though this Worker no longer owns or
-writes that database.
+When that authority exists, staging must precede production. Back up
+`quant-ingest` before the release sequence even though this Worker no longer
+owns or writes that database.
 
 ## Publish
 
