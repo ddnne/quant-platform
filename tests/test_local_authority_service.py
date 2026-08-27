@@ -181,6 +181,14 @@ def test_exact_acl_binds_peer_operation_purpose_and_environment() -> None:
             operation="ready:publish_profile_plan_bound",
             purpose="render_current_projection",
         )
+    trader_acl = authority.ExactMethodAcl(
+        authority_id="trader", environment="production"
+    )
+    assert trader_acl.require(
+        caller="controlled_pilot_orchestrator",
+        operation="trader:authorize_exact_four_batch_human_present",
+        purpose="exact_four_human_approval",
+    ).caller == "controlled_pilot_orchestrator"
 
 
 def test_service_authenticates_kernel_peer_and_commits_only_after_strict_gate(

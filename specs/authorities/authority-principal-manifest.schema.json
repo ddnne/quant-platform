@@ -12,6 +12,7 @@
     "protocol_schema_digests",
     "parallel_protocol_schema_digests",
     "residual_risks",
+    "local_peer_identities",
     "principals",
     "manifest_digest"
   ],
@@ -120,6 +121,24 @@
               "maxLength": 512
             }
           }
+        }
+      }
+    },
+    "local_peer_identities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ops_scheduler",
+        "coverage_scheduler",
+        "ready_publisher",
+        "controlled_pilot_orchestrator"
+      ],
+      "properties": {
+        "ops_scheduler": { "$ref": "#/$defs/local_peer_identity" },
+        "coverage_scheduler": { "$ref": "#/$defs/local_peer_identity" },
+        "ready_publisher": { "$ref": "#/$defs/local_peer_identity" },
+        "controlled_pilot_orchestrator": {
+          "$ref": "#/$defs/local_peer_identity"
         }
       }
     },
@@ -262,6 +281,38 @@
     }
   },
   "$defs": {
+    "local_peer_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime", "signing_capability", "deployments"],
+      "properties": {
+        "runtime": { "const": "local_os_disabled_service" },
+        "signing_capability": { "const": false },
+        "deployments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["staging", "production"],
+          "properties": {
+            "staging": { "$ref": "#/$defs/local_peer_deployment" },
+            "production": { "$ref": "#/$defs/local_peer_deployment" }
+          }
+        }
+      }
+    },
+    "local_peer_deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service_user", "home", "shell", "hidden"],
+      "properties": {
+        "service_user": {
+          "type": "string",
+          "pattern": "^qp_(staging|production)_[a-z0-9_]+$"
+        },
+        "home": { "const": "/var/empty" },
+        "shell": { "const": "/usr/bin/false" },
+        "hidden": { "const": true }
+      }
+    },
     "sha256": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
@@ -460,7 +511,7 @@
           "enum": [
             "cloudflare_typed_service_binding",
             "local_peer_credentials",
-            "webauthn_human_presence"
+            "local_peer_credentials_and_webauthn"
           ]
         }
       }

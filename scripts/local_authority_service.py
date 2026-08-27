@@ -270,9 +270,10 @@ class ExactMethodAcl:
             raise LocalAuthorityError("local authority is not declared")
         grants: set[MethodGrant] = set()
         for row in principal["method_acl"]:
-            if row.get(
-                "authentication"
-            ) == "local_peer_credentials" and environment in row.get(
+            if row.get("authentication") in {
+                "local_peer_credentials",
+                "local_peer_credentials_and_webauthn",
+            } and environment in row.get(
                 "environments", []
             ):
                 grants.add(

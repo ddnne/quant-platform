@@ -312,6 +312,36 @@ def test_checked_in_manifest_and_schema_digests_are_valid() -> None:
     assert manifest["manifest_digest"] == manifest_module.PINNED_MANIFEST_DIGEST
 
 
+def test_local_authority_acl_uses_owned_handoffs_and_dedicated_callers() -> None:
+    manifest = manifest_module.load_and_validate_manifest()
+    principals = manifest["principals"]
+    assert principals["ops_projection"]["allowed_callers"] == ["d1_sync"]
+    assert principals["coverage_transition"]["allowed_callers"] == ["d1_sync"]
+    assert principals["trader"]["method_acl"] == [
+        {
+            "authenticated_caller": "controlled_pilot_orchestrator",
+            "target_operation": "trader:authorize_exact_four_batch_human_present",
+            "purpose": "exact_four_human_approval",
+            "environments": ["staging", "production"],
+            "authentication": "local_peer_credentials_and_webauthn",
+        }
+    ]
+    assert principals["controlled_execution"]["method_acl"] == [
+        {
+            "authenticated_caller": "trader",
+            "target_operation": "controlled_execution:consume_trader_handoff",
+            "purpose": "exact_four_one_shot_execution",
+            "environments": ["staging", "production"],
+            "authentication": "local_peer_credentials",
+        }
+    ]
+    orchestrator = manifest["local_peer_identities"][
+        "controlled_pilot_orchestrator"
+    ]
+    assert orchestrator["runtime"] == "local_os_disabled_service"
+    assert orchestrator["signing_capability"] is False
+
+
 def test_runtime_and_key_backend_discriminants_are_frozen() -> None:
     principals = _manifest()["principals"]
     assert principals["receipt"]["runtime"] == "cloudflare_worker"
@@ -386,7 +416,7 @@ def test_generic_ready_trader_and_execution_operations_are_absent() -> None:
         "trader.authorize_exact_four_batch_human_present"
     )
     assert principals["controlled_execution"]["service_entrypoint"] == (
-        "controlled_execution.execute_exact_four_one_shot"
+        "controlled_execution.consume_trader_handoff"
     )
 
 

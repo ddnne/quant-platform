@@ -2,7 +2,7 @@
   "schema_version": "authority-principal-manifest/v1",
   "generation": 1,
   "activation_status": "PENDING",
-  "schema_digest": "sha256:8b2dd7bc823a55cbab5f1d845c857bf2656b5b1ae9c268f28dad4504ec3170c4",
+  "schema_digest": "sha256:271861396ee98812e628976b16c845a89a0228a3a5d7587a4a1305c11fa258e1",
   "protocol_schema_digests": {
     "frozen_mirror_request": "sha256:d0d20ba5094f7b6e5bb3f6b68792cf975956c05a2acbdbb18f50edf2f98cfe21",
     "frozen_mirror_handoff": "sha256:4041b2eef7f848dcc66addb14e3a5f6e8572fb5ac91e9e239dd66a29067779a5",
@@ -24,6 +24,80 @@
       "status": "OPEN",
       "scope": "ACCOUNT_WIDE",
       "reason": "Cloudflare Workers Scripts Write remains account-scoped; separate Worker, Service Binding, Durable Object, and key custody do not make the deployment credential resource-scoped."
+    }
+  },
+  "local_peer_identities": {
+    "ops_scheduler": {
+      "runtime": "local_os_disabled_service",
+      "signing_capability": false,
+      "deployments": {
+        "staging": {
+          "service_user": "qp_staging_ops_scheduler",
+          "home": "/var/empty",
+          "shell": "/usr/bin/false",
+          "hidden": true
+        },
+        "production": {
+          "service_user": "qp_production_ops_scheduler",
+          "home": "/var/empty",
+          "shell": "/usr/bin/false",
+          "hidden": true
+        }
+      }
+    },
+    "coverage_scheduler": {
+      "runtime": "local_os_disabled_service",
+      "signing_capability": false,
+      "deployments": {
+        "staging": {
+          "service_user": "qp_staging_coverage_scheduler",
+          "home": "/var/empty",
+          "shell": "/usr/bin/false",
+          "hidden": true
+        },
+        "production": {
+          "service_user": "qp_production_coverage_scheduler",
+          "home": "/var/empty",
+          "shell": "/usr/bin/false",
+          "hidden": true
+        }
+      }
+    },
+    "ready_publisher": {
+      "runtime": "local_os_disabled_service",
+      "signing_capability": false,
+      "deployments": {
+        "staging": {
+          "service_user": "qp_staging_ready_publisher",
+          "home": "/var/empty",
+          "shell": "/usr/bin/false",
+          "hidden": true
+        },
+        "production": {
+          "service_user": "qp_production_ready_publisher",
+          "home": "/var/empty",
+          "shell": "/usr/bin/false",
+          "hidden": true
+        }
+      }
+    },
+    "controlled_pilot_orchestrator": {
+      "runtime": "local_os_disabled_service",
+      "signing_capability": false,
+      "deployments": {
+        "staging": {
+          "service_user": "qp_staging_controlled_pilot_orchestrator",
+          "home": "/var/empty",
+          "shell": "/usr/bin/false",
+          "hidden": true
+        },
+        "production": {
+          "service_user": "qp_production_controlled_pilot_orchestrator",
+          "home": "/var/empty",
+          "shell": "/usr/bin/false",
+          "hidden": true
+        }
+      }
     }
   },
   "principals": {
@@ -228,13 +302,12 @@
       "service_entrypoint": "d1_sync.sync_now",
       "provides": [
         "d1_sync:sync_now",
-        "frozen_mirror:readonly_handoff",
-        "coverage_transition_apply:apply_signed"
+        "d1_sync:freeze_and_render_ops_projection",
+        "d1_sync:freeze_authorize_apply_coverage"
       ],
       "allowed_callers": [
         "ops_scheduler",
-        "ops_projection",
-        "coverage_transition"
+        "coverage_scheduler"
       ],
       "method_acl": [
         {
@@ -245,23 +318,16 @@
           "authentication": "local_peer_credentials"
         },
         {
-          "authenticated_caller": "ops_projection",
-          "target_operation": "frozen_mirror:readonly_handoff",
-          "purpose": "ops_projection",
+          "authenticated_caller": "ops_scheduler",
+          "target_operation": "d1_sync:freeze_and_render_ops_projection",
+          "purpose": "ops_projection_from_owned_mirror",
           "environments": ["staging", "production"],
           "authentication": "local_peer_credentials"
         },
         {
-          "authenticated_caller": "coverage_transition",
-          "target_operation": "frozen_mirror:readonly_handoff",
-          "purpose": "coverage_transition",
-          "environments": ["staging", "production"],
-          "authentication": "local_peer_credentials"
-        },
-        {
-          "authenticated_caller": "coverage_transition",
-          "target_operation": "coverage_transition_apply:apply_signed",
-          "purpose": "coverage_transition_apply",
+          "authenticated_caller": "coverage_scheduler",
+          "target_operation": "d1_sync:freeze_authorize_apply_coverage",
+          "purpose": "coverage_transition_from_owned_mirror",
           "environments": ["staging", "production"],
           "authentication": "local_peer_credentials"
         }
@@ -338,13 +404,13 @@
         "ops_projection:render_and_sign"
       ],
       "allowed_callers": [
-        "ops_scheduler"
+        "d1_sync"
       ],
       "method_acl": [
         {
-          "authenticated_caller": "ops_scheduler",
+          "authenticated_caller": "d1_sync",
           "target_operation": "ops_projection:render_and_sign",
-          "purpose": "render_current_projection",
+          "purpose": "render_owned_mirror_projection",
           "environments": ["staging", "production"],
           "authentication": "local_peer_credentials"
         }
@@ -417,17 +483,17 @@
       "authority_status": "PENDING",
       "signing_purpose": "coverage_complete_transition",
       "registry_path": "packages/data_plane/storage/authorities/coverage_transition/public_keys.json",
-      "service_entrypoint": "coverage_transition.authorize_and_apply",
+      "service_entrypoint": "coverage_transition.authorize",
       "provides": [
-        "coverage_transition:authorize_and_apply"
+        "coverage_transition:authorize"
       ],
       "allowed_callers": [
-        "coverage_scheduler"
+        "d1_sync"
       ],
       "method_acl": [
         {
-          "authenticated_caller": "coverage_scheduler",
-          "target_operation": "coverage_transition:authorize_and_apply",
+          "authenticated_caller": "d1_sync",
+          "target_operation": "coverage_transition:authorize",
           "purpose": "coverage_v3_transition",
           "environments": ["staging", "production"],
           "authentication": "local_peer_credentials"
@@ -560,15 +626,15 @@
         "trader:authorize_exact_four_batch_human_present"
       ],
       "allowed_callers": [
-        "human_approval_gateway"
+        "controlled_pilot_orchestrator"
       ],
       "method_acl": [
         {
-          "authenticated_caller": "human_approval_gateway",
+          "authenticated_caller": "controlled_pilot_orchestrator",
           "target_operation": "trader:authorize_exact_four_batch_human_present",
           "purpose": "exact_four_human_approval",
           "environments": ["staging", "production"],
-          "authentication": "webauthn_human_presence"
+          "authentication": "local_peer_credentials_and_webauthn"
         }
       ],
       "pending_dependencies": [
@@ -669,18 +735,18 @@
       "authority_status": "PENDING",
       "signing_purpose": "controlled_execution_artifact",
       "registry_path": "specs/execution_artifacts/public_keys.json",
-      "service_entrypoint": "controlled_execution.execute_exact_four_one_shot",
+      "service_entrypoint": "controlled_execution.consume_trader_handoff",
       "provides": [
-        "controlled_execution:execute_exact_four_one_shot"
+        "controlled_execution:consume_trader_handoff"
       ],
       "allowed_callers": [
-        "controlled_pilot_orchestrator"
+        "trader"
       ],
       "method_acl": [
         {
-          "authenticated_caller": "controlled_pilot_orchestrator",
-          "target_operation": "controlled_execution:execute_exact_four_one_shot",
-          "purpose": "exact_four_one_shot",
+          "authenticated_caller": "trader",
+          "target_operation": "controlled_execution:consume_trader_handoff",
+          "purpose": "exact_four_one_shot_execution",
           "environments": ["staging", "production"],
           "authentication": "local_peer_credentials"
         }
@@ -735,5 +801,5 @@
       }
     }
   },
-  "manifest_digest": "sha256:d6afc3fddc29a12b5472213b06acb64d881f9cd63fe91a001c3c273a5428cb84"
+  "manifest_digest": "sha256:ebf938dbdd9bc607cba21bb6b1d2641c1a826a383048616c9858a3d4505c55a3"
 }

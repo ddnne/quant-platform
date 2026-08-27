@@ -75,14 +75,35 @@ EXPECTED_RUNTIME = {
 }
 ALLOWED_CALLERS = {
     "receipt": ("governed_ingestion",),
-    "d1_sync": ("ops_scheduler", "ops_projection", "coverage_transition"),
-    "ops_projection": ("ops_scheduler",),
-    "coverage_transition": ("coverage_scheduler",),
+    "d1_sync": ("ops_scheduler", "coverage_scheduler"),
+    "ops_projection": ("d1_sync",),
+    "coverage_transition": ("d1_sync",),
     "ready": ("ready_publisher",),
-    "trader": ("human_approval_gateway",),
-    "controlled_execution": ("controlled_pilot_orchestrator",),
+    "trader": ("controlled_pilot_orchestrator",),
+    "controlled_execution": ("trader",),
 }
 _BOTH_ENVIRONMENTS = ["staging", "production"]
+LOCAL_PEER_IDENTITIES = {
+    caller: {
+        "runtime": "local_os_disabled_service",
+        "signing_capability": False,
+        "deployments": {
+            environment: {
+                "service_user": f"qp_{environment}_{caller}",
+                "home": "/var/empty",
+                "shell": "/usr/bin/false",
+                "hidden": True,
+            }
+            for environment in _BOTH_ENVIRONMENTS
+        },
+    }
+    for caller in (
+        "ops_scheduler",
+        "coverage_scheduler",
+        "ready_publisher",
+        "controlled_pilot_orchestrator",
+    )
+}
 
 
 def _acl(
@@ -124,32 +145,27 @@ EXPECTED_METHOD_ACL = {
     "d1_sync": [
         _acl("ops_scheduler", "d1_sync:sync_now", "sync_current"),
         _acl(
-            "ops_projection",
-            "frozen_mirror:readonly_handoff",
-            "ops_projection",
+            "ops_scheduler",
+            "d1_sync:freeze_and_render_ops_projection",
+            "ops_projection_from_owned_mirror",
         ),
         _acl(
-            "coverage_transition",
-            "frozen_mirror:readonly_handoff",
-            "coverage_transition",
-        ),
-        _acl(
-            "coverage_transition",
-            "coverage_transition_apply:apply_signed",
-            "coverage_transition_apply",
+            "coverage_scheduler",
+            "d1_sync:freeze_authorize_apply_coverage",
+            "coverage_transition_from_owned_mirror",
         ),
     ],
     "ops_projection": [
         _acl(
-            "ops_scheduler",
+            "d1_sync",
             "ops_projection:render_and_sign",
-            "render_current_projection",
+            "render_owned_mirror_projection",
         )
     ],
     "coverage_transition": [
         _acl(
-            "coverage_scheduler",
-            "coverage_transition:authorize_and_apply",
+            "d1_sync",
+            "coverage_transition:authorize",
             "coverage_v3_transition",
         )
     ],
@@ -162,17 +178,17 @@ EXPECTED_METHOD_ACL = {
     ],
     "trader": [
         _acl(
-            "human_approval_gateway",
+            "controlled_pilot_orchestrator",
             "trader:authorize_exact_four_batch_human_present",
             "exact_four_human_approval",
-            "webauthn_human_presence",
+            "local_peer_credentials_and_webauthn",
         )
     ],
     "controlled_execution": [
         _acl(
-            "controlled_pilot_orchestrator",
-            "controlled_execution:execute_exact_four_one_shot",
-            "exact_four_one_shot",
+            "trader",
+            "controlled_execution:consume_trader_handoff",
+            "exact_four_one_shot_execution",
         )
     ],
 }
@@ -296,14 +312,14 @@ EXPECTED_PROVIDES = {
     ),
     "d1_sync": (
         "d1_sync:sync_now",
-        "frozen_mirror:readonly_handoff",
-        "coverage_transition_apply:apply_signed",
+        "d1_sync:freeze_and_render_ops_projection",
+        "d1_sync:freeze_authorize_apply_coverage",
     ),
     "ops_projection": ("ops_projection:render_and_sign",),
-    "coverage_transition": ("coverage_transition:authorize_and_apply",),
+    "coverage_transition": ("coverage_transition:authorize",),
     "ready": ("ready:publish_profile_plan_bound",),
     "trader": ("trader:authorize_exact_four_batch_human_present",),
-    "controlled_execution": ("controlled_execution:execute_exact_four_one_shot",),
+    "controlled_execution": ("controlled_execution:consume_trader_handoff",),
 }
 EXPECTED_CAPABILITIES = {
     "receipt": (
@@ -410,7 +426,7 @@ EXPECTED_RESIDUAL_RISK = "cloudflare_workers_scripts_write_account_scope"
 # contains its own body digest; this independent code pin prevents a caller from
 # changing the contract and merely recomputing that self-declared digest.
 PINNED_MANIFEST_DIGEST = (
-    "sha256:d6afc3fddc29a12b5472213b06acb64d881f9cd63fe91a001c3c273a5428cb84"
+    "sha256:ebf938dbdd9bc607cba21bb6b1d2641c1a826a383048616c9858a3d4505c55a3"
 )
 
 _BROAD_CAPABILITY_TOKENS = frozenset(
@@ -860,6 +876,9 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     for name, path in PARALLEL_PROTOCOL_SCHEMAS.items():
         if parallel[name] != canonical_digest(_load_strict_json(path)):
             raise ValueError(f"parallel authority protocol schema digest drift: {name}")
+
+    if manifest["local_peer_identities"] != LOCAL_PEER_IDENTITIES:
+        raise ValueError("local peer identity contract drift")
 
     _validate_semantics(manifest)
     body_digest = manifest_body_digest(manifest)
