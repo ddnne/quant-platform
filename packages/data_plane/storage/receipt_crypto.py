@@ -615,6 +615,27 @@ def load_audit_verify_keys() -> dict[str, ReceiptVerifyKey]:
     return {row.key_id: row for row in _load_pinned_registry().audit_keys}
 
 
+def receipt_verify_key_status(key_id: str) -> str | None:
+    """Return the pinned lifecycle state for one exact receipt key id.
+
+    Callers may use this only to decide whether a cryptographically valid
+    receipt is historical audit evidence.  COMPLETE eligibility must continue
+    to use :func:`load_verify_keys` and the full collection-closure verifier.
+    """
+    if type(key_id) is not str or not key_id or key_id != key_id.strip():
+        return None
+    matches = [
+        entry.status
+        for entry in _load_pinned_registry().entries
+        if entry.key_id == key_id
+    ]
+    if len(matches) > 1:
+        raise ReceiptKeyConfigurationError(
+            "pinned receipt registry contains a duplicate key id"
+        )
+    return matches[0] if matches else None
+
+
 def partition_extra_digests(extra_digests: Mapping[str, Any] | None) -> dict[str, Any]:
     """Copy extra_digests excluding standard claims and envelope aliases."""
     if extra_digests is None:

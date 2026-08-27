@@ -57,6 +57,7 @@ from storage.receipt_policy import (  # noqa: E402
     is_recovered_only_digests,
     receipt_source_for_canonical_source,
 )
+from storage.receipt_crypto import receipt_verify_key_status  # noqa: E402
 from storage.coverage_ledger import CollectionReceipt  # noqa: E402
 from storage.verified_receipt import (  # noqa: E402
     ReceiptVerificationError,
@@ -943,11 +944,16 @@ def _read_receipt_product_materializations(
         )
         try:
             closure = verify_collection_closure(receipt)
-        except ReceiptVerificationError:
+        except ReceiptVerificationError as closure_error:
             # A correctly signed receipt from a revoked/prior key remains
             # audit history but is no longer COMPLETE/product eligible.  A
             # forged or corrupt row must still stop projection rather than be
             # silently treated as historical evidence.
+            if receipt_verify_key_status(digests.get("issuer_key_id")) != "revoked":
+                raise RuntimeError(
+                    "active or non-revoked trusted receipt failed closure: "
+                    + "/".join(map(str, identity))
+                ) from closure_error
             try:
                 audit_signed_receipt_claims(receipt)
             except ReceiptVerificationError as audit_error:

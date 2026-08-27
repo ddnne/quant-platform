@@ -469,6 +469,9 @@ def test_product_projection_keeps_revoked_receipt_audit_only(
 
     monkeypatch.setattr(exporter, "verify_collection_closure", inactive)
     monkeypatch.setattr(
+        exporter, "receipt_verify_key_status", lambda _key_id: "revoked"
+    )
+    monkeypatch.setattr(
         exporter,
         "audit_signed_receipt_claims",
         lambda _receipt: MappingProxyType({"version": "signed-receipt-claims/v2"}),
@@ -487,7 +490,28 @@ def test_product_projection_rejects_forged_trusted_marker(
         raise exporter.ReceiptVerificationError("invalid signature")
 
     monkeypatch.setattr(exporter, "verify_collection_closure", rejected)
+    monkeypatch.setattr(
+        exporter, "receipt_verify_key_status", lambda _key_id: "active"
+    )
+    with pytest.raises(RuntimeError, match="non-revoked trusted receipt"):
+        exporter._read_receipt_product_materializations(conn, "generation")
+    conn.close()
+
+
+def test_product_projection_rejects_corrupt_revoked_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _receipt_product_projection_source()
+    _insert_product_receipt_candidate(conn, run_id=101)
+
+    def rejected(_receipt: object) -> None:
+        raise exporter.ReceiptVerificationError("invalid signature")
+
+    monkeypatch.setattr(exporter, "verify_collection_closure", rejected)
     monkeypatch.setattr(exporter, "audit_signed_receipt_claims", rejected)
+    monkeypatch.setattr(
+        exporter, "receipt_verify_key_status", lambda _key_id: "revoked"
+    )
     with pytest.raises(RuntimeError, match="neither active nor valid audit evidence"):
         exporter._read_receipt_product_materializations(conn, "generation")
     conn.close()
