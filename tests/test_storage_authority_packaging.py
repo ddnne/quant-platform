@@ -38,7 +38,9 @@ def test_coverage_transition_registry_is_package_owned_and_digest_stable() -> No
     assert coverage_transition._PINNED_REGISTRY_DIGEST == (
         _COVERAGE_CANONICAL_DIGEST
     )
-    assert not coverage_transition.CoverageTransitionPublicKeyRegistry.load_pinned().provisioned
+    assert not coverage_transition.CoverageTransitionPublicKeyRegistry.load_pinned(
+        expected_environment="production"
+    ).provisioned
     assert not (_ROOT / "specs/coverage_transition/public_keys.json").exists()
 
 

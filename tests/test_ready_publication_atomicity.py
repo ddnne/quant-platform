@@ -131,6 +131,7 @@ def _replace_fixture_with_coherent_exact_four_artifact(ready, binding):
             "dependency_closure_digest": binding.closure_set_digest,
             "universe_rule_digest": EXACT_FOUR_UNIVERSE_RULE_DIGEST,
             "resolved_universe_digest": "sha256:" + ("ab" * 32),
+            "product_materialization_digest": "sha256:" + ("cd" * 32),
         }
         outer["dependency_scope_evidence"] = {
             **scope_body,

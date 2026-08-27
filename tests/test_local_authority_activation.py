@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import socket
-import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -97,7 +96,13 @@ def _active_fixture(
     runtime_entrypoint.chmod(0o444)
     runtime_scripts.chmod(0o555)
     runtime_bundle.chmod(0o555)
-    runtime_python = Path(sys.executable).resolve(strict=True)
+    # Use a fixture-owned executable instead of the host interpreter. Hosted
+    # CI commonly installs Python as root while the test process is unprivileged;
+    # the authority contract intentionally requires the audited owner passed by
+    # the fixture, so ambient toolchain ownership is not valid fixture evidence.
+    runtime_python = tmp_path / "authority-python"
+    runtime_python.write_bytes(b"#!/bin/sh\nexit 0\n")
+    runtime_python.chmod(0o555)
 
     manifest = {
         "principals": {

@@ -807,6 +807,9 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
         or not is_sha256_digest(
             dependency_scope.get("resolved_universe_digest")
         )
+        or not is_sha256_digest(
+            dependency_scope.get("product_materialization_digest")
+        )
         or not is_sha256_digest(dependency_scope.get("proof_digest"))
     ):
         raise MassResearchDisabledError(
