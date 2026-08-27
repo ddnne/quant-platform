@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -64,7 +65,11 @@ def test_data_access_page_size_200_is_bounded_in_sql(tmp_path, monkeypatch):
         db_path=path,
         manifest={"state": "READY"},
     )
-    monkeypatch.setattr(access, "_snapshot", lambda _snapshot_id=None: ready)
+    monkeypatch.setattr(
+        access,
+        "_pinned_snapshot",
+        lambda _snapshot_id=None: nullcontext(ready),
+    )
 
     first = access.query_dataset(
         dataset="equities_bars_daily",
@@ -143,4 +148,3 @@ def test_keyset_cursor_uses_source_tiebreaker_and_binds_snapshot_query(tmp_path)
             **{**common, "as_of": "2025-01-03T09:00:00+09:00"},
             page_token=first.metadata["next_page_token"],
         )
-

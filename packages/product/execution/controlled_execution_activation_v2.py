@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import os
+import pwd
 import sqlite3
 import stat
 import urllib.parse
@@ -26,6 +27,10 @@ from execution.controlled_execution_runtime_v2 import (
     UnixControlledExecutionProviderV2,
     _build_server_controlled_execution_runtime_v2,
     open_pinned_controlled_snapshot_v2,
+)
+from execution.controlled_ready_custody_v2 import (
+    ControlledReadyCustodyV2Error,
+    load_controlled_ready_custody_v2,
 )
 from execution.controlled_execution_store_v2 import (
     _WRITER_CONSTRUCTION_TOKEN,
@@ -99,6 +104,59 @@ _CONTROLLED_STORE_TRIGGERS = frozenset(
         "controlled_manifests_no_delete",
     }
 )
+
+
+def _require_controlled_reader_group_v2(
+    *,
+    environment: str,
+    service_uid: int,
+    claimed_gid: int,
+) -> None:
+    """Bind custody reads to a Controlled-only supplementary group."""
+
+    try:
+        from scripts.local_authority_bootstrap_common import (
+            BootstrapError,
+            _deployments,
+            require_controlled_custody_reader_group,
+        )
+    except ImportError as exc:
+        raise ExactFourAuthorityPending(
+            "Controlled dedicated reader group is not provisioned"
+        ) from exc
+    try:
+        rows = [
+            row
+            for row in _deployments(environment)
+            if row["authority_id"] == "controlled_execution"
+        ]
+        if len(rows) != 1:
+            raise ValueError("Controlled deployment is not unique")
+        row = rows[0]
+        account = pwd.getpwuid(service_uid)
+        service_group, caller_group, reader_group = (
+            require_controlled_custody_reader_group(
+                row=row,
+                service_account=account,
+            )
+        )
+        supplementary_gids = set(os.getgroups())
+    except (BootstrapError, KeyError, OSError, TypeError, ValueError) as exc:
+        raise ExactFourAuthorityPending(
+            "Controlled dedicated reader group is not provisioned"
+        ) from exc
+    if (
+        row.get("environment") != environment
+        or row.get("service_user") != account.pw_name
+        or account.pw_uid != service_uid
+        or account.pw_gid != service_group.gr_gid
+        or reader_group.gr_gid != claimed_gid
+        or claimed_gid not in supplementary_gids
+        or os.getegid() != caller_group.gr_gid
+    ):
+        raise ExactFourAuthorityPending(
+            "Controlled reader group drifts from its isolated supplementary capability"
+        )
 
 
 def _require_live_controlled_store_identity_v2(
@@ -522,8 +580,9 @@ def _load_root_owned_activation() -> dict[str, Any]:
         "private_key_path",
         "budget_id",
         "budget_ledger_path",
-        "immutable_snapshot_path",
-        "signed_projection_path",
+        "ready_custody_manifest_path",
+        "ready_custody_manifest_digest",
+        "controlled_reader_gid",
         "provider_socket_path",
         "provider_uid",
         "provider_timeout_seconds",
@@ -533,11 +592,26 @@ def _load_root_owned_activation() -> dict[str, Any]:
         "credential_registry",
     }
     if set(document) != required or document.get("format") != (
-        "exact-four-controlled-execution-activation/v2"
+        "exact-four-controlled-execution-activation/v3"
     ):
         raise ExactFourAuthorityPending(
             "Controlled activation state fields or format are invalid"
         )
+    if (
+        document.get("environment") not in {"staging", "production"}
+        or type(document.get("service_uid")) is not int
+        or document["service_uid"] <= 0
+        or type(document.get("controlled_reader_gid")) is not int
+        or document["controlled_reader_gid"] <= 0
+    ):
+        raise ExactFourAuthorityPending(
+            "Controlled activation reader-group binding is invalid"
+        )
+    _require_controlled_reader_group_v2(
+        environment=document["environment"],
+        service_uid=document["service_uid"],
+        claimed_gid=document["controlled_reader_gid"],
+    )
     return document
 
 
@@ -837,8 +911,11 @@ def _load_live_controlled_execution_runtime_v2() -> ControlledExecutionRuntimeV2
     provider_uid = document["provider_uid"]
     budget_id = document["budget_id"]
     budget_path = _activation_absolute_path(document, "budget_ledger_path")
-    snapshot_path = _activation_absolute_path(document, "immutable_snapshot_path")
-    projection_path = _activation_absolute_path(document, "signed_projection_path")
+    custody_manifest_path = _activation_absolute_path(
+        document, "ready_custody_manifest_path"
+    )
+    custody_manifest_digest = document.get("ready_custody_manifest_digest")
+    controlled_reader_gid = document.get("controlled_reader_gid")
     provider_socket = _activation_absolute_path(document, "provider_socket_path")
     timeout_seconds = document.get("provider_timeout_seconds")
     if (
@@ -854,11 +931,38 @@ def _load_live_controlled_execution_runtime_v2() -> ControlledExecutionRuntimeV2
         or budget_id != budget_id.strip()
         or type(timeout_seconds) is not int
         or not 0 < timeout_seconds <= 300
+        or type(custody_manifest_digest) is not str
+        or not custody_manifest_digest.startswith("sha256:")
+        or len(custody_manifest_digest) != 71
+        or type(controlled_reader_gid) is not int
+        or controlled_reader_gid <= 0
         or document["protected_store_observed"] is not True
     ):
         raise ExactFourAuthorityPending(
             "Controlled runtime principal, budget, snapshot, or provider is absent"
         )
+    _require_controlled_reader_group_v2(
+        environment=environment,
+        service_uid=service_uid,
+        claimed_gid=controlled_reader_gid,
+    )
+    try:
+        custody = load_controlled_ready_custody_v2(
+            custody_manifest_path,
+            expected_environment=environment,
+            expected_owner_uid=0,
+            expected_reader_gid=controlled_reader_gid,
+        )
+    except ControlledReadyCustodyV2Error as exc:
+        raise ExactFourAuthorityPending(
+            "Controlled READY custody transition is absent or invalid"
+        ) from exc
+    if custody.manifest_digest != custody_manifest_digest:
+        raise ExactFourAuthorityPending(
+            "Controlled READY custody manifest digest differs from activation"
+        )
+    snapshot_path = custody.snapshot_path
+    projection_path = custody.projection_path
     for path, label in (
         (budget_path, "budget ledger"),
         (snapshot_path, "immutable snapshot"),

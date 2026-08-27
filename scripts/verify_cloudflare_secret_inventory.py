@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -19,6 +20,7 @@ from typing import Any, Callable, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "specs" / "cloudflare" / "active_worker_bindings.json"
 WORKER_ROOT = ROOT / "platform" / "workers"
+_WRANGLER_TIMEOUT_SECONDS = 60
 
 
 class SecretInventoryError(RuntimeError):
@@ -117,19 +119,70 @@ def wrangler_command(
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
+def _isolated_wrangler_environment(
+    root: Path,
+    *,
+    account_id: str,
+    api_token: str,
+) -> dict[str, str]:
+    if not account_id or not api_token:
+        raise SecretInventoryError(
+            "explicit Cloudflare account id and API token are required"
+        )
+    directories = {
+        "HOME": root / "home",
+        "WRANGLER_HOME": root / "wrangler",
+        "XDG_CACHE_HOME": root / "cache",
+        "XDG_CONFIG_HOME": root / "config",
+        "XDG_DATA_HOME": root / "data",
+    }
+    for path in directories.values():
+        path.mkdir(mode=0o700, parents=False, exist_ok=False)
+    return {
+        "PATH": os.environ.get("PATH") or os.defpath,
+        "LANG": os.environ.get("LANG") or "C",
+        "HOME": str(directories["HOME"]),
+        "WRANGLER_HOME": str(directories["WRANGLER_HOME"]),
+        "XDG_CACHE_HOME": str(directories["XDG_CACHE_HOME"]),
+        "XDG_CONFIG_HOME": str(directories["XDG_CONFIG_HOME"]),
+        "XDG_DATA_HOME": str(directories["XDG_DATA_HOME"]),
+        "TMPDIR": str(root),
+        "CI": "true",
+        "NO_COLOR": "1",
+        "WRANGLER_SEND_METRICS": "false",
+        "CLOUDFLARE_ACCOUNT_ID": account_id,
+        "CLOUDFLARE_API_TOKEN": api_token,
+    }
+
+
 def live_secret_names(
     worker: str,
     *,
     environment: str = "production",
+    account_id: str,
+    api_token: str,
     runner: Runner = subprocess.run,
 ) -> tuple[str, ...]:
-    completed = runner(
-        wrangler_command(worker, environment=environment),
-        cwd=WORKER_ROOT / worker,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="cloudflare-secret-inventory-"
+        ) as temporary:
+            command_environment = _isolated_wrangler_environment(
+                Path(temporary),
+                account_id=account_id,
+                api_token=api_token,
+            )
+            completed = runner(
+                wrangler_command(worker, environment=environment),
+                cwd=WORKER_ROOT / worker,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=command_environment,
+                timeout=_WRANGLER_TIMEOUT_SECONDS,
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SecretInventoryError(f"{worker}: wrangler secret list failed") from exc
     if completed.returncode != 0:
         # Wrangler stderr can contain authentication diagnostics. Do not relay
         # arbitrary command output from a secret-management operation.
@@ -141,6 +194,8 @@ def verify_live_secret_inventory(
     workers: Sequence[str] | None = None,
     *,
     environment: str = "production",
+    account_id: str,
+    api_token: str,
     manifest_path: Path = MANIFEST,
     runner: Runner = subprocess.run,
 ) -> list[str]:
@@ -150,7 +205,13 @@ def verify_live_secret_inventory(
         raise SecretInventoryError("requested Worker inventory is not active")
     verified: list[str] = []
     for worker in selected:
-        live = live_secret_names(worker, environment=environment, runner=runner)
+        live = live_secret_names(
+            worker,
+            environment=environment,
+            account_id=account_id,
+            api_token=api_token,
+            runner=runner,
+        )
         policy = expected[worker]
         if live != policy:
             missing = sorted(set(policy) - set(live))
@@ -174,18 +235,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--require-api-token",
         action="store_true",
-        help="fail before any request unless CLOUDFLARE_API_TOKEN is present",
+        help="compatibility flag; explicit API-token authentication is mandatory",
     )
     args = parser.parse_args(argv)
-    if args.require_api_token and not os.environ.get("CLOUDFLARE_API_TOKEN"):
+    api_token = os.environ.get("CLOUDFLARE_API_TOKEN", "")
+    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
+    if not api_token:
         print(
             f"CLOUDFLARE_API_TOKEN is required for {args.environment} secret acceptance",
             file=sys.stderr,
         )
         return 1
+    if not account_id:
+        print(
+            f"CLOUDFLARE_ACCOUNT_ID is required for {args.environment} secret acceptance",
+            file=sys.stderr,
+        )
+        return 1
     try:
         verified = verify_live_secret_inventory(
-            args.workers, environment=args.environment
+            args.workers,
+            environment=args.environment,
+            account_id=account_id,
+            api_token=api_token,
         )
     except SecretInventoryError as exc:
         print(f"{args.environment} secret inventory: {exc}", file=sys.stderr)

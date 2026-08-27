@@ -6,10 +6,11 @@ paths, R2 listing, ingestion, approval, publication, or deletion.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, fields, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
 
 import features
 import pit
@@ -21,9 +22,15 @@ from data_contracts import (
     require_history_eligible,
 )
 from paper_runtime.snapshot import (
+    ReadySnapshot,
     describe_snapshot as describe_ready_snapshot,
     latest_ready_snapshot as find_latest_ready_snapshot,
     list_ready_snapshots,
+)
+from paper_runtime.snapshot_read import (
+    _READY_ARTIFACT_MAX_BYTES,
+    _hash_pinned_file,
+    _open_immutable_regular_file,
 )
 from storage.coverage_ledger import (
     coverage_gaps as read_coverage_gaps,
@@ -112,6 +119,45 @@ class QuantDataAccess:
             raise FileNotFoundError("no READY research snapshot is published")
         return snapshot
 
+    @contextmanager
+    def _pinned_snapshot(self, snapshot_id: str | None = None):
+        """Yield one descriptor-backed READY view and rehash before return.
+
+        Production reads must not validate a publication pathname and then
+        reopen that pathname later.  Every database-reading method keeps the
+        verified inode open for the complete operation and gives SQLite only
+        the descriptor path.  The result is withheld until a final digest and
+        identity check succeeds.
+        """
+
+        snapshot = self._snapshot(snapshot_id)
+        if (
+            type(snapshot) is not ReadySnapshot
+            or type(snapshot.artifact_digest) is not str
+            or snapshot.artifact_identity is None
+        ):
+            raise RuntimeError(
+                "Quant Data production read requires exact verified READY metadata"
+            )
+        with _open_immutable_regular_file(
+            snapshot.db_path,
+            label="Quant Data READY artifact",
+            max_bytes=_READY_ARTIFACT_MAX_BYTES,
+            expected_identity=snapshot.artifact_identity,
+        ) as pinned:
+            if _hash_pinned_file(pinned) != snapshot.artifact_digest:
+                raise RuntimeError("Quant Data READY artifact digest drifted")
+            descriptor_path = Path(f"/dev/fd/{pinned.fd}")
+            if not descriptor_path.exists():
+                descriptor_path = Path(f"/proc/self/fd/{pinned.fd}")
+            if not descriptor_path.exists():
+                raise RuntimeError(
+                    "Quant Data descriptor-backed SQLite access is unavailable"
+                )
+            yield replace(snapshot, db_path=descriptor_path)
+            if _hash_pinned_file(pinned) != snapshot.artifact_digest:
+                raise RuntimeError("Quant Data READY artifact changed during read")
+
     def _require_dataset(self, dataset: str) -> str:
         value = str(dataset).strip()
         if value not in self._datasets:
@@ -160,27 +206,31 @@ class QuantDataAccess:
         }
 
     def coverage_summary(self, snapshot_id: str | None = None) -> dict[str, Any]:
-        snapshot = self._snapshot(snapshot_id)
-        return {
-            "snapshot_id": snapshot.snapshot_id,
-            **read_coverage_summary(snapshot.db_path),
-        }
+        with self._pinned_snapshot(snapshot_id) as snapshot:
+            return {
+                "snapshot_id": snapshot.snapshot_id,
+                **read_coverage_summary(snapshot.db_path),
+            }
 
     def dataset_coverage(
         self, dataset: str, snapshot_id: str | None = None
     ) -> dict[str, Any]:
         dataset = self._require_dataset(dataset)
-        snapshot = self._snapshot(snapshot_id)
-        rows = read_dataset_coverage(snapshot.db_path, dataset=dataset)
-        return {"snapshot_id": snapshot.snapshot_id, "coverage": rows[0] if rows else None}
+        with self._pinned_snapshot(snapshot_id) as snapshot:
+            rows = read_dataset_coverage(snapshot.db_path, dataset=dataset)
+            return {
+                "snapshot_id": snapshot.snapshot_id,
+                "coverage": rows[0] if rows else None,
+            }
 
     def coverage_gaps(self, snapshot_id: str | None = None) -> dict[str, Any]:
-        snapshot = self._snapshot(snapshot_id)
-        rows = [
-            row for row in read_coverage_gaps(snapshot.db_path)
-            if row["dataset"] in self._datasets
-        ]
-        return {"snapshot_id": snapshot.snapshot_id, "gaps": rows}
+        with self._pinned_snapshot(snapshot_id) as snapshot:
+            rows = [
+                row
+                for row in read_coverage_gaps(snapshot.db_path)
+                if row["dataset"] in self._datasets
+            ]
+            return {"snapshot_id": snapshot.snapshot_id, "gaps": rows}
 
     def latest_ready_snapshot(self) -> dict[str, Any]:
         snapshot = self._snapshot()
@@ -254,37 +304,37 @@ class QuantDataAccess:
         dataset = self._require_history_dataset(dataset)
         as_of_iso = self._require_as_of(as_of)
         start_day, end_day = self._date_window(as_of_iso, start, end)
-        snapshot = self._snapshot(snapshot_id)
         size = self.config.default_page_size if page_size is None else int(page_size)
         if not 1 <= size <= self.config.max_rows:
             raise ValueError(f"page_size must be between 1 and {self.config.max_rows}")
-        result = pit.get_jquants_records(
-            as_of=as_of_iso,
-            dataset=dataset,
-            code=code,
-            from_event=start_day,
-            to_event=end_day + "T23:59:59+09:00",
-            db_path=snapshot.db_path,
-            page_size=size,
-            page_token=page_token,
-            snapshot_id=snapshot.snapshot_id,
-        )
-        request = {
-            "snapshot_id": snapshot.snapshot_id,
-            "dataset": dataset,
-            "as_of": as_of_iso,
-            "code": code,
-            "start": start_day,
-            "end": end_day,
-        }
-        quota = self._quota.charge(len(result.rows))
-        return {
-            **request,
-            "rows": result.rows,
-            "returned": len(result.rows),
-            "next_page_token": result.metadata.get("next_page_token"),
-            "quota": quota,
-        }
+        with self._pinned_snapshot(snapshot_id) as snapshot:
+            result = pit.get_jquants_records(
+                as_of=as_of_iso,
+                dataset=dataset,
+                code=code,
+                from_event=start_day,
+                to_event=end_day + "T23:59:59+09:00",
+                db_path=snapshot.db_path,
+                page_size=size,
+                page_token=page_token,
+                snapshot_id=snapshot.snapshot_id,
+            )
+            request = {
+                "snapshot_id": snapshot.snapshot_id,
+                "dataset": dataset,
+                "as_of": as_of_iso,
+                "code": code,
+                "start": start_day,
+                "end": end_day,
+            }
+            quota = self._quota.charge(len(result.rows))
+            return {
+                **request,
+                "rows": result.rows,
+                "returned": len(result.rows),
+                "next_page_token": result.metadata.get("next_page_token"),
+                "quota": quota,
+            }
 
     def get_series(
         self,
@@ -333,23 +383,23 @@ class QuantDataAccess:
         if key not in self._features:
             raise PermissionError(f"feature version is not allowlisted: {key!r}")
         definition = features.get_for_strategy(*key)
-        snapshot = self._snapshot(snapshot_id)
-        output = features.compute(
-            definition,
-            as_of=self._require_as_of(as_of),
-            db_path=snapshot.db_path,
-            **dict(params),
-        )
-        metadata = dict(output.metadata)
-        metadata.pop("db_path", None)
-        self._quota.charge(1)
-        return {
-            "snapshot_id": snapshot.snapshot_id,
-            "feature_id": key[0],
-            "version": key[1],
-            "value": _jsonable(output.value),
-            "metadata": _jsonable(metadata),
-        }
+        with self._pinned_snapshot(snapshot_id) as snapshot:
+            output = features.compute(
+                definition,
+                as_of=self._require_as_of(as_of),
+                db_path=snapshot.db_path,
+                **dict(params),
+            )
+            metadata = dict(output.metadata)
+            metadata.pop("db_path", None)
+            self._quota.charge(1)
+            return {
+                "snapshot_id": snapshot.snapshot_id,
+                "feature_id": key[0],
+                "version": key[1],
+                "value": _jsonable(output.value),
+                "metadata": _jsonable(metadata),
+            }
 
     def compute_features(
         self,
@@ -403,27 +453,36 @@ class QuantDataAccess:
     ) -> dict[str, Any]:
         dataset = self._require_history_dataset(dataset)
         as_of_iso = self._require_as_of(as_of)
-        snapshot = self._snapshot(snapshot_id)
-        result = pit.get_jquants_records(
-            as_of=as_of_iso,
-            dataset=dataset,
-            natural_key=natural_key,
-            db_path=snapshot.db_path,
-        )
-        self._quota.charge(len(result.rows))
-        row = result.rows[0] if result.rows else None
-        if row is None:
-            return {"snapshot_id": snapshot.snapshot_id, "found": False}
-        return {
-            "snapshot_id": snapshot.snapshot_id,
-            "found": True,
-            "dataset": dataset,
-            "natural_key": natural_key,
-            "event_time": row.get("event_time"),
-            "available_at": row.get("available_at"),
-            "ingested_at": row.get("ingested_at"),
-            "raw_manifest": self.raw_manifest(dataset, snapshot.snapshot_id)["manifest"],
-        }
+        with self._pinned_snapshot(snapshot_id) as snapshot:
+            result = pit.get_jquants_records(
+                as_of=as_of_iso,
+                dataset=dataset,
+                natural_key=natural_key,
+                db_path=snapshot.db_path,
+            )
+            self._quota.charge(len(result.rows))
+            row = result.rows[0] if result.rows else None
+            if row is None:
+                return {"snapshot_id": snapshot.snapshot_id, "found": False}
+            manifests = snapshot.manifest.get("raw_manifests", {})
+            item = manifests.get(dataset) if isinstance(manifests, dict) else None
+            source_run = snapshot.manifest.get("source_run", {})
+            run_id = source_run.get("id") if isinstance(source_run, dict) else None
+            reference = item or (
+                {"key": f"raw/{dataset}/{run_id}/manifest.json", "verified": False}
+                if run_id is not None
+                else None
+            )
+            return {
+                "snapshot_id": snapshot.snapshot_id,
+                "found": True,
+                "dataset": dataset,
+                "natural_key": natural_key,
+                "event_time": row.get("event_time"),
+                "available_at": row.get("available_at"),
+                "ingested_at": row.get("ingested_at"),
+                "raw_manifest": reference,
+            }
 
 
 __all__ = ["DEFAULT_SNAPSHOT_DIR", "QuantDataAccess", "QuantDataConfig"]

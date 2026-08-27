@@ -17,8 +17,7 @@ resource role, canonical journal, lease length, retry count, and source-SHA
 binding. The exact SHA is never supplied to the command: it comes from the
 root-owned, content-addressed runtime-bundle manifest created by the existing
 bootstrap. Runtime config paths likewise come only from the root-owned config
-and the principal manifest. The protected runtime archive excludes `tests/`,
-including the test-only closure-reflection harness.
+and the principal manifest. The protected runtime archive excludes `tests/`.
 
 The journal is always:
 
@@ -40,24 +39,34 @@ therefore inside this diagnostic's trust boundary. `plan` and `audit` report
 `trusted_root_required:true`, `privileged_rollback_evident:false`, and
 `durability_scope:POST_INITIALIZATION_CRASH_AND_POWER_LOSS_ONLY`. A same-file
 hash chain cannot upgrade that assurance; an external high-water anchor is
-required before any operational ceremony.
+required before any operational ceremony. The machine-readable plan/audit
+therefore remains `operational_state:HOLD`, names the absent external anchor,
+and also names the missing WAL-quiescence transition for Controlled.
 
-Retries retain a contiguous hash-chained event history and the latest complete
-challenge/resource snapshot, but the current schema overwrites prior attempt
-snapshots. It therefore reports `historical_attempt_evidence_complete:false`.
-Immutable per-attempt challenge/resource evidence is a P2 audit-fidelity
-prerequisite for the future external-anchor ceremony, not evidence supplied by
-this source contract.
+Journal schema v3 retains every challenge, resource snapshot, lease identity,
+boot identity, deadline, and acquisition time in an immutable per-attempt row.
+A canonical full-attempt digest binds all of those fields into the event chain;
+explicit `BEFORE INSERT` collision triggers reject `OR REPLACE` and UPSERT as
+well as ordinary duplicate inserts. Therefore `plan` and `audit` report
+`historical_attempt_evidence_complete:true`. `audit` also emits a canonical
+`local-authority-staged-canary-anchor-candidate/v2` containing the event count,
+tail sequence and digest, attempt count and full-attempt-set digest, and the
+complete run-state digest. Validation and every candidate input are read from
+one explicit SQLite transaction snapshot. This closes the local
+audit-fidelity prerequisite; it is not an external anchor or an authorization
+to execute the canary. A pre-v3 journal fails schema validation and must be
+quarantined under the trusted-root recovery process rather than upgraded in
+place.
 
-The manager exposes only `plan`, `audit`, and an atomic `run`. `run` acquires a
-durable bounded lease, rechecks its monotonic deadline under the journal write
-lock, executes the exact protected runtime as the declared service UID,
-validates the preflight, remeasures source/resources, rechecks the monotonic
-deadline again under the write lock, and commits a hash-chained event. A crash
-leaves a recoverable lease; a later run may reclaim it after the same-boot
-monotonic deadline or a boot-identity change, up to three attempts.
-The retry family is fixed by authority, environment, action, and source SHA;
-changing resource metadata cannot reset the three-attempt bound. Audit opens
+The manager exposes `plan`, `audit`, and a fail-closed `run` surface. Public
+`run` and the public Python `run_canary` callable always reject with
+`operational HOLD`; they cannot acquire a lease, execute an authority, or
+create a journal. Every declared authority names the absent external anchor;
+Controlled additionally names the missing quiescence transition. The former
+lease/start/execute/commit implementation is intentionally absent rather than
+retained as unreachable production code. A reviewed executable workflow must
+be introduced only after both applicable blockers have real authorities and
+tests. Audit opens
 the journal with SQLite `mode=ro`. WAL headers and WAL/SHM sidecars are rejected
 before SQLite opens the file. A write-side open can recover only a protected
 same-directory DELETE-mode rollback journal, and must remove it before full
@@ -78,6 +87,27 @@ Raw service-signed canary bytes are noncanonical diagnostics. Any future
 consumer or external anchor must require the root manager's committed journal
 chain; it must never accept a runner response by itself.
 
+The external anchor must issue a fresh journal-instance and environment-set
+bound challenge, enforce a monotonic generation and exact prior-anchor digest
+with compare-and-swap,
+persist the accepted candidate in an append-only or rollback-evident system,
+and return a signed receipt from an independently pinned key. The local root
+administrator must not hold the anchor control-plane credentials or a deletion
+capability. Merely copying `journal.sqlite3`, its hash, or the audit JSON to
+another root-writable path does not meet this requirement.
+
+Controlled's product writer normally uses WAL, while its canary audit requires
+a sidecar-free DELETE-mode database. Before Controlled can enter this ceremony,
+a separately reviewed authority-owned transition must: stop new IPC and prove
+the writer quiescent; retain the same pinned database inode; acquire an
+exclusive SQLite lock as the Controlled UID; run a truncating checkpoint and
+require the exact successful empty result; switch to DELETE mode; close and
+fsync the database and parent directory; prove WAL, SHM, and rollback sidecars
+absent; run the bounded canary; and only then resume the writer. Root deleting
+sidecars, copying the main file, or changing `journal_mode` while a writer can
+still run is forbidden. This transition is not yet implemented, so the
+Controlled operational canary remains HOLD.
+
 Trader is not actionable in this canary plane. Its inactive WebAuthn preflight
 has no authority-held signature, so a Python/root orchestrator could otherwise
 self-assert the output. Trader remains PENDING until kernel-authenticated IPC or
@@ -90,10 +120,12 @@ separate typed Cloudflare canary protocol and authenticated deployment
 evidence; until then it remains PENDING and caller-supplied evidence is
 rejected.
 
-## Future operator sequence
+## Future operator interface
 
-Do not execute this sequence while the external high-water anchor is absent.
-The commands document the eventual interface only.
+Do not execute a ceremony while the external high-water anchor is absent. The
+commands below document the eventual interface only. In the current source the
+`run` command always exits nonzero with HOLD, even when invoked as root from a
+protected bundle; Controlled remains held by both blockers.
 
 First install the reviewed exact commit as the protected runtime bundle using
 the existing bootstrap. Then invoke the manager from that bundle with its

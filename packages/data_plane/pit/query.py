@@ -100,7 +100,17 @@ def connect_readonly(db_path: Any = None) -> sqlite3.Connection:
             "(scripts/run_ingestion_once.py), or pass db_path= pointing at an "
             "existing ingestion.sqlite."
         )
-    uri = "file:" + quote(str(path.resolve())) + "?mode=ro"
+    descriptor_backed = (
+        path.is_absolute()
+        and path.parent in {Path("/dev/fd"), Path("/proc/self/fd")}
+        and path.name.isdigit()
+    )
+    # Resolving /proc/self/fd/N on Linux yields the original pathname and
+    # silently recreates the validate-then-reopen race.  Descriptor-backed
+    # callers must preserve the lexical FD path all the way into SQLite.
+    resolved = path if descriptor_backed else path.resolve()
+    query = "?mode=ro&immutable=1" if descriptor_backed else "?mode=ro"
+    uri = "file:" + quote(str(resolved)) + query
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     # Managed production databases fail closed unless their generation is a

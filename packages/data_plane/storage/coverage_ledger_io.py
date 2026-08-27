@@ -33,8 +33,15 @@ def _canonical_json(value: Any) -> str:
 
 
 def _connect_readonly(db_path: str | Path) -> sqlite3.Connection:
-    path = Path(db_path).resolve()
-    uri = "file:" + quote(str(path)) + "?mode=ro"
+    lexical = Path(db_path)
+    descriptor_backed = (
+        lexical.is_absolute()
+        and lexical.parent in {Path("/dev/fd"), Path("/proc/self/fd")}
+        and lexical.name.isdigit()
+    )
+    path = lexical if descriptor_backed else lexical.resolve()
+    query = "?mode=ro&immutable=1" if descriptor_backed else "?mode=ro"
+    uri = "file:" + quote(str(path)) + query
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     return conn

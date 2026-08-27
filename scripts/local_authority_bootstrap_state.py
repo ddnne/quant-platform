@@ -32,6 +32,7 @@ from scripts.local_authority_bootstrap_common import (
     _require_positive_activation,
     _safe_file_state,
     _write_root_owned_file,
+    require_controlled_custody_reader_group,
 )
 from scripts.local_authority_files import (
     ProtectedAuthorityFileError,
@@ -202,6 +203,11 @@ def _observe_active_row(row: dict[str, Any], *, group_id: int) -> dict[str, Any]
         *peer_usernames,
     }:
         raise BootstrapError("dedicated socket caller group membership drifted")
+    if row["authority_id"] == "controlled_execution":
+        require_controlled_custody_reader_group(
+            row=row,
+            service_account=entry,
+        )
     try:
         socket_info = socket_path.lstat()
     except OSError as exc:
@@ -284,6 +290,7 @@ def activate_state(selected: str, *, apply: bool) -> dict[str, Any]:
                 "root-owned runtime config",
                 "protected SQLite event ledger identity",
                 "loaded launchd job and exact Unix socket inode",
+                "Controlled-only supplementary READY custody reader group",
             ],
             "trader": "SEPARATE_WEBAUTHN_HUMAN_PRESENCE_ACTIVATION_REQUIRED",
         }
@@ -444,6 +451,18 @@ def audit_state(selected: str) -> dict[str, Any]:
         runtime_config_ready = _safe_file_state(
             Path(row["runtime_config_path"]), uid=0, modes=(0o440, 0o444)
         )
+        custody_reader_group_ready: bool | str = "NOT_APPLICABLE"
+        if row["authority_id"] == "controlled_execution":
+            try:
+                if entry is None:
+                    raise BootstrapError("Controlled service user is absent")
+                require_controlled_custody_reader_group(
+                    row=row,
+                    service_account=entry,
+                )
+                custody_reader_group_ready = True
+            except BootstrapError:
+                custody_reader_group_ready = False
         active_keys = _active_registry_keys(row["registry_path"])
         recorded = active_rows.get((row["authority_id"], row["environment"]))
         checks = {
@@ -458,6 +477,7 @@ def audit_state(selected: str) -> dict[str, Any]:
             "runtime_config_root_owned": runtime_config_ready,
             "runtime_bundle_root_owned": runtime_bundle is not None,
             "socket_kernel_object_ready": socket_ready,
+            "controlled_custody_reader_group_ready": custody_reader_group_ready,
             "launchd_job_loaded": _launchd_loaded(row["launchd_label"]),
             "public_registry_active_key_count": active_keys,
             "strict_release_gate_allowed": ledger.release_allowed,
@@ -475,6 +495,11 @@ def audit_state(selected: str) -> dict[str, Any]:
             active_keys >= 1,
             checks["strict_release_gate_allowed"],
             checks["root_activation_row_present"],
+            *(
+                (checks["controlled_custody_reader_group_ready"],)
+                if row["authority_id"] == "controlled_execution"
+                else ()
+            ),
         )
         audited.append(
             {

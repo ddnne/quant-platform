@@ -27,12 +27,26 @@ artifact to mode `0444` cannot revoke a same-UID `O_RDWR` descriptor retained
 before that change.
 
 The sole accepted Controlled Pilot SQLite path is the Controlled activation
-service: it opens the root-owned snapshot and signed projection with no-follow
-checks and retains them as `PinnedControlledSnapshotV2` descriptors for the
-execution runtime. The Quant Data adapter still describes READY and then reads
-the returned pathname; it is a separate, non-Controlled read plane and is not
-evidence of general production read integrity. An end-to-end, root-owned atomic
-READY-to-Controlled install and accepted authority chain remain open under
+service. A root-only installer re-verifies the READY authority response,
+embedded exact-four manifest and signed projection, writes create-only
+content-addressed root-owned files, fsyncs them, and commits the immutable
+custody manifest last. Activation v3 accepts that exact manifest/digest rather
+than caller-declared snapshot/projection paths. Both install and activation
+replay the stored projection through the current verifier and require the
+attestation digest, verified document digest, and file digest to agree. Source
+and destination directories stay descriptor-pinned through the bounded copy;
+content links are directory-fsynced before the commit-last manifest. Activation
+re-derives both Controlled groups from the canonical bootstrap deployment. The
+socket caller group remains the process effective GID, while custody mode
+`0440` uses the distinct supplementary
+`qp_<environment>_controlled_execution_readers` group. That reader group must
+contain exactly the Controlled service user; Trader is intentionally present
+only in the socket caller group and cannot read custody. Neither group may
+reuse the shared authority service GID. Activation then retains both files as
+`PinnedControlledSnapshotV2` descriptors. Quant Data database reads likewise
+retain a verified descriptor and rehash before returning, but this separate
+read plane does not prove same-UID isolation. Execution of the install under
+real UID/GID ownership and full authority-chain acceptance remain open under
 A2/R5/R11. `latest-ready.json` is only a replaceable pointer; it cannot make an
 incomplete artifact READY.
 

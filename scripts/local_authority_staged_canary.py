@@ -73,7 +73,7 @@ POLICY_DIGEST = (
 POLICY_FORMAT = "local-authority-staged-canary-policy/v1"
 CHALLENGE_FORMAT = "local-authority-staged-canary-challenge/v1"
 CANARY_FORMAT = "local-authority-staged-canary-evidence/v1"
-JOURNAL_FORMAT = "local-authority-staged-canary-journal/v1"
+JOURNAL_FORMAT = "local-authority-staged-canary-journal/v3"
 CLASSIFICATION = "CANARY_NOT_RESEARCH_ELIGIBLE"
 CANONICAL_STATE_ROOT = Path(
     "/Library/Application Support/quant-platform/authorities/staged-canary"
@@ -134,8 +134,9 @@ _CONTROLLED_ACTIVATION_FIELDS = {
     "private_key_path",
     "budget_id",
     "budget_ledger_path",
-    "immutable_snapshot_path",
-    "signed_projection_path",
+    "ready_custody_manifest_path",
+    "ready_custody_manifest_digest",
+    "controlled_reader_gid",
     "provider_socket_path",
     "provider_uid",
     "provider_timeout_seconds",
@@ -792,7 +793,7 @@ def _observe_runtime_resources(
         if (
             set(activation) != _CONTROLLED_ACTIVATION_FIELDS
             or activation.get("format")
-            != "exact-four-controlled-execution-activation/v2"
+            != "exact-four-controlled-execution-activation/v3"
             or activation.get("environment") != environment
             or activation.get("service_uid") != service_uid
             or activation.get("protected_store_observed") is not True

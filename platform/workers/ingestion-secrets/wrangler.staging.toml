@@ -6,11 +6,15 @@ compatibility_date = "2026-08-01"
 workers_dev = false
 preview_urls = false
 
+[secrets]
+required = ["JQUANTS_API_KEY", "JQUANTS_RPC_CURSOR_HMAC_KEY"]
+
 [vars]
 ENVIRONMENT = "staging"
 
-# No public route and no secret bindings until an internal service-binding
-# consumer is deployed.
+# No public route.  The two staging-only secrets support only the governed
+# acquisition Service Binding; the legacy HTTP proxy remains disabled because
+# no JQUANTS_PROXY_TOKEN is present.
 
 [[ratelimits]]
 name = "PROXY_RATE_LIMITER"
