@@ -10,6 +10,8 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -26,7 +28,6 @@ from scripts.finding_ledger_gate import (
     FindingLedgerError,
     require_pinned_finding_ledger_gate,
 )
-from tests.staged_canary_workflow_harness import SealedCanaryWorkflowHarness
 
 
 def _fake_binding() -> dict[str, str]:
@@ -310,13 +311,101 @@ def _patch_operational_inputs(
     monkeypatch: pytest.MonkeyPatch,
     resources: dict[str, object],
 ) -> None:
-    monkeypatch.setattr(manager, "_runtime_binding", _fake_binding)
     monkeypatch.setattr(manager, "load_pinned_finding_ledger", _fake_ledger)
-    monkeypatch.setattr(manager, "_boot_id", lambda: "test-boot")
     monkeypatch.setattr(
         manager,
         "observe_preflight_resources",
         lambda **_kwargs: resources,
+    )
+
+
+def _archived_challenge(
+    *, resources: Mapping[str, object], deadline: int
+) -> dict[str, object]:
+    policy = canary.load_policy()
+    action = policy.actions["ready"]
+    ledger = manager.load_pinned_finding_ledger()
+    issued = datetime.now(UTC)
+    return {
+        "format": canary.CHALLENGE_FORMAT,
+        "classification": canary.CLASSIFICATION,
+        "authority_id": "ready",
+        "environment": "staging",
+        "action": action.action,
+        "proof_kind": action.proof_kind,
+        "source_sha": "1" * 40,
+        "runtime_bundle_digest": "sha256:" + "2" * 64,
+        "policy_digest": policy.digest,
+        "principal_manifest_digest": canary.PINNED_MANIFEST_DIGEST,
+        "finding_ledger_digest": ledger.digest,
+        "open_p0_ids": list(ledger.open_p0_ids),
+        "resource_digest": resources["resource_digest"],
+        "nonce": "8" * 64,
+        "issued_at": issued.isoformat(timespec="microseconds"),
+        "expires_at": (issued + timedelta(seconds=canary.LEASE_SECONDS)).isoformat(
+            timespec="microseconds"
+        ),
+        "deadline_monotonic_ns": deadline,
+        "strict_boundaries": dict(canary.STRICT_BOUNDARIES),
+    }
+
+
+def _archived_canary_id() -> str:
+    return canary._digest(
+        {
+            "format": "local-authority-staged-canary-attempt-family/v1",
+            "authority_id": "ready",
+            "environment": "staging",
+            "action": canary.load_policy().actions["ready"].action,
+            "source_sha": "1" * 40,
+            "runtime_bundle_digest": "sha256:" + "2" * 64,
+            "policy_digest": canary.load_policy().digest,
+        }
+    )
+
+
+def _append_archived_event(
+    connection: sqlite3.Connection,
+    *,
+    canary_id: str,
+    event_type: str,
+    attempt: int,
+    lease_token: str,
+    detail_digest: str,
+) -> None:
+    tail = connection.execute(
+        "SELECT sequence,event_digest,observed_at FROM staged_canary_events "
+        "ORDER BY sequence DESC LIMIT 1"
+    ).fetchone()
+    sequence = 1 if tail is None else int(tail["sequence"]) + 1
+    prior = None if tail is None else str(tail["event_digest"])
+    observed_at = datetime.now(UTC).isoformat(timespec="microseconds")
+    if tail is not None and observed_at < str(tail["observed_at"]):
+        observed_at = str(tail["observed_at"])
+    body = {
+        "format": "local-authority-staged-canary-event/v1",
+        "sequence": sequence,
+        "canary_id": canary_id,
+        "event_type": event_type,
+        "attempt": attempt,
+        "observed_at": observed_at,
+        "lease_token_digest": canary._digest(lease_token.encode("ascii")),
+        "detail_digest": detail_digest,
+        "prior_event_digest": prior,
+    }
+    connection.execute(
+        "INSERT INTO staged_canary_events VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            sequence,
+            canary_id,
+            event_type,
+            attempt,
+            observed_at,
+            body["lease_token_digest"],
+            detail_digest,
+            prior,
+            canary._digest(body),
+        ),
     )
 
 
@@ -326,23 +415,9 @@ def _insert_archived_ready_run(
     state: str = "COMMITTED",
 ) -> tuple[str, dict[str, object], dict[str, object]]:
     resources = _archived_ready_resources(private)
-    deadline = manager.time.monotonic_ns() + canary.LEASE_SECONDS * 1_000_000_000
-    challenge = manager._build_challenge(
-        authority_id="ready",
-        environment="staging",
-        source_sha="1" * 40,
-        runtime_bundle_digest="sha256:" + "2" * 64,
-        resource_digest=str(resources["resource_digest"]),
-        nonce="8" * 64,
-        deadline_monotonic_ns=deadline,
-    )
-    canary_id = manager._canary_id(
-        authority_id="ready",
-        environment="staging",
-        action=canary.load_policy().actions["ready"].action,
-        source_sha="1" * 40,
-        runtime_bundle_digest="sha256:" + "2" * 64,
-    )
+    deadline = time.monotonic_ns() + canary.LEASE_SECONDS * 1_000_000_000
+    challenge = _archived_challenge(resources=resources, deadline=deadline)
+    canary_id = _archived_canary_id()
     result = _signed_result(challenge, resources, private)
     challenge_json = canary.canonical_json_bytes(challenge).decode("utf-8")
     resource_json = canary.canonical_json_bytes(resources).decode("utf-8")
@@ -386,8 +461,21 @@ def _insert_archived_ready_run(
             ),
         )
         challenge_digest = canary._digest(challenge)
+        lease_token_digest = canary._digest(token.encode("ascii"))
+        acquired_at = challenge["issued_at"]
+        attempt_evidence_digest = manager._attempt_evidence_digest(
+            canary_id=canary_id,
+            attempt=1,
+            challenge_digest=challenge_digest,
+            resource_digest=resources["resource_digest"],
+            lease_token_digest=lease_token_digest,
+            lease_boot_id="test-boot",
+            deadline_monotonic_ns=deadline,
+            lease_expires_at=challenge["expires_at"],
+            acquired_at=acquired_at,
+        )
         connection.execute(
-            "INSERT INTO staged_canary_attempts VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO staged_canary_attempts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 canary_id,
                 1,
@@ -395,31 +483,32 @@ def _insert_archived_ready_run(
                 challenge_digest,
                 resource_json,
                 resources["resource_digest"],
-                canary._digest(token.encode("ascii")),
+                lease_token_digest,
                 "test-boot",
                 deadline,
                 challenge["expires_at"],
-                datetime.now(UTC).isoformat(timespec="microseconds"),
+                acquired_at,
+                attempt_evidence_digest,
             ),
         )
-        manager._append_event(
+        _append_archived_event(
             connection,
             canary_id=canary_id,
             event_type="LEASE_ACQUIRED",
             attempt=1,
             lease_token=token,
-            detail_digest=challenge_digest,
+            detail_digest=attempt_evidence_digest,
         )
-        manager._append_event(
+        _append_archived_event(
             connection,
             canary_id=canary_id,
             event_type="ACTION_STARTED",
             attempt=1,
             lease_token=token,
-            detail_digest=challenge_digest,
+            detail_digest=attempt_evidence_digest,
         )
         if state == "FAILED_RETRYABLE":
-            manager._append_event(
+            _append_archived_event(
                 connection,
                 canary_id=canary_id,
                 event_type="ACTION_FAILED_RETRYABLE",
@@ -428,7 +517,7 @@ def _insert_archived_ready_run(
                 detail_digest=canary._digest(b"SyntheticFailure"),
             )
         elif state == "COMMITTED":
-            manager._append_event(
+            _append_archived_event(
                 connection,
                 canary_id=canary_id,
                 event_type="CANARY_COMMITTED",
@@ -627,7 +716,7 @@ def test_forged_research_eligible_or_alternate_key_canary_is_rejected() -> None:
         authority_id="ready",
         environment="staging",
         resources=resources,
-        deadline_monotonic_ns=manager.time.monotonic_ns() + 60_000_000_000,
+        deadline_monotonic_ns=time.monotonic_ns() + 60_000_000_000,
     )
     valid = _signed_result(challenge, resources, private)
     assert (
@@ -666,7 +755,7 @@ def test_forged_research_eligible_or_alternate_key_canary_is_rejected() -> None:
         )
 
 
-def test_atomic_workflow_exposes_no_minting_primitive_or_callback() -> None:
+def test_hold_surface_exposes_no_minting_primitive_or_callback() -> None:
     import inspect
 
     from scripts import local_authority_runtime_bundle as runtime_bundle
@@ -676,7 +765,9 @@ def test_atomic_workflow_exposes_no_minting_primitive_or_callback() -> None:
         "authority_id",
         "environment",
     )
+    assert manager.run_canary.__closure__ is None
     for forbidden in (
+        "_seal_atomic_run_workflow",
         "_acquire_lease",
         "_mark_action_started",
         "_execute_exact_runner",
@@ -690,135 +781,69 @@ def test_atomic_workflow_exposes_no_minting_primitive_or_callback() -> None:
     assert runtime_bundle._RUNTIME_ARCHIVE_EXCLUSIONS == ("tests",)
 
 
-def test_module_monkeypatch_cannot_bypass_sealed_entrance_checks(
+@pytest.mark.parametrize(
+    "authority_id",
+    sorted(canary.load_policy().actions),
+)
+def test_public_run_is_hold_for_every_declared_authority(
     isolated_journal: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    authority_id: str,
 ) -> None:
-    monkeypatch.setattr(manager, "_require_human_root", lambda: None)
-    monkeypatch.setattr(manager, "_require_protected_manager_binding", lambda: None)
-    expected_rejection = (
-        "interactive human sudo|Python -I"
-        if sys.platform == "darwin"
-        else "support macOS only"
-    )
     with pytest.raises(
         canary.StagedCanaryError,
-        match=expected_rejection,
-    ):
-        manager.run_canary(authority_id="ready", environment="staging")
+        match="operational HOLD.*EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED",
+    ) as exc_info:
+        manager.run_canary(authority_id=authority_id, environment="staging")
+    if authority_id == "controlled_execution":
+        assert "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED" in str(
+            exc_info.value
+        )
+    else:
+        assert "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED" not in str(
+            exc_info.value
+        )
     assert not isolated_journal.exists()
 
 
-def test_sealed_workflow_success_is_verified_and_idempotent(
+def test_public_cli_run_returns_hold_without_mutation(
+    isolated_journal: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert (
+        manager.main(
+            ["run", "--authority", "ready", "--environment", "staging"]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert "staged authority canary rejected: operational HOLD" in captured.err
+    assert captured.out == ""
+    assert not isolated_journal.exists()
+
+
+
+def test_attempt_snapshot_is_immutable_and_anchor_candidate_binds_the_tail(
     isolated_journal: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     private = Ed25519PrivateKey.generate()
     resources = _archived_ready_resources(private)
     _patch_operational_inputs(monkeypatch, resources)
-    harness = SealedCanaryWorkflowHarness.from_sealed_run(manager.run_canary)
-
-    def exact_runner(challenge: Mapping[str, object]) -> bytes:
-        result = _signed_result(dict(challenge), resources, private)
-        return canary.canonical_json_bytes(result)
-
-    first_id, first = harness.run(
-        authority_id="ready",
-        environment="staging",
-        exact_runner=exact_runner,
-    )
-    second_id, second = harness.run(
-        authority_id="ready",
-        environment="staging",
-        exact_runner=exact_runner,
-    )
-    assert first_id == second_id
-    assert first["canary_digest"] == second["canary_digest"]
-    assert first["research_eligible"] is False
-    with sqlite3.connect(isolated_journal) as connection:
-        assert connection.execute(
-            "SELECT state,attempt_count FROM staged_canary_runs"
-        ).fetchone() == ("COMMITTED", 1)
-
-
-def test_sealed_workflow_recovers_expired_lease_and_bounds_retries(
-    isolated_journal: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    private = Ed25519PrivateKey.generate()
-    resources = _archived_ready_resources(private)
-    _patch_operational_inputs(monkeypatch, resources)
-    harness = SealedCanaryWorkflowHarness.from_sealed_run(manager.run_canary)
-    canary_id, first_token, first_challenge, _ = harness.acquire(
-        authority_id="ready", environment="staging"
-    )
-    real_monotonic_ns = manager.time.monotonic_ns
-    monkeypatch.setattr(
-        manager.time,
-        "monotonic_ns",
-        lambda: int(first_challenge["deadline_monotonic_ns"]),
-    )
-    second_id, second_token, _challenge_doc, _ = harness.acquire(
-        authority_id="ready", environment="staging"
-    )
-    monkeypatch.setattr(manager.time, "monotonic_ns", real_monotonic_ns)
-    assert second_id == canary_id
-    assert second_token != first_token
-    harness.fail(
-        canary_id=canary_id,
-        token=second_token,
-        failure_class="SyntheticFailure",
-    )
-    third_id, third_token, _challenge_doc, _ = harness.acquire(
-        authority_id="ready", environment="staging"
-    )
-    assert third_id == canary_id
-    harness.fail(
-        canary_id=canary_id,
-        token=third_token,
-        failure_class="SyntheticFailure",
-    )
-    with pytest.raises(canary.StagedCanaryError, match="bounded retries"):
-        harness.acquire(authority_id="ready", environment="staging")
-    with sqlite3.connect(isolated_journal) as connection:
-        assert connection.execute(
-            "SELECT state,attempt_count FROM staged_canary_runs"
-        ).fetchone() == ("FAILED_FINAL", 3)
-
-
-def test_retry_snapshots_are_immutable_and_anchor_candidate_binds_the_tail(
-    isolated_journal: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    snapshots = [
-        _archived_ready_resources(Ed25519PrivateKey.generate()) for _ in range(2)
-    ]
-    _patch_operational_inputs(monkeypatch, snapshots[0])
-    harness = SealedCanaryWorkflowHarness.from_sealed_run(manager.run_canary)
-    canary_id = ""
-    for snapshot in snapshots:
-        monkeypatch.setattr(
-            manager,
-            "observe_preflight_resources",
-            lambda _snapshot=snapshot, **_kwargs: _snapshot,
-        )
-        canary_id, token, _challenge_doc, _ = harness.acquire(
-            authority_id="ready", environment="staging"
-        )
-        harness.start(canary_id=canary_id, token=token)
-        harness.fail(
-            canary_id=canary_id,
-            token=token,
-            failure_class="SyntheticFailure",
-        )
+    canary_id, _challenge, _resources = _insert_archived_ready_run(private)
 
     result = manager.audit()
     assert result["historical_attempt_evidence_complete"] is True
-    assert result["attempt_evidence_count"] == 2
-    assert result["event_count"] == 6
+    assert result["attempt_evidence_count"] == 1
+    assert result["event_count"] == 3
     assert result["tail_event_digest"].startswith("sha256:")
     assert result["anchor_candidate"]["tail_event_digest"] == result[
         "tail_event_digest"
+    ]
+    assert result["anchor_candidate"]["tail_event_sequence"] == result[
+        "event_count"
+    ]
+    assert result["anchor_candidate"]["attempt_evidence_set_digest"] == result[
+        "attempt_evidence_set_digest"
     ]
     assert result["anchor_candidate_digest"] == canary._digest(
         result["anchor_candidate"]
@@ -830,15 +855,312 @@ def test_retry_snapshots_are_immutable_and_anchor_candidate_binds_the_tail(
             "FROM staged_canary_attempts WHERE canary_id=? ORDER BY attempt",
             (canary_id,),
         ).fetchall()
-        assert [row[0] for row in attempts] == [1, 2]
-        assert attempts[0][1] != attempts[1][1]
-        assert attempts[0][2] != attempts[1][2]
+        assert [row[0] for row in attempts] == [1]
         with pytest.raises(sqlite3.IntegrityError, match="immutable"):
             connection.execute(
                 "UPDATE staged_canary_attempts SET resource_digest=? "
                 "WHERE canary_id=? AND attempt=1",
                 ("sha256:" + "f" * 64, canary_id),
             )
+
+
+def test_attempt_primary_key_rejects_replace_and_upsert(
+    isolated_journal: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = Ed25519PrivateKey.generate()
+    resources = _archived_ready_resources(private)
+    _patch_operational_inputs(monkeypatch, resources)
+    _insert_archived_ready_run(private)
+    with sqlite3.connect(isolated_journal) as connection:
+        row = connection.execute(
+            "SELECT * FROM staged_canary_attempts"
+        ).fetchone()
+        assert row is not None
+        placeholders = ",".join("?" for _ in row)
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            connection.execute(
+                f"INSERT OR REPLACE INTO staged_canary_attempts "
+                f"VALUES({placeholders})",
+                tuple(row),
+            )
+        connection.rollback()
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            connection.execute(
+                f"INSERT INTO staged_canary_attempts VALUES({placeholders}) "
+                "ON CONFLICT(canary_id,attempt) DO UPDATE SET "
+                "lease_boot_id=excluded.lease_boot_id",
+                tuple(row),
+            )
+        connection.rollback()
+    assert manager.audit()["attempt_evidence_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("column", "replacement"),
+    (
+        ("lease_boot_id", "forged-boot-id"),
+        ("acquired_at", "2030-01-01T00:00:00.000000+00:00"),
+        ("resource_json", "{}"),
+        ("challenge_json", "{}"),
+    ),
+)
+def test_attempt_field_tampering_is_detected_after_trigger_replay(
+    isolated_journal: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    column: str,
+    replacement: str,
+) -> None:
+    private = Ed25519PrivateKey.generate()
+    resources = _archived_ready_resources(private)
+    _patch_operational_inputs(monkeypatch, resources)
+    _insert_archived_ready_run(private)
+    with sqlite3.connect(isolated_journal) as connection:
+        trigger_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+            "AND name='staged_canary_attempts_no_update'"
+        ).fetchone()[0]
+        connection.execute("DROP TRIGGER staged_canary_attempts_no_update")
+        connection.execute(
+            f'UPDATE staged_canary_attempts SET "{column}"=?',
+            (replacement,),
+        )
+        connection.execute(trigger_sql)
+        connection.commit()
+    with pytest.raises(canary.StagedCanaryError):
+        manager.audit()
+
+
+def test_coherent_attempt_rewrite_changes_external_anchor_candidate(
+    isolated_journal: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = Ed25519PrivateKey.generate()
+    resources = _archived_ready_resources(private)
+    _patch_operational_inputs(monkeypatch, resources)
+    _insert_archived_ready_run(private)
+    before = manager.audit()
+
+    with sqlite3.connect(isolated_journal) as connection:
+        connection.row_factory = sqlite3.Row
+        trigger_rows = connection.execute(
+            "SELECT name,sql FROM sqlite_master WHERE type='trigger' ORDER BY name"
+        ).fetchall()
+        for trigger in trigger_rows:
+            connection.execute(f'DROP TRIGGER "{trigger["name"]}"')
+        attempt = connection.execute(
+            "SELECT * FROM staged_canary_attempts"
+        ).fetchone()
+        assert attempt is not None
+        forged_boot_id = "forged-boot-id"
+        forged_attempt_digest = manager._attempt_evidence_digest(
+            canary_id=attempt["canary_id"],
+            attempt=attempt["attempt"],
+            challenge_digest=attempt["challenge_digest"],
+            resource_digest=attempt["resource_digest"],
+            lease_token_digest=attempt["lease_token_digest"],
+            lease_boot_id=forged_boot_id,
+            deadline_monotonic_ns=attempt["deadline_monotonic_ns"],
+            lease_expires_at=attempt["lease_expires_at"],
+            acquired_at=attempt["acquired_at"],
+        )
+        connection.execute(
+            "UPDATE staged_canary_attempts SET lease_boot_id=?,"
+            "attempt_evidence_digest=?",
+            (forged_boot_id, forged_attempt_digest),
+        )
+        prior = None
+        events = connection.execute(
+            "SELECT * FROM staged_canary_events ORDER BY sequence"
+        ).fetchall()
+        for event in events:
+            detail_digest = (
+                forged_attempt_digest
+                if event["event_type"]
+                in {"LEASE_ACQUIRED", "EXPIRED_LEASE_RECOVERED", "ACTION_STARTED"}
+                else event["detail_digest"]
+            )
+            body = {
+                "format": "local-authority-staged-canary-event/v1",
+                "sequence": event["sequence"],
+                "canary_id": event["canary_id"],
+                "event_type": event["event_type"],
+                "attempt": event["attempt"],
+                "observed_at": event["observed_at"],
+                "lease_token_digest": event["lease_token_digest"],
+                "detail_digest": detail_digest,
+                "prior_event_digest": prior,
+            }
+            event_digest = canary._digest(body)
+            connection.execute(
+                "UPDATE staged_canary_events SET detail_digest=?,"
+                "prior_event_digest=?,event_digest=? WHERE sequence=?",
+                (detail_digest, prior, event_digest, event["sequence"]),
+            )
+            prior = event_digest
+        for trigger in trigger_rows:
+            connection.execute(trigger["sql"])
+        connection.commit()
+
+    after = manager.audit()
+    assert after["historical_attempt_evidence_complete"] is True
+    assert after["attempt_evidence_set_digest"] != before[
+        "attempt_evidence_set_digest"
+    ]
+    assert after["anchor_candidate_digest"] != before["anchor_candidate_digest"]
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("lease_boot_id", "other-boot"),
+        ("acquired_at", "2030-01-01T00:00:00.000000+00:00"),
+        ("resource_digest", "sha256:" + "a" * 64),
+        ("challenge_digest", "sha256:" + "b" * 64),
+    ),
+)
+def test_full_attempt_digest_and_candidate_bind_each_evidence_dimension(
+    isolated_journal: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    replacement: str,
+) -> None:
+    private = Ed25519PrivateKey.generate()
+    resources = _archived_ready_resources(private)
+    _patch_operational_inputs(monkeypatch, resources)
+    _insert_archived_ready_run(private)
+    audit = manager.audit()
+    with sqlite3.connect(isolated_journal) as connection:
+        connection.row_factory = sqlite3.Row
+        attempt = connection.execute(
+            "SELECT * FROM staged_canary_attempts"
+        ).fetchone()
+    assert attempt is not None
+    evidence = {
+        "canary_id": attempt["canary_id"],
+        "attempt": attempt["attempt"],
+        "challenge_digest": attempt["challenge_digest"],
+        "resource_digest": attempt["resource_digest"],
+        "lease_token_digest": attempt["lease_token_digest"],
+        "lease_boot_id": attempt["lease_boot_id"],
+        "deadline_monotonic_ns": attempt["deadline_monotonic_ns"],
+        "lease_expires_at": attempt["lease_expires_at"],
+        "acquired_at": attempt["acquired_at"],
+    }
+    evidence[field] = replacement
+    forged_attempt_digest = manager._attempt_evidence_digest(**evidence)
+    assert forged_attempt_digest != attempt["attempt_evidence_digest"]
+    forged_set_digest = canary._digest(
+        {
+            "format": manager._ATTEMPT_EVIDENCE_SET_FORMAT,
+            "attempts": [
+                {
+                    "canary_id": attempt["canary_id"],
+                    "attempt": attempt["attempt"],
+                    "attempt_evidence_digest": forged_attempt_digest,
+                }
+            ],
+        }
+    )
+    forged_candidate = {
+        **audit["anchor_candidate"],
+        "attempt_evidence_set_digest": forged_set_digest,
+    }
+    assert forged_set_digest != audit["attempt_evidence_set_digest"]
+    assert canary._digest(forged_candidate) != audit["anchor_candidate_digest"]
+
+
+def test_audit_anchor_candidate_uses_one_read_snapshot_during_concurrent_write(
+    isolated_journal: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = Ed25519PrivateKey.generate()
+    resources = _archived_ready_resources(private)
+    _patch_operational_inputs(monkeypatch, resources)
+    canary_id, _challenge, _resources = _insert_archived_ready_run(
+        private, state="RUNNING"
+    )
+    token = "9" * 64
+
+    release_writer = threading.Event()
+    writer_inserted = threading.Event()
+    writer_errors: list[BaseException] = []
+
+    def append_started() -> None:
+        release_writer.wait(timeout=5)
+        try:
+            connection = sqlite3.connect(
+                isolated_journal,
+                isolation_level=None,
+                timeout=10.0,
+            )
+            connection.row_factory = sqlite3.Row
+            try:
+                connection.execute("PRAGMA busy_timeout=10000")
+                connection.execute("BEGIN IMMEDIATE")
+                failure_class = "SyntheticFailure"
+                connection.execute(
+                    "UPDATE staged_canary_runs SET state='FAILED_RETRYABLE',"
+                    "lease_token=NULL,lease_boot_id=NULL,deadline_monotonic_ns=NULL,"
+                    "lease_expires_at=NULL,failure_class=?,updated_at=? "
+                    "WHERE canary_id=?",
+                    (
+                        failure_class,
+                        datetime.now(UTC).isoformat(timespec="microseconds"),
+                        canary_id,
+                    ),
+                )
+                _append_archived_event(
+                    connection,
+                    canary_id=canary_id,
+                    event_type="ACTION_FAILED_RETRYABLE",
+                    attempt=1,
+                    lease_token=token,
+                    detail_digest=canary._digest(failure_class.encode("ascii")),
+                )
+                writer_inserted.set()
+                connection.commit()
+            finally:
+                connection.close()
+        except BaseException as exc:  # pragma: no cover - asserted below
+            writer_errors.append(exc)
+            writer_inserted.set()
+
+    writer = threading.Thread(target=append_started, daemon=True)
+    writer.start()
+    real_connect = manager._connect_journal
+
+    class _AuditConnectionProxy:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self._connection = connection
+
+        def execute(self, sql: str, *args: object):
+            cursor = self._connection.execute(sql, *args)
+            if sql == "SELECT COUNT(*) FROM staged_canary_events":
+                release_writer.set()
+                assert writer_inserted.wait(timeout=5)
+            return cursor
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._connection, name)
+
+    def connect_with_audit_probe(*, create: bool, read_only: bool = False):
+        connection = real_connect(create=create, read_only=read_only)
+        return _AuditConnectionProxy(connection) if read_only else connection
+
+    monkeypatch.setattr(manager, "_connect_journal", connect_with_audit_probe)
+    during = manager.audit()
+    writer.join(timeout=10)
+    assert not writer.is_alive()
+    assert writer_errors == []
+    assert during["event_count"] == 2
+    assert during["tail_event_sequence"] == 2
+    assert during["anchor_candidate"]["tail_event_sequence"] == 2
+
+    monkeypatch.setattr(manager, "_connect_journal", real_connect)
+    after = manager.audit()
+    assert after["event_count"] == 3
+    assert after["tail_event_sequence"] == 3
 
 
 def test_missing_immutable_retry_snapshot_is_detected(
@@ -861,207 +1183,6 @@ def test_missing_immutable_retry_snapshot_is_detected(
     with pytest.raises(canary.StagedCanaryError, match="attempt history"):
         manager.audit()
 
-
-def test_three_stranded_leases_terminalize_when_recovery_is_exhausted(
-    isolated_journal: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    private = Ed25519PrivateKey.generate()
-    resources = _archived_ready_resources(private)
-    _patch_operational_inputs(monkeypatch, resources)
-    harness = SealedCanaryWorkflowHarness.from_sealed_run(manager.run_canary)
-    canary_id = ""
-    challenge: Mapping[str, object] | None = None
-    for _attempt in range(manager.MAXIMUM_ATTEMPTS):
-        if challenge is not None:
-            monkeypatch.setattr(
-                manager.time,
-                "monotonic_ns",
-                lambda deadline=int(challenge["deadline_monotonic_ns"]): deadline,
-            )
-        canary_id, _token, challenge, _resources = harness.acquire(
-            authority_id="ready", environment="staging"
-        )
-    assert challenge is not None
-    monkeypatch.setattr(
-        manager.time,
-        "monotonic_ns",
-        lambda: int(challenge["deadline_monotonic_ns"]),
-    )
-    with pytest.raises(canary.StagedCanaryError, match="bounded retries"):
-        harness.acquire(authority_id="ready", environment="staging")
-    with sqlite3.connect(isolated_journal) as connection:
-        row = connection.execute(
-            "SELECT state,attempt_count,lease_token,deadline_monotonic_ns,"
-            "failure_class FROM staged_canary_runs WHERE canary_id=?",
-            (canary_id,),
-        ).fetchone()
-        tail = connection.execute(
-            "SELECT event_type,attempt FROM staged_canary_events "
-            "WHERE canary_id=? ORDER BY sequence DESC LIMIT 1",
-            (canary_id,),
-        ).fetchone()
-    assert row == (
-        "FAILED_FINAL",
-        manager.MAXIMUM_ATTEMPTS,
-        None,
-        None,
-        "EXPIRED_LEASE_EXHAUSTED",
-    )
-    assert tail == ("ACTION_FAILED_FINAL", manager.MAXIMUM_ATTEMPTS)
-
-
-def test_exhausted_lease_terminalizes_before_broken_resource_preflight(
-    isolated_journal: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    private = Ed25519PrivateKey.generate()
-    resources = _archived_ready_resources(private)
-    _patch_operational_inputs(monkeypatch, resources)
-    harness = SealedCanaryWorkflowHarness.from_sealed_run(manager.run_canary)
-    challenge: Mapping[str, object] | None = None
-    for _attempt in range(manager.MAXIMUM_ATTEMPTS):
-        if challenge is not None:
-            monkeypatch.setattr(
-                manager.time,
-                "monotonic_ns",
-                lambda deadline=int(challenge["deadline_monotonic_ns"]): deadline,
-            )
-        canary_id, _token, challenge, _resources = harness.acquire(
-            authority_id="ready", environment="staging"
-        )
-    assert challenge is not None
-    monkeypatch.setattr(
-        manager.time,
-        "monotonic_ns",
-        lambda: int(challenge["deadline_monotonic_ns"]),
-    )
-
-    def broken_resources(**_kwargs: object) -> Mapping[str, object]:
-        raise canary.StagedCanaryError("governed resource disappeared")
-
-    monkeypatch.setattr(manager, "observe_preflight_resources", broken_resources)
-    with pytest.raises(canary.StagedCanaryError, match="resource disappeared"):
-        harness.acquire(authority_id="ready", environment="staging")
-    with sqlite3.connect(isolated_journal) as connection:
-        row = connection.execute(
-            "SELECT state,lease_token,failure_class FROM staged_canary_runs "
-            "WHERE canary_id=?",
-            (canary_id,),
-        ).fetchone()
-    assert row == ("FAILED_FINAL", None, "EXPIRED_LEASE_EXHAUSTED")
-
-
-def test_sealed_workflow_resource_churn_cannot_reset_attempt_family(
-    isolated_journal: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    snapshots = [
-        _archived_ready_resources(Ed25519PrivateKey.generate()) for _ in range(4)
-    ]
-    _patch_operational_inputs(monkeypatch, snapshots[0])
-    harness = SealedCanaryWorkflowHarness.from_sealed_run(manager.run_canary)
-    family_id: str | None = None
-    for snapshot in snapshots[:3]:
-        monkeypatch.setattr(
-            manager,
-            "observe_preflight_resources",
-            lambda _snapshot=snapshot, **_kwargs: _snapshot,
-        )
-        canary_id, token, _challenge_doc, _ = harness.acquire(
-            authority_id="ready", environment="staging"
-        )
-        family_id = family_id or canary_id
-        assert canary_id == family_id
-        harness.fail(
-            canary_id=canary_id,
-            token=token,
-            failure_class="SyntheticFailure",
-        )
-    monkeypatch.setattr(
-        manager,
-        "observe_preflight_resources",
-        lambda **_kwargs: snapshots[3],
-    )
-    with pytest.raises(canary.StagedCanaryError, match="bounded retries"):
-        harness.acquire(authority_id="ready", environment="staging")
-    assert isolated_journal.exists()
-
-
-def test_sealed_workflow_rechecks_deadline_before_action_and_commit(
-    isolated_journal: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    private = Ed25519PrivateKey.generate()
-    resources = _archived_ready_resources(private)
-    _patch_operational_inputs(monkeypatch, resources)
-    harness = SealedCanaryWorkflowHarness.from_sealed_run(manager.run_canary)
-    canary_id, token, challenge, _ = harness.acquire(
-        authority_id="ready", environment="staging"
-    )
-    deadline = int(challenge["deadline_monotonic_ns"])
-    real_monotonic_ns = manager.time.monotonic_ns
-    monkeypatch.setattr(manager.time, "monotonic_ns", lambda: deadline)
-    with pytest.raises(canary.StagedCanaryError, match="stale or expired"):
-        harness.start(canary_id=canary_id, token=token)
-
-    monkeypatch.setattr(
-        manager.time,
-        "monotonic_ns",
-        lambda: deadline,
-    )
-    _recovered_id, recovered_token, recovered_challenge, _ = harness.acquire(
-        authority_id="ready", environment="staging"
-    )
-    monkeypatch.setattr(manager.time, "monotonic_ns", real_monotonic_ns)
-    harness.start(canary_id=canary_id, token=recovered_token)
-    result = _signed_result(recovered_challenge, resources, private)
-    recovered_deadline = int(recovered_challenge["deadline_monotonic_ns"])
-    observations = iter(
-        (recovered_deadline - 2, recovered_deadline - 1, recovered_deadline)
-    )
-    monkeypatch.setattr(manager.time, "monotonic_ns", lambda: next(observations))
-    with pytest.raises(canary.StagedCanaryError, match="durable commit"):
-        harness.commit(
-            canary_id=canary_id,
-            token=recovered_token,
-            challenge=recovered_challenge,
-            runner_output=canary.canonical_json_bytes(result),
-        )
-
-
-def test_sealed_commit_requires_started_action_and_under_lock_signature(
-    isolated_journal: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    private = Ed25519PrivateKey.generate()
-    resources = _archived_ready_resources(private)
-    _patch_operational_inputs(monkeypatch, resources)
-    harness = SealedCanaryWorkflowHarness.from_sealed_run(manager.run_canary)
-    canary_id, token, challenge, _ = harness.acquire(
-        authority_id="ready", environment="staging"
-    )
-    valid = _signed_result(challenge, resources, private)
-    with pytest.raises(canary.StagedCanaryError, match="started action"):
-        harness.commit(
-            canary_id=canary_id,
-            token=token,
-            challenge=challenge,
-            runner_output=canary.canonical_json_bytes(valid),
-        )
-    harness.start(canary_id=canary_id, token=token)
-    forged = _signed_result(
-        challenge,
-        resources,
-        Ed25519PrivateKey.generate(),
-    )
-    with pytest.raises(canary.StagedCanaryError, match="signature"):
-        harness.commit(
-            canary_id=canary_id,
-            token=token,
-            challenge=challenge,
-            runner_output=canary.canonical_json_bytes(forged),
-        )
 
 
 def test_corrupt_existing_journal_is_never_repaired_on_create(
@@ -1213,6 +1334,32 @@ def test_journal_exact_schema_rejects_an_extra_object(
     with sqlite3.connect(isolated_journal) as connection:
         connection.execute("CREATE TABLE attacker_reset_counter(value INTEGER)")
         connection.commit()
+    with pytest.raises(canary.StagedCanaryError, match="schema"):
+        manager.audit()
+
+
+def test_pre_v3_journal_identity_fails_closed_without_in_place_upgrade(
+    isolated_journal: Path,
+) -> None:
+    manager._prepare_canonical_state_root()
+    legacy_schema = manager._SCHEMA.replace(
+        "CHECK(schema_version=3)",
+        "CHECK(schema_version=2)",
+    )
+    with sqlite3.connect(isolated_journal) as connection:
+        connection.executescript(legacy_schema)
+        connection.execute(
+            "INSERT INTO staged_canary_meta VALUES(1,?,?,?,?,?)",
+            (
+                2,
+                "local-authority-staged-canary-journal/v2",
+                canary.load_policy().digest,
+                canary.PINNED_MANIFEST_DIGEST,
+                str(isolated_journal),
+            ),
+        )
+        connection.commit()
+    isolated_journal.chmod(0o600)
     with pytest.raises(canary.StagedCanaryError, match="schema"):
         manager.audit()
 

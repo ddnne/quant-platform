@@ -73,7 +73,7 @@ POLICY_DIGEST = (
 POLICY_FORMAT = "local-authority-staged-canary-policy/v1"
 CHALLENGE_FORMAT = "local-authority-staged-canary-challenge/v1"
 CANARY_FORMAT = "local-authority-staged-canary-evidence/v1"
-JOURNAL_FORMAT = "local-authority-staged-canary-journal/v2"
+JOURNAL_FORMAT = "local-authority-staged-canary-journal/v3"
 CLASSIFICATION = "CANARY_NOT_RESEARCH_ELIGIBLE"
 CANONICAL_STATE_ROOT = Path(
     "/Library/Application Support/quant-platform/authorities/staged-canary"
