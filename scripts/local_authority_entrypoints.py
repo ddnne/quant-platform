@@ -27,11 +27,17 @@ from typing import Any
 from uuid import uuid4
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from ops import d1_sync_signing, projection_signing
+from ops import d1_sync_signing, projection_signing, trust_domain
 from paper_runtime import begin_snapshot_sync, readiness_attestation
 from storage import coverage_transition
 
 from scripts import authority_protocol_runtime, export_ops_projection, sync_d1_to_sqlite
+from scripts.local_ready_registry import (
+    LocalReadyRegistryError,
+    derive_ready_authority_resource_digest,
+    load_scoped_ready_public_keys,
+    ready_authority_instance_id,
+)
 from scripts.local_authority_service import (
     REQUEST_FORMAT,
     AuthorityRequestContext,
@@ -274,7 +280,13 @@ def _validate_owned_mirror(
     environment: str,
     purpose: str,
     expected_d1_uid: int,
-) -> tuple[sqlite3.Connection, dict[str, Any], str, tuple[int, int, int]]:
+) -> tuple[
+    sqlite3.Connection,
+    dict[str, Any],
+    str,
+    dict[str, Any],
+    tuple[int, int, int],
+]:
     values = _require_payload_fields(
         payload,
         fields={"owned_mirror_evidence", "selector"},
@@ -337,6 +349,7 @@ def _validate_owned_mirror(
         conn,
         dict(values["selector"]),
         evidence["governed_db_path"],
+        dict(evidence),
         (int(info.st_dev), int(info.st_ino), int(info.st_size)),
     )
 
@@ -367,12 +380,14 @@ class OpsProjectionRenderAndSign:
         payload: Mapping[str, Any],
         fds: Sequence[int],
     ) -> Mapping[str, Any]:
-        conn, selector, _, authority_file_identity = _validate_owned_mirror(
-            payload,
-            fds,
-            environment=self.environment,
-            purpose="ops_projection",
-            expected_d1_uid=self.expected_d1_uid,
+        conn, selector, _, _evidence, authority_file_identity = (
+            _validate_owned_mirror(
+                payload,
+                fds,
+                environment=self.environment,
+                purpose="ops_projection",
+                expected_d1_uid=self.expected_d1_uid,
+            )
         )
         if selector:
             conn.close()
@@ -394,8 +409,20 @@ class OpsProjectionRenderAndSign:
         finally:
             conn.close()
         candidate_document = json.loads(candidate.candidate_bytes)
-        envelope = candidate_document["projection"]["envelope"]
-        projection_signing._validate_envelope(envelope)
+        envelope = dict(candidate_document["projection"]["envelope"])
+        sync_identity = candidate_document["sync_identity"]
+        envelope.update(
+            {
+                "environment": self.environment,
+                "resource_identity": trust_domain.projection_resource_identity(
+                    environment=self.environment,
+                    source=sync_identity,
+                ),
+            }
+        )
+        projection_signing._validate_envelope(
+            envelope, expected_environment=self.environment
+        )
         body = projection_signing._signed_body(
             key_id=self.custody.key_id,
             envelope=envelope,
@@ -410,8 +437,9 @@ class OpsProjectionRenderAndSign:
         projection_signing._verify_document(
             signed_document,
             {self.custody.key_id: public},
+            expected_environment=self.environment,
         )
-        active = projection_signing._load_pinned_active_keys()
+        active = projection_signing._load_pinned_active_keys(self.environment)
         active_public = active.get(self.custody.key_id)
         if (
             active_public is None
@@ -420,7 +448,9 @@ class OpsProjectionRenderAndSign:
             raise LocalAuthorityPending(
                 "Ops Projection public registry does not activate the custody key"
             )
-        projection_signing.verify_pinned_ops_projection(signed_document)
+        projection_signing.verify_pinned_ops_projection(
+            signed_document, expected_environment=self.environment
+        )
         signed_bytes = projection_signing.canonical_json_bytes(signed_document)
         signed_name, signed_store_digest = _append_content_addressed(
             self.artifact_store,
@@ -462,12 +492,14 @@ class CoverageTransitionAuthorize:
         payload: Mapping[str, Any],
         fds: Sequence[int],
     ) -> Mapping[str, Any]:
-        conn, selector, governed_db_path, _ = _validate_owned_mirror(
-            payload,
-            fds,
-            environment=self.environment,
-            purpose="coverage_transition",
-            expected_d1_uid=self.expected_d1_uid,
+        conn, selector, governed_db_path, evidence, _authority_file_identity = (
+            _validate_owned_mirror(
+                payload,
+                fds,
+                environment=self.environment,
+                purpose="coverage_transition",
+                expected_d1_uid=self.expected_d1_uid,
+            )
         )
         build_id = selector.get("build_id")
         datasets = selector.get("datasets")
@@ -495,6 +527,24 @@ class CoverageTransitionAuthorize:
                     expires_at=expires.isoformat().replace("+00:00", "Z"),
                 )
             )
+            body = dict(request["body"])
+            sync_identity = evidence["sync_identity"]
+            body.update(
+                {
+                    "environment": self.environment,
+                    "resource_identity": {
+                        "environment": self.environment,
+                        "source_d1": sync_identity["resource_identity"],
+                        "source_audit_digest": sync_identity["audit_digest"],
+                        "source_export_digest": sync_identity["export_digest"],
+                        "source_change_seq": sync_identity["source_change_seq"],
+                        "governed_db_content_digest": evidence["descriptor"][
+                            "content_digest"
+                        ],
+                    },
+                }
+            )
+            request = coverage_transition._unsigned_request(body)
         finally:
             conn.close()
         document = {
@@ -510,8 +560,12 @@ class CoverageTransitionAuthorize:
         document["signature"] = self.custody.sign(
             coverage_transition._canonical_bytes(message)
         )
-        frozen = coverage_transition._validate_signed_document(document)
-        registry = coverage_transition.CoverageTransitionPublicKeyRegistry.load_pinned()
+        frozen = coverage_transition._validate_signed_document(
+            document, expected_environment=self.environment
+        )
+        registry = coverage_transition.CoverageTransitionPublicKeyRegistry.load_pinned(
+            expected_environment=self.environment
+        )
         if not registry.provisioned or not registry.verify(
             key_id=self.custody.key_id,
             message=message,
@@ -543,6 +597,7 @@ class D1FreezeAndRenderOpsProjection:
         ops_uid: int,
     ) -> None:
         self.environment = environment
+        self.environment = trust_domain.require_environment(environment)
         self.governed_db_path = Path(governed_db_path).absolute()
         self.ops_socket_path = Path(ops_socket_path)
         self.ops_uid = ops_uid
@@ -610,7 +665,9 @@ class D1FreezeAndRenderOpsProjection:
                     raise LocalAuthorityError(
                         "Ops authority response is not signed evidence"
                     )
-                verified = projection_signing._verify_pinned_document(signed_bytes)
+                verified = projection_signing._verify_pinned_document(
+                    signed_bytes, expected_environment=self.environment
+                )
                 if verified.issuer_key_id != result["issuer_key_id"]:
                     raise LocalAuthorityError(
                         "Ops authority response issuer identity differs"
@@ -647,12 +704,13 @@ class _SealedD1SyncAudit:
 class _D1SyncAuditSealer:
     """Consume only the opaque exact-reconciliation capability and sign it."""
 
-    def __init__(self, custody: FileEd25519KeyCustody) -> None:
+    def __init__(self, custody: FileEd25519KeyCustody, *, environment: str) -> None:
         self.custody = custody
+        self.environment = trust_domain.require_environment(environment)
 
     def preflight(self) -> None:
         try:
-            registry = d1_sync_signing._load_registry_document()
+            registry = d1_sync_signing._load_registry_document(self.environment)
         except d1_sync_signing.D1SyncAuditError as exc:
             raise LocalAuthorityPending(
                 "D1 sync public registry is unavailable"
@@ -685,15 +743,18 @@ class _D1SyncAuditSealer:
         if type(facts) is not dict or set(facts) != _D1_RECONCILED_FACT_FIELDS:
             raise LocalAuthorityError("D1 reconciled export facts are not closed")
         issued_at = d1_sync_signing._utc_now().isoformat()
+        resource = dict(trust_domain.d1_resource_identity(self.environment))
         envelope = {
             "schema_version": d1_sync_signing.AUDIT_ENVELOPE_SCHEMA,
-            "authority_id": d1_sync_signing.GOVERNED_AUTHORITY_ID,
+            "authority_id": resource["authority_id"],
             "source_mode": "WRANGLER_REMOTE",
-            "d1_name": d1_sync_signing.GOVERNED_D1_NAME,
-            "d1_id": d1_sync_signing.GOVERNED_D1_ID,
+            "environment": self.environment,
+            "resource_identity": resource,
+            "d1_name": resource["name"],
+            "d1_id": resource["database_id"],
             **facts,
             "registry_digest": (
-                d1_sync_signing.PINNED_D1_SYNC_REGISTRY_DOCUMENT_DIGEST
+                d1_sync_signing.registry_document_digest(self.environment)
             ),
             "issued_at": issued_at,
         }
@@ -709,7 +770,9 @@ class _D1SyncAuditSealer:
                 d1_sync_signing.canonical_d1_sync_bytes(body)
             ),
         }
-        d1_sync_signing.verify_signed_d1_sync_audit(document)
+        d1_sync_signing.verify_signed_d1_sync_audit(
+            document, expected_environment=self.environment
+        )
         return _SealedD1SyncAudit(document)
 
 
@@ -769,6 +832,7 @@ def _execute_governed_remote_sync(
     wrangler_cli_path: Path,
     wrangler_config_path: Path,
     sealer: _D1SyncAuditSealer,
+    environment: str,
 ) -> Mapping[str, Any]:
     """Acquire the pinned D1, reconcile, sign, persist and freeze one mirror."""
 
@@ -800,6 +864,7 @@ def _execute_governed_remote_sync(
                 authority_node_path=node_executable_path,
                 authority_wrangler_cli_path=wrangler_cli_path,
                 authority_wrangler_config_path=wrangler_config_path,
+                authority_environment=environment,
             )
         )
         source_conn = acquired.open_source()
@@ -871,6 +936,7 @@ class D1SyncNow:
     def __init__(
         self,
         *,
+        environment: str,
         governed_db_path: str | Path,
         cloudflare_token_path: str | Path,
         node_executable_path: str | Path,
@@ -880,6 +946,7 @@ class D1SyncNow:
         expected_uid: int,
         executor: Callable[..., Mapping[str, Any]] = _execute_governed_remote_sync,
     ) -> None:
+        self.environment = trust_domain.require_environment(environment)
         self.governed_db_path = Path(governed_db_path).absolute()
         self.cloudflare_token_path = Path(cloudflare_token_path).absolute()
         self.node_executable_path = Path(node_executable_path).absolute()
@@ -927,7 +994,10 @@ class D1SyncNow:
             node_executable_path=self.node_executable_path,
             wrangler_cli_path=self.wrangler_cli_path,
             wrangler_config_path=self.wrangler_config_path,
-            sealer=_D1SyncAuditSealer(self.custody),
+            sealer=_D1SyncAuditSealer(
+                self.custody, environment=self.environment
+            ),
+            environment=self.environment,
         )
         if type(result) is not dict or result.get("status") != "SYNCED":
             raise LocalAuthorityError("D1 sync executor returned invalid evidence")
@@ -1011,7 +1081,9 @@ class D1FreezeAuthorizeApplyCoverage:
                 "Coverage authority did not return one signed transition"
             )
         applied = coverage_transition.apply_signed_coverage_transition(
-            str(self.governed_db_path), document
+            str(self.governed_db_path),
+            document,
+            expected_environment=self.environment,
         )
         return {
             **dict(applied),
@@ -1131,9 +1203,11 @@ class ReadyPublishProfilePlanBound:
     def __init__(
         self,
         *,
+        environment: str,
         snapshot_root: str | Path,
         custody: FileEd25519KeyCustody,
     ) -> None:
+        self.environment = trust_domain.require_environment(environment)
         self.snapshot_root = Path(snapshot_root).resolve(strict=True)
         self.custody = custody
 
@@ -1207,6 +1281,8 @@ class ReadyPublishProfilePlanBound:
         )
         document = {
             "format": readiness_attestation.READINESS_ATTESTATION_FORMAT,
+            "environment": self.environment,
+            "authority_instance_id": ready_authority_instance_id(self.environment),
             "attestation_id": attestation_id,
             "readiness_scope": "PILOT",
             "snapshot_id": snapshot_id,
@@ -1240,16 +1316,40 @@ class ReadyPublishProfilePlanBound:
             "key_id": self.custody.key_id,
             "issuer": "ReadyPublicationService/v3",
         }
+        document["authority_resource_digest"] = derive_ready_authority_resource_digest(
+            environment=self.environment,
+            snapshot_id=snapshot_id,
+            immutable_db_digest=artifact_digest,
+            ready_manifest_digest=manifest["manifest_digest"],
+            signed_projection_document_digest=(
+                verified_projection.signed_document_digest
+            ),
+        )
         document["signature"] = self.custody.sign(
             readiness_attestation._canonical_bytes(document)
         )
         attestation_bytes = readiness_attestation._canonical_bytes(document)
-        readiness_attestation.verify_pinned_pilot_snapshot_attestation(
-            attestation_bytes,
-            snapshot_id=snapshot_id,
-            ready_manifest=manifest,
-            immutable_db_digest=artifact_digest,
+        try:
+            scoped_keys = load_scoped_ready_public_keys(
+                expected_environment=self.environment
+            )
+        except LocalReadyRegistryError as exc:
+            raise LocalAuthorityPending("READY public registry is unavailable") from exc
+        scoped_key = scoped_keys.get(
+            (
+                self.environment,
+                document["authority_instance_id"],
+                self.custody.key_id,
+            )
         )
+        public = _custody_public_key(self.custody)
+        if (
+            scoped_key is None
+            or scoped_key.public_bytes_raw() != public.public_bytes_raw()
+        ):
+            raise LocalAuthorityPending(
+                "READY public registry does not activate the custody key"
+            )
         _, _, final_digest, final_identity = _load_ready_snapshot(
             self.snapshot_root,
             snapshot_id,
@@ -1259,6 +1359,9 @@ class ReadyPublishProfilePlanBound:
         return {
             "status": "SIGNED",
             "snapshot_id": snapshot_id,
+            "environment": self.environment,
+            "authority_instance_id": document["authority_instance_id"],
+            "authority_resource_digest": document["authority_resource_digest"],
             "attestation_id": attestation_id,
             "attestation_base64": base64.b64encode(attestation_bytes).decode("ascii"),
             "attestation_digest": "sha256:"

@@ -14,7 +14,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "schema_version", "generation_id", "content_digest", "source_db_digest",
+        "schema_version", "environment", "resource_identity", "generation_id", "content_digest", "source_db_digest",
         "generated_at", "producer_commit_sha", "contract_digest", "registry_digest",
         "coverage_policy_version", "coverage_policy_digest", "projection_status", "source_generation",
         "source_snapshot_generation", "source_cursor", "export_cursor", "applied_cursor",
@@ -23,6 +23,8 @@
       ],
       "properties": {
         "schema_version": { "const": "ops-projection-envelope/v1" },
+        "environment": { "enum": ["staging", "production"] },
+        "resource_identity": { "$ref": "#/$defs/resourceIdentity" },
         "generation_id": { "type": "string", "minLength": 1 },
         "content_digest": { "$ref": "#/$defs/sha256" },
         "source_db_digest": { "$ref": "#/$defs/sha256" },
@@ -99,6 +101,29 @@
   "$defs": {
     "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "cursor": { "type": ["integer", "null"], "minimum": 0 },
+    "resourceIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["environment", "source_d1", "source_audit_digest", "source_export_digest", "source_change_seq"],
+      "properties": {
+        "environment": { "enum": ["staging", "production"] },
+        "source_d1": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "kind", "name", "database_id", "authority_id"],
+          "properties": {
+            "provider": { "const": "cloudflare" },
+            "kind": { "const": "d1" },
+            "name": { "type": "string", "minLength": 1 },
+            "database_id": { "type": "string", "minLength": 1 },
+            "authority_id": { "type": "string", "minLength": 1 }
+          }
+        },
+        "source_audit_digest": { "$ref": "#/$defs/sha256" },
+        "source_export_digest": { "$ref": "#/$defs/sha256" },
+        "source_change_seq": { "$ref": "#/$defs/cursor" }
+      }
+    },
     "tableContent": {
       "type": "object",
       "additionalProperties": false,

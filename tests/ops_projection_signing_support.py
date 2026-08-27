@@ -35,8 +35,27 @@ class TestOpsProjectionSigningKey:
     __test__ = False
 
     def sign(self, envelope: Mapping[str, Any]) -> dict[str, Any]:
-        _validate_envelope(envelope)
-        body = _signed_body(key_id=self.key_id, envelope=envelope)
+        bound = dict(envelope)
+        bound.update(
+            {
+                "environment": "production",
+                "resource_identity": {
+                    "environment": "production",
+                    "source_d1": {
+                        "provider": "cloudflare",
+                        "kind": "d1",
+                        "name": "quant-ingest",
+                        "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+                        "authority_id": "cloudflare-d1:be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+                    },
+                    "source_audit_digest": bound["source_db_digest"],
+                    "source_export_digest": bound["source_db_digest"],
+                    "source_change_seq": bound["source_cursor"],
+                },
+            }
+        )
+        _validate_envelope(bound, expected_environment="production")
+        body = _signed_body(key_id=self.key_id, envelope=bound)
         signature = self.private_key.sign(canonical_json_bytes(body))
         return {
             **body,
@@ -66,7 +85,7 @@ class TestOpsProjectionVerifier:
         envelope = document.get("envelope")
         if not isinstance(envelope, Mapping):
             raise OpsProjectionSignatureError("Ops Projection envelope is missing")
-        _validate_envelope(envelope)
+        _validate_envelope(envelope, expected_environment="production")
         body = _signed_body(key_id=self.key_id, envelope=envelope)
         signature_value = str(document.get("signature") or "")
         if not signature_value.startswith("ed25519:"):

@@ -29,8 +29,8 @@ from ops.projection_signing import (
     PINNED_OPS_PROJECTION_REGISTRY_GENERATION,
     open_ops_projection_signing_service,
     sha256_digest,
-    verified_pinned_ops_projection_dataset_evidence,
-    verify_pinned_ops_projection,
+    verified_pinned_ops_projection_dataset_evidence as _verified_pinned_ops_projection_dataset_evidence,
+    verify_pinned_ops_projection as _verify_pinned_ops_projection,
 )
 from scripts import export_ops_projection as exporter
 from scripts import publish_ops_projection as publisher
@@ -49,6 +49,18 @@ from tests.ops_projection_signing_support import (
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "platform/workers/quant-ops-mcp/migrations/projection/0001_ops_projection.sql"
+
+
+def verify_pinned_ops_projection(document):
+    return _verify_pinned_ops_projection(
+        document, expected_environment="production"
+    )
+
+
+def verified_pinned_ops_projection_dataset_evidence(document, datasets):
+    return _verified_pinned_ops_projection_dataset_evidence(
+        document, datasets, expected_environment="production"
+    )
 
 
 def test_projection_content_digest_matches_worker_storage_representation() -> None:
@@ -166,6 +178,14 @@ def _test_mirror_identity(
             else digest
         )
         return {
+            "environment": "production",
+            "resource_identity": {
+                "provider": "cloudflare",
+                "kind": "d1",
+                "name": "quant-ingest",
+                "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+                "authority_id": "cloudflare-d1:be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+            },
             "audit_digest": digest,
             "issuer_key_id": "test-d1-sync-authority",
             "export_digest": digest,
@@ -984,6 +1004,14 @@ def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
     )
     signed_envelope = sign_projection_bundle_for_test(bundle, signer)
     registry = make_test_ops_projection_verifier(private)
+    with pytest.raises(
+        OpsProjectionSignatureError, match="environment mismatch"
+    ):
+        projection_signing._verify_document(
+            signed_envelope,
+            {signer.key_id: private.public_key()},
+            expected_environment="staging",
+        )
     assert bundle.signed_envelope is None
     schema = json.loads(
         (ROOT / "specs/ops_projection/signed_envelope.schema.json").read_text(
@@ -1050,7 +1078,7 @@ def test_pinned_projection_verifier_freezes_one_exact_document_observation(
     monkeypatch.setattr(
         projection_signing,
         "_load_pinned_active_keys",
-        lambda: {signer.key_id: private.public_key()},
+        lambda _environment="production": {signer.key_id: private.public_key()},
     )
 
     verified = verify_pinned_ops_projection(signed_a)
@@ -1087,7 +1115,7 @@ def test_verified_dataset_evidence_retains_signed_document_identity(
     monkeypatch.setattr(
         projection_signing,
         "_load_pinned_active_keys",
-        lambda: {signer.key_id: private.public_key()},
+        lambda _environment="production": {signer.key_id: private.public_key()},
     )
     expected_digest = sha256_digest(signed)
 
@@ -1128,7 +1156,7 @@ def test_signed_projection_raw_json_is_strictly_decoded_once(
     monkeypatch.setattr(
         projection_signing,
         "_load_pinned_active_keys",
-        lambda: {signer.key_id: private.public_key()},
+        lambda _environment="production": {signer.key_id: private.public_key()},
     )
 
     raw = json.dumps(signed, separators=(",", ":")).encode("utf-8")
@@ -1193,7 +1221,7 @@ def test_projection_a_signature_cannot_return_stateful_b_envelope(
     monkeypatch.setattr(
         projection_signing,
         "_load_pinned_active_keys",
-        lambda: {signer.key_id: private.public_key()},
+        lambda _environment="production": {signer.key_id: private.public_key()},
     )
     with pytest.raises(OpsProjectionSignatureError, match="exact finite JSON"):
         verify_pinned_ops_projection(attacked)
@@ -1221,7 +1249,7 @@ def test_projection_nested_subclasses_and_extra_fields_are_rejected(
     monkeypatch.setattr(
         projection_signing,
         "_load_pinned_active_keys",
-        lambda: {signer.key_id: private.public_key()},
+        lambda _environment="production": {signer.key_id: private.public_key()},
     )
 
     class StatefulString(str):

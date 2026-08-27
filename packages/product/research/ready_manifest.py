@@ -1533,6 +1533,7 @@ def _verify_production_projection_evidence_facts(
         envelope, evidence = verified_pinned_ops_projection_dataset_evidence(
             signed_document,
             selected_datasets,
+            expected_environment="production",
         )
     except OpsProjectionSignatureError as exc:
         raise MassResearchDisabledError(

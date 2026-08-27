@@ -2134,6 +2134,8 @@ def _authenticated_applied_mirror_identity_from_conn(
         raise ValueError("authenticated applied mirror inventory is incomplete")
     owned_counts = dict(counts)
     return {
+        "environment": envelope["environment"],
+        "resource_identity": dict(envelope["resource_identity"]),
         "audit_digest": row.get("audit_digest"),
         "issuer_key_id": row.get("issuer_key_id"),
         "export_digest": envelope["export_digest"],
@@ -2149,6 +2151,8 @@ def _authenticated_applied_mirror_identity_from_conn(
 
 _APPLIED_MIRROR_IDENTITY_FIELDS = frozenset(
     {
+        "environment",
+        "resource_identity",
         "audit_digest",
         "issuer_key_id",
         "export_digest",
@@ -2169,6 +2173,15 @@ def _canonical_applied_mirror_identity_json(
     """Validate and freeze the sync/full-source identity held by one handle."""
     if type(identity) is not dict or set(identity) != _APPLIED_MIRROR_IDENTITY_FIELDS:
         raise ValueError("authenticated applied mirror identity is not closed")
+    from ops.trust_domain import require_d1_resource_identity, require_environment
+
+    try:
+        environment = require_environment(identity.get("environment"))
+        require_d1_resource_identity(
+            identity.get("resource_identity"), expected_environment=environment
+        )
+    except ValueError as exc:
+        raise ValueError("authenticated applied mirror trust domain is invalid") from exc
     source = identity.get("source_change_seq")
     applied = identity.get("applied_change_seq")
     if (

@@ -27,6 +27,7 @@ from urllib.parse import quote
 from weakref import WeakSet
 
 from storage.migrations import SNAPSHOT_INVALIDATION_TRIGGERS
+from ops.trust_domain import d1_resource_identity, require_environment
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WRANGLER_CONFIG = (
@@ -131,10 +132,12 @@ def _require_protected_authority_file(
 
 
 def _validated_authority_wrangler(
-    *, node_path: Path, cli_path: Path, config_path: Path
-) -> tuple[tuple[str, str], Path]:
+    *, environment: str, node_path: Path, cli_path: Path, config_path: Path
+) -> tuple[tuple[str, str], Path, tuple[str, ...], str]:
     """Validate an activation-pinned, root-owned Node/Wrangler runtime."""
 
+    environment = require_environment(environment)
+    resource = d1_resource_identity(environment)
     node = _require_protected_authority_file(node_path, executable=True)
     cli = _require_protected_authority_file(cli_path)
     config = _require_protected_authority_file(config_path)
@@ -163,18 +166,23 @@ def _validated_authority_wrangler(
         raise RuntimeError("authority Node runtime version is unavailable")
     try:
         document = tomllib.loads(config.read_text(encoding="utf-8"))
-        bindings = document["env"][GOVERNED_WRANGLER_ENV]["d1_databases"]
+        bindings = (
+            document["env"]["production"]["d1_databases"]
+            if environment == "production"
+            else document["d1_databases"]
+        )
     except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
         raise RuntimeError("cannot verify authority governed D1 binding") from exc
     if bindings != [
         {
             "binding": "DB",
-            "database_name": GOVERNED_D1_NAME,
-            "database_id": GOVERNED_D1_ID,
+            "database_name": resource["name"],
+            "database_id": resource["database_id"],
         }
     ]:
         raise RuntimeError("authority Wrangler config is not bound to governed D1")
-    return (str(node), str(cli)), config
+    environment_args = ("--env", "production") if environment == "production" else ()
+    return (str(node), str(cli)), config, environment_args, resource["name"]
 
 
 def _run_authority_wrangler_d1_export(
@@ -184,8 +192,10 @@ def _run_authority_wrangler_d1_export(
     node_path: Path,
     cli_path: Path,
     config_path: Path,
+    environment: str,
 ) -> None:
-    command_prefix, config = _validated_authority_wrangler(
+    command_prefix, config, environment_args, database_name = _validated_authority_wrangler(
+        environment=environment,
         node_path=node_path,
         cli_path=cli_path,
         config_path=config_path,
@@ -201,14 +211,13 @@ def _run_authority_wrangler_d1_export(
         *command_prefix,
         "d1",
         "export",
-        GOVERNED_D1_NAME,
+        database_name,
         "--remote",
         "--output",
         str(output_path),
         "--config",
         str(config),
-        "--env",
-        GOVERNED_WRANGLER_ENV,
+        *environment_args,
         "--skip-confirmation",
     ]
     child_environment = {
@@ -1389,6 +1398,7 @@ def _build_authenticated_export_authority():
         authority_node_path: Path | None = None,
         authority_wrangler_cli_path: Path | None = None,
         authority_wrangler_config_path: Path | None = None,
+        authority_environment: str | None = None,
     ) -> _PinnedWranglerExport:
         """Acquire after an authority-owned preflight, never a caller flag."""
 
@@ -1404,7 +1414,11 @@ def _build_authenticated_export_authority():
             authority_wrangler_config_path,
         )
         if any(item is not None for item in authority_runtime):
-            if any(item is None for item in authority_runtime) or credential_token is None:
+            if (
+                any(item is None for item in authority_runtime)
+                or credential_token is None
+                or authority_environment is None
+            ):
                 raise RuntimeError("authority Wrangler runtime is incomplete")
             _run_authority_wrangler_d1_export(
                 output_path=raw_artifact,
@@ -1412,6 +1426,7 @@ def _build_authenticated_export_authority():
                 node_path=authority_node_path,
                 cli_path=authority_wrangler_cli_path,
                 config_path=authority_wrangler_config_path,
+                environment=authority_environment,
             )
         else:
             if credential_token is not None:

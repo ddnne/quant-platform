@@ -426,7 +426,7 @@ EXPECTED_RESIDUAL_RISK = "cloudflare_workers_scripts_write_account_scope"
 # contains its own body digest; this independent code pin prevents a caller from
 # changing the contract and merely recomputing that self-declared digest.
 PINNED_MANIFEST_DIGEST = (
-    "sha256:ebf938dbdd9bc607cba21bb6b1d2641c1a826a383048616c9858a3d4505c55a3"
+    "sha256:6e6706ce769025eeca1b1ba5b55ce1303096f22197e39ffc72acf2fb31a88a13"
 )
 
 _BROAD_CAPABILITY_TOKENS = frozenset(
@@ -672,6 +672,26 @@ def _validate_local_deployment(
         raise ValueError(f"{principal}/{environment}: event store ownership drift")
     if deployment.get("socket_path") != expected_socket:
         raise ValueError(f"{principal}/{environment}: socket ownership drift")
+    registry_path = deployment.get("public_registry_path")
+    production_registry = {
+        "d1_sync": "specs/d1_sync/verify_public_keys.json",
+        "ops_projection": "specs/ops_projection/verify_public_keys.json",
+        "coverage_transition": (
+            "packages/data_plane/storage/authorities/coverage_transition/public_keys.json"
+        ),
+        "ready": "specs/ready/readiness_verify_public_keys.json",
+        "trader": "specs/trader_authorization/public_keys.json",
+        "controlled_execution": "specs/execution_artifacts/public_keys.json",
+    }[principal]
+    expected_registry = (
+        production_registry.replace(".json", ".staging.json")
+        if environment == "staging"
+        else production_registry
+    )
+    if registry_path != expected_registry:
+        raise ValueError(
+            f"{principal}/{environment}: public registry crosses trust domain"
+        )
 
 
 def _validate_receipt_deployment(

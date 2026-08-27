@@ -142,7 +142,9 @@ def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
                 installed_root,
                 label=f"loaded first-party module {module_name}",
             )
-    if coverage_transition_module.CoverageTransitionPublicKeyRegistry.load_pinned().provisioned:
+    if coverage_transition_module.CoverageTransitionPublicKeyRegistry.load_pinned(
+        expected_environment="production"
+    ).provisioned:
         raise AssertionError("Coverage transition authority unexpectedly active")
     receipt_schema = verified_receipt_module._claims_schema()
     if receipt_schema.get("$id") != "specs/receipts/signed_receipt_claims.schema.json":

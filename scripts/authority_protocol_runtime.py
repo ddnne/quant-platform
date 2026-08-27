@@ -515,6 +515,8 @@ def _remeasure_applied_mirror_identity(
     ):
         raise ValueError("applied mirror identity is incomplete")
     return {
+        "environment": envelope["environment"],
+        "resource_identity": dict(envelope["resource_identity"]),
         "audit_digest": row["audit_digest"],
         "issuer_key_id": row["issuer_key_id"],
         "export_digest": envelope["export_digest"],

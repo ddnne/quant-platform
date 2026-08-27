@@ -20,6 +20,12 @@ from typing import Any, Mapping
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from ops.trust_domain import (
+    d1_resource_identity,
+    require_d1_resource_identity,
+    require_environment,
+)
+
 
 SIGNED_DOCUMENT_SCHEMA = "d1-sync-signed-audit/v1"
 AUDIT_ENVELOPE_SCHEMA = "d1-sync-audit-envelope/v1"
@@ -27,6 +33,8 @@ REGISTRY_PURPOSE = "d1_sync_audit_verification"
 GOVERNED_D1_NAME = "quant-ingest"
 GOVERNED_D1_ID = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 GOVERNED_AUTHORITY_ID = f"cloudflare-d1:{GOVERNED_D1_ID}"
+STAGING_D1_NAME = "quant-ingest-staging"
+STAGING_D1_ID = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
 D1_SYNC_AUDIT_MAX_AGE_SECONDS = 1_800
 D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS = 60
 _PINNED_VERIFY_REGISTRY_PATH = (
@@ -34,6 +42,12 @@ _PINNED_VERIFY_REGISTRY_PATH = (
     / "specs"
     / "d1_sync"
     / "verify_public_keys.json"
+)
+_PINNED_STAGING_VERIFY_REGISTRY_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "specs"
+    / "d1_sync"
+    / "verify_public_keys.staging.json"
 )
 PINNED_D1_SYNC_REGISTRY_GENERATION = 2
 # These values are an independent code pin. Replacing or redirecting the JSON
@@ -47,12 +61,22 @@ PINNED_D1_SYNC_REGISTRY_BODY_DIGEST = (
 PINNED_D1_SYNC_REGISTRY_DOCUMENT_DIGEST = (
     "sha256:e469f909faddcfbf8702f07a3a9f6bce5605b4b1252433bee31675c3ba67a60a"
 )
+PINNED_STAGING_D1_SYNC_REGISTRY_GENERATION = 1
+PINNED_STAGING_D1_SYNC_PRIOR_REGISTRY_DIGEST = None
+PINNED_STAGING_D1_SYNC_REGISTRY_BODY_DIGEST = (
+    "sha256:0db8ec5977a98a265d20f34d6ae95d09d3af39926c62a061671868f3a3250489"
+)
+PINNED_STAGING_D1_SYNC_REGISTRY_DOCUMENT_DIGEST = (
+    "sha256:0229b1e65bc7ce1980669954fba295b8ecdba55607d0001f37b3f33263396f43"
+)
 
 _ENVELOPE_FIELDS = frozenset(
     {
         "schema_version",
         "authority_id",
         "source_mode",
+        "environment",
+        "resource_identity",
         "d1_name",
         "d1_id",
         "sync_kind",
@@ -218,15 +242,41 @@ def _registry_body_digest(document: dict[str, Any]) -> str:
     )
 
 
-def _load_registry_document() -> dict[str, Any]:
+def _registry_contract(environment: str) -> tuple[Path, int, str | None, str, str]:
+    selected = require_environment(environment)
+    if selected == "staging":
+        return (
+            _PINNED_STAGING_VERIFY_REGISTRY_PATH,
+            PINNED_STAGING_D1_SYNC_REGISTRY_GENERATION,
+            PINNED_STAGING_D1_SYNC_PRIOR_REGISTRY_DIGEST,
+            PINNED_STAGING_D1_SYNC_REGISTRY_BODY_DIGEST,
+            PINNED_STAGING_D1_SYNC_REGISTRY_DOCUMENT_DIGEST,
+        )
+    return (
+        _PINNED_VERIFY_REGISTRY_PATH,
+        PINNED_D1_SYNC_REGISTRY_GENERATION,
+        PINNED_D1_SYNC_PRIOR_REGISTRY_DIGEST,
+        PINNED_D1_SYNC_REGISTRY_BODY_DIGEST,
+        PINNED_D1_SYNC_REGISTRY_DOCUMENT_DIGEST,
+    )
+
+
+def registry_document_digest(environment: str) -> str:
+    return _registry_contract(environment)[4]
+
+
+def _load_registry_document(environment: str = "production") -> dict[str, Any]:
+    path, generation, prior_digest, body_digest, document_digest = (
+        _registry_contract(environment)
+    )
     try:
-        raw = _PINNED_VERIFY_REGISTRY_PATH.read_bytes()
+        raw = path.read_bytes()
         document = _decode_strict_json(raw, field="pinned D1 sync registry")
     except (OSError, D1SyncAuditError) as exc:
         raise D1SyncAuditError(
             "cannot load pinned D1 sync public-key registry"
         ) from exc
-    if d1_sync_digest(document) != PINNED_D1_SYNC_REGISTRY_DOCUMENT_DIGEST:
+    if d1_sync_digest(document) != document_digest:
         raise D1SyncAuditError("pinned D1 sync registry digest mismatch")
     if (
         set(document) != _REGISTRY_FIELDS
@@ -234,17 +284,17 @@ def _load_registry_document() -> dict[str, Any]:
         or document.get("schema_version") != 2
         or document.get("purpose") != REGISTRY_PURPOSE
         or type(document.get("generation")) is not int
-        or document.get("generation") != PINNED_D1_SYNC_REGISTRY_GENERATION
+        or document.get("generation") != generation
         or document.get("authority_status") not in {"ACTIVE", "PENDING"}
         or document.get("prior_registry_digest")
-        != PINNED_D1_SYNC_PRIOR_REGISTRY_DIGEST
+        != prior_digest
         or document.get("registry_digest")
-        != PINNED_D1_SYNC_REGISTRY_BODY_DIGEST
-        or _registry_body_digest(document) != PINNED_D1_SYNC_REGISTRY_BODY_DIGEST
+        != body_digest
+        or _registry_body_digest(document) != body_digest
     ):
         raise D1SyncAuditError("pinned D1 sync registry policy is invalid")
     rows = document.get("keys")
-    if type(rows) is not list or not 1 <= len(rows) <= 16:
+    if type(rows) is not list or len(rows) > 16:
         raise D1SyncAuditError("pinned D1 sync registry keys are invalid")
     seen: set[str] = set()
     active = 0
@@ -276,15 +326,21 @@ def _load_registry_document() -> dict[str, Any]:
     return document
 
 
-def _validate_envelope(envelope: Mapping[str, Any]) -> tuple[datetime, datetime]:
+def _validate_envelope(
+    envelope: Mapping[str, Any], *, expected_environment: str
+) -> tuple[datetime, datetime]:
+    expected_environment = require_environment(expected_environment)
+    expected_resource = dict(d1_resource_identity(expected_environment))
     if type(envelope) is not dict or set(envelope) != _ENVELOPE_FIELDS:
         raise D1SyncAuditError("D1 sync audit envelope fields are not closed")
     if (
         envelope.get("schema_version") != AUDIT_ENVELOPE_SCHEMA
-        or envelope.get("authority_id") != GOVERNED_AUTHORITY_ID
+        or envelope.get("environment") != expected_environment
+        or envelope.get("resource_identity") != expected_resource
+        or envelope.get("authority_id") != expected_resource["authority_id"]
         or envelope.get("source_mode") != "WRANGLER_REMOTE"
-        or envelope.get("d1_name") != GOVERNED_D1_NAME
-        or envelope.get("d1_id") != GOVERNED_D1_ID
+        or envelope.get("d1_name") != expected_resource["name"]
+        or envelope.get("d1_id") != expected_resource["database_id"]
         or envelope.get("sync_kind") not in {"FULL", "INCREMENTAL"}
         or envelope.get("artifact_format") not in {"sql", "sqlite"}
     ):
@@ -293,6 +349,7 @@ def _validate_envelope(envelope: Mapping[str, Any]) -> tuple[datetime, datetime]
         "schema_version",
         "authority_id",
         "source_mode",
+        "environment",
         "d1_name",
         "d1_id",
         "sync_kind",
@@ -310,7 +367,14 @@ def _validate_envelope(envelope: Mapping[str, Any]) -> tuple[datetime, datetime]
     ):
         if not _is_digest(envelope.get(field)):
             raise D1SyncAuditError(f"D1 sync audit {field} is invalid")
-    if envelope["registry_digest"] != PINNED_D1_SYNC_REGISTRY_DOCUMENT_DIGEST:
+    try:
+        require_d1_resource_identity(
+            envelope["resource_identity"],
+            expected_environment=expected_environment,
+        )
+    except ValueError as exc:
+        raise D1SyncAuditError("D1 sync resource identity is invalid") from exc
+    if envelope["registry_digest"] != registry_document_digest(expected_environment):
         raise D1SyncAuditError("D1 sync audit registry digest is not pinned")
     if envelope["source_content_digest"] != envelope["local_content_digest"]:
         raise D1SyncAuditError("D1 sync audit source/local content differs")
@@ -402,6 +466,7 @@ def _verify_signed_d1_sync_audit_document(
     *,
     require_fresh: bool,
     eligibility: str = "current",
+    expected_environment: str | None = None,
 ) -> _VerifiedD1SyncAuditDocument:
     if type(eligibility) is not str or eligibility not in {
         "current",
@@ -425,8 +490,15 @@ def _verify_signed_d1_sync_audit_document(
     ):
         raise D1SyncAuditError("signed D1 sync audit document is invalid")
     envelope = frozen["envelope"]
-    exported_utc, issued_utc = _validate_envelope(envelope)
-    registry = _load_registry_document()
+    if expected_environment is None:
+        try:
+            expected_environment = require_environment(envelope.get("environment"))
+        except ValueError as exc:
+            raise D1SyncAuditError("D1 sync environment is invalid") from exc
+    exported_utc, issued_utc = _validate_envelope(
+        envelope, expected_environment=expected_environment
+    )
+    registry = _load_registry_document(expected_environment)
     matching = [
         row
         for row in registry["keys"]
@@ -474,19 +546,26 @@ def _verify_signed_d1_sync_audit(
     *,
     require_fresh: bool,
     eligibility: str = "current",
+    expected_environment: str | None = None,
 ) -> Mapping[str, Any]:
     return _verify_signed_d1_sync_audit_document(
         document,
         require_fresh=require_fresh,
         eligibility=eligibility,
+        expected_environment=expected_environment,
     ).envelope
 
 
-def verify_signed_d1_sync_audit(document: object) -> Mapping[str, Any]:
+def verify_signed_d1_sync_audit(
+    document: object, *, expected_environment: str
+) -> Mapping[str, Any]:
     """Verify one current closed audit using only the pinned public registry."""
 
     return _verify_signed_d1_sync_audit(
-        document, require_fresh=True, eligibility="current"
+        document,
+        require_fresh=True,
+        eligibility="current",
+        expected_environment=expected_environment,
     )
 
 
@@ -496,11 +575,14 @@ __all__ = [
     "GOVERNED_AUTHORITY_ID",
     "GOVERNED_D1_ID",
     "GOVERNED_D1_NAME",
+    "STAGING_D1_ID",
+    "STAGING_D1_NAME",
     "PINNED_D1_SYNC_PRIOR_REGISTRY_DIGEST",
     "PINNED_D1_SYNC_REGISTRY_BODY_DIGEST",
     "PINNED_D1_SYNC_REGISTRY_DOCUMENT_DIGEST",
     "PINNED_D1_SYNC_REGISTRY_GENERATION",
     "canonical_d1_sync_bytes",
     "d1_sync_digest",
+    "registry_document_digest",
     "verify_signed_d1_sync_audit",
 ]

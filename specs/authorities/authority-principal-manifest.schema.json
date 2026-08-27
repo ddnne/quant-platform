@@ -559,6 +559,7 @@
         "readable_private_key_refs",
         "event_store_ref",
         "socket_path",
+        "public_registry_path",
         "cloudflare_resources"
       ],
       "properties": {
@@ -609,6 +610,10 @@
         "socket_path": {
           "type": "string",
           "pattern": "^/var/run/quant-platform/(staging|production)/[a-z0-9_]+\\.sock$"
+        },
+        "public_registry_path": {
+          "type": "string",
+          "pattern": "^(packages|specs)/[a-zA-Z0-9_./-]+\\.json$"
         },
         "cloudflare_resources": {
           "type": "array",

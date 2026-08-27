@@ -1,0 +1,9 @@
+{
+  "schema_version": 2,
+  "purpose": "d1_sync_audit_verification",
+  "generation": 1,
+  "authority_status": "PENDING",
+  "prior_registry_digest": null,
+  "keys": [],
+  "registry_digest": "sha256:0db8ec5977a98a265d20f34d6ae95d09d3af39926c62a061671868f3a3250489"
+}

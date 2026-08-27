@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 import stat
@@ -34,6 +35,7 @@ from urllib.parse import quote
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from ops.trust_domain import require_d1_resource_identity, require_environment
 
 from data_contracts.coverage import (
     COVERAGE_STATUSES,
@@ -65,8 +67,16 @@ _PINNED_REGISTRY_PATH = (
     / "coverage_transition"
     / "public_keys.json"
 )
+_PINNED_STAGING_REGISTRY_PATH = (
+    Path(__file__).with_name("authorities")
+    / "coverage_transition"
+    / "public_keys.staging.json"
+)
 # Filled with the canonical digest of the checked-in empty public registry.
 _PINNED_REGISTRY_DIGEST = (
+    "sha256:9e6c239cf85ab09999ef4aa90881a55abdcc246488df2c1ded9e9d2a5947de49"
+)
+_PINNED_STAGING_REGISTRY_DIGEST = (
     "sha256:9e6c239cf85ab09999ef4aa90881a55abdcc246488df2c1ded9e9d2a5947de49"
 )
 _DIGEST_PREFIX = "sha256:"
@@ -127,6 +137,8 @@ _SIGNED_DOCUMENT_FIELDS = frozenset(
 _BODY_FIELDS = frozenset(
     {
         "build_id",
+        "environment",
+        "resource_identity",
         "publication_cutoff",
         "datasets",
         "dataset_set_digest",
@@ -186,6 +198,40 @@ def _canonical_json(value: Any) -> str:
 
 def _digest(value: Any) -> str:
     return _DIGEST_PREFIX + hashlib.sha256(_canonical_bytes(value)).hexdigest()
+
+
+def _regular_file_digest(path: Path) -> str:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise CoverageTransitionError("Coverage DB resource identity is unsafe")
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        final = os.fstat(fd)
+    except OSError as exc:
+        raise CoverageTransitionError("Coverage DB resource identity is unreadable") from exc
+    finally:
+        if "fd" in locals():
+            os.close(fd)
+    if (
+        info.st_dev,
+        info.st_ino,
+        info.st_size,
+        info.st_mtime_ns,
+    ) != (
+        final.st_dev,
+        final.st_ino,
+        final.st_size,
+        final.st_mtime_ns,
+    ):
+        raise CoverageTransitionError("Coverage DB changed while hashing")
+    return _DIGEST_PREFIX + digest.hexdigest()
 
 
 def _require_digest(value: Any, *, field: str) -> str:
@@ -437,14 +483,30 @@ class CoverageTransitionPublicKeyRegistry:
         return cls(active)
 
     @classmethod
-    def load_pinned(cls) -> "CoverageTransitionPublicKeyRegistry":
+    def load_pinned(
+        cls, *, expected_environment: str
+    ) -> "CoverageTransitionPublicKeyRegistry":
         try:
-            document = json.loads(_PINNED_REGISTRY_PATH.read_text(encoding="utf-8"))
+            environment = require_environment(expected_environment)
+        except ValueError as exc:
+            raise CoverageTransitionError("Coverage environment is invalid") from exc
+        path = (
+            _PINNED_STAGING_REGISTRY_PATH
+            if environment == "staging"
+            else _PINNED_REGISTRY_PATH
+        )
+        expected_digest = (
+            _PINNED_STAGING_REGISTRY_DIGEST
+            if environment == "staging"
+            else _PINNED_REGISTRY_DIGEST
+        )
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise CoverageTransitionError(
                 "Coverage transition pinned registry cannot be loaded"
             ) from exc
-        if type(document) is not dict or _digest(document) != _PINNED_REGISTRY_DIGEST:
+        if type(document) is not dict or _digest(document) != expected_digest:
             raise CoverageTransitionError(
                 "Coverage transition pinned registry digest mismatch"
             )
@@ -464,9 +526,13 @@ class CoverageTransitionPublicKeyRegistry:
         return True
 
 
-def coverage_transition_availability() -> Mapping[str, str]:
+def coverage_transition_availability(
+    *, expected_environment: str
+) -> Mapping[str, str]:
     """Return the stable production authority state without exposing keys."""
-    registry = CoverageTransitionPublicKeyRegistry.load_pinned()
+    registry = CoverageTransitionPublicKeyRegistry.load_pinned(
+        expected_environment=expected_environment
+    )
     if not registry.provisioned:
         return MappingProxyType(
             {
@@ -906,7 +972,13 @@ def build_coverage_transition_request_from_owned_connection(
     return MappingProxyType(_unsigned_request(body))
 
 
-def _validate_signed_document(document: Mapping[str, Any]) -> dict[str, Any]:
+def _validate_signed_document(
+    document: Mapping[str, Any], *, expected_environment: str
+) -> dict[str, Any]:
+    try:
+        expected_environment = require_environment(expected_environment)
+    except ValueError as exc:
+        raise CoverageTransitionError("Coverage environment is invalid") from exc
     frozen = _freeze_json(document)
     if set(frozen) != _SIGNED_DOCUMENT_FIELDS:
         raise CoverageTransitionError(
@@ -927,6 +999,37 @@ def _validate_signed_document(document: Mapping[str, Any]) -> dict[str, Any]:
         )
     _require_digest(frozen["transition_id"], field="transition_id")
     body = frozen["body"]
+    if body.get("environment") != expected_environment:
+        raise CoverageTransitionError("Coverage transition environment mismatch")
+    resource = body.get("resource_identity")
+    if (
+        type(resource) is not dict
+        or set(resource)
+        != {
+            "environment",
+            "source_d1",
+            "source_audit_digest",
+            "source_export_digest",
+            "source_change_seq",
+            "governed_db_content_digest",
+        }
+        or resource.get("environment") != expected_environment
+    ):
+        raise CoverageTransitionError("Coverage resource identity is invalid")
+    try:
+        require_d1_resource_identity(
+            resource.get("source_d1"), expected_environment=expected_environment
+        )
+    except ValueError as exc:
+        raise CoverageTransitionError("Coverage D1 resource identity is invalid") from exc
+    for field in (
+        "source_audit_digest",
+        "source_export_digest",
+        "governed_db_content_digest",
+    ):
+        _require_digest(resource.get(field), field=f"resource_identity.{field}")
+    if type(resource.get("source_change_seq")) is not int or resource["source_change_seq"] < 0:
+        raise CoverageTransitionError("Coverage source change sequence is invalid")
     if type(body["build_id"]) is not str or not body["build_id"]:
         raise CoverageTransitionError("Coverage transition build id is invalid")
     _normalize_datasets(body["datasets"])
@@ -1330,16 +1433,22 @@ def _assert_post_apply_state(
 def apply_signed_coverage_transition(
     db_path: str,
     document: Mapping[str, Any],
+    *,
+    expected_environment: str,
 ) -> Mapping[str, Any]:
     """Verify live state and atomically consume one signed transition.
 
     The function owns its connection and transaction.  It accepts no caller
     verifier, signing key, clock, cutoff, counts, digests, or target rows.
     """
-    registry = CoverageTransitionPublicKeyRegistry.load_pinned()
+    registry = CoverageTransitionPublicKeyRegistry.load_pinned(
+        expected_environment=expected_environment
+    )
     if not registry.provisioned:
         _pending()
-    frozen = _validate_signed_document(document)
+    frozen = _validate_signed_document(
+        document, expected_environment=expected_environment
+    )
     message = _signature_message(frozen)
     if not registry.verify(
         key_id=frozen["issuer_key_id"],
@@ -1392,6 +1501,13 @@ def apply_signed_coverage_transition(
             raise CoverageTransitionAlreadyConsumed(
                 "Coverage transition evidence was already consumed"
             )
+        if (
+            _regular_file_digest(path)
+            != body["resource_identity"]["governed_db_content_digest"]
+        ):
+            raise CoverageTransitionError(
+                "Coverage transition does not bind the governed DB resource"
+            )
         datasets = _normalize_datasets(body["datasets"])
         expected_body = _derive_transition_body(
             conn,
@@ -1401,7 +1517,7 @@ def apply_signed_coverage_transition(
             issued_at=body["issued_at"],
             expires_at=body["expires_at"],
         )
-        if body != expected_body:
+        if {key: body[key] for key in expected_body} != expected_body:
             raise CoverageTransitionError(
                 "Coverage transition does not bind the exact live active/target state"
             )

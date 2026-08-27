@@ -1,0 +1,9 @@
+{
+  "schema_version": 2,
+  "purpose": "ops_projection_verification",
+  "generation": 1,
+  "authority_status": "PENDING",
+  "prior_registry_digest": null,
+  "keys": [],
+  "registry_digest": "sha256:b04a7692f2d754e3494ccd0bbf7e0b0459518886e95ad2d301e479ee42673815"
+}

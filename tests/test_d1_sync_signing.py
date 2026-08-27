@@ -76,6 +76,14 @@ def _envelope(registry: dict, *, issued_at: datetime) -> dict:
     digest = "sha256:" + "a" * 64
     return {
         "schema_version": signing.AUDIT_ENVELOPE_SCHEMA,
+        "environment": "production",
+        "resource_identity": {
+            "provider": "cloudflare",
+            "kind": "d1",
+            "name": signing.GOVERNED_D1_NAME,
+            "database_id": signing.GOVERNED_D1_ID,
+            "authority_id": signing.GOVERNED_AUTHORITY_ID,
+        },
         "authority_id": signing.GOVERNED_AUTHORITY_ID,
         "source_mode": "WRANGLER_REMOTE",
         "d1_name": signing.GOVERNED_D1_NAME,
@@ -272,14 +280,22 @@ def test_pinned_verifier_accepts_current_closed_audit_and_rejects_tampering(
     now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(signing, "_utc_now", lambda: now)
     document = _signed_document(private, registry, issued_at=now)
-    verified = signing.verify_signed_d1_sync_audit(document)
+    verified = signing.verify_signed_d1_sync_audit(
+        document, expected_environment="production"
+    )
     assert verified["source_change_seq"] == verified["applied_change_seq"] == 7
+    with pytest.raises(signing.D1SyncAuditError, match="authority or mode"):
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="staging"
+        )
 
     tampered = deepcopy(document)
     tampered["envelope"]["local_content_digest"] = "sha256:" + "d" * 64
     tampered["envelope"]["source_content_digest"] = "sha256:" + "d" * 64
     with pytest.raises(signing.D1SyncAuditError, match="signature is invalid"):
-        signing.verify_signed_d1_sync_audit(tampered)
+        signing.verify_signed_d1_sync_audit(
+            tampered, expected_environment="production"
+        )
 
 
 def test_verifier_rejects_a_signed_b_cursor_and_stateful_document(
@@ -296,7 +312,9 @@ def test_verifier_rejects_a_signed_b_cursor_and_stateful_document(
     unsigned_b["envelope"]["applied_change_seq"] = 999
 
     with pytest.raises(signing.D1SyncAuditError, match="signature is invalid"):
-        signing.verify_signed_d1_sync_audit(unsigned_b)
+        signing.verify_signed_d1_sync_audit(
+            unsigned_b, expected_environment="production"
+        )
 
     class StatefulDocument(dict):
         def __init__(self, first: dict, second: dict):
@@ -312,7 +330,9 @@ def test_verifier_rejects_a_signed_b_cursor_and_stateful_document(
 
     attacker = StatefulDocument(signed_a, unsigned_b)
     with pytest.raises(signing.D1SyncAuditError, match="exact finite JSON"):
-        signing.verify_signed_d1_sync_audit(attacker)
+        signing.verify_signed_d1_sync_audit(
+            attacker, expected_environment="production"
+        )
     assert attacker.observations == 0
 
 
@@ -350,7 +370,9 @@ def test_verifier_rejects_nested_and_scalar_subclasses(tmp_path, monkeypatch):
 
     for document in documents:
         with pytest.raises(signing.D1SyncAuditError, match="exact finite JSON"):
-            signing.verify_signed_d1_sync_audit(document)
+            signing.verify_signed_d1_sync_audit(
+                document, expected_environment="production"
+            )
 
 
 def test_verified_envelope_is_deep_immutable_and_retained_once(
@@ -363,7 +385,9 @@ def test_verified_envelope_is_deep_immutable_and_retained_once(
     monkeypatch.setattr(signing, "_utc_now", lambda: now)
     document = _signed_document(private, registry, issued_at=now)
 
-    verified = signing.verify_signed_d1_sync_audit(document)
+    verified = signing.verify_signed_d1_sync_audit(
+        document, expected_environment="production"
+    )
     document["envelope"]["source_change_seq"] = 999
     document["envelope"]["applied_change_seq"] = 999
     document["envelope"]["table_counts"]["jquants_records"] = 999
@@ -898,9 +922,13 @@ def test_strict_json_rejects_duplicate_and_nonfinite_signed_documents(
     nonfinite = text.replace('"jquants_records": 1', '"jquants_records": NaN')
 
     with pytest.raises(signing.D1SyncAuditError, match="duplicate key"):
-        signing.verify_signed_d1_sync_audit(duplicate)
+        signing.verify_signed_d1_sync_audit(
+            duplicate, expected_environment="production"
+        )
     with pytest.raises(signing.D1SyncAuditError, match="non-finite"):
-        signing.verify_signed_d1_sync_audit(nonfinite)
+        signing.verify_signed_d1_sync_audit(
+            nonfinite, expected_environment="production"
+        )
 
 
 @pytest.mark.parametrize("location", ["document", "envelope", "table_counts"])
@@ -921,7 +949,9 @@ def test_signed_d1_schema_is_closed(tmp_path, monkeypatch, location):
 
     message = "shape" if location == "document" else "fields|table counts"
     with pytest.raises(signing.D1SyncAuditError, match=message):
-        signing.verify_signed_d1_sync_audit(document)
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
 
 
 @pytest.mark.parametrize(
@@ -945,7 +975,9 @@ def test_pinned_verifier_rejects_old_or_future_signed_audit(
         issued_at=now + timedelta(seconds=offset),
     )
     with pytest.raises(signing.D1SyncAuditError, match=message):
-        signing.verify_signed_d1_sync_audit(document)
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
 
 
 def test_freshness_is_rechecked_at_final_verified_return(tmp_path, monkeypatch):
@@ -959,8 +991,8 @@ def test_freshness_is_rechecked_at_final_verified_return(tmp_path, monkeypatch):
     monkeypatch.setattr(signing, "_utc_now", lambda: clock["now"])
     load_registry = signing._load_registry_document
 
-    def advance_while_verifying():
-        registry_document = load_registry()
+    def advance_while_verifying(environment="production"):
+        registry_document = load_registry(environment)
         clock["now"] += timedelta(seconds=1)
         return registry_document
 
@@ -970,7 +1002,9 @@ def test_freshness_is_rechecked_at_final_verified_return(tmp_path, monkeypatch):
     document = _signed_document(private, registry, issued_at=issued_at)
 
     with pytest.raises(signing.D1SyncAuditError, match="stale"):
-        signing.verify_signed_d1_sync_audit(document)
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
 
 
 def test_current_audit_rejects_old_export_with_fresh_restatement(
@@ -988,7 +1022,9 @@ def test_current_audit_rejects_old_export_with_fresh_restatement(
     _resign(private, document)
 
     with pytest.raises(signing.D1SyncAuditError, match="stale"):
-        signing.verify_signed_d1_sync_audit(document)
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
 
 
 def test_temp_audit_table_cannot_shadow_signed_complete_persistence(
@@ -1223,7 +1259,9 @@ def test_d1_sync_registry_rejects_invalid_shape_or_multiple_active_keys(
     _write_and_pin_registry(registry_path, registry, monkeypatch)
     document = _signed_document(private, registry, issued_at=now)
     with pytest.raises(signing.D1SyncAuditError, match="registry"):
-        signing.verify_signed_d1_sync_audit(document)
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
 
 
 @pytest.mark.parametrize("field", ["schema_version", "generation"])
@@ -1240,7 +1278,9 @@ def test_d1_sync_registry_rejects_float_integer_fields(
     document = _signed_document(private, registry, issued_at=now)
 
     with pytest.raises(signing.D1SyncAuditError, match="registry policy"):
-        signing.verify_signed_d1_sync_audit(document)
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
 
 
 def test_attacker_path_and_legacy_public_global_cannot_replace_registry(
@@ -1264,11 +1304,15 @@ def test_attacker_path_and_legacy_public_global_cannot_replace_registry(
     monkeypatch.setattr(
         signing, "DEFAULT_VERIFY_REGISTRY_PATH", attacker_path, raising=False
     )
-    assert signing.verify_signed_d1_sync_audit(document)["source_change_seq"] == 7
+    assert signing.verify_signed_d1_sync_audit(
+        document, expected_environment="production"
+    )["source_change_seq"] == 7
 
     monkeypatch.setattr(signing, "_PINNED_VERIFY_REGISTRY_PATH", attacker_path)
     with pytest.raises(signing.D1SyncAuditError, match="digest mismatch"):
-        signing.verify_signed_d1_sync_audit(document)
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
     assert registry_path != attacker_path
 
 
@@ -1291,7 +1335,9 @@ def test_registry_strict_decoder_rejects_duplicate_canonical_collision(
     monkeypatch.setattr(signing, "_PINNED_VERIFY_REGISTRY_PATH", duplicate_path)
 
     with pytest.raises(signing.D1SyncAuditError, match="cannot load"):
-        signing.verify_signed_d1_sync_audit(document)
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
 
 
 def test_zero_active_revoked_registry_rejects_current_and_backdated_history(
@@ -1309,7 +1355,9 @@ def test_zero_active_revoked_registry_rejects_current_and_backdated_history(
     document = _signed_document(private, registry, issued_at=now)
 
     with pytest.raises(signing.D1SyncAuditError, match="not active"):
-        signing.verify_signed_d1_sync_audit(document)
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
     with pytest.raises(signing.D1SyncAuditError, match="revoked"):
         signing._verify_signed_d1_sync_audit(
             document, require_fresh=False, eligibility="historical"
@@ -1325,7 +1373,9 @@ def test_current_verifier_rejects_retired_and_revoked_keys_historical_does_not(
     now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(signing, "_utc_now", lambda: now)
     document = _signed_document(private, registry, issued_at=now)
-    assert signing.verify_signed_d1_sync_audit(document)["source_change_seq"] == 7
+    assert signing.verify_signed_d1_sync_audit(
+        document, expected_environment="production"
+    )["source_change_seq"] == 7
 
     replacement = Ed25519PrivateKey.generate()
     public = replacement.public_key().public_bytes(
@@ -1345,7 +1395,9 @@ def test_current_verifier_rejects_retired_and_revoked_keys_historical_does_not(
     _write_and_pin_registry(registry_path, retired, monkeypatch)
     retired_document = _signed_document(private, retired, issued_at=now)
     with pytest.raises(signing.D1SyncAuditError, match="not active"):
-        signing.verify_signed_d1_sync_audit(retired_document)
+        signing.verify_signed_d1_sync_audit(
+            retired_document, expected_environment="production"
+        )
     historical = signing._verify_signed_d1_sync_audit(
         retired_document, require_fresh=False, eligibility="historical"
     )
@@ -1363,4 +1415,6 @@ def test_current_verifier_rejects_retired_and_revoked_keys_historical_does_not(
             revoked_document, require_fresh=False, eligibility="historical"
         )
     with pytest.raises(signing.D1SyncAuditError, match="not active"):
-        signing.verify_signed_d1_sync_audit(revoked_document)
+        signing.verify_signed_d1_sync_audit(
+            revoked_document, expected_environment="production"
+        )

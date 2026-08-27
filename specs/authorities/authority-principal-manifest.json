@@ -2,7 +2,7 @@
   "schema_version": "authority-principal-manifest/v1",
   "generation": 1,
   "activation_status": "PENDING",
-  "schema_digest": "sha256:271861396ee98812e628976b16c845a89a0228a3a5d7587a4a1305c11fa258e1",
+  "schema_digest": "sha256:dcca69a282ac207d957ade5a65a956bd3b91b4b8e118ccc88e826e6cd78d58e9",
   "protocol_schema_digests": {
     "frozen_mirror_request": "sha256:d0d20ba5094f7b6e5bb3f6b68792cf975956c05a2acbdbb18f50edf2f98cfe21",
     "frozen_mirror_handoff": "sha256:4041b2eef7f848dcc66addb14e3a5f6e8572fb5ac91e9e239dd66a29067779a5",
@@ -360,6 +360,7 @@
           ],
           "event_store_ref": "local-protected://staging/d1_sync/authority-events.sqlite3",
           "socket_path": "/var/run/quant-platform/staging/d1_sync.sock",
+          "public_registry_path": "specs/d1_sync/verify_public_keys.staging.json",
           "cloudflare_resources": [
             {
               "provider": "cloudflare",
@@ -382,6 +383,7 @@
           ],
           "event_store_ref": "local-protected://production/d1_sync/authority-events.sqlite3",
           "socket_path": "/var/run/quant-platform/production/d1_sync.sock",
+          "public_registry_path": "specs/d1_sync/verify_public_keys.json",
           "cloudflare_resources": [
             {
               "provider": "cloudflare",
@@ -444,6 +446,7 @@
           ],
           "event_store_ref": "local-protected://staging/ops_projection/authority-events.sqlite3",
           "socket_path": "/var/run/quant-platform/staging/ops_projection.sock",
+          "public_registry_path": "specs/ops_projection/verify_public_keys.staging.json",
           "cloudflare_resources": [
             {
               "provider": "cloudflare",
@@ -466,6 +469,7 @@
           ],
           "event_store_ref": "local-protected://production/ops_projection/authority-events.sqlite3",
           "socket_path": "/var/run/quant-platform/production/ops_projection.sock",
+          "public_registry_path": "specs/ops_projection/verify_public_keys.json",
           "cloudflare_resources": [
             {
               "provider": "cloudflare",
@@ -527,6 +531,7 @@
           ],
           "event_store_ref": "local-protected://staging/coverage_transition/authority-events.sqlite3",
           "socket_path": "/var/run/quant-platform/staging/coverage_transition.sock",
+          "public_registry_path": "packages/data_plane/storage/authorities/coverage_transition/public_keys.staging.json",
           "cloudflare_resources": []
         },
         "production": {
@@ -542,6 +547,7 @@
           ],
           "event_store_ref": "local-protected://production/coverage_transition/authority-events.sqlite3",
           "socket_path": "/var/run/quant-platform/production/coverage_transition.sock",
+          "public_registry_path": "packages/data_plane/storage/authorities/coverage_transition/public_keys.json",
           "cloudflare_resources": []
         }
       }
@@ -596,6 +602,7 @@
           ],
           "event_store_ref": "local-protected://staging/ready/authority-events.sqlite3",
           "socket_path": "/var/run/quant-platform/staging/ready.sock",
+          "public_registry_path": "specs/ready/readiness_verify_public_keys.staging.json",
           "cloudflare_resources": []
         },
         "production": {
@@ -611,6 +618,7 @@
           ],
           "event_store_ref": "local-protected://production/ready/authority-events.sqlite3",
           "socket_path": "/var/run/quant-platform/production/ready.sock",
+          "public_registry_path": "specs/ready/readiness_verify_public_keys.json",
           "cloudflare_resources": []
         }
       }
@@ -712,6 +720,7 @@
           "readable_private_key_refs": [],
           "event_store_ref": "local-protected://staging/trader/authority-events.sqlite3",
           "socket_path": "/var/run/quant-platform/staging/trader.sock",
+          "public_registry_path": "specs/trader_authorization/public_keys.staging.json",
           "cloudflare_resources": []
         },
         "production": {
@@ -725,6 +734,7 @@
           "readable_private_key_refs": [],
           "event_store_ref": "local-protected://production/trader/authority-events.sqlite3",
           "socket_path": "/var/run/quant-platform/production/trader.sock",
+          "public_registry_path": "specs/trader_authorization/public_keys.json",
           "cloudflare_resources": []
         }
       }
@@ -781,6 +791,7 @@
           ],
           "event_store_ref": "local-protected://staging/controlled_execution/authority-events.sqlite3",
           "socket_path": "/var/run/quant-platform/staging/controlled_execution.sock",
+          "public_registry_path": "specs/execution_artifacts/public_keys.staging.json",
           "cloudflare_resources": []
         },
         "production": {
@@ -796,10 +807,11 @@
           ],
           "event_store_ref": "local-protected://production/controlled_execution/authority-events.sqlite3",
           "socket_path": "/var/run/quant-platform/production/controlled_execution.sock",
+          "public_registry_path": "specs/execution_artifacts/public_keys.json",
           "cloudflare_resources": []
         }
       }
     }
   },
-  "manifest_digest": "sha256:ebf938dbdd9bc607cba21bb6b1d2641c1a826a383048616c9858a3d4505c55a3"
+  "manifest_digest": "sha256:6e6706ce769025eeca1b1ba5b55ce1303096f22197e39ffc72acf2fb31a88a13"
 }

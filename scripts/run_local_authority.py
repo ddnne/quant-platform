@@ -218,6 +218,7 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
     if authority_id == "d1_sync":
         handlers = {
             D1SyncNow.operation: D1SyncNow(
+                environment=environment,
                 governed_db_path=resources["governed_db_path"],
                 cloudflare_token_path=resources["cloudflare_token_path"],
                 node_executable_path=resources["node_executable_path"],
@@ -269,6 +270,7 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
     elif authority_id == "ready":
         handlers = {
             ReadyPublishProfilePlanBound.operation: ReadyPublishProfilePlanBound(
+                environment=environment,
                 snapshot_root=resources["snapshot_root"],
                 custody=custody,
             )

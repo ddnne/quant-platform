@@ -91,9 +91,7 @@ def _deployments(selected: str) -> list[dict[str, Any]]:
                         / authority_id
                         / "authority-events.sqlite3"
                     ),
-                    "registry_path": manifest["principals"][authority_id].get(
-                        "registry_path"
-                    ),
+                    "registry_path": deployment["public_registry_path"],
                     "runtime_config_path": str(
                         PROTECTED_ROOT
                         / "runtime-config"
@@ -288,4 +286,3 @@ def _safe_file_state(path: Path, *, uid: int, modes: Iterable[int]) -> bool:
         and stat.S_IMODE(info.st_mode) in set(modes)
         and info.st_nlink == 1
     )
-

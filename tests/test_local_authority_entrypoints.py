@@ -170,6 +170,7 @@ def test_d1_sync_entrypoint_uses_only_configured_resources_and_exact_cursor(
         }
 
     handler = D1SyncNow(
+        environment="production",
         governed_db_path=database,
         cloudflare_token_path=credential,
         node_executable_path="/protected/node",
@@ -220,7 +221,7 @@ def test_d1_sync_sealer_rejects_forged_evidence_and_signs_only_bound_facts(
         key_id="d1-sync-test-v1",
         private=private,
     )
-    sealer = _D1SyncAuditSealer(custody)
+    sealer = _D1SyncAuditSealer(custody, environment="production")
     monkeypatch.setattr(sealer, "preflight", lambda: None)
     with pytest.raises(service_runtime.LocalAuthorityError, match="opaque"):
         sealer(object())
@@ -260,7 +261,9 @@ def test_d1_sync_sealer_rejects_forged_evidence_and_signs_only_bound_facts(
     assert document["envelope"]["registry_digest"] == d1_sync_signing.d1_sync_digest(
         registry
     )
-    assert d1_sync_signing.verify_signed_d1_sync_audit(document)[
+    assert d1_sync_signing.verify_signed_d1_sync_audit(
+        document, expected_environment="production"
+    )[
         "applied_change_seq"
     ] == 7
 
@@ -282,7 +285,7 @@ def test_d1_owned_ops_flow_renders_and_signs_exact_received_inode(
     monkeypatch.setattr(
         projection_signing,
         "_load_pinned_active_keys",
-        lambda: {custody.key_id: private.public_key()},
+        lambda _environment="production": {custody.key_id: private.public_key()},
     )
     monkeypatch.setattr(
         service_runtime, "require_pinned_finding_ledger_gate", lambda: object()
@@ -513,6 +516,14 @@ def test_d1_coverage_flow_signs_then_cas_applies_without_nested_callback(
 
 def _synthetic_sync_identity() -> dict[str, object]:
     return {
+        "environment": "production",
+        "resource_identity": {
+            "provider": "cloudflare",
+            "kind": "d1",
+            "name": "quant-ingest",
+            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+            "authority_id": "cloudflare-d1:be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+        },
         "audit_digest": "sha256:" + "1" * 64,
         "issuer_key_id": "d1-test-v1",
         "export_digest": "sha256:" + "2" * 64,
@@ -596,7 +607,9 @@ def test_coverage_pending_registry_does_not_mutate_live_state(
     monkeypatch.setattr(
         CoverageTransitionPublicKeyRegistry,
         "load_pinned",
-        classmethod(lambda cls: CoverageTransitionPublicKeyRegistry({})),
+            classmethod(
+                lambda cls, **_kwargs: CoverageTransitionPublicKeyRegistry({})
+            ),
     )
     handler = CoverageTransitionAuthorize(
         environment="production", custody=custody, expected_d1_uid=os.geteuid()
@@ -627,7 +640,9 @@ def test_ready_authority_rejects_caller_paths_and_unsigned_projection(
     tmp_path: Path,
 ) -> None:
     custody, _ = _custody(tmp_path, key_id="ready-pending-v1")
-    handler = ReadyPublishProfilePlanBound(snapshot_root=tmp_path, custody=custody)
+    handler = ReadyPublishProfilePlanBound(
+        environment="production", snapshot_root=tmp_path, custody=custody
+    )
     with pytest.raises(
         service_runtime.LocalAuthorityError, match="fields are not closed"
     ):

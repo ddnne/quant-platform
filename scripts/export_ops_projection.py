@@ -1543,6 +1543,8 @@ def render_projection_bundle(
 
 _SYNC_IDENTITY_FIELDS = frozenset(
     {
+        "environment",
+        "resource_identity",
         "audit_digest",
         "issuer_key_id",
         "export_digest",
@@ -1564,6 +1566,15 @@ def _freeze_authenticated_sync_identity(
 
     if type(identity) is not MappingProxyType or set(identity) != _SYNC_IDENTITY_FIELDS:
         raise RuntimeError("Ops Projection sync identity is not authority-frozen")
+    from ops.trust_domain import require_d1_resource_identity, require_environment
+
+    try:
+        environment = require_environment(identity.get("environment"))
+        resource_identity = require_d1_resource_identity(
+            identity.get("resource_identity"), expected_environment=environment
+        )
+    except ValueError as exc:
+        raise RuntimeError("Ops Projection sync trust domain is invalid") from exc
     source_cursor = identity.get("source_change_seq")
     applied_cursor = identity.get("applied_change_seq")
     if (
@@ -1607,6 +1618,8 @@ def _freeze_authenticated_sync_identity(
     ):
         raise RuntimeError("Ops Projection sync inventory is invalid")
     return {
+        "environment": environment,
+        "resource_identity": resource_identity,
         "audit_digest": identity["audit_digest"],
         "issuer_key_id": issuer_key_id,
         "export_digest": identity["export_digest"],

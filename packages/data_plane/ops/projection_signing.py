@@ -20,6 +20,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from ops.projection_content import PROJECTED_CONTENT_TABLES, projection_content_digest
+from ops.trust_domain import projection_resource_identity, require_environment
 
 
 SIGNED_DOCUMENT_SCHEMA = "ops-projection-signed-envelope/v1"
@@ -29,6 +30,12 @@ _PINNED_VERIFY_REGISTRY_PATH = (
     / "specs"
     / "ops_projection"
     / "verify_public_keys.json"
+)
+_PINNED_STAGING_VERIFY_REGISTRY_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "specs"
+    / "ops_projection"
+    / "verify_public_keys.staging.json"
 )
 PINNED_OPS_PROJECTION_REGISTRY_GENERATION = 2
 # These four values are an independent code pin.  Replacing the checked-in
@@ -42,6 +49,14 @@ PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST = (
 )
 PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST = (
     "sha256:44c55900ffd8e0eb97de298b40f2277f7ad767448c859cdbd46b037ca874064d"
+)
+PINNED_STAGING_OPS_PROJECTION_REGISTRY_GENERATION = 1
+PINNED_STAGING_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST = None
+PINNED_STAGING_OPS_PROJECTION_REGISTRY_BODY_DIGEST = (
+    "sha256:b04a7692f2d754e3494ccd0bbf7e0b0459518886e95ad2d301e479ee42673815"
+)
+PINNED_STAGING_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST = (
+    "sha256:e4b1ccfbaeb427c7b0ae57c83a0109cadb018baea381ceb37dbbeef507ca165b"
 )
 
 
@@ -152,9 +167,17 @@ def _signed_body(*, key_id: str, envelope: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _validate_envelope(envelope: Mapping[str, Any]) -> None:
+def _validate_envelope(
+    envelope: Mapping[str, Any], *, expected_environment: str
+) -> None:
+    try:
+        expected_environment = require_environment(expected_environment)
+    except ValueError as exc:
+        raise OpsProjectionSignatureError("invalid environment") from exc
     required = {
         "schema_version",
+        "environment",
+        "resource_identity",
         "generation_id",
         "content_digest",
         "source_db_digest",
@@ -186,6 +209,25 @@ def _validate_envelope(envelope: Mapping[str, Any]) -> None:
         )
     if envelope.get("schema_version") != ENVELOPE_SCHEMA:
         raise OpsProjectionSignatureError("unsupported Ops Projection envelope schema")
+    if envelope.get("environment") != expected_environment:
+        raise OpsProjectionSignatureError("Ops Projection environment mismatch")
+    resource = envelope.get("resource_identity")
+    if type(resource) is not dict or resource.get("environment") != expected_environment:
+        raise OpsProjectionSignatureError("Ops Projection resource identity invalid")
+    try:
+        expected_resource = projection_resource_identity(
+            environment=expected_environment,
+            source={
+                "resource_identity": resource.get("source_d1"),
+                "audit_digest": resource.get("source_audit_digest"),
+                "export_digest": resource.get("source_export_digest"),
+                "source_change_seq": resource.get("source_change_seq"),
+            },
+        )
+    except ValueError as exc:
+        raise OpsProjectionSignatureError("Ops Projection resource identity invalid") from exc
+    if resource != expected_resource:
+        raise OpsProjectionSignatureError("Ops Projection resource identity invalid")
     for field in (
         "generation_id",
         "generated_at",
@@ -366,11 +408,39 @@ def _registry_digest(document: dict[str, Any]) -> str:
     )
 
 
-def _load_pinned_active_keys() -> Mapping[str, Ed25519PublicKey]:
+def _ops_registry_contract(environment: str) -> tuple[Path, int, str | None, str, str]:
+    selected = require_environment(environment)
+    if selected == "staging":
+        return (
+            _PINNED_STAGING_VERIFY_REGISTRY_PATH,
+            PINNED_STAGING_OPS_PROJECTION_REGISTRY_GENERATION,
+            PINNED_STAGING_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST,
+            PINNED_STAGING_OPS_PROJECTION_REGISTRY_BODY_DIGEST,
+            PINNED_STAGING_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST,
+        )
+    return (
+        _PINNED_VERIFY_REGISTRY_PATH,
+        PINNED_OPS_PROJECTION_REGISTRY_GENERATION,
+        PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST,
+        PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST,
+        PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST,
+    )
+
+
+def ops_registry_document_digest(environment: str) -> str:
+    return _ops_registry_contract(environment)[4]
+
+
+def _load_pinned_active_keys(
+    expected_environment: str = "production",
+) -> Mapping[str, Ed25519PublicKey]:
     """Load exactly the code-pinned production root (never a caller path)."""
 
+    path, generation, prior_digest, body_digest, document_digest = (
+        _ops_registry_contract(expected_environment)
+    )
     try:
-        raw_document = _PINNED_VERIFY_REGISTRY_PATH.read_bytes()
+        raw_document = path.read_bytes()
         document = _decode_strict_json(raw_document, field="Ops Projection registry")
     except (OSError, OpsProjectionSignatureError) as exc:
         raise OpsProjectionSignatureError(
@@ -378,7 +448,7 @@ def _load_pinned_active_keys() -> Mapping[str, Ed25519PublicKey]:
         ) from exc
     if type(document) is not dict:
         raise OpsProjectionSignatureError("pinned Ops Projection registry is invalid")
-    if sha256_digest(document) != PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST:
+    if sha256_digest(document) != document_digest:
         raise OpsProjectionSignatureError(
             "pinned Ops Projection registry digest mismatch"
         )
@@ -388,18 +458,18 @@ def _load_pinned_active_keys() -> Mapping[str, Ed25519PublicKey]:
         or document.get("schema_version") != 2
         or document.get("purpose") != "ops_projection_verification"
         or type(document.get("generation")) is not int
-        or document.get("generation") != PINNED_OPS_PROJECTION_REGISTRY_GENERATION
+        or document.get("generation") != generation
         or document.get("authority_status") not in {"ACTIVE", "PENDING"}
         or document.get("prior_registry_digest")
-        != PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST
+        != prior_digest
         or document.get("registry_digest")
-        != PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST
-        or _registry_digest(document) != PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST
+        != body_digest
+        or _registry_digest(document) != body_digest
     ):
         raise OpsProjectionSignatureError("pinned Ops Projection registry is invalid")
 
     rows = document.get("keys")
-    if type(rows) is not list or not rows or len(rows) > 16:
+    if type(rows) is not list or len(rows) > 16:
         raise OpsProjectionSignatureError("pinned Ops Projection registry keys invalid")
     keys: dict[str, Ed25519PublicKey] = {}
     seen: set[str] = set()
@@ -443,29 +513,43 @@ def _load_pinned_active_keys() -> Mapping[str, Ed25519PublicKey]:
 
 def verify_pinned_ops_projection(
     document: dict[str, Any] | bytes | str,
+    *,
+    expected_environment: str,
 ) -> Mapping[str, Any]:
     """Verify an envelope only against the compile-time production trust root."""
 
-    return _verify_pinned_document(document).envelope
+    return _verify_pinned_document(
+        document, expected_environment=expected_environment
+    ).envelope
 
 
 def _verify_pinned_document(
     document: dict[str, Any] | bytes | str,
+    *,
+    expected_environment: str = "production",
 ) -> _VerifiedOpsProjectionDocument:
-    keys = _load_pinned_active_keys()
-    return _verify_document_identity(document, keys)
+    keys = _load_pinned_active_keys(expected_environment)
+    return _verify_document_identity(
+        document, keys, expected_environment=expected_environment
+    )
 
 
 def _verify_document(
     document: dict[str, Any] | bytes | str,
     keys: Mapping[str, Ed25519PublicKey],
+    *,
+    expected_environment: str = "production",
 ) -> Mapping[str, Any]:
-    return _verify_document_identity(document, keys).envelope
+    return _verify_document_identity(
+        document, keys, expected_environment=expected_environment
+    ).envelope
 
 
 def _verify_document_identity(
     document: dict[str, Any] | bytes | str,
     keys: Mapping[str, Ed25519PublicKey],
+    *,
+    expected_environment: str = "production",
 ) -> _VerifiedOpsProjectionDocument:
     if type(keys) is not dict:
         raise OpsProjectionSignatureError(
@@ -506,7 +590,7 @@ def _verify_document_identity(
     envelope = frozen.get("envelope")
     if type(envelope) is not dict:
         raise OpsProjectionSignatureError("Ops Projection envelope is missing")
-    _validate_envelope(envelope)
+    _validate_envelope(envelope, expected_environment=expected_environment)
     body = _signed_body(key_id=key_id, envelope=envelope)
     signature_value = frozen["signature"]
     if not signature_value.startswith("ed25519:"):
@@ -530,6 +614,8 @@ def _verify_document_identity(
 def verified_pinned_ops_projection_dataset_evidence(
     document: dict[str, Any] | bytes | str,
     required_datasets: tuple[str, ...] | list[str],
+    *,
+    expected_environment: str,
 ) -> tuple[Mapping[str, Any], Mapping[str, Mapping[str, Any]]]:
     """Derive immutable READY rows plus identity from one verified document."""
 
@@ -544,7 +630,9 @@ def verified_pinned_ops_projection_dataset_evidence(
         raise OpsProjectionSignatureError(
             "required_datasets must be unique exact non-empty strings"
         )
-    verified_document = _verify_pinned_document(document)
+    verified_document = _verify_pinned_document(
+        document, expected_environment=expected_environment
+    )
     envelope = verified_document.envelope
     coverage = envelope["dataset_coverage"]
     assert isinstance(coverage, Mapping)  # validated by verify

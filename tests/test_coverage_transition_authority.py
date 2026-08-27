@@ -33,9 +33,9 @@ from storage.coverage_transition import (
     CoverageTransitionAuthorityPending,
     CoverageTransitionError,
     CoverageTransitionPublicKeyRegistry,
-    apply_signed_coverage_transition,
+    apply_signed_coverage_transition as _apply_signed_coverage_transition,
     build_coverage_transition_request,
-    coverage_transition_availability,
+    coverage_transition_availability as _coverage_transition_availability,
 )
 import storage.coverage_transition as transition_module
 from storage.sqlite_store import SqliteStore
@@ -50,6 +50,16 @@ _CUTOFF = "2008-05-31"
 _PUBLICATION_AT = "2008-05-31T12:00:00+00:00"
 _CHECKED_AT = "2008-05-31T13:00:00+00:00"
 _DATASETS = ("equities_bars_daily",)
+
+
+def apply_signed_coverage_transition(db_path: str, document: Any):
+    return _apply_signed_coverage_transition(
+        db_path, document, expected_environment="production"
+    )
+
+
+def coverage_transition_availability():
+    return _coverage_transition_availability(expected_environment="production")
 
 
 def _canonical(value: Any) -> bytes:
@@ -304,16 +314,42 @@ def _prepare_transition_db(
     store.close()
 
 
+def _bind_production_resource(request: dict[str, Any], path: Path) -> dict[str, Any]:
+    request["body"] = {
+        **request["body"],
+        "environment": "production",
+        "resource_identity": {
+            "environment": "production",
+            "source_d1": {
+                "provider": "cloudflare",
+                "kind": "d1",
+                "name": "quant-ingest",
+                "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+                "authority_id": "cloudflare-d1:be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+            },
+            "source_audit_digest": "sha256:" + "1" * 64,
+            "source_export_digest": "sha256:" + "2" * 64,
+            "source_change_seq": 9,
+            "governed_db_content_digest": transition_module._regular_file_digest(path),
+        },
+    }
+    _readdress(request)
+    return request
+
+
 def _request(path: Path) -> dict[str, Any]:
     issued_at, expires_at = _transition_clock()
-    return dict(
-        build_coverage_transition_request(
-            str(path),
-            build_id=_BUILD_ID,
-            datasets=_DATASETS,
-            issued_at=issued_at,
-            expires_at=expires_at,
-        )
+    return _bind_production_resource(
+        dict(
+            build_coverage_transition_request(
+                str(path),
+                build_id=_BUILD_ID,
+                datasets=_DATASETS,
+                issued_at=issued_at,
+                expires_at=expires_at,
+            )
+        ),
+        path,
     )
 
 
@@ -324,7 +360,7 @@ def _configure_test_registry(
     monkeypatch.setattr(
         CoverageTransitionPublicKeyRegistry,
         "load_pinned",
-        classmethod(lambda cls: registry),
+        classmethod(lambda cls, **_kwargs: registry),
     )
 
 
@@ -423,6 +459,11 @@ def test_signed_exact_transition_is_content_addressed_and_one_shot(
     registry = _registry_for(key_id, private)
     _configure_test_registry(monkeypatch, registry)
     document = _sign_request(request, key_id=key_id, private=private)
+
+    with pytest.raises(CoverageTransitionError, match="environment mismatch"):
+        _apply_signed_coverage_transition(
+            str(path), document, expected_environment="staging"
+        )
 
     result = dict(apply_signed_coverage_transition(str(path), document))
     assert result["status"] == "COMPLETE"
@@ -751,6 +792,7 @@ def test_two_dataset_failure_rolls_back_tombstone_and_first_cas(
             expires_at=expires_at,
         )
     )
+    request = _bind_production_resource(request, path)
     key_id, private = _test_transition_key()
     _configure_test_registry(monkeypatch, _registry_for(key_id, private))
     document = _sign_request(request, key_id=key_id, private=private)

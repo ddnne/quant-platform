@@ -156,7 +156,7 @@ def _configure_projection_registry_for_test(
 ) -> None:
     monkeypatch.setattr(
         "ops.projection_signing._load_pinned_active_keys",
-        lambda: {registry.key_id: registry.public_key},
+        lambda _environment="production": {registry.key_id: registry.public_key},
     )
 
 
