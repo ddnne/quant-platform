@@ -55,10 +55,10 @@ typed error envelope.
 | R2 | READY/coherence paths hard-coded one global V2 policy and rejected valid per-dataset V3 evidence | FIXED | `590a71d2`, `76d21575`; exact per-dataset policy triplets plus content-addressed local proof ID reverified from current ledgers/receipts/generation; independent review P0/P1=0 |
 | R3 | ExperimentPlan embedded `ready_snapshot_id=not-declared`, making later immutable snapshot equality circular | FIXED | `76240e89`; plan identity is snapshot-free and immutable snapshot binding occurs only in authorization; independent review passed |
 | R4 | exact-four bindings were caller-overridable | FIXED | `76240e89`; only the checked-in canonical four plans and exact plan/closure/profile digests reach the scheduler; independent attack tests passed |
-| R5 | Generic READY publication and a same-UID arbitrary READY signer remained reachable | OPEN | **SOURCE-CLOSED (inactive):** `fa01ff3c`, `2b582aee`; product is verify-only, exact-four consumers require an immutable sidecar plus caller-owned expected environment/resource, and the registry has zero active keys. **OPERATIONAL-OPEN:** provision the dedicated READY UID/socket/key/store, independently recheck the authenticated current mirror/closure/copy, and publish and verify one immutable exact-four READY; Mass stays disabled. |
+| R5 | Generic READY publication and a same-UID arbitrary READY signer remained reachable | OPEN | **SOURCE-PARTIAL (inactive):** `fa01ff3c`, `2b582aee`; exact-four consumers are verify-only, require an immutable sidecar plus caller-owned expected environment/resource, and the registry has zero active keys. A local READY handler/client exists, but the product publisher still returns `PENDING` unconditionally and no production call site invokes `ReadyPublisherAuthorityClient`. **SOURCE/OPERATIONAL-OPEN:** wire the product publisher to the dedicated authenticated READY authority without an injectable signer, then provision its UID/socket/key/store, independently recheck the authenticated current mirror/closure/copy, and publish and verify one immutable exact-four READY; Mass stays disabled. |
 | R6 | Missing natural-key ledger could pass through fixture compatibility | FIXED | `d6a49e24`; production collector has no fixture/quality/raw override, exact run/build evidence is re-read fail-closed, fixture helpers are tests-only, and independent review reported P0/P1=0 |
-| R10 | Trader authorization remained a same-UID HOME-key signing oracle over caller-constructed approval decisions | OPEN | **SOURCE-CLOSED (inactive):** `4f9decc1`, `f1d377eb`; product is verify-only, signature verification is exact, challenge one-use/counter/decision/event handling is atomic, `fmt=none` enrollment is honestly `UNATTESTED/PENDING_TRUST_REVIEW`, and active keys=0. **OPERATIONAL-OPEN:** bind a human/root-reviewed witness or trusted attestation to the exact registration/environment/RP, provision Trader UID/store, retire the HOME key, activate the credential, and pass human-approval smoke. |
-| R11 | Controlled execution duplicated authority lineage into a caller-writable HOME store | OPEN | **SOURCE-CLOSED (inactive):** `811d500c`, `b89cc23c`, `3601815e`; exact writer-domain/digest/immutable-byte checks hold, execution and promotion are false, and no active writer exists. **OPERATIONAL-OPEN:** provision the external writer UID/socket/fresh key/protected canonical store and accept one authorized Pilot artifact chain. |
+| R10 | Trader authorization remained a same-UID HOME-key signing oracle over caller-constructed approval decisions | OPEN | **SOURCE-PARTIAL (inactive):** `4f9decc1`, `f1d377eb`; product verification, exact signature checks, atomic challenge one-use/counter/decision/event handling, and honest `fmt=none` `UNATTESTED/PENDING_TRUST_REVIEW` enrollment exist, with active keys=0. The Trader handler factory exists, but the generic authority runner/bootstrap supports only D1-sync, Ops, Coverage and READY; no production Trader server is reachable. **SOURCE/OPERATIONAL-OPEN:** add the reviewed Trader runner/listener/bootstrap path, bind a human/root-reviewed witness or trusted attestation to the exact registration/environment/RP, provision Trader UID/store, retire the HOME key, activate the credential, and pass human-approval smoke. |
+| R11 | Controlled execution duplicated authority lineage into a caller-writable HOME store | OPEN | **SOURCE-PARTIAL (inactive):** `811d500c`, `b89cc23c`, `3601815e`; exact writer-domain/digest/immutable-byte checks hold, execution and promotion are false, and no active writer exists. The Controlled handler factory exists, but the generic authority runner/bootstrap has no production Controlled server. **SOURCE/OPERATIONAL-OPEN:** add the reviewed Controlled runner/listener/bootstrap path, provision the external writer UID/socket/fresh key/protected canonical store, and accept one authorized Pilot artifact chain. |
 
 ### P1
 
@@ -103,7 +103,7 @@ typed error envelope.
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
 | A1 | JSDA Queue repeatedly selected only the newest year/files and could not converge on history | FIXED | `7afffade`; stable child segment identity, cursor progress, retry/DLQ evidence |
-| A2 | Receipt, D1, Ops, READY, Trader, transition and execution keys had filenames but no complete principal/evidence-authority isolation | OPEN | **SOURCE-CLOSED (inactive, crash-atomic):** `4a29126d`, `9af5c59d`, `dbbf88ab`; manifests/bootstrap/descriptor isolation and the strict positive gate exist. D1 sync uses a request-bound v2 journal, same-directory temporary apply/sign/fsync/atomic replacement, exact outer-event acknowledgement, identity-based recovery, atomic staging publication, sidecar rejection, and deadline plus runtime-policy remeasurement. **OPERATIONAL-OPEN:** 0/7 OS authorities are provisioned and all registries have active keys=0; an administrator must bootstrap seven UIDs/sockets/root-owned stores/fresh in-authority keys and independently accept each protocol. |
+| A2 | Receipt, D1, Ops, READY, Trader, transition and execution keys had filenames but no complete principal/evidence-authority isolation | OPEN | **SOURCE-PARTIAL (inactive; D1 handoff crash-atomic):** `4a29126d`, `9af5c59d`, `dbbf88ab`; the manifest declares one Cloudflare Receipt authority and six local OS principals. Receipt has a PENDING-only bootstrap and four local authorities are runnable, but the READY product call site and the Trader/Controlled production runners are absent. D1 sync uses a request-bound v2 journal, same-directory temporary apply/sign/fsync/atomic replacement, exact outer-event acknowledgement, identity-based recovery, atomic staging publication, sidecar rejection, and deadline plus runtime-policy remeasurement. **SOURCE/OPERATIONAL-OPEN:** 0/1 Cloudflare Receipt authority and 0/6 local OS authorities are provisioned, and all registries have active keys=0. The current all-P0 strict gate also blocks the positive operations required to close these OPEN rows. Before activation, the next PR must add an authority/action/environment/SHA/resource-bound staged gate whose canary outputs are research-ineligible, while retaining the all-P0 gate for final release, READY eligibility and Controlled Pilot. Then an administrator must bootstrap six UIDs/sockets/root-owned stores/fresh in-authority keys and independently accept all seven protocols. |
 | A7 | Release workflows did not consume the machine-readable P0 finding gate | FIXED | `6a8fc1f9`; the pinned source-integration validator runs before required CI; the strict gate runs before authenticated deployment acceptance, release evidence, local-authority activation/positive operations, READY/Trader/Controlled execution. The v3 evidence payload binds the exact ledger digest and OPEN-P0 inventory. |
 
 ### P1
@@ -122,26 +122,33 @@ event ledger holds `BEGIN IMMEDIATE` across the potentially long remote handler.
 
 ## Integration gate
 
-The latest independent adversarial reviews accepted the fail-closed boundaries
-explicitly marked `SOURCE-CLOSED`, including receipt claims-v3/calendar evidence
-and D1 crash-atomic handoff. That source-versus-operational distinction is prose
-in the v1 ledger, not a second machine-enforced status. Required CI validates
-only ledger format and inventory; independent review decides whether an
-inactive source candidate may merge. D2, D3, R5, R10, R11, C4, C10 and A2 remain
-operationally `OPEN`; required source-integration CI may merge the inactive
-candidate, while the strict production/positive-operation gate rejects it.
+Independent adversarial review has accepted some fail-closed boundaries, while
+R5, R10, R11 and A2 remain explicitly `SOURCE-PARTIAL` and operationally
+`OPEN`. The source-versus-operational distinction is prose in the v1 ledger,
+not a second machine-enforced status. Required CI validates only ledger format
+and inventory; independent review decides whether an inactive source candidate
+is sufficiently contained to merge. This ledger does not claim source P0 = 0
+or Operational Closure. D2, D3, R5, R10, R11, C4, C10 and A2 remain `OPEN`, and
+the strict production/positive-operation gate rejects the candidate.
 Receipt uses a sole dedicated create-only/readback R2 evidence surface, but the
 portable-locator and typed-`RAW_ONLY` error-envelope work remains disclosed P1.
 Cloudflare has a checked-in PENDING-only bootstrap path; the local PENDING daemon
 is deferred because of ACTIVE-socket evidence ambiguity. Live environment-scoped
-key activation, 7-authority provisioning, authenticated sync, FRESH projection,
+key activation, one Cloudflare plus six local-OS authority provisioning,
+authenticated sync, FRESH projection,
 and receipt reproof still remain.
 Release, publication and Controlled Pilot remain blocked.
 R7's authority-owned append-only history and
 sidecar-retention residuals remain tracked by R5/A2 rather than reopening the
 fail-closed publication row. Local PENDING daemon bootstrap remains deferred
 until ACTIVE-socket evidence and the transition protocol cannot be confused;
-it must not be achieved by marking operational rows `FIXED` early or bypassing
-the strict gate. After all P0 rows are closed, run a fresh independent review
+it must not be achieved by marking operational rows `FIXED` early or adding a
+general strict-gate bypass. The current all-P0 gate cannot also serve as the
+staged activation gate because the required smoke evidence is itself needed to
+close the OPEN rows. A next PR must add a narrowly scoped, expiring,
+authority/action/environment/SHA/resource-bound staged gate and force canary
+outputs to remain research-ineligible; the all-P0 gate remains mandatory for
+final release, READY eligibility and Controlled Pilot. After all P0 rows are
+closed, run a fresh independent review
 against one immutable SHA, then run the full native
 CI-equivalent suite. Only that reviewed SHA may be pushed for the release PR.

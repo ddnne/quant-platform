@@ -148,6 +148,15 @@ reviewed public-key registry.
 
 ## Deployment 2: ACTIVE
 
+**Currently blocked.** The ordinary all-P0 strict gate correctly rejects this
+deployment, while ACTIVE smoke evidence is itself required to close the OPEN
+Receipt and authority-isolation rows. Stop after the PENDING ceremony until a
+reviewed next PR adds a narrowly scoped, expiring
+authority/action/environment/SHA/resource-bound staged gate and forces staging
+outputs to remain research-ineligible. A generic `ignore P0` switch is not an
+acceptable substitute, and this runbook does not authorize ACTIVE deployment
+under the current gate.
+
 Activation is a separate reviewed change. Set:
 
 ```toml

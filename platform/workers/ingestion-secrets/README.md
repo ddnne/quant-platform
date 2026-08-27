@@ -1,8 +1,8 @@
 # J-Quants ingestion secret proxy
 
-This Worker keeps `JQUANTS_API_KEY` on Cloudflare. It contains a closed typed
-acquisition RPC target for a future Receipt authority and retains the existing
-authenticated local-runner HTTP proxy during migration.
+This Worker keeps `JQUANTS_API_KEY` on Cloudflare. It contains the closed typed
+acquisition RPC target consumed by the inactive Receipt authority source and
+retains the existing authenticated local-runner HTTP proxy during migration.
 
 ## Typed acquisition RPC v2 (target implemented, activation pending)
 
@@ -22,13 +22,18 @@ requires an exact row for every calendar date, and selects only `HolDiv` values
 digests are bound into the acquisition identity, HMAC continuation state,
 metadata query digest, and page chain. It never derives dates from weekdays.
 
-The registry still deliberately leaves the following closure dependencies
-`PENDING`:
+Route availability and COMPLETE eligibility are separate decisions. The
+current generated registry still overloads `datasets` and `excluded_datasets`
+to express both axes; a follow-up contract change must split them explicitly.
+For now, `equities_master` is `ACTIVE_RAW_ONLY`: its closed route may return
+raw evidence, but it is also `PENDING_AUTHORITY_ACTIVATION` and cannot establish
+COMPLETE eligibility. The following closure dependencies remain `PENDING`:
 
-- `equities_master` COMPLETE/reproof activation, until a governed production
-  Receipt acquisition capability independently captures and create-only
-  persists the official calendar bytes. The Python verifier supports that
-  opaque evidence, but no production capture writer currently mints it;
+- `equities_master` COMPLETE/reproof activation, until the checked-in Receipt
+  capture writer is deployed through the governed Service Binding, independently
+  captures and create-only persists the official calendar bytes, and its fresh
+  environment-scoped key and receipts pass acceptance. Source presence is not
+  live authority evidence;
 - `equities_bars_daily_am` and `equities_earnings_calendar`, until a
   target-owned trading-calendar/session-cutoff authority can derive tip
   identity without trusting a caller date;
@@ -45,18 +50,19 @@ unbounded or inconsistent continuation state fail closed.
 
 `JQUANTS_RPC_CURSOR_HMAC_KEY` is a dedicated target-only navigation key. Its
 HMAC output is not an offline-verifiable receipt or COMPLETE evidence and must
-never be shared with the caller/reconciler. A future Receipt authority must
-consume the live Service Binding response, create-only persist exact bytes and
-metadata, independently reconcile them, and issue its own Ed25519 receipt.
-Persisted target headers alone remain `RAW_ONLY` after a crash unless a future
-closed verification capability is added.
+never be shared with the caller/reconciler. The Receipt authority must consume
+the live Service Binding response, create-only persist exact bytes and metadata,
+independently reconcile them, and issue its own Ed25519 receipt. Persisted target
+headers alone remain `RAW_ONLY` after a crash unless the Receipt authority
+revalidates the stored response through its closed recovery capability.
 
-No live `JQUANTS_ACQUISITION` caller binding, Receipt capture writer, or
+No live `JQUANTS_ACQUISITION` caller binding, ACTIVE Receipt deployment, or
 production HMAC key is provisioned by this change. Staging intentionally has
-zero secret names, so the RPC returns `rpc_unavailable`; production activation,
-Receipt-authority capture, receipt signing, registry activation, and historical
-reproof all remain `PENDING`. The verifier models the equities-master official
-daily slice sequence and provider pagination independently, but it cannot turn
+zero secret names, so the RPC returns `rpc_unavailable`; production capture,
+receipt signing, registry activation, and historical reproof all remain
+`PENDING`. The source capture writer exists only behind the inactive Receipt
+authority boundary. The verifier models the equities-master official daily
+slice sequence and provider pagination independently, but it cannot turn
 caller-authored paths or headers into a positive capture capability.
 
 ## Authority boundary

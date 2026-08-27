@@ -36,6 +36,24 @@ remote apply results only in immutable release evidence.
 - **AM history:** do not treat V2 monthly AM completeness as a current target.
   V3 AM is tip-scoped. Residual PARTIAL rows are not permission to mint empty
   COMPLETE receipts.
+- **Authority reachability:** the manifest covers one Cloudflare Receipt
+  authority and six local OS principals, but this is not seven runnable local
+  daemons. READY has a local handler/client but no product publisher call site;
+  Trader and Controlled have handler factories but no production runner. R5,
+  R10, R11 and A2 therefore remain `SOURCE-PARTIAL` and `OPEN`.
+- **Staged activation:** the current all-P0 strict gate correctly rejects a
+  release, but it also blocks the positive smoke needed to close the same OPEN
+  rows. Do not add a general bypass or execute ACTIVE instructions yet. The
+  next PR must introduce a narrowly scoped, expiring
+  authority/action/environment/SHA/resource-bound staged gate and mark every
+  canary output research-ineligible. The all-P0 gate remains mandatory for
+  final release, READY eligibility and Controlled Pilot.
+- **Equities master:** the closed acquisition route is available only as
+  `ACTIVE_RAW_ONLY`; COMPLETE/reproof eligibility remains
+  `PENDING_AUTHORITY_ACTIVATION`. The current generated registry expresses
+  those two axes by listing `equities_master` as both routed and PENDING. Do not
+  interpret route availability as COMPLETE eligibility; the next contract PR
+  must split those axes explicitly.
 
 ## 1. Preconditions
 
