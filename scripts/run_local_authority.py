@@ -4,15 +4,21 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import ctypes
+import grp
 import hashlib
 import json
+import os
 import pwd
 import socket
+import stat
 import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NoReturn
+
+from cryptography.hazmat.primitives import serialization
 
 _ROOT = Path(__file__).resolve().parents[1]
 _IMPORT_ROOTS = (
@@ -26,11 +32,19 @@ for import_root in reversed(_IMPORT_ROOTS):
     if str(import_root) not in sys.path:
         sys.path.insert(0, str(import_root))
 
+from execution.exact_four_codec import ExactFourAuthorityPending
+
 from scripts.authority_principal_manifest import load_and_validate_manifest
+from scripts.execution_authority_entrypoints import (
+    CONTROLLED_TRADER_HANDOFF_OPERATION,
+    TRADER_AUTHORIZE_OPERATION,
+    open_live_controlled_execution_handler_v2,
+    open_live_trader_authority_handler_v2,
+)
 from scripts.finding_ledger_gate import FindingLedgerError
-from scripts.local_authority_files import (
-    ProtectedAuthorityFileError,
-    read_protected_authority_file,
+from scripts.local_authority_bootstrap_common import (
+    EXECUTION_ACTIVATION_DOCUMENTS,
+    PROTECTED_ROOT,
 )
 from scripts.local_authority_entrypoints import (
     CoverageTransitionAuthorize,
@@ -41,10 +55,15 @@ from scripts.local_authority_entrypoints import (
     ReadyPublishProfilePlanBound,
     _d1_sync_tool_bindings_digest,
 )
+from scripts.local_authority_files import (
+    ProtectedAuthorityFileError,
+    read_protected_authority_file,
+)
 from scripts.local_authority_service import (
     DEFAULT_PROCESSING_TIMEOUT_SECONDS,
     FileEd25519KeyCustody,
     LocalAuthorityError,
+    LocalAuthorityPending,
     PeerPrincipalRegistry,
     SQLiteAuthorityEventLedger,
     UnixAuthorityConnectionServer,
@@ -53,6 +72,7 @@ from scripts.local_authority_service import (
 )
 
 D1_SYNC_PROCESSING_TIMEOUT_SECONDS = 900.0
+EXECUTION_PROCESSING_TIMEOUT_SECONDS = 1800.0
 
 
 def _processing_timeout_seconds(authority_id: str) -> float:
@@ -60,6 +80,8 @@ def _processing_timeout_seconds(authority_id: str) -> float:
 
     if authority_id == "d1_sync":
         return D1_SYNC_PROCESSING_TIMEOUT_SECONDS
+    if authority_id in {"trader", "controlled_execution"}:
+        return EXECUTION_PROCESSING_TIMEOUT_SECONDS
     return DEFAULT_PROCESSING_TIMEOUT_SECONDS
 
 
@@ -76,6 +98,8 @@ _REQUIRED_CALLERS = {
     "ops_projection": {"d1_sync"},
     "coverage_transition": {"d1_sync"},
     "ready": {"ready_publisher"},
+    "trader": {"controlled_pilot_orchestrator"},
+    "controlled_execution": {"trader"},
 }
 _RESOURCE_FIELDS = {
     "d1_sync": {
@@ -90,6 +114,8 @@ _RESOURCE_FIELDS = {
     "ops_projection": {"artifact_store"},
     "coverage_transition": set(),
     "ready": {"snapshot_root"},
+    "trader": {"activation_document_path"},
+    "controlled_execution": {"activation_document_path"},
 }
 
 
@@ -139,6 +165,14 @@ def validate_runtime_config(
     for name, value in resources.items():
         if type(value) is not str or not value or not Path(value).is_absolute():
             raise AuthorityRunnerError(f"runtime resource path is invalid: {name}")
+    if (
+        authority_id in EXECUTION_ACTIVATION_DOCUMENTS
+        and Path(resources["activation_document_path"])
+        != EXECUTION_ACTIVATION_DOCUMENTS[authority_id]
+    ):
+        raise AuthorityRunnerError(
+            "execution activation document path differs from the pinned authority"
+        )
     return document
 
 
@@ -192,6 +226,97 @@ def load_runtime_config(
     return document
 
 
+def _load_root_runtime_config(
+    path: Path, *, authority_id: str, environment: str
+) -> dict[str, Any]:
+    """Read one exact root-owned config when no generic key overlay exists."""
+
+    try:
+        raw = read_protected_authority_file(
+            path,
+            expected_owner_uids={0},
+            allowed_modes={0o440, 0o444},
+            max_bytes=1024 * 1024,
+        ).raw
+    except ProtectedAuthorityFileError as exc:
+        raise AuthorityRunnerError("root-owned runtime config is unavailable") from exc
+    return decode_runtime_config(
+        raw,
+        authority_id=authority_id,
+        environment=environment,
+    )
+
+
+def _require_execution_activation_path(
+    *, authority_id: str, resources: Mapping[str, Any]
+) -> Path:
+    try:
+        expected = EXECUTION_ACTIVATION_DOCUMENTS[authority_id]
+    except KeyError as exc:  # pragma: no cover - closed caller set
+        raise AuthorityRunnerError("execution authority identity is unsupported") from exc
+    observed = Path(resources["activation_document_path"])
+    if observed != expected:
+        raise AuthorityRunnerError(
+            "execution activation document path differs from the pinned authority"
+        )
+    return observed
+
+
+def _require_trader_service_identity(
+    *, environment: str, manifest: Mapping[str, Any]
+) -> tuple[int, dict[str, Any], Path, Path]:
+    """Authenticate the WebAuthn-only Trader process and its root config.
+
+    Trader deliberately has no file-key activation row.  Its independently
+    root-owned WebAuthn activation document is reopened by the handler factory;
+    this layer pins the surrounding OS principal, caller group, config, store
+    directory and outer event ledger before that factory can run.
+    """
+
+    try:
+        deployment = manifest["principals"]["trader"]["deployments"][environment]
+        account = pwd.getpwnam(deployment["service_user"])
+        caller_group_name = f"qp_{environment}_trader_callers"
+        caller_group = grp.getgrnam(caller_group_name)
+    except (KeyError, TypeError) as exc:
+        raise AuthorityRunnerError("declared Trader service identity is absent") from exc
+    if (
+        deployment.get("key_backend") != "webauthn_platform_or_hardware"
+        or deployment.get("mode") != "PENDING_NO_KEY"
+        or account.pw_uid <= 0
+        or account.pw_dir != "/var/empty"
+        or account.pw_shell != "/usr/bin/false"
+        or account.pw_uid != os.geteuid()
+        or caller_group.gr_gid != os.getegid()
+    ):
+        raise AuthorityRunnerError("Trader process does not match its isolated UID")
+    service_dir = PROTECTED_ROOT / environment / "trader"
+    try:
+        directory = service_dir.lstat()
+    except OSError as exc:
+        raise AuthorityRunnerError("Trader protected service directory is absent") from exc
+    if (
+        not stat.S_ISDIR(directory.st_mode)
+        or directory.st_uid != account.pw_uid
+        or stat.S_IMODE(directory.st_mode) != 0o700
+    ):
+        raise AuthorityRunnerError("Trader protected service directory is unsafe")
+    config = _load_root_runtime_config(
+        PROTECTED_ROOT / "runtime-config" / environment / "trader.json",
+        authority_id="trader",
+        environment=environment,
+    )
+    _require_execution_activation_path(
+        authority_id="trader", resources=config["resources"]
+    )
+    return (
+        account.pw_uid,
+        config,
+        service_dir,
+        service_dir / "authority-events.sqlite3",
+    )
+
+
 def _load_public_metadata(
     row: Mapping[str, Any], *, expected_uid: int
 ) -> dict[str, Any]:
@@ -226,25 +351,36 @@ def _load_public_metadata(
 
 
 def build_service(*, authority_id: str, environment: str) -> UnixAuthorityService:
-    uid, activation = require_declared_service_identity(
-        authority_id=authority_id,
-        environment=environment,
-    )
-    config = load_runtime_config(
-        activation,
-        authority_id=authority_id,
-        environment=environment,
-    )
-    metadata = _load_public_metadata(activation, expected_uid=uid)
-    custody = FileEd25519KeyCustody(
-        activation["key_path"],
-        key_id=metadata["key_id"],
-        expected_uid=uid,
-    )
-    resources = config["resources"]
     manifest = load_and_validate_manifest()
+    if authority_id == "trader":
+        uid, config, service_dir, ledger_path = _require_trader_service_identity(
+            environment=environment,
+            manifest=manifest,
+        )
+        activation = None
+        metadata = None
+        custody = None
+    else:
+        uid, activation = require_declared_service_identity(
+            authority_id=authority_id,
+            environment=environment,
+        )
+        config = load_runtime_config(
+            activation,
+            authority_id=authority_id,
+            environment=environment,
+        )
+        metadata = _load_public_metadata(activation, expected_uid=uid)
+        custody = FileEd25519KeyCustody(
+            activation["key_path"],
+            key_id=metadata["key_id"],
+            expected_uid=uid,
+        )
+        service_dir = Path(activation["key_path"]).parent
+        ledger_path = Path(activation["ledger_path"])
+    resources = config["resources"]
     ledger = SQLiteAuthorityEventLedger(
-        activation["ledger_path"],
+        ledger_path,
         authority_id=authority_id,
         environment=environment,
         expected_uid=uid,
@@ -261,6 +397,7 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
             ) from exc
 
     if authority_id == "d1_sync":
+        assert activation is not None and custody is not None
         handlers = {
             D1SyncNow.operation: D1SyncNow(
                 environment=environment,
@@ -301,6 +438,7 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
             ),
         }
     elif authority_id == "ops_projection":
+        assert custody is not None
         handlers = {
             OpsProjectionRenderAndSign.operation: OpsProjectionRenderAndSign(
                 environment=environment,
@@ -310,6 +448,7 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
             )
         }
     elif authority_id == "coverage_transition":
+        assert custody is not None
         handlers = {
             CoverageTransitionAuthorize.operation: (
                 CoverageTransitionAuthorize(
@@ -320,6 +459,7 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
             )
         }
     elif authority_id == "ready":
+        assert custody is not None
         handlers = {
             ReadyPublishProfilePlanBound.operation: ReadyPublishProfilePlanBound(
                 environment=environment,
@@ -327,6 +467,63 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
                 custody=custody,
             )
         }
+    elif authority_id == "trader":
+        _require_execution_activation_path(
+            authority_id=authority_id,
+            resources=resources,
+        )
+        try:
+            handler = open_live_trader_authority_handler_v2()
+        except ExactFourAuthorityPending as exc:
+            raise LocalAuthorityPending(
+                "Trader WebAuthn activation is PENDING"
+            ) from exc
+        controlled_uid = service_uid("controlled_execution")
+        expected_socket = Path(
+            manifest["principals"]["controlled_execution"]["deployments"]
+            [environment]["socket_path"]
+        )
+        if (
+            handler.authority.environment != environment
+            or handler.controlled_execution_uid != controlled_uid
+            or handler.controlled_socket_path != expected_socket
+            or handler.authority.ledger._path.parent.resolve()
+            != service_dir.resolve()
+        ):
+            raise AuthorityRunnerError(
+                "Trader activation is not bound to the declared peer and store"
+            )
+        handlers = {TRADER_AUTHORIZE_OPERATION: handler}
+    elif authority_id == "controlled_execution":
+        assert activation is not None and metadata is not None and custody is not None
+        _require_execution_activation_path(
+            authority_id=authority_id,
+            resources=resources,
+        )
+        try:
+            handler = open_live_controlled_execution_handler_v2()
+        except ExactFourAuthorityPending as exc:
+            raise LocalAuthorityPending(
+                "Controlled execution activation is PENDING"
+            ) from exc
+        writer = handler.writer
+        writer_public = base64.b64encode(
+            writer.public_key.public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+        ).decode("ascii")
+        if (
+            writer.environment != environment
+            or writer._trader_uid != service_uid("trader")
+            or writer._signer.key_id != metadata["key_id"]
+            or writer_public != metadata["public_key_base64"]
+            or writer._path.parent.resolve() != service_dir.resolve()
+        ):
+            raise AuthorityRunnerError(
+                "Controlled activation is not bound to its UID, peer, store, and key"
+            )
+        handlers = {CONTROLLED_TRADER_HANDOFF_OPERATION: handler}
     else:  # validated by load_runtime_config; defensive for future manifest rows
         raise AuthorityRunnerError("authority has no reviewed local handler set")
     return UnixAuthorityService(

@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from execution import controlled_execution_activation_v2 as controlled_activation
+from execution.exact_four_codec import ExactFourAuthorityPending
 from scripts import run_local_authority as runner
 
 
@@ -94,3 +98,79 @@ def test_d1_runtime_requires_governed_mirror_credential_and_pinned_cli_paths() -
 def test_only_d1_sync_receives_the_extended_processing_lease() -> None:
     assert runner._processing_timeout_seconds("d1_sync") == 900.0
     assert runner._processing_timeout_seconds("ready") == 30.0
+    assert runner._processing_timeout_seconds("trader") == 1800.0
+    assert runner._processing_timeout_seconds("controlled_execution") == 1800.0
+
+
+@pytest.mark.parametrize(
+    ("authority_id", "peer_user", "peer", "activation_path"),
+    (
+        (
+            "trader",
+            "qp_production_controlled_pilot_orchestrator",
+            "controlled_pilot_orchestrator",
+            "/etc/quant-platform/authorities/trader/activation.json",
+        ),
+        (
+            "controlled_execution",
+            "qp_production_trader_authority",
+            "trader",
+            "/etc/quant-platform/authorities/controlled_execution/activation.json",
+        ),
+    ),
+)
+def test_execution_runtime_configs_are_closed_and_pin_activation(
+    authority_id: str,
+    peer_user: str,
+    peer: str,
+    activation_path: str,
+) -> None:
+    config = {
+        "format": runner.RUNTIME_CONFIG_FORMAT,
+        "authority_id": authority_id,
+        "environment": "production",
+        "peer_callers": {peer_user: peer},
+        "resources": {"activation_document_path": activation_path},
+    }
+    assert runner.validate_runtime_config(
+        config,
+        authority_id=authority_id,
+        environment="production",
+    )["resources"] == {"activation_document_path": activation_path}
+    assert "current_db" not in json.dumps(config)
+
+    wrong_path = json.loads(json.dumps(config))
+    wrong_path["resources"]["activation_document_path"] = "/tmp/activation.json"
+    with pytest.raises(runner.AuthorityRunnerError, match="pinned authority"):
+        runner.validate_runtime_config(
+            wrong_path,
+            authority_id=authority_id,
+            environment="production",
+        )
+
+    mutable_db = json.loads(json.dumps(config))
+    mutable_db["resources"]["current_db"] = "/tmp/current.sqlite"
+    with pytest.raises(runner.AuthorityRunnerError, match="resource capability"):
+        runner.validate_runtime_config(
+            mutable_db,
+            authority_id=authority_id,
+            environment="production",
+        )
+
+
+def test_controlled_bootstrap_key_format_has_no_pem_or_generic_signer_fallback() -> None:
+    private = Ed25519PrivateKey.generate()
+    raw = private.private_bytes(
+        serialization.Encoding.Raw,
+        serialization.PrivateFormat.Raw,
+        serialization.NoEncryption(),
+    )
+    decoded = controlled_activation._decode_protected_writer_key_v2(raw)
+    assert isinstance(decoded, Ed25519PrivateKey)
+    pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    with pytest.raises(ExactFourAuthorityPending, match="cannot be decoded"):
+        controlled_activation._decode_protected_writer_key_v2(pem)

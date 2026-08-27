@@ -126,7 +126,8 @@ def test_live_audit_never_promotes_pending_contract() -> None:
 def test_key_plan_never_generates_a_file_key_for_trader() -> None:
     plan = bootstrap.generate_keys("production", apply=False)
     trader = next(row for row in plan["deployments"] if row["authority_id"] == "trader")
-    assert trader["action"] == "SKIP_WEBAUTHN_HUMAN_PRESENCE_REQUIRED"
+    assert trader["action"] == "INITIALIZE_EVENT_STORE_WEBAUTHN_ENROLLMENT_REQUIRED"
+    assert "GENERATE" not in trader["action"]
 
 
 def test_key_generation_is_service_uid_scoped_idempotent_and_never_returns_seed(
@@ -210,6 +211,53 @@ def test_runtime_configs_pin_exact_peer_users_without_arbitrary_mapping() -> Non
     assert bootstrap._runtime_config_template(rows["coverage_transition"])[
         "peer_callers"
     ] == {"qp_production_d1_sync_authority": "d1_sync"}
+    trader = bootstrap._runtime_config_template(rows["trader"])
+    controlled = bootstrap._runtime_config_template(rows["controlled_execution"])
+    assert trader["peer_callers"] == {
+        "qp_production_controlled_pilot_orchestrator": (
+            "controlled_pilot_orchestrator"
+        )
+    }
+    assert controlled["peer_callers"] == {
+        "qp_production_trader_authority": "trader"
+    }
+    assert trader["resources"] == {
+        "activation_document_path": (
+            "/etc/quant-platform/authorities/trader/activation.json"
+        )
+    }
+    assert controlled["resources"] == {
+        "activation_document_path": (
+            "/etc/quant-platform/authorities/controlled_execution/activation.json"
+        )
+    }
+    assert "current_db" not in json.dumps(controlled)
+
+
+def test_runtime_and_launchd_plans_cover_all_six_distinct_principals() -> None:
+    configs = bootstrap.install_runtime_configs(
+        "production", apply=False, source_root=None
+    )
+    plists = bootstrap.render_plists("production", apply=False)
+    expected = {
+        "d1_sync",
+        "ops_projection",
+        "coverage_transition",
+        "ready",
+        "trader",
+        "controlled_execution",
+    }
+    assert {row["template"]["authority_id"] for row in configs["templates"]} == expected
+    assert {row["authority_id"] for row in plists["plists"]} == expected
+    assert configs["deferred_authorities"] == []
+    assert plists["deferred_authorities"] == []
+    deployments = bootstrap._deployments("production")
+    assert len({row["service_user"] for row in deployments}) == 6
+    assert len({row["socket_path"] for row in deployments}) == 6
+    assert len({row["service_dir"] for row in deployments}) == 6
+    assert len({row["ledger_path"] for row in deployments}) == 6
+    file_keys = [row["key_path"] for row in deployments if row["key_path"]]
+    assert len(set(file_keys)) == 5
 
 
 def test_runtime_bundle_plan_requires_reviewed_root_python_artifact() -> None:
