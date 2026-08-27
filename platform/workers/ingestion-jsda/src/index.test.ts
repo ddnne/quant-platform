@@ -80,6 +80,47 @@ describe("ingestion-jsda HTTP boundary", () => {
     });
   });
 
+  it("rejects a formally valid hand-written v3_active self-claim", async () => {
+    const r2Ops: string[] = [];
+    const env = {
+      RAW_BUCKET: {
+        put: async () => {
+          r2Ops.push("put");
+        },
+      } as never,
+      DB: {
+        prepare: () => ({
+          first: async () => ({
+            phase: "v3_active",
+            activated_at: "2026-08-27T00:00:00Z",
+            activated_source_sha: "a".repeat(40),
+            drain_evidence_digest: `sha256:${"b".repeat(64)}`,
+          }),
+        }),
+      } as never,
+      INGESTION_RUN_TOKEN: RUN_TOKEN,
+    };
+    const ready = await worker.fetch(
+      new Request("https://ingestion-jsda.test/health/ready"),
+      env,
+    );
+    expect(ready.status).toBe(503);
+    await expect(ready.json()).resolves.toMatchObject({
+      ok: false,
+      product_ready: false,
+      cutover: "AUTHORITY_DISABLED",
+    });
+    const run = await worker.fetch(
+      new Request("https://ingestion-jsda.test/v1/run", {
+        method: "POST",
+        headers: { "X-Ingestion-Token": RUN_TOKEN },
+      }),
+      env,
+    );
+    expect(run.status).toBe(503);
+    expect(r2Ops).toEqual([]);
+  });
+
   it("fails closed before D1, R2, Queue, or outbound fetch on bad methods and auth", async () => {
     const outbound = rejectOutboundFetch();
     const cases = [

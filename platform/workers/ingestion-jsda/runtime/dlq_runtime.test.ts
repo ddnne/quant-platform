@@ -7,7 +7,7 @@ import {
   reset,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import worker from "../src/index";
+import worker from "../src/testing";
 import type { JsdaWorkerEnv } from "../src/env";
 import { loadJob, loadRunClosure, registerJob } from "../src/job_store";
 import {

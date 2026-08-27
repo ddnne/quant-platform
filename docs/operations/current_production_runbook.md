@@ -103,18 +103,26 @@ following against the same authenticated D1 identity:
    exact canonical `sqlite_master`/PRAGMA structure;
 4. simulate every pending canonical migration on a local copy of the remote
    export, including interruption recovery and v2/v3 preservation;
-5. apply the exact manifest chain through the pinned local Wrangler;
-6. take a second independent remote export and require exact schema, exact
+5. preflight all local paths as resolve-distinct, private, create-only paths,
+   publish PREPARED evidence, and occupy the final evidence pathname with a
+   durable `REMOTE_APPLY_AUTHORIZED_STATE_UNKNOWN_UNTIL_FINALIZED` reservation;
+6. apply the exact manifest chain through the pinned local Wrangler;
+7. take a second independent remote export and require exact schema, exact
    migration history, empty FK check, and v2/v3 row preservation;
-7. bind the bookmark, encrypted backup checksum, pre/post digests, source SHA,
-   and environment to create-only evidence.
+8. atomically replace only the unchanged reservation with evidence binding the
+   bookmark, encrypted backup checksum, pre/post digests, source SHA, manifest,
+   database, and environment. If apply or postflight fails, the reservation is
+   retained as an auditable remote-state-unknown marker and retry is refused.
 
 [`scripts/d1_specialized_schema_validation.py`](../../scripts/d1_specialized_schema_validation.py)
 remains the narrow 0013 semantic contract. The guarded owner additionally uses
 [`scripts/d1_ingestion_migration_validation.py`](../../scripts/d1_ingestion_migration_validation.py)
 for the complete chain. Both production and staging database name/ID and
 migration table come only from the canonical manifest; caller-supplied database
-identity is not accepted.
+identity is not accepted. Production also cross-binds staging top-level,
+preflight, postflight, encrypted-backup database identity, manifest digest, and
+backup restore source SHA; a valid old backup cannot be relabelled for a newer
+source SHA.
 
 ```bash
 .venv/bin/python scripts/cloudflare_d1_migration_manifest.py
@@ -165,15 +173,21 @@ edit the singleton. Activation requires a separate reviewed authority that
 proves Cron/producer/consumer disablement, zero in-flight leases, the deployed
 v3 source SHA, and an immutable drain-evidence digest before setting
 `v3_active`; the database then aborts any late v2 insert/update. That activation
-authority is not part of this migration apply command, so source migration
-readiness is not a claim that production JSDA is already cut over.
+authority is not part of this migration apply command or the production Worker
+entrypoint. The production entrypoint uses an explicitly disabled verifier:
+even a hand-written, formally valid `v3_active` row reports
+`AUTHORITY_DISABLED` and cannot enable product work. A future change must add
+and review signed, authority-bound activation verification and wire that
+positive capability before product readiness can become true. Source migration
+readiness is therefore not a claim that production JSDA is already cut over.
 
 `GET /health` is liveness only and reports `product_ready` plus the observed
 cutover phase. It must never be used as the JSDA product smoke. Deployment
 acceptance must call `GET /health/ready` and require HTTP 200,
 `product_ready:true`, and `cutover:"V3_ACTIVE"` for the deployed version. HTTP
-503 with `PENDING` is the expected fail-closed result before the separate
-cutover authority completes; it is not a successful product deployment.
+503 with `PENDING` or `AUTHORITY_DISABLED` is the expected fail-closed result
+until the separate signed cutover authority exists and completes; it is not a
+successful product deployment.
 
 ## 3. Publish the signed Ops projection
 

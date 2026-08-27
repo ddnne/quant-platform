@@ -9,7 +9,7 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import worker from "../src/index";
+import worker from "../src/testing";
 import type { JsdaWorkerEnv } from "../src/env";
 import {
   claimJob,
@@ -141,14 +141,17 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
               drain_evidence_digest=NULL
         WHERE singleton=1`,
     ).run();
-    const controller = createScheduledController({
-      cron: "30 1 * * *",
-      scheduledTime: new Date("2026-08-25T01:30:00.000Z"),
-    });
-    const ctx = createExecutionContext();
-    await expect(worker.scheduled(controller, runtimeEnv, ctx)).rejects.toThrow(
-      "JSDA_V3_CUTOVER_PENDING",
+    const response = await worker.fetch(
+      new Request("https://ingestion-jsda.test/v1/run", {
+        method: "POST",
+        headers: { "X-Ingestion-Token": "jsda-runtime-test-token" },
+      }),
+      runtimeEnv,
     );
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "jsda_v3_cutover_pending",
+    });
     const count = await runtimeEnv.DB.prepare(
       "SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v3",
     ).first<{ n: number }>();

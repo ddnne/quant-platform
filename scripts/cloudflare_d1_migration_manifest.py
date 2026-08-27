@@ -59,6 +59,7 @@ APPLICATION_POLICIES: Mapping[str, Mapping[str, Any]] = {
             "exact-export-postflight",
             "same-source-staging-acceptance-before-production",
             "authenticated-staging-backup-before-production",
+            "signed-jsda-v3-cutover-authority-before-readiness",
             "jsda-v3-readiness-smoke-before-product-acceptance",
         ],
     },

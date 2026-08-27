@@ -59,6 +59,7 @@ def test_ingestion_apply_policy_is_staging_first_and_fail_closed() -> None:
             "exact-export-postflight",
             "same-source-staging-acceptance-before-production",
             "authenticated-staging-backup-before-production",
+            "signed-jsda-v3-cutover-authority-before-readiness",
             "jsda-v3-readiness-smoke-before-product-acceptance",
         ],
     }

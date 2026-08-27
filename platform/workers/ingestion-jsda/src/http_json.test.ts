@@ -25,8 +25,8 @@ describe("jsda json helper", () => {
     expect(await res.json()).toEqual({ ok: true });
   });
 
-  it("index.ts imports from http_json and does not contain Response.json", () => {
-    const src = readFileSync(join(here, "index.ts"), "utf8");
+  it("Worker handlers import from http_json and do not contain Response.json", () => {
+    const src = readFileSync(join(here, "worker.ts"), "utf8");
     expect(src).toContain('from "./http_json"');
     expect(src).not.toContain("Response.json");
   });
