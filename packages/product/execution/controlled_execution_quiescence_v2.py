@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from execution.exact_four_codec import ExactFourAuthorityPending, _canonical_bytes
+from qp_ofd_continuity import new_portable_ofd_continuity_cookie_v2
 
 
 CONTROLLED_QUIESCENCE_MARKER_FORMAT = (
@@ -86,9 +87,7 @@ class ControlledWriterLifecycleLeaseV2:
             # they would again share an OFD and could silently reacquire the
             # flock.  Keep an unpredictable, OFD-scoped seek position as a
             # continuity cookie.  A fresh open starts at offset zero.
-            self._ofd_cookie = 3 + int.from_bytes(os.urandom(8), "big") % (
-                (1 << 62) - 4
-            )
+            self._ofd_cookie = new_portable_ofd_continuity_cookie_v2()
             os.lseek(self._descriptor, self._ofd_cookie, os.SEEK_SET)
             if (
                 os.lseek(self._descriptor_guard, 0, os.SEEK_CUR)

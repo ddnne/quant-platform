@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import multiprocessing
 import os
 import sqlite3
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import qp_ofd_continuity as ofd_continuity
 from execution import controlled_execution_quiescence_v2 as quiescence
 from scripts import run_local_authority as runner
 
@@ -151,6 +153,75 @@ def test_lifecycle_lock_is_mutually_exclusive_across_processes(tmp_path: Path) -
         _identity(store.resolve()), require_marker_absent=True
     )
     second.close()
+
+
+def test_portable_ofd_cookie_reserves_the_signed_32_bit_probe_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cookie_span = (1 << 31) - 4
+    monkeypatch.setattr(
+        ofd_continuity.os,
+        "urandom",
+        lambda size: (cookie_span - 1).to_bytes(size, "big"),
+    )
+    cookie = ofd_continuity.new_portable_ofd_continuity_cookie_v2()
+    assert cookie == (1 << 31) - 2
+    assert cookie + 1 == (1 << 31) - 1
+
+
+def test_lifecycle_cookie_is_portable_to_signed_32_bit_seek_filesystems(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = tmp_path / "controlled.sqlite3"
+    _provision_wal_store(store)
+    real_lseek = os.lseek
+    maximum_offset = (1 << 31) - 1
+
+    def filesystem_bounded_lseek(fd: int, offset: int, whence: int) -> int:
+        if whence == os.SEEK_SET and offset > maximum_offset:
+            raise OSError(errno.EINVAL, "simulated filesystem seek ceiling")
+        return real_lseek(fd, offset, whence)
+
+    monkeypatch.setattr(
+        quiescence.os,
+        "urandom",
+        lambda size: (1 << 31).to_bytes(size, "big"),
+    )
+    monkeypatch.setattr(quiescence.os, "lseek", filesystem_bounded_lseek)
+    lease = quiescence._acquire_lifecycle_lock(
+        _identity(store.resolve()), require_marker_absent=True
+    )
+    try:
+        lease._require_held()
+        assert 3 <= lease._ofd_cookie < maximum_offset
+    finally:
+        lease.close()
+
+
+def test_lifecycle_cookie_does_not_mask_unrelated_seek_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = tmp_path / "controlled.sqlite3"
+    _provision_wal_store(store)
+    real_lseek = os.lseek
+
+    def failing_lseek(fd: int, offset: int, whence: int) -> int:
+        if whence == os.SEEK_SET and offset >= 3:
+            raise OSError(errno.EIO, "simulated descriptor failure")
+        return real_lseek(fd, offset, whence)
+
+    monkeypatch.setattr(quiescence.os, "lseek", failing_lseek)
+    with pytest.raises(
+        quiescence.ControlledExecutionQuiescenceV2Error,
+        match="descriptor cannot be guarded",
+    ) as captured:
+        quiescence._acquire_lifecycle_lock(
+            _identity(store.resolve()), require_marker_absent=True
+        )
+    assert isinstance(captured.value.__cause__, OSError)
+    assert captured.value.__cause__.errno == errno.EIO
 
 
 def test_forked_child_cannot_reuse_or_unlock_parent_lifecycle(

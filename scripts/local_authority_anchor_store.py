@@ -22,6 +22,7 @@ from typing import Any, Protocol
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from qp_ofd_continuity import new_portable_ofd_continuity_cookie_v2
 from scripts.local_authority_activation import canonical_json_bytes
 from scripts.local_authority_anchor_contract import (
     ABANDONMENT_RECORD_FORMAT,
@@ -216,9 +217,7 @@ class AnchorReceiptAudit:
                 # file description.  The unpredictable shared offset also
                 # prevents a stale Audit object from reviving if both integer
                 # descriptor numbers are later closed and reused by open+dup.
-                ofd_cookie = 3 + int.from_bytes(os.urandom(8), "big") % (
-                    (1 << 62) - 4
-                )
+                ofd_cookie = new_portable_ofd_continuity_cookie_v2()
                 os.lseek(lock_fd, ofd_cookie, os.SEEK_SET)
                 if os.lseek(guard_fd, 0, os.SEEK_CUR) != ofd_cookie:
                     raise OSError("collector lock descriptors do not share an OFD")

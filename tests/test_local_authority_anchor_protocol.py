@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import errno
 import json
 import multiprocessing
 import os
@@ -41,6 +42,7 @@ assert 'scripts.local_authority_anchor_store' not in sys.modules
 assert 'scripts.local_authority_anchor_protocol' not in sys.modules
 import scripts.local_authority_anchor_store
 assert 'scripts.local_authority_anchor_protocol' not in sys.modules
+assert 'execution' not in sys.modules
 import scripts.local_authority_anchor_protocol as facade
 assert facade.__all__ == [
     'AnchorOperationalHold',
@@ -1583,6 +1585,65 @@ def test_collector_lock_check_proves_the_exact_ofd_owns_flock(
             process.terminate()
             process.join(timeout=5)
     assert process.exitcode == 0
+
+
+def test_collector_cookie_is_portable_to_signed_32_bit_seek_filesystems(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_path = tmp_path / "audit"
+    audit = anchor_store.AnchorReceiptAudit(
+        audit_path,
+        expected_owner_uid=os.getuid(),
+        expected_owner_gid=os.getgid(),
+    )
+    real_lseek = os.lseek
+    maximum_offset = (1 << 31) - 1
+
+    def filesystem_bounded_lseek(fd: int, offset: int, whence: int) -> int:
+        if whence == os.SEEK_SET and offset > maximum_offset:
+            raise OSError(errno.EINVAL, "simulated filesystem seek ceiling")
+        return real_lseek(fd, offset, whence)
+
+    monkeypatch.setattr(
+        anchor_store.os,
+        "urandom",
+        lambda size: (1 << 31).to_bytes(size, "big"),
+    )
+    monkeypatch.setattr(anchor_store.os, "lseek", filesystem_bounded_lseek)
+    with audit.collector_lock():
+        audit._require_collector_lock()
+        cookie = audit._collector_lock_ofd_cookie
+        assert cookie is not None
+        assert 3 <= cookie < maximum_offset
+
+
+def test_collector_cookie_does_not_mask_unrelated_seek_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_path = tmp_path / "audit"
+    audit = anchor_store.AnchorReceiptAudit(
+        audit_path,
+        expected_owner_uid=os.getuid(),
+        expected_owner_gid=os.getgid(),
+    )
+    real_lseek = os.lseek
+
+    def failing_lseek(fd: int, offset: int, whence: int) -> int:
+        if whence == os.SEEK_SET and offset >= 3:
+            raise OSError(errno.EIO, "simulated descriptor failure")
+        return real_lseek(fd, offset, whence)
+
+    monkeypatch.setattr(anchor_store.os, "lseek", failing_lseek)
+    with pytest.raises(
+        anchor_contract.AnchorProtocolError,
+        match="descriptor cannot be guarded",
+    ) as captured:
+        with audit.collector_lock():
+            pass
+    assert isinstance(captured.value.__cause__, OSError)
+    assert captured.value.__cause__.errno == errno.EIO
 
 
 def test_closed_collector_lock_fd_number_reuse_is_rejected(
