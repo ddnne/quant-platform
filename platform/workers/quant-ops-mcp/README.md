@@ -122,7 +122,10 @@ reviewed RPC and dependency inventory. The npm lockfile is therefore a
 source/build input proved transitively through `npm ci`, the runtime bundle and
 the exact module bytes; it is not claimed to be independently observable from
 Cloudflare's live version API. No live acceptance or deploy is implied by these
-source checks. See
+source checks. The ordinary authenticated deployment acceptance brackets and
+validates the selected live versions of all active Workers, rejecting any
+unreviewed Service Binding or Durable Object stub into Quant Ops, and emits
+canonical JSON for immutable release-evidence intake. See
 [`docs/architecture/adr_quant_ops_mcpagent_migration.md`](../../../docs/architecture/adr_quant_ops_mcpagent_migration.md).
 
 Production MCP URL:

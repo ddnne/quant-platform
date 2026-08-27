@@ -233,6 +233,18 @@ def _expected_bindings(surface: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
             "name": row["binding"],
             "type": "r2_bucket",
         })
+    for row in surface["kv_namespaces"]:
+        add({
+            "name": row["binding"],
+            "namespace_id": row["id"],
+            "type": "kv_namespace",
+        })
+    for row in surface["queue_producers"]:
+        add({
+            "name": row["binding"],
+            "queue_name": row["queue"],
+            "type": "queue",
+        })
     for row in surface["durable_objects"]:
         add({
             "class_name": row["class_name"],
@@ -255,6 +267,9 @@ def _expected_bindings(surface: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
             "simple": row["simple"],
             "type": "ratelimit",
         })
+    ai = surface["ai"]
+    if ai:
+        add({"name": ai["binding"], "type": "ai"})
     version_metadata = surface["version_metadata"]
     if version_metadata:
         add({"name": version_metadata["binding"], "type": "version_metadata"})
@@ -372,32 +387,19 @@ def _validate_deployment(
     return deployment_id, version_id, expected_message, created_on
 
 
-def _validate_version(
+def _validate_version_runtime_surface(
     value: Any,
     *,
     role: str,
-    environment: str,
-    source_sha: str,
     version_id: str,
     surface: Mapping[str, Any],
-    authority_mode: str = "PENDING",
 ) -> dict[str, Any]:
+    """Validate immutable Worker version resources against one manifest surface."""
+
     version = _mapping(value, label=f"{role} version")
     if version.get("id") != version_id:
         raise ReceiptPendingLiveAcceptanceError(
             f"{role} deployment selected a different version"
-        )
-    annotations = _mapping(
-        version.get("annotations"), label=f"{role} version annotations"
-    )
-    if (
-        annotations.get("workers/message")
-        != deployment_message(role, environment, source_sha, authority_mode)
-        or annotations.get("workers/tag")
-        != version_tag(role, environment, source_sha, authority_mode)
-    ):
-        raise ReceiptPendingLiveAcceptanceError(
-            f"{role} version annotations are not source-bound"
         )
     metadata = _mapping(version.get("metadata"), label=f"{role} version metadata")
     if metadata.get("source") != "wrangler" or metadata.get("has_preview") is not False:
@@ -414,7 +416,11 @@ def _validate_version(
         )
     script = _mapping(resources.get("script"), label=f"{role} script resource")
     handlers = script.get("handlers")
-    expected_handlers = ["fetch"] + (["scheduled"] if surface["crons"] else [])
+    expected_handlers = ["fetch"]
+    if surface["crons"]:
+        expected_handlers.append("scheduled")
+    if surface["queue_consumers"]:
+        expected_handlers.append("queue")
     expected_named_handlers = _expected_named_handlers(surface)
     expected_script_keys = {"etag", "handlers", "last_deployed_from"}
     if expected_named_handlers:
@@ -463,9 +469,6 @@ def _validate_version(
         "worker_name": surface["name"],
         "deployment_version_id": version_id,
         "version_created_on": created_on,
-        "version_tag": version_tag(
-            role, environment, source_sha, authority_mode
-        ),
         # Cloudflare documents this as an opaque etag, not a local bundle hash.
         "cloudflare_script_etag": script["etag"],
         "binding_digest": _canonical_digest(bindings),
@@ -473,6 +476,41 @@ def _validate_version(
         "secret_binding_names": sorted(surface["secret_names"]),
         "durable_object_namespace_id": namespace_id,
     }
+
+
+def _validate_version(
+    value: Any,
+    *,
+    role: str,
+    environment: str,
+    source_sha: str,
+    version_id: str,
+    surface: Mapping[str, Any],
+    authority_mode: str = "PENDING",
+) -> dict[str, Any]:
+    version = _mapping(value, label=f"{role} version")
+    annotations = _mapping(
+        version.get("annotations"), label=f"{role} version annotations"
+    )
+    if (
+        annotations.get("workers/message")
+        != deployment_message(role, environment, source_sha, authority_mode)
+        or annotations.get("workers/tag")
+        != version_tag(role, environment, source_sha, authority_mode)
+    ):
+        raise ReceiptPendingLiveAcceptanceError(
+            f"{role} version annotations are not source-bound"
+        )
+    accepted = _validate_version_runtime_surface(
+        version,
+        role=role,
+        version_id=version_id,
+        surface=surface,
+    )
+    accepted["version_tag"] = version_tag(
+        role, environment, source_sha, authority_mode
+    )
+    return accepted
 
 
 def _validate_public_surface(

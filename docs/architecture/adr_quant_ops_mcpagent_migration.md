@@ -42,7 +42,12 @@ added through its inherited RPC surface. Until migration completes:
   `sql`, `agent` and `server` members and prove no agent SQLite change;
 - exact live module bytes, when collected by deployment acceptance, must match
   the reviewed build. The module embeds the binding-manifest schema and digest,
-  connecting those bytes to this inventory.
+  connecting those bytes to this inventory. The same read-only observation
+  brackets every active Worker's selected version and compares its bindings,
+  named handlers, migration tag and compatibility runtime with the reviewed
+  environment manifest. This cross-Worker comparison prevents an otherwise
+  identical Quant Ops module from being reached through an unreviewed Service
+  Binding or external Durable Object stub.
 
 The lockfile is not a Cloudflare live observation. Its guarantee is transitive:
 exact lock bytes and npm integrity select the dependency, workerd validates the

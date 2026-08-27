@@ -139,6 +139,7 @@ run_with_cloudflare_credentials \
   "$py" "$ROOT/scripts/quant_ops_mcp_live_module_acceptance.py" \
   --environment production \
   --expected-source-sha "$accepted_source_sha" \
-  --expected-account-id "$cloudflare_account_id"
+  --expected-account-id "$cloudflare_account_id" \
+  --json
 
 echo "cloudflare deployment acceptance: ok"
