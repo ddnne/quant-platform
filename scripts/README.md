@@ -14,13 +14,74 @@ Candidate eval is `POST /v1/daily-path`, not `python -m research.unique_logic`
 (that CLI is a retired fail-closed stub). Live counts / GO gates: [docs/phase62_residual_status.md](../docs/phase62_residual_status.md)
 only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual prose alone.
 
-**Mandatory local CI:** [`verify_ci.sh`](verify_ci.sh) (seven workers including `ci-aggregate`; no `VERIFY_*` skips). If `.venv` is missing it bootstraps with `python3.11` (or `python3` that is 3.11+) `python -m venv .venv`; it fails if Python is <3.11 (does not silently use system 3.9). Then `pip install -e ".[dev]"`, `pytest tests/`, catalog compile + `catalog_ids` freeze, Evaluation IR golden/schema presence, all seven workers (`package-lock.json`, `npm ci`, `npm test`, `npm run typecheck`, `wrangler deploy --dry-run`, `wrangler types --check` if the types script exists else `wrangler types`), tracked `.env`/`*.pem` scan, and a clean git tree after generated types. Never `--legacy-peer-deps`; never skip missing `node_modules`; never live `wrangler deploy`.
+**Mandatory local CI:** [`verify_ci.sh`](verify_ci.sh) (active Worker lanes in parallel; no `VERIFY_*` skips). It pins `uv 0.11.26`, runs `uv sync --frozen --extra dev`, `pytest tests/`, the Evaluation IR freeze, verifies the machine-readable Cloudflare binding manifest, then runs each Worker through `npm ci`, tests, typecheck, base/production/staging Wrangler dry-runs, and generated-types checks. The legacy catalog is not compiled into CI or Worker source. Wrangler, TypeScript, and Workers types are exact-versioned. Never `--legacy-peer-deps`; never skip missing dependencies; never live `wrangler deploy`.
 
-[`verify_all.sh`](verify_all.sh) is a skippable helper only (optional `VERIFY_*` worker steps; may skip missing `node_modules`). Merge gate is the native GitHub check from the Cloudflare Workers & Pages GitHub App for the repo-root Workers Build running `verify_ci.sh` — **not live until a HUMAN connects the App and sets branch protection expected source**. `ci-aggregate` receipts are deprecated (not SoT). Do not add `.github/workflows`. See [`docs/ci/workers_builds.md`](../docs/ci/workers_builds.md).
+[`finding_ledger_ci.py`](finding_ledger_ci.py) runs before source-integration CI.
+It validates the exact tracked ledger schema and OPEN P0 inventory, but it does
+not authorize a deployment, release, or source-safety decision. Independent
+review may accept an inactive fail-closed implementation while operational
+work remains; an OPEN row may also still contain source work such as crash-safe
+recovery.
+
+[`finding_ledger_gate.py`](finding_ledger_gate.py) remains mandatory before
+authenticated deployment acceptance, release-evidence construction, READY
+publication, and Controlled Pilot. It accepts no ledger path argument:
+production always reads the tracked `docs/phase633_finding_ledger.json` and
+fails until every code-pinned P0 finding is `FIXED` and the independent-review
+unresolved count is zero. Finding IDs are a closed inventory so deleting every
+row cannot vacuously pass. Adding a real finding requires one reviewed change
+that updates the JSON and Markdown rows and the code-pinned ID inventory
+together; the row starts `OPEN`, and a later reviewed evidence commit may mark
+it `FIXED`. Test fixtures may call the private bytes evaluator with an all-FIXED
+document, but no production release CLI accepts a caller-selected ledger.
+
+[`verify_all.sh`](verify_all.sh) is a skippable helper only. Merge authority is the live native GitHub check from the Cloudflare Workers & Pages GitHub App for the repository-root Build running `verify_ci.sh`. The caller-supplied receipt aggregator is removed. Do not add `.github/workflows`. See [`docs/ci/workers_builds.md`](../docs/ci/workers_builds.md).
+
+**Authenticated production acceptance:**
+[`verify_cloudflare_deployment_acceptance.sh`](verify_cloudflare_deployment_acceptance.sh)
+runs mandatory CI and then compares live production `wrangler secret list`
+names with the frozen manifest. It requires Cloudflare API token/account
+presence, requests names only, never prints values, and fails closed on drift.
 
 Phase 6 hardening utilities:
 
 - `ops_status.py --json` — offline READY snapshot, coverage, B0 and validation status.
+- `encrypt_d1_backup.py` — stream a fresh production D1 SQL export into a
+  temporary SQLite restore, run `integrity_check`, verify the fixed
+  `quant-ingest` database ID plus the canonical minimum schema and non-empty
+  production evidence, then encrypt with AES-256-GCM. Database/export/restore
+  evidence, format/cipher, nonce, and key fingerprint are authenticated in
+  the v2 header. Only a successfully decrypted
+  and re-verified artifact is atomically published; the plaintext is then
+  removed by default. Any restore/schema/encryption failure retains the source
+  and leaves the target unpublished. Retention requires the explicit unsafe
+  `--keep-source` opt-in. The raw 32-byte key stays outside the repository with
+  mode `0600`; neither SQL contents nor key material is logged.
+- `build_release_evidence.py` — validate normalized post-deploy observations
+  and emit a content-addressed, read-only, non-secret v3 manifest suitable for
+  a GitHub Release. Every check/build/deployment/migration/smoke/MCP observation
+  has a closed collector-provenance record (evidence ID, UTC timestamp, response
+  digest, source SHA). Nested extra fields, local paths, provider-token shapes,
+  unverified backup metadata, non-canonical migrations, unproven Pilot `GO`,
+  and Mass `GO` are rejected. The exact pinned finding-ledger byte digest and
+  OPEN-P0 inventory are part of the content-addressed payload and cannot be
+  caller-substituted.
+
+Production backup example (timestamps and final SHA must be the observed values):
+
+```bash
+uv run python scripts/encrypt_d1_backup.py encrypt \
+  quant-ingest.sql quant-ingest.sql.enc \
+  --key /secure/private/d1_backup_aes256.key \
+  --database-name quant-ingest \
+  --database-id be6fdcf8-40be-41fc-9535-7facd1fc2ffc \
+  --exported-at 2026-08-25T06:00:00Z \
+  --release-source-sha 0123456789abcdef0123456789abcdef01234567
+```
+
+The successful JSON output is the exact closed `backup` object accepted by
+`build_release_evidence.py`; it intentionally contains no local path. Re-run
+`verify` against the encrypted artifact before publishing the release manifest.
 - Paper CLIs (`run_paper_once.py`, `run_agents_paper_once.py`, `rebuild_paper_index.py`) are **deleted**. Paper runtime stays in `packages/research_runtime/paper_runtime/`.
 - `python -m mcp_servers.quant_data --list-tools` — Quant Data Access MCP smoke.
 - `export_ops_projection.py` — verified local Coverage/READY/B0 metadataを bounded
@@ -36,23 +97,28 @@ Wave eval runners (`run_w*.py`) are **gone**. Do **not** add new
 
 New research:
 
-- catalog: `specs/research_catalog/` (compiled map; `specs/research_logics/` YAML is empty — do not add YAML)
-- candidate SoT: `POST /v1/daily-path` (`research.cf_daily_path_job`)
+- legacy catalog: `artifacts/replay/legacy_strategy_catalog/` (immutable replay only; `specs/research_logics/` YAML is empty)
+- bounded daily path: exact-four only; legacy catalog IDs fail closed
 - local unique CLI (`python -m research.unique_logic`): retired fail-closed stub, not candidate SoT
 - CF screen (auxiliary): `research.cf_mass_eval_job.run_cf_mass_eval_job`
 - record: `research.occupancy_audit.run_eval_wave` (R2 `research/eval/job={id}/`; no `run_wNN`)
 
 See [`docs/architecture/adr_research_recording.md`](../docs/architecture/adr_research_recording.md)
 and [`docs/architecture/wave_assets_deprecated.md`](../docs/architecture/wave_assets_deprecated.md).
-Guard: `tests/test_wave_script_freeze.py`.
+The exact-four runtime and replay-isolation tests enforce the operational
+boundary; filenames are not used as a security or release boundary.
 
-Official OTC archive backfill (not wave-named):
+Official OTC archive recovery (not a COMPLETE issuer):
 
 ```bash
 uv run python scripts/jsda_otc_official_backfill.py --year 2003 --n 100 --log-dir data/ops/otc_official_backfill --fetch
 uv run python scripts/jsda_otc_seal_official.py --log-dir data/ops/otc_official_backfill
-uv run python scripts/publish_ops_projection.py --apply-remote
 ```
+
+The second command records `FAILED/REPROOF_REQUIRED` plus
+`RECOVERED_RAW_ONLY`. It deliberately does not mutate structured facts, sign a
+trusted receipt, refresh COMPLETE, or publish an Ops projection. Reprocess the
+persisted raw through the governed acquisition/reconciliation service instead.
 
 ## run_ingestion_once.py（Phase 1）
 

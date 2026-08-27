@@ -16,7 +16,16 @@ from research.artifacts import (
     EXPERIMENT_PLAN_VERSION,
     ExperimentPlan,
 )
+from research.dependency_closure import (
+    PlanDependencyClosure,
+    build_plan_dependency_closure,
+    experiment_plan_digest,
+)
 from research.eval_flags import CATALOG_AND_PLUS_N_STOPPED, RECONSTITUTION_APPLY
+from research.research_data_profile import (
+    ResearchDataProfile,
+    profile_from_dependency_closure,
+)
 from selection.budget_ledger import MassResearchDisabledError
 
 SCHEMA_REL = Path("specs") / "experiment_plans" / "schema.json"
@@ -32,9 +41,9 @@ PILOT_EXPERIMENT_PLAN_IDS: tuple[str, ...] = (
 )
 PILOT_PLAN_COUNT: int = 4
 PILOT_EXECUTION_ENABLED: bool = False
-PILOT_READY_SNAPSHOT_ID: str = "not-declared"
 PILOT_COST_SCENARIO: str = "default_one_way_10bp"
 PILOT_EVALUATION_PROTOCOL: str = "standard_research_eval"
+PILOT_RISK_POLICY: str = "core_crash_high_vol"
 PILOT_PERIOD_START: str = "2023-01-04"
 PILOT_PERIOD_END: str = "2023-10-13"
 
@@ -56,6 +65,11 @@ def load_experiment_plan_schema(*, root: Path | None = None) -> dict[str, Any]:
         raise ValueError("ExperimentPlan schema must set additionalProperties false")
     if raw.get("properties", {}).get("execution_enabled", {}).get("const") is not False:
         raise ValueError("ExperimentPlan schema execution_enabled must be const false")
+    if (
+        raw.get("properties", {}).get("version", {}).get("const")
+        != EXPERIMENT_PLAN_VERSION
+    ):
+        raise ValueError("ExperimentPlan schema version is not in codec lockstep")
     return dict(raw)
 
 
@@ -82,6 +96,9 @@ def _require_typed_payload(payload: Mapping[str, Any]) -> ExperimentPlan:
         raise ValueError(f"{plan.plan_id}: cost required")
     if not plan.evaluation_protocol:
         raise ValueError(f"{plan.plan_id}: evaluation_protocol required")
+    if plan.risk_policy != PILOT_RISK_POLICY:
+        raise ValueError(f"{plan.plan_id}: risk_policy must be {PILOT_RISK_POLICY!r}")
+    build_plan_dependency_closure(plan)
     return plan
 
 
@@ -93,6 +110,8 @@ def load_experiment_plans(*, root: Path | None = None) -> tuple[ExperimentPlan, 
         raise ValueError(
             f"PILOT_EXPERIMENT_PLAN_IDS must have length {PILOT_PLAN_COUNT}"
         )
+    if len(set(PILOT_EXPERIMENT_PLAN_IDS)) != PILOT_PLAN_COUNT:
+        raise ValueError("PILOT_EXPERIMENT_PLAN_IDS cannot contain duplicates")
     directory = experiment_plans_dir(root=root)
     expected_names = {f"{pid}.json" for pid in PILOT_EXPERIMENT_PLAN_IDS} | {SCHEMA_NAME}
     found_names = {p.name for p in directory.glob("*.json")}
@@ -114,7 +133,47 @@ def load_experiment_plans(*, root: Path | None = None) -> tuple[ExperimentPlan, 
         plans.append(plan)
     if len(plans) != PILOT_PLAN_COUNT:
         raise ValueError(f"expected exactly {PILOT_PLAN_COUNT} ExperimentPlans")
+    if len({plan.plan_id for plan in plans}) != PILOT_PLAN_COUNT:
+        raise ValueError("duplicate ExperimentPlan plan_id")
+    if len({plan.idea_id for plan in plans}) != PILOT_PLAN_COUNT:
+        raise ValueError("duplicate ExperimentPlan idea_id")
+    if len(
+        {
+            (
+                plan.strategy_spec_id,
+                plan.strategy_spec_version,
+                plan.strategy_spec_hash,
+            )
+            for plan in plans
+        }
+    ) != PILOT_PLAN_COUNT:
+        raise ValueError("duplicate exact StrategySpec across ExperimentPlans")
+    if len({experiment_plan_digest(plan) for plan in plans}) != PILOT_PLAN_COUNT:
+        raise ValueError("duplicate ExperimentPlan canonical digest")
+    closures = tuple(build_plan_dependency_closure(plan) for plan in plans)
+    if len({closure.closure_digest for closure in closures}) != PILOT_PLAN_COUNT:
+        raise ValueError("duplicate PlanDependencyClosure digest")
     return tuple(plans)
+
+
+def load_experiment_plan_closures(
+    *, root: Path | None = None
+) -> tuple[PlanDependencyClosure, ...]:
+    """Compile the exact dependency closure for each of the four plans."""
+    return tuple(
+        build_plan_dependency_closure(plan)
+        for plan in load_experiment_plans(root=root)
+    )
+
+
+def load_experiment_plan_profiles(
+    *, root: Path | None = None
+) -> tuple[ResearchDataProfile, ...]:
+    """Materialize one digest-bound ResearchDataProfile v2 per closure."""
+    return tuple(
+        profile_from_dependency_closure(closure)
+        for closure in load_experiment_plan_closures(root=root)
+    )
 
 
 def start(*_args: object, **_kwargs: object) -> None:
@@ -138,12 +197,14 @@ __all__ = [
     "PILOT_PERIOD_END",
     "PILOT_PERIOD_START",
     "PILOT_PLAN_COUNT",
-    "PILOT_READY_SNAPSHOT_ID",
+    "PILOT_RISK_POLICY",
     "PLANS_REL",
     "SCHEMA_REL",
     "experiment_plan_schema_path",
     "experiment_plans_dir",
     "load_experiment_plan_schema",
     "load_experiment_plans",
+    "load_experiment_plan_closures",
+    "load_experiment_plan_profiles",
     "start",
 ]

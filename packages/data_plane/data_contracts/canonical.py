@@ -1,9 +1,17 @@
-"""Canonical dataset registry — single source of truth for all dataset metadata.
+"""Canonical dataset meta-index.
 
-This module provides the unified registry that all systems (Python, TypeScript,
-documentation) must reference for dataset definitions. No dataset metadata should
-be duplicated elsewhere — all downstream registries are subsets or views of this
-canonical source.
+This registry owns stable dataset identity, membership, source, governance tier,
+and routing links. It is deliberately *not* the source of truth for history
+bounds, coverage grain/frequency, natural keys, availability, or research
+eligibility:
+
+* CollectionCoverageContract owns history bounds and coverage shape.
+* SourceCapabilityContract owns official availability and eligibility where a
+  V3 row exists.
+
+The JSON retains legacy projection fields for inventory compatibility. Python
+accessors derive those values from the owning contracts, and
+``validate_derived_metadata`` rejects projection drift.
 """
 
 from __future__ import annotations
@@ -21,26 +29,93 @@ _REQUIRED = frozenset({
     "source",
     "governance_tier",
     "contracts",
-    "natural_key_fields",
-    "historical_start",
-    "coverage_segment_granularity",
-    "expected_frequency",
 })
+
+_DERIVED_FIELDS = frozenset(
+    {
+        "available_at",
+        "collection_window",
+        "coverage_segment_granularity",
+        "expected_frequency",
+        "historical_start",
+        "natural_key_fields",
+        "research_eligible",
+    }
+)
 
 
 @dataclass(frozen=True)
 class CanonicalDatasetContract:
-    """Complete canonical definition for one dataset."""
+    """Stable identity entry with values derived from owning contracts."""
 
     dataset_id: str
     display_name: str
     source: str
     governance_tier: str
     contracts: Mapping[str, str]
-    natural_key_fields: tuple[str, ...]
-    historical_start: str
-    coverage_segment_granularity: str
-    expected_frequency: str
+
+    @property
+    def natural_key_fields(self) -> tuple[str, ...]:
+        """Derive row identity from the primary PIT/ingestion contract."""
+        if self.source == "jquants_premium_core":
+            from .loader import contract_for
+
+            return contract_for(self.dataset_id).natural_key_fields
+        if self.source == "jsda_governed":
+            from .jsda import jsda_contract_for
+
+            return jsda_contract_for(self.dataset_id).natural_key_fields
+        raise ValueError(
+            f"{self.dataset_id} has no governed primary natural-key contract"
+        )
+
+    @property
+    def historical_start(self) -> str:
+        """Derive the coverage start from CollectionCoverageContract."""
+        coverage = _coverage_contract_or_none(self.dataset_id)
+        if coverage is not None:
+            return coverage.history_target_start
+        raise ValueError(
+            f"{self.dataset_id} has no governed CollectionCoverageContract"
+        )
+
+    @property
+    def coverage_segment_granularity(self) -> str:
+        """Derive coverage grain from CollectionCoverageContract."""
+        coverage = _coverage_contract_or_none(self.dataset_id)
+        if coverage is not None:
+            return coverage.segment_granularity
+        raise ValueError(
+            f"{self.dataset_id} has no governed CollectionCoverageContract"
+        )
+
+    @property
+    def expected_frequency(self) -> str:
+        """Derive expected frequency from CollectionCoverageContract."""
+        coverage = _coverage_contract_or_none(self.dataset_id)
+        if coverage is not None:
+            return coverage.expected_frequency
+        raise ValueError(
+            f"{self.dataset_id} has no governed CollectionCoverageContract"
+        )
+
+    @property
+    def research_eligible(self) -> bool:
+        """Derive official eligibility from SourceCapability V3 when available."""
+        from .source_capability import source_capability_contract_or_none
+
+        capability = source_capability_contract_or_none(self.dataset_id)
+        if capability is not None:
+            return capability.historical_research_eligible
+        return False
+
+    @property
+    def available_at(self):
+        """Derive point-in-time availability semantics from SourceCapability."""
+        from .source_capability import source_capability_contract_or_none
+
+        capability = source_capability_contract_or_none(self.dataset_id)
+        return capability.available_at if capability is not None else None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> "CanonicalDatasetContract":
@@ -68,29 +143,12 @@ class CanonicalDatasetContract:
         if "primary" not in contracts:
             raise ValueError(f"{dataset_id}.contracts must include 'primary'")
 
-        natural_key_fields = _strings(raw["natural_key_fields"], f"{dataset_id}.natural_key_fields")
-        historical_start = _text(raw["historical_start"], f"{dataset_id}.historical_start")
-
-        # Validate ISO date format
-        try:
-            from datetime import date
-            date.fromisoformat(historical_start)
-        except ValueError as exc:
-            raise ValueError(f"{dataset_id}.historical_start must be ISO date format") from exc
-
-        segment_granularity = _text(raw["coverage_segment_granularity"], f"{dataset_id}.coverage_segment_granularity")
-        expected_frequency = _text(raw["expected_frequency"], f"{dataset_id}.expected_frequency")
-
         return cls(
             dataset_id=dataset_id,
             display_name=display_name,
             source=source,
             governance_tier=tier,
             contracts=contracts,
-            natural_key_fields=natural_key_fields,
-            historical_start=historical_start,
-            coverage_segment_granularity=segment_granularity,
-            expected_frequency=expected_frequency,
         )
 
 
@@ -100,10 +158,13 @@ def _text(value: Any, label: str) -> str:
     return value.strip()
 
 
-def _strings(value: Any, label: str) -> tuple[str, ...]:
-    if not isinstance(value, list) or not value:
-        raise ValueError(f"{label} must be a non-empty string array")
-    return tuple(_text(item, label) for item in value)
+def _coverage_contract_or_none(dataset_id: str):
+    from .coverage import coverage_contract_for
+
+    try:
+        return coverage_contract_for(dataset_id)
+    except KeyError:
+        return None
 
 
 def _load() -> tuple[str, Mapping[str, CanonicalDatasetContract]]:
@@ -193,6 +254,25 @@ def datasets_by_source(source: str) -> tuple[CanonicalDatasetContract, ...]:
     )
 
 
+def validate_derived_metadata() -> None:
+    """Reject derived authority fields if they reappear in the meta-index."""
+    import json
+
+    document = json.loads(CANONICAL_REGISTRY_PATH.read_text(encoding="utf-8"))
+    violations: list[str] = []
+    for row in document.get("datasets", []):
+        if not isinstance(row, Mapping):
+            continue
+        dataset_id = str(row.get("dataset_id") or "<unknown>")
+        for field_name in sorted(_DERIVED_FIELDS.intersection(row)):
+            violations.append(f"{dataset_id}.{field_name}")
+    if violations:
+        raise ValueError(
+            "canonical meta-index contains derived authority fields: "
+            + ", ".join(violations)
+        )
+
+
 def validate_downstream_consistency() -> None:
     """Validate that all downstream registries are consistent with canonical registry.
 
@@ -232,6 +312,12 @@ def validate_downstream_consistency() -> None:
             f"canonical registry missing datasets from downstream contracts: {sorted(canonical_missing)}"
         )
 
+    validate_derived_metadata()
+
+
+# Fail closed at import time if duplicate authority metadata is reintroduced.
+validate_derived_metadata()
+
 
 __all__ = [
     "REGISTRY_VERSION",
@@ -241,5 +327,6 @@ __all__ = [
     "experimental_datasets",
     "governed_datasets",
     "datasets_by_source",
+    "validate_derived_metadata",
     "validate_downstream_consistency",
 ]

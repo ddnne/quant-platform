@@ -281,7 +281,6 @@ class PaperCandidateReceptacle:
                 "scheduler_armed": False,
                 "run_now": False,
                 "continuous": False,
-                "require_ready_snapshot": False,
             },
             "arm": arm,
             **arm,

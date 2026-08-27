@@ -1,35 +1,51 @@
-"""Phase 7 PaperExecutionService — the sole authority over ``run_paper``.
+"""Offline DRAFT execution and the fail-closed Controlled Pilot boundary.
 
-The orchestrator (:class:`agents.pipeline.AgentPaperPipeline`) and every role
-agent are capability-free. The single positive capability that can reach the
-trusted paper runtime is funneled through this service: it accepts an
-:class:`~agents.types.AuthorizedPaperExecutionRequest` together with the
-immutable :class:`~strategies.spec.StrategySpec` that authorized it, re-derives
-every authorization field, pins the exact data snapshot, and resolves every
-FeatureRef against the governed registry before delegating to
-:func:`strategies.paper.run_paper`.
-
-This is data, not an order: the request carries no broker, callable,
-credential, database handle, or transport. The service is what turns that
-capability-free authorization into exactly one reproducible paper run.
+``PaperExecutionService`` and ``OfflineFixturePaperService`` are local DRAFT
+helpers only.  Controlled PAPER execution belongs to a separately permissioned
+OS authority.  That authority is not provisioned yet, so the zero-argument
+``ControlledPilotExecutionService`` reports a stable PENDING reason and cannot
+receive a database path, output store, verifier, or in-process capability.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import features
 from agents.types import AuthorizedPaperExecutionRequest
 from paper_runtime import data_snapshot_id
-from strategies.paper import JsonPaperStore, PaperRunConfig, PaperRunResult, run_paper
+from strategies.paper import (
+    JsonPaperStore,
+    Lifecycle,
+    PaperRunConfig,
+    PaperRunResult,
+    run_paper,
+)
 from strategies.spec import FeatureRef, StrategySpec, interpret_strategy_spec
 
 
 class PaperExecutionRejected(ValueError):
     """Raised when an execution request fails the authority gate."""
+
+
+CONTROLLED_AUTHORITY_UNPROVISIONED = "CONTROLLED_AUTHORITY_UNPROVISIONED"
+
+
+class ControlledPilotPending(PaperExecutionRejected):
+    """Controlled execution is unavailable until the OS authority exists."""
+
+    status = "PENDING"
+    reason_code = CONTROLLED_AUTHORITY_UNPROVISIONED
+
+    def __init__(self) -> None:
+        super().__init__(
+            f"{self.status}: {self.reason_code}; controlled execution requires "
+            "a separately permissioned authority"
+        )
 
 
 def _strategy_spec_hash(spec: StrategySpec) -> str:
@@ -50,6 +66,10 @@ def _authorization_id(
     *,
     ready_snapshot_id: str = "",
     ready_manifest_digest: str = "",
+    readiness_attestation_id: str = "",
+    profile_digest: str = "",
+    plan_set_digest: str = "",
+    dependency_closure_digest: str = "",
     universe: tuple[str, ...] | list[str] = (),
     period_start: str = "",
     period_end: str = "",
@@ -62,6 +82,10 @@ def _authorization_id(
         "max_gross_weight": max_gross_weight,
         "ready_snapshot_id": ready_snapshot_id or "",
         "ready_manifest_digest": ready_manifest_digest or "",
+        "readiness_attestation_id": readiness_attestation_id or "",
+        "profile_digest": profile_digest or "",
+        "plan_set_digest": plan_set_digest or "",
+        "dependency_closure_digest": dependency_closure_digest or "",
         "universe": list(universe),
         "period_start": period_start or "",
         "period_end": period_end or "",
@@ -85,13 +109,18 @@ def _iter_feature_refs(spec: StrategySpec) -> tuple[FeatureRef, ...]:
 
 
 class PaperExecutionService:
-    """The single positive capability reaching :func:`strategies.paper.run_paper`.
+    """Local authorization checks for offline DRAFT experiments.
 
     Construction is cheap and stateless aside from the optional paper store.
-    :meth:`execute` is the authority entry; :meth:`execute_runtime_dto` is the
-    paper_runtime DTO adapter. Neither exposes ``run_paper``, the SQLite path,
-    or any engine handle to its caller.
+    :meth:`execute_runtime_dto` is the legacy paper_runtime DTO adapter.  This
+    service is not a controlled execution authority and rejects READY-bound or
+    non-DRAFT inputs.
     """
+
+    __slots__ = ("paper_store",)
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise TypeError("PaperExecutionService is final")
 
     def __init__(self, paper_store: JsonPaperStore | None = None) -> None:
         self.paper_store = paper_store
@@ -102,10 +131,55 @@ class PaperExecutionService:
         spec: StrategySpec,
         config: PaperRunConfig,
     ) -> PaperRunResult:
-        """Authorize the request, run paper, and verify the pinned snapshot."""
-        pinned_snapshot = self._authorize(plan, spec, config)
-        strategy = interpret_strategy_spec(spec)
-        result = run_paper(strategy, config, store=self.paper_store)
+        """Compatibility entry for offline fixtures only.
+
+        Controlled execution remains PENDING at
+        :class:`ControlledPilotExecutionService`.
+        """
+        if type(config) is not PaperRunConfig:
+            raise PaperExecutionRejected(
+                "offline fixture execution requires exact PaperRunConfig"
+            )
+        if config.lifecycle is not Lifecycle.DRAFT:
+            raise PaperExecutionRejected(
+                "PaperExecutionService compatibility entry is offline DRAFT only"
+            )
+        if any(
+            str(getattr(plan, name, "") or "").strip()
+            for name in (
+                "ready_snapshot_id",
+                "ready_manifest_digest",
+                "readiness_attestation_id",
+                "profile_digest",
+                "plan_set_digest",
+                "dependency_closure_digest",
+            )
+        ):
+            raise PaperExecutionRejected(
+                "offline fixture execution cannot consume READY authority"
+            )
+        pinned_snapshot = self._authorize_offline(plan, spec, config)
+        strategy: Any = interpret_strategy_spec(spec)
+        result = run_paper(strategy, config, store=None)
+        return self._finalize_result(
+            plan,
+            spec,
+            result,
+            pinned_snapshot=pinned_snapshot,
+            execution_scope="OFFLINE_FIXTURE",
+            gross_cap=None,
+        )
+
+    def _finalize_result(
+        self,
+        plan: Any,
+        spec: StrategySpec,
+        result: PaperRunResult,
+        *,
+        pinned_snapshot: str,
+        execution_scope: str,
+        gross_cap: float | None,
+    ) -> PaperRunResult:
         consumed = str(result.reproducibility.get("data_snapshot_id", ""))
         if consumed != pinned_snapshot:
             # run_paper already fails closed on an intra-run mutation; this is
@@ -116,7 +190,25 @@ class PaperExecutionService:
                 "authorized; refusing to return a result pinned to the wrong "
                 "READY snapshot"
             )
+        if (
+            type(result) is not PaperRunResult
+            or result.lifecycle is not Lifecycle.DRAFT
+        ):
+            raise PaperExecutionRejected(
+                "offline execution returned a noncanonical DRAFT result"
+            )
         self._attest_consumed_feature_versions(spec, result)
+        reproduction = dict(result.reproducibility)
+        reproduction.update(
+            {
+                "execution_authority_scope": execution_scope,
+                "max_gross_weight_limit": gross_cap,
+                "promotion_eligible": False,
+            }
+        )
+        result = replace(result, reproducibility=reproduction)
+        if self.paper_store is not None:
+            self.paper_store.save(result)
         return result
 
     def execute_runtime_dto(self, request: Any) -> PaperRunResult:
@@ -132,9 +224,9 @@ class PaperExecutionService:
                 "raw strategies cannot bypass PaperExecutionService"
             )
         config = getattr(request, "config", None)
-        if not isinstance(config, PaperRunConfig):
+        if type(config) is not PaperRunConfig:
             raise PaperExecutionRejected(
-                "paper_runtime DTO execute requires PaperRunConfig"
+                "paper_runtime DTO execute requires exact PaperRunConfig"
             )
         max_gross = getattr(request, "max_gross", None)
         if max_gross is None:
@@ -161,6 +253,16 @@ class PaperExecutionService:
             ready_manifest_digest=str(
                 getattr(request, "ready_manifest_digest", "") or ""
             ),
+            readiness_attestation_id=str(
+                getattr(request, "readiness_attestation_id", "") or ""
+            ),
+            profile_digest=str(getattr(request, "profile_digest", "") or ""),
+            plan_set_digest=str(
+                getattr(request, "plan_set_digest", "") or ""
+            ),
+            dependency_closure_digest=str(
+                getattr(request, "dependency_closure_digest", "") or ""
+            ),
             universe=tuple(getattr(request, "universe", ()) or ()),
             period_start=str(getattr(request, "period_start", "") or ""),
             period_end=str(getattr(request, "period_end", "") or ""),
@@ -169,17 +271,12 @@ class PaperExecutionService:
         )
         object.__setattr__(
             plan,
-            "profile_digest",
-            str(getattr(request, "profile_digest", "") or ""),
-        )
-        object.__setattr__(
-            plan,
             "feature_ref_versions",
             declared_versions,
         )
         return self.execute(plan, spec, config)
 
-    def _authorize(
+    def _authorize_offline(
         self,
         plan: AuthorizedPaperExecutionRequest,
         spec: StrategySpec,
@@ -207,6 +304,14 @@ class PaperExecutionService:
             plan.max_gross_weight,
             ready_snapshot_id=getattr(plan, "ready_snapshot_id", "") or "",
             ready_manifest_digest=getattr(plan, "ready_manifest_digest", "") or "",
+            readiness_attestation_id=(
+                getattr(plan, "readiness_attestation_id", "") or ""
+            ),
+            profile_digest=getattr(plan, "profile_digest", "") or "",
+            plan_set_digest=getattr(plan, "plan_set_digest", "") or "",
+            dependency_closure_digest=(
+                getattr(plan, "dependency_closure_digest", "") or ""
+            ),
             universe=getattr(plan, "universe", ()) or (),
             period_start=getattr(plan, "period_start", "") or "",
             period_end=getattr(plan, "period_end", "") or "",
@@ -249,12 +354,6 @@ class PaperExecutionService:
             raise PaperExecutionRejected(str(exc)) from exc
 
         auth_snap = getattr(plan, "ready_snapshot_id", "") or ""
-        require_ready = bool(getattr(config, "require_ready_snapshot", False))
-        if require_ready and not str(auth_snap).strip():
-            raise PaperExecutionRejected(
-                "require_ready_snapshot=True but authorization has empty "
-                "ready_snapshot_id; refusing paper execution without READY pin"
-            )
         if auth_snap and auth_snap != pinned_snapshot:
             raise PaperExecutionRejected(
                 "authorized ready_snapshot_id does not match config db snapshot; "
@@ -330,12 +429,6 @@ class PaperExecutionService:
                 "core research data profile digest is missing; "
                 "refusing paper execution"
             )
-        declared = str(getattr(plan, "profile_digest", "") or "")
-        if declared and declared != digest:
-            raise PaperExecutionRejected(
-                "authorized profile_digest does not match the core "
-                "research data profile"
-            )
         pinned_versions = {
             str(dep.get("id")): str(dep.get("version"))
             for dep in profile.feature_dependencies
@@ -364,4 +457,35 @@ class PaperExecutionService:
                 )
 
 
-__all__ = ["PaperExecutionService", "PaperExecutionRejected"]
+# The descriptive DRAFT entry is an alias, not a subclass seam.  Both names
+# resolve to the same final implementation, so overriding ``_finalize_result``
+# cannot turn a local fixture run into a PAPER result.
+OfflineFixturePaperService = PaperExecutionService
+
+
+class ControlledPilotExecutionService:
+    """Zero-argument boundary for the not-yet-provisioned OS authority.
+
+    There is intentionally no constructor state and no request/config surface
+    in this containment slice.  A later reviewed protocol may replace
+    :meth:`execute`; until then a caller cannot supply paths, stores, trust
+    roots, or an in-process execution object.
+    """
+
+    __slots__ = ()
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise TypeError("ControlledPilotExecutionService is final")
+
+    def execute(self) -> NoReturn:
+        raise ControlledPilotPending()
+
+
+__all__ = [
+    "CONTROLLED_AUTHORITY_UNPROVISIONED",
+    "ControlledPilotExecutionService",
+    "ControlledPilotPending",
+    "OfflineFixturePaperService",
+    "PaperExecutionRejected",
+    "PaperExecutionService",
+]

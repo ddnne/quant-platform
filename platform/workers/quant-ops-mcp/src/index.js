@@ -24,7 +24,7 @@ const oauthProvider = new OAuthProvider({
 export default {
   /**
    * @param {Request} request
-   * @param {Record<string, unknown>} env
+   * @param {Env} env
    * @param {ExecutionContext} ctx
    */
   async fetch(request, env, ctx) {

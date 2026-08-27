@@ -11,10 +11,11 @@ from pathlib import Path
 
 from data_contracts.coverage import coverage_contract_for
 from data_contracts.permanent_defer import TIP_ONLY_POLICY
+from data_contracts.source_capability import specs_dir
 from storage.coverage_ledger import evaluate_segment, plan_required_segments
 
 _REPO = Path(__file__).resolve().parents[1]
-_CAPABILITY = _REPO / "specs" / "source_capability" / "equities_bars_daily_am.json"
+_CAPABILITY = specs_dir() / "equities_bars_daily_am.json"
 _MIGRATION = _REPO / "specs" / "coverage_v3" / "equities_bars_daily_am_migration.json"
 
 DATASET = "equities_bars_daily_am"

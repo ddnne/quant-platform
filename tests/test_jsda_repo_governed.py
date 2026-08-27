@@ -155,16 +155,20 @@ def test_parse_repo_xls_uses_xlrd_and_excel_serial_dates(monkeypatch):
 
 def _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys):
     """Bind governed writes to the tmp Ed25519 fixture; never production keys."""
-    monkeypatch.setattr(
-        "storage.trusted_receipt.load_signing_key",
-        lambda **kwargs: receipt_ed25519_keys.signing_key,
+    del monkeypatch
+    from tests.receipt_test_support import open_test_receipt_service
+
+    return open_test_receipt_service(
+        signing_key=receipt_ed25519_keys.signing_key
     )
 
 
 def test_tokyo_repo_runner_raw_receipt_coverage_and_resume(
     tmp_path, monkeypatch, receipt_ed25519_keys
 ):
-    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
+    receipt_service = _inject_tmp_receipt_authority(
+        monkeypatch, receipt_ed25519_keys
+    )
     _install_workbook(monkeypatch)
     captured: list[dict] = []
     real_refresh = repo_mod.refresh_coverage_ledger
@@ -181,12 +185,13 @@ def test_tokyo_repo_runner_raw_receipt_coverage_and_resume(
         store=store,
         data_base=tmp_path,
         checked_at="2025-04-02T13:00:00+09:00",
+        receipt_service=receipt_service,
     )
     assert (report.completed, report.resumed, report.deferred, report.failed) == (
-        1, 0, 0, 0
+        0, 0, 0, 1
     )
     assert report.raw_rows == report.structured_rows == 28
-    assert store.count("jsda_repo_rates") == 28
+    assert store.count("jsda_repo_rates") == 0
 
     receipts = read_collection_receipts(store.path, dataset=TOKYO_REPO_DATASET)
     assert len(receipts) == 1
@@ -194,29 +199,31 @@ def test_tokyo_repo_runner_raw_receipt_coverage_and_resume(
     evidence = json.loads(receipt["digests_json"])
     assert receipt["segment_start"] == "2012-10-29"
     assert receipt["segment_end"] == "2025-04-02"
+    assert receipt["status"] == "FAILED"
     assert receipt["expected_items"] == receipt["observed_items"] == 1
     assert receipt["raw_row_count"] == receipt["structured_row_count"] == 28
     assert evidence["raw"].startswith("sha256:")
     assert evidence["source_url"].endswith("trrts.xls")
     assert evidence["fetched_at"] == "2025-04-02T13:00:00+09:00"
     assert Path(evidence["raw_path"]).read_bytes() == client.workbook_bytes
-    assert evidence.get("eligibility") == "TRUSTED_COLLECTION"
-    assert str(evidence.get("signature") or "").startswith("ed25519:")
+    assert evidence.get("eligibility") == "RECOVERED_RAW_ONLY"
+    assert not str(evidence.get("signature") or "").startswith("ed25519:")
     coverage = read_dataset_coverage(store.path, dataset=TOKYO_REPO_DATASET)
-    assert len(coverage) == 1 and coverage[0]["status"] == "COMPLETE"
+    assert len(coverage) == 1 and coverage[0]["status"] == "PARTIAL"
 
     second = run_tokyo_repo_backfill(
         http=client,
         store=store,
         data_base=tmp_path,
         checked_at="2025-04-02T13:00:01+09:00",
+        receipt_service=receipt_service,
     )
-    assert (second.completed, second.resumed) == (0, 1)
-    assert store.count("jsda_repo_rates") == 28
-    assert client.calls.count(client.timeseries_url) == 1
+    assert (second.completed, second.resumed, second.failed) == (0, 0, 1)
+    assert store.count("jsda_repo_rates") == 0
+    assert client.calls.count(client.timeseries_url) == 2
     assert len(read_collection_receipts(
         store.path, dataset=TOKYO_REPO_DATASET
-    )) == 1
+    )) == 2
     assert len(captured) == 2
     assert all("index_text" in call for call in captured)
     assert all(call["index_text"] is None for call in captured)

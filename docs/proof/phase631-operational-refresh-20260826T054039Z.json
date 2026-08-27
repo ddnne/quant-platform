@@ -1,0 +1,426 @@
+{
+  "schema_version": "phase631-operational-refresh-proof/v1",
+  "observed_at": "2026-08-26T05:40:39Z",
+  "source_sha": "3836f069dd43e74f244675baee43e1275e36e3fa",
+  "origin_main_sha": "c718011a7407e8c601076e626ad4fc3a1377ae44",
+  "mutation_performed": false,
+  "secret_values_accessed": false,
+  "private_key_material_accessed": false,
+  "github": {
+    "open_pull_request_count": 0,
+    "required_check": {
+      "name": "Workers Builds: quant-platform-ci-aggregate-staging",
+      "app": "cloudflare-workers-and-pages",
+      "source": "branch_protection.required_status_checks",
+      "strict": true,
+      "origin_main_conclusion": "success"
+    }
+  },
+  "cloudflare": {
+    "wrangler_version": "4.125.0",
+    "deployments": {
+      "production": [
+        {
+          "worker": "quant-platform-ingestion-jsda",
+          "deployment_id": "d407a38f-01fc-4327-a725-539ca458694d",
+          "version_id": "542f9835-dcb6-4f9c-b5ac-b35350fc907a",
+          "version_number": 17,
+          "traffic_percentage": 100,
+          "source": "wrangler",
+          "source_sha_annotation": "c718011a"
+        },
+        {
+          "worker": "quant-platform-ingestion-premium",
+          "deployment_id": "b3123799-1054-4fc4-831f-1e4e1d01a4e7",
+          "version_id": "b95a2874-293a-4172-b853-decc6d80d33b",
+          "version_number": 27,
+          "traffic_percentage": 100,
+          "source": "wrangler",
+          "source_sha_annotation": "c718011a"
+        },
+        {
+          "worker": "quant-platform-ingestion-secrets",
+          "deployment_id": "1c016d9d-5527-4ebf-a3b5-03d1a7df4cb4",
+          "version_id": "5f413d98-5c5e-4519-86a4-50f71f857ecc",
+          "version_number": 7,
+          "traffic_percentage": 100,
+          "source": "wrangler",
+          "source_sha_annotation": "c718011a"
+        },
+        {
+          "worker": "quant-platform-ops-read-mcp",
+          "deployment_id": "a1b58619-ae51-45a4-a330-651a1522e678",
+          "version_id": "45df505e-34b1-477e-96c2-5270a5097636",
+          "version_number": 19,
+          "traffic_percentage": 100,
+          "source": "wrangler",
+          "source_sha_annotation": "c718011a"
+        },
+        {
+          "worker": "quant-platform-research-ai-gateway",
+          "deployment_id": "4b1c7cef-0466-42bf-aa67-05e1071068ef",
+          "version_id": "07fbf7b5-7b5f-4564-b375-8e67c912e275",
+          "version_number": 5,
+          "traffic_percentage": 100,
+          "source": "wrangler",
+          "source_sha_annotation": "c718011a"
+        },
+        {
+          "worker": "quant-platform-research-mass-eval",
+          "deployment_id": "70ec83c0-ece8-4ee6-8fff-abe9b7f61870",
+          "version_id": "6d5b0efb-7890-44b2-acf4-da410f44846a",
+          "version_number": 259,
+          "traffic_percentage": 100,
+          "source": "wrangler",
+          "source_sha_annotation": "c718011a"
+        }
+      ],
+      "staging": [
+        {
+          "worker": "quant-platform-ingestion-jsda-staging",
+          "deployment_id": "9ab16913-fb6a-4fa5-806a-f35341156d31",
+          "version_id": "ba642c80-ce12-40c2-998d-4d55875f3dc4",
+          "version_number": 2,
+          "traffic_percentage": 100,
+          "source": "wrangler",
+          "source_sha_annotation": "UNKNOWN"
+        },
+        {
+          "worker": "quant-platform-ingestion-premium-staging",
+          "deployment_id": "5717a8ca-4fc4-4dbc-992c-f7fef6954d7c",
+          "version_id": "c3fb354c-01a5-4b92-97a3-7597f362cddb",
+          "version_number": 2,
+          "traffic_percentage": 100,
+          "source": "wrangler",
+          "source_sha_annotation": "UNKNOWN"
+        },
+        {
+          "worker": "quant-platform-ingestion-secrets-staging",
+          "deployment_id": "855a626a-8ff7-49c5-8399-faa594b5465c",
+          "version_id": "f621e1b1-1381-498f-8a9e-a51f3eb8e570",
+          "version_number": 2,
+          "traffic_percentage": 100,
+          "source": "wrangler",
+          "source_sha_annotation": "UNKNOWN"
+        },
+        {
+          "worker": "quant-platform-ops-read-mcp-staging",
+          "deployment_id": "6c496c9c-63e7-41ca-b14d-327ba62ce999",
+          "version_id": "b29f4dea-dbbb-47e9-a3e3-be111216cd92",
+          "version_number": 2,
+          "traffic_percentage": 100,
+          "source": "wrangler",
+          "source_sha_annotation": "UNKNOWN"
+        },
+        {
+          "worker": "quant-platform-research-ai-gateway-staging",
+          "deployment_id": "7dc3a9c2-0154-411d-a0ef-b2a9025d3495",
+          "version_id": "6aff828e-17ac-480a-995c-938952a3e7d7",
+          "version_number": 2,
+          "traffic_percentage": 100,
+          "source": "wrangler",
+          "source_sha_annotation": "UNKNOWN"
+        },
+        {
+          "worker": "quant-platform-research-mass-eval-staging",
+          "deployment_id": "ba5e146d-0404-4a19-8e3c-9443dd2b14a7",
+          "version_id": "1891c04f-acf8-414c-99ad-62319592c94d",
+          "version_number": 2,
+          "traffic_percentage": 100,
+          "source": "wrangler",
+          "source_sha_annotation": "UNKNOWN"
+        }
+      ]
+    },
+    "secret_names": {
+      "production": {
+        "quant-platform-ingestion-jsda": [
+          "INGESTION_RUN_TOKEN"
+        ],
+        "quant-platform-ingestion-premium": [
+          "DATA_EXPORT_TOKEN",
+          "INGESTION_PROXY_TOKEN",
+          "INGESTION_RUN_TOKEN",
+          "JQUANTS_API_KEY"
+        ],
+        "quant-platform-ingestion-secrets": [
+          "INGESTION_PROXY_TOKEN",
+          "JQUANTS_API_KEY",
+          "JQUANTS_PROXY_TOKEN"
+        ],
+        "quant-platform-ops-read-mcp": [
+          "GITHUB_CLIENT_ID",
+          "GITHUB_CLIENT_SECRET"
+        ],
+        "quant-platform-research-ai-gateway": [
+          "GATEWAY_TOKEN"
+        ],
+        "quant-platform-research-mass-eval": [
+          "GATEWAY_TOKEN",
+          "MASS_EVAL_TOKEN"
+        ]
+      },
+      "staging": {
+        "quant-platform-ingestion-jsda-staging": [],
+        "quant-platform-ingestion-premium-staging": [],
+        "quant-platform-ingestion-secrets-staging": [],
+        "quant-platform-ops-read-mcp-staging": [],
+        "quant-platform-research-ai-gateway-staging": [],
+        "quant-platform-research-mass-eval-staging": []
+      }
+    },
+    "binding_drift": [
+      {
+        "worker": "quant-platform-ingestion-jsda",
+        "environment": "production",
+        "live_only": [
+          "MAX_DATA_FILES",
+          "MAX_YEAR_PAGES"
+        ],
+        "repository_only": [
+          "JSDA_DLQ_QUEUE"
+        ]
+      },
+      {
+        "worker": "quant-platform-ingestion-jsda-staging",
+        "environment": "staging",
+        "live_only": [
+          "MAX_DATA_FILES",
+          "MAX_YEAR_PAGES"
+        ],
+        "repository_only": [
+          "JSDA_DLQ_QUEUE"
+        ]
+      },
+      {
+        "worker": "quant-platform-ingestion-premium",
+        "environment": "production",
+        "live_only": [
+          "INGESTION_PROXY_TOKEN"
+        ],
+        "repository_only": []
+      },
+      {
+        "worker": "quant-platform-ingestion-secrets",
+        "environment": "production",
+        "live_only": [
+          "INGESTION_PROXY_TOKEN"
+        ],
+        "repository_only": []
+      },
+      {
+        "worker": "quant-platform-ops-read-mcp",
+        "environment": "production",
+        "live_only": [
+          "OPS_DB"
+        ],
+        "repository_only": [
+          "OPS_PROJECTION_DB",
+          "QUOTA_DB",
+          "STATE_SECRET"
+        ]
+      },
+      {
+        "worker": "quant-platform-ops-read-mcp-staging",
+        "environment": "staging",
+        "live_only": [
+          "OPS_DB"
+        ],
+        "repository_only": [
+          "OPS_PROJECTION_DB",
+          "QUOTA_DB"
+        ]
+      },
+      {
+        "worker": "quant-platform-research-mass-eval",
+        "environment": "production",
+        "live_only": [
+          "DB",
+          "GATEWAY_TOKEN"
+        ],
+        "repository_only": []
+      },
+      {
+        "worker": "quant-platform-research-mass-eval-staging",
+        "environment": "staging",
+        "live_only": [
+          "DB"
+        ],
+        "repository_only": []
+      }
+    ],
+    "queues": [
+      {
+        "name": "quant-jsda-ingestion",
+        "environment": "production",
+        "exists": true,
+        "producer_count": 1,
+        "consumer_count": 1,
+        "backlog": "UNKNOWN"
+      },
+      {
+        "name": "quant-jsda-ingestion-dlq",
+        "environment": "production",
+        "exists": true,
+        "producer_count": 0,
+        "consumer_count": 0,
+        "backlog": "UNKNOWN"
+      },
+      {
+        "name": "quant-jsda-ingestion-rejects",
+        "environment": "production",
+        "exists": false,
+        "producer_count": "UNKNOWN",
+        "consumer_count": "UNKNOWN",
+        "backlog": "UNKNOWN"
+      },
+      {
+        "name": "quant-jsda-ingestion-staging",
+        "environment": "staging",
+        "exists": true,
+        "producer_count": 1,
+        "consumer_count": 1,
+        "backlog": "UNKNOWN"
+      },
+      {
+        "name": "quant-jsda-ingestion-dlq-staging",
+        "environment": "staging",
+        "exists": true,
+        "producer_count": 0,
+        "consumer_count": 0,
+        "backlog": "UNKNOWN"
+      },
+      {
+        "name": "quant-jsda-ingestion-rejects-staging",
+        "environment": "staging",
+        "exists": false,
+        "producer_count": "UNKNOWN",
+        "consumer_count": "UNKNOWN",
+        "backlog": "UNKNOWN"
+      }
+    ],
+    "d1_pending_migrations": [
+      {
+        "target": "quant-ingest",
+        "environment": "production",
+        "pending": [
+          "0011_jsda_queue_v2.sql",
+          "0012_jsda_observation_identity.sql"
+        ]
+      },
+      {
+        "target": "quant-ingest-staging",
+        "environment": "staging",
+        "pending": [
+          "0011_jsda_queue_v2.sql",
+          "0012_jsda_observation_identity.sql"
+        ]
+      },
+      {
+        "target": "quant-ops-projection",
+        "environment": "production",
+        "pending": [
+          "0001_ops_projection.sql"
+        ]
+      },
+      {
+        "target": "quant-ops-projection-staging",
+        "environment": "staging",
+        "pending": [
+          "0001_ops_projection.sql"
+        ]
+      },
+      {
+        "target": "quant-ops-quota",
+        "environment": "production",
+        "pending": [
+          "0001_remote_daily_quota.sql",
+          "0002_oauth_state_nonce.sql"
+        ]
+      },
+      {
+        "target": "quant-ops-quota-staging",
+        "environment": "staging",
+        "pending": [
+          "0001_remote_daily_quota.sql",
+          "0002_oauth_state_nonce.sql"
+        ]
+      }
+    ],
+    "cron": {
+      "status": "UNVERIFIED",
+      "reason": "Wrangler 4.125.0 exposes no read-only trigger-list command; the mutating triggers deploy command was not invoked, and dashboard-config JSONC was not accepted as validated evidence.",
+      "repository_declared": {
+        "quant-platform-ingestion-jsda": [
+          "30 1 * * *"
+        ],
+        "quant-platform-ingestion-premium": [
+          "15 * * * *"
+        ],
+        "all_staging_workers": []
+      },
+      "live_schedules": "UNKNOWN"
+    }
+  },
+  "authority_isolation": {
+    "finding_id": "A2",
+    "provisioned_count": 0,
+    "authority_count": 7,
+    "status": "NOT_PROVISIONED",
+    "authorities": [
+      {
+        "name": "receipt",
+        "active_public_key_count": 0,
+        "provisioned": false
+      },
+      {
+        "name": "d1_sync",
+        "active_public_key_count": 0,
+        "provisioned": false
+      },
+      {
+        "name": "ops_projection",
+        "active_public_key_count": 0,
+        "provisioned": false
+      },
+      {
+        "name": "ready",
+        "active_public_key_count": 0,
+        "provisioned": false
+      },
+      {
+        "name": "trader",
+        "active_public_key_count": 0,
+        "provisioned": false
+      },
+      {
+        "name": "coverage_transition",
+        "active_public_key_count": 0,
+        "provisioned": false
+      },
+      {
+        "name": "controlled_execution",
+        "active_public_key_count": 0,
+        "provisioned": false
+      }
+    ],
+    "dedicated_os_principal_detected": false,
+    "dedicated_launch_service_detected": false,
+    "dedicated_unix_socket_detected": false,
+    "dedicated_cloudflare_authority_binding_detected": false,
+    "same_uid_legacy_material_detected": true
+  },
+  "observation_sources": [
+    "git ls-remote origin refs/heads/main",
+    "GitHub pull request and branch-protection APIs",
+    "GitHub check-runs API",
+    "wrangler deployments status --json",
+    "wrangler versions view --json with value fields excluded",
+    "wrangler secret list with names only",
+    "wrangler queues list and queues info",
+    "wrangler d1 migrations list --remote",
+    "repository binding and migration manifests",
+    "public-key registry status metadata",
+    "OS principal, launch service, process, and Unix socket name inventory"
+  ]
+}

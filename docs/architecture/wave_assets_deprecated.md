@@ -10,8 +10,9 @@ do not treat the warehouse as residual SoT.
 **Do not add new** `scripts/run_w*.py` or `docs/proof/w08*_wNN_*.md` scorecards.
 Evaluators live in `packages/product/research/unique_logic/` under **functional
 names** (not wave numbers). New research: `research.daily_path_eval` /
-`research.cf_mass_eval_job` / `research.eval_registry` and the compiled
-catalog at `specs/research_catalog/` (`specs/research_logics/` YAML is empty).
+`research.cf_mass_eval_job` / `research.eval_registry`. The retired catalog is
+an immutable replay artifact at `artifacts/replay/legacy_strategy_catalog/`
+and is not part of either runtime (`specs/research_logics/` is empty).
 
 ## unique_logic module names
 
@@ -41,4 +42,6 @@ Unreferenced W91–W107 wave scorecards under `docs/proof/w0818*` / `w0819*` /
 - `w0819c_w100_daily_path_dd_gate_20260819.md`
 - older checklist / cost / defer proofs still named from packages
 
-Guard: `tests/test_wave_script_freeze.py` (`ALLOWED_RUN_W` empty).
+This naming policy is recorded here for review. Runtime and release gates validate
+the active exact-four entrypoints and replay isolation instead of inspecting
+source filenames.

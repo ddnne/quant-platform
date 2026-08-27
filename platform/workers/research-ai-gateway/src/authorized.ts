@@ -1,4 +1,4 @@
-/** GATEWAY_TOKEN vs X-Gateway-Token only. MASS_EVAL_TOKEN is a different check. */
+/** Optional closed HTTP defense: GATEWAY_TOKEN vs X-Gateway-Token only. */
 
 function timingSafeEqualBytes(a: ArrayBuffer, b: ArrayBuffer): boolean {
   const x = new Uint8Array(a);

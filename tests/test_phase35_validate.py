@@ -7,8 +7,6 @@ same rule in TypeScript — this is the Python source of truth.
 
 from __future__ import annotations
 
-import inspect
-
 import pytest
 
 from cf_platform.ingest_premium.validate import (
@@ -137,12 +135,13 @@ def test_assert_no_addon_in_required_passes_for_clean():
 
 
 def test_assert_no_addon_in_required_default_matches_catalog_addon_group():
-    """Default addon ids are catalog list_datasets("addon"), not a second list."""
-    default = inspect.signature(assert_no_addon_in_required).parameters["addon_ids"].default
+    """The default policy rejects every catalog-owned add-on behaviorally."""
     catalog_addons = tuple(list_datasets("addon"))
-    assert default == catalog_addons
-    assert default
-    assert not set(default) & set(PREMIUM_CORE_DATASETS)
+    assert catalog_addons
+    assert not set(catalog_addons) & set(PREMIUM_CORE_DATASETS)
+    for leaked in catalog_addons:
+        with pytest.raises(AssertionError, match="addon datasets must not be"):
+            assert_no_addon_in_required([*PREMIUM_CORE_DATASETS, leaked])
 
 
 def test_assert_no_addon_in_required_raises_for_leak():

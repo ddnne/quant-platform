@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from core import BacktestResult
 from price_basis import RAW, require_supported_price_basis
@@ -35,7 +35,7 @@ class Lifecycle(str, Enum):
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PaperRunConfig:
     """Inputs to one backtest-backed paper run.
 
@@ -45,22 +45,24 @@ class PaperRunConfig:
     or PIT handle.
     """
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise TypeError("PaperRunConfig is final")
+
     start: str
     end: str
     db_path: str | Path | None = None
-    universe: tuple[str, ...] | list[str] | None = None
+    universe: tuple[str, ...] | list[str] | Mapping[str, Any] | None = None
     execution_mode: str = "next_close"
     cost_bps: float = 5.0
     starting_capital: float = 1_000_000.0
     lookback_days: int = 30
     price_basis: str = RAW
-    lifecycle: Lifecycle | str = Lifecycle.PAPER
+    # The importable low-level runtime is an offline fixture/backtest surface.
+    # ``Lifecycle.PAPER`` remains a stable serialization label, but run_paper
+    # and JsonPaperStore reject it.  Only a future OS-isolated authority may
+    # issue controlled PAPER artifacts.
+    lifecycle: Lifecycle | str = Lifecycle.DRAFT
     calendar_as_of: str | None = None
-    # Phase 7: pin paper to an immutable READY snapshot when non-empty.
-    ready_snapshot_id: str = ""
-    ready_manifest_digest: str = ""
-    # When True, empty ready_snapshot_id is refused (default False keeps unit tests).
-    require_ready_snapshot: bool = False
     # W85 / w0816t — short-leg financing = f(repo[t] + fixed spread).
     # Default **off** preserves long-only / legacy paper numerics. Enable
     # for CS L-S paper trials (short notional × (repo+spread)/days).
@@ -113,17 +115,33 @@ class PaperRunConfig:
             self, "price_basis", require_supported_price_basis(self.price_basis)
         )
         if self.universe is not None:
-            normalized = tuple(
-                sorted({str(code).strip() for code in self.universe if str(code).strip()})
-            )
-            if not normalized:
-                raise ValueError("universe cannot be empty when supplied")
-            object.__setattr__(self, "universe", normalized)
+            if getattr(self.universe, "membership_by_date", None) is not None:
+                if not self.universe.membership_by_date:
+                    raise ValueError("resolved daily universe cannot be empty")
+            elif getattr(self.universe, "membership_proof", None):
+                if not tuple(self.universe):
+                    raise ValueError("PIT-proven universe cannot be empty")
+            else:
+                normalized = tuple(
+                    sorted(
+                        {
+                            str(code).strip()
+                            for code in self.universe
+                            if str(code).strip()
+                        }
+                    )
+                )
+                if not normalized:
+                    raise ValueError("universe cannot be empty when supplied")
+                object.__setattr__(self, "universe", normalized)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PaperRunResult:
     """One completed paper result plus its reproduction manifest."""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise TypeError("PaperRunResult is final")
 
     experiment_id: str
     run_id: str

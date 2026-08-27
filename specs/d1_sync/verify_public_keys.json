@@ -1,0 +1,16 @@
+{
+  "schema_version": 2,
+  "purpose": "d1_sync_audit_verification",
+  "generation": 2,
+  "authority_status": "PENDING",
+  "prior_registry_digest": "sha256:6e632d3e2d5753b0ab7ea5b1959084c78c44d764805bd69b952def2dac7bd0c7",
+  "keys": [
+    {
+      "key_id": "d1-sync-20260825-v1",
+      "algorithm": "Ed25519",
+      "public_key_base64": "B/ExGrrNmA+JpMvyre3Cr9CKJJKvCn9gKQvuIq+a5dA=",
+      "status": "revoked"
+    }
+  ],
+  "registry_digest": "sha256:90b0e08c7098b3662f1ea805ffdf7acfc0b22304795f013623d7232fdb933644"
+}

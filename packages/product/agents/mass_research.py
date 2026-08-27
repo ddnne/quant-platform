@@ -1,6 +1,7 @@
-"""Mass research entry — fail-closed until signed READY attestation exists.
+"""Mass entry — fail-closed until a signed Mass-scoped READY exists.
 
-Operator override cannot substitute for VerifiedResearchReadiness.
+Operator override and pilot-scoped readiness cannot substitute for
+``VerifiedMassReadiness``.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from selection.budget_ledger import (
     ResearchBudgetCapability,
 )
 from research.readiness import (
-    VerifiedResearchReadiness,
+    VerifiedMassReadiness,
     require_mass_research_start,
 )
 
@@ -18,7 +19,7 @@ from research.readiness import (
 def start_mass_research(
     *,
     budget: ResearchBudgetCapability | None,
-    readiness: VerifiedResearchReadiness | None = None,
+    readiness: VerifiedMassReadiness | None = None,
     expected_snapshot_id: str | None = None,
     # Explicitly reject legacy / unsafe kwargs.
     operator_override: object | None = None,
@@ -26,10 +27,10 @@ def start_mass_research(
     governed_complete: int | None = None,
     governed_total: int | None = None,
     go_override: bool | None = None,
-) -> tuple[ResearchBudgetCapability, VerifiedResearchReadiness]:
+) -> tuple[ResearchBudgetCapability, VerifiedMassReadiness]:
     if operator_override is not None:
         raise MassResearchDisabledError(
-            "operator_override cannot substitute for VerifiedResearchReadiness"
+            "operator_override cannot substitute for VerifiedMassReadiness"
         )
     if any(
         v is not None
@@ -49,7 +50,7 @@ def start_mass_research(
 def assert_mass_research_allowed(
     *,
     budget: ResearchBudgetCapability | None,
-    readiness: VerifiedResearchReadiness | None = None,
+    readiness: VerifiedMassReadiness | None = None,
     **legacy: object,
 ) -> ResearchBudgetCapability:
     cap, _ = start_mass_research(budget=budget, readiness=readiness, **legacy)  # type: ignore[arg-type]

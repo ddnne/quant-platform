@@ -1,0 +1,12 @@
+{
+  "schema_version": "cloudflare-active-worker-inventory/v1",
+  "workers": [
+    "ingestion-jsda",
+    "ingestion-premium",
+    "ingestion-secrets",
+    "quant-ops-mcp",
+    "receipt-evidence-authority",
+    "research-ai-gateway",
+    "research-mass-eval"
+  ]
+}

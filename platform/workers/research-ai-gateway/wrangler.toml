@@ -6,16 +6,18 @@
 # Staging is not [env.staging] in this file (would share the production
 # Cloudflare account). See wrangler.staging.toml — HUMAN separate account.
 #
-# Secrets:
-#   npx wrangler secret put GATEWAY_TOKEN -c platform/workers/research-ai-gateway/wrangler.toml
-#
-# Fail-closed: missing GATEWAY_TOKEN refuses /v1/complete.
+# Mass uses the typed service-binding RPC and never receives a shared token.
+# GATEWAY_TOKEN is only defense in depth if an operator later attaches a closed
+# HTTP route; without it the HTTP /v1/complete surface fails closed.
 
 name = "quant-platform-research-ai-gateway"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 workers_dev = false
 preview_urls = false
+
+[secrets]
+required = ["GATEWAY_TOKEN"]
 
 [ai]
 binding = "AI"
@@ -30,14 +32,28 @@ new_sqlite_classes = ["BudgetLedger"]
 
 [observability]
 enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"
 
 [env.production]
 name = "quant-platform-research-ai-gateway"
 workers_dev = false
 preview_urls = false
 
+[env.production.secrets]
+required = ["GATEWAY_TOKEN"]
+
 [env.production.ai]
 binding = "AI"
 
 [env.production.durable_objects]
 bindings = [{ name = "BUDGET_LEDGER", class_name = "BudgetLedger" }]
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.production.version_metadata]
+binding = "CF_VERSION_METADATA"

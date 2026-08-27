@@ -63,6 +63,7 @@ class FetchJob:
 class JobResult:
     job: FetchJob
     rows: list[dict] = field(default_factory=list)
+    fetch_result: Any = None
     error: str = ""
     elapsed_s: float = 0.0
 
@@ -240,8 +241,15 @@ def run_parallel(
 
         t0 = time.monotonic()
         try:
-            rows = client.fetch_dataset(job.dataset_id, **job.params)
-            res = JobResult(job=job, rows=rows, elapsed_s=time.monotonic() - t0)
+            fetch_result = client.fetch_dataset_evidenced(
+                job.dataset_id, **job.params
+            )
+            res = JobResult(
+                job=job,
+                rows=list(fetch_result.rows),
+                fetch_result=fetch_result,
+                elapsed_s=time.monotonic() - t0,
+            )
         except Exception as exc:  # noqa: BLE001 — surface per-job
             res = JobResult(
                 job=job, error=f"{type(exc).__name__}: {exc}", elapsed_s=time.monotonic() - t0

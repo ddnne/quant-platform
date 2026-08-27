@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "specs/receipts/receipt_authority_instances.schema.json",
+  "title": "ReceiptAuthorityInstancesV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "instances"],
+  "$defs": {
+    "d1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding", "database_name", "database_id"],
+      "properties": {
+        "binding": {"const": "DB"},
+        "database_name": {"type": "string", "minLength": 1},
+        "database_id": {"type": "string", "format": "uuid"}
+      }
+    },
+    "authorityR2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding", "bucket_name", "raw_prefix", "product_prefix"],
+      "properties": {
+        "binding": {"const": "AUTHORITY_EVIDENCE_BUCKET"},
+        "bucket_name": {"type": "string", "minLength": 1},
+        "raw_prefix": {"type": "string", "pattern": "^raw/receipt-authority/(production|staging)/$"},
+        "product_prefix": {"type": "string", "pattern": "^product/receipt-authority/(production|staging)/$"}
+      }
+    },
+    "durableObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding", "class_name"],
+      "properties": {
+        "binding": {"const": "RECEIPT_EVIDENCE_AUTHORITY_DO"},
+        "class_name": {"const": "ReceiptEvidenceAuthority"}
+      }
+    },
+    "acquisitionService": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding", "service", "entrypoint"],
+      "properties": {
+        "binding": {"const": "JQUANTS_ACQUISITION"},
+        "service": {"type": "string", "minLength": 1},
+        "entrypoint": {"const": "IngestionSecretsService"}
+      }
+    },
+    "instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["environment", "authority_id", "worker_name", "resources"],
+      "properties": {
+        "environment": {"enum": ["production", "staging"]},
+        "authority_id": {"const": "receipt-evidence-authority"},
+        "worker_name": {"type": "string", "minLength": 1},
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "d1",
+            "authority_evidence_r2",
+            "durable_object",
+            "acquisition_service"
+          ],
+          "properties": {
+            "d1": {"$ref": "#/$defs/d1"},
+            "authority_evidence_r2": {"$ref": "#/$defs/authorityR2"},
+            "durable_object": {"$ref": "#/$defs/durableObject"},
+            "acquisition_service": {"$ref": "#/$defs/acquisitionService"}
+          }
+        }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "receipt-authority-instances/v1"},
+    "instances": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["production", "staging"],
+      "properties": {
+        "production": {"$ref": "#/$defs/instance"},
+        "staging": {"$ref": "#/$defs/instance"}
+      }
+    }
+  }
+}

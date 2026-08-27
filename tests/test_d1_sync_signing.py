@@ -1,0 +1,1420 @@
+from __future__ import annotations
+
+import base64
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+import json
+import os
+from pathlib import Path
+import shutil
+import sqlite3
+from types import MappingProxyType
+
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from ops import d1_sync_signing as signing
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _write_and_pin_registry(registry_path, registry, monkeypatch) -> None:
+    body = {key: value for key, value in registry.items() if key != "registry_digest"}
+    registry["registry_digest"] = signing.d1_sync_digest(body)
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    monkeypatch.setattr(signing, "_PINNED_VERIFY_REGISTRY_PATH", registry_path)
+    monkeypatch.setattr(
+        signing, "PINNED_D1_SYNC_REGISTRY_GENERATION", registry["generation"]
+    )
+    monkeypatch.setattr(
+        signing,
+        "PINNED_D1_SYNC_PRIOR_REGISTRY_DIGEST",
+        registry["prior_registry_digest"],
+    )
+    monkeypatch.setattr(
+        signing,
+        "PINNED_D1_SYNC_REGISTRY_BODY_DIGEST",
+        registry["registry_digest"],
+    )
+    monkeypatch.setattr(
+        signing,
+        "PINNED_D1_SYNC_REGISTRY_DOCUMENT_DIGEST",
+        signing.d1_sync_digest(registry),
+    )
+
+
+def _install_external_key_registry(tmp_path, monkeypatch):
+    """Install public verification material; keep the private key test-local."""
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    registry = {
+        "schema_version": 2,
+        "purpose": "d1_sync_audit_verification",
+        "generation": 2,
+        "authority_status": "ACTIVE",
+        "prior_registry_digest": "sha256:" + "9" * 64,
+        "keys": [
+            {
+                "key_id": "d1-sync-test-v1",
+                "algorithm": "Ed25519",
+                "public_key_base64": base64.b64encode(public).decode("ascii"),
+                "status": "active",
+            }
+        ],
+    }
+    registry_path = tmp_path / "registry.json"
+    _write_and_pin_registry(registry_path, registry, monkeypatch)
+    return private, registry_path, registry
+
+
+def _envelope(registry: dict, *, issued_at: datetime) -> dict:
+    digest = "sha256:" + "a" * 64
+    return {
+        "schema_version": signing.AUDIT_ENVELOPE_SCHEMA,
+        "environment": "production",
+        "resource_identity": {
+            "provider": "cloudflare",
+            "kind": "d1",
+            "name": signing.GOVERNED_D1_NAME,
+            "database_id": signing.GOVERNED_D1_ID,
+            "authority_id": signing.GOVERNED_AUTHORITY_ID,
+        },
+        "authority_id": signing.GOVERNED_AUTHORITY_ID,
+        "source_mode": "WRANGLER_REMOTE",
+        "d1_name": signing.GOVERNED_D1_NAME,
+        "d1_id": signing.GOVERNED_D1_ID,
+        "sync_kind": "FULL",
+        "export_digest": "sha256:" + "b" * 64,
+        "artifact_format": "sql",
+        "source_change_seq": 7,
+        "applied_change_seq": 7,
+        "source_content_digest": digest,
+        "local_content_digest": digest,
+        "source_schema_digest": "sha256:" + "e" * 64,
+        "schema_digest": "sha256:" + "c" * 64,
+        "table_counts": {"jquants_records": 1},
+        "prior_audit_digest": None,
+        "registry_digest": signing.d1_sync_digest(registry),
+        "exported_at": issued_at.isoformat(),
+        "issued_at": issued_at.isoformat(),
+    }
+
+
+def _signed_document(
+    private: Ed25519PrivateKey,
+    registry: dict,
+    *,
+    issued_at: datetime,
+) -> dict:
+    body = {
+        "schema_version": signing.SIGNED_DOCUMENT_SCHEMA,
+        "algorithm": "Ed25519",
+        "issuer_key_id": "d1-sync-test-v1",
+        "envelope": _envelope(registry, issued_at=issued_at),
+    }
+    return {
+        **body,
+        "signature": "ed25519:"
+        + base64.b64encode(
+            private.sign(signing.canonical_d1_sync_bytes(body))
+        ).decode("ascii"),
+    }
+
+
+def _resign(private: Ed25519PrivateKey, document: dict) -> None:
+    body = {key: value for key, value in document.items() if key != "signature"}
+    document["signature"] = "ed25519:" + base64.b64encode(
+        private.sign(signing.canonical_d1_sync_bytes(body))
+    ).decode("ascii")
+
+
+def _bound_store_and_document(tmp_path, monkeypatch, *, now: datetime):
+    from scripts import sync_d1_to_sqlite as sync
+    from storage.sqlite_store import SqliteStore
+
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    store = SqliteStore(tmp_path / "persistence.sqlite")
+    sync._ensure_control_tables(store._conn)  # noqa: SLF001
+    sync._ensure_export_sync_audit(store)
+    sync._record_change_seq(store, 7)
+    existing_tables = {
+        row[0]
+        for row in store._conn.execute(  # noqa: SLF001
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    for table in sync.DEFAULT_TABLES:
+        if table not in existing_tables:
+            store._conn.execute(  # noqa: SLF001
+                f'CREATE TABLE "{table}" (placeholder TEXT)'
+            )
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO jquants_records "
+        "(source,dataset,natural_key,event_time,available_at,ingested_at,payload) "
+        "VALUES ('jquants','equities_bars_daily','{}','2026-08-25',"
+        "'2026-08-25','2026-08-25','{}')"
+    )
+    store._conn.commit()  # noqa: SLF001
+    content_digest, schema_digest, counts = (
+        sync._private_export.governed_content_identity(
+            store._conn, sync.DEFAULT_TABLES  # noqa: SLF001
+        )
+    )
+    document = _signed_document(private, registry, issued_at=now)
+    document["envelope"].update(
+        {
+            "source_content_digest": content_digest,
+            "local_content_digest": content_digest,
+            "source_schema_digest": schema_digest,
+            "schema_digest": schema_digest,
+            "table_counts": counts,
+        }
+    )
+    _resign(private, document)
+    return sync, store, document
+
+
+def _install_test_sealed_audit(monkeypatch, document: dict) -> None:
+    class SealedAudit:
+        def _consume_for_persistence(self):
+            return (
+                signing.d1_sync_digest(document),
+                document["issuer_key_id"],
+                document["signature"],
+                document,
+            )
+
+    monkeypatch.setattr(
+        signing,
+        "_seal_authenticated_wrangler_export",
+        lambda _capability: SealedAudit(),
+    )
+
+
+def test_committed_d1_registry_has_no_trusted_same_uid_authority() -> None:
+    registry = json.loads(
+        signing._PINNED_VERIFY_REGISTRY_PATH.read_text(encoding="utf-8")
+    )
+    assert registry["purpose"] == signing.REGISTRY_PURPOSE
+    assert registry["authority_status"] == "PENDING"
+    assert [row for row in registry["keys"] if row["status"] == "active"] == []
+    assert all(row["status"] == "revoked" for row in registry["keys"])
+    assert not hasattr(signing, "DEFAULT_VERIFY_REGISTRY_PATH")
+
+
+def test_pinned_registry_binds_document_body_generation_and_prior_audit() -> None:
+    current_path = ROOT / "specs/d1_sync/verify_public_keys.json"
+    audit_path = ROOT / "specs/d1_sync/verify_public_keys.generation-1.json"
+    current = json.loads(current_path.read_text(encoding="utf-8"))
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert current["generation"] == signing.PINNED_D1_SYNC_REGISTRY_GENERATION
+    assert (
+        current["prior_registry_digest"]
+        == signing.PINNED_D1_SYNC_PRIOR_REGISTRY_DIGEST
+        == signing.d1_sync_digest(audit)
+    )
+    assert (
+        current["registry_digest"]
+        == signing.PINNED_D1_SYNC_REGISTRY_BODY_DIGEST
+        == signing.d1_sync_digest(
+            {key: value for key, value in current.items() if key != "registry_digest"}
+        )
+    )
+    assert (
+        signing.d1_sync_digest(current)
+        == signing.PINNED_D1_SYNC_REGISTRY_DOCUMENT_DIGEST
+    )
+    assert audit["purpose"] == "d1_sync_registry_audit"
+    assert audit["authority_status"] == "REVOKED"
+
+
+def test_same_uid_home_key_cannot_enable_preflight_or_sealing(
+    tmp_path, monkeypatch
+):
+    private, _registry_path, _registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    fake_home = tmp_path / "home"
+    old_key_path = (
+        fake_home / ".config" / "quant-platform" / "d1_sync_signing_key.pem"
+    )
+    old_key_path.parent.mkdir(parents=True)
+    old_key_path.write_bytes(
+        private.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    old_key_path.chmod(0o600)
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    with pytest.raises(
+        signing.D1SyncAuditError,
+        match="full-source authority is not provisioned",
+    ):
+        signing._preflight_d1_sync_signing_authority()
+    with pytest.raises(
+        signing.D1SyncAuditError,
+        match="full-source authority is not provisioned",
+    ):
+        signing._seal_authenticated_wrangler_export(
+            {"authority_id": signing.GOVERNED_AUTHORITY_ID}
+        )
+
+
+def test_pinned_verifier_accepts_current_closed_audit_and_rejects_tampering(
+    tmp_path, monkeypatch
+):
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(private, registry, issued_at=now)
+    verified = signing.verify_signed_d1_sync_audit(
+        document, expected_environment="production"
+    )
+    assert verified["source_change_seq"] == verified["applied_change_seq"] == 7
+    with pytest.raises(signing.D1SyncAuditError, match="authority or mode"):
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="staging"
+        )
+
+    tampered = deepcopy(document)
+    tampered["envelope"]["local_content_digest"] = "sha256:" + "d" * 64
+    tampered["envelope"]["source_content_digest"] = "sha256:" + "d" * 64
+    with pytest.raises(signing.D1SyncAuditError, match="signature is invalid"):
+        signing.verify_signed_d1_sync_audit(
+            tampered, expected_environment="production"
+        )
+
+
+def test_verifier_rejects_a_signed_b_cursor_and_stateful_document(
+    tmp_path, monkeypatch
+):
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    signed_a = _signed_document(private, registry, issued_at=now)
+    unsigned_b = deepcopy(signed_a)
+    unsigned_b["envelope"]["source_change_seq"] = 999
+    unsigned_b["envelope"]["applied_change_seq"] = 999
+
+    with pytest.raises(signing.D1SyncAuditError, match="signature is invalid"):
+        signing.verify_signed_d1_sync_audit(
+            unsigned_b, expected_environment="production"
+        )
+
+    class StatefulDocument(dict):
+        def __init__(self, first: dict, second: dict):
+            super().__init__(second)
+            self.first = first
+            self.second = second
+            self.observations = 0
+
+        def items(self):
+            self.observations += 1
+            selected = self.first if self.observations == 1 else self.second
+            return selected.items()
+
+    attacker = StatefulDocument(signed_a, unsigned_b)
+    with pytest.raises(signing.D1SyncAuditError, match="exact finite JSON"):
+        signing.verify_signed_d1_sync_audit(
+            attacker, expected_environment="production"
+        )
+    assert attacker.observations == 0
+
+
+def test_verifier_rejects_nested_and_scalar_subclasses(tmp_path, monkeypatch):
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+
+    class DictSubclass(dict):
+        pass
+
+    class ListSubclass(list):
+        pass
+
+    class StrSubclass(str):
+        pass
+
+    documents = []
+    nested_mapping = _signed_document(private, registry, issued_at=now)
+    nested_mapping["envelope"]["table_counts"] = DictSubclass(
+        nested_mapping["envelope"]["table_counts"]
+    )
+    documents.append(nested_mapping)
+    nested_list = _signed_document(private, registry, issued_at=now)
+    nested_list["envelope"]["table_counts"] = ListSubclass([1])
+    documents.append(nested_list)
+    scalar = _signed_document(private, registry, issued_at=now)
+    scalar["issuer_key_id"] = StrSubclass(scalar["issuer_key_id"])
+    documents.append(scalar)
+    documents.append(
+        StrSubclass(json.dumps(_signed_document(private, registry, issued_at=now)))
+    )
+
+    for document in documents:
+        with pytest.raises(signing.D1SyncAuditError, match="exact finite JSON"):
+            signing.verify_signed_d1_sync_audit(
+                document, expected_environment="production"
+            )
+
+
+def test_verified_envelope_is_deep_immutable_and_retained_once(
+    tmp_path, monkeypatch
+):
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(private, registry, issued_at=now)
+
+    verified = signing.verify_signed_d1_sync_audit(
+        document, expected_environment="production"
+    )
+    document["envelope"]["source_change_seq"] = 999
+    document["envelope"]["applied_change_seq"] = 999
+    document["envelope"]["table_counts"]["jquants_records"] = 999
+
+    assert isinstance(verified, MappingProxyType)
+    assert isinstance(verified["table_counts"], MappingProxyType)
+    assert verified["source_change_seq"] == verified["applied_change_seq"] == 7
+    assert verified["table_counts"]["jquants_records"] == 1
+    with pytest.raises(TypeError):
+        verified["source_change_seq"] = 999
+    with pytest.raises(TypeError):
+        verified["table_counts"]["jquants_records"] = 999
+    with pytest.raises(TypeError, match="exact dict"):
+        signing.d1_sync_digest(verified)
+
+
+def test_verified_d1_cursor_chain_reaches_sync_boundary_without_mutable_alias(
+    tmp_path, monkeypatch
+):
+    from scripts import sync_d1_to_sqlite as sync
+
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(private, registry, issued_at=now)
+    counts = {table: 0 for table in sync.DEFAULT_TABLES}
+    document["envelope"]["table_counts"] = counts
+    _resign(private, document)
+    envelope = document["envelope"]
+    row = {
+        "signed_evidence_json": json.dumps(document),
+        "status": "COMPLETE",
+        "audit_digest": signing.d1_sync_digest(document),
+        "issuer_key_id": document["issuer_key_id"],
+        "signature": document["signature"],
+        "table_counts_json": json.dumps(counts),
+        **{
+            field: envelope[field]
+            for field in (
+                "export_digest",
+                "artifact_format",
+                "source_mode",
+                "sync_kind",
+                "source_change_seq",
+                "applied_change_seq",
+                "source_content_digest",
+                "local_content_digest",
+                "schema_digest",
+                "authority_id",
+                "prior_audit_digest",
+            )
+        },
+    }
+    with sqlite3.connect(":memory:") as conn:
+        verified = sync._verified_sync_envelope_from_row(
+            conn, row, recompute_local=False
+        )
+    document["envelope"]["source_change_seq"] = 999
+    document["envelope"]["applied_change_seq"] = 999
+
+    assert verified["source_change_seq"] == verified["applied_change_seq"] == 7
+    assert (
+        verified["registry_digest"]
+        == signing.PINNED_D1_SYNC_REGISTRY_DOCUMENT_DIGEST
+    )
+    with pytest.raises(TypeError):
+        verified["source_change_seq"] = 999
+
+    valid_text = row["signed_evidence_json"]
+    assert isinstance(valid_text, str)
+    duplicate_text = valid_text.replace(
+        '"schema_version": "d1-sync-signed-audit/v1",',
+        '"schema_version": "attacker", "schema_version": "d1-sync-signed-audit/v1",',
+        1,
+    )
+    duplicate_row = {**row, "signed_evidence_json": duplicate_text}
+    with sqlite3.connect(":memory:") as conn:
+        with pytest.raises(signing.D1SyncAuditError, match="duplicate key"):
+            sync._verified_sync_envelope_from_row(
+                conn, duplicate_row, recompute_local=False
+            )
+
+    class StatefulRow(dict):
+        def items(self):
+            raise AssertionError("stateful row must not be observed")
+
+    with sqlite3.connect(":memory:") as conn:
+        with pytest.raises(TypeError, match="exact dict"):
+            sync._verified_sync_envelope_from_row(
+                conn, StatefulRow(row), recompute_local=False
+            )
+
+    class StrSubclass(str):
+        pass
+
+    class IntSubclass(int):
+        pass
+
+    with sqlite3.connect(":memory:") as conn:
+        with pytest.raises(ValueError, match="types are not canonical"):
+            sync._verified_sync_envelope_from_row(
+                conn,
+                {**row, "status": StrSubclass("COMPLETE")},
+                recompute_local=False,
+            )
+
+    first_count = f'"{next(iter(counts))}": 0'
+    for replacement in (
+        f'"{next(iter(counts))}": false',
+        f'"{next(iter(counts))}": true',
+        f'"{next(iter(counts))}": 0.0',
+    ):
+        attacked_counts = row["table_counts_json"].replace(
+            first_count, replacement, 1
+        )
+        with sqlite3.connect(":memory:") as conn:
+            with pytest.raises(ValueError, match="counts are not canonical"):
+                sync._verified_sync_envelope_from_row(
+                    conn,
+                    {**row, "table_counts_json": attacked_counts},
+                    recompute_local=False,
+                )
+
+    class StatefulCountText(str):
+        def __str__(self):
+            raise AssertionError("stateful text must not be coerced")
+
+    with sqlite3.connect(":memory:") as conn:
+        with pytest.raises(ValueError, match="types are not canonical"):
+            sync._verified_sync_envelope_from_row(
+                conn,
+                {
+                    **row,
+                    "table_counts_json": StatefulCountText(
+                        row["table_counts_json"]
+                    ),
+                },
+                recompute_local=False,
+            )
+    with sqlite3.connect(":memory:") as conn:
+        with pytest.raises(ValueError, match="types are not canonical"):
+            sync._verified_sync_envelope_from_row(
+                conn,
+                {**row, "source_change_seq": IntSubclass(7)},
+                recompute_local=False,
+            )
+
+
+@pytest.mark.parametrize(
+    "audit_target",
+    ["local_d1_export_sync_runs", "LOCAL_D1_EXPORT_SYNC_RUNS"],
+)
+def test_audit_insert_trigger_cannot_mutate_governed_data_and_commit_complete(
+    tmp_path, monkeypatch, audit_target
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+    store._conn.executescript(  # noqa: SLF001
+        f"""
+        CREATE TRIGGER corrupt_governed_after_audit
+        AFTER INSERT ON {audit_target} BEGIN
+            DELETE FROM jquants_records;
+        END;
+        """
+    )
+    store._conn.commit()  # noqa: SLF001
+
+    with pytest.raises(ValueError, match="unowned schema objects"):
+        sync._mark_authenticated_export_complete(store, object())
+
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM jquants_records"
+    ).fetchone()[0] == 1
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM local_d1_export_sync_runs"
+    ).fetchone()[0] == 0
+    store.close()
+
+
+def test_authenticated_audit_commits_only_after_exact_final_postcondition(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+
+    envelope = sync._mark_authenticated_export_complete(store, object())
+
+    row = store._conn.execute(  # noqa: SLF001
+        "SELECT status,audit_digest,signed_evidence_json "
+        "FROM main.local_d1_export_sync_runs"
+    ).fetchone()
+    assert envelope["source_change_seq"] == 7
+    assert row[0] == "COMPLETE"
+    assert row[1] == signing.d1_sync_digest(document)
+    assert json.loads(row[2]) == document
+    store.close()
+
+
+def test_audit_persistence_rechecks_freshness_after_all_postconditions(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+    clock = {"now": now}
+    monkeypatch.setattr(signing, "_utc_now", lambda: clock["now"])
+    governed_identity = sync._private_export.governed_content_identity
+    calls = {"count": 0}
+
+    def advance_during_postcondition(conn, tables):
+        result = governed_identity(conn, tables)
+        calls["count"] += 1
+        if calls["count"] == 2:
+            clock["now"] = now + timedelta(
+                seconds=signing.D1_SYNC_AUDIT_MAX_AGE_SECONDS + 1
+            )
+        return result
+
+    monkeypatch.setattr(
+        sync._private_export,
+        "governed_content_identity",
+        advance_during_postcondition,
+    )
+
+    with pytest.raises(signing.D1SyncAuditError, match="stale"):
+        sync._mark_authenticated_export_complete(store, object())
+
+    assert calls["count"] >= 2
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM local_d1_export_sync_runs"
+    ).fetchone()[0] == 0
+    store.close()
+
+
+def test_real_sqlite_signed_chain_retains_deep_immutable_projection_identity(
+    tmp_path, monkeypatch
+):
+    from scripts import sync_d1_to_sqlite as sync
+    from storage.sqlite_store import SqliteStore
+
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    path = tmp_path / "authenticated-mirror.sqlite"
+    store = SqliteStore(path)
+    sync._ensure_control_tables(store._conn)  # noqa: SLF001
+    sync._ensure_export_sync_audit(store)
+    sync._record_change_seq(store, 7)
+    existing_tables = {
+        row[0]
+        for row in store._conn.execute(  # noqa: SLF001
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    for table in sync.DEFAULT_TABLES:
+        if table not in existing_tables:
+            store._conn.execute(  # noqa: SLF001
+                f'CREATE TABLE "{table}" (placeholder TEXT)'
+            )
+    store._conn.commit()  # noqa: SLF001
+    content_digest, schema_digest, counts = (
+        sync._private_export.governed_content_identity(
+            store._conn, sync.DEFAULT_TABLES  # noqa: SLF001
+        )
+    )
+    document = _signed_document(private, registry, issued_at=now)
+    document["envelope"].update(
+        {
+            "source_content_digest": content_digest,
+            "local_content_digest": content_digest,
+            "source_schema_digest": schema_digest,
+            "schema_digest": schema_digest,
+            "table_counts": counts,
+        }
+    )
+    _resign(private, document)
+    envelope = document["envelope"]
+    store._conn.execute(  # noqa: SLF001
+        """
+        INSERT INTO local_d1_export_sync_runs (
+            export_digest,artifact_format,source_mode,sync_kind,
+            source_change_seq,applied_change_seq,source_content_digest,
+            local_content_digest,schema_digest,table_counts_json,authority_id,
+            prior_audit_digest,audit_digest,issuer_key_id,signature,
+            signed_evidence_json,status,started_at,updated_at,error
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
+        """,
+        (
+            envelope["export_digest"],
+            envelope["artifact_format"],
+            envelope["source_mode"],
+            envelope["sync_kind"],
+            envelope["source_change_seq"],
+            envelope["applied_change_seq"],
+            envelope["source_content_digest"],
+            envelope["local_content_digest"],
+            envelope["schema_digest"],
+            json.dumps(counts, sort_keys=True, separators=(",", ":")),
+            envelope["authority_id"],
+            envelope["prior_audit_digest"],
+            signing.d1_sync_digest(document),
+            document["issuer_key_id"],
+            document["signature"],
+            json.dumps(document, sort_keys=True, separators=(",", ":")),
+            "COMPLETE",
+            envelope["issued_at"],
+            envelope["issued_at"],
+        ),
+    )
+    store._conn.commit()  # noqa: SLF001
+    sync._freeze_authenticated_current_applied_mirror(store)
+    store.close()
+
+    handle = sync.open_authenticated_applied_mirror(path)
+    writer = sqlite3.connect(path, timeout=0)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            writer.execute(
+                "UPDATE main.local_snapshot_policy SET require_manifest=0 "
+                "WHERE singleton=1"
+            )
+        writer.rollback()
+    finally:
+        writer.close()
+
+    def consume(_conn, identity):
+        assert isinstance(identity, MappingProxyType)
+        immutable_counts = identity["table_counts"]
+        assert isinstance(immutable_counts, MappingProxyType)
+        assert immutable_counts == counts
+        with pytest.raises(TypeError):
+            immutable_counts["jquants_records"] = 999
+        return identity["source_change_seq"], identity["applied_change_seq"]
+
+    assert sync._consume_authenticated_applied_mirror(handle, consume) == (7, 7)
+
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE main.local_snapshot_policy SET require_manifest=0 "
+            "WHERE singleton=1"
+        )
+    with pytest.raises(ValueError, match="not an authenticated current"):
+        sync.open_authenticated_applied_mirror(path)
+
+
+def test_applied_mirror_binds_path_connections_to_initial_file_bytes(
+    tmp_path, monkeypatch
+):
+    """Two valid A/B mirrors cannot substitute B during both SQLite opens."""
+    from scripts import sync_d1_to_sqlite as sync
+    from storage.sqlite_store import SqliteStore
+
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+
+    def build(path: Path, label: str) -> str:
+        store = SqliteStore(path)
+        sync._ensure_control_tables(store._conn)  # noqa: SLF001
+        sync._ensure_export_sync_audit(store)
+        sync._record_change_seq(store, 7)
+        existing = {
+            row[0]
+            for row in store._conn.execute(  # noqa: SLF001
+                "SELECT name FROM main.sqlite_master WHERE type='table'"
+            )
+        }
+        for table in sync.DEFAULT_TABLES:
+            if table not in existing:
+                store._conn.execute(  # noqa: SLF001
+                    f'CREATE TABLE "{table}" (placeholder TEXT)'
+                )
+        store._conn.execute(  # noqa: SLF001
+            "INSERT INTO main.jquants_records("
+            "source,dataset,natural_key,event_time,available_at,ingested_at,payload) "
+            "VALUES('jquants','equities_bars_daily','{}','2026-08-25',"
+            "'2026-08-25','2026-08-25',?)",
+            (json.dumps({"label": label}),),
+        )
+        store._conn.commit()  # noqa: SLF001
+        content, schema, counts = sync._private_export.governed_content_identity(
+            store._conn, sync.DEFAULT_TABLES  # noqa: SLF001
+        )
+        document = _signed_document(private, registry, issued_at=now)
+        document["envelope"].update(
+            {
+                "source_content_digest": content,
+                "local_content_digest": content,
+                "source_schema_digest": schema,
+                "schema_digest": schema,
+                "table_counts": counts,
+            }
+        )
+        _resign(private, document)
+        _install_test_sealed_audit(monkeypatch, document)
+        sync._mark_authenticated_export_complete(store, object())
+        sync._freeze_authenticated_current_applied_mirror(store)
+        store.close()
+        return content
+
+    path_a = (tmp_path / "a.sqlite").resolve()
+    path_b = (tmp_path / "b.sqlite").resolve()
+    digest_a = build(path_a, "A")
+    digest_b = build(path_b, "B")
+    assert digest_a != digest_b
+
+    real_open = sync.os.open
+    hits: list[str] = []
+    attack_enabled = True
+
+    def swapped_open(database, *args, **kwargs):
+        if not attack_enabled or Path(os.fspath(database)) != path_a:
+            return real_open(database, *args, **kwargs)
+        saved_a = tmp_path / "saved-a.sqlite"
+        os.replace(path_a, saved_a)
+        os.replace(path_b, path_a)
+        try:
+            descriptor = real_open(database, *args, **kwargs)
+            hits.append(os.fspath(database))
+        finally:
+            os.replace(path_a, path_b)
+            os.replace(saved_a, path_a)
+        return descriptor
+
+    monkeypatch.setattr(sync.os, "open", swapped_open)
+    with pytest.raises(ValueError, match="not an authenticated current"):
+        sync.open_authenticated_applied_mirror(path_a)
+    assert hits == [os.fspath(path_a)]
+
+    # An exact byte clone defeats content-only binding, but cannot satisfy the
+    # retained descriptor's independently pinned inode.
+    attack_enabled = False
+    path_b.unlink()
+    shutil.copy2(path_a, path_b)
+    assert path_a.read_bytes() == path_b.read_bytes()
+    attack_enabled = True
+    with pytest.raises(ValueError, match="not an authenticated current"):
+        sync.open_authenticated_applied_mirror(path_a)
+    assert hits == [os.fspath(path_a), os.fspath(path_a)]
+
+    # Without substitution, that exact descriptor must lock original A for
+    # the entire consumer lifetime.
+    attack_enabled = False
+    handle = sync.open_authenticated_applied_mirror(path_a)
+    writer = sqlite3.connect(path_a, timeout=0)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            writer.execute(
+                "UPDATE main.local_snapshot_policy SET require_manifest=0 "
+                "WHERE singleton=1"
+            )
+        writer.rollback()
+    finally:
+        writer.close()
+    assert sync._consume_authenticated_applied_mirror(
+        handle,
+        lambda conn, _identity: conn.execute(
+            "SELECT require_manifest FROM main.local_snapshot_policy "
+            "WHERE singleton=1"
+        ).fetchone()[0],
+    ) == 1
+    assert hits == [os.fspath(path_a), os.fspath(path_a)]
+
+
+def test_descriptor_connection_accepts_only_same_inode_when_sqlite_rewrites_path(
+    tmp_path,
+):
+    """Linux may report a backing path for a /dev/fd URI; inode is authority."""
+
+    from scripts import sync_d1_to_sqlite as sync
+
+    source = (tmp_path / "source.sqlite").resolve()
+    with sqlite3.connect(source) as setup:
+        setup.execute("CREATE TABLE proof (value TEXT NOT NULL)")
+        setup.execute("INSERT INTO proof VALUES ('same-inode')")
+    alias = tmp_path / "source-alias.sqlite"
+    alias.symlink_to(source)
+    expected = sync._private_export._measure_regular_file(source)  # noqa: SLF001
+
+    same = sqlite3.connect(f"file:{alias}?mode=rw", uri=True)
+    try:
+        sync._require_descriptor_sqlite_connection(  # noqa: SLF001
+            same,
+            descriptor_path=str(source),
+            expected=expected,
+        )
+    finally:
+        same.close()
+
+    substituted = tmp_path / "substituted.sqlite"
+    shutil.copy2(source, substituted)
+    other = sqlite3.connect(f"file:{substituted}?mode=rw", uri=True)
+    try:
+        with pytest.raises(ValueError, match="changed inode"):
+            sync._require_descriptor_sqlite_connection(  # noqa: SLF001
+                other,
+                descriptor_path=str(source),
+                expected=expected,
+            )
+    finally:
+        other.close()
+
+
+def test_strict_json_rejects_duplicate_and_nonfinite_signed_documents(
+    tmp_path, monkeypatch
+):
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    text = json.dumps(_signed_document(private, registry, issued_at=now))
+    duplicate = text.replace(
+        '"schema_version": "d1-sync-signed-audit/v1",',
+        '"schema_version": "attacker", "schema_version": "d1-sync-signed-audit/v1",',
+        1,
+    )
+    nonfinite = text.replace('"jquants_records": 1', '"jquants_records": NaN')
+
+    with pytest.raises(signing.D1SyncAuditError, match="duplicate key"):
+        signing.verify_signed_d1_sync_audit(
+            duplicate, expected_environment="production"
+        )
+    with pytest.raises(signing.D1SyncAuditError, match="non-finite"):
+        signing.verify_signed_d1_sync_audit(
+            nonfinite, expected_environment="production"
+        )
+
+
+@pytest.mark.parametrize("location", ["document", "envelope", "table_counts"])
+def test_signed_d1_schema_is_closed(tmp_path, monkeypatch, location):
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(private, registry, issued_at=now)
+    if location == "document":
+        document["unsigned_extra"] = "attacker"
+    elif location == "envelope":
+        document["envelope"]["unsigned_extra"] = "attacker"
+    else:
+        document["envelope"]["table_counts"][""] = 1
+        _resign(private, document)
+
+    message = "shape" if location == "document" else "fields|table counts"
+    with pytest.raises(signing.D1SyncAuditError, match=message):
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
+
+
+@pytest.mark.parametrize(
+    ("offset", "message"),
+    [
+        (-signing.D1_SYNC_AUDIT_MAX_AGE_SECONDS - 1, "stale"),
+        (signing.D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS + 1, "future"),
+    ],
+)
+def test_pinned_verifier_rejects_old_or_future_signed_audit(
+    tmp_path, monkeypatch, offset, message
+):
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(
+        private,
+        registry,
+        issued_at=now + timedelta(seconds=offset),
+    )
+    with pytest.raises(signing.D1SyncAuditError, match=message):
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
+
+
+def test_freshness_is_rechecked_at_final_verified_return(tmp_path, monkeypatch):
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    issued_at = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    clock = {
+        "now": issued_at + timedelta(seconds=signing.D1_SYNC_AUDIT_MAX_AGE_SECONDS)
+    }
+    monkeypatch.setattr(signing, "_utc_now", lambda: clock["now"])
+    load_registry = signing._load_registry_document
+
+    def advance_while_verifying(environment="production"):
+        registry_document = load_registry(environment)
+        clock["now"] += timedelta(seconds=1)
+        return registry_document
+
+    monkeypatch.setattr(
+        signing, "_load_registry_document", advance_while_verifying
+    )
+    document = _signed_document(private, registry, issued_at=issued_at)
+
+    with pytest.raises(signing.D1SyncAuditError, match="stale"):
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
+
+
+def test_current_audit_rejects_old_export_with_fresh_restatement(
+    tmp_path, monkeypatch
+):
+    private, _registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(private, registry, issued_at=now)
+    document["envelope"]["exported_at"] = (
+        now - timedelta(days=1)
+    ).isoformat()
+    _resign(private, document)
+
+    with pytest.raises(signing.D1SyncAuditError, match="stale"):
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
+
+
+def test_temp_audit_table_cannot_shadow_signed_complete_persistence(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+    store._conn.execute(  # noqa: SLF001
+        "CREATE TEMP TABLE local_d1_export_sync_runs "
+        "(export_digest TEXT PRIMARY KEY, status TEXT)"
+    )
+
+    with pytest.raises(ValueError, match="temporary object"):
+        sync._mark_authenticated_export_complete(store, object())
+
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM main.local_d1_export_sync_runs"
+    ).fetchone()[0] == 0
+    store.close()
+
+
+def test_mixed_case_temp_audit_trigger_cannot_mutate_ready_state(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+    store._conn.executescript(  # noqa: SLF001
+        """
+        CREATE TEMP TRIGGER attacker_ready_deputy
+        AFTER INSERT ON main.LoCaL_D1_ExPoRt_SyNc_RuNs BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=1
+            WHERE singleton=1;
+        END;
+        """
+    )
+
+    with pytest.raises(ValueError, match="temporary object"):
+        sync._mark_authenticated_export_complete(store, object())
+
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM main.local_d1_export_sync_runs"
+    ).fetchone()[0] == 0
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT snapshot_ready FROM main.local_snapshot_policy WHERE singleton=1"
+    ).fetchone()[0] == 0
+    store.close()
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "missing_table",
+        "missing_row",
+        "duplicate_row",
+        "extra_index",
+        "mixed_case_index",
+        "mixed_case_trigger",
+    ],
+)
+def test_signed_complete_requires_canonical_invalidation_policy_target(
+    tmp_path, monkeypatch, attack
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+    if attack == "missing_table":
+        store._conn.execute("DROP TABLE main.local_snapshot_policy")  # noqa: SLF001
+    elif attack == "missing_row":
+        store._conn.execute(  # noqa: SLF001
+            "DELETE FROM main.local_snapshot_policy WHERE singleton=1"
+        )
+    elif attack == "duplicate_row":
+        store._conn.executescript(  # noqa: SLF001
+            """
+            DROP TABLE main.local_snapshot_policy;
+            CREATE TABLE main.local_snapshot_policy (
+                singleton INTEGER,
+                require_manifest INTEGER,
+                snapshot_ready INTEGER,
+                sync_started_at TEXT,
+                last_error TEXT,
+                publication_state TEXT,
+                active_build_id TEXT,
+                active_snapshot_id TEXT
+            );
+            INSERT INTO main.local_snapshot_policy VALUES
+                (1,1,0,'now',NULL,'BUILDING','build-a',NULL),
+                (1,1,0,'now',NULL,'BUILDING','build-b',NULL);
+            """
+        )
+    elif attack in {"extra_index", "mixed_case_index"}:
+        target = (
+            "local_snapshot_policy"
+            if attack == "extra_index"
+            else "LOCAL_SNAPSHOT_POLICY"
+        )
+        store._conn.execute(  # noqa: SLF001
+            "CREATE INDEX attacker_policy_index "
+            f"ON {target}(snapshot_ready)"
+        )
+    else:
+        store._conn.execute(  # noqa: SLF001
+            """
+            CREATE TRIGGER attacker_restore_ready_on_invalidation
+            AFTER UPDATE ON main.LOCAL_SNAPSHOT_POLICY BEGIN
+                UPDATE local_snapshot_policy
+                SET snapshot_ready=1, publication_state='READY',
+                    active_snapshot_id='attacker-snapshot'
+                WHERE singleton=1;
+            END
+            """
+        )
+    store._conn.commit()  # noqa: SLF001
+
+    with pytest.raises(ValueError, match="snapshot policy|no columns"):
+        sync._mark_authenticated_export_complete(store, object())
+
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM main.local_d1_export_sync_runs"
+    ).fetchone()[0] == 0
+    store.close()
+
+
+def test_audit_insert_policy_side_effect_rolls_back_from_final_postcondition(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    sync, store, document = _bound_store_and_document(
+        tmp_path, monkeypatch, now=now
+    )
+    _install_test_sealed_audit(monkeypatch, document)
+    before = tuple(
+        store._conn.execute(  # noqa: SLF001
+            "SELECT * FROM main.local_snapshot_policy WHERE singleton=1"
+        ).fetchone()
+    )
+    require_boundary = sync._require_canonical_sync_audit_table
+    installed = []
+
+    def install_after_precondition(conn):
+        policy = require_boundary(conn)
+        conn.execute(
+            """
+            CREATE TRIGGER attacker_restore_ready_after_audit
+            AFTER INSERT ON main.local_d1_export_sync_runs BEGIN
+                UPDATE local_snapshot_policy
+                SET snapshot_ready=1, publication_state='READY',
+                    active_snapshot_id='attacker-snapshot'
+                WHERE singleton=1;
+            END
+            """
+        )
+        installed.append(True)
+        return policy
+
+    monkeypatch.setattr(
+        sync, "_require_canonical_sync_audit_table", install_after_precondition
+    )
+    with pytest.raises(ValueError, match="snapshot policy"):
+        sync._mark_authenticated_export_complete(store, object())
+
+    assert installed == [True]
+    assert tuple(
+        store._conn.execute(  # noqa: SLF001
+            "SELECT * FROM main.local_snapshot_policy WHERE singleton=1"
+        ).fetchone()
+    ) == before
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM main.local_d1_export_sync_runs"
+    ).fetchone()[0] == 0
+    assert store._conn.execute(  # noqa: SLF001
+        "SELECT COUNT(*) FROM main.sqlite_master "
+        "WHERE name='attacker_restore_ready_after_audit'"
+    ).fetchone()[0] == 0
+    store.close()
+
+
+@pytest.mark.parametrize("mutation", ["collation", "missing_check"])
+def test_audit_table_exact_ddl_rejects_semantic_schema_substitution(
+    mutation,
+):
+    from scripts import sync_d1_to_sqlite as sync
+
+    body = sync._SYNC_AUDIT_TABLE_BODY_SQL
+    if mutation == "collation":
+        body = body.replace(
+            "export_digest     TEXT PRIMARY KEY",
+            "export_digest     TEXT PRIMARY KEY COLLATE NOCASE",
+        )
+    else:
+        body = body.replace(
+            "CHECK (status IN ('APPLYING', 'COMPLETE', 'FAILED'))",
+            "CHECK (status IN ('APPLYING', 'COMPLETE', 'FAILED', 'FAKE'))",
+        )
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.execute(
+            "CREATE TABLE main.local_d1_export_sync_runs " + body
+        )
+        with pytest.raises(ValueError, match="DDL is not canonical"):
+            sync._require_canonical_sync_audit_table(conn)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("mutation", ["missing_status", "wrong_purpose", "two_active"])
+def test_d1_sync_registry_rejects_invalid_shape_or_multiple_active_keys(
+    tmp_path, monkeypatch, mutation
+):
+    private, registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(private, registry, issued_at=now)
+    if mutation == "missing_status":
+        registry["keys"][0].pop("status")
+    elif mutation == "wrong_purpose":
+        registry["purpose"] = "ops_projection_verification"
+    else:
+        registry["keys"].append(
+            {**registry["keys"][0], "key_id": "d1-sync-test-v2"}
+        )
+    _write_and_pin_registry(registry_path, registry, monkeypatch)
+    document = _signed_document(private, registry, issued_at=now)
+    with pytest.raises(signing.D1SyncAuditError, match="registry"):
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
+
+
+@pytest.mark.parametrize("field", ["schema_version", "generation"])
+def test_d1_sync_registry_rejects_float_integer_fields(
+    tmp_path, monkeypatch, field
+):
+    private, registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    registry[field] = 2.0
+    _write_and_pin_registry(registry_path, registry, monkeypatch)
+    document = _signed_document(private, registry, issued_at=now)
+
+    with pytest.raises(signing.D1SyncAuditError, match="registry policy"):
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
+
+
+def test_attacker_path_and_legacy_public_global_cannot_replace_registry(
+    tmp_path, monkeypatch
+):
+    private, registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(private, registry, issued_at=now)
+
+    attacker = deepcopy(registry)
+    attacker["purpose"] = "attacker_selected_verification"
+    attacker["registry_digest"] = signing.d1_sync_digest(
+        {key: value for key, value in attacker.items() if key != "registry_digest"}
+    )
+    attacker_path = tmp_path / "attacker-registry.json"
+    attacker_path.write_text(json.dumps(attacker), encoding="utf-8")
+
+    monkeypatch.setattr(
+        signing, "DEFAULT_VERIFY_REGISTRY_PATH", attacker_path, raising=False
+    )
+    assert signing.verify_signed_d1_sync_audit(
+        document, expected_environment="production"
+    )["source_change_seq"] == 7
+
+    monkeypatch.setattr(signing, "_PINNED_VERIFY_REGISTRY_PATH", attacker_path)
+    with pytest.raises(signing.D1SyncAuditError, match="digest mismatch"):
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
+    assert registry_path != attacker_path
+
+
+def test_registry_strict_decoder_rejects_duplicate_canonical_collision(
+    tmp_path, monkeypatch
+):
+    private, registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(private, registry, issued_at=now)
+    duplicate = registry_path.read_text(encoding="utf-8").replace(
+        '"schema_version": 2,',
+        '"schema_version": 1, "schema_version": 2,',
+        1,
+    )
+    duplicate_path = tmp_path / "duplicate-registry.json"
+    duplicate_path.write_text(duplicate, encoding="utf-8")
+    monkeypatch.setattr(signing, "_PINNED_VERIFY_REGISTRY_PATH", duplicate_path)
+
+    with pytest.raises(signing.D1SyncAuditError, match="cannot load"):
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
+
+
+def test_zero_active_revoked_registry_rejects_current_and_backdated_history(
+    tmp_path, monkeypatch
+):
+    private, registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2020, 1, 2, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(private, registry, issued_at=now)
+    registry["keys"][0]["status"] = "revoked"
+    registry["authority_status"] = "PENDING"
+    _write_and_pin_registry(registry_path, registry, monkeypatch)
+    document = _signed_document(private, registry, issued_at=now)
+
+    with pytest.raises(signing.D1SyncAuditError, match="not active"):
+        signing.verify_signed_d1_sync_audit(
+            document, expected_environment="production"
+        )
+    with pytest.raises(signing.D1SyncAuditError, match="revoked"):
+        signing._verify_signed_d1_sync_audit(
+            document, require_fresh=False, eligibility="historical"
+        )
+
+
+def test_current_verifier_rejects_retired_and_revoked_keys_historical_does_not(
+    tmp_path, monkeypatch
+):
+    private, registry_path, registry = _install_external_key_registry(
+        tmp_path, monkeypatch
+    )
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    document = _signed_document(private, registry, issued_at=now)
+    assert signing.verify_signed_d1_sync_audit(
+        document, expected_environment="production"
+    )["source_change_seq"] == 7
+
+    replacement = Ed25519PrivateKey.generate()
+    public = replacement.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    retired = dict(registry)
+    retired["keys"] = [
+        {**registry["keys"][0], "status": "retired"},
+        {
+            "key_id": "d1-sync-test-v2",
+            "algorithm": "Ed25519",
+            "public_key_base64": base64.b64encode(public).decode("ascii"),
+            "status": "active",
+        },
+    ]
+    _write_and_pin_registry(registry_path, retired, monkeypatch)
+    retired_document = _signed_document(private, retired, issued_at=now)
+    with pytest.raises(signing.D1SyncAuditError, match="not active"):
+        signing.verify_signed_d1_sync_audit(
+            retired_document, expected_environment="production"
+        )
+    historical = signing._verify_signed_d1_sync_audit(
+        retired_document, require_fresh=False, eligibility="historical"
+    )
+    assert historical["source_change_seq"] == 7
+
+    revoked = dict(retired)
+    revoked["keys"] = [
+        {**registry["keys"][0], "status": "revoked"},
+        retired["keys"][1],
+    ]
+    _write_and_pin_registry(registry_path, revoked, monkeypatch)
+    revoked_document = _signed_document(private, revoked, issued_at=now)
+    with pytest.raises(signing.D1SyncAuditError, match="revoked"):
+        signing._verify_signed_d1_sync_audit(
+            revoked_document, require_fresh=False, eligibility="historical"
+        )
+    with pytest.raises(signing.D1SyncAuditError, match="not active"):
+        signing.verify_signed_d1_sync_audit(
+            revoked_document, expected_environment="production"
+        )

@@ -3,7 +3,8 @@
 Listed days parse in ingestion.jsda.official_index; ledger re-exports.
 Planner and refresh take that set. Missing index text is fail-closed empty
 (UNKNOWN/PARTIAL), not a calendar walk or inventory replay.
-Does not COMPLETE weekends or PARSE_ZERO days. Does not fetch live HTML.
+Does not COMPLETE weekends or early-layout REPROOF_REQUIRED days. Does not
+fetch live HTML.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from data_contracts.source_capability import (
     SourceCapabilityContract,
     required_domain_subset_official,
     source_capability_contract_for,
+    specs_dir,
 )
 from ingestion.jsda.official_index import (
     official_index_days as sot_official_index_days,
@@ -40,7 +42,7 @@ from storage.coverage_ledger import (
 from storage.sqlite_store import SqliteStore
 
 _REPO = repo_root()
-_CAPABILITY = _REPO / "specs" / "source_capability" / "jsda_otc_bond_reference_prices.json"
+_CAPABILITY = specs_dir() / "jsda_otc_bond_reference_prices.json"
 _MIGRATION = _REPO / "specs" / "coverage_v3" / "jsda_otc_official_index_migration.json"
 _FIXTURE = _REPO / "tests" / "fixtures" / "jsda_otc_official_index_tiny.html"
 
@@ -49,7 +51,7 @@ OFFICIAL_START = "2002-08-02"
 OFFICIAL_EVIDENCE_URL = (
     "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html"
 )
-PARSE_ZERO_DAYS = ("2002-08-02", "2002-08-05")
+REPROOF_REQUIRED_DAYS = ("2002-08-02", "2002-08-05")
 V2_TARGET_END = "2026-08-19"
 V2_REQUIRED = 8784
 V2_COMPLETE = 5886
@@ -149,28 +151,61 @@ def test_calendar_overhang_2898_is_not_converted_to_complete() -> None:
     assert mig["empty_complete_forbidden"] is True
 
 
-def test_parse_zero_2002_08_02_and_05_remain_genuine_gaps() -> None:
+def test_parser_capable_2002_08_02_and_05_require_trusted_reproof() -> None:
     mig = _load(_MIGRATION)
-    gaps = mig["old_new_required_segment_mapping"]["genuine_parse_zero_gaps"]
+    gaps = mig["old_new_required_segment_mapping"]["early_layout_reproof_gaps"]
     ids = [row["segment_id"] for row in gaps]
-    assert ids == list(PARSE_ZERO_DAYS)
+    assert ids == list(REPROOF_REQUIRED_DAYS)
     for row in gaps:
         assert row["raw_exists"] is True
-        assert row["column_count"] == 23
-        assert row["parser_min_columns"] == 29
-        assert row["outcome"] == "PARSE_ZERO"
+        assert row["column_count"] == 21
+        assert row["parser_supported_widths"] == ["21", "29+"]
+        assert row["parser_outcome"] == "PARSER_CAPABLE"
+        assert row["reproof_status"] == "REPROOF_REQUIRED"
+        assert row["trusted_receipt_present"] is False
         assert row["v2_status"] == "PARTIAL"
         assert row["v3_status"] == "stay_PARTIAL"
         assert row["v3_status"] != "COMPLETE"
         assert row["invent_complete"] is False
     remaining = mig["remaining_genuine_gaps"]
-    assert remaining["items"] == list(PARSE_ZERO_DAYS)
+    assert remaining["items"] == list(REPROOF_REQUIRED_DAYS)
     assert remaining["classification"] == "stay_PARTIAL"
     assert remaining["dataset_complete_claim"] is False
-    assert remaining["parse_zero_invent_complete"] == "FORBIDDEN"
-    assert mig["parse_zero_invent_complete"] == "FORBIDDEN"
+    assert remaining["unreconciled_raw_invent_complete"] == "FORBIDDEN"
+    assert mig["unreconciled_raw_invent_complete"] == "FORBIDDEN"
     assert mig["after"]["history_target_start"] == OFFICIAL_START
     assert mig["behavior_change"]["history_target_start"] == OFFICIAL_START
+
+
+def test_early_layout_observations_are_metadata_not_completion_authority() -> None:
+    evidence = _load(_MIGRATION)["official_evidence"]
+    observed = evidence["artifact_observations"]
+    assert [item["segment_id"] for item in observed] == list(
+        REPROOF_REQUIRED_DAYS
+    )
+    expected = {
+        "2002-08-02": (
+            562202,
+            4199,
+            "be1219146b4e93bd406d9c988c2b27b672a98beb9982d85d9820cc31797beddd",
+        ),
+        "2002-08-05": (
+            561743,
+            4197,
+            "84701915abda46b3e8eb6e456c486c1b7b7b42a7de9e7d4b919e832078dbeebc",
+        ),
+    }
+    for item in observed:
+        byte_count, row_count, digest = expected[item["segment_id"]]
+        assert item["url"].startswith(
+            "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/files/"
+        )
+        assert item["bytes"] == byte_count
+        assert item["csv_rows"] == row_count
+        assert item["column_count"] == 21
+        assert item["sha256"] == digest
+        assert item["metadata_only"] is True
+        assert item["completion_authority"] is False
 
 
 def test_5886_complete_days_map_into_required_set_not_recomplete() -> None:
@@ -273,7 +308,7 @@ def test_plan_required_segments_uses_official_index_not_calendar() -> None:
     assert WEEKEND_IN_TINY_SPAN not in ids
     assert len(ids) != len(calendar)
     assert len(ids) != V2_REQUIRED
-    for day in PARSE_ZERO_DAYS:
+    for day in REPROOF_REQUIRED_DAYS:
         assert day in ids
     for seg in planned:
         assert seg.expected_scope["segment_granularity"] == (
@@ -290,7 +325,7 @@ def test_plan_required_segments_clips_index_days_to_window() -> None:
     assert [seg.segment_id for seg in planned] == ["2002-08-02", "2002-08-05"]
 
 
-def test_weekend_and_parse_zero_are_not_invented_complete() -> None:
+def test_weekend_and_reproof_required_are_not_invented_complete() -> None:
     policy = coverage_contract_for(DATASET)
     html = _FIXTURE.read_text(encoding="utf-8")
     planned = plan_required_segments(
@@ -298,7 +333,7 @@ def test_weekend_and_parse_zero_are_not_invented_complete() -> None:
     )
     ids = {seg.segment_id for seg in planned}
     assert WEEKEND_IN_TINY_SPAN not in ids
-    for day in PARSE_ZERO_DAYS:
+    for day in REPROOF_REQUIRED_DAYS:
         required = next(seg for seg in planned if seg.segment_id == day)
         status, _detail = evaluate_segment(policy, required, None)
         assert status == "PARTIAL"
@@ -363,7 +398,7 @@ def test_refresh_does_not_rerequire_weekend_absent_from_official_index(
     assert WEEKEND_IN_TINY_SPAN not in ids
     assert len(ids) != V2_REQUIRED
     assert len(ids) != len(calendar)
-    for day in PARSE_ZERO_DAYS:
+    for day in REPROOF_REQUIRED_DAYS:
         row = next(item for item in after if item["segment_id"] == day)
         assert row["status"] == "PARTIAL"
         assert row["status"] != "COMPLETE"
@@ -413,7 +448,10 @@ def test_v2_coverage_floor_not_rewritten_here() -> None:
     assert cap["official_evidence_url"] == OFFICIAL_EVIDENCE_URL
     mig = _load(_MIGRATION)
     assert mig["official_evidence"]["url"] == OFFICIAL_EVIDENCE_URL
-    assert mig["official_evidence"]["do_not_raise_floor_to_hide_parse_zero"] is True
+    assert (
+        mig["official_evidence"]["do_not_raise_floor_to_hide_reproof_gap"]
+        is True
+    )
     assert DATASET in PERMANENT_DEFER_DATASETS
     assert PERMANENT_DEFER_IDS[DATASET] == "PD-D5-JSDA-OTC"
 

@@ -149,15 +149,14 @@ def main(argv: list[str] | None = None) -> int:
         ).fetchone()[0]
         print(f"local COMPLETE total: {total}")
 
-        # Post-seal aggregate follow-up (W70): if this was the last PARTIAL
-        # segment, promote dataset_coverage without a full ledger refresh.
-        # Never invents segs; leaves coverage_segments untouched beyond seal.
+        # Post-seal aggregate follow-up. Generic sync records current evidence
+        # but cannot PARTIAL -> COMPLETE while C10 transition authority is open.
+        # It never invents segments or grants receipt scripts aggregate authority.
         from storage.coverage_ledger import sync_dataset_coverage_from_segments
 
         reagg = sync_dataset_coverage_from_segments(
             conn,
             datasets=[args.dataset],
-            policy_version=args.policy_version,
             wave="restore_local_complete_from_receipt",
         )
         for row in reagg:

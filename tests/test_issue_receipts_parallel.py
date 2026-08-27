@@ -128,7 +128,8 @@ def test_raw_index_and_prepare_skips_no_raw(tmp_path: Path):
     raw_path = raw_dir / (
         "markets_short_ratio_from=2025-01-01_to=2025-01-31_test.json"
     )
-    raw_path.write_text('{"rows":[1,2,3]}', encoding="utf-8")
+    raw_path.write_text('{"rows":[1,2]}', encoding="utf-8")
+    raw_path.chmod(0o444)
     _seed_db(db)
 
     conn = sqlite3.connect(db)
@@ -167,9 +168,11 @@ def test_cli_dry_run_exits_ready(tmp_path: Path, capsys: pytest.CaptureFixture[s
     data_dir = tmp_path / "data"
     raw_dir = data_dir / "raw" / "jquants" / "2026" / "08" / "11"
     raw_dir.mkdir(parents=True)
-    (
+    raw_path = (
         raw_dir / "markets_short_ratio_from=2025-01-01_to=2025-01-31_test.json"
-    ).write_text('{"ok":true,"rows":[1]}', encoding="utf-8")
+    )
+    raw_path.write_text('{"ok":true,"rows":[1,2]}', encoding="utf-8")
+    raw_path.chmod(0o444)
     # Empty stub must not count as raw for another segment.
     (
         raw_dir / "markets_short_ratio_date=2025-03-04_stub.json"

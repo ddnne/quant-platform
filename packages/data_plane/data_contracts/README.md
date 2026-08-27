@@ -31,8 +31,11 @@ backfill planning, Ops MCP, and READY profiles must derive from this
 contract and must not independently define a history start or coverage
 mode that exceeds official provision.
 
-JSON documents are optional at `specs/source_capability/*.json`; an empty
-directory is valid. The loader rejects unknown fields and unknown
-`history_mode` values. `required_domain_subset_official(contract)` is the
-helper later lanes call. This package does not rewrite
-`plan_required_segments` and does not invent COMPLETE.
+The authoritative JSON documents ship at
+`data_contracts/source_capability_contracts/*.json`. The default loader is
+package-relative and rejects a missing or incomplete bundled authority;
+explicit custom fixture directories retain missing/empty-as-empty behavior.
+The loader rejects unknown fields and unknown `history_mode` values.
+`required_domain_subset_official(contract)` is the helper later lanes call.
+This package does not rewrite `plan_required_segments` and does not invent
+COMPLETE.

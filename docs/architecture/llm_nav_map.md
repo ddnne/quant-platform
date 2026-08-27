@@ -4,8 +4,7 @@
 **Paired ADR:** [`adr_llm_friendly_refactor.md`](./adr_llm_friendly_refactor.md) (**Accepted (Grok 2026-08-12)**).  
 **Live residual SoT (sole):** [`../phase62_residual_status.md`](../phase62_residual_status.md)  
 — **live flags only** (COMPLETE segs / Mass·READY / pins / DEFER). Experiment scores: R2 + D1.  
-**Live finding ledger (sole):** [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md)  
-— `docs/reviews/P632_wave*` / Independent A/B/C revisits are historical freezes, not live SoT. Do not add more.  
+**Live finding ledger (sole):** [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md). Historical review waves are available only through Git history.
 **This map never embeds live counts** (acq / residual agents own those numbers).  
 **Layout SoT:** [`repo_layout_migration.md`](./repo_layout_migration.md) (**DONE** Batches 0–E; Batch Z DEFER)  
 **Architecture hub:** [`../architecture.md`](../architecture.md) (PIT / Coverage V2 / MCP; not residual counts)
@@ -24,10 +23,10 @@
 | 2 | **This file** | Task routing + do-not list |
 | 3 | [`../phase62_residual_status.md`](../phase62_residual_status.md) | **Live residual SoT (sole)** — COMPLETE segs, raw_n, C8, tip, Phase7 OFF, Mass NO-GO |
 | 4 | [`../architecture.md`](../architecture.md) | PIT sole read path, Coverage V2, MCP planes (not residual counts) |
-| 5 | *One* domain doc for your task (table below) | Contract detail |
+| 5 | [`../operations/current_production_runbook.md`](../operations/current_production_runbook.md) | **Current executable production runbook** |
 
 **Refactor / layout / import policy work:** also read the [ADR](./adr_llm_friendly_refactor.md).  
-**Review / findings work:** also read [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md) (not a new `docs/reviews` wave).
+**Review / findings work:** also read [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md); update its machine-readable companion rather than creating a dated review snapshot.
 
 ---
 
@@ -42,8 +41,8 @@
 ✗ Call market HTTP outside packages/data_plane/ingestion
 ✗ Commit secrets, data/*.sqlite, .venv, egg-info, node_modules
 ✗ Treat docs/phase62*_status.md / final_report as current residual SoT
-✗ Treat docs/reviews wave / Independent A/B/C revisit files as live finding SoT
-✗ Create docs/reviews/P632_wave* or Independent A/B/C revisit files
+✗ Treat a historical Git review snapshot as live finding SoT
+✗ Reintroduce dated review-wave files into the active docs tree
 ✗ Weaken publish fail-closed guards or mass_research operator_override rejection
 ✗ Delete Python↔TS parity mirrors or governed.js codegen without replacement
 ✗ Create scripts/run_wNN_*.py or docs/proof/w08*_wNN_*.md as an eval warehouse
@@ -122,7 +121,7 @@ Details + exceptions: ADR §5.
 | LLM-friendly refactor | plane READMEs + `tests/test_plane_import_boundaries.py` | [ADR](./adr_llm_friendly_refactor.md) (**Accepted**); residual for live status |
 | New research hyp / daily_path_DD | `research.daily_path_eval` · `research.eval_registry` · `research.cf_mass_eval_job` | [ADR recording](./adr_research_recording.md) — **completion requires an R2 `research/eval/job={id}/` put**; no new `run_wNN` script |
 | Existing `run_w*` / wave proofs | **deleted** | [`wave_assets_deprecated.md`](./wave_assets_deprecated.md) |
-| Eval job index (D1/R2) | `research.eval_registry` · `platform/workers/quant-ops-mcp/migrations/0006_research_eval_jobs.sql` | recording ADR |
+| Legacy eval recording | `research.eval_registry` (offline/R2 artifact helper only) | the former Ops-D1 migration owner was removed; Mass remains NO-GO |
 | Test tiers (G0/G1/G2) | `tests/README.md` | this map §11 B1-d |
 
 ---
@@ -173,7 +172,7 @@ Full policy: ADR §5.2.
 | **1 Domain** | `pit_api`, `core_engine`, `features`, `paper`, `agents`, `quant_data_access`, `data_sources` | By task |
 | **2 Ops** | `docs/operations/*`, phase runbooks, worker READMEs | When operating live systems; not residual counts |
 | **3 Proof** | `docs/proof/*` | Cite evidence; do not invent status |
-| **4 Historical** | dated ops notes / proof; `docs/reviews/*` wave and Independent A/B/C freezes | Banner / archive; **not** residual SoT; **not** live finding SoT |
+| **4 Historical** | prior review waves and superseded status snapshots | Git history only; **not** residual SoT; **not** live finding SoT |
 
 ### 7.1 Phase / residual file index (maintenance)
 
@@ -181,8 +180,7 @@ Full policy: ADR §5.2.
 |------|-----|
 | `docs/phase62_residual_status.md` | **live residual SoT (sole)** — COMPLETE / raw_n / C8 / tip / Mass·READY / Phase7 |
 | `docs/phase633_finding_ledger.md` | **live finding ledger (sole)** — empty P0/P1 scaffold; reviewers fill |
-| `docs/architecture/adr_review_findings_sot.md` | **current** — review wave files are historical freezes; do not add more |
-| `docs/reviews/*` | **historical freezes** — keep; not live finding SoT |
+| `docs/architecture/adr_review_findings_sot.md` | **current** — one live ledger; historical reviews stay in Git history |
 | `docs/architecture.md` | **current architecture hub** (banner → residual; no live counts) |
 | `docs/architecture/llm_nav_map.md` | **current** agent entry map (this file; no live counts) |
 | `docs/architecture/repo_layout_migration.md` | **current layout SoT** |
@@ -200,7 +198,7 @@ Full policy: ADR §5.2.
 | `docs/proof/*` | dated evidence |
 | `docs/operations/*` | ops runbooks |
 
-Historical phase status / final_report / checklist / acceptance-plan / dated live-sync files carry a **Historical snapshot** banner pointing at [`phase62_residual_status.md`](../phase62_residual_status.md). **Never** treat them as live residual SoT. `docs/reviews/*` wave / Independent A/B/C files stay freezes — live findings: [`phase633_finding_ledger.md`](../phase633_finding_ledger.md).
+Historical phase status / final_report / checklist / acceptance-plan / dated live-sync files carry a **Historical snapshot** banner pointing at [`phase62_residual_status.md`](../phase62_residual_status.md). **Never** treat them as live residual SoT. Prior review waves are recoverable from Git history; live findings are in [`phase633_finding_ledger.md`](../phase633_finding_ledger.md).
 
 ---
 
@@ -240,7 +238,7 @@ Test tiers: `tests/README.md` (G0/G1/G2; ADR §12 / B1-d).
 | Ingest | `run_ingestion_once.py`, `run_historical_backfill.py` | data_plane |
 | Coverage / receipts | `write_collection_receipts.py`, `refresh_coverage_ledger.py`, `issue_receipts_parallel.py`, `issue_signed_receipts_for_segments.py` | data_plane / edge (**empty-raw ban** incl. `{"data":[]}`; no COMPLETE without raw; sticky COMPLETE survives day-roll) |
 | Sync / D1 | `sync_d1_to_sqlite.py`, `report_d1_local_sync_lag.py`, `restore_local_complete_from_receipt.py` | ops |
-| Projection | `export_ops_projection.py`, `publish_ops_projection.py`, `ops_reeval_freshness.py`, `ops_reeval_observed_window.py`, `ops_status.py` | ops (**publish fail-closed**; observed_* re-eval does not rewrite segments) |
+| Projection | `export_ops_projection.py`, `publish_ops_projection.py`, `ops_status.py` | ops (**dedicated append-only generation; pointer-last activation**) |
 | Paper / agents | CLIs deleted; `paper_runtime` APIs + `agents/` | research / product |
 | Validation | `run_phase35_validation.py`, `run_phase4_accept.py` | edge / features |
 | Codegen | `generate_governed_js.py`, `verify_governed_js_drift.py` | contracts → Workers |

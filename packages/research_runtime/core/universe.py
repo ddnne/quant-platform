@@ -12,17 +12,20 @@ forever through an older per-code row. Richer filters (sector, scale, explicit
 listing-status flags in the raw payload, liquidity screens) are deliberately
 out of scope for the minimal engine.
 
-A caller-injected fixed universe must be an :class:`EquityMasterMap` produced
-by :func:`load_master` / :func:`membership_at` (``pit_as_of`` /
-``membership_proof`` required). A raw code list is rejected unless
-``QP_ALLOW_FIXED_UNIVERSE=1``. That env is research-only; it is not a Mass,
-READY, or GO path.
+A caller-injected fixed universe is only a candidate allowlist.  It never
+proves membership: the engine intersects the candidates with
+:func:`load_master` at every decision instant.  An :class:`EquityMasterMap`
+produced by :func:`load_master` / :func:`membership_at` is the normal input.
+A raw code list is rejected unless ``QP_ALLOW_FIXED_UNIVERSE=1``.  That env
+only admits offline candidate codes; it cannot bypass the daily PIT gate and
+is not a Mass, READY, or GO path.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any
 
 import pit
@@ -36,6 +39,66 @@ _WRAPPER_KEYS = frozenset({"pit_as_of", "membership_proof", "codes", "membership
 
 class RawFixedUniverseError(ValueError):
     """Raw code list injected without PIT ``as_of`` / ``membership_proof``."""
+
+
+class ResolvedDailyUniverse:
+    """Immutable date-indexed candidates from a governed snapshot resolver.
+
+    Product policy owns the rule.  The core copies its closed result and still
+    intersects every day's candidates with that day's PIT master.  A missing
+    decision date therefore fails closed instead of falling back to a static
+    list.
+    """
+
+    __slots__ = (
+        "membership_by_date",
+        "membership_proof",
+        "resolved_membership_digest",
+        "rule_digest",
+    )
+
+    def __init__(self, universe: Any) -> None:
+        raw = getattr(universe, "membership_by_date", None)
+        resolved_digest = _nonempty_str(
+            getattr(universe, "resolved_membership_digest", None)
+        )
+        rule_digest = _nonempty_str(getattr(universe, "rule_digest", None))
+        proof = _nonempty_str(getattr(universe, "membership_proof", None))
+        if (
+            not isinstance(raw, Mapping)
+            or not resolved_digest.startswith("sha256:")
+            or not rule_digest.startswith("sha256:")
+            or proof != "controlled-resolved-universe:" + resolved_digest
+        ):
+            raise RawFixedUniverseError(
+                "daily resolved universe requires governed rule and membership digests"
+            )
+        copied: dict[str, tuple[str, ...]] = {}
+        for day, values in raw.items():
+            if isinstance(values, (str, bytes)):
+                raise RawFixedUniverseError(
+                    "daily resolved universe codes must be a sequence"
+                )
+            codes = tuple(sorted({str(code).strip() for code in values}))
+            if not str(day).strip() or not codes or any(not code for code in codes):
+                raise RawFixedUniverseError(
+                    "daily resolved universe has an empty date or membership"
+                )
+            copied[str(day)] = codes
+        if not copied:
+            raise RawFixedUniverseError("daily resolved universe is empty")
+        self.membership_by_date = MappingProxyType(copied)
+        self.resolved_membership_digest = resolved_digest
+        self.rule_digest = rule_digest
+        self.membership_proof = proof
+
+    def codes_for(self, decision_date: str) -> tuple[str, ...]:
+        try:
+            return self.membership_by_date[str(decision_date)]
+        except KeyError as exc:
+            raise RawFixedUniverseError(
+                f"daily resolved universe has no membership for {decision_date}"
+            ) from exc
 
 
 class EquityMasterMap(dict[str, EquityMaster]):
@@ -105,13 +168,15 @@ def _reject_raw() -> None:
 
 def resolve_injected_universe(
     universe: Any, *, db_path: Any = None
-) -> tuple[str, ...] | None:
-    """Frozen codes for a caller-injected universe, or None for PIT-per-day.
+) -> tuple[str, ...] | ResolvedDailyUniverse | None:
+    """Candidate allowlist codes, or ``None`` for all PIT members per day.
 
     Accepts :class:`EquityMasterMap` (from :func:`load_master`) or a mapping /
     object that carries a non-empty ``pit_as_of`` / ``membership_proof``.
     A ``codes`` + ``pit_as_of`` payload is re-checked via :func:`membership_at`.
     Raw sequences of codes are rejected unless ``QP_ALLOW_FIXED_UNIVERSE=1``.
+    The returned codes are not a membership proof; callers must intersect
+    them with :func:`load_master` at the decision instant.
     """
     if universe is None:
         return None
@@ -119,6 +184,9 @@ def resolve_injected_universe(
         raise TypeError(
             f"unsupported universe injection type: {type(universe)!r}"
         )
+
+    if hasattr(universe, "membership_by_date"):
+        return ResolvedDailyUniverse(universe)
 
     proof = _proof_of(universe)
     as_of = _nonempty_str(getattr(universe, "pit_as_of", None))

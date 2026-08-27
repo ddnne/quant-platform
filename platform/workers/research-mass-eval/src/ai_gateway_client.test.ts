@@ -17,25 +17,22 @@ const frozen = {
   CONTINUOUS_PAPER: "UNARMED",
 } as Env;
 
-type ClientEnv = Env & { GATEWAY_TOKEN?: string };
+type ClientEnv = Env;
 
 function mockGateway(
   json: unknown,
   calls: unknown[],
 ): NonNullable<Env["AI_GATEWAY"]> {
   return {
-    fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-      calls.push({ input, init });
-      return new Response(JSON.stringify(json), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+    complete: async (input: unknown, options?: { idempotency_key?: string }) => {
+      calls.push({ input, options });
+      return { http_status: 200, body: json };
     },
   } as NonNullable<Env["AI_GATEWAY"]>;
 }
 
 describe("completeViaGateway unbound fail-closed", () => {
-  it("returns ai_gateway_unbound when AI_GATEWAY is missing or undefined and does not fetch", async () => {
+  it("returns ai_gateway_unbound when AI_GATEWAY is missing or undefined", async () => {
     const globalCalls: unknown[] = [];
     const orig = globalThis.fetch;
     globalThis.fetch = (async (...args: unknown[]) => {
@@ -56,16 +53,6 @@ describe("completeViaGateway unbound fail-closed", () => {
     }
   });
 
-  it("returns gateway_token_unbound when AI_GATEWAY is bound but GATEWAY_TOKEN is missing and does not fetch", async () => {
-    const calls: unknown[] = [];
-    const env: ClientEnv = {
-      ...frozen,
-      AI_GATEWAY: mockGateway({ ok: true }, calls),
-    };
-    const out = await completeViaGateway(env, body);
-    expect(out).toEqual({ ok: false, reason: "gateway_token_unbound" });
-    expect(calls).toEqual([]);
-  });
 });
 
 describe("completeViaGateway response contract", () => {
@@ -73,7 +60,6 @@ describe("completeViaGateway response contract", () => {
     const calls: unknown[] = [];
     const env: ClientEnv = {
       ...frozen,
-      GATEWAY_TOKEN: "gateway-secret",
       AI_GATEWAY: mockGateway({ ok: true, text: "raw" }, calls),
     };
     const out = await completeViaGateway(env, body);
@@ -85,7 +71,6 @@ describe("completeViaGateway response contract", () => {
     const calls: unknown[] = [];
     const env: ClientEnv = {
       ...frozen,
-      GATEWAY_TOKEN: "gateway-secret",
       AI_GATEWAY: mockGateway(
         {
           ok: true,
@@ -122,7 +107,6 @@ describe("completeViaGateway response contract", () => {
       const calls: unknown[] = [];
       const env: ClientEnv = {
         ...frozen,
-        GATEWAY_TOKEN: "gateway-secret",
         AI_GATEWAY: mockGateway(payload, calls),
       };
       const out = await completeViaGateway(env, body);

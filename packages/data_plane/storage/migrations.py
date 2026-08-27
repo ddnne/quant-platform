@@ -17,26 +17,40 @@ class Migration:
     sql: str
 
 
-def _invalidate_snapshot_triggers(*items: str | tuple[str, str]) -> str:
-    """Fact/revision INSERT/UPDATE/DELETE must drop snapshot_ready."""
-    chunks: list[str] = []
-    for item in items:
-        table, stem = item if isinstance(item, tuple) else (item, item)
-        for event, suffix in (("INSERT", "i"), ("UPDATE", "u"), ("DELETE", "d")):
-            chunks.append(
-                f"""
-        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_{stem}_{suffix}
-        AFTER {event} ON {table} BEGIN
+@dataclass(frozen=True, slots=True)
+class SnapshotInvalidationTrigger:
+    table: str
+    stem: str
+    event: str
+    suffix: str
+
+    @property
+    def name(self) -> str:
+        return f"invalidate_snapshot_{self.stem}_{self.suffix}"
+
+    @property
+    def migration_sql(self) -> str:
+        return f"""
+        CREATE TRIGGER IF NOT EXISTS {self.name}
+        AFTER {self.event} ON {self.table} BEGIN
             UPDATE local_snapshot_policy SET snapshot_ready=0,
                 active_snapshot_id=NULL,
                 last_error='fact mutation invalidated research snapshot'
             WHERE singleton=1;
         END;"""
-            )
-    return "".join(chunks)
+
+    @property
+    def sqlite_master_sql(self) -> str:
+        return (
+            f"CREATE TRIGGER {self.name} AFTER {self.event} ON {self.table} "
+            "BEGIN UPDATE local_snapshot_policy SET snapshot_ready=0, "
+            "active_snapshot_id=NULL, "
+            "last_error='fact mutation invalidated research snapshot' "
+            "WHERE singleton=1; END"
+        )
 
 
-_PHASE6_FACT_TRIGGERS = _invalidate_snapshot_triggers(
+_PHASE6_FACT_TARGETS: tuple[str | tuple[str, str], ...] = (
     "jquants_listed_info",
     "jquants_daily_bars",
     "jquants_market_calendar",
@@ -50,6 +64,55 @@ _PHASE6_FACT_TRIGGERS = _invalidate_snapshot_triggers(
     "jsda_bond_trades_revisions",
     "jsda_repo_rates_revisions",
 )
+_PHASE61_OTC_TARGETS: tuple[str | tuple[str, str], ...] = (
+    ("jsda_otc_bond_reference_prices", "jsda_otc_reference"),
+    (
+        "jsda_otc_bond_reference_prices_revisions",
+        "jsda_otc_reference_revisions",
+    ),
+)
+_PHASE62_CORPORATE_TARGETS: tuple[str | tuple[str, str], ...] = (
+    ("jsda_corporate_bond_transactions", "jsda_corporate_transactions"),
+    (
+        "jsda_corporate_bond_transactions_revisions",
+        "jsda_corporate_transactions_revisions",
+    ),
+)
+
+
+def _trigger_contracts(
+    items: tuple[str | tuple[str, str], ...],
+) -> tuple[SnapshotInvalidationTrigger, ...]:
+    return tuple(
+        SnapshotInvalidationTrigger(
+            table=table,
+            stem=stem,
+            event=event,
+            suffix=suffix,
+        )
+        for item in items
+        for table, stem in (
+            item if isinstance(item, tuple) else (item, item),
+        )
+        for event, suffix in (("INSERT", "i"), ("UPDATE", "u"), ("DELETE", "d"))
+    )
+
+
+SNAPSHOT_INVALIDATION_TRIGGERS: tuple[SnapshotInvalidationTrigger, ...] = (
+    _trigger_contracts(
+        _PHASE6_FACT_TARGETS
+        + _PHASE61_OTC_TARGETS
+        + _PHASE62_CORPORATE_TARGETS
+    )
+)
+
+
+def _invalidate_snapshot_triggers(*items: str | tuple[str, str]) -> str:
+    """Fact/revision INSERT/UPDATE/DELETE must drop snapshot_ready."""
+    return "".join(_trigger.migration_sql for _trigger in _trigger_contracts(items))
+
+
+_PHASE6_FACT_TRIGGERS = _invalidate_snapshot_triggers(*_PHASE6_FACT_TARGETS)
 
 
 MIGRATIONS: tuple[Migration, ...] = (
@@ -309,13 +372,7 @@ MIGRATIONS: tuple[Migration, ...] = (
             ON jsda_otc_bond_reference_prices
                (quote_effective_date, available_at, security_code);
         """
-        + _invalidate_snapshot_triggers(
-            ("jsda_otc_bond_reference_prices", "jsda_otc_reference"),
-            (
-                "jsda_otc_bond_reference_prices_revisions",
-                "jsda_otc_reference_revisions",
-            ),
-        ),
+        + _invalidate_snapshot_triggers(*_PHASE61_OTC_TARGETS),
     ),
     Migration(
         7,
@@ -382,16 +439,7 @@ MIGRATIONS: tuple[Migration, ...] = (
             ON jsda_corporate_bond_transactions
                (trade_date, available_at, security_code);
         """
-        + _invalidate_snapshot_triggers(
-            (
-                "jsda_corporate_bond_transactions",
-                "jsda_corporate_transactions",
-            ),
-            (
-                "jsda_corporate_bond_transactions_revisions",
-                "jsda_corporate_transactions_revisions",
-            ),
-        ),
+        + _invalidate_snapshot_triggers(*_PHASE62_CORPORATE_TARGETS),
     ),
     Migration(
         9,
@@ -419,6 +467,146 @@ MIGRATIONS: tuple[Migration, ...] = (
             RENAME TO raw_retention_manifests;
         CREATE INDEX IF NOT EXISTS ix_raw_retention_run_complete
             ON raw_retention_manifests (run_id, completeness, dataset);
+        """,
+    ),
+    Migration(
+        10,
+        "phase633_immutable_local_coverage_proofs",
+        """
+        CREATE TABLE IF NOT EXISTS local_coverage_proofs (
+            proof_id                 TEXT PRIMARY KEY CHECK
+                (length(proof_id) = 71 AND
+                 substr(proof_id, 1, 7) = 'sha256:' AND
+                 substr(proof_id, 8) NOT GLOB '*[^0-9a-f]*'),
+            format                   TEXT NOT NULL CHECK
+                (format = 'local-coverage-proof/v1'),
+            required_datasets_json   TEXT NOT NULL,
+            coverage_proof_json      TEXT NOT NULL,
+            coverage_policy_version  TEXT NOT NULL,
+            coverage_policy_digest   TEXT NOT NULL,
+            source_generation        INTEGER NOT NULL CHECK
+                (source_generation > 0),
+            applied_generation       INTEGER NOT NULL CHECK
+                (applied_generation > 0),
+            persisted_at             TEXT NOT NULL
+        );
+
+        CREATE TRIGGER IF NOT EXISTS local_coverage_proofs_no_update
+        BEFORE UPDATE ON local_coverage_proofs BEGIN
+            SELECT RAISE(ABORT, 'local coverage proofs are immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS local_coverage_proofs_no_delete
+        BEFORE DELETE ON local_coverage_proofs BEGIN
+            SELECT RAISE(ABORT, 'local coverage proofs are immutable');
+        END;
+        """,
+    ),
+    Migration(
+        11,
+        "phase631_exact_coverage_inventory_proofs",
+        """
+        CREATE TABLE IF NOT EXISTS local_coverage_proofs_v2 (
+            proof_id                 TEXT PRIMARY KEY CHECK
+                (length(proof_id) = 71 AND
+                 substr(proof_id, 1, 7) = 'sha256:' AND
+                 substr(proof_id, 8) NOT GLOB '*[^0-9a-f]*'),
+            format                   TEXT NOT NULL CHECK
+                (format = 'local-coverage-proof/v2'),
+            build_id                 TEXT NOT NULL UNIQUE,
+            publication_cutoff       TEXT NOT NULL CHECK
+                (length(publication_cutoff) = 10),
+            required_datasets_json   TEXT NOT NULL,
+            coverage_proof_json      TEXT NOT NULL,
+            coverage_policy_version  TEXT NOT NULL,
+            coverage_policy_digest   TEXT NOT NULL,
+            inventory_set_digest     TEXT NOT NULL,
+            source_generation        INTEGER NOT NULL CHECK
+                (source_generation > 0),
+            applied_generation       INTEGER NOT NULL CHECK
+                (applied_generation > 0),
+            persisted_at             TEXT NOT NULL
+        );
+
+        CREATE TRIGGER IF NOT EXISTS local_coverage_proofs_v2_no_update
+        BEFORE UPDATE ON local_coverage_proofs_v2 BEGIN
+            SELECT RAISE(ABORT, 'local coverage proofs v2 are immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS local_coverage_proofs_v2_no_delete
+        BEFORE DELETE ON local_coverage_proofs_v2 BEGIN
+            SELECT RAISE(ABORT, 'local coverage proofs v2 are immutable');
+        END;
+        """,
+    ),
+    Migration(
+        12,
+        "phase631_coverage_complete_transition_tombstones",
+        """
+        CREATE TABLE IF NOT EXISTS coverage_complete_transition_tombstones (
+            transition_id              TEXT PRIMARY KEY CHECK
+                (length(transition_id) = 71 AND
+                 substr(transition_id, 1, 7) = 'sha256:' AND
+                 substr(transition_id, 8) NOT GLOB '*[^0-9a-f]*'),
+            format                     TEXT NOT NULL CHECK
+                (format = 'coverage-complete-transition/v1'),
+            authority_domain           TEXT NOT NULL CHECK
+                (authority_domain =
+                 'quant-platform/coverage/complete-transition/v1'),
+            issuer_key_id              TEXT NOT NULL,
+            build_id                   TEXT NOT NULL,
+            publication_cutoff         TEXT NOT NULL CHECK
+                (length(publication_cutoff) = 10),
+            dataset_set_digest         TEXT NOT NULL,
+            from_state_digest          TEXT NOT NULL,
+            target_state_digest        TEXT NOT NULL,
+            coverage_policy_set_digest TEXT NOT NULL,
+            inventory_set_digest       TEXT NOT NULL,
+            receipt_set_digest         TEXT NOT NULL,
+            signed_evidence_json        TEXT NOT NULL,
+            consumed_at                TEXT NOT NULL,
+            UNIQUE (build_id, dataset_set_digest)
+        );
+
+        CREATE TRIGGER IF NOT EXISTS
+            coverage_complete_transition_tombstones_no_update
+        BEFORE UPDATE ON coverage_complete_transition_tombstones BEGIN
+            SELECT RAISE(ABORT, 'coverage transition tombstones are immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS
+            coverage_complete_transition_tombstones_no_delete
+        BEFORE DELETE ON coverage_complete_transition_tombstones BEGIN
+            SELECT RAISE(ABORT, 'coverage transition tombstones are immutable');
+        END;
+        """,
+    ),
+    Migration(
+        13,
+        "phase631_receipt_product_materializations",
+        """
+        CREATE TABLE IF NOT EXISTS receipt_product_materializations (
+            operation_id        TEXT PRIMARY KEY,
+            run_id              INTEGER NOT NULL UNIQUE,
+            source              TEXT NOT NULL CHECK (source = 'jquants'),
+            dataset             TEXT NOT NULL,
+            segment_id          TEXT NOT NULL,
+            artifact_key        TEXT NOT NULL UNIQUE,
+            artifact_digest     TEXT NOT NULL,
+            artifact_body       TEXT NOT NULL,
+            row_count           INTEGER NOT NULL CHECK (row_count > 0),
+            byte_count          INTEGER NOT NULL CHECK (byte_count > 0),
+            manifest_key        TEXT NOT NULL UNIQUE,
+            manifest_digest     TEXT NOT NULL,
+            raw_manifest_key    TEXT NOT NULL,
+            raw_manifest_digest TEXT NOT NULL,
+            raw_page_count      INTEGER NOT NULL CHECK (raw_page_count > 0),
+            raw_row_count       INTEGER NOT NULL CHECK (raw_row_count > 0),
+            raw_bytes           INTEGER NOT NULL CHECK (raw_bytes > 0),
+            committed_at        TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_receipt_product_segment
+            ON receipt_product_materializations(dataset,segment_id,run_id);
         """,
     ),
 )

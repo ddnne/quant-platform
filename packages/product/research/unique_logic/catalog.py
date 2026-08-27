@@ -1,8 +1,12 @@
-"""Load unique_logic catalog. YAML files are gone; compiled catalog is SoT.
+"""Load the legacy unique_logic replay catalog explicitly.
 
 yaml_* names (unique_family_ids_from_yaml, yaml_combo_rows) are kept aliases;
 unique_family_ids_from_catalog / combo_rows_from_catalog are the same objects.
 YAML overlay replaces the compiled map only when QP_ALLOW_YAML_OVERLAY=1.
+
+This module is not imported by the exact-four Pilot or the Mass scheduler.
+The immutable rows live under ``artifacts/replay`` and exist only for audit,
+replay, and migration compatibility.
 """
 from __future__ import annotations
 
@@ -110,8 +114,14 @@ def catalog_spec(logic_id: str, *, root: Path | None = None) -> dict[str, Any] |
 
 
 def load_compiled_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
-    """Closed-DSL rows from the compiler map. Load SoT."""
-    path = (root or repo_root()) / "specs" / "research_catalog" / "migration.jsonl"
+    """Closed-DSL rows from the immutable legacy replay artifact."""
+    path = (
+        (root or repo_root())
+        / "artifacts"
+        / "replay"
+        / "legacy_strategy_catalog"
+        / "migration.jsonl"
+    )
     specs: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():

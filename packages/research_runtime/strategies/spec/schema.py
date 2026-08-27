@@ -19,6 +19,8 @@ Version history
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -558,6 +560,30 @@ class StrategySpec:
         return body
 
 
+def iter_feature_refs(spec: StrategySpec) -> tuple[FeatureRef, ...]:
+    """Return every governed feature reference in semantic rule order."""
+    if not isinstance(spec, StrategySpec):
+        raise TypeError("StrategySpec required")
+    rule = spec.rule
+    if isinstance(rule, ValueMomentumAgreeRule):
+        return (rule.value_feature, rule.momentum_feature)
+    return (rule.feature,)
+
+
+def strategy_spec_digest(spec: StrategySpec) -> str:
+    """Canonical digest for an exact StrategySpec body."""
+    if not isinstance(spec, StrategySpec):
+        raise TypeError("StrategySpec required")
+    raw = json.dumps(
+        spec.to_dict(),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
 __all__ = [
     "CrossSectionRankRule",
     "FeatureRef",
@@ -571,4 +597,6 @@ __all__ = [
     "ThresholdRule",
     "TopKRule",
     "ValueMomentumAgreeRule",
+    "iter_feature_refs",
+    "strategy_spec_digest",
 ]

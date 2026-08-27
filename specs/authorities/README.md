@@ -1,0 +1,106 @@
+# Authority contracts
+
+This directory freezes the seven signing principals and the cross-process
+protocols they are allowed to use. Validate the checked-in contract with:
+
+```sh
+uv run --frozen python scripts/authority_principal_manifest.py
+```
+
+The manifest is intentionally `PENDING`: it creates no user, key, Worker,
+binding, database, bucket, or socket. Its body digest is independently pinned
+by the validator, and it binds the canonical digests of all protocol schemas in
+this directory.
+
+Each entrypoint has an exact method ACL binding authenticated caller, operation,
+purpose, environment, and authentication mechanism. `allowed_callers` is only a
+derived inventory; it does not grant every listed caller every listed method.
+Parallel lanes may extend `parallel_protocol_schema_digests` only by adding the
+reviewed schema path to the validator in the same commit.
+
+`receipt` is the sole Cloudflare-hosted signer. It is a separate
+`quant-platform-receipt-evidence-authority` Worker in its own package and uses
+a SQLite Durable Object. Direct `CryptoKey` persistence is not available in
+workerd, so the runtime generates Ed25519, AES-256-GCM-wraps it with a random
+96-bit IV and canonical authority/environment/generation AAD, stores only the
+wrapped ciphertext, then imports the operational key as non-extractable. The
+secret inventory is exactly `RECEIPT_KEY_WRAP_KEY`; wrong key, AAD, ciphertext,
+or generation fails closed. Its sole R2 binding is the dedicated
+`quant-receipt-evidence` bucket. Authority raw, reconciliation evidence, and
+signed product artifacts use disjoint prefixes; each object is created
+conditionally and read back exactly before issuance. The signer has no binding
+to shared `quant-structured`. It also owns the scoped
+quant-ingest run/raw/product/receipt evidence operations, Durable Object, and
+outgoing `JQUANTS_ACQUISITION` capabilities.
+The caller-side `RECEIPT_EVIDENCE_AUTHORITY` binding is recorded separately as
+an inbound relationship. The Worker has no public URL or route, and public
+`fetch` is fixed to 404. The other six authorities are separate local
+OS services. `trader` is additionally constrained to a WebAuthn platform or
+hardware credential with user presence; it may not use a file-backed signer.
+
+The canonical future Trader wire contract is
+`specs/ready/exact_four_trader_authorization_v2.schema.json`. Its audit-only
+compiler accepts unsigned Pilot READY claims, while the separate positive
+entrypoint requires the unavailable `VerifiedPilotReadinessV2` capability. The
+envelope binds governed RP and credential generations, canonical WebAuthn
+bytes, an atomic one-use-plus-counter ledger transaction, and the existing
+append-only `authority-event/v2` convention. Final issuance is exactly the
+authority event observation time and expiry is exactly the bound challenge
+expiry; neither remains caller-selectable. A stable decision/transaction key
+lets the future store atomically reject request or ledger rewraps and return
+only a byte-identical event for a true retry. Canonical decoding proves byte
+identity and size only; challenge randomness belongs to a separate governed
+32-or-more-byte CSPRNG generator that is not active. The older v1 WebAuthn
+schemas and unsigned Trader/execution claims remain audit/replay material and
+cannot enter the v2 positive path. RP/credential registries, credential
+signature verification, the challenge generator, transactional ledger,
+authority event store, and controlled v2 consumer are all still `PENDING`.
+
+The `ingestion-secrets` package now contains the closed typed v2
+`JQUANTS_ACQUISITION` target alongside its time-bounded legacy HTTP proxy. The
+manifest still records an activation-blocking `PENDING` dependency: the typed
+caller/acquisition bindings and reconciliation protocol are implemented, but no
+live binding, cursor-HMAC/wrapping secret, migration, or authority activation is
+provisioned. The target HMAC
+authenticates only opaque live continuation state; response headers and metadata
+are not standalone receipt proof.
+
+The dedicated Worker contains the production fail-closed receipt-side verifier.
+It accepts only a typed live Service Binding capture, independently rechecks the
+closed request, exact 37
+headers, immutable raw bytes, provider pagination/query transitions, chain and
+closed-month Coverage identity, then pins the authority clock only after that
+verification completes. Only a subsequently created transaction context may
+provide the conservative PIT `available_at`/signed `checked_at`; direct
+record-time capture and context-before-capture ordering are rejected. The legacy
+`jquants-pagination-evidence/v1` format is audit/recovery-only and cannot mint a
+new COMPLETE receipt. Structured rows are committed only after canonical
+parse/normalize/natural-key reconciliation; a fresh transaction rereads raw and
+structured state before calling the receipt principal. Acquisition expiry and
+context freshness are rechecked after that commit, immediately before issuance,
+after issuance, and at the final local precommit boundary. Every authority-clock
+tick must be nondecreasing from verified capture completion onward; the existing
+future-skew allowance cannot authorize a clock rollback. The returned envelope
+is public-key verified.
+
+This foundation does not activate D2 or D3. Worker/caller code, typed bindings,
+append/finalize/recover ledgers, immutable D1 triggers, migrations, and workerd
+tests exist, including crash-after-issue recovery and Premium-to-Receipt RPC.
+No production resource, wrapping secret, migration application, PENDING deploy,
+public-key registry activation, signing authorization, or reproof is provisioned.
+The authenticated Premium registration operation returns only the PENDING
+public-key registration; it never returns private material. Persisted HMAC
+headers after a crash remain RAW_ONLY, and master, tip-only,
+current/partial-month acquisition plus the 22-dataset reproof remain pending.
+The exact two-deploy runbook and limited closure-provisioning acceptance are in
+`docs/operations/receipt_evidence_authority_activation.md`.
+
+The frozen-mirror v2 protocols bind environment, authenticated caller, exact
+method and purpose, request digest, D1 identity, signed audit, immutable mirror
+identity, and descriptor identity. A schema-valid handoff is never itself a
+verified capability. Runtime inspection and the OS/socket/event-ledger gates
+described in the ADR must also succeed; those deployment gates remain pending.
+
+The account-wide scope of Cloudflare Workers Scripts Write remains an explicit
+open residual risk. The Worker, Service Binding, Durable Object, and key-custody
+split does not make that deployment permission resource-scoped.

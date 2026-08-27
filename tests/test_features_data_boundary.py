@@ -1,8 +1,8 @@
-"""Features data boundary: facts enter only via ``pit``; no direct SQLite/HTTP.
+"""Features runtime boundary: facts enter through scoped PIT capabilities.
 
-Mirrors ``tests/test_core_data_boundary.py``: static import ban + runtime
-PIT-spy. Features may import :mod:`pit` for reads and stdlib helpers — they
-must not open SQLite, hit the network, or import :mod:`storage`.
+The centralized plane dependency test owns the import graph.  These tests
+observe PIT reads and ensure feature code receives scoped getters and inputs,
+not a database path or unrestricted mapping.
 """
 
 from __future__ import annotations
@@ -13,45 +13,6 @@ import pytest
 
 import features
 import pit
-
-FEATURES_DIR = Path(features.__file__).resolve().parent
-
-FORBIDDEN_SUBSTRINGS = [
-    "import sqlite3",
-    "from sqlite3",
-    "import storage",
-    "from storage",
-    "import httpx",
-    "from httpx",
-    "import requests",
-    "from requests",
-    "import urllib",
-    "from urllib",
-    "import socket",
-]
-
-
-def _features_python_files() -> list[Path]:
-    return sorted(p for p in FEATURES_DIR.rglob("*.py"))
-
-
-def test_features_modules_do_not_import_forbidden_data_paths():
-    offenders: list[str] = []
-    for path in _features_python_files():
-        text = path.read_text(encoding="utf-8")
-        for bad in FORBIDDEN_SUBSTRINGS:
-            for line in text.splitlines():
-                stripped = line.lstrip()
-                if stripped.startswith("#"):
-                    continue
-                if bad in line:
-                    offenders.append(
-                        f"{path.relative_to(FEATURES_DIR.parent)}: {line.strip()}"
-                    )
-    assert not offenders, (
-        "forbidden fact/network imports in features/:\n" + "\n".join(offenders)
-    )
-
 
 def test_features_runtime_does_not_resolve_db_when_pit_spy_set(
     tmp_path, monkeypatch

@@ -1,0 +1,11 @@
+{
+  "schema_version": 3,
+  "purpose": "receipt_verification",
+  "generation": 1,
+  "authority_status": "PENDING",
+  "environment": "staging",
+  "authority_instance_digest": "sha256:0fa133cf345bdd1f979beebb18e3873fbad88ac7631fc7d5b07ffaca34e68ac7",
+  "prior_registry_digest": null,
+  "keys": [],
+  "registry_digest": "sha256:794a893e22df462971765f168db233d5478b7ca9b75f311ee565160be5ee49c1"
+}

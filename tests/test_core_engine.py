@@ -46,6 +46,27 @@ def _uni(db, codes=None):
     return membership_at(close_as_of(START), db_path=db, codes=codes)
 
 
+def _write_master_snapshot(db, *, snapshot_date, codes, available_at):
+    with SqliteStore(db) as store:
+        store.upsert(
+            "jquants_listed_info",
+            [
+                {
+                    "source": "jquants",
+                    "code": code,
+                    "snapshot_date": snapshot_date,
+                    "event_time": f"{snapshot_date}T09:00:00+09:00",
+                    "available_at": available_at,
+                    "ingested_at": available_at,
+                    "company_name": f"Co-{code}",
+                    "sector_17_code": "1",
+                    "market_code": "1",
+                }
+                for code in codes
+            ],
+        )
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
@@ -94,7 +115,10 @@ def test_buy_hold_completes_backtest_next_close(tmp_path):
     assert md["pit_api_version"] == pit.PIT_API_VERSION
     assert md["execution_mode"] == "next_close"
     assert md["strategy_id"] == "buy_hold"
-    assert md["universe_rule"].startswith("fixed:")
+    assert md["universe_rule"] == (
+        "fixed_allowlist_intersect_pit_equity_master_per_decision_day"
+    )
+    assert md["fixed_allowlist"] == sorted(CODES)
     assert md["price_basis"] == RAW
     assert md["signal_lookback_days"] == md["lookback_days"]
     assert md["valuation_mark_policy"] == "last_pit_safe_exact_session_bar"
@@ -430,7 +454,9 @@ def test_raw_code_list_requires_research_env(tmp_path, monkeypatch):
         run_backtest(BuyHold(), START, END, db_path=db, universe=tuple(CODES))
     monkeypatch.setenv(FIXED_UNIVERSE_ENV, "1")
     res = run_backtest(BuyHold(), START, END, db_path=db, universe=tuple(CODES))
-    assert res.metadata["universe_rule"].startswith("fixed:")
+    assert res.metadata["universe_rule"] == (
+        "fixed_allowlist_intersect_pit_equity_master_per_decision_day"
+    )
 
 
 def test_load_master_mapping_injects_fixed_universe(tmp_path):
@@ -478,6 +504,118 @@ def test_universe_uses_latest_complete_master_snapshot(tmp_path):
     run_backtest(rec, START, END, db_path=db)
     assert rec.ctxs[0].universe == ("1332", "8697")
     assert rec.ctxs[1].universe == ("1332",)
+
+
+def test_fixed_allowlist_is_intersected_with_daily_pit_membership(
+    tmp_path, monkeypatch
+):
+    """A candidate allowlist follows listing and delisting snapshots daily."""
+    db = seed_db(tmp_path, codes=["1332", "7203"])
+    _write_master_snapshot(
+        db,
+        snapshot_date="2025-04-01",
+        codes=["1332"],
+        available_at="2025-04-01T08:00:00+09:00",
+    )
+    _write_master_snapshot(
+        db,
+        snapshot_date="2025-04-02",
+        codes=["1332", "7203"],
+        available_at="2025-04-02T08:00:00+09:00",
+    )
+    _write_master_snapshot(
+        db,
+        snapshot_date="2025-04-03",
+        codes=["7203"],
+        available_at="2025-04-03T08:00:00+09:00",
+    )
+    monkeypatch.setenv(FIXED_UNIVERSE_ENV, "1")
+    rec = Recorder()
+    result = run_backtest(
+        rec,
+        START,
+        END,
+        db_path=db,
+        universe=("1332", "7203", "9999"),
+    )
+    assert [ctx.universe for ctx in rec.ctxs] == [
+        ("1332",),
+        ("1332", "7203"),
+        ("7203",),
+        ("7203",),
+    ]
+    assert all(set(ctx.master) == set(ctx.universe) for ctx in rec.ctxs)
+    assert result.metadata["fixed_allowlist"] == ["1332", "7203", "9999"]
+
+
+def test_next_close_pending_order_is_cancelled_after_membership_exit(
+    tmp_path, monkeypatch
+):
+    db = seed_db(tmp_path, codes=["1332", "7203"])
+    _write_master_snapshot(
+        db,
+        snapshot_date="2025-04-01",
+        codes=["1332"],
+        available_at="2025-04-01T08:00:00+09:00",
+    )
+    _write_master_snapshot(
+        db,
+        snapshot_date="2025-04-02",
+        codes=["7203"],
+        available_at="2025-04-02T08:00:00+09:00",
+    )
+
+    class BuyFirstVisible:
+        strategy_id = "buy_first_visible"
+        params = {}
+
+        def __init__(self):
+            self.sent = False
+
+        def on_bar(self, ctx):
+            if self.sent:
+                return []
+            self.sent = True
+            return [OrderIntent(code=ctx.universe[0], target_weight=1.0)]
+
+    monkeypatch.setenv(FIXED_UNIVERSE_ENV, "1")
+    result = run_backtest(
+        BuyFirstVisible(),
+        START,
+        END,
+        db_path=db,
+        universe=("1332", "7203"),
+    )
+    assert result.trades == []
+
+
+def test_same_day_membership_uses_open_decision_instant(tmp_path, monkeypatch):
+    db = seed_db(tmp_path, codes=["1332", "7203"])
+    _write_master_snapshot(
+        db,
+        snapshot_date="2025-04-01",
+        codes=["1332"],
+        available_at="2025-04-01T08:00:00+09:00",
+    )
+    _write_master_snapshot(
+        db,
+        snapshot_date="2025-04-02",
+        codes=["1332", "7203"],
+        available_at="2025-04-02T09:30:00+09:00",
+    )
+    monkeypatch.setenv(FIXED_UNIVERSE_ENV, "1")
+    rec = Recorder()
+    run_backtest(
+        rec,
+        START,
+        END,
+        db_path=db,
+        execution_mode="same_day_close",
+        universe=("1332", "7203"),
+    )
+    assert rec.ctxs[0].universe == ("1332",)
+    assert rec.ctxs[1].universe == ("1332",)
+    assert rec.ctxs[2].universe == ("1332", "7203")
 
 
 def test_open_and_close_as_of_helpers():

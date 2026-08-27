@@ -1,65 +1,52 @@
-# Segment COMPLETE checklist (Phase 6.2.3)
+# Segment COMPLETE checklist
 
-Live COMPLETE **counts** live only in [phase62_residual_status.md](phase62_residual_status.md).  
-Mass / READY / Phase7 remain **NO-GO / OFF** unless residual says otherwise.
+Live counts live only in [phase62_residual_status.md](phase62_residual_status.md).
+Mass, READY, and Pilot do not become GO from this checklist or from green code.
 
-A coverage segment is **COMPLETE** only when **all** of the following hold.
-Row counts, raw retention alone, or Cloudflare fetch success are **not** enough.
+A segment is COMPLETE only when one governed ingestion transaction proves this
+minimal invariant chain:
 
-## Required evidence chain
+1. The required segment was derived from that dataset's effective Coverage
+   policy and SourceCapability; policy id/version/digest match.
+2. The actual source request set exactly covers the required time, universe,
+   discovery, and pagination scope. An overlapping or filtered request is not
+   sufficient.
+3. Every verbatim response page is persisted immutable before parsing, with a
+   canonical manifest and continuation/discovery chain.
+4. The canonical parser and normalizer reproduce the structured transaction.
+5. A contract-derived reread of the complete segment has exactly the same
+   natural-key set and payloads—no missing or extra rows.
+6. The trusted ingestion service derives counts, digests, exhaustion,
+   generation, and timestamp itself, then signs an Ed25519
+   `TRUSTED_COLLECTION` receipt in the same transaction.
+7. The current parser/normalizer authority version and trusted public-key
+   registry verify the receipt. Historical signatures remain audit records but
+   do not retain eligibility across an authority-version change.
+8. The ledger evaluates that receipt and promotes the dataset only if every
+   required segment is COMPLETE.
+9. A signed, immutable Ops Projection generation binds the resulting D1 rows,
+   and its active pointer moves last.
 
-1. **Required segment** exists in `coverage_segments` (`collection-coverage/v2`)
-2. **Structured rows** for the segment window (`jquants_records` or governed JSDA fact table)
-3. **Raw bytes retained** with digests on the receipt (`raw_page_count >= 1`, `digests.raw`)
-4. **Signed SUCCESS receipt** (Ed25519 via `SignedReceiptAuthority`)
-   - `eligibility=TRUSTED_COLLECTION`
-   - Verifiable against `data_contracts/receipt_verify_public_keys.json`
-5. **Identity match**: receipt source/dataset/segment_id/start/end/scope/expected_items == required
-6. **Non-event segments**: `expected_items` must be explicit (for `source_query` unit → typically `1`)
-7. **Pagination exhausted** and raw_row_count == structured_row_count when reconciliation required
-8. **Ledger refresh** promotes segment to COMPLETE via `evaluate_segment`
-9. **Dataset aggregate follow-up (mandatory after last PARTIAL seal):**
-   - Prefer surgical re-agg (does **not** rewrite `coverage_segments`):
-     ```bash
-     .venv/bin/python scripts/sync_dataset_coverage_from_segments.py \
-       --db data/structured/ingestion.sqlite --datasets <DATASET>
-     ```
-   - Promotes `dataset_coverage.status=COMPLETE` only when **all** required
-     segs are COMPLETE with honest `status_counts` (never invents segments;
-     refuses empty-raw COMPLETE). Avoid full `refresh_coverage_ledger` unless
-     segment plane itself is wrong.
-   - `scripts/restore_local_complete_from_receipt.py` runs this sync for the
-     sealed dataset automatically after a successful segment COMPLETE.
-10. **Ops projection** published so MCP shows COMPLETE:
-   - Prefer `scripts/ops_reeval_freshness.py` (targeted; never rewrites segments)
-   - Full `publish_ops_projection.py --apply-remote` only if local COMPLETE ≥ remote
-     (fail-closed guard refuses otherwise; see `docs/operations/projection_publish_guard.md`)
+The following are explicitly not COMPLETE:
 
-## Explicitly NOT COMPLETE
+| Evidence | Result |
+| --- | --- |
+| `RECOVERED_RAW_ONLY` or operator recovery CLI | audit/reparse input only |
+| readonly local file plus caller URL | no trusted acquisition provenance |
+| raw/structured counts supplied by a caller | self-report, not reconciliation |
+| one day or partial window overlapping a monthly segment | incomplete scope |
+| code-filtered query for an all-universe segment | incomplete universe |
+| empty response plus caller `EXPECTED_EMPTY_WITH_EVIDENCE` | forbidden override |
+| Cloudflare fetch/Cron PASS | acquisition health only |
+| FRESH Ops projection | Ops Current, not Research READY |
 
-| State | Why |
-|-------|-----|
-| `RECOVERED_RAW_ONLY` | Rebuild without signed issuer |
-| `PARSED_STAGING_ONLY` | JSDA staging parse (structured_row_count forced 0) |
-| raw only / CF 200 | No structured + signed receipt |
-| validation PASS with 0 inserts | Idempotent window, not coverage COMPLETE |
-| projection FRESH alone | Ops plane freshness ≠ Research READY |
+There is no sanctioned operator command that mints signed COMPLETE from
+after-the-fact files. The legacy recovery utilities record non-eligible
+evidence only. To advance Coverage, rerun the governed ingestion path for the
+exact required scope, refresh the ledger, publish a signed Ops Projection, and
+then remeasure it. Never edit `coverage_segments` or receipt claims by hand.
 
-## Operator commands (honest path)
-
-```bash
-# Issue signed receipts only where raw+structured exist
-.venv/bin/python scripts/issue_signed_receipts_for_segments.py \
-  --dataset markets_calendar --limit 50 --order asc
-
-# Refresh + export (remote needs wrangler auth)
-.venv/bin/python scripts/publish_ops_projection.py \
-  --db data/structured/ingestion.sqlite \
-  --refresh-coverage --apply-remote
-```
-
-## Mass / Phase 7
-
-Mass Autonomous Research stays **NO-GO** until VerifiedResearchReadiness
-(attestation + READY snapshot + B0 + coverage gates). Do not equate
-`markets_calendar COMPLETE` with platform READY.
+READY adds further gates: canonical exact-four dependency closure, profile and
+plan digests, B0/B4 PASS, current non-null source/export/applied cursor,
+immutable snapshot publication, and a dedicated READY signature. Pilot READY
+cannot authorize Mass.

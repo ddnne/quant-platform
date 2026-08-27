@@ -1,115 +1,124 @@
-# Quant Ops Read MCP (remote, GitHub OAuth)
+# Quant Ops Read MCP
 
-Human-facing Ops MCP for **browser / mobile ChatGPT & Claude**, using the
-**same mechanism as `news-mcp`**:
+Human-facing, GitHub-OAuth-protected operational MCP. The Worker has no
+ingestion database binding and no write/admin/research-row tool.
 
 ```text
-ChatGPT / Claude Connector
-        │ OAuth (GitHub login = ALLOWED_LOGIN)
-        ▼
-workers-oauth-provider  (/authorize /token /register)
-        │
-        ▼
-QuantOpsMcpAgent (/mcp, Durable Object)
-        │
-        ▼
-OPS_DB (quant-ingest D1 projection) — read only
+OAuth client
+   -> QuantOpsMcpAgent
+      -> OPS_PROJECTION_DB (immutable generation read model)
+      -> QUOTA_DB          (daily quota + one-shot OAuth state nonce)
+
+quant-ingest -> dedicated Ed25519 publisher -> OPS_PROJECTION_DB
 ```
 
-No research fact rows, no SQL, no ingestion/admin tools.
+`OPS_PROJECTION_DB` and `QUOTA_DB` are physically distinct in production and
+staging. `platform/workers/ingestion-premium/migrations/` remains the sole
+migration owner for `quant-ingest`.
 
 ## Tools
 
-`ops_status`, `ingestion_last_run`, `dataset_coverage`, `coverage_gaps`,
-`coverage_segments`, `backfill_status`, `validation_summary`, `b0_status`,
-`latest_ready_snapshot`, `snapshot_quality`, `raw_retention_status`, `sync_status`
+The remote surface contains 17 read tools:
 
-## Auth (news-compatible)
+`ops_status`, `source_inventory`, `endpoint_status`, `projection_status`,
+`collection_sla_status`, `ingestion_last_run`, `dataset_coverage`,
+`coverage_gaps`, `coverage_segments`, `backfill_status`, `validation_summary`,
+`b0_status`, `latest_ready_snapshot`, `snapshot_quality`,
+`raw_retention_status`, `sync_status`, and `storage_plane_status`.
 
-- GitHub OAuth via `@cloudflare/workers-oauth-provider`
-- Only `ALLOWED_LOGIN` (default `ddnne`) may complete login
-- KV binding **must** be named `OAUTH_KV`
+Every tool reads the pointer-selected sealed generation only. Missing active
+rows return `NOT_PROJECTED`; older generations and unsealed content rows are
+never fallback data. `storage_plane_status` reads a publisher-materialized JSON
+aggregate and does not scan ingestion facts.
 
-### Secrets
+The generation is accepted only after three checks: its
+`ops-projection-signed-envelope/v1` Ed25519 signature verifies against the
+digest-pinned committed `specs/ops_projection/verify_public_keys.json`, the
+signed all-table content manifest hashes to the envelope `content_digest`, and
+every table required by the selected tool is rehashed from D1. A valid
+signature with mutated required content returns
+`NOT_PROJECTED`. D1 triggers allow payload writes only while a generation is
+`OPEN`; the transition to `SEALED` freezes every payload row before the active
+pointer is changed. The committed registry contains public verification
+material only. Its current authority state is `PENDING` with zero active keys,
+so unsigned or formerly signed generations are not accepted as current.
 
-```bash
-npx wrangler secret put GITHUB_CLIENT_ID
-npx wrangler secret put GITHUB_CLIENT_SECRET
-# optional: npx wrangler secret put STATE_SECRET
-```
+All 17 tools publish closed `inputSchema` and `outputSchema` objects. The
+deterministic SHA-256 over every tool name and both schemas is returned from
+`tools/list` as `_meta["quant-platform/tool-schema-digest"]`; a reviewed digest
+is frozen in the Worker and in
+`specs/ops_projection/mcp_tool_schema_acceptance.json`, so acceptance fails
+closed on unreviewed schema drift.
 
-### GitHub OAuth App
-
-Create (or reuse) a GitHub OAuth App with callback:
-
-```text
-https://quant-platform-ops-read-mcp.taku-haga.workers.dev/callback
-```
-
-Homepage can be the Worker origin. Scope used: `read:user`.
-
-If reusing the **news-mcp** OAuth App, add the quant callback URL as an
-additional Authorization callback URL (GitHub allows multiple on some plans /
-settings; otherwise create a dedicated App).
-
-## Deploy
+## Migrations
 
 ```bash
 cd platform/workers/quant-ops-mcp
+
+npx wrangler d1 migrations apply quant-ops-projection --remote \
+  --config=wrangler.toml
+npx wrangler d1 migrations apply quant-ops-quota --remote \
+  --config=wrangler.toml
+```
+
+Wrangler resolves the independent migration directories from each binding:
+
+- `migrations/projection/`
+- `migrations/quota/`
+
+Apply staging first with `wrangler.staging.toml`. Back up `quant-ingest` before
+the release migration/deploy sequence even though this Worker no longer owns or
+writes that database.
+
+## Publish
+
+The publisher creates an `OPEN` generation, inserts and verifies every expected
+row count, seals it, and flips the active pointer last:
+
+```bash
+.venv/bin/python scripts/publish_ops_projection.py \
+  --db data/structured/ingestion.sqlite \
+  --refresh-coverage \
+  --apply-remote
+```
+
+The publisher derives source/export cursors from the latest COMPLETE,
+content-addressed authenticated D1 sync audit and requires exact equality with
+the local applied cursor. Remote publication accepts only the governed local
+mirror path. Production signing is disabled until a dedicated full-source
+authority owns derivation and signing; HOME paths and environment private keys
+are not signing inputs. Public consumers use the chained, verify-only registry
+in `specs/ops_projection/verify_public_keys.json`. Python and Worker code pin
+its complete document digest, body digest, generation, and prior audit pointer;
+runtime vars cannot replace that root. Generation 1 is an audit-only revocation
+record and is structurally unusable as a verifier registry.
+
+No date is assumed for the storage hot window. A diagnostic render may supply a
+reviewed `--storage-hot-cutoff YYYY-MM-DD`; remote publication rejects this
+caller-selected policy until it is backed by a governed configuration.
+
+## Verify and deploy
+
+```bash
 npm install
 npm test
-npx wrangler deploy
+npm run typecheck
+npm run types
+npx wrangler deploy --dry-run --env=""
+npx wrangler deploy --dry-run --env=production
+npx wrangler deploy --dry-run --config=wrangler.staging.toml
 ```
 
-Apply D1 migrations once (if not already):
+Production MCP URL:
 
-```bash
-npx wrangler d1 execute quant-ingest --remote \
-  --file=migrations/0001_remote_daily_quota.sql
-npx wrangler d1 execute quant-ingest --remote \
-  --file=migrations/0002_ops_projection.sql
-```
+`https://quant-platform-ops-read-mcp.taku-haga.workers.dev/mcp`
 
-## Endpoints
-
-| Path | Auth | Purpose |
-|------|------|---------|
-| `/mcp` | OAuth Bearer | Streamable HTTP MCP |
-| `/sse` | OAuth Bearer | Legacy SSE transport |
-| `/authorize`, `/token`, `/register`, `/callback` | OAuth | Authorization server |
-| `/healthz` | none | Liveness |
-| `/.well-known/oauth-protected-resource` | none | Resource metadata |
-
-Production URL:
-
-```text
-https://quant-platform-ops-read-mcp.taku-haga.workers.dev/mcp
-```
-
-## Connect from ChatGPT (phone) / Claude
-
-Same as news-mcp:
-
-1. Open Connectors / remote MCP settings
-2. Add URL: `https://quant-platform-ops-read-mcp.taku-haga.workers.dev/mcp`
-3. Complete **GitHub** login as `ddnne`
-4. Call e.g. `ops_status`, `coverage_gaps`
-
-Unauthenticated:
-
-```bash
-curl -i https://quant-platform-ops-read-mcp.taku-haga.workers.dev/mcp \
-  -H 'content-type: application/json' \
-  -H 'accept: application/json, text/event-stream' \
-  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}'
-# expect 401 + WWW-Authenticate
-```
-
-## Local stdio (dev only)
-
-```bash
-.venv/bin/python -m mcp_servers.quant_data \
-  --snapshot-dir data/research_snapshots
-```
-
-Not for phone/browser.
+The GitHub OAuth callback is the same origin plus `/callback`. Unauthenticated
+MCP calls must return `401`; `/health` and `/healthz` are liveness only.
+OAuth state is authenticated only with the dedicated `STATE_SECRET` Worker
+secret. Each signed state has a closed five-minute `issued_at`/`expires_at`
+window and a random nonce recorded in `QUOTA_DB`; callback atomically deletes
+that nonce before any GitHub request, so expiry and replay fail closed.
+`GITHUB_CLIENT_SECRET` is provider authentication material and is never reused
+as the state HMAC key. A missing state secret or nonce store fails before
+authorization issuance or callback network I/O.

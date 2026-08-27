@@ -11,8 +11,9 @@ This document is the operator map for:
    [`scripts/workers_builds_verify_ci.sh`](../../scripts/workers_builds_verify_ci.sh),
    which hands authority to [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh).
 2. The **native GitHub check run** posted by the Cloudflare Workers & Pages GitHub App (required check).
-3. Product-lane Builds (informational only).
-4. Deprecated **ci-aggregate** receipts (not proof a Cloudflare Build ran).
+3. Product-lane Builds (informational only). The dedicated Receipt authority is
+   intentionally excluded from those ordinary product lanes and uses its
+   reviewed PENDING/ACTIVE two-deployment procedure.
 
 Mass / READY / GO stay unarmed. A green check is not production publication and is
 not a research API.
@@ -53,8 +54,7 @@ receipts are not.
 | Signal | Role |
 |---|---|
 | Native GitHub check from the Cloudflare GitHub App (repo-root Build) | **required** merge check; `main` pins context `Workers Builds: quant-platform-ci-aggregate-staging` to App ID `85455` |
-| Six product-lane Workers Builds / PR comments / per-worker check runs | **informational** |
-| `ci-aggregate` Worker + PAT `GITHUB_STATUS_TOKEN` + `CI_LANE_TOKEN` receipts | **deprecated** — retired as merge authority; not SoT. Do not delete [`platform/workers/ci-aggregate`](../../platform/workers/ci-aggregate/) in this change |
+| Six ordinary product-lane Workers Builds / PR comments / per-worker check runs | **informational**; the dedicated Receipt authority is not a product lane |
 
 Branch protection requires the exact native context above with expected source
 `checks[].app_id = 85455`. A PAT-posted context named `ci-aggregate` is not a
@@ -81,13 +81,28 @@ asdf rebuild.
 
 [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh) is fail-closed:
 
-- Bootstraps `.venv` with Python 3.11+ when missing (`python3.11` or `python3` that is 3.11+; never system 3.9). Then `pip install -e ".[dev]"`.
+- Validates the pinned finding ledger and reports OPEN operational P0 rows.
+  This merge check is not the production finding-ledger release gate.
+- Uses pinned `uv 0.11.26` and `uv sync --frozen --extra dev` with the tracked lockfile.
 - `pytest tests/`, catalog freeze, Evaluation IR schema/codec.
-- All seven workers: `package-lock.json` required, `npm ci`, `npm test`, `npm run typecheck`, `wrangler deploy --dry-run`, types `--check`.
+- Seven active workers run in parallel: `package-lock.json` required, `npm ci`, `npm test`, `npm run typecheck`, generated types `--check`, and Wrangler dry-runs for base, production, and isolated staging.
+- [`active_worker_bindings.json`](../../specs/cloudflare/active_worker_bindings.json) freezes D1, R2, Queue/DLQ, Durable Object, Service Binding, Cron, vars, and secret names. Values of secrets are never read or stored.
+- Wrangler `[secrets].required` declarations are part of generated Env exactness for base and production. Staging declares no production secrets.
+- Wrangler, TypeScript, and Cloudflare Worker types are exact-version policy across all active workers.
 - Missing lockfile or missing `node_modules` (do not skip) is a fail.
 - Never `npm ci --legacy-peer-deps`.
 - Never live product `wrangler deploy`.
 - No `VERIFY_*` skip flags. Do not add `.github/workflows`.
+
+The merge check is deliberately non-deploying and does not receive production
+secret-management authority. Before a production migration or deploy, run the
+authenticated read-only
+[`scripts/verify_cloudflare_deployment_acceptance.sh`](../../scripts/verify_cloudflare_deployment_acceptance.sh).
+It first runs the strict [`finding_ledger_gate.py`](../../scripts/finding_ledger_gate.py),
+then reruns `verify_ci.sh` and compares each live production `wrangler secret
+list --format json` name set to the frozen manifest. It never requests or emits
+secret values and fails closed on an OPEN P0, authentication, or inventory
+drift.
 
 Workers Builds injects `WORKERS_CI_COMMIT_SHA`. Do not invent a SHA.
 
@@ -108,7 +123,7 @@ Workers Builds injects `WORKERS_CI_COMMIT_SHA`. Do not invent a SHA.
 ## Product lanes (informational)
 
 Connect **the same** GitHub repository `ddnne/quant-platform` to each of the
-six product Workers if operators want per-Worker preview/history. Set **root
+six ordinary product Workers if operators want per-Worker preview/history. Set **root
 directory** to that Worker’s tree so Wrangler `name` matches the dashboard
 Worker
 ([name requirement](https://developers.cloudflare.com/workers/ci-cd/builds/troubleshoot/#workers-name-requirement)).
@@ -148,7 +163,9 @@ Active Deployment.
 | Explicit promote | `npx wrangler deploy` **or** dashboard promote of a specific version | operator, after the native check is green **and** an explicit decision to ship |
 
 **Do not** set any production-branch **deploy command** to `npx wrangler deploy`
-for the six product Workers. That would auto-promote on green CI.
+for the six ordinary product Workers. That would auto-promote on green CI. The
+seventh active Worker, `receipt-evidence-authority`, is deployed only through
+its reviewed PENDING/ACTIVE activation procedure and is not an automatic lane.
 
 Use `npx wrangler versions upload` as the production-branch deploy command (and
 the non-production command) on product lanes. Disconnecting Git does not replace
@@ -157,7 +174,8 @@ this policy — the deploy command is the switch
 
 Local **mandatory** CI is the same script: [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh).
 [`scripts/verify_all.sh`](../../scripts/verify_all.sh) is a fast local helper only.
-Six-lane `npm test` runs skip Python/catalog and are **not** `verify_ci`.
+Six ordinary product-lane `npm test` runs skip Python/catalog and are **not**
+`verify_ci`; authoritative `verify_ci` covers all seven active Workers.
 
 [Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/) Git
 integration also posts a **pull request comment** and per-worker **check runs**
@@ -166,36 +184,14 @@ A PR comment is informational. Per-worker check runs can skip when
 [build watch paths](https://developers.cloudflare.com/workers/ci-cd/builds/build-watch-paths/)
 do not match. Neither is a substitute for the repo-root native check.
 
-## ci-aggregate (deprecated)
+## Retired receipt aggregator
 
-Worker: [`platform/workers/ci-aggregate`](../../platform/workers/ci-aggregate/)
-(`quant-platform-ci-aggregate`).
-
-**Deprecated.** `POST /v1/receipts` accepts caller-supplied `{worker, sha, result, command}`.
-That is not proof a Cloudflare Build ran `verify_ci.sh`. A client with
-`CI_LANE_TOKEN` can post `pass` without Workers Builds.
-
-Keep the Worker **in tree**. `verify_ci.sh` still typechecks it. The native
-GitHub App check is now required with the expected source, so the PAT receipt
-path is retired as authority. Physical Worker removal is a separate cleanup;
-do not delete it in this change and do not mint legacy tokens here.
-
-Print-only first-deploy helper (still print-only; not a producer):
-[`scripts/ci_aggregate_first_deploy.sh`](../../scripts/ci_aggregate_first_deploy.sh).
-
-**Not a research API.** `wrangler.toml` sets `workers_dev = true` only so a
-receipt POST host can exist without a custom zone.
-
-Historical receipt shape (do not treat as merge SoT):
-
-```http
-POST /v1/receipts
-Content-Type: application/json
-X-CI-Lane-Token: <CI_LANE_TOKEN>
-```
-
-Unbound or blank `CI_LANE_TOKEN` → HTTP **503**. Wrong header → HTTP **401**.
-Do not accept a GitHub PR comment as a success signal.
+The caller-supplied receipt Worker and its first-deploy helper were removed.
+No `CI_LANE_TOKEN` or `GITHUB_STATUS_TOKEN` path remains in the active CI
+implementation. The similarly named private
+`quant-platform-ci-aggregate-staging` service is only the no-op Cloudflare
+Workers Builds anchor that runs the repository-root command; it is not the
+retired receipt API and exposes no product route.
 
 ## What this does not do
 

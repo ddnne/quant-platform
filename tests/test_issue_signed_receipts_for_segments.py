@@ -10,7 +10,6 @@ COMPLETE.
 from __future__ import annotations
 
 import importlib.util
-import inspect
 import sys
 from pathlib import Path
 
@@ -162,13 +161,3 @@ def test_main_missing_index_file_does_not_call_refresh(
     )
     assert rc == 1
     assert called["n"] == 0
-
-
-def test_main_refresh_site_passes_index_text(cli_module) -> None:
-    src = inspect.getsource(cli_module.main)
-    assert "_read_index_text" in src
-    assert "index_text=index_text" in src
-    assert "_refresh_issued_coverage" in src
-    assert "urllib" not in src
-    assert "requests." not in inspect.getsource(cli_module)
-    assert "urlopen" not in inspect.getsource(cli_module)

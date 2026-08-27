@@ -10,13 +10,16 @@ Their collection_coverage.json rows must match ``derive_collection_coverage_v3``
 ``2008-05-07``). Missing V3 stays None. Tip/snapshot grains plan a current
 collection window, not hundreds of empty monthly COMPLETE shells. Official
 ``2008-05-07`` for equities_master is domain correction, not Dataset COMPLETE.
-Live MCP projection remains document-root collection-coverage/v2 until HUMAN
-refresh.
+The production ingestion Worker consumes the same mixed-version document and
+persists each dataset row's effective policy version. Publishing a V3 Ops
+generation is still a separate operational step and never relabels old V2
+evidence.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 from types import MappingProxyType
@@ -65,7 +68,12 @@ VENDOR_ANNOTATION_FIELDS = (
     "vendor_data_provision_citation",
     "vendor_history_policy_citation",
 )
-_OPTIONAL_STRINGS = ("policy_version", "history_mode") + VENDOR_ANNOTATION_FIELDS
+_OPTIONAL_STRINGS = (
+    "policy_version",
+    "history_mode",
+    "required_domain_basis",
+    "empty_success_policy",
+) + VENDOR_ANNOTATION_FIELDS
 
 
 @dataclass(frozen=True)
@@ -91,6 +99,8 @@ class CollectionCoverageContract:
     governance_tier: str
     policy_version: str | None = None
     history_mode: str | None = None
+    required_domain_basis: str | None = None
+    empty_success_policy: str | None = None
     not_historical_required_start: str | None = None
     earliest_official_availability: str | None = None
     official_mode: str | None = None
@@ -142,6 +152,30 @@ class CollectionCoverageContract:
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{dataset_id}.{name} must be non-empty string")
             optional[name] = value
+        if optional.get("policy_version") == "collection-coverage/v3":
+            from .source_capability import (
+                EMPTY_SUCCESS_POLICIES,
+                REQUIRED_DOMAIN_BASES,
+            )
+
+            missing_v3 = {
+                "history_mode",
+                "required_domain_basis",
+                "empty_success_policy",
+            } - optional.keys()
+            if missing_v3:
+                raise ValueError(
+                    f"{dataset_id} collection-coverage/v3 missing "
+                    f"{sorted(missing_v3)}"
+                )
+            if optional["required_domain_basis"] not in REQUIRED_DOMAIN_BASES:
+                raise ValueError(
+                    f"{dataset_id}.required_domain_basis is not supported"
+                )
+            if optional["empty_success_policy"] not in EMPTY_SUCCESS_POLICIES:
+                raise ValueError(
+                    f"{dataset_id}.empty_success_policy is not supported"
+                )
         return cls(
             dataset_id=dataset_id,
             **{name: raw[name] for name in _REQUIRED},
@@ -210,6 +244,66 @@ def coverage_contract_for(dataset_id: str) -> CollectionCoverageContract:
         raise KeyError(f"unknown coverage contract: {dataset_id!r}") from exc
 
 
+def coverage_policy_digest(dataset_id: str) -> str:
+    """Canonical digest for one dataset's effective governed policy row.
+
+    The collection-coverage document root may contain a deliberate mixture of
+    V2 and V3 rows.  READY therefore binds this per-dataset digest instead of
+    treating the document-root version as the effective policy for every row.
+    """
+
+    payload = coverage_contract_for(dataset_id).to_dict()
+    raw = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def coverage_policy_binding(dataset_id: str) -> Mapping[str, str]:
+    """Closed identity/version/digest tuple for one governed policy row."""
+
+    contract = coverage_contract_for(dataset_id)
+    if not contract.policy_version:
+        raise ValueError(f"coverage policy version missing for {dataset_id!r}")
+    return MappingProxyType(
+        {
+            "policy_id": dataset_id,
+            "policy_version": contract.policy_version,
+            "policy_digest": coverage_policy_digest(dataset_id),
+        }
+    )
+
+
+def coverage_policy_set_binding(dataset_ids: tuple[str, ...] | list[str]) -> Mapping[str, Any]:
+    """Canonical mixed-version policy-set binding for exact dataset membership."""
+
+    normalized = tuple(sorted(str(item) for item in dataset_ids))
+    if not normalized or len(normalized) != len(set(normalized)):
+        raise ValueError("coverage policy set requires unique dataset ids")
+    rows = [dict(coverage_policy_binding(dataset_id)) for dataset_id in normalized]
+    raw = json.dumps(
+        rows,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+    versions = sorted({row["policy_version"] for row in rows})
+    effective_version = versions[0] if len(versions) == 1 else "mixed:" + digest
+    return MappingProxyType(
+        {
+            "policy_version": effective_version,
+            "policy_digest": digest,
+            "datasets": tuple(MappingProxyType(row) for row in rows),
+        }
+    )
+
+
 __all__ = [
     "COVERAGE_CONTRACT_PATH",
     "COVERAGE_STATUSES",
@@ -221,4 +315,7 @@ __all__ = [
     "CollectionCoverageContract",
     "all_coverage_contracts",
     "coverage_contract_for",
+    "coverage_policy_binding",
+    "coverage_policy_digest",
+    "coverage_policy_set_binding",
 ]

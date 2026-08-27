@@ -1,6 +1,11 @@
 """Declarative StrategySpec schema and safe interpreter."""
 
-from .interpreter import StrategySpecStrategy, interpret_strategy_spec
+from .interpreter import (
+    StrategySpecStrategy,
+    interpret_strategy_spec,
+    resolve_feature_ref,
+    resolve_strategy_features,
+)
 from .schema import (
     CrossSectionRankRule,
     FeatureRef,
@@ -14,6 +19,8 @@ from .schema import (
     ThresholdRule,
     TopKRule,
     ValueMomentumAgreeRule,
+    iter_feature_refs,
+    strategy_spec_digest,
 )
 
 __all__ = [
@@ -31,4 +38,8 @@ __all__ = [
     "TopKRule",
     "ValueMomentumAgreeRule",
     "interpret_strategy_spec",
+    "iter_feature_refs",
+    "resolve_feature_ref",
+    "resolve_strategy_features",
+    "strategy_spec_digest",
 ]

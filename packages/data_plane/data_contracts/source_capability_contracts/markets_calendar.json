@@ -1,0 +1,56 @@
+{
+  "policy_version": "source-capability/v3",
+  "dataset_id": "markets_calendar",
+  "source": "jquants_premium_core",
+  "upstream_locator": "/v2/markets/calendar",
+  "official_evidence_url": "https://jpx-jquants.com/en/spec/mkt-cal",
+  "history_mode": "bounded_history",
+  "earliest_official_availability": "2008-01-01",
+  "historical_research_eligible": true,
+  "tip_only_operational": false,
+  "supported_query_parameters": ["from", "to", "holidaydivision", "pagination_key"],
+  "publication_calendar": {
+    "kind": "jpx_calendar_publication",
+    "timezone": "Asia/Tokyo",
+    "official_history_evidence_url": "https://jpx-jquants.com/en/spec/data-spec",
+    "official_update_rule": "irregular; following-year business-day and holiday calendar is updated around late March"
+  },
+  "entitlement_semantics": {
+    "clamp_before_earliest": true,
+    "subscription_floor": null,
+    "official_data_provision_start": "2008-01-01"
+  },
+  "collection_window": {
+    "grain": "calendar_month",
+    "open": "2008-01-01",
+    "close": "latest_published_before_collection_cutoff"
+  },
+  "freshness_sla": {
+    "expected_after": "official_calendar_update",
+    "usable_by": "next_collection_after_official_update",
+    "timezone": "Asia/Tokyo",
+    "rule": "irregular_calendar_publication"
+  },
+  "event_time": {
+    "policy": "observation_date",
+    "fields": ["Date"]
+  },
+  "available_at": {
+    "policy": "calendar_prepublished",
+    "field": null,
+    "known_publication_lag": "historical publication timestamps are not supplied; retain conservative ingestion availability"
+  },
+  "revision_semantics": {
+    "policy": "snapshot_replace_capture_new_generation",
+    "generation_on_revision": true
+  },
+  "research_profile_eligibility": {
+    "include_in": ["core", "core_historical"],
+    "exclude_from": [],
+    "exclusion_reason": "none"
+  },
+  "required_domain_semantics": {
+    "basis": "calendar_months_from_official_start",
+    "empty_success_policy": "never_complete"
+  }
+}

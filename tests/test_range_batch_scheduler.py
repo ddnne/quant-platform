@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+from data_contracts.coverage import coverage_contract_for
 from ops.backfill_planner import BackfillJob, BackfillPlan, BackfillPlanner
 from ops.range_batch_scheduler import (
     DEFAULT_FINS_RPM,
@@ -62,6 +63,11 @@ def test_track_a_equities_master_focus_is_official_domain():
     assert start == "2008-05-07"
     assert start != "2006-08-13"
     assert end == "2099-12-31"
+
+
+def test_track_a_focus_starts_derive_from_coverage_contract() -> None:
+    for dataset_id, (start, _end) in TRACK_A_FOCUS_RANGES.items():
+        assert start == coverage_contract_for(dataset_id).history_target_start
 
 
 def test_filter_track_a_and_focus_range():

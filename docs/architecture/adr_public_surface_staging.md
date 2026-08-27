@@ -47,7 +47,6 @@ on wrangler 4.125.0.
 |---|---|---|
 | quant-ops-mcp | GitHub OAuth callback host (above) | keep read-only |
 | ingestion-secrets | local runners reach the token-gated host; no custom zone | **HUMAN** Cloudflare Access / mTLS / Tunnel before flipping `workers_dev` off. Closing it now would silently break the secrets proxy. |
-| ci-aggregate | receipt POST host without a custom zone | **not** a public research API (no PIT / eval / ingest / MCP). Lane G will abolish this Worker; this lane does **not** delete it. |
 
 Do not treat a `*.workers.dev` hostname as network privacy. Inbound auth is the
 fence where a host exists. Do not treat the Worker itself as auth.
@@ -86,4 +85,4 @@ available.
 | Cloudflare Access / mTLS / Tunnel for ingestion-secrets | **HUMAN** |
 | Separate staging OAuth application and staging-only secrets | **HUMAN** |
 | GATEWAY_TOKEN service-binding unspoofable replacement | **HOLD** |
-| ci-aggregate abolish | Lane G |
+| caller-supplied CI receipt aggregator | **retired**; native Cloudflare GitHub App check is the only merge authority |

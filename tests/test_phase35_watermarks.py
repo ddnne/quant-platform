@@ -56,14 +56,6 @@ def _apply_0001_then_0002(conn: sqlite3.Connection) -> None:
     conn.executescript(_MIGRATION.read_text())
 
 
-def test_migration_file_exists():
-    assert _MIGRATION.exists(), "0002_watermarks.sql should exist"
-    sql = _MIGRATION.read_text()
-    # Surface the table + index in the doc / regression.
-    assert "CREATE TABLE IF NOT EXISTS ingestion_watermarks" in sql
-    assert "CREATE INDEX IF NOT EXISTS ix_watermarks_last_ingested_at" in sql
-
-
 def test_migration_creates_expected_schema_in_memory():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -82,6 +74,11 @@ def test_migration_creates_expected_schema_in_memory():
         "WHERE pk > 0 ORDER BY pk"
     ).fetchall()
     assert [row["name"] for row in pk] == ["dataset"]
+    indexes = {
+        row["name"]
+        for row in conn.execute("PRAGMA index_list(ingestion_watermarks)")
+    }
+    assert "ix_watermarks_last_ingested_at" in indexes
 
 
 def test_migration_is_idempotent():
@@ -303,6 +300,7 @@ def test_incremental_skips_already_mirrored_rows(tmp_path, monkeypatch, sync_mod
 
     monkeypatch.setattr(sync_module, "_new_http_client", lambda: client_sentinel)
     monkeypatch.setattr(sync_module, "_http_get_json", fake_http_get_json)
+    monkeypatch.setenv("DATA_EXPORT_TOKEN", "fixture-token")
 
     from storage.sqlite_store import SqliteStore
 
@@ -318,8 +316,6 @@ def test_incremental_skips_already_mirrored_rows(tmp_path, monkeypatch, sync_mod
             str(db),
             "--url",
             "https://fixture.invalid",
-            "--token",
-            "fixture-token",
             "--table",
             "jquants_records",
             "--page-limit",
@@ -369,6 +365,7 @@ def test_incremental_with_explicit_since_overrides_local_max(
     monkeypatch.setattr(sync_module, "_new_http_client", lambda: object())
     monkeypatch.setattr(sync_module, "_http_get_json", fake_http_get_json)
     monkeypatch.setattr(sync_module, "_filter_since", wrapped)
+    monkeypatch.setenv("DATA_EXPORT_TOKEN", "x")
 
     db = tmp_path / "since.sqlite"
     rc = sync_module.main(
@@ -377,8 +374,6 @@ def test_incremental_with_explicit_since_overrides_local_max(
             str(db),
             "--url",
             "https://fixture.invalid",
-            "--token",
-            "x",
             "--table",
             "jquants_records",
             "--page-limit",
@@ -402,6 +397,7 @@ def test_since_requires_incremental(tmp_path, monkeypatch, sync_module):
 
     monkeypatch.setattr(sync_module, "_new_http_client", lambda: object())
     monkeypatch.setattr(sync_module, "_http_get_json", fake_http_get_json)
+    monkeypatch.setenv("DATA_EXPORT_TOKEN", "x")
 
     rc = sync_module.main(
         [
@@ -409,8 +405,6 @@ def test_since_requires_incremental(tmp_path, monkeypatch, sync_module):
             str(tmp_path / "x.sqlite"),
             "--url",
             "https://fixture.invalid",
-            "--token",
-            "x",
             "--table",
             "jquants_records",
             "--since",

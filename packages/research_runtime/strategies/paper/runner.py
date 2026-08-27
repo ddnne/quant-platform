@@ -25,7 +25,7 @@ from paper_runtime import (
 )
 
 from .store import JsonPaperStore
-from .types import PaperRunConfig, PaperRunResult
+from .types import Lifecycle, PaperRunConfig, PaperRunResult
 
 
 # 0.6.0 — Phase 5 paper runner baseline
@@ -240,8 +240,14 @@ def _reproducibility(
         "leverage_financing": core_md.get("leverage_financing"),
         "leverage_financing_applied": core_md.get("leverage_financing_applied"),
         "repo_financing_load": financing_load,
-        "universe": list(config.universe) if config.universe is not None else None,
+        "universe": (
+            None
+            if getattr(config.universe, "membership_by_date", None) is not None
+            else (list(config.universe) if config.universe is not None else None)
+        ),
         "universe_rule": core_md["universe_rule"],
+        "universe_rule_digest": core_md.get("universe_rule_digest"),
+        "resolved_universe_digest": core_md.get("resolved_universe_digest"),
         "lookback_days": core_md["lookback_days"],
         "price_basis": core_md["price_basis"],
         "starting_capital": core_md["starting_capital"],
@@ -283,6 +289,10 @@ def _experiment_id(reproduction: dict[str, Any]) -> str:
             "leverage_financing": reproduction.get("leverage_financing"),
             "universe": reproduction["universe"],
             "universe_rule": reproduction["universe_rule"],
+            "universe_rule_digest": reproduction.get("universe_rule_digest"),
+            "resolved_universe_digest": reproduction.get(
+                "resolved_universe_digest"
+            ),
             "lookback_days": reproduction["lookback_days"],
             "price_basis": reproduction["price_basis"],
             "starting_capital": reproduction["starting_capital"],
@@ -301,7 +311,7 @@ def run_paper(
     *,
     store: JsonPaperStore | None = None,
 ) -> PaperRunResult:
-    """Run ``strategy`` through ``core.run_backtest`` and optionally persist it.
+    """Run an offline DRAFT through ``core.run_backtest`` and optionally persist it.
 
     A cheap control-plane snapshot id is computed before and after the run. A
     concurrent mutation fails closed rather than emitting reproduction
@@ -312,6 +322,19 @@ def run_paper(
     series auto-loaded from the paper DB when present; leverage financing
     uses the same repo without re-applying short spread.
     """
+    # This importable runtime is deliberately incapable of producing a
+    # controlled PAPER result.  The separately permissioned authority is not
+    # provisioned yet; Python object identity or a private-looking symbol must
+    # never substitute for that OS boundary.  Keep this check before every DB,
+    # feature, engine, or store access.
+    if type(config) is not PaperRunConfig:
+        raise TypeError("local paper runtime requires exact PaperRunConfig")
+    lifecycle = config.lifecycle
+    if lifecycle is not Lifecycle.DRAFT:
+        raise PermissionError(
+            "local paper runtime is DRAFT-only; controlled execution is "
+            "PENDING: CONTROLLED_AUTHORITY_UNPROVISIONED"
+        )
     configured_path = Path(config.db_path or "data/structured/ingestion.sqlite")
     feature_versions = _feature_versions(strategy)
     feature_hashes = feature_definition_hashes(feature_versions)
@@ -360,7 +383,10 @@ def run_paper(
     result = PaperRunResult(
         experiment_id=experiment_id,
         run_id=experiment_id,
-        lifecycle=config.lifecycle,
+        # This importable runner has no PAPER minting authority.  Do not read
+        # caller state again after the entry gate; the only possible local
+        # result label is the literal DRAFT enum.
+        lifecycle=Lifecycle.DRAFT,
         backtest=backtest,
         reproducibility=reproduction,
     )

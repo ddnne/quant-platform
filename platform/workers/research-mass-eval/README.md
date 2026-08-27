@@ -1,9 +1,14 @@
 # quant-platform-research-mass-eval
 
-**W90 / w0816y** — Cloudflare Worker for **multi-logic lite multi-period batch evaluation**.
+Cloudflare Worker for bounded research evaluation. Mass remains disabled.
 
 Research plane only. Does **not** arm operational Mass / READY / GO / continuous paper / live.
 Does **not** retune the three frozen default-path representatives.
+
+`POST /v1/daily-path` accepts only the four governed Pilot strategy IDs. The
+retired 2,254-row catalog is not bundled, imported, or inferred from ID
+prefixes; catalog-style `gates` / `cs_gate` input fails closed. The immutable
+catalog survives only under `artifacts/replay/legacy_strategy_catalog/`.
 
 ## What it does
 
@@ -41,7 +46,8 @@ route. Health is the only unauthenticated endpoint and returns `{ok,service,vers
 
 Mass / daily-path / propose require typed capabilities (`src/capabilities.ts`).
 Env flags can only deny. Worker does **not** bind Workers AI; propose uses
-service binding `AI_GATEWAY`. R2 writes are create-if-absent (duplicate job_id → 409).
+typed `GatewayService` RPC binding `AI_GATEWAY`; no shared Gateway bearer token
+is present in this Worker. R2 writes are create-if-absent (duplicate job_id → 409).
 
 | Mass (operational) | **NO-GO** |
 | READY | **false / 未宣言** |
@@ -91,7 +97,7 @@ curl -sS -X POST \
     ],
     \"logics\": [
       {
-        \"logic_id\": \"multi_day_hold\",
+        \"logic_id\": \"paper_mdh_hold10_momentum_topk\",
         \"family_id\": \"multi_day_hold\",
         \"params\": {\"hold_days\": 5},
         \"thesis\": \"Multi-day momentum sticky hold earns residual after cost\"
@@ -121,8 +127,8 @@ cat /tmp/mass_eval_summary.json | jq .
 | path | role |
 |------|------|
 | **this worker** | CF minimal multi-logic batch + R2 artifacts |
-| `python -m research.unique_logic --backend local` | Serial local unique_logic fallback |
-| `research.cf_daily_path_job` / POST /v1/daily-path / POST /v1/propose-thesis | Candidate SoT (no auto-inject) |
+| legacy `research.unique_logic` modules | explicit audit/replay compatibility only |
+| exact-four `POST /v1/daily-path` | bounded daily-path evaluator; no auto-promotion |
 
 Python helper: `research.offline.factory.try_cf_minimal_mass_batch()` reports this worker.
 

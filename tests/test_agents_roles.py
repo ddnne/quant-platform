@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
 from agents.composer import ComposerAgent
 from agents.fundamental import FundamentalAgent
 from agents.macro import MacroAgent
@@ -53,39 +50,3 @@ def test_roles_exchange_structured_messages_and_a_declarative_spec():
     assert spec.to_dict()["rule"]["type"] == "top_k"
     proposals = [proposal for memo in memos for proposal in memo.feature_proposals]
     assert proposals and all(proposal.status == "candidate" for proposal in proposals)
-
-
-def test_role_implementations_cannot_import_data_or_secret_capabilities():
-    import agents as _agents_pkg
-
-    root = Path(_agents_pkg.__file__).resolve().parent
-    role_files = [
-        "macro.py",
-        "fundamental.py",
-        "quant.py",
-        "composer.py",
-        "strategist.py",
-        "pm.py",
-        "trader.py",
-        "risk_agent.py",
-    ]
-    banned_roots = {
-        "ingestion",
-        "storage",
-        "pit",
-        "sqlite3",
-        "requests",
-        "httpx",
-        "urllib",
-        "secrets",
-    }
-    for name in role_files:
-        path = root / name
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        imports: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imports.update(alias.name.split(".")[0] for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imports.add(node.module.split(".")[0])
-        assert not imports.intersection(banned_roots), (path, imports)

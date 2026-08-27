@@ -1,5 +1,9 @@
 # Phase 6.1 production backfill, READY, and remote MCP runbook
 
+> **HISTORICAL / NON-EXECUTABLE.** Do not run commands from this document.
+> The current production runbook is
+> [`operations/current_production_runbook.md`](operations/current_production_runbook.md).
+>
 > **Live residual SoT:** [phase62_residual_status.md](phase62_residual_status.md)  
 > (COMPLETE / raw_n / Mass·READY / Phase7 — not this runbook.)  
 > **Agent nav:** [architecture/llm_nav_map.md](architecture/llm_nav_map.md)
@@ -73,14 +77,23 @@ curl -fsS "$INGESTION_PREMIUM_URL/health"
 The health response must contain `natural_key_migration.state == "READY"`.
 Do not bypass this gate or rebuild natural keys with ad-hoc SQL.
 
-Apply the Ops MCP durable quota and bounded projection schemas:
+Apply the isolated Ops projection and quota schemas. The Ops Worker must never
+run a migration against `quant-ingest`; ingestion-premium is its sole owner:
+
+First verify the canonical owner/checksum inventory. Its source-controlled
+`applied_state` is deliberately `UNVERIFIED`; record actual remote state only in
+the immutable release evidence after each apply.
+
+```bash
+.venv/bin/python scripts/cloudflare_d1_migration_manifest.py
+```
 
 ```bash
 cd ../quant-ops-mcp
-npx wrangler d1 execute quant-ingest --remote \
-  --file=migrations/0001_remote_daily_quota.sql
-npx wrangler d1 execute quant-ingest --remote \
-  --file=migrations/0002_ops_projection.sql
+npx wrangler d1 migrations apply quant-ops-projection --remote \
+  --config=wrangler.toml
+npx wrangler d1 migrations apply quant-ops-quota --remote \
+  --config=wrangler.toml
 cd ../../..
 ```
 
@@ -195,8 +208,7 @@ raw evidence, natural-key state, and immutable manifest checks.
 
 ```bash
 .venv/bin/python scripts/sync_d1_to_sqlite.py \
-  --url "$INGESTION_PREMIUM_URL" \
-  --token "$DATA_EXPORT_TOKEN" \
+  --wrangler-remote \
   --db data/structured/ingestion.sqlite \
   --snapshot-dir data/research_snapshots
 
@@ -217,22 +229,34 @@ A targeted `--table` sync intentionally cannot publish READY.
 
 ## 7. Project Ops metadata and deploy remote MCP
 
-The projection contains bounded coverage, segment, B0 and READY metadata. It
-does not grant the MCP a write tool or expose local paths/raw objects.
+The projection contains generation-scoped coverage, segment, B0, READY,
+authoritative raw-segment, sync-cursor, and materialized storage metadata. The
+Worker reads only the active immutable generation from `OPS_PROJECTION_DB`;
+quota writes go only to `QUOTA_DB`.
+
+Remote publication additionally requires a dedicated Ops Projection Ed25519
+private key. Its public key must be the exactly-one active entry in
+`specs/ops_projection/verify_public_keys.json`, which is purpose- and
+digest-pinned into the Worker bundle. Runtime vars cannot replace that root;
+Receipt and READY keys are not valid here.
 
 ```bash
-.venv/bin/python scripts/export_ops_projection.py \
+.venv/bin/python scripts/publish_ops_projection.py \
   --db data/structured/ingestion.sqlite \
   --snapshot-dir data/research_snapshots \
-  --output /tmp/quant-ops-projection.sql
+  --apply-remote
 
 cd platform/workers/quant-ops-mcp
-npx wrangler d1 execute quant-ingest --remote \
-  --file=/tmp/quant-ops-projection.sql
 npm test
 npm run typecheck
-npx wrangler deploy
+npx wrangler deploy --dry-run --env=production
+npx wrangler deploy --env=production
 ```
+
+The publisher does not accept cursor or signing-key overrides. It derives both
+cursor pins from the latest COMPLETE authenticated D1 sync audit, verifies the
+content identity and local applied cursor in one read transaction, and loads
+only the dedicated Ops signing configuration.
 
 Before deploy, replace the fail-closed public placeholders in `wrangler.toml`
 with the reviewed Access team domain, dedicated Ops application AUD, Managed
@@ -252,7 +276,7 @@ curl -i "$QUANT_OPS_MCP_URL/mcp" \
 The unauthenticated response must be `401`. Through the configured
 Access/Managed OAuth flow, call `initialize`, `tools/list`, and `ops_status`;
 the authenticated smoke must succeed and charge the D1 daily quota. Confirm
-that `tools/list` contains exactly the 12 documented Ops reads and no write or
+that `tools/list` contains exactly the 17 documented Ops reads and no write or
 research-row tool. Add the same `/mcp` URL to ChatGPT remote connectors; local
 stdio is only the offline/dev adapter.
 

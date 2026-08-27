@@ -89,8 +89,11 @@ https://quant-platform-ops-read-mcp.<account-subdomain>.workers.dev/mcp
 
 ### ローカル stdio smoke（dev adapter）
 
+以下の `/absolute/path/to/quant-platform` は、各端末の fresh clone の絶対
+パスへ置き換えます。repository 固有のユーザー名や配置場所は正本にしません。
+
 ```bash
-cd /Users/taku/GitHub/quant-platform
+cd /absolute/path/to/quant-platform
 
 .venv/bin/python -m mcp_servers.quant_data \
   --snapshot-dir data/research_snapshots \
@@ -134,18 +137,18 @@ tests で protocol/auth acceptance は検証できます。
 ### 3.2 Grok Build / Grok TUI（local dev）
 
 **User scope:** `~/.grok/config.toml`
-**Project scope:** `/Users/taku/GitHub/quant-platform/.grok/config.toml`
+**Project scope:** `<repo-root>/.grok/config.toml`
 
 ```toml
 [mcp_servers.quant_data]
-command = "/Users/taku/GitHub/quant-platform/.venv/bin/python"
+command = "/absolute/path/to/quant-platform/.venv/bin/python"
 args = [
   "-m",
   "mcp_servers.quant_data",
   "--snapshot-dir",
-  "/Users/taku/GitHub/quant-platform/data/research_snapshots",
+  "/absolute/path/to/quant-platform/data/research_snapshots",
 ]
-cwd = "/Users/taku/GitHub/quant-platform"
+cwd = "/absolute/path/to/quant-platform"
 enabled = true
 startup_timeout_sec = 30
 ```
@@ -154,9 +157,9 @@ CLI:
 
 ```bash
 grok mcp add quant_data -- \
-  /Users/taku/GitHub/quant-platform/.venv/bin/python \
+  /absolute/path/to/quant-platform/.venv/bin/python \
   -m mcp_servers.quant_data \
-  --snapshot-dir /Users/taku/GitHub/quant-platform/data/research_snapshots
+  --snapshot-dir /absolute/path/to/quant-platform/data/research_snapshots
 
 # cwd が CLI で入らない場合は config.toml を手編集
 grok mcp list
@@ -171,14 +174,14 @@ Codex は `~/.codex/config.toml` の `[mcp_servers.*]` で stdio MCP を起動�
 
 ```toml
 [mcp_servers.quant_data]
-command = "/Users/taku/GitHub/quant-platform/.venv/bin/python"
+command = "/absolute/path/to/quant-platform/.venv/bin/python"
 args = [
   "-m",
   "mcp_servers.quant_data",
   "--snapshot-dir",
-  "/Users/taku/GitHub/quant-platform/data/research_snapshots",
+  "/absolute/path/to/quant-platform/data/research_snapshots",
 ]
-cwd = "/Users/taku/GitHub/quant-platform"
+cwd = "/absolute/path/to/quant-platform"
 enabled = true
 startup_timeout_sec = 30
 ```
@@ -194,14 +197,14 @@ ChatGPT は上の remote endpoint を使います。
 {
   "mcpServers": {
     "quant-data": {
-      "command": "/Users/taku/GitHub/quant-platform/.venv/bin/python",
+      "command": "/absolute/path/to/quant-platform/.venv/bin/python",
       "args": [
         "-m",
         "mcp_servers.quant_data",
         "--snapshot-dir",
-        "/Users/taku/GitHub/quant-platform/data/research_snapshots"
+        "/absolute/path/to/quant-platform/data/research_snapshots"
       ],
-      "cwd": "/Users/taku/GitHub/quant-platform"
+      "cwd": "/absolute/path/to/quant-platform"
     }
   }
 }
@@ -217,14 +220,14 @@ Claude を完全終了して再起動。
 {
   "mcpServers": {
     "quant-data": {
-      "command": "/Users/taku/GitHub/quant-platform/.venv/bin/python",
+      "command": "/absolute/path/to/quant-platform/.venv/bin/python",
       "args": [
         "-m",
         "mcp_servers.quant_data",
         "--snapshot-dir",
-        "/Users/taku/GitHub/quant-platform/data/research_snapshots"
+        "/absolute/path/to/quant-platform/data/research_snapshots"
       ],
-      "cwd": "/Users/taku/GitHub/quant-platform"
+      "cwd": "/absolute/path/to/quant-platform"
     }
   }
 }

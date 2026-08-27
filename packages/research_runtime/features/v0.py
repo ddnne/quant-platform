@@ -91,6 +91,7 @@ Return1d: FeatureDefinition = register(
             "Returns None when fewer than two closes are visible."
         ),
         compute=_return_1d,
+        dataset_dependencies=("equities_bars_daily",),
         tags=("price", "daily", "return"),
         intended_role="signal",
         status="approved",
@@ -157,6 +158,7 @@ MomentumN: FeatureDefinition = register(
             "Returns None when fewer than N+1 closes are visible at as_of."
         ),
         compute=_momentum_n,
+        dataset_dependencies=("equities_bars_daily",),
         tags=("price", "daily", "momentum"),
         intended_role="signal",
         status="approved",
@@ -228,6 +230,7 @@ VolatilityN: FeatureDefinition = register(
             "when fewer than N+1 closes are visible at as_of."
         ),
         compute=_volatility_n,
+        dataset_dependencies=("equities_bars_daily",),
         tags=("price", "daily", "volatility"),
         intended_role="signal",
         status="approved",

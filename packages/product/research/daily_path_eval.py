@@ -11,7 +11,6 @@ _ADV_CTX: ContextVar[Mapping[str, float] | None] = ContextVar(
     "held_book_adv_by_code", default=None
 )
 
-from research.freezes import assert_frozen_pins_untouched
 from research.stats_metrics import (
     equity_path_drawdown,
     evaluate_daily_path_dd_gate,
@@ -332,6 +331,5 @@ def panel_index(
         "dates": dates,
         "momentum_n": n,
     }
-
 
 

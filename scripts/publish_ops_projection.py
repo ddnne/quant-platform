@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Automate Coverage refresh + Ops projection publish.
+"""Automate Coverage refresh + immutable Ops projection publication.
 
 Pipeline:
   1. Optional: refresh_coverage_ledger on local research DB
   2. export_ops_projection SQL
-  3. If --apply-remote: wrangler d1 execute quant-ingest --remote --file=...
+  3. If --apply-remote: append to dedicated quant-ops-projection D1
+  4. Verify that the expected immutable generation became active
 
 Removes the "human must remember export commands" sole path. Remote MCP still
 never gains write tools; this script is an out-of-band publisher.
 
-Fail-closed guard (GLM design):
-  - Before full --apply-remote (non dry-run), probe local + remote COMPLETE counts.
-  - If remote probe fails OR local < remote, refuse exit 3 unless --force-apply-remote.
-  - Targeted reevaluation path is unaffected (not a full publish).
+The publisher never deletes or updates a generation. An incomplete import may
+leave only unreferenced content rows; it cannot append a sealed generation or
+move the active pointer, so the Worker continues to read the prior generation.
 """
 
 from __future__ import annotations
@@ -35,15 +35,66 @@ import json
 import re
 import sqlite3
 import subprocess
+import tomllib
 from datetime import datetime, timezone
 
 ROOT = ensure_repo_root()
 
 from ingestion.jsda.official_index import read_local_index_text  # noqa: E402
-from scripts.export_ops_projection import render_projection_sql  # noqa: E402
+from ops.projection_signing import open_ops_projection_signing_service  # noqa: E402
+from scripts.export_ops_projection import (  # noqa: E402
+    _render_trusted_projection_bundle,
+    render_projection_bundle,
+)
+from scripts.sync_d1_to_sqlite import (  # noqa: E402
+    _authenticated_export_cursor_chain,
+    _freeze_authenticated_current_applied_mirror,
+    open_authenticated_applied_mirror,
+)
+
+OPS_PROJECTION_DATABASE = "quant-ops-projection"
+OPS_PROJECTION_DATABASE_ID = "1b497e8a-5c69-4e19-ae2e-89a8f3185272"
+OPS_WRANGLER_VERSION = "4.125.0"
+OPS_WRANGLER_CWD = ROOT / "platform" / "workers" / "quant-ops-mcp"
+OPS_WRANGLER_CONFIG = OPS_WRANGLER_CWD / "wrangler.toml"
+OPS_WRANGLER_BIN = OPS_WRANGLER_CWD / "node_modules" / ".bin" / "wrangler"
+GOVERNED_LOCAL_DB = (ROOT / "data" / "structured" / "ingestion.sqlite").resolve()
+GOVERNED_SNAPSHOT_DIR = (ROOT / "data" / "research_snapshots").resolve()
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _validated_ops_wrangler() -> tuple[str, Path]:
+    """Pin production Ops commands to the reviewed binary/config/D1 id."""
+    executable = OPS_WRANGLER_BIN.resolve()
+    config = OPS_WRANGLER_CONFIG.resolve()
+    package_json = executable.parents[1] / "package.json"
+    try:
+        installed = str(
+            json.loads(package_json.read_text(encoding="utf-8"))["version"]
+        )
+        document = tomllib.loads(config.read_text(encoding="utf-8"))
+        bindings = document["env"]["production"]["d1_databases"]
+    except (OSError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as exc:
+        raise RuntimeError("cannot verify pinned Ops Wrangler authority") from exc
+    if not executable.is_file() or not executable.stat().st_mode & 0o111:
+        raise RuntimeError("repository-pinned Ops Wrangler is unavailable")
+    if installed != OPS_WRANGLER_VERSION:
+        raise RuntimeError("Ops Wrangler version does not match the pinned policy")
+    projection = [
+        row
+        for row in bindings
+        if isinstance(row, dict) and row.get("binding") == "OPS_PROJECTION_DB"
+    ]
+    if (
+        len(projection) != 1
+        or projection[0].get("database_name") != OPS_PROJECTION_DATABASE
+        or projection[0].get("database_id") != OPS_PROJECTION_DATABASE_ID
+    ):
+        raise RuntimeError("Ops Wrangler config is not bound to governed projection D1")
+    return str(executable), config
 
 
 def load_otc_index_text(path: Path | None) -> str | None:
@@ -51,25 +102,8 @@ def load_otc_index_text(path: Path | None) -> str | None:
     return read_local_index_text(path, missing_ok=True)
 
 
-def count_local_complete(db_path: Path) -> int:
-    """Count COMPLETE coverage_segments in a local SQLite ops/research DB.
-
-    Raises sqlite3.Error if the table is missing — callers must surface that
-    rather than silently treating an unprobed DB as zero (fail-closed).
-    """
-    conn = sqlite3.connect(str(db_path))
-    try:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM coverage_segments WHERE status = 'COMPLETE'"
-        ).fetchone()
-        return int(row[0]) if row else 0
-    finally:
-        conn.close()
-
 def count_remote_complete(
     *,
-    database: str = "quant-ingest",
-    wrangler_cwd: Path | None = None,
     timeout_sec: int = 120,
 ) -> int | None:
     """Query remote D1 COMPLETE count via wrangler. None if unreachable.
@@ -77,45 +111,50 @@ def count_remote_complete(
     Returns None for any transport / parse / non-zero exit failure so that
     enforce_complete_count_guard can apply fail-closed semantics.
     """
-    # Probe the same D1 the Ops MCP reads (quant-ops-mcp wrangler.toml).
-    # ingestion-premium config can 7403 against this account even when MCP works.
-    cwd = wrangler_cwd or (ROOT / "platform" / "workers" / "quant-ops-mcp")
-    wrangler_bin = cwd / "node_modules" / ".bin" / "wrangler"
-    config = cwd / "wrangler.toml"
-    use_local_bin = wrangler_bin.is_file()
-    cmd: list[str] = []
-    if use_local_bin:
-        cmd.append(str(wrangler_bin))
-    else:
-        cmd.extend(["npx", "wrangler"])
-    cmd.extend(
-        [
-            "d1",
-            "execute",
-            database,
-            "--remote",
-            f"--config={config}",
-            "--json",
-            "--command",
-            "SELECT COUNT(*) AS c FROM coverage_segments WHERE status='COMPLETE'",
-        ]
-    )
+    # Probe the same dedicated read-model D1 the Ops MCP reads.  Never query
+    # quant-ingest through the Ops Worker configuration.
+    try:
+        wrangler, config = _validated_ops_wrangler()
+    except RuntimeError:
+        print("WARN: pinned remote COMPLETE probe is unavailable", file=sys.stderr)
+        return None
+    cmd = [
+        wrangler,
+        "d1",
+        "execute",
+        OPS_PROJECTION_DATABASE,
+        "--remote",
+        "--config",
+        str(config),
+        "--env",
+        "production",
+        "--yes",
+        "--json",
+        "--command",
+        "SELECT COUNT(*) AS c FROM coverage_segments s "
+        "JOIN ops_projection_active a "
+        "ON a.singleton=1 AND a.generation_id=s.projection_generation_id "
+        "WHERE s.status='COMPLETE'",
+    ]
     try:
         proc = subprocess.run(
             cmd,
-            cwd=str(cwd if use_local_bin else ROOT),
+            cwd=str(OPS_WRANGLER_CWD),
             capture_output=True,
             text=True,
             timeout=timeout_sec,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"WARN: remote COMPLETE probe failed: {exc}", file=sys.stderr)
+    except (OSError, subprocess.TimeoutExpired):
+        print(
+            "WARN: remote COMPLETE probe failed; provider output withheld",
+            file=sys.stderr,
+        )
         return None
     if proc.returncode != 0:
         print(
-            f"WARN: remote COMPLETE probe exit={proc.returncode}: "
-            f"{(proc.stderr or proc.stdout)[:500]}",
+            f"WARN: remote COMPLETE probe exit={proc.returncode}; "
+            "provider output withheld",
             file=sys.stderr,
         )
         return None
@@ -135,30 +174,160 @@ def count_remote_complete(
         m = re.search(r'"c"\s*:\s*(\d+)', text)
         return int(m.group(1)) if m else None
 
+
+def read_remote_active_generation(
+    *,
+    timeout_sec: int = 120,
+) -> str | None:
+    """Return the dedicated projection's active generation, or None."""
+    try:
+        wrangler, config = _validated_ops_wrangler()
+    except RuntimeError:
+        return None
+    command = [
+        wrangler,
+        "d1",
+        "execute",
+        OPS_PROJECTION_DATABASE,
+        "--remote",
+        "--config",
+        str(config),
+        "--env",
+        "production",
+        "--yes",
+        "--json",
+        "--command",
+        "SELECT generation_id FROM ops_projection_active WHERE singleton=1",
+    ]
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=str(OPS_WRANGLER_CWD),
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    text = proc.stdout or ""
+    start = text.find("[")
+    if start < 0:
+        return None
+    try:
+        payload = json.loads(text[start:])
+        rows = payload[0].get("results") or []
+        value = rows[0].get("generation_id") if rows else None
+        return str(value) if value else None
+    except (json.JSONDecodeError, KeyError, TypeError, IndexError):
+        return None
+
+
+def read_remote_active_cursor(
+    *,
+    timeout_sec: int = 120,
+) -> int | None:
+    """Return the current trusted projection cursor, 0 if never activated.
+
+    ``None`` means the remote state or transport is unverifiable and therefore
+    blocks publication. A dangling pointer, missing metadata, null cursor, or
+    divergent source/export/applied chain is never treated as an empty D1.
+    """
+    try:
+        wrangler, config = _validated_ops_wrangler()
+    except RuntimeError:
+        return None
+    command = [
+        wrangler,
+        "d1",
+        "execute",
+        OPS_PROJECTION_DATABASE,
+        "--remote",
+        "--config",
+        str(config),
+        "--env",
+        "production",
+        "--yes",
+        "--json",
+        "--command",
+        "SELECT (SELECT COUNT(*) FROM ops_projection_active "
+        "WHERE singleton=1) AS active_count,"
+        "m.source_cursor,m.export_cursor,m.applied_cursor "
+        "FROM (SELECT 1) seed "
+        "LEFT JOIN ops_projection_active a ON a.singleton=1 "
+        "LEFT JOIN ops_projection_metadata m "
+        "ON m.projection_generation_id=a.generation_id",
+    ]
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=str(OPS_WRANGLER_CWD),
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    text = proc.stdout or ""
+    start = text.find("[")
+    if start < 0:
+        return None
+    try:
+        payload = json.loads(text[start:])
+        rows = payload[0].get("results") or []
+        if len(rows) != 1:
+            return None
+        row = rows[0]
+        active_count = row.get("active_count")
+        if active_count == 0:
+            return 0
+        if active_count != 1:
+            return None
+        cursors = (
+            row.get("source_cursor"),
+            row.get("export_cursor"),
+            row.get("applied_cursor"),
+        )
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in cursors
+        ):
+            return None
+        if len(set(cursors)) != 1:
+            return None
+        return cursors[0]
+    except (json.JSONDecodeError, KeyError, TypeError, IndexError):
+        return None
+
 def enforce_complete_count_guard(
     *,
     local_complete: int,
     remote_complete: int | None,
-    force: bool,
 ) -> str | None:
     """Return error message if full apply must be refused; else None.
 
-    Fail-closed: unknown remote (None) is treated as refuse. ``force`` is the
-    only override path and must be supplied explicitly by the operator.
+    Fail-closed: unknown remote (None), invalid counts, and regressions refuse.
+    Contract transitions require a separate governed workflow; this production
+    publisher intentionally exposes no generic operator override.
     """
-    if force:
-        return None
+    if local_complete < 0 or (remote_complete is not None and remote_complete < 0):
+        return "Refusing --apply-remote: COMPLETE counts must be non-negative"
     if remote_complete is None:
         return (
             "Refusing --apply-remote: could not read remote COMPLETE count "
-            "(fail-closed). Use --force-apply-remote to override after manual check."
+            "(fail-closed; no generic override is available)."
         )
     if local_complete < remote_complete:
         return (
             f"Refusing --apply-remote: local COMPLETE segments ({local_complete}) "
             f"fewer than remote ({remote_complete}). "
-            "Full projection publish would risk destroying remote COMPLETE evidence. "
-            "Use targeted reevaluation, or --force-apply-remote only after explicit review."
+            "Activating this generation would regress current COMPLETE evidence. "
+            "Use a governed signed contract-transition workflow instead."
         )
     return None
 
@@ -167,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--db",
         type=Path,
-        default=ROOT / "data" / "structured" / "ingestion.sqlite",
+        default=GOVERNED_LOCAL_DB,
     )
     parser.add_argument(
         "--snapshot-dir",
@@ -183,6 +352,11 @@ def main(argv: list[str] | None = None) -> int:
         "--meta-output",
         type=Path,
         default=ROOT / "data" / "ops" / "projection_meta.json",
+    )
+    parser.add_argument(
+        "--storage-hot-cutoff",
+        default=None,
+        help="Optional reviewed ISO hot-window cutoff; never defaults to a date.",
     )
     parser.add_argument(
         "--refresh-coverage",
@@ -204,14 +378,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Apply exported SQL to remote D1 via wrangler (requires CF auth).",
     )
     parser.add_argument(
-        "--force-apply-remote",
-        action="store_true",
-        help=(
-            "Override COMPLETE-count fail-closed guard for --apply-remote. "
-            "Use only after confirming local evidence supersedes remote."
-        ),
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Render SQL only; do not write meta apply.",
@@ -221,6 +387,72 @@ def main(argv: list[str] | None = None) -> int:
     if not args.db.exists():
         print(f"ERROR: local DB not found: {args.db}", file=sys.stderr)
         return 2
+
+    db_path = args.db.resolve()
+    trusted_cursor_chain = _authenticated_export_cursor_chain(db_path)
+    has_trusted_cursor_chain = all(
+        isinstance(value, int) and value > 0 for value in trusted_cursor_chain
+    )
+    if args.apply_remote and db_path != GOVERNED_LOCAL_DB:
+        print(
+            "ERROR: remote Ops publication requires the governed local mirror path",
+            file=sys.stderr,
+        )
+        return 7
+    if args.apply_remote and args.snapshot_dir.resolve() != GOVERNED_SNAPSHOT_DIR:
+        print(
+            "ERROR: remote Ops publication requires the governed snapshot directory",
+            file=sys.stderr,
+        )
+        return 7
+    if args.apply_remote and args.otc_index_html is not None:
+        print(
+            "ERROR: remote Ops publication cannot consume a caller-selected OTC index",
+            file=sys.stderr,
+        )
+        return 7
+    if args.apply_remote and args.storage_hot_cutoff is not None:
+        print(
+            "ERROR: remote Ops publication cannot consume a caller-selected hot cutoff",
+            file=sys.stderr,
+        )
+        return 7
+    if args.apply_remote and not has_trusted_cursor_chain:
+        print(
+            "ERROR: remote Ops publication requires a COMPLETE authenticated "
+            "D1 sync audit with exact local cursor/content identity",
+            file=sys.stderr,
+        )
+        return 7
+
+    projection_authority = open_ops_projection_signing_service()
+    if (
+        args.apply_remote
+        and has_trusted_cursor_chain
+        and projection_authority is None
+    ):
+        print(
+            "ERROR: dedicated Ops Projection signing authority is PENDING",
+            file=sys.stderr,
+        )
+        return 6
+
+    if args.apply_remote and not args.dry_run:
+        remote_active_cursor = read_remote_active_cursor()
+        if remote_active_cursor is None:
+            print(
+                "ERROR: remote Ops active cursor is unverifiable; refusing replay",
+                file=sys.stderr,
+            )
+            return 7
+        local_cursor = trusted_cursor_chain[0]
+        if not isinstance(local_cursor, int) or local_cursor < remote_active_cursor:
+            print(
+                "ERROR: authenticated local cursor would regress the active "
+                "remote Ops projection",
+                file=sys.stderr,
+            )
+            return 7
 
     refresh_status = "skipped"
     refresh_error = None
@@ -240,6 +472,11 @@ def main(argv: list[str] | None = None) -> int:
                 index_text=index_text,
             )
             store._conn.commit()  # noqa: SLF001
+            # SqliteStore enters WAL on open.  Refresh is authoritative only
+            # when the resulting governed content still matches the current
+            # signed audit and the same owner connection can freeze it back to
+            # the descriptor-lockable DELETE handoff contract.
+            _freeze_authenticated_current_applied_mirror(store)
             refresh_status = "success"
             last_success_at = _now()
             print("coverage ledger refresh ok")
@@ -251,55 +488,97 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             store.close()
 
-    # Fail-closed guard before spending time on full SQL export when apply is requested.
-    # 対象: 完全 publish のみ (dry-run / targeted reeval は対象外)
+    if args.apply_remote and refresh_status == "failed":
+        print(
+            "ERROR: refusing --apply-remote after coverage refresh failed "
+            "(fail-closed; projection FRESH requires refresh_success).",
+            file=sys.stderr,
+        )
+        return 4
+
+    render_kwargs = {
+        "snapshot_dir": args.snapshot_dir,
+        "refresh_status": refresh_status,
+        "refresh_error": refresh_error,
+        "last_refresh_attempt_at": last_refresh_attempt_at,
+        "last_success_at": last_success_at,
+        "storage_hot_cutoff": args.storage_hot_cutoff,
+    }
+    if has_trusted_cursor_chain and projection_authority is not None:
+        try:
+            applied_mirror = open_authenticated_applied_mirror(db_path)
+        except (ValueError, TypeError, RuntimeError, json.JSONDecodeError, sqlite3.Error):
+            print(
+                "ERROR: Ops projection requires an authenticated applied mirror handle",
+                file=sys.stderr,
+            )
+            return 7
+        bundle = _render_trusted_projection_bundle(
+            applied_mirror,
+            **render_kwargs,
+        )
+    else:
+        bundle = render_projection_bundle(db_path, **render_kwargs)
+    if has_trusted_cursor_chain:
+        rendered_cursors = (
+            bundle.envelope.get("source_cursor"),
+            bundle.envelope.get("export_cursor"),
+            bundle.envelope.get("applied_cursor"),
+        )
+        guarded_cursor = trusted_cursor_chain[0]
+        if (
+            type(guarded_cursor) is not int
+            or guarded_cursor <= 0
+            or rendered_cursors
+            != (guarded_cursor, guarded_cursor, guarded_cursor)
+        ):
+            print(
+                "ERROR: authenticated projection changed after cursor guard",
+                file=sys.stderr,
+            )
+            return 7
+    # The production COMPLETE regression guard consumes the count measured in
+    # the exact descriptor-bound render view.  It must never reopen db_path.
     if args.apply_remote and not args.dry_run:
-        local_n = count_local_complete(args.db)
+        local_n = bundle.complete_coverage_segments
+        if type(local_n) is not int or local_n < 0:
+            print(
+                "ERROR: authenticated projection COMPLETE count is invalid",
+                file=sys.stderr,
+            )
+            return 3
         remote_n = count_remote_complete()
         guard_err = enforce_complete_count_guard(
             local_complete=local_n,
             remote_complete=remote_n,
-            force=bool(args.force_apply_remote),
         )
         if guard_err:
             print(f"ERROR: {guard_err}", file=sys.stderr)
             print(
-                f"guard_detail local_complete={local_n} remote_complete={remote_n} "
-                f"force={bool(args.force_apply_remote)}",
+                f"guard_detail local_complete={local_n} remote_complete={remote_n}",
                 file=sys.stderr,
             )
             return 3
-        if args.force_apply_remote and remote_n is not None and local_n < remote_n:
-            print(
-                f"WARN: --force-apply-remote with local COMPLETE {local_n} < remote {remote_n}",
-                file=sys.stderr,
-            )
-        print(
-            f"complete_count_guard ok local={local_n} remote={remote_n} "
-            f"force={bool(args.force_apply_remote)}"
-        )
-
-    sql = render_projection_sql(
-        args.db,
-        snapshot_dir=args.snapshot_dir,
-        refresh_status=refresh_status,
-        refresh_error=refresh_error,
-        last_refresh_attempt_at=last_refresh_attempt_at,
-        last_success_at=last_success_at,
-    )
-    from ops.projection_meta import build_projection_metadata
-
-    meta = build_projection_metadata(
-        args.db,
-        refresh_status=refresh_status,
-        refresh_error=refresh_error,
-        last_refresh_attempt_at=last_refresh_attempt_at,
-        last_success_at=last_success_at,
-        publisher="scripts/publish_ops_projection.py",
-    )
+        print(f"complete_count_guard ok local={local_n} remote={remote_n}")
+    sql = bundle.sql
+    meta = dict(bundle.metadata)
+    meta["publisher"] = "scripts/publish_ops_projection.py"
+    meta["last_refresh_status"] = refresh_status
+    meta["last_refresh_error"] = refresh_error
     meta["local_db"] = str(args.db)
     meta["snapshot_dir"] = str(args.snapshot_dir)
     meta["sql_bytes"] = len(sql.encode("utf-8"))
+    meta["generation_id"] = bundle.generation_id
+    meta["source_db_digest"] = bundle.source_db_digest
+    meta["content_digest"] = bundle.content_digest
+    meta["row_counts"] = dict(bundle.row_counts)
+    meta["signature_status"] = "SIGNED" if bundle.signed_envelope else "UNSIGNED"
+    meta["issuer_key_id"] = (
+        bundle.signed_envelope.get("issuer_key_id")
+        if bundle.signed_envelope
+        else None
+    )
+    meta["signed_envelope"] = bundle.signed_envelope
     # Back-compat aliases for older readers
     meta["projection_status"] = meta["status"]
     meta["projection_generated_at"] = meta["generated_at"]
@@ -340,23 +619,50 @@ def main(argv: list[str] | None = None) -> int:
         )
         remote_path = args.output.with_suffix(".d1.sql")
         remote_path.write_text(remote_sql, encoding="utf-8")
+        try:
+            wrangler, config = _validated_ops_wrangler()
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 8
         cmd = [
-            "npx",
-            "wrangler",
+            wrangler,
             "d1",
             "execute",
-            "quant-ingest",
+            OPS_PROJECTION_DATABASE,
             "--remote",
-            f"--file={remote_path}",
+            "--config",
+            str(config),
+            "--env",
+            "production",
+            "--yes",
+            "--file",
+            str(remote_path),
         ]
-        print("running:", " ".join(cmd))
+        print("running pinned Ops projection D1 apply")
         proc = subprocess.run(
-            cmd, cwd=ROOT / "platform" / "workers" / "quant-ops-mcp"
+            cmd,
+            cwd=OPS_WRANGLER_CWD,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
         )
         if proc.returncode != 0:
-            print("ERROR: remote apply failed", file=sys.stderr)
+            print(
+                "ERROR: remote apply failed; provider output withheld",
+                file=sys.stderr,
+            )
             return proc.returncode
+        observed_generation = read_remote_active_generation()
+        if observed_generation != bundle.generation_id:
+            print(
+                "ERROR: projection import did not activate the expected generation "
+                f"expected={bundle.generation_id} observed={observed_generation}",
+                file=sys.stderr,
+            )
+            return 5
         meta["applied_at"] = _now()
+        meta["active_generation"] = observed_generation
         if meta.get("status") == "FRESH" and refresh_status != "success":
             meta["status"] = "STALE"
         meta["projection_status"] = meta["status"]

@@ -1,15 +1,22 @@
 /** Budget HTTP dispatcher. Occupancy algebra stays in budget_do. Presence of budget_id is not a reserve. */
 
+import { DurableObject } from "cloudflare:workers";
+
 import {
+  cancelPreProviderReservation,
   createBudget,
+  createBudgetCoordinator,
   finalizeBudget,
   heartbeatLease,
-  reconcileBudget,
+  markProviderStarted,
   recoverExpiredLeases,
   releaseBudget,
   reserveBudget,
+  reserveOwnedBudget,
+  settleUncertainBudget,
   snapshotBudget,
   type BudgetResult,
+  type AtomicBudgetStorage,
   type BudgetStorage,
 } from "./budget_do";
 import { json } from "./http_json";
@@ -21,16 +28,32 @@ class DurableObjectBudgetStorage implements BudgetStorage {
     return this.storage.get<T>(key);
   }
 
-  put(key: string, value: unknown): Promise<void> {
-    return this.storage.put(key, value);
+  async commit(key: string, value: unknown, nextAlarm: number | null): Promise<void> {
+    await this.storage.transaction(async (txn) => {
+      await txn.put(key, value);
+      if (nextAlarm === null) {
+        await txn.deleteAlarm();
+      } else {
+        await txn.setAlarm(nextAlarm);
+      }
+    });
   }
 
-  async delete(key: string): Promise<void> {
-    await this.storage.delete(key);
-  }
-
-  async list(prefix: string): Promise<Map<string, unknown>> {
-    return (await this.storage.list({ prefix })) as Map<string, unknown>;
+  runAtomic<T>(work: (storage: AtomicBudgetStorage) => Promise<T>): Promise<T> {
+    return this.storage.transaction(async (transaction) => {
+      const atomicStorage: AtomicBudgetStorage = {
+        get: <V>(key: string) => transaction.get<V>(key),
+        commit: async (key: string, value: unknown, nextAlarm: number | null) => {
+          await transaction.put(key, value);
+          if (nextAlarm === null) {
+            await transaction.deleteAlarm();
+          } else {
+            await transaction.setAlarm(nextAlarm);
+          }
+        },
+      };
+      return work(atomicStorage);
+    });
   }
 }
 
@@ -39,10 +62,24 @@ function errorStatus(error: string): number {
   if (
     error === "reservation_not_found" ||
     error === "lease_not_active" ||
+    error === "lease_reservation_mismatch" ||
     error === "budget_frozen" ||
     error === "actual_exceeds_reserved" ||
+    error === "provider_usage_uncertain" ||
+    error === "provider_not_started" ||
     error === "idempotency_digest_conflict" ||
-    error === "reservation_released"
+    error === "reservation_released" ||
+    error === "settlement_capability_required" ||
+    error === "settlement_capability_invalid" ||
+    error === "settlement_capability_consumed" ||
+    error === "request_digest_mismatch" ||
+    error === "lease_mismatch" ||
+    error === "caller_settlement_rejected" ||
+    error === "provider_usage_invalid" ||
+    error === "reservation_changed_retry" ||
+    error === "reserve_owner_capability_invalid" ||
+    error === "reservation_owned_by_other_invocation" ||
+    error === "reservation_not_cancellable"
   ) {
     return 409;
   }
@@ -56,6 +93,17 @@ export async function handleBudgetRequest(
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
+  if (
+    path === "/finalize" ||
+    path === "/cancel-pre-provider" ||
+    path === "/reconcile" ||
+    path === "/provider-started" ||
+    path === "/settle-uncertain" ||
+    path === "/mint" ||
+    path === "/mint-settlement-capability"
+  ) {
+    return json({ ok: false, error: "not found" }, 404);
+  }
   if (request.method === "GET" && (path === "/snapshot" || path === "/")) {
     return json(await snapshotBudget(storage, now));
   }
@@ -83,35 +131,8 @@ export async function handleBudgetRequest(
         {
           idempotency_key: String(rec.idempotency_key ?? ""),
           amounts: rec.amounts,
-          acquire_lease: rec.acquire_lease === true,
+          acquire_lease: true,
           request_digest: typeof rec.request_digest === "string" ? rec.request_digest : undefined,
-        },
-        now,
-      );
-      break;
-    case "/reconcile":
-      result = await reconcileBudget(
-        storage,
-        {
-          idempotency_key: String(rec.idempotency_key ?? ""),
-          amounts: rec.amounts,
-        },
-        now,
-      );
-      break;
-    case "/finalize":
-      result = await finalizeBudget(
-        storage,
-        {
-          idempotency_key: String(rec.idempotency_key ?? ""),
-          amounts: rec.amounts,
-          result:
-            rec.result && typeof rec.result === "object" && !Array.isArray(rec.result)
-              ? {
-                  http_status: Number((rec.result as Record<string, unknown>).http_status),
-                  body: (rec.result as Record<string, unknown>).body,
-                }
-              : undefined,
         },
         now,
       );
@@ -125,6 +146,11 @@ export async function handleBudgetRequest(
         {
           lease_id: typeof rec.lease_id === "string" ? rec.lease_id : undefined,
           idempotency_key: typeof rec.idempotency_key === "string" ? rec.idempotency_key : undefined,
+          request_digest: typeof rec.request_digest === "string" ? rec.request_digest : undefined,
+          reserve_owner_capability:
+            typeof rec.reserve_owner_capability === "string"
+              ? rec.reserve_owner_capability
+              : undefined,
         },
         now,
       );
@@ -140,14 +166,62 @@ export async function handleBudgetRequest(
 }
 
 /** Wrangler Durable Object. Algebra lives in budget_do for unit tests. */
-export class BudgetLedger {
+export class BudgetLedger extends DurableObject<unknown> {
   private readonly storage: BudgetStorage;
+  private readonly coordinator: ReturnType<typeof createBudgetCoordinator>;
 
   constructor(state: DurableObjectState, _env: unknown) {
+    super(state, _env);
     this.storage = new DurableObjectBudgetStorage(state.storage);
+    this.coordinator = createBudgetCoordinator(this.storage);
+    state.blockConcurrencyWhile(async () => {
+      // Reconstruct the recovery alarm after eviction/restart and settle any
+      // provider-started lease that expired while the instance was absent.
+      await recoverExpiredLeases(this.storage);
+    });
   }
 
   fetch(request: Request): Promise<Response> {
     return handleBudgetRequest(this.storage, request);
+  }
+
+  reserve(input: Parameters<typeof reserveBudget>[1]) {
+    return this.coordinator.reserve(input);
+  }
+
+  reserveOwned(input: Parameters<typeof reserveOwnedBudget>[1]) {
+    return this.coordinator.reserveOwned(input);
+  }
+
+  markProviderStarted(input: Parameters<typeof markProviderStarted>[1]) {
+    return this.coordinator.markProviderStarted(input);
+  }
+
+  cancelPreProvider(input: Parameters<typeof cancelPreProviderReservation>[1]) {
+    return this.coordinator.cancelPreProvider(input);
+  }
+
+  finalizeExact(input: Parameters<typeof finalizeBudget>[1]) {
+    return this.coordinator.finalizeExact(input);
+  }
+
+  settleUncertain(input: Parameters<typeof settleUncertainBudget>[1]) {
+    return this.coordinator.settleUncertain(input);
+  }
+
+  release(input: Parameters<typeof releaseBudget>[1]) {
+    return this.coordinator.release(input);
+  }
+
+  heartbeat(leaseId: string) {
+    return this.coordinator.heartbeat(leaseId);
+  }
+
+  snapshot() {
+    return this.coordinator.snapshot();
+  }
+
+  async alarm(): Promise<void> {
+    await recoverExpiredLeases(this.storage);
   }
 }

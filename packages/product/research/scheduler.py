@@ -15,7 +15,7 @@ from research.hypothesis_classes import (
 )
 from research.readiness import (
     MassResearchDisabledError,
-    VerifiedResearchReadiness,
+    VerifiedMassReadiness,
     require_mass_research_start,
 )
 from selection.budget_ledger import (
@@ -76,15 +76,15 @@ class ExperimentScheduler:
         self,
         *,
         plan: ExperimentPlan,
-        readiness: VerifiedResearchReadiness | None = None,
-        lease_ttl_seconds: int = 3600,
+        readiness: VerifiedMassReadiness | None = None,
         hypothesis_class: str | None = None,
         explicit_opt_in: Sequence[str] | None = None,
     ) -> ScheduledExperiment:
         if not isinstance(plan, ExperimentPlan):
             raise MassResearchDisabledError("ExperimentPlan required")
-        if not plan.ready_snapshot_id.strip():
-            raise MassResearchDisabledError("plan.ready_snapshot_id required")
+        from research.dependency_closure import build_plan_dependency_closure
+
+        closure = build_plan_dependency_closure(plan)
         if hypothesis_class is not None and str(hypothesis_class).strip():
             cid = str(hypothesis_class).strip()
             if not is_generation_enabled(cid, explicit_opt_in=explicit_opt_in):
@@ -96,10 +96,18 @@ class ExperimentScheduler:
         cap, att = require_mass_research_start(
             budget=self._budget,
             readiness=readiness,
-            expected_snapshot_id=plan.ready_snapshot_id,
         )
-        att.require_valid(expected_snapshot_id=plan.ready_snapshot_id)
-        lease = cap.acquire_slot(ttl_seconds=lease_ttl_seconds)
+        if plan.plan_id not in att.plan_ids:
+            raise MassResearchDisabledError(
+                "ExperimentPlan is not a member of the signed Mass readiness plan set"
+            )
+        if not set(closure.required_datasets) <= set(att.dataset_ids):
+            raise MassResearchDisabledError(
+                "ExperimentPlan dependency closure exceeds signed Mass readiness"
+            )
+        # The capability owns the canonical policy-bound TTL (currently 1800s).
+        # A scheduler caller cannot extend the lease ad hoc.
+        lease = cap.acquire_slot()
         try:
             cap.consume(generations=1)
         except Exception:

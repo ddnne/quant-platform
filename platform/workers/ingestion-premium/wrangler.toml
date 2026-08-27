@@ -34,6 +34,9 @@ compatibility_date = "2026-08-01"
 workers_dev = false
 preview_urls = false
 
+[secrets]
+required = ["DATA_EXPORT_TOKEN", "INGESTION_RUN_TOKEN", "JQUANTS_API_KEY"]
+
 # R2 — full response pages + manifest under raw/{dataset}/{run_id}/.
 [[r2_buckets]]
 binding = "RAW_BUCKET"
@@ -51,6 +54,11 @@ binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
+[[services]]
+binding = "RECEIPT_EVIDENCE_AUTHORITY"
+service = "quant-platform-receipt-evidence-authority"
+entrypoint = "ReceiptAuthorityService"
+
 # Secrets bound via `wrangler secret put` (never in this file):
 # - JQUANTS_API_KEY            (required for fetch)
 # - INGESTION_RUN_TOKEN        (manual run and migration rebuild only)
@@ -59,6 +67,7 @@ database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 [vars]
 # Parallel dataset ingest; shared RateLimiter still enforces ~500/min upstream.
 INGEST_CONCURRENCY = "6"
+RECEIPT_AUTHORITY_ENVIRONMENT = "production"
 # MASTER_SCD2_ONLY = "1"  # optional: route equities_master structured to R2 only
 
 [triggers]
@@ -67,11 +76,18 @@ crons = ["15 * * * *"]
 
 [observability]
 enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"
 
 [env.production]
 name = "quant-platform-ingestion-premium"
 workers_dev = false
 preview_urls = false
+
+[env.production.secrets]
+required = ["DATA_EXPORT_TOKEN", "INGESTION_RUN_TOKEN", "JQUANTS_API_KEY"]
 
 [[env.production.r2_buckets]]
 binding = "RAW_BUCKET"
@@ -86,5 +102,22 @@ binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
+[[env.production.services]]
+binding = "RECEIPT_EVIDENCE_AUTHORITY"
+service = "quant-platform-receipt-evidence-authority"
+entrypoint = "ReceiptAuthorityService"
+
 [env.production.vars]
 INGEST_CONCURRENCY = "6"
+RECEIPT_AUTHORITY_ENVIRONMENT = "production"
+
+[env.production.triggers]
+# Named environments do not inherit top-level triggers.
+crons = ["15 * * * *"]
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.production.version_metadata]
+binding = "CF_VERSION_METADATA"

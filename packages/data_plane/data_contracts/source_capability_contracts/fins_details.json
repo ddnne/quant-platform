@@ -1,0 +1,56 @@
+{
+  "policy_version": "source-capability/v3",
+  "dataset_id": "fins_details",
+  "source": "jquants_premium_core",
+  "upstream_locator": "/v2/fins/details",
+  "official_evidence_url": "https://jpx-jquants.com/en/spec/fin-details",
+  "history_mode": "event_stream",
+  "earliest_official_availability": "2009-01-13",
+  "historical_research_eligible": true,
+  "tip_only_operational": false,
+  "supported_query_parameters": ["code", "date", "cursor", "pagination_key"],
+  "publication_calendar": {
+    "kind": "jpx_financial_disclosure_event",
+    "timezone": "Asia/Tokyo",
+    "official_history_evidence_url": "https://jpx-jquants.com/en/spec/data-spec",
+    "official_update_schedule": ["near_realtime", "18:00_preliminary", "24:30_final"]
+  },
+  "entitlement_semantics": {
+    "clamp_before_earliest": true,
+    "subscription_floor": null,
+    "official_data_provision_start": "2009-01-13"
+  },
+  "collection_window": {
+    "grain": "calendar_month",
+    "open": "2009-01-13",
+    "close": "latest_published_before_collection_cutoff"
+  },
+  "freshness_sla": {
+    "expected_after": "disclosure_time",
+    "usable_by": "24:30",
+    "timezone": "Asia/Tokyo",
+    "rule": "near_realtime_then_preliminary_and_final"
+  },
+  "event_time": {
+    "policy": "explicit_timestamp_field",
+    "fields": ["DiscDate", "DiscTime"]
+  },
+  "available_at": {
+    "policy": "explicit_timestamp_field",
+    "field": "DiscDate+DiscTime",
+    "known_publication_lag": null
+  },
+  "revision_semantics": {
+    "policy": "source_overwrite_capture_new_generation",
+    "generation_on_revision": true
+  },
+  "research_profile_eligibility": {
+    "include_in": ["core", "core_historical"],
+    "exclude_from": [],
+    "exclusion_reason": "none"
+  },
+  "required_domain_semantics": {
+    "basis": "publication_windows_from_official_start",
+    "empty_success_policy": "trusted_exhausted_receipt_may_complete"
+  }
+}

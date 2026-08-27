@@ -77,6 +77,34 @@ describe("handleBudgetRequest HTTP dispatcher", () => {
     expect(await res.json()).toEqual({ ok: false, error: "not found" });
   });
 
+  it.each([
+    "/provider-started",
+    "/settle-uncertain",
+    "/mint",
+    "/mint-settlement-capability",
+  ] as const)("direct HTTP %s is 404 and does not mint settlement authority", async (path) => {
+    const storage = new MemoryBudgetStorage();
+    const res = await dispatch(storage, "POST", path, {
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        idempotency_key: "http-mint",
+        lease_id: "lease",
+        reason: "timeout",
+      }),
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ ok: false, error: "not found" });
+    const snap = await dispatch(storage, "GET", "/snapshot");
+    const payload = (await snap.json()) as {
+      used?: Record<string, number>;
+      reserved?: Record<string, number>;
+      active_leases?: number;
+    };
+    expect(payload.used).toEqual(zeroCounters());
+    expect(payload.reserved).toEqual(zeroCounters());
+    expect(payload.active_leases).toBe(0);
+  });
+
   it("POST /reserve JSON {} is 400 idempotency_key required and does not create occupancy", async () => {
     const storage = new MemoryBudgetStorage();
     const res = await dispatch(storage, "POST", "/reserve", {

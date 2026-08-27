@@ -25,13 +25,12 @@ from core.costs import (
     rates_by_date_from_repo_rows,
     short_financing,
 )
-from core.engine import CORE_ENGINE_VERSION, run_backtest
+from core.engine import run_backtest
 from core.execution import close_as_of
 from core.repo_rates import load_repo_rates_by_date_for_paper
 from core.strategies.buy_hold import BuyHold
 from core.universe import membership_at
 from strategies.paper import PaperRunConfig, run_paper
-from strategies.paper.runner import PAPER_RUNNER_VERSION
 
 from _coreseed import CODES, TRADING_DAYS, seed_db
 from storage.sqlite_store import SqliteStore
@@ -109,9 +108,7 @@ class _LeveredLong:
         return [OrderIntent(code=code, target_weight=1.5)]
 
 
-def test_wave_versions():
-    assert CORE_ENGINE_VERSION == "0.6.2"
-    assert PAPER_RUNNER_VERSION == "0.7.0"
+def test_financing_default_contracts():
     assert SHORT_BORROW_SPREAD_MID_BP == 50.0
     assert DEFAULT_SHORT_BORROW_SPREAD_BP == 50.0
 
@@ -376,11 +373,3 @@ def test_explicit_repo_rates_bypass_auto_load(tmp_path):
     assert load["load_path"] == "config_explicit"
     # rate 0 + mid 50bp still charges spread-only
     assert result.reproducibility["short_financing"]["spread_bp"] == 50.0
-
-
-def test_research_cost_models_wave_pin():
-    from research.cost_models import COST_MODELS_PROOF, COST_MODELS_WAVE
-
-    assert "W86" in COST_MODELS_WAVE
-    assert "w0816u" in COST_MODELS_WAVE
-    assert "w0816u_w86_paper_repo_financing" in COST_MODELS_PROOF

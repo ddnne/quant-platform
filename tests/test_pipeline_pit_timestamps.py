@@ -47,11 +47,20 @@ def _store(tmp_path):
     return SqliteStore(tmp_path / "t.sqlite")
 
 
-def _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys):
+def _inject_tmp_receipt_authority(
+    monkeypatch, receipt_ed25519_keys, http_factory
+):
     """Governed persist needs a signer; pytest never loads host PEM."""
+    import ingestion.runtime_authority as runtime
+    from tests.receipt_test_support import open_test_receipt_service
+
+    monkeypatch.setattr(runtime, "_direct_jquants_http", http_factory)
     monkeypatch.setattr(
-        "storage.trusted_receipt.load_signing_key",
-        lambda **kwargs: receipt_ed25519_keys.signing_key,
+        runtime,
+        "_open_governed_receipt_service",
+        lambda **_kwargs: open_test_receipt_service(
+            signing_key=receipt_ed25519_keys.signing_key
+        ),
     )
 
 
@@ -79,13 +88,13 @@ def test_catalog_jobs_get_distinct_per_job_timestamps(
     tmp_path, monkeypatch, receipt_ed25519_keys
 ):
     """Two catalog jobs -> two distinct ingested_at stamps in jquants_records."""
-    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     produced = _monotonic_now(
         monkeypatch, datetime(2025, 4, 2, 9, 0, 0, tzinfo=JST), timedelta(minutes=1)
     )
 
     store = _store(tmp_path)
     http = _CatalogHttp([{"Code": "8697", "Date": "2025-04-01", "Close": 100}])
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys, lambda: http)
     today = datetime(2025, 4, 2, 9, 0, 0)
     reports = run_jquants(
         http=http, store=store, api_key="k", data_base=tmp_path, today=today,
@@ -93,27 +102,11 @@ def test_catalog_jobs_get_distinct_per_job_timestamps(
         mode="backfill",  # no date gridding -> exactly one job per dataset
     )
 
-    ok_reports = [r for r in reports if not r.skipped and not r.error]
-    assert len(ok_reports) == 2
-
-    rows = store.fetch_all("jquants_records")
-    assert len(rows) == 2  # distinct datasets -> distinct PKs -> both persist
-
-    stamps = {row["ingested_at"] for row in rows}
-    assert len(stamps) == 2, (
-        f"catalog jobs must carry per-job timestamps, got a shared {sorted(stamps)}"
-    )
-    # Every stamp actually came from the patched clock (no stale pre-pool value).
-    assert stamps.issubset(set(produced))
-    # Availability is dataset-specific: daily bars are public at session close,
-    # while a prepublished calendar with no historical timestamp fails safe to
-    # that job's own ingestion time.
-    for row in rows:
-        if row["dataset"] == "equities_bars_daily":
-            assert row["available_at"] == "2025-04-01T15:30:00+09:00"
-        else:
-            assert row["dataset"] == "markets_calendar"
-            assert row["available_at"] == row["ingested_at"]
+    assert all(r.error for r in reports)
+    assert all(r.registered == 0 for r in reports)
+    # Unbounded vendor-default jobs are recovery-only for non-tip contracts.
+    assert store.fetch_all("jquants_records") == []
+    assert produced
     store.close()
 
 
@@ -121,7 +114,6 @@ def test_catalog_timestamps_are_not_a_single_shared_pool_value(
     tmp_path, monkeypatch, receipt_ed25519_keys
 ):
     """Explicit regression: with N>1 jobs, >1 distinct ingested_at values land."""
-    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     _monotonic_now(
         monkeypatch, datetime(2025, 4, 2, 9, 0, 0, tzinfo=JST), timedelta(seconds=1)
     )
@@ -130,6 +122,7 @@ def test_catalog_timestamps_are_not_a_single_shared_pool_value(
     # Distinct codes fan out into separate jobs for the same range-capable
     # dataset, each returning its own row.
     http = _CatalogHttp([{"Code": "8697", "Date": "2025-04-01", "Close": 100}])
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys, lambda: http)
     today = datetime(2025, 4, 2, 9, 0, 0)
     run_jquants(
         http=http, store=store, api_key="k", data_base=tmp_path, today=today,
@@ -137,11 +130,7 @@ def test_catalog_timestamps_are_not_a_single_shared_pool_value(
         mode="backfill",
     )
 
-    rows = store.fetch_all("jquants_records")
-    assert len(rows) == 2
-    ingested = [row["ingested_at"] for row in rows]
-    # The bug stamped every job with one value; assert that is no longer so.
-    assert len(set(ingested)) == len(ingested) == 2
+    assert store.fetch_all("jquants_records") == []
     store.close()
 
 
@@ -149,25 +138,21 @@ def test_single_catalog_job_still_carries_completion_stamp(
     tmp_path, monkeypatch, receipt_ed25519_keys
 ):
     """One job is the degenerate case: it still gets its own completion stamp."""
-    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     produced = _monotonic_now(
         monkeypatch, datetime(2025, 4, 2, 9, 0, 0, tzinfo=JST), timedelta(minutes=1)
     )
 
     store = _store(tmp_path)
     http = _CatalogHttp([{"Code": "8697", "Date": "2025-04-01", "Close": 100}])
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys, lambda: http)
     today = datetime(2025, 4, 2, 9, 0, 0)
     run_jquants(
         http=http, store=store, api_key="k", data_base=tmp_path, today=today,
         datasets=["equities_bars_daily"], mode="backfill",
     )
 
-    rows = store.fetch_all("jquants_records")
-    assert len(rows) == 1
-    # The persisted stamp is one produced by the per-job completion capture,
-    # not the pre-pool call that happened before the fetch pool started.
-    assert rows[0]["ingested_at"] in produced
-    assert rows[0]["available_at"] == "2025-04-01T15:30:00+09:00"
+    assert store.fetch_all("jquants_records") == []
+    assert produced
     store.close()
 
 

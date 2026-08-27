@@ -41,19 +41,27 @@ import {
 import { fetchDataset } from "./fetch_jq";
 import { todayJst, toJstIso } from "./identity";
 import { sha256HexFromString } from "./sha256";
+import type { ReceiptEvidenceAuthorityRpc } from "../../receipt-evidence-authority/src/types";
+import {
+  issueGovernedReceipt,
+  recoverPreparedReceipt,
+  recoverPreparedReceipts,
+  type ReceiptAuthorityEnvironment,
+} from "./receipt_authority_client";
 
-export interface Env {
+/** Generated bindings plus secret/optional var refinements only. */
+export type Env = Omit<
+  Cloudflare.Env,
+  "RECEIPT_EVIDENCE_AUTHORITY" | "RECEIPT_AUTHORITY_ENVIRONMENT"
+> & {
+  RECEIPT_EVIDENCE_AUTHORITY: ReceiptEvidenceAuthorityRpc;
+  RECEIPT_AUTHORITY_ENVIRONMENT: ReceiptAuthorityEnvironment;
   JQUANTS_API_KEY: string;
   INGESTION_RUN_TOKEN?: string;
   DATA_EXPORT_TOKEN?: string;
-  /** Optional concurrency cap (1–8). Default 6 (near Premium ceiling). */
-  INGEST_CONCURRENCY?: string;
-  /** When "1", equities_master structured skips full-history D1 (R2 only). */
   MASTER_SCD2_ONLY?: string;
-  RAW_BUCKET: R2Bucket;
-  STRUCTURED_BUCKET: R2Bucket;
-  DB: D1Database;
-}
+  ALLOW_D1_STRUCTURED_DATASETS?: string;
+};
 
 // P0-4 parallel ingest knobs — drive near Premium ~500/min ceiling.
 const DEFAULT_CONCURRENCY = 6;
@@ -673,6 +681,132 @@ async function handleRun(
   return json({ ok: summary.status !== "fail", summary });
 }
 
+function exactQuery(
+  url: URL,
+  names: readonly string[],
+): Record<string, string> | null {
+  const actual = [...url.searchParams.keys()].sort();
+  const expected = [...names].sort();
+  if (
+    actual.length !== expected.length ||
+    actual.some((name, index) => name !== expected[index])
+  ) return null;
+  const result: Record<string, string> = {};
+  for (const name of names) {
+    const values = url.searchParams.getAll(name);
+    if (values.length !== 1 || values[0] === "") return null;
+    result[name] = values[0]!;
+  }
+  return result;
+}
+
+function receiptEnvironment(env: Env): ReceiptAuthorityEnvironment {
+  if (
+    env.RECEIPT_AUTHORITY_ENVIRONMENT !== "production" &&
+    env.RECEIPT_AUTHORITY_ENVIRONMENT !== "staging"
+  ) throw new Error("receipt authority environment is not configured");
+  return env.RECEIPT_AUTHORITY_ENVIRONMENT;
+}
+
+async function requireAuthenticatedEmptyPost(
+  env: Env,
+  request: Request,
+): Promise<Response | null> {
+  if (request.method !== "POST") return json({ error: "POST required" }, 405);
+  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
+    return json({ error: "unauthorized" }, 401);
+  }
+  if ((await request.arrayBuffer()).byteLength !== 0) {
+    return json({ error: "request body is forbidden" }, 400);
+  }
+  return null;
+}
+
+async function handleReceiptReconcile(
+  env: Env,
+  request: Request,
+): Promise<Response> {
+  const rejected = await requireAuthenticatedEmptyPost(env, request);
+  if (rejected !== null) return rejected;
+  const query = exactQuery(new URL(request.url), ["dataset", "segment"]);
+  if (query === null) return json({ error: "exact dataset and segment required" }, 400);
+  try {
+    const issued = await issueGovernedReceipt(
+      env,
+      receiptEnvironment(env),
+      query.dataset!,
+      query.segment!,
+    );
+    return json({
+      ok: true,
+      operation_id: issued.result.operation_id,
+      receipt_digest: issued.result.receipt_digest,
+      state: issued.result.state,
+    });
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "receipt_authority_request",
+      operation: "issue_for_segment",
+      dataset: query.dataset,
+      segment_id: query.segment,
+      result: "FAILED",
+      reason: error instanceof Error ? error.message : "unknown",
+    }));
+    return json({ error: "receipt authority unavailable" }, 409);
+  }
+}
+
+async function handleReceiptRecovery(
+  env: Env,
+  request: Request,
+): Promise<Response> {
+  const rejected = await requireAuthenticatedEmptyPost(env, request);
+  if (rejected !== null) return rejected;
+  const query = exactQuery(new URL(request.url), ["operation_id"]);
+  if (query === null) return json({ error: "exact operation_id required" }, 400);
+  try {
+    const result = await recoverPreparedReceipt(env, query.operation_id!);
+    return json({
+      ok: true,
+      operation_id: result.operation_id,
+      receipt_digest: result.receipt_digest,
+      state: result.state,
+    });
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "receipt_authority_request",
+      operation: "recover_issue",
+      operation_id: query.operation_id,
+      result: "FAILED",
+      reason: error instanceof Error ? error.message : "unknown",
+    }));
+    return json({ error: "receipt authority recovery unavailable" }, 409);
+  }
+}
+
+async function handleReceiptPublicKeyRegistration(
+  env: Env,
+  request: Request,
+): Promise<Response> {
+  const rejected = await requireAuthenticatedEmptyPost(env, request);
+  if (rejected !== null) return rejected;
+  if (exactQuery(new URL(request.url), []) === null) {
+    return json({ error: "query parameters are forbidden" }, 400);
+  }
+  try {
+    const registration = await env.RECEIPT_EVIDENCE_AUTHORITY
+      .public_key_registration();
+    return json({ ok: true, registration });
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "receipt_authority_key_registration",
+      result: "FAILED",
+      reason: error instanceof Error ? error.message : "unknown",
+    }));
+    return json({ error: "receipt key registration unavailable" }, 409);
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -684,6 +818,15 @@ export default {
       return handleNaturalKeyRebuild(env, request);
     }
     if (url.pathname === "/v1/run") return handleRun(env, request, fetch);
+    if (url.pathname === "/v1/admin/receipt-evidence/reconcile") {
+      return handleReceiptReconcile(env, request);
+    }
+    if (url.pathname === "/v1/admin/receipt-evidence/recover") {
+      return handleReceiptRecovery(env, request);
+    }
+    if (url.pathname === "/v1/admin/receipt-evidence/public-key-registration") {
+      return handleReceiptPublicKeyRegistration(env, request);
+    }
     const exportResponse = await handleExportPaths(request, env);
     if (exportResponse) return exportResponse;
     if (url.pathname === "/v1/ops/archive-cold") {
@@ -702,8 +845,9 @@ export default {
   },
 
   async scheduled(
-    _event: ScheduledEvent, env: Env, ctx: ExecutionContext,
+    _controller: ScheduledController, env: Env, ctx: ExecutionContext,
   ): Promise<void> {
     ctx.waitUntil(runIngestion(env, {}, "cron", fetch));
+    ctx.waitUntil(recoverPreparedReceipts(env));
   },
 };

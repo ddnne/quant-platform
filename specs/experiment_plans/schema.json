@@ -2,8 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "specs/experiment_plans/schema.json",
   "title": "ExperimentPlan",
-  "description": "Closed ExperimentPlan v1. Unknown fields fail. execution_enabled is const false. Not a catalog rewrite and not a mass start.",
-  "$comment": "Exactly four typed plans live beside this schema. Pilot start stays off. Do not dump the active catalog into this directory.",
+  "description": "Closed ExperimentPlan v2. Exact strategy id/version/hash, governed FeatureRefs, strict enums, and execution disabled.",
+  "$comment": "Exactly four typed plans live beside this schema. v1 is audit-only and is never execution eligible.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,106 +12,90 @@
     "idea_id",
     "hypothesis",
     "strategy_spec_id",
+    "strategy_spec_version",
+    "strategy_spec_hash",
     "feature_refs",
     "research_data_profile_id",
-    "ready_snapshot_id",
     "universe",
     "period_start",
     "period_end",
     "cost_scenario",
     "evaluation_protocol",
+    "risk_policy",
     "budget_allocation",
     "execution_enabled"
   ],
   "properties": {
-    "version": {
+    "version": {"type": "string", "const": "experiment-plan/v2"},
+    "plan_id": {"type": "string", "minLength": 1},
+    "idea_id": {"type": "string", "minLength": 1},
+    "hypothesis": {"type": "string", "minLength": 1},
+    "strategy_spec_id": {"type": "string", "minLength": 1},
+    "strategy_spec_version": {
       "type": "string",
-      "const": "experiment-plan/v1"
+      "const": "strategy-spec/v3"
     },
-    "plan_id": {
+    "strategy_spec_hash": {
       "type": "string",
-      "minLength": 1
-    },
-    "idea_id": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Human ResearchIdea id. Not a catalog logic_id dump."
-    },
-    "hypothesis": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Human idea text."
-    },
-    "strategy_spec_id": {
-      "type": "string",
-      "minLength": 1
+      "pattern": "^sha256:[0-9a-f]{64}$"
     },
     "feature_refs": {
       "type": "array",
       "minItems": 1,
+      "uniqueItems": true,
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["id", "version"],
         "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1
-          },
-          "version": {
-            "type": "string",
-            "minLength": 1
-          },
-          "params": {
-            "type": "object"
-          }
+          "id": {"type": "string", "minLength": 1},
+          "version": {"type": "string", "minLength": 1},
+          "params": {"type": "object"}
         }
       }
     },
-    "research_data_profile_id": {
-      "type": "string",
-      "const": "core"
-    },
-    "ready_snapshot_id": {
-      "type": "string",
-      "minLength": 1,
-      "description": "READY is not declared. This is not a live snapshot grant."
-    },
+    "research_data_profile_id": {"type": "string", "const": "core"},
     "universe": {
       "type": "array",
       "minItems": 1,
-      "items": {
-        "type": "string",
-        "minLength": 1
-      }
+      "uniqueItems": true,
+      "items": {"type": "string", "enum": ["tse_prime_with_fins"]}
     },
     "period_start": {
       "type": "string",
-      "minLength": 1
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
     },
     "period_end": {
       "type": "string",
-      "minLength": 1
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
     },
     "cost_scenario": {
       "type": "string",
-      "minLength": 1
+      "enum": ["default_one_way_10bp"]
     },
     "evaluation_protocol": {
       "type": "string",
-      "minLength": 1
+      "enum": ["standard_research_eval"]
+    },
+    "risk_policy": {
+      "type": "string",
+      "enum": ["core_crash_high_vol"]
     },
     "budget_allocation": {
       "type": "object",
       "minProperties": 1,
-      "additionalProperties": {
-        "type": "integer"
+      "additionalProperties": false,
+      "properties": {
+        "generations": {"type": "integer", "minimum": 1},
+        "model_calls": {"type": "integer", "minimum": 1},
+        "input_tokens": {"type": "integer", "minimum": 1},
+        "output_tokens": {"type": "integer", "minimum": 1},
+        "cached_tokens": {"type": "integer", "minimum": 1},
+        "paper_runs": {"type": "integer", "minimum": 1},
+        "compute_time_ms": {"type": "integer", "minimum": 1},
+        "estimated_cost_micros": {"type": "integer", "minimum": 1}
       }
     },
-    "execution_enabled": {
-      "type": "boolean",
-      "const": false,
-      "description": "Pilot execution switch. Must stay false."
-    }
+    "execution_enabled": {"type": "boolean", "const": false}
   }
 }

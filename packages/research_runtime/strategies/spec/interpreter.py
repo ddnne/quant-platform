@@ -21,10 +21,11 @@ from .schema import (
     ThresholdRule,
     TopKRule,
     ValueMomentumAgreeRule,
+    iter_feature_refs,
 )
 
 
-def _resolve_one_feature(ref: FeatureRef) -> features.FeatureDefinition:
+def resolve_feature_ref(ref: FeatureRef) -> features.FeatureDefinition:
     """Resolve and authorize one feature, including every declared parameter."""
     try:
         definition = features.get_for_strategy(
@@ -67,15 +68,24 @@ def _resolve_one_feature(ref: FeatureRef) -> features.FeatureDefinition:
     return definition
 
 
+def resolve_strategy_features(
+    spec: StrategySpec,
+) -> tuple[features.FeatureDefinition, ...]:
+    """Resolve every exact FeatureRef without a latest-version fallback."""
+    if not isinstance(spec, StrategySpec):
+        raise TypeError("StrategySpec required")
+    return tuple(resolve_feature_ref(ref) for ref in iter_feature_refs(spec))
+
+
 def _resolve_features(spec: StrategySpec) -> dict[str, features.FeatureDefinition]:
     """Resolve all FeatureRefs referenced by the rule."""
     rule = spec.rule
     if isinstance(rule, ValueMomentumAgreeRule):
         return {
-            "value": _resolve_one_feature(rule.value_feature),
-            "momentum": _resolve_one_feature(rule.momentum_feature),
+            "value": resolve_feature_ref(rule.value_feature),
+            "momentum": resolve_feature_ref(rule.momentum_feature),
         }
-    return {"primary": _resolve_one_feature(rule.feature)}
+    return {"primary": resolve_feature_ref(rule.feature)}
 
 
 def _score_feature(
@@ -322,4 +332,9 @@ def interpret_strategy_spec(
     return StrategySpecStrategy(spec)
 
 
-__all__ = ["StrategySpecStrategy", "interpret_strategy_spec"]
+__all__ = [
+    "StrategySpecStrategy",
+    "interpret_strategy_spec",
+    "resolve_feature_ref",
+    "resolve_strategy_features",
+]

@@ -5,19 +5,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-
 @dataclass(frozen=True)
-class ExperimentBudget:
-    max_parallel_experiments: int = 4
-    max_generations: int = 3
-    max_model_calls: int = 50
-    max_paper_runs: int = 20
-    # Hard token/cost caps (required for mass research; never leave None).
-    max_input_tokens: int = 2_000_000
-    max_output_tokens: int = 500_000
-    max_cached_tokens: int = 2_000_000
+class OfflineExperimentBudget:
+    """Caller-tunable budget for DRAFT/offline screening and fixture runs.
+
+    This value is not a controlled-pilot policy or authorization capability.
+    Controlled v2 claims pin ``ControlledPilotPolicyPin`` loaded from the
+    digest-checked policy source of truth and never consume these overrides.
+    """
+
+    max_parallel_experiments: int = 2
+    max_generations: int = 1
+    max_model_calls: int = 16
+    max_paper_runs: int = 8
+    max_input_tokens: int = 400_000
+    max_output_tokens: int = 80_000
+    max_cached_tokens: int = 400_000
     max_compute_time_ms: int = 3_600_000
-    max_estimated_cost_micros: int = 50_000_000  # $50 in micros
+    max_estimated_cost_micros: int = 20_000_000
+    lease_ttl_seconds: int = 1_800
+    automatic_promotion: bool = False
 
     def __post_init__(self) -> None:
         if self.max_parallel_experiments < 1:
@@ -26,6 +33,10 @@ class ExperimentBudget:
             raise ValueError("max_generations must be >= 1")
         if self.max_input_tokens < 1 or self.max_output_tokens < 1:
             raise ValueError("token budgets must be >= 1")
+        if self.lease_ttl_seconds < 30:
+            raise ValueError("lease_ttl_seconds must be >= 30")
+        if self.automatic_promotion:
+            raise ValueError("automatic promotion is disabled")
 
 
 def screen_candidates(
@@ -48,7 +59,7 @@ def early_stop(
     generation: int,
     paper_runs: int,
     model_calls: int,
-    budget: ExperimentBudget,
+    budget: OfflineExperimentBudget,
     best_score: float | None = None,
     floor: float | None = None,
 ) -> bool:
@@ -62,3 +73,16 @@ def early_stop(
     if floor is not None and best_score is not None and best_score < floor:
         return True
     return False
+
+
+# Compatibility name for the offline API.  New controlled code must never use
+# this alias as an authority or policy input.
+ExperimentBudget = OfflineExperimentBudget
+
+
+__all__ = [
+    "ExperimentBudget",
+    "OfflineExperimentBudget",
+    "early_stop",
+    "screen_candidates",
+]

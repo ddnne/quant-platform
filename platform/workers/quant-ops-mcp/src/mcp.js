@@ -1,5 +1,6 @@
 import { OPS_TOOLS, callOpsTool } from "./domain.js";
 import { QuotaExceeded, quotaCost } from "./quota.js";
+import { acceptedOpsToolSchemaDigest } from "./tool_schema_digest.js";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
@@ -50,12 +51,18 @@ export async function handleJsonRpc(payload, db, context = {}) {
       return response(id, {
         protocolVersion: MCP_PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "quant-ops-read", version: "0.1.0" },
-        instructions: "Current mutable Ops status only. Research rows are not exposed by this server.",
+        serverInfo: { name: "quant-ops-read", version: "0.2.0" },
+        instructions: "Signed immutable Ops status only. Research rows are not exposed by this server.",
       });
     }
     if (request.method === "ping") return response(id, {});
-    if (request.method === "tools/list") return response(id, { tools: OPS_TOOLS });
+    if (request.method === "tools/list") {
+      const schemaDigest = await acceptedOpsToolSchemaDigest(OPS_TOOLS);
+      return response(id, {
+        tools: OPS_TOOLS,
+        _meta: { "quant-platform/tool-schema-digest": schemaDigest },
+      });
+    }
     if (request.method === "notifications/initialized") return null;
     if (id === undefined) return null;
     if (request.method === "tools/call") {

@@ -7,10 +7,9 @@ import { json } from "./http_json";
 import { ingestionTokenMatches } from "./ingestion_token";
 import { requireNaturalKeysV2Ready } from "./natural_key_migration";
 
-export interface ExportEnv {
-  DB: D1Database;
+export type ExportEnv = Pick<Cloudflare.Env, "DB"> & {
   DATA_EXPORT_TOKEN?: string;
-}
+};
 
 export async function handleExportD1(
   env: ExportEnv, request: Request,

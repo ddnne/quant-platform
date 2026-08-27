@@ -154,6 +154,7 @@ def synced_cf_d1_db(
     # fast rather than touching the network.
     monkeypatch.setattr(sync_module, "_new_http_client", lambda: object())
     monkeypatch.setattr(sync_module, "_http_get_json", fake_export)
+    monkeypatch.setenv("DATA_EXPORT_TOKEN", "fixture-token")
     db = tmp_path / "cf-export.sqlite"
     rc = sync_module.main(
         [
@@ -161,8 +162,6 @@ def synced_cf_d1_db(
             str(db),
             "--url",
             "https://fixture.invalid",
-            "--token",
-            "fixture-token",
             "--table",
             "jquants_records",
             "--page-limit",
@@ -181,16 +180,16 @@ def synced_cf_d1_db(
 
 
 @pytest.fixture(autouse=True)
-def _disable_host_receipt_pem(
+def _configure_receipt_verifier_fixtures(
     monkeypatch: pytest.MonkeyPatch, receipt_ed25519_keys: SimpleNamespace
 ) -> None:
-    """Never load operator ~/.config receipt PEM during pytest.
+    """Bind only tests-owned receipt keys and keep readiness fail-closed.
 
-    Bind the tmp Ed25519 helper used by snapshot/coherence tests that import
+    Product receipt crypto is verify-only. Bind the tmp Ed25519 helper used by
+    snapshot/coherence tests that import
     ``tests.test_phase61_coverage_v2._signed_digests`` without that module's
     autouse fixture.
     """
-    monkeypatch.setenv("QUANT_RECEIPT_DISABLE_HOST_PEM", "1")
     monkeypatch.setenv("QUANT_READINESS_DISABLE_HOST_PEM", "1")
     import tests.test_phase61_coverage_v2 as phase61
 
@@ -204,39 +203,10 @@ def _disable_host_receipt_pem(
 def receipt_ed25519_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> SimpleNamespace:
-    """Ephemeral Ed25519 pair; verifier reads tmp JSON, never the repo registry."""
-    import base64
+    """Ephemeral authority configured only through tests-only support."""
+    from tests.receipt_test_support import configure_test_receipt_authority
 
-    import storage.receipt_crypto as rc
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    from cryptography.hazmat.primitives.serialization import load_pem_private_key
-    from storage.receipt_crypto import ReceiptSigningKey, generate_keypair
-
-    priv_pem, pub, kid = generate_keypair(key_id="test-receipt-v1")
-    keys_path = tmp_path / "receipt_verify_public_keys.json"
-    keys_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "keys": [
-                    {
-                        "key_id": kid,
-                        "public_key_b64": base64.b64encode(pub).decode("ascii"),
-                        "algorithm": "Ed25519",
-                    }
-                ],
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv(rc.VERIFY_KEYS_ENV, str(keys_path))
-    monkeypatch.setattr(rc, "PUBLIC_KEYS_PATH", keys_path)
-    priv = load_pem_private_key(priv_pem, password=None)
-    assert isinstance(priv, Ed25519PrivateKey)
-    return SimpleNamespace(
-        path=keys_path,
-        key_id=kid,
-        signing_key=ReceiptSigningKey(key_id=kid, _private=priv),
+    return configure_test_receipt_authority(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
     )

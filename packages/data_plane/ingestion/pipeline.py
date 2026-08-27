@@ -7,6 +7,7 @@ Fetcher is local-only. Registrar validates ``available_at`` and upserts.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,7 +20,6 @@ from .pipeline_receipts import (
     _index_text_for_plan,
     _plan_required_segments,
     emit_catalog_job_receipt,
-    require_signed_receipt_authority,
     rollback_governed_catalog_write,
 )
 
@@ -91,14 +91,14 @@ class Registrar:
     def __init__(self, store) -> None:
         self._store = store
 
-    def register(self, table: str, rows) -> int:
+    def register(self, table: str, rows, *, commit: bool = True) -> int:
         # Persist canonical +09:00 available_at so lexicographic MIN is chronological.
         canonical = []
         for r in rows:
             r = dict(r)
             r["available_at"] = validate_available_at(r.get("available_at"))
             canonical.append(r)
-        return self._store.upsert(table, canonical)
+        return self._store.upsert(table, canonical, commit=commit)
 
 
 def _compact_stamp(iso_ts: str) -> str:
@@ -117,9 +117,24 @@ def _stamped(name: str, stamp: str) -> str:
 def save_raw(
     data_base: Path, source: str, filename: str, data: bytes, when
 ) -> Path:
+    """Persist verbatim raw bytes create-only and make the artifact read-only.
+
+    An idempotent retry may observe an identical artifact at the same path.
+    Different bytes at an existing identity are rejected instead of silently
+    overwriting the raw evidence used by a receipt.
+    """
     p = raw_path(data_base, source, when, filename)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(data)
+    payload = bytes(data)
+    try:
+        with p.open("xb") as handle:
+            handle.write(payload)
+    except FileExistsError:
+        if p.read_bytes() != payload:
+            raise FileExistsError(
+                f"immutable raw identity already contains different bytes: {p}"
+            )
+    p.chmod(0o444)
     return p
 
 
@@ -203,6 +218,25 @@ def run_jquants(
     reports: List[RunReport] = []
 
     if datasets:
+        from .runtime_authority import _open_governed_receipt_service
+
+        try:
+            receipt_service = _open_governed_receipt_service()
+        except Exception:  # noqa: BLE001
+            # Raw acquisition may still proceed as recovery-only evidence, but
+            # no structured fact/receipt transaction can begin.
+            receipt_service = None
+        if receipt_service is not None:
+            try:
+                # Governed SUCCESS never trusts the caller-supplied HttpClient.
+                client = receipt_service.open_jquants_client(
+                    api_key=api_key,
+                    via_cf_proxy=via_proxy,
+                )
+            except Exception:  # noqa: BLE001
+                # Continue immutable raw acquisition through the caller client,
+                # but its results cannot pass persist_jquants_collection().
+                pass
         return _run_jquants_catalog(
             client=client,
             reg=reg,
@@ -217,6 +251,7 @@ def run_jquants(
             runtime=runtime,
             max_workers=max_workers,
             chunk_days=chunk_days,
+            receipt_service=receipt_service,
         )
 
     try:
@@ -313,6 +348,7 @@ def _run_jquants_catalog(
     runtime: str,
     max_workers: int = 8,
     chunk_days: int = 30,
+    receipt_service=None,
 ) -> List[RunReport]:
     """Catalog-driven parallel fetch → raw → normalize_generic → jquants_records."""
     from .jquants import normalize as JN
@@ -351,46 +387,97 @@ def _run_jquants_catalog(
         # Per-job PIT stamp; parallel jobs must not share a pre-pool timestamp.
         res.completed_at = now_iso()
 
-    def _persist(job, rows: list, when: str) -> RunReport:
+    def _persist(job, result, when: str) -> RunReport:
         # kind = dataset id. Window lives in the filename so jobs don't clobber.
         kind = job.dataset_id
+        rows = list(result.rows)
         stamp_name = job.label.replace(" ", "_")[:120]
-        raw_bytes = json.dumps(rows, ensure_ascii=False).encode("utf-8")
         try:
             with write_lock:
-                rp = save_raw(
+                collection_context = (
+                    receipt_service.begin_collection()
+                    if receipt_service is not None
+                    else None
+                )
+                if collection_context is not None:
+                    # Raw filenames, canonical normalization, persisted PIT
+                    # metadata, and signed receipt all share one
+                    # authority-minted timestamp.
+                    when = collection_context.checked_at
+                fetch_result = result.fetch_result
+                if fetch_result is None or not fetch_result.pages:
+                    raise ValueError("J-Quants fetch result has no raw page evidence")
+                raw_paths = []
+                manifest_pages = []
+                for index, page in enumerate(fetch_result.pages):
+                    page_path = save_raw(
+                        data_base,
+                        "jquants",
+                        _stamped(f"{stamp_name}_page={index:04d}.json", when),
+                        page.response_body,
+                        when,
+                    )
+                    raw_paths.append(page_path)
+                    manifest_pages.append({
+                        "index": index,
+                        "raw_path": str(page_path.resolve()),
+                        "body_digest": (
+                            "sha256:" + hashlib.sha256(page.response_body).hexdigest()
+                        ),
+                        "request_path": page.request_path,
+                        "request_params": dict(page.request_params),
+                        "response_url": page.response_url,
+                        "response_status": page.response_status,
+                        "pagination_in": page.pagination_in,
+                        "pagination_out": page.pagination_out,
+                    })
+                manifest = {
+                    "schema_version": "jquants-pagination-evidence/v1",
+                    "source": "jquants",
+                    "dataset": job.dataset_id,
+                    "base_params": dict(fetch_result.base_params),
+                    "pages": manifest_pages,
+                }
+                manifest_path = save_raw(
                     data_base,
                     "jquants",
-                    _stamped(f"{stamp_name}.json", when),
-                    raw_bytes,
+                    _stamped(f"{stamp_name}_pagination-manifest.json", when),
+                    json.dumps(
+                        manifest,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8"),
                     when,
                 )
-                # Verify signing authority before structured mutation; upsert commits.
-                # Collection SUCCESS is not Coverage COMPLETE.
-                try:
-                    authority = require_signed_receipt_authority()
-                except Exception as rec_exc:  # noqa: BLE001
+                if receipt_service is None:
                     return RunReport(
                         "jquants",
                         kind,
                         fetched=len(rows),
                         registered=0,
-                        error=f"receipt emit failed (governed): {rec_exc}",
-                        raw_path=str(rp),
+                        error=(
+                            "receipt emit failed (governed): "
+                            "receipt capability was not injected"
+                        ),
+                        raw_path=str(manifest_path),
                     )
+                persisted_collection = receipt_service.persist_jquants_collection(
+                    fetch_result=fetch_result,
+                    raw_paths=tuple(raw_paths),
+                    manifest_path=manifest_path,
+                )
                 norm = JN.normalize_generic(
                     rows, dataset=job.dataset_id, ingested_at=when
                 )
-                n = reg.register("jquants_records", norm)
+                n = reg.register("jquants_records", norm, commit=False)
                 try:
                     emit_catalog_job_receipt(
                         store,
                         job=job,
-                        when=when,
-                        raw_bytes=raw_bytes,
-                        rows=rows,
-                        structured_row_count=n,
-                        authority=authority,
+                        collection_context=collection_context,
+                        persisted_collection=persisted_collection,
+                        receipt_service=receipt_service,
                     )
                 except Exception as rec_exc:  # noqa: BLE001
                     rollback_governed_catalog_write(store)
@@ -400,10 +487,14 @@ def _run_jquants_catalog(
                         fetched=len(rows),
                         registered=0,
                         error=f"receipt emit failed (governed): {rec_exc}",
-                        raw_path=str(rp),
+                        raw_path=str(manifest_path),
                     )
             return RunReport(
-                "jquants", kind, fetched=len(rows), registered=n, raw_path=str(rp)
+                "jquants",
+                kind,
+                fetched=len(rows),
+                registered=n,
+                raw_path=str(manifest_path),
             )
         except Exception as exc:  # noqa: BLE001
             return RunReport("jquants", kind, error=f"{exc}")
@@ -418,7 +509,7 @@ def _run_jquants_catalog(
             )
             continue
         when = getattr(res, "completed_at", "") or now_iso()
-        reports.append(_persist(res.job, res.rows, when))
+        reports.append(_persist(res.job, res, when))
 
     summary = summarize_results(results)
     print(

@@ -1,16 +1,17 @@
-"""Worker-body thesis counting. YAML-only clones do not count. Does not GO."""
+"""Legacy Worker-body inventory compatibility. Does not GO.
+
+The 2,254-row catalog is retired from the product Worker.  These helpers stay
+only so historical audit/replay callers receive an explicit empty runtime
+inventory instead of inferring support from TypeScript source text.
+"""
 
 from __future__ import annotations
 
-import re
 from functools import lru_cache
 from typing import Any, Mapping, Sequence
 
-from qp_paths import repo_root
-from research.unique_logic.catalog import catalog_dir, load_catalog_specs
 from research.unique_logic.constants import (
     CF_NEW_THESIS_IDS,
-    COMBO_EVENT_GATES,
     ALWAYS_ON_OCCUPANCY_WARN,
     ALWAYS_ON_PARK_IDS,
     NEAR_EMPTY_OCCUPANCY,
@@ -19,12 +20,10 @@ from research.unique_logic.constants import (
     PRI_FUND_GATES,
     PRI_RATE_GATES,
     PRI_VOL_GATES,
-    PYTHON_ONLY_EVENT_GATES,
     RESEARCH_UNIQUE_LOGIC_IDS,
     THIN_SLEEVE_EXCLUDE_IDS,
     USABLE_OCCUPANCY_MIN,
 )
-from research.unique_logic.near_duplicate import is_near_duplicate
 from research.occupancy_guards import (
     AlwaysOnBatchError,
     CHEAP_PB_PRIMARY_GATE_CAP,
@@ -49,16 +48,6 @@ from research.occupancy_guards import (
     mean_occupancy_by_logic,
 )
 
-_WORKER_DAILY_PATH = (
-    repo_root()
-    / "platform"
-    / "workers"
-    / "research-mass-eval"
-    / "src"
-    / "daily_path.ts"
-)
-_WORKER_COMBO_GATES = _WORKER_DAILY_PATH.parent / "combo_gates.ts"
-_WORKER_CATALOG_IDS = _WORKER_DAILY_PATH.parent / "catalog_ids.ts"
 _EMPTY_CS = frozenset({"", "None", "none"})
 
 
@@ -124,51 +113,15 @@ def always_on_occupancy_park() -> frozenset[str]:
 
 
 @lru_cache(maxsize=1)
-def _daily_path_src() -> str:
-    """daily_path leftover + generated catalog_ids (IDs live in catalog_ids.ts)."""
-    body = _WORKER_DAILY_PATH.read_text(encoding="utf-8")
-    ids = (
-        _WORKER_CATALOG_IDS.read_text(encoding="utf-8")
-        if _WORKER_CATALOG_IDS.is_file()
-        else ""
-    )
-    return ids + "\n" + body
-
-
-def _ts_quoted_ids(src: str, name: str) -> set[str]:
-    m = re.search(
-        rf"(?:export )?const {name} = (?:new Set\()?\[(.*?)](?: as const)?",
-        src,
-        flags=re.S,
-    )
-    if not m:
-        return set()
-    return set(re.findall(r'"([^"]+)"', m.group(1)))
-
-
-@lru_cache(maxsize=1)
 def combo_cs_gates_implemented() -> frozenset[str]:
-    """CS gates with a body in Worker ``comboCsGateOk`` (unknown fails closed)."""
-    src = _WORKER_COMBO_GATES.read_text(encoding="utf-8")
-    start = src.find("export function comboCsGateOk(")
-    if start < 0:
-        return frozenset()
-    end = src.find("\nfunction weekdayMon0", start)
-    body = src[start:end] if end > start else src[start:]
-    return frozenset(re.findall(r'gate === "([^"]+)"', body))
+    """The controlled Worker has no legacy combo-gate surface."""
+    return frozenset()
 
 
 @lru_cache(maxsize=1)
 def worker_implemented_logic_ids() -> frozenset[str]:
-    """IDs that have Worker bodies. YAML-only clones do not count."""
-    src = _daily_path_src()
-    worker = (
-        _ts_quoted_ids(src, "CF_NEW_EVENT_THESIS_IDS")
-        | _ts_quoted_ids(src, "CF_NEW_CS_THESIS_IDS")
-        | _ts_quoted_ids(src, "CF_EVENT_LOGIC_IDS")
-        | _ts_quoted_ids(src, "CF_UNIQUE_CS_LOGIC_IDS")
-    )
-    return frozenset(worker & set(RESEARCH_UNIQUE_LOGIC_IDS))
+    """Legacy catalog IDs implemented by the product Worker: intentionally none."""
+    return frozenset()
 
 
 def _gates_of(spec: Mapping[str, Any]) -> list[str]:
@@ -191,50 +144,21 @@ def _cs_gate_of(spec: Mapping[str, Any]) -> str | None:
 
 
 def combo_worker_gates_ok(spec: Mapping[str, Any]) -> bool:
-    """True when combo event gates ⊆ COMBO_EVENT_GATES and CS cs_gate is implemented."""
-    gates = _gates_of(spec)
-    if PYTHON_ONLY_EVENT_GATES.intersection(gates):
-        return False
-    if any(g not in COMBO_EVENT_GATES for g in gates):
-        return False
-    cs = _cs_gate_of(spec)
-    if cs is None:
-        return True
-    return cs in combo_cs_gates_implemented() or cs in COMBO_EVENT_GATES
+    """Legacy combo rows are never countable in the controlled Worker."""
+    del spec
+    return False
 
 
 def is_countable_spec(spec: Mapping[str, Any]) -> bool:
-    """Catalog row (compiled or YAML) + Worker body + known gates. File on disk is not required."""
-    lid = str(spec.get("logic_id") or "").strip()
-    if not lid:
-        return False
-    if spec.get("catalog") is not True and not (catalog_dir() / f"{lid}.yaml").is_file():
-        return False
-    if lid not in worker_implemented_logic_ids():
-        return False
-    if lid not in RESEARCH_UNIQUE_LOGIC_IDS:
-        return False
-    if is_near_duplicate(lid):
-        return False
-    if lid in unique22_occupancy_park():
-        return False
-    if lid in near_empty_occupancy_park():
-        return False
-    if lid in always_on_occupancy_park():
-        return False
-    if lid in CF_NEW_THESIS_IDS:
-        return combo_worker_gates_ok(spec)
-    return True
+    """A retired catalog row cannot become a product-runtime thesis."""
+    del spec
+    return False
 
 
 @lru_cache(maxsize=1)
 def countable_thesis_ids() -> frozenset[str]:
-    """Catalog + Worker body + implemented gates; clones / near_dup / occupancy parks excluded."""
-    out: set[str] = set()
-    for spec in load_catalog_specs():
-        if is_countable_spec(spec):
-            out.add(str(spec["logic_id"]))
-    return frozenset(out)
+    """No legacy catalog row is countable in Pilot or Mass runtime."""
+    return frozenset()
 
 
 

@@ -6,6 +6,7 @@ __pycache__/
 .Python
 .venv/
 .venv
+.ci-uv/
 node_modules/
 venv/
 .env
@@ -34,6 +35,7 @@ credentials.json
 
 # Cloudflare / wrangler local
 .wrangler/
+.wrangler-dry-run/
 .dev.vars
 
 # Data dumps (local only)
@@ -56,8 +58,7 @@ data/paper/*
 .glm-logs/
 data/ops/
 
-# Local uv lock from accidental tool runs (repo is not an uv project)
-uv.lock
+# Python dependency resolution is reproducible through the tracked uv.lock.
 
 # Accidental root package shadows after packages/* reorg (never recreate)
 /data_contracts/

@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-platform.invalid/specs/receipts/jquants_acquisition_collection.schema.json",
+  "title": "Pending governed J-Quants acquisition collection v2",
+  "description": "Closed capture record for exact response bytes returned by the typed JQUANTS_ACQUISITION Service Binding. This record is input to later persistence and reconciliation; it is not a COMPLETE receipt and does not assert row counts or pagination exhaustion independently of target-authored response evidence.",
+  "x-quant-canonicalization": "RFC8259 UTF-8, lexicographically sorted object keys, no whitespace; collection_digest is computed over the document without collection_digest",
+  "x-quant-integrity-rules": [
+    "pages are retained in live response order",
+    "raw_size and raw_digest are measured from the exact bytes stored at raw_path",
+    "raw_digest equals metadata.body_digest and x-quant-acquisition-body-digest",
+    "response_status equals metadata.upstream_http_status and x-quant-acquisition-upstream-status",
+    "x-quant-acquisition-metadata-digest binds the canonical metadata but is not an offline signature",
+    "request, continuation, ordinal, and chain continuity are revalidated before receipt eligibility"
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "capture_mode",
+    "initial_request",
+    "pages",
+    "collection_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "jquants-acquisition-collection/v2"
+    },
+    "capture_mode": {
+      "const": "LIVE_SERVICE_BINDING_RESPONSE"
+    },
+    "initial_request": {
+      "allOf": [
+        {
+          "$ref": "https://quant-platform.invalid/specs/authorities/jquants_acquisition_rpc.schema.json#/$defs/request"
+        },
+        {
+          "properties": {
+            "continuation_token": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "continuation_token"
+          ]
+        }
+      ]
+    },
+    "pages": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8192,
+      "items": {
+        "$ref": "#/$defs/page"
+      }
+    },
+    "collection_digest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "raw_path",
+        "raw_size",
+        "raw_digest",
+        "response_status",
+        "headers",
+        "metadata"
+      ],
+      "properties": {
+        "raw_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^\\S(?:.*\\S)?$"
+        },
+        "raw_size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777216
+        },
+        "raw_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "response_status": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 299
+        },
+        "headers": {
+          "allOf": [
+            {
+              "$ref": "https://quant-platform.invalid/specs/authorities/jquants_acquisition_rpc.schema.json#/$defs/response_headers"
+            },
+            {
+              "properties": {
+                "x-quant-acquisition-evidence-state": {
+                  "enum": [
+                    "RAW_PAGE",
+                    "RAW_ONLY"
+                  ]
+                },
+                "x-quant-acquisition-body-kind": {
+                  "const": "UPSTREAM_EXACT_BYTES"
+                }
+              },
+              "required": [
+                "x-quant-acquisition-evidence-state",
+                "x-quant-acquisition-body-kind"
+              ]
+            }
+          ]
+        },
+        "metadata": {
+          "allOf": [
+            {
+              "$ref": "https://quant-platform.invalid/specs/authorities/jquants_acquisition_rpc.schema.json#/$defs/response_metadata"
+            },
+            {
+              "properties": {
+                "evidence_state": {
+                  "enum": [
+                    "RAW_PAGE",
+                    "RAW_ONLY"
+                  ]
+                },
+                "body_kind": {
+                  "const": "UPSTREAM_EXACT_BYTES"
+                }
+              },
+              "required": [
+                "evidence_state",
+                "body_kind"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

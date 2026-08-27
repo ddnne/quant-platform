@@ -21,20 +21,12 @@ def _spec(lid: str) -> dict:
 
 
 def test_event_proposals_are_new_unique_logic_not_catalog_remaps():
-    import inspect
-
-    from research.unique_logic import catalog as catalog_mod
     from research.unique_logic.catalog import yaml_unique_rows
 
     assert_unique_family_specs(list(event.NEW_UNIQUE_LOGIC), EVENT_LOGIC_IDS)
     ids = [s["logic_id"] for s in event.NEW_UNIQUE_LOGIC]
     rows = yaml_unique_rows(logic_ids=ids)
     assert [r["logic_id"] for r in rows] == ids
-    src = inspect.getsource(catalog_mod.yaml_unique_rows)
-    assert "NEW_UNIQUE_LOGIC" not in src
-    event_src = inspect.getsource(event)
-    assert "EVENT_LOGIC_IDS" in event_src
-    assert "event_funding_stress_skip" not in event_src.split("def ", 1)[0]
 
 
 def test_pit_median_is_strictly_prior_dates():

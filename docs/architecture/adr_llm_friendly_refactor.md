@@ -138,7 +138,7 @@ After layout migration, onboarding and multi-file agent edits still require trib
 | D8 | **Naming glossary** in nav map; status vocabulary enforced in new docs | B1-a |
 | D9 | No Mass/READY/Phase7 code paths armed; every batch re-runs `test_mass_research_gate.py` + gateway fail-closed | all |
 | D10 | Workers + `data/` frozen; only docs/comments may mention their paths | all |
-| D11 | **Live findings one ledger**: `docs/phase633_finding_ledger.md` is the sole current finding SoT. `docs/reviews/P632_wave*` and Independent A/B/C revisit files are **historical freezes, not live SoT**; do not add more (keep existing; do not delete this lane). See [`adr_review_findings_sot.md`](./adr_review_findings_sot.md) | Lane L |
+| D11 | **Live findings one ledger**: `docs/phase633_finding_ledger.md` is the sole current finding SoT; historical review waves remain in Git history and are absent from the active tree. See [`adr_review_findings_sot.md`](./adr_review_findings_sot.md) | Lane L |
 
 ---
 
@@ -350,7 +350,7 @@ Layer 3 — EVIDENCE (cite, do not “upgrade” status from these alone)
 
 Layer 4 — HISTORICAL / ARCHIVE (do not treat as current GO)
   dated `docs/proof/*` and ops notes (not residual SoT)
-  docs/reviews/P632_wave* / Independent A/B/C revisits — freezes, not live finding SoT
+  historical review waves — Git history only, not live finding SoT
 ```
 
 ### 7.3 B1-a concrete doc actions
@@ -559,8 +559,8 @@ Prefer extending an existing area file over creating `test_misc_*.py`.
 - Do not commit secrets, data/*.sqlite, .venv, egg-info, node_modules.
 - Do not delete parity mirrors (Py/TS) or receipt verification keys casually.
 - Do not treat historical phase62*_status.md as current residual SoT.
-- Do not treat docs/reviews wave / Independent A/B/C revisit files as live finding SoT.
-- Do not add docs/reviews/P632_wave* or Independent A/B/C revisit files.
+- Do not treat a historical Git review snapshot as live finding SoT.
+- Do not reintroduce dated review-wave files into the active tree.
 ```
 
 ---
@@ -803,7 +803,7 @@ B1-e may document grouping without forcing directory moves (layout Batch F optio
 | [`../architecture.md`](../architecture.md) | PIT / coverage / MCP boundaries |
 | [`../phase62_residual_status.md`](../phase62_residual_status.md) | **Live residual SoT** |
 | [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md) | **Live finding ledger (sole)** |
-| [`./adr_review_findings_sot.md`](./adr_review_findings_sot.md) | Review wave files = historical freezes; do not add more |
+| [`./adr_review_findings_sot.md`](./adr_review_findings_sot.md) | One live ledger; historical reviews stay in Git history |
 | [`./phase7_fail_closed.md`](./phase7_fail_closed.md) | Phase 7 OFF |
 | [`../quant_data_access.md`](../quant_data_access.md) | Ops vs research read domains |
 | [`./llm_nav_map.md`](./llm_nav_map.md) | Agent entry map (B1 live) |
@@ -818,4 +818,5 @@ B1-e may document grouping without forcing directory moves (layout Batch F optio
 |------|--------|
 | 2026-08-12 | B0 Proposed: initial full ADR for LLM-friendly refactor; no implementation |
 | 2026-08-12 | **Accepted** (Grok review): Batch Z DEFER; leaf imports; residual single SoT; scripts optional; Mass/READY/Phase7 NO-GO. B1 may implement. |
-| 2026-08-24 | D11: live findings one ledger (`phase633_finding_ledger.md`); `docs/reviews` wave files are historical freezes, not live SoT. |
+| 2026-08-24 | D11: live findings one ledger (`phase633_finding_ledger.md`); review waves are not live SoT. |
+| 2026-08-25 | Historical review waves removed from the active tree after ledger consolidation; Git retains the audit history. |

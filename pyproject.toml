@@ -65,7 +65,11 @@ exclude = ["tests*", "scripts*", "docs*", "platform*"]
 py-modules = ["qp_paths"]
 
 [tool.setuptools.package-data]
-data_contracts = ["*.json"]
+data_contracts = ["*.json", "source_capability_contracts/*.json"]
+storage = [
+    "authorities/coverage_transition/*.json",
+    "authorities/receipts/*.json",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

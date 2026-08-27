@@ -1,14 +1,17 @@
-"""OTC sealer refresh takes local index_text; PARSE_ZERO stays PARTIAL.
+"""OTC sealer refresh takes local index_text; unproved raw stays PARTIAL.
 
 Missing --index-text is fail-closed empty, not calendar COMPLETE.
-PARSE_ZERO 2002-08-02/05 stay unsealed without in-repo digest+count.
+Early 21-column 2002-08-02/05 rows parse, but stay REPROOF_REQUIRED without
+trusted raw reconciliation.
 Does not fetch live JSDA HTML. Does not invent COMPLETE.
 """
 
 from __future__ import annotations
 
+import csv
 import importlib.util
-import inspect
+import io
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -18,8 +21,8 @@ import pytest
 _REPO = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO / "scripts" / "jsda_otc_seal_official.py"
 _FIXTURE = _REPO / "tests" / "fixtures" / "jsda_otc_official_index_tiny.html"
-_CSV_23 = _REPO / "tests" / "fixtures" / "jsda_otc_reference_headerless_23col.csv"
-PARSE_ZERO_DAYS = ("2002-08-02", "2002-08-05")
+_CSV_FULL = _REPO / "tests" / "fixtures" / "jsda_otc_reference_headerless.csv"
+EARLY_LAYOUT_REPROOF_DAYS = ("2002-08-02", "2002-08-05")
 WEEKEND_IN_TINY_SPAN = "2002-08-03"
 V2_REQUIRED = 8784
 
@@ -105,14 +108,22 @@ def test_refresh_otc_coverage_always_passes_index_text(seal, monkeypatch) -> Non
     assert captured["kwargs"]["datasets"] == [seal.OTC_DATASET]
 
 
-def test_parse_zero_days_unproven_without_digest_count(seal) -> None:
-    assert seal.PARSE_ZERO_SEAL_PROOF == {}
-    assert set(PARSE_ZERO_DAYS) == set(seal.PARSE_ZERO_DAYS)
-    for day in PARSE_ZERO_DAYS:
-        assert seal._parse_zero_unproven(day, "sha256:" + "ab" * 32, 4200) is True
-        assert seal._parse_zero_unproven(day, None, 4200) is True
-        assert seal._parse_zero_unproven(day, "sha256:" + "ab" * 32, 0) is True
-    assert seal._parse_zero_unproven("2002-08-06", "sha256:" + "cd" * 32, 3167) is False
+def test_early_layout_requires_trusted_digest_count_release(seal) -> None:
+    assert seal.EARLY_LAYOUT_RECONCILIATION_PROOF == {}
+    assert set(EARLY_LAYOUT_REPROOF_DAYS) == set(
+        seal.EARLY_LAYOUT_REPROOF_DAYS
+    )
+    for day in EARLY_LAYOUT_REPROOF_DAYS:
+        assert seal._early_layout_reproof_required(
+            day, "sha256:" + "ab" * 32, 4200
+        ) is True
+        assert seal._early_layout_reproof_required(day, None, 4200) is True
+        assert seal._early_layout_reproof_required(
+            day, "sha256:" + "ab" * 32, 0
+        ) is True
+    assert seal._early_layout_reproof_required(
+        "2002-08-06", "sha256:" + "cd" * 32, 3167
+    ) is False
 
 
 def test_inventory_scope_defaults_official_archive_index_day(
@@ -133,19 +144,36 @@ def test_inventory_scope_defaults_official_archive_index_day(
     conn.close()
 
 
-def test_seal_day_parse_zero_stays_unsealed_without_proof(
+def _synthetic_early_layout_body() -> bytes:
+    source = _CSV_FULL.read_text(encoding="utf-8")
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    for row in csv.reader(io.StringIO(source)):
+        writer.writerow(row[:21])
+    return buffer.getvalue().encode("cp932")
+
+
+def test_seal_day_parser_capable_stays_unsealed_without_trusted_reproof(
     seal, tmp_path: Path,
 ) -> None:
-    lines = [ln for ln in _CSV_23.read_text(encoding="utf-8").splitlines() if ln.strip()]
-    body = (lines[0] + "\n" + lines[1] + "\n").encode("cp932")
+    body = _synthetic_early_layout_body()
     n = (seal.FULL_OK_MIN // len(body)) + 2
     raw = body * n
     assert len(raw) > seal.FULL_OK_MIN
     path = tmp_path / "S020802.csv"
     path.write_bytes(raw)
-    for day in PARSE_ZERO_DAYS:
-        result = seal.seal_day(None, day, path, "", None)
-        assert result["status"] == "PARSE_ZERO"
+    for day in EARLY_LAYOUT_REPROOF_DAYS:
+        quote_day = "2002-08-01" if day == "2002-08-02" else "2002-08-02"
+        result = seal.seal_day(
+            None,
+            day,
+            path,
+            "",
+            quote_effective_date=quote_day,
+        )
+        assert result["status"] == "REPROOF_REQUIRED"
+        assert result["reason"] == "TRUSTED_RAW_RECONCILIATION_REQUIRED"
+        assert result["status"] != "PARSE_ZERO"
         assert result["status"] != "SEALED"
         assert result["status"] != "COMPLETE"
         assert result["segment_id"] == day
@@ -153,14 +181,71 @@ def test_seal_day_parse_zero_stays_unsealed_without_proof(
         assert str(result["digest"]).startswith("sha256:")
 
 
-def test_seal_source_does_not_fetch_live_html_or_invent_complete(seal) -> None:
-    src = Path(inspect.getsourcefile(seal)).read_text(encoding="utf-8")
-    assert "index_text=index_text" in src
-    assert "def refresh_otc_coverage" in src
-    assert "_parse_zero_unproven" in inspect.getsource(seal.seal_day)
-    assert "urllib" not in src
-    assert "requests." not in src
-    assert "urlopen" not in src
-    assert seal.OTC_GRAIN == "official_archive_index_day"
-    assert seal.PARSE_ZERO_SEAL_PROOF == {}
-    assert WEEKEND_IN_TINY_SPAN not in seal.PARSE_ZERO_DAYS
+def test_seal_day_rejects_publication_label_as_quote_day(
+    seal, tmp_path: Path,
+) -> None:
+    path = tmp_path / "S020802.csv"
+    path.write_bytes(b"x" * (seal.FULL_OK_MIN + 1))
+    result = seal.seal_day(
+        None,
+        "2002-08-02",
+        path,
+        "",
+        quote_effective_date="2002-08-02",
+    )
+    assert result == {
+        "segment_id": "2002-08-02",
+        "status": "QUOTE_EFFECTIVE_DATE_UNRESOLVED",
+    }
+
+
+def test_official_publication_labels_resolve_to_prior_quote_day(seal) -> None:
+    resolved = seal.resolve_quote_effective_dates(
+        (), stored_labels=("2002-08-02", "2002-08-05", "2002-08-06")
+    )
+    assert resolved == {
+        "2002-08-02": "2002-08-01",
+        "2002-08-05": "2002-08-02",
+        "2002-08-06": "2002-08-05",
+    }
+
+
+def test_recovery_sealer_records_only_failed_reproof_evidence(
+    seal, tmp_path: Path,
+) -> None:
+    body = _CSV_FULL.read_bytes()
+    raw = body * ((seal.FULL_OK_MIN // len(body)) + 2)
+    path = tmp_path / "S020806.csv"
+    path.write_bytes(raw)
+    store = seal.SqliteStore(tmp_path / "recovery.sqlite")
+    try:
+        result = seal.seal_day(
+            store,
+            "2002-08-06",
+            path,
+            "https://www.jsda.or.jp/example/S020806.csv",
+            quote_effective_date="2002-08-05",
+        )
+        assert result["status"] == "REPROOF_REQUIRED"
+        assert result["reason"] == "GOVERNED_INGESTION_REPLAY_REQUIRED"
+        row = store._conn.execute(  # noqa: SLF001
+            "SELECT status,error,digests_json,structured_row_count "
+            "FROM collection_receipts WHERE dataset=? AND segment_id=? "
+            "ORDER BY run_id DESC LIMIT 1",
+            (seal.OTC_DATASET, "2002-08-06"),
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "FAILED"
+        assert str(row[1]).startswith("REPROOF_REQUIRED:")
+        digests = json.loads(str(row[2]))
+        assert digests["eligibility"] == "RECOVERED_RAW_ONLY"
+        assert digests["quote_effective_date"] == "2002-08-05"
+        assert "signature" not in digests
+        assert int(row[3]) == 0
+        facts = store._conn.execute(  # noqa: SLF001
+            "SELECT COUNT(*) FROM jsda_otc_bond_reference_prices "
+            "WHERE publication_label_date='2002-08-06'"
+        ).fetchone()[0]
+        assert int(facts) == 0
+    finally:
+        store.close()

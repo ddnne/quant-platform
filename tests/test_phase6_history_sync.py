@@ -10,10 +10,10 @@ import pytest
 
 from paper_runtime import (
     begin_snapshot_sync,
-    commit_snapshot_manifest,
     data_snapshot_id,
 )
 from storage.sqlite_store import SqliteStore
+from tests.ready_snapshot_test_support import commit_snapshot_manifest_fixture
 
 
 def _record(
@@ -76,13 +76,17 @@ def test_local_schema_migrations_are_formal_and_idempotent(tmp_path):
         (7, "phase61_jsda_correction_provenance"),
         (8, "phase62_jsda_corporate_bond_transactions"),
         (9, "phase632_raw_acquisition_status"),
+        (10, "phase633_immutable_local_coverage_proofs"),
+        (11, "phase631_exact_coverage_inventory_proofs"),
+        (12, "phase631_coverage_complete_transition_tombstones"),
+        (13, "phase631_receipt_product_materializations"),
     ]
     first.close()
 
     second = SqliteStore(path)
     assert second._conn.execute(  # noqa: SLF001
         "SELECT COUNT(*) FROM schema_migrations"
-    ).fetchone()[0] == 9
+    ).fetchone()[0] == 13
     second.close()
 
 
@@ -302,7 +306,7 @@ def test_manifest_commit_gates_and_identifies_research_snapshot(tmp_path):
     with pytest.raises(RuntimeError, match="not committed"):
         data_snapshot_id(path)
 
-    manifest_id = commit_snapshot_manifest(
+    manifest_id = commit_snapshot_manifest_fixture(
         store._conn, required_datasets=datasets  # noqa: SLF001
     )
     assert manifest_id.startswith("sha256:")
@@ -331,7 +335,7 @@ def test_manifest_rejects_partial_latest_run(tmp_path):
     store._conn.commit()  # noqa: SLF001
     begin_snapshot_sync(store._conn, started_at="2025-04-03T01:00:00Z")  # noqa: SLF001
     with pytest.raises(RuntimeError, match="not a complete pass"):
-        commit_snapshot_manifest(
+        commit_snapshot_manifest_fixture(
             store._conn, required_datasets=("dataset_a",)  # noqa: SLF001
         )
     store.close()

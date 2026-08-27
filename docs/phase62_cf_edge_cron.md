@@ -23,7 +23,8 @@ The projection pipeline (`scripts/publish_ops_projection.py`) is, in order:
 1. `refresh_coverage_ledger` against the **local** research SQLite DB.
 2. `export_ops_projection` — render bounded D1 projection SQL from that same DB
    plus `data/research_snapshots`.
-3. `--apply-remote` — `wrangler d1 execute quant-ingest --remote --file=…`.
+3. `--apply-remote` — append an immutable generation to the dedicated
+   `quant-ops-projection` D1 and flip its active pointer last.
 
 Every step depends on data that lives on the research host, not on the edge.
 Pushing this into a Worker `scheduled` handler would require either:
@@ -52,11 +53,12 @@ the ledger reports.
 ### Preconditions
 
 - Research host with the local SQLite DB at `data/structured/ingestion.sqlite`
-  (override via `OPS_DB`).
+  (override via `OPS_SOURCE_DB`).
 - A Python interpreter (default `PYTHON=$ROOT/.venv/bin/python`).
 - For remote apply: `CLOUDFLARE_API_TOKEN` / `wrangler` login with D1 write on
-  `quant-ingest`, and `APPLY_REMOTE_OPS=1`.
-- The `quant-ops-mcp` worker deployed with migration `0003` and the 16 read tools.
+  `quant-ops-projection`, and `APPLY_REMOTE_OPS=1`.
+- The `quant-ops-mcp` Worker deployed with isolated projection/quota migrations
+  and all 17 read tools.
 
 ### "No human flag" wiring
 
@@ -90,7 +92,7 @@ write to production D1), not a per-run gate.
   <key>EnvironmentVariables</key>
   <dict>
     <key>APPLY_REMOTE_OPS</key><string>1</string>
-    <key>OPS_DB</key><string>/path/to/quant-platform/data/structured/ingestion.sqlite</string>
+    <key>OPS_SOURCE_DB</key><string>/path/to/quant-platform/data/structured/ingestion.sqlite</string>
   </dict>
   <key>StartCalendarInterval</key><dict><key>Minute</key><integer>7</integer></dict>
   <key>StandardOutPath</key><string>/path/to/quant-platform/.glm-logs/ops-cron/launchd.out.log</string>
@@ -122,12 +124,16 @@ runs against the host's research snapshot **after** sync. Do not merge the two.
 
 ## Failure and restart rules
 
-- A failed refresh must **not** block publish: `cron_publish_ops.sh` tolerates a
-  refresh failure (`|| true`) and still publishes the last-known ledger truth.
-- A failed remote apply leaves `projection_status = "AVAILABLE"` (not
-  `APPLIED_REMOTE`); the next successful run flips it back.
-- A missing projection surfaces as `UNKNOWN` plus every governed gap on the Ops
-  MCP — never as a false COMPLETE.
+- A failed refresh blocks remote activation and exits non-zero. The prior
+  immutable generation remains active.
+- A partial D1 import may leave unreferenced generation-scoped content rows,
+  but cannot append the immutable `SEALED` generation row or move the pointer
+  because both are guarded by expected row counts.
+- A missing projection or missing active row surfaces as `NOT_PROJECTED`; the
+  Worker never falls back to old generations or an ingestion table.
+- An active pointer is insufficient by itself: the generation's dedicated
+  Ed25519 Ops Projection envelope must verify against the configured public-key
+  registry. Receipt and READY keys are never accepted as substitutes.
 - Remote apply requires wrangler CF auth; without it, run with `APPLY_REMOTE_OPS`
   unset to publish locally only.
 

@@ -1,19 +1,10 @@
-export interface Env {
-  STRUCTURED_BUCKET: R2Bucket;
-  DB?: D1Database;
-  /** Service binding to research-ai-gateway. Direct Workers AI is forbidden. */
-  AI_GATEWAY?: Fetcher;
+import type { GatewayRpc } from "../../research-ai-gateway/src/gateway_rpc";
+
+/** Generated bindings with typed Gateway RPC; secrets stay string-only. */
+export type Env = Omit<Cloudflare.Env, "AI_GATEWAY"> & {
+  AI_GATEWAY: GatewayRpc;
   MASS_EVAL_TOKEN?: string;
-  MASS_EVAL_VERSION?: string;
-  MASS_EVAL_WAVE?: string;
-  MASS_RESEARCH?: string;
-  PHASE7?: string;
-  READY_DECLARED?: string;
-  OPERATIONAL_GO?: string;
-  CONTINUOUS_PAPER?: string;
-  /** nets_only is deny-by-default; only the exact value "allow" opts in. */
-  NETS_ONLY?: string;
-}
+};
 
 export interface LogicSpec {
   logic_id: string;
@@ -36,7 +27,7 @@ export interface MassEvalRequest {
   logics: LogicSpec[];
   periods?: PeriodSpec[];
   job_id: string;
-  mode?: "synthetic" | "r2_panels" | "d1_bars" | "nets_only";
+  mode?: "synthetic" | "r2_panels" | "nets_only";
   eval_kind?: "screen" | "daily_path";
   write_artifacts?: boolean;
   panels_prefix?: string;

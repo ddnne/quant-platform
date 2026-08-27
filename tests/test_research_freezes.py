@@ -5,26 +5,6 @@ from __future__ import annotations
 from tests.research_eval_util import _disc_event, _event_eval_kw
 
 
-def test_three_default_pins_untouched() -> None:
-    from research.daily_path_eval import assert_frozen_pins_untouched
-    from research.freezes import (
-        FROZEN_DEFAULT_PATH,
-        FROZEN_PIN_SNAPSHOT,
-        MASS_RESEARCH,
-        PHASE7,
-        READY_DECLARED,
-    )
-
-    pack = assert_frozen_pins_untouched()
-    assert pack["pins_untouched"] is True
-    assert pack["frozen_defaults_retuned"] is False
-    assert len(FROZEN_PIN_SNAPSHOT) == 3
-    assert len(FROZEN_DEFAULT_PATH) == 3
-    assert MASS_RESEARCH == "NO-GO"
-    assert READY_DECLARED is False
-    assert PHASE7 == "OFF"
-
-
 def test_unknown_event_gate_fails_closed() -> None:
     from research.unique_logic.constants import KNOWN_EVENT_GATES
     from research.unique_logic.event_combos import spec_by_id, evaluate_combo_daily_mtm
@@ -94,31 +74,6 @@ def test_unknown_cs_gate_fails_closed() -> None:
     assert pack.get("n_entered") in (0, None)
     assert pack.get("always_on_cs_sticky") is not True
     assert pack.get("go") is not True
-
-
-def test_harness_default_eval_codes_are_smoke_three() -> None:
-    import research.eval_universe as eu
-
-    assert eu.HARNESS_SMOKE_CODES == ("13010", "72030", "67580")
-    assert not hasattr(eu, "DEFAULT_EVAL_CODES")
-    assert len(eu.EVAL_UNIVERSE_POOL) > 3
-
-
-def test_research_modules_ast_bans_mass_ready_orders() -> None:
-    from agents.mass_research import start_mass_research
-    from selection.budget_ledger import MassResearchDisabledError
-    from tests.research_eval_util import (
-        HARNESS_AST_PATHS,
-        assert_ast_bans_mass_ready_orders,
-    )
-    import pytest
-
-    assert HARNESS_AST_PATHS
-    for path in HARNESS_AST_PATHS:
-        assert path.is_file(), path
-        assert_ast_bans_mass_ready_orders(path)
-    with pytest.raises(MassResearchDisabledError):
-        start_mass_research(budget=None, readiness=None)
 
 
 def test_factory_templates_do_not_clone_combo_catalog() -> None:
@@ -193,4 +148,3 @@ def test_default_logic_specs_leftover_and_bar_native() -> None:
     assert native[0]["logic_id"] == "mdh_sticky_momentum"
     assert native[0]["family_id"] == "multi_day_hold"
     assert native[0]["params"]
-

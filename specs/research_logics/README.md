@@ -2,8 +2,8 @@
 
 Expanded YAML was removed in a mechanical catalog migration.
 
-**Source of truth:** `specs/research_catalog/migration.jsonl` +
-`specs/research_catalog/manifest.json` (`research.catalog_compiler`).
+**Replay artifact:** `artifacts/replay/legacy_strategy_catalog/migration.jsonl` +
+`artifacts/replay/legacy_strategy_catalog/manifest.json` (`research.catalog_compiler`).
 `CATALOG_AND_PLUS_N_STOPPED` remains on. Do not add YAML here without a dated
 brief that flips the freeze.
 
@@ -28,9 +28,9 @@ evaluator: research.unique_logic.funding.evaluate_overnight_level_cs_tilt_daily_
 ```
 
 This directory is **empty**. Do not add YAML here. The schema above is the
-historical declaration shape; live rows are the compiled map. Evaluators live in
-`packages/product/research/unique_logic/`. Candidate SoT is
-`POST /v1/daily-path` (`research.cf_daily_path_job`). Local
+historical declaration shape; rows are audit/replay-only. Legacy evaluators live
+in `packages/product/research/unique_logic/` but are not imported by the
+exact-four Pilot or Mass scheduler. Local
 `python -m research.unique_logic` is a retired fail-closed stub, not candidate eval.
 
 Scores go to R2 + D1. Do not add `scripts/run_wNN_*.py`.

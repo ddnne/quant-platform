@@ -4,21 +4,15 @@
 # Never skip missing node_modules. Fast local helper: scripts/verify_all.sh
 set -euo pipefail
 
+# Vitest's Wrangler integration also reads this ambient selector. Every CLI
+# invocation below pins --env explicitly; clear it for npm test subprocesses.
+unset CLOUDFLARE_ENV
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 # Ban: do not pass --legacy-peer-deps (peer graph must resolve from lockfiles).
 # Ban: do not skip missing node_modules (always npm ci from package-lock.json).
-
-WORKERS=(
-  platform/workers/ingestion-jsda
-  platform/workers/ingestion-premium
-  platform/workers/ingestion-secrets
-  platform/workers/quant-ops-mcp
-  platform/workers/research-ai-gateway
-  platform/workers/research-mass-eval
-  platform/workers/ci-aggregate
-)
 
 # Print package.json scripts.<name> body, or empty if missing.
 npm_script_body() {
@@ -57,42 +51,129 @@ find_python_311_plus() {
   return 1
 }
 
-echo "==> secret/path scan (tracked .env / *.pem)"
-if git ls-files | grep -E '(^|/)\.env$|\.pem$'; then
-  echo "tracked secret path: .env or *.pem must not be in git ls-files" >&2
-  exit 1
-fi
-
-venv_py="$ROOT/.venv/bin/python"
-if [[ ! -x "$venv_py" ]]; then
-  echo "==> bootstrap .venv (Python 3.11+)"
-  host_py=""
-  if ! host_py="$(find_python_311_plus)"; then
-    echo "Python 3.11+ with working stdlib sqlite3 is required to create .venv." >&2
-    echo "do not silently use system python" >&2
-    exit 1
-  fi
-  "$host_py" -m venv "$ROOT/.venv"
-  if [[ ! -x "$venv_py" ]]; then
-    echo "failed to create .venv/bin/python with $host_py" >&2
-    exit 1
-  fi
-fi
-if ! python_is_311_plus "$venv_py"; then
-  echo ".venv must be Python 3.11+ with working stdlib sqlite3 (got $($venv_py -V 2>&1))." >&2
+host_py=""
+if ! host_py="$(find_python_311_plus)"; then
+  echo "Python 3.11+ with working stdlib sqlite3 is required." >&2
   echo "do not silently use system python" >&2
   exit 1
 fi
-py="$venv_py"
 
-echo "==> pip install -e \".[dev]\""
-"$py" -m pip install -e ".[dev]"
+echo "==> pinned finding-ledger source-integration validation"
+"$host_py" "$ROOT/scripts/finding_ledger_ci.py"
+
+echo "==> secret/path scan"
+"$host_py" "$ROOT/scripts/verify_secret_paths.py"
+
+UV_VERSION="0.11.26"
+VIRTUALENV_VERSION="21.7.4"
+uv_cmd="$(command -v uv 2>/dev/null || true)"
+if [[ -z "$uv_cmd" ]] || \
+  [[ "$("$uv_cmd" --version)" != "uv $UV_VERSION "* && \
+     "$("$uv_cmd" --version)" != "uv $UV_VERSION" ]]; then
+  echo "==> bootstrap uv $UV_VERSION"
+  if command -v pipx >/dev/null 2>&1; then
+    # Ubuntu's distribution Python can have sqlite3 while omitting ensurepip.
+    # virtualenv carries its own seed packages, so it remains usable on the
+    # documented Workers Builds image without installing OS packages.
+    pipx run --spec "virtualenv==$VIRTUALENV_VERSION" virtualenv \
+      --python "$host_py" --clear "$ROOT/.ci-uv"
+  else
+    "$host_py" -m venv --clear "$ROOT/.ci-uv"
+  fi
+  "$ROOT/.ci-uv/bin/python" -m pip install "uv==$UV_VERSION"
+  uv_cmd="$ROOT/.ci-uv/bin/uv"
+fi
+if [[ "$($uv_cmd --version)" != "uv $UV_VERSION "* && "$($uv_cmd --version)" != "uv $UV_VERSION" ]]; then
+  echo "uv version drift: expected $UV_VERSION, got $($uv_cmd --version)" >&2
+  exit 1
+fi
+
+echo "==> uv sync --frozen --extra dev"
+"$uv_cmd" sync --frozen --extra dev --python "$host_py"
+py="$ROOT/.venv/bin/python"
+if ! python_is_311_plus "$py"; then
+  echo "uv-managed .venv must be Python 3.11+ with working stdlib sqlite3." >&2
+  exit 1
+fi
+
+echo "==> Cloudflare active-worker binding manifest"
+"$py" scripts/cloudflare_binding_manifest.py
+echo "==> J-Quants acquisition target registry"
+"$py" scripts/generate_jquants_acquisition_registry.py
+echo "==> generated Quant Ops canonical routing authority"
+"$py" scripts/verify_governed_js_drift.py
+echo "==> installed SourceCapability wheel authority"
+"$py" scripts/verify_source_capability_wheel.py \
+  --uv "$uv_cmd" --python "$py"
+WORKERS=()
+while IFS= read -r worker_dir; do
+  [[ -n "$worker_dir" ]] || continue
+  WORKERS+=("$worker_dir")
+done < <("$py" scripts/cloudflare_binding_manifest.py --print-worker-paths)
+if [[ "${#WORKERS[@]}" -eq 0 ]]; then
+  echo "active Worker inventory is empty" >&2
+  exit 1
+fi
+if ! command -v npm >/dev/null 2>&1; then
+  echo "npm not found" >&2
+  exit 1
+fi
+
+# Python integration tests exercise the repository-pinned Wrangler boundary.
+# Install every active Worker's locked graph before pytest, once, and reuse it
+# for the parallel runtime/typecheck/dry-run lanes below.
+ci_log_dir="$(mktemp -d "${TMPDIR:-/tmp}/quant-platform-ci.XXXXXX")"
+trap 'rm -rf -- "$ci_log_dir"' EXIT
+
+prepare_worker_dependencies() {
+  local dir="$1" name
+  name="$(basename "$dir")"
+  if [[ ! -d "$dir" ]]; then
+    echo "worker $name: missing directory ($dir)" >&2
+    exit 1
+  fi
+  if [[ ! -f "$dir/package.json" ]]; then
+    echo "worker $name: missing package.json ($dir)" >&2
+    exit 1
+  fi
+  if [[ ! -f "$dir/package-lock.json" ]]; then
+    echo "worker $name: missing package-lock.json ($dir)" >&2
+    exit 1
+  fi
+  echo "==> npm ci ($name)"
+  # Do not use npm ci --legacy-peer-deps.
+  (cd "$dir" && npm ci)
+}
+
+echo "==> active Worker dependency graphs (parallel, locked)"
+dependency_pids=()
+dependency_names=()
+for dir in "${WORKERS[@]}"; do
+  name="$(basename "$dir")"
+  dependency_names+=("$name")
+  (prepare_worker_dependencies "$dir") \
+    >"$ci_log_dir/install-$name.log" 2>&1 &
+  dependency_pids+=("$!")
+done
+dependency_failed=0
+for i in "${!dependency_pids[@]}"; do
+  name="${dependency_names[$i]}"
+  if ! wait "${dependency_pids[$i]}"; then
+    dependency_failed=1
+    echo "worker dependency install failed: $name" >&2
+  fi
+  cat "$ci_log_dir/install-$name.log"
+done
+if [[ "$dependency_failed" -ne 0 ]]; then
+  echo "one or more active Worker dependency installs failed" >&2
+  exit 1
+fi
+
+echo "==> Cloudflare canonical D1 migration manifest"
+"$py" scripts/cloudflare_d1_migration_manifest.py
 
 echo "==> python pytest"
 "$py" -m pytest tests/
-
-echo "==> catalog compile + catalog_ids freeze"
-"$py" -c "from research.catalog_compiler import compile_catalog, assert_catalog_ids_emit_frozen; compile_catalog(); assert_catalog_ids_emit_frozen()"
 
 echo "==> Evaluation IR schema + golden (jsonschema + codec roundtrip)"
 golden="$ROOT/specs/evaluation_ir/golden.jsonl"
@@ -193,12 +274,8 @@ if n == 0:
     raise SystemExit(f"Evaluation IR golden is empty: {golden_path}")
 '
 
-if ! command -v npm >/dev/null 2>&1; then
-  echo "npm not found" >&2
-  exit 1
-fi
-
-for dir in "${WORKERS[@]}"; do
+verify_worker() {
+  local dir="$1" name
   name="$(basename "$dir")"
   if [[ ! -d "$dir" ]]; then
     echo "worker $name: missing directory ($dir)" >&2
@@ -212,18 +289,24 @@ for dir in "${WORKERS[@]}"; do
     echo "worker $name: missing package-lock.json ($dir)" >&2
     exit 1
   fi
-  echo "==> npm ci ($name)"
-  # Do not use npm ci --legacy-peer-deps
-  (cd "$dir" && npm ci)
   echo "==> npm test ($name)"
   (cd "$dir" && npm test)
   echo "==> npm run typecheck ($name)"
   (cd "$dir" && npm run typecheck)
-  echo "==> wrangler deploy --dry-run --env= ($name)"
-  # Several production configs define a named env.production for explicit
-  # promotion. CI validates the top-level deployment surface deliberately;
-  # never leave Wrangler to infer an environment.
-  (cd "$dir" && npx wrangler deploy --dry-run --env="")
+  echo "==> wrangler deploy --dry-run --config=wrangler.toml --env= ($name)"
+  (cd "$dir" && npx --no-install wrangler deploy --dry-run \
+    --config=wrangler.toml --env="")
+  echo "==> wrangler deploy --dry-run --config=wrangler.toml --env=production ($name)"
+  (cd "$dir" && npx --no-install wrangler deploy --dry-run \
+    --config=wrangler.toml --env=production)
+  echo "==> wrangler deploy --dry-run --config=wrangler.staging.toml ($name)"
+  (cd "$dir" && npx --no-install wrangler deploy --dry-run \
+    --config=wrangler.staging.toml)
+  if [[ -f "$dir/wrangler.test.toml" ]]; then
+    echo "==> wrangler deploy --dry-run --config=wrangler.test.toml ($name)"
+    (cd "$dir" && npx --no-install wrangler deploy --dry-run \
+      --config=wrangler.test.toml --env="")
+  fi
   if [[ -n "$(npm_script_body "$py" "$dir/package.json" types)" ]]; then
     echo "==> wrangler types --check ($name)"
     # Honor scripts.types flags (include-runtime false). Bare
@@ -231,9 +314,69 @@ for dir in "${WORKERS[@]}"; do
     (cd "$dir" && npm run types -- --check)
   else
     echo "==> wrangler types ($name)"
-    (cd "$dir" && npx wrangler types)
+    (cd "$dir" && npx --no-install wrangler types \
+      --config=wrangler.toml --env="")
   fi
+  local type_dir base_types production_types staging_types
+  type_dir="$ci_log_dir/types-$name"
+  mkdir -p "$type_dir"
+  base_types="$type_dir/base.d.ts"
+  production_types="$type_dir/production.d.ts"
+  staging_types="$type_dir/staging.d.ts"
+  echo "==> wrangler types --env=base ($name)"
+  (cd "$dir" && npx --no-install wrangler types "$base_types" \
+    --config=wrangler.toml --env="" --include-runtime=false)
+  echo "==> wrangler types --env=production ($name)"
+  (cd "$dir" && npx --no-install wrangler types "$production_types" \
+    --config=wrangler.toml --env=production --include-runtime=false)
+  echo "==> wrangler types --config=wrangler.staging.toml ($name)"
+  (cd "$dir" && npx --no-install wrangler types "$staging_types" \
+    --config=wrangler.staging.toml --include-runtime=false)
+  local environment generated assertion env_tsconfig
+  for environment in $("$py" "$ROOT/scripts/verify_generated_worker_env.py" \
+    --list-environments); do
+    case "$environment" in
+      base) generated="$base_types" ;;
+      production) generated="$production_types" ;;
+      staging) generated="$staging_types" ;;
+      *) echo "unknown Worker environment: $environment" >&2; exit 1 ;;
+    esac
+    assertion="$type_dir/$environment.assert.ts"
+    env_tsconfig="$type_dir/$environment.tsconfig.json"
+    "$py" "$ROOT/scripts/verify_generated_worker_env.py" \
+      --worker "$name" \
+      --environment "$environment" \
+      --generated-types "$generated" \
+      --assertion "$assertion" \
+      --tsconfig "$env_tsconfig"
+    echo "==> named Env typecheck --env=$environment ($name)"
+    (cd "$dir" && npx --no-install tsc --project "$env_tsconfig")
+  done
+}
+
+echo "==> active Worker lanes (parallel, fail-closed aggregation)"
+worker_pids=()
+worker_names=()
+for dir in "${WORKERS[@]}"; do
+  name="$(basename "$dir")"
+  worker_names+=("$name")
+  (verify_worker "$dir") >"$ci_log_dir/$name.log" 2>&1 &
+  worker_pids+=("$!")
 done
+
+worker_failed=0
+for i in "${!worker_pids[@]}"; do
+  name="${worker_names[$i]}"
+  if ! wait "${worker_pids[$i]}"; then
+    worker_failed=1
+    echo "worker lane failed: $name" >&2
+  fi
+  cat "$ci_log_dir/$name.log"
+done
+if [[ "$worker_failed" -ne 0 ]]; then
+  echo "one or more active Worker lanes failed" >&2
+  exit 1
+fi
 
 echo "==> git working tree clean (generated types)"
 if ! git diff --quiet || ! git diff --cached --quiet; then

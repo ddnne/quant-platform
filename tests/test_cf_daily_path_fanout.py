@@ -214,50 +214,6 @@ def test_event_daily_path_ids_cover_filters_and_sides() -> None:
     assert set(CF_NEW_THESIS_IDS)
 
 
-def test_cf_daily_path_job_does_not_import_factory() -> None:
-    import ast
-    from pathlib import Path
-
-    research_dir = (
-        Path(__file__).resolve().parents[1]
-        / "packages"
-        / "product"
-        / "research"
-    )
-    # AST import walk only — comments are not imports.
-    banned_factory = ("mass_strategy_factory", "class_hyp_eval")
-    # CF path must not import offline bar_eval (or family modules).
-    banned_cf = banned_factory + ("bar_eval",)
-    files: dict[str, tuple[str, ...]] = {
-        "cf_daily_path_job.py": banned_cf,
-        "cf_mass_eval_job.py": banned_cf,
-        "cf_mass_eval_stage.py": banned_cf,
-        "cf_mass_eval_run.py": banned_cf,
-        "cf_mass_eval_thicken.py": banned_cf,
-        "cf_propose_thesis.py": banned_cf + ("factory",),
-        "bar_native_specs.py": banned_cf,
-        "eval_universe.py": banned_cf,
-        "unique_logic/event_combos.py": banned_cf,
-        "eval_windows.py": banned_cf,
-    }
-    for path in sorted(research_dir.glob("eval_loaders*.py")):
-        files[str(path.relative_to(research_dir))] = banned_cf
-    for path in sorted((research_dir / "offline").glob("bar_eval*.py")):
-        files[str(path.relative_to(research_dir))] = banned_factory
-    for name, banned in files.items():
-        path = research_dir / name
-        if not path.exists():
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    for token in banned:
-                        assert token not in alias.name, name
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                for token in banned:
-                    assert token not in node.module, name
-                    assert node.module != f"research.{token}", name
 
 
 def test_panels_cache_id_stable() -> None:
@@ -414,32 +370,6 @@ def test_both_track_sleeve_fanout_records_via_daily_path() -> None:
     assert pack["compare"]["not_a_pass"] is True
 
 
-def test_both_track_sleeve_fanout_uses_select_eval_universe() -> None:
-    import ast
-    from pathlib import Path
-
-    research_dir = (
-        Path(__file__).resolve().parents[1]
-        / "packages"
-        / "product"
-        / "research"
-    )
-    src = (research_dir / "cf_daily_path_job.py").read_text(encoding="utf-8")
-    mass_src = (research_dir / "cf_mass_eval_job.py").read_text(encoding="utf-8")
-    assert "select_eval_universe" in src
-    assert "select_eval_universe" in mass_src
-    assert "selected[: int(max_codes)]" not in src
-    assert "selected[: int(max_codes)]" not in mass_src
-    assert "run_both_track_sleeve_fanout" in src
-    tree = ast.parse(src)
-    names = [
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef)
-    ]
-    assert "run_both_track_sleeve_fanout" in names
-
-
 def test_mass_eval_spec_drops_unique_but_keeps_bar_native() -> None:
     from research.cf_mass_eval_job import build_cf_mass_eval_job_spec
 
@@ -488,4 +418,3 @@ def test_unique_mdh_collapse_is_not_candidate_complete() -> None:
     }
     assert is_path_collapsed_cell(collapsed) is True
     assert is_daily_path_complete_cell(collapsed) is False
-

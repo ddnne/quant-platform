@@ -1,0 +1,57 @@
+{
+  "policy_version": "source-capability/v3",
+  "dataset_id": "equities_earnings_calendar",
+  "source": "jquants_premium_core",
+  "upstream_locator": "/v2/equities/earnings-calendar",
+  "official_evidence_url": "https://jpx-jquants.com/en/spec/eq-earnings-cal",
+  "history_mode": "next_business_day_snapshot",
+  "earliest_official_availability": "2010-01-04",
+  "historical_research_eligible": false,
+  "tip_only_operational": true,
+  "supported_query_parameters": ["pagination_key"],
+  "publication_calendar": {
+    "kind": "jpx_financial_announcement_page",
+    "timezone": "Asia/Tokyo",
+    "index_url": "https://www.jpx.co.jp/english/listing/event-schedules/financial-announcement/index.html",
+    "official_update_around": "19:00",
+    "issuance_scope": "next_business_day_only",
+    "cutoff_semantics": "capture the snapshot actually issued by the collection cutoff; no row means no next-business-day announcement in that issued snapshot"
+  },
+  "entitlement_semantics": {
+    "clamp_before_earliest": false,
+    "subscription_floor": null
+  },
+  "collection_window": {
+    "grain": "collection_cutoff_snapshot",
+    "open": "collection_generation",
+    "close": "collection_cutoff"
+  },
+  "freshness_sla": {
+    "expected_after": "19:00",
+    "usable_by": "20:00",
+    "timezone": "Asia/Tokyo",
+    "rule": "next_business_day_snapshot"
+  },
+  "event_time": {
+    "policy": "observation_date",
+    "fields": ["Date"]
+  },
+  "available_at": {
+    "policy": "calendar_prepublished",
+    "field": null,
+    "known_publication_lag": null
+  },
+  "revision_semantics": {
+    "policy": "snapshot_replace",
+    "generation_on_revision": true
+  },
+  "research_profile_eligibility": {
+    "include_in": ["tip_operational"],
+    "exclude_from": ["historical_research", "core_historical"],
+    "exclusion_reason": "Vendor next-business-day snapshot only (pagination_key; March/September FY). Historical announcement dates route to fins_earnings_date."
+  },
+  "required_domain_semantics": {
+    "basis": "issued_collection_cutoff_snapshot",
+    "empty_success_policy": "never_complete"
+  }
+}

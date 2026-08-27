@@ -1,10 +1,30 @@
 import { describe, expect, it } from "vitest";
+import pricingPolicyDocument from "../../../../specs/policy/ai_gateway_pricing_policy.json";
 import {
+  ALLOWED_MODELS,
   decodeGatewayRequest,
   decodeTypedArtifact,
   estimateCostUsd,
+  MAX_GATEWAY_INPUT_TOKENS,
+  MAX_GATEWAY_MESSAGES,
+  MAX_GATEWAY_PROMPT_UTF8_BYTES,
   parseModelJson,
+  providerInputBounds,
 } from "./schema";
+import { AI_GATEWAY_PRICING_POLICY_DIGEST } from "./pricing_policy";
+import { sha256Hex } from "./sha256";
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
 const base = {
   model: "@cf/meta/llama-3.1-8b-instruct-fp8",
@@ -33,6 +53,44 @@ describe("decodeGatewayRequest", () => {
   it("rejects oversize max_tokens", () => {
     const got = decodeGatewayRequest({ ...base, max_tokens: 9999 });
     expect(got.ok).toBe(false);
+  });
+
+  it("rejects message count, UTF-8 bytes, and token upper bounds before provider use", () => {
+    const tooMany = decodeGatewayRequest({
+      ...base,
+      messages: Array.from({ length: MAX_GATEWAY_MESSAGES + 1 }, () => ({
+        role: "user",
+        content: "x",
+      })),
+    });
+    expect(tooMany).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("messages[] exceeds hard limit"),
+    });
+
+    const tooManyBytes = decodeGatewayRequest({
+      ...base,
+      messages: [{ role: "user", content: "x".repeat(MAX_GATEWAY_PROMPT_UTF8_BYTES + 1) }],
+    });
+    expect(tooManyBytes).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("UTF-8 bytes exceed hard limit"),
+    });
+
+    const tokenHeavyButByteBounded = "x".repeat(
+      MAX_GATEWAY_PROMPT_UTF8_BYTES - 1_000,
+    );
+    const bounds = providerInputBounds([{ role: "user", content: tokenHeavyButByteBounded }]);
+    expect(bounds.utf8_bytes).toBeLessThanOrEqual(MAX_GATEWAY_PROMPT_UTF8_BYTES);
+    expect(bounds.token_upper_bound).toBeGreaterThan(MAX_GATEWAY_INPUT_TOKENS);
+    const tooManyTokens = decodeGatewayRequest({
+      ...base,
+      messages: [{ role: "user", content: tokenHeavyButByteBounded }],
+    });
+    expect(tooManyTokens).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("token upper bound exceeds hard limit"),
+    });
   });
 
   it("refuses missing budget_id", () => {
@@ -166,11 +224,24 @@ describe("parseModelJson", () => {
 });
 
 describe("estimateCostUsd", () => {
-  it("is non-negative", () => {
-    expect(estimateCostUsd("@cf/meta/llama-3.1-8b-instruct-fp8", 10, 10)).toBeGreaterThanOrEqual(
-      0,
+  it("uses the official input/output rates independently", () => {
+    expect(estimateCostUsd(ALLOWED_MODELS[0], 1_000_000, 0)).toBe(0.293);
+    expect(estimateCostUsd(ALLOWED_MODELS[0], 0, 1_000_000)).toBe(2.253);
+    expect(estimateCostUsd(ALLOWED_MODELS[1], 1_000_000, 0)).toBe(0.06);
+    expect(estimateCostUsd(ALLOWED_MODELS[1], 0, 1_000_000)).toBe(0.4);
+    expect(estimateCostUsd(ALLOWED_MODELS[2], 1_000_000, 0)).toBe(0.152);
+    expect(estimateCostUsd(ALLOWED_MODELS[2], 0, 1_000_000)).toBe(0.287);
+  });
+
+  it("has one canonical price for every allowed model", () => {
+    expect(pricingPolicyDocument.policy.model_rates.map(({ model }) => model).sort()).toEqual(
+      [...ALLOWED_MODELS].sort(),
     );
   });
+
+  it("is bound to the canonical policy payload digest", async () => {
+    const digest = `sha256:${await sha256Hex(canonicalJson(pricingPolicyDocument.policy))}`;
+    expect(digest).toBe(pricingPolicyDocument.policy_digest);
+    expect(digest).toBe(AI_GATEWAY_PRICING_POLICY_DIGEST);
+  });
 });
-
-

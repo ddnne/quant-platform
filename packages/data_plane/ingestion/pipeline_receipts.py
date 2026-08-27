@@ -10,10 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .jquants.receipts import (
-    emit_segment_receipt,
-    require_signed_receipt_authority,
-)
+from .jquants.receipts import emit_segment_receipt
 
 
 def count_raw_items(raw: bytes | list | tuple) -> int:
@@ -114,11 +111,9 @@ def emit_catalog_job_receipt(
     store,
     *,
     job: Any,
-    when: str,
-    raw_bytes: bytes,
-    rows: list,
-    structured_row_count: int,
-    authority,
+    collection_context,
+    persisted_collection,
+    receipt_service,
 ) -> None:
     """Record required segments and a signed SUCCESS receipt for one catalog job.
 
@@ -128,6 +123,7 @@ def emit_catalog_job_receipt(
     from data_contracts import coverage_contract_for
     from storage.coverage_ledger import record_required_segments
 
+    when = collection_context.checked_at
     params = dict(getattr(job, "params", None) or {})
     policy = coverage_contract_for(job.dataset_id)
     target_end = (
@@ -184,22 +180,19 @@ def emit_catalog_job_receipt(
             "SELECT COALESCE(MAX(id), 0) FROM ingestion_run_log"
         ).fetchone()
         run_id = int(run_id_row[0]) if run_id_row else 0
-        raw_count = count_raw_items(rows)
-        obs = observed_items_from_actual(unit=unit, raw_item_count=raw_count)
         emit_segment_receipt(
-            store._conn,
+            store,
             required=req,
             run_id=run_id,
-            raw=raw_bytes,
-            observed_items=obs,
-            structured_row_count=structured_row_count,
-            raw_row_count=raw_count,
-            pagination_exhausted=True,
-            status="SUCCESS",
-            authority=authority,
-            commit=False,
+            persisted_collection=persisted_collection,
+            collection_context=collection_context,
+            source_request={
+                "dataset": str(job.dataset_id),
+                "params": params,
+                "target_end": target_end,
+            },
+            service=receipt_service,
         )
-        commit_governed_catalog_receipt(store)
 
 
 __all__ = [
@@ -209,6 +202,5 @@ __all__ = [
     "count_raw_items",
     "emit_catalog_job_receipt",
     "observed_items_from_actual",
-    "require_signed_receipt_authority",
     "rollback_governed_catalog_write",
 ]

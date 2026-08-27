@@ -42,7 +42,8 @@ Phase 3.5 — **Cloudflare 上の J-Quants Premium core 閉路の実装**。Work
 `quant-platform-ingestion-premium` は、デプロイ後に cron で 23 データセットを取得し、R2 raw + D1
 structured に保存・per-dataset の pass/fail 検証を行う。**閉路の対象は Premium core 23 だけ**:
 addon（分足・Tick・TDnet）は Phase 1 でカタログされているが Phase 3.5 のスケジュール対象外。
-ローカルはページネーション付き `/v1/export/d1` から同期して `pit.get_*` で読む。
+ローカルは認証済み Wrangler で private D1 export を取得・同期し、`pit.get_*` で読む。
+公開 ingestion Worker URL は不要で、`/v1/export/d1` は既存クライアント移行中の互換経路に限定する。
 検証は per-job の pass/fail に加えて、
 [docs/phase35_validation_matrix.md](docs/phase35_validation_matrix.md) のカタログ
 （C1–C12, M*, B*, A*, K*, E*, F*, I*, D*, S*, N*, X*）を daily / weekly の 2 階層で実行する。
@@ -77,7 +78,7 @@ digest）で dataset COMPLETE を判定する。READY は governed JQ/JSDA 全�
 slice しない。ブラウザ ChatGPT / mobile は Cloudflare Access/OAuth の Streamable HTTP
 **Ops Read MCP** を使い、local stdio MCP は offline/dev adapter に限定する。Remote Research は
 Cloudflare 上で immutable READY generation を pin できるまで公開しない。運用手順は
-[docs/phase61_production_runbook.md](docs/phase61_production_runbook.md)、接続境界は
+[docs/operations/current_production_runbook.md](docs/operations/current_production_runbook.md)、接続境界は
 [docs/quant_data_access.md](docs/quant_data_access.md)。
 
 > 開示系（EDINET 由来の大株主・持ち合い・大量保有）は独立した EDINET DB ではなく、**J-Quants の EDINET 系 API**（`/v2/edinet/major-shareholders`、`/v2/edinet/cross-shareholdings`、`/v2/edinet/large-volume-shareholders`、および `/v2/fins/...`）で統合する方針。Phase 1 では J-Quants 上記エンドポイント + JSDA が対象。

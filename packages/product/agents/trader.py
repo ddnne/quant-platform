@@ -19,8 +19,6 @@ class TraderAgent:
         self,
         decision: PortfolioDecision,
         *,
-        ready_snapshot_id: str = "",
-        ready_manifest_digest: str = "",
         universe: Sequence[str] = (),
         period_start: str = "",
         period_end: str = "",
@@ -36,13 +34,19 @@ class TraderAgent:
             allow_nan=False,
         )
         spec_hash = "sha256:" + hashlib.sha256(spec_json.encode("utf-8")).hexdigest()
-        # Authorization covers mode, spec hash, gross, and exact READY pin.
+        # This self-hash scopes an offline proposal only.  READY fields are
+        # structurally empty and cannot be caller supplied; Controlled Pilot
+        # accepts only the separately signed VerifiedTraderAuthorization type.
         authorization = {
             "mode": "paper",
             "strategy_spec_hash": spec_hash,
             "max_gross_weight": decision.max_gross_weight,
-            "ready_snapshot_id": ready_snapshot_id or "",
-            "ready_manifest_digest": ready_manifest_digest or "",
+            "ready_snapshot_id": "",
+            "ready_manifest_digest": "",
+            "readiness_attestation_id": "",
+            "profile_digest": "",
+            "plan_set_digest": "",
+            "dependency_closure_digest": "",
             "universe": list(universe),
             "period_start": period_start or "",
             "period_end": period_end or "",
@@ -64,12 +68,16 @@ class TraderAgent:
             max_gross_weight=decision.max_gross_weight,
             instructions=(
                 "interpret the reviewed StrategySpec",
-                "run through strategies.paper.run_paper",
+                "run through OfflineFixturePaperService",
                 "do not contact a broker",
-                "consume exact READY snapshot only",
+                "offline fixture DRAFT only; no promotion authority",
             ),
-            ready_snapshot_id=str(ready_snapshot_id or ""),
-            ready_manifest_digest=str(ready_manifest_digest or ""),
+            ready_snapshot_id="",
+            ready_manifest_digest="",
+            readiness_attestation_id="",
+            profile_digest="",
+            plan_set_digest="",
+            dependency_closure_digest="",
             universe=tuple(str(u) for u in universe),
             period_start=str(period_start or ""),
             period_end=str(period_end or ""),

@@ -41,7 +41,7 @@ def paper_fixture(tmp_path):
     return db, days
 
 
-def _config(db, days, *, lifecycle: Lifecycle = Lifecycle.PAPER) -> PaperRunConfig:
+def _config(db, days, *, lifecycle: Lifecycle = Lifecycle.DRAFT) -> PaperRunConfig:
     return PaperRunConfig(
         start=days[0],
         end=days[-1],
@@ -67,7 +67,7 @@ def test_paper_run_completes_with_metrics_trades_and_reproducibility(
     assert result.experiment_id
     assert result.run_id
     assert result.run_id == result.experiment_id
-    assert result.lifecycle is Lifecycle.PAPER
+    assert result.lifecycle is Lifecycle.DRAFT
     assert result.equity_curve
     assert result.trades
     assert result.metrics["num_trading_days"] == len(days)
@@ -140,18 +140,15 @@ def test_momentum_example_runs_and_pins_its_feature_version(paper_fixture):
     assert result.metadata["feature_versions"]["momentum_n"]
 
 
-def test_lifecycle_does_not_change_experiment_or_run_identity(paper_fixture):
+def test_local_runtime_rejects_paper_lifecycle(paper_fixture):
     db, days = paper_fixture
     paper = _config(db, days, lifecycle=Lifecycle.PAPER)
-    draft = replace(paper, lifecycle=Lifecycle.DRAFT)
 
-    paper_result = run_paper(Return1dFeatureStrategy(), paper)
-    draft_result = run_paper(Return1dFeatureStrategy(), draft)
-
-    assert paper_result.experiment_id == draft_result.experiment_id
-    assert paper_result.run_id == draft_result.run_id
-    assert paper_result.lifecycle is Lifecycle.PAPER
-    assert draft_result.lifecycle is Lifecycle.DRAFT
+    with pytest.raises(
+        PermissionError,
+        match="DRAFT-only.*CONTROLLED_AUTHORITY_UNPROVISIONED",
+    ):
+        run_paper(Return1dFeatureStrategy(), paper)
 
 
 def test_engine_config_change_creates_a_distinct_experiment(paper_fixture):

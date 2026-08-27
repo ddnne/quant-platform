@@ -13,11 +13,18 @@ binding = "OAUTH_KV"
 id = "4402f398df93412ebe6774d1bc603142"
 
 [[d1_databases]]
-binding = "OPS_DB"
-database_name = "quant-ingest-staging"
-database_id = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
-migrations_dir = "migrations"
-migrations_table = "d1_migrations_ops"
+binding = "OPS_PROJECTION_DB"
+database_name = "quant-ops-projection-staging"
+database_id = "68ee96d5-766c-4832-836b-54c079bd6265"
+migrations_dir = "migrations/projection"
+migrations_table = "d1_migrations_ops_projection"
+
+[[d1_databases]]
+binding = "QUOTA_DB"
+database_name = "quant-ops-quota-staging"
+database_id = "a27f8ce9-82cb-4eec-abac-9c3385ce40e1"
+migrations_dir = "migrations/quota"
+migrations_table = "d1_migrations_ops_quota"
 
 [durable_objects]
 bindings = [{ name = "MCP_OBJECT", class_name = "QuantOpsMcpAgent" }]
@@ -29,5 +36,12 @@ new_sqlite_classes = ["QuantOpsMcpAgent"]
 [vars]
 ALLOWED_LOGIN = "ddnne"
 DAILY_ROW_QUOTA = "25000"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"
 # OAUTH_AUTHORIZATION_SERVER intentionally absent: fail closed until the
 # separate staging OAuth app exists.

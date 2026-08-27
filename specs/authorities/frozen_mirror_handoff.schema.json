@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-platform.invalid/specs/authorities/frozen_mirror_handoff.schema.json",
+  "title": "Authenticated applied mirror descriptor handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "authority_domain",
+    "request_id",
+    "request_digest",
+    "environment",
+    "authenticated_caller",
+    "target_operation",
+    "purpose",
+    "source_d1_name",
+    "source_d1_id",
+    "signed_audit_document_json",
+    "signed_audit_document_digest",
+    "signed_audit_issuer_key_id",
+    "source_change_seq",
+    "applied_change_seq",
+    "descriptor_open_mode",
+    "descriptor_identity",
+    "mirror_identity_digest",
+    "source_content_digest",
+    "local_content_digest",
+    "source_schema_digest",
+    "local_schema_digest",
+    "table_counts",
+    "journal_mode",
+    "opened_at",
+    "expires_at",
+    "fd_count",
+    "handoff_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "authenticated-applied-mirror-handoff/v2"},
+    "authority_domain": {"const": "quant-platform/d1-sync/frozen-mirror/v2"},
+    "request_id": {"$ref": "#/$defs/request_id"},
+    "request_digest": {"$ref": "#/$defs/sha256"},
+    "environment": {"enum": ["staging", "production"]},
+    "authenticated_caller": {"enum": ["ops_projection", "coverage_transition"]},
+    "target_operation": {"const": "frozen_mirror:readonly_handoff"},
+    "purpose": {"enum": ["ops_projection", "coverage_transition"]},
+    "source_d1_name": {"enum": ["quant-ingest-staging", "quant-ingest"]},
+    "source_d1_id": {
+      "enum": [
+        "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
+        "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+      ]
+    },
+    "signed_audit_document_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 262144
+    },
+    "signed_audit_document_digest": {"$ref": "#/$defs/sha256"},
+    "signed_audit_issuer_key_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]{2,127}$"
+    },
+    "source_change_seq": {"type": "integer", "minimum": 0},
+    "applied_change_seq": {"type": "integer", "minimum": 0},
+    "descriptor_open_mode": {"const": "O_RDONLY"},
+    "descriptor_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device", "inode", "size", "sha256"],
+      "properties": {
+        "device": {"type": "integer", "minimum": 0},
+        "inode": {"type": "integer", "minimum": 1},
+        "size": {"type": "integer", "minimum": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "mirror_identity_digest": {"$ref": "#/$defs/sha256"},
+    "source_content_digest": {"$ref": "#/$defs/sha256"},
+    "local_content_digest": {"$ref": "#/$defs/sha256"},
+    "source_schema_digest": {"$ref": "#/$defs/sha256"},
+    "local_schema_digest": {"$ref": "#/$defs/sha256"},
+    "table_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jquants_market_calendar",
+        "jquants_listed_info",
+        "jquants_daily_bars",
+        "jquants_records",
+        "jquants_market_calendar_revisions",
+        "jquants_listed_info_revisions",
+        "jquants_daily_bars_revisions",
+        "jquants_records_revisions",
+        "ingestion_run_log",
+        "ingestion_validation",
+        "ingestion_watermarks",
+        "raw_retention_manifests",
+        "coverage_segments",
+        "collection_receipts"
+      ],
+      "properties": {
+        "jquants_market_calendar": {"$ref": "#/$defs/row_count"},
+        "jquants_listed_info": {"$ref": "#/$defs/row_count"},
+        "jquants_daily_bars": {"$ref": "#/$defs/row_count"},
+        "jquants_records": {"$ref": "#/$defs/row_count"},
+        "jquants_market_calendar_revisions": {"$ref": "#/$defs/row_count"},
+        "jquants_listed_info_revisions": {"$ref": "#/$defs/row_count"},
+        "jquants_daily_bars_revisions": {"$ref": "#/$defs/row_count"},
+        "jquants_records_revisions": {"$ref": "#/$defs/row_count"},
+        "ingestion_run_log": {"$ref": "#/$defs/row_count"},
+        "ingestion_validation": {"$ref": "#/$defs/row_count"},
+        "ingestion_watermarks": {"$ref": "#/$defs/row_count"},
+        "raw_retention_manifests": {"$ref": "#/$defs/row_count"},
+        "coverage_segments": {"$ref": "#/$defs/row_count"},
+        "collection_receipts": {"$ref": "#/$defs/row_count"}
+      }
+    },
+    "journal_mode": {"const": "delete"},
+    "opened_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "fd_count": {"const": 1},
+    "handoff_digest": {"$ref": "#/$defs/sha256"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"environment": {"const": "staging"}},
+        "required": ["environment"]
+      },
+      "then": {
+        "properties": {
+          "source_d1_name": {"const": "quant-ingest-staging"},
+          "source_d1_id": {"const": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"}
+        }
+      },
+      "else": {
+        "properties": {
+          "source_d1_name": {"const": "quant-ingest"},
+          "source_d1_id": {"const": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"authenticated_caller": {"const": "ops_projection"}},
+        "required": ["authenticated_caller"]
+      },
+      "then": {"properties": {"purpose": {"const": "ops_projection"}}},
+      "else": {"properties": {"purpose": {"const": "coverage_transition"}}}
+    }
+  ],
+  "$defs": {
+    "request_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "row_count": {"type": "integer", "minimum": 0}
+  }
+}

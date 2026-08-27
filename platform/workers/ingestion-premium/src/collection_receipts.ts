@@ -6,8 +6,6 @@
 import type { DatasetSpec } from "./catalog";
 import { toJstIso } from "./identity";
 
-const COVERAGE_POLICY_VERSION = "collection-coverage/v2";
-
 export interface CollectionReceiptEnv {
   DB: D1Database;
 }
@@ -42,7 +40,7 @@ export async function writeRequiredCoverageSegment(
        evaluated_at=excluded.evaluated_at,
        detail_json=excluded.detail_json`,
   ).bind(
-    spec.id, segment.id, COVERAGE_POLICY_VERSION,
+    spec.id, segment.id, spec.coverage.policy_version,
     segment.start, segment.end, JSON.stringify(segment.expectedScope),
     segment.expectedItems, toJstIso(new Date()),
     JSON.stringify({
@@ -99,7 +97,12 @@ export async function writeCollectionReceipt(
     evidence.observedItems,
     evidence.rawPageCount, evidence.rawRowCount, evidence.structuredRowCount,
     evidence.paginationExhausted ? 1 : 0,
-    JSON.stringify({ raw: evidence.rawDigest, manifest: evidence.manifestKey }),
+    JSON.stringify({
+      eligibility: "RECOVERED_RAW_ONLY",
+      issuer_class: "UnsignedIngestionAudit",
+      raw: evidence.rawDigest,
+      manifest: evidence.manifestKey,
+    }),
     runId, evidence.status, evidence.error, toJstIso(new Date()),
   ).run();
 }

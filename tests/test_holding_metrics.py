@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
 import pytest
 
 from research.holding_metrics import (
@@ -21,10 +18,6 @@ from research.holding_metrics import (
     run_lengths_for_sign_sequence,
     sign_from_value,
 )
-
-REPO = Path(__file__).resolve().parents[1]
-MOD_PATH = REPO / "packages" / "product" / "research" / "holding_metrics.py"
-
 
 # ---------------------------------------------------------------------------
 # Freeze / closed surface
@@ -66,28 +59,6 @@ def test_report_api_dicts_freeze_closed():
     stats = panel_run_length_stats(records)
     assert stats["ready_declared"] is False
     assert stats["mass_research"] == "NO-GO"
-
-
-def test_module_source_has_no_ready_mint_or_mass_arm():
-    """Static guard: holding_metrics must not mint READY or arm Mass."""
-    src = MOD_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(src)
-    banned_calls = {
-        "require_mass_research_start",
-        "VerifiedResearchReadiness",
-        "mint_ready",
-        "declare_ready",
-    }
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            name = ""
-            if isinstance(node.func, ast.Name):
-                name = node.func.id
-            elif isinstance(node.func, ast.Attribute):
-                name = node.func.attr
-            assert name not in banned_calls
-    assert "READY_DECLARED" in src
-    assert "MASS_RESEARCH" in src
 
 
 # ---------------------------------------------------------------------------

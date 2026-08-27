@@ -12,11 +12,12 @@ from pathlib import Path
 import pytest
 
 from data_contracts.coverage import coverage_contract_for
+from data_contracts.source_capability import specs_dir
 from qp_paths import repo_root
 from storage.coverage_ledger import evaluate_segment, plan_required_segments
 
 _REPO = repo_root()
-_CAPABILITY = _REPO / "specs" / "source_capability" / "equities_earnings_calendar.json"
+_CAPABILITY = specs_dir() / "equities_earnings_calendar.json"
 _MIGRATION = _REPO / "specs" / "coverage_v3" / "equities_earnings_calendar_migration.json"
 
 DATASET = "equities_earnings_calendar"

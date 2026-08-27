@@ -14,15 +14,14 @@ Research control plane (Phase 7 stays OFF): readiness attestation, experiment pl
 - **Batch guards:** `research.occupancy_guards` (AND freeze, known-thin, cheap_pb cap, occupancy band).
 - **Execution capabilities:** `research.research_capabilities` deny-by-default. Worker eval/propose require the same gates.
 - **Candidate grade:** `research.candidate_policy.job_candidate_grade` (partial → false).
-- **Thesis count:** `research.unique_logic.worker_bodies.countable_thesis_ids` (catalog + Worker body; YAML clones do not count).
-- **Catalog:** compiled `specs/research_catalog/migration.jsonl` + `manifest.json` (`research.catalog_compiler`). `specs/research_logics/` YAML is empty; do not add YAML while `CATALOG_AND_PLUS_N_STOPPED`. Worker ID arrays: generated `platform/workers/research-mass-eval/src/catalog_ids.ts` (leftover occupancy stays in `daily_path.ts`).
+- **Legacy inventory:** `research.unique_logic.worker_bodies.countable_thesis_ids()` is intentionally empty. Catalog size is not a success metric or a runtime input.
+- **Legacy replay artifact:** `artifacts/replay/legacy_strategy_catalog/{manifest.json,migration.jsonl}`. Normal Pilot/Mass imports must not read it; `specs/research_logics/` remains empty.
 - **Propose:** `POST /v1/propose-thesis` (`research.cf_propose_thesis`; **AI Gateway only**, never `env.AI.run`; 403 `generation` without verified readiness; LLM failure is `ok:false`/`llm_failed`, not stub-as-success; review_proposal_row; no auto-inject).
 - **Family reclass:** `research.catalog_family` — flow **gate** ≠ flow **family**.
-- **Catalog compiler:** `research.catalog_compiler` closed-DSL data artifact + semantic hash. Owns generated `catalog_ids.ts` emit. Python constants remain policy SoT for Worker ID arrays. Persisted `specs/research_catalog/` manifest + migration map (`yaml_still_present: false`); not GO.
+- **Legacy replay compiler:** `research.catalog_compiler` verifies the immutable closed-DSL artifact and semantic hashes. It emits no Worker source and is not a Pilot/Mass authority.
 - **Evaluation IR:** `research.evaluation_ir` calls `job_candidate_grade`; unknown fields rejected. Daily-path job artifacts carry `evaluation-ir/v1`; `candidate_grade` is the IR candidate (not a second grade).
 - **Phase 7 pilot:** `research.phase7_pilot.MassResearchScheduler` cannot construct without readiness+budget+plan+eval service+immutable store. Not enabled.
-- **Eval wave one-call:** `research.occupancy_audit.run_eval_wave` writes inventory / usable-read / series / cost-risk / jsonl / occupancy maps / drift / unique22 / reconstitution detect + occupancy preview / series-sleeve coverage + propose write-gate. Never injects. Does not fan out occupancy. Does not apply reconstitution. Compiled catalog is load SoT. KEEP sleeves `eval-cf-dp-both-sleeves-20260824df`. Do not restitch 24ek thinner alts.
-- **Smoke codes:** `research.eval_universe.HARNESS_SMOKE_CODES`. Not the eval entry.
+- **Historical catalog replay:** `research.occupancy_audit` remains available for explicit audit/replay only. It cannot populate the Pilot or Mass runtime inventory.
 - **`cost_models.py` / `options_225_vol_series.py`:** live math. Do not fake-split.
 
 CF period-net (`research.cf_mass_eval_job`, `POST /v1/mass-eval`) is auxiliary; `n_survivors` is not a pass. Offline `research.offline.bar_eval` / `multiyear` / `factory` are local helpers, not candidate SoT.

@@ -9,11 +9,15 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from cf_platform.ingest_premium.coverage import run_coverage, summarize
 from data_contracts.loader import all_contracts
-from paper_runtime.snapshot_coverage_proof import _coverage_v2_proof
+from paper_runtime.snapshot_coverage_proof import (
+    _coverage_proof,
+    _validation_cutoff_for_build,
+    persist_coverage_proof,
+)
 from qp_paths import repo_root
 from storage.coverage_ledger import refresh_coverage_ledger
 
@@ -54,7 +58,12 @@ _JQUANTS_DATASETS = frozenset(
 def _raw_manifests_for(
     conn: sqlite3.Connection, run_id: int, required: tuple[str, ...]
 ) -> dict[str, dict[str, Any]]:
-    """Require one COMPLETE R2 raw-retention attestation per dataset."""
+    """Require one successful raw acquisition per dataset.
+
+    ``ACQUIRED`` is the current raw-plane success state.  Historical
+    ``COMPLETE`` rows remain readable, but structured completeness is proven
+    separately by reconciled signed receipts and the Coverage proof.
+    """
     from paper_runtime.snapshot import SnapshotRejected
 
     table = conn.execute(
@@ -75,7 +84,7 @@ def _raw_manifests_for(
     missing = sorted(set(required) - set(manifests))
     failed = sorted(
         dataset for dataset, row in manifests.items()
-        if row["completeness"] != "COMPLETE"
+        if row["completeness"] not in ("ACQUIRED", "COMPLETE")
     )
     if missing or failed:
         raise SnapshotRejected(
@@ -105,18 +114,20 @@ def _transition_policy(
     conn.commit()
 
 
-def _evaluate_publication_gate(
+def _evaluate_publication_gate_impl(
     conn: sqlite3.Connection,
     staging_path: Path,
     *,
     build_id: str,
     required: tuple[str, ...],
+    fixture_compatibility: bool,
+    _fixture_coverage_refresh: Callable[..., list[dict[str, Any]]] | None = None,
 ) -> tuple[
     int, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]],
     dict[str, int], list[dict[str, Any]], dict[str, dict[str, Any]],
-    dict[str, Any],
+    dict[str, Any] | None,
 ]:
-    """Strict B0 + Phase 3.5 daily checks + Coverage V2 ledger."""
+    """Strict B0 + Phase 3.5 daily checks + governed Coverage ledger."""
     from paper_runtime.snapshot import (
         QUALITY_POLICY_VERSION,
         SnapshotRejected,
@@ -134,11 +145,36 @@ def _evaluate_publication_gate(
         conn, jquants_required
     )
     raw_manifests = _raw_manifests_for(conn, run_id, jquants_required)
-    today = datetime.now(timezone.utc).date().isoformat()
+    # Coverage inventory and refresh share the exact UTC cutoff frozen by the
+    # publisher-owned BUILDING row. Wall-clock drift cannot change membership
+    # between gate evaluation, proof persistence, and artifact reopen.
+    today = _validation_cutoff_for_build(conn, build_id)
     # No year-index HTML on the READY path. Explicit None is fail-closed empty OTC.
-    coverage_rows = refresh_coverage_ledger(
-        conn, staging_path, datasets=required, today=today, index_text=None
-    )
+    if fixture_compatibility:
+        if _fixture_coverage_refresh is None:
+            raise SnapshotRejected(
+                "fixture Coverage evaluation must be supplied by tests support"
+            )
+        coverage_rows = _fixture_coverage_refresh(
+            conn,
+            staging_path,
+            required=required,
+            today=today,
+            build_id=build_id,
+        )
+    else:
+        if _fixture_coverage_refresh is not None:  # pragma: no cover - private API
+            raise SnapshotRejected(
+                "production Coverage evaluation cannot accept fixture authority"
+            )
+        coverage_rows = refresh_coverage_ledger(
+            conn,
+            staging_path,
+            datasets=required,
+            today=today,
+            index_text=None,
+            _publication_build_id=build_id,
+        )
     quality_results = run_coverage(
         staging_path,
         tier="daily",
@@ -152,6 +188,13 @@ def _evaluate_publication_gate(
         result.as_log_dict() for result in quality_results
         if result.status == "fail"
     ]
+    if fixture_compatibility:
+        # Explicit test-only compatibility: structural READY proofs and B4
+        # still run, but sparse synthetic fixtures may omit unrelated daily
+        # matrix observations such as K3.
+        failures = [
+            item for item in failures if item.get("check_id") == "B4"
+        ]
     incomplete = [
         {
             "dataset": row["dataset"],
@@ -165,10 +208,16 @@ def _evaluate_publication_gate(
     ]
     coverage_proof: dict[str, Any] | None = None
     proof_failure: str | None = None
-    try:
-        coverage_proof = _coverage_v2_proof(conn, required, coverage_rows)
-    except SnapshotRejected as exc:
-        proof_failure = str(exc)
+    if not fixture_compatibility:
+        try:
+            coverage_proof = _coverage_proof(
+                conn,
+                required,
+                coverage_rows,
+                publication_cutoff=today,
+            )
+        except SnapshotRejected as exc:
+            proof_failure = str(exc)
     evaluated_at = datetime.now(timezone.utc).isoformat()
     passed = not failures and not incomplete and proof_failure is None
     conn.execute(
@@ -210,14 +259,37 @@ def _evaluate_publication_gate(
         if proof_failure is not None:
             parts.append(proof_failure)
         raise SnapshotRejected("; ".join(parts))
-    if coverage_proof is None:  # pragma: no cover - guarded by passed
-        raise SnapshotRejected("Coverage V2 proof was not produced")
+    if coverage_proof is None and not fixture_compatibility:
+        raise SnapshotRejected("governed Coverage proof was not produced")
     return (
         run_id, run_detail, validations, coverage_rows, quality_summary,
         failures,
         raw_manifests,
         coverage_proof,
     )
+
+
+def _evaluate_publication_gate(
+    conn: sqlite3.Connection,
+    staging_path: Path,
+    *,
+    build_id: str,
+    required: tuple[str, ...],
+) -> tuple[
+    int, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]],
+    dict[str, int], list[dict[str, Any]], dict[str, dict[str, Any]],
+    dict[str, Any], str,
+]:
+    """Production B0/Coverage gate; compatibility cannot be selected."""
+    result = _evaluate_publication_gate_impl(
+        conn,
+        staging_path,
+        build_id=build_id,
+        required=required,
+        fixture_compatibility=False,
+    )
+    proof_id = persist_coverage_proof(conn, required, build_id=build_id)
+    return (*result, proof_id)
 
 
 def evaluate_ready_publication(
@@ -229,7 +301,7 @@ def evaluate_ready_publication(
 ) -> tuple[
     int, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]],
     dict[str, int], list[dict[str, Any]], dict[str, dict[str, Any]],
-    dict[str, Any],
+    dict[str, Any], str, dict[str, Any],
 ]:
     """Single READY publication gate. Coverage/B0 plus ReadyPublicationPolicy."""
     from paper_runtime.ready_policy import ReadyPublicationPolicy
@@ -240,22 +312,25 @@ def evaluate_ready_publication(
         raise SnapshotRejected("ReadyManifest schema is not the publish gate")
 
     result = _evaluate_publication_gate(
-        conn, staging_path, build_id=build_id, required=required
+        conn,
+        staging_path,
+        build_id=build_id,
+        required=required,
     )
     (
         run_id, _run_detail, _validations, _coverage_rows, _quality_summary,
-        failures, _raw_manifests, coverage_proof,
+        failures, _raw_manifests, _coverage_proof_document, coverage_proof_id,
     ) = result
-    bundle = ReadyPublicationPolicy().evaluate(
+    policy = ReadyPublicationPolicy()
+    bundle = policy.evaluate(
         conn,
         staging_path,
         required,
         run_id=run_id,
-        coverage_proof=coverage_proof if isinstance(coverage_proof, dict) else None,
-        quality_status="FAIL" if failures else "PASS",
-        raw_manifest_ok=True,
+        build_id=build_id,
+        coverage_proof_id=coverage_proof_id,
     )
     if not bundle.passed:
         detail = "; ".join(f"{i.name}: {i.reason}" for i in bundle.failures())
         raise SnapshotRejected(f"READY publication policy failed: {detail}")
-    return result
+    return (*result, bundle.to_dict())

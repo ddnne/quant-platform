@@ -25,7 +25,7 @@ from ..pipeline import Registrar, RunReport, _stamped, save_raw
 from .fetch import JsdaFetcher
 from .normalize import normalize_otc_reference_prices
 from .parse import parse_otc_reference_csv, parse_otc_reference_xlsx
-from .receipts import record_governed_receipt, require_jsda_receipt_authority
+from .receipts import record_governed_receipt, require_jsda_receipt_service
 from .urls import (
     OTC_REFERENCE_DATASET,
     JsdaArchiveSegment,
@@ -209,14 +209,14 @@ def _record(
     checked_at: str,
     status: str,
     error: Optional[str],
-    observed_items: int,
-    raw_page_count: int,
-    raw_row_count: int,
-    structured_row_count: int,
+    observed_items: int | None = None,
+    raw_page_count: int | None = None,
+    raw_row_count: int | None = None,
+    structured_row_count: int | None = None,
     pagination_exhausted: bool,
     digests: Mapping[str, Any],
-    authority=None,
-    raw: bytes = b"",
+    receipt_service=None,
+    raw_artifact_paths: Sequence[Path | str] = (),
 ) -> None:
     record_governed_receipt(
         store,
@@ -231,12 +231,12 @@ def _record(
         structured_row_count=structured_row_count,
         pagination_exhausted=pagination_exhausted,
         digests=digests,
-        authority=authority,
-        raw=raw,
+        receipt_service=receipt_service,
+        raw_artifact_paths=raw_artifact_paths,
     )
 
 
-def _quote_effective_dates(
+def resolve_quote_effective_dates(
     segments: Sequence[JsdaArchiveSegment],
     *,
     stored_labels: Sequence[str] = (),
@@ -289,6 +289,7 @@ def run_otc_reference_backfill(
     to_year: Optional[int] = None,
     checked_at: Optional[str] = None,
     force: bool = False,
+    receipt_service=None,
 ) -> OtcArchiveBackfillReport:
     """Discover and ingest official OTC-reference files one day at a time."""
     checked_at = checked_at or now_iso()
@@ -304,13 +305,12 @@ def run_otc_reference_backfill(
     requirements: list[RequiredCoverageSegment] = []
     selected_segments: list[JsdaArchiveSegment] = []
     index_digests: dict[str, str] = {}
-    authority = None
     authority_error: Optional[str] = None
 
     try:
         try:
-            authority = require_jsda_receipt_authority()
-        except RuntimeError as exc:
+            receipt_service = require_jsda_receipt_service(receipt_service)
+        except (RuntimeError, TypeError) as exc:
             authority_error = str(exc)
         root_raw = fetcher.fetch_file(root_url)
         root_path = _save_index_raw(
@@ -371,7 +371,7 @@ def run_otc_reference_backfill(
         prior_receipts = _receipt_objects(read_collection_receipts(
             store.path, dataset=OTC_REFERENCE_DATASET
         ))
-        effective_dates = _quote_effective_dates(
+        effective_dates = resolve_quote_effective_dates(
             all_discovered,
             stored_labels=_stored_publication_labels(store),
         )
@@ -453,7 +453,7 @@ def run_otc_reference_backfill(
                 raw_rows = len(records)
                 if raw_rows == 0:
                     raise ValueError("official OTC archive file parsed zero rows")
-                if authority is None:
+                if receipt_service is None:
                     raise RuntimeError(
                         authority_error
                         or "receipt signing key not configured"
@@ -467,7 +467,7 @@ def run_otc_reference_backfill(
                     source_format=str(segment.source_format),
                 )
                 structured_rows = registrar.register(
-                    "jsda_otc_bond_reference_prices", rows
+                    "jsda_otc_bond_reference_prices", rows, commit=False
                 )
                 _record(
                     store,
@@ -476,22 +476,19 @@ def run_otc_reference_backfill(
                     checked_at=checked_at,
                     status="SUCCESS",
                     error=None,
-                    observed_items=1,
-                    raw_page_count=1,
-                    raw_row_count=raw_rows,
-                    structured_row_count=structured_rows,
                     pagination_exhausted=True,
                     digests={
                         "raw": raw_digest,
                         "source_url": segment.source_url,
                         "fetched_at": checked_at,
                         "raw_path": str(raw_path),
+                        "quote_effective_date": effective_date,
                         "archive_index": index_digests.get(
                             segment.publication_label_date[:4]
                         ),
                     },
-                    authority=authority,
-                    raw=raw_bytes,
+                    receipt_service=receipt_service,
+                    raw_artifact_paths=(raw_path,),
                 )
                 completed += 1
             except Exception as exc:  # noqa: BLE001
@@ -513,7 +510,6 @@ def run_otc_reference_backfill(
                         "fetched_at": checked_at,
                         "raw_path": None if raw_path is None else str(raw_path),
                     },
-                    raw=raw_bytes,
                 )
                 failed += 1
 

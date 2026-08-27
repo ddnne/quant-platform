@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
 import pytest
 
 from research.robustness_gate import (
@@ -14,10 +11,6 @@ from research.robustness_gate import (
     period_rows_from_cross_table,
     walk_forward_gross_from_compare,
 )
-
-REPO = Path(__file__).resolve().parents[1]
-GATE_PATH = REPO / "packages" / "product" / "research" / "robustness_gate.py"
-
 
 def test_gate_document_closed_to_ready_mass():
     assert GATE_VERSION.startswith("research-robustness-gate/")
@@ -173,24 +166,3 @@ def test_period_rows_from_cross_table():
     rows = period_rows_from_cross_table(cross, signal_id="c21_topix_relative_sign")
     assert len(rows) == 1
     assert rows[0]["period_id"] == "w1"
-
-
-def test_gate_module_ast_bans_ready_mass_orders():
-    tree = ast.parse(GATE_PATH.read_text(encoding="utf-8"))
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module.split(".")[0])
-            for a in node.names:
-                imported.add(a.name)
-        elif isinstance(node, ast.Import):
-            for a in node.names:
-                imported.add(a.name.split(".")[0])
-    src = GATE_PATH.read_text(encoding="utf-8")
-    assert "mass_research" not in imported
-    assert "start_mass_research" not in imported
-    assert "VerifiedResearchReadiness" not in imported
-    assert "READY_DECLARED: bool = True" not in src
-    assert "OPERATIONAL_GO: bool = True" not in src
-    assert "CONNECTED_TO_READY: bool = True" not in src
-    assert "CONNECTED_TO_MASS: bool = True" not in src

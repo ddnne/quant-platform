@@ -190,24 +190,10 @@ def test_scheduler_default_mix_excludes_simple_daily_sign(tmp_path):
     mix = sched.default_hypothesis_class_mix()
     assert CLASS_SIMPLE_DAILY_SIGN not in mix.class_ids
     # Pinning simple_daily_sign without opt-in fails before mass readiness path.
-    from research.artifacts import ExperimentPlan
+    from research.experiment_plans import load_experiment_plans
     from selection.budget_ledger import MassResearchDisabledError
 
-    plan = ExperimentPlan.from_dict(
-        {
-            "plan_id": "p1",
-            "idea_id": "i1",
-            "strategy_spec_id": "st1",
-            "feature_refs": [{"id": "f", "version": "v1"}],
-            "ready_snapshot_id": "snap-1",
-            "universe": ["1301"],
-            "period_start": "2024-01-01",
-            "period_end": "2024-12-31",
-            "cost_scenario": "default",
-            "evaluation_protocol": "signal-default",
-            "budget_allocation": {"generations": 1},
-        }
-    )
+    plan = load_experiment_plans()[0]
     with pytest.raises(MassResearchDisabledError, match="not generation-enabled"):
         sched.schedule(
             plan=plan,

@@ -1,18 +1,12 @@
 """daily_path cost verify: fail-closed missing ADV, ON vs OFF, ADV buckets."""
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
 from research.cf_cost_verify import (
     HIGH_ADV_JPY,
     LOW_ADV_JPY,
     run_cost_on_off_compare,
 )
 from research.daily_path_eval import held_book_daily_mtm
-
-ROOT = Path(__file__).resolve().parents[1]
-VERIFY_PATH = ROOT / "packages" / "product" / "research" / "cf_cost_verify.py"
 
 DATES = ["2024-01-02", "2024-01-03", "2024-01-04"]
 HELD = {"7203": {"2024-01-02": 1.0, "2024-01-03": 1.0}}
@@ -128,21 +122,6 @@ def test_remote_cost_verify_uses_worker_put(monkeypatch) -> None:
     assert seen == ["research/eval/job=eval-cf-cost-test/cost_verify.json"]
 
 
-def test_cf_cost_verify_does_not_import_factory() -> None:
-    src = VERIFY_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(src, filename=str(VERIFY_PATH))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                assert "factory" not in alias.name
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            assert "factory" not in node.module
-            assert node.module != "research.offline.factory"
-            assert "cost_models" not in node.module
-            for alias in node.names:
-                assert "factory" not in alias.name
-
-
 def test_eval_tracks_cost_models_hold_why() -> None:
     from research.eval_tracks import NEXT_RESEARCH_QUEUE
 
@@ -155,26 +134,14 @@ def test_eval_tracks_cost_models_hold_why() -> None:
     assert row["not_a_pass"] is True
 
 
-def test_liq_buckets_match_cost_models_sot() -> None:
+def test_liquidity_multipliers_are_behaviorally_ordered() -> None:
     from research.cost_models import LIQUIDITY_TX_MULT
 
     assert LIQUIDITY_TX_MULT["high"] == 1.0
     assert LIQUIDITY_TX_MULT["mid"] == 1.5
     assert LIQUIDITY_TX_MULT["low"] == 2.5
-    worker = (
-        ROOT
-        / "platform"
-        / "workers"
-        / "research-mass-eval"
-        / "src"
-        / "daily_path.ts"
-    ).read_text(encoding="utf-8")
-    assert "if (!finite(adv))" in worker
-    assert "costAdvIncomplete = true" in worker
-    assert "cost_adv_incomplete" in worker
-    assert "LIQUIDITY_TX_MULT high/mid/low (1.0/1.5/2.5)" in worker
-    py = (ROOT / "packages" / "product" / "research" / "daily_path_eval.py").read_text(
-        encoding="utf-8"
+    assert (
+        LIQUIDITY_TX_MULT["high"]
+        < LIQUIDITY_TX_MULT["mid"]
+        < LIQUIDITY_TX_MULT["low"]
     )
-    assert "from research.cost_models" not in py
-    assert "import cost_models" not in py

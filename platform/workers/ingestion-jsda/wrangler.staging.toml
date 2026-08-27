@@ -19,6 +19,15 @@ retry_delay = 60
 dead_letter_queue = "quant-jsda-ingestion-dlq-staging"
 max_concurrency = 1
 
+[[queues.consumers]]
+queue = "quant-jsda-ingestion-dlq-staging"
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 8
+retry_delay = 60
+dead_letter_queue = "quant-jsda-ingestion-rejects-staging"
+max_concurrency = 1
+
 [[r2_buckets]]
 binding = "RAW_BUCKET"
 bucket_name = "quant-raw-staging"
@@ -30,5 +39,11 @@ database_id = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
 
 [vars]
 USER_AGENT = "quant-platform-staging-ingest/0.1"
-MAX_DATA_FILES = "1"
-MAX_YEAR_PAGES = "1"
+JSDA_DLQ_QUEUE = "quant-jsda-ingestion-dlq-staging"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"

@@ -75,11 +75,11 @@ export function parseRequest(body: unknown): { ok: true; value: MassEvalRequest 
   }
 
   const modeRaw = body.mode != null ? String(body.mode) : "synthetic";
-  const allowedModes = new Set(["synthetic", "r2_panels", "d1_bars", "nets_only"]);
+  const allowedModes = new Set(["synthetic", "r2_panels", "nets_only"]);
   if (!allowedModes.has(modeRaw)) {
     return {
       ok: false,
-      error: "mode must be synthetic | r2_panels | d1_bars | nets_only",
+      error: "mode must be synthetic | r2_panels | nets_only",
     };
   }
 

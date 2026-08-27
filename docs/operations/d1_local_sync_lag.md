@@ -110,40 +110,30 @@ python scripts/report_d1_local_sync_lag.py \
   --focus markets_calendar,equities_bars_daily,indices_bars_daily_topix
 ```
 
-## Sync commands used for closed paths
+## Private sync commands
 
 ```bash
-export INGESTION_PREMIUM_URL="https://quant-platform-ingestion-premium.<acct>.workers.dev"
-export DATA_EXPORT_TOKEN  # from ~/.config/quant-platform/data_export_token — do not commit
 source .venv/bin/activate
 
-# 1) Control-plane watermarks
+# First bootstrap: authenticated Wrangler talks to D1 without a public Worker.
 python scripts/sync_d1_to_sqlite.py \
   --db data/structured/ingestion.sqlite \
-  --table ingestion_watermarks \
-  --url "$INGESTION_PREMIUM_URL" \
-  --token "$DATA_EXPORT_TOKEN"
+  --wrangler-remote
 
-# 2) Applied change_seq (skips R2/SCD2 markers; advances seq)
+# Subsequent apply: sequenced pages resume after the durable local cursor.
 python scripts/sync_d1_to_sqlite.py \
   --db data/structured/ingestion.sqlite \
-  --table jquants_records \
+  --wrangler-remote \
   --incremental \
-  --url "$INGESTION_PREMIUM_URL" \
-  --token "$DATA_EXPORT_TOKEN"
-
-# 3) Thin control tables
-python scripts/sync_d1_to_sqlite.py \
-  --db data/structured/ingestion.sqlite \
-  --table coverage_segments \
-  --url "$INGESTION_PREMIUM_URL" \
-  --token "$DATA_EXPORT_TOKEN"
-
-python scripts/sync_d1_to_sqlite.py \
-  --db data/structured/ingestion.sqlite \
-  --table collection_receipts \
-  --url "$INGESTION_PREMIUM_URL" \
-  --token "$DATA_EXPORT_TOKEN"
+  --page-limit 500
 ```
 
-Secrets stay in `~/.config/quant-platform/` or env; never in git.
+The executable, production config/environment, database name, and database id
+are repository-pinned and are not CLI inputs. Wrangler reads its authenticated
+profile directly; no API token or export
+secret is passed on the command line. Its provider output is withheld. The
+temporary SQL is mode `0600` inside a mode `0700` directory and is removed
+after apply. `--d1-export` is offline recovery only and cannot mint READY or a
+trusted source/export cursor. A remote full bootstrap exact-reconciles the
+governed tables; remote incremental apply refuses any DB whose prior trusted
+content identity has changed.

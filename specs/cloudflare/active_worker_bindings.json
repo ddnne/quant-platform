@@ -1,0 +1,1958 @@
+{
+  "active_workers": [
+    "ingestion-jsda",
+    "ingestion-premium",
+    "ingestion-secrets",
+    "quant-ops-mcp",
+    "receipt-evidence-authority",
+    "research-ai-gateway",
+    "research-mass-eval"
+  ],
+  "config_key_policy": {
+    "ignored": [],
+    "modeled": [
+      "account_id",
+      "ai",
+      "compatibility_date",
+      "compatibility_flags",
+      "d1_databases",
+      "durable_objects",
+      "kv_namespaces",
+      "main",
+      "migrations",
+      "name",
+      "observability",
+      "placement",
+      "preview_urls",
+      "queues",
+      "r2_buckets",
+      "ratelimits",
+      "route",
+      "routes",
+      "secrets",
+      "services",
+      "tail_consumers",
+      "triggers",
+      "vars",
+      "version_metadata",
+      "workers_dev"
+    ],
+    "nested_modeled": {
+      "durable_objects": [
+        "bindings"
+      ],
+      "queues": [
+        "consumers",
+        "producers"
+      ],
+      "secrets": [
+        "required"
+      ],
+      "triggers": [
+        "crons"
+      ]
+    },
+    "schema_version": "wrangler-config-key-policy/v1",
+    "selection_only": [
+      "env"
+    ],
+    "unclassified": "REJECT"
+  },
+  "schema_version": "cloudflare-active-worker-bindings/v4",
+  "test_harness_surfaces": {
+    "ingestion-jsda": {
+      "account_id": null,
+      "ai": {},
+      "compatibility_date": "2026-08-01",
+      "compatibility_flags": [],
+      "config": "platform/workers/ingestion-jsda/wrangler.test.toml",
+      "crons": [],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_id": "00000000-0000-0000-0000-000000000011",
+          "database_name": "quant-ingest-jsda-test",
+          "migrations_dir": "../ingestion-premium/migrations"
+        }
+      ],
+      "durable_objects": [],
+      "kv_namespaces": [],
+      "main": "src/index.ts",
+      "migrations": [],
+      "name": "quant-platform-ingestion-jsda-test",
+      "observability": {},
+      "placement": {},
+      "preview_urls": false,
+      "queue_consumers": [
+        {
+          "dead_letter_queue": "quant-jsda-ingestion-dlq-test",
+          "max_batch_size": 3,
+          "max_batch_timeout": 5,
+          "max_concurrency": 1,
+          "max_retries": 3,
+          "queue": "quant-jsda-ingestion-test",
+          "retry_delay": 60
+        },
+        {
+          "dead_letter_queue": "quant-jsda-ingestion-rejects-test",
+          "max_batch_size": 1,
+          "max_batch_timeout": 5,
+          "max_concurrency": 1,
+          "max_retries": 8,
+          "queue": "quant-jsda-ingestion-dlq-test",
+          "retry_delay": 60
+        }
+      ],
+      "queue_producers": [
+        {
+          "binding": "JSDA_QUEUE",
+          "queue": "quant-jsda-ingestion-test"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "RAW_BUCKET",
+          "bucket_name": "quant-raw-jsda-test"
+        }
+      ],
+      "ratelimits": [],
+      "route": null,
+      "routes": [],
+      "secret_names": [],
+      "services": [],
+      "tail_consumers": [],
+      "toolchain": {
+        "@cloudflare/vitest-plugin": "1.0.0",
+        "@cloudflare/workers-types": "5.20260825.1",
+        "typescript": "5.9.2",
+        "vitest": "4.1.11",
+        "wrangler": "4.125.0"
+      },
+      "vars": {
+        "INGESTION_RUN_TOKEN": "jsda-runtime-test-token",
+        "JSDA_DLQ_QUEUE": "quant-jsda-ingestion-dlq-test",
+        "USER_AGENT": "quant-platform-jsda-runtime-test/0.1"
+      },
+      "version_metadata": {},
+      "workers_dev": false
+    },
+    "ingestion-secrets": {
+      "account_id": null,
+      "ai": {},
+      "compatibility_date": "2026-08-01",
+      "compatibility_flags": [],
+      "config": "platform/workers/ingestion-secrets/wrangler.test.toml",
+      "crons": [],
+      "d1_databases": [],
+      "durable_objects": [],
+      "kv_namespaces": [],
+      "main": "src/index.ts",
+      "migrations": [],
+      "name": "quant-platform-ingestion-secrets-test",
+      "observability": {},
+      "placement": {},
+      "preview_urls": false,
+      "queue_consumers": [],
+      "queue_producers": [],
+      "r2_buckets": [],
+      "ratelimits": [
+        {
+          "name": "PROXY_RATE_LIMITER",
+          "namespace_id": "63103",
+          "simple": {
+            "limit": 1000,
+            "period": 60
+          }
+        }
+      ],
+      "route": null,
+      "routes": [],
+      "secret_names": [],
+      "services": [],
+      "tail_consumers": [],
+      "toolchain": {
+        "@cloudflare/vitest-plugin": "1.0.0",
+        "@cloudflare/workers-types": "5.20260825.1",
+        "typescript": "5.9.2",
+        "vitest": "4.1.11",
+        "wrangler": "4.125.0"
+      },
+      "vars": {
+        "ENVIRONMENT": "production",
+        "JQUANTS_API_KEY": "jq-runtime-api-key-not-for-live",
+        "JQUANTS_PROXY_TOKEN": "jq-runtime-proxy-token-not-for-live",
+        "JQUANTS_RPC_CURSOR_HMAC_KEY": "jq-runtime-cursor-hmac-key-not-for-live-00000000000000000000000000000000"
+      },
+      "version_metadata": {},
+      "workers_dev": false
+    },
+    "quant-ops-mcp": {
+      "account_id": null,
+      "ai": {},
+      "compatibility_date": "2026-08-01",
+      "compatibility_flags": [
+        "nodejs_compat"
+      ],
+      "config": "platform/workers/quant-ops-mcp/wrangler.test.toml",
+      "crons": [],
+      "d1_databases": [
+        {
+          "binding": "OPS_PROJECTION_DB",
+          "database_id": "00000000-0000-0000-0000-000000000021",
+          "database_name": "quant-ops-projection-test",
+          "migrations_dir": "migrations/projection",
+          "migrations_table": "d1_migrations_ops_projection"
+        },
+        {
+          "binding": "QUOTA_DB",
+          "database_id": "00000000-0000-0000-0000-000000000022",
+          "database_name": "quant-ops-quota-test",
+          "migrations_dir": "migrations/quota",
+          "migrations_table": "d1_migrations_ops_quota"
+        }
+      ],
+      "durable_objects": [
+        {
+          "class_name": "QuantOpsMcpAgent",
+          "name": "MCP_OBJECT"
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "OAUTH_KV",
+          "id": "00000000000000000000000000000021"
+        }
+      ],
+      "main": "src/index.js",
+      "migrations": [
+        {
+          "new_sqlite_classes": [
+            "QuantOpsMcpAgent"
+          ],
+          "tag": "v1"
+        }
+      ],
+      "name": "quant-platform-ops-read-mcp-test",
+      "observability": {},
+      "placement": {},
+      "preview_urls": false,
+      "queue_consumers": [],
+      "queue_producers": [],
+      "r2_buckets": [],
+      "ratelimits": [],
+      "route": null,
+      "routes": [],
+      "secret_names": [],
+      "services": [],
+      "tail_consumers": [],
+      "toolchain": {
+        "@cloudflare/vitest-plugin": "1.0.0",
+        "@cloudflare/workers-types": "5.20260825.1",
+        "typescript": "5.9.2",
+        "vitest": "4.1.11",
+        "wrangler": "4.125.0"
+      },
+      "vars": {
+        "ALLOWED_LOGIN": "ddnne",
+        "DAILY_ROW_QUOTA": "25000",
+        "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.test"
+      },
+      "version_metadata": {},
+      "workers_dev": false
+    },
+    "receipt-evidence-authority": {
+      "account_id": null,
+      "ai": {},
+      "compatibility_date": "2026-08-01",
+      "compatibility_flags": [],
+      "config": "platform/workers/receipt-evidence-authority/wrangler.test.toml",
+      "crons": [],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_id": "00000000-0000-0000-0000-000000000014",
+          "database_name": "quant-ingest-receipt-test"
+        }
+      ],
+      "durable_objects": [
+        {
+          "class_name": "ReceiptEvidenceAuthority",
+          "name": "RECEIPT_EVIDENCE_AUTHORITY_DO"
+        }
+      ],
+      "kv_namespaces": [],
+      "main": "src/index.ts",
+      "migrations": [
+        {
+          "new_sqlite_classes": [
+            "ReceiptEvidenceAuthority"
+          ],
+          "tag": "v1"
+        }
+      ],
+      "name": "quant-platform-receipt-evidence-authority-test",
+      "observability": {},
+      "placement": {},
+      "preview_urls": false,
+      "queue_consumers": [],
+      "queue_producers": [],
+      "r2_buckets": [
+        {
+          "binding": "AUTHORITY_EVIDENCE_BUCKET",
+          "bucket_name": "quant-receipt-evidence-test"
+        }
+      ],
+      "ratelimits": [],
+      "route": null,
+      "routes": [],
+      "secret_names": [],
+      "services": [],
+      "tail_consumers": [],
+      "toolchain": {
+        "@cloudflare/vitest-plugin": "1.0.0",
+        "@cloudflare/workers-types": "5.20260825.1",
+        "typescript": "5.9.2",
+        "vitest": "4.1.11",
+        "wrangler": "4.125.0"
+      },
+      "vars": {
+        "ACTIVATED_KEY_ID": "receipt-test-runtime-registration-required",
+        "AUTHORITY_MODE": "ACTIVE",
+        "ENVIRONMENT": "production",
+        "RECEIPT_KEY_GENERATION": "1",
+        "RECEIPT_KEY_WRAP_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      },
+      "workers_dev": false
+    },
+    "research-ai-gateway": {
+      "account_id": null,
+      "ai": {},
+      "compatibility_date": "2026-08-01",
+      "compatibility_flags": [],
+      "config": "platform/workers/research-ai-gateway/wrangler.test.toml",
+      "crons": [],
+      "d1_databases": [],
+      "durable_objects": [
+        {
+          "class_name": "BudgetLedger",
+          "name": "BUDGET_LEDGER"
+        }
+      ],
+      "kv_namespaces": [],
+      "main": "src/index.ts",
+      "migrations": [
+        {
+          "new_sqlite_classes": [
+            "BudgetLedger"
+          ],
+          "tag": "v1"
+        }
+      ],
+      "name": "quant-platform-research-ai-gateway-test",
+      "observability": {},
+      "placement": {},
+      "preview_urls": false,
+      "queue_consumers": [],
+      "queue_producers": [],
+      "r2_buckets": [],
+      "ratelimits": [],
+      "route": null,
+      "routes": [],
+      "secret_names": [],
+      "services": [],
+      "tail_consumers": [],
+      "toolchain": {
+        "@cloudflare/vitest-plugin": "1.0.0",
+        "@cloudflare/workers-types": "5.20260825.1",
+        "typescript": "5.9.2",
+        "vitest": "4.1.11",
+        "wrangler": "4.125.0"
+      },
+      "vars": {},
+      "version_metadata": {},
+      "workers_dev": false
+    },
+    "research-mass-eval": {
+      "account_id": null,
+      "ai": {},
+      "compatibility_date": "2026-08-01",
+      "compatibility_flags": [],
+      "config": "platform/workers/research-mass-eval/wrangler.test.toml",
+      "crons": [],
+      "d1_databases": [],
+      "durable_objects": [],
+      "kv_namespaces": [],
+      "main": "src/index.ts",
+      "migrations": [],
+      "name": "quant-platform-research-mass-eval-test",
+      "observability": {},
+      "placement": {},
+      "preview_urls": false,
+      "queue_consumers": [],
+      "queue_producers": [],
+      "r2_buckets": [
+        {
+          "binding": "STRUCTURED_BUCKET",
+          "bucket_name": "quant-structured-test"
+        }
+      ],
+      "ratelimits": [],
+      "route": null,
+      "routes": [],
+      "secret_names": [],
+      "services": [
+        {
+          "binding": "AI_GATEWAY",
+          "entrypoint": "GatewayService",
+          "service": "quant-platform-research-ai-gateway-test"
+        }
+      ],
+      "tail_consumers": [],
+      "toolchain": {
+        "@cloudflare/vitest-plugin": "1.0.0",
+        "@cloudflare/workers-types": "5.20260825.1",
+        "typescript": "5.9.2",
+        "vitest": "4.1.11",
+        "wrangler": "4.125.0"
+      },
+      "vars": {
+        "CONTINUOUS_PAPER": "UNARMED",
+        "MASS_EVAL_VERSION": "research-mass-eval/test",
+        "MASS_EVAL_WAVE": "test",
+        "MASS_RESEARCH": "NO-GO",
+        "NETS_ONLY": "deny",
+        "OPERATIONAL_GO": "false",
+        "PHASE7": "OFF",
+        "READY_DECLARED": "false"
+      },
+      "version_metadata": {},
+      "workers_dev": false
+    }
+  },
+  "toolchain_policy": {
+    "@cloudflare/vitest-plugin": "1.0.0",
+    "@cloudflare/workers-types": "5.20260825.1",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11",
+    "wrangler": "4.125.0"
+  },
+  "worker_package_scripts": {
+    "ingestion-jsda": {
+      "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
+      "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+      "tail": "wrangler tail --config=wrangler.toml --env=production",
+      "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
+    },
+    "ingestion-premium": {
+      "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
+      "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
+      "test": "vitest run",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
+    },
+    "ingestion-secrets": {
+      "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
+      "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
+      "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts && node --test harness/*.test.mjs",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
+    },
+    "quant-ops-mcp": {
+      "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
+      "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+      "test": "node --experimental-test-module-mocks --test test/*.test.mjs && vitest run --config vitest.runtime.config.ts && vitest run --config vitest.harness.config.ts",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
+    },
+    "receipt-evidence-authority": {
+      "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
+      "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
+      "test": "vitest run --config vitest.runtime.config.ts",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
+    },
+    "research-ai-gateway": {
+      "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
+      "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+      "test": "vitest run --config vitest.config.ts && vitest run --config vitest.harness.config.ts",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
+    },
+    "research-mass-eval": {
+      "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
+      "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+      "dev": "wrangler dev --config=wrangler.toml --env=\"\"",
+      "tail": "wrangler tail --config=wrangler.toml --env=production",
+      "test": "vitest run",
+      "typecheck": "tsc --noEmit",
+      "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
+    }
+  },
+  "workers": {
+    "ingestion-jsda": {
+      "base": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/ingestion-jsda/wrangler.toml",
+        "crons": [
+          "30 1 * * *"
+        ],
+        "d1_databases": [
+          {
+            "binding": "DB",
+            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+            "database_name": "quant-ingest"
+          }
+        ],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-ingestion-jsda",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [
+          {
+            "dead_letter_queue": "quant-jsda-ingestion-dlq",
+            "max_batch_size": 3,
+            "max_batch_timeout": 5,
+            "max_concurrency": 1,
+            "max_retries": 3,
+            "queue": "quant-jsda-ingestion",
+            "retry_delay": 60
+          },
+          {
+            "dead_letter_queue": "quant-jsda-ingestion-rejects",
+            "max_batch_size": 1,
+            "max_batch_timeout": 5,
+            "max_concurrency": 1,
+            "max_retries": 8,
+            "queue": "quant-jsda-ingestion-dlq",
+            "retry_delay": 60
+          }
+        ],
+        "queue_producers": [
+          {
+            "binding": "JSDA_QUEUE",
+            "queue": "quant-jsda-ingestion"
+          }
+        ],
+        "r2_buckets": [
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "INGESTION_RUN_TOKEN"
+        ],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "JSDA_DLQ_QUEUE": "quant-jsda-ingestion-dlq",
+          "USER_AGENT": "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      },
+      "production": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/ingestion-jsda/wrangler.toml",
+        "crons": [
+          "30 1 * * *"
+        ],
+        "d1_databases": [
+          {
+            "binding": "DB",
+            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+            "database_name": "quant-ingest"
+          }
+        ],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-ingestion-jsda",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [
+          {
+            "dead_letter_queue": "quant-jsda-ingestion-dlq",
+            "max_batch_size": 3,
+            "max_batch_timeout": 5,
+            "max_concurrency": 1,
+            "max_retries": 3,
+            "queue": "quant-jsda-ingestion",
+            "retry_delay": 60
+          },
+          {
+            "dead_letter_queue": "quant-jsda-ingestion-rejects",
+            "max_batch_size": 1,
+            "max_batch_timeout": 5,
+            "max_concurrency": 1,
+            "max_retries": 8,
+            "queue": "quant-jsda-ingestion-dlq",
+            "retry_delay": 60
+          }
+        ],
+        "queue_producers": [
+          {
+            "binding": "JSDA_QUEUE",
+            "queue": "quant-jsda-ingestion"
+          }
+        ],
+        "r2_buckets": [
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "INGESTION_RUN_TOKEN"
+        ],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "JSDA_DLQ_QUEUE": "quant-jsda-ingestion-dlq",
+          "USER_AGENT": "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      },
+      "staging": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/ingestion-jsda/wrangler.staging.toml",
+        "crons": [],
+        "d1_databases": [
+          {
+            "binding": "DB",
+            "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
+            "database_name": "quant-ingest-staging"
+          }
+        ],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-ingestion-jsda-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [
+          {
+            "dead_letter_queue": "quant-jsda-ingestion-dlq-staging",
+            "max_batch_size": 3,
+            "max_batch_timeout": 5,
+            "max_concurrency": 1,
+            "max_retries": 3,
+            "queue": "quant-jsda-ingestion-staging",
+            "retry_delay": 60
+          },
+          {
+            "dead_letter_queue": "quant-jsda-ingestion-rejects-staging",
+            "max_batch_size": 1,
+            "max_batch_timeout": 5,
+            "max_concurrency": 1,
+            "max_retries": 8,
+            "queue": "quant-jsda-ingestion-dlq-staging",
+            "retry_delay": 60
+          }
+        ],
+        "queue_producers": [
+          {
+            "binding": "JSDA_QUEUE",
+            "queue": "quant-jsda-ingestion-staging"
+          }
+        ],
+        "r2_buckets": [
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw-staging"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "JSDA_DLQ_QUEUE": "quant-jsda-ingestion-dlq-staging",
+          "USER_AGENT": "quant-platform-staging-ingest/0.1"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      }
+    },
+    "ingestion-premium": {
+      "base": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/ingestion-premium/wrangler.toml",
+        "crons": [
+          "15 * * * *"
+        ],
+        "d1_databases": [
+          {
+            "binding": "DB",
+            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+            "database_name": "quant-ingest"
+          }
+        ],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-ingestion-premium",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw"
+          },
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "DATA_EXPORT_TOKEN",
+          "INGESTION_RUN_TOKEN",
+          "JQUANTS_API_KEY"
+        ],
+        "services": [
+          {
+            "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+            "entrypoint": "ReceiptAuthorityService",
+            "service": "quant-platform-receipt-evidence-authority"
+          }
+        ],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "INGEST_CONCURRENCY": "6",
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "production"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      },
+      "production": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/ingestion-premium/wrangler.toml",
+        "crons": [
+          "15 * * * *"
+        ],
+        "d1_databases": [
+          {
+            "binding": "DB",
+            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+            "database_name": "quant-ingest"
+          }
+        ],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-ingestion-premium",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw"
+          },
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "DATA_EXPORT_TOKEN",
+          "INGESTION_RUN_TOKEN",
+          "JQUANTS_API_KEY"
+        ],
+        "services": [
+          {
+            "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+            "entrypoint": "ReceiptAuthorityService",
+            "service": "quant-platform-receipt-evidence-authority"
+          }
+        ],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "INGEST_CONCURRENCY": "6",
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "production"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      },
+      "staging": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/ingestion-premium/wrangler.staging.toml",
+        "crons": [],
+        "d1_databases": [
+          {
+            "binding": "DB",
+            "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
+            "database_name": "quant-ingest-staging",
+            "migrations_dir": "migrations",
+            "migrations_table": "d1_migrations_ingestion"
+          }
+        ],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-ingestion-premium-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw-staging"
+          },
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured-staging"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [],
+        "services": [
+          {
+            "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+            "entrypoint": "ReceiptAuthorityService",
+            "service": "quant-platform-receipt-evidence-authority-staging"
+          }
+        ],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "INGEST_CONCURRENCY": "2",
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "staging"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      }
+    },
+    "ingestion-secrets": {
+      "base": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/ingestion-secrets/wrangler.toml",
+        "crons": [],
+        "d1_databases": [],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-ingestion-secrets",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [],
+        "ratelimits": [
+          {
+            "name": "PROXY_RATE_LIMITER",
+            "namespace_id": "63101",
+            "simple": {
+              "limit": 60,
+              "period": 60
+            }
+          }
+        ],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "JQUANTS_API_KEY",
+          "JQUANTS_PROXY_TOKEN",
+          "JQUANTS_RPC_CURSOR_HMAC_KEY"
+        ],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "ENVIRONMENT": "production"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": true
+      },
+      "production": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/ingestion-secrets/wrangler.toml",
+        "crons": [],
+        "d1_databases": [],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-ingestion-secrets",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [],
+        "ratelimits": [
+          {
+            "name": "PROXY_RATE_LIMITER",
+            "namespace_id": "63101",
+            "simple": {
+              "limit": 60,
+              "period": 60
+            }
+          }
+        ],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "JQUANTS_API_KEY",
+          "JQUANTS_PROXY_TOKEN",
+          "JQUANTS_RPC_CURSOR_HMAC_KEY"
+        ],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "ENVIRONMENT": "production"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": true
+      },
+      "staging": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/ingestion-secrets/wrangler.staging.toml",
+        "crons": [],
+        "d1_databases": [],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-ingestion-secrets-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [],
+        "ratelimits": [
+          {
+            "name": "PROXY_RATE_LIMITER",
+            "namespace_id": "63102",
+            "simple": {
+              "limit": 60,
+              "period": 60
+            }
+          }
+        ],
+        "route": null,
+        "routes": [],
+        "secret_names": [],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "ENVIRONMENT": "staging"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      }
+    },
+    "quant-ops-mcp": {
+      "base": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [
+          "nodejs_compat"
+        ],
+        "config": "platform/workers/quant-ops-mcp/wrangler.toml",
+        "crons": [],
+        "d1_databases": [
+          {
+            "binding": "OPS_PROJECTION_DB",
+            "database_id": "1b497e8a-5c69-4e19-ae2e-89a8f3185272",
+            "database_name": "quant-ops-projection",
+            "migrations_dir": "migrations/projection",
+            "migrations_table": "d1_migrations_ops_projection"
+          },
+          {
+            "binding": "QUOTA_DB",
+            "database_id": "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6",
+            "database_name": "quant-ops-quota",
+            "migrations_dir": "migrations/quota",
+            "migrations_table": "d1_migrations_ops_quota"
+          }
+        ],
+        "durable_objects": [
+          {
+            "class_name": "QuantOpsMcpAgent",
+            "name": "MCP_OBJECT"
+          }
+        ],
+        "kv_namespaces": [
+          {
+            "binding": "OAUTH_KV",
+            "id": "cbbfc9439c3e4a789fa103777d38f39e"
+          }
+        ],
+        "main": "src/index.js",
+        "migrations": [
+          {
+            "new_sqlite_classes": [
+              "QuantOpsMcpAgent"
+            ],
+            "tag": "v1"
+          }
+        ],
+        "name": "quant-platform-ops-read-mcp",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "GITHUB_CLIENT_ID",
+          "GITHUB_CLIENT_SECRET",
+          "STATE_SECRET"
+        ],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "ALLOWED_LOGIN": "ddnne",
+          "DAILY_ROW_QUOTA": "25000",
+          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": true
+      },
+      "production": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [
+          "nodejs_compat"
+        ],
+        "config": "platform/workers/quant-ops-mcp/wrangler.toml",
+        "crons": [],
+        "d1_databases": [
+          {
+            "binding": "OPS_PROJECTION_DB",
+            "database_id": "1b497e8a-5c69-4e19-ae2e-89a8f3185272",
+            "database_name": "quant-ops-projection",
+            "migrations_dir": "migrations/projection",
+            "migrations_table": "d1_migrations_ops_projection"
+          },
+          {
+            "binding": "QUOTA_DB",
+            "database_id": "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6",
+            "database_name": "quant-ops-quota",
+            "migrations_dir": "migrations/quota",
+            "migrations_table": "d1_migrations_ops_quota"
+          }
+        ],
+        "durable_objects": [
+          {
+            "class_name": "QuantOpsMcpAgent",
+            "name": "MCP_OBJECT"
+          }
+        ],
+        "kv_namespaces": [
+          {
+            "binding": "OAUTH_KV",
+            "id": "cbbfc9439c3e4a789fa103777d38f39e"
+          }
+        ],
+        "main": "src/index.js",
+        "migrations": [
+          {
+            "new_sqlite_classes": [
+              "QuantOpsMcpAgent"
+            ],
+            "tag": "v1"
+          }
+        ],
+        "name": "quant-platform-ops-read-mcp",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "GITHUB_CLIENT_ID",
+          "GITHUB_CLIENT_SECRET",
+          "STATE_SECRET"
+        ],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "ALLOWED_LOGIN": "ddnne",
+          "DAILY_ROW_QUOTA": "25000",
+          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": true
+      },
+      "staging": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [
+          "nodejs_compat"
+        ],
+        "config": "platform/workers/quant-ops-mcp/wrangler.staging.toml",
+        "crons": [],
+        "d1_databases": [
+          {
+            "binding": "OPS_PROJECTION_DB",
+            "database_id": "68ee96d5-766c-4832-836b-54c079bd6265",
+            "database_name": "quant-ops-projection-staging",
+            "migrations_dir": "migrations/projection",
+            "migrations_table": "d1_migrations_ops_projection"
+          },
+          {
+            "binding": "QUOTA_DB",
+            "database_id": "a27f8ce9-82cb-4eec-abac-9c3385ce40e1",
+            "database_name": "quant-ops-quota-staging",
+            "migrations_dir": "migrations/quota",
+            "migrations_table": "d1_migrations_ops_quota"
+          }
+        ],
+        "durable_objects": [
+          {
+            "class_name": "QuantOpsMcpAgent",
+            "name": "MCP_OBJECT"
+          }
+        ],
+        "kv_namespaces": [
+          {
+            "binding": "OAUTH_KV",
+            "id": "4402f398df93412ebe6774d1bc603142"
+          }
+        ],
+        "main": "src/index.js",
+        "migrations": [
+          {
+            "new_sqlite_classes": [
+              "QuantOpsMcpAgent"
+            ],
+            "tag": "v1"
+          }
+        ],
+        "name": "quant-platform-ops-read-mcp-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "ALLOWED_LOGIN": "ddnne",
+          "DAILY_ROW_QUOTA": "25000"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      }
+    },
+    "receipt-evidence-authority": {
+      "base": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/receipt-evidence-authority/wrangler.toml",
+        "crons": [],
+        "d1_databases": [
+          {
+            "binding": "DB",
+            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+            "database_name": "quant-ingest"
+          }
+        ],
+        "durable_objects": [
+          {
+            "class_name": "ReceiptEvidenceAuthority",
+            "name": "RECEIPT_EVIDENCE_AUTHORITY_DO"
+          }
+        ],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [
+          {
+            "new_sqlite_classes": [
+              "ReceiptEvidenceAuthority"
+            ],
+            "tag": "v1"
+          }
+        ],
+        "name": "quant-platform-receipt-evidence-authority",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [
+          {
+            "binding": "AUTHORITY_EVIDENCE_BUCKET",
+            "bucket_name": "quant-receipt-evidence"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "RECEIPT_KEY_WRAP_KEY"
+        ],
+        "services": [
+          {
+            "binding": "JQUANTS_ACQUISITION",
+            "entrypoint": "IngestionSecretsService",
+            "service": "quant-platform-ingestion-secrets"
+          }
+        ],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "AUTHORITY_MODE": "PENDING",
+          "ENVIRONMENT": "production",
+          "RECEIPT_KEY_GENERATION": "1"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      },
+      "production": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/receipt-evidence-authority/wrangler.toml",
+        "crons": [],
+        "d1_databases": [
+          {
+            "binding": "DB",
+            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+            "database_name": "quant-ingest"
+          }
+        ],
+        "durable_objects": [
+          {
+            "class_name": "ReceiptEvidenceAuthority",
+            "name": "RECEIPT_EVIDENCE_AUTHORITY_DO"
+          }
+        ],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [
+          {
+            "new_sqlite_classes": [
+              "ReceiptEvidenceAuthority"
+            ],
+            "tag": "v1"
+          }
+        ],
+        "name": "quant-platform-receipt-evidence-authority",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [
+          {
+            "binding": "AUTHORITY_EVIDENCE_BUCKET",
+            "bucket_name": "quant-receipt-evidence"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "RECEIPT_KEY_WRAP_KEY"
+        ],
+        "services": [
+          {
+            "binding": "JQUANTS_ACQUISITION",
+            "entrypoint": "IngestionSecretsService",
+            "service": "quant-platform-ingestion-secrets"
+          }
+        ],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "AUTHORITY_MODE": "PENDING",
+          "ENVIRONMENT": "production",
+          "RECEIPT_KEY_GENERATION": "1"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      },
+      "staging": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/receipt-evidence-authority/wrangler.staging.toml",
+        "crons": [],
+        "d1_databases": [
+          {
+            "binding": "DB",
+            "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
+            "database_name": "quant-ingest-staging"
+          }
+        ],
+        "durable_objects": [
+          {
+            "class_name": "ReceiptEvidenceAuthority",
+            "name": "RECEIPT_EVIDENCE_AUTHORITY_DO"
+          }
+        ],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [
+          {
+            "new_sqlite_classes": [
+              "ReceiptEvidenceAuthority"
+            ],
+            "tag": "v1"
+          }
+        ],
+        "name": "quant-platform-receipt-evidence-authority-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [
+          {
+            "binding": "AUTHORITY_EVIDENCE_BUCKET",
+            "bucket_name": "quant-receipt-evidence-staging"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "RECEIPT_KEY_WRAP_KEY"
+        ],
+        "services": [
+          {
+            "binding": "JQUANTS_ACQUISITION",
+            "entrypoint": "IngestionSecretsService",
+            "service": "quant-platform-ingestion-secrets-staging"
+          }
+        ],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "AUTHORITY_MODE": "PENDING",
+          "ENVIRONMENT": "staging",
+          "RECEIPT_KEY_GENERATION": "1"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      }
+    },
+    "research-ai-gateway": {
+      "base": {
+        "account_id": null,
+        "ai": {
+          "binding": "AI"
+        },
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/research-ai-gateway/wrangler.toml",
+        "crons": [],
+        "d1_databases": [],
+        "durable_objects": [
+          {
+            "class_name": "BudgetLedger",
+            "name": "BUDGET_LEDGER"
+          }
+        ],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [
+          {
+            "new_sqlite_classes": [
+              "BudgetLedger"
+            ],
+            "tag": "v1"
+          }
+        ],
+        "name": "quant-platform-research-ai-gateway",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "GATEWAY_TOKEN"
+        ],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {},
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      },
+      "production": {
+        "account_id": null,
+        "ai": {
+          "binding": "AI"
+        },
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/research-ai-gateway/wrangler.toml",
+        "crons": [],
+        "d1_databases": [],
+        "durable_objects": [
+          {
+            "class_name": "BudgetLedger",
+            "name": "BUDGET_LEDGER"
+          }
+        ],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [
+          {
+            "new_sqlite_classes": [
+              "BudgetLedger"
+            ],
+            "tag": "v1"
+          }
+        ],
+        "name": "quant-platform-research-ai-gateway",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "GATEWAY_TOKEN"
+        ],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {},
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      },
+      "staging": {
+        "account_id": null,
+        "ai": {
+          "binding": "AI"
+        },
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/research-ai-gateway/wrangler.staging.toml",
+        "crons": [],
+        "d1_databases": [],
+        "durable_objects": [
+          {
+            "class_name": "BudgetLedger",
+            "name": "BUDGET_LEDGER"
+          }
+        ],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [
+          {
+            "new_sqlite_classes": [
+              "BudgetLedger"
+            ],
+            "tag": "v1"
+          }
+        ],
+        "name": "quant-platform-research-ai-gateway-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [],
+        "services": [],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {},
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      }
+    },
+    "research-mass-eval": {
+      "base": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/research-mass-eval/wrangler.toml",
+        "crons": [],
+        "d1_databases": [],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-research-mass-eval",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "MASS_EVAL_TOKEN"
+        ],
+        "services": [
+          {
+            "binding": "AI_GATEWAY",
+            "entrypoint": "GatewayService",
+            "service": "quant-platform-research-ai-gateway"
+          }
+        ],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "CONTINUOUS_PAPER": "UNARMED",
+          "MASS_EVAL_VERSION": "research-mass-eval/v142-63-failclosed",
+          "MASS_EVAL_WAVE": "research-mass-eval",
+          "MASS_RESEARCH": "NO-GO",
+          "NETS_ONLY": "deny",
+          "OPERATIONAL_GO": "false",
+          "PHASE7": "OFF",
+          "READY_DECLARED": "false"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      },
+      "production": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/research-mass-eval/wrangler.toml",
+        "crons": [],
+        "d1_databases": [],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-research-mass-eval",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [
+          "MASS_EVAL_TOKEN"
+        ],
+        "services": [
+          {
+            "binding": "AI_GATEWAY",
+            "entrypoint": "GatewayService",
+            "service": "quant-platform-research-ai-gateway"
+          }
+        ],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "CONTINUOUS_PAPER": "UNARMED",
+          "MASS_EVAL_VERSION": "research-mass-eval/v142-63-failclosed",
+          "MASS_EVAL_WAVE": "research-mass-eval",
+          "MASS_RESEARCH": "NO-GO",
+          "NETS_ONLY": "deny",
+          "OPERATIONAL_GO": "false",
+          "PHASE7": "OFF",
+          "READY_DECLARED": "false"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      },
+      "staging": {
+        "account_id": null,
+        "ai": {},
+        "compatibility_date": "2026-08-01",
+        "compatibility_flags": [],
+        "config": "platform/workers/research-mass-eval/wrangler.staging.toml",
+        "crons": [],
+        "d1_databases": [],
+        "durable_objects": [],
+        "kv_namespaces": [],
+        "main": "src/index.ts",
+        "migrations": [],
+        "name": "quant-platform-research-mass-eval-staging",
+        "observability": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        },
+        "placement": {},
+        "preview_urls": false,
+        "queue_consumers": [],
+        "queue_producers": [],
+        "r2_buckets": [
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured-staging"
+          }
+        ],
+        "ratelimits": [],
+        "route": null,
+        "routes": [],
+        "secret_names": [],
+        "services": [
+          {
+            "binding": "AI_GATEWAY",
+            "entrypoint": "GatewayService",
+            "service": "quant-platform-research-ai-gateway-staging"
+          }
+        ],
+        "tail_consumers": [],
+        "toolchain": {
+          "@cloudflare/vitest-plugin": "1.0.0",
+          "@cloudflare/workers-types": "5.20260825.1",
+          "typescript": "5.9.2",
+          "vitest": "4.1.11",
+          "wrangler": "4.125.0"
+        },
+        "vars": {
+          "CONTINUOUS_PAPER": "UNARMED",
+          "MASS_EVAL_VERSION": "research-mass-eval/v142-63-failclosed",
+          "MASS_EVAL_WAVE": "research-mass-eval",
+          "MASS_RESEARCH": "NO-GO",
+          "NETS_ONLY": "deny",
+          "OPERATIONAL_GO": "false",
+          "PHASE7": "OFF",
+          "READY_DECLARED": "false"
+        },
+        "version_metadata": {
+          "binding": "CF_VERSION_METADATA"
+        },
+        "workers_dev": false
+      }
+    }
+  }
+}

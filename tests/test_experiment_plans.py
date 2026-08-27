@@ -1,4 +1,4 @@
-"""Exactly four typed ExperimentPlans. start() stays off. AND+N freeze holds."""
+"""Exactly four typed ExperimentPlans, independent of the replay catalog."""
 from __future__ import annotations
 
 import json
@@ -7,7 +7,11 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from research.artifacts import CORE_RESEARCH_DATA_PROFILE_ID, EXPERIMENT_PLAN_VERSION
+from research.artifacts import (
+    CORE_RESEARCH_DATA_PROFILE_ID,
+    EXPERIMENT_PLAN_VERSION,
+    ExperimentPlan,
+)
 from research.eval_flags import (
     CATALOG_AND_PLUS_N_STOPPED,
     EVENT_THREE_AND_PLUS_N_STOPPED,
@@ -21,31 +25,21 @@ from research.experiment_plans import (
     PILOT_PERIOD_END,
     PILOT_PERIOD_START,
     PILOT_PLAN_COUNT,
-    PILOT_READY_SNAPSHOT_ID,
     load_experiment_plan_schema,
     load_experiment_plans,
     start,
 )
-from research.freezes import FROZEN_PIN_SNAPSHOT
 from selection.budget_ledger import MassResearchDisabledError
 
 
 def test_typed_experiment_plans_are_exactly_four() -> None:
-    from research.catalog_active import active_logic_ids, pilot_candidates
-
     schema = load_experiment_plan_schema()
     plans = load_experiment_plans()
     assert len(plans) == PILOT_PLAN_COUNT == 4
     assert len(plans) == len(PILOT_EXPERIMENT_PLAN_IDS)
     assert tuple(p.plan_id for p in plans) == PILOT_EXPERIMENT_PLAN_IDS
     assert PILOT_EXECUTION_ENABLED is False
-    n_active = len(active_logic_ids())
-    assert n_active > 4
-    assert set(PILOT_EXPERIMENT_PLAN_IDS).isdisjoint(active_logic_ids())
-    assert len(pilot_candidates()) == PILOT_PLAN_COUNT == 4
-    assert len(pilot_candidates()) != n_active
-    assert pilot_candidates() == frozenset(p.strategy_spec_id for p in plans)
-    assert len(plans) != n_active
+    assert len({plan.strategy_spec_id for plan in plans}) == PILOT_PLAN_COUNT
     for plan in plans:
         payload = plan.to_dict()
         jsonschema.validate(payload, schema)
@@ -56,7 +50,8 @@ def test_typed_experiment_plans_are_exactly_four() -> None:
         assert plan.period_end == PILOT_PERIOD_END
         assert plan.cost_scenario == PILOT_COST_SCENARIO
         assert plan.evaluation_protocol == PILOT_EVALUATION_PROTOCOL
-        assert plan.ready_snapshot_id == PILOT_READY_SNAPSHOT_ID
+        assert not hasattr(plan, "ready_snapshot_id")
+        assert "ready_snapshot_id" not in payload
         assert plan.execution_enabled is False
         assert payload["execution_enabled"] is False
         assert plan.version == EXPERIMENT_PLAN_VERSION
@@ -77,6 +72,12 @@ def test_experiment_plan_schema_is_closed() -> None:
     armed["execution_enabled"] = True
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(armed, schema)
+    circular = plans[0].to_dict()
+    circular["ready_snapshot_id"] = "not-declared"
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(circular, schema)
+    with pytest.raises(ValueError, match="unknown field"):
+        ExperimentPlan.from_dict(circular)
 
 
 def test_start_still_raises_mass_research_disabled() -> None:
@@ -89,26 +90,19 @@ def test_start_still_raises_mass_research_disabled() -> None:
         pilot_start()
 
 
-def test_and_plus_n_freeze_still_true() -> None:
-    from research.occupancy_guards import assert_catalog_and_plus_n_stopped
-
+def test_pilot_freezes_stay_closed_without_loading_catalog_inventory() -> None:
     assert CATALOG_AND_PLUS_N_STOPPED is True
     assert EVENT_THREE_AND_PLUS_N_STOPPED is True
     assert RECONSTITUTION_APPLY is False
-    freeze = assert_catalog_and_plus_n_stopped()
-    assert freeze["ok"] is True
-    assert freeze["freeze"] == 2254
-    assert freeze["yaml_still_present"] is False
-    assert len(FROZEN_PIN_SNAPSHOT) == 3
     xs = next(p for p in load_experiment_plans() if p.plan_id == "exp-xs-hold10-mom5")
     assert xs.strategy_spec_id == "cross_section_hold_10"
-    assert xs.feature_refs[0]["params"]["n"] == 5
+    assert xs.feature_refs[0].params["n"] == 5
     fund = next(
         p for p in load_experiment_plans() if p.plan_id == "exp-fund-hold10-value-mom"
     )
     assert fund.strategy_spec_id == "fundamentals_hold_10"
-    mom = next(r for r in fund.feature_refs if r["id"] == "momentum_n")
-    assert mom["params"]["n"] == 10
+    mom = next(r for r in fund.feature_refs if r.id == "momentum_n")
+    assert mom.params["n"] == 10
 
 
 def test_on_disk_plan_files_match_shortlist() -> None:

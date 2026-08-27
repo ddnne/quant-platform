@@ -10,12 +10,16 @@ The publication state machine is:
 
 `BUILDING → SYNCED → VALIDATING → READY | REJECTED`
 
-`publish_ready_snapshot(staging_db, snapshot_dir, required_datasets=...)`
-runs the gate, copies SQLite with the backup API, embeds the READY manifest,
-checks SQLite integrity, changes the copy to mode `0444`, and atomically renames
-it to `sha256_<digest>.sqlite`. The immutable database and its manifest must
-both verify before `latest_ready_snapshot`, `describe_snapshot`, or
-`open_ready_snapshot` will return it. SQLite reads use
+The production entry is the exact-four plan-bound publisher. It accepts a
+signed Ops Projection document and has no caller-selected dataset membership,
+plan binding, fixture switch, or verifier override. It compiles the canonical
+four ExperimentPlans and their dependency closures, runs the gate, copies
+SQLite with the backup API, embeds the READY manifest, checks SQLite integrity,
+changes the copy to mode `0444`, and atomically renames it to
+`sha256_<digest>.sqlite`. Generic publication is private and test-only and
+cannot emit a production readiness capability. The immutable database and its
+manifest must both verify before `latest_ready_snapshot`, `describe_snapshot`,
+or `open_ready_snapshot` will return it. SQLite reads use
 `mode=ro&immutable=1`. `latest-ready.json` is only a replaceable pointer; it
 cannot make an incomplete artifact READY.
 
@@ -27,18 +31,24 @@ different generation.
 
 ## Publication gate
 
-Publication reuses the existing strict B0 scale gates, the Phase 3.5 daily
-validation matrix, and Coverage V2. Any hard validation failure or governed
-dataset whose required segment set is not completely backed by successful
-receipts rejects the build. The manifest records the snapshot id, canonical contract version,
-source run, D1 change sequence, coverage and quality policy versions, dataset
-watermarks, validation/coverage summaries, a bounded Coverage V2 proof digest,
-and commit time. Opening a READY artifact re-verifies that proof.
+Production publication is fail-closed for raw, trusted receipt, validation,
+natural-key migration, B0/B4, sync generation, applied cursor, and Coverage
+evidence. Missing tables or rows are UNKNOWN/FAIL, never fixture PASS. Any hard
+validation failure or dependency-closure dataset whose required segment set is
+not completely backed by current trusted receipts rejects the build.
+
+The manifest binds the profile id/version/digest, exact-four plan-set digest,
+dependency-closure digest, dataset membership digest, per-dataset Coverage
+policy-set digest, raw/receipt/validation/B0/B4 proof digests,
+source/export/applied cursor, immutable snapshot id/digest, and publication
+time. Opening a READY artifact rebuilds and re-verifies those bindings.
 
 ## Collection coverage policy
 
 `data_contracts/collection_coverage.json` is paired one-for-one with the
-governed J-Quants and JSDA dataset contracts. Its effective fields are:
+governed J-Quants and JSDA dataset contracts. Each dataset carries its own
+effective policy id/version/digest; a document-root version never relabels a
+legacy row as V3. Effective fields include:
 
 - `collection_scope`
 - `history_target_start`
@@ -52,20 +62,23 @@ governed J-Quants and JSDA dataset contracts. Its effective fields are:
 - `governance_tier` (`governed` or `experimental`)
 
 `coverage_segments` is the independent inventory of required collection units;
-`collection_receipts` records expected scope/items, observed items, raw page/row
-counts, structured row count, pagination exhaustion, digests, run, status,
-error, and checked time. `dataset_coverage` persists the resulting `COMPLETE`,
+`collection_receipts` records the issuer-derived expected scope/items,
+observed items, raw page/row counts, structured row count,
+pagination/discovery exhaustion, digests, run, status, error, and checked time.
+`dataset_coverage` persists the resulting `COMPLETE`,
 `PARTIAL`, `STALE`, `UNKNOWN`, or `FAILED` state. Observed min/max bounds remain
 diagnostics only.
 
 Calendar/trading/periodic datasets need every required segment. A missing
 middle segment is therefore `PARTIAL` even if early and late rows exist.
-Irregular disclosures use `event_reconciled` mode: a successful bounded window
-query with exhausted pagination, retained raw evidence, and a 0-to-0 structured
-reconciliation is COMPLETE; an unrelated old row is not. Non-event segments
-need an explicit expected item count.
+Irregular disclosures use `event_reconciled` mode: a complete bounded query
+set with exhausted pagination, retained raw evidence, and exact segment
+structured reconciliation may be COMPLETE. An unrelated old row, a partial
+window, a caller-provided expected-empty flag, or matching counts without
+matching natural-key sets is not proof. Non-event segments need an explicit
+issuer-derived expected item contract.
 
-The current policy deliberately makes Premium-core plus the governed JSDA
-bond-reference, Tokyo Repo Rate, and corporate-bond transaction datasets
-`governed`. Phase 7 may add experimental datasets, but an explicit tier is
-required and no experimental series is silently promoted into governed research.
+Pilot publication scopes this proof to the exact plan dependency closure.
+Global Ops may remain PARTIAL for an unrelated dataset without hiding it or
+turning it into Pilot proof. Mass requires a separate explicit Mass profile and
+remains disabled.

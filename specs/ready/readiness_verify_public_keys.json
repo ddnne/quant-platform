@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "purpose": "readiness_attestation_verification",
+  "environment": "production",
+  "authority_instance_id": "ready-authority/production/v1",
+  "keys": [
+    {
+      "key_id": "readiness-20260825-v1",
+      "algorithm": "Ed25519",
+      "public_key_b64": "ZOse2JOo725wYTZbey1wcqnwjfGAPbs/BfddkY/8Pdg=",
+      "status": "revoked"
+    }
+  ]
+}

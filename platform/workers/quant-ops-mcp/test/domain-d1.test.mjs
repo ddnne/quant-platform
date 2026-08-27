@@ -1,19 +1,24 @@
 import assert from "node:assert/strict";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import test from "node:test";
-
+import test, { mock } from "node:test";
+import { classifyRawAcquisition, honestProjectionStatus, syncDatasetState } from "../src/domain_policy.js";
 import {
-  callOpsTool,
-  OPS_TOOLS,
-} from "../src/domain.js";
+  PROJECTED_CONTENT_TABLES,
+  projectedManifestDigest,
+  projectedTableContent,
+} from "../src/projection_content.js";
 import {
-  classifyRawAcquisition,
-  honestProjectionStatus,
-  JSDA_UPSTREAM_LOCATORS,
-  syncDatasetState,
-} from "../src/domain_policy.js";
-import { GOVERNED_DATASETS } from "../src/governed.js";
+  canonicalProjectionBytes,
+  PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST,
+  PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST,
+  PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST,
+  PINNED_OPS_PROJECTION_REGISTRY_GENERATION,
+  projectionSha256,
+} from "../src/projection_signature.js";
+import * as projectionSignature from "../src/projection_signature.js";
+import { makeTestProjectionVerifier } from "./support/projection_signature.js";
 import { DurableDailyQuota, QuotaExceeded } from "../src/quota.js";
 
 function d1(db) {
@@ -34,205 +39,882 @@ function d1(db) {
 }
 
 const projectionMigration = readFileSync(
-  new URL("../migrations/0002_ops_projection.sql", import.meta.url), "utf8",
-);
-const inventoryMigration = readFileSync(
-  new URL("../migrations/0003_endpoint_inventory_sla.sql", import.meta.url), "utf8",
-);
-const generationMigration = readFileSync(
-  new URL("../migrations/0004_projection_generation.sql", import.meta.url), "utf8",
-);
-const appliedPinsMigration = readFileSync(
-  new URL("../migrations/0007_ops_applied_pins.sql", import.meta.url), "utf8",
+  new URL("../migrations/projection/0001_ops_projection.sql", import.meta.url),
+  "utf8",
+) + readFileSync(
+  new URL("../migrations/projection/0002_receipt_product_materializations.sql", import.meta.url),
+  "utf8",
 );
 const quotaMigration = readFileSync(
-  new URL("../migrations/0001_remote_daily_quota.sql", import.meta.url), "utf8",
+  new URL("../migrations/quota/0001_remote_daily_quota.sql", import.meta.url),
+  "utf8",
 );
-const ingestionMigrations = [
-  "0001_init.sql", "0002_watermarks.sql", "0003_change_feed.sql",
-  "0004_revision_identity_v2.sql", "0005_natural_keys_v2.sql",
-  "0006_raw_retention_manifests.sql", "0007_collection_coverage_v2.sql",
-  "0010_raw_acquisition_status.sql",
-].map((name) => readFileSync(
-  new URL(`../../ingestion-premium/migrations/${name}`, import.meta.url), "utf8",
-));
 
-test("coverage tool descriptions report stored policy_version not frozen Coverage V2", () => {
-  const byName = Object.fromEntries(OPS_TOOLS.map((tool) => [tool.name, tool.description]));
-  for (const name of ["dataset_coverage", "coverage_gaps", "coverage_segments"]) {
-    assert.match(byName[name], /Coverage projection \(policy_version as stored on the generation\)/);
-    assert.doesNotMatch(byName[name], /Coverage V2/);
+const projectionKeyPair = generateKeyPairSync("ed25519");
+const projectionKeyId = "ops-projection-test-v1";
+const projectionPublicJwk = projectionKeyPair.publicKey.export({ format: "jwk" });
+const projectionPublicRaw = Buffer.from(String(projectionPublicJwk.x), "base64url").toString("base64");
+const projectionRegistryBody = {
+  schema_version: 2,
+  purpose: "ops_projection_verification",
+  generation: 1,
+  authority_status: "ACTIVE",
+  prior_registry_digest: null,
+  keys: [{
+    key_id: projectionKeyId,
+    algorithm: "Ed25519",
+    status: "active",
+    public_key_base64: projectionPublicRaw,
+  }],
+};
+const projectionRegistry = {
+  ...projectionRegistryBody,
+  registry_digest: "sha256:" + createHash("sha256")
+    .update(canonicalProjectionBytes(projectionRegistryBody))
+    .digest("hex"),
+};
+
+let testProjectionVerifier = null;
+mock.module("../src/projection_signature.js", {
+  exports: {
+    ...projectionSignature,
+    verifyPinnedProjectionGeneration(generation) {
+      return testProjectionVerifier
+        ? testProjectionVerifier(generation)
+        : projectionSignature.verifyPinnedProjectionGeneration(generation);
+    },
+  },
+});
+const { callOpsTool, OPS_TOOLS } = await import("../src/domain.js");
+
+test("production projection verifier root is purpose-bound and digest-pinned", async () => {
+  const pinned = JSON.parse(readFileSync(
+    new URL("../../../../specs/ops_projection/verify_public_keys.json", import.meta.url),
+    "utf8",
+  ));
+  assert.equal(pinned.purpose, "ops_projection_verification");
+  assert.equal(pinned.authority_status, "PENDING");
+  assert.equal(pinned.generation, PINNED_OPS_PROJECTION_REGISTRY_GENERATION);
+  assert.equal(
+    pinned.prior_registry_digest,
+    PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST,
+  );
+  assert.equal(pinned.registry_digest, PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST);
+  assert.equal(pinned.keys.filter((row) => row.status === "active").length, 0);
+  assert.equal(pinned.keys[0].status, "revoked");
+  assert.equal(await projectionSha256(pinned), PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST);
+  const body = Object.fromEntries(
+    Object.entries(pinned).filter(([key]) => key !== "registry_digest"),
+  );
+  assert.equal(await projectionSha256(body), PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST);
+  assert.equal("parseProjectionKeyRegistry" in projectionSignature, false);
+  assert.equal("verifyProjectionGeneration" in projectionSignature, false);
+  assert.equal("loadPinnedProjectionKeyRegistry" in projectionSignature, false);
+
+  const audit = JSON.parse(readFileSync(
+    new URL("../../../../specs/ops_projection/verify_public_keys.generation-1.json", import.meta.url),
+    "utf8",
+  ));
+  assert.equal(audit.purpose, "ops_projection_registry_audit");
+  assert.equal(audit.authority_status, "REVOKED");
+  assert.equal(await projectionSha256(audit), PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST);
+});
+
+function signedGeneration(
+  generation,
+  now,
+  contentManifest,
+  contentDigest,
+  cursorIdentity = {},
+) {
+  const digest = (character) => `sha256:${character.repeat(64)}`;
+  const envelope = {
+    schema_version: "ops-projection-envelope/v1",
+    generation_id: generation,
+    content_digest: contentDigest,
+    source_db_digest: digest("2"),
+    generated_at: now,
+    producer_commit_sha: "a".repeat(40),
+    contract_digest: digest("3"),
+    registry_digest: digest("4"),
+    coverage_policy_version: "collection-coverage/v3",
+    coverage_policy_digest: digest("8"),
+    projection_status: cursorIdentity.status ?? "FRESH",
+    source_generation: cursorIdentity.source === undefined ? 10 : cursorIdentity.source,
+    source_snapshot_generation: cursorIdentity.snapshot === undefined
+      ? now
+      : cursorIdentity.snapshot,
+    source_cursor: cursorIdentity.source === undefined ? 10 : cursorIdentity.source,
+    export_cursor: cursorIdentity.exported === undefined
+      ? 10
+      : cursorIdentity.exported,
+    applied_cursor: cursorIdentity.applied === undefined
+      ? 10
+      : cursorIdentity.applied,
+    coverage_status_digest: digest("5"),
+    dataset_coverage: {},
+    b0_status: "UNKNOWN",
+    b0_evidence_digest: digest("6"),
+    b4_status: "UNKNOWN",
+    b4_evidence_digest: digest("7"),
+    evidence_digests: { coverage: digest("5") },
+    content_manifest: contentManifest,
+    row_counts: Object.fromEntries(
+      Object.entries(contentManifest).map(([table, row]) => [table, row.row_count]),
+    ),
+  };
+  const body = {
+    schema_version: "ops-projection-signed-envelope/v1",
+    algorithm: "Ed25519",
+    issuer_key_id: projectionKeyId,
+    envelope,
+  };
+  const signature = "ed25519:" + sign(
+    null,
+    Buffer.from(canonicalProjectionBytes(body)),
+    projectionKeyPair.privateKey,
+  ).toString("base64");
+  return { envelope, document: { ...body, signature }, signature };
+}
+
+async function opsCall(db, name, args) {
+  testProjectionVerifier = makeTestProjectionVerifier(projectionRegistry);
+  try {
+    return await callOpsTool(d1(db), name, args);
+  } finally {
+    testProjectionVerifier = null;
   }
-});
+}
 
-test("tool descriptions do not freeze Coverage V2 aggregate", () => {
-  // Live catalog still uses that phrase; echo stored policy_version. Not V3.
-  for (const tool of OPS_TOOLS) {
-    assert.doesNotMatch(tool.description, /Coverage V2 aggregate/);
-    assert.doesNotMatch(tool.description, /Coverage V2/);
-  }
-});
-
-test("absent Coverage projection is UNKNOWN with all JQ and JSDA gaps", async () => {
-  const db = new DatabaseSync(":memory:");
-  const result = await callOpsTool(d1(db), "coverage_gaps", {});
-  assert.equal(result.status, "UNKNOWN");
-  assert.equal(result.gaps.length, GOVERNED_DATASETS.length);
-  assert.ok(result.gaps.some((row) => row.dataset === "jsda_otc_bond_reference_prices"));
-  assert.ok(result.gaps.some((row) => row.dataset === "jsda_tokyo_repo_rates"));
-  assert.ok(result.gaps.some((row) => row.dataset === "jsda_corporate_bond_transactions"));
-  assert.ok(result.gaps.every((row) =>
-    row.reason === "Coverage projection has not been populated"));
-  const coverage = await callOpsTool(d1(db), "dataset_coverage", {
-    dataset: "jsda_otc_bond_reference_prices",
-  });
-  assert.equal(coverage.status, "UNKNOWN");
-  assert.equal(coverage.reason, "Coverage projection has not been populated");
-  assert.doesNotMatch(coverage.reason, /Coverage V2/);
-  const segments = await callOpsTool(d1(db), "coverage_segments", {
-    dataset: "jsda_otc_bond_reference_prices",
-  });
-  assert.equal(segments.status, "UNKNOWN");
-  assert.equal(segments.reason, "Coverage projection has not been populated");
-  const endpoint = await callOpsTool(d1(db), "endpoint_status", {
-    dataset: "jsda_otc_bond_reference_prices",
-  });
-  assert.equal(endpoint.coverage.status, "UNKNOWN");
-  assert.equal(endpoint.coverage.reason, "Coverage projection has not been populated");
-  db.close();
-});
-
-test("real projection schema exposes bounded JSDA Coverage and READY metadata", async () => {
+function projectionDb() {
   const db = new DatabaseSync(":memory:");
   db.exec(projectionMigration);
+  return db;
+}
+
+async function seedGeneration(
+  db,
+  generation,
+  {
+    active = true,
+    status = "FRESH",
+    populate = null,
+    sync = {},
+    jsdaWatermark = true,
+    envelopeSync = null,
+    signing = true,
+    afterManifest = null,
+    documentTransform = null,
+    contentDigestOverride = null,
+  } = {},
+) {
+  const now = new Date().toISOString();
+  const syncIdentity = {
+    source: sync.source === undefined ? 10 : sync.source,
+    exported: sync.exported === undefined ? 10 : sync.exported,
+    applied: sync.applied === undefined ? 10 : sync.applied,
+    snapshot: now,
+  };
+  db.prepare(`INSERT INTO ops_projection_generation
+    (generation_id,status,source_db_digest,content_digest,generated_at,
+     producer_commit_sha,contract_digest,registry_digest,coverage_policy_version,
+     sealed_at,signed_envelope_json,issuer_key_id,signature,detail_json)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      generation, "OPEN", `sha256:${"0".repeat(64)}`,
+      `sha256:${"0".repeat(64)}`, now, "a".repeat(40),
+      `sha256:${"0".repeat(64)}`, `sha256:${"0".repeat(64)}`,
+      "collection-coverage/v3", null, null, null, null, "{}",
+    );
+  db.prepare(`INSERT INTO ops_projection_metadata
+    (projection_generation_id,generated_at,source_generation,source_cursor,
+     export_cursor,applied_cursor,age_seconds,status,projection_version,
+     refresh_attempt_at,refresh_success_at,refresh_error,detail_json)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      generation, now, now, syncIdentity.source, syncIdentity.exported,
+      syncIdentity.applied, 0, status, "ops_projection/v4",
+      now, status === "FRESH" ? now : null, null,
+      JSON.stringify({ refresh_status: status === "FRESH" ? "success" : "failed" }),
+    );
+  db.prepare(`INSERT INTO ops_ready_state
+    (projection_generation_id,status,snapshot_id,reason,evaluated_at)
+    VALUES (?, 'NOT_READY', NULL, 'not published', ?)`).run(generation, now);
+  db.prepare(`INSERT INTO ops_b0_status
+    (projection_generation_id,singleton,status,policy_version,evaluated_at,
+     summary_json,results_json,source_build_id)
+    VALUES (?,1,'UNKNOWN','not-projected',?,'{}','[]','not-projected')`).run(generation, now);
+  db.prepare(`INSERT INTO ops_sync_feed
+    (projection_generation_id,feed,latest_source_change_seq,change_log_row_count,
+     exported_cursor,applied_cursor,updated_at)
+    VALUES (?,'jquants_records',?,?,?,?,?)`).run(
+      generation,
+      syncIdentity.source,
+      sync.changeLogRows === undefined ? 1 : sync.changeLogRows,
+      syncIdentity.exported,
+      syncIdentity.applied,
+      now,
+    );
+  if (jsdaWatermark) {
+    db.prepare(`INSERT INTO ingestion_watermarks
+      (projection_generation_id,dataset,last_event_date,last_ingested_at,last_export_cursor)
+      VALUES (?,?,?,?,?)`).run(
+        generation, "jsda_otc_bond_reference_prices", "2026-08-25", now,
+        syncIdentity.exported,
+      );
+  }
+  db.prepare(`INSERT INTO ops_storage_plane_status
+    (projection_generation_id,materialized_at,payload_json) VALUES (?,?,?)`).run(
+      generation, now,
+      JSON.stringify({ schema: "ops_storage_plane_status/v1", counts: { facts: 12 } }),
+    );
+  if (populate) populate(db, generation, now);
+
+  const contentManifest = {};
+  for (const table of PROJECTED_CONTENT_TABLES) {
+    contentManifest[table] = await projectedTableContent(d1(db), generation, table);
+  }
+  const contentDigest = await projectedManifestDigest(contentManifest);
+  if (afterManifest) afterManifest(db, generation, now);
+  const signed = signedGeneration(
+    generation,
+    now,
+    contentManifest,
+    contentDigestOverride || contentDigest,
+    { ...syncIdentity, status, ...(envelopeSync || {}) },
+  );
+  const storedDocument = documentTransform
+    ? documentTransform(structuredClone(signed.document))
+    : signed.document;
+  db.prepare(`UPDATE ops_projection_generation
+    SET source_db_digest=?,content_digest=?,producer_commit_sha=?,contract_digest=?,
+        registry_digest=?,coverage_policy_version=?,signed_envelope_json=?,
+        issuer_key_id=?,signature=?
+    WHERE generation_id=? AND status='OPEN'`).run(
+      signed.envelope.source_db_digest, signed.envelope.content_digest,
+      signed.envelope.producer_commit_sha, signed.envelope.contract_digest,
+      signed.envelope.registry_digest, signed.envelope.coverage_policy_version,
+      signing ? JSON.stringify(storedDocument) : null,
+      signing ? projectionKeyId : null,
+      signing ? signed.signature : null,
+      generation,
+    );
+  db.prepare(`UPDATE ops_projection_generation SET status='SEALED',sealed_at=?
+    WHERE generation_id=? AND status='OPEN'`).run(now, generation);
+  if (active) {
+    db.prepare(`INSERT INTO ops_projection_active
+      (singleton,generation_id,activated_at) VALUES (1,?,?)
+      ON CONFLICT(singleton) DO UPDATE SET
+        generation_id=excluded.generation_id,activated_at=excluded.activated_at`).run(
+          generation, now,
+        );
+  }
+}
+
+function insertCoverage(db, generation, dataset, status = "PARTIAL") {
   db.prepare(`INSERT INTO dataset_coverage
-    (dataset,status,policy_version,collection_scope,history_target_start,
-     history_target_end_rule,coverage_mode,expected_frequency,universe_rule,
-     raw_retention_required,structured_reconciliation_required,governance_tier,
-     observed_start,observed_end,row_count,source_run_id,evaluated_at,detail_json)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      "jsda_otc_bond_reference_prices", "PARTIAL", "collection-coverage/v2",
-      "jsda", "2002-08-02", "current", "official_archive_index_reconciled",
+    (projection_generation_id,dataset,status,policy_version,collection_scope,
+     history_target_start,history_target_end_rule,coverage_mode,
+     expected_frequency,universe_rule,raw_retention_required,
+     structured_reconciliation_required,governance_tier,observed_start,
+     observed_end,row_count,source_run_id,evaluated_at,detail_json)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      generation, dataset, status, "collection-coverage/v3", "jsda",
+      "2002-08-02", "current", "official_archive_index_reconciled",
       "official_archive_day", "official_index", 1, 1, "governed",
-      "2002-08-02", "2002-08-02", 1, 7, "2026-08-11T00:00:00Z", "{}",
+      "2002-08-02", "2026-08-22", 5886, 7, new Date().toISOString(), "{}",
     );
-  db.prepare(`INSERT INTO coverage_segments
-    (source,dataset,segment_id,policy_version,segment_start,segment_end,
-     expected_scope,expected_items,status,receipt_run_id,evaluated_at,detail_json)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      "jsda", "jsda_otc_bond_reference_prices", "2002-08", "collection-coverage/v2",
-      "2002-08-02", "2002-08-30", "{}", 1, "PARTIAL", 7,
-      "2026-08-11T00:00:00Z", "{}",
-    );
-  const snapshotId = "sha256:" + "a".repeat(64);
-  db.prepare(`INSERT INTO ops_ready_snapshots
-    VALUES (?,?,?,?,?,?,?,?)`).run(
-      snapshotId, "READY", "2026-08-11T00:00:00Z", 7, 42,
-      "collection-coverage/v2", "b0+coverage/v2", "sha256:" + "b".repeat(64),
-    );
-  db.prepare(`INSERT INTO ops_snapshot_quality VALUES (?,?,?,?,?)`).run(
-    snapshotId, "PASS", "b0+coverage/v2", "2026-08-11T00:00:00Z", "{}",
-  );
-  db.prepare(`INSERT INTO ops_b0_status VALUES (?,?,?,?,?,?)`).run(
-    1, "PASS", "b0+coverage/v2", "2026-08-11T00:00:00Z", "{}", "build-1",
-  );
+}
 
-  const coverage = await callOpsTool(d1(db), "dataset_coverage", {
+test("the public surface remains exactly seventeen read-only tools", () => {
+  const names = OPS_TOOLS.map((tool) => tool.name);
+  assert.equal(names.length, 17);
+  assert.ok(names.includes("storage_plane_status"));
+  for (const name of ["ingest", "publish", "delete", "sql", "query_dataset"]) {
+    assert.ok(!names.includes(name));
+  }
+});
+
+test("content hashing matches Python for D1 numbers and non-ASCII text", async () => {
+  const digest = await projectionSha256({
+    rows: [{
+      projection_generation_id: "g",
+      dataset_id: "日本株",
+      research_eligible: 1,
+      enabled: 0,
+      weight: 1,
+      note: "東京",
+    }],
+  });
+  assert.equal(
+    digest,
+    "sha256:76195ac60aedf9a62db147dd1c8914282617553423c5d0fb918627447aac7d61",
+  );
+});
+
+test("all seventeen tool results stay inside their closed output schema", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-output-contract");
+  const argsByName = {
+    endpoint_status: { dataset: "equities_bars_daily" },
+    dataset_coverage: { dataset: "equities_bars_daily" },
+  };
+  for (const tool of OPS_TOOLS) {
+    const value = await opsCall(db, tool.name, argsByName[tool.name] || {});
+    const allowed = new Set(Object.keys(tool.outputSchema.properties));
+    assert.deepEqual(
+      Object.keys(value).filter((key) => !allowed.has(key)),
+      [],
+      tool.name,
+    );
+    for (const required of tool.outputSchema.required) {
+      assert.ok(Object.hasOwn(value, required), `${tool.name}.${required}`);
+    }
+  }
+  db.close();
+});
+
+test("no active generation is explicit NOT_PROJECTED", async () => {
+  const db = projectionDb();
+  for (const [name, args] of [
+    ["ops_status", {}],
+    ["dataset_coverage", { dataset: "jsda_otc_bond_reference_prices" }],
+    ["coverage_segments", {}],
+    ["storage_plane_status", {}],
+    ["sync_status", {}],
+    ["latest_ready_snapshot", {}],
+  ]) {
+    const result = await opsCall(db, name, args);
+    assert.equal(result.status, "NOT_PROJECTED", name);
+    assert.equal(result.projection_generation, null, name);
+    assert.equal(typeof result.reason, "string", name);
+  }
+  db.close();
+});
+
+test("a sealed generation cannot be read without the active pointer", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-staging", {
+    active: false,
+    populate: (target, generation) => insertCoverage(
+      target, generation, "jsda_otc_bond_reference_prices", "COMPLETE",
+    ),
+  });
+  const result = await opsCall(db, "dataset_coverage", {
     dataset: "jsda_otc_bond_reference_prices",
   });
-  assert.equal(coverage.status, "UNKNOWN");
-  assert.equal(coverage.coverage, null);
-  assert.equal(coverage.last_known_good.status, "PARTIAL");
-  // Live projection remains collection-coverage/v2 (STALE). Do not pretend V3 is published.
-  assert.equal(coverage.last_known_good.policy_version, "collection-coverage/v2");
-  assert.match(coverage.reason, /policy_version collection-coverage\/v2/);
-  assert.doesNotMatch(coverage.reason, /Coverage V2/);
-  const segments = await callOpsTool(d1(db), "coverage_segments", {
-    dataset: "jsda_otc_bond_reference_prices", limit: 200,
-  });
-  assert.equal(segments.segments.length, 1);
-  assert.equal(segments.segments[0].policy_version, "collection-coverage/v2");
-  const quality = await callOpsTool(d1(db), "snapshot_quality", { snapshot_id: snapshotId });
-  assert.equal(quality.quality.status, "PASS");
-  const b0 = await callOpsTool(d1(db), "b0_status", {});
-  assert.equal(b0.status, "PASS");
+  assert.equal(result.status, "NOT_PROJECTED");
   db.close();
 });
 
-test("durable quota migration enforces the conditional upsert on real SQLite", async () => {
-  const db = new DatabaseSync(":memory:");
-  db.exec(quotaMigration);
-  const quota = new DurableDailyQuota(d1(db), 2);
-  const principal = { subject: "human:alice", clientId: "grant-1" };
-  assert.equal((await quota.charge(principal, 2, Date.parse("2026-08-11T12:00:00Z"))).used, 2);
-  await assert.rejects(
-    quota.charge(principal, 1, Date.parse("2026-08-11T12:01:00Z")),
-    QuotaExceeded,
+test("production ignores a caller registry and unsigned generations fail closed", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-untrusted");
+  let result = await callOpsTool(d1(db), "ops_status", {}, {
+    projectionPublicKeyRegistry: projectionRegistry,
+  });
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.equal(result.projection_generation, "projgen-untrusted");
+  assert.match(result.reason, /issuer is not trusted/);
+  await seedGeneration(db, "projgen-unsigned", { signing: false });
+  result = await opsCall(db, "ops_status", {});
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.match(result.reason, /generation is unsigned/);
+  db.close();
+});
+
+test("a tampered signed envelope is NOT_PROJECTED", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-tampered", {
+    documentTransform(document) {
+      document.envelope.applied_cursor = 9;
+      return document;
+    },
+  });
+  const result = await opsCall(db, "sync_status", {});
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.match(result.reason, /signature is invalid/);
+  db.close();
+});
+
+test("signature-valid manifest with the wrong overall digest is NOT_PROJECTED", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-manifest-unbound", {
+    contentDigestOverride: `sha256:${"e".repeat(64)}`,
+  });
+  const result = await opsCall(db, "storage_plane_status", {});
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.equal(result.projection_signature_verified, true);
+  assert.equal(result.required_content_verified, false);
+  assert.match(result.reason, /content digest does not bind its manifest/);
+  db.close();
+});
+
+test("signature-valid payload tampering is detected by table rehash", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-content-tampered", {
+    afterManifest(target, generation) {
+      target.prepare(`UPDATE ops_storage_plane_status
+        SET payload_json='{"counts":{"facts":999}}'
+        WHERE projection_generation_id=?`).run(generation);
+    },
+  });
+  const result = await opsCall(db, "storage_plane_status", {});
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.equal(result.projection_signature_verified, true);
+  assert.equal(result.required_content_verified, false);
+  assert.match(result.reason, /content mismatch for ops_storage_plane_status/);
+  db.close();
+});
+
+test("validation rehash binds its exact ingestion run after manifest creation", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-validation-run-tampered", {
+    populate(target, generation, now) {
+      target.prepare(`INSERT INTO ingestion_run_log
+        (projection_generation_id,id,ran_at,source,runtime,status,detail)
+        VALUES (?,?,?,?,?,?,?)`).run(
+        generation, 9, now, "jsda", "queue", "pass", "{}",
+      );
+      target.prepare(`INSERT INTO ingestion_validation
+        (projection_generation_id,run_id,dataset,status,rows_seen,rows_inserted,
+         rows_revisions,detail) VALUES (?,?,?,?,?,?,?,?)`).run(
+        generation, 9, "jsda_otc_bond_reference_prices", "pass", 1, 1, 0, "{}",
+      );
+    },
+    afterManifest(target, generation) {
+      target.prepare(`UPDATE ingestion_run_log SET source='jquants'
+        WHERE projection_generation_id=? AND id=9`).run(generation);
+    },
+  });
+  const result = await opsCall(db, "validation_summary", {});
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.equal(result.projection_signature_verified, true);
+  assert.equal(result.required_content_verified, false);
+  assert.match(result.reason, /content mismatch for ingestion_run_log/);
+  db.close();
+});
+
+test("OPEN publication seals pointer-last and freezes every payload table", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-frozen");
+  const generation = db.prepare(`SELECT status,sealed_at,signed_envelope_json
+    FROM ops_projection_generation WHERE generation_id='projgen-frozen'`).get();
+  assert.equal(generation.status, "SEALED");
+  assert.equal(typeof generation.sealed_at, "string");
+  const envelope = JSON.parse(generation.signed_envelope_json).envelope;
+  assert.equal(
+    envelope.content_manifest.ops_projection_metadata.row_count,
+    1,
+    "metadata participates in the non-recursive content manifest",
+  );
+  assert.deepEqual(
+    Object.keys(envelope.content_manifest).sort(),
+    [...PROJECTED_CONTENT_TABLES],
+  );
+  const triggers = new Set(
+    db.prepare(`SELECT name FROM sqlite_master WHERE type='trigger'`).all()
+      .map((row) => row.name),
+  );
+  for (const table of PROJECTED_CONTENT_TABLES) {
+    for (const operation of ["insert", "update", "delete"]) {
+      assert.ok(triggers.has(`${table}_open_${operation}`), `${table} ${operation}`);
+    }
+    assert.throws(
+      () => db.prepare(`INSERT INTO ${table} (projection_generation_id) VALUES (?)`)
+        .run("projgen-frozen"),
+      /require an OPEN projection generation/,
+      `${table} sealed insert`,
+    );
+  }
+  assert.throws(
+    () => db.prepare(`UPDATE ops_storage_plane_status SET payload_json='{}'
+      WHERE projection_generation_id='projgen-frozen'`).run(),
+    /immutable after projection seal/,
+  );
+  assert.throws(
+    () => db.prepare(`DELETE FROM ops_storage_plane_status
+      WHERE projection_generation_id='projgen-frozen'`).run(),
+    /immutable after projection seal/,
+  );
+  assert.throws(
+    () => db.prepare(`UPDATE ops_projection_generation SET content_digest=?
+      WHERE generation_id='projgen-frozen'`).run(`sha256:${"f".repeat(64)}`),
+    /sealed Ops Projection generation is immutable/,
   );
   db.close();
 });
 
-test("Ops queries run against the complete ingestion D1 migration sequence", async () => {
-  const db = new DatabaseSync(":memory:");
-  for (const migration of ingestionMigrations) db.exec(migration);
-  db.exec(projectionMigration);
-  db.exec(quotaMigration);
-  db.prepare(`INSERT INTO ingestion_run_log
-    (ran_at,source,runtime,status,detail) VALUES (?,?,?,?,?)`).run(
-      "2026-08-11T00:00:00Z", "jquants", "worker", "pass", "{}",
-    );
-  const runId = Number(db.prepare("SELECT MAX(id) AS id FROM ingestion_run_log").get().id);
-  db.prepare(`INSERT INTO ingestion_validation
-    (run_id,dataset,started_at,finished_at,status,rows_seen,rows_inserted,
-     rows_revisions,available_at_min,available_at_max,detail)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
-      runId, "equities_bars_daily", "2026-08-11T00:00:00Z",
-      "2026-08-11T00:01:00Z", "pass", 1, 1, 0,
-      "2026-08-10T06:30:00Z", "2026-08-10T06:30:00Z", "{}",
-    );
-  db.prepare(`INSERT INTO ingestion_watermarks
-    (dataset,last_event_date,last_ingested_at,last_export_cursor)
-    VALUES (?,?,?,?)`).run(
-      "equities_bars_daily", "2026-08-10", "2026-08-11T00:00:00Z", 7,
-    );
-  db.prepare(`INSERT INTO raw_retention_manifests
-    (dataset,run_id,manifest_key,page_count,row_count,raw_bytes,data_digest,
-     completeness,created_at) VALUES (?,?,?,?,?,?,?,?,?)`).run(
-      "equities_bars_daily", runId, "raw/jq/manifest.json", 1, 1, 10,
-      "sha256:test", "COMPLETE", "2026-08-11T00:00:00Z",
-    );
+test("only the pointer-selected generation is visible", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-old", {
+    populate: (target, generation) => insertCoverage(
+      target, generation, "jsda_otc_bond_reference_prices", "COMPLETE",
+    ),
+  });
+  await seedGeneration(db, "projgen-current", {
+    populate: (target, generation) => insertCoverage(
+      target, generation, "jsda_otc_bond_reference_prices", "PARTIAL",
+    ),
+  });
+  const coverage = await opsCall(db, "dataset_coverage", {
+    dataset: "jsda_otc_bond_reference_prices",
+  });
+  assert.equal(coverage.status, "PARTIAL");
+  assert.equal(coverage.projection_generation, "projgen-current");
+  assert.equal(coverage.coverage.policy_version, "collection-coverage/v3");
+  db.close();
+});
 
-  const validation = await callOpsTool(d1(db), "validation_summary", {});
-  assert.equal(validation.status, "PASS");
-  const raw = await callOpsTool(d1(db), "raw_retention_status", {
+test("a missing active Coverage row never falls back to an older generation", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-old", {
+    populate: (target, generation) => insertCoverage(
+      target, generation, "jsda_otc_bond_reference_prices", "COMPLETE",
+    ),
+  });
+  await seedGeneration(db, "projgen-current");
+  const result = await opsCall(db, "dataset_coverage", {
+    dataset: "jsda_otc_bond_reference_prices",
+  });
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.equal(result.coverage, null);
+  assert.equal(result.projection_generation, "projgen-current");
+  assert.equal(Object.hasOwn(result, "last_known_good"), false);
+  db.close();
+});
+
+test("raw status exposes one current acquisition row and no historical attempts", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-raw", {
+    populate(target, generation, now) {
+      target.prepare(`INSERT INTO raw_retention_manifests
+        (projection_generation_id,source,dataset,segment_id,run_id,manifest_key,page_count,
+         row_count,raw_bytes,data_digest,completeness,created_at,reason)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+          generation, "jquants", "equities_bars_daily", "2026-08", 2, "raw/latest", 1,
+          4, 40, "sha256:latest", "ACQUIRED", now,
+          "latest operational raw acquisition receipt",
+        );
+    },
+  });
+  const result = await opsCall(db, "raw_retention_status", {
     dataset: "equities_bars_daily",
   });
-  assert.equal(raw.attestations.length, 1);
-  const sync = await callOpsTool(d1(db), "sync_status", {});
-  assert.equal(sync.watermarks.length, 1);
-  assert.equal(sync.latest_change_seq, null);
-  assert.equal(raw.totals.total, 1);
-  assert.equal(raw.totals.acquired, 1);
-  assert.equal(raw.totals.complete, undefined);
-  assert.equal(raw.attestations[0].acquisition_state, "EXPECTED_AND_CAPTURED");
-  assert.equal(raw.attestations[0].completeness, "COMPLETE");
-  assert.match(raw.note, /not dataset Coverage COMPLETE/);
-  const ops = await callOpsTool(d1(db), "ops_status", {});
-  assert.equal(ops.raw_retention.manifests, 1);
-  assert.equal(ops.raw_retention.acquired, 1);
-  // deprecated alias of acquired; not a Dataset COMPLETE count
-  assert.equal(ops.raw_retention.complete, ops.raw_retention.acquired);
+  assert.equal(result.status, "AVAILABLE");
+  assert.equal(result.totals.total_segments, 1);
+  assert.equal(result.totals.acquired_segments, 1);
+  assert.equal(result.attestations[0].run_id, 2);
+  assert.equal(result.attestations[0].source, "jquants");
+  assert.equal(result.attestations[0].acquisition_state, "EXPECTED_AND_CAPTURED");
+  assert.match(result.note, /not TrustedReceipt.*READY.*D2\/D3 closure/);
+  const summary = await opsCall(db, "ops_status", {});
+  assert.equal(summary.raw_retention.current_acquisition_segments, 1);
+  assert.equal(
+    summary.raw_retention.authoritative_segments,
+    summary.raw_retention.current_acquisition_segments,
+  );
+  assert.match(
+    summary.research_note,
+    /authoritative_segments is a deprecated compatibility alias.*neither proves TrustedReceipt.*Coverage COMPLETE.*READY.*D2\/D3 closure/,
+  );
   db.close();
 });
 
-test("applied_feed_cursor is null until ops_applied_pins has a non-null seq", async () => {
-  const db = new DatabaseSync(":memory:");
-  const sync = await callOpsTool(d1(db), "sync_status", {});
-  assert.equal(sync.applied_feed_cursor, null);
+test("J-Quants rows never masquerade as projected JSDA operations", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-jq-only", {
+    jsdaWatermark: false,
+    populate(target, generation, now) {
+      target.prepare(`INSERT INTO ingestion_run_log
+        (projection_generation_id,id,ran_at,source,runtime,status,detail)
+        VALUES (?,?,?,?,?,?,?)`).run(
+          generation, 1, now, "jquants", "cloudflare", "pass", "{}",
+        );
+      target.prepare(`INSERT INTO ingestion_validation
+        (projection_generation_id,run_id,dataset,status,rows_seen,rows_inserted,
+         rows_revisions,detail) VALUES (?,?,?,?,?,?,?,?)`).run(
+          generation, 1, "equities_bars_daily", "pass", 4, 4, 0, "{}",
+        );
+      target.prepare(`INSERT INTO raw_retention_manifests
+        (projection_generation_id,source,dataset,segment_id,run_id,manifest_key,page_count,
+         row_count,raw_bytes,data_digest,completeness,created_at,reason)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+          generation, "jquants", "equities_bars_daily", "2026-08", 1,
+          "raw/jq", 1, 4, 40, "sha256:jq", "ACQUIRED", now,
+          "latest operational raw acquisition receipt",
+        );
+    },
+  });
+  for (const [name, args, reason] of [
+    ["ingestion_last_run", {}, /JSDA ingestion run evidence is absent/],
+    ["validation_summary", {}, /not bound to exactly one JSDA ingestion run/],
+    ["raw_retention_status", { dataset: "jsda_otc_bond_reference_prices" }, /raw acquisition evidence is absent/],
+    ["sync_status", {}, /JSDA sync watermark evidence is absent/],
+  ]) {
+    const result = await opsCall(db, name, args);
+    assert.equal(result.status, "NOT_PROJECTED", name);
+    assert.equal(result.plane, "ops_current", name);
+    assert.equal(result.projection_generation, "projgen-jq-only", name);
+    assert.match(result.reason, reason, name);
+  }
   db.close();
 });
 
-test("applied_cursor null is never CURRENT even when export lag is 0", () => {
+test("run and validation tools accept explicit JSDA evidence in the active generation", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-jsda-ops", {
+    populate(target, generation, now) {
+      const insertRun = target.prepare(`INSERT INTO ingestion_run_log
+        (projection_generation_id,id,ran_at,source,runtime,status,detail)
+        VALUES (?,?,?,?,?,?,?)`);
+      insertRun.run(generation, 1, now, "jquants", "cloudflare", "pass", "{}");
+      insertRun.run(generation, 2, now, "jsda", "cloudflare_queue_v2", "pass", "{}");
+      const insertValidation = target.prepare(`INSERT INTO ingestion_validation
+        (projection_generation_id,run_id,dataset,status,rows_seen,rows_inserted,
+         rows_revisions,detail) VALUES (?,?,?,?,?,?,?,?)`);
+      insertValidation.run(
+        generation, 2, "equities_bars_daily", "pass", 4, 4, 0, "{}",
+      );
+      insertValidation.run(
+        generation, 2, "jsda_otc_bond_reference_prices", "pass", 4, 4, 0, "{}",
+      );
+    },
+  });
+  const run = await opsCall(db, "ingestion_last_run", {});
+  assert.equal(run.status, "AVAILABLE");
+  assert.equal(run.run.source, "jsda");
+  const validation = await opsCall(db, "validation_summary", {});
+  assert.equal(validation.status, "PASS");
+  assert.equal(validation.dataset_count, 2);
+  db.close();
+});
+
+test("validation JSDA presence is canonical-dataset and exact-run bound", async () => {
+  for (const mode of ["missing", "wrong-source", "duplicate"]) {
+    const db = projectionDb();
+    await seedGeneration(db, `projgen-validation-binding-${mode}`, {
+      populate(target, generation, now) {
+        if (mode === "duplicate") {
+          target.exec(`DROP TABLE ingestion_run_log;
+            CREATE TABLE ingestion_run_log (
+              projection_generation_id TEXT NOT NULL,
+              id INTEGER NOT NULL,
+              ran_at TEXT NOT NULL,
+              source TEXT NOT NULL,
+              runtime TEXT,
+              status TEXT NOT NULL,
+              detail TEXT
+            );`);
+        }
+        const insertRun = target.prepare(`INSERT INTO ingestion_run_log
+          (projection_generation_id,id,ran_at,source,runtime,status,detail)
+          VALUES (?,?,?,?,?,?,?)`);
+        if (mode === "wrong-source") {
+          insertRun.run(generation, 7, now, "jquants", "cloudflare", "pass", "{}");
+        } else if (mode === "duplicate") {
+          insertRun.run(generation, 7, now, "jsda", "queue", "pass", "{}");
+          insertRun.run(generation, 7, now, "jsda", "queue-replay", "pass", "{}");
+        }
+        target.prepare(`INSERT INTO ingestion_validation
+          (projection_generation_id,run_id,dataset,status,rows_seen,rows_inserted,
+           rows_revisions,detail) VALUES (?,?,?,?,?,?,?,?)`).run(
+          generation, 7, "jsda_otc_bond_reference_prices", "pass", 1, 1, 0, "{}",
+        );
+      },
+    });
+    const result = await opsCall(db, "validation_summary", {});
+    assert.equal(result.status, "NOT_PROJECTED", mode);
+    assert.match(result.reason, /not bound to exactly one JSDA ingestion run/, mode);
+    db.close();
+  }
+});
+
+test("jsda-looking unknown datasets cannot spoof validation or watermark evidence", async () => {
+  const validationDb = projectionDb();
+  await seedGeneration(validationDb, "projgen-validation-dataset-spoof", {
+    populate(target, generation, now) {
+      target.prepare(`INSERT INTO ingestion_run_log
+        (projection_generation_id,id,ran_at,source,runtime,status,detail)
+        VALUES (?,?,?,?,?,?,?)`).run(
+        generation, 8, now, "jsda", "queue", "pass", "{}",
+      );
+      target.prepare(`INSERT INTO ingestion_validation
+        (projection_generation_id,run_id,dataset,status,rows_seen,rows_inserted,
+         rows_revisions,detail) VALUES (?,?,?,?,?,?,?,?)`).run(
+        generation, 8, "jsda_fake", "pass", 1, 1, 0, "{}",
+      );
+      target.prepare(`INSERT INTO ingestion_validation
+        (projection_generation_id,run_id,dataset,status,rows_seen,rows_inserted,
+         rows_revisions,detail) VALUES (?,?,?,?,?,?,?,?)`).run(
+        generation, 8, "jsda_otc_bond_reference_prices", "pass", 1, 1, 0, "{}",
+      );
+    },
+  });
+  const validation = await opsCall(validationDb, "validation_summary", {});
+  assert.equal(validation.status, "NOT_PROJECTED");
+  assert.match(validation.reason, /outside the canonical catalog/);
+  validationDb.close();
+
+  const watermarkDb = projectionDb();
+  await seedGeneration(watermarkDb, "projgen-watermark-dataset-spoof", {
+    populate(target, generation, now) {
+      target.prepare(`INSERT INTO ingestion_watermarks
+        (projection_generation_id,dataset,last_event_date,last_ingested_at,last_export_cursor)
+        VALUES (?,?,?,?,?)`).run(generation, "jsda_fake", "2026-08-25", now, 10);
+    },
+  });
+  const sync = await opsCall(watermarkDb, "sync_status", {});
+  assert.equal(sync.status, "NOT_PROJECTED");
+  assert.match(sync.reason, /outside the canonical catalog/);
+  watermarkDb.close();
+});
+
+test("canonical addon watermarks do not invalidate exact JSDA presence", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-canonical-addon-watermark", {
+    populate(target, generation, now) {
+      target.prepare(`INSERT INTO ingestion_watermarks
+        (projection_generation_id,dataset,last_event_date,last_ingested_at,last_export_cursor)
+        VALUES (?,?,?,?,?)`).run(generation, "equities_trades", "2026-08-25", now, 10);
+    },
+  });
+  const result = await opsCall(db, "sync_status", {});
+  assert.equal(result.status, "CURRENT");
+  assert.equal(result.watermarks.length, 2);
+  db.close();
+});
+
+test("an old canonical JSDA watermark proves presence, not source freshness", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-old-jsda-watermark", {
+    populate(target, generation) {
+      target.prepare(`UPDATE ingestion_watermarks SET last_event_date=?
+        WHERE projection_generation_id=? AND dataset=?`).run(
+        "2002-08-02", generation, "jsda_otc_bond_reference_prices",
+      );
+    },
+  });
+  const result = await opsCall(db, "sync_status", {});
+  assert.equal(result.status, "CURRENT");
+  assert.notEqual(result.status, "FRESH");
+  assert.equal(result.watermarks[0].last_event_date, "2002-08-02");
+  db.close();
+});
+
+test("raw totals cover the whole generation while compatibility rows stay bounded", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-raw-bounded", {
+    populate(target, generation, now) {
+      const statement = target.prepare(`INSERT INTO raw_retention_manifests
+        (projection_generation_id,source,dataset,segment_id,run_id,manifest_key,page_count,
+         row_count,raw_bytes,data_digest,completeness,created_at,reason)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      for (let index = 1; index <= 501; index += 1) {
+        statement.run(
+          generation, "jsda", "jsda_otc_bond_reference_prices",
+          `segment-${String(index).padStart(4, "0")}`, index,
+          `raw/jsda/${index}`, 1, 1, 10, `sha256:${index}`, "ACQUIRED", now,
+          "latest operational raw acquisition receipt",
+        );
+      }
+    },
+  });
+  const result = await opsCall(db, "raw_retention_status", {
+    dataset: "jsda_otc_bond_reference_prices",
+  });
+  assert.equal(result.status, "AVAILABLE");
+  assert.equal(result.totals.total_segments, 501);
+  assert.equal(result.totals.acquired_segments, 501);
+  assert.equal(result.attestations.length, 500);
+  db.close();
+});
+
+test("raw acquisition labels remain separate from Dataset COMPLETE", () => {
+  assert.equal(
+    classifyRawAcquisition({ completeness: "ACQUIRED", row_count: 4, raw_bytes: 40 }),
+    "EXPECTED_AND_CAPTURED",
+  );
+  assert.equal(
+    classifyRawAcquisition({ completeness: "FAILED", row_count: 0, raw_bytes: 0 }),
+    "DOWNLOAD_FAILED",
+  );
+});
+
+test("sync status requires non-null equal source/export/applied cursors", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-sync");
+  let result = await opsCall(db, "sync_status", {});
+  assert.equal(result.status, "CURRENT");
+  assert.equal(result.source_cursor, 10);
+  assert.equal(result.export_cursor, 10);
+  assert.equal(result.applied_cursor, 10);
+  await seedGeneration(db, "projgen-sync-unpinned", {
+    sync: { applied: null },
+  });
+  result = await opsCall(db, "sync_status", {});
+  assert.equal(result.status, "UNKNOWN");
+  assert.equal(result.applied_cursor, null);
+  assert.notEqual(result.state, "CURRENT");
+  db.close();
+});
+
+test("signed envelope and projected cursor identities must match exactly", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-cursor-disagreement", {
+    sync: { source: 9, exported: 9, applied: 9 },
+    envelopeSync: { source: 10, exported: 10, applied: 10 },
+  });
+  for (const name of ["projection_status", "sync_status"]) {
+    const result = await opsCall(db, name, {});
+    assert.equal(result.status, "NOT_PROJECTED", name);
+    assert.equal(result.projection_generation, "projgen-cursor-disagreement", name);
+    assert.match(result.reason, /signed cursor identity mismatch/, name);
+  }
+  db.close();
+});
+
+test("unsafe cross-runtime cursors are non-canonical", async () => {
+  const db = projectionDb();
+  const unsafe = Number.MAX_SAFE_INTEGER + 1;
+  await seedGeneration(db, "projgen-unsafe-cursor", {
+    envelopeSync: { source: unsafe, exported: unsafe, applied: unsafe },
+  });
+  const result = await opsCall(db, "sync_status", {});
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.match(result.reason, /cursor identity is non-canonical/);
+  db.close();
+});
+
+test("missing source change-log evidence is NOT_PROJECTED, never zero", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-sync-unproven", {
+    sync: { changeLogRows: null },
+  });
+  const result = await opsCall(db, "sync_status", {});
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.equal(result.change_log_row_count, null);
+  assert.equal(result.projection_generation, "projgen-sync-unproven");
+  assert.match(result.reason, /change-log evidence is absent/);
+  db.close();
+});
+
+test("aggregate tools identify missing active-generation rows", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-missing-domain-rows");
+  const coverage = await opsCall(db, "coverage_gaps", {});
+  assert.equal(coverage.status, "NOT_PROJECTED");
+  assert.match(coverage.reason, /Coverage rows are absent/);
+  const backfill = await opsCall(db, "backfill_status", {
+    dataset: "equities_bars_daily",
+  });
+  assert.equal(backfill.status, "NOT_PROJECTED");
+  assert.match(backfill.reason, /segment plans are absent/);
+  const summary = await opsCall(db, "ops_status", {});
+  assert.equal(summary.status, "NOT_PROJECTED");
+  assert.match(summary.reason, /Coverage summary is absent/);
+  db.close();
+});
+
+test("cursor policy never makes a null apply pin current", () => {
   assert.equal(
     syncDatasetState({ exported: 10, applied: null, lag: 0, changeLogRows: 1 }),
     "EXPORT_CURRENT_APPLY_UNPINNED",
@@ -243,369 +925,60 @@ test("applied_cursor null is never CURRENT even when export lag is 0", () => {
   );
 });
 
-function seedSyncPlane(db, { exported, latest, applied }) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS ingestion_watermarks (
-      dataset TEXT PRIMARY KEY,
-      last_event_date TEXT,
-      last_ingested_at TEXT NOT NULL,
-      last_export_cursor INTEGER
-    );
-    CREATE TABLE IF NOT EXISTS ingestion_change_log (
-      change_seq INTEGER PRIMARY KEY AUTOINCREMENT,
-      table_name TEXT NOT NULL,
-      source TEXT NOT NULL,
-      dataset TEXT NOT NULL,
-      natural_key TEXT NOT NULL,
-      event_time TEXT NOT NULL,
-      available_at TEXT NOT NULL,
-      ingested_at TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      raw_payload TEXT,
-      changed_at TEXT NOT NULL
-    );
-  `);
-  db.exec(appliedPinsMigration);
-  db.prepare(`INSERT INTO ingestion_watermarks
-    (dataset, last_event_date, last_ingested_at, last_export_cursor)
-    VALUES (?,?,?,?)`).run(
-      "equities_bars_daily", "2026-08-10", "2026-08-11T00:00:00Z", exported,
-    );
-  db.prepare(`INSERT INTO ingestion_change_log
-    (change_seq, table_name, source, dataset, natural_key, event_time,
-     available_at, ingested_at, payload, changed_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
-      latest, "jquants_records", "jquants", "equities_bars_daily", "nk",
-      "2026-08-10", "2026-08-10T00:00:00Z", "2026-08-11T00:00:00Z", "{}",
-      "2026-08-11T00:00:00Z",
-    );
-  db.prepare(`INSERT INTO ops_applied_pins
-    (feed, last_applied_change_seq, updated_at, projected_at, projection_generation_id)
-    VALUES (?,?,?,?,?)`).run(
-      "jquants_records", applied, "2026-08-12T00:00:00Z", "2026-08-12T00:00:00Z", null,
-    );
-}
-
-test("matching applied pin with export lag 0 is CURRENT", async () => {
-  const db = new DatabaseSync(":memory:");
-  seedSyncPlane(db, { exported: 10, latest: 10, applied: 10 });
-  const sync = await callOpsTool(d1(db), "sync_status", {});
-  assert.equal(sync.applied_feed_cursor, 10);
-  assert.equal(sync.datasets.length, 1);
-  assert.equal(sync.datasets[0].applied_cursor, 10);
-  assert.equal(sync.datasets[0].exported_cursor, 10);
-  assert.equal(sync.datasets[0].lag, 0);
-  assert.equal(sync.datasets[0].state, "CURRENT");
+test("NOT_READY is an explicit projected state rather than a missing default", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-not-ready");
+  const result = await opsCall(db, "latest_ready_snapshot", {});
+  assert.equal(result.status, "NOT_READY");
+  assert.equal(result.snapshot, null);
+  assert.equal(result.projection_generation, "projgen-not-ready");
   db.close();
 });
 
-test("applied pin with export lag greater than 0 is not CURRENT", async () => {
-  const db = new DatabaseSync(":memory:");
-  seedSyncPlane(db, { exported: 10, latest: 20, applied: 10 });
-  const sync = await callOpsTool(d1(db), "sync_status", {});
-  assert.equal(sync.applied_feed_cursor, 10);
-  assert.equal(sync.datasets[0].applied_cursor, 10);
-  assert.equal(sync.datasets[0].lag, 10);
-  assert.notEqual(sync.datasets[0].state, "CURRENT");
-  assert.equal(sync.datasets[0].state, "LAGGING");
+test("storage_plane_status reads the publisher aggregate without ingestion tables", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-storage");
+  const result = await opsCall(db, "storage_plane_status", {});
+  assert.equal(result.status, "AVAILABLE");
+  assert.equal(result.counts.facts, 12);
+  assert.equal(result.projection_generation, "projgen-storage");
+  assert.equal(result.projection_signature_verified, true);
+  assert.equal(result.required_content_verified, true);
   db.close();
 });
 
-test("ops_applied_pins NULL seq is unpinned not CURRENT", async () => {
-  const db = new DatabaseSync(":memory:");
-  seedSyncPlane(db, { exported: 10, latest: 10, applied: null });
-  const sync = await callOpsTool(d1(db), "sync_status", {});
-  assert.equal(sync.applied_feed_cursor, null);
-  assert.equal(sync.datasets[0].applied_cursor, null);
-  assert.equal(sync.datasets[0].lag, 0);
-  assert.equal(sync.datasets[0].state, "EXPORT_CURRENT_APPLY_UNPINNED");
+test("projection freshness is recomputed and requires refresh success", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-fresh");
+  const fresh = await opsCall(db, "projection_status", {});
+  assert.equal(fresh.projection_status, "FRESH");
+  assert.equal(fresh.stages.refresh_success, true);
+  await seedGeneration(db, "projgen-failed", { status: "FAILED" });
+  const failed = await opsCall(db, "projection_status", {});
+  assert.notEqual(failed.projection_status, "FRESH");
+  assert.equal(failed.stages.refresh_success, false);
   db.close();
 });
 
-function insertCoverageRow(db, dataset, status, generationId = null) {
-  const columns = [
-    "dataset", "status", "policy_version", "collection_scope",
-    "history_target_start", "history_target_end_rule", "coverage_mode",
-    "expected_frequency", "universe_rule", "raw_retention_required",
-    "structured_reconciliation_required", "governance_tier",
-    "observed_start", "observed_end", "row_count", "source_run_id",
-    "evaluated_at", "detail_json",
-  ];
-  const values = [
-    dataset, status, "collection-coverage/v2", "jsda", "2002-08-02", "current",
-    "official_archive_index_reconciled", "official_archive_day", "official_index",
-    1, 1, "governed", "2002-08-02", "2002-08-02", 1, 7, "2026-08-11T00:00:00Z", "{}",
-  ];
-  if (generationId != null) {
-    columns.push("projection_generation_id");
-    values.push(generationId);
-  }
-  const placeholders = columns.map(() => "?").join(",");
-  db.prepare(
-    `INSERT INTO dataset_coverage (${columns.join(",")}) VALUES (${placeholders})`,
-  ).run(...values);
-}
-
-test("COMPLETE coverage without active generation is UNKNOWN not COMPLETE", async () => {
-  const db = new DatabaseSync(":memory:");
-  db.exec(projectionMigration);
-  insertCoverageRow(db, "jsda_otc_bond_reference_prices", "COMPLETE");
-  const coverage = await callOpsTool(d1(db), "dataset_coverage", {
-    dataset: "jsda_otc_bond_reference_prices",
-  });
-  assert.equal(coverage.status, "UNKNOWN");
-  assert.equal(coverage.coverage, null);
-  assert.equal(coverage.last_known_good.status, "COMPLETE");
-  assert.equal(coverage.last_known_good.policy_version, "collection-coverage/v2");
-  assert.match(coverage.reason, /last-known-good is not current COMPLETE/);
-  assert.match(coverage.reason, /policy_version collection-coverage\/v2/);
-  assert.doesNotMatch(coverage.reason, /Coverage V2/);
-
-  const gaps = await callOpsTool(d1(db), "coverage_gaps", {});
-  assert.equal(gaps.status, "UNKNOWN");
-  assert.equal(gaps.gaps.length, GOVERNED_DATASETS.length);
-  assert.ok(gaps.gaps.every((row) => row.status !== "COMPLETE"));
-  const otc = gaps.gaps.find((row) => row.dataset === "jsda_otc_bond_reference_prices");
-  assert.equal(otc.status, "UNKNOWN");
-  assert.equal(otc.reason, "Coverage projection has not been populated");
-
-  const endpoint = await callOpsTool(d1(db), "endpoint_status", {
-    dataset: "jsda_otc_bond_reference_prices",
-  });
-  assert.equal(endpoint.coverage.status, "UNKNOWN");
-  assert.equal(endpoint.coverage.last_known_good.status, "COMPLETE");
-  assert.equal(endpoint.coverage.last_known_good.policy_version, "collection-coverage/v2");
-  assert.match(endpoint.coverage.reason, /policy_version collection-coverage\/v2/);
-  db.close();
-});
-
-test("active generation COMPLETE is current coverage COMPLETE", async () => {
-  const db = new DatabaseSync(":memory:");
-  db.exec(projectionMigration);
-  db.exec(inventoryMigration);
-  db.exec(generationMigration);
-  const gen = "projgen-active";
-  db.prepare(`INSERT INTO ops_projection_generation
-    (generation_id, status, generated_at, detail_json) VALUES (?,?,?,?)`).run(
-      gen, "ACTIVE", "2026-08-11T00:00:00Z", "{}",
-    );
-  db.prepare(`INSERT INTO ops_projection_active
-    (singleton, generation_id, activated_at) VALUES (?,?,?)`).run(
-      1, gen, "2026-08-11T00:00:00Z",
-    );
-  insertCoverageRow(db, "jsda_otc_bond_reference_prices", "COMPLETE", gen);
-  const coverage = await callOpsTool(d1(db), "dataset_coverage", {
-    dataset: "jsda_otc_bond_reference_prices",
-  });
-  assert.equal(coverage.status, "COMPLETE");
-  assert.equal(coverage.coverage.status, "COMPLETE");
-  assert.equal(coverage.coverage.policy_version, "collection-coverage/v2");
-  assert.equal(coverage.active_generation, gen);
-
-  const endpoint = await callOpsTool(d1(db), "endpoint_status", {
-    dataset: "jsda_otc_bond_reference_prices",
-  });
-  assert.equal(endpoint.coverage.status, "COMPLETE");
-  db.close();
-});
-
-test("raw zero-row complete is empty-with-evidence not coverage complete", () => {
-  assert.equal(
-    classifyRawAcquisition({ completeness: "COMPLETE", row_count: 0, raw_bytes: 12 }),
-    "EXPECTED_EMPTY_WITH_EVIDENCE",
-  );
-  assert.equal(
-    classifyRawAcquisition({ completeness: "ACQUIRED", row_count: 0, raw_bytes: 12 }),
-    "EXPECTED_EMPTY_WITH_EVIDENCE",
-  );
-  assert.equal(
-    JSDA_UPSTREAM_LOCATORS.jsda_otc_bond_reference_prices.includes("market.jsda.or.jp"),
-    true,
-  );
-});
-
-test("raw ACQUIRED is captured like legacy COMPLETE and is not Coverage COMPLETE", async () => {
-  assert.equal(
-    classifyRawAcquisition({ completeness: "ACQUIRED", row_count: 4, raw_bytes: 40 }),
-    "EXPECTED_AND_CAPTURED",
-  );
-  assert.equal(
-    classifyRawAcquisition({ completeness: "ACQUIRED", row_count: 0, raw_bytes: 0 }),
-    "SOURCE_NOT_PUBLISHED",
-  );
-  assert.equal(
-    classifyRawAcquisition({ completeness: "COMPLETE", row_count: 2, raw_bytes: 8 }),
-    "EXPECTED_AND_CAPTURED",
-  );
-  assert.equal(
-    classifyRawAcquisition({ completeness: "FAILED", row_count: 0, raw_bytes: 0 }),
-    "DOWNLOAD_FAILED",
-  );
-  assert.equal(
-    classifyRawAcquisition({ completeness: "PENDING", row_count: 1, raw_bytes: 8 }),
-    "UNVERIFIED",
-  );
-
-  const db = new DatabaseSync(":memory:");
-  for (const migration of ingestionMigrations) db.exec(migration);
-  db.prepare(`INSERT INTO ingestion_run_log
-    (ran_at,source,runtime,status,detail) VALUES (?,?,?,?,?)`).run(
-      "2026-08-23T00:00:00Z", "jquants", "worker", "pass", "{}",
-    );
-  const insert = db.prepare(`INSERT INTO raw_retention_manifests
-    (dataset,run_id,manifest_key,page_count,row_count,raw_bytes,data_digest,
-     completeness,created_at) VALUES (?,?,?,?,?,?,?,?,?)`);
-  insert.run(
-    "equities_bars_daily", 1, "raw/a.json", 1, 4, 20,
-    "sha256:a", "ACQUIRED", "2026-08-23T00:00:00Z",
-  );
-  insert.run(
-    "equities_bars_daily", 2, "raw/b.json", 1, 0, 12,
-    "sha256:b", "COMPLETE", "2026-08-21T00:00:00Z",
-  );
-  insert.run(
-    "equities_bars_daily", 3, "raw/c.json", 1, 0, 0,
-    "sha256:c", "FAILED", "2026-08-20T00:00:00Z",
-  );
-
-  const raw = await callOpsTool(d1(db), "raw_retention_status", {
-    dataset: "equities_bars_daily",
-  });
-  assert.equal(raw.totals.total, 3);
-  assert.equal(raw.totals.acquired, 2);
-  assert.equal(raw.totals.failed, 1);
-  assert.equal(raw.totals.incomplete, 1);
-  assert.equal(raw.totals.complete, undefined);
-  assert.doesNotMatch(JSON.stringify(raw.totals), /Coverage COMPLETE/);
-  assert.match(raw.note, /not dataset Coverage COMPLETE/);
-  assert.doesNotMatch(raw.note, /Coverage COMPLETE is/);
-  const byRun = Object.fromEntries(
-    raw.attestations.map((row) => [Number(row.run_id), row]),
-  );
-  assert.equal(byRun[1].acquisition_state, "EXPECTED_AND_CAPTURED");
-  assert.equal(byRun[1].completeness, "ACQUIRED");
-  assert.equal(byRun[2].acquisition_state, "EXPECTED_EMPTY_WITH_EVIDENCE");
-  assert.equal(byRun[2].completeness, "COMPLETE");
-  assert.equal(byRun[3].acquisition_state, "DOWNLOAD_FAILED");
-  assert.equal(Number(raw.oldest_unresolved.run_id), 3);
-  assert.equal(raw.oldest_unresolved.completeness, "FAILED");
-
-  const ops = await callOpsTool(d1(db), "ops_status", {});
-  assert.equal(ops.raw_retention.manifests, 3);
-  assert.equal(ops.raw_retention.acquired, 2);
-  // complete aliases acquired (SUM of ACQUIRED|legacy COMPLETE), not COMPLETE-only=1
-  assert.equal(ops.raw_retention.complete, 2);
-  assert.equal(ops.raw_retention.complete, ops.raw_retention.acquired);
-  assert.doesNotMatch(JSON.stringify(ops.raw_retention), /Coverage COMPLETE/);
-  db.close();
-});
-
-test("honestProjectionStatus: FRESH requires refresh_status success", () => {
-  const now = Date.parse("2026-08-21T13:00:00Z");
-  const recent = "2026-08-21T12:30:49.152421+00:00";
-  const skipped = honestProjectionStatus({
-    generated_at: recent,
+test("honestProjectionStatus rejects stored FRESH without successful refresh", () => {
+  const now = Date.now();
+  const result = honestProjectionStatus({
+    generated_at: new Date(now).toISOString(),
     status: "FRESH",
     detail_json: '{"refresh_status":null}',
   }, now);
-  assert.equal(skipped.status, "STALE");
-  assert.equal(skipped.refreshAttempt, false);
-  assert.equal(skipped.refreshOk, false);
-
-  const failed = honestProjectionStatus({
-    generated_at: recent,
-    status: "FRESH",
-    detail_json: '{"refresh_status":"failed"}',
-  }, now);
-  assert.equal(failed.status, "DEGRADED_REFRESH_FAILED");
-  assert.equal(failed.refreshAttempt, true);
-  assert.equal(failed.refreshOk, false);
-
-  const ok = honestProjectionStatus({
-    generated_at: recent,
-    status: "FRESH",
-    detail_json: '{"refresh_status":"success"}',
-  }, now);
-  assert.equal(ok.status, "FRESH");
-  assert.equal(ok.refreshOk, true);
-
-  const aged = honestProjectionStatus({
-    generated_at: "2026-08-21T12:30:49.152421+00:00",
-    status: "FRESH",
-    detail_json: '{"refresh_status":"success"}',
-  }, Date.parse("2026-08-23T14:00:00Z"));
-  assert.equal(aged.status, "STALE");
-  assert.equal(aged.refreshOk, true);
+  assert.equal(result.status, "STALE");
 });
 
-async function seedProjectionMeta(db, { generatedAt, status, detail, gen }) {
-  db.exec(projectionMigration);
-  db.exec(inventoryMigration);
-  db.exec(generationMigration);
-  db.prepare(`INSERT INTO ops_projection_metadata
-    (generated_at, source_generation, age_seconds, status, projection_version,
-     detail_json, projection_generation_id)
-    VALUES (?,?,?,?,?,?,?)`).run(
-    generatedAt, generatedAt, 0, status, "ops_projection/v3", detail, gen,
-  );
-  db.prepare(`INSERT INTO ops_projection_generation
-    (generation_id, status, generated_at, detail_json) VALUES (?,?,?,?)`).run(
-    gen, "ACTIVE", generatedAt, "{}",
-  );
-  db.prepare(`INSERT INTO ops_projection_active
-    (singleton, generation_id, activated_at) VALUES (?,?,?)`).run(
-    1, gen, generatedAt,
-  );
-}
-
-test("projection_status does not report FRESH when refresh_success is false", async () => {
+test("quota remains isolated in its own migration and database", async () => {
   const db = new DatabaseSync(":memory:");
-  const generatedAt = new Date().toISOString();
-  await seedProjectionMeta(db, {
-    generatedAt,
-    status: "FRESH",
-    detail: JSON.stringify({ refresh_status: null }),
-    gen: "projgen-ef18b4f86ee946048161d25e2a30a2a8",
-  });
-  const result = await callOpsTool(d1(db), "projection_status", {});
-  assert.equal(result.projection_status, "STALE");
-  assert.equal(result.stale, true);
-  assert.equal(result.stages.refresh_attempt, false);
-  assert.equal(result.stages.refresh_success, false);
-  assert.equal(result.last_known_good.not_fresh, true);
-  db.close();
-});
-
-test("live stored FRESH + null refresh_status + age>86400 never CURRENT/FRESH", async () => {
-  const db = new DatabaseSync(":memory:");
-  await seedProjectionMeta(db, {
-    generatedAt: "2026-08-21T12:30:49.152421+00:00",
-    status: "FRESH",
-    detail: JSON.stringify({ refresh_status: null }),
-    gen: "projgen-ef18b4f86ee946048161d25e2a30a2a8",
-  });
-  const result = await callOpsTool(d1(db), "projection_status", {});
-  assert.equal(result.projection_status, "STALE");
-  assert.notEqual(result.projection_status, "FRESH");
-  assert.equal(result.stale, true);
-  assert.equal(result.stages.refresh_success, false);
-  assert.equal(result.last_known_good.not_fresh, true);
-  db.close();
-});
-
-test("projection_status FRESH only when refresh_status is success and age is fresh", async () => {
-  const db = new DatabaseSync(":memory:");
-  const generatedAt = new Date().toISOString();
-  await seedProjectionMeta(db, {
-    generatedAt,
-    status: "FRESH",
-    detail: JSON.stringify({ refresh_status: "success" }),
-    gen: "projgen-success",
-  });
-  const result = await callOpsTool(d1(db), "projection_status", {});
-  assert.equal(result.projection_status, "FRESH");
-  assert.equal(result.stale, false);
-  assert.equal(result.stages.refresh_attempt, true);
-  assert.equal(result.stages.refresh_success, true);
+  db.exec(quotaMigration);
+  const quota = new DurableDailyQuota(d1(db), 2);
+  const principal = { subject: "human:alice", clientId: "grant-1" };
+  assert.equal((await quota.charge(principal, 2, Date.parse("2026-08-25T00:00:00Z"))).used, 2);
+  await assert.rejects(
+    quota.charge(principal, 1, Date.parse("2026-08-25T00:01:00Z")),
+    QuotaExceeded,
+  );
   db.close();
 });

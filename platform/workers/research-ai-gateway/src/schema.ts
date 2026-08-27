@@ -1,5 +1,8 @@
 /** Strict AI Gateway request/response. Unknown fields rejected. */
 
+import { PILOT_BUDGET_CAPS } from "./budget_do";
+export { estimateCostUsd } from "./pricing_policy";
+
 export const ALLOWED_MODELS = [
   "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
   "@cf/zai-org/glm-4.7-flash",
@@ -55,6 +58,43 @@ const SELECTION_DECISIONS = new Set(["PROMOTE", "HOLD", "REJECT"]);
 const FEATURE_PARAM_RESERVED = new Set(["code", "as_of", "db_path", "version"]);
 const IDENTIFIER_RE = /^[A-Za-z0-9._-]+$/;
 
+/**
+ * Per-call bounds are derived from the canonical controlled-pilot policy. Two
+ * calls may occupy the ledger concurrently, so neither may reserve more than
+ * its equal share of the global input cap.
+ */
+export const MAX_GATEWAY_MESSAGES = PILOT_BUDGET_CAPS.max_model_calls;
+export const MAX_GATEWAY_INPUT_TOKENS = Math.floor(
+  PILOT_BUDGET_CAPS.max_input_tokens / PILOT_BUDGET_CAPS.max_parallel_experiments,
+);
+export const MAX_GATEWAY_PROMPT_UTF8_BYTES = Math.floor(MAX_GATEWAY_INPUT_TOKENS / 2);
+export const PROVIDER_CHAT_ENVELOPE_TOKENS = Math.max(
+  1_024,
+  Math.floor(MAX_GATEWAY_INPUT_TOKENS / 50),
+);
+
+export type ProviderInputBounds = {
+  utf8_bytes: number;
+  token_upper_bound: number;
+};
+
+/**
+ * Byte-level tokenizers cannot emit more content tokens than a conservative
+ * two-token-per-byte bound. A separate envelope allowance covers provider chat
+ * templates and model control tokens. Measured usage above this reservation is
+ * still frozen and audited by the ledger.
+ */
+export function providerInputBounds(
+  messages: ReadonlyArray<{ role: string; content: string }>,
+): ProviderInputBounds {
+  const canonical = JSON.stringify(messages);
+  const utf8Bytes = new TextEncoder().encode(canonical).byteLength;
+  return {
+    utf8_bytes: utf8Bytes,
+    token_upper_bound: utf8Bytes * 2 + PROVIDER_CHAT_ENVELOPE_TOKENS,
+  };
+}
+
 export type GatewayMessage = { role: "system" | "user" | "assistant"; content: string };
 
 export type GatewayRequest = {
@@ -82,7 +122,11 @@ export type GatewayOk = {
   model: AllowedModel;
   input_tokens: number;
   output_tokens: number;
+  cached_tokens: number;
   monetary_cost_usd: number;
+  monetary_cost_source: "provider" | "pricing_policy_estimate";
+  pricing_policy_id: string | null;
+  pricing_policy_digest: string | null;
   prompt_digest: string;
   output_digest: string;
   ready_snapshot_id: string | null;
@@ -163,6 +207,9 @@ export function decodeGatewayRequest(raw: unknown): DecodeResult<GatewayRequest>
   if (!Array.isArray(raw.messages) || raw.messages.length < 1) {
     return fail("messages[] required");
   }
+  if (raw.messages.length > MAX_GATEWAY_MESSAGES) {
+    return fail(`messages[] exceeds hard limit ${MAX_GATEWAY_MESSAGES}`);
+  }
   const messages: GatewayMessage[] = [];
   for (let i = 0; i < raw.messages.length; i++) {
     const m = raw.messages[i];
@@ -179,6 +226,17 @@ export function decodeGatewayRequest(raw: unknown): DecodeResult<GatewayRequest>
       role: m.role as GatewayMessage["role"],
       content: m.content,
     });
+  }
+  const inputBounds = providerInputBounds(messages);
+  if (inputBounds.utf8_bytes > MAX_GATEWAY_PROMPT_UTF8_BYTES) {
+    return fail(
+      `messages UTF-8 bytes exceed hard limit ${MAX_GATEWAY_PROMPT_UTF8_BYTES}`,
+    );
+  }
+  if (inputBounds.token_upper_bound > MAX_GATEWAY_INPUT_TOKENS) {
+    return fail(
+      `messages token upper bound exceeds hard limit ${MAX_GATEWAY_INPUT_TOKENS}`,
+    );
   }
   const maxTokens = Number(raw.max_tokens);
   if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 1400) {
@@ -799,15 +857,4 @@ export function decodeTypedArtifact(
   }
   const body = isObj(raw) ? stripEnvelope(raw) : raw;
   return decodeByName(schema, body);
-}
-
-/** Rough USD per 1k tokens. Ledger charge uses these measured tokens. */
-export function estimateCostUsd(
-  model: string,
-  inputTokens: number,
-  outputTokens: number,
-): number {
-  const perK =
-    model.includes("70b") ? 0.0003 : model.includes("glm") ? 0.00008 : 0.00004;
-  return Number((((inputTokens + outputTokens) / 1000) * perK).toFixed(8));
 }

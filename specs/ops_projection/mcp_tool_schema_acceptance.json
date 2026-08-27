@@ -1,0 +1,24 @@
+{
+  "schema_version": "quant-ops-mcp-tool-schema-acceptance/v1",
+  "tool_count": 17,
+  "tool_names": [
+    "ops_status",
+    "source_inventory",
+    "endpoint_status",
+    "projection_status",
+    "collection_sla_status",
+    "ingestion_last_run",
+    "dataset_coverage",
+    "coverage_gaps",
+    "coverage_segments",
+    "backfill_status",
+    "validation_summary",
+    "b0_status",
+    "latest_ready_snapshot",
+    "snapshot_quality",
+    "raw_retention_status",
+    "sync_status",
+    "storage_plane_status"
+  ],
+  "schema_digest": "sha256:dad7cd29ef002e76ee1f9802b8685a179f94fcbd0bb2e6df685858e41c1778d3"
+}

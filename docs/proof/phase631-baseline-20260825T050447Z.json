@@ -1,0 +1,199 @@
+{
+  "schema_version": "phase631-baseline/v1",
+  "observed_at_utc": "2026-08-25T05:04:47Z",
+  "observed_at_jst": "2026-08-25T14:04:47+09:00",
+  "repository": {
+    "url": "https://github.com/ddnne/quant-platform",
+    "head": "c718011a7407e8c601076e626ad4fc3a1377ae44",
+    "origin_main": "c718011a7407e8c601076e626ad4fc3a1377ae44",
+    "tree": "27ffd60bb72455c6f3e5ff048d4ecb5b4c941140",
+    "worktree_clean": true,
+    "open_pull_requests": 0,
+    "required_check": {
+      "context": "Workers Builds: quant-platform-ci-aggregate-staging",
+      "app_id": 85455,
+      "app_slug": "cloudflare-workers-and-pages",
+      "strict": true,
+      "conclusion": "success",
+      "build_id": "4e1a82ac-d051-43f3-abec-ea14ec1c52b5"
+    }
+  },
+  "inventory": {
+    "tracked_files": 964,
+    "python_product_loc": 83533,
+    "python_test_loc": 39681,
+    "python_test_files": 174,
+    "worker_product_loc": 29735,
+    "worker_test_loc": 1113,
+    "worker_test_files": 9,
+    "docs_loc": 40399,
+    "docs_review_files": 98,
+    "source_or_ast_dependent_test_files": 73,
+    "strategy_catalog_entries": 2254,
+    "npm_lockfiles": 7,
+    "npm_lockfile_loc": 23465,
+    "python_lockfile_present": false,
+    "worker_package_managers": "seven independent npm package-lock.json files",
+    "wrangler_declared_range": "^4.120.1",
+    "wrangler_latest_at_observation": "4.125.0",
+    "workers_types_latest_at_observation": "5.20260825.1",
+    "cloudflare_vitest_plugin_latest_at_observation": "1.0.0"
+  },
+  "tests": {
+    "python_reported_anchor": {
+      "passed": 1567,
+      "skipped": 7,
+      "source": "independent fresh-clone review supplied by the operator",
+      "local_rerun_state": "passed",
+      "local_rerun_collected": 1574,
+      "local_rerun_exit_code": 0
+    },
+    "worker_reported_anchor": {
+      "passed": 487,
+      "runtime": "node",
+      "cloudflare_runtime_coverage": false,
+      "source": "successful required Cloudflare build evidence"
+    }
+  },
+  "cloudflare": {
+    "account_id": "11233bca08d134a9b738eaa46b9751d9",
+    "active_versions": {
+      "quant-platform-ingestion-secrets": "5f413d98-5c5e-4519-86a4-50f71f857ecc",
+      "quant-platform-ingestion-premium": "b95a2874-293a-4172-b853-decc6d80d33b",
+      "quant-platform-ingestion-jsda": "542f9835-dcb6-4f9c-b5ac-b35350fc907a",
+      "quant-platform-ops-read-mcp": "45df505e-34b1-477e-96c2-5270a5097636",
+      "quant-platform-research-ai-gateway": "07fbf7b5-7b5f-4564-b375-8e67c912e275",
+      "quant-platform-research-mass-eval": "6d5b0efb-7890-44b2-acf4-da410f44846a",
+      "quant-platform-ci-aggregate-staging": "ae98854d-7766-4664-8f21-47651dfe51e1"
+    },
+    "workers_dev": {
+      "quant-platform-ingestion-secrets": {
+        "enabled": true,
+        "previews_enabled": true
+      },
+      "quant-platform-ops-read-mcp": {
+        "enabled": true,
+        "previews_enabled": true
+      }
+    },
+    "cron": {
+      "quant-platform-ingestion-premium": "15 * * * *",
+      "quant-platform-ingestion-jsda": "30 1 * * *"
+    },
+    "queues": {
+      "quant-jsda-ingestion_backlog": 0,
+      "quant-jsda-ingestion-dlq_backlog": 0
+    },
+    "d1": {
+      "database": "quant-ingest",
+      "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+      "size_bytes": 717897728,
+      "migration_ledger_last_id": 16,
+      "migration_ledger_last_name": "0010_raw_acquisition_status.sql",
+      "split_migration_ledgers": 0,
+      "recent_running_ingestion_runs": 0,
+      "running_jsda_jobs": 0,
+      "foreign_key_violations": 0
+    },
+    "access": {
+      "zero_trust_api_state": "not_enabled_on_legacy_access_app_endpoint",
+      "worker_level_access_state": "not_yet_verified",
+      "note": "Worker-level workers.dev Access is supported by current Cloudflare documentation and must be attempted separately from the legacy Access application endpoint."
+    }
+  },
+  "live_ops": {
+    "quant_mcp_connector_tool_count": 16,
+    "repository_tool_count": 17,
+    "missing_connector_tool": "storage_plane_status",
+    "repository_tool_schema_digest": "sha256:ff0311ed39edf0be754f30685dc2d45755e9fadc665b64d8c07e66969afe9e63",
+    "live_tool_schema_digest": null,
+    "live_tool_schema_digest_reason": "The connected application exposes a cached 16-tool schema; authenticated tools/list evidence has not yet been refreshed.",
+    "latest_jquants_run": {
+      "id": 14357,
+      "ran_at": "2026-08-25T13:15:37+09:00",
+      "status": "pass",
+      "dataset_count": 23,
+      "passed": 23,
+      "failed": 0,
+      "rows_inserted": 66132,
+      "raw_bytes": 33467555
+    },
+    "coverage": {
+      "policy_version": "collection-coverage/v2",
+      "governed_datasets": 26,
+      "complete": 22,
+      "partial": 4,
+      "partial_segments": {
+        "equities_bars_daily_am": "1/32",
+        "equities_earnings_calendar": "1/200",
+        "equities_master": "220/241",
+        "jsda_otc_bond_reference_prices": "5886/8784"
+      },
+      "jsda_tokyo_repo_rates": "1/1 COMPLETE",
+      "jsda_corporate_bond_transactions": "12/12 COMPLETE"
+    },
+    "projection": {
+      "status": "STALE",
+      "version": "ops_projection/v3",
+      "generation": "projgen-ef18b4f86ee946048161d25e2a30a2a8",
+      "generated_at": "2026-08-21T12:30:49.152421+00:00",
+      "source_generation": "2026-08-21T12:28:33.345482+00:00",
+      "age_seconds_at_observation": 318674,
+      "refresh_attempt": false,
+      "refresh_success": false
+    },
+    "sync": {
+      "latest_source_cursor": 2891143,
+      "applied_feed_cursor": null
+    },
+    "b0": {
+      "status": "UNKNOWN",
+      "reason": "snapshot quality/B0 projection is unavailable"
+    },
+    "ready_snapshot": null,
+    "raw": {
+      "attempts": 21322,
+      "acquired": 19107,
+      "failed": 2215,
+      "zero_byte_or_zero_row": 5450
+    },
+    "validation": {
+      "run_id": 14357,
+      "status": "PASS",
+      "dataset_count": 23,
+      "failures": 0
+    }
+  },
+  "source_capabilities": {
+    "files_present": [
+      "equities_bars_daily_am",
+      "equities_earnings_calendar",
+      "equities_master",
+      "jsda_otc_bond_reference_prices"
+    ],
+    "core_v1_required_datasets": [
+      "equities_master",
+      "equities_bars_daily",
+      "fins_details",
+      "fins_dividend",
+      "fins_earnings_date",
+      "fins_summary",
+      "markets_calendar"
+    ],
+    "core_v1_missing_capabilities": [
+      "equities_bars_daily",
+      "fins_details",
+      "fins_dividend",
+      "fins_earnings_date",
+      "fins_summary",
+      "markets_calendar"
+    ]
+  },
+  "go_state": {
+    "phase_6_3_foundation": "CONDITIONAL",
+    "phase_7_offline_foundation": "GO",
+    "exact_four_controlled_pilot": "NO-GO",
+    "autonomous_mass_research": "NO-GO",
+    "phase_8_fof_live_trading": "NO-GO"
+  }
+}

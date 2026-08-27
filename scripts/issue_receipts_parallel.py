@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parallel signed-receipt issuance. Never invent COMPLETE without raw.
+"""Parallel after-the-fact recovery evidence. Never issues signed COMPLETE.
 
 Optional --index-text PATH is local official-index HTML. Omitted:
 index_text is None so OTC required set is fail-closed empty, not
@@ -34,18 +34,16 @@ ROOT = ensure_repo_root()
 from ingestion.jsda.official_index import (  # noqa: E402
     read_local_index_text as _read_index_text,
 )
-from ingestion.pipeline_receipts import (  # noqa: E402
-    count_raw_items,
-    observed_items_from_actual,
-)
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
+    build_collection_receipt,
     refresh_coverage_ledger,
     record_collection_receipt,
     record_required_segments,
     sync_dataset_coverage_from_segments,
 )
-from storage.trusted_receipt import open_signed_receipt_authority  # noqa: E402
+from storage.sqlite_store import SqliteStore  # noqa: E402
+from storage.receipt_crypto import partition_extra_digests  # noqa: E402
 
 _FROM_TO_RE = re.compile(
     r"from=(?P<fr>\d{4}-\d{2}-\d{2}).*?to=(?P<to>\d{4}-\d{2}-\d{2})",
@@ -75,6 +73,37 @@ def _count_structured(
         (dataset, start[:10], end[:10]),
     ).fetchone()
     return int(row[0]) if row else 0
+
+
+def _load_structured_records(
+    conn: sqlite3.Connection, dataset: str, start: str, end: str
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM jquants_records WHERE dataset=? "
+        "AND substr(event_time,1,10)>=? AND substr(event_time,1,10)<=? "
+        "ORDER BY event_time",
+        (dataset, start[:10], end[:10]),
+    ).fetchall()
+    columns = [str(item[0]) for item in (conn.execute(
+        "SELECT name FROM pragma_table_info('jquants_records') ORDER BY cid"
+    ).fetchall())]
+    return [dict(zip(columns, row, strict=True)) for row in rows]
+
+
+def _raw_records(raw: bytes) -> list[Any] | None:
+    """Return concrete JSON records; opaque/count-only raw is not signable."""
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+        return None
+    if isinstance(payload, list):
+        return list(payload)
+    if isinstance(payload, dict):
+        for key in ("data", "rows", "results", "records"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return list(value)
+    return None
 
 
 @dataclass(frozen=True)
@@ -165,8 +194,8 @@ def find_raw_bytes_indexed(
     segment_id: str,
     segment_start: str,
     segment_end: str,
-) -> bytes | None:
-    """Best non-empty raw file for a segment, or None."""
+) -> tuple[Path, bytes] | None:
+    """Best non-empty persisted raw artifact for a segment, or None."""
     prefix = f"{dataset}_"
     month = segment_id if len(segment_id) == 7 else segment_id[:7]
     ranked: list[tuple[int, int, Path]] = []
@@ -210,7 +239,7 @@ def find_raw_bytes_indexed(
         except OSError:
             continue
         if _is_usable_raw(raw):
-            return raw
+            return path, raw
     return None
 
 
@@ -231,9 +260,10 @@ class PreparedIssue:
     job: SegmentJob
     required: RequiredCoverageSegment
     structured: int
+    raw_path: Path
     raw: bytes
-    observed: int
-    raw_rows: int
+    raw_records: list[Any]
+    structured_records: list[dict[str, Any]]
 
 
 @dataclass
@@ -322,24 +352,38 @@ def prepare_one(
     uri = f"file:{db_path.resolve().as_posix()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     try:
-        structured = _count_structured(
+        structured_records = _load_structured_records(
             conn, job.dataset, job.segment_start, job.segment_end
         )
     finally:
         conn.close()
+    structured = len(structured_records)
 
     if structured < min_structured:
         return PrepareResult(job=job, skip_reason=f"no_struct structured={structured}")
 
-    raw = find_raw_bytes_indexed(
+    raw_match = find_raw_bytes_indexed(
         raw_index,
         dataset=job.dataset,
         segment_id=job.segment_id,
         segment_start=job.segment_start,
         segment_end=job.segment_end,
     )
-    if raw is None:
+    if raw_match is None:
         return PrepareResult(job=job, skip_reason="no_raw")
+    raw_path, raw = raw_match
+    if raw_path.stat().st_mode & 0o222:
+        return PrepareResult(job=job, skip_reason="raw_not_immutable")
+    raw_records = _raw_records(raw)
+    if raw_records is None or len(raw_records) != structured:
+        return PrepareResult(
+            job=job,
+            skip_reason=(
+                "unreconciled concrete raw/structured evidence "
+                f"raw={None if raw_records is None else len(raw_records)} "
+                f"structured={structured}"
+            ),
+        )
 
     scope = job.expected_scope
     unit = scope.get("expected_item_unit")
@@ -355,15 +399,14 @@ def prepare_one(
         expected_scope=scope,
         expected_items=expected_items,
     )
-    raw_count = count_raw_items(raw)
-    observed = observed_items_from_actual(unit=unit, raw_item_count=raw_count)
     prepared = PreparedIssue(
         job=job,
         required=required,
         structured=structured,
+        raw_path=raw_path,
         raw=raw,
-        observed=observed,
-        raw_rows=raw_count,
+        raw_records=raw_records,
+        structured_records=structured_records,
     )
     return PrepareResult(job=job, prepared=prepared)
 
@@ -401,31 +444,33 @@ def prepare_parallel(
 
 
 def issue_prepared(
-    conn: sqlite3.Connection,
+    store: SqliteStore,
     prepared_list: Sequence[PreparedIssue],
     *,
-    authority: Any,
     start_run_id: int,
 ) -> list[dict[str, Any]]:
-    """Serial issue + DB record. Returns issued summary rows."""
+    """Record serial RECOVERED_RAW_ONLY observations; never sign."""
+    conn = store._conn  # noqa: SLF001 - operator tool shares governed store
     issued_rows: list[dict[str, Any]] = []
     next_run = start_run_id
     for prep in prepared_list:
-        receipt = authority.issue(
+        record_required_segments(conn, [prep.required])
+        receipt = build_collection_receipt(
             required=prep.required,
             run_id=next_run,
             raw=prep.raw,
-            observed_items=prep.observed,
+            observed_items=1 if prep.raw_records else 0,
+            raw_row_count=len(prep.raw_records),
             structured_row_count=prep.structured,
-            raw_row_count=prep.raw_rows,
             pagination_exhausted=True,
-            structured_generation=prep.structured,
-            raw_manifest_digest=None,
-            source_request_digest=None,
+            extra_digests=partition_extra_digests({
+                "eligibility": "RECOVERED_RAW_ONLY",
+                "origin": "after-the-fact-operator-recovery",
+                "raw_path": str(prep.raw_path),
+            }),
         )
-        next_run += 1
-        record_required_segments(conn, [prep.required])
         record_collection_receipt(conn, receipt)
+        next_run += 1
         issued_rows.append(
             {
                 "dataset": prep.required.dataset,
@@ -539,17 +584,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    if not args.dry_run:
-        try:
-            authority = open_signed_receipt_authority()
-        except RuntimeError as exc:
-            print(f"signing authority unavailable: {exc}", file=sys.stderr)
-            return 2
+    # A dry-run is deliberately read-only: opening ``SqliteStore`` would apply
+    # schema migrations and therefore make an operator preview mutate its input.
+    # The production path owns the governed store and its migrations.
+    store: SqliteStore | None
+    if args.dry_run:
+        store = None
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
     else:
-        authority = None
-
-    conn = sqlite3.connect(db)
-    conn.row_factory = sqlite3.Row
+        store = SqliteStore(db)
+        conn = store._conn  # noqa: SLF001 - operator tool owns this store
     jobs = load_candidate_segments(
         conn,
         datasets=datasets,
@@ -561,7 +606,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not jobs:
         print("no segments found", file=sys.stderr)
-        conn.close()
+        if store is not None:
+            store.close()
+        else:
+            conn.close()
         return 1
 
     print(
@@ -606,20 +654,20 @@ def main(argv: list[str] | None = None) -> int:
     elif not ready:
         print(f"summary issued=0 skipped={skipped}")
     else:
+        assert store is not None
         max_run = conn.execute(
             "SELECT COALESCE(MAX(run_id), 900000) FROM collection_receipts"
         ).fetchone()[0]
         start_run = int(max_run) + 1
         issued_rows = issue_prepared(
-            conn,
+            store,
             ready,
-            authority=authority,
             start_run_id=start_run,
         )
         conn.commit()
         for row in issued_rows:
             print(
-                f"issued signed receipt {row['dataset']}/{row['segment_id']} "
+                f"recorded recovery receipt {row['dataset']}/{row['segment_id']} "
                 f"structured={row['structured']} run_id={row['run_id']}"
             )
         print(f"summary issued={len(issued_rows)} skipped={skipped}")
@@ -664,7 +712,10 @@ def main(argv: list[str] | None = None) -> int:
     complete_after = conn.execute(
         "SELECT COUNT(*) FROM coverage_segments WHERE status='COMPLETE'"
     ).fetchone()[0]
-    conn.close()
+    if store is not None:
+        store.close()
+    else:
+        conn.close()
 
     summary = {
         "datasets": datasets,
@@ -681,7 +732,10 @@ def main(argv: list[str] | None = None) -> int:
         "local_complete_segments": int(complete_after),
         "dry_run": bool(args.dry_run),
         "workers": int(args.workers),
-        "note": "COMPLETE only after signed SUCCESS + ledger refresh; never without raw.",
+        "note": (
+            "RECOVERED_RAW_ONLY: a governed ingestion replay must independently "
+            "persist, parse, commit, reread, reconcile, and sign before COMPLETE."
+        ),
     }
     if args.json_summary:
         print(json.dumps(summary, ensure_ascii=False))

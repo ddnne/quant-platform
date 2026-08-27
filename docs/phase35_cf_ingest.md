@@ -96,9 +96,11 @@ The run summary (`/health` → `last_run`) now includes `concurrency` and
 6. **Failures ≠ success** — a fetch error sets `status='fail'`; the run
    summary status is `pass` / `partial` / `fail` (never silent). See
    ``cf_platform.ingest_premium.validate.classify_dataset`` for the rule.
-7. **Local-readable path** — ``scripts/sync_d1_to_sqlite.py`` follows the
-   cursor-paginated `/v1/export/d1` response and builds a local PIT DB so
-   ``pit.get_*`` reads work offline.
+7. **Local-readable path** — ``scripts/sync_d1_to_sqlite.py`` uses the
+   operator's authenticated Wrangler session to export private D1 directly,
+   then builds a local PIT DB so ``pit.get_*`` reads work offline. No public
+   ingestion-premium hostname is required. The cursor-paginated HTTP export is
+   retained only as a bounded migration compatibility path.
 
 ## Resources
 
@@ -152,8 +154,7 @@ npx wrangler deploy -c wrangler.toml
 
 ```bash
 python3 scripts/sync_d1_to_sqlite.py \
-  --url https://quant-platform-ingestion-premium.<acct>.workers.dev \
-  --token "$INGESTION_PROXY_TOKEN" \
+  --wrangler-remote \
   --db data/structured/ingestion.sqlite
 
 # Then verify pit reads work:
@@ -242,8 +243,8 @@ features automatically pick up CF-ingested Premium core rows. The closed
 loop:
 
 ```
-J-Quants Premium → CF Worker (cron) → R2 raw + D1 structured
-                       ↓ /v1/export/d1
+J-Quants Premium → CF Worker (cron) → R2 raw + private D1 structured
+                       ↓ authenticated Wrangler D1 export
               sync_d1_to_sqlite.py (S6)
                        ↓
                 local ingestion.sqlite

@@ -1,114 +1,32 @@
 /**
- * Holds JQUANTS_API_KEY on Cloudflare and optionally proxies J-Quants HTTP
- * so local runners never need a local copy of the key.
+ * J-Quants credential holder.
  *
- * Auth: request header X-Ingestion-Token must match JQUANTS_PROXY_TOKEN secret
- * when proxying. Health checks need no auth. The upstream capability is
- * intentionally narrow: GET requests to exact shared-contract paths.
+ * Public HTTP preserves the time-bounded authenticated legacy proxy.  The new
+ * governed acquisition surface is a closed WorkerEntrypoint RPC method; no HTTP
+ * route dispatches or tunnels it.
  */
-import premiumContract from "../../../../packages/data_plane/data_contracts/jquants_premium_core.json";
-import addonProxyContract from "../../../../packages/data_plane/data_contracts/jquants_proxy_addons.json";
-import { authorized } from "./authorized";
-import { json } from "./http_json";
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { fetchGovernedPage, type AcquisitionEnv } from "./jquants_acquisition";
+import type {
+  JquantsAcquisitionRequestV2,
+  JquantsAcquisitionRpc,
+} from "./jquants_acquisition_types";
+import { handleHttpRequest, type LegacyHttpEnv } from "./legacy_http";
 
-export interface Env {
-  JQUANTS_API_KEY: string;
-  JQUANTS_PROXY_TOKEN?: string;
-}
-
-const JQ_BASE = "https://api.jquants.com";
-const JQUANTS_PROXY_PATHS: ReadonlySet<string> = new Set(
-  [...premiumContract.datasets, ...addonProxyContract.datasets].map(
-    (dataset) => dataset.path,
-  ),
-);
-
-type ProxyBody = {
-  path: string;
-  method: "GET";
-  query: Record<string, string>;
+export type Env = AcquisitionEnv & LegacyHttpEnv & {
+  ENVIRONMENT?: "production" | "staging";
 };
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseProxyBody(value: unknown): ProxyBody | null {
-  if (!isObject(value) || typeof value.path !== "string") return null;
-  if (value.method !== undefined && value.method !== "GET") return null;
-  if (value.query !== undefined && !isObject(value.query)) return null;
-
-  const query: Record<string, string> = {};
-  for (const [key, item] of Object.entries(value.query || {})) {
-    if (typeof item !== "string") return null;
-    if (item !== "") query[key] = item;
+export class IngestionSecretsService
+  extends WorkerEntrypoint<Env>
+  implements JquantsAcquisitionRpc {
+  override fetch(request: Request): Promise<Response> {
+    return handleHttpRequest(request, this.env);
   }
-  return { path: value.path, method: "GET", query };
+
+  fetch_governed_page(request: JquantsAcquisitionRequestV2): Promise<Response> {
+    return fetchGovernedPage(request, this.env);
+  }
 }
 
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/health") {
-      if (request.method !== "GET") {
-        return json({ error: "GET required" }, 405);
-      }
-      return json({
-        ok: true,
-        has_jquants_key: Boolean(env.JQUANTS_API_KEY),
-      });
-    }
-
-    if (url.pathname === "/v1/proxy/jquants") {
-      if (!(await authorized(request, env.JQUANTS_PROXY_TOKEN))) {
-        return json({ error: "unauthorized" }, 401);
-      }
-      if (!env.JQUANTS_API_KEY) {
-        return json({ error: "JQUANTS_API_KEY not bound" }, 500);
-      }
-      if (request.method !== "POST") {
-        return json({ error: "POST required" }, 405);
-      }
-      let rawBody: unknown;
-      try {
-        rawBody = await request.json();
-      } catch {
-        return json({ error: "invalid json" }, 400);
-      }
-      const body = parseProxyBody(rawBody);
-      if (body === null) {
-        return json(
-          { error: "body requires path, optional method=GET, and string query values" },
-          400,
-        );
-      }
-      if (!JQUANTS_PROXY_PATHS.has(body.path)) {
-        return json(
-          { error: "path is not allowed by the J-Quants proxy contracts" },
-          403,
-        );
-      }
-      const target = new URL(JQ_BASE + body.path);
-      for (const [key, value] of Object.entries(body.query)) {
-        target.searchParams.set(key, value);
-      }
-      const upstream = await fetch(target.toString(), {
-        method: "GET",
-        headers: { "x-api-key": env.JQUANTS_API_KEY },
-        redirect: "manual",
-      });
-      return new Response(upstream.body, {
-        status: upstream.status,
-        statusText: upstream.statusText,
-        headers: {
-          "content-type": upstream.headers.get("content-type") || "application/json",
-          "cache-control": "no-store",
-          "x-content-type-options": "nosniff",
-        },
-      });
-    }
-
-    return json({ error: "not found" }, 404);
-  },
-} satisfies ExportedHandler<Env>;
+export default IngestionSecretsService;

@@ -7,7 +7,11 @@ import json
 
 import pytest
 
-from data_contracts import COVERAGE_POLICY_VERSION, coverage_contract_for
+from data_contracts import (
+    COVERAGE_POLICY_VERSION,
+    coverage_contract_for,
+    coverage_policy_binding,
+)
 from data_contracts.source_capability import source_capability_contract_or_none
 from research.research_data_profile import (
     CORE_PROFILE_ID,
@@ -35,6 +39,16 @@ def _core_spec(**overrides: object) -> dict:
     spec.pop("profile_digest", None)
     spec.update(overrides)
     return spec
+
+
+def _complete_evidence(dataset_id: str, **overrides: object) -> dict[str, object]:
+    evidence: dict[str, object] = {
+        "status": "COMPLETE",
+        "coverage_mode": official_mode(dataset_id),
+        **dict(coverage_policy_binding(dataset_id)),
+    }
+    evidence.update(overrides)
+    return evidence
 
 
 def test_omit_dependency_fails() -> None:
@@ -137,17 +151,16 @@ def test_digest_stable() -> None:
 def test_profile_ready_false_when_required_dataset_is_partial() -> None:
     profile = load_core_profile()
     evidence = {
-        dataset: {"status": "COMPLETE", "coverage_mode": official_mode(dataset)}
+        dataset: _complete_evidence(dataset)
         for dataset in profile.required_datasets
     }
-    evidence["equities_bars_daily"] = {
-        "status": "PARTIAL",
-        "coverage_mode": official_mode("equities_bars_daily"),
-    }
+    evidence["equities_bars_daily"] = _complete_evidence(
+        "equities_bars_daily", status="PARTIAL"
+    )
     assert profile_ready(profile, evidence) is False
     assert profile_ready(profile, None) is False
     missing = {
-        dataset: {"status": "COMPLETE", "coverage_mode": official_mode(dataset)}
+        dataset: _complete_evidence(dataset)
         for dataset in profile.required_datasets
         if dataset != "fins_summary"
     }
@@ -158,7 +171,7 @@ def test_profile_ready_rejects_string_complete_labels() -> None:
     profile = load_core_profile()
     assert profile_ready(profile, {"equities_bars_daily": "COMPLETE"}) is False
     evidence = {
-        dataset: {"status": "COMPLETE", "coverage_mode": official_mode(dataset)}
+        dataset: _complete_evidence(dataset)
         for dataset in profile.required_datasets
     }
     evidence["equities_bars_daily"] = "COMPLETE"
@@ -169,7 +182,7 @@ def test_profile_ready_true_only_when_every_required_is_complete_official() -> N
     # Combinatorics only: synthetic COMPLETE is not a live READY publish.
     profile = load_core_profile()
     evidence = {
-        dataset: {"status": "COMPLETE", "coverage_mode": official_mode(dataset)}
+        dataset: _complete_evidence(dataset)
         for dataset in profile.required_datasets
     }
     missing_v3 = any(
@@ -179,11 +192,41 @@ def test_profile_ready_true_only_when_every_required_is_complete_official() -> N
     # Missing SourceCapability V3 is not official-complete.
     assert profile_ready(profile, evidence) is (not missing_v3)
     wrong_mode = dict(evidence)
-    wrong_mode["markets_calendar"] = {
-        "status": "COMPLETE",
-        "coverage_mode": "not-official",
-    }
+    wrong_mode["markets_calendar"] = _complete_evidence(
+        "markets_calendar", coverage_mode="not-official"
+    )
     assert profile_ready(profile, wrong_mode) is False
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong"),
+    (
+        ("policy_id", "caller-policy"),
+        ("policy_version", "collection-coverage/caller"),
+        ("policy_digest", "sha256:" + ("00" * 32)),
+    ),
+)
+@pytest.mark.parametrize("mutation", ("missing", "unknown", "wrong"))
+def test_profile_ready_requires_exact_coverage_policy_triplet(
+    field: str,
+    wrong: str,
+    mutation: str,
+) -> None:
+    profile = load_core_profile()
+    evidence = {
+        dataset: _complete_evidence(dataset)
+        for dataset in profile.required_datasets
+    }
+    target = dict(evidence["equities_bars_daily"])
+    if mutation == "missing":
+        target.pop(field)
+    elif mutation == "unknown":
+        target[field] = "UNKNOWN"
+    else:
+        target[field] = wrong
+    evidence["equities_bars_daily"] = target
+
+    assert profile_ready(profile, evidence) is False
 
 
 def test_listed_dataset_constructs_when_required_includes_it() -> None:
@@ -247,7 +290,7 @@ def test_profile_ready_false_on_stale_v2_live_evidence() -> None:
     # Live MCP: projection STALE, applied_cursor null, master PARTIAL under
     # collection-coverage/v2 2006-08-13 floor (not local v3 2008-05-07).
     evidence = {
-        dataset: {"status": "COMPLETE", "coverage_mode": official_mode(dataset)}
+        dataset: _complete_evidence(dataset)
         for dataset in profile.required_datasets
     }
     evidence["equities_master"] = {
@@ -261,21 +304,19 @@ def test_profile_ready_false_on_stale_v2_live_evidence() -> None:
     assert profile_ready(profile, evidence) is False
 
     stale_complete = {
-        dataset: {
-            "status": "COMPLETE",
-            "coverage_mode": official_mode(dataset),
-            "projection_status": "STALE",
-            "applied_cursor": None,
-        }
+        dataset: _complete_evidence(
+            dataset,
+            projection_status="STALE",
+            applied_cursor=None,
+        )
         for dataset in profile.required_datasets
     }
     assert profile_ready(profile, stale_complete) is False
     unpinned = {
-        dataset: {
-            "status": "COMPLETE",
-            "coverage_mode": official_mode(dataset),
-            "applied_cursor": None,
-        }
+        dataset: _complete_evidence(
+            dataset,
+            applied_cursor=None,
+        )
         for dataset in profile.required_datasets
     }
     assert profile_ready(profile, unpinned) is False

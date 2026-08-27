@@ -20,7 +20,9 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 from data_contracts import (
@@ -30,6 +32,8 @@ from data_contracts import (
     REGISTRY_VERSION,
     canonical_dataset_for,
     coverage_contract_for,
+    coverage_policy_binding,
+    coverage_policy_set_binding,
     coverage_v3_dataset_ids,
     source_capability_contract_or_none,
 )
@@ -38,6 +42,11 @@ from research.evaluation_ir import EVALUATION_IR_VERSION
 from strategies.spec import FeatureRef, STRATEGY_SPEC_VERSION, StrategySpec
 
 PROFILE_VERSION: str = "research-data-profile/v1"
+PROFILE_VERSION_V1: str = PROFILE_VERSION
+PROFILE_VERSION_V2: str = "research-data-profile/v2"
+SUPPORTED_PROFILE_VERSIONS: frozenset[str] = frozenset(
+    {PROFILE_VERSION_V1, PROFILE_VERSION_V2}
+)
 CORE_PROFILE_ID: str = "core"
 CORE_PROFILE_REL: Path = Path("specs") / "research_profiles" / "core_v1.json"
 REQUIRED_COVERAGE_MODE_OFFICIAL: str = "official"
@@ -90,6 +99,13 @@ _PROFILE_FIELDS: frozenset[str] = frozenset(
         "snapshot_cutoff",
         "permitted_universe",
         "excluded_datasets_and_reasons",
+        "plan_id",
+        "plan_digest",
+        "dependency_closure_digest",
+        "period_start",
+        "period_end",
+        "required_lookback_trading_days",
+        "dataset_scopes",
     }
 )
 _DEPS_REQUIRED_KEYS: tuple[str, ...] = (
@@ -104,6 +120,7 @@ _DATASET_LIST_KEYS: tuple[str, ...] = (
     "datasets",
     "datasets_required",
     "required_datasets",
+    "dataset_dependencies",
 )
 _FEATURE_REF_KEYS: tuple[str, ...] = (
     "feature",
@@ -135,6 +152,24 @@ def compute_digest(payload: Mapping[str, Any]) -> str:
     """Canonical JSON SHA-256 of a profile body (excludes ``profile_digest``)."""
     raw = _canonical_json(payload).encode("utf-8")
     return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): _freeze_json(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _thaw_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json(item) for item in value]
+    return value
 
 
 def resolve_deps(spec: Mapping[str, Any] | ResearchDataProfile) -> tuple[str, ...]:
@@ -215,9 +250,36 @@ class ResearchDataProfile:
     snapshot_cutoff: str | None
     permitted_universe: tuple[str, ...]
     excluded_datasets_and_reasons: Mapping[str, str]
+    plan_id: str | None = None
+    plan_digest: str | None = None
+    dependency_closure_digest: str | None = None
+    period_start: str | None = None
+    period_end: str | None = None
+    required_lookback_trading_days: int = 0
+    dataset_scopes: tuple[Mapping[str, Any], ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "required_datasets", tuple(self.required_datasets))
+        object.__setattr__(
+            self, "contract_versions", _freeze_json(self.contract_versions)
+        )
+        object.__setattr__(
+            self, "feature_dependencies", _freeze_json(self.feature_dependencies)
+        )
+        object.__setattr__(
+            self, "strategy_dependencies", _freeze_json(self.strategy_dependencies)
+        )
+        object.__setattr__(self, "risk_dependencies", tuple(self.risk_dependencies))
+        object.__setattr__(self, "permitted_universe", tuple(self.permitted_universe))
+        object.__setattr__(
+            self,
+            "excluded_datasets_and_reasons",
+            _freeze_json(self.excluded_datasets_and_reasons),
+        )
+        object.__setattr__(self, "dataset_scopes", _freeze_json(self.dataset_scopes))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        body = {
             "profile_id": self.profile_id,
             "profile_version": self.profile_version,
             "profile_digest": self.profile_digest,
@@ -225,13 +287,34 @@ class ResearchDataProfile:
             "required_datasets": list(self.required_datasets),
             "required_coverage_mode": self.required_coverage_mode,
             "contract_versions": dict(self.contract_versions),
-            "feature_dependencies": [dict(item) for item in self.feature_dependencies],
-            "strategy_dependencies": [dict(item) for item in self.strategy_dependencies],
+            "feature_dependencies": [
+                _thaw_json(item) for item in self.feature_dependencies
+            ],
+            "strategy_dependencies": [
+                _thaw_json(item) for item in self.strategy_dependencies
+            ],
             "risk_dependencies": list(self.risk_dependencies),
             "snapshot_cutoff": self.snapshot_cutoff,
             "permitted_universe": list(self.permitted_universe),
             "excluded_datasets_and_reasons": dict(self.excluded_datasets_and_reasons),
         }
+        if self.profile_version == PROFILE_VERSION_V2:
+            body.update(
+                {
+                    "plan_id": self.plan_id,
+                    "plan_digest": self.plan_digest,
+                    "dependency_closure_digest": self.dependency_closure_digest,
+                    "period_start": self.period_start,
+                    "period_end": self.period_end,
+                    "required_lookback_trading_days": (
+                        self.required_lookback_trading_days
+                    ),
+                    "dataset_scopes": [
+                        _thaw_json(item) for item in self.dataset_scopes
+                    ],
+                }
+            )
+        return body
 
     def to_canonical_dict(self) -> dict[str, Any]:
         body = self.to_dict()
@@ -247,10 +330,21 @@ class ResearchDataProfile:
             raise ResearchDataProfileError(
                 f"unknown ResearchDataProfile field(s): {unknown}"
             )
+        optional_v2_fields = {
+            "plan_id",
+            "plan_digest",
+            "dependency_closure_digest",
+            "period_start",
+            "period_end",
+            "required_lookback_trading_days",
+            "dataset_scopes",
+        }
         missing_fields = sorted(
             key
             for key in _PROFILE_FIELDS
-            if key not in payload and key != "profile_digest"
+            if key not in payload
+            and key != "profile_digest"
+            and key not in optional_v2_fields
         )
         if missing_fields:
             raise ResearchDataProfileError(
@@ -259,11 +353,51 @@ class ResearchDataProfile:
 
         profile_id = _require_str(payload.get("profile_id"), "profile_id")
         profile_version = _require_str(payload.get("profile_version"), "profile_version")
-        if profile_version != PROFILE_VERSION:
+        if profile_version not in SUPPORTED_PROFILE_VERSIONS:
             raise ResearchDataProfileError(
                 f"unsupported profile_version {profile_version!r}; "
-                f"expected {PROFILE_VERSION!r}"
+                f"expected one of {sorted(SUPPORTED_PROFILE_VERSIONS)}"
             )
+        if profile_version == PROFILE_VERSION_V2:
+            missing_v2 = sorted(optional_v2_fields - set(payload))
+            if missing_v2:
+                raise ResearchDataProfileError(
+                    f"ResearchDataProfile v2 missing field(s): {missing_v2}"
+                )
+            plan_id = _require_str(payload.get("plan_id"), "plan_id")
+            plan_digest = _require_sha256(payload.get("plan_digest"), "plan_digest")
+            closure_digest = _require_sha256(
+                payload.get("dependency_closure_digest"),
+                "dependency_closure_digest",
+            )
+            period_start = _require_iso_date(
+                payload.get("period_start"), "period_start"
+            )
+            period_end = _require_iso_date(payload.get("period_end"), "period_end")
+            if period_start > period_end:
+                raise ResearchDataProfileError("profile period is reversed")
+            raw_lookback = payload.get("required_lookback_trading_days")
+            if (
+                isinstance(raw_lookback, bool)
+                or not isinstance(raw_lookback, int)
+                or raw_lookback < 0
+            ):
+                raise ResearchDataProfileError(
+                    "required_lookback_trading_days must be a non-negative integer"
+                )
+            required_lookback = raw_lookback
+        else:
+            present_v2 = sorted(optional_v2_fields.intersection(payload))
+            if present_v2:
+                raise ResearchDataProfileError(
+                    f"ResearchDataProfile v1 cannot contain field(s): {present_v2}"
+                )
+            plan_id = None
+            plan_digest = None
+            closure_digest = None
+            period_start = None
+            period_end = None
+            required_lookback = 0
         purpose = _require_str(payload.get("purpose"), "purpose")
         required_coverage_mode = _require_str(
             payload.get("required_coverage_mode"), "required_coverage_mode"
@@ -290,6 +424,27 @@ class ResearchDataProfile:
 
         # resolve_deps fail-closed on missing Deps / omitted listed datasets.
         required_datasets = resolve_deps(payload)
+        if profile_version == PROFILE_VERSION_V2:
+            dataset_scopes = _require_dataset_scopes(
+                payload.get("dataset_scopes"),
+                required_datasets=required_datasets,
+                period_start=period_start,
+                period_end=period_end,
+                required_lookback=required_lookback,
+            )
+            expected_policy = coverage_policy_set_binding(list(required_datasets))
+            if (
+                contract_versions.get("coverage_policy")
+                != expected_policy["policy_version"]
+                or contract_versions.get("coverage_policy_digest")
+                != expected_policy["policy_digest"]
+            ):
+                raise ResearchDataProfileError(
+                    "ResearchDataProfile v2 coverage policy-set version/digest "
+                    "does not match required_datasets"
+                )
+        else:
+            dataset_scopes = ()
 
         body = {
             "profile_id": profile_id,
@@ -309,6 +464,18 @@ class ResearchDataProfile:
             ),
             "excluded_datasets_and_reasons": dict(excluded),
         }
+        if profile_version == PROFILE_VERSION_V2:
+            body.update(
+                {
+                    "plan_id": plan_id,
+                    "plan_digest": plan_digest,
+                    "dependency_closure_digest": closure_digest,
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "required_lookback_trading_days": required_lookback,
+                    "dataset_scopes": [dict(item) for item in dataset_scopes],
+                }
+            )
         digest = compute_digest(body)
         declared = payload.get("profile_digest")
         if declared is not None:
@@ -331,6 +498,13 @@ class ResearchDataProfile:
             snapshot_cutoff=snapshot_cutoff,
             permitted_universe=tuple(body["permitted_universe"]),
             excluded_datasets_and_reasons=excluded,
+            plan_id=plan_id,
+            plan_digest=plan_digest,
+            dependency_closure_digest=closure_digest,
+            period_start=period_start,
+            period_end=period_end,
+            required_lookback_trading_days=required_lookback,
+            dataset_scopes=dataset_scopes,
         )
 
 
@@ -361,6 +535,79 @@ def default_contract_versions() -> dict[str, str]:
     }
 
 
+def contract_versions_for_datasets(
+    dataset_ids: Sequence[str],
+) -> dict[str, str]:
+    """Pinned versions plus the exact governed Coverage policy-set identity."""
+    policy_set = coverage_policy_set_binding(list(dataset_ids))
+    versions = default_contract_versions()
+    versions["coverage_policy"] = str(policy_set["policy_version"])
+    versions["coverage_policy_digest"] = str(policy_set["policy_digest"])
+    return versions
+
+
+def profile_from_dependency_closure(closure: Any) -> ResearchDataProfile:
+    """Materialize the exact v2 data profile bound to one plan closure."""
+    from research.dependency_closure import PlanDependencyClosure
+
+    if not isinstance(closure, PlanDependencyClosure):
+        raise ResearchDataProfileError("PlanDependencyClosure v1 required")
+    feature_dependencies = [
+        {
+            "id": dependency.feature_id,
+            "version": dependency.feature_version,
+            "params": dict(dependency.params),
+            "definition_digest": dependency.definition_digest,
+            "dataset_dependencies": list(dependency.dataset_dependencies),
+        }
+        for dependency in closure.feature_dependencies
+    ]
+    payload = {
+        "profile_id": f"{closure.research_data_profile_id}:{closure.plan_id}",
+        "profile_version": PROFILE_VERSION_V2,
+        "purpose": (
+            "Exact transitive data profile compiled from "
+            f"PlanDependencyClosure {closure.plan_id}"
+        ),
+        "required_datasets": list(closure.required_datasets),
+        "required_coverage_mode": REQUIRED_COVERAGE_MODE_OFFICIAL,
+        "contract_versions": contract_versions_for_datasets(
+            closure.required_datasets
+        ),
+        "feature_dependencies": feature_dependencies,
+        "strategy_dependencies": [
+            {
+                "strategy_id": closure.strategy_spec_id,
+                "version": closure.strategy_spec_version,
+                "strategy_spec_hash": closure.strategy_spec_hash,
+            }
+        ],
+        "risk_dependencies": [
+            f"{closure.risk_dependency.dependency_id}@"
+            f"{closure.risk_dependency.version}"
+        ],
+        "snapshot_cutoff": closure.period_end,
+        "permitted_universe": [
+            dependency.dependency_id
+            for dependency in closure.universe_dependencies
+        ],
+        "excluded_datasets_and_reasons": dict(CORE_TIP_ONLY_EXCLUSIONS),
+        "plan_id": closure.plan_id,
+        "plan_digest": closure.plan_digest,
+        "dependency_closure_digest": closure.closure_digest,
+        "period_start": closure.period_start,
+        "period_end": closure.period_end,
+        "required_lookback_trading_days": closure.required_lookback_trading_days,
+        "dataset_scopes": [scope.to_dict() for scope in closure.dataset_scopes],
+    }
+    profile = ResearchDataProfile.from_dict(payload)
+    if profile.required_datasets != closure.required_datasets:
+        raise ResearchDataProfileError(
+            "compiled profile datasets do not match PlanDependencyClosure"
+        )
+    return profile
+
+
 def _assert_core_exclusions(profile: ResearchDataProfile) -> None:
     required = set(profile.required_datasets)
     for dataset in (TIP_ONLY_AM_DATASET, TIP_ONLY_EARNINGS_CALENDAR_DATASET):
@@ -382,10 +629,10 @@ def _assert_core_exclusions(profile: ResearchDataProfile) -> None:
 def _complete_under_official(
     dataset_id: str, evidence_by_dataset: Mapping[str, Any]
 ) -> bool:
-    """True iff mapping evidence is COMPLETE under official_mode(dataset_id).
+    """True iff evidence is COMPLETE under the exact governed policy row.
 
-    A string COMPLETE label is not official-mode proof. Missing V3 is not
-    official-complete.
+    A string COMPLETE label is not official-mode proof. Missing V3 or any
+    missing/mismatched policy identity, version, or digest is fail-closed.
     """
     if source_capability_contract_or_none(dataset_id) is None:
         return False
@@ -400,6 +647,12 @@ def _complete_under_official(
         return False
     if evidence.get("status") != "COMPLETE":
         return False
+    expected_policy = coverage_policy_binding(dataset_id)
+    if any(
+        evidence.get(field) != expected_policy[field]
+        for field in ("policy_id", "policy_version", "policy_digest")
+    ):
+        return False
     required_mode = official_mode(dataset_id)
     if "coverage_mode" in evidence:
         return evidence.get("coverage_mode") == required_mode
@@ -409,6 +662,76 @@ def _complete_under_official(
 def _evaluation_protocol(raw: Any) -> str:
     versions = _require_contract_versions(raw)
     return versions["evaluation_ir"]
+
+
+def _require_iso_date(raw: Any, where: str) -> str:
+    value = _require_str(raw, where)
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise ResearchDataProfileError(f"{where} must be an ISO date") from exc
+    if parsed.isoformat() != value:
+        raise ResearchDataProfileError(f"{where} must be an ISO date")
+    return value
+
+
+def _require_dataset_scopes(
+    raw: Any,
+    *,
+    required_datasets: tuple[str, ...],
+    period_start: str,
+    period_end: str,
+    required_lookback: int,
+) -> tuple[dict[str, Any], ...]:
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        raise ResearchDataProfileError("dataset_scopes must be an array")
+    normalized: list[dict[str, Any]] = []
+    expected_fields = {
+        "dataset_id",
+        "period_start",
+        "period_end",
+        "required_lookback_trading_days",
+    }
+    for index, item in enumerate(raw):
+        if not isinstance(item, Mapping) or set(item) != expected_fields:
+            raise ResearchDataProfileError(
+                f"dataset_scopes[{index}] fields are not closed"
+            )
+        dataset_id = _require_str(item.get("dataset_id"), "dataset_scope.dataset_id")
+        start = _require_iso_date(item.get("period_start"), "dataset_scope.period_start")
+        end = _require_iso_date(item.get("period_end"), "dataset_scope.period_end")
+        lookback = item.get("required_lookback_trading_days")
+        if (
+            isinstance(lookback, bool)
+            or not isinstance(lookback, int)
+            or lookback < 0
+        ):
+            raise ResearchDataProfileError(
+                "dataset_scope lookback must be a non-negative integer"
+            )
+        if start != period_start or end != period_end:
+            raise ResearchDataProfileError(
+                "dataset_scope period must match profile period"
+            )
+        normalized.append(
+            {
+                "dataset_id": dataset_id,
+                "period_start": start,
+                "period_end": end,
+                "required_lookback_trading_days": lookback,
+            }
+        )
+    normalized.sort(key=lambda item: str(item["dataset_id"]))
+    if tuple(str(item["dataset_id"]) for item in normalized) != required_datasets:
+        raise ResearchDataProfileError(
+            "dataset_scopes must exactly match required_datasets"
+        )
+    if max(
+        (int(item["required_lookback_trading_days"]) for item in normalized),
+        default=0,
+    ) != required_lookback:
+        raise ResearchDataProfileError("profile lookback summary mismatch")
+    return tuple(normalized)
 
 
 def _require_contract_versions(raw: Any) -> dict[str, str]:
@@ -473,7 +796,11 @@ def _normalize_strategy_dep(item: Any, where: str) -> dict[str, Any]:
     if not str(payload.get("strategy_id") or "").strip():
         raise ResearchDataProfileError(f"{where}.strategy_id is required")
     if "rule" not in payload:
-        raise ResearchDataProfileError(f"{where}.rule is required")
+        if not str(payload.get("version") or "").strip():
+            raise ResearchDataProfileError(f"{where}.version is required")
+        _require_sha256(
+            payload.get("strategy_spec_hash"), f"{where}.strategy_spec_hash"
+        )
     return payload
 
 
@@ -578,6 +905,21 @@ def _require_str(value: Any, where: str) -> str:
     return value.strip()
 
 
+def _require_sha256(value: Any, where: str) -> str:
+    text = _require_str(value, where)
+    if len(text) != 71 or not text.startswith("sha256:"):
+        raise ResearchDataProfileError(f"{where} must be a canonical sha256 digest")
+    try:
+        int(text[7:], 16)
+    except ValueError as exc:
+        raise ResearchDataProfileError(
+            f"{where} must be a canonical sha256 digest"
+        ) from exc
+    if text[7:] != text[7:].lower():
+        raise ResearchDataProfileError(f"{where} must be a canonical sha256 digest")
+    return text
+
+
 def _jsonable(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {str(key): _jsonable(item) for key, item in value.items()}
@@ -606,15 +948,19 @@ __all__ = [
     "COVERAGE_POLICY_V3",
     "COVERAGE_V3_DATASETS",
     "PROFILE_VERSION",
+    "PROFILE_VERSION_V1",
+    "PROFILE_VERSION_V2",
     "REQUIRED_COVERAGE_MODE_OFFICIAL",
     "ResearchDataProfile",
     "ResearchDataProfileError",
     "TIP_ONLY_AM_DATASET",
     "TIP_ONLY_EARNINGS_CALENDAR_DATASET",
     "compute_digest",
+    "contract_versions_for_datasets",
     "default_contract_versions",
     "load_core_profile",
     "official_mode",
     "profile_ready",
+    "profile_from_dependency_closure",
     "resolve_deps",
 ]

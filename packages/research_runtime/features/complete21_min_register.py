@@ -9,6 +9,17 @@ from __future__ import annotations
 from price_basis import RAW
 
 from .complete21_min_compute import (
+    _CALENDAR_DATASETS,
+    _DISC_DATASETS,
+    _FUND_VALUE_DATASETS,
+    _FUTURES_DATASETS,
+    _MARGIN_ALERT_DATASETS,
+    _MARGIN_DATASETS,
+    _REPO_DATASETS,
+    _RETURN_C21_DATASETS,
+    _SHORT_RATIO_DATASETS,
+    _TOPIX_REL_DATASETS,
+    _VOLUME_DATASETS,
     _disclosure_flag_fins,
     _fundamental_value_score,
     _futures_activity_proxy,
@@ -39,6 +50,7 @@ VolumeChange1d: FeatureDefinition = register(
             "None with fewer than two PIT-visible volumes. Permanent DEFER rejected."
         ),
         compute=_volume_change_1d,
+        dataset_dependencies=_VOLUME_DATASETS,
         tags=("volume", "daily", "complete21"),
         intended_role="signal",
         status="approved",
@@ -60,6 +72,7 @@ TopixRelative1d: FeatureDefinition = register(
             "(equities_bars_daily + indices_bars_daily_topix). Permanent DEFER rejected."
         ),
         compute=_topix_relative_1d,
+        dataset_dependencies=_TOPIX_REL_DATASETS,
         tags=("return", "relative", "topix", "complete21"),
         intended_role="signal",
         status="approved",
@@ -81,6 +94,7 @@ DisclosureFlagFins: FeatureDefinition = register(
             "exists for code at as_of, else 0.0. Permanent DEFER rejected."
         ),
         compute=_disclosure_flag_fins,
+        dataset_dependencies=_DISC_DATASETS,
         tags=("disclosure", "fins", "flag", "complete21"),
         intended_role="signal",
         status="approved",
@@ -103,6 +117,7 @@ MarginInterestChange1d: FeatureDefinition = register(
             "Permanent DEFER rejected."
         ),
         compute=_margin_interest_change_1d,
+        dataset_dependencies=_MARGIN_DATASETS,
         tags=("margin", "interest", "complete21"),
         intended_role="signal",
         status="approved",
@@ -124,6 +139,7 @@ ShortRatioLevel: FeatureDefinition = register(
             "(ShrtWithResVa + ShrtNoResVa) / SellExShortVa. Permanent DEFER rejected."
         ),
         compute=_short_ratio_level,
+        dataset_dependencies=_SHORT_RATIO_DATASETS,
         tags=("short", "ratio", "sector", "complete21"),
         intended_role="signal",
         status="approved",
@@ -147,6 +163,7 @@ IsTradingDay: FeatureDefinition = register(
             "Permanent DEFER rejected."
         ),
         compute=_is_trading_day,
+        dataset_dependencies=_CALENDAR_DATASETS,
         tags=("calendar", "trading_day", "complete21"),
         intended_role="utility",
         status="approved",
@@ -169,6 +186,7 @@ RepoRateLevel: FeatureDefinition = register(
             "rate_type filters. Permanent DEFER rejected."
         ),
         compute=_repo_rate_level,
+        dataset_dependencies=_REPO_DATASETS,
         tags=("repo", "rate", "jsda", "macro", "complete21"),
         intended_role="state",
         status="approved",
@@ -191,6 +209,7 @@ RepoRateChange: FeatureDefinition = register(
             "(JSDA). Candidate until feature E2E promotion. Permanent DEFER rejected."
         ),
         compute=_repo_rate_change,
+        dataset_dependencies=_REPO_DATASETS,
         tags=("repo", "rate", "jsda", "macro", "change", "complete21"),
         intended_role="state",
         status="candidate",
@@ -212,6 +231,7 @@ Return1dC21: FeatureDefinition = register(
             "Candidate twin of approved v0 return_1d; does not replace it."
         ),
         compute=_return_1d_c21,
+        dataset_dependencies=_RETURN_C21_DATASETS,
         tags=("return", "daily", "complete21", "export"),
         intended_role="signal",
         status="candidate",
@@ -234,6 +254,7 @@ MarginAlertFlag: FeatureDefinition = register(
             "Permanent DEFER rejected."
         ),
         compute=_margin_alert_flag,
+        dataset_dependencies=_MARGIN_ALERT_DATASETS,
         tags=("margin", "alert", "flag", "complete21"),
         intended_role="signal",
         status="approved",
@@ -257,6 +278,7 @@ FuturesActivityProxy: FeatureDefinition = register(
             "None when no volumes are visible. Permanent DEFER rejected."
         ),
         compute=_futures_activity_proxy,
+        dataset_dependencies=_FUTURES_DATASETS,
         tags=("futures", "derivatives", "activity", "complete21"),
         intended_role="state",
         status="approved",
@@ -278,6 +300,7 @@ FundamentalValueScore: FeatureDefinition = register(
             "from fins_summary + equities_bars_daily close at as_of. Not READY."
         ),
         compute=_fundamental_value_score,
+        dataset_dependencies=_FUND_VALUE_DATASETS,
         tags=("fundamentals", "value", "fins", "complete21"),
         intended_role="signal",
         status="approved",

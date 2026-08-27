@@ -1,9 +1,9 @@
 """Propose title polarity / occupancy-label SoT.
 
-Python ``review_proposal_row`` and Worker ``titleOccupancyBad`` must share
-these tables. ``scripts/sync_cf_new_thesis_ids.py`` copies them into
-``propose_review_tables.ts``. Phrases are space-normalized (hyphens become
-spaces in both review paths). Does not inject. Does not GO.
+Python ``review_proposal_row`` and Worker ``titleOccupancyBad`` share these
+static review-policy tables. They are not generated from, or evidence of, the
+retired runtime catalog. Phrases are space-normalized (hyphens become spaces in
+both review paths). Does not inject. Does not GO.
 """
 
 from __future__ import annotations

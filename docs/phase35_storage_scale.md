@@ -69,32 +69,49 @@ The Worker also surfaces the table on `/v1/export/d1?table=ingestion_watermarks`
 so an operator can ask "when did dataset X last advance?" without touching the
 D1 console.
 
-## Local incremental sync
+## Private local bootstrap and incremental sync
 
-`scripts/sync_d1_to_sqlite.py --incremental` skips rows already mirrored
-locally. Important limitation (also called out in `--help`):
+The production path does not expose ingestion-premium on `workers.dev`.
+Instead, `scripts/sync_d1_to_sqlite.py --wrangler-remote` invokes the
+repository-pinned Wrangler 4.125.0 with the operator's existing authenticated profile,
+wired only to the repository-pinned production config and governed
+`quant-ingest` database id. The CLI exposes no executable, config, environment,
+database-name, or database-id override. It
+writes the remote D1 export only inside a mode-`0700` temporary directory, and
+removes it after apply. Provider stdout/stderr and credentials are never
+printed.
 
-> **The export API has no server-side `ingested_at` filter.** It paginates by
-> `rowid` only. Incremental mode therefore derives `since =
-> MAX(ingested_at)` from the local DB and applies it **client-side after page
-> fetch**. Every page is still walked; the savings are upsert work, not
-> transfer.
+The export is materialized into an isolated read-only SQLite source and checked
+with `PRAGMA integrity_check`. A full bootstrap applies every governed fact and
+control table and advances `sync_change_state` only after the complete table
+set succeeds. `--incremental` consumes `ingestion_change_log` where
+`change_seq > last_applied_change_seq` and commits the applied cursor after
+each durable page. If the process stops after fact upsert but before cursor
+commit, replay is idempotent. An export older than the local cursor is rejected.
 
-Concretely:
+```bash
+# First private bootstrap
+.venv/bin/python scripts/sync_d1_to_sqlite.py \
+  --db data/structured/ingestion.sqlite \
+  --wrangler-remote
 
-1. For each table, read `SELECT MAX(ingested_at) FROM {table}` from the
-   local SQLite (or accept an explicit `--since ISO`).
-2. Pull pages from `/v1/export/d1` exactly as in the full sync — same
-   cursor, same page size.
-3. After each page lands, drop rows whose `ingested_at <= since` before
-   handing the batch to `SqliteStore.upsert`. Comparison is lexicographic on
-   JST ISO strings (canonical form produced by `validate_available_at`),
-   which is also chronological.
-4. A single `httpx.Client` is reused across every table and page so the
-   TLS handshake + connection pool is amortised.
+# Later monotonic applies
+.venv/bin/python scripts/sync_d1_to_sqlite.py \
+  --db data/structured/ingestion.sqlite \
+  --wrangler-remote \
+  --incremental
+```
 
-When the export API gains a real filter (planned with
-`last_export_cursor`), step 2 collapses to one page for the common case.
+`--d1-export /path/to/export.sql` accepts a previously acquired SQL or
+standalone SQLite artifact for offline recovery. That operator-supplied mode is
+explicitly apply-only and cannot publish production READY or trusted cursor
+evidence. An authenticated full bootstrap removes prior governed rows before
+apply, then verifies source/local row counts and digests. Authenticated
+incremental apply requires the prior trusted content identity to match before
+it can advance. Every private apply records artifact digest, source cursor,
+applied cursor, source/local content identities, and status in
+`local_d1_export_sync_runs`. The HTTP `/v1/export/*` path remains temporarily
+available for legacy clients but is no longer the production default.
 
 ## Migration path (out of the generic `jquants_records` dump)
 

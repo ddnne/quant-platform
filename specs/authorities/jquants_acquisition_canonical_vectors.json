@@ -1,0 +1,48 @@
+{
+  "schema_version": "jquants-acquisition-canonical-vectors/v1",
+  "canonicalization": "RFC8259_UTF8_SORTED_KEYS_NO_WHITESPACE",
+  "vectors": [
+    {
+      "id": "ascii-pagination-key",
+      "value": {
+        "schema_version": "jquants-acquisition-query/v2",
+        "path": "/v2/indices/bars/daily/topix",
+        "ordered_query": [
+          ["from", "2024-02-01"],
+          ["to", "2024-02-29"],
+          ["pagination_key", "page-2"]
+        ]
+      },
+      "canonical_json": "{\"ordered_query\":[[\"from\",\"2024-02-01\"],[\"to\",\"2024-02-29\"],[\"pagination_key\",\"page-2\"]],\"path\":\"/v2/indices/bars/daily/topix\",\"schema_version\":\"jquants-acquisition-query/v2\"}",
+      "sha256_digest": "sha256:6bfbc5234d0d50778184e0061c7e181a406de5d2d992f6045d7cf755c8f566ee"
+    },
+    {
+      "id": "unicode-bmp-pagination-key",
+      "value": {
+        "schema_version": "jquants-acquisition-query/v2",
+        "path": "/v2/indices/bars/daily/topix",
+        "ordered_query": [
+          ["from", "2024-02-01"],
+          ["to", "2024-02-29"],
+          ["pagination_key", "次ページ"]
+        ]
+      },
+      "canonical_json": "{\"ordered_query\":[[\"from\",\"2024-02-01\"],[\"to\",\"2024-02-29\"],[\"pagination_key\",\"次ページ\"]],\"path\":\"/v2/indices/bars/daily/topix\",\"schema_version\":\"jquants-acquisition-query/v2\"}",
+      "sha256_digest": "sha256:7750d9c0c7b508b327c12ae4a5de51420ccf4c4876b24e7d14cdca49584d21b8"
+    },
+    {
+      "id": "unicode-astral-pagination-key",
+      "value": {
+        "schema_version": "jquants-acquisition-query/v2",
+        "path": "/v2/indices/bars/daily/topix",
+        "ordered_query": [
+          ["from", "2024-02-01"],
+          ["to", "2024-02-29"],
+          ["pagination_key", "cursor-😀-é"]
+        ]
+      },
+      "canonical_json": "{\"ordered_query\":[[\"from\",\"2024-02-01\"],[\"to\",\"2024-02-29\"],[\"pagination_key\",\"cursor-😀-é\"]],\"path\":\"/v2/indices/bars/daily/topix\",\"schema_version\":\"jquants-acquisition-query/v2\"}",
+      "sha256_digest": "sha256:ce5a981ca2d552389a34377537b01696c5587cae88a5b7649c3a42ed6b889eea"
+    }
+  ]
+}

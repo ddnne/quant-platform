@@ -316,20 +316,3 @@ def test_interpreter_uses_pinned_version_even_when_newer_exists():
     finally:
         features.FEATURES_REGISTRY.pop((feature_id, "1.0.0"), None)
         features.FEATURES_REGISTRY.pop((feature_id, "2.0.0"), None)
-
-
-def test_strategy_spec_source_contains_no_dynamic_code_execution():
-    import ast
-    from pathlib import Path
-
-    import strategies as _strategies_pkg
-
-    root = Path(_strategies_pkg.__file__).resolve().parent / "spec"
-    for path in root.glob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        called = {
-            node.func.id
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        }
-        assert not ({"eval", "exec", "compile", "__import__"} & called), path

@@ -1,7 +1,7 @@
 """JSON/catalog identity for the J-Quants secret-proxy allowlists.
 
-Worker request/auth/upstream behavior is executed in
-``platform/workers/ingestion-secrets/src/index.test.ts``. These tests pin
+Worker request/auth/upstream behavior is executed in the Workerd runtime suites
+under ``platform/workers/ingestion-secrets/runtime``. These tests pin
 the checked-in JSON contracts to the Python catalog sets — contract identity,
 not Worker source greps.
 """

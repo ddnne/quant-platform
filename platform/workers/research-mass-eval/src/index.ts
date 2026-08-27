@@ -8,7 +8,6 @@ import {
 import {
   buildSyntheticPanels,
   defaultPeriodsFromRequest,
-  loadD1BarsPanels,
   loadR2Panels,
 } from "./panels";
 import type { Env, MassEvalJobResult, MassEvalRequest } from "./types";
@@ -28,8 +27,8 @@ async function runMassEval(
   req: MassEvalRequest,
 ): Promise<MassEvalJobResult> {
   const t0 = Date.now();
-  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v139-24em-plus56";
-  const wave = env.MASS_EVAL_WAVE || "research-mass-eval";
+  const version = env.MASS_EVAL_VERSION;
+  const wave = env.MASS_EVAL_WAVE;
   const mode = req.mode || "synthetic";
   const oneWay = req.one_way_cost ?? 0.001;
   const maxCodes = Math.max(2, Math.min(40, req.max_codes ?? 8));
@@ -52,28 +51,6 @@ async function runMassEval(
     );
     panels = loaded.panels;
     panelNotes = loaded.notes;
-  } else if (mode === "d1_bars") {
-    if (!env.DB) {
-      panelNotes = ["d1_not_bound"];
-      panels = periodSpecs.map((p) => ({
-        period_id: String(p.period_id),
-        year: Number(p.year ?? 0),
-        period_start: p.period_start || "",
-        period_end: p.period_end || "",
-        status: "data_missing" as const,
-        bars: {},
-        source: "d1_not_bound",
-      }));
-    } else {
-      const loaded = await loadD1BarsPanels(
-        env.DB,
-        periodSpecs,
-        maxCodes,
-        maxDays,
-      );
-      panels = loaded.panels;
-      panelNotes = loaded.notes;
-    }
   }
 
   const results = req.logics.map((logic, index) =>
@@ -230,7 +207,7 @@ async function runDailyPath(
   req: MassEvalRequest,
 ): Promise<Record<string, unknown>> {
   const t0 = Date.now();
-  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v139-24em-plus56";
+  const version = env.MASS_EVAL_VERSION;
   const mode = req.mode || "r2_panels";
   const oneWay = req.one_way_cost ?? 0.001;
   const maxCodes = Math.max(2, Math.min(40, req.max_codes ?? 8));
@@ -249,15 +226,6 @@ async function runDailyPath(
       env.STRUCTURED_BUCKET,
       periodSpecs,
       panelsPrefix,
-    );
-    panels = loaded.panels;
-    panelNotes = loaded.notes;
-  } else if (mode === "d1_bars" && env.DB) {
-    const loaded = await loadD1BarsPanels(
-      env.DB,
-      periodSpecs,
-      maxCodes,
-      maxDays,
     );
     panels = loaded.panels;
     panelNotes = loaded.notes;
@@ -291,7 +259,7 @@ async function runDailyPath(
   });
   const payload: Record<string, unknown> = {
     version,
-    wave: env.MASS_EVAL_WAVE || "research-mass-eval",
+    wave: env.MASS_EVAL_WAVE,
     job_id: req.job_id,
     eval_kind: "daily_path",
     // Grade authority is jobCandidateGrade via encode; do not grade twice.

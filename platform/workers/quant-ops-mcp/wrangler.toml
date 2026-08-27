@@ -13,6 +13,10 @@ main = "src/index.js"
 compatibility_date = "2026-08-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
+preview_urls = false
+
+[secrets]
+required = ["GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET", "STATE_SECRET"]
 
 # OAuth token storage. Binding name MUST be OAUTH_KV (library requirement).
 [[kv_namespaces]]
@@ -20,9 +24,18 @@ binding = "OAUTH_KV"
 id = "cbbfc9439c3e4a789fa103777d38f39e" # title: quant-ops-mcp-oauth
 
 [[d1_databases]]
-binding = "OPS_DB"
-database_name = "quant-ingest"
-database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+binding = "OPS_PROJECTION_DB"
+database_name = "quant-ops-projection"
+database_id = "1b497e8a-5c69-4e19-ae2e-89a8f3185272"
+migrations_dir = "migrations/projection"
+migrations_table = "d1_migrations_ops_projection"
+
+[[d1_databases]]
+binding = "QUOTA_DB"
+database_name = "quant-ops-quota"
+database_id = "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6"
+migrations_dir = "migrations/quota"
+migrations_table = "d1_migrations_ops_quota"
 
 [durable_objects]
 bindings = [{ name = "MCP_OBJECT", class_name = "QuantOpsMcpAgent" }]
@@ -41,25 +54,42 @@ OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.work
 # secrets (wrangler secret put):
 #   GITHUB_CLIENT_ID
 #   GITHUB_CLIENT_SECRET
-# optional STATE_SECRET (else GITHUB_CLIENT_SECRET is reused for HMAC state)
+#   STATE_SECRET (dedicated OAuth-state HMAC key; no provider-secret fallback)
 
 [observability]
 enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"
 
 # Production uses the same Worker name (no -production suffix) so existing
 # OAuth clients keep the workers.dev callback host.
 [env.production]
 name = "quant-platform-ops-read-mcp"
 workers_dev = true
+preview_urls = false
+
+[env.production.secrets]
+required = ["GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET", "STATE_SECRET"]
 
 [[env.production.kv_namespaces]]
 binding = "OAUTH_KV"
 id = "cbbfc9439c3e4a789fa103777d38f39e" # title: quant-ops-mcp-oauth
 
 [[env.production.d1_databases]]
-binding = "OPS_DB"
-database_name = "quant-ingest"
-database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+binding = "OPS_PROJECTION_DB"
+database_name = "quant-ops-projection"
+database_id = "1b497e8a-5c69-4e19-ae2e-89a8f3185272"
+migrations_dir = "migrations/projection"
+migrations_table = "d1_migrations_ops_projection"
+
+[[env.production.d1_databases]]
+binding = "QUOTA_DB"
+database_name = "quant-ops-quota"
+database_id = "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6"
+migrations_dir = "migrations/quota"
+migrations_table = "d1_migrations_ops_quota"
 
 [env.production.durable_objects]
 bindings = [{ name = "MCP_OBJECT", class_name = "QuantOpsMcpAgent" }]
@@ -68,3 +98,10 @@ bindings = [{ name = "MCP_OBJECT", class_name = "QuantOpsMcpAgent" }]
 ALLOWED_LOGIN = "ddnne"
 DAILY_ROW_QUOTA = "25000"
 OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.production.version_metadata]
+binding = "CF_VERSION_METADATA"

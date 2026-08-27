@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import worker, { authorized, type GatewayEnv } from "./index";
+import { authorized } from "./authorized";
+import worker, { type GatewayEnv } from "./index";
 
 const GATEWAY_TOKEN = "gateway-secret";
 

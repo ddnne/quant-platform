@@ -6,6 +6,7 @@ import calendar
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 import json
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Iterable, Mapping, Sequence
@@ -13,13 +14,15 @@ from typing import Any, Iterable, Mapping, Sequence
 from cf_platform.ingest_premium.coverage import CheckResult, run_coverage
 from data_contracts.coverage import (
     COVERAGE_STATUSES,
-    POLICY_VERSION,
     SNAPSHOT_SEGMENT_GRANULARITIES,
     CollectionCoverageContract,
     all_coverage_contracts,
     coverage_contract_for,
+    coverage_policy_binding,
+    coverage_policy_set_binding,
 )
 from data_contracts.source_capability import (
+    COLLECTION_COVERAGE_V3,
     TIP_SNAPSHOT_MODES,
     OfficialRequiredDomainSubset,
     SourceCapabilityContract,
@@ -32,12 +35,14 @@ from ingestion.jsda.official_index import (
 )
 from storage.coverage_ledger_io import (
     persist_refreshed_coverage,
+    preserve_existing_complete_coverage_row,
     read_collection_receipts,
     read_coverage_segments,
     read_dataset_coverage,
     record_collection_receipt,
     record_required_segments,
     update_dataset_coverage_row,
+    update_existing_complete_coverage_evidence,
 )
 from storage.coverage_receipts import (
     EXPECTED_EMPTY_WITH_EVIDENCE,
@@ -45,6 +50,14 @@ from storage.coverage_receipts import (
     build_collection_receipt,
     build_synthetic_complete_receipt,
     compute_raw_digest,
+)
+from storage.receipt_policy import (
+    is_recovered_only_digests,
+    receipt_source_for_canonical_source,
+)
+from storage.receipt_crypto import (
+    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+    PRODUCTION_RECEIPT_ENVIRONMENT,
 )
 
 
@@ -74,7 +87,11 @@ class RequiredCoverageSegment:
 
 @dataclass(frozen=True)
 class CollectionReceipt:
-    """Auditable result of collecting and structuring one source window."""
+    """Untrusted persisted transport for one collection observation.
+
+    No field in this DTO is COMPLETE-authoritative until the v2 verifier has
+    returned a ``VerifiedCollectionClosure``.
+    """
 
     source: str
     dataset: str
@@ -93,6 +110,129 @@ class CollectionReceipt:
     status: str
     error: str | None
     checked_at: str
+
+
+class CoverageInventoryAuthorityUnavailable(RuntimeError):
+    """Exact inventory cannot be regenerated without transition authority."""
+
+
+class CoveragePublicationCutoffError(RuntimeError):
+    """The active publication lifecycle cannot authorize a frozen cutoff."""
+
+
+@dataclass(frozen=True)
+class CanonicalCoverageSegmentIdentity:
+    """Closed identity used for exact expected/actual inventory comparison."""
+
+    source: str
+    dataset: str
+    segment_id: str
+    policy_id: str
+    policy_version: str
+    policy_digest: str
+    segment_start: str
+    segment_end: str
+    expected_scope_json: str
+    expected_items: int | None
+
+    @property
+    def logical_key(self) -> tuple[str, str]:
+        return self.dataset, self.segment_id
+
+    @property
+    def storage_key(self) -> tuple[str, str, str, str]:
+        return self.source, self.dataset, self.segment_id, self.policy_version
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "dataset": self.dataset,
+            "segment_id": self.segment_id,
+            "policy_id": self.policy_id,
+            "policy_version": self.policy_version,
+            "policy_digest": self.policy_digest,
+            "segment_start": self.segment_start,
+            "segment_end": self.segment_end,
+            "expected_scope": json.loads(self.expected_scope_json),
+            "expected_items": self.expected_items,
+        }
+
+
+@dataclass(frozen=True)
+class ExactCoverageInventoryComparison:
+    """Verifier-produced comparison; callers cannot supply expected inventory."""
+
+    target_end: str
+    expected_segments: tuple[RequiredCoverageSegment, ...]
+    expected_identities: tuple[CanonicalCoverageSegmentIdentity, ...]
+    actual_identities: tuple[CanonicalCoverageSegmentIdentity, ...]
+    missing: tuple[CanonicalCoverageSegmentIdentity, ...]
+    unexpected: tuple[CanonicalCoverageSegmentIdentity, ...]
+    duplicates: tuple[tuple[str, str, int], ...]
+    wrong_policy: tuple[tuple[str, str, tuple[str, ...]], ...]
+    malformed: tuple[tuple[str, str, str], ...]
+
+    @property
+    def exact(self) -> bool:
+        return not (
+            self.missing
+            or self.unexpected
+            or self.duplicates
+            or self.wrong_policy
+            or self.malformed
+        )
+
+    def segments_for(self, dataset: str) -> tuple[RequiredCoverageSegment, ...]:
+        return tuple(
+            segment for segment in self.expected_segments
+            if segment.dataset == dataset
+        )
+
+    def detail(self, *, limit: int = 20) -> dict[str, Any]:
+        def brief(item: CanonicalCoverageSegmentIdentity) -> tuple[str, ...]:
+            return (
+                item.source,
+                item.dataset,
+                item.segment_id,
+                item.policy_version,
+                item.segment_start,
+                item.segment_end,
+            )
+
+        return {
+            "target_end": self.target_end,
+            "expected_count": len(self.expected_identities),
+            "actual_count": len(self.actual_identities),
+            "missing": [brief(item) for item in self.missing[:limit]],
+            "unexpected": [brief(item) for item in self.unexpected[:limit]],
+            "duplicate": list(self.duplicates[:limit]),
+            "wrong_policy": list(self.wrong_policy[:limit]),
+            "malformed": list(self.malformed[:limit]),
+        }
+
+
+@dataclass(frozen=True)
+class ExactCoverageCompleteVerification:
+    """Exact inventory plus verifier-minted closures for selected receipts."""
+
+    inventory: ExactCoverageInventoryComparison
+    closures: tuple[Any, ...]
+    invalid_segments: tuple[tuple[str, str, str], ...]
+
+    @property
+    def complete_eligible(self) -> bool:
+        return (
+            self.inventory.exact
+            and not self.invalid_segments
+            and len(self.closures) == len(self.inventory.expected_segments)
+        )
+
+    def detail(self, *, limit: int = 20) -> dict[str, Any]:
+        return {
+            **self.inventory.detail(limit=limit),
+            "verified_receipt_count": len(self.closures),
+            "invalid_selected_receipts": list(self.invalid_segments[:limit]),
+        }
 
 
 def _month_end(value: date) -> date:
@@ -328,6 +468,205 @@ def plan_required_segments(
     return tuple(segments)
 
 
+_DETERMINISTIC_READY_INVENTORY_GRAINS = frozenset({"calendar_month"})
+
+
+def _canonical_segment_identity(
+    segment: RequiredCoverageSegment,
+) -> CanonicalCoverageSegmentIdentity:
+    binding = coverage_policy_binding(segment.dataset)
+    return CanonicalCoverageSegmentIdentity(
+        source=segment.source,
+        dataset=segment.dataset,
+        segment_id=segment.segment_id,
+        policy_id=str(binding["policy_id"]),
+        policy_version=str(binding["policy_version"]),
+        policy_digest=str(binding["policy_digest"]),
+        segment_start=segment.segment_start,
+        segment_end=segment.segment_end,
+        expected_scope_json=_canonical_json(dict(segment.expected_scope)),
+        expected_items=segment.expected_items,
+    )
+
+
+def _persisted_segment_identity(
+    row: Mapping[str, Any],
+) -> CanonicalCoverageSegmentIdentity:
+    dataset = str(row["dataset"])
+    scope = json.loads(str(row["expected_scope"]))
+    if not isinstance(scope, dict):
+        raise ValueError("coverage segment expected_scope must be an object")
+    binding = coverage_policy_binding(dataset)
+    expected_items = row["expected_items"]
+    return CanonicalCoverageSegmentIdentity(
+        source=str(row["source"]),
+        dataset=dataset,
+        segment_id=str(row["segment_id"]),
+        policy_id=str(binding["policy_id"]),
+        policy_version=str(row["policy_version"]),
+        policy_digest=str(binding["policy_digest"]),
+        segment_start=str(row["segment_start"]),
+        segment_end=str(row["segment_end"]),
+        expected_scope_json=_canonical_json(scope),
+        expected_items=(
+            None if expected_items is None else int(expected_items)
+        ),
+    )
+
+
+def compare_exact_coverage_inventory(
+    conn: sqlite3.Connection,
+    datasets: Iterable[str],
+    *,
+    target_end: str,
+) -> ExactCoverageInventoryComparison:
+    """Compare live rows with independently regenerated deterministic V3 inventory.
+
+    Expected identities always come from checked-in Coverage and
+    SourceCapability contracts. Observed ``coverage_segments`` can never define
+    or shrink the expected set. Discovery/tip/index/time-series modes remain
+    authority-PENDING until C10 provides a verifier-owned inventory.
+    """
+    observed = tuple(datasets)
+    selected = tuple(sorted(set(observed)))
+    if not selected or observed != selected:
+        raise ValueError(
+            "exact Coverage inventory datasets must be sorted and duplicate-free"
+        )
+
+    expected_segments: list[RequiredCoverageSegment] = []
+    expected_identities: list[CanonicalCoverageSegmentIdentity] = []
+    for dataset in selected:
+        try:
+            policy = coverage_contract_for(dataset)
+        except KeyError as exc:
+            raise CoverageInventoryAuthorityUnavailable(
+                f"Coverage inventory authority unavailable for {dataset}: "
+                "checked-in Coverage V3 policy is missing"
+            ) from exc
+        capability = source_capability_contract_or_none(dataset)
+        if policy.policy_version != COLLECTION_COVERAGE_V3 or capability is None:
+            raise CoverageInventoryAuthorityUnavailable(
+                f"Coverage inventory authority unavailable for {dataset}: "
+                "checked-in V3 policy pair is required"
+            )
+        grain = capability.collection_window.grain
+        if (
+            grain not in _DETERMINISTIC_READY_INVENTORY_GRAINS
+            or policy.segment_granularity != grain
+        ):
+            raise CoverageInventoryAuthorityUnavailable(
+                f"Coverage inventory authority unavailable for {dataset}: "
+                f"{grain!r} requires an authority-issued inventory (C10 OPEN)"
+            )
+        try:
+            source = receipt_source_for_canonical_source(capability.source)
+        except ValueError as exc:
+            raise CoverageInventoryAuthorityUnavailable(
+                f"Coverage inventory authority unavailable for {dataset}: "
+                f"unsupported source {capability.source!r}"
+            ) from exc
+        segments = plan_required_segments(
+            policy,
+            target_end,
+            source=source,
+            index_text=None,
+        )
+        if not segments:
+            raise CoverageInventoryAuthorityUnavailable(
+                f"Coverage canonical inventory is empty for {dataset}"
+            )
+        expected_segments.extend(segments)
+        expected_identities.extend(
+            _canonical_segment_identity(segment) for segment in segments
+        )
+
+    placeholders = ",".join("?" for _ in selected)
+    cursor = conn.execute(
+        "SELECT source,dataset,segment_id,policy_version,segment_start,"
+        "segment_end,expected_scope,expected_items FROM coverage_segments "
+        f"WHERE dataset IN ({placeholders}) "
+        "ORDER BY dataset,segment_start,segment_id,source,policy_version",
+        selected,
+    )
+    columns = tuple(item[0] for item in cursor.description or ())
+    rows = [
+        dict(zip(columns, row, strict=True)) for row in cursor.fetchall()
+    ]
+    expected_by_key = {
+        _canonical_json(identity.to_dict()): identity
+        for identity in expected_identities
+    }
+    actual_by_key: dict[str, CanonicalCoverageSegmentIdentity] = {}
+    logical_rows: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    old_policy_rows: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    malformed: list[tuple[str, str, str]] = []
+    for row in rows:
+        dataset = str(row["dataset"])
+        logical = dataset, str(row["segment_id"])
+        expected_version = str(
+            coverage_policy_binding(dataset)["policy_version"]
+        )
+        if str(row["policy_version"]) != expected_version:
+            old_policy_rows.setdefault(logical, []).append(row)
+            continue
+        logical_rows.setdefault(logical, []).append(row)
+        try:
+            identity = _persisted_segment_identity(row)
+            key = _canonical_json(identity.to_dict())
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            malformed.append((dataset, str(row["segment_id"]), str(exc)))
+            continue
+        if key in actual_by_key:
+            malformed.append(
+                (dataset, str(row["segment_id"]), "duplicate exact identity")
+            )
+            continue
+        actual_by_key[key] = identity
+
+    expected_keys = set(expected_by_key)
+    actual_keys = set(actual_by_key)
+
+    def sort_identity(item: CanonicalCoverageSegmentIdentity) -> str:
+        return _canonical_json(item.to_dict())
+
+    missing = tuple(sorted(
+        (expected_by_key[key] for key in expected_keys - actual_keys),
+        key=sort_identity,
+    ))
+    unexpected = tuple(sorted(
+        (actual_by_key[key] for key in actual_keys - expected_keys),
+        key=sort_identity,
+    ))
+    duplicates = tuple(sorted(
+        (dataset, segment_id, len(group))
+        for (dataset, segment_id), group in logical_rows.items()
+        if len(group) != 1
+    ))
+    expected_logical = {identity.logical_key for identity in expected_identities}
+    wrong_policy = tuple(sorted(
+        (
+            dataset,
+            segment_id,
+            tuple(sorted({str(row["policy_version"]) for row in group})),
+        )
+        for (dataset, segment_id), group in old_policy_rows.items()
+        if (dataset, segment_id) in expected_logical
+        and (dataset, segment_id) not in logical_rows
+    ))
+    return ExactCoverageInventoryComparison(
+        target_end=target_end,
+        expected_segments=tuple(expected_segments),
+        expected_identities=tuple(expected_identities),
+        actual_identities=tuple(sorted(actual_by_key.values(), key=sort_identity)),
+        missing=missing,
+        unexpected=unexpected,
+        duplicates=duplicates,
+        wrong_policy=wrong_policy,
+        malformed=tuple(sorted(malformed)),
+    )
+
+
 def _empty_observed_forbids_complete(policy: CollectionCoverageContract) -> bool:
     """Tip snapshots and official-archive-index never COMPLETE on empty receipts.
 
@@ -355,97 +694,120 @@ def _empty_observed_forbids_complete(policy: CollectionCoverageContract) -> bool
     return "official_archive_index" in mode
 
 
+def _evaluate_segment_with_closure(
+    policy: CollectionCoverageContract,
+    required: RequiredCoverageSegment,
+    receipt: CollectionReceipt | None,
+) -> tuple[str, dict[str, Any], Any | None]:
+    """Evaluate one segment and retain the verifier-minted closure internally."""
+    if receipt is None:
+        return "PARTIAL", {"reason": "missing collection receipt"}, None
+    # Persisted CollectionReceipt is an untrusted transport DTO.  From this
+    # boundary onward COMPLETE policy may observe only the opaque closure.
+    try:
+        from storage.verified_receipt import (
+            ReceiptVerificationError,
+            require_verified_collection_closure,
+        )
+
+        closure = require_verified_collection_closure(
+            receipt,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=(
+                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ),
+            required=required,
+            expected_policy_version=policy.policy_version,
+        )
+    except ReceiptVerificationError as exc:
+        return (
+            "PARTIAL",
+            {
+                "reason": f"receipt closure invalid: {exc}",
+                "eligibility": "RECOVERED_RAW_ONLY",
+            },
+            None,
+        )
+    if closure.status != "SUCCESS" or closure.error:
+        return "FAILED", {"reason": closure.error or "collection failed"}, closure
+    if not closure.pagination_exhausted or not closure.discovery_exhausted:
+        return (
+            "PARTIAL",
+            {"reason": "collection discovery is not exhausted"},
+            closure,
+        )
+    if closure.observed_items == 0 and _empty_observed_forbids_complete(policy):
+        return (
+            "PARTIAL",
+            {"reason": "empty tip-snapshot or archive-index receipt is not complete"},
+            closure,
+        )
+    if (
+        policy.expected_frequency != "event_driven"
+        and required.expected_items is None
+    ):
+        return (
+            "PARTIAL",
+            {"reason": "non-event segment lacks explicit expected items"},
+            closure,
+        )
+    if closure.expected_items is not None and (
+        closure.observed_items != closure.expected_items
+    ):
+        return "PARTIAL", {"reason": "expected scope not fully observed"}, closure
+    if (
+        policy.expected_frequency != "event_driven"
+        and closure.observed_items == 0
+    ):
+        return (
+            "PARTIAL",
+            {"reason": "empty receipt is complete only for event-driven windows"},
+            closure,
+        )
+    raw_digest = closure.raw_digest
+    if policy.raw_retention_required and (
+        closure.raw_page_count < 1
+        or not isinstance(raw_digest, str)
+        or not raw_digest
+    ):
+        return "PARTIAL", {"reason": "raw pages/digest not retained"}, closure
+    if (
+        policy.structured_reconciliation_required
+        and closure.raw_row_count != closure.structured_row_count
+    ):
+        return "FAILED", {"reason": "raw/structured row mismatch"}, closure
+    if not _has_nonempty_trusted_raw_evidence(closure):
+        return (
+            "PARTIAL",
+            {
+                "reason": "empty raw is not COMPLETE-eligible without "
+                "EXPECTED_EMPTY_WITH_EVIDENCE",
+                "raw_row_count": closure.raw_row_count,
+            },
+            closure,
+        )
+    return (
+        "COMPLETE",
+        {
+            "reason": "receipt reconciled",
+            "event_zero": closure.observed_items == 0,
+        },
+        closure,
+    )
+
+
 def evaluate_segment(
     policy: CollectionCoverageContract,
     required: RequiredCoverageSegment,
     receipt: CollectionReceipt | None,
 ) -> tuple[str, dict[str, Any]]:
     """Evaluate one required segment without treating absent events as gaps."""
-    if receipt is None:
-        return "PARTIAL", {"reason": "missing collection receipt"}
-    identity_matches = (
-        receipt.source == required.source
-        and receipt.dataset == required.dataset
-        and receipt.segment_id == required.segment_id
-        and receipt.segment_start == required.segment_start
-        and receipt.segment_end == required.segment_end
-        and dict(receipt.expected_scope) == dict(required.expected_scope)
-        and receipt.expected_items == required.expected_items
+    status, detail, _closure = _evaluate_segment_with_closure(
+        policy,
+        required,
+        receipt,
     )
-    if not identity_matches:
-        return "PARTIAL", {"reason": "receipt does not match required scope"}
-    # Trusted-path gate: VerifiedReceipt plus non-empty trusted raw (or expected-empty flag).
-    try:
-        from storage.verified_receipt import (
-            ReceiptVerificationError,
-            require_verified_receipt,
-        )
-
-        require_verified_receipt(receipt, required=required)
-    except ReceiptVerificationError:
-        return "PARTIAL", {
-            "reason": "receipt not COMPLETE-eligible (valid Ed25519 signature required)",
-            "eligibility": receipt_eligibility(receipt),
-            "issuer_key_id": receipt.digests.get("issuer_key_id"),
-            "issuer_class": receipt.digests.get("issuer_class"),
-        }
-    if receipt.status == "FAILED" and receipt.digests.get("failure_kind") in {
-        "MISSING_EXPECTED_SEGMENT", "DEFERRED_SOURCE_GAP"
-    }:
-        reason = (
-            "expected source segment is missing"
-            if receipt.digests.get("failure_kind") == "MISSING_EXPECTED_SEGMENT"
-            else "authoritative source gap explicitly deferred"
-        )
-        return "PARTIAL", {"reason": reason}
-    if receipt.status != "SUCCESS" or receipt.error:
-        return "FAILED", {"reason": receipt.error or "collection failed"}
-    if not receipt.pagination_exhausted:
-        return "PARTIAL", {"reason": "pagination not exhausted"}
-    if receipt.observed_items == 0 and _empty_observed_forbids_complete(policy):
-        return "PARTIAL", {
-            "reason": "empty tip-snapshot or archive-index receipt is not complete"
-        }
-    if (
-        policy.expected_frequency != "event_driven"
-        and required.expected_items is None
-    ):
-        return "PARTIAL", {
-            "reason": "non-event segment lacks explicit expected items"
-        }
-    if receipt.expected_items is not None and (
-        receipt.observed_items != receipt.expected_items
-    ):
-        return "PARTIAL", {"reason": "expected scope not fully observed"}
-    if (
-        policy.expected_frequency != "event_driven"
-        and receipt.observed_items == 0
-    ):
-        return "PARTIAL", {
-            "reason": "empty receipt is complete only for event-driven windows"
-        }
-    raw_digest = receipt.digests.get("raw")
-    if policy.raw_retention_required and (
-        receipt.raw_page_count < 1
-        or not isinstance(raw_digest, str)
-        or not raw_digest
-    ):
-        return "PARTIAL", {"reason": "raw pages/digest not retained"}
-    if (
-        policy.structured_reconciliation_required
-        and receipt.raw_row_count != receipt.structured_row_count
-    ):
-        return "FAILED", {"reason": "raw/structured row mismatch"}
-    if not _has_nonempty_trusted_raw_evidence(receipt):
-        return "PARTIAL", {
-            "reason": "empty raw is not COMPLETE-eligible without "
-            "EXPECTED_EMPTY_WITH_EVIDENCE",
-            "raw_row_count": int(receipt.raw_row_count),
-        }
-    return "COMPLETE", {
-        "reason": "receipt reconciled",
-        "event_zero": receipt.observed_items == 0,
-    }
+    return status, detail
 
 
 def _latest_run_id(conn: sqlite3.Connection, dataset: str) -> int | None:
@@ -472,18 +834,31 @@ def _date_prefix(value: str | None) -> str | None:
 def _receipt_observed_window(
     receipts: Sequence[CollectionReceipt],
 ) -> tuple[str | None, str | None, int]:
-    """Observed calendar span from SUCCESS receipts with ``raw_row_count > 0``."""
+    """Observed calendar span from verified v3 closures with retained rows."""
+    from storage.verified_receipt import (
+        ReceiptVerificationError,
+        require_verified_collection_closure,
+    )
+
     starts: list[str] = []
     ends: list[str] = []
     raw_total = 0
     for receipt in receipts:
-        if receipt.status != "SUCCESS":
+        try:
+            closure = require_verified_collection_closure(
+                receipt,
+                expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+                expected_authority_instance_digest=(
+                    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+                ),
+            )
+        except ReceiptVerificationError:
             continue
-        raw_n = int(receipt.raw_row_count or 0)
+        raw_n = closure.raw_row_count
         if raw_n <= 0:
             continue
-        start = _date_prefix(receipt.segment_start)
-        end = _date_prefix(receipt.segment_end)
+        start = _date_prefix(closure.segment_start)
+        end = _date_prefix(closure.segment_end)
         if start is None or end is None:
             continue
         starts.append(start)
@@ -648,7 +1023,11 @@ def _dataset_status(
 
 
 def _coverage_source(dataset: str) -> str:
-    return "jsda" if dataset.startswith("jsda_") else "jquants"
+    from data_contracts.canonical import canonical_dataset_for
+
+    return receipt_source_for_canonical_source(
+        canonical_dataset_for(dataset).source
+    )
 
 
 def _jsda_validation_status(
@@ -732,19 +1111,208 @@ def _receipt_from_row(row: Mapping[str, Any]) -> CollectionReceipt:
     )
 
 
+def verify_exact_coverage_complete(
+    conn: sqlite3.Connection,
+    datasets: Iterable[str],
+    *,
+    target_end: str,
+) -> ExactCoverageCompleteVerification:
+    """Verify exact inventory/receipts in one SQLite read snapshot."""
+    owns_snapshot = not conn.in_transaction
+    if owns_snapshot:
+        conn.execute("BEGIN")
+    try:
+        return _verify_exact_coverage_complete_in_snapshot(
+            conn,
+            datasets,
+            target_end=target_end,
+        )
+    finally:
+        if owns_snapshot:
+            conn.rollback()
+
+
+def _verify_exact_coverage_complete_in_snapshot(
+    conn: sqlite3.Connection,
+    datasets: Iterable[str],
+    *,
+    target_end: str,
+) -> ExactCoverageCompleteVerification:
+    """Verify exact canonical identities and each selected signed receipt.
+
+    The expected set is regenerated internally.  A receipt is considered only
+    when the exact canonical segment selects its run id; arbitrary latest or
+    orphan receipts cannot satisfy COMPLETE eligibility.
+    """
+    inventory = compare_exact_coverage_inventory(
+        conn,
+        datasets,
+        target_end=target_end,
+    )
+    if not inventory.exact:
+        return ExactCoverageCompleteVerification(inventory, (), ())
+
+    selected = tuple(sorted({item.dataset for item in inventory.expected_segments}))
+    placeholders = ",".join("?" for _ in selected)
+    try:
+        cursor = conn.execute(
+            """
+            SELECT
+                s.source AS segment_source,
+                s.dataset AS segment_dataset,
+                s.segment_id AS segment_id,
+                s.policy_version AS segment_policy_version,
+                s.segment_start AS segment_start,
+                s.segment_end AS segment_end,
+                s.expected_scope AS segment_expected_scope,
+                s.expected_items AS segment_expected_items,
+                s.status AS segment_status,
+                s.receipt_run_id AS selected_receipt_run_id,
+                r.source AS receipt_source,
+                r.dataset AS receipt_dataset,
+                r.segment_id AS receipt_segment_id,
+                r.segment_start AS receipt_segment_start,
+                r.segment_end AS receipt_segment_end,
+                r.expected_scope AS receipt_expected_scope,
+                r.expected_items AS receipt_expected_items,
+                r.observed_items AS receipt_observed_items,
+                r.raw_page_count AS receipt_raw_page_count,
+                r.raw_row_count AS receipt_raw_row_count,
+                r.structured_row_count AS receipt_structured_row_count,
+                r.pagination_exhausted AS receipt_pagination_exhausted,
+                r.digests_json AS receipt_digests_json,
+                r.run_id AS receipt_run_id,
+                r.status AS receipt_status,
+                r.error AS receipt_error,
+                r.checked_at AS receipt_checked_at
+            FROM coverage_segments AS s
+            LEFT JOIN collection_receipts AS r
+              ON r.source=s.source
+             AND r.dataset=s.dataset
+             AND r.segment_id=s.segment_id
+             AND r.run_id=s.receipt_run_id
+            WHERE s.dataset IN ("""
+            + placeholders
+            + ")",
+            selected,
+        )
+        columns = tuple(item[0] for item in cursor.description or ())
+        rows = [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+    except sqlite3.Error:
+        invalid = tuple(
+            (
+                segment.dataset,
+                segment.segment_id,
+                "selected collection receipt ledger unavailable",
+            )
+            for segment in inventory.expected_segments
+        )
+        return ExactCoverageCompleteVerification(inventory, (), invalid)
+
+    by_key = {
+        (
+            str(row["segment_source"]),
+            str(row["segment_dataset"]),
+            str(row["segment_id"]),
+            str(row["segment_policy_version"]),
+        ): row
+        for row in rows
+    }
+    closures: list[Any] = []
+    invalid: list[tuple[str, str, str]] = []
+    selected_receipts: set[tuple[str, str, str, int]] = set()
+    for identity, required in zip(
+        inventory.expected_identities,
+        inventory.expected_segments,
+        strict=True,
+    ):
+        row = by_key.get(identity.storage_key)
+        reason: str | None = None
+        closure: Any | None = None
+        if row is None:
+            reason = "canonical segment disappeared during receipt verification"
+        else:
+            try:
+                joined_identity = _persisted_segment_identity({
+                    "source": row["segment_source"],
+                    "dataset": row["segment_dataset"],
+                    "segment_id": row["segment_id"],
+                    "policy_version": row["segment_policy_version"],
+                    "segment_start": row["segment_start"],
+                    "segment_end": row["segment_end"],
+                    "expected_scope": row["segment_expected_scope"],
+                    "expected_items": row["segment_expected_items"],
+                })
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                reason = f"canonical segment changed: {exc}"
+            else:
+                if joined_identity != identity:
+                    reason = "canonical segment changed during receipt verification"
+        if reason is None and row["segment_status"] != "COMPLETE":
+            reason = "segment not COMPLETE"
+        elif reason is None and (
+            row["selected_receipt_run_id"] is None
+            or row["receipt_run_id"] is None
+        ):
+            reason = "selected signed receipt missing"
+        elif reason is None:
+            receipt_payload = {
+                "source": row["receipt_source"],
+                "dataset": row["receipt_dataset"],
+                "segment_id": row["receipt_segment_id"],
+                "segment_start": row["receipt_segment_start"],
+                "segment_end": row["receipt_segment_end"],
+                "expected_scope": row["receipt_expected_scope"],
+                "expected_items": row["receipt_expected_items"],
+                "observed_items": row["receipt_observed_items"],
+                "raw_page_count": row["receipt_raw_page_count"],
+                "raw_row_count": row["receipt_raw_row_count"],
+                "structured_row_count": row["receipt_structured_row_count"],
+                "pagination_exhausted": row["receipt_pagination_exhausted"],
+                "digests_json": row["receipt_digests_json"],
+                "run_id": row["receipt_run_id"],
+                "status": row["receipt_status"],
+                "error": row["receipt_error"],
+                "checked_at": row["receipt_checked_at"],
+            }
+            try:
+                receipt = _receipt_from_row(receipt_payload)
+                status, detail, closure = _evaluate_segment_with_closure(
+                    coverage_contract_for(required.dataset),
+                    required,
+                    receipt,
+                )
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                reason = f"selected receipt malformed: {exc}"
+            else:
+                if status != "COMPLETE" or closure is None:
+                    reason = str(detail.get("reason") or "receipt is not COMPLETE")
+        if reason is None:
+            receipt_identity = (
+                closure.source,
+                closure.dataset,
+                closure.segment_id,
+                closure.run_id,
+            )
+            if receipt_identity in selected_receipts:
+                reason = "selected receipt reused"
+            else:
+                selected_receipts.add(receipt_identity)
+                closures.append(closure)
+        if reason is not None:
+            invalid.append((required.dataset, required.segment_id, reason))
+
+    return ExactCoverageCompleteVerification(
+        inventory=inventory,
+        closures=tuple(closures),
+        invalid_segments=tuple(invalid),
+    )
+
+
 def _rank_receipt_for_match(item: CollectionReceipt) -> tuple:
     """Trusted first, recovered last, then structured/time."""
     trusted = 1 if is_complete_eligible_receipt(item) else 0
-    origin = str(item.digests.get("origin") or "")
-    recovered = 1 if (
-        item.digests.get("eligibility") == "RECOVERED_RAW_ONLY"
-        or origin in {
-            "recovered-raw-only",
-            "parsed-staging-only",
-            "offline-test-fixture",
-        }
-        or bool(item.digests.get("synthetic"))
-    ) else 0
+    recovered = 1 if is_recovered_only_digests(item.digests) else 0
     structured = int(item.structured_row_count or 0)
     return (trusted, -recovered, structured, item.checked_at, item.run_id)
 
@@ -767,26 +1335,45 @@ def _latest_receipt_for(
     return max(exact, key=_rank_receipt_for_match)
 
 
-def _latest_eligible_success_for_segment_id(
+def _latest_complete_receipt_for_required(
     receipts: Sequence[CollectionReceipt],
     *,
-    source: str,
-    dataset: str,
-    segment_id: str,
-) -> CollectionReceipt | None:
-    """Best COMPLETE-eligible SUCCESS receipt for a segment_id (sticky fallback)."""
-    candidates = [
-        receipt
-        for receipt in receipts
-        if receipt.source == source
-        and receipt.dataset == dataset
-        and receipt.segment_id == segment_id
-        and receipt.status == "SUCCESS"
-        and is_complete_eligible_receipt(receipt)
-    ]
+    policy: CollectionCoverageContract,
+    required: RequiredCoverageSegment,
+) -> tuple[CollectionReceipt, Any] | None:
+    """Best receipt that independently evaluates COMPLETE for this scope."""
+    from storage.verified_receipt import (
+        ReceiptVerificationError,
+        require_verified_collection_closure,
+    )
+
+    candidates: list[tuple[CollectionReceipt, Any]] = []
+    for receipt in receipts:
+        if evaluate_segment(policy, required, receipt)[0] != "COMPLETE":
+            continue
+        try:
+            closure = require_verified_collection_closure(
+                receipt,
+                expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+                expected_authority_instance_digest=(
+                    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+                ),
+                required=required,
+                expected_policy_version=policy.policy_version,
+            )
+        except ReceiptVerificationError:  # defensive; evaluate already verified
+            continue
+        candidates.append((receipt, closure))
     if not candidates:
         return None
-    return max(candidates, key=_rank_receipt_for_match)
+    return max(
+        candidates,
+        key=lambda item: (
+            item[1].structured_row_count,
+            item[1].checked_at,
+            item[1].run_id,
+        ),
+    )
 
 
 def evaluate_required_segments(
@@ -810,7 +1397,207 @@ def evaluate_required_segments(
     return aggregate, evaluated
 
 
-def refresh_coverage_ledger(
+def validation_coverage_cutoff_for_build(
+    conn: sqlite3.Connection,
+    db_path: str | Path,
+    build_id: object,
+) -> str:
+    """Derive the cutoff from the unique active VALIDATING build.
+
+    The caller supplies only an identifier.  This verifier re-derives the date
+    from the publication row and binds it to the active local policy and the
+    exact main/staging database path in the caller's current transaction.
+    """
+    if not isinstance(build_id, str) or not build_id:
+        raise CoveragePublicationCutoffError(
+            "Coverage refresh requires a publisher-owned build id"
+        )
+    try:
+        publications = conn.execute(
+            "SELECT state,staging_path,created_at FROM snapshot_publications "
+            "WHERE build_id=?",
+            (build_id,),
+        ).fetchall()
+        policies = conn.execute(
+            "SELECT publication_state,snapshot_ready,active_build_id "
+            "FROM local_snapshot_policy WHERE singleton=1"
+        ).fetchall()
+        main_path = next(
+            (
+                str(row[2])
+                for row in conn.execute("PRAGMA database_list").fetchall()
+                if str(row[1]) == "main"
+            ),
+            "",
+        )
+    except sqlite3.Error as exc:
+        raise CoveragePublicationCutoffError(
+            "Coverage refresh publication lifecycle is unavailable"
+        ) from exc
+    if len(publications) != 1 or len(policies) != 1:
+        raise CoveragePublicationCutoffError(
+            "Coverage refresh has no unique active publication lifecycle"
+        )
+    publication = publications[0]
+    policy = policies[0]
+    staging_path = str(publication[1])
+    try:
+        descriptor_prefix = next(
+            (
+                prefix
+                for prefix in ("/dev/fd/", "/proc/self/fd/")
+                if main_path.startswith(prefix)
+            ),
+            None,
+        )
+        main_info = (
+            os.fstat(int(main_path.removeprefix(descriptor_prefix)))
+            if descriptor_prefix is not None
+            else Path(main_path).stat()
+        )
+        main_matches_staging = os.path.samestat(main_info, Path(staging_path).stat())
+        main_matches_governed = os.path.samestat(main_info, Path(db_path).stat())
+    except (OSError, ValueError):
+        main_matches_staging = False
+        main_matches_governed = False
+    if (
+        str(publication[0]) != "VALIDATING"
+        or str(policy[0]) != "VALIDATING"
+        or int(policy[1]) != 0
+        or policy[2] != build_id
+        or not main_path
+        or not main_matches_staging
+        or not main_matches_governed
+    ):
+        raise CoveragePublicationCutoffError(
+            "Coverage refresh build is not the unique active VALIDATING build"
+        )
+    created_at = str(publication[2])
+    try:
+        instant = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise CoveragePublicationCutoffError(
+            "Coverage refresh publication timestamp is malformed"
+        ) from exc
+    if instant.tzinfo is None or instant.utcoffset() is None:
+        raise CoveragePublicationCutoffError(
+            "Coverage refresh publication timestamp must be timezone-aware"
+        )
+    return instant.astimezone(timezone.utc).date().isoformat()
+
+
+def _refresh_inventory_target_end(
+    conn: sqlite3.Connection,
+    db_path: str | Path,
+    evaluated_at: str,
+    publication_build_id: object | None,
+) -> str:
+    """Use an internally verified build cutoff or the internal UTC clock."""
+    if publication_build_id is not None:
+        return validation_coverage_cutoff_for_build(
+            conn,
+            db_path,
+            publication_build_id,
+        )
+    try:
+        instant = datetime.fromisoformat(evaluated_at.replace("Z", "+00:00"))
+    except ValueError as exc:  # pragma: no cover - internal clock contract
+        raise RuntimeError("Coverage refresh clock did not return ISO-8601") from exc
+    if instant.tzinfo is None or instant.utcoffset() is None:
+        raise RuntimeError("Coverage refresh clock must be timezone-aware")
+    return instant.astimezone(timezone.utc).date().isoformat()
+
+
+def _apply_refresh_complete_gate(
+    conn: sqlite3.Connection,
+    rows: list[dict[str, Any]],
+    *,
+    prior_coverage: Mapping[str, Mapping[str, Any]],
+    inventory_target_end: str,
+) -> None:
+    """Fail closed every aggregate COMPLETE computed by generic refresh.
+
+    C10 transition authority does not exist yet, so generic refresh can never
+    promote an aggregate.  A current-policy COMPLETE may survive only when the
+    replacement inventory is exact and every selected persisted receipt closes
+    under its signature.  This function runs after segment replacement and in
+    the same write transaction as the final aggregate upsert.
+    """
+    for row in rows:
+        dataset = str(row["dataset"])
+        computed_status = str(row["status"])
+        current_policy_version = str(row["policy_version"])
+        prior = prior_coverage.get(dataset)
+        prior_status = None if prior is None else str(prior.get("status") or "")
+        prior_policy_version = (
+            None if prior is None else str(prior.get("policy_version") or "")
+        )
+        inventory_status = "NOT_EVALUATED"
+        selected_receipt_status = "NOT_EVALUATED"
+        inventory_detail: dict[str, Any] | None = None
+        blocker: str | None = None
+
+        if computed_status == "COMPLETE":
+            if prior_status != "COMPLETE":
+                blocker = "transition_authority_required"
+            elif prior_policy_version != current_policy_version:
+                blocker = "prior_aggregate_policy_mismatch"
+            else:
+                try:
+                    verification = verify_exact_coverage_complete(
+                        conn,
+                        (dataset,),
+                        target_end=inventory_target_end,
+                    )
+                except CoverageInventoryAuthorityUnavailable as exc:
+                    inventory_status = "PENDING"
+                    inventory_detail = {
+                        "target_end": inventory_target_end,
+                        "reason": str(exc),
+                    }
+                    blocker = "inventory_authority_pending"
+                else:
+                    inventory_detail = verification.detail()
+                    if not verification.inventory.exact:
+                        inventory_status = "MISMATCH"
+                        blocker = "inventory_mismatch"
+                    else:
+                        inventory_status = "EXACT"
+                        if verification.complete_eligible:
+                            selected_receipt_status = "VERIFIED"
+                        else:
+                            selected_receipt_status = "INVALID"
+                            blocker = "selected_receipt_invalid"
+            if blocker is not None:
+                row["status"] = "PARTIAL"
+        else:
+            blocker = "evaluation_not_complete"
+
+        try:
+            detail = json.loads(str(row.get("detail_json") or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            detail = {}
+        if not isinstance(detail, dict):
+            detail = {}
+        coverage_detail = dict(detail.get("coverage_v2") or {})
+        coverage_detail["aggregate_complete_gate"] = {
+            "mode": "generic_refresh_c10_transition_authority_unavailable",
+            "computed_status": computed_status,
+            "persisted_status": row["status"],
+            "prior_status": prior_status,
+            "prior_policy_version": prior_policy_version,
+            "current_policy_version": current_policy_version,
+            "inventory_target_end": inventory_target_end,
+            "inventory_status": inventory_status,
+            "selected_receipt_status": selected_receipt_status,
+            "blocker": blocker,
+            "inventory": inventory_detail,
+        }
+        detail["coverage_v2"] = coverage_detail
+        row["detail_json"] = _canonical_json(detail)
+
+
+def _refresh_coverage_ledger_in_transaction(
     conn: sqlite3.Connection,
     db_path: str | Path,
     *,
@@ -818,6 +1605,7 @@ def refresh_coverage_ledger(
     today: str | None = None,
     freshness_days: int = 7,
     index_text: str | None = None,
+    _publication_build_id: object | None = None,
 ) -> list[dict[str, Any]]:
     """Evaluate Coverage V2 segments and atomically refresh aggregate rows.
 
@@ -831,7 +1619,27 @@ def refresh_coverage_ledger(
     if not selected:
         raise ValueError("datasets must not be empty")
     policies = {dataset: coverage_contract_for(dataset) for dataset in selected}
+    evaluated_at = _now()
+    inventory_target_end = _refresh_inventory_target_end(
+        conn,
+        db_path,
+        evaluated_at,
+        _publication_build_id,
+    )
     target_end = today or datetime.now(timezone.utc).date().isoformat()
+    prior_cursor = conn.execute(
+        "SELECT dataset,status,policy_version FROM dataset_coverage "
+        f"WHERE dataset IN ({','.join('?' for _ in selected)})",
+        selected,
+    )
+    prior_columns = tuple(item[0] for item in prior_cursor.description or ())
+    prior_coverage = {
+        str(row["dataset"]): row
+        for row in (
+            dict(zip(prior_columns, raw, strict=True))
+            for raw in prior_cursor.fetchall()
+        )
+    }
     jquants_selected = tuple(
         dataset for dataset in selected if _coverage_source(dataset) == "jquants"
     )
@@ -859,10 +1667,10 @@ def refresh_coverage_ledger(
     placeholders = ",".join("?" for _ in selected)
     # status + receipt_run_id: sticky COMPLETE needs prior COMPLETE inventory.
     inventory_cursor = conn.execute(
-        "SELECT source,dataset,segment_id,segment_start,segment_end,"
+        "SELECT source,dataset,segment_id,policy_version,segment_start,segment_end,"
         "expected_scope,expected_items,status,receipt_run_id FROM coverage_segments "
-        f"WHERE policy_version=? AND dataset IN ({placeholders})",
-        (POLICY_VERSION, *selected),
+        f"WHERE dataset IN ({placeholders})",
+        selected,
     )
     inventory_by_dataset: dict[str, dict[str, Mapping[str, Any]]] = {
         dataset: {} for dataset in selected
@@ -870,10 +1678,13 @@ def refresh_coverage_ledger(
     for raw in inventory_cursor.fetchall():
         row: Mapping[str, Any] = dict(raw) if isinstance(raw, sqlite3.Row) else {
             "source": raw[0], "dataset": raw[1], "segment_id": raw[2],
-            "segment_start": raw[3], "segment_end": raw[4],
-            "expected_scope": raw[5], "expected_items": raw[6],
-            "status": raw[7], "receipt_run_id": raw[8],
+            "policy_version": raw[3],
+            "segment_start": raw[4], "segment_end": raw[5],
+            "expected_scope": raw[6], "expected_items": raw[7],
+            "status": raw[8], "receipt_run_id": raw[9],
         }
+        if row.get("policy_version") != policies[str(row["dataset"])].policy_version:
+            continue
         inventory_by_dataset[str(row["dataset"])][str(row["segment_id"])] = row
     receipt_cursor = conn.execute(
         "SELECT * FROM collection_receipts "
@@ -890,7 +1701,6 @@ def refresh_coverage_ledger(
         receipt = _receipt_from_row(row)
         receipts_by_dataset[receipt.dataset].append(receipt)
 
-    evaluated_at = _now()
     rows: list[dict[str, Any]] = []
     segment_rows: list[dict[str, Any]] = []
     for dataset in selected:
@@ -982,44 +1792,49 @@ def refresh_coverage_ledger(
             prior_status = (
                 None if prior_inv is None else str(prior_inv.get("status") or "")
             )
-            sticky_receipt = receipt
-            if (
-                segment_status != "COMPLETE"
-                and prior_status == "COMPLETE"
-                and (
-                    sticky_receipt is None
-                    or sticky_receipt.status != "SUCCESS"
-                    or not is_complete_eligible_receipt(sticky_receipt)
-                )
-            ):
-                sticky_receipt = _latest_eligible_success_for_segment_id(
+            sticky = None
+            if segment_status != "COMPLETE" and prior_status == "COMPLETE":
+                sticky = _latest_complete_receipt_for_required(
                     receipts_by_dataset[dataset],
-                    source=required_segment.source,
-                    dataset=required_segment.dataset,
-                    segment_id=required_segment.segment_id,
+                    policy=policy,
+                    required=required_segment,
                 )
             if (
                 segment_status != "COMPLETE"
                 and prior_status == "COMPLETE"
-                and sticky_receipt is not None
-                and sticky_receipt.status == "SUCCESS"
-                and is_complete_eligible_receipt(sticky_receipt)
+                and sticky is not None
             ):
+                sticky_receipt, sticky_closure = sticky
                 segment_detail = {
                     **dict(segment_detail),
                     "sticky_complete": True,
                     "demotion_blocked": segment_detail.get("reason"),
                     "reason": "sticky COMPLETE: eligible SUCCESS receipt retained",
-                    "sticky_receipt_run_id": sticky_receipt.run_id,
+                    "sticky_receipt_run_id": sticky_closure.run_id,
                 }
                 segment_status = "COMPLETE"
                 receipt = sticky_receipt
             segment_statuses.append(segment_status)
+            selected_run_id = None if receipt is None else receipt.run_id
+            if segment_status == "COMPLETE":
+                from storage.verified_receipt import (
+                    require_verified_collection_closure,
+                )
+
+                selected_run_id = require_verified_collection_closure(
+                    receipt,
+                    expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+                    expected_authority_instance_digest=(
+                        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+                    ),
+                    required=required_segment,
+                    expected_policy_version=policy.policy_version,
+                ).run_id
             segment_rows.append({
                 "source": required_segment.source,
                 "dataset": required_segment.dataset,
                 "segment_id": required_segment.segment_id,
-                "policy_version": POLICY_VERSION,
+                "policy_version": policy.policy_version,
                 "segment_start": required_segment.segment_start,
                 "segment_end": required_segment.segment_end,
                 "expected_scope": _canonical_json(
@@ -1027,7 +1842,7 @@ def refresh_coverage_ledger(
                 ),
                 "expected_items": required_segment.expected_items,
                 "status": segment_status,
-                "receipt_run_id": None if receipt is None else receipt.run_id,
+                "receipt_run_id": selected_run_id,
                 "evaluated_at": evaluated_at,
                 "detail_json": _canonical_json(segment_detail),
             })
@@ -1051,6 +1866,9 @@ def refresh_coverage_ledger(
         detail = {
             "checks": [result.as_log_dict() for result in dataset_evidence],
             "global_failures": [result.as_log_dict() for result in global_failures],
+            # Compatibility shape for existing operational readers. The
+            # authoritative policy version is the per-dataset column above;
+            # this nested key is not used as READY policy authority.
             "coverage_v2": {
                 "required_segments": len(segment_statuses),
                 "status_counts": {
@@ -1075,7 +1893,7 @@ def refresh_coverage_ledger(
             "dataset": dataset,
             **asdict(policy),
             "status": status,
-            "policy_version": POLICY_VERSION,
+            "policy_version": policy.policy_version,
             "observed_start": observed_start,
             "observed_end": observed_end,
             "row_count": count,
@@ -1094,23 +1912,79 @@ def refresh_coverage_ledger(
     persist_refreshed_coverage(
         conn,
         delete_keys=[
-            (_coverage_source(dataset), dataset, POLICY_VERSION)
+            (_coverage_source(dataset), dataset, policies[dataset].policy_version)
             for dataset in selected
         ],
         segment_rows=segment_rows,
-        coverage_rows=rows,
+        coverage_rows=(),
     )
+    _apply_refresh_complete_gate(
+        conn,
+        rows,
+        prior_coverage=prior_coverage,
+        inventory_target_end=inventory_target_end,
+    )
+    persist_refreshed_coverage(
+        conn,
+        delete_keys=(),
+        segment_rows=(),
+        coverage_rows=tuple(row for row in rows if row["status"] != "COMPLETE"),
+    )
+    for row in rows:
+        if row["status"] == "COMPLETE":
+            preserve_existing_complete_coverage_row(conn, row)
     return rows
+
+
+def refresh_coverage_ledger(
+    conn: sqlite3.Connection,
+    db_path: str | Path,
+    *,
+    datasets: Iterable[str] | None = None,
+    today: str | None = None,
+    freshness_days: int = 7,
+    index_text: str | None = None,
+    _publication_build_id: object | None = None,
+) -> list[dict[str, Any]]:
+    """Refresh under one write snapshot; generic callers cannot mint COMPLETE."""
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        rows = _refresh_coverage_ledger_in_transaction(
+            conn,
+            db_path,
+            datasets=datasets,
+            today=today,
+            freshness_days=freshness_days,
+            index_text=index_text,
+            _publication_build_id=_publication_build_id,
+        )
+        if owns_transaction:
+            conn.commit()
+        return rows
+    except BaseException:
+        if owns_transaction:
+            conn.rollback()
+        raise
 
 
 def coverage_summary(db_path: str | Path) -> dict[str, Any]:
     rows = read_dataset_coverage(db_path)
+    policy_set = coverage_policy_set_binding(
+        [str(row["dataset"]) for row in rows]
+    ) if rows else None
     counts = {status: 0 for status in sorted(COVERAGE_STATUSES)}
     for row in rows:
         counts[str(row["status"])] += 1
     governed = [row for row in rows if row["governance_tier"] == "governed"]
     return {
-        "policy_version": POLICY_VERSION,
+        "policy_version": (
+            policy_set["policy_version"] if policy_set is not None else "UNKNOWN"
+        ),
+        "policy_digest": (
+            policy_set["policy_digest"] if policy_set is not None else "UNKNOWN"
+        ),
         "dataset_count": len(rows),
         "status_counts": counts,
         "governed_ready": bool(governed) and all(
@@ -1172,7 +2046,7 @@ def build_surgical_reagg_detail(
     existing_detail: Mapping[str, Any] | None,
     *,
     status_counts: Mapping[str, int],
-    required_segments: int,
+    required_segments: int | None,
     audit: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Merge honest coverage_v2 status_counts into ``detail_json``."""
@@ -1181,7 +2055,10 @@ def build_surgical_reagg_detail(
     prev_counts = cov.get("status_counts")
     new_counts = honest_status_counts(status_counts)
     cov["status_counts"] = new_counts
-    cov["required_segments"] = int(required_segments)
+    if required_segments is None:
+        cov.pop("required_segments", None)
+    else:
+        cov["required_segments"] = int(required_segments)
     if audit is not None:
         cov["surgical_reagg"] = dict(audit)
         if prev_counts is not None and "prev_status_counts" not in cov["surgical_reagg"]:
@@ -1191,17 +2068,20 @@ def build_surgical_reagg_detail(
     return detail
 
 
-def sync_dataset_coverage_from_segments(
+def _sync_dataset_coverage_from_segments_in_transaction(
     conn: sqlite3.Connection,
     *,
     datasets: Iterable[str] | None = None,
-    policy_version: str = POLICY_VERSION,
     dry_run: bool = False,
-    require_no_failing_checks: bool = True,
-    refuse_empty_complete: bool = True,
     wave: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Re-aggregate ``dataset_coverage`` from ``coverage_segments``; never rewrite segs."""
+    """Re-aggregate only after verifier-owned exact inventory comparison.
+
+    The surgical path cannot accept caller-supplied inventory or bypass flags.
+    Deterministic V3 inventory is regenerated from checked-in contracts at the
+    evaluation date.  Every other mode is transition-authority PENDING (C10),
+    so this function can neither mint nor preserve ``COMPLETE`` for it.
+    """
     if datasets is None:
         selected = [
             str(row[0])
@@ -1210,17 +2090,36 @@ def sync_dataset_coverage_from_segments(
             ).fetchall()
         ]
     else:
-        selected = list(datasets)
+        selected = sorted(set(datasets))
     if not selected:
         return []
 
     evaluated_at = _now()
+    try:
+        evaluated_dt = datetime.fromisoformat(evaluated_at.replace("Z", "+00:00"))
+    except ValueError as exc:  # pragma: no cover - internal clock contract
+        raise RuntimeError("Coverage sync clock did not return ISO-8601") from exc
+    if evaluated_dt.tzinfo is None:  # pragma: no cover - internal clock contract
+        raise RuntimeError("Coverage sync clock must be timezone-aware")
+    inventory_target_end = evaluated_dt.astimezone(timezone.utc).date().isoformat()
     results: list[dict[str, Any]] = []
     pre_platform = conn.execute(
         "SELECT COUNT(*) FROM coverage_segments WHERE status='COMPLETE'"
     ).fetchone()[0]
 
     for dataset in selected:
+        try:
+            effective_policy_version = coverage_contract_for(dataset).policy_version
+        except KeyError:
+            aggregate_policy_row = conn.execute(
+                "SELECT policy_version FROM dataset_coverage WHERE dataset=?",
+                (dataset,),
+            ).fetchone()
+            effective_policy_version = (
+                str(aggregate_policy_row[0])
+                if aggregate_policy_row is not None and aggregate_policy_row[0]
+                else "authority-unavailable"
+            )
         seg_rows = conn.execute(
             """
             SELECT status, COUNT(*) AS n
@@ -1228,7 +2127,7 @@ def sync_dataset_coverage_from_segments(
             WHERE dataset=? AND policy_version=?
             GROUP BY status
             """,
-            (dataset, policy_version),
+            (dataset, effective_policy_version),
         ).fetchall()
         raw_counts = {
             str(row[0]): int(row[1]) for row in seg_rows if int(row[1]) > 0
@@ -1239,7 +2138,8 @@ def sync_dataset_coverage_from_segments(
         derived = aggregate_status_from_segment_counts(status_counts)
 
         dc = conn.execute(
-            "SELECT status, detail_json, observed_start, observed_end, row_count "
+            "SELECT status,policy_version,detail_json,observed_start,"
+            "observed_end,row_count "
             "FROM dataset_coverage WHERE dataset=?",
             (dataset,),
         ).fetchone()
@@ -1257,7 +2157,10 @@ def sync_dataset_coverage_from_segments(
             continue
 
         old_status = str(dc[0] if not isinstance(dc, sqlite3.Row) else dc["status"])
-        detail_raw = dc[1] if not isinstance(dc, sqlite3.Row) else dc["detail_json"]
+        old_policy_version = str(
+            dc[1] if not isinstance(dc, sqlite3.Row) else dc["policy_version"]
+        )
+        detail_raw = dc[2] if not isinstance(dc, sqlite3.Row) else dc["detail_json"]
         try:
             detail = json.loads(detail_raw or "{}")
             if not isinstance(detail, dict):
@@ -1267,22 +2170,53 @@ def sync_dataset_coverage_from_segments(
         prev_counts = (detail.get("coverage_v2") or {}).get("status_counts")
         failing = _failing_checks_from_detail(detail)
 
-        empty_complete = 0
-        if refuse_empty_complete and complete > 0:
-            empty_complete = int(
-                conn.execute(
-                    """
-                    SELECT COUNT(*) FROM coverage_segments
-                    WHERE dataset=? AND policy_version=? AND status='COMPLETE'
-                      AND (receipt_run_id IS NULL OR receipt_run_id=0)
-                    """,
-                    (dataset, policy_version),
-                ).fetchone()[0]
+        empty_complete = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM coverage_segments
+                WHERE dataset=? AND policy_version=? AND status='COMPLETE'
+                  AND (receipt_run_id IS NULL OR receipt_run_id=0)
+                """,
+                (dataset, effective_policy_version),
+            ).fetchone()[0]
+        )
+
+        verification: ExactCoverageCompleteVerification | None = None
+        inventory: ExactCoverageInventoryComparison | None = None
+        inventory_status = "EXACT"
+        receipt_status = "NOT_EVALUATED"
+        inventory_reason: str | None = None
+        inventory_detail: dict[str, Any]
+        try:
+            verification = verify_exact_coverage_complete(
+                conn,
+                (dataset,),
+                target_end=inventory_target_end,
             )
+        except CoverageInventoryAuthorityUnavailable as exc:
+            inventory_status = "PENDING"
+            inventory_reason = str(exc)
+            inventory_detail = {
+                "target_end": inventory_target_end,
+                "reason": inventory_reason,
+            }
+        else:
+            inventory = verification.inventory
+            inventory_detail = verification.detail()
+            if not inventory.exact:
+                inventory_status = "MISMATCH"
+                inventory_reason = "persisted segments do not equal canonical inventory"
+            elif verification.complete_eligible:
+                receipt_status = "VERIFIED"
+            else:
+                receipt_status = "INVALID"
+                inventory_reason = "selected signed receipt closure is incomplete"
 
         base = {
             "dataset": dataset,
             "old_status": old_status,
+            "old_policy_version": old_policy_version,
+            "current_policy_version": effective_policy_version,
             "status_counts": status_counts,
             "prev_status_counts": prev_counts,
             "derived_status": derived,
@@ -1290,40 +2224,39 @@ def sync_dataset_coverage_from_segments(
             "complete": complete,
             "failing_checks": len(failing),
             "empty_complete": empty_complete,
+            "inventory_status": inventory_status,
+            "selected_receipt_status": receipt_status,
+            "inventory": inventory_detail,
             "dry_run": dry_run,
         }
 
-        if total <= 0:
-            results.append({**base, "action": "skip_empty_inventory"})
-            continue
+        blocker: str | None = None
+        if inventory_status == "PENDING":
+            blocker = "inventory_authority_pending"
+        elif inventory_status == "MISMATCH":
+            blocker = "inventory_mismatch"
+        elif receipt_status != "VERIFIED":
+            blocker = "selected_receipt_invalid"
+        elif (
+            old_status == "COMPLETE"
+            and old_policy_version != effective_policy_version
+        ):
+            blocker = "prior_aggregate_policy_mismatch"
+        elif total <= 0:
+            blocker = "empty_inventory"
+        elif derived == "COMPLETE" and failing:
+            blocker = "failing_checks"
+        elif derived == "COMPLETE" and empty_complete > 0:
+            blocker = "empty_complete_segments"
+        elif derived == "COMPLETE" and old_status != "COMPLETE":
+            blocker = "transition_authority_required"
 
-        # Only PARTIAL→COMPLETE is gated; never demote COMPLETE for historical C* noise.
-        if derived == "COMPLETE":
-            promoting = old_status != "COMPLETE"
-            if promoting and require_no_failing_checks and failing:
-                results.append(
-                    {
-                        **base,
-                        "action": "skip_failing_checks",
-                        "failing_check_ids": [
-                            c.get("id") or c.get("check_id") or c.get("name")
-                            for c in failing
-                        ],
-                    }
-                )
-                continue
-            if promoting and refuse_empty_complete and empty_complete > 0:
-                results.append(
-                    {
-                        **base,
-                        "action": "skip_empty_complete_segments",
-                        "reason": "COMPLETE segs with null/0 receipt_run_id",
-                    }
-                )
-                continue
-            new_status = "COMPLETE"
+        if blocker is not None:
+            new_status = "FAILED" if derived == "FAILED" else "PARTIAL"
         elif derived == "FAILED":
             new_status = "FAILED"
+        elif derived == "COMPLETE":
+            new_status = "COMPLETE"
         else:
             new_status = "PARTIAL"
 
@@ -1332,7 +2265,9 @@ def sync_dataset_coverage_from_segments(
         status_same = old_status == new_status
         counts_same = prev_norm == new_counts
 
-        if status_same and counts_same:
+        # A non-exact or blocked verdict is material evidence even if the
+        # aggregate was already non-COMPLETE; persist it instead of verify_only.
+        if status_same and counts_same and blocker is None:
             results.append(
                 {
                     **base,
@@ -1343,41 +2278,76 @@ def sync_dataset_coverage_from_segments(
             )
             continue
 
-        if old_status == "COMPLETE" and new_status != "COMPLETE":
+        if blocker == "inventory_authority_pending":
+            action = "inventory_authority_pending"
+        elif blocker == "inventory_mismatch":
+            action = "inventory_mismatch"
+        elif blocker == "selected_receipt_invalid":
+            action = "selected_receipt_invalid"
+        elif blocker == "prior_aggregate_policy_mismatch":
+            action = "prior_aggregate_policy_mismatch"
+        elif blocker == "transition_authority_required":
+            action = "transition_authority_required"
+        elif blocker == "empty_inventory":
+            action = "empty_inventory_rejected"
+        elif blocker == "failing_checks":
+            action = "failing_checks_rejected"
+        elif blocker == "empty_complete_segments":
+            action = "empty_complete_segments_rejected"
+        elif old_status == "COMPLETE" and new_status != "COMPLETE":
             action = "demoted"
-        elif old_status != new_status and new_status == "COMPLETE":
-            action = "promoted"
         else:
             action = "counts_refreshed"
 
         audit = {
             "at": evaluated_at,
             "reason": (
-                "all required segments COMPLETE; stale aggregate re-synced"
+                inventory_reason
+                or "existing COMPLETE retained after exact signed verification"
                 if new_status == "COMPLETE"
-                else "honest re-aggregate from coverage_segments SoT"
+                else inventory_reason
+                or "fail-closed re-aggregate from exact coverage inventory"
             ),
             "prev_status": old_status,
             "new_status": new_status,
+            "prev_policy_version": old_policy_version,
+            "current_policy_version": effective_policy_version,
             "prev_status_counts": prev_counts,
+            "inventory_status": inventory_status,
+            "selected_receipt_status": receipt_status,
+            "inventory": inventory_detail,
+            "blocker": blocker,
             "wave": wave,
         }
         new_detail = build_surgical_reagg_detail(
             detail,
             status_counts=new_counts,
-            required_segments=total,
+            required_segments=(
+                len(inventory.expected_identities)
+                if inventory is not None
+                else None
+            ),
             audit=audit,
         )
         detail_json = _canonical_json(new_detail)
 
         if not dry_run:
-            update_dataset_coverage_row(
-                conn,
-                dataset=dataset,
-                status=new_status,
-                detail_json=detail_json,
-                evaluated_at=evaluated_at,
-            )
+            if new_status == "COMPLETE":
+                update_existing_complete_coverage_evidence(
+                    conn,
+                    dataset=dataset,
+                    policy_version=effective_policy_version,
+                    detail_json=detail_json,
+                    evaluated_at=evaluated_at,
+                )
+            else:
+                update_dataset_coverage_row(
+                    conn,
+                    dataset=dataset,
+                    status=new_status,
+                    detail_json=detail_json,
+                    evaluated_at=evaluated_at,
+                )
 
         results.append(
             {
@@ -1387,14 +2357,9 @@ def sync_dataset_coverage_from_segments(
                 "to": new_status,
                 "status": new_status,
                 "new_status_counts": new_counts,
+                "blocker": blocker,
             }
         )
-
-    if not dry_run and any(
-        r.get("action") in {"promoted", "demoted", "counts_refreshed"}
-        for r in results
-    ):
-        conn.commit()
 
     post_platform = conn.execute(
         "SELECT COUNT(*) FROM coverage_segments WHERE status='COMPLETE'"
@@ -1410,62 +2375,103 @@ def sync_dataset_coverage_from_segments(
     return results
 
 
+def sync_dataset_coverage_from_segments(
+    conn: sqlite3.Connection,
+    *,
+    datasets: Iterable[str] | None = None,
+    dry_run: bool = False,
+    wave: str | None = None,
+) -> list[dict[str, Any]]:
+    """Run surgical aggregation under one pinned SQLite snapshot/write lock."""
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN" if dry_run else "BEGIN IMMEDIATE")
+    try:
+        results = _sync_dataset_coverage_from_segments_in_transaction(
+            conn,
+            datasets=datasets,
+            dry_run=dry_run,
+            wave=wave,
+        )
+        if owns_transaction:
+            if dry_run:
+                conn.rollback()
+            else:
+                conn.commit()
+        return results
+    except BaseException:
+        if owns_transaction:
+            conn.rollback()
+        raise
+
+
 def is_synthetic_receipt(receipt: CollectionReceipt) -> bool:
     return bool(receipt.digests.get("synthetic"))
 
 
 def receipt_eligibility(receipt: CollectionReceipt) -> str:
-    """TRUSTED_COLLECTION only with a VerifiedReceipt, never issuer strings."""
-    if is_synthetic_receipt(receipt) or receipt.digests.get("origin") in {
-        "offline-test-fixture",
-        "recovered-raw-only",
-        "parsed-staging-only",
-        "failed-collection",
-    }:
-        return "RECOVERED_RAW_ONLY"
-    from storage.verified_receipt import ReceiptVerificationError, require_verified_receipt
+    """TRUSTED_COLLECTION only with a scoped v3 closure, never issuer strings."""
+    from storage.verified_receipt import (
+        ReceiptVerificationError,
+        require_verified_collection_closure,
+    )
 
     try:
-        require_verified_receipt(receipt)
+        require_verified_collection_closure(
+            receipt,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=(
+                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ),
+        )
     except ReceiptVerificationError:
         return "RECOVERED_RAW_ONLY"
     return "TRUSTED_COLLECTION"
 
 
-def _has_nonempty_trusted_raw_evidence(receipt: CollectionReceipt) -> bool:
+def _has_nonempty_trusted_raw_evidence(closure: Any) -> bool:
     """COMPLETE needs raw_count>0 or signed EXPECTED_EMPTY_WITH_EVIDENCE.
 
     Unsigned ``[]`` / ``{"data":[]}`` is not expected-empty evidence.
     """
-    if int(receipt.raw_row_count) > 0:
+    if closure.raw_row_count > 0:
         return True
-    extras = receipt.digests.get("extra_digests")
-    return isinstance(extras, dict) and bool(
-        extras.get(EXPECTED_EMPTY_WITH_EVIDENCE)
-    )
+    return bool(closure.extra_digests.get(EXPECTED_EMPTY_WITH_EVIDENCE))
 
 
 def is_complete_eligible_receipt(receipt: CollectionReceipt) -> bool:
-    """COMPLETE only with VerifiedReceipt and non-empty trusted raw evidence."""
-    if is_synthetic_receipt(receipt):
-        return False
-    from storage.verified_receipt import ReceiptVerificationError, require_verified_receipt
+    """COMPLETE only with a verified scoped v3 closure and trusted raw evidence."""
+    from storage.verified_receipt import (
+        ReceiptVerificationError,
+        require_verified_collection_closure,
+    )
 
     try:
-        require_verified_receipt(receipt)
+        closure = require_verified_collection_closure(
+            receipt,
+            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_authority_instance_digest=(
+                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+            ),
+        )
     except ReceiptVerificationError:
         return False
-    return _has_nonempty_trusted_raw_evidence(receipt)
+    return _has_nonempty_trusted_raw_evidence(closure)
 
 
 __all__ = [
+    "CanonicalCoverageSegmentIdentity",
     "CollectionReceipt",
+    "CoverageInventoryAuthorityUnavailable",
+    "ExactCoverageCompleteVerification",
+    "ExactCoverageInventoryComparison",
     "RequiredCoverageSegment",
     "EXPECTED_EMPTY_WITH_EVIDENCE",
     "SYNTHETIC_RECEIPT_MARKER",
     "build_collection_receipt",
     "build_synthetic_complete_receipt",
     "compute_raw_digest",
+    "compare_exact_coverage_inventory",
     "coverage_gaps",
     "coverage_summary",
     "evaluate_segment",
@@ -1479,4 +2485,6 @@ __all__ = [
     "record_collection_receipt",
     "record_required_segments",
     "refresh_coverage_ledger",
+    "sync_dataset_coverage_from_segments",
+    "verify_exact_coverage_complete",
 ]

@@ -6,13 +6,14 @@ while ``dataset_coverage.status`` stays PARTIAL with stale
 ``coverage_v2.status_counts``. Full ``refresh_coverage_ledger`` re-evaluates
 every segment and is riskier than necessary when segments are already correct.
 
-This CLI updates **only** ``dataset_coverage`` rows from live
-``coverage_segments`` status histograms:
+This CLI updates **only** ``dataset_coverage`` rows after canonical inventory
+and selected signed-receipt verification:
 
 - never invents segments
 - never rewrites ``coverage_segments``
-- promotes to COMPLETE only when all segs COMPLETE, no FAILED, no empty
-  COMPLETE (null/0 receipt_run_id), and existing C* checks do not fail
+- never promotes PARTIAL to COMPLETE while C10 transition authority is open
+- retains an existing current-policy COMPLETE only for an exact inventory with
+  one verified selected receipt per segment and no failing checks
 - honest status_counts always written on change
 
 Post-seal checklist (preferred after a tip seal):
@@ -22,7 +23,6 @@ Post-seal checklist (preferred after a tip seal):
   --db data/structured/ingestion.sqlite --datasets fins_earnings_date
 .venv/bin/python scripts/publish_ops_projection.py \\
   --db data/structured/ingestion.sqlite --apply-remote
-.venv/bin/python scripts/ops_reeval_freshness.py
 ```
 
 Prefer one-dataset mode when only one dataset's segs flipped COMPLETE.
@@ -51,7 +51,6 @@ from urllib.parse import quote
 
 ROOT = ensure_repo_root()
 
-from data_contracts.coverage import POLICY_VERSION  # noqa: E402
 from storage.coverage_ledger import (  # noqa: E402
     coverage_summary,
     sync_dataset_coverage_from_segments,
@@ -76,24 +75,9 @@ def main(argv: list[str] | None = None) -> int:
         help="datasets to re-aggregate (default: all rows in dataset_coverage)",
     )
     parser.add_argument(
-        "--policy-version",
-        default=POLICY_VERSION,
-        help=f"coverage policy version (default: {POLICY_VERSION})",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="compute actions without writing dataset_coverage",
-    )
-    parser.add_argument(
-        "--allow-failing-checks",
-        action="store_true",
-        help="allow COMPLETE promote even if detail_json.checks has fail entries",
-    )
-    parser.add_argument(
-        "--allow-empty-complete",
-        action="store_true",
-        help="allow COMPLETE promote with null/0 receipt_run_id segs (NOT recommended)",
     )
     parser.add_argument(
         "--wave",
@@ -140,10 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         results = sync_dataset_coverage_from_segments(
             conn,
             datasets=args.datasets,
-            policy_version=args.policy_version,
             dry_run=args.dry_run,
-            require_no_failing_checks=not args.allow_failing_checks,
-            refuse_empty_complete=not args.allow_empty_complete,
             wave=args.wave,
         )
 
@@ -208,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"    {status}: {count}", flush=True)
             print(f"  Governed READY: {summary['governed_ready']}", flush=True)
 
-        # Exit 0 even when nothing to promote (verify_only / skips are success).
+        # Exit 0 for verification-only, demotion, or authority-pending results.
         # Exit 1 only if integrity would have been violated (segments changed).
         if pre_platform != post_platform:
             print(

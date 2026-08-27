@@ -10,7 +10,6 @@ from typing import Any, Mapping, Sequence
 from qp_paths import repo_root
 from research.eval_flags import (
     CATALOG_AND_PLUS_N_STOPPED,
-    CATALOG_YAML_COUNT_AT_STOP,
     EVENT_THREE_AND_PLUS_N_STOPPED,
 )
 from research.unique_logic.catalog import (
@@ -59,35 +58,58 @@ def primary_gate_of(spec: Mapping[str, Any]) -> str | None:
     return gates[0] if gates else None
 
 
-def _manifest_yaml_still_present() -> bool:
-    path = repo_root() / "specs" / "research_catalog" / "manifest.json"
+def _legacy_manifest_path():
+    return (
+        repo_root()
+        / "artifacts"
+        / "replay"
+        / "legacy_strategy_catalog"
+        / "manifest.json"
+    )
+
+
+def _legacy_manifest() -> dict[str, Any] | None:
+    path = _legacy_manifest_path()
     if not path.is_file():
-        return True
+        return None
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return True
+        return None
     if not isinstance(raw, Mapping):
+        return None
+    return dict(raw)
+
+
+def _manifest_yaml_still_present() -> bool:
+    raw = _legacy_manifest()
+    if raw is None:
         return True
     # Default True is fail-closed: missing manifest ≠ yaml gone.
     return bool(raw.get("yaml_still_present", True))
 
 
 def assert_catalog_and_plus_n_stopped() -> dict[str, Any]:
-    """Refuse catalog growth while CATALOG_AND_PLUS_N_STOPPED. Does not GO.
-
-    yaml n>0 must equal CATALOG_YAML_COUNT_AT_STOP. yaml n==0 requires
-    compiled migration n to equal the freeze (yaml_still_present false).
-    Do not add YAML without a dated brief that flips the freeze.
-    """
+    """Keep the legacy catalog replay-only and content-addressed. Does not GO."""
     n = len(list(catalog_dir().glob("*.yaml")))
-    freeze = int(CATALOG_YAML_COUNT_AT_STOP)
+    manifest = _legacy_manifest()
+    n_compiled = len(compiled_migration_ids())
+    manifest_n = None
+    digest = ""
+    if manifest is not None:
+        try:
+            manifest_n = int(manifest.get("n"))
+        except (TypeError, ValueError):
+            manifest_n = None
+        digest = str(manifest.get("digest") or "")
     out = {
         "stopped": bool(CATALOG_AND_PLUS_N_STOPPED),
         "n": n,
-        "n_compiled": 0,
+        "n_compiled": n_compiled,
+        "n_manifest": manifest_n,
         "yaml_still_present": _manifest_yaml_still_present(),
-        "freeze": freeze,
+        "artifact_digest": digest,
+        "freeze": digest,
         "ok": True,
         "go": False,
         "not_a_pass": True,
@@ -95,19 +117,27 @@ def assert_catalog_and_plus_n_stopped() -> dict[str, Any]:
     if not CATALOG_AND_PLUS_N_STOPPED:
         return out
     if n > 0:
-        if n != freeze:
-            raise CatalogAndPlusNStoppedError(
-                f"catalog yaml n={n} != freeze {freeze}; "
-                "dated brief must flip CATALOG_AND_PLUS_N_STOPPED to add AND YAML"
-            )
-        return out
-    n_compiled = len(compiled_migration_ids())
-    out["n_compiled"] = n_compiled
-    if n_compiled != freeze:
         raise CatalogAndPlusNStoppedError(
-            f"catalog yaml n=0 compiled n={n_compiled} != freeze {freeze}; "
-            "compiled migration n must equal CATALOG_YAML_COUNT_AT_STOP"
+            f"catalog yaml n={n}; legacy rows must remain in the replay artifact"
         )
+    if manifest is None:
+        raise CatalogAndPlusNStoppedError("legacy replay manifest missing or invalid")
+    if manifest.get("artifact_class") != "immutable_legacy_replay":
+        raise CatalogAndPlusNStoppedError("legacy replay artifact_class invalid")
+    if manifest.get("runtime_import_allowed") is not False:
+        raise CatalogAndPlusNStoppedError("legacy replay runtime import must be disabled")
+    if manifest.get("yaml_still_present", True) is not False:
+        raise CatalogAndPlusNStoppedError("legacy replay manifest still permits YAML")
+    if manifest.get("go") is not False:
+        raise CatalogAndPlusNStoppedError("legacy replay artifact must never be GO")
+    if manifest_n is None or manifest_n < 1:
+        raise CatalogAndPlusNStoppedError("legacy replay manifest n missing or invalid")
+    if n_compiled != manifest_n:
+        raise CatalogAndPlusNStoppedError(
+            f"legacy replay migration n={n_compiled} != manifest n={manifest_n}"
+        )
+    if not digest.startswith("sha256:") or len(digest) != len("sha256:") + 64:
+        raise CatalogAndPlusNStoppedError("legacy replay digest missing or invalid")
     return out
 
 

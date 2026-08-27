@@ -1,0 +1,82 @@
+{
+  "policy_version": "source-capability/v3",
+  "dataset_id": "equities_master",
+  "source": "jquants_premium_core",
+  "upstream_locator": "/v2/equities/master",
+  "official_evidence_url": "https://jpx-jquants.com/en/spec/eq-master",
+  "history_mode": "bounded_history",
+  "earliest_official_availability": "2008-05-07",
+  "historical_research_eligible": true,
+  "tip_only_operational": false,
+  "supported_query_parameters": ["code", "date", "pagination_key"],
+  "publication_calendar": {
+    "kind": "jpx_business_day",
+    "timezone": "Asia/Tokyo",
+    "as_of_past": true,
+    "as_of_current_day": true,
+    "as_of_next_business_day": true,
+    "next_business_day_available_after": "17:30",
+    "non_business_day_resolution": "next_business_day"
+  },
+  "entitlement_semantics": {
+    "clamp_before_earliest": true,
+    "subscription_floor": null,
+    "plan": "premium",
+    "subscription_entitlement_floor": "2006-08-13",
+    "subscription_entitlement_floor_live": "2006-08-19",
+    "subscription_floor_is_not_historical_required_start": true,
+    "not_historical_required_start": "2006-08-13",
+    "official_data_provision_start": "2008-05-07"
+  },
+  "collection_window": {
+    "grain": "calendar_month",
+    "open": "2008-05-07",
+    "close": "latest_published_before_collection_cutoff",
+    "required_domain_start": "2008-05-07",
+    "required_segment_start_month": "2008-05",
+    "pit_history_start": "2008-05-07",
+    "query_before_official_start": {
+      "behavior": "clamp_to_earliest_official_availability",
+      "clamped_date": "2008-05-07",
+      "classification": "vendor_misdate_clamp",
+      "not_missing_backfill": true
+    }
+  },
+  "freshness_sla": {
+    "expected_after": "17:30",
+    "usable_by": "next_business_day_08:00",
+    "timezone": "Asia/Tokyo",
+    "rule": "trading_day",
+    "same_day": true,
+    "next_business_day_after": "17:30",
+    "policy": "trading_day"
+  },
+  "event_time": {
+    "policy": "observation_date",
+    "fields": ["Date"],
+    "grain": "issuer_snapshot_day"
+  },
+  "available_at": {
+    "policy": "ingest_time_conservative",
+    "field": null
+  },
+  "revision_semantics": {
+    "policy": "scd2_event_sourcing",
+    "generation_on_revision": true,
+    "kind": "scd2_event_sourcing",
+    "corrections_not_visible_before_available_at": true
+  },
+  "research_profile_eligibility": {
+    "include_in": ["core", "core_historical"],
+    "exclude_from": [],
+    "exclusion_reason": "none",
+    "historical_research": true,
+    "pit_history_start": "2008-05-07",
+    "tip_ops": true,
+    "dataset_complete_claim": false
+  },
+  "required_domain_semantics": {
+    "basis": "calendar_months_from_official_start",
+    "empty_success_policy": "never_complete"
+  }
+}

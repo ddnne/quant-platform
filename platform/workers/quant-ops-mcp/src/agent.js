@@ -4,37 +4,100 @@
  */
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import { OPS_TOOLS, callOpsTool } from "./domain.js";
 import { DurableDailyQuota, quotaCost, QuotaExceeded } from "./quota.js";
+import { acceptedOpsToolSchemaDigest } from "./tool_schema_digest.js";
+
+export const OPS_TOOL_SCHEMA_META_KEY = "quant-platform/tool-schema-digest";
+
+/** @param {Record<string, unknown>} schema */
+function zodFromJsonSchema(schema) {
+  if (schema.type !== "object" || schema.additionalProperties !== false) {
+    throw new TypeError("Quant Ops MCP tools require a closed object schema");
+  }
+  return z.fromJSONSchema(schema);
+}
 
 /**
- * Build a loose zod object from the MCP JSON Schema properties map.
- * Ops tools only use string / integer / enum; unknown keys are rejected by domain.
- * @param {Record<string, unknown>} properties
- * @param {string[]} required
+ * Construct the exact server used by QuantOpsMcpAgent. This is also the narrow
+ * behavioral-test seam; production environment bindings are closed over here.
+ *
+ * @param {{OPS_PROJECTION_DB:D1Database,QUOTA_DB:D1Database,DAILY_ROW_QUOTA:string|number}} env
+ * @param {{login?:unknown}|undefined} props
  */
-function zodFromSchema(properties = {}, required = []) {
-  /** @type {Record<string, z.ZodTypeAny>} */
-  const shape = {};
-  for (const [key, raw] of Object.entries(properties)) {
-    const prop = /** @type {Record<string, unknown>} */ (raw || {});
-    let field;
-    if (prop.type === "integer") {
-      field = z.number().int();
-      if (typeof prop.minimum === "number") field = field.min(prop.minimum);
-      if (typeof prop.maximum === "number") field = field.max(prop.maximum);
-    } else if (Array.isArray(prop.enum)) {
-      field = z.enum(/** @type {[string, ...string[]]} */ (prop.enum.map(String)));
-    } else {
-      field = z.string();
-      if (typeof prop.minLength === "number") field = field.min(prop.minLength);
-      if (typeof prop.maxLength === "number") field = field.max(prop.maxLength);
-    }
-    shape[key] = required.includes(key) ? field : field.optional();
+export async function buildOpsMcpServer(env, props) {
+  const schemaDigest = await acceptedOpsToolSchemaDigest(OPS_TOOLS);
+  const schemaMeta = Object.freeze({ [OPS_TOOL_SCHEMA_META_KEY]: schemaDigest });
+  const publishedTools = OPS_TOOLS.map((tool) => ({
+    ...tool,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    _meta: schemaMeta,
+  }));
+  const server = new McpServer(
+    { name: "quant-ops-read", version: "0.2.0" },
+    {
+      instructions:
+        "Read-only Quant Ops status (coverage, validation, READY metadata). " +
+        "No research rows, SQL, ingestion triggers, or admin tools. " +
+        "GitHub OAuth; single allowed login only.",
+    },
+  );
+
+  for (const tool of publishedTools) {
+    server.registerTool(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: zodFromJsonSchema(tool.inputSchema),
+        outputSchema: zodFromJsonSchema(tool.outputSchema),
+        annotations: tool.annotations,
+        _meta: tool._meta,
+      },
+      async (args) => {
+        try {
+          const value = await callOpsTool(env.OPS_PROJECTION_DB, tool.name, args);
+          const login = typeof props?.login === "string" && props.login
+            ? props.login
+            : "unknown";
+          const quota = new DurableDailyQuota(env.QUOTA_DB, env.DAILY_ROW_QUOTA);
+          const charged = await quota.charge(
+            { subject: `human:${login}`, clientId: login },
+            quotaCost(value),
+          );
+          return {
+            content: [{ type: "text", text: JSON.stringify(value) }],
+            structuredContent: value,
+            _meta: { quota: charged },
+          };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Internal error";
+          const isQuota = err instanceof QuotaExceeded;
+          return {
+            content: [{ type: "text", text: message }],
+            isError: true,
+            _meta: isQuota ? { quota: "exceeded" } : undefined,
+          };
+        }
+      },
+    );
   }
-  return z.object(shape);
+
+  // The SDK derives JSON Schema from Zod for validation. Publish the reviewed
+  // canonical source schemas verbatim so the live HTTP surface and acceptance
+  // manifest have one byte-stable digest rather than converter-dependent drift.
+  server.server.setRequestHandler(ListToolsRequestSchema, () => ({
+    tools: publishedTools,
+    _meta: schemaMeta,
+  }));
+  return server;
 }
 
 export class QuantOpsMcpAgent extends McpAgent {
@@ -44,56 +107,6 @@ export class QuantOpsMcpAgent extends McpAgent {
   });
 
   async init() {
-    this.server = new McpServer(
-      { name: "quant-ops-read", version: "0.2.0" },
-      {
-        instructions:
-          "Read-only Quant Ops status (coverage, validation, READY metadata). " +
-          "No research rows, SQL, ingestion triggers, or admin tools. " +
-          "GitHub OAuth; single allowed login only.",
-      },
-    );
-
-    for (const tool of OPS_TOOLS) {
-      const schema = tool.inputSchema || {};
-      const properties = /** @type {Record<string, unknown>} */ (
-        schema.properties || {}
-      );
-      const required = /** @type {string[]} */ (schema.required || []);
-      const shape = zodFromSchema(properties, required);
-      this.server.tool(
-        tool.name,
-        tool.description,
-        shape.shape,
-        async (args) => {
-          try {
-            const db = this.env.OPS_DB;
-            const value = await callOpsTool(db, tool.name, args);
-            const login = typeof this.props?.login === "string" && this.props.login
-              ? this.props.login
-              : "unknown";
-            const quota = new DurableDailyQuota(db, this.env.DAILY_ROW_QUOTA);
-            const charged = await quota.charge(
-              { subject: `human:${login}`, clientId: login },
-              quotaCost(value),
-            );
-            return {
-              content: [{ type: "text", text: JSON.stringify(value) }],
-              structuredContent: value,
-              _meta: { quota: charged },
-            };
-          } catch (err) {
-            const message =
-              err instanceof Error ? err.message : "Internal error";
-            const isQuota = err instanceof QuotaExceeded;
-            return {
-              content: [{ type: "text", text: message }],
-              isError: true,
-              _meta: isQuota ? { quota: "exceeded" } : undefined,
-            };
-          }
-        },
-      );
-    }
+    this.server = await buildOpsMcpServer(this.env, this.props);
   }
 }

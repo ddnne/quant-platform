@@ -20,3 +20,30 @@ test("GET /callback without code/state is 400 missing code/state", async () => {
     assert.doesNotMatch(raw, /\bCOMPLETE\b/);
   }
 });
+
+test("OAuth state authority never falls back to the GitHub client secret", async () => {
+  const provider = {
+    parseAuthRequest: async () => ({ clientId: "client" }),
+    completeAuthorization: async () => ({ redirectTo: "https://client.test" }),
+  };
+  const env = {
+    GITHUB_CLIENT_ID: "github-client",
+    GITHUB_CLIENT_SECRET: "provider-secret-is-not-a-state-key",
+    ALLOWED_LOGIN: "allowed",
+    OAUTH_PROVIDER: provider,
+  };
+
+  const authorize = await githubHandler.fetch(
+    new Request("https://ops.test/authorize"),
+    env,
+  );
+  assert.equal(authorize.status, 500);
+  assert.equal(await authorize.text(), "server misconfigured: STATE_SECRET missing");
+
+  const callback = await githubHandler.fetch(
+    new Request("https://ops.test/callback?code=abc&state=legacy.invalid"),
+    env,
+  );
+  assert.equal(callback.status, 500);
+  assert.equal(await callback.text(), "server misconfigured: state secret unset");
+});

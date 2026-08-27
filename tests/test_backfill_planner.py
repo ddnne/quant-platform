@@ -224,25 +224,23 @@ def test_planner_master_jobs_exclude_pre_official_months():
     assert all(j.state != "COMPLETE" for j in plan.jobs)
 
 
-def test_planner_fins_summary_without_v3_uses_coverage_json_not_invented_domain():
-    """No-V3 governed datasets keep official domain None; start is coverage JSON.
-
-    Missing SourceCapability V3 is not an invented official domain.
-    plan_required_segments and BackfillPlanner both start at
-    collection_coverage.json history_target_start. evaluate_segment
-    without a receipt is PARTIAL, not COMPLETE.
-    """
+def test_planner_fins_summary_uses_v3_official_domain_without_minting_complete():
+    """Fins planning derives its start from V3 and still requires evidence."""
     from datetime import date
 
     from data_contracts.coverage import coverage_contract_for
-    from data_contracts.source_capability import source_capability_contract_or_none
+    from data_contracts.source_capability import source_capability_contract_for
     from storage.coverage_ledger import evaluate_segment, plan_required_segments
 
     dataset = "fins_summary"
-    assert source_capability_contract_or_none(dataset) is None
+    capability = source_capability_contract_for(dataset)
+    assert capability.earliest_official_availability == "2008-07-07"
+    assert capability.required_domain_semantics.basis == (
+        "publication_windows_from_official_start"
+    )
 
     policy = coverage_contract_for(dataset)
-    assert policy.history_target_start == "2008-07-01"
+    assert policy.history_target_start == capability.earliest_official_availability
     assert policy.earliest_official_availability is None
 
     cutoff = date(2008, 8, 31)
@@ -312,12 +310,12 @@ def test_planner_never_emits_complete_status():
     assert all(j.expected_evidence != "COMPLETE" for j in plan.jobs)
 
 
-def test_planner_bars_and_fins_month_chunks_match_required_segments():
-    """Bounded-history bars/fins stay calendar_month jobs via required segments."""
+def test_planner_bars_and_fins_v3_month_chunks_match_required_segments():
+    """Core V3 domains remain calendar-month jobs clipped to official starts."""
     from datetime import date
 
     from data_contracts.coverage import coverage_contract_for
-    from data_contracts.source_capability import source_capability_contract_or_none
+    from data_contracts.source_capability import source_capability_contract_for
     from storage.coverage_ledger import plan_required_segments
 
     cutoff = date(2008, 7, 31)
@@ -325,7 +323,10 @@ def test_planner_bars_and_fins_month_chunks_match_required_segments():
         ("equities_bars_daily", {"2008-05", "2008-06", "2008-07"}),
         ("fins_summary", {"2008-07"}),
     ):
-        assert source_capability_contract_or_none(dataset) is None
+        capability = source_capability_contract_for(dataset)
+        assert coverage_contract_for(dataset).history_target_start == (
+            capability.earliest_official_availability
+        )
         required = plan_required_segments(
             coverage_contract_for(dataset), cutoff.isoformat()
         )
@@ -340,15 +341,18 @@ def test_planner_bars_and_fins_month_chunks_match_required_segments():
         assert all(j.state != "COMPLETE" for j in plan.jobs)
 
 
-def test_planner_empty_missing_v3_does_not_mint_complete(tmp_path):
-    """Empty ledger + no V3 row still month-chunks; never COMPLETE."""
+def test_planner_empty_v3_domain_does_not_mint_complete(tmp_path):
+    """An empty ledger with V3 inventory stays pending, never COMPLETE."""
     import sqlite3
     from datetime import date
 
-    from data_contracts.source_capability import source_capability_contract_or_none
+    from data_contracts.source_capability import source_capability_contract_for
     from ops.backfill_planner import backfill_status_rows
 
-    assert source_capability_contract_or_none("fins_summary") is None
+    assert (
+        source_capability_contract_for("fins_summary").earliest_official_availability
+        == "2008-07-07"
+    )
     db = tmp_path / "coverage.sqlite"
     conn = sqlite3.connect(db)
     conn.execute(
@@ -373,14 +377,25 @@ def test_planner_empty_missing_v3_does_not_mint_complete(tmp_path):
 
 
 def test_planner_missing_v3_invented_official_domain_is_fail_closed(monkeypatch):
-    """A no-V3 dataset must not treat invented official domain as required."""
+    """If a V3 row disappears, an invented official domain fails closed."""
     from datetime import date
 
-    from data_contracts.source_capability import source_capability_contract_or_none
+    from data_contracts.source_capability import (
+        source_capability_contract_for,
+        source_capability_contract_or_none,
+    )
     from ops.backfill_planner import _invented_official_domain_without_v3
     from storage.coverage_ledger import RequiredCoverageSegment
 
-    assert source_capability_contract_or_none("fins_summary") is None
+    assert source_capability_contract_for("fins_summary") is not None
+    monkeypatch.setattr(
+        "ops.backfill_planner.source_capability_contract_or_none",
+        lambda dataset_id: (
+            None
+            if dataset_id == "fins_summary"
+            else source_capability_contract_or_none(dataset_id)
+        ),
+    )
     invented = {"earliest_official_availability": "2008-07-01"}
     assert _invented_official_domain_without_v3("fins_summary", invented) is True
     assert _invented_official_domain_without_v3("fins_summary", {}) is False
@@ -425,16 +440,10 @@ def test_planner_passes_index_text_into_required_segments(monkeypatch):
     JQ month jobs stay honest with or without HTML. Omitted is not a
     weekend COMPLETE invent. JSDA remains skipped at plan().
     """
-    import inspect
     from datetime import date
     from pathlib import Path
 
     from ops import backfill_planner as planner_mod
-
-    sig = inspect.signature(BackfillPlanner.plan)
-    assert sig.parameters["index_text"].default is None
-    jobs_sig = inspect.signature(BackfillPlanner._jobs_from_required_segments)
-    assert jobs_sig.parameters["index_text"].default is None
 
     captured: list[dict] = []
     real = planner_mod.plan_required_segments

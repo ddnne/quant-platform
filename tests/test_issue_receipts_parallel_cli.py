@@ -47,36 +47,18 @@ def _stub_db(tmp_path: Path) -> Path:
     return db
 
 
-def _seed_ready(tmp_path: Path) -> tuple[Path, Path]:
+def _seed_ready(tmp_path: Path, cli_module) -> tuple[Path, Path]:
     db = tmp_path / "t.sqlite"
     data_dir = tmp_path / "data"
     raw_dir = data_dir / "raw" / "jquants" / "2026" / "08" / "11"
     raw_dir.mkdir(parents=True)
-    (
+    raw_path = (
         raw_dir / "markets_short_ratio_from=2025-01-01_to=2025-01-31_test.json"
-    ).write_text('{"ok":true,"rows":[1]}', encoding="utf-8")
-    conn = sqlite3.connect(db)
-    conn.executescript(
-        """
-        CREATE TABLE coverage_segments (
-            source TEXT, dataset TEXT, segment_id TEXT, policy_version TEXT,
-            segment_start TEXT, segment_end TEXT, expected_scope TEXT,
-            expected_items INTEGER, status TEXT, receipt_run_id INTEGER
-        );
-        CREATE TABLE jquants_records (
-            dataset TEXT, event_time TEXT
-        );
-        CREATE TABLE collection_receipts (
-            source TEXT, dataset TEXT, segment_id TEXT,
-            segment_start TEXT, segment_end TEXT,
-            expected_scope TEXT, expected_items INTEGER,
-            observed_items INTEGER, raw_page_count INTEGER,
-            raw_row_count INTEGER, structured_row_count INTEGER,
-            pagination_exhausted INTEGER, digests_json TEXT,
-            run_id INTEGER, status TEXT, error TEXT, checked_at TEXT
-        );
-        """
     )
+    raw_path.write_text('{"ok":true,"rows":[1]}', encoding="utf-8")
+    raw_path.chmod(0o444)
+    store = cli_module.SqliteStore(db)
+    conn = store._conn
     scope = json.dumps(
         {
             "coverage_mode": "periodic_reconciled",
@@ -87,7 +69,11 @@ def _seed_ready(tmp_path: Path) -> tuple[Path, Path]:
         }
     )
     conn.execute(
-        "INSERT INTO coverage_segments VALUES (?,?,?,?,?,?,?,?,?,?)",
+        """INSERT INTO coverage_segments (
+               source, dataset, segment_id, policy_version,
+               segment_start, segment_end, expected_scope, expected_items,
+               status, receipt_run_id, evaluated_at, detail_json
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             "jquants",
             "markets_short_ratio",
@@ -99,14 +85,28 @@ def _seed_ready(tmp_path: Path) -> tuple[Path, Path]:
             1,
             "PARTIAL",
             None,
+            "2025-02-01T00:00:00+00:00",
+            "{}",
         ),
     )
     conn.execute(
-        "INSERT INTO jquants_records VALUES (?,?)",
-        ("markets_short_ratio", "2025-01-05T00:00:00+09:00"),
+        """INSERT INTO jquants_records (
+               source, dataset, natural_key, event_time, available_at,
+               ingested_at, payload, raw_payload
+           ) VALUES (?,?,?,?,?,?,?,?)""",
+        (
+            "jquants",
+            "markets_short_ratio",
+            '{"Date":"2025-01-05"}',
+            "2025-01-05T00:00:00+09:00",
+            "2025-01-05T00:00:00+09:00",
+            "2025-01-05T00:00:00+09:00",
+            "{}",
+            "{}",
+        ),
     )
     conn.commit()
-    conn.close()
+    store.close()
     return db, data_dir
 
 
@@ -125,7 +125,7 @@ def _stub_refresh(cli_module, monkeypatch) -> dict:
             }
         ]
 
-    def fake_issue(conn, prepared_list, *, authority, start_run_id):
+    def fake_issue(store, prepared_list, *, start_run_id):
         captured["issued"] = True
         return [
             {
@@ -137,15 +137,12 @@ def _stub_refresh(cli_module, monkeypatch) -> dict:
             }
         ]
 
-    def fake_authority():
-        return object()
-
     def fake_sync(conn, datasets=None, wave=None):
+        captured["synced"] = True
         return []
 
     monkeypatch.setattr(cli_module, "refresh_coverage_ledger", fake_refresh)
     monkeypatch.setattr(cli_module, "issue_prepared", fake_issue)
-    monkeypatch.setattr(cli_module, "open_signed_receipt_authority", fake_authority)
     monkeypatch.setattr(cli_module, "sync_dataset_coverage_from_segments", fake_sync)
     return captured
 
@@ -174,7 +171,7 @@ def test_read_index_text_missing_path_is_none(cli_module) -> None:
 def test_main_passes_local_index_text_through(
     cli_module, monkeypatch, tmp_path: Path,
 ) -> None:
-    db, data_dir = _seed_ready(tmp_path)
+    db, data_dir = _seed_ready(tmp_path, cli_module)
     captured = _stub_refresh(cli_module, monkeypatch)
     html = _FIXTURE.read_text(encoding="utf-8")
     assert "https://" not in html
@@ -197,12 +194,13 @@ def test_main_passes_local_index_text_through(
     assert captured["index_text"] is not None
     assert captured["index_text"].strip() != ""
     assert captured["index_text"] != V2_REQUIRED
+    assert captured.get("synced") is True
 
 
 def test_main_omitted_index_text_is_none_not_calendar_replay(
     cli_module, monkeypatch, tmp_path: Path,
 ) -> None:
-    db, data_dir = _seed_ready(tmp_path)
+    db, data_dir = _seed_ready(tmp_path, cli_module)
     captured = _stub_refresh(cli_module, monkeypatch)
     rc = cli_module.main(
         [
@@ -219,6 +217,7 @@ def test_main_omitted_index_text_is_none_not_calendar_replay(
     assert "index_text" in captured["kwargs"]
     assert captured["index_text"] is None
     assert captured["index_text"] != V2_REQUIRED
+    assert captured.get("synced") is True
 
 
 def test_main_missing_index_file_does_not_call_refresh(

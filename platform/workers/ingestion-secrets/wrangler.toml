@@ -11,14 +11,56 @@ name = "quant-platform-ingestion-secrets"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 workers_dev = true
+preview_urls = false
+
+[vars]
+ENVIRONMENT = "production"
+
+[secrets]
+required = ["JQUANTS_API_KEY", "JQUANTS_PROXY_TOKEN", "JQUANTS_RPC_CURSOR_HMAC_KEY"]
 
 # Secret bindings (values set via `wrangler secret put`, never in this file):
 # - JQUANTS_API_KEY
 # - JQUANTS_PROXY_TOKEN        (allowlisted upstream GET only)
+# - JQUANTS_RPC_CURSOR_HMAC_KEY (target-only RPC navigation; no key fallback)
 
 [observability]
 enabled = true
+head_sampling_rate = 1
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
+[[ratelimits]]
+name = "PROXY_RATE_LIMITER"
+namespace_id = "63101"
+
+[ratelimits.simple]
+limit = 60
+period = 60
 
 [env.production]
 name = "quant-platform-ingestion-secrets"
 workers_dev = true
+preview_urls = false
+
+[env.production.vars]
+ENVIRONMENT = "production"
+
+[env.production.secrets]
+required = ["JQUANTS_API_KEY", "JQUANTS_PROXY_TOKEN", "JQUANTS_RPC_CURSOR_HMAC_KEY"]
+
+[[env.production.ratelimits]]
+name = "PROXY_RATE_LIMITER"
+namespace_id = "63101"
+
+[env.production.ratelimits.simple]
+limit = 60
+period = 60
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.production.version_metadata]
+binding = "CF_VERSION_METADATA"

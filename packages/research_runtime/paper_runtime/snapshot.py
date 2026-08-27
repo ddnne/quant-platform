@@ -17,29 +17,28 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from data_contracts.coverage import (
-    POLICY_VERSION as COVERAGE_POLICY_VERSION,
     all_coverage_contracts,
+    coverage_policy_set_binding,
 )
 from data_contracts.jsda import JSDA_CONTRACT_VERSION
 from data_contracts.loader import SCHEMA_VERSION as DATASET_CONTRACT_VERSION
 from paper_runtime.snapshot_coverage_proof import (
-    _coverage_v2_proof,
-    _verify_coverage_v2_manifest,
+    _coverage_proof,
+    _verify_coverage_manifest,
 )
 from paper_runtime.snapshot_persist import (
     _atomic_json,
     _copy_sqlite,
     _persist_building_publication,
-    _persist_synced_policy,
     _persist_synced_publication,
     begin_snapshot_sync,
 )
 from paper_runtime.snapshot_publish_policy import (
     READY_MANIFEST_SCHEMA,
-    evaluate_ready_publication,
     _transition_policy,
 )
 from paper_runtime.snapshot_read import (
+    _describe_fixture_snapshot,
     describe_snapshot,
     latest_ready_snapshot,
     list_ready_snapshots,
@@ -50,7 +49,8 @@ from paper_runtime.snapshot_read import (
 DATA_SNAPSHOT_FORMAT = "paper-data-snapshot/v1"
 LOCAL_SNAPSHOT_MANIFEST_FORMAT = "local-snapshot-manifest/v1"
 RESEARCH_SNAPSHOT_MANIFEST_FORMAT = "research-snapshot-manifest/v2"
-QUALITY_POLICY_VERSION = "b0+phase35-daily+coverage/v2"
+RESEARCH_SNAPSHOT_PUBLICATION_FORMAT = "research-snapshot-publication/v1"
+QUALITY_POLICY_VERSION = "b0+phase35-daily+coverage-set/v1"
 SNAPSHOT_STATES = frozenset(
     {"BUILDING", "SYNCED", "VALIDATING", "READY", "REJECTED"}
 )
@@ -99,8 +99,15 @@ class ReadySnapshot:
         return str(self.manifest["committed_at"])
 
 
-def _connect_readonly(path: Path) -> sqlite3.Connection:
-    uri = "file:" + quote(str(path.resolve())) + "?mode=ro"
+def _connect_readonly(
+    path: Path, *, immutable: bool = False
+) -> sqlite3.Connection:
+    # Published snapshots are content-addressed immutable artifacts, where
+    # SQLite must not create ``-wal``/``-shm`` sidecars.  Mutable current DBs,
+    # however, may have committed data only in an uncheckpointed WAL; treating
+    # those as immutable would silently read stale state.
+    query = "?mode=ro&immutable=1" if immutable else "?mode=ro"
+    uri = "file:" + quote(str(path.resolve())) + query
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     return conn
@@ -306,6 +313,14 @@ def _canonical_digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
 def fail_snapshot_sync(conn: sqlite3.Connection, error: str) -> None:
     """Keep a partial local DB unavailable to paper research."""
     conn.execute(
@@ -385,86 +400,6 @@ def _latest_complete_run(
     return run_id, detail, [latest[dataset] for dataset in required]
 
 
-def commit_snapshot_manifest(
-    conn: sqlite3.Connection,
-    *,
-    required_datasets: Iterable[str],
-) -> str:
-    """Legacy in-place manifest for compatibility fixtures (not production READY)."""
-    required = tuple(sorted(set(str(item) for item in required_datasets)))
-    if not required:
-        raise ValueError("required_datasets must not be empty")
-    _persist_synced_policy(conn)
-    conn.execute(
-        "UPDATE local_snapshot_policy SET publication_state='VALIDATING' "
-        "WHERE singleton=1"
-    )
-    conn.commit()
-    run_id, detail, validations = _latest_complete_run(conn, required)
-
-    placeholders = ",".join("?" for _ in required)
-    rows = conn.execute(
-        "SELECT dataset, last_event_date, last_ingested_at "
-        "FROM ingestion_watermarks "
-        f"WHERE dataset IN ({placeholders}) ORDER BY dataset",
-        required,
-    ).fetchall()
-    watermarks = [dict(row) for row in rows]
-    present = {str(row["dataset"]) for row in watermarks}
-    missing = sorted(set(required) - present)
-    if missing:
-        raise RuntimeError(f"required dataset watermarks missing: {missing}")
-    change = conn.execute(
-        "SELECT last_applied_change_seq FROM sync_change_state "
-        "WHERE feed = 'jquants_records'"
-    ).fetchone()
-    change_seq = int(change[0]) if change is not None else 0
-    committed_at = datetime.now(timezone.utc).isoformat()
-    manifest = {
-        "format": LOCAL_SNAPSHOT_MANIFEST_FORMAT,
-        "committed_at": committed_at,
-        "source_run": {
-            "id": run_id,
-            "started_at": detail.get("startedAt"),
-            "finished_at": detail.get("finishedAt"),
-        },
-        "required_datasets": list(required),
-        "change_seq": change_seq,
-        "dataset_watermarks": watermarks,
-        "validations": validations,
-    }
-    snapshot_id = _canonical_digest(manifest)
-    manifest_json = json.dumps(
-        manifest, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
-        allow_nan=False,
-    )
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO local_snapshot_manifests
-                (snapshot_id, format, committed_at, source_run_id, change_seq,
-                 manifest_json)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                snapshot_id, LOCAL_SNAPSHOT_MANIFEST_FORMAT, committed_at,
-                run_id, change_seq, manifest_json,
-            ),
-        )
-        conn.execute(
-            "UPDATE local_snapshot_policy SET snapshot_ready = 1, "
-            "last_error = NULL, publication_state='READY', "
-            "active_snapshot_id=? WHERE singleton = 1",
-            (snapshot_id,),
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    return snapshot_id
-
-
 def _research_manifest_id(manifest: dict[str, Any]) -> str:
     identity = dict(manifest)
     identity.pop("snapshot_id", None)
@@ -475,6 +410,26 @@ def _research_manifest_id(manifest: dict[str, Any]) -> str:
     # ReadyManifest binds to snapshot_id and is therefore appended after the
     # non-circular research snapshot identity has been calculated.
     identity.pop("ready_manifest", None)
+    # A repeated validation of the same immutable source state must resolve to
+    # the same content address. Keep the retained observation time in the full
+    # manifest, but exclude that volatile clock reading from snapshot identity.
+    ready_evidence = identity.get("ready_evidence")
+    if isinstance(ready_evidence, Mapping):
+        stable_evidence = dict(ready_evidence)
+        stable_items: list[Any] = []
+        for raw_item in ready_evidence.get("items", []):
+            if not isinstance(raw_item, Mapping):
+                stable_items.append(raw_item)
+                continue
+            item = dict(raw_item)
+            detail = item.get("detail")
+            if isinstance(detail, Mapping):
+                stable_detail = dict(detail)
+                stable_detail.pop("evaluated_at", None)
+                item["detail"] = stable_detail
+            stable_items.append(item)
+        stable_evidence["items"] = stable_items
+        identity["ready_evidence"] = stable_evidence
     return _canonical_digest(identity)
 
 
@@ -507,7 +462,7 @@ def _watermarks_for(
     coverage = {
         str(row["dataset"]): row for row in (coverage_rows or [])
     }
-    # JSDA has no D1 watermark; COMPLETE Coverage V2 observed_end is the bound.
+    # JSDA has no D1 watermark; current governed Coverage observed_end is the bound.
     for dataset in sorted(set(required) - present):
         row = coverage.get(dataset)
         if (
@@ -520,7 +475,7 @@ def _watermarks_for(
                 "dataset": dataset,
                 "last_event_date": row["observed_end"],
                 "last_ingested_at": row["evaluated_at"],
-                "derived_from": "coverage_v2_receipts",
+                "derived_from": "governed_coverage_receipts",
             })
             present.add(dataset)
     watermarks.sort(key=lambda row: str(row["dataset"]))
@@ -530,21 +485,59 @@ def _watermarks_for(
     return watermarks
 
 
-def publish_ready_snapshot(
+def _publish_ready_snapshot(
     staging_db: str | Path,
     snapshot_dir: str | Path,
     *,
     required_datasets: Iterable[str],
     _profile_coverage_evidence: Mapping[str, Any] | None = None,
+    _dependency_scope_evidence: Mapping[str, Any] | None = None,
     _ready_manifest_builder: (
         Callable[[Mapping[str, Any]], Mapping[str, Any]] | None
     ) = None,
+    _ready_attestation_builder: Callable[[ReadySnapshot], Path | None] | None = None,
+) -> ReadySnapshot:
+    """Reject generic local production publication before any mutation.
+
+    Production snapshots are accepted only through the verify-only reader
+    after an external READY authority has signed the exact immutable artifact.
+    """
+    del (
+        staging_db,
+        snapshot_dir,
+        required_datasets,
+        _profile_coverage_evidence,
+        _dependency_scope_evidence,
+        _ready_manifest_builder,
+        _ready_attestation_builder,
+    )
+    raise SnapshotRejected("generic production READY authority is PENDING")
+
+
+def _publish_ready_snapshot_impl(
+    staging_db: str | Path,
+    snapshot_dir: str | Path,
+    *,
+    required_datasets: Iterable[str],
+    _profile_coverage_evidence: Mapping[str, Any] | None = None,
+    _dependency_scope_evidence: Mapping[str, Any] | None = None,
+    _ready_manifest_builder: (
+        Callable[[Mapping[str, Any]], Mapping[str, Any]] | None
+    ) = None,
+    _ready_attestation_builder: Callable[[ReadySnapshot], Path | None] | None = None,
+    publication_gate: Callable[..., tuple[Any, ...]],
+    fixture_compatibility: bool,
 ) -> ReadySnapshot:
     """Gate a staging DB and atomically publish a read-only snapshot.
 
     The product-owned READY(P) bridge may supply retained profile evidence and
     a closed ReadyManifest builder. Both must be present together.
     """
+    if fixture_compatibility is not True:
+        raise SnapshotRejected(
+            "local production READY publication is disabled; authority is PENDING"
+        )
+    publication_scope = "FIXTURE"
     staging_path = Path(staging_db).resolve()
     if not staging_path.is_file():
         raise FileNotFoundError(f"staging database does not exist: {staging_path}")
@@ -561,6 +554,34 @@ def publish_ready_snapshot(
     if profile_bound != (_profile_coverage_evidence is not None):
         raise SnapshotRejected(
             "profile coverage evidence and ReadyManifest builder must be supplied together"
+        )
+    if _ready_attestation_builder is not None and not profile_bound:
+        raise SnapshotRejected(
+            "READY attestation builder requires a profile-bound ReadyManifest"
+        )
+    if _dependency_scope_evidence is not None and not profile_bound:
+        raise SnapshotRejected(
+            "dependency scope evidence requires a profile-bound ReadyManifest"
+        )
+    if not profile_bound and not fixture_compatibility:
+        raise SnapshotRejected(
+            "production READY requires a profile/plan-bound ReadyManifest publisher"
+        )
+    if (
+        profile_bound
+        and not fixture_compatibility
+        and _ready_attestation_builder is None
+    ):
+        raise SnapshotRejected(
+            "production READY requires an atomic signed readiness attestation"
+        )
+    if (
+        profile_bound
+        and not fixture_compatibility
+        and not isinstance(_dependency_scope_evidence, Mapping)
+    ):
+        raise SnapshotRejected(
+            "production READY requires publisher-owned dependency scope evidence"
         )
     if not profile_bound and (
         not governed <= required_set or not required_set <= set(policies)
@@ -579,9 +600,23 @@ def publish_ready_snapshot(
     build_id = "build-" + uuid4().hex
     created_at = datetime.now(timezone.utc).isoformat()
     contract = f"jquants-premium-core/v{DATASET_CONTRACT_VERSION}"
-    coverage_policy_version = COVERAGE_POLICY_VERSION
+    governed_required = [
+        dataset_id
+        for dataset_id in required
+        if policies[dataset_id].governance_tier == "governed"
+    ]
+    coverage_policy = coverage_policy_set_binding(governed_required)
+    coverage_policy_version = str(coverage_policy["policy_version"])
+    coverage_policy_digest = str(coverage_policy["policy_digest"])
     quality_policy_version = QUALITY_POLICY_VERSION
-    published_ready: ReadySnapshot | None = None
+    readiness_sidecar_path: Path | None = None
+    artifact_path: Path | None = None
+    manifest_path: Path | None = None
+    publication_marker_path: Path | None = None
+    artifact_created = False
+    manifest_attempted = False
+    pointer_attempted = False
+    publication_marker_attempted = False
     try:
         _persist_building_publication(
             conn,
@@ -605,9 +640,12 @@ def publish_ready_snapshot(
             (
                 run_id, run_detail, validations, coverage_rows,
                 quality_summary, quality_failures, raw_manifests,
-                coverage_proof,
-            ) = evaluate_ready_publication(
-                conn, staging_path, build_id=build_id, required=required
+                coverage_proof, coverage_proof_id, ready_evidence,
+            ) = publication_gate(
+                conn,
+                staging_path,
+                build_id=build_id,
+                required=required,
             )
             watermarks = _watermarks_for(conn, required, coverage_rows)
             if READY_MANIFEST_SCHEMA.get("$id") != "ready-manifest/v1":
@@ -625,15 +663,45 @@ def publish_ready_snapshot(
                 raise
             raise SnapshotRejected(reason) from exc
 
-        change = conn.execute(
-            "SELECT last_applied_change_seq FROM sync_change_state "
-            "WHERE feed='jquants_records'"
+        sync_items = [
+            item
+            for item in ready_evidence.get("items", [])
+            if isinstance(item, Mapping)
+            and item.get("name") == "SyncGenerationEvidence"
+        ]
+        if len(sync_items) != 1 or not isinstance(
+            sync_items[0].get("detail"), Mapping
+        ):
+            raise SnapshotRejected("production READY sync evidence is missing")
+        try:
+            change_seq = int(
+                sync_items[0]["detail"]["applied_sync_generation"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SnapshotRejected(
+                "production READY applied generation is malformed"
+            ) from exc
+        if change_seq <= 0:
+            raise SnapshotRejected("production READY applied generation is null")
+        quality_row = conn.execute(
+            "SELECT results_json FROM snapshot_quality_results WHERE build_id=?",
+            (build_id,),
         ).fetchone()
-        change_seq = int(change[0]) if change is not None else 0
+        if quality_row is None:
+            raise SnapshotRejected("production READY quality result ledger is missing")
+        try:
+            quality_results = json.loads(str(quality_row[0]))
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise SnapshotRejected(
+                "production READY quality result ledger is malformed"
+            ) from exc
+        if not isinstance(quality_results, list) or not quality_results:
+            raise SnapshotRejected("production READY quality results are empty")
         committed_at = datetime.now(timezone.utc).isoformat()
         manifest: dict[str, Any] = {
             "format": RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
             "state": "READY",
+            "build_id": build_id,
             "contract_version": contract,
             "source_contract_versions": {
                 "jquants": contract,
@@ -646,6 +714,7 @@ def publish_ready_snapshot(
             },
             "change_seq": change_seq,
             "coverage_policy_version": coverage_policy_version,
+            "coverage_policy_digest": coverage_policy_digest,
             "quality_policy_version": quality_policy_version,
             "required_datasets": list(required),
             "dataset_watermarks": watermarks,
@@ -662,12 +731,15 @@ def publish_ready_snapshot(
                 }
                 for row in coverage_rows
             ],
-            "coverage_v2_proof": coverage_proof,
+            "coverage_proof": coverage_proof,
+            "coverage_proof_id": coverage_proof_id,
             "quality": {
                 "status": "PASS",
                 "summary": quality_summary,
                 "failures": quality_failures,
+                "results": quality_results,
             },
+            "ready_evidence": ready_evidence,
             "raw_manifests": raw_manifests,
             "validations": validations,
             "created_at": created_at,
@@ -678,6 +750,10 @@ def publish_ready_snapshot(
                 str(dataset_id): dict(row)
                 for dataset_id, row in _profile_coverage_evidence.items()
             }
+        if _dependency_scope_evidence is not None:
+            manifest["dependency_scope_evidence"] = dict(
+                _dependency_scope_evidence
+            )
         snapshot_id = _research_manifest_id(manifest)
         manifest["snapshot_id"] = snapshot_id
         if profile_bound:
@@ -688,6 +764,7 @@ def publish_ready_snapshot(
         stem = _artifact_stem(snapshot_id)
         artifact_path = destination / f"{stem}.sqlite"
         manifest_path = destination / f"{stem}.manifest.json"
+        publication_marker_path = destination / f"{stem}.publication.json"
         manifest["artifact"] = artifact_path.name
         manifest["manifest_digest"] = _research_manifest_digest(manifest)
 
@@ -742,7 +819,11 @@ def publish_ready_snapshot(
                 embedded.close()
             os.chmod(temp_db, 0o444)
             if artifact_path.exists():
-                existing = describe_snapshot(destination, snapshot_id)
+                existing = (
+                    _describe_fixture_snapshot(destination, snapshot_id)
+                    if fixture_compatibility
+                    else describe_snapshot(destination, snapshot_id)
+                )
                 temp_db.unlink(missing_ok=True)
                 ready = existing
                 manifest = existing.manifest
@@ -751,24 +832,12 @@ def publish_ready_snapshot(
                 committed_at = existing.committed_at
             else:
                 os.replace(temp_db, artifact_path)
+                artifact_created = True
+                manifest_attempted = True
                 _atomic_json(manifest_path, manifest, mode=0o444)
                 ready = ReadySnapshot(
                     snapshot_id, artifact_path, manifest_path, manifest
                 )
-            published_ready = ready
-            try:
-                _atomic_json(
-                    destination / "latest-ready.json",
-                    {
-                        "format": "research-snapshot-pointer/v1",
-                        "snapshot_id": snapshot_id,
-                        "manifest": manifest_path.name,
-                        "committed_at": committed_at,
-                    },
-                    mode=0o644,
-                )
-            except OSError:
-                pass
         except Exception:
             temp_db.unlink(missing_ok=True)
             raise
@@ -792,15 +861,121 @@ def publish_ready_snapshot(
             (snapshot_id,),
         )
         conn.commit()
+
+        # Signing is deliberately after the authoritative source transaction:
+        # a failed READY commit must never leave a usable signed capability.
+        # If pointer finalization later fails, the returned sidecar path is
+        # removed by the rejection handler below before control escapes.
+        if _ready_attestation_builder is not None:
+            readiness_sidecar_path = _ready_attestation_builder(ready)
+            if (
+                readiness_sidecar_path is None
+                or not readiness_sidecar_path.is_file()
+            ):
+                raise SnapshotRejected(
+                    "READY attestation builder did not publish an artifact"
+                )
+        artifact_digest = _file_sha256(artifact_path)
+        publication_body: dict[str, Any] = {
+            "format": RESEARCH_SNAPSHOT_PUBLICATION_FORMAT,
+            "snapshot_id": snapshot_id,
+            "manifest_digest": manifest["manifest_digest"],
+            "committed_at": committed_at,
+            "change_seq": change_seq,
+            "artifact_digest": artifact_digest,
+            "publication_scope": publication_scope,
+            "readiness_attestation": (
+                readiness_sidecar_path.name
+                if readiness_sidecar_path is not None
+                else None
+            ),
+            "readiness_attestation_digest": (
+                _file_sha256(readiness_sidecar_path)
+                if readiness_sidecar_path is not None
+                else None
+            ),
+        }
+        publication = {
+            **publication_body,
+            "publication_digest": _canonical_digest(publication_body),
+        }
+        # The mutable convenience pointer binds the complete marker and its
+        # monotonic source generation.  The marker is written last, so a
+        # pointer failure cannot leave a directly discoverable publication.
+        pointer_attempted = True
+        _atomic_json(
+            destination / "latest-ready.json",
+            {
+                "format": "research-snapshot-pointer/v1",
+                "snapshot_id": snapshot_id,
+                "manifest": manifest_path.name,
+                "committed_at": committed_at,
+                "change_seq": change_seq,
+                "publication_digest": publication["publication_digest"],
+            },
+            mode=0o444,
+        )
+        publication_marker_attempted = True
+        _atomic_json(publication_marker_path, publication, mode=0o444)
         return ready
     except Exception as exc:
-        if published_ready is not None:
-            return published_ready
+        original_exc = exc
+        # A replace-last helper can be wrapped by a filesystem layer that
+        # reports failure after the destination appeared.  Remove discovery
+        # documents for every attempted finalization before cleaning signed
+        # sidecars or quarantining immutable evidence.
+        if publication_marker_attempted and publication_marker_path is not None:
+            try:
+                publication_marker_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if pointer_attempted:
+            try:
+                (destination / "latest-ready.json").unlink(missing_ok=True)
+            except OSError:
+                pass
+        if readiness_sidecar_path is not None:
+            try:
+                readiness_sidecar_path.unlink(missing_ok=True)
+            except OSError:
+                # A retained signed capability would be unsafe even though the
+                # source publication is rejected. Surface that cleanup failure
+                # rather than reporting the original finalization error alone.
+                exc = SnapshotRejected(
+                    "READY publication rejected but readiness sidecar cleanup "
+                    f"failed: {readiness_sidecar_path}"
+                )
+        created_paths = [
+            path
+            for path, created in (
+                (artifact_path, artifact_created),
+                (manifest_path, manifest_attempted),
+            )
+            if created and path is not None and path.exists()
+        ]
+        if created_paths:
+            quarantine_path = destination / "rejected" / build_id
+            try:
+                quarantine_path.mkdir(parents=True, exist_ok=False)
+                for path in created_paths:
+                    os.replace(path, quarantine_path / path.name)
+                exc = SnapshotRejected(
+                    "READY publication finalization failed; rejected immutable "
+                    f"evidence quarantined at {quarantine_path}: {exc}"
+                )
+            except OSError as cleanup_exc:
+                # No publication marker exists, so even a failed quarantine is
+                # outside every public READY read path. Surface the cleanup
+                # problem for an operator rather than treating it as success.
+                exc = SnapshotRejected(
+                    "READY publication failed and rejected evidence quarantine "
+                    f"failed: {cleanup_exc}; original error: {exc}"
+                )
         try:
             conn.rollback()
             conn.execute(
                 "UPDATE snapshot_publications SET state='REJECTED', "
-                "rejection_reason=? WHERE build_id=? AND state!='READY'",
+                "rejection_reason=? WHERE build_id=?",
                 (str(exc)[:4000], build_id),
             )
             conn.execute(
@@ -812,6 +987,8 @@ def publish_ready_snapshot(
             conn.commit()
         except sqlite3.Error:
             conn.rollback()
+        if exc is not original_exc:
+            raise exc from original_exc
         raise
     finally:
         conn.close()
@@ -847,7 +1024,7 @@ def _manifest_snapshot_state(
         expected_id = _research_manifest_id(manifest)
         if manifest.get("manifest_digest") != _research_manifest_digest(manifest):
             raise RuntimeError("latest local snapshot full-manifest checksum mismatch")
-        _verify_coverage_v2_manifest(conn, manifest)
+        _verify_coverage_manifest(conn, manifest)
     else:
         expected_id = _canonical_digest(manifest)
     if expected_id != row["snapshot_id"]:
@@ -876,13 +1053,13 @@ def _manifest_snapshot_state(
     }
 
 
-def data_snapshot_id(db_path: str | Path) -> str:
-    """Logical snapshot id from watermarks/validation (not a byte hash)."""
+def _data_snapshot_id(db_path: str | Path, *, immutable: bool) -> str:
+    """Logical snapshot id with an explicit mutable/immutable read contract."""
     path = Path(db_path)
     if not path.is_file():
         raise FileNotFoundError(f"paper database does not exist: {path}")
 
-    conn = _connect_readonly(path)
+    conn = _connect_readonly(path, immutable=immutable)
     try:
         conn.execute("BEGIN")
         tables = {
@@ -913,6 +1090,16 @@ def data_snapshot_id(db_path: str | Path) -> str:
     return _canonical_digest(state)
 
 
+def data_snapshot_id(db_path: str | Path) -> str:
+    """Logical id for a current DB, including committed WAL state."""
+    return _data_snapshot_id(db_path, immutable=False)
+
+
+def _immutable_data_snapshot_id(db_path: str | Path) -> str:
+    """Logical id for a checkpointed content-addressed snapshot artifact."""
+    return _data_snapshot_id(db_path, immutable=True)
+
+
 __all__ = [
     "DATA_SNAPSHOT_FORMAT",
     "LOCAL_SNAPSHOT_MANIFEST_FORMAT",
@@ -923,12 +1110,10 @@ __all__ = [
     "ReadySnapshot",
     "SnapshotRejected",
     "begin_snapshot_sync",
-    "commit_snapshot_manifest",
     "data_snapshot_id",
     "describe_snapshot",
     "fail_snapshot_sync",
     "latest_ready_snapshot",
     "list_ready_snapshots",
     "open_ready_snapshot",
-    "publish_ready_snapshot",
 ]

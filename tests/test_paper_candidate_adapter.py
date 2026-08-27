@@ -9,9 +9,7 @@ Covers:
 
 from __future__ import annotations
 
-import ast
 import json
-from pathlib import Path
 
 import pytest
 
@@ -32,15 +30,6 @@ from research.paper_candidate_specs import (
     build_multi_day_hold_strategy_spec,
 )
 from strategies.spec import STRATEGY_SPEC_VERSION, StrategySpec, interpret_strategy_spec
-REPO = Path(__file__).resolve().parents[1]
-RESEARCH_DIR = REPO / "packages" / "product" / "research"
-ADAPTER_PATH = RESEARCH_DIR / "paper_candidate_adapt.py"
-ADAPTER_IMPL_PATHS = (
-    ADAPTER_PATH,
-    RESEARCH_DIR / "paper_candidate_specs.py",
-)
-
-
 def test_multi_day_hold_10d_strategy_spec_is_closed_and_interpretable():
     spec = build_multi_day_hold_strategy_spec(hold_days=10, top_k=5)
     assert isinstance(spec, StrategySpec)
@@ -128,7 +117,7 @@ def test_adapter_strips_hostile_arm_live_go_flags():
     assert body["paper_run_hints"]["scheduler_armed"] is False
     assert body["paper_run_hints"]["run_now"] is False
     assert body["paper_run_hints"]["continuous"] is False
-    assert body["paper_run_hints"]["require_ready_snapshot"] is False
+    assert "require_ready_snapshot" not in body["paper_run_hints"]
     assert_unarmed(body)
 
 
@@ -248,57 +237,6 @@ def test_emit_example_paper_specs(tmp_path: Path):
         "event_post.json",
         "index.json",
     }
-
-
-def test_adapter_source_has_no_run_paper_or_live_order_calls():
-    """Static guard: receptacle must not invoke paper runner or live path."""
-    imported: set[str] = set()
-    called: set[str] = set()
-    srcs: list[str] = []
-    for path in ADAPTER_IMPL_PATHS:
-        src = path.read_text(encoding="utf-8")
-        srcs.append(src)
-        tree = ast.parse(src, filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported.update(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imported.add(node.module)
-                for alias in node.names:
-                    imported.add(f"{node.module}.{alias.name}")
-            elif isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name):
-                    called.add(node.func.id)
-                elif isinstance(node.func, ast.Attribute):
-                    called.add(node.func.attr)
-
-    forbidden_roots = {
-        "execution",
-        "agents.trader",
-        "agents.pipeline",
-        "strategies.paper.runner",
-        "strategies.paper",
-    }
-    for mod in imported:
-        root = mod.split(".", 1)[0]
-        if mod in forbidden_roots or root in {"execution"}:
-            # strategies.spec is allowed; strategies.paper is not
-            if mod.startswith("strategies.spec"):
-                continue
-            if mod == "strategies" or mod.startswith("strategies.paper"):
-                pytest.fail(f"adapter must not import paper runner: {mod}")
-            if root == "execution":
-                pytest.fail(f"adapter must not import execution: {mod}")
-
-    for name in ("run_paper", "PaperExecutionService", "prepare", "place_order"):
-        assert name not in called, f"adapter must not call {name}"
-
-    joined = "\n".join(srcs)
-    assert "live_order_path_enabled: bool = True" not in joined
-    assert "PAPER_SCHEDULER_ARMED: bool = True" not in joined
-    assert "LIVE_ORDERS: bool = True" not in joined
-    assert "OPERATIONAL_GO: bool = True" not in joined
-    assert "READY_DECLARED: bool = True" not in joined
 
 
 def test_paper_candidate_receptacle_type():

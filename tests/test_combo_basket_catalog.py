@@ -372,7 +372,7 @@ def test_reconstitution_occupancy_preview_does_not_apply() -> None:
     assert lo["lo"] == 0.4
 
 
-def test_blend_thinner_keep_ids_are_excluded() -> None:
+def test_retired_inventory_cannot_supply_blend_replacements() -> None:
     from research.combo_basket_catalog import (
         BLEND_THINNER_KEEP_IDS,
         usable_sleeve_coverage,
@@ -383,12 +383,12 @@ def test_blend_thinner_keep_ids_are_excluded() -> None:
         "liq_large": {lid: 0.46 for lid in BLEND_THINNER_KEEP_IDS},
     }
     out = usable_sleeve_coverage(occ)
-    cand = {c["logic_id"] for c in out["replacement_candidates"]}
-    assert cand.isdisjoint(BLEND_THINNER_KEEP_IDS)
-    excluded = {x["logic_id"] for x in out["blend_thinner_excluded"]}
-    assert BLEND_THINNER_KEEP_IDS <= excluded
-    assert all(x["apply"] is False for x in out["blend_thinner_excluded"])
-    assert len(out["blend_thinner_excluded"]) == len(BLEND_THINNER_KEEP_IDS)
+    assert out["n_usable"] == 0
+    assert out["replacement_candidates"] == []
+    assert out["n_replacement_ok"] == 0
+    assert out["blend_thinner_excluded"] == []
+    assert out["apply"] is False
+    assert out["go"] is False
 
 
 def test_four_member_sleeve_requires_thicker_than_weakest() -> None:
@@ -493,14 +493,17 @@ def test_compare_mid_vs_liq_does_not_pass() -> None:
     assert out["liq_majority_better"]  # majority-better is still not a pass
 
 
-def test_summarize_emits_candidate_family_counts() -> None:
+def test_retired_catalog_result_is_not_a_candidate_family() -> None:
 
     cells = _eval_complete_year_cells(
         "event_skip_monday", occupancy=0.18, eval_path="eventHeld"
     )
     summary = summarize_daily_path_cells(cells, job_id="eval-test-fam")
-    assert summary["n_candidate_logics"] == 1
-    assert summary["candidate_family_counts"]["event_new"] == 1
+    row = summary["logics"][0]
+    assert summary["n_candidate_logics"] == 0
+    assert summary["candidate_family_counts"] == {}
+    assert row["candidate"] is False
+    assert "worker_body_missing" in row["flags"]
     assert summary["go"] is False
 
 
@@ -575,4 +578,3 @@ def test_summarize_basket_trends_is_not_a_pass() -> None:
     assert row["historical"] is True
     assert row["deprecated"] is True
     assert row["primary"] is False
-

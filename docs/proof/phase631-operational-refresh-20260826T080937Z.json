@@ -1,0 +1,317 @@
+{
+  "schema_version": "phase631-operational-refresh-proof/v2",
+  "observed_at": "2026-08-26T08:09:37Z",
+  "source_sha": "216b682b0073e2f2d490edcf91f0580335c87ea0",
+  "origin_main_sha": "c718011a7407e8c601076e626ad4fc3a1377ae44",
+  "mutation_performed": false,
+  "secret_values_accessed": false,
+  "private_key_material_accessed": false,
+  "local_verification": {
+    "python": {
+      "collected": 2083,
+      "passed": 2079,
+      "skipped": 4,
+      "failed": 0
+    },
+    "workers": {
+      "services": 6,
+      "tests_passed": 609,
+      "tests_failed": 0,
+      "typechecks_passed": 6,
+      "dry_runs_passed": 18,
+      "generated_env_checks_passed": 18
+    },
+    "binding_manifest": "PASS",
+    "d1_migration_manifest": "PASS",
+    "secret_path_scan": "PASS"
+  },
+  "release_gate": {
+    "status": "BLOCKED",
+    "finding_count": 41,
+    "p0_count": 25,
+    "p1_count": 16,
+    "open_p0_ids": [
+      "A2",
+      "C10",
+      "C4",
+      "D2",
+      "D3",
+      "R10",
+      "R11",
+      "R5"
+    ],
+    "independent_review_unresolved_p0": 0
+  },
+  "github": {
+    "open_pull_request_count": 0,
+    "required_check": {
+      "name": "Workers Builds: quant-platform-ci-aggregate-staging",
+      "app": "cloudflare-workers-and-pages",
+      "strict": true,
+      "origin_main_conclusion": "success"
+    },
+    "local_commits_ahead_of_origin_main": 168
+  },
+  "cloudflare": {
+    "wrangler_version": "4.125.0",
+    "deployed_source_sha": "c718011a",
+    "production_versions": [
+      {
+        "worker": "quant-platform-ingestion-jsda",
+        "deployment_id": "d407a38f-01fc-4327-a725-539ca458694d",
+        "version_id": "542f9835-dcb6-4f9c-b5ac-b35350fc907a"
+      },
+      {
+        "worker": "quant-platform-ingestion-premium",
+        "deployment_id": "b3123799-1054-4fc4-831f-1e4e1d01a4e7",
+        "version_id": "b95a2874-293a-4172-b853-decc6d80d33b"
+      },
+      {
+        "worker": "quant-platform-ingestion-secrets",
+        "deployment_id": "1c016d9d-5527-4ebf-a3b5-03d1a7df4cb4",
+        "version_id": "5f413d98-5c5e-4519-86a4-50f71f857ecc"
+      },
+      {
+        "worker": "quant-platform-ops-read-mcp",
+        "deployment_id": "a1b58619-ae51-45a4-a330-651a1522e678",
+        "version_id": "45df505e-34b1-477e-96c2-5270a5097636"
+      },
+      {
+        "worker": "quant-platform-research-ai-gateway",
+        "deployment_id": "4b1c7cef-0466-42bf-aa67-05e1071068ef",
+        "version_id": "07fbf7b5-7b5f-4564-b375-8e67c912e275"
+      },
+      {
+        "worker": "quant-platform-research-mass-eval",
+        "deployment_id": "70ec83c0-ece8-4ee6-8fff-abe9b7f61870",
+        "version_id": "6d5b0efb-7890-44b2-acf4-da410f44846a"
+      }
+    ],
+    "cron": {
+      "status": "VERIFIED",
+      "quant-platform-ingestion-jsda": [
+        "30 1 * * *"
+      ],
+      "quant-platform-ingestion-premium": [
+        "15 * * * *"
+      ],
+      "other_production_workers": []
+    },
+    "queues": [
+      {
+        "name": "quant-jsda-ingestion",
+        "producer_count": 1,
+        "consumer_count": 1,
+        "backlog": "UNKNOWN"
+      },
+      {
+        "name": "quant-jsda-ingestion-dlq",
+        "producer_count": 0,
+        "consumer_count": 0,
+        "backlog": "UNKNOWN"
+      },
+      {
+        "name": "quant-jsda-ingestion-rejects",
+        "exists": false,
+        "backlog": "UNKNOWN"
+      }
+    ],
+    "pending_migrations": {
+      "quant-ingest": [
+        "0011_jsda_queue_v2.sql",
+        "0012_jsda_observation_identity.sql"
+      ],
+      "quant-ingest-staging": [
+        "0011_jsda_queue_v2.sql",
+        "0012_jsda_observation_identity.sql"
+      ],
+      "quant-ops-projection": [
+        "0001_ops_projection.sql"
+      ],
+      "quant-ops-projection-staging": [
+        "0001_ops_projection.sql"
+      ],
+      "quant-ops-quota": [
+        "0001_remote_daily_quota.sql",
+        "0002_oauth_state_nonce.sql"
+      ],
+      "quant-ops-quota-staging": [
+        "0001_remote_daily_quota.sql",
+        "0002_oauth_state_nonce.sql"
+      ]
+    },
+    "production_secret_name_drift": [
+      {
+        "worker": "quant-platform-ingestion-premium",
+        "unexpected": [
+          "INGESTION_PROXY_TOKEN"
+        ],
+        "missing": []
+      },
+      {
+        "worker": "quant-platform-ingestion-secrets",
+        "unexpected": [
+          "INGESTION_PROXY_TOKEN"
+        ],
+        "missing": []
+      },
+      {
+        "worker": "quant-platform-ops-read-mcp",
+        "unexpected": [],
+        "missing": [
+          "STATE_SECRET"
+        ]
+      },
+      {
+        "worker": "quant-platform-research-mass-eval",
+        "unexpected": [
+          "GATEWAY_TOKEN"
+        ],
+        "missing": []
+      }
+    ],
+    "production_binding_drift": [
+      {
+        "worker": "quant-platform-ops-read-mcp",
+        "live_only": [
+          "OPS_DB"
+        ],
+        "repository_only": [
+          "OPS_PROJECTION_DB",
+          "QUOTA_DB",
+          "STATE_SECRET"
+        ]
+      },
+      {
+        "worker": "quant-platform-research-mass-eval",
+        "live_only": [
+          "DB",
+          "GATEWAY_TOKEN"
+        ],
+        "repository_only": []
+      }
+    ]
+  },
+  "live_quant_mcp": {
+    "tool_count": 16,
+    "repository_expected_tool_count": 17,
+    "missing_tool": "storage_plane_status",
+    "latest_jquants": {
+      "run_id": 14393,
+      "started_at": "2026-08-26T16:15:37+09:00",
+      "finished_at": "2026-08-26T16:17:00+09:00",
+      "status": "PASS",
+      "datasets_passed": 23,
+      "datasets_failed": 0,
+      "rows_inserted": 66190,
+      "raw_bytes": 33594922
+    },
+    "validation": {
+      "run_id": 14393,
+      "status": "PASS",
+      "dataset_count": 23,
+      "failure_count": 0
+    },
+    "coverage": {
+      "contract_projection": "V2",
+      "governed_dataset_count": 26,
+      "complete_dataset_count": 22,
+      "partial_dataset_count": 4,
+      "partial": {
+        "equities_bars_daily_am": [
+          1,
+          32
+        ],
+        "equities_earnings_calendar": [
+          1,
+          200
+        ],
+        "equities_master": [
+          220,
+          241
+        ],
+        "jsda_otc_bond_reference_prices": [
+          5886,
+          8784
+        ]
+      }
+    },
+    "projection": {
+      "status": "STALE",
+      "generated_at": "2026-08-21T12:30:49.152421+00:00",
+      "age_seconds_at_observation": 416327,
+      "version": "ops_projection/v3"
+    },
+    "b0": {
+      "status": "UNKNOWN",
+      "reason": "snapshot quality/B0 projection is unavailable"
+    },
+    "sync": {
+      "source_change_seq": 2891821,
+      "latest_change_seq": 2891821,
+      "applied_feed_cursor": null,
+      "ready_pinned_cursor": null
+    },
+    "ready": null,
+    "raw": {
+      "manifests": 21943,
+      "acquired": 19728,
+      "incomplete": 2215,
+      "failed": 2215,
+      "note": "Live v3 status still aggregates historical attempts rather than latest authoritative segment evidence."
+    },
+    "sla": {
+      "status": "PROJECTION_STALE",
+      "reason": "ops_projection_stale"
+    }
+  },
+  "live_jsda": {
+    "queue_schema": "legacy jsda_acquisition_jobs",
+    "v2_job_table_present": false,
+    "jobs": [
+      {
+        "dataset": "jsda_corporate_bond_transactions",
+        "state": "partial",
+        "count": 15,
+        "latest_updated_at": "2026-08-26T01:34:39.606Z"
+      },
+      {
+        "dataset": "jsda_otc_bond_reference_prices",
+        "state": "partial",
+        "count": 15,
+        "latest_updated_at": "2026-08-26T01:34:35.298Z"
+      },
+      {
+        "dataset": "jsda_tokyo_repo_rates",
+        "state": "pass",
+        "count": 15,
+        "latest_updated_at": "2026-08-26T01:30:59.739Z"
+      }
+    ]
+  },
+  "authority_isolation": {
+    "status": "NOT_PROVISIONED",
+    "provisioned_count": 0,
+    "authority_count": 7,
+    "active_public_key_count": 0,
+    "same_uid_raw_pwrite_boundary": "OPEN",
+    "trusted_ops_renderer": "PENDING"
+  },
+  "go_no_go": {
+    "phase_6_3_code": "CONDITIONAL_PASS",
+    "phase_7_offline_foundation": "GO",
+    "exact_four_controlled_pilot": "NO-GO",
+    "autonomous_mass_research": "NO-GO",
+    "phase_8_fof_live_trading": "NO-GO"
+  },
+  "observation_sources": [
+    "git fetch origin and GitHub branch-protection/check-runs APIs",
+    "wrangler deployments list and versions view with secret values excluded",
+    "Cloudflare GET Cron Triggers API",
+    "wrangler secret list with names only",
+    "wrangler queues list and queues info",
+    "wrangler d1 migrations list --remote",
+    "read-only D1 sqlite_master and aggregate SELECT queries",
+    "live quant-mcp read-only tools"
+  ]
+}

@@ -98,6 +98,31 @@
         "exclusion_reason": { "$ref": "#/$defs/nonempty_string" }
       }
     },
+    "required_domain_semantics": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["basis", "empty_success_policy"],
+      "properties": {
+        "basis": {
+          "type": "string",
+          "enum": [
+            "calendar_months_from_official_start",
+            "publication_windows_from_official_start",
+            "issued_same_trading_day_snapshot",
+            "issued_collection_cutoff_snapshot",
+            "official_archive_publication_days",
+            "official_archive_periods"
+          ]
+        },
+        "empty_success_policy": {
+          "type": "string",
+          "enum": [
+            "never_complete",
+            "trusted_exhausted_receipt_may_complete"
+          ]
+        }
+      }
+    },
     "dataset": {
       "type": "object",
       "additionalProperties": false,
@@ -118,7 +143,8 @@
         "event_time",
         "available_at",
         "revision_semantics",
-        "research_profile_eligibility"
+        "research_profile_eligibility",
+        "required_domain_semantics"
       ],
       "properties": {
         "policy_version": { "const": "source-capability/v3" },
@@ -148,7 +174,8 @@
         "event_time": { "$ref": "#/$defs/event_time" },
         "available_at": { "$ref": "#/$defs/available_at" },
         "revision_semantics": { "$ref": "#/$defs/revision_semantics" },
-        "research_profile_eligibility": { "$ref": "#/$defs/research_profile_eligibility" }
+        "research_profile_eligibility": { "$ref": "#/$defs/research_profile_eligibility" },
+        "required_domain_semantics": { "$ref": "#/$defs/required_domain_semantics" }
       }
     },
     "bundle": {

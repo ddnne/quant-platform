@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from data_contracts import all_coverage_contracts
-from storage.coverage_ledger import POLICY_VERSION
+from data_contracts.coverage import coverage_policy_binding
 
 
 @dataclass(frozen=True)
@@ -99,22 +99,42 @@ def _check_coverage_completeness(
 ) -> CoherenceGateResult:
     """Gate 1: All required governed datasets have COMPLETE coverage segments."""
     # Only check datasets that are both governed AND in required_datasets
+    policies = {contract.dataset_id: contract for contract in all_coverage_contracts()}
+    unknown_datasets = sorted(set(required_datasets) - set(policies))
     governed_datasets = {
         contract.dataset_id
-        for contract in all_coverage_contracts()
+        for contract in policies.values()
         if contract.governance_tier == "governed"
         and contract.dataset_id in required_datasets
     }
+    if unknown_datasets:
+        return CoherenceGateResult(
+            gate_name="coverage_completeness",
+            passed=False,
+            reason=f"Unknown governed Coverage datasets: {unknown_datasets}",
+            detail={"unknown_datasets": unknown_datasets},
+        )
 
     # Use conn.execute to query segments directly instead of read_coverage_segments
     # to avoid path/connection confusion
-    segments_cursor = conn.execute(
-        "SELECT * FROM coverage_segments WHERE policy_version=?",
-        (POLICY_VERSION,)
-    )
+    try:
+        segments_cursor = conn.execute("SELECT * FROM coverage_segments")
+    except sqlite3.OperationalError:
+        return CoherenceGateResult(
+            gate_name="coverage_completeness",
+            passed=False,
+            reason="coverage_segments table does not exist",
+            detail={"governed_count": len(governed_datasets)},
+        )
     segments = [dict(row) for row in segments_cursor.fetchall()]
     coverage_by_dataset = {
-        dataset: [row for row in segments if row["dataset"] == dataset]
+        dataset: [
+            row
+            for row in segments
+            if row["dataset"] == dataset
+            and row["policy_version"]
+            == coverage_policy_binding(dataset)["policy_version"]
+        ]
         for dataset in required_datasets
     }
 
@@ -153,22 +173,57 @@ def _check_receipts_with_raw_retention(
     required_datasets: tuple[str, ...],
 ) -> CoherenceGateResult:
     """Gate 2: All COMPLETE segments have successful receipts with raw retention."""
-    # Query COMPLETE segments directly
-    segments_cursor = conn.execute(
-        "SELECT * FROM coverage_segments WHERE status=? AND policy_version=?",
-        ("COMPLETE", POLICY_VERSION)
+    policies = {contract.dataset_id: contract for contract in all_coverage_contracts()}
+    governed = tuple(
+        dataset
+        for dataset in required_datasets
+        if dataset in policies and policies[dataset].governance_tier == "governed"
     )
-    segments = [dict(row) for row in segments_cursor.fetchall()]
+    try:
+        segments_cursor = conn.execute(
+            "SELECT * FROM coverage_segments WHERE status=?", ("COMPLETE",)
+        )
+        all_segments = [dict(row) for row in segments_cursor.fetchall()]
+    except sqlite3.OperationalError:
+        return CoherenceGateResult(
+            gate_name="receipts_with_raw_retention",
+            passed=False,
+            reason="coverage_segments table does not exist",
+            detail={"complete_segments_checked": 0},
+        )
+    segments = [
+        row
+        for row in all_segments
+        if row["dataset"] in governed
+        and row["policy_version"]
+        == coverage_policy_binding(str(row["dataset"]))["policy_version"]
+    ]
 
     receipts_by_dataset = {}
-    for dataset in required_datasets:
-        receipt_cursor = conn.execute(
-            "SELECT * FROM collection_receipts WHERE dataset=? ORDER BY checked_at DESC, run_id DESC",
-            (dataset,)
+    try:
+        for dataset in governed:
+            receipt_cursor = conn.execute(
+                "SELECT * FROM collection_receipts WHERE dataset=? "
+                "ORDER BY checked_at DESC, run_id DESC",
+                (dataset,),
+            )
+            receipts_by_dataset[dataset] = [
+                dict(row) for row in receipt_cursor.fetchall()
+            ]
+    except sqlite3.OperationalError:
+        return CoherenceGateResult(
+            gate_name="receipts_with_raw_retention",
+            passed=False,
+            reason="collection_receipts table does not exist",
+            detail={"complete_segments_checked": len(segments)},
         )
-        receipts_by_dataset[dataset] = [dict(row) for row in receipt_cursor.fetchall()]
 
-    issues = []
+    current_segment_datasets = {str(row["dataset"]) for row in segments}
+    issues = [
+        f"{dataset} (no COMPLETE segments for governed policy)"
+        for dataset in governed
+        if dataset not in current_segment_datasets
+    ]
     for segment in segments:
         if segment["dataset"] not in required_datasets:
             continue
@@ -237,10 +292,18 @@ def _check_validation_passing(
     run_id: int,
 ) -> CoherenceGateResult:
     """Gate 3: All required datasets have passing validation for the given run."""
-    rows = conn.execute(
-        "SELECT dataset, status FROM ingestion_validation WHERE run_id = ?",
-        (run_id,),
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            "SELECT dataset, status FROM ingestion_validation WHERE run_id = ?",
+            (run_id,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return CoherenceGateResult(
+            gate_name="validation_passing",
+            passed=False,
+            reason="ingestion_validation table does not exist",
+            detail={"run_id": run_id},
+        )
 
     validation_by_dataset = {row["dataset"]: row["status"] for row in rows}
 
@@ -301,8 +364,9 @@ def _check_natural_key_migration_ready(
     conn: sqlite3.Connection,
 ) -> CoherenceGateResult:
     """Gate 4: Natural key migration is READY (schema-aligned)."""
-    # Prefer CF/worker table ``natural_key_migrations``; fall back to local
-    # ``jquants_key_migrations`` / presence of natural_key on jquants_records.
+    # Production authority is an explicit migration ledger. Merely observing
+    # populated natural_key values cannot prove that the governed migration
+    # completed, and table absence is UNKNOWN/FAIL rather than fixture PASS.
     for sql in (
         "SELECT state FROM natural_key_migrations ORDER BY rowid DESC LIMIT 1",
         "SELECT state FROM natural_key_migration ORDER BY id DESC LIMIT 1",
@@ -325,23 +389,6 @@ def _check_natural_key_migration_ready(
             ),
             detail={"state": state, "source": sql.split()[3]},
         )
-
-    # Local research DB: keys live as columns; treat as ready if populated.
-    try:
-        row = conn.execute(
-            "SELECT COUNT(*) AS n FROM jquants_records "
-            "WHERE natural_key IS NOT NULL AND natural_key != ''"
-        ).fetchone()
-        n = int(row["n"] if row and "n" in row.keys() else (row[0] if row else 0))
-        if n > 0:
-            return CoherenceGateResult(
-                gate_name="natural_key_migration_ready",
-                passed=True,
-                reason=f"jquants_records has {n} natural_key rows (local path)",
-                detail={"state": "READY", "natural_key_rows": n},
-            )
-    except sqlite3.OperationalError:
-        pass
 
     return CoherenceGateResult(
         gate_name="natural_key_migration_ready",

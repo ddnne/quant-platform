@@ -20,11 +20,6 @@ function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function gatewayToken(env: Env): string | undefined {
-  const rec = env as Env & { GATEWAY_TOKEN?: string };
-  return rec.GATEWAY_TOKEN;
-}
-
 /** Research Worker talks only to AI Gateway. Direct env.AI is not available. */
 export async function completeViaGateway(
   env: Env,
@@ -42,34 +37,22 @@ export async function completeViaGateway(
   if (!env.AI_GATEWAY) {
     return { ok: false, reason: "ai_gateway_unbound" };
   }
-  const token = gatewayToken(env);
-  if (!token) {
-    return { ok: false, reason: "gateway_token_unbound" };
-  }
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    "X-Gateway-Token": token,
-  };
-  const res = await env.AI_GATEWAY.fetch(
-    new Request("https://ai-gateway/v1/complete", {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    }),
-  );
-  let parsed: unknown = null;
+  let rpc: { http_status: number; body: unknown };
   try {
-    parsed = await res.json();
+    rpc = await env.AI_GATEWAY.complete(body);
   } catch {
-    return { ok: false, reason: `gateway_http_${res.status}` };
+    return { ok: false, reason: "gateway_rpc_failed" };
   }
+  const parsed = rpc.body;
   if (!isObj(parsed)) {
     return { ok: false, reason: "gateway_invalid_json" };
   }
-  if (!res.ok || parsed.ok !== true) {
+  if (rpc.http_status < 200 || rpc.http_status >= 300 || parsed.ok !== true) {
     return {
       ok: false,
-      reason: String(parsed.error || parsed.reason || `gateway_http_${res.status}`),
+      reason: String(
+        parsed.error || parsed.reason || `gateway_http_${rpc.http_status}`,
+      ),
     };
   }
   if (Object.prototype.hasOwnProperty.call(parsed, "text")) {

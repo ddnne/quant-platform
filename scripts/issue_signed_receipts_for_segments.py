@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Issue Ed25519-signed receipts for planned segments. Does not invent COMPLETE."""
+"""Record unsigned recovery evidence for planned segments.
+
+After-the-fact raw/DB matching is not a trusted ingestion transaction and can
+never issue COMPLETE-eligible evidence.  Governed signing occurs only inline
+in the ingestion runtime.
+"""
 
 from __future__ import annotations
 
@@ -28,12 +33,14 @@ from ingestion.jsda.official_index import (  # noqa: E402
 )
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
+    build_collection_receipt,
     refresh_coverage_ledger,
     record_collection_receipt,
     record_required_segments,
     sync_dataset_coverage_from_segments,
 )
-from storage.trusted_receipt import open_signed_receipt_authority  # noqa: E402
+from storage.sqlite_store import SqliteStore  # noqa: E402
+from storage.receipt_crypto import partition_extra_digests  # noqa: E402
 
 _FROM_TO_RE = re.compile(
     r"from=(?P<fr>\d{4}-\d{2}-\d{2}).*?to=(?P<to>\d{4}-\d{2}-\d{2})",
@@ -57,6 +64,36 @@ def _count_structured(
         (dataset, start[:10], end[:10]),
     ).fetchone()
     return int(row[0]) if row else 0
+
+
+def _load_structured_records(
+    conn: sqlite3.Connection, dataset: str, start: str, end: str
+) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM jquants_records WHERE dataset=? "
+        "AND substr(event_time,1,10)>=? AND substr(event_time,1,10)<=? "
+        "ORDER BY event_time",
+        (dataset, start[:10], end[:10]),
+    ).fetchall()
+    columns = [str(row[0]) for row in conn.execute(
+        "SELECT name FROM pragma_table_info('jquants_records') ORDER BY cid"
+    ).fetchall()]
+    return [dict(zip(columns, row, strict=True)) for row in rows]
+
+
+def _raw_records(raw: bytes) -> list | None:
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+        return None
+    if isinstance(payload, list):
+        return list(payload)
+    if isinstance(payload, dict):
+        for key in ("data", "rows", "results", "records"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return list(value)
+    return None
 
 def _windows_overlap(a0: str, a1: str, b0: str, b1: str) -> bool:
     return a0[:10] <= b1[:10] and b0[:10] <= a1[:10]
@@ -131,15 +168,15 @@ def _refresh_issued_coverage(
     )
 
 
-def _find_raw_bytes(
+def _find_raw_artifact(
     data_dir: Path,
     dataset: str,
     segment_id: str,
     *,
     segment_start: str,
     segment_end: str,
-) -> bytes | None:
-    """Locate raw JSON whose filename/path is consistent with the segment window."""
+) -> tuple[Path, bytes] | None:
+    """Locate persisted raw JSON consistent with the segment window."""
     base = data_dir / "raw" / "jquants"
     if not base.is_dir():
         return None
@@ -197,7 +234,7 @@ def _find_raw_bytes(
         except OSError:
             continue
         if _is_usable_raw(raw):
-            return raw
+            return path, raw
     return None
 
 
@@ -213,14 +250,8 @@ def main(argv: list[str] | None = None) -> int:
     if not db.is_file():
         print(f"db missing: {db}", file=sys.stderr)
         return 2
-    try:
-        authority = open_signed_receipt_authority()
-    except RuntimeError as exc:
-        print(f"signing authority unavailable: {exc}", file=sys.stderr)
-        return 2
-
-    conn = sqlite3.connect(db)
-    conn.row_factory = sqlite3.Row
+    store = SqliteStore(db)
+    conn = store._conn  # noqa: SLF001 - operator tool owns this store
     dataset_list = [d.strip() for d in args.datasets.split(",") if d.strip()]
     if not dataset_list:
         dataset_list = [args.dataset]
@@ -253,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
 
     issued = 0
     issued_datasets: set[str] = set()
-    skipped = {"no_struct": 0, "no_raw": 0}
+    skipped = {"no_struct": 0, "no_raw": 0, "unreconciled": 0}
     for row in segments:
         scope = row["expected_scope"]
         if isinstance(scope, str):
@@ -275,49 +306,61 @@ def main(argv: list[str] | None = None) -> int:
             expected_scope=scope_dict,
             expected_items=expected_items,
         )
-        structured = _count_structured(
+        structured_records = _load_structured_records(
             conn, required.dataset, required.segment_start, required.segment_end
         )
+        structured = len(structured_records)
         if structured < args.min_structured:
             skipped["no_struct"] += 1
             print(
                 f"skip {required.segment_id}: structured={structured} < {args.min_structured}"
             )
             continue
-        raw = _find_raw_bytes(
+        raw_match = _find_raw_artifact(
             Path(args.data_dir),
             required.dataset,
             required.segment_id,
             segment_start=required.segment_start,
             segment_end=required.segment_end,
         )
-        if raw is None:
+        if raw_match is None:
             skipped["no_raw"] += 1
             print(f"skip {required.segment_id}: no raw bytes for window")
             continue
-        observed = 1 if unit == "source_query" else structured
-        if required.expected_items is not None and unit == "source_query":
-            observed = int(required.expected_items)
-        raw_rows = structured
-        receipt = authority.issue(
+        raw_path, raw = raw_match
+        if raw_path.stat().st_mode & 0o222:
+            skipped["unreconciled"] += 1
+            print(f"skip {required.segment_id}: raw artifact is not immutable")
+            continue
+        raw_records = _raw_records(raw)
+        if raw_records is None or len(raw_records) != structured:
+            skipped["unreconciled"] += 1
+            print(
+                f"skip {required.segment_id}: concrete raw/structured "
+                f"evidence does not reconcile"
+            )
+            continue
+        record_required_segments(conn, [required])
+        receipt = build_collection_receipt(
             required=required,
             run_id=next_run,
             raw=raw,
-            observed_items=observed,
+            observed_items=1 if raw_records else 0,
+            raw_row_count=len(raw_records),
             structured_row_count=structured,
-            raw_row_count=raw_rows,
             pagination_exhausted=True,
-            structured_generation=structured,
-            raw_manifest_digest=None,
-            source_request_digest=None,
+            extra_digests=partition_extra_digests({
+                "eligibility": "RECOVERED_RAW_ONLY",
+                "origin": "after-the-fact-operator-recovery",
+                "raw_path": str(raw_path),
+            }),
         )
-        next_run += 1
-        record_required_segments(conn, [required])
         record_collection_receipt(conn, receipt)
+        next_run += 1
         issued += 1
         issued_datasets.add(required.dataset)
         print(
-            f"issued signed receipt {required.dataset}/{required.segment_id} "
+            f"recorded recovery receipt {required.dataset}/{required.segment_id} "
             f"structured={structured} run_id={receipt.run_id}"
         )
     conn.commit()
@@ -362,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
             )
     else:
         print("no receipts issued")
-    conn.close()
+    store.close()
     return 0 if issued else 1
 
 if __name__ == "__main__":
