@@ -32,6 +32,11 @@ from scripts.authority_principal_manifest import (
     load_and_validate_manifest,
 )
 from scripts.finding_ledger_gate import require_pinned_finding_ledger_gate
+from scripts.local_authority_files import (
+    ProtectedAuthorityFileError,
+    read_protected_authority_file,
+    stat_observation,
+)
 
 ACTIVATION_STATE_FORMAT = "local-authority-activation-state/v2"
 ACTIVATION_STATE_PATH = Path(
@@ -167,17 +172,6 @@ def state_body_digest(document: Mapping[str, Any]) -> str:
             {key: value for key, value in document.items() if key != "state_digest"}
         )
     )
-
-
-def stat_observation(info: os.stat_result) -> dict[str, int]:
-    return {
-        "device": int(info.st_dev),
-        "inode": int(info.st_ino),
-        "owner_uid": int(info.st_uid),
-        "owner_gid": int(info.st_gid),
-        "mode": stat.S_IMODE(info.st_mode),
-        "nlink": int(info.st_nlink),
-    }
 
 
 def regular_file_digest(path: Path) -> str:
@@ -405,41 +399,17 @@ def public_key_from_seed(path: Path, *, expected_uid: int) -> str:
 
 
 def _protected_document_bytes(path: Path, *, expected_owner_uid: int) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(path, flags)
-    except OSError as exc:
+        return read_protected_authority_file(
+            path,
+            expected_owner_uids={expected_owner_uid},
+            allowed_modes={0o440, 0o444},
+            max_bytes=1024 * 1024,
+        ).raw
+    except ProtectedAuthorityFileError as exc:
         raise ActivationStateError(
             "root-owned activation state is unavailable"
         ) from exc
-    try:
-        before = os.fstat(fd)
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_uid != expected_owner_uid
-            or stat.S_IMODE(before.st_mode) not in {0o440, 0o444}
-            or before.st_nlink != 1
-            or before.st_size <= 0
-            or before.st_size > 1024 * 1024
-        ):
-            raise ActivationStateError("root-owned activation state metadata is unsafe")
-        raw = b""
-        while len(raw) < before.st_size:
-            chunk = os.read(fd, before.st_size - len(raw))
-            if not chunk:
-                break
-            raw += chunk
-        after = os.fstat(fd)
-        if len(raw) != before.st_size or (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
-            raise ActivationStateError("root-owned activation state changed while read")
-        return raw
-    finally:
-        os.close(fd)
 
 
 def _validate_observation(value: object, *, field: str) -> dict[str, int]:
@@ -572,12 +542,26 @@ def load_activation_state(
 
 
 def _require_registry_key(
-    *, registry_path: Path, key_id: str, public_key_base64: str, expected_digest: str
+    *,
+    registry_path: Path,
+    key_id: str,
+    public_key_base64: str,
+    expected_digest: str,
+    expected_owner_uid: int,
 ) -> None:
     try:
-        raw = registry_path.read_bytes()
+        raw = read_protected_authority_file(
+            registry_path,
+            expected_owner_uids={expected_owner_uid},
+            allowed_modes={0o444},
+            max_bytes=1024 * 1024,
+        ).raw
         document = json.loads(raw)
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (
+        ProtectedAuthorityFileError,
+        UnicodeError,
+        json.JSONDecodeError,
+    ) as exc:
         raise ActivationStateError("activation public registry is unavailable") from exc
     if _digest_bytes(raw) != expected_digest:
         raise ActivationStateError("activation public registry changed after audit")
@@ -752,7 +736,18 @@ def require_active_service_identity(
         kind="runtime config",
         owner_uids={expected_root_uid},
     )
-    runtime_config_raw = Path(row["runtime_config_path"]).read_bytes()
+    try:
+        runtime_config_raw = read_protected_authority_file(
+            row["runtime_config_path"],
+            expected_owner_uids={expected_root_uid},
+            allowed_modes={0o440, 0o444},
+            max_bytes=1024 * 1024,
+            expected_observation=row["runtime_config_observation"],
+        ).raw
+    except ProtectedAuthorityFileError as exc:
+        raise ActivationStateError(
+            "activation runtime config changed after audit"
+        ) from exc
     if _digest_bytes(runtime_config_raw) != row["runtime_config_file_digest"]:
         raise ActivationStateError("activation runtime config changed after audit")
     try:
@@ -846,6 +841,7 @@ def require_active_service_identity(
         key_id=row["key_id"],
         public_key_base64=row["public_key_base64"],
         expected_digest=row["registry_file_digest"],
+        expected_owner_uid=expected_root_uid,
     )
     return account.pw_uid, MappingProxyType(dict(row))
 

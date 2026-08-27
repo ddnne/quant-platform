@@ -24,8 +24,11 @@ from scripts.local_authority_activation import (
     state_body_digest,
     validate_activation_state,
 )
+from scripts.local_authority_files import (
+    ProtectedAuthorityFileError,
+    read_protected_authority_file,
+)
 from scripts.local_authority_bootstrap_common import (
-    _ROOT,
     _RUNNABLE_AUTHORITIES,
     SERVICE_GROUP,
     BootstrapError,
@@ -74,13 +77,25 @@ def _require_existing_safe_user(row: dict[str, Any], *, group_id: int) -> Any:
 
 
 def _require_active_registry(
-    row: dict[str, Any], metadata: dict[str, Any]
+    row: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    runtime_bundle_root: Path,
 ) -> tuple[str, bytes]:
-    registry_path = _ROOT / row["registry_path"]
+    registry_path = runtime_bundle_root / row["registry_path"]
     try:
-        raw = registry_path.read_bytes()
+        raw = read_protected_authority_file(
+            registry_path,
+            expected_owner_uids={0},
+            allowed_modes={0o444},
+            max_bytes=1024 * 1024,
+        ).raw
         document = json.loads(raw)
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (
+        ProtectedAuthorityFileError,
+        UnicodeError,
+        json.JSONDecodeError,
+    ) as exc:
         raise BootstrapError("public registry is unavailable") from exc
     rows = document.get("keys") if type(document) is dict else None
     matches = [
@@ -116,7 +131,11 @@ def _observe_active_row(row: dict[str, Any], *, group_id: int) -> dict[str, Any]
     ):
         raise BootstrapError("service directory is not isolated")
     metadata = _load_public_metadata(row, expected_uid=entry.pw_uid)
-    registry_digest, _ = _require_active_registry(row, metadata)
+    registry_digest, _ = _require_active_registry(
+        row,
+        metadata,
+        runtime_bundle_root=Path(runtime_bundle["bundle_path"]),
+    )
     key_path = Path(row["key_path"])
     ledger_path = Path(row["ledger_path"])
     socket_path = Path(row["socket_path"])
@@ -137,7 +156,15 @@ def _observe_active_row(row: dict[str, Any], *, group_id: int) -> dict[str, Any]
         raise BootstrapError("event ledger identity is incorrect")
     if not _safe_file_state(config_path, uid=0, modes=(0o440, 0o444)):
         raise BootstrapError("root-owned runtime config is absent or unsafe")
-    config_raw = config_path.read_bytes()
+    try:
+        config_raw = read_protected_authority_file(
+            config_path,
+            expected_owner_uids={0},
+            allowed_modes={0o440, 0o444},
+            max_bytes=1024 * 1024,
+        ).raw
+    except ProtectedAuthorityFileError as exc:
+        raise BootstrapError("runtime config changed during audit") from exc
     try:
         config = json.loads(config_raw)
     except (UnicodeError, json.JSONDecodeError) as exc:

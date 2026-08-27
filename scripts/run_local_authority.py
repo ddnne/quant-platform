@@ -28,6 +28,10 @@ for import_root in reversed(_IMPORT_ROOTS):
 
 from scripts.authority_principal_manifest import load_and_validate_manifest
 from scripts.finding_ledger_gate import FindingLedgerError
+from scripts.local_authority_files import (
+    ProtectedAuthorityFileError,
+    read_protected_authority_file,
+)
 from scripts.local_authority_entrypoints import (
     CoverageTransitionAuthorize,
     D1FreezeAndRenderOpsProjection,
@@ -151,8 +155,14 @@ def load_runtime_config(
 ) -> dict[str, Any]:
     path = Path(row["runtime_config_path"])
     try:
-        raw = path.read_bytes()
-    except OSError as exc:
+        raw = read_protected_authority_file(
+            path,
+            expected_owner_uids={0},
+            allowed_modes={0o440, 0o444},
+            max_bytes=1024 * 1024,
+            expected_observation=row["runtime_config_observation"],
+        ).raw
+    except ProtectedAuthorityFileError as exc:
         raise AuthorityRunnerError("root-owned runtime config is unavailable") from exc
     digest = "sha256:" + hashlib.sha256(raw).hexdigest()
     if digest != row["runtime_config_file_digest"]:
@@ -169,11 +179,23 @@ def load_runtime_config(
     return document
 
 
-def _load_public_metadata(row: Mapping[str, Any]) -> dict[str, Any]:
+def _load_public_metadata(
+    row: Mapping[str, Any], *, expected_uid: int
+) -> dict[str, Any]:
     metadata_path = Path(row["key_path"]).with_name("ed25519-public-metadata.json")
     try:
-        document = json.loads(metadata_path.read_bytes())
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raw = read_protected_authority_file(
+            metadata_path,
+            expected_owner_uids={expected_uid},
+            allowed_modes={0o400, 0o440, 0o444},
+            max_bytes=64 * 1024,
+        ).raw
+        document = json.loads(raw)
+    except (
+        ProtectedAuthorityFileError,
+        UnicodeError,
+        json.JSONDecodeError,
+    ) as exc:
         raise AuthorityRunnerError(
             "authority public-key metadata is unavailable"
         ) from exc
@@ -200,7 +222,7 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
         authority_id=authority_id,
         environment=environment,
     )
-    metadata = _load_public_metadata(activation)
+    metadata = _load_public_metadata(activation, expected_uid=uid)
     custody = FileEd25519KeyCustody(
         activation["key_path"],
         key_id=metadata["key_id"],

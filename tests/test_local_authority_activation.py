@@ -81,6 +81,7 @@ def _active_fixture(
     }
     registry_raw = json.dumps(registry, sort_keys=True).encode()
     registry_path.write_bytes(registry_raw)
+    registry_path.chmod(0o444)
 
     runtime_config_path = protected / "runtime-config/staging/ready.json"
     runtime_config_path.parent.mkdir(parents=True)
