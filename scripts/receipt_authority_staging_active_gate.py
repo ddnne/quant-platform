@@ -498,26 +498,35 @@ def _verify_audit_attestation(
         raise ReceiptStagingActiveGateError(
             "Receipt audit recovery time order drifted"
         )
+    deployment_times: dict[str, datetime] = {}
     for role in ("authority", "caller"):
         deployed_at = datetime.fromisoformat(
-            str(accepted[role]["version_created_on"]).replace("Z", "+00:00")
+            str(accepted[role]["deployment_created_on"]).replace("Z", "+00:00")
         )
-        if (
-            deployed_at.tzinfo is None
-            or replay_confirmed_at < deployed_at.astimezone(UTC)
-        ):
+        if deployed_at.tzinfo is None:
+            raise ReceiptStagingActiveGateError(
+                "Receipt ACTIVE deployment time is not timezone-aware"
+            )
+        deployment_times[role] = deployed_at.astimezone(UTC)
+        if replay_confirmed_at <= deployment_times[role]:
             raise ReceiptStagingActiveGateError(
                 "Receipt audit recovery predates ACTIVE deployment"
             )
-    authority_deployed_at = datetime.fromisoformat(
-        str(authority["version_created_on"]).replace("Z", "+00:00")
-    )
-    caller_deployed_at = datetime.fromisoformat(
-        str(caller["version_created_on"]).replace("Z", "+00:00")
-    )
+    authority_deployed_at = deployment_times["authority"]
+    caller_deployed_at = deployment_times["caller"]
     if caller_deployed_at <= authority_deployed_at:
         raise ReceiptStagingActiveGateError(
-            "Premium caller version was not coordinated after authority activation"
+            "Premium caller deployment was not coordinated after authority deployment"
+        )
+    caller_version_created_at = datetime.fromisoformat(
+        str(caller["version_created_on"]).replace("Z", "+00:00")
+    )
+    if (
+        caller_version_created_at.tzinfo is None
+        or caller_version_created_at.astimezone(UTC) <= authority_deployed_at
+    ):
+        raise ReceiptStagingActiveGateError(
+            "Premium caller version was not uploaded after authority deployment"
         )
 
     operation_id = _canonical_digest({
@@ -693,12 +702,14 @@ def _validate_staging_active_transition_core(
             raise ReceiptStagingActiveGateError(
                 f"{role} public surface changed during ACTIVE transition"
             )
-        deployment_id, version_id, message = live._validate_deployment(
-            deployments[role],
-            role=role,
-            environment="staging",
-            source_sha=reviewed_sha,
-            authority_mode="ACTIVE",
+        deployment_id, version_id, message, deployment_created_on = (
+            live._validate_deployment(
+                deployments[role],
+                role=role,
+                environment="staging",
+                source_sha=reviewed_sha,
+                authority_mode="ACTIVE",
+            )
         )
         row = live._validate_version(
             versions[role],
@@ -710,6 +721,7 @@ def _validate_staging_active_transition_core(
             authority_mode="ACTIVE",
         )
         row["deployment_id"] = deployment_id
+        row["deployment_created_on"] = deployment_created_on
         row["deployment_message"] = message
         row["source_provenance"] = _validate_source_provenance(
             source_provenance[role], role=role
@@ -733,11 +745,13 @@ def _validate_staging_active_transition_core(
     )
     ledger = load_pinned_finding_ledger()
     deployment_pair_digest = _canonical_digest({
-        "schema_version": "receipt-audit-deployment-pair/v1",
+        "schema_version": "receipt-audit-deployment-pair/v2",
         "environment": "staging",
+        "authority_deployment_id": accepted["authority"]["deployment_id"],
         "authority_worker_version_id": accepted["authority"][
             "deployment_version_id"
         ],
+        "caller_deployment_id": accepted["caller"]["deployment_id"],
         "caller_worker_version_id": accepted["caller"]["deployment_version_id"],
         "active_key_id": active_key_id,
         "registry_digest": registry["registry_digest"],

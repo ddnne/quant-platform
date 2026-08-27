@@ -29,6 +29,7 @@ def _documents(environment: str) -> tuple[
         version_id = f"10000000-0000-4000-8000-{ordinal:012d}"
         deployments[role] = {
             "id": deployment_id,
+            "created_on": f"2026-08-27T08:00:0{ordinal}.000000Z",
             "source": "wrangler",
             "strategy": "percentage",
             "annotations": {
@@ -138,6 +139,10 @@ def test_exact_live_pending_chain_is_read_only_and_source_bound(
     assert set(result["workers"]) == {"acquisition", "authority", "caller"}
     assert all(row["traffic_percent"] == 100 for row in result["workers"].values())
     assert all(
+        row["deployment_created_on"].endswith("Z")
+        for row in result["workers"].values()
+    )
+    assert all(
         row["source_provenance"]["status"] == "VERIFIED_EXACT_MODULE_BYTES"
         for row in result["workers"].values()
     )
@@ -190,6 +195,12 @@ def test_staging_chain_declares_only_minimum_non_proxy_secrets() -> None:
                 ]
             ),
             "one version at 100 percent",
+        ),
+        (
+            lambda deployments, _versions, _public: deployments["authority"].update(
+                created_on="caller-supplied"
+            ),
+            "deployment created_on is not UTC RFC3339",
         ),
         (
             lambda _deployments, versions, _public: versions["authority"][

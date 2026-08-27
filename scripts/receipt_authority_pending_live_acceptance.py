@@ -328,7 +328,7 @@ def _validate_deployment(
     environment: str,
     source_sha: str,
     authority_mode: str = "PENDING",
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str]:
     deployment = _mapping(value, label=f"{role} deployment")
     deployment_id = deployment.get("id")
     if type(deployment_id) is not str or _UUID.fullmatch(deployment_id) is None:
@@ -339,6 +339,9 @@ def _validate_deployment(
         raise ReceiptPendingLiveAcceptanceError(
             f"{role} deployment source or strategy drifted"
         )
+    created_on = _timestamp(
+        deployment.get("created_on"), label=f"{role} deployment created_on"
+    )
     annotations = _mapping(
         deployment.get("annotations"), label=f"{role} deployment annotations"
     )
@@ -366,7 +369,7 @@ def _validate_deployment(
     version_id = traffic["version_id"]
     if type(version_id) is not str or _UUID.fullmatch(version_id) is None:
         raise ReceiptPendingLiveAcceptanceError(f"{role} version id is invalid")
-    return deployment_id, version_id, expected_message
+    return deployment_id, version_id, expected_message, created_on
 
 
 def _validate_version(
@@ -609,11 +612,13 @@ def validate_live_pending_receipt_chain(
     accepted_workers: dict[str, Any] = {}
     for role, worker in CHAIN:
         surface = manifest["workers"][worker][selected]
-        deployment_id, version_id, message = _validate_deployment(
-            deployments[role],
-            role=role,
-            environment=selected,
-            source_sha=reviewed_sha,
+        deployment_id, version_id, message, deployment_created_on = (
+            _validate_deployment(
+                deployments[role],
+                role=role,
+                environment=selected,
+                source_sha=reviewed_sha,
+            )
         )
         accepted = _validate_version(
             versions[role],
@@ -624,6 +629,7 @@ def validate_live_pending_receipt_chain(
             surface=surface,
         )
         accepted["deployment_id"] = deployment_id
+        accepted["deployment_created_on"] = deployment_created_on
         accepted["deployment_message"] = message
         accepted["traffic_percent"] = 100
         provenance = _mapping(

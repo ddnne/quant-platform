@@ -275,16 +275,20 @@ evidence do not exist. The ordinary all-P0 gate still rejects release. A generic
 `ignore P0` switch is not an acceptable substitute, and this runbook does not
 authorize ACTIVE deployment under the current gate.
 
-The staging gate treats the authority deployment version, Premium caller
-deployment version, active key ID, and exact registry digest as one immutable
-activation pair. Any authority deploy, authority version replacement, key
-rotation, or registry change requires a coordinated Premium redeploy *after*
-the authority deploy. That redeploy must create a new Cloudflare caller version
-and a new version-scoped Premium D1 audit row. Never update or reuse an older
-row or attestation. The gate rejects the old signed attestation after the
-authority side changes and continues to reject a newly signed authority
-attestation until the newer caller version is selected and bound to the same
-key/registry surface.
+The staging gate treats the authority deployment ID and selected version,
+Premium caller deployment ID and selected version, active key ID, and exact
+registry digest as one immutable activation pair. It measures the actual
+Cloudflare deployment `created_on` values separately from version-upload time.
+Any authority deploy, authority version replacement, key rotation, or registry
+change requires a coordinated Premium version upload and redeploy *after* the
+authority deployment. That redeploy must create a new Cloudflare caller version
+and a new version-scoped Premium D1 audit row. The signed audit attestation must
+be issued only after both exact deployments. Never update or reuse an older row
+or attestation. The gate rejects a same-version redeploy paired with an older
+attestation, reversed deployment order, and a caller version uploaded before
+the authority deployment. It continues to reject a newly signed authority
+attestation until the newer caller version and deployment are selected and
+bound to the same key/registry surface.
 
 Activation is a separate reviewed change. Set:
 

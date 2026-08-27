@@ -55,6 +55,11 @@ def _chain_documents(
         message = live.deployment_message(role, "staging", SHA, "ACTIVE")
         deployments[role] = {
             "id": deployment_id,
+            "created_on": {
+                "acquisition": "2026-08-28T08:00:05.000Z",
+                "authority": "2026-08-28T08:00:10.000Z",
+                "caller": "2026-08-28T08:00:20.000Z",
+            }[role],
             "source": "wrangler",
             "strategy": "percentage",
             "annotations": {
@@ -92,7 +97,11 @@ def _chain_documents(
                 "workers/triggered_by": "version_upload",
             },
             "metadata": {
-                "created_on": f"2026-08-28T08:00:00.00000{ordinal}Z",
+                "created_on": {
+                    "acquisition": "2026-08-28T08:00:01.000Z",
+                    "authority": "2026-08-28T08:00:02.000Z",
+                    "caller": "2026-08-28T08:00:11.000Z",
+                }[role],
                 "source": "wrangler",
                 "has_preview": False,
             },
@@ -383,7 +392,20 @@ def test_exact_audit_only_transition_uses_real_signature_and_separate_digests(
     ]
     assert result["signed_attestation_digest"] != result["signed_claims_digest"]
     assert set(result["workers"]) == {"acquisition", "authority", "caller"}
-    assert active._SHA256.fullmatch(result["deployment_pair_digest"])
+    assert result["deployment_pair_digest"] == active._canonical_digest(
+        {
+            "schema_version": "receipt-audit-deployment-pair/v2",
+            "environment": "staging",
+            "authority_deployment_id": evidence["deployments"]["authority"]["id"],
+            "authority_worker_version_id": evidence["versions"]["authority"]["id"],
+            "caller_deployment_id": evidence["deployments"]["caller"]["id"],
+            "caller_worker_version_id": evidence["versions"]["caller"]["id"],
+            "active_key_id": evidence["key_id"],
+            "registry_digest": json.loads(
+                evidence["registry_path"].read_text(encoding="utf-8")
+            )["registry_digest"],
+        }
+    )
 
 
 def test_authority_change_requires_a_newer_coordinated_caller_version(
@@ -394,6 +416,12 @@ def test_authority_change_requires_a_newer_coordinated_caller_version(
     new_authority_version = "20000000-0000-4000-8000-000000000002"
     evidence["deployments"]["authority"]["versions"][0]["version_id"] = (
         new_authority_version
+    )
+    evidence["deployments"]["authority"]["id"] = (
+        "20000000-0000-4000-8000-000000000012"
+    )
+    evidence["deployments"]["authority"]["created_on"] = (
+        "2026-08-28T08:00:12.000Z"
     )
     evidence["versions"]["authority"]["id"] = new_authority_version
     evidence["versions"]["authority"]["metadata"]["created_on"] = (
@@ -418,7 +446,7 @@ def test_authority_change_requires_a_newer_coordinated_caller_version(
     )
     with pytest.raises(
         active.ReceiptStagingActiveGateError,
-        match="Premium caller version was not coordinated after authority activation",
+        match="Premium caller version was not uploaded after authority deployment",
     ):
         _validate(evidence)
 
@@ -426,9 +454,15 @@ def test_authority_change_requires_a_newer_coordinated_caller_version(
     evidence["deployments"]["caller"]["versions"][0]["version_id"] = (
         new_caller_version
     )
+    evidence["deployments"]["caller"]["id"] = (
+        "20000000-0000-4000-8000-000000000014"
+    )
+    evidence["deployments"]["caller"]["created_on"] = (
+        "2026-08-28T08:00:14.000Z"
+    )
     evidence["versions"]["caller"]["id"] = new_caller_version
     evidence["versions"]["caller"]["metadata"]["created_on"] = (
-        "2026-08-28T08:00:11.000000Z"
+        "2026-08-28T08:00:13.000000Z"
     )
     evidence["attestation"] = _attestation(
         evidence["private_key"], evidence["key_id"], evidence["versions"]
@@ -443,6 +477,54 @@ def test_authority_change_requires_a_newer_coordinated_caller_version(
     assert result["workers"]["caller"]["deployment_version_id"] == (
         new_caller_version
     )
+
+
+def test_same_version_redeployment_after_attestation_is_rejected(
+    tmp_path: Path,
+) -> None:
+    evidence = _evidence(tmp_path)
+    evidence["deployments"]["caller"]["id"] = (
+        "30000000-0000-4000-8000-000000000003"
+    )
+    evidence["deployments"]["caller"]["created_on"] = (
+        "2026-08-28T08:02:00.000Z"
+    )
+
+    with pytest.raises(
+        active.ReceiptStagingActiveGateError,
+        match="Receipt audit recovery predates ACTIVE deployment",
+    ):
+        _validate(evidence)
+
+
+def test_reversed_authority_and_caller_deployment_order_is_rejected(
+    tmp_path: Path,
+) -> None:
+    evidence = _evidence(tmp_path)
+    evidence["deployments"]["caller"]["created_on"] = (
+        "2026-08-28T08:00:09.000Z"
+    )
+
+    with pytest.raises(
+        active.ReceiptStagingActiveGateError,
+        match="Premium caller deployment was not coordinated after authority deployment",
+    ):
+        _validate(evidence)
+
+
+def test_attestation_must_be_issued_after_both_current_deployments(
+    tmp_path: Path,
+) -> None:
+    evidence = _evidence(tmp_path)
+    evidence["deployments"]["authority"]["created_on"] = (
+        "2026-08-28T08:01:01.000Z"
+    )
+
+    with pytest.raises(
+        active.ReceiptStagingActiveGateError,
+        match="Receipt audit recovery predates ACTIVE deployment",
+    ):
+        _validate(evidence)
 
 
 def test_public_validator_has_no_evidence_or_trust_root_injection() -> None:
