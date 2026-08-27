@@ -26,6 +26,7 @@ ACTIVE_WORKERS = (
     "ingestion-premium",
     "ingestion-secrets",
     "quant-ops-mcp",
+    "receipt-activation-observer",
     "receipt-evidence-authority",
     "research-ai-gateway",
     "research-mass-eval",

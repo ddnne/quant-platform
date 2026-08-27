@@ -34,16 +34,27 @@ event transactions, operation lookup and every other internal helper use
 JavaScript `#private` methods, not TypeScript-only `private`; workerd rejects the
 former helper names before key, Durable Object, D1 or R2 state can change.
 
-`PremiumReceiptOperatorService` is a named, typed Service Binding entrypoint
-with no `fetch()` method. Its only PENDING action is the argument-free
-`pending_public_key_registration()` proposal. The authority derives and the
-Premium entrypoint revalidates the action, environment, complete deployment
-source SHA, Worker versions, authority resource digest, key identity, and
-`operation_binding_digest`. It cannot return the AES wrapping secret, wrapped
-PKCS#8 ciphertext, or an unwrapped private key. A caller principal/Worker is not
-yet bound to this entrypoint. The typed Premium surface is therefore only a
-source-level partial boundary; it remains operationally unreachable and is not
-an implemented operator-to-Premium principal chain.
+Premium exports two disjoint named Service Binding entrypoints with no
+`fetch()` methods. `PremiumReceiptOperatorService` exposes only the
+argument-free `pending_public_key_registration()` proposal;
+`PremiumReceiptAuditEvidenceService` exposes only the argument-free,
+SELECT-only `staging_recovery_audit_evidence()` observation. The authority
+derives and the Premium entrypoint revalidates the action, environment,
+complete deployment source SHA, Worker versions, authority resource digest,
+key identity, and `operation_binding_digest`. The read RPC derives its caller
+version from `CF_VERSION_METADATA`, validates the exact migration-0019 schema
+objects and stored canonical attestation, and returns the exact D1 TEXT UTF-8
+bytes in canonical base64. Neither RPC can return the AES wrapping secret,
+wrapped PKCS#8 ciphertext, or an unwrapped private key.
+
+The only source-defined caller for the read RPC is the staging-only
+`receipt-activation-observer`. Its base and production configurations have no
+route and `workers_dev=false`; staging has `preview_urls=false` and exactly one
+named Service Binding to `PremiumReceiptAuditEvidenceService`. It has no D1, R2,
+KV, Queue, Durable Object, AI, or secret binding. Its sole successful HTTP
+shape is an exact random-challenge GET protected by the official Workers
+Access context. The observer binds the exact Access application AUD into its
+canonical response and cannot initiate registration or the audit canary.
 
 `RECEIPT_KEY_WRAP_KEY` is a 32-byte, independently generated wrapping key
 encoded as exactly 64 lowercase hexadecimal characters. Put
@@ -66,6 +77,12 @@ Before either deployment:
 6. Queue/DLQ backlog and current ingestion state have been recorded.
 7. Production and staging wrapping secrets and Durable Object namespaces are
    treated as distinct authority domains.
+8. Before the staging observer is accepted, its Access manifest must be
+   reviewed from `PENDING` to `ACTIVE` with the immutable Worker ID, its exact
+   enabled non-preview Workers Beta `subdomain.url`, the exact worker
+   destination, application ID/AUD, one `non_identity` Service Auth
+   policy, and one exact service-token ID. An Access API error `9999` is an
+   operational hold, not authorization to substitute bearer-header auth.
 
 The PENDING ceremony is a three-Worker deployment, not an authority-only
 upload. `ingestion-secrets` supplies the closed acquisition RPC,
@@ -192,9 +209,12 @@ operations remain forbidden, and the result is explicitly research-ineligible.
 Premium has `workers_dev=false`, no route and no custom domain. Adding any of
 those public surfaces to make an old `curl` example work is prohibited. The
 typed Premium capability and exact named-handler acceptance are now checked in,
-but no operator principal/Worker owns a Service Binding to it. Until that
-separately reviewed, no-public-surface caller is configured and accepted, do
-not generate a key or claim that registration is executable.
+and the source tree contains a no-secret staging observer bound only to the
+read-only evidence RPC. No live operator/observer principal or Service Binding
+has been deployed or accepted, and the observer cannot call registration.
+Until a separately reviewed no-public-Premium-surface registration caller and
+the Access-protected observer are configured and accepted, do not generate a
+key or claim that registration or activation is executable.
 
 Preserve the non-secret response, source/deployment SHA, environment, Worker
 version, Durable Object generation, and response digest as immutable release
@@ -250,23 +270,35 @@ calls ordinary `issue_for_segment`/`recover_issue`, never writes
 `collection_receipts`, Coverage, product raw/structured state or authority R2,
 and cannot produce `TRUSTED_COLLECTION`. Premium D1 stores only the canonical
 signed audit attestation and its separately named whole-envelope digest. The
-ACTIVE audit method can only read that attestation; the only other exact RPC is
-the argument-free PENDING registration proposal. Neither operator method can
-initiate a positive Receipt operation.
+ACTIVE audit entrypoint can only read that attestation; the separate operator
+entrypoint has only the argument-free PENDING registration proposal. Neither
+entrypoint can initiate a positive Receipt operation.
 
-The public gate owns one fixed gitignored ops attestation path and the pinned
-staging registry path; only its private test core accepts mappings or alternate
-paths. It collects the live documents itself with GET-only Cloudflare calls and
-isolated Wrangler homes, reads the attestation once as canonical JSON, and
-remeasures the exact three-Worker deployment bracket, module bytes, bindings,
-Durable Object
-migration tag, secret-name and public surfaces, and verifies the complete
-initial/first-recovery/replay-confirmation operation chain with the real
-Ed25519 key from the pinned staging registry. Its public API accepts neither
-live evidence mappings, paths, a registry/verifier override, nor an in-memory
-attestation/Receipt. The signed-claims digest and whole signed-
-attestation digest are distinct. It accepts no count, product digest or GO
-override and marks output `AUDIT_ONLY` and research-ineligible.
+The public gate owns the pinned Access manifest and staging key registry; only
+its private test core accepts mappings or alternate paths. It generates a
+fresh 256-bit challenge, proves an unauthenticated request is rejected, and
+then performs the authenticated HTTPS GET using service-token credentials read
+only from the process environment. Redirects, inherited proxies, HTML,
+oversize responses, extra query/body data, and credential values in argv or
+artifacts are excluded. The response must carry the exact Access application
+AUD observed from the Cloudflare API.
+
+The gate remeasures the exact four-Worker deployment bracket, immutable module
+bytes, bindings, Durable Object migration tag, secret-name/public surfaces,
+Workers Beta immutable observer ID plus its enabled non-preview subdomain URL,
+Access app/policy/token inventory, and the
+Premium D1 migration-0019 schema plus exact stored attestation TEXT before and
+after the observer request. Worker-level Access must have exactly
+`destinations=[{type:"worker",worker_id:<immutable-id>}]`. The HTTPS endpoint
+is derived from the same ID-addressed Worker API response and must equal the
+pinned manifest URL and hostname; any covering worker,
+preview-worker, all-workers, public, wildcard, or legacy hostname application
+fails closed. It verifies the complete initial/first-recovery/replay-
+confirmation chain with the real Ed25519 key from the pinned staging registry.
+Its public API accepts neither live evidence mappings, paths, a
+registry/verifier override, nor an in-memory attestation/Receipt. Successful
+evidence is canonical, content-addressed, create-only local output marked
+`AUDIT_ONLY` and research-ineligible.
 
 This is only a source-level partial safety boundary, not permission to activate.
 The active registry,
@@ -318,6 +350,17 @@ exception no longer applies. At minimum, require:
 7. The selected Premium caller version was deployed after the selected
    authority version; the signed attestation names both exact versions and the
    registry-derived key. An older pair or mutable row is not accepted.
+8. The observer Worker exists in the Workers Beta inventory. Record its
+   immutable ID, protect exactly that worker destination with one Service Auth
+   policy and one service token, then replace every `PENDING` placeholder in
+   `specs/cloudflare/receipt_activation_observer_access.json` through a normal
+   reviewed commit. A domain-only, `allow`, `bypass`, any-valid-token, preview,
+   or broader application is prohibited.
+9. Redeploy the four exact reviewed versions after the manifest change. Supply
+   `RECEIPT_OBSERVER_ACCESS_CLIENT_ID` and
+   `RECEIPT_OBSERVER_ACCESS_CLIENT_SECRET` only as process environment secrets
+   when running the gate; never place either value in Git, argv, logs, or the
+   output document.
 
 Both checked-in scoped registries remain `PENDING` with no active key. This
 runbook does not authorize changing either registry or Worker to `ACTIVE` while
@@ -385,14 +428,15 @@ with a changed request, and post-sign structured-row mutation all fail closed.
 ## Current status
 
 The repository contains the inactive implementation and test evidence only.
-Staging and production remain PENDING and unprovisioned. The checked-in
-deployment contract now includes the minimum staging acquisition/caller secret
-names and a fail-closed live three-Worker acceptance verifier. It does not
-install their values, deploy, migrate, generate a key, or call registration.
-Staging registration remains HOLD because the typed Premium entrypoint has no
-bound operator caller principal/Worker. The source-only ACTIVE validator and
-Cron recovery canary are present, but have not been migrated, deployed, or
-measured. Production acceptance additionally remains C7 HOLD because
+Staging and production remain PENDING and unprovisioned. The checked-in Access
+manifest intentionally retains `PENDING` placeholders, so the ACTIVE gate
+returns an operational hold until the account-specific Worker, application,
+AUD, policy, token, and ID-derived subdomain URL/hostname identities are
+independently recorded and
+reviewed. No service-token value is checked in. The source-only observer,
+ACTIVE validator, migration, and Cron recovery canary have not been deployed or
+measured, and no live observer-to-Premium Service Binding has been accepted.
+Production acceptance additionally remains C7 HOLD because
 the acquisition Worker's workers.dev hostname is enabled and no Cloudflare
 Access application/policy is provisioned or verified; the live collector
 intentionally refuses to report a production PASS in that state.

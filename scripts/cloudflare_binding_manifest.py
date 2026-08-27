@@ -265,12 +265,14 @@ PRODUCTION_SECRET_NAMES: dict[str, tuple[str, ...]] = {
         "GITHUB_CLIENT_SECRET",
         "STATE_SECRET",
     ),
+    "receipt-activation-observer": (),
     "receipt-evidence-authority": ("RECEIPT_KEY_WRAP_KEY",),
     "research-ai-gateway": ("GATEWAY_TOKEN",),
     "research-mass-eval": ("MASS_EVAL_TOKEN",),
 }
 
 STAGING_SECRET_NAMES: dict[str, tuple[str, ...]] = {
+    "receipt-activation-observer": (),
     "ingestion-premium": ("INGESTION_RUN_TOKEN",),
     "ingestion-secrets": (
         "JQUANTS_API_KEY",
@@ -316,7 +318,10 @@ _PINNED_PACKAGE_SCRIPTS = {
     "ingestion-premium": {
         **_COMMON_PACKAGE_SCRIPTS,
         "cf-typegen": _WRANGLER_PACKAGE_SCRIPT_POLICY["cf-typegen"],
-        "test": "vitest run",
+        "test": (
+            "vitest run --config vitest.config.ts && "
+            "vitest run --config vitest.runtime.config.ts"
+        ),
     },
     "ingestion-secrets": {
         **_COMMON_PACKAGE_SCRIPTS,
@@ -335,6 +340,11 @@ _PINNED_PACKAGE_SCRIPTS = {
             "vitest run --config vitest.runtime.config.ts && "
             "vitest run --config vitest.harness.config.ts"
         ),
+    },
+    "receipt-activation-observer": {
+        **_COMMON_PACKAGE_SCRIPTS,
+        "cf-typegen": _WRANGLER_PACKAGE_SCRIPT_POLICY["cf-typegen"],
+        "test": "vitest run --config vitest.runtime.config.ts",
     },
     "receipt-evidence-authority": {
         **_COMMON_PACKAGE_SCRIPTS,
@@ -407,16 +417,30 @@ WORKER_ENTRYPOINT_RPC_POLICY: dict[
     "ingestion-premium": {
         "PremiumReceiptOperatorService": (
             False,
-            (
-                "pending_public_key_registration",
-                "staging_recovery_audit_attestation",
-            ),
+            ("pending_public_key_registration",),
+        ),
+        "PremiumReceiptAuditEvidenceService": (
+            False,
+            ("staging_recovery_audit_evidence",),
         ),
     },
     "research-ai-gateway": {
         "GatewayService": (False, ("complete",)),
     },
 }
+
+DEFAULT_FETCH_RESERVED_SPECIAL_POLICY = frozenset(
+    {
+        "ingestion-jsda",
+        "ingestion-premium",
+        "ingestion-secrets",
+        "quant-ops-mcp",
+        "receipt-activation-observer",
+        "receipt-evidence-authority",
+        "research-ai-gateway",
+        "research-mass-eval",
+    }
+)
 
 DURABLE_OBJECT_RPC_POLICY: dict[str, dict[str, tuple[str, ...]]] = {
     "receipt-evidence-authority": {
@@ -852,6 +876,10 @@ def _effective_surface(
         "toolchain": pinned_toolchain,
         "observability": dict(sorted((observability or {}).items())),
         "version_metadata": dict(sorted((version_metadata or {}).items())),
+        "default_handler": {
+            "fetch_reserved_special": worker
+            in DEFAULT_FETCH_RESERVED_SPECIAL_POLICY,
+        },
         "worker_entrypoints": [
             {
                 "name": name,
@@ -966,6 +994,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("binding manifest fields are not closed")
     if manifest["schema_version"] != "cloudflare-active-worker-bindings/v8":
         raise ValueError("binding manifest schema_version drift")
+    if DEFAULT_FETCH_RESERVED_SPECIAL_POLICY != frozenset(ACTIVE_WORKERS):
+        raise ValueError("default fetch reserved-special policy drift")
     if manifest["config_key_policy"] != CONFIG_KEY_POLICY:
         raise ValueError("Wrangler config-key policy drift")
     if manifest["active_workers"] != list(ACTIVE_WORKERS):
@@ -1052,6 +1082,12 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
 
     for worker, environments in workers.items():
         for environment, surface in environments.items():
+            if surface.get("default_handler") != {
+                "fetch_reserved_special": True,
+            }:
+                raise ValueError(
+                    f"{worker}/{environment}: default fetch reserved-special drift"
+                )
             expected_secrets = sorted(
                 STAGING_SECRET_NAMES.get(worker, ())
                 if environment == "staging"
@@ -1158,6 +1194,59 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         }
     ]:
         raise ValueError("mass-eval must use the typed GatewayService binding")
+
+    observer_names = {
+        "base": "quant-platform-receipt-activation-observer",
+        "production": "quant-platform-receipt-activation-observer",
+        "staging": "quant-platform-receipt-activation-observer-staging",
+    }
+    no_observer_bindings = (
+        "d1_databases",
+        "r2_buckets",
+        "kv_namespaces",
+        "queue_producers",
+        "queue_consumers",
+        "durable_objects",
+        "tail_consumers",
+        "ratelimits",
+    )
+    for environment in ("base", "production", "staging"):
+        observer = workers["receipt-activation-observer"][environment]
+        if (
+            observer["name"] != observer_names[environment]
+            or observer["preview_urls"] is not False
+            or observer["route"] is not None
+            or observer["routes"] != []
+            or observer["worker_entrypoints"] != []
+            or observer["durable_object_class_handlers"] != []
+            or observer["secret_names"] != []
+            or any(observer[field] != [] for field in no_observer_bindings)
+            or observer["ai"] != {}
+        ):
+            raise ValueError(
+                f"receipt-activation-observer/{environment}: capability surface drift"
+            )
+        if observer["vars"] != {
+            "ENVIRONMENT": "staging" if environment == "staging" else "disabled"
+        }:
+            raise ValueError(
+                f"receipt-activation-observer/{environment}: environment policy drift"
+            )
+    for environment in ("base", "production"):
+        observer = workers["receipt-activation-observer"][environment]
+        if observer["workers_dev"] is not False or observer["services"] != []:
+            raise ValueError(
+                f"receipt-activation-observer/{environment}: public surface drift"
+            )
+    observer_staging = workers["receipt-activation-observer"]["staging"]
+    if observer_staging["workers_dev"] is not True or observer_staging["services"] != [{
+        "binding": "PREMIUM_RECEIPT_OPERATOR",
+        "entrypoint": "PremiumReceiptAuditEvidenceService",
+        "service": "quant-platform-ingestion-premium-staging",
+    }]:
+        raise ValueError(
+            "receipt-activation-observer/staging: operator binding drift"
+        )
 
     receipt_names = {
         "base": "quant-platform-receipt-evidence-authority",

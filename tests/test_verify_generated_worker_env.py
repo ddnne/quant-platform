@@ -76,6 +76,7 @@ def test_every_active_worker_environment_is_covered_without_generic_erasure() ->
         "receipt-evidence-authority",
         "ingestion-secrets",
         "quant-ops-mcp",
+        "receipt-activation-observer",
         "research-ai-gateway",
         "research-mass-eval",
     }

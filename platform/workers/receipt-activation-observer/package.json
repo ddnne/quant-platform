@@ -1,12 +1,12 @@
 {
-  "name": "quant-platform-ingestion-premium",
+  "name": "quant-platform-receipt-activation-observer",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Phase 3.5 — J-Quants Premium core ingestion closed loop on Cloudflare",
+  "description": "Access-protected staging observer for Receipt authority activation evidence",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",
+    "test": "vitest run --config vitest.runtime.config.ts",
     "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
     "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
     "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"

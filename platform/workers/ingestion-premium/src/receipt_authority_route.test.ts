@@ -166,10 +166,7 @@ describe("Receipt positive-operation boundary", () => {
         .map((key) => String(key))
         .filter((key) => key !== "constructor")
         .sort(),
-    ).toEqual([
-      "pending_public_key_registration",
-      "staging_recovery_audit_attestation",
-    ]);
+    ).toEqual(["pending_public_key_registration"]);
   });
 
   it("rejects deployment or registration provenance drift fail-closed", async () => {
