@@ -19,6 +19,7 @@ from scripts.local_authority_activation import (
     ActivationStateError,
     canonical_json_bytes,
     load_activation_state,
+    observe_runtime_resource_bindings,
     stat_observation,
     state_body_digest,
     validate_activation_state,
@@ -224,6 +225,11 @@ def _observe_active_row(row: dict[str, Any], *, group_id: int) -> dict[str, Any]
         "runtime_python_digest": runtime_bundle["python_digest"],
         "runtime_python_observation": stat_observation(
             Path(runtime_bundle["python_path"]).lstat()
+        ),
+        "runtime_resource_bindings": observe_runtime_resource_bindings(
+            authority_id=row["authority_id"],
+            resources=config["resources"],
+            expected_owner_uid=0,
         ),
         "key_path": str(key_path),
         "key_observation": stat_observation(key_path.lstat()),
@@ -470,4 +476,3 @@ def audit_state(selected: str) -> dict[str, Any]:
         "activation_state_error": activation_error,
         "deployments": audited,
     }
-

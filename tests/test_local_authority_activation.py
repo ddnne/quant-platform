@@ -84,7 +84,7 @@ def _active_fixture(
 
     runtime_config_path = protected / "runtime-config/staging/ready.json"
     runtime_config_path.parent.mkdir(parents=True)
-    runtime_config_raw = b'{"format":"test-runtime-config/v1"}'
+    runtime_config_raw = b'{"format":"test-runtime-config/v1","resources":{}}'
     runtime_config_path.write_bytes(runtime_config_raw)
     runtime_config_path.chmod(0o444)
 
@@ -174,6 +174,7 @@ def _active_fixture(
         "runtime_python_observation": activation.stat_observation(
             runtime_python.lstat()
         ),
+        "runtime_resource_bindings": [],
         "key_path": str(key_path),
         "key_observation": activation.stat_observation(key_path.lstat()),
         "ledger_path": str(ledger_path),
@@ -249,6 +250,52 @@ def test_active_state_fails_closed_when_live_key_inode_changes(
         listener.close()
         socket_path.unlink(missing_ok=True)
         socket_path.parent.rmdir()
+
+
+def test_d1_runtime_bindings_pin_node_cli_tree_config_lock_and_inode(
+    tmp_path: Path,
+) -> None:
+    node = tmp_path / "node"
+    node.write_bytes(b"reviewed node")
+    node.chmod(0o555)
+    cli_tree = tmp_path / "wrangler-tree"
+    cli_tree.mkdir()
+    cli = cli_tree / "wrangler.js"
+    cli.write_bytes(b"reviewed wrangler")
+    cli.chmod(0o444)
+    cli_tree.chmod(0o555)
+    config = tmp_path / "wrangler.toml"
+    config.write_bytes(b'name = "quant-ingest"\n')
+    config.chmod(0o444)
+    lock = tmp_path / "package-lock.json"
+    lock.write_bytes(b'{"lockfileVersion":3}')
+    lock.chmod(0o444)
+    resources = {
+        "node_executable_path": str(node),
+        "wrangler_cli_path": str(cli),
+        "wrangler_cli_tree_path": str(cli_tree),
+        "wrangler_config_path": str(config),
+        "wrangler_lock_path": str(lock),
+    }
+    recorded = activation.observe_runtime_resource_bindings(
+        authority_id="d1_sync",
+        resources=resources,
+        expected_owner_uid=os.geteuid(),
+    )
+    assert {row["name"] for row in recorded} == set(resources)
+    assert all(row["observation"]["inode"] > 0 for row in recorded)
+
+    replacement = config.with_suffix(".replacement")
+    replacement.write_bytes(config.read_bytes())
+    replacement.chmod(0o444)
+    replacement.replace(config)
+    with pytest.raises(activation.ActivationStateError, match="observation is stale"):
+        activation._require_live_runtime_resource_bindings(
+            authority_id="d1_sync",
+            resources=resources,
+            recorded=recorded,
+            expected_owner_uid=os.geteuid(),
+        )
 
 
 def test_checked_in_state_is_absent_and_pending_contract_stays_unchanged() -> None:

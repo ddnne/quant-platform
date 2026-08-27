@@ -33,7 +33,7 @@ from scripts.authority_principal_manifest import (
 )
 from scripts.finding_ledger_gate import require_pinned_finding_ledger_gate
 
-ACTIVATION_STATE_FORMAT = "local-authority-activation-state/v1"
+ACTIVATION_STATE_FORMAT = "local-authority-activation-state/v2"
 ACTIVATION_STATE_PATH = Path(
     "/Library/Application Support/quant-platform/authorities/activation-state.json"
 )
@@ -75,6 +75,7 @@ _ROW_FIELDS = {
     "runtime_python_path",
     "runtime_python_digest",
     "runtime_python_observation",
+    "runtime_resource_bindings",
     "key_path",
     "key_observation",
     "ledger_path",
@@ -89,6 +90,20 @@ _OBSERVATION_FIELDS = {
     "owner_gid",
     "mode",
     "nlink",
+}
+_RUNTIME_RESOURCE_BINDING_FIELDS = {
+    "name",
+    "kind",
+    "path",
+    "digest",
+    "observation",
+}
+_D1_SYNC_PINNED_RUNTIME_RESOURCES = {
+    "node_executable_path": "file",
+    "wrangler_cli_path": "file",
+    "wrangler_cli_tree_path": "tree",
+    "wrangler_config_path": "file",
+    "wrangler_lock_path": "file",
 }
 
 
@@ -243,6 +258,105 @@ def runtime_bundle_tree_digest(path: Path, *, expected_owner_uid: int) -> str:
     if not inventory:
         raise ActivationStateError("runtime bundle inventory is empty")
     return _digest_bytes(canonical_json_bytes({"entries": inventory}))
+
+
+def observe_runtime_resource_bindings(
+    *,
+    authority_id: str,
+    resources: Mapping[str, Any],
+    expected_owner_uid: int,
+) -> list[dict[str, Any]]:
+    """Capture exact executable/config/lock identities used by an authority."""
+
+    expected = (
+        _D1_SYNC_PINNED_RUNTIME_RESOURCES if authority_id == "d1_sync" else {}
+    )
+    if any(
+        type(resources.get(name)) is not str
+        or not Path(resources[name]).is_absolute()
+        for name in expected
+    ):
+        raise ActivationStateError("runtime resource binding path is invalid")
+    if authority_id == "d1_sync":
+        cli = Path(resources["wrangler_cli_path"])
+        tree = Path(resources["wrangler_cli_tree_path"])
+        try:
+            cli.relative_to(tree)
+        except ValueError as exc:
+            raise ActivationStateError(
+                "Wrangler CLI entrypoint escapes its pinned tree"
+            ) from exc
+
+    observed: list[dict[str, Any]] = []
+    for name, kind in sorted(expected.items()):
+        path = Path(resources[name])
+        try:
+            info = path.lstat()
+        except OSError as exc:
+            raise ActivationStateError(
+                f"runtime resource is unavailable: {name}"
+            ) from exc
+        mode = stat.S_IMODE(info.st_mode)
+        if (
+            info.st_uid != expected_owner_uid
+            or mode & 0o022
+            or kind == "tree"
+            and not stat.S_ISDIR(info.st_mode)
+            or kind == "file"
+            and (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1)
+        ):
+            raise ActivationStateError(f"runtime resource metadata is unsafe: {name}")
+        digest = (
+            runtime_bundle_tree_digest(path, expected_owner_uid=expected_owner_uid)
+            if kind == "tree"
+            else regular_file_digest(path)
+        )
+        observed.append(
+            {
+                "name": name,
+                "kind": kind,
+                "path": str(path),
+                "digest": digest,
+                "observation": stat_observation(info),
+            }
+        )
+    return observed
+
+
+def _validate_runtime_resource_bindings(
+    *, authority_id: str, value: object
+) -> list[dict[str, Any]]:
+    if type(value) is not list:
+        raise ActivationStateError("runtime resource bindings must be a list")
+    expected = (
+        _D1_SYNC_PINNED_RUNTIME_RESOURCES if authority_id == "d1_sync" else {}
+    )
+    bindings: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for index, row in enumerate(value):
+        if type(row) is not dict or set(row) != _RUNTIME_RESOURCE_BINDING_FIELDS:
+            raise ActivationStateError(
+                f"runtime resource bindings[{index}] schema is not exact"
+            )
+        name = row["name"]
+        if (
+            name not in expected
+            or name in names
+            or row["kind"] != expected[name]
+            or type(row["path"]) is not str
+            or not Path(row["path"]).is_absolute()
+            or type(row["digest"]) is not str
+            or not row["digest"].startswith("sha256:")
+        ):
+            raise ActivationStateError("runtime resource binding identity is invalid")
+        _validate_observation(
+            row["observation"], field=f"runtime resource {name}"
+        )
+        names.add(name)
+        bindings.append(row)
+    if names != set(expected):
+        raise ActivationStateError("runtime resource binding set is incomplete")
+    return bindings
 
 
 def public_key_fingerprint(public_key_base64: str) -> str:
@@ -428,6 +542,10 @@ def validate_activation_state(document: Mapping[str, Any]) -> Mapping[str, Any]:
             row["runtime_entrypoint_observation"], field="runtime entrypoint"
         )
         _validate_observation(row["runtime_python_observation"], field="runtime python")
+        _validate_runtime_resource_bindings(
+            authority_id=row["authority_id"],
+            value=row["runtime_resource_bindings"],
+        )
         _validate_observation(row["ledger_observation"], field="ledger")
         _validate_observation(row["socket_observation"], field="socket")
     if value["state_digest"] != state_body_digest(value):
@@ -515,6 +633,24 @@ def _require_live_observation(
         and mode != 0o660
     ):
         raise ActivationStateError(f"activation {kind} permissions are unsafe")
+
+
+def _require_live_runtime_resource_bindings(
+    *,
+    authority_id: str,
+    resources: Mapping[str, Any],
+    recorded: object,
+    expected_owner_uid: int,
+) -> None:
+    live = observe_runtime_resource_bindings(
+        authority_id=authority_id,
+        resources=resources,
+        expected_owner_uid=expected_owner_uid,
+    )
+    if live != recorded:
+        raise ActivationStateError(
+            "activation runtime executable/config/lock observation is stale"
+        )
 
 
 def require_active_service_identity(
@@ -619,6 +755,32 @@ def require_active_service_identity(
     runtime_config_raw = Path(row["runtime_config_path"]).read_bytes()
     if _digest_bytes(runtime_config_raw) != row["runtime_config_file_digest"]:
         raise ActivationStateError("activation runtime config changed after audit")
+    try:
+        runtime_config = json.loads(
+            runtime_config_raw,
+            object_pairs_hook=_reject_duplicates,
+            parse_float=_reject_float,
+            parse_constant=_reject_float,
+        )
+        runtime_resources = runtime_config["resources"]
+    except (
+        ActivationStateError,
+        KeyError,
+        TypeError,
+        UnicodeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise ActivationStateError(
+            "activation runtime config resource binding is invalid"
+        ) from exc
+    if type(runtime_resources) is not dict:
+        raise ActivationStateError("activation runtime resources are invalid")
+    _require_live_runtime_resource_bindings(
+        authority_id=authority_id,
+        resources=runtime_resources,
+        recorded=row["runtime_resource_bindings"],
+        expected_owner_uid=expected_root_uid,
+    )
     _require_live_observation(
         Path(row["runtime_bundle_path"]),
         row["runtime_bundle_observation"],
@@ -694,6 +856,7 @@ __all__ = [
     "ActivationStateError",
     "canonical_json_bytes",
     "load_activation_state",
+    "observe_runtime_resource_bindings",
     "public_key_fingerprint",
     "public_key_from_seed",
     "regular_file_digest",

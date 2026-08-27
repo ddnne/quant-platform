@@ -70,7 +70,9 @@ def test_d1_runtime_requires_governed_mirror_credential_and_pinned_cli_paths() -
             "cloudflare_token_path": "/protected/cloudflare-token",
             "node_executable_path": "/protected/node",
             "wrangler_cli_path": "/protected/wrangler.js",
+            "wrangler_cli_tree_path": "/protected/wrangler-tree",
             "wrangler_config_path": "/protected/wrangler.toml",
+            "wrangler_lock_path": "/protected/package-lock.json",
         },
     }
     assert runner.validate_runtime_config(
