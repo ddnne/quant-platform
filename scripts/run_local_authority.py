@@ -478,6 +478,10 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
             raise LocalAuthorityPending(
                 "Trader WebAuthn activation is PENDING"
             ) from exc
+        except Exception as exc:  # noqa: BLE001 - startup exposes only this class
+            raise AuthorityRunnerError(
+                "Trader WebAuthn activation validation failed"
+            ) from exc
         controlled_uid = service_uid("controlled_execution")
         expected_socket = Path(
             manifest["principals"]["controlled_execution"]["deployments"]
@@ -505,6 +509,10 @@ def build_service(*, authority_id: str, environment: str) -> UnixAuthorityServic
         except ExactFourAuthorityPending as exc:
             raise LocalAuthorityPending(
                 "Controlled execution activation is PENDING"
+            ) from exc
+        except Exception as exc:  # noqa: BLE001 - startup exposes only this class
+            raise AuthorityRunnerError(
+                "Controlled execution activation validation failed"
             ) from exc
         writer = handler.writer
         writer_public = base64.b64encode(
