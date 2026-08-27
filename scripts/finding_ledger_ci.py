@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Validate the pinned finding ledger for source integration.
 
-This command deliberately does not authorize a production release.  It lets
-reviewed, fail-closed implementation work merge while an operational finding
-still needs an administrator or human-present ceremony.  Production deploy,
-release evidence, READY publication, and Controlled Pilot entrypoints continue
-to call ``finding_ledger_gate.py`` and require every P0 finding to be FIXED.
+This command deliberately does not authorize a production release or decide
+source safety.  It validates only the tracked schema and finding inventory;
+independent review may accept an inactive fail-closed implementation even when
+an OPEN row still needs source work, administration, or a human-present
+ceremony.  Authenticated deployment acceptance, release evidence, READY
+publication, and Controlled Pilot entrypoints continue to call
+``finding_ledger_gate.py`` and require every P0 finding to be FIXED.
 """
 
 from __future__ import annotations

@@ -17,10 +17,11 @@ only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual 
 **Mandatory local CI:** [`verify_ci.sh`](verify_ci.sh) (active Worker lanes in parallel; no `VERIFY_*` skips). It pins `uv 0.11.26`, runs `uv sync --frozen --extra dev`, `pytest tests/`, the Evaluation IR freeze, verifies the machine-readable Cloudflare binding manifest, then runs each Worker through `npm ci`, tests, typecheck, base/production/staging Wrangler dry-runs, and generated-types checks. The legacy catalog is not compiled into CI or Worker source. Wrangler, TypeScript, and Workers types are exact-versioned. Never `--legacy-peer-deps`; never skip missing dependencies; never live `wrangler deploy`.
 
 [`finding_ledger_ci.py`](finding_ledger_ci.py) runs before source-integration CI.
-It validates the exact tracked ledger and reports the OPEN P0 inventory, but it
-does not authorize a deployment or release. This permits reviewed fail-closed
-implementation to merge when the only remaining closure step is an explicit
-administrator or human-present ceremony.
+It validates the exact tracked ledger schema and OPEN P0 inventory, but it does
+not authorize a deployment, release, or source-safety decision. Independent
+review may accept an inactive fail-closed implementation while operational
+work remains; an OPEN row may also still contain source work such as crash-safe
+recovery.
 
 [`finding_ledger_gate.py`](finding_ledger_gate.py) remains mandatory before
 authenticated deployment acceptance, release-evidence construction, READY
