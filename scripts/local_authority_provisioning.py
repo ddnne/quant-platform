@@ -37,6 +37,7 @@ from scripts.local_authority_bootstrap_common import (
     SERVICE_GROUP,
     BootstrapError,
     _caller_service_user,
+    _directory_service_attribute_values,
     _deployments,
     _ensure_directory,
     _local_peer_rows,
@@ -59,22 +60,54 @@ def _record_exists(kind: str, name: str) -> bool:
 
 def _used_ids(kind: str, attribute: str) -> set[int]:
     result = _run(["/usr/bin/dscl", ".", "-list", f"/{kind}", attribute])
-    if result.returncode != 0:
+    if result.returncode != 0 or result.stderr:
         raise BootstrapError(f"cannot enumerate macOS {kind} ids")
     used: set[int] = set()
     for line in result.stdout.splitlines():
         fields = line.rsplit(None, 1)
-        if len(fields) == 2 and fields[1].isdigit():
-            used.add(int(fields[1]))
+        try:
+            identifier = int(fields[1]) if len(fields) == 2 and fields[0] else None
+        except ValueError:
+            identifier = None
+        if identifier is None or str(identifier) != fields[1]:
+            raise BootstrapError(f"macOS {kind} id enumeration is malformed")
+        used.add(identifier)
+    if not used:
+        raise BootstrapError(f"macOS {kind} id enumeration is empty")
     return used
 
 
 def _next_id(used: set[int]) -> int:
-    candidate = max(600, max(used, default=599) + 1)
+    # macOS exposes nobody-style sentinel ids at UINT32_MAX.  They are valid
+    # reserved identities, but must not drive a new local uid/gid allocation.
+    allocatable = [
+        identifier for identifier in used if 0 <= identifier < 2**31 - 1
+    ]
+    candidate = max(600, max(allocatable, default=599) + 1)
     while candidate in used:
         candidate += 1
+    if candidate >= 2**31 - 1:
+        raise BootstrapError("no safe macOS local identity id remains")
     used.add(candidate)
     return candidate
+
+
+def _used_group_capability_ids() -> set[int]:
+    """Reserve every group id visible through groups or user primary groups."""
+
+    used = _used_ids("Groups", "PrimaryGroupID")
+    used.update(_used_ids("Users", "PrimaryGroupID"))
+    try:
+        accounts = tuple(pwd.getpwall())
+    except (OSError, RuntimeError) as exc:
+        raise BootstrapError("cannot enumerate macOS user primary groups") from exc
+    if any(
+        type(account.pw_gid) is not int or type(account.pw_name) is not str
+        for account in accounts
+    ):
+        raise BootstrapError("macOS user primary group enumeration is malformed")
+    used.update(account.pw_gid for account in accounts if account.pw_gid >= 0)
+    return used
 
 
 def _dscl_create(path: str, attribute: str, value: str) -> None:
@@ -101,7 +134,7 @@ def _dscl_values(kind: str, name: str, attribute: str) -> tuple[str, ...]:
 
 def _ensure_group() -> int:
     if not _record_exists("Groups", SERVICE_GROUP):
-        group_id = _next_id(_used_ids("Groups", "PrimaryGroupID"))
+        group_id = _next_id(_used_group_capability_ids())
         path = f"/Groups/{SERVICE_GROUP}"
         _dscl_create(path, "PrimaryGroupID", str(group_id))
         _dscl_create(path, "RealName", "quant-platform signing authorities")
@@ -188,6 +221,52 @@ def _set_exact_caller_group_members(
     )
 
 
+def _set_exact_custody_reader_group_members(
+    group_name: str,
+    *,
+    username: str,
+) -> None:
+    """Converge both macOS group member representations and remove nesting."""
+
+    generated_uids = _dscl_values("Users", username, "GeneratedUID")
+    if len(generated_uids) != 1:
+        raise BootstrapError(
+            f"custody reader user GeneratedUID is not exact: {username}"
+        )
+    _set_exact_group_members(
+        group_name,
+        usernames=(username,),
+        purpose="custody reader",
+    )
+    _dscl_create(f"/Groups/{group_name}", "GroupMembers", generated_uids[0])
+    nested = _directory_service_attribute_values(
+        "Groups", group_name, "NestedGroups", allow_absent=True
+    )
+    if nested:
+        result = _run(
+            [
+                "/usr/bin/dscl",
+                ".",
+                "-delete",
+                f"/Groups/{group_name}",
+                "NestedGroups",
+            ]
+        )
+        if result.returncode != 0 or result.stdout or result.stderr:
+            raise BootstrapError(
+                f"cannot remove nested custody reader groups: {group_name}"
+            )
+    if (
+        _dscl_values("Groups", group_name, "GroupMembers") != generated_uids
+        or _directory_service_attribute_values(
+            "Groups", group_name, "NestedGroups", allow_absent=True
+        )
+    ):
+        raise BootstrapError(
+            f"custody reader DirectoryService membership did not converge: {group_name}"
+        )
+
+
 def _ensure_user(username: str, *, group_id: int, used_ids: set[int]) -> int:
     if not _record_exists("Users", username):
         uid = _next_id(used_ids)
@@ -229,7 +308,7 @@ def apply_plan(selected: str) -> dict[str, Any]:
     rows = _deployments(selected)
     group_id = _ensure_group()
     used_ids = _used_ids("Users", "UniqueID")
-    used_group_ids = _used_ids("Groups", "PrimaryGroupID")
+    used_group_ids = _used_group_capability_ids()
     _ensure_directory(PROTECTED_ROOT, uid=0, gid=group_id, mode=0o711)
     _ensure_directory(RUN_ROOT, uid=0, gid=group_id, mode=0o711)
     applied: list[dict[str, Any]] = []
@@ -251,10 +330,9 @@ def apply_plan(selected: str) -> dict[str, Any]:
                 raise BootstrapError(
                     "Controlled custody reader group reuses another capability GID"
                 )
-            _set_exact_group_members(
+            _set_exact_custody_reader_group_members(
                 row["custody_reader_group"],
-                usernames=(row["service_user"],),
-                purpose="custody reader",
+                username=row["service_user"],
             )
             require_controlled_custody_reader_group(
                 row=row,
@@ -697,7 +775,7 @@ def install_runtime_configs(
                     f"runtime governed resource is absent: {resource_path}"
                 ) from exc
         caller_group_id = _ensure_caller_group(
-            row["caller_group"], used_ids=_used_ids("Groups", "PrimaryGroupID")
+            row["caller_group"], used_ids=_used_group_capability_ids()
         )
         _set_exact_caller_group_members(
             row["caller_group"],
@@ -706,16 +784,15 @@ def install_runtime_configs(
         if row["custody_reader_group"] is not None:
             custody_reader_group_id = _ensure_custody_reader_group(
                 row["custody_reader_group"],
-                used_ids=_used_ids("Groups", "PrimaryGroupID"),
+                used_ids=_used_group_capability_ids(),
             )
             if custody_reader_group_id in {group_id, caller_group_id}:
                 raise BootstrapError(
                     "Controlled custody reader group reuses another capability GID"
                 )
-            _set_exact_group_members(
+            _set_exact_custody_reader_group_members(
                 row["custody_reader_group"],
-                usernames=(row["service_user"],),
-                purpose="custody reader",
+                username=row["service_user"],
             )
             require_controlled_custody_reader_group(
                 row=row,

@@ -19,6 +19,48 @@ from execution.exact_four_codec import ExactFourAuthorityPending
 from scripts import install_controlled_ready_custody as install_command
 
 
+_CONTROLLED_GENERATED_UID = "11111111-2222-3333-4444-555555555555"
+
+
+def _patch_controlled_reader_directory_service(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    service_uid: int = 503,
+) -> None:
+    from scripts import local_authority_bootstrap_common as bootstrap_common
+
+    account = _service_account("qp_controlled", service_uid, 20)
+    monkeypatch.setattr(bootstrap_common.pwd, "getpwall", lambda: [account])
+    attributes = {
+        ("Users", "qp_controlled", "GeneratedUID"): (
+            _CONTROLLED_GENERATED_UID,
+        ),
+        ("Users", "qp_controlled", "UniqueID"): (str(service_uid),),
+        (
+            "Groups",
+            "qp_staging_controlled_execution_readers",
+            "GroupMembership",
+        ): ("qp_controlled",),
+        (
+            "Groups",
+            "qp_staging_controlled_execution_readers",
+            "GroupMembers",
+        ): (_CONTROLLED_GENERATED_UID,),
+        (
+            "Groups",
+            "qp_staging_controlled_execution_readers",
+            "NestedGroups",
+        ): (),
+    }
+    monkeypatch.setattr(
+        bootstrap_common,
+        "_directory_service_attribute_values",
+        lambda kind, name, attribute, **_kwargs: attributes[
+            (kind, name, attribute)
+        ],
+    )
+
+
 def _digest(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
@@ -548,6 +590,7 @@ def test_install_command_uses_exact_controlled_custody_reader_group(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    _patch_controlled_reader_directory_service(monkeypatch)
     service_gid = 20
     accounts = {
         "qp_ready": _service_account("qp_ready", 501, service_gid),
@@ -722,6 +765,7 @@ def test_install_command_rejects_shared_service_group_as_reader(
 def test_install_command_rejects_reused_authority_uid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _patch_controlled_reader_directory_service(monkeypatch)
     accounts = (
         _service_account("qp_ready", 501, 20),
         _service_account("qp_projection", 501, 20),
@@ -965,6 +1009,8 @@ def test_activation_binds_reader_gid_to_controlled_only_supplementary_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from scripts import local_authority_bootstrap_common as bootstrap_common
+
+    _patch_controlled_reader_directory_service(monkeypatch)
 
     monkeypatch.setattr(
         bootstrap_common,

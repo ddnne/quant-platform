@@ -12,7 +12,11 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import bootstrap_local_authorities as bootstrap
+from scripts import local_authority_bootstrap_common as bootstrap_common
 from scripts import local_authority_provisioning as provisioning
+
+
+_CONTROLLED_GENERATED_UID = "11111111-2222-3333-4444-555555555555"
 
 
 def test_default_plan_is_non_mutating_and_covers_six_local_principals() -> None:
@@ -97,9 +101,9 @@ def test_prepare_users_provisions_controlled_only_custody_reader_group(
     )
     monkeypatch.setattr(
         provisioning,
-        "_set_exact_group_members",
-        lambda name, *, usernames, purpose: memberships.append(
-            (name, usernames, purpose)
+        "_set_exact_custody_reader_group_members",
+        lambda name, *, username: memberships.append(
+            (name, (username,), "custody reader")
         ),
     )
     monkeypatch.setattr(provisioning.pwd, "getpwnam", lambda _name: account)
@@ -119,6 +123,293 @@ def test_prepare_users_provisions_controlled_only_custody_reader_group(
         )
     ]
     assert result["deployments"][0]["custody_reader_group_gid"] == 40
+
+
+def _patch_exact_controlled_reader_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    primary_gid: int = 20,
+    group_members: tuple[str, ...] = (_CONTROLLED_GENERATED_UID,),
+    nested_groups: tuple[str, ...] = (),
+) -> SimpleNamespace:
+    account = SimpleNamespace(
+        pw_name="qp_controlled",
+        pw_uid=503,
+        pw_gid=primary_gid,
+        pw_dir="/var/empty",
+        pw_shell="/usr/bin/false",
+    )
+    groups = {
+        bootstrap_common.SERVICE_GROUP: SimpleNamespace(
+            gr_name=bootstrap_common.SERVICE_GROUP, gr_gid=20, gr_mem=[]
+        ),
+        "qp_staging_controlled_execution_callers": SimpleNamespace(
+            gr_name="qp_staging_controlled_execution_callers",
+            gr_gid=30,
+            gr_mem=["qp_controlled", "qp_trader"],
+        ),
+        "qp_staging_controlled_execution_readers": SimpleNamespace(
+            gr_name="qp_staging_controlled_execution_readers",
+            gr_gid=40,
+            gr_mem=["qp_controlled"],
+        ),
+    }
+    monkeypatch.setattr(
+        bootstrap_common.grp, "getgrnam", lambda name: groups[name]
+    )
+    monkeypatch.setattr(
+        bootstrap_common.grp,
+        "getgrgid",
+        lambda gid: next(group for group in groups.values() if group.gr_gid == gid),
+    )
+    monkeypatch.setattr(bootstrap_common.pwd, "getpwall", lambda: [account])
+    attributes = {
+        ("Users", "qp_controlled", "GeneratedUID"): (
+            _CONTROLLED_GENERATED_UID,
+        ),
+        ("Users", "qp_controlled", "UniqueID"): ("503",),
+        (
+            "Groups",
+            "qp_staging_controlled_execution_readers",
+            "GroupMembership",
+        ): ("qp_controlled",),
+        (
+            "Groups",
+            "qp_staging_controlled_execution_readers",
+            "GroupMembers",
+        ): group_members,
+        (
+            "Groups",
+            "qp_staging_controlled_execution_readers",
+            "NestedGroups",
+        ): nested_groups,
+    }
+    monkeypatch.setattr(
+        bootstrap_common,
+        "_directory_service_attribute_values",
+        lambda kind, name, attribute, **_kwargs: attributes[
+            (kind, name, attribute)
+        ],
+    )
+    return account
+
+
+def _controlled_reader_row() -> dict[str, str]:
+    return {
+        "authority_id": "controlled_execution",
+        "environment": "staging",
+        "service_user": "qp_controlled",
+        "caller_group": "qp_staging_controlled_execution_callers",
+        "custody_reader_group": "qp_staging_controlled_execution_readers",
+    }
+
+
+def test_controlled_reader_group_accepts_only_flat_exact_directory_membership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account = _patch_exact_controlled_reader_identity(monkeypatch)
+
+    _service, _caller, reader = (
+        bootstrap_common.require_controlled_custody_reader_group(
+            row=_controlled_reader_row(), service_account=account
+        )
+    )
+
+    assert reader.gr_gid == 40
+
+
+def test_controlled_reader_group_normalizes_identical_nss_duplicate_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account = _patch_exact_controlled_reader_identity(monkeypatch)
+    duplicate = SimpleNamespace(**vars(account))
+    monkeypatch.setattr(
+        bootstrap_common.pwd, "getpwall", lambda: [account, duplicate, duplicate]
+    )
+
+    _service, _caller, reader = (
+        bootstrap_common.require_controlled_custody_reader_group(
+            row=_controlled_reader_row(), service_account=account
+        )
+    )
+
+    assert reader.gr_gid == 40
+
+
+@pytest.mark.parametrize(
+    "conflict",
+    [
+        SimpleNamespace(
+            pw_name="qp_controlled",
+            pw_uid=503,
+            pw_gid=20,
+            pw_dir="/unexpected",
+            pw_shell="/usr/bin/false",
+        ),
+        SimpleNamespace(
+            pw_name="controlled_alias",
+            pw_uid=503,
+            pw_gid=20,
+            pw_dir="/var/empty",
+            pw_shell="/usr/bin/false",
+        ),
+    ],
+)
+def test_controlled_reader_group_rejects_service_identity_conflicts(
+    monkeypatch: pytest.MonkeyPatch,
+    conflict: SimpleNamespace,
+) -> None:
+    account = _patch_exact_controlled_reader_identity(monkeypatch)
+    monkeypatch.setattr(
+        bootstrap_common.pwd, "getpwall", lambda: [account, conflict]
+    )
+
+    with pytest.raises(bootstrap.BootstrapError, match="identity is ambiguous"):
+        bootstrap_common.require_controlled_custody_reader_group(
+            row=_controlled_reader_row(), service_account=account
+        )
+
+
+def test_controlled_reader_group_rejects_any_primary_gid_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account = _patch_exact_controlled_reader_identity(monkeypatch)
+    alias = SimpleNamespace(
+        pw_name="unrelated",
+        pw_uid=777,
+        pw_gid=40,
+        pw_dir="/var/empty",
+        pw_shell="/usr/bin/false",
+    )
+    monkeypatch.setattr(
+        bootstrap_common.pwd, "getpwall", lambda: [account, alias]
+    )
+
+    with pytest.raises(bootstrap.BootstrapError, match="user primary group"):
+        bootstrap_common.require_controlled_custody_reader_group(
+            row=_controlled_reader_row(), service_account=account
+        )
+
+
+@pytest.mark.parametrize(
+    ("group_members", "nested_groups"),
+    [
+        ((_CONTROLLED_GENERATED_UID, "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"), ()),
+        ((_CONTROLLED_GENERATED_UID,), ("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",)),
+    ],
+)
+def test_controlled_reader_group_rejects_guid_or_nested_membership_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    group_members: tuple[str, ...],
+    nested_groups: tuple[str, ...],
+) -> None:
+    account = _patch_exact_controlled_reader_identity(
+        monkeypatch,
+        group_members=group_members,
+        nested_groups=nested_groups,
+    )
+
+    with pytest.raises(bootstrap.BootstrapError, match="exact and flat"):
+        bootstrap_common.require_controlled_custody_reader_group(
+            row=_controlled_reader_row(), service_account=account
+        )
+
+
+def test_group_gid_allocator_reserves_user_primary_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        provisioning,
+        "_used_ids",
+        lambda kind, _attribute: {600} if kind == "Groups" else {603},
+    )
+    monkeypatch.setattr(
+        provisioning.pwd,
+        "getpwall",
+        lambda: [SimpleNamespace(pw_name="external", pw_gid=605)],
+    )
+
+    used = provisioning._used_group_capability_ids()
+
+    assert used == {600, 603, 605}
+    assert provisioning._next_id(used) == 606
+
+
+def test_custody_reader_provisioning_replaces_guid_members_and_removes_nesting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nested = ["AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"]
+    group_members: list[str] = ["AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"]
+    membership_calls: list[tuple[str, tuple[str, ...], str]] = []
+
+    def values(kind: str, _name: str, attribute: str) -> tuple[str, ...]:
+        if kind == "Users" and attribute == "GeneratedUID":
+            return (_CONTROLLED_GENERATED_UID,)
+        if kind == "Groups" and attribute == "GroupMembers":
+            return tuple(group_members)
+        raise AssertionError((kind, attribute))
+
+    def create(_path: str, attribute: str, value: str) -> None:
+        assert attribute == "GroupMembers"
+        group_members[:] = [value]
+
+    def run(command: list[str]) -> SimpleNamespace:
+        assert command[-1] == "NestedGroups"
+        nested.clear()
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(provisioning, "_dscl_values", values)
+    monkeypatch.setattr(provisioning, "_dscl_create", create)
+    monkeypatch.setattr(
+        provisioning,
+        "_set_exact_group_members",
+        lambda name, *, usernames, purpose: membership_calls.append(
+            (name, usernames, purpose)
+        ),
+    )
+    monkeypatch.setattr(
+        provisioning,
+        "_directory_service_attribute_values",
+        lambda *_args, **_kwargs: tuple(nested),
+    )
+    monkeypatch.setattr(provisioning, "_run", run)
+
+    provisioning._set_exact_custody_reader_group_members(
+        "qp_staging_controlled_execution_readers",
+        username="qp_controlled",
+    )
+
+    assert membership_calls == [
+        (
+            "qp_staging_controlled_execution_readers",
+            ("qp_controlled",),
+            "custody reader",
+        )
+    ]
+    assert group_members == [_CONTROLLED_GENERATED_UID]
+    assert nested == []
+
+
+def test_directory_service_reader_rejects_unknown_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        bootstrap_common,
+        "_run",
+        lambda _command: SimpleNamespace(
+            returncode=0,
+            stdout="",
+            stderr="directory service timeout",
+        ),
+    )
+
+    with pytest.raises(bootstrap.BootstrapError, match="cannot inspect"):
+        bootstrap_common._directory_service_attribute_values(
+            "Groups",
+            "qp_staging_controlled_execution_readers",
+            "NestedGroups",
+            allow_absent=True,
+        )
 
 
 def test_prepare_users_rejects_shared_gid_for_custody_reader_group(

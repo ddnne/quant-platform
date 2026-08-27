@@ -8,6 +8,7 @@ import platform
 import pwd
 import stat
 import subprocess
+import uuid
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -68,6 +69,61 @@ def controlled_custody_reader_group(environment: str) -> str:
     return f"qp_{environment}_controlled_execution_readers"
 
 
+def _directory_service_attribute_values(
+    kind: str,
+    name: str,
+    attribute: str,
+    *,
+    allow_absent: bool = False,
+) -> tuple[str, ...]:
+    """Read one macOS DirectoryService attribute without hiding errors."""
+
+    result = _run(
+        ["/usr/bin/dscl", ".", "-read", f"/{kind}/{name}", attribute]
+    )
+    absent = f"No such key: {attribute}"
+    if (
+        allow_absent
+        and result.returncode == 0
+        and not result.stdout
+        and result.stderr.strip() == absent
+    ):
+        return ()
+    if result.returncode != 0 or result.stderr:
+        raise BootstrapError(
+            f"cannot inspect macOS identity {kind}/{name} {attribute}"
+        )
+    lines = result.stdout.splitlines()
+    prefix = f"{attribute}:"
+    if not lines or not lines[0].startswith(prefix):
+        raise BootstrapError(
+            f"macOS identity {kind}/{name} has malformed {attribute}"
+        )
+    values = lines[0].removeprefix(prefix).strip().split()
+    for line in lines[1:]:
+        if not line[:1].isspace():
+            raise BootstrapError(
+                f"macOS identity {kind}/{name} has malformed {attribute}"
+            )
+        values.extend(line.strip().split())
+    if not values and not allow_absent:
+        raise BootstrapError(
+            f"macOS identity {kind}/{name} has empty {attribute}"
+        )
+    return tuple(values)
+
+
+def _canonical_generated_uid(value: str) -> str:
+    try:
+        parsed = uuid.UUID(value)
+    except (AttributeError, ValueError) as exc:
+        raise BootstrapError("Controlled service GeneratedUID is malformed") from exc
+    canonical = str(parsed).upper()
+    if value.upper() != canonical:
+        raise BootstrapError("Controlled service GeneratedUID is not canonical")
+    return canonical
+
+
 def require_controlled_custody_reader_group(
     *,
     row: dict[str, Any],
@@ -101,6 +157,49 @@ def require_controlled_custody_reader_group(
         raise BootstrapError(
             "Controlled custody reader group is not provisioned"
         ) from exc
+    try:
+        accounts = tuple(pwd.getpwall())
+    except (OSError, RuntimeError) as exc:
+        raise BootstrapError("macOS user identities cannot be enumerated") from exc
+    if any(
+        type(account.pw_name) is not str
+        or not account.pw_name
+        or type(account.pw_uid) is not int
+        or type(account.pw_gid) is not int
+        or type(account.pw_dir) is not str
+        or type(account.pw_shell) is not str
+        for account in accounts
+    ):
+        raise BootstrapError("macOS user identity enumeration is malformed")
+    normalized_by_identity = {
+        (
+            account.pw_name,
+            account.pw_uid,
+            account.pw_gid,
+            account.pw_dir,
+            account.pw_shell,
+        ): account
+        for account in accounts
+    }
+    normalized_accounts = tuple(normalized_by_identity.values())
+    enumerated_service_accounts = [
+        account
+        for account in normalized_accounts
+        if account.pw_name == service_account.pw_name
+    ]
+    if (
+        len(enumerated_service_accounts) != 1
+        or enumerated_service_accounts[0].pw_uid != service_account.pw_uid
+        or enumerated_service_accounts[0].pw_gid != service_account.pw_gid
+        or enumerated_service_accounts[0].pw_dir != service_account.pw_dir
+        or enumerated_service_accounts[0].pw_shell != service_account.pw_shell
+        or any(
+            account.pw_uid == service_account.pw_uid
+            and account.pw_name != service_account.pw_name
+            for account in normalized_accounts
+        )
+    ):
+        raise BootstrapError("Controlled macOS user identity is ambiguous")
     if (
         type(service_group.gr_gid) is not int
         or type(caller_group.gr_gid) is not int
@@ -123,6 +222,42 @@ def require_controlled_custody_reader_group(
         raise BootstrapError("Controlled custody reader GID is not resolvable") from exc
     if reader_by_gid.gr_name != expected_reader_name:
         raise BootstrapError("Controlled custody reader GID reverse mapping drifted")
+    primary_members = sorted(
+        account.pw_name
+        for account in normalized_accounts
+        if account.pw_gid == reader_group.gr_gid
+    )
+    if primary_members:
+        raise BootstrapError(
+            "Controlled custody reader GID is a user primary group"
+        )
+    generated_uids = _directory_service_attribute_values(
+        "Users", service_account.pw_name, "GeneratedUID"
+    )
+    unique_ids = _directory_service_attribute_values(
+        "Users", service_account.pw_name, "UniqueID"
+    )
+    group_membership = _directory_service_attribute_values(
+        "Groups", reader_group.gr_name, "GroupMembership"
+    )
+    group_members = _directory_service_attribute_values(
+        "Groups", reader_group.gr_name, "GroupMembers"
+    )
+    nested_groups = _directory_service_attribute_values(
+        "Groups", reader_group.gr_name, "NestedGroups", allow_absent=True
+    )
+    if (
+        len(generated_uids) != 1
+        or len(unique_ids) != 1
+        or unique_ids[0] != str(service_account.pw_uid)
+        or tuple(group_membership) != (service_account.pw_name,)
+        or tuple(group_members)
+        != (_canonical_generated_uid(generated_uids[0]),)
+        or nested_groups
+    ):
+        raise BootstrapError(
+            "Controlled custody DirectoryService membership is not exact and flat"
+        )
     return service_group, caller_group, reader_group
 
 
