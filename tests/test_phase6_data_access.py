@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -69,7 +70,11 @@ def test_query_dataset_uses_ready_snapshot_and_filters_future_facts(
         db_path=synced_cf_d1_db.db,
         manifest={"state": "READY", "source_run": {"id": 7}},
     )
-    monkeypatch.setattr(access, "_snapshot", lambda _snapshot_id=None: ready)
+    monkeypatch.setattr(
+        access,
+        "_pinned_snapshot",
+        lambda _snapshot_id=None: nullcontext(ready),
+    )
 
     first = access.query_dataset(
         dataset="equities_bars_daily",
