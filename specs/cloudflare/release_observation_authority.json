@@ -1,0 +1,25 @@
+{
+  "schema_version": "quant-platform-release-observation-authority/v1",
+  "authority_status": "PENDING",
+  "active_key_count": 0,
+  "publication_authorized": false,
+  "caller_supplied_json_trusted": false,
+  "trusted_input": "authority-signed-exact-response-envelope-only",
+  "collectors": {
+    "jsda_readiness": {
+      "target_worker": "quant-platform-ingestion-jsda",
+      "endpoint": "/health/ready",
+      "transport": "private-service-binding",
+      "binding_name": null,
+      "transport_implemented": false,
+      "status": "HOLD"
+    }
+  },
+  "closure_requires": [
+    "isolated-release-observation-principal",
+    "active-public-key-registry",
+    "exact-response-byte-signatures",
+    "private-jsda-readiness-service-binding",
+    "independent-staging-and-production-acceptance"
+  ]
+}

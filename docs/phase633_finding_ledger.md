@@ -113,7 +113,7 @@ typed error envelope.
 | A3 | Worker tests were almost entirely Node mocks | FIXED | `32a1ea7d`; focused workerd and `createTestHarness()` boundary tests |
 | A4 | Legacy 2,254-strategy catalog was imported by the product runtime | FIXED | `e5969f50`; immutable replay artifact only |
 | A5 | Python tests still inspect source text, AST, or implementation spelling where a behavioral boundary should suffice | DEFERRED | Replace incrementally with type/capability/transaction invariants; do not increase this class or treat a coarse text-search count as authority |
-| A6 | Release evidence existed only at local absolute paths | OPEN | Publish a content-addressed non-secret manifest after production acceptance; backup body remains private/encrypted |
+| A6 | Release evidence existed only at local absolute paths | OPEN | **SOURCE-HOLD:** the production builder rejects every caller-supplied observation document. `specs/cloudflare/release_observation_authority.json` pins PENDING, active keys 0 and publication disabled; the private JSDA `/health/ready` Service Binding collector is absent. Close only after an isolated authority signs exact response bytes, staging/production acceptance succeeds, and a content-addressed non-secret manifest is published; backup body remains private/encrypted. |
 
 Disclosed P1 residuals under A2: there is no quarantine/recovery runbook for a
 non-`COMMITTED` journal older than one hour; runtime/tool/policy digests are not

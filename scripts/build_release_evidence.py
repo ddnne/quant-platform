@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Build a closed, content-addressed, non-secret release evidence envelope.
+"""Fail-closed release-evidence publication boundary.
 
-The input is a normalized set of observations, not a free-form release report.
-Every remote observation carries collector provenance, response digest, evidence
-ID, timestamp, and source SHA. Nested objects are closed schemas: an invented
-field, omitted proof, stale deployment, or untraceable claim fails publication.
+The legacy candidate schema remains available only to repository tests so its
+closed-field invariants can be retained while the trusted collection service is
+built. A caller-supplied JSON document is not an observation authority: names,
+UUIDs, timestamps and response digests are self-claims unless a dedicated
+service collected and signed the exact response bytes. Consequently every
+production publication entrypoint in this module is intentionally unavailable
+until that signed release-observation authority and its private JSDA Service
+Binding collector exist.
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, NoReturn
 from urllib.parse import urlsplit
 
 try:
@@ -128,6 +132,82 @@ _SENSITIVE_VALUE = re.compile(
 
 _ROOT = Path(__file__).resolve().parents[1]
 _MIGRATION_MANIFEST = _ROOT / "specs" / "cloudflare" / "d1_migration_manifest.json"
+_RELEASE_OBSERVATION_AUTHORITY_CONTRACT = (
+    _ROOT / "specs" / "cloudflare" / "release_observation_authority.json"
+)
+
+
+class ReleaseObservationAuthorityUnavailable(RuntimeError):
+    """Trusted remote observations cannot yet be minted or published."""
+
+
+def _load_pending_release_observation_contract() -> Mapping[str, Any]:
+    raw = json.loads(_RELEASE_OBSERVATION_AUTHORITY_CONTRACT.read_text(encoding="utf-8"))
+    if not isinstance(raw, Mapping) or set(raw) != {
+        "schema_version",
+        "authority_status",
+        "active_key_count",
+        "publication_authorized",
+        "caller_supplied_json_trusted",
+        "trusted_input",
+        "collectors",
+        "closure_requires",
+    }:
+        raise RuntimeError("release-observation authority contract schema drift")
+    collectors = raw.get("collectors")
+    jsda = collectors.get("jsda_readiness") if isinstance(collectors, Mapping) else None
+    if (
+        raw.get("schema_version")
+        != "quant-platform-release-observation-authority/v1"
+        or raw.get("authority_status") != "PENDING"
+        or raw.get("active_key_count") != 0
+        or raw.get("publication_authorized") is not False
+        or raw.get("caller_supplied_json_trusted") is not False
+        or raw.get("trusted_input")
+        != "authority-signed-exact-response-envelope-only"
+        or not isinstance(jsda, Mapping)
+        or set(jsda)
+        != {
+            "target_worker",
+            "endpoint",
+            "transport",
+            "binding_name",
+            "transport_implemented",
+            "status",
+        }
+        or jsda.get("target_worker") != _JSDA_WORKER
+        or jsda.get("endpoint") != _JSDA_READY_ENDPOINT
+        or jsda.get("transport") != "private-service-binding"
+        or jsda.get("binding_name") is not None
+        or jsda.get("transport_implemented") is not False
+        or jsda.get("status") != "HOLD"
+    ):
+        raise RuntimeError(
+            "release-observation authority must remain exact PENDING/HOLD while "
+            "publication and the JSDA collector are unimplemented"
+        )
+    return raw
+
+
+_PENDING_RELEASE_OBSERVATION_CONTRACT = _load_pending_release_observation_contract()
+
+
+def _require_signed_release_observation_authority() -> NoReturn:
+    """Keep production publication unreachable until its authority exists.
+
+    This function deliberately has no flag, capability parameter, environment
+    override, or test hook that can turn a normalized caller document into
+    trusted evidence. A future implementation must replace this boundary with
+    verification of an authority-signed, exact-byte observation envelope.
+    """
+
+    if _PENDING_RELEASE_OBSERVATION_CONTRACT["publication_authorized"] is not False:
+        raise RuntimeError("release-observation authority contract is not fail-closed")
+    raise ReleaseObservationAuthorityUnavailable(
+        "release evidence publication is PENDING: the signed release-observation "
+        "authority and private JSDA /health/ready Service Binding collector are "
+        "not implemented; caller-supplied JSON is schema-only and untrusted"
+    )
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -794,7 +874,14 @@ def _validate_remote_acceptance(payload: Mapping[str, Any]) -> None:
     _validate_quant_mcp(payload)
 
 
-def validate_payload(payload: Mapping[str, Any]) -> None:
+def _validate_untrusted_candidate_schema_for_tests(payload: Mapping[str, Any]) -> None:
+    """Validate legacy candidate shape without granting evidence authority.
+
+    This private helper exists only so schema/policy regression tests can keep
+    exercising the closed candidate format. Passing it is never publication,
+    provenance, or remote acceptance.
+    """
+
     snapshot = require_pinned_finding_ledger_gate()
     expected = frozenset(REQUIRED_FIELDS)
     if set(payload) != expected:
@@ -832,13 +919,8 @@ def validate_payload(payload: Mapping[str, Any]) -> None:
 
 
 def build_envelope(payload: Mapping[str, Any]) -> dict[str, Any]:
-    validate_payload(payload)
-    digest = payload_digest(payload)
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "evidence_digest": digest,
-        "payload": dict(payload),
-    }
+    del payload
+    _require_signed_release_observation_authority()
 
 
 def write_envelope(payload: Mapping[str, Any], output_dir: Path) -> Path:
@@ -862,6 +944,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     require_pinned_finding_ledger_gate()
+    _require_signed_release_observation_authority()
     raw = json.loads(args.input.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("release evidence input must be a JSON object")

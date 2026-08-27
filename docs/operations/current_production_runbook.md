@@ -29,6 +29,10 @@ remote apply results only in immutable release evidence.
   token remains enabled. Do not treat that HOLD as closed.
 - **Controlled Pilot:** **NO-GO** until live evidence in
   `docs/phase62_residual_status.md` passes. Green tests do not arm exact-four.
+- **Release evidence:** publication is **PENDING/HOLD**. Normalized caller JSON
+  is schema-only and cannot prove any remote response. The dedicated signed
+  release-observation authority has zero active keys and is not implemented;
+  see `specs/cloudflare/release_observation_authority.json`. A6 remains OPEN.
 - **Mass Research:** **NO-GO**. Mass talks to Gateway only through typed
   Service Binding RPC `GatewayService`. `GATEWAY_TOKEN` is HTTP defense in
   depth if a closed route is attached later; it is not a shared Mass
@@ -191,6 +195,13 @@ version. The canonical release observation must bind its response digest to the
 collector provenance digest. A generic `GET /health` `PASS`, a mismatched
 digest, or HTTP 503 with `PENDING`/`AUTHORITY_DISABLED` is not a successful
 product deployment.
+
+There is currently no reachable collector for that endpoint: JSDA has
+`workers_dev=false`, `preview_urls=false`, no route, and no Service Binding
+consumer in the frozen binding manifest. Therefore JSDA product smoke and
+release publication remain HOLD. Do not substitute caller-supplied HTTP JSON;
+a future private Service Binding collector must capture and authority-sign the
+exact response bytes for staging and production.
 
 ## 3. Publish the signed Ops projection
 

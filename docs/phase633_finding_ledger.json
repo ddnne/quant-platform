@@ -50,6 +50,6 @@
     {"id":"A3","area":"architecture_test_operations","severity":"P1","status":"FIXED","summary":"Worker coverage was almost entirely Node mocks","evidence":"32a1ea7d"},
     {"id":"A4","area":"architecture_test_operations","severity":"P1","status":"FIXED","summary":"Legacy strategy catalog was a product-runtime input","evidence":"e5969f50"},
     {"id":"A5","area":"architecture_test_operations","severity":"P1","status":"DEFERRED","summary":"Source, AST, and spelling-dependent Python tests remain","closure":"Replace incrementally with structural invariants"},
-    {"id":"A6","area":"architecture_test_operations","severity":"P1","status":"OPEN","summary":"Immutable remote release evidence is not yet published","closure":"Content-addressed non-secret release manifest after production acceptance"}
+    {"id":"A6","area":"architecture_test_operations","severity":"P1","status":"OPEN","summary":"Immutable remote release evidence is not yet published","evidence":"SOURCE-HOLD: production builder rejects every caller-supplied observation document; specs/cloudflare/release_observation_authority.json pins PENDING, active keys 0, publication disabled, and the missing private JSDA readiness Service Binding","closure":"Implement and activate an isolated signed exact-response release-observation authority plus private JSDA /health/ready Service Binding collector, independently accept staging and production, then publish a content-addressed non-secret manifest"}
   ]
 }

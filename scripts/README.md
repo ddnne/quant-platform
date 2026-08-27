@@ -79,18 +79,14 @@ Phase 6 hardening utilities:
   fresh live observation exactly matches the recorded baseline; every other
   state stays `UNKNOWN`. No recovery result grants mutation authority or
   permits a blind retry. This revision publishes no remote apply command.
-- `build_release_evidence.py` — validate normalized post-deploy observations
-  and emit a content-addressed, read-only, non-secret v4 manifest suitable for
-  a GitHub Release. Every check/build/deployment/migration/smoke/MCP observation
-  has a closed collector-provenance record (evidence ID, UTC timestamp, response
-  digest, source SHA). Nested extra fields, local paths, provider-token shapes,
-  unverified backup metadata, non-canonical migrations, unproven Pilot `GO`,
-  and Mass `GO` are rejected. The exact pinned finding-ledger byte digest and
-  OPEN-P0 inventory are part of the content-addressed payload and cannot be
-  caller-substituted. JSDA acceptance specifically requires `/health/ready`,
-  HTTP 200, `product_ready:true`, `cutover:"V3_ACTIVE"`, the deployed source
-  SHA/version, and a response digest equal to its provenance response digest;
-  generic `/health` `PASS` evidence is rejected.
+- `build_release_evidence.py` — **publication PENDING / fail-closed**. The
+  former normalized JSON format is retained only as a private schema-regression
+  helper; collector names, UUIDs and digests supplied by a caller are not
+  evidence. The production builder and CLI always stop until a dedicated
+  release-observation authority signs the exact response bytes. The JSDA
+  `/health/ready` collector also needs a private Service Binding; the current
+  binding inventory has no such route. The exact PENDING/HOLD contract is
+  `specs/cloudflare/release_observation_authority.json`. A6 remains OPEN.
 
 Rollback-only production backup example (timestamps and final SHA must be the
 observed values):
@@ -106,9 +102,10 @@ uv run python scripts/encrypt_d1_backup.py encrypt \
   --release-source-sha 0123456789abcdef0123456789abcdef01234567
 ```
 
-The successful JSON output is the exact closed `backup` object accepted by
-`build_release_evidence.py`; it intentionally contains no local path. Re-run
-`verify` against the encrypted artifact before publishing the release manifest.
+The successful JSON output is a path-free rollback-backup candidate object.
+Re-run `verify` against the encrypted artifact, but do not treat that JSON as
+release evidence or publish a release manifest while the signed observation
+authority remains PENDING.
 - Paper CLIs (`run_paper_once.py`, `run_agents_paper_once.py`, `rebuild_paper_index.py`) are **deleted**. Paper runtime stays in `packages/research_runtime/paper_runtime/`.
 - `python -m mcp_servers.quant_data --list-tools` — Quant Data Access MCP smoke.
 - `export_ops_projection.py` — verified local Coverage/READY/B0 metadataを bounded
