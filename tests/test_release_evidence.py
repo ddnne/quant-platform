@@ -77,6 +77,7 @@ def payload() -> dict[str, object]:
         "table_count": 25,
     }
     database = {
+        "environment": "production",
         "name": release._GOVERNED_DATABASE_NAME,
         "id": release._GOVERNED_DATABASE_ID,
         "schema_profile": release._BACKUP_SCHEMA_PROFILE,

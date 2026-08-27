@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Restore, validate, encrypt, and re-verify a production Cloudflare D1 export.
+"""Restore, validate, encrypt, and re-verify a governed Cloudflare D1 export.
 
 The SQL export is never trusted merely because Wrangler produced a file. It is
 streamed into a temporary SQLite database, checked for integrity and the
@@ -28,6 +28,8 @@ import uuid
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
+from scripts.cloudflare_d1_migration_manifest import MANIFEST, build_manifest
+
 
 MAGIC = b"QPDBENC2"
 NONCE_BYTES = 12
@@ -36,8 +38,13 @@ KEY_BYTES = 32
 HEADER_LENGTH_BYTES = 4
 MAX_HEADER_BYTES = 64 * 1024
 CHUNK_BYTES = 4 * 1024 * 1024
-BACKUP_FORMAT = "quant-platform-d1-backup/aes-256-gcm-v2"
-SCHEMA_PROFILE = "quant-ingest-production/v1"
+BACKUP_FORMAT = "quant-platform-d1-backup/aes-256-gcm-v3"
+SCHEMA_PROFILES = {
+    "production": "quant-ingest-production/v1",
+    "staging": "quant-ingest-staging/v1",
+}
+# Compatibility aliases for production release-evidence callers.
+SCHEMA_PROFILE = SCHEMA_PROFILES["production"]
 GOVERNED_DATABASE_NAME = "quant-ingest"
 GOVERNED_DATABASE_ID = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -241,18 +248,52 @@ def _key_id(key: bytes) -> str:
     return "sha256:" + hashlib.sha256(key).hexdigest()
 
 
+def _governed_database(environment: str) -> dict[str, str]:
+    if environment not in SCHEMA_PROFILES:
+        raise ValueError("D1 backup environment must be production or staging")
+    generated = build_manifest()
+    rendered = json.dumps(generated, indent=2, sort_keys=False) + "\n"
+    try:
+        frozen = MANIFEST.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError("canonical D1 migration manifest is missing") from exc
+    if frozen != rendered:
+        raise ValueError("canonical D1 migration manifest is stale")
+    try:
+        binding = generated["targets"]["quant-ingest"]["environments"][
+            environment
+        ]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("canonical quant-ingest environment binding is missing") from exc
+    return {
+        "environment": environment,
+        "name": str(binding["database_name"]),
+        "id": str(binding["database_id"]),
+        "schema_profile": SCHEMA_PROFILES[environment],
+    }
+
+
 def _validate_database_identity(
-    *, database_name: str, database_id: str, release_source_sha: str
-) -> None:
-    if database_name != GOVERNED_DATABASE_NAME or database_id != GOVERNED_DATABASE_ID:
-        raise ValueError("D1 export identity is not the governed production database")
+    *,
+    environment: str,
+    database_name: str,
+    database_id: str,
+    release_source_sha: str,
+) -> dict[str, str]:
+    governed = _governed_database(environment)
+    if database_name != governed["name"] or database_id != governed["id"]:
+        raise ValueError(
+            f"D1 export identity is not the governed {environment} database"
+        )
     if not _SHA.fullmatch(release_source_sha):
         raise ValueError("release_source_sha must be a full lowercase Git SHA")
+    return governed
 
 
 def _restore_and_validate_export(
     source: Path,
     *,
+    environment: str,
     database_name: str,
     database_id: str,
     exported_at: str,
@@ -260,6 +301,7 @@ def _restore_and_validate_export(
     sqlite3_binary: str | None = None,
 ) -> tuple[dict[str, Any], str, int]:
     _validate_database_identity(
+        environment=environment,
         database_name=database_name,
         database_id=database_id,
         release_source_sha=release_source_sha,
@@ -376,6 +418,7 @@ def _restore_and_validate_export(
 
 def _header_payload(
     *,
+    environment: str,
     database_name: str,
     database_id: str,
     exported_at: str,
@@ -390,11 +433,12 @@ def _header_payload(
         "cipher": "AES-256-GCM",
         "key_id": key_id,
         "nonce": base64.b64encode(nonce).decode("ascii"),
-        "database": {
-            "name": database_name,
-            "id": database_id,
-            "schema_profile": SCHEMA_PROFILE,
-        },
+        "database": _validate_database_identity(
+            environment=environment,
+            database_name=database_name,
+            database_id=database_id,
+            release_source_sha=str(restore["source_sha"]),
+        ),
         "exported_at": exported_at,
         "restore": dict(restore),
         "plaintext_bytes": plaintext_bytes,
@@ -427,16 +471,17 @@ def _validate_authenticated_header(header: Any) -> Mapping[str, Any]:
         raise ValueError("encrypted backup nonce is invalid")
     database = header.get("database")
     if not isinstance(database, Mapping) or set(database) != {
+        "environment",
         "name",
         "id",
         "schema_profile",
     }:
         raise ValueError("encrypted backup database identity is invalid")
-    if (
-        database.get("name") != GOVERNED_DATABASE_NAME
-        or database.get("id") != GOVERNED_DATABASE_ID
-        or database.get("schema_profile") != SCHEMA_PROFILE
-    ):
+    try:
+        governed = _governed_database(str(database.get("environment") or ""))
+    except ValueError as exc:
+        raise ValueError("encrypted backup database identity is invalid") from exc
+    if dict(database) != governed:
         raise ValueError("encrypted backup database identity is invalid")
     _require_utc_timestamp(str(header.get("exported_at") or ""), "exported_at")
     restore = header.get("restore")
@@ -576,6 +621,7 @@ def encrypt_backup(
     target: Path,
     key_path: Path,
     *,
+    environment: str,
     database_name: str,
     database_id: str,
     exported_at: str,
@@ -593,6 +639,7 @@ def encrypt_backup(
     # leaves the public target pathname absent.
     restore, source_digest, source_bytes = _restore_and_validate_export(
         source,
+        environment=environment,
         database_name=database_name,
         database_id=database_id,
         exported_at=exported_at,
@@ -601,6 +648,7 @@ def encrypt_backup(
     )
     nonce = os.urandom(NONCE_BYTES)
     header = _header_payload(
+        environment=environment,
         database_name=database_name,
         database_id=database_id,
         exported_at=exported_at,
@@ -662,6 +710,9 @@ def main(argv: list[str] | None = None) -> int:
     encrypt.add_argument("source", type=Path)
     encrypt.add_argument("target", type=Path)
     encrypt.add_argument("--key", type=Path, required=True)
+    encrypt.add_argument(
+        "--environment", choices=tuple(SCHEMA_PROFILES), required=True
+    )
     encrypt.add_argument("--database-name", required=True)
     encrypt.add_argument("--database-id", required=True)
     encrypt.add_argument("--exported-at", required=True)
@@ -686,6 +737,7 @@ def main(argv: list[str] | None = None) -> int:
             args.source,
             args.target,
             args.key,
+            environment=args.environment,
             database_name=args.database_name,
             database_id=args.database_id,
             exported_at=args.exported_at,

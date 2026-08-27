@@ -96,7 +96,7 @@ _MCP_TOOL_NAMES = (
 _ACCEPTED_MCP_SCHEMA_DIGEST = (
     "sha256:dad7cd29ef002e76ee1f9802b8685a179f94fcbd0bb2e6df685858e41c1778d3"
 )
-_BACKUP_FORMAT = "quant-platform-d1-backup/aes-256-gcm-v2"
+_BACKUP_FORMAT = "quant-platform-d1-backup/aes-256-gcm-v3"
 _BACKUP_SCHEMA_PROFILE = "quant-ingest-production/v1"
 _GOVERNED_DATABASE_NAME = "quant-ingest"
 _GOVERNED_DATABASE_ID = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
@@ -550,7 +550,7 @@ def _validate_backup(payload: Mapping[str, Any]) -> None:
     database = _exact_mapping(
         backup["database"],
         "backup.database",
-        {"name", "id", "schema_profile"},
+        {"environment", "name", "id", "schema_profile"},
     )
     restore = _exact_mapping(
         backup["restore"],
@@ -579,7 +579,7 @@ def _validate_backup(payload: Mapping[str, Any]) -> None:
         or type(ciphertext_bytes) is not int
         or ciphertext_bytes <= plaintext_bytes
     ):
-        raise ValueError("backup must be a non-empty verified AES-256-GCM v2 artifact")
+        raise ValueError("backup must be a non-empty verified AES-256-GCM v3 artifact")
     _require_digest(backup["plaintext_digest"], "backup.plaintext_digest")
     _require_digest(backup["ciphertext_digest"], "backup.ciphertext_digest")
     _require_digest(
@@ -594,6 +594,7 @@ def _validate_backup(payload: Mapping[str, Any]) -> None:
     if len(nonce) != 12:
         raise ValueError("backup.nonce must be authenticated AES-GCM nonce")
     if database != {
+        "environment": "production",
         "name": _GOVERNED_DATABASE_NAME,
         "id": _GOVERNED_DATABASE_ID,
         "schema_profile": _BACKUP_SCHEMA_PROFILE,
