@@ -101,6 +101,12 @@ class ReadySnapshot:
     readiness_digest: str | None = None
     readiness_attestation_id: str | None = None
     readiness_bytes: bytes | None = None
+    artifact_digest: str | None = None
+    artifact_identity: tuple[int, ...] | None = None
+    manifest_identity: tuple[int, ...] | None = None
+    publication_identity: tuple[int, ...] | None = None
+    readiness_identity: tuple[int, ...] | None = None
+    publication_digest: str | None = None
 
     @property
     def committed_at(self) -> str:
@@ -1263,7 +1269,12 @@ def _bind_snapshot_candidate_publishers(
     engine: Callable[..., ReadySnapshot],
     exact_four_impl: Callable[..., Any],
 ) -> tuple[Callable[..., ReadySnapshot], Callable[..., Any]]:
-    """Close the generic engine over one fixture and one governed product API."""
+    """Bind fixture and product wrappers around a non-authoritative engine.
+
+    Python closure introspection is not a security boundary and can recover
+    ``engine``.  Safety instead comes from the fact that the engine cannot mint
+    the isolated authority signature required by the production reader.
+    """
 
     def fixture_candidate(
         staging_db: str | Path,
@@ -1388,32 +1399,53 @@ def _data_snapshot_id(db_path: str | Path, *, immutable: bool) -> str:
 
     conn = _connect_readonly(path, immutable=immutable)
     try:
-        conn.execute("BEGIN")
-        tables = {
-            str(row["name"])
-            for row in conn.execute(
-                "SELECT name FROM sqlite_schema WHERE type = 'table'"
-            )
-        }
-        manifest_state = _manifest_snapshot_state(conn, tables)
-        if manifest_state is not None:
-            return str(manifest_state["manifest_id"])
-        else:
-            watermarks = _watermark_state(conn, tables)
-            state = {
-                "format": DATA_SNAPSHOT_FORMAT,
-                "schema": _schema_state(conn),
-                "watermarks": watermarks,
-                "validation": _validation_state(conn, tables),
-            }
-            if not watermarks:
-                state["fallback"] = {
-                    "fact_tables": _fact_table_state(conn, tables),
-                    "main_file": _main_file_state(path),
-                }
+        return _data_snapshot_id_from_open_connection(
+            conn,
+            main_file_state=_main_file_state(path),
+        )
     finally:
         conn.close()
 
+
+def _data_snapshot_id_from_open_connection(
+    conn: sqlite3.Connection,
+    *,
+    main_file_state: Mapping[str, int] | None = None,
+) -> str:
+    """Derive identity from an already descriptor-pinned SQLite connection.
+
+    The production READY reader uses this form so the logical identity and
+    embedded manifest are measured from the same inode as the artifact hash.
+    ``main_file_state`` is needed only for legacy databases without watermarks;
+    governed READY artifacts always carry an embedded manifest.
+    """
+
+    conn.execute("BEGIN")
+    tables = {
+        str(row["name"])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_schema WHERE type = 'table'"
+        )
+    }
+    manifest_state = _manifest_snapshot_state(conn, tables)
+    if manifest_state is not None:
+        return str(manifest_state["manifest_id"])
+    watermarks = _watermark_state(conn, tables)
+    state: dict[str, Any] = {
+        "format": DATA_SNAPSHOT_FORMAT,
+        "schema": _schema_state(conn),
+        "watermarks": watermarks,
+        "validation": _validation_state(conn, tables),
+    }
+    if not watermarks:
+        if main_file_state is None:
+            raise RuntimeError(
+                "descriptor-pinned snapshot identity has no main-file state"
+            )
+        state["fallback"] = {
+            "fact_tables": _fact_table_state(conn, tables),
+            "main_file": dict(main_file_state),
+        }
     return _canonical_digest(state)
 
 

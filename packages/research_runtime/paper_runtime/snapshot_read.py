@@ -11,73 +11,217 @@ import json
 import os
 import sqlite3
 import stat
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterator
 from urllib.parse import quote
 
 if TYPE_CHECKING:
     from paper_runtime.snapshot import ReadySnapshot
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return "sha256:" + digest.hexdigest()
+_READY_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024 * 1024
+_READY_CONTROL_MAX_BYTES = 4 * 1024 * 1024
+_READY_IO_BUDGET_SECONDS = 15 * 60
+_READ_CHUNK_BYTES = 1024 * 1024
 
 
-def _read_immutable_regular_file(path: Path, *, label: str) -> bytes:
-    """Read one exact non-symlink, non-writable file identity."""
+@dataclass(frozen=True, slots=True)
+class _ImmutableFileIdentity:
+    device: int
+    inode: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    owner_uid: int
+    mode: int
+    links: int
 
+    @classmethod
+    def from_stat(cls, metadata: os.stat_result) -> _ImmutableFileIdentity:
+        return cls(
+            device=metadata.st_dev,
+            inode=metadata.st_ino,
+            size=metadata.st_size,
+            mtime_ns=metadata.st_mtime_ns,
+            ctime_ns=metadata.st_ctime_ns,
+            owner_uid=metadata.st_uid,
+            mode=stat.S_IMODE(metadata.st_mode),
+            links=metadata.st_nlink,
+        )
+
+    def as_tuple(self) -> tuple[int, ...]:
+        return (
+            self.device,
+            self.inode,
+            self.size,
+            self.mtime_ns,
+            self.ctime_ns,
+            self.owner_uid,
+            self.mode,
+            self.links,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _PinnedRegularFile:
+    fd: int
+    path: Path
+    identity: _ImmutableFileIdentity
+    deadline_monotonic: float
+
+
+def _require_safe_parent(path: Path, *, label: str) -> os.stat_result:
+    try:
+        parent = os.stat(path.parent, follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"{label} does not exist: {path}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"{label} parent cannot be inspected") from exc
+    if (
+        not stat.S_ISDIR(parent.st_mode)
+        or stat.S_IMODE(parent.st_mode) & (stat.S_IWGRP | stat.S_IWOTH)
+    ):
+        raise RuntimeError(f"{label} parent is not a protected directory")
+    return parent
+
+
+@contextmanager
+def _open_immutable_regular_file(
+    path: Path,
+    *,
+    label: str,
+    max_bytes: int,
+    expected_identity: tuple[int, ...] | None = None,
+    deadline_monotonic: float | None = None,
+) -> Iterator[_PinnedRegularFile]:
+    """Pin one protected file and reject identity drift before releasing it."""
+
+    parent = _require_safe_parent(path, label=label)
     nofollow = getattr(os, "O_NOFOLLOW", None)
     if nofollow is None:
         raise RuntimeError(f"{label} no-follow support is unavailable")
+    flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
     try:
-        fd = os.open(path, os.O_RDONLY | nofollow)
+        fd = os.open(path, flags)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"{label} does not exist: {path}") from exc
     except OSError as exc:
         raise RuntimeError(f"{label} cannot be opened without following links") from exc
     try:
         before = os.fstat(fd)
+        identity = _ImmutableFileIdentity.from_stat(before)
         if (
             not stat.S_ISREG(before.st_mode)
-            or before.st_nlink != 1
-            or before.st_size <= 0
-            or before.st_size > 1024 * 1024
-            or before.st_mode
-            & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
+            or identity.links != 1
+            or identity.size <= 0
+            or identity.size > max_bytes
+            or identity.mode not in {0o400, 0o440, 0o444}
+            or identity.owner_uid != parent.st_uid
         ):
             raise RuntimeError(f"{label} is not an immutable regular file")
-        chunks: list[bytes] = []
-        while True:
-            chunk = os.read(fd, 1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        after = os.fstat(fd)
-        before_identity = (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_mode,
+        if expected_identity is not None and identity.as_tuple() != expected_identity:
+            raise RuntimeError(f"{label} identity drifted after validation")
+        deadline = (
+            time.monotonic() + _READY_IO_BUDGET_SECONDS
+            if deadline_monotonic is None
+            else deadline_monotonic
         )
-        after_identity = (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_mode,
-        )
-        if before_identity != after_identity:
-            raise RuntimeError(f"{label} changed while it was read")
-        return b"".join(chunks)
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"{label} verification deadline exceeded")
+        yield _PinnedRegularFile(fd, path, identity, deadline)
+        if _ImmutableFileIdentity.from_stat(os.fstat(fd)) != identity:
+            raise RuntimeError(f"{label} changed while it was pinned")
     finally:
         os.close(fd)
 
 
+def _hash_pinned_file(pinned: _PinnedRegularFile) -> str:
+    digest = hashlib.sha256()
+    offset = 0
+    while offset < pinned.identity.size:
+        if time.monotonic() >= pinned.deadline_monotonic:
+            raise RuntimeError("READY artifact verification deadline exceeded")
+        chunk = os.pread(
+            pinned.fd,
+            min(_READ_CHUNK_BYTES, pinned.identity.size - offset),
+            offset,
+        )
+        if not chunk:
+            raise RuntimeError("READY artifact changed while hashing")
+        digest.update(chunk)
+        offset += len(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def _read_pinned_file(pinned: _PinnedRegularFile) -> bytes:
+    chunks: list[bytes] = []
+    offset = 0
+    while offset < pinned.identity.size:
+        if time.monotonic() >= pinned.deadline_monotonic:
+            raise RuntimeError("READY control-file verification deadline exceeded")
+        chunk = os.pread(
+            pinned.fd,
+            min(_READ_CHUNK_BYTES, pinned.identity.size - offset),
+            offset,
+        )
+        if not chunk:
+            raise RuntimeError("READY control file changed while it was read")
+        chunks.append(chunk)
+        offset += len(chunk)
+    return b"".join(chunks)
+
+
+def _read_immutable_regular_file_with_identity(
+    path: Path,
+    *,
+    label: str,
+    expected_identity: tuple[int, ...] | None = None,
+) -> tuple[bytes, tuple[int, ...]]:
+    with _open_immutable_regular_file(
+        path,
+        label=label,
+        max_bytes=_READY_CONTROL_MAX_BYTES,
+        expected_identity=expected_identity,
+    ) as pinned:
+        return _read_pinned_file(pinned), pinned.identity.as_tuple()
+
+
+def _read_immutable_regular_file(path: Path, *, label: str) -> bytes:
+    """Read one exact non-symlink, non-writable file identity."""
+    raw, _identity = _read_immutable_regular_file_with_identity(
+        path,
+        label=label,
+    )
+    return raw
+
+
+def _open_pinned_sqlite(pinned: _PinnedRegularFile) -> sqlite3.Connection:
+    """Open SQLite through the already-pinned inode, never through its name."""
+
+    descriptor_paths = (
+        Path(f"/dev/fd/{pinned.fd}"),
+        Path(f"/proc/self/fd/{pinned.fd}"),
+    )
+    descriptor_path = next(
+        (candidate for candidate in descriptor_paths if candidate.exists()),
+        None,
+    )
+    if descriptor_path is None:
+        raise RuntimeError("READY descriptor-backed SQLite access is unavailable")
+    uri = "file:" + quote(str(descriptor_path)) + "?mode=ro&immutable=1"
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error as exc:
+        raise RuntimeError("READY descriptor-backed SQLite open failed") from exc
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def _embedded_research_manifest(
-    artifact_path: Path,
+    conn: sqlite3.Connection,
     snapshot_id: str,
     *,
     expected_format: str,
@@ -90,13 +234,7 @@ def _embedded_research_manifest(
     boundary for every outer field, including volatile ordering fields such as
     ``committed_at``.
     """
-    uri = (
-        "file:"
-        + quote(str(artifact_path.resolve()))
-        + "?mode=ro&immutable=1"
-    )
     try:
-        conn = sqlite3.connect(uri, uri=True)
         rows = conn.execute(
             "SELECT format, manifest_json FROM local_snapshot_manifests "
             "WHERE snapshot_id=?",
@@ -106,9 +244,6 @@ def _embedded_research_manifest(
         raise RuntimeError(
             "READY snapshot has no readable embedded research manifest"
         ) from exc
-    finally:
-        if "conn" in locals():
-            conn.close()
     if len(rows) != 1 or rows[0][0] != expected_format:
         raise RuntimeError(
             "READY snapshot embedded research manifest identity is invalid"
@@ -138,7 +273,7 @@ def _describe_snapshot_for_scope(
         ReadySnapshot,
         _artifact_stem,
         _canonical_digest,
-        _immutable_data_snapshot_id,
+        _data_snapshot_id_from_open_connection,
         _research_manifest_digest,
         _research_manifest_id,
         RESEARCH_SNAPSHOT_PUBLICATION_FORMAT,
@@ -148,13 +283,15 @@ def _describe_snapshot_for_scope(
     stem = _artifact_stem(snapshot_id)
     manifest_path = directory / f"{stem}.manifest.json"
     publication_path = directory / f"{stem}.publication.json"
-    if not publication_path.is_file():
-        raise FileNotFoundError(
-            f"snapshot publication marker does not exist: {publication_path}"
-        )
     try:
-        publication = json.loads(publication_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        publication_bytes, publication_identity = (
+            _read_immutable_regular_file_with_identity(
+                publication_path,
+                label="snapshot publication marker",
+            )
+        )
+        publication = json.loads(publication_bytes)
+    except json.JSONDecodeError as exc:
         raise RuntimeError(
             f"invalid snapshot publication marker: {publication_path}"
         ) from exc
@@ -191,12 +328,18 @@ def _describe_snapshot_for_scope(
         != _canonical_digest(publication_body)
     ):
         raise RuntimeError("snapshot publication marker is invalid")
-    if not manifest_path.is_file():
-        raise FileNotFoundError(f"snapshot manifest does not exist: {manifest_path}")
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        manifest_bytes, manifest_identity = (
+            _read_immutable_regular_file_with_identity(
+                manifest_path,
+                label="snapshot manifest",
+            )
+        )
+        manifest = json.loads(manifest_bytes)
+    except json.JSONDecodeError as exc:
         raise RuntimeError(f"invalid snapshot manifest: {manifest_path}") from exc
+    if not isinstance(manifest, dict):
+        raise RuntimeError("snapshot manifest is not an object")
     if manifest.get("format") != RESEARCH_SNAPSHOT_MANIFEST_FORMAT:
         raise RuntimeError("unsupported research snapshot manifest format")
     if manifest.get("state") != "READY" or manifest.get("snapshot_id") != snapshot_id:
@@ -215,125 +358,132 @@ def _describe_snapshot_for_scope(
     if artifact_name != f"{stem}.sqlite":
         raise RuntimeError("research snapshot artifact name mismatch")
     artifact_path = directory / artifact_name
-    if not artifact_path.is_file():
-        raise FileNotFoundError(f"snapshot artifact does not exist: {artifact_path}")
-    mode = artifact_path.stat().st_mode
-    if mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
-        raise RuntimeError("READY snapshot artifact is writable")
-    if manifest_path.stat().st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
-        raise RuntimeError("READY snapshot manifest is writable")
-    if publication_path.stat().st_mode & (
-        stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
-    ):
-        raise RuntimeError("READY snapshot publication marker is writable")
-    artifact_digest = _file_sha256(artifact_path)
-    if artifact_digest != publication.get("artifact_digest"):
-        raise RuntimeError("READY snapshot artifact digest mismatch")
-    embedded_manifest = _embedded_research_manifest(
+    with _open_immutable_regular_file(
         artifact_path,
-        snapshot_id,
-        expected_format=RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
-    )
-    if embedded_manifest != manifest:
-        raise RuntimeError(
-            "external READY snapshot manifest does not match embedded manifest"
-        )
-    attestation_name = publication.get("readiness_attestation")
-    attestation_digest = publication.get("readiness_attestation_digest")
-    attestation_id = publication.get("readiness_attestation_id")
-    attestation_path: Path | None = None
-    attestation_bytes: bytes | None = None
-    if publication_scope == "PRODUCTION":
-        if not isinstance(attestation_name, str) or not attestation_name:
-            raise RuntimeError("production READY publication has no attestation")
-        if (
-            not isinstance(attestation_digest, str)
-            or not attestation_digest.startswith("sha256:")
-            or len(attestation_digest) != 71
-        ):
-            raise RuntimeError("production READY attestation digest is invalid")
-        if (
-            type(attestation_id) is not str
-            or not attestation_id
-            or Path(attestation_id).name != attestation_id
-            or attestation_name
-            != f"{stem}.{attestation_id}.readiness.json"
-        ):
-            raise RuntimeError(
-                "production READY marker does not bind the exact attestation id"
+        label="READY snapshot artifact",
+        max_bytes=_READY_ARTIFACT_MAX_BYTES,
+    ) as artifact:
+        artifact_digest = _hash_pinned_file(artifact)
+        if artifact_digest != publication.get("artifact_digest"):
+            raise RuntimeError("READY snapshot artifact digest mismatch")
+        artifact_conn = _open_pinned_sqlite(artifact)
+        try:
+            embedded_manifest = _embedded_research_manifest(
+                artifact_conn,
+                snapshot_id,
+                expected_format=RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
             )
-    if attestation_name is not None:
-        if (
-            not isinstance(attestation_name, str)
-            or Path(attestation_name).name != attestation_name
-        ):
-            raise RuntimeError("READY attestation path is invalid")
-        attestation_path = directory / attestation_name
-        attestation_bytes = _read_immutable_regular_file(
-            attestation_path,
-            label="READY attestation",
-        )
-        digest = hashlib.sha256(attestation_bytes).hexdigest()
-        if attestation_digest != "sha256:" + digest:
-            raise RuntimeError("READY attestation digest mismatch")
-        if publication_scope == "PRODUCTION":
-            try:
-                from paper_runtime.readiness_attestation import (
-                    verify_pinned_pilot_snapshot_attestation,
-                )
-
-                nested_manifest = manifest.get("ready_manifest")
-                if not isinstance(nested_manifest, dict):
-                    raise RuntimeError(
-                        "production READY snapshot has no embedded ReadyManifest"
-                    )
-                verified_attestation = verify_pinned_pilot_snapshot_attestation(
-                    attestation_bytes,
-                    snapshot_id=snapshot_id,
-                    ready_manifest=nested_manifest,
-                    immutable_db_digest=artifact_digest,
-                    expected_environment="production",
-                )
-                if verified_attestation.get("attestation_id") != attestation_id:
-                    raise RuntimeError(
-                        "production READY attestation id does not match marker"
-                    )
-            except Exception as exc:
+            if embedded_manifest != manifest:
                 raise RuntimeError(
-                    "production READY attestation is not trusted"
-                ) from exc
-    elif attestation_digest is not None or attestation_id is not None:
-        raise RuntimeError("READY attestation identity has no artifact")
-    if publication_scope == "FIXTURE" and (
-        attestation_name is not None
-        or attestation_digest is not None
-        or attestation_id is not None
-    ):
-        raise RuntimeError("fixture publication cannot carry READY authority")
-    # Product data-snapshot identity reopens the production v2 Coverage proof.
-    # Fixture publications intentionally have no such authority; their file,
-    # external/embedded manifest, and publication-marker digests were already
-    # checked above through the tests-only scope.
-    if (
-        publication_scope == "PRODUCTION"
-        and _immutable_data_snapshot_id(artifact_path) != snapshot_id
-    ):
-        raise RuntimeError("embedded snapshot manifest does not match sidecar")
-    return ReadySnapshot(
-        snapshot_id,
-        artifact_path,
-        manifest_path,
-        manifest,
-        publication_path=publication_path,
-        readiness_path=attestation_path,
-        readiness_digest=(
-            str(attestation_digest) if attestation_digest is not None else None
-        ),
-        readiness_attestation_id=(
-            str(attestation_id) if attestation_id is not None else None
-        ),
-        readiness_bytes=attestation_bytes,
-    )
+                    "external READY snapshot manifest does not match embedded manifest"
+                )
+            if (
+                publication_scope == "PRODUCTION"
+                and _data_snapshot_id_from_open_connection(artifact_conn)
+                != snapshot_id
+            ):
+                raise RuntimeError(
+                    "embedded snapshot manifest does not match sidecar"
+                )
+        finally:
+            artifact_conn.close()
+
+        attestation_name = publication.get("readiness_attestation")
+        attestation_digest = publication.get("readiness_attestation_digest")
+        attestation_id = publication.get("readiness_attestation_id")
+        attestation_path: Path | None = None
+        attestation_bytes: bytes | None = None
+        attestation_identity: tuple[int, ...] | None = None
+        if publication_scope == "PRODUCTION":
+            if not isinstance(attestation_name, str) or not attestation_name:
+                raise RuntimeError("production READY publication has no attestation")
+            if (
+                not isinstance(attestation_digest, str)
+                or not attestation_digest.startswith("sha256:")
+                or len(attestation_digest) != 71
+            ):
+                raise RuntimeError("production READY attestation digest is invalid")
+            if (
+                type(attestation_id) is not str
+                or not attestation_id
+                or Path(attestation_id).name != attestation_id
+                or attestation_name
+                != f"{stem}.{attestation_id}.readiness.json"
+            ):
+                raise RuntimeError(
+                    "production READY marker does not bind the exact attestation id"
+                )
+        if attestation_name is not None:
+            if (
+                not isinstance(attestation_name, str)
+                or Path(attestation_name).name != attestation_name
+            ):
+                raise RuntimeError("READY attestation path is invalid")
+            attestation_path = directory / attestation_name
+            attestation_bytes, attestation_identity = (
+                _read_immutable_regular_file_with_identity(
+                    attestation_path,
+                    label="READY attestation",
+                )
+            )
+            digest = hashlib.sha256(attestation_bytes).hexdigest()
+            if attestation_digest != "sha256:" + digest:
+                raise RuntimeError("READY attestation digest mismatch")
+            if publication_scope == "PRODUCTION":
+                try:
+                    from paper_runtime.readiness_attestation import (
+                        verify_pinned_pilot_snapshot_attestation,
+                    )
+
+                    nested_manifest = manifest.get("ready_manifest")
+                    if not isinstance(nested_manifest, dict):
+                        raise RuntimeError(
+                            "production READY snapshot has no embedded ReadyManifest"
+                        )
+                    verified_attestation = verify_pinned_pilot_snapshot_attestation(
+                        attestation_bytes,
+                        snapshot_id=snapshot_id,
+                        ready_manifest=nested_manifest,
+                        immutable_db_digest=artifact_digest,
+                        expected_environment="production",
+                    )
+                    if verified_attestation.get("attestation_id") != attestation_id:
+                        raise RuntimeError(
+                            "production READY attestation id does not match marker"
+                        )
+                except Exception as exc:
+                    raise RuntimeError(
+                        "production READY attestation is not trusted"
+                    ) from exc
+        elif attestation_digest is not None or attestation_id is not None:
+            raise RuntimeError("READY attestation identity has no artifact")
+        if publication_scope == "FIXTURE" and (
+            attestation_name is not None
+            or attestation_digest is not None
+            or attestation_id is not None
+        ):
+            raise RuntimeError("fixture publication cannot carry READY authority")
+        return ReadySnapshot(
+            snapshot_id,
+            artifact_path,
+            manifest_path,
+            manifest,
+            publication_path=publication_path,
+            readiness_path=attestation_path,
+            readiness_digest=(
+                str(attestation_digest) if attestation_digest is not None else None
+            ),
+            readiness_attestation_id=(
+                str(attestation_id) if attestation_id is not None else None
+            ),
+            readiness_bytes=attestation_bytes,
+            artifact_digest=artifact_digest,
+            artifact_identity=artifact.identity.as_tuple(),
+            manifest_identity=manifest_identity,
+            publication_identity=publication_identity,
+            readiness_identity=attestation_identity,
+            publication_digest=str(publication["publication_digest"]),
+        )
 
 
 def describe_snapshot(
@@ -419,13 +569,19 @@ def _latest_ready_snapshot_for_scope(
     """Resolve the newest monotonic publication for one exact scope."""
     directory = Path(snapshot_dir).resolve()
     pointer_path = directory / "latest-ready.json"
-    if not pointer_path.is_file():
+    try:
+        pointer_bytes, _pointer_identity = (
+            _read_immutable_regular_file_with_identity(
+                pointer_path,
+                label="latest READY pointer",
+            )
+        )
+        pointer = json.loads(pointer_bytes)
+    except FileNotFoundError as exc:
         raise FileNotFoundError(
             f"no READY research snapshot: committed pointer missing under {directory}"
-        )
-    try:
-        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        ) from exc
+    except json.JSONDecodeError as exc:
         raise RuntimeError("latest READY pointer is invalid") from exc
     if (
         not isinstance(pointer, dict)
@@ -450,22 +606,13 @@ def _latest_ready_snapshot_for_scope(
         pointer["snapshot_id"],
         publication_scope=publication_scope,
     )
-    publication_path = directory / (
-        pointer["snapshot_id"].replace(":", "_", 1) + ".publication.json"
-    )
-    publication = json.loads(publication_path.read_text(encoding="utf-8"))
     if (
         pointer.get("manifest") != ready.manifest_path.name
         or pointer.get("committed_at") != ready.committed_at
         or pointer.get("change_seq") != ready.manifest.get("change_seq")
-        or pointer.get("publication_digest")
-        != publication.get("publication_digest")
+        or pointer.get("publication_digest") != ready.publication_digest
     ):
         raise RuntimeError("latest READY pointer does not bind its snapshot")
-    if pointer_path.stat().st_mode & (
-        stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
-    ):
-        raise RuntimeError("latest READY pointer is writable")
     candidates = _list_ready_snapshots_for_scope(
         directory,
         publication_scope=publication_scope,
@@ -496,16 +643,54 @@ def _latest_fixture_snapshot(snapshot_dir: str | Path) -> ReadySnapshot:
 def open_ready_snapshot(
     snapshot_dir: str | Path, snapshot_id: str | None = None
 ) -> sqlite3.Connection:
-    """Open a verified READY artifact with immutable SQLite URI flags."""
+    """Open the exact inode verified by the production READY reader."""
     ready = (
         latest_ready_snapshot(snapshot_dir)
         if snapshot_id is None
         else describe_snapshot(snapshot_dir, snapshot_id)
     )
-    uri = "file:" + quote(str(ready.db_path)) + "?mode=ro&immutable=1"
-    conn = sqlite3.connect(uri, uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    if (
+        type(ready.artifact_digest) is not str
+        or ready.artifact_identity is None
+    ):
+        raise RuntimeError("READY snapshot has no pinned artifact identity")
+    return _open_verified_snapshot_connection(
+        ready,
+        label="READY snapshot artifact",
+    )
+
+
+def _open_verified_snapshot_connection(
+    ready: ReadySnapshot,
+    *,
+    label: str,
+) -> sqlite3.Connection:
+    """Reopen, remeasure, and transfer one pinned inode to SQLite."""
+
+    conn: sqlite3.Connection | None = None
+    try:
+        with _open_immutable_regular_file(
+            ready.db_path,
+            label=label,
+            max_bytes=_READY_ARTIFACT_MAX_BYTES,
+            expected_identity=ready.artifact_identity,
+        ) as artifact:
+            if _hash_pinned_file(artifact) != ready.artifact_digest:
+                raise RuntimeError(
+                    f"{label} digest drifted after validation"
+                )
+            # SQLite opens /dev/fd or /proc/self/fd while ``artifact`` is
+            # alive. Its own descriptor remains on the pinned inode after the
+            # context closes. A final hash and fstat reject mutation or rename
+            # during descriptor transfer.
+            conn = _open_pinned_sqlite(artifact)
+            if _hash_pinned_file(artifact) != ready.artifact_digest:
+                raise RuntimeError(f"{label} changed during SQLite open")
+        return conn
+    except Exception:
+        if conn is not None:
+            conn.close()
+        raise
 
 
 def _open_fixture_snapshot(
@@ -516,7 +701,12 @@ def _open_fixture_snapshot(
         if snapshot_id is None
         else _describe_fixture_snapshot(snapshot_dir, snapshot_id)
     )
-    uri = "file:" + quote(str(ready.db_path)) + "?mode=ro&immutable=1"
-    conn = sqlite3.connect(uri, uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    if (
+        type(ready.artifact_digest) is not str
+        or ready.artifact_identity is None
+    ):
+        raise RuntimeError("fixture snapshot has no pinned artifact identity")
+    return _open_verified_snapshot_connection(
+        ready,
+        label="fixture snapshot artifact",
+    )

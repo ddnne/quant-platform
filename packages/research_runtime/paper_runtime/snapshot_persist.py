@@ -9,11 +9,18 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+
+_READY_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024 * 1024
+_READY_COPY_FREE_SPACE_MARGIN_BYTES = 64 * 1024 * 1024
+_READY_COPY_BUDGET_SECONDS = 15 * 60
 
 
 def _atomic_json(path: Path, payload: dict[str, Any], *, mode: int) -> None:
@@ -54,9 +61,32 @@ def _atomic_bytes(path: Path, payload: bytes, *, mode: int) -> None:
 
 
 def _copy_sqlite(source: sqlite3.Connection, target_path: Path) -> None:
+    page_count = int(source.execute("PRAGMA page_count").fetchone()[0])
+    page_size = int(source.execute("PRAGMA page_size").fetchone()[0])
+    expected_bytes = page_count * page_size
+    if expected_bytes <= 0 or expected_bytes > _READY_ARTIFACT_MAX_BYTES:
+        raise RuntimeError("READY SQLite source exceeds the fixed artifact bound")
+    free = shutil.disk_usage(target_path.parent).free
+    if free < expected_bytes + _READY_COPY_FREE_SPACE_MARGIN_BYTES:
+        raise RuntimeError("READY snapshot destination has insufficient free space")
+    deadline = time.monotonic() + _READY_COPY_BUDGET_SECONDS
+
+    def require_copy_budget(
+        _status: int,
+        _remaining: int,
+        _total: int,
+    ) -> None:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("READY SQLite copy deadline exceeded")
+
     target = sqlite3.connect(str(target_path))
     try:
-        source.backup(target)
+        source.backup(
+            target,
+            pages=1024,
+            progress=require_copy_budget,
+            sleep=0.0,
+        )
     finally:
         target.close()
 

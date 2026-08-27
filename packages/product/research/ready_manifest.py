@@ -621,9 +621,9 @@ class VerifiedPilotReadyPublication:
     readiness_path: Path
 
     def __post_init__(self) -> None:
-        from paper_runtime.snapshot import ReadySnapshot, _file_sha256
+        from paper_runtime.snapshot import ReadySnapshot
         from paper_runtime.snapshot_read import (
-            _read_immutable_regular_file,
+            _read_immutable_regular_file_with_identity,
             describe_snapshot,
         )
 
@@ -652,6 +652,13 @@ class VerifiedPilotReadyPublication:
             reopened.db_path != self.snapshot.db_path
             or reopened.manifest_path != self.snapshot.manifest_path
             or reopened.manifest != self.snapshot.manifest
+            or reopened.artifact_digest != self.snapshot.artifact_digest
+            or reopened.artifact_identity != self.snapshot.artifact_identity
+            or reopened.manifest_identity != self.snapshot.manifest_identity
+            or reopened.publication_identity
+            != self.snapshot.publication_identity
+            or reopened.readiness_identity != self.snapshot.readiness_identity
+            or reopened.publication_digest != self.snapshot.publication_digest
         ):
             raise MassResearchDisabledError(
                 "caller snapshot differs from independently reopened publication"
@@ -686,11 +693,27 @@ class VerifiedPilotReadyPublication:
         if (
             reloaded.to_dict() != self.readiness.to_dict()
             or reloaded.attestation_id != marker_attestation_id
-            or self.readiness.immutable_db_digest != _file_sha256(reopened.db_path)
+            or self.readiness.immutable_db_digest != reopened.artifact_digest
+            or type(reopened.readiness_identity) is not tuple
             or path.parent.resolve() != reopened.db_path.parent.resolve()
-            or _read_immutable_regular_file(path, label="READY attestation")
-            != marker_bytes
-            or path.stat().st_mode & 0o222
+        ):
+            raise MassResearchDisabledError(
+                "published snapshot/readiness immutable binding mismatch"
+            )
+        try:
+            reloaded_bytes, reloaded_identity = (
+                _read_immutable_regular_file_with_identity(
+                    path,
+                    label="READY attestation",
+                    expected_identity=reopened.readiness_identity,
+                )
+            )
+        except Exception as exc:
+            raise MassResearchDisabledError(
+                "published snapshot/readiness path drifted after validation"
+            ) from exc
+        if reloaded_bytes != marker_bytes or (
+            reloaded_identity != reopened.readiness_identity
         ):
             raise MassResearchDisabledError(
                 "published snapshot/readiness immutable binding mismatch"

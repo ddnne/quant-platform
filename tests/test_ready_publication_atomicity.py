@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 import paper_runtime.snapshot as snapshot_module
+import paper_runtime.snapshot_read as snapshot_read_module
 from data_contracts.coverage import coverage_policy_binding
 from paper_runtime.snapshot import SnapshotRejected
 from paper_runtime.snapshot_coverage_proof import (
@@ -46,6 +48,109 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return "sha256:" + digest.hexdigest()
+
+
+def _marker_database(path: Path, marker: str) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("CREATE TABLE marker(value TEXT NOT NULL)")
+        conn.execute("INSERT INTO marker(value) VALUES (?)", (marker,))
+        conn.commit()
+    finally:
+        conn.close()
+    path.chmod(0o444)
+
+
+def _measured_ready_artifact(path: Path) -> snapshot_module.ReadySnapshot:
+    snapshot_id = "sha256:" + "ab" * 32
+    manifest_path = path.with_suffix(".manifest.json")
+    manifest_path.write_text("{}\n", encoding="utf-8")
+    manifest_path.chmod(0o444)
+    with snapshot_read_module._open_immutable_regular_file(
+        path,
+        label="READY snapshot artifact",
+        max_bytes=snapshot_read_module._READY_ARTIFACT_MAX_BYTES,
+    ) as pinned:
+        digest = snapshot_read_module._hash_pinned_file(pinned)
+        identity = pinned.identity.as_tuple()
+    return snapshot_module.ReadySnapshot(
+        snapshot_id,
+        path,
+        manifest_path,
+        {},
+        artifact_digest=digest,
+        artifact_identity=identity,
+    )
+
+
+def test_open_ready_snapshot_rejects_same_path_swap_after_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot_dir = tmp_path / "snapshots"
+    snapshot_dir.mkdir()
+    artifact = snapshot_dir / "verified.sqlite"
+    replacement = snapshot_dir / "attacker.sqlite"
+    _marker_database(artifact, "verified-A")
+    _marker_database(replacement, "attacker-B")
+    ready = _measured_ready_artifact(artifact)
+
+    def describe_then_swap(_directory, _snapshot_id):
+        os.replace(replacement, artifact)
+        return ready
+
+    monkeypatch.setattr(
+        snapshot_read_module,
+        "describe_snapshot",
+        describe_then_swap,
+    )
+    with pytest.raises(RuntimeError, match="identity drifted after validation"):
+        snapshot_read_module.open_ready_snapshot(
+            snapshot_dir,
+            ready.snapshot_id,
+        )
+
+
+def test_open_ready_snapshot_rejects_path_swap_during_descriptor_transfer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot_dir = tmp_path / "snapshots"
+    snapshot_dir.mkdir()
+    artifact = snapshot_dir / "verified.sqlite"
+    replacement = snapshot_dir / "attacker.sqlite"
+    displaced = snapshot_dir / "verified.displaced.sqlite"
+    _marker_database(artifact, "verified-A")
+    _marker_database(replacement, "attacker-B")
+    ready = _measured_ready_artifact(artifact)
+    monkeypatch.setattr(
+        snapshot_read_module,
+        "describe_snapshot",
+        lambda _directory, _snapshot_id: ready,
+    )
+    real_hash = snapshot_read_module._hash_pinned_file
+    swapped = False
+
+    def hash_then_swap(pinned):
+        nonlocal swapped
+        digest = real_hash(pinned)
+        if not swapped:
+            os.replace(artifact, displaced)
+            os.replace(replacement, artifact)
+            swapped = True
+        return digest
+
+    monkeypatch.setattr(snapshot_read_module, "_hash_pinned_file", hash_then_swap)
+    with pytest.raises(RuntimeError, match="changed while it was pinned"):
+        snapshot_read_module.open_ready_snapshot(
+            snapshot_dir,
+            ready.snapshot_id,
+        )
+    direct = sqlite3.connect(artifact)
+    try:
+        assert direct.execute("SELECT value FROM marker").fetchone()[0] == "attacker-B"
+    finally:
+        direct.close()
 
 
 def _replace_fixture_with_coherent_exact_four_artifact(ready, binding):
@@ -415,7 +520,7 @@ def test_production_reader_binds_nested_ready_manifest_and_artifact_bytes(
     )
     with pytest.raises(
         MassResearchDisabledError,
-        match="exact readiness bytes",
+        match="caller snapshot differs",
     ):
         VerifiedPilotReadyPublication(
             snapshot=forged_snapshot,

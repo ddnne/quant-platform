@@ -16,9 +16,11 @@ import fcntl
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import stat
 import tempfile
+import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -58,6 +60,8 @@ from scripts.local_authority_service import (
 )
 
 _READY_TTL_SECONDS = 60 * 60
+_READY_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024 * 1024
+_READY_COPY_FREE_SPACE_MARGIN_BYTES = 64 * 1024 * 1024
 OWNED_MIRROR_EVIDENCE_FORMAT = "d1-owned-frozen-mirror/v1"
 _OWNED_MIRROR_FIELDS = {
     "format",
@@ -2558,17 +2562,24 @@ class D1FreezeAuthorizeApplyCoverage:
         }
 
 
-def _hash_open_file(fd: int) -> tuple[str, os.stat_result]:
+def _hash_open_file(
+    fd: int,
+    *,
+    request_context: AuthorityRequestContext | None = None,
+) -> tuple[str, os.stat_result]:
     before = os.fstat(fd)
     if (
         not stat.S_ISREG(before.st_mode)
         or before.st_size <= 0
+        or before.st_size > _READY_ARTIFACT_MAX_BYTES
         or before.st_nlink != 1
     ):
         raise LocalAuthorityError("READY snapshot artifact is not a regular file")
     digest = hashlib.sha256()
     offset = 0
     while offset < before.st_size:
+        if request_context is not None:
+            request_context.require_within_processing_deadline()
         chunk = os.pread(fd, min(1024 * 1024, before.st_size - offset), offset)
         if not chunk:
             raise LocalAuthorityError("READY snapshot changed while hashing")
@@ -2598,6 +2609,8 @@ def _hash_open_file(fd: int) -> tuple[str, os.stat_result]:
 def _load_ready_snapshot(
     snapshot_root: Path,
     snapshot_id: str,
+    *,
+    request_context: AuthorityRequestContext | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], str, tuple[int, int, int, int]]:
     from paper_runtime.snapshot import (
         RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
@@ -2618,7 +2631,10 @@ def _load_ready_snapshot(
     except OSError as exc:
         raise LocalAuthorityError("READY snapshot artifact cannot be opened") from exc
     try:
-        artifact_digest, info = _hash_open_file(fd)
+        artifact_digest, info = _hash_open_file(
+            fd,
+            request_context=request_context,
+        )
         if stat.S_IMODE(info.st_mode) & 0o222:
             raise LocalAuthorityError("READY snapshot artifact is writable")
         descriptor_path = Path(f"/dev/fd/{fd}")
@@ -2668,7 +2684,10 @@ def _load_ready_snapshot(
             ready_manifest,
             expected_snapshot_id=snapshot_id,
         )
-        final_digest, final_info = _hash_open_file(fd)
+        final_digest, final_info = _hash_open_file(
+            fd,
+            request_context=request_context,
+        )
         if final_digest != artifact_digest:
             raise LocalAuthorityError("READY snapshot changed during validation")
         identity = (
@@ -2682,10 +2701,20 @@ def _load_ready_snapshot(
         os.close(fd)
 
 
-def _copy_open_snapshot(fd: int, destination: Path) -> None:
+def _copy_open_snapshot(
+    fd: int,
+    destination: Path,
+    *,
+    request_context: AuthorityRequestContext | None = None,
+) -> None:
     """Copy one descriptor-pinned SQLite artifact into authority-owned scratch."""
 
     before = os.fstat(fd)
+    if before.st_size <= 0 or before.st_size > _READY_ARTIFACT_MAX_BYTES:
+        raise LocalAuthorityError("READY snapshot exceeds the fixed artifact bound")
+    free = shutil.disk_usage(destination.parent).free
+    if free < before.st_size + _READY_COPY_FREE_SPACE_MARGIN_BYTES:
+        raise LocalAuthorityError("READY authority scratch space is insufficient")
     flags = (
         os.O_WRONLY
         | os.O_CREAT
@@ -2697,11 +2726,15 @@ def _copy_open_snapshot(fd: int, destination: Path) -> None:
     try:
         offset = 0
         while offset < before.st_size:
+            if request_context is not None:
+                request_context.require_within_processing_deadline()
             chunk = os.pread(fd, min(1024 * 1024, before.st_size - offset), offset)
             if not chunk:
                 raise LocalAuthorityError("READY snapshot copy ended unexpectedly")
             written = 0
             while written < len(chunk):
+                if request_context is not None:
+                    request_context.require_within_processing_deadline()
                 written += os.write(output, chunk[written:])
             offset += len(chunk)
         os.fsync(output)
@@ -2733,6 +2766,7 @@ def _recompute_exact_four_ready_authority_proof(
     signed_projection: bytes,
     *,
     environment: str,
+    request_context: AuthorityRequestContext,
 ) -> tuple[dict[str, Any], Any]:
     """Independently replay every READY proof from one pinned snapshot copy.
 
@@ -2764,6 +2798,7 @@ def _recompute_exact_four_ready_authority_proof(
     )
     from research.research_data_profile import profile_ready
 
+    request_context.require_within_processing_deadline()
     binding = load_exact_four_pilot_ready_binding()
     required = tuple(binding.required_datasets)
     if (
@@ -2815,6 +2850,7 @@ def _recompute_exact_four_ready_authority_proof(
         snapshot_path,
         binding,
     )
+    request_context.require_within_processing_deadline()
     build_id = outer.get("build_id")
     snapshot_id = outer.get("snapshot_id")
     if type(build_id) is not str or not build_id or type(snapshot_id) is not str:
@@ -2826,6 +2862,13 @@ def _recompute_exact_four_ready_authority_proof(
     # proof evaluation below then runs query-only against READY state.
     transport = sqlite3.connect(str(snapshot_path))
     try:
+        transport.set_progress_handler(
+            lambda: int(
+                time.monotonic_ns()
+                >= request_context.processing_deadline_monotonic_ns
+            ),
+            10_000,
+        )
         transport.execute("BEGIN IMMEDIATE")
         rows = transport.execute(
             "SELECT state,snapshot_id,manifest_json FROM snapshot_publications "
@@ -2857,6 +2900,13 @@ def _recompute_exact_four_ready_authority_proof(
     )
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA query_only=ON")
+    connection.set_progress_handler(
+        lambda: int(
+            time.monotonic_ns()
+            >= request_context.processing_deadline_monotonic_ns
+        ),
+        10_000,
+    )
     try:
         coverage_proof_id = outer.get("coverage_proof_id")
         run_id, run_detail, validations = _latest_complete_run(
@@ -2899,6 +2949,7 @@ def _recompute_exact_four_ready_authority_proof(
             workers=1,
             strict_live_gates=True,
         )
+        request_context.require_within_processing_deadline()
         quality_summary = summarize(quality_checks)
         quality_results = [check.as_log_dict() for check in quality_checks]
         quality_failures = [
@@ -3021,6 +3072,7 @@ class ReadyPublishProfilePlanBound:
         outer, manifest, artifact_digest, initial_identity = _load_ready_snapshot(
             self.snapshot_root,
             snapshot_id,
+            request_context=request_context,
         )
         from paper_runtime.snapshot import _artifact_stem
 
@@ -3039,7 +3091,10 @@ class ReadyPublishProfilePlanBound:
                 "READY snapshot cannot be pinned for independent replay"
             ) from exc
         try:
-            pinned_digest, pinned_info = _hash_open_file(artifact_fd)
+            pinned_digest, pinned_info = _hash_open_file(
+                artifact_fd,
+                request_context=request_context,
+            )
             pinned_identity = (
                 pinned_info.st_dev,
                 pinned_info.st_ino,
@@ -3057,7 +3112,11 @@ class ReadyPublishProfilePlanBound:
                 prefix="quant-ready-authority-"
             ) as scratch:
                 scratch_snapshot = Path(scratch) / "snapshot.sqlite"
-                _copy_open_snapshot(artifact_fd, scratch_snapshot)
+                _copy_open_snapshot(
+                    artifact_fd,
+                    scratch_snapshot,
+                    request_context=request_context,
+                )
                 try:
                     manifest, verified_projection = (
                         _recompute_exact_four_ready_authority_proof(
@@ -3066,6 +3125,7 @@ class ReadyPublishProfilePlanBound:
                             manifest,
                             signed_projection,
                             environment=self.environment,
+                            request_context=request_context,
                         )
                     )
                 except LocalAuthorityError:
@@ -3074,7 +3134,10 @@ class ReadyPublishProfilePlanBound:
                     raise LocalAuthorityError(
                         "READY independent proof recomputation rejected"
                     ) from exc
-            replay_digest, replay_info = _hash_open_file(artifact_fd)
+            replay_digest, replay_info = _hash_open_file(
+                artifact_fd,
+                request_context=request_context,
+            )
             replay_identity = (
                 replay_info.st_dev,
                 replay_info.st_ino,
@@ -3175,6 +3238,7 @@ class ReadyPublishProfilePlanBound:
         _, _, final_digest, final_identity = _load_ready_snapshot(
             self.snapshot_root,
             snapshot_id,
+            request_context=request_context,
         )
         if final_digest != artifact_digest or final_identity != initial_identity:
             raise LocalAuthorityError("READY snapshot changed before issuance")

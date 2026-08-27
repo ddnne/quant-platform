@@ -1715,6 +1715,11 @@ def test_ready_authority_replays_ready_state_and_rejects_forged_scope(
         lambda _checks: quality_summary,
     )
 
+    request_context = _context(
+        caller="ready_publisher",
+        operation=ReadyPublishProfilePlanBound.operation,
+        purpose="profile_plan_closure_ready",
+    )
     replayed, observed_projection = (
         entrypoints._recompute_exact_four_ready_authority_proof(
             scratch,
@@ -1722,6 +1727,7 @@ def test_ready_authority_replays_ready_state_and_rejects_forged_scope(
             retained_manifest,
             b"signed-projection",
             environment="production",
+            request_context=request_context,
         )
     )
     assert replayed == retained_manifest
@@ -1750,6 +1756,7 @@ def test_ready_authority_replays_ready_state_and_rejects_forged_scope(
             retained_manifest,
             b"signed-projection",
             environment="production",
+            request_context=request_context,
         )
 
 
@@ -1774,7 +1781,12 @@ def test_ready_handler_rejects_forged_proof_before_custody_sign(
     monkeypatch.setattr(
         entrypoints,
         "_load_ready_snapshot",
-        lambda *_args: (forged_outer, retained_manifest, digest, identity),
+        lambda *_args, **_kwargs: (
+            forged_outer,
+            retained_manifest,
+            digest,
+            identity,
+        ),
     )
 
     def reject_forgery(*_args, **_kwargs):
