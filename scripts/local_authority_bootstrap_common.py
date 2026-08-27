@@ -37,7 +37,18 @@ BOOTSTRAP_ONLY_ACTIONS = frozenset({
 })
 POSITIVE_ACTIVATION_ACTIONS = frozenset({"load-plists", "activate"})
 _ACTIONS = ("plan", "audit", *sorted(BOOTSTRAP_ONLY_ACTIONS), *sorted(POSITIVE_ACTIVATION_ACTIONS))
-_RUNNABLE_AUTHORITIES = frozenset({"d1_sync", "ops_projection", "coverage_transition", "ready"})
+_RUNNABLE_AUTHORITIES = frozenset(LOCAL_OS_PRINCIPALS)
+_FILE_BACKED_ACTIVATION_AUTHORITIES = frozenset(
+    authority_id
+    for authority_id in LOCAL_OS_PRINCIPALS
+    if authority_id != "trader"
+)
+EXECUTION_ACTIVATION_DOCUMENTS = {
+    "trader": Path("/etc/quant-platform/authorities/trader/activation.json"),
+    "controlled_execution": Path(
+        "/etc/quant-platform/authorities/controlled_execution/activation.json"
+    ),
+}
 
 
 class BootstrapError(RuntimeError):

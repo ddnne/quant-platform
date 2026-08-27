@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Build a closed, content-addressed, non-secret release evidence envelope.
+"""Fail-closed release-evidence publication boundary.
 
-The input is a normalized set of observations, not a free-form release report.
-Every remote observation carries collector provenance, response digest, evidence
-ID, timestamp, and source SHA. Nested objects are closed schemas: an invented
-field, omitted proof, stale deployment, or untraceable claim fails publication.
+The legacy candidate schema remains available only to repository tests so its
+closed-field invariants can be retained while the trusted collection service is
+built. A caller-supplied JSON document is not an observation authority: names,
+UUIDs, timestamps and response digests are self-claims unless a dedicated
+service collected and signed the exact response bytes. Consequently every
+production publication entrypoint in this module is intentionally unavailable
+until that signed release-observation authority and its private JSDA Service
+Binding collector exist.
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, NoReturn
 from urllib.parse import urlsplit
 
 try:
@@ -31,7 +35,7 @@ except ModuleNotFoundError:  # Direct ``python scripts/...`` execution.
     )
 
 
-SCHEMA_VERSION = "quant-platform-release-evidence/v3"
+SCHEMA_VERSION = "quant-platform-release-evidence/v4"
 OBSERVATION_SCHEMA_VERSION = "quant-platform-release-observation/v1"
 REQUIRED_FIELDS = (
     "source_sha",
@@ -71,6 +75,8 @@ _ACTIVE_WORKERS = frozenset(
         "quant-platform-research-mass-eval",
     }
 )
+_JSDA_WORKER = "quant-platform-ingestion-jsda"
+_JSDA_READY_ENDPOINT = "/health/ready"
 _MIGRATION_TARGETS = frozenset(
     {"quant-ingest", "quant-ops-projection", "quant-ops-quota"}
 )
@@ -96,7 +102,7 @@ _MCP_TOOL_NAMES = (
 _ACCEPTED_MCP_SCHEMA_DIGEST = (
     "sha256:dad7cd29ef002e76ee1f9802b8685a179f94fcbd0bb2e6df685858e41c1778d3"
 )
-_BACKUP_FORMAT = "quant-platform-d1-backup/aes-256-gcm-v2"
+_BACKUP_FORMAT = "quant-platform-d1-backup/aes-256-gcm-v3"
 _BACKUP_SCHEMA_PROFILE = "quant-ingest-production/v1"
 _GOVERNED_DATABASE_NAME = "quant-ingest"
 _GOVERNED_DATABASE_ID = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
@@ -126,6 +132,82 @@ _SENSITIVE_VALUE = re.compile(
 
 _ROOT = Path(__file__).resolve().parents[1]
 _MIGRATION_MANIFEST = _ROOT / "specs" / "cloudflare" / "d1_migration_manifest.json"
+_RELEASE_OBSERVATION_AUTHORITY_CONTRACT = (
+    _ROOT / "specs" / "cloudflare" / "release_observation_authority.json"
+)
+
+
+class ReleaseObservationAuthorityUnavailable(RuntimeError):
+    """Trusted remote observations cannot yet be minted or published."""
+
+
+def _load_pending_release_observation_contract() -> Mapping[str, Any]:
+    raw = json.loads(_RELEASE_OBSERVATION_AUTHORITY_CONTRACT.read_text(encoding="utf-8"))
+    if not isinstance(raw, Mapping) or set(raw) != {
+        "schema_version",
+        "authority_status",
+        "active_key_count",
+        "publication_authorized",
+        "caller_supplied_json_trusted",
+        "trusted_input",
+        "collectors",
+        "closure_requires",
+    }:
+        raise RuntimeError("release-observation authority contract schema drift")
+    collectors = raw.get("collectors")
+    jsda = collectors.get("jsda_readiness") if isinstance(collectors, Mapping) else None
+    if (
+        raw.get("schema_version")
+        != "quant-platform-release-observation-authority/v1"
+        or raw.get("authority_status") != "PENDING"
+        or raw.get("active_key_count") != 0
+        or raw.get("publication_authorized") is not False
+        or raw.get("caller_supplied_json_trusted") is not False
+        or raw.get("trusted_input")
+        != "authority-signed-exact-response-envelope-only"
+        or not isinstance(jsda, Mapping)
+        or set(jsda)
+        != {
+            "target_worker",
+            "endpoint",
+            "transport",
+            "binding_name",
+            "transport_implemented",
+            "status",
+        }
+        or jsda.get("target_worker") != _JSDA_WORKER
+        or jsda.get("endpoint") != _JSDA_READY_ENDPOINT
+        or jsda.get("transport") != "private-service-binding"
+        or jsda.get("binding_name") is not None
+        or jsda.get("transport_implemented") is not False
+        or jsda.get("status") != "HOLD"
+    ):
+        raise RuntimeError(
+            "release-observation authority must remain exact PENDING/HOLD while "
+            "publication and the JSDA collector are unimplemented"
+        )
+    return raw
+
+
+_PENDING_RELEASE_OBSERVATION_CONTRACT = _load_pending_release_observation_contract()
+
+
+def _require_signed_release_observation_authority() -> NoReturn:
+    """Keep production publication unreachable until its authority exists.
+
+    This function deliberately has no flag, capability parameter, environment
+    override, or test hook that can turn a normalized caller document into
+    trusted evidence. A future implementation must replace this boundary with
+    verification of an authority-signed, exact-byte observation envelope.
+    """
+
+    if _PENDING_RELEASE_OBSERVATION_CONTRACT["publication_authorized"] is not False:
+        raise RuntimeError("release-observation authority contract is not fail-closed")
+    raise ReleaseObservationAuthorityUnavailable(
+        "release evidence publication is PENDING: the signed release-observation "
+        "authority and private JSDA /health/ready Service Binding collector are "
+        "not implemented; caller-supplied JSON is schema-only and untrusted"
+    )
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -195,10 +277,20 @@ def _walk(value: Any, path: tuple[str, ...] = ()) -> None:
         raise ValueError(
             f"release evidence contains secret-shaped material at {'.'.join(path)}"
         )
+    is_jsda_smoke_endpoint = (
+        len(path) == 4
+        and path[0] == "smoke"
+        and path[1] in {"staging", "production"}
+        and path[2] == _JSDA_WORKER
+        and path[3] == "endpoint"
+    )
     if (
-        value.startswith(("~/", "~\\", "file://"))
-        or PurePosixPath(value).is_absolute()
-        or PureWindowsPath(value).is_absolute()
+        not is_jsda_smoke_endpoint
+        and (
+            value.startswith(("~/", "~\\", "file://"))
+            or PurePosixPath(value).is_absolute()
+            or PureWindowsPath(value).is_absolute()
+        )
     ):
         raise ValueError(
             f"release evidence contains a local absolute path at {'.'.join(path)}"
@@ -440,10 +532,26 @@ def _validate_smoke(payload: Mapping[str, Any]) -> None:
             )
         for worker, raw_row in workers.items():
             label = f"smoke.{environment}.{worker}"
+            expected_fields = {
+                "result",
+                "source_sha",
+                "deployment_version_id",
+                "provenance",
+            }
+            if worker == _JSDA_WORKER:
+                expected_fields.update(
+                    {
+                        "endpoint",
+                        "http_status",
+                        "product_ready",
+                        "cutover",
+                        "response_digest",
+                    }
+                )
             row = _exact_mapping(
                 raw_row,
                 label,
-                {"result", "source_sha", "deployment_version_id", "provenance"},
+                expected_fields,
             )
             if (
                 row["result"] != "PASS"
@@ -452,12 +560,25 @@ def _validate_smoke(payload: Mapping[str, Any]) -> None:
                 != deployments[worker][environment]["version_id"]
             ):
                 raise ValueError(f"{label} is not a PASS for the deployed source/version")
-            _validate_provenance(
+            provenance = _validate_provenance(
                 row["provenance"],
                 f"{label}.provenance",
                 expected_collector="release-smoke-runner/v1",
                 source_sha=source_sha,
             )
+            if worker == _JSDA_WORKER:
+                _require_digest(row["response_digest"], f"{label}.response_digest")
+                if (
+                    row["endpoint"] != _JSDA_READY_ENDPOINT
+                    or row["http_status"] != 200
+                    or row["product_ready"] is not True
+                    or row["cutover"] != "V3_ACTIVE"
+                    or row["response_digest"] != provenance["response_digest"]
+                ):
+                    raise ValueError(
+                        f"{label} must prove HTTP 200 product readiness from "
+                        f"{_JSDA_READY_ENDPOINT} with a provenance-bound response"
+                    )
 
 
 def _validate_quant_mcp(payload: Mapping[str, Any]) -> None:
@@ -550,7 +671,7 @@ def _validate_backup(payload: Mapping[str, Any]) -> None:
     database = _exact_mapping(
         backup["database"],
         "backup.database",
-        {"name", "id", "schema_profile"},
+        {"environment", "name", "id", "schema_profile"},
     )
     restore = _exact_mapping(
         backup["restore"],
@@ -579,7 +700,7 @@ def _validate_backup(payload: Mapping[str, Any]) -> None:
         or type(ciphertext_bytes) is not int
         or ciphertext_bytes <= plaintext_bytes
     ):
-        raise ValueError("backup must be a non-empty verified AES-256-GCM v2 artifact")
+        raise ValueError("backup must be a non-empty verified AES-256-GCM v3 artifact")
     _require_digest(backup["plaintext_digest"], "backup.plaintext_digest")
     _require_digest(backup["ciphertext_digest"], "backup.ciphertext_digest")
     _require_digest(
@@ -594,6 +715,7 @@ def _validate_backup(payload: Mapping[str, Any]) -> None:
     if len(nonce) != 12:
         raise ValueError("backup.nonce must be authenticated AES-GCM nonce")
     if database != {
+        "environment": "production",
         "name": _GOVERNED_DATABASE_NAME,
         "id": _GOVERNED_DATABASE_ID,
         "schema_profile": _BACKUP_SCHEMA_PROFILE,
@@ -752,7 +874,14 @@ def _validate_remote_acceptance(payload: Mapping[str, Any]) -> None:
     _validate_quant_mcp(payload)
 
 
-def validate_payload(payload: Mapping[str, Any]) -> None:
+def _validate_untrusted_candidate_schema_for_tests(payload: Mapping[str, Any]) -> None:
+    """Validate legacy candidate shape without granting evidence authority.
+
+    This private helper exists only so schema/policy regression tests can keep
+    exercising the closed candidate format. Passing it is never publication,
+    provenance, or remote acceptance.
+    """
+
     snapshot = require_pinned_finding_ledger_gate()
     expected = frozenset(REQUIRED_FIELDS)
     if set(payload) != expected:
@@ -790,28 +919,16 @@ def validate_payload(payload: Mapping[str, Any]) -> None:
 
 
 def build_envelope(payload: Mapping[str, Any]) -> dict[str, Any]:
-    validate_payload(payload)
-    digest = payload_digest(payload)
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "evidence_digest": digest,
-        "payload": dict(payload),
-    }
+    del payload
+    _require_signed_release_observation_authority()
 
 
-def write_envelope(payload: Mapping[str, Any], output_dir: Path) -> Path:
-    envelope = build_envelope(payload)
-    digest_hex = envelope["evidence_digest"].removeprefix("sha256:")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    target = output_dir / f"quant-platform-release-evidence-{digest_hex}.json"
-    rendered = json.dumps(envelope, ensure_ascii=False, indent=2) + "\n"
-    if target.exists():
-        if target.read_text(encoding="utf-8") != rendered:
-            raise ValueError(f"content-addressed evidence collision: {target.name}")
-        return target
-    target.write_text(rendered, encoding="utf-8")
-    target.chmod(0o444)
-    return target
+def write_envelope(payload: Mapping[str, Any], output_dir: Path) -> NoReturn:
+    # Guard this public disk-writing boundary independently. In particular,
+    # replacing or wrapping ``build_envelope`` must not resurrect the legacy
+    # unsigned artifact writer while the observation authority is PENDING.
+    del payload, output_dir
+    _require_signed_release_observation_authority()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -820,6 +937,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     require_pinned_finding_ledger_gate()
+    _require_signed_release_observation_authority()
     raw = json.loads(args.input.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("release evidence input must be a JSON object")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import math
@@ -9,8 +10,8 @@ import os
 import re
 import sqlite3
 import tempfile
-from datetime import datetime, timezone
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import quote
@@ -27,6 +28,7 @@ from paper_runtime.snapshot_coverage_proof import (
     _verify_coverage_manifest,
 )
 from paper_runtime.snapshot_persist import (
+    _atomic_bytes,
     _atomic_json,
     _copy_sqlite,
     _persist_building_publication,
@@ -36,13 +38,13 @@ from paper_runtime.snapshot_persist import (
 from paper_runtime.snapshot_publish_policy import (
     READY_MANIFEST_SCHEMA,
     _transition_policy,
+    evaluate_ready_publication,
 )
 from paper_runtime.snapshot_read import (
     _describe_fixture_snapshot,
     describe_snapshot,
     latest_ready_snapshot,
     list_ready_snapshots,
-    open_ready_snapshot,
 )
 
 
@@ -93,10 +95,41 @@ class ReadySnapshot:
     db_path: Path
     manifest_path: Path
     manifest: dict[str, Any]
+    publication_path: Path | None = None
+    readiness_path: Path | None = None
+    readiness_digest: str | None = None
+    readiness_attestation_id: str | None = None
+    readiness_bytes: bytes | None = None
+    artifact_digest: str | None = None
+    artifact_identity: tuple[int, ...] | None = None
+    manifest_identity: tuple[int, ...] | None = None
+    publication_identity: tuple[int, ...] | None = None
+    readiness_identity: tuple[int, ...] | None = None
+    publication_digest: str | None = None
 
     @property
     def committed_at(self) -> str:
         return str(self.manifest["committed_at"])
+
+
+@dataclass(frozen=True)
+class _ReadyPublicationProductApi:
+    """Product-plane operations required by the READY publication runner.
+
+    ``paper_runtime`` owns the immutable snapshot transaction, while the
+    product plane owns plan/profile/readiness policy.  Keeping those operations
+    explicit prevents the reusable runtime from importing back into the
+    product plane.
+    """
+
+    load_verified_pilot_readiness_bytes: Callable[..., Any]
+    verified_publication_type: Callable[..., Any]
+    verified_projection_evidence: Callable[..., Any]
+    build_profile_bound_manifest: Callable[..., Any]
+    load_exact_four_binding: Callable[..., Any]
+    ready_manifest_from_document: Callable[..., Any]
+    profile_ready: Callable[..., bool]
+    verify_exact_four_pit_scope: Callable[..., Mapping[str, Any]]
 
 
 def _connect_readonly(
@@ -528,16 +561,51 @@ def _publish_ready_snapshot_impl(
     publication_gate: Callable[..., tuple[Any, ...]],
     fixture_compatibility: bool,
 ) -> ReadySnapshot:
-    """Gate a staging DB and atomically publish a read-only snapshot.
+    """Tests-only compatibility publisher; it cannot select production scope."""
 
-    The product-owned READY(P) bridge may supply retained profile evidence and
-    a closed ReadyManifest builder. Both must be present together.
-    """
     if fixture_compatibility is not True:
         raise SnapshotRejected(
             "local production READY publication is disabled; authority is PENDING"
         )
-    publication_scope = "FIXTURE"
+    return _publish_fixture_snapshot_candidate(
+        staging_db,
+        snapshot_dir,
+        required_datasets=required_datasets,
+        _profile_coverage_evidence=_profile_coverage_evidence,
+        _dependency_scope_evidence=_dependency_scope_evidence,
+        _ready_manifest_builder=_ready_manifest_builder,
+        _ready_attestation_builder=_ready_attestation_builder,
+        publication_gate=publication_gate,
+    )
+
+
+def _snapshot_candidate_engine(
+    staging_db: str | Path,
+    snapshot_dir: str | Path,
+    *,
+    required_datasets: Iterable[str],
+    _profile_coverage_evidence: Mapping[str, Any] | None = None,
+    _dependency_scope_evidence: Mapping[str, Any] | None = None,
+    _ready_manifest_builder: (
+        Callable[[Mapping[str, Any]], Mapping[str, Any]] | None
+    ) = None,
+    _ready_attestation_builder: Callable[[ReadySnapshot], Path | None] | None = None,
+    publication_gate: Callable[..., tuple[Any, ...]],
+    fixture_compatibility: bool,
+    publication_scope: str,
+) -> ReadySnapshot:
+    """Build one candidate; only the fixed product wrapper selects production.
+
+    This core is not signing authority.  A production marker is usable only
+    after the independently recomputing READY service returns a pinned signed
+    attestation that the production metadata verifier accepts.
+    """
+
+    if (fixture_compatibility, publication_scope) not in {
+        (True, "FIXTURE"),
+        (False, "PRODUCTION"),
+    }:
+        raise SnapshotRejected("snapshot candidate scope is invalid")
     staging_path = Path(staging_db).resolve()
     if not staging_path.is_file():
         raise FileNotFoundError(f"staging database does not exist: {staging_path}")
@@ -876,6 +944,43 @@ def _publish_ready_snapshot_impl(
                     "READY attestation builder did not publish an artifact"
                 )
         artifact_digest = _file_sha256(artifact_path)
+        readiness_attestation_id: str | None = None
+        readiness_attestation_digest: str | None = None
+        if readiness_sidecar_path is not None and publication_scope == "PRODUCTION":
+            from paper_runtime.readiness_attestation import (
+                ReadyAttestationVerificationError,
+                decode_strict_ready_json,
+            )
+
+            try:
+                readiness_bytes = readiness_sidecar_path.read_bytes()
+                readiness_document = decode_strict_ready_json(readiness_bytes)
+            except (OSError, ReadyAttestationVerificationError) as exc:
+                raise SnapshotRejected(
+                    "READY attestation is not strict immutable JSON"
+                ) from exc
+            if type(readiness_document) is not dict:
+                raise SnapshotRejected("READY attestation must be an object")
+            readiness_attestation_id = readiness_document.get("attestation_id")
+            if (
+                type(readiness_attestation_id) is not str
+                or not readiness_attestation_id
+                or Path(readiness_attestation_id).name
+                != readiness_attestation_id
+            ):
+                raise SnapshotRejected("READY attestation id is invalid")
+            expected_sidecar_name = (
+                f"{artifact_path.stem}.{readiness_attestation_id}.readiness.json"
+            )
+            if readiness_sidecar_path.name != expected_sidecar_name:
+                raise SnapshotRejected(
+                    "READY attestation filename does not bind its exact id"
+                )
+            readiness_attestation_digest = (
+                "sha256:" + hashlib.sha256(readiness_bytes).hexdigest()
+            )
+        elif readiness_sidecar_path is not None:
+            readiness_attestation_digest = _file_sha256(readiness_sidecar_path)
         publication_body: dict[str, Any] = {
             "format": RESEARCH_SNAPSHOT_PUBLICATION_FORMAT,
             "snapshot_id": snapshot_id,
@@ -889,11 +994,8 @@ def _publish_ready_snapshot_impl(
                 if readiness_sidecar_path is not None
                 else None
             ),
-            "readiness_attestation_digest": (
-                _file_sha256(readiness_sidecar_path)
-                if readiness_sidecar_path is not None
-                else None
-            ),
+            "readiness_attestation_digest": readiness_attestation_digest,
+            "readiness_attestation_id": readiness_attestation_id,
         }
         publication = {
             **publication_body,
@@ -994,6 +1096,255 @@ def _publish_ready_snapshot_impl(
         conn.close()
 
 
+def _publish_exact_four_pilot_ready_snapshot_via_authority_impl(
+    staging_db: str | Path,
+    snapshot_dir: str | Path,
+    *,
+    signed_projection_document: object,
+    _candidate_engine: Callable[..., ReadySnapshot],
+    _product_api: _ReadyPublicationProductApi,
+) -> Any:
+    """Publish the canonical pilot only through the isolated READY service.
+
+    The public product callable accepts no caller-selected signer, registry,
+    profile, dataset membership, manifest builder, or fixture policy.  Its
+    internal product adapter is not an authority: this runner preflights the
+    pinned local authority before inspecting caller evidence, creates an
+    undiscoverable immutable candidate, and asks the authority to independently
+    reopen and sign that exact snapshot.  Publication markers are written only
+    after the returned signature has been verified and retained byte-for-byte.
+    """
+
+    from scripts.local_authority_clients import ReadyPublisherAuthorityClient
+    from scripts.local_authority_service import LocalAuthorityError
+
+    # Bind the exact production caller UID, active public registry, and launchd
+    # socket before reading or mutating caller-provided publication material.
+    client = ReadyPublisherAuthorityClient(environment="production")
+    client.require_available()
+    if type(signed_projection_document) is not bytes or not signed_projection_document:
+        raise SnapshotRejected("signed Ops projection must be exact non-empty bytes")
+    signed_projection = signed_projection_document
+    governed = _product_api.load_exact_four_binding()
+    evidence = _product_api.verified_projection_evidence(
+        signed_projection,
+        list(governed.required_datasets),
+        expected_environment="production",
+    )
+    if set(evidence.rows) != set(governed.required_datasets):
+        raise SnapshotRejected(
+            "pilot READY evidence must exactly match the dependency closure"
+        )
+    for profile in governed.profiles:
+        if not _product_api.profile_ready(profile, evidence.rows):
+            raise SnapshotRejected(
+                f"pilot READY evidence is incomplete for {profile.plan_id}"
+            )
+    for dataset_id in governed.required_datasets:
+        row = evidence.rows[dataset_id]
+        source = str(row.get("source_generation") or "").strip()
+        exported = str(row.get("export_cursor") or "").strip()
+        applied = str(
+            row.get("applied_sync_generation") or row.get("applied_cursor") or ""
+        ).strip()
+        if not source or source != exported or exported != applied:
+            raise SnapshotRejected(
+                f"pilot READY cursor chain is missing or not current for {dataset_id}"
+            )
+        scopes = [
+            dict(scope)
+            for profile in governed.profiles
+            for scope in profile.dataset_scopes
+            if scope.get("dataset_id") == dataset_id
+        ]
+        required_start = min(str(scope["period_start"]) for scope in scopes)
+        required_end = max(str(scope["period_end"]) for scope in scopes)
+        observed_start = str(row.get("observed_start") or "")[:10]
+        observed_end = str(row.get("observed_end") or "")[:10]
+        if (
+            not observed_start
+            or not observed_end
+            or observed_start > required_start
+            or observed_end < required_end
+        ):
+            raise SnapshotRejected(
+                "pilot READY Coverage does not span the dependency period for "
+                f"{dataset_id}: observed={observed_start}..{observed_end}, "
+                f"required={required_start}..{required_end}"
+            )
+
+    scope_proof = _product_api.verify_exact_four_pit_scope(staging_db, governed)
+
+    def build_manifest(document: Mapping[str, Any]) -> Mapping[str, Any]:
+        return _product_api.build_profile_bound_manifest(
+            document, profile=governed
+        ).to_dict()
+
+    signed_result: dict[str, Any] = {}
+
+    def request_attestation(ready: ReadySnapshot) -> Path:
+        manifest = _product_api.ready_manifest_from_document(ready.manifest)
+        immutable_scope = _product_api.verify_exact_four_pit_scope(
+            ready.db_path, governed
+        )
+        if (
+            manifest.pit_contract_digests.get("dependency_scope")
+            != immutable_scope["proof_digest"]
+        ):
+            raise SnapshotRejected(
+                "immutable snapshot PIT dependency scope drifted before authority call"
+            )
+        event_id = (
+            "ready-publish:"
+            + ready.snapshot_id
+            + ":"
+            + evidence.signed_document_digest
+        )
+        try:
+            result = dict(
+                client.publish_profile_plan_bound(
+                    event_id=event_id,
+                    snapshot_id=ready.snapshot_id,
+                    signed_projection_document=signed_projection,
+                )
+            )
+        except LocalAuthorityError as exc:
+            raise SnapshotRejected("isolated READY authority rejected publication") from exc
+        try:
+            raw = base64.b64decode(result["attestation_base64"], validate=True)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SnapshotRejected("READY authority returned invalid attestation bytes") from exc
+        if "sha256:" + hashlib.sha256(raw).hexdigest() != result.get(
+            "attestation_digest"
+        ):
+            raise SnapshotRejected("READY authority attestation digest mismatch")
+        path = ready.db_path.with_name(
+            f"{ready.db_path.stem}.{result['attestation_id']}.readiness.json"
+        )
+        try:
+            _atomic_bytes(path, raw, mode=0o444)
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
+        signed_result.update(result=result, path=path)
+        return path
+
+    snapshot = _candidate_engine(
+        staging_db,
+        snapshot_dir,
+        required_datasets=governed.required_datasets,
+        _profile_coverage_evidence=evidence.rows,
+        _dependency_scope_evidence=scope_proof,
+        _ready_manifest_builder=build_manifest,
+        _ready_attestation_builder=request_attestation,
+        publication_gate=evaluate_ready_publication,
+        fixture_compatibility=False,
+        publication_scope="PRODUCTION",
+    )
+    if set(signed_result) != {"result", "path"}:
+        raise SnapshotRejected("isolated READY authority produced no attestation")
+    # Re-describe through the production metadata verifier after the
+    # publication marker is durable. The result is not a database-read
+    # capability.
+    reopened = describe_snapshot(snapshot_dir, snapshot.snapshot_id)
+    result = signed_result["result"]
+    readiness_path = reopened.readiness_path
+    readiness_bytes = reopened.readiness_bytes
+    ready_manifest = _product_api.ready_manifest_from_document(reopened.manifest)
+    if (
+        not isinstance(readiness_path, Path)
+        or type(readiness_bytes) is not bytes
+        or not readiness_bytes
+        or readiness_path != Path(signed_result["path"])
+        or reopened.readiness_attestation_id != result.get("attestation_id")
+        or reopened.readiness_digest != result.get("attestation_digest")
+    ):
+        raise SnapshotRejected(
+            "published marker does not pin the authority's exact attestation"
+        )
+    readiness = _product_api.load_verified_pilot_readiness_bytes(
+        readiness_bytes,
+        expected_environment="production",
+        expected_snapshot_id=reopened.snapshot_id,
+        expected_ready_manifest_digest=ready_manifest.manifest_digest,
+    )
+    return _product_api.verified_publication_type(
+        snapshot=reopened,
+        readiness=readiness,
+        readiness_path=readiness_path,
+    )
+
+
+def _bind_snapshot_candidate_publishers(
+    engine: Callable[..., ReadySnapshot],
+    exact_four_impl: Callable[..., Any],
+) -> tuple[Callable[..., ReadySnapshot], Callable[..., Any]]:
+    """Bind fixture and product wrappers around a non-authoritative engine.
+
+    Python closure introspection is not a security boundary and can recover
+    ``engine``.  Safety instead comes from the fact that the engine cannot mint
+    the isolated authority signature required by the production metadata
+    verifier.
+    """
+
+    def fixture_candidate(
+        staging_db: str | Path,
+        snapshot_dir: str | Path,
+        *,
+        required_datasets: Iterable[str],
+        _profile_coverage_evidence: Mapping[str, Any] | None = None,
+        _dependency_scope_evidence: Mapping[str, Any] | None = None,
+        _ready_manifest_builder: (
+            Callable[[Mapping[str, Any]], Mapping[str, Any]] | None
+        ) = None,
+        _ready_attestation_builder: (
+            Callable[[ReadySnapshot], Path | None] | None
+        ) = None,
+        publication_gate: Callable[..., tuple[Any, ...]],
+    ) -> ReadySnapshot:
+        return engine(
+            staging_db,
+            snapshot_dir,
+            required_datasets=required_datasets,
+            _profile_coverage_evidence=_profile_coverage_evidence,
+            _dependency_scope_evidence=_dependency_scope_evidence,
+            _ready_manifest_builder=_ready_manifest_builder,
+            _ready_attestation_builder=_ready_attestation_builder,
+            publication_gate=publication_gate,
+            fixture_compatibility=True,
+            publication_scope="FIXTURE",
+        )
+
+    def exact_four_candidate(
+        staging_db: str | Path,
+        snapshot_dir: str | Path,
+        *,
+        signed_projection_document: object,
+        _product_api: _ReadyPublicationProductApi,
+    ) -> Any:
+        return exact_four_impl(
+            staging_db,
+            snapshot_dir,
+            signed_projection_document=signed_projection_document,
+            _candidate_engine=engine,
+            _product_api=_product_api,
+        )
+
+    return fixture_candidate, exact_four_candidate
+
+
+(
+    _publish_fixture_snapshot_candidate,
+    _publish_exact_four_pilot_ready_snapshot_via_authority,
+) = _bind_snapshot_candidate_publishers(
+    _snapshot_candidate_engine,
+    _publish_exact_four_pilot_ready_snapshot_via_authority_impl,
+)
+del _snapshot_candidate_engine
+del _publish_exact_four_pilot_ready_snapshot_via_authority_impl
+del _bind_snapshot_candidate_publishers
+
+
 def _manifest_snapshot_state(
     conn: sqlite3.Connection, tables: set[str]
 ) -> dict[str, Any] | None:
@@ -1061,32 +1412,53 @@ def _data_snapshot_id(db_path: str | Path, *, immutable: bool) -> str:
 
     conn = _connect_readonly(path, immutable=immutable)
     try:
-        conn.execute("BEGIN")
-        tables = {
-            str(row["name"])
-            for row in conn.execute(
-                "SELECT name FROM sqlite_schema WHERE type = 'table'"
-            )
-        }
-        manifest_state = _manifest_snapshot_state(conn, tables)
-        if manifest_state is not None:
-            return str(manifest_state["manifest_id"])
-        else:
-            watermarks = _watermark_state(conn, tables)
-            state = {
-                "format": DATA_SNAPSHOT_FORMAT,
-                "schema": _schema_state(conn),
-                "watermarks": watermarks,
-                "validation": _validation_state(conn, tables),
-            }
-            if not watermarks:
-                state["fallback"] = {
-                    "fact_tables": _fact_table_state(conn, tables),
-                    "main_file": _main_file_state(path),
-                }
+        return _data_snapshot_id_from_open_connection(
+            conn,
+            main_file_state=_main_file_state(path),
+        )
     finally:
         conn.close()
 
+
+def _data_snapshot_id_from_open_connection(
+    conn: sqlite3.Connection,
+    *,
+    main_file_state: Mapping[str, int] | None = None,
+) -> str:
+    """Derive identity from an already descriptor-pinned SQLite connection.
+
+    The production READY reader uses this form so the logical identity and
+    embedded manifest are measured from the same inode as the artifact hash.
+    ``main_file_state`` is needed only for legacy databases without watermarks;
+    governed READY artifacts always carry an embedded manifest.
+    """
+
+    conn.execute("BEGIN")
+    tables = {
+        str(row["name"])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_schema WHERE type = 'table'"
+        )
+    }
+    manifest_state = _manifest_snapshot_state(conn, tables)
+    if manifest_state is not None:
+        return str(manifest_state["manifest_id"])
+    watermarks = _watermark_state(conn, tables)
+    state: dict[str, Any] = {
+        "format": DATA_SNAPSHOT_FORMAT,
+        "schema": _schema_state(conn),
+        "watermarks": watermarks,
+        "validation": _validation_state(conn, tables),
+    }
+    if not watermarks:
+        if main_file_state is None:
+            raise RuntimeError(
+                "descriptor-pinned snapshot identity has no main-file state"
+            )
+        state["fallback"] = {
+            "fact_tables": _fact_table_state(conn, tables),
+            "main_file": dict(main_file_state),
+        }
     return _canonical_digest(state)
 
 
@@ -1115,5 +1487,4 @@ __all__ = [
     "fail_snapshot_sync",
     "latest_ready_snapshot",
     "list_ready_snapshots",
-    "open_ready_snapshot",
 ]

@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
+import os
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+import paper_runtime
 import paper_runtime.snapshot as snapshot_module
+import paper_runtime.snapshot_read as snapshot_read_module
 from data_contracts.coverage import coverage_policy_binding
 from paper_runtime.snapshot import SnapshotRejected
 from paper_runtime.snapshot_coverage_proof import (
@@ -19,10 +23,13 @@ from paper_runtime.snapshot_coverage_proof import (
 )
 from paper_runtime.snapshot_read import describe_snapshot, latest_ready_snapshot
 from research.ready_manifest import (
+    VerifiedPilotReadyPublication,
     build_profile_bound_ready_manifest_from_snapshot_document,
     load_exact_four_pilot_ready_binding,
+    publish_exact_four_pilot_ready_snapshot,
     ready_manifest_from_snapshot_document,
 )
+from selection.budget_ledger import MassResearchDisabledError
 from research.research_data_profile import official_mode
 from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
 from tests.readiness_test_support import (
@@ -43,6 +50,90 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return "sha256:" + digest.hexdigest()
+
+
+def _writable_database(path: Path) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("CREATE TABLE marker(value TEXT NOT NULL)")
+        conn.execute("INSERT INTO marker(value) VALUES ('verified-A')")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_public_ready_sqlite_open_stays_closed_with_retained_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot_dir = tmp_path / "snapshots"
+    snapshot_dir.mkdir()
+    artifact = snapshot_dir / "verified.sqlite"
+    _writable_database(artifact)
+    retained_writer = os.open(
+        artifact,
+        os.O_RDWR | getattr(os, "O_CLOEXEC", 0),
+    )
+    artifact.chmod(0o444)
+    fake_connection = sqlite3.connect(":memory:")
+    calls: list[str] = []
+
+    def patched_builder(*_args, **_kwargs):
+        calls.append("builder")
+        return object()
+
+    def patched_opener(*_args, **_kwargs):
+        calls.append("opener")
+        return fake_connection
+
+    monkeypatch.setattr(
+        snapshot_read_module,
+        "latest_ready_snapshot",
+        patched_builder,
+    )
+    monkeypatch.setattr(
+        snapshot_read_module,
+        "describe_snapshot",
+        patched_builder,
+    )
+    monkeypatch.setattr(
+        snapshot_read_module,
+        "_open_fixture_snapshot_connection",
+        patched_opener,
+    )
+    monkeypatch.setattr(
+        snapshot_read_module,
+        "_open_pinned_sqlite",
+        patched_opener,
+    )
+
+    try:
+        assert artifact.stat().st_mode & 0o777 == 0o444
+        offset = artifact.stat().st_size - 1
+        original = os.pread(retained_writer, 1, offset)
+        assert len(original) == 1
+        changed = bytes([original[0] ^ 1])
+        assert os.pwrite(retained_writer, changed, offset) == 1
+        assert os.pread(retained_writer, 1, offset) == changed
+        assert os.pwrite(retained_writer, original, offset) == 1
+        os.fsync(retained_writer)
+
+        with pytest.raises(
+            SnapshotRejected,
+            match="public production READY SQLite open is disabled",
+        ):
+            snapshot_read_module.open_ready_snapshot(
+                snapshot_dir,
+                "sha256:" + "ab" * 32,
+            )
+
+        assert calls == []
+        assert not hasattr(paper_runtime, "open_ready_snapshot")
+        assert not hasattr(snapshot_module, "open_ready_snapshot")
+        assert fake_connection.execute("SELECT 1").fetchone() == (1,)
+    finally:
+        fake_connection.close()
+        os.close(retained_writer)
 
 
 def _replace_fixture_with_coherent_exact_four_artifact(ready, binding):
@@ -264,8 +355,6 @@ def test_rejected_pointer_finalization_removes_already_minted_sidecar(
     assert snapshot_module.list_ready_snapshots(snapshot_dir) == []
     with pytest.raises(FileNotFoundError, match="no READY"):
         snapshot_module.latest_ready_snapshot(snapshot_dir)
-    with pytest.raises(FileNotFoundError, match="no READY"):
-        snapshot_module.open_ready_snapshot(snapshot_dir)
     assert not list(snapshot_dir.glob("sha256_*.sqlite"))
     assert not list(snapshot_dir.glob("sha256_*.manifest.json"))
     assert not list(snapshot_dir.glob("sha256_*.publication.json"))
@@ -313,7 +402,9 @@ def test_production_reader_binds_nested_ready_manifest_and_artifact_bytes(
         immutable_db_digest=artifact_digest,
         profile_binding=binding,
     )
-    attestation_path = artifact_path.with_suffix(".readiness.json")
+    attestation_path = artifact_path.with_name(
+        f"{artifact_path.stem}.{readiness.attestation_id}.readiness.json"
+    )
     snapshot_module._atomic_json(
         attestation_path,
         readiness.to_dict(),
@@ -329,6 +420,7 @@ def test_production_reader_binds_nested_ready_manifest_and_artifact_bytes(
         "publication_scope": "PRODUCTION",
         "readiness_attestation": attestation_path.name,
         "readiness_attestation_digest": _sha256_file(attestation_path),
+        "readiness_attestation_id": readiness.attestation_id,
     }
     publication = {
         **publication_body,
@@ -360,7 +452,85 @@ def test_production_reader_binds_nested_ready_manifest_and_artifact_bytes(
 
     observed = describe_snapshot(snapshot_dir, outer["snapshot_id"])
     assert observed.snapshot_id == outer["snapshot_id"]
+    assert observed.readiness_path == attestation_path
+    assert observed.readiness_attestation_id == readiness.attestation_id
+    assert observed.readiness_digest == _sha256_file(attestation_path)
+    assert observed.readiness_bytes == attestation_path.read_bytes()
     assert latest_ready_snapshot(snapshot_dir).snapshot_id == outer["snapshot_id"]
+
+    alternate = mint_pilot_readiness(
+        nested,
+        publisher=signer,
+        immutable_db_digest=artifact_digest,
+        profile_binding=binding,
+        signed_projection_document_digest="sha256:" + "ab" * 32,
+    )
+    alternate_path = artifact_path.with_name(
+        f"{artifact_path.stem}.{alternate.attestation_id}.readiness.json"
+    )
+    snapshot_module._atomic_json(alternate_path, alternate.to_dict(), mode=0o444)
+    snapshot_module._atomic_json(
+        attestation_path,
+        alternate.to_dict(),
+        mode=0o444,
+    )
+    with pytest.raises(
+        MassResearchDisabledError,
+        match="cannot be independently reopened",
+    ):
+        VerifiedPilotReadyPublication(
+            snapshot=observed,
+            readiness=readiness,
+            readiness_path=attestation_path,
+        )
+    snapshot_module._atomic_json(
+        attestation_path,
+        readiness.to_dict(),
+        mode=0o444,
+    )
+    forged_snapshot = snapshot_module.ReadySnapshot(
+        observed.snapshot_id,
+        observed.db_path,
+        observed.manifest_path,
+        observed.manifest,
+        publication_path=observed.publication_path,
+        readiness_path=alternate_path,
+        readiness_digest=_sha256_file(alternate_path),
+        readiness_attestation_id=alternate.attestation_id,
+        readiness_bytes=alternate_path.read_bytes(),
+    )
+    with pytest.raises(
+        MassResearchDisabledError,
+        match="caller snapshot differs",
+    ):
+        VerifiedPilotReadyPublication(
+            snapshot=forged_snapshot,
+            readiness=alternate,
+            readiness_path=alternate_path,
+        )
+
+    mismatched_body = {
+        **publication_body,
+        "readiness_attestation": alternate_path.name,
+        "readiness_attestation_digest": _sha256_file(alternate_path),
+    }
+    snapshot_module._atomic_json(
+        artifact_path.with_suffix(".publication.json"),
+        {
+            **mismatched_body,
+            "publication_digest": snapshot_module._canonical_digest(
+                mismatched_body
+            ),
+        },
+        mode=0o444,
+    )
+    with pytest.raises(RuntimeError, match="exact attestation id"):
+        describe_snapshot(snapshot_dir, outer["snapshot_id"])
+    snapshot_module._atomic_json(
+        artifact_path.with_suffix(".publication.json"),
+        publication,
+        mode=0o444,
+    )
 
     rewritten = dict(outer)
     rewritten["committed_at"] = "2099-12-31T23:59:59+00:00"
@@ -446,6 +616,16 @@ def test_fixture_gate_cannot_publish_a_production_scope(tmp_path: Path) -> None:
     assert not snapshot_dir.exists()
     assert not list(tmp_path.glob("**/*.publication.json"))
     assert not list(tmp_path.glob("**/latest-ready.json"))
+    assert not hasattr(snapshot_module, "_snapshot_candidate_engine")
+    assert not hasattr(
+        snapshot_module,
+        "_publish_exact_four_pilot_ready_snapshot_via_authority_impl",
+    )
+    assert set(
+        inspect.signature(
+            publish_exact_four_pilot_ready_snapshot
+        ).parameters
+    ) == {"staging_db", "snapshot_dir", "signed_projection_document"}
 
 
 def test_publication_marker_post_replace_failure_is_not_discoverable(
@@ -589,8 +769,6 @@ def test_database_publication_failure_aborts_before_readiness_is_minted(
     assert snapshot_module.list_ready_snapshots(snapshot_dir) == []
     with pytest.raises(FileNotFoundError, match="no READY"):
         snapshot_module.latest_ready_snapshot(snapshot_dir)
-    with pytest.raises(FileNotFoundError, match="no READY"):
-        snapshot_module.open_ready_snapshot(snapshot_dir)
     assert not list(snapshot_dir.glob("sha256_*.sqlite"))
     assert not list(snapshot_dir.glob("sha256_*.manifest.json"))
     assert not list(snapshot_dir.glob("sha256_*.publication.json"))
@@ -598,15 +776,6 @@ def test_database_publication_failure_aborts_before_readiness_is_minted(
     assert len(quarantined) == 1
     assert len(list(quarantined[0].glob("sha256_*.sqlite"))) == 1
     assert len(list(quarantined[0].glob("sha256_*.manifest.json"))) == 1
-    rejected_manifest = json.loads(
-        next(quarantined[0].glob("sha256_*.manifest.json")).read_text(
-            encoding="utf-8"
-        )
-    )
-    with pytest.raises(FileNotFoundError, match="publication marker"):
-        snapshot_module.open_ready_snapshot(
-            snapshot_dir, rejected_manifest["snapshot_id"]
-        )
     source = sqlite3.connect(staging)
     try:
         publication = source.execute(

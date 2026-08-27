@@ -130,21 +130,11 @@ AM data is only available from 2024-01-04 onward. Null dates before that period 
 
 ## Sync and publish ops projection
 
-Export the ops projection for the remote Ops MCP:
-
-```bash
-.venv/bin/python scripts/export_ops_projection.py \
-  --db data/structured/ingestion.sqlite \
-  --snapshot-dir data/research_snapshots \
-  --output /tmp/quant-ops-projection.sql
-
-cd platform/workers/quant-ops-mcp
-npx wrangler d1 execute quant-ingest --remote \
-  --file=/tmp/quant-ops-projection.sql
-npx wrangler deploy
-```
-
-The projection contains bounded coverage, segment, B0, and READY metadata. It does not grant the MCP write tools or expose local paths/raw objects.
+The former direct projection-D1 mutation and deploy commands have been removed.
+This document is historical and non-executable, and the old example also named
+the ingestion source database rather than the isolated projection database.
+Use the current production runbook; publication remains PENDING until the
+dedicated Ops projection authority is provisioned and accepted.
 
 ## Remote MCP ops verification
 

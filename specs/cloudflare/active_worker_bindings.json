@@ -77,7 +77,7 @@
       ],
       "durable_objects": [],
       "kv_namespaces": [],
-      "main": "src/index.ts",
+      "main": "src/testing.ts",
       "migrations": [],
       "name": "quant-platform-ingestion-jsda-test",
       "observability": {},

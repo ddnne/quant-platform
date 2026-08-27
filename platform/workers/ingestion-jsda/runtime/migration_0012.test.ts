@@ -90,7 +90,7 @@ describe("0012 populated JSDA migration semantics and FK preservation", () => {
     await applyD1Migrations(runtimeEnv.DB, only0012);
     const migrated = await runtimeEnv.DB.prepare(
       `SELECT freshness, observation_epoch
-         FROM jsda_acquisition_jobs_v2 WHERE work_key=?`,
+         FROM jsda_acquisition_jobs_v3 WHERE work_key=?`,
     )
       .bind(oldObservation.work_key)
       .first<{ freshness: string; observation_epoch: string }>();
@@ -102,7 +102,7 @@ describe("0012 populated JSDA migration semantics and FK preservation", () => {
     await registerJob(runtimeEnv.DB, rootB);
     await registerJob(runtimeEnv.DB, laterObservation);
     const observations = await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v3
         WHERE dataset=? AND job_type='fetch_file' AND target_url=?`,
     )
       .bind(rootA.dataset, locator.target_url)
@@ -347,6 +347,27 @@ describe("0012 populated JSDA migration semantics and FK preservation", () => {
     expect(
       (
         await runtimeEnv.DB.prepare(
+          "SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v3",
+        ).first<{ n: number }>()
+      )?.n,
+    ).toBe(jobsBefore?.n);
+    expect(
+      (
+        await runtimeEnv.DB.prepare(
+          "SELECT COUNT(*) AS n FROM jsda_acquisition_events_v3",
+        ).first<{ n: number }>()
+      )?.n,
+    ).toBe(eventsBefore?.n);
+    expect(
+      (
+        await runtimeEnv.DB.prepare(
+          "SELECT COUNT(*) AS n FROM jsda_acquisition_discoveries_v3",
+        ).first<{ n: number }>()
+      )?.n,
+    ).toBe(discoveriesBefore?.n);
+    expect(
+      (
+        await runtimeEnv.DB.prepare(
           "SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2",
         ).first<{ n: number }>()
       )?.n,
@@ -383,7 +404,7 @@ describe("0012 populated JSDA migration semantics and FK preservation", () => {
     expect(fkSql).not.toMatch(/jobs_v2_next/);
 
     const firstRoot = await runtimeEnv.DB.prepare(
-      "SELECT state FROM jsda_acquisition_jobs_v2 WHERE work_key=?",
+      "SELECT state FROM jsda_acquisition_jobs_v3 WHERE work_key=?",
     )
       .bind(root.work_key)
       .first<{ state: string }>();
@@ -402,7 +423,7 @@ describe("0012 populated JSDA migration semantics and FK preservation", () => {
     );
     await applyD1Migrations(runtimeEnv.DB, []);
     await runtimeEnv.DB.prepare(
-      `INSERT INTO jsda_acquisition_jobs_v2 (
+      `INSERT INTO jsda_acquisition_jobs_v3 (
          work_key, run_key, dataset, job_type, target_url, segment_id,
          parent_work_key, contract_digest, state, attempt, cursor,
          requested_by, requested_at, first_seen_at, updated_at,
@@ -425,7 +446,7 @@ describe("0012 populated JSDA migration semantics and FK preservation", () => {
       )
       .run();
     await runtimeEnv.DB.prepare(
-      `INSERT INTO jsda_acquisition_jobs_v2 (
+      `INSERT INTO jsda_acquisition_jobs_v3 (
          work_key, run_key, dataset, job_type, target_url, segment_id,
          parent_work_key, contract_digest, state, attempt, cursor,
          requested_by, requested_at, first_seen_at, updated_at
@@ -480,7 +501,7 @@ describe("0012 populated JSDA migration semantics and FK preservation", () => {
     });
 
     const secondRootJob = await runtimeEnv.DB.prepare(
-      "SELECT state FROM jsda_acquisition_jobs_v2 WHERE work_key=?",
+      "SELECT state FROM jsda_acquisition_jobs_v3 WHERE work_key=?",
     )
       .bind(secondRoot.work_key)
       .first<{ state: string }>();
@@ -584,7 +605,7 @@ describe("0012 populated JSDA migration semantics and FK preservation", () => {
 
     await applyD1Migrations(runtimeEnv.DB, only0012);
     const after = await runtimeEnv.DB.prepare(
-      "SELECT state FROM jsda_acquisition_jobs_v2 WHERE work_key=?",
+      "SELECT state FROM jsda_acquisition_jobs_v3 WHERE work_key=?",
     )
       .bind(root.work_key)
       .first<{ state: string }>();

@@ -28,6 +28,7 @@ from scripts.local_authority_activation import (
 from scripts.local_authority_bootstrap_common import (
     _ROOT,
     _RUNNABLE_AUTHORITIES,
+    EXECUTION_ACTIVATION_DOCUMENTS,
     LAUNCHD_RENDER_ROOT,
     LAUNCHD_TEMPLATE,
     PROTECTED_ROOT,
@@ -352,11 +353,56 @@ def _generate_or_validate_key_material(
     }
 
 
+def _initialize_non_file_authority_material(
+    row: dict[str, Any], *, expected_uid: int
+) -> dict[str, Any]:
+    """Initialize Trader's outer event store without minting a file key."""
+
+    if (
+        row["authority_id"] != "trader"
+        or row["key_backend"] != "webauthn_platform_or_hardware"
+        or row["key_path"] is not None
+        or os.geteuid() != expected_uid
+    ):
+        raise BootstrapError("non-file authority material request is invalid")
+    service_dir = Path(row["service_dir"])
+    try:
+        service_info = service_dir.lstat()
+    except OSError as exc:
+        raise BootstrapError("protected service directory is unavailable") from exc
+    if (
+        not stat.S_ISDIR(service_info.st_mode)
+        or service_info.st_uid != expected_uid
+        or stat.S_IMODE(service_info.st_mode) != 0o700
+    ):
+        raise BootstrapError("protected service directory ownership is unsafe")
+    ledger = SQLiteAuthorityEventLedger(
+        row["ledger_path"],
+        authority_id=row["authority_id"],
+        environment=row["environment"],
+        expected_uid=expected_uid,
+    )
+    ledger.initialize()
+    return {
+        "authority_id": row["authority_id"],
+        "environment": row["environment"],
+        "status": "EVENT_STORE_READY_WEBAUTHN_ENROLLMENT_REQUIRED",
+        "private_key_created": False,
+        "private_key_exposed": False,
+        "event_ledger_initialized": True,
+    }
+
+
 def _run_key_generation_as_service_user(
     row: dict[str, Any], *, uid: int, gid: int
 ) -> dict[str, Any]:
+    def prepare() -> dict[str, Any]:
+        if row["key_backend"] == "protected_local_key":
+            return _generate_or_validate_key_material(row, expected_uid=uid)
+        return _initialize_non_file_authority_material(row, expected_uid=uid)
+
     if os.geteuid() == uid:
-        return _generate_or_validate_key_material(row, expected_uid=uid)
+        return prepare()
     if os.geteuid() != 0:
         raise BootstrapError("service UID transition requires root")
     read_fd, write_fd = os.pipe()
@@ -367,7 +413,7 @@ def _run_key_generation_as_service_user(
             os.setgroups([gid])
             os.setgid(gid)
             os.setuid(uid)
-            result = _generate_or_validate_key_material(row, expected_uid=uid)
+            result = prepare()
             payload = {"ok": True, "result": result}
         except Exception as exc:  # noqa: BLE001 - child reports only the error class
             payload = {"ok": False, "error": type(exc).__name__}
@@ -414,7 +460,7 @@ def generate_keys(selected: str, *, apply: bool) -> dict[str, Any]:
                     "action": (
                         "GENERATE_PROTECTED_ED25519_AS_SERVICE_UID"
                         if row["key_backend"] == "protected_local_key"
-                        else "SKIP_WEBAUTHN_HUMAN_PRESENCE_REQUIRED"
+                        else "INITIALIZE_EVENT_STORE_WEBAUTHN_ENROLLMENT_REQUIRED"
                     ),
                 }
                 for row in rows
@@ -428,16 +474,6 @@ def generate_keys(selected: str, *, apply: bool) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     used_ids: set[int] = set()
     for row in rows:
-        if row["key_backend"] != "protected_local_key":
-            results.append(
-                {
-                    "authority_id": row["authority_id"],
-                    "environment": row["environment"],
-                    "status": "SKIPPED_WEBAUTHN_HUMAN_PRESENCE_REQUIRED",
-                    "private_key_created": False,
-                }
-            )
-            continue
         uid = _ensure_user(row["service_user"], group_id=group_id, used_ids=used_ids)
         results.append(_run_key_generation_as_service_user(row, uid=uid, gid=group_id))
     return {
@@ -471,16 +507,23 @@ def _runtime_config_template(row: dict[str, Any]) -> dict[str, Any]:
         "ops_projection": ("artifact_store",),
         "coverage_transition": (),
         "ready": ("snapshot_root",),
+        "trader": ("activation_document_path",),
+        "controlled_execution": ("activation_document_path",),
     }[row["authority_id"]]
+    resources = {
+        resource_name: f"/REPLACE/WITH/{resource_name.upper()}"
+        for resource_name in resource_names
+    }
+    if row["authority_id"] in EXECUTION_ACTIVATION_DOCUMENTS:
+        resources["activation_document_path"] = str(
+            EXECUTION_ACTIVATION_DOCUMENTS[row["authority_id"]]
+        )
     return {
         "format": "local-authority-runtime-config/v1",
         "authority_id": row["authority_id"],
         "environment": row["environment"],
         "peer_callers": callers,
-        "resources": {
-            resource_name: f"/REPLACE/WITH/{resource_name.upper()}"
-            for resource_name in resource_names
-        },
+        "resources": resources,
     }
 
 
@@ -561,6 +604,14 @@ def install_runtime_configs(
             raise BootstrapError(
                 f"runtime config peer identities differ from pinned manifest: {relative}"
             )
+        if (
+            row["authority_id"] in EXECUTION_ACTIVATION_DOCUMENTS
+            and config["resources"]["activation_document_path"]
+            != str(EXECUTION_ACTIVATION_DOCUMENTS[row["authority_id"]])
+        ):
+            raise BootstrapError(
+                f"runtime activation path differs from pinned authority: {relative}"
+            )
         if any(
             "REPLACE" in value
             for value in (
@@ -581,7 +632,11 @@ def install_runtime_configs(
             if peer_entry.pw_uid in {0, authority_entry.pw_uid}:
                 raise BootstrapError("runtime peer is not an isolated non-root UID")
             peer_usernames.append(peer_username)
-        for resource_path in config["resources"].values():
+        for resource_name, resource_path in config["resources"].items():
+            if resource_name == "activation_document_path":
+                # Human-reviewed activation is intentionally installed later;
+                # an absent document keeps the socket service fail-closed.
+                continue
             try:
                 Path(resource_path).resolve(strict=True)
             except OSError as exc:
@@ -822,6 +877,17 @@ def load_plists(selected: str, *, apply: bool) -> dict[str, Any]:
             raise BootstrapError(
                 f"root-owned runtime config must be installed before load: {runtime_config}"
             )
+        if row["authority_id"] in EXECUTION_ACTIVATION_DOCUMENTS:
+            activation_path = EXECUTION_ACTIVATION_DOCUMENTS[row["authority_id"]]
+            if not _safe_file_state(
+                activation_path,
+                uid=0,
+                modes=(0o400, 0o440, 0o444, 0o600, 0o640, 0o644),
+            ):
+                raise BootstrapError(
+                    "root-owned execution activation document must be reviewed "
+                    f"before load: {activation_path}"
+                )
         if _launchd_loaded(row["launchd_label"]):
             job["status"] = "ALREADY_LOADED"
             continue

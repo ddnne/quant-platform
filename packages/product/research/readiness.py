@@ -79,13 +79,28 @@ class ReadyPublicationAuthorityStatus:
 
 
 def ready_publication_authority_status() -> ReadyPublicationAuthorityStatus:
-    """Report PENDING/UNKNOWN until a separately isolated issuer exists.
+    """Report operational truth without mistaking filesystem preflight for liveness.
 
     Product code intentionally has no private-key type, private-key loader,
-    signer factory, or issuer injection hook.  Activating this contract needs
-    a different OS principal or remote service that independently reopens and
-    remeasures every item in ``required_checks`` before it signs anything.
+    signer factory, or issuer injection hook.  The positive observation is a
+    pinned public registry plus launchd socket metadata is only a preflight: it
+    cannot prove a live listener or authenticate its kernel peer.  Only an
+    actual publication call can do that, so this passive status remains
+    PENDING/UNKNOWN even when the preflight material is present.
     """
+
+    try:
+        from scripts.local_authority_clients import ReadyPublisherAuthorityClient
+        from scripts.local_authority_service import LocalAuthorityError
+
+        ReadyPublisherAuthorityClient(environment="production").require_available()
+    except LocalAuthorityError:
+        reason = "dedicated READY publication authority is not provisioned"
+    else:
+        reason = (
+            "pinned READY registry and socket metadata are present; "
+            "listener liveness and peer identity are unverified until a call"
+        )
 
     return ReadyPublicationAuthorityStatus(
         state="PENDING",
@@ -93,12 +108,12 @@ def ready_publication_authority_status() -> ReadyPublicationAuthorityStatus:
         contract_version=READY_PUBLICATION_AUTHORITY_CONTRACT,
         required_checks=READY_PUBLICATION_REQUIRED_CHECKS,
         mass_state="DISABLED",
-        reason="dedicated READY publication authority is not provisioned",
+        reason=reason,
     )
 
 
 def require_ready_publication_authority() -> None:
-    """Fail before publication mutation while the external issuer is absent."""
+    """Never mint a positive capability from passive endpoint metadata."""
 
     status = ready_publication_authority_status()
     raise ReadyPublicationAuthorityPending(
@@ -519,6 +534,29 @@ def load_verified_pilot_readiness(
         raise MassResearchDisabledError(
             f"cannot load pilot readiness sidecar: {source}"
         ) from exc
+    return _load_verified_pilot_readiness_bytes(
+        raw_document,
+        expected_environment=expected_environment,
+        expected_snapshot_id=expected_snapshot_id,
+        expected_ready_manifest_digest=expected_ready_manifest_digest,
+        expected_authority_resource_digest=expected_authority_resource_digest,
+    )
+
+
+def _load_verified_pilot_readiness_bytes(
+    raw_document: bytes,
+    *,
+    expected_environment: str,
+    expected_snapshot_id: str | None = None,
+    expected_ready_manifest_digest: str | None = None,
+    expected_authority_resource_digest: str | None = None,
+) -> VerifiedPilotReadiness:
+    """Verify descriptor-pinned sidecar bytes without reopening a pathname."""
+
+    if type(raw_document) is not bytes or not raw_document:
+        raise MassResearchDisabledError(
+            "pilot readiness sidecar must be exact non-empty bytes"
+        )
     from paper_runtime.readiness_attestation import (
         ReadyAttestationVerificationError,
         decode_strict_ready_json,

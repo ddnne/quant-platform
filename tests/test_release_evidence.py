@@ -77,6 +77,7 @@ def payload() -> dict[str, object]:
         "table_count": 25,
     }
     database = {
+        "environment": "production",
         "name": release._GOVERNED_DATABASE_NAME,
         "id": release._GOVERNED_DATABASE_ID,
         "schema_profile": release._BACKUP_SCHEMA_PROFILE,
@@ -157,6 +158,17 @@ def payload() -> dict[str, object]:
                     "result": "PASS",
                     "source_sha": SHA,
                     "deployment_version_id": version,
+                    **(
+                        {
+                            "endpoint": "/health/ready",
+                            "http_status": 200,
+                            "product_ready": True,
+                            "cutover": "V3_ACTIVE",
+                            "response_digest": "sha256:" + "e" * 64,
+                        }
+                        if worker == "quant-platform-ingestion-jsda"
+                        else {}
+                    ),
                     "provenance": provenance(
                         "release-smoke-runner/v1",
                         f"smoke:{environment}:{worker}",
@@ -272,16 +284,88 @@ def proven_go(facts: dict[str, object]) -> None:
     )
 
 
-def test_release_evidence_is_deterministic_and_content_addressed(tmp_path: Path) -> None:
+def validate_untrusted_candidate(facts: dict[str, object]) -> None:
+    release._validate_untrusted_candidate_schema_for_tests(facts)
+
+
+def test_candidate_schema_is_deterministic_but_cannot_publish(tmp_path: Path) -> None:
     facts = payload()
-    first = release.write_envelope(facts, tmp_path)
-    second = release.write_envelope(facts, tmp_path)
-    assert first == second
-    document = json.loads(first.read_text(encoding="utf-8"))
-    assert document["schema_version"] == release.SCHEMA_VERSION
-    assert document["evidence_digest"] == release.payload_digest(facts)
-    assert document["evidence_digest"].removeprefix("sha256:") in first.name
-    assert first.stat().st_mode & 0o777 == 0o444
+    output = tmp_path / "release"
+    validate_untrusted_candidate(facts)
+    assert release.payload_digest(facts) == release.payload_digest(facts)
+    with pytest.raises(
+        release.ReleaseObservationAuthorityUnavailable,
+        match="caller-supplied JSON is schema-only and untrusted",
+    ):
+        release.build_envelope(facts)
+    with pytest.raises(release.ReleaseObservationAuthorityUnavailable):
+        release.write_envelope(facts, output)
+    assert not output.exists()
+
+
+def test_cli_rejects_before_reading_any_caller_document(tmp_path: Path) -> None:
+    missing = tmp_path / "caller-observations.json"
+    output = tmp_path / "release"
+    with pytest.raises(
+        release.ReleaseObservationAuthorityUnavailable,
+        match="signed release-observation authority",
+    ):
+        release.main([str(missing), "--output-dir", str(output)])
+    assert not output.exists()
+
+
+def test_public_builder_never_treats_even_invalid_json_as_evidence() -> None:
+    with pytest.raises(release.ReleaseObservationAuthorityUnavailable):
+        release.build_envelope({"collector": "caller-self-claim"})
+
+
+def test_writer_guard_is_independent_of_a_replaced_builder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "release"
+    monkeypatch.setattr(
+        release,
+        "build_envelope",
+        lambda payload: {
+            "schema_version": release.SCHEMA_VERSION,
+            "evidence_digest": release.payload_digest(payload),
+            "payload": dict(payload),
+        },
+    )
+    with pytest.raises(release.ReleaseObservationAuthorityUnavailable):
+        release.write_envelope({"collector": "caller-self-claim"}, output)
+    assert not output.exists()
+
+
+def test_pending_authority_contract_matches_missing_jsda_collector_transport() -> None:
+    contract = json.loads(
+        (ROOT / "specs/cloudflare/release_observation_authority.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert contract["authority_status"] == "PENDING"
+    assert contract["active_key_count"] == 0
+    assert contract["publication_authorized"] is False
+    assert contract["caller_supplied_json_trusted"] is False
+    jsda = contract["collectors"]["jsda_readiness"]
+    assert jsda == {
+        "target_worker": "quant-platform-ingestion-jsda",
+        "endpoint": "/health/ready",
+        "transport": "private-service-binding",
+        "binding_name": None,
+        "transport_implemented": False,
+        "status": "HOLD",
+    }
+    bindings = json.loads(
+        (ROOT / "specs/cloudflare/active_worker_bindings.json").read_text(
+            encoding="utf-8"
+        )
+    )["workers"]["ingestion-jsda"]
+    for environment in ("base", "staging", "production"):
+        assert bindings[environment]["services"] == []
+        assert bindings[environment]["workers_dev"] is False
+        assert bindings[environment]["preview_urls"] is False
+        assert bindings[environment]["routes"] == []
 
 
 @pytest.mark.parametrize(
@@ -298,36 +382,36 @@ def test_release_evidence_rejects_policy_drift(
     facts = payload()
     facts[field] = value
     with pytest.raises(ValueError, match=message):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
 
 def test_release_evidence_requires_exact_pinned_finding_ledger() -> None:
     missing = payload()
     del missing["finding_ledger"]
     with pytest.raises(ValueError, match="field membership drift"):
-        release.build_envelope(missing)
+        validate_untrusted_candidate(missing)
 
     wrong_digest = payload()
     wrong_digest["finding_ledger"]["ledger_digest"] = "sha256:" + "0" * 64  # type: ignore[index]
     with pytest.raises(ValueError, match="pinned ledger digest"):
-        release.build_envelope(wrong_digest)
+        validate_untrusted_candidate(wrong_digest)
 
     invented_open = payload()
     invented_open["finding_ledger"]["open_p0_ids"] = ["A2"]  # type: ignore[index]
     with pytest.raises(ValueError, match="open P0 ids"):
-        release.build_envelope(invented_open)
+        validate_untrusted_candidate(invented_open)
 
     invented_field = payload()
     invented_field["finding_ledger"]["reviewed"] = True  # type: ignore[index]
     with pytest.raises(ValueError, match="finding_ledger schema drift"):
-        release.build_envelope(invented_field)
+        validate_untrusted_candidate(invented_field)
 
 
 def test_release_evidence_rejects_secrets_provider_tokens_and_local_paths() -> None:
     secret = payload()
     secret["quant_mcp"]["unexpected_api_token"] = "do-not-publish"  # type: ignore[index]
     with pytest.raises(ValueError, match="secret-shaped key"):
-        release.build_envelope(secret)
+        validate_untrusted_candidate(secret)
 
     provider_tokens = (
         "gho_abcdefghijklmn" + "opqrstuvwxyz123456",
@@ -339,7 +423,7 @@ def test_release_evidence_rejects_secrets_provider_tokens_and_local_paths() -> N
         secret = payload()
         secret["controlled_pilot"]["reason"] = provider_token  # type: ignore[index]
         with pytest.raises(ValueError, match="secret-shaped material"):
-            release.build_envelope(secret)
+            validate_untrusted_candidate(secret)
 
     for absolute in (
         "/tmp/private/result.json",
@@ -350,45 +434,87 @@ def test_release_evidence_rejects_secrets_provider_tokens_and_local_paths() -> N
         local = payload()
         local["controlled_pilot"]["reason"] = absolute  # type: ignore[index]
         with pytest.raises(ValueError, match="local absolute path"):
-            release.build_envelope(local)
+            validate_untrusted_candidate(local)
 
 
 def test_nested_schemas_are_closed_and_provenance_is_source_bound() -> None:
     facts = payload()
     facts["required_check"]["note"] = "self reported"  # type: ignore[index]
     with pytest.raises(ValueError, match="required_check schema drift"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
     facts = payload()
     del facts["smoke"]["production"][  # type: ignore[index]
         "quant-platform-ingestion-jsda"
     ]["provenance"]["observed_at"]
     with pytest.raises(ValueError, match="provenance schema drift"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
     facts = payload()
     facts["cloudflare_build"]["provenance"]["source_sha"] = "f" * 40  # type: ignore[index]
     with pytest.raises(ValueError, match="collector and source SHA"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
 
 def test_release_evidence_requires_check_build_deploy_and_smoke_identity() -> None:
     facts = payload()
     facts["required_check"]["head_sha"] = "f" * 40  # type: ignore[index]
     with pytest.raises(ValueError, match="authoritative Cloudflare App"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
     facts = payload()
     facts["deployments"].pop("quant-platform-ingestion-jsda")  # type: ignore[union-attr]
     with pytest.raises(ValueError, match="exactly the active Worker inventory"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
     facts = payload()
     facts["smoke"]["production"]["quant-platform-ingestion-jsda"][  # type: ignore[index]
         "deployment_version_id"
     ] = "99999999-9999-4999-8999-999999999999"
     with pytest.raises(ValueError, match="deployed source/version"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
+
+    facts = payload()
+    facts["smoke"]["production"]["quant-platform-ingestion-jsda"][  # type: ignore[index]
+        "source_sha"
+    ] = "f" * 40
+    with pytest.raises(ValueError, match="deployed source/version"):
+        validate_untrusted_candidate(facts)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("endpoint", "/health"),
+        ("http_status", 503),
+        ("product_ready", False),
+        ("cutover", "PENDING"),
+        ("response_digest", "sha256:" + "d" * 64),
+    ],
+)
+def test_jsda_smoke_requires_ready_endpoint_and_bound_ready_response(
+    field: str, value: object
+) -> None:
+    facts = payload()
+    jsda = facts["smoke"]["production"]["quant-platform-ingestion-jsda"]  # type: ignore[index]
+    jsda[field] = value
+    with pytest.raises(ValueError, match="must prove HTTP 200 product readiness"):
+        validate_untrusted_candidate(facts)
+
+
+def test_jsda_smoke_rejects_generic_health_pass_schema() -> None:
+    facts = payload()
+    jsda = facts["smoke"]["production"]["quant-platform-ingestion-jsda"]  # type: ignore[index]
+    for field in (
+        "endpoint",
+        "http_status",
+        "product_ready",
+        "cutover",
+        "response_digest",
+    ):
+        del jsda[field]
+    with pytest.raises(ValueError, match="schema drift"):
+        validate_untrusted_candidate(facts)
 
 
 def test_fake_or_incomplete_migration_evidence_is_rejected() -> None:
@@ -397,65 +523,65 @@ def test_fake_or_incomplete_migration_evidence_is_rejected() -> None:
         "status": "APPLIED"
     }
     with pytest.raises(ValueError, match="canonical targets"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
     facts = payload()
     facts["migrations"]["production"]["quant-ingest"]["pending"] = 1  # type: ignore[index]
     with pytest.raises(ValueError, match="unapplied migrations"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
     facts = payload()
     facts["migrations"]["production"]["quant-ingest"][  # type: ignore[index]
         "applied_migrations"
     ] = []
     with pytest.raises(ValueError, match="canonical migration sequence"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
 
 def test_exact_mcp_names_schema_and_deployment_are_required() -> None:
     facts = payload()
     facts["quant_mcp"]["tools"][0] = "invented_tool"  # type: ignore[index]
     with pytest.raises(ValueError, match="exact 17 tools"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
     facts = payload()
     facts["quant_mcp"]["schema_digest"] = "sha256:" + "1" * 64  # type: ignore[index]
     with pytest.raises(ValueError, match="accepted schema digest"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
     facts = payload()
     facts["quant_mcp"]["deployment_version_id"] = (  # type: ignore[index]
         "99999999-9999-4999-8999-999999999999"
     )
     with pytest.raises(ValueError, match="accepted Ops MCP deployment"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
 
 def test_release_evidence_rejects_empty_unverified_or_unbound_backup() -> None:
     facts = payload()
     facts["backup"]["plaintext_bytes"] = 0  # type: ignore[index]
     with pytest.raises(ValueError, match="non-empty verified"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
     facts = payload()
     facts["backup"]["verified"] = False  # type: ignore[index]
     with pytest.raises(ValueError, match="non-empty verified"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
     facts = payload()
     facts["backup"]["database"]["id"] = "11111111-1111-4111-8111-111111111111"  # type: ignore[index]
     with pytest.raises(ValueError, match="governed production D1"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
     facts = payload()
     facts["backup"]["authenticated_metadata_digest"] = "sha256:" + "0" * 64  # type: ignore[index]
     with pytest.raises(ValueError, match="authenticated metadata digest"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
     facts = payload()
     facts["backup"]["note"] = "invented-field"  # type: ignore[index]
     with pytest.raises(ValueError, match="schema drift"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
 
 def test_release_evidence_rejects_unproven_go_and_generic_no_go() -> None:
@@ -469,19 +595,19 @@ def test_release_evidence_rejects_unproven_go_and_generic_no_go() -> None:
         ),
     }
     with pytest.raises(ValueError, match="schema drift"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
     facts = payload()
     facts["controlled_pilot"]["reason"] = "not ready"  # type: ignore[index]
     with pytest.raises(ValueError, match="specific evidenced blocker"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)
 
 
 def test_complete_exact_four_go_chain_is_accepted_but_cannot_promote() -> None:
     facts = payload()
     proven_go(facts)
-    release.build_envelope(facts)
+    validate_untrusted_candidate(facts)
 
     facts["controlled_pilot"]["automatic_promotion"] = True  # type: ignore[index]
     with pytest.raises(ValueError, match="without promotion"):
-        release.build_envelope(facts)
+        validate_untrusted_candidate(facts)

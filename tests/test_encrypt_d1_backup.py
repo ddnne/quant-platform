@@ -77,6 +77,7 @@ def key(tmp_path: Path) -> Path:
 
 def identity_kwargs() -> dict[str, str]:
     return {
+        "environment": "production",
         "database_name": backup.GOVERNED_DATABASE_NAME,
         "database_id": backup.GOVERNED_DATABASE_ID,
         "exported_at": EXPORTED_AT,
@@ -146,6 +147,7 @@ def test_valid_d1_dump_encrypts_verifies_and_deletes_only_after_success(
     assert result["plaintext_bytes"] > 0
     assert result["ciphertext_bytes"] > result["plaintext_bytes"]
     assert result["database"] == {
+        "environment": "production",
         "name": backup.GOVERNED_DATABASE_NAME,
         "id": backup.GOVERNED_DATABASE_ID,
         "schema_profile": backup.SCHEMA_PROFILE,
@@ -239,6 +241,60 @@ def test_wrong_database_identity_or_schema_fails_closed(tmp_path: Path) -> None:
     assert not target.exists()
 
 
+def test_staging_identity_is_manifest_bound_and_cross_environment_fails(
+    tmp_path: Path,
+) -> None:
+    source = governed_d1_export(tmp_path, suffix="-staging")
+    target = tmp_path / "quant-ingest-staging.sql.enc"
+    key_path = key(tmp_path)
+    staging = backup._governed_database("staging")
+    result = backup.encrypt_backup(
+        source,
+        target,
+        key_path,
+        environment="staging",
+        database_name=staging["name"],
+        database_id=staging["id"],
+        exported_at=EXPORTED_AT,
+        release_source_sha=SHA,
+    )
+    assert result["database"] == staging
+    assert backup.verify_encrypted(target, key_path)["database"] == staging
+
+    second = governed_d1_export(tmp_path, suffix="-cross-env")
+    with pytest.raises(ValueError, match="governed staging database"):
+        backup.encrypt_backup(
+            second,
+            tmp_path / "cross-env.enc",
+            key_path,
+            environment="staging",
+            database_name=backup.GOVERNED_DATABASE_NAME,
+            database_id=backup.GOVERNED_DATABASE_ID,
+            exported_at=EXPORTED_AT,
+            release_source_sha=SHA,
+        )
+    assert second.is_file()
+
+
+def test_authenticated_environment_cannot_be_relabelled(tmp_path: Path) -> None:
+    source = governed_d1_export(tmp_path, suffix="-environment")
+    encrypted = tmp_path / "environment.enc"
+    key_path = key(tmp_path)
+    backup.encrypt_backup(source, encrypted, key_path, **identity_kwargs())
+    raw = bytearray(encrypted.read_bytes())
+    header_offset = len(backup.MAGIC) + backup.HEADER_LENGTH_BYTES
+    header_length = struct.unpack(
+        ">I", raw[len(backup.MAGIC) : header_offset]
+    )[0]
+    header = bytes(raw[header_offset : header_offset + header_length])
+    replacement = header.replace(b'"environment":"production"', b'"environment":"staging___"')
+    assert replacement != header
+    raw[header_offset : header_offset + header_length] = replacement
+    encrypted.write_bytes(raw)
+    with pytest.raises((ValueError, InvalidTag)):
+        backup.verify_encrypted(encrypted, key_path)
+
+
 def test_tamper_is_rejected(tmp_path: Path) -> None:
     source = governed_d1_export(tmp_path)
     encrypted = tmp_path / "quant-ingest.sql.enc"
@@ -275,6 +331,27 @@ def test_key_permissions_and_target_overwrite_fail_closed(tmp_path: Path) -> Non
     target.unlink()
     with pytest.raises(ValueError, match="permissions"):
         backup.encrypt_backup(source, target, key_path, **identity_kwargs())
+
+
+def test_racing_target_creation_is_never_overwritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = governed_d1_export(tmp_path, suffix="-race")
+    original_source = source.read_bytes()
+    target = tmp_path / "race.enc"
+    key_path = key(tmp_path)
+    real_link = backup.os.link
+
+    def racing_link(source_path, target_path, **kwargs):
+        Path(target_path).write_bytes(b"racing-owner")
+        return real_link(source_path, target_path, **kwargs)
+
+    monkeypatch.setattr(backup.os, "link", racing_link)
+    with pytest.raises(FileExistsError):
+        backup.encrypt_backup(source, target, key_path, **identity_kwargs())
+    assert target.read_bytes() == b"racing-owner"
+    assert source.read_bytes() == original_source
+    assert not list(tmp_path.glob(f".{target.name}.*.partial"))
 
 
 def test_key_generation_refuses_overwrite(tmp_path: Path) -> None:

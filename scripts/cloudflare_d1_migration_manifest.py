@@ -46,6 +46,76 @@ TARGETS: Mapping[str, Mapping[str, str]] = {
     },
 }
 
+APPLICATION_POLICIES: Mapping[str, Mapping[str, Any]] = {
+    "quant-ingest": {
+        "mode": "source-only-hold/v2",
+        "owner_command": None,
+        "observation_recovery_command": (
+            "scripts/apply_ingestion_d1_migrations.py"
+        ),
+        "remote_mutation_authorized": False,
+        "environment_order": ["staging", "production"],
+        "authorization_state": {
+            "staging": "HOLD",
+            "production": "HOLD",
+        },
+        "canonical_reservation_identity": [
+            "environment",
+            "database_id",
+            "source_sha",
+            "canonical_manifest_digest",
+        ],
+        "hold_until": [
+            "trusted-remote-cross-host-exclusive-lock",
+            "trusted-control-plane-source-sha-attestation",
+        ],
+        "local_o_excl_role": "SINGLE_HOST_CRASH_AUDIT_MARKER_ONLY",
+        "production_staging_evidence": (
+            "independent-canonical-staging-d1-reobservation"
+        ),
+        "caller_staging_artifacts": "FORBIDDEN",
+        "encrypted_backup_role": "ROLLBACK_ONLY",
+        "encrypted_backup_grants_authority": False,
+        "recovery_states": {
+            "APPLIED": "fresh-exact-canonical-postflight-and-zero-pending",
+            "NOT_APPLIED": (
+                "fresh-observation-exactly-matches-recorded-preflight-baseline"
+            ),
+            "UNKNOWN": "all-other-or-unobservable-states",
+        },
+        "recovery_grants_mutation_authority": False,
+        "jsda_acceptance": {
+            "endpoint": "/health/ready",
+            "http_status": 200,
+            "product_ready": True,
+            "cutover": "V3_ACTIVE",
+            "response_digest_bound_to_provenance": True,
+            "deployment_version_and_source_sha_bound": True,
+        },
+        "requires": [
+            "canonical-live-database-identity",
+            "time-travel-bookmark",
+            "rollback-only-encrypted-export-checksum",
+            "exact-export-preflight",
+            "exact-export-postflight",
+            "signed-jsda-v3-cutover-authority-before-readiness",
+            "jsda-v3-readiness-smoke-before-product-acceptance",
+        ],
+    },
+    "quant-ops-projection": {
+        "mode": "wrangler-canonical-owner/v1",
+        "owner_command": None,
+        "environment_order": ["staging", "production"],
+        "requires": [],
+    },
+    "quant-ops-quota": {
+        "mode": "wrangler-canonical-owner/v1",
+        "owner_command": None,
+        "environment_order": ["staging", "production"],
+        "requires": [],
+    },
+}
+
 
 def _load_toml(path: Path) -> dict[str, Any]:
     with path.open("rb") as handle:
@@ -142,14 +212,16 @@ def build_manifest() -> dict[str, Any]:
             "target_role": policy["target_role"],
             "owner": owner,
             "migration_dir": str((ROOT / owner / migration_dir).relative_to(ROOT)),
+            "application_policy": dict(APPLICATION_POLICIES[target_name]),
             "environments": environments,
             "migrations": _migrations(target_name, owner, migration_dir),
         }
     manifest = {
-        "schema_version": "cloudflare-d1-migration-manifest/v1",
+        "schema_version": "cloudflare-d1-migration-manifest/v2",
         "applied_state_policy": (
-            "UNVERIFIED is fail-closed source state; remote post-apply state belongs "
-            "in immutable release evidence"
+            "UNVERIFIED is fail-closed source state; source policy HOLD never "
+            "authorizes remote mutation, and remote post-apply state belongs in "
+            "immutable release evidence"
         ),
         "targets": targets,
     }
@@ -166,6 +238,8 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         policy = TARGETS[str(target_name)]
         if target.get("owner") != policy["owner"]:
             raise ValueError(f"{target_name}: migration owner drift")
+        if target.get("application_policy") != APPLICATION_POLICIES[target_name]:
+            raise ValueError(f"{target_name}: migration application policy drift")
         migrations = target.get("migrations") or []
         for order, migration in enumerate(migrations, start=1):
             if migration.get("order") != order:

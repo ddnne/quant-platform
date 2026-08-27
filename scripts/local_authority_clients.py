@@ -15,6 +15,7 @@ import hashlib
 import os
 import pwd
 import re
+import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,26 +27,27 @@ from ops import projection_signing
 from ops.trust_domain import require_environment
 
 from scripts.authority_principal_manifest import load_and_validate_manifest
+from scripts.local_authority_service import (
+    DEFAULT_IO_TIMEOUT_SECONDS,
+    REQUEST_FORMAT,
+    LocalAuthorityError,
+    LocalAuthorityPending,
+    call_unix_authority,
+    canonical_json_bytes,
+    decode_strict_json,
+    sha256_digest,
+)
 from scripts.local_ready_registry import (
     LocalReadyRegistryError,
     derive_ready_authority_resource_digest,
     load_scoped_ready_public_keys,
     ready_authority_instance_id,
 )
-from scripts.local_authority_service import (
-    DEFAULT_IO_TIMEOUT_SECONDS,
-    LocalAuthorityError,
-    LocalAuthorityPending,
-    REQUEST_FORMAT,
-    call_unix_authority,
-    canonical_json_bytes,
-    decode_strict_json,
-    sha256_digest,
-)
 
 _EVENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}\Z")
 _PINNED_CALL_TIMEOUT_SECONDS = {
     ("d1_sync:sync_now", "sync_current"): 905.0,
+    ("ready:publish_profile_plan_bound", "profile_plan_closure_ready"): 905.0,
 }
 
 
@@ -399,6 +401,38 @@ class ReadyPublisherAuthorityClient:
             caller="ready_publisher",
             authority_id="ready",
         )
+
+    def require_available(self) -> str:
+        """Preflight the pinned verifier and launchd endpoint without mutation.
+
+        This is deliberately only a preflight: the kernel peer credential is
+        authenticated again by ``call_unix_authority`` and the returned READY
+        signature is independently checked against the same pinned registry.
+        """
+
+        try:
+            active = load_scoped_ready_public_keys(
+                expected_environment=self._client.environment
+            )
+        except LocalReadyRegistryError as exc:
+            raise LocalAuthorityPending(
+                "READY verifier registry is unavailable"
+            ) from exc
+        if len(active) != 1:
+            raise LocalAuthorityPending(
+                "READY verifier registry has no exact active authority key"
+            )
+        try:
+            endpoint = self._client.socket_path.lstat()
+        except OSError as exc:
+            raise LocalAuthorityPending("READY authority socket is unavailable") from exc
+        if (
+            not stat.S_ISSOCK(endpoint.st_mode)
+            or endpoint.st_uid not in {0, self._client.server_uid}
+            or stat.S_IMODE(endpoint.st_mode) != 0o660
+        ):
+            raise LocalAuthorityError("READY authority socket identity is invalid")
+        return next(iter(active))[2]
 
     def publish_profile_plan_bound(
         self,

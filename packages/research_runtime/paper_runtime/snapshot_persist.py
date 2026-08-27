@@ -9,11 +9,18 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+
+_READY_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024 * 1024
+_READY_COPY_FREE_SPACE_MARGIN_BYTES = 64 * 1024 * 1024
+_READY_COPY_BUDGET_SECONDS = 15 * 60
 
 
 def _atomic_json(path: Path, payload: dict[str, Any], *, mode: int) -> None:
@@ -34,10 +41,52 @@ def _atomic_json(path: Path, payload: dict[str, Any], *, mode: int) -> None:
         raise
 
 
+def _atomic_bytes(path: Path, payload: bytes, *, mode: int) -> None:
+    """Replace one immutable sidecar with its already-verified exact bytes."""
+
+    if type(payload) is not bytes or not payload:
+        raise TypeError("atomic byte payload must be exact non-empty bytes")
+    fd, raw_path = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
+    temp_path = Path(raw_path)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_path, mode)
+        os.replace(temp_path, path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
 def _copy_sqlite(source: sqlite3.Connection, target_path: Path) -> None:
+    page_count = int(source.execute("PRAGMA page_count").fetchone()[0])
+    page_size = int(source.execute("PRAGMA page_size").fetchone()[0])
+    expected_bytes = page_count * page_size
+    if expected_bytes <= 0 or expected_bytes > _READY_ARTIFACT_MAX_BYTES:
+        raise RuntimeError("READY SQLite source exceeds the fixed artifact bound")
+    free = shutil.disk_usage(target_path.parent).free
+    if free < expected_bytes + _READY_COPY_FREE_SPACE_MARGIN_BYTES:
+        raise RuntimeError("READY snapshot destination has insufficient free space")
+    deadline = time.monotonic() + _READY_COPY_BUDGET_SECONDS
+
+    def require_copy_budget(
+        _status: int,
+        _remaining: int,
+        _total: int,
+    ) -> None:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("READY SQLite copy deadline exceeded")
+
     target = sqlite3.connect(str(target_path))
     try:
-        source.backup(target)
+        source.backup(
+            target,
+            pages=1024,
+            progress=require_copy_budget,
+            sleep=0.0,
+        )
     finally:
         target.close()
 

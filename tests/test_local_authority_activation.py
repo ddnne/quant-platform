@@ -258,6 +258,70 @@ def test_active_state_fails_closed_when_live_key_inode_changes(
         socket_path.parent.rmdir()
 
 
+def test_active_state_fails_closed_for_wrong_uid_registry_and_socket(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_path, protected, repository, socket_path, listener = _active_fixture(
+        tmp_path, monkeypatch
+    )
+    try:
+        with pytest.raises(activation.ActivationStateError, match="service identity"):
+            activation.require_active_service_identity(
+                authority_id="ready",
+                environment="staging",
+                path=state_path,
+                expected_root_uid=os.geteuid(),
+                current_euid=os.geteuid() + 1,
+                current_egid=os.getegid(),
+                _protected_root=protected,
+                _repository_root=repository,
+            )
+
+        registry = repository / "specs/ready/readiness_verify_public_keys.json"
+        registry.chmod(0o644)
+        registry.write_bytes(b'{"format":"drifted","keys":[]}')
+        registry.chmod(0o444)
+        with pytest.raises(activation.ActivationStateError, match="registry"):
+            activation.require_active_service_identity(
+                authority_id="ready",
+                environment="staging",
+                path=state_path,
+                expected_root_uid=os.geteuid(),
+                current_euid=os.geteuid(),
+                current_egid=os.getegid(),
+                _protected_root=protected,
+                _repository_root=repository,
+            )
+    finally:
+        listener.close()
+        socket_path.unlink(missing_ok=True)
+        socket_path.parent.rmdir()
+
+    state_path, protected, repository, socket_path, listener = _active_fixture(
+        tmp_path / "socket-drift", monkeypatch
+    )
+    listener.close()
+    socket_path.unlink()
+    replacement = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    replacement.bind(str(socket_path))
+    try:
+        with pytest.raises(activation.ActivationStateError, match="observation is stale"):
+            activation.require_active_service_identity(
+                authority_id="ready",
+                environment="staging",
+                path=state_path,
+                expected_root_uid=os.geteuid(),
+                current_euid=os.geteuid(),
+                current_egid=os.getegid(),
+                _protected_root=protected,
+                _repository_root=repository,
+            )
+    finally:
+        replacement.close()
+        socket_path.unlink(missing_ok=True)
+        socket_path.parent.rmdir()
+
+
 def test_d1_runtime_bindings_pin_node_cli_tree_config_lock_and_inode(
     tmp_path: Path,
 ) -> None:

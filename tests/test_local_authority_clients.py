@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import os
-import hashlib
-from types import SimpleNamespace
 import base64
+import hashlib
 import json
+import os
+import stat
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -136,7 +137,7 @@ def test_fixed_clients_emit_only_manifest_granted_operations(
         "profile_plan_closure_ready",
     ]
     assert all(item[2] == os.geteuid() + 1000 for item in calls)
-    assert [item[3] for item in calls] == [905.0, 5.0, 5.0, 5.0]
+    assert [item[3] for item in calls] == [905.0, 5.0, 5.0, 905.0]
 
 
 def test_client_identity_and_result_shape_fail_closed(
@@ -230,3 +231,41 @@ def test_ready_client_reverifies_scoped_signature_and_resource_digest(
             expected_snapshot_id=snapshot_id,
             signed_projection_document=projection,
         )
+
+
+def test_ready_preflight_requires_one_active_key_and_exact_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _activate_declared_test_identities(monkeypatch)
+    ready = clients.ReadyPublisherAuthorityClient(environment="production")
+    server_uid = ready._client.server_uid
+    endpoint = SimpleNamespace(
+        st_mode=stat.S_IFSOCK | 0o660,
+        st_uid=server_uid,
+    )
+    socket_path = SimpleNamespace(lstat=lambda: endpoint)
+    object.__setattr__(ready._client, "socket_path", socket_path)
+    private = Ed25519PrivateKey.generate()
+    key_id = "ready-production-v1"
+    instance = clients.ready_authority_instance_id("production")
+    monkeypatch.setattr(
+        clients,
+        "load_scoped_ready_public_keys",
+        lambda *, expected_environment: {
+            (expected_environment, instance, key_id): private.public_key()
+        },
+    )
+
+    assert ready.require_available() == key_id
+
+    endpoint.st_uid = server_uid + 1
+    with pytest.raises(clients.LocalAuthorityError, match="socket identity"):
+        ready.require_available()
+    endpoint.st_uid = server_uid
+    monkeypatch.setattr(
+        clients,
+        "load_scoped_ready_public_keys",
+        lambda *, expected_environment: {},
+    )
+    with pytest.raises(clients.LocalAuthorityPending, match="no exact active"):
+        ready.require_available()

@@ -24,18 +24,18 @@ from scripts.local_authority_activation import (
     state_body_digest,
     validate_activation_state,
 )
-from scripts.local_authority_files import (
-    ProtectedAuthorityFileError,
-    read_protected_authority_file,
-)
 from scripts.local_authority_bootstrap_common import (
-    _RUNNABLE_AUTHORITIES,
+    _FILE_BACKED_ACTIVATION_AUTHORITIES,
     SERVICE_GROUP,
     BootstrapError,
     _deployments,
     _require_positive_activation,
     _safe_file_state,
     _write_root_owned_file,
+)
+from scripts.local_authority_files import (
+    ProtectedAuthorityFileError,
+    read_protected_authority_file,
 )
 from scripts.local_authority_provisioning import (
     _dscl_values,
@@ -295,7 +295,7 @@ def activate_state(selected: str, *, apply: bool) -> dict[str, Any]:
     identities = {
         (row["authority_id"], row["environment"])
         for row in selected_rows
-        if row["authority_id"] in _RUNNABLE_AUTHORITIES
+        if row["authority_id"] in _FILE_BACKED_ACTIVATION_AUTHORITIES
     }
     if ACTIVATION_STATE_PATH.exists():
         existing = load_activation_state(ACTIVATION_STATE_PATH)
@@ -360,7 +360,7 @@ def activate_state(selected: str, *, apply: bool) -> dict[str, Any]:
             {
                 row["authority_id"]
                 for row in selected_rows
-                if row["authority_id"] not in _RUNNABLE_AUTHORITIES
+                if row["authority_id"] not in _FILE_BACKED_ACTIVATION_AUTHORITIES
             }
         ),
     }

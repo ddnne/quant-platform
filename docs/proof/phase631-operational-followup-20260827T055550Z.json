@@ -1,0 +1,136 @@
+{
+  "schema_version": "phase631-operational-followup-proof/v1",
+  "observed_at": "2026-08-27T05:55:50Z",
+  "source_sha": "97315e5f715adb619bf5ce8131c1e4d7b3f7df70",
+  "github": {
+    "pull_request": 36,
+    "pull_request_head": "8a4e9040902296c870dee4c9640cf3d3a8065c44",
+    "merge_commit": "97315e5f715adb619bf5ce8131c1e4d7b3f7df70",
+    "required_check": "Workers Builds: quant-platform-ci-aggregate-staging",
+    "required_check_app_id": 85455,
+    "required_check_build_id": "1205e553-a935-4fb0-8202-61fde99f145b",
+    "required_check_result": "SUCCESS",
+    "open_pull_requests_after_merge": 0
+  },
+  "local_verification": {
+    "python": {
+      "passed": 2639,
+      "skipped": 4,
+      "failed": 0
+    },
+    "active_worker_lanes": 7,
+    "worker_lanes_result": "PASS",
+    "generated_drift": false,
+    "secret_path_scan": "PASS"
+  },
+  "cloudflare": {
+    "account_id": "11233bca08d134a9b738eaa46b9751d9",
+    "wrangler_version": "4.125.0",
+    "receipt_pending_gate": {
+      "environment": "staging",
+      "result": "PASS",
+      "authority_instance_digest": "sha256:0fa133cf345bdd1f979beebb18e3873fbad88ac7631fc7d5b07ffaca34e68ac7",
+      "binding_manifest_raw_digest": "sha256:d081bc12e1b97decb679aaed80e55c153707cd48297388711446210600aff14f",
+      "finding_ledger_digest": "sha256:9e68e49a9545742ae70cb0c2377d66596bd76e3cda7512937abb8d6cb26398d2",
+      "active_key_count": 0,
+      "positive_operation_allowed": false
+    },
+    "r2": {
+      "quant-receipt-evidence-staging": "CREATED_EMPTY",
+      "quant-receipt-evidence": "ABSENT"
+    },
+    "d1": {
+      "staging_database": "quant-ingest-staging",
+      "staging_database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
+      "production_database": "quant-ingest",
+      "production_database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+      "pending_migrations_staging": [
+        "0011_jsda_queue_v2.sql",
+        "0012_jsda_observation_identity.sql",
+        "0013_restore_specialized_jquants_schema.sql",
+        "0014_receipt_authority_reconciliation.sql",
+        "0015_receipt_authority_requests.sql",
+        "0016_receipt_authority_immutability.sql",
+        "0017_receipt_authority_run_evidence.sql",
+        "0018_receipt_product_materialization.sql"
+      ],
+      "pending_migrations_production": [
+        "0011_jsda_queue_v2.sql",
+        "0012_jsda_observation_identity.sql",
+        "0013_restore_specialized_jquants_schema.sql",
+        "0014_receipt_authority_reconciliation.sql",
+        "0015_receipt_authority_requests.sql",
+        "0016_receipt_authority_immutability.sql",
+        "0017_receipt_authority_run_evidence.sql",
+        "0018_receipt_product_materialization.sql"
+      ],
+      "migration_applied_in_this_run": false
+    },
+    "secret_name_inventory": {
+      "staging_existing_workers": {
+        "workers": 6,
+        "result": "PASS"
+      },
+      "production_existing_workers": {
+        "workers": 6,
+        "result": "PASS"
+      },
+      "added": [
+        "quant-platform-ingestion-secrets:JQUANTS_RPC_CURSOR_HMAC_KEY",
+        "quant-platform-ops-read-mcp:STATE_SECRET"
+      ],
+      "removed": [
+        "quant-platform-ingestion-premium:INGESTION_PROXY_TOKEN",
+        "quant-platform-ingestion-secrets:INGESTION_PROXY_TOKEN",
+        "quant-platform-research-mass-eval:GATEWAY_TOKEN"
+      ],
+      "retained_legacy_proxy_secret": "quant-platform-ingestion-secrets:JQUANTS_PROXY_TOKEN",
+      "secret_values_logged": false
+    },
+    "access": {
+      "enabled": false,
+      "read_only_api_result": "access.api.error.not_enabled",
+      "human_initialization_required": true,
+      "application_created": false
+    },
+    "receipt_worker": {
+      "staging": "NOT_DEPLOYED",
+      "production": "NOT_DEPLOYED"
+    }
+  },
+  "backup": {
+    "staging_export_completed": true,
+    "encrypted_artifact_published": false,
+    "failure_reason": "backup validator accepted only the governed production identity",
+    "plaintext_export_removed": true,
+    "remote_database_mutated": false,
+    "new_staging_backup_key_generated": true,
+    "secret_values_logged": false
+  },
+  "go_no_go": {
+    "inactive_source_merge": "GO",
+    "receipt_pending_staging_deploy": "NO-GO_PENDING_SAFE_MIGRATIONS_AND_ENCRYPTED_BACKUP",
+    "production_deploy": "NO-GO",
+    "ready": "NO-GO",
+    "controlled_pilot": "NO-GO",
+    "mass_research": "NO-GO",
+    "phase8_live_trading": "NO-GO"
+  },
+  "open_p0_ids": [
+    "A2",
+    "C10",
+    "C4",
+    "D2",
+    "D3",
+    "R10",
+    "R11",
+    "R5"
+  ],
+  "mutations_performed": [
+    "created empty R2 bucket quant-receipt-evidence-staging",
+    "added two production secret bindings with freshly generated values",
+    "removed three production secret bindings unused by the deployed source"
+  ],
+  "private_key_material_accessed": false,
+  "credential_values_logged": false
+}

@@ -6,10 +6,13 @@ This module verifies receipts and bounded proof digests; it does not decide READ
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import os
 import re
 import sqlite3
+import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,6 +89,41 @@ def _canonical_required(required: Iterable[str]) -> tuple[str, ...]:
             "Coverage proof membership must be exact, sorted, and duplicate-free"
         )
     return observed
+
+
+def _same_immutable_ready_inode(main_path: str, artifact_path: str) -> bool:
+    """Accept a descriptor URI only when it pins the recorded artifact inode."""
+
+    try:
+        main = os.stat(main_path)
+        artifact = os.stat(artifact_path, follow_symlinks=False)
+        # Darwin's devfs reports a synthetic ``st_dev`` for /dev/fd entries.
+        # Resolve that already-open descriptor through the kernel rather than
+        # weakening identity comparison to inode-only across filesystems.
+        if (
+            (main.st_dev, main.st_ino) != (artifact.st_dev, artifact.st_ino)
+            and main_path.startswith("/dev/fd/")
+            and hasattr(fcntl, "F_GETPATH")
+        ):
+            descriptor = int(Path(main_path).name)
+            raw_path = fcntl.fcntl(
+                descriptor,
+                fcntl.F_GETPATH,
+                b"\0" * 1024,
+            )
+            kernel_path = os.fsdecode(raw_path.split(b"\0", 1)[0])
+            main = os.stat(kernel_path, follow_symlinks=False)
+    except OSError:
+        return False
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        stat.S_ISREG(main.st_mode)
+        and stat.S_ISREG(artifact.st_mode)
+        and artifact.st_nlink == 1
+        and not stat.S_IMODE(artifact.st_mode) & 0o222
+        and (main.st_dev, main.st_ino) == (artifact.st_dev, artifact.st_ino)
+    )
 
 
 def _publication_cutoff_for_build_impl(
@@ -197,7 +235,7 @@ def _publication_cutoff_for_build_impl(
         if (
             not main_path
             or not artifact_path
-            or Path(main_path).resolve() != Path(artifact_path).resolve()
+            or not _same_immutable_ready_inode(main_path, artifact_path)
         ):
             raise CoverageProofVerificationError(
                 "Coverage proof READY database is not the immutable artifact"

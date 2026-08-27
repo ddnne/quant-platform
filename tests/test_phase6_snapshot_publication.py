@@ -22,7 +22,6 @@ from paper_runtime import (
     data_snapshot_id,
     latest_ready_snapshot,
     list_ready_snapshots,
-    open_ready_snapshot,
 )
 from paper_runtime.snapshot import _publish_ready_snapshot
 from research.research_data_profile import load_core_profile, official_mode
@@ -402,6 +401,7 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(
     assert publication["publication_scope"] == "FIXTURE"
     assert publication["readiness_attestation"] is None
     assert publication["readiness_attestation_digest"] is None
+    assert publication["readiness_attestation_id"] is None
     assert publication_path.stat().st_mode & 0o222 == 0
     assert (snapshot_dir / "latest-ready.json").stat().st_mode & 0o222 == 0
     assert ready.snapshot_id == ready.manifest["snapshot_id"]
@@ -559,19 +559,10 @@ def test_pointer_finalization_failure_quarantines_rejected_evidence(
     assert list_ready_snapshots(snapshot_dir) == []
     with pytest.raises(FileNotFoundError, match="no READY"):
         latest_ready_snapshot(snapshot_dir)
-    with pytest.raises(FileNotFoundError, match="no READY"):
-        open_ready_snapshot(snapshot_dir)
     rejected = list((snapshot_dir / "rejected").glob("build-*"))
     assert len(rejected) == 1
     assert len(list(rejected[0].glob("sha256_*.sqlite"))) == 1
     assert len(list(rejected[0].glob("sha256_*.manifest.json"))) == 1
-    rejected_manifest = json.loads(
-        next(rejected[0].glob("sha256_*.manifest.json")).read_text(
-            encoding="utf-8"
-        )
-    )
-    with pytest.raises(FileNotFoundError, match="publication marker"):
-        open_ready_snapshot(snapshot_dir, rejected_manifest["snapshot_id"])
     conn = sqlite3.connect(path)
     state, reason = conn.execute(
         "SELECT state,rejection_reason FROM snapshot_publications "

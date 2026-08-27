@@ -23,8 +23,11 @@ is not a Mass, READY, or GO path.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from collections.abc import Mapping, Sequence
+from datetime import date
 from types import MappingProxyType
 from typing import Any
 
@@ -62,16 +65,23 @@ class ResolvedDailyUniverse:
         resolved_digest = _nonempty_str(
             getattr(universe, "resolved_membership_digest", None)
         )
+        rule_id = _nonempty_str(getattr(universe, "rule_id", None))
+        rule_version = _nonempty_str(getattr(universe, "rule_version", None))
         rule_digest = _nonempty_str(getattr(universe, "rule_digest", None))
+        period_start = _iso_date(getattr(universe, "period_start", None))
+        period_end = _iso_date(getattr(universe, "period_end", None))
         proof = _nonempty_str(getattr(universe, "membership_proof", None))
         if (
             not isinstance(raw, Mapping)
-            or not resolved_digest.startswith("sha256:")
-            or not rule_digest.startswith("sha256:")
-            or proof != "controlled-resolved-universe:" + resolved_digest
+            or not rule_id
+            or not rule_version
+            or not _is_sha256_digest(rule_digest)
+            or not period_start
+            or not period_end
+            or period_start > period_end
         ):
             raise RawFixedUniverseError(
-                "daily resolved universe requires governed rule and membership digests"
+                "daily resolved universe requires a governed rule, period, and digest"
             )
         copied: dict[str, tuple[str, ...]] = {}
         for day, values in raw.items():
@@ -80,15 +90,42 @@ class ResolvedDailyUniverse:
                     "daily resolved universe codes must be a sequence"
                 )
             codes = tuple(sorted({str(code).strip() for code in values}))
-            if not str(day).strip() or not codes or any(not code for code in codes):
+            normalized_day = _iso_date(day)
+            if (
+                not normalized_day
+                or normalized_day < period_start
+                or normalized_day > period_end
+                or not codes
+                or any(not code for code in codes)
+                or normalized_day in copied
+            ):
                 raise RawFixedUniverseError(
-                    "daily resolved universe has an empty date or membership"
+                    "daily resolved universe has an invalid date or membership"
                 )
-            copied[str(day)] = codes
+            copied[normalized_day] = codes
         if not copied:
             raise RawFixedUniverseError("daily resolved universe is empty")
+        canonical = {
+            "rule_id": rule_id,
+            "rule_version": rule_version,
+            "rule_digest": rule_digest,
+            "period_start": period_start,
+            "period_end": period_end,
+            "decision_memberships": [
+                {"decision_date": day, "codes": list(copied[day])}
+                for day in sorted(copied)
+            ],
+        }
+        expected_digest = _canonical_digest(canonical)
+        if (
+            resolved_digest != expected_digest
+            or proof != "controlled-resolved-universe:" + expected_digest
+        ):
+            raise RawFixedUniverseError(
+                "daily resolved universe membership digest does not match its map"
+            )
         self.membership_by_date = MappingProxyType(copied)
-        self.resolved_membership_digest = resolved_digest
+        self.resolved_membership_digest = expected_digest
         self.rule_digest = rule_digest
         self.membership_proof = proof
 
@@ -138,6 +175,32 @@ def _nonempty_str(value: Any) -> str:
         return ""
     text = str(value).strip()
     return text
+
+
+def _is_sha256_digest(value: str) -> bool:
+    if not value.startswith("sha256:") or len(value) != 71:
+        return False
+    return all(character in "0123456789abcdef" for character in value[7:])
+
+
+def _iso_date(value: Any) -> str:
+    text = _nonempty_str(value)
+    try:
+        parsed = date.fromisoformat(text)
+    except ValueError:
+        return ""
+    return text if parsed.isoformat() == text else ""
+
+
+def _canonical_digest(payload: Any) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _proof_of(obj: Any) -> str:

@@ -46,42 +46,66 @@ presence, requests names only, never prints values, and fails closed on drift.
 Phase 6 hardening utilities:
 
 - `ops_status.py --json` — offline READY snapshot, coverage, B0 and validation status.
-- `encrypt_d1_backup.py` — stream a fresh production D1 SQL export into a
+- `encrypt_d1_backup.py` — stream a fresh governed production or staging D1 SQL export into a
   temporary SQLite restore, run `integrity_check`, verify the fixed
-  `quant-ingest` database ID plus the canonical minimum schema and non-empty
+  environment-specific `quant-ingest` database ID from the canonical migration
+  manifest plus the canonical minimum schema and non-empty
   production evidence, then encrypt with AES-256-GCM. Database/export/restore
-  evidence, format/cipher, nonce, and key fingerprint are authenticated in
-  the v2 header. Only a successfully decrypted
+  evidence, environment, format/cipher, nonce, and key fingerprint are
+  authenticated in the v3 header. Only a successfully decrypted
   and re-verified artifact is atomically published; the plaintext is then
   removed by default. Any restore/schema/encryption failure retains the source
   and leaves the target unpublished. Retention requires the explicit unsafe
   `--keep-source` opt-in. The raw 32-byte key stays outside the repository with
-  mode `0600`; neither SQL contents nor key material is logged.
-- `build_release_evidence.py` — validate normalized post-deploy observations
-  and emit a content-addressed, read-only, non-secret v3 manifest suitable for
-  a GitHub Release. Every check/build/deployment/migration/smoke/MCP observation
-  has a closed collector-provenance record (evidence ID, UTC timestamp, response
-  digest, source SHA). Nested extra fields, local paths, provider-token shapes,
-  unverified backup metadata, non-canonical migrations, unproven Pilot `GO`,
-  and Mass `GO` are rejected. The exact pinned finding-ledger byte digest and
-  OPEN-P0 inventory are part of the content-addressed payload and cannot be
-  caller-substituted.
+  mode `0600`; neither SQL contents nor key material is logged. The encrypted
+  artifact is rollback material only. Its header, restore verification, key,
+  or digest never attests the executing source SHA and never grants migration
+  or staging authority.
+- `d1_ingestion_migration_validation.py` — restore a remote export locally,
+  require canonical migration-history prefix and FK/integrity checks, replay
+  pending 0011-0018 on an isolated copy, and prove exact final schema plus
+  populated v2-to-v3 JSDA preservation. Recorded partial/malformed states fail.
+- `apply_ingestion_d1_migrations.py` — a source-only fail-closed D1
+  observation/HOLD and recovery implementation; its legacy filename does not
+  make it a remote mutation authority. The canonical reservation identity is
+  environment + canonical database ID + source SHA + canonical manifest
+  digest. Local create-only/`O_EXCL` files are single-host crash markers, not a
+  cross-host lock, so both staging and production remain `HOLD` until a trusted
+  remote lock and control-plane source-SHA attestation exist. Production
+  independently re-observes the canonical staging D1 and accepts no caller
+  staging JSON, path, backup, or key. Recovery classifies
+  `RECOVERED_APPLIED_EXACT` as `APPLIED` only for exact canonical postflight
+  with zero pending, and `RECOVERED_NOT_APPLIED` as `NOT_APPLIED` only when a
+  fresh live observation exactly matches the recorded baseline; every other
+  state stays `UNKNOWN`. No recovery result grants mutation authority or
+  permits a blind retry. This revision publishes no remote apply command.
+- `build_release_evidence.py` — **publication PENDING / fail-closed**. The
+  former normalized JSON format is retained only as a private schema-regression
+  helper; collector names, UUIDs and digests supplied by a caller are not
+  evidence. The production builder and CLI always stop until a dedicated
+  release-observation authority signs the exact response bytes. The JSDA
+  `/health/ready` collector also needs a private Service Binding; the current
+  binding inventory has no such route. The exact PENDING/HOLD contract is
+  `specs/cloudflare/release_observation_authority.json`. A6 remains OPEN.
 
-Production backup example (timestamps and final SHA must be the observed values):
+Rollback-only production backup example (timestamps and final SHA must be the
+observed values):
 
 ```bash
 uv run python scripts/encrypt_d1_backup.py encrypt \
   quant-ingest.sql quant-ingest.sql.enc \
   --key /secure/private/d1_backup_aes256.key \
+  --environment production \
   --database-name quant-ingest \
   --database-id be6fdcf8-40be-41fc-9535-7facd1fc2ffc \
   --exported-at 2026-08-25T06:00:00Z \
   --release-source-sha 0123456789abcdef0123456789abcdef01234567
 ```
 
-The successful JSON output is the exact closed `backup` object accepted by
-`build_release_evidence.py`; it intentionally contains no local path. Re-run
-`verify` against the encrypted artifact before publishing the release manifest.
+The successful JSON output is a path-free rollback-backup candidate object.
+Re-run `verify` against the encrypted artifact, but do not treat that JSON as
+release evidence or publish a release manifest while the signed observation
+authority remains PENDING.
 - Paper CLIs (`run_paper_once.py`, `run_agents_paper_once.py`, `rebuild_paper_index.py`) are **deleted**. Paper runtime stays in `packages/research_runtime/paper_runtime/`.
 - `python -m mcp_servers.quant_data --list-tools` — Quant Data Access MCP smoke.
 - `export_ops_projection.py` — verified local Coverage/READY/B0 metadataを bounded

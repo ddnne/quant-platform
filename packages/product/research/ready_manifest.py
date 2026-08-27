@@ -614,23 +614,110 @@ class ExactFourPilotReadyBinding:
 
 @dataclass(frozen=True, slots=True)
 class VerifiedPilotReadyPublication:
-    """Reserved result type for the unprovisioned external READY authority.
-
-    Product code cannot construct this positive publication capability. The
-    future loader must independently reopen and verify the immutable snapshot,
-    manifest, and sidecar instead of trusting caller-created DTOs.
-    """
+    """Production publication proven by its immutable signed sidecar."""
 
     snapshot: Any
     readiness: Any
     readiness_path: Path
 
     def __post_init__(self) -> None:
-        from research.readiness import require_ready_publication_authority
+        from paper_runtime.snapshot import ReadySnapshot
+        from paper_runtime.snapshot_read import (
+            _read_immutable_regular_file_with_identity,
+            describe_snapshot,
+        )
 
-        # Do not inspect caller DTOs while the independently isolated
-        # publication principal/service is absent.
-        require_ready_publication_authority()
+        from research.readiness import (
+            ReadyPublicationAuthorityPending,
+            VerifiedPilotReadiness,
+            _load_verified_pilot_readiness_bytes,
+        )
+
+        if type(self.snapshot) is not ReadySnapshot or type(
+            self.readiness
+        ) is not VerifiedPilotReadiness:
+            raise ReadyPublicationAuthorityPending(
+                "READY publication PENDING; caller cannot construct the result"
+            )
+        try:
+            reopened = describe_snapshot(
+                self.snapshot.db_path.parent,
+                self.snapshot.snapshot_id,
+            )
+        except Exception as exc:
+            raise ReadyPublicationAuthorityPending(
+                "READY publication marker cannot be independently reopened"
+            ) from exc
+        if (
+            reopened.db_path != self.snapshot.db_path
+            or reopened.manifest_path != self.snapshot.manifest_path
+            or reopened.manifest != self.snapshot.manifest
+            or reopened.artifact_digest != self.snapshot.artifact_digest
+            or reopened.artifact_identity != self.snapshot.artifact_identity
+            or reopened.manifest_identity != self.snapshot.manifest_identity
+            or reopened.publication_identity
+            != self.snapshot.publication_identity
+            or reopened.readiness_identity != self.snapshot.readiness_identity
+            or reopened.publication_digest != self.snapshot.publication_digest
+        ):
+            raise MassResearchDisabledError(
+                "caller snapshot differs from independently reopened publication"
+            )
+        manifest = ready_manifest_from_snapshot_document(reopened.manifest)
+        path = Path(self.readiness_path)
+        marker_path = reopened.readiness_path
+        marker_digest = reopened.readiness_digest
+        marker_attestation_id = reopened.readiness_attestation_id
+        marker_bytes = reopened.readiness_bytes
+        if (
+            not isinstance(marker_path, Path)
+            or path != marker_path
+            or type(marker_digest) is not str
+            or not _SHA256_RE.fullmatch(marker_digest)
+            or type(marker_attestation_id) is not str
+            or not marker_attestation_id
+            or type(marker_bytes) is not bytes
+            or not marker_bytes
+            or "sha256:" + hashlib.sha256(marker_bytes).hexdigest()
+            != marker_digest
+        ):
+            raise MassResearchDisabledError(
+                "published snapshot marker has no exact readiness bytes"
+            )
+        reloaded = _load_verified_pilot_readiness_bytes(
+            marker_bytes,
+            expected_environment="production",
+            expected_snapshot_id=reopened.snapshot_id,
+            expected_ready_manifest_digest=manifest.manifest_digest,
+        )
+        if (
+            reloaded.to_dict() != self.readiness.to_dict()
+            or reloaded.attestation_id != marker_attestation_id
+            or self.readiness.immutable_db_digest != reopened.artifact_digest
+            or type(reopened.readiness_identity) is not tuple
+            or path.parent.resolve() != reopened.db_path.parent.resolve()
+        ):
+            raise MassResearchDisabledError(
+                "published snapshot/readiness immutable binding mismatch"
+            )
+        try:
+            reloaded_bytes, reloaded_identity = (
+                _read_immutable_regular_file_with_identity(
+                    path,
+                    label="READY attestation",
+                    expected_identity=reopened.readiness_identity,
+                )
+            )
+        except Exception as exc:
+            raise MassResearchDisabledError(
+                "published snapshot/readiness path drifted after validation"
+            ) from exc
+        if reloaded_bytes != marker_bytes or (
+            reloaded_identity != reopened.readiness_identity
+        ):
+            raise MassResearchDisabledError(
+                "published snapshot/readiness immutable binding mismatch"
+            )
 
     @property
     def snapshot_id(self) -> str:
@@ -1870,17 +1957,50 @@ def _publish_exact_four_pilot_ready_snapshot_impl(
     *,
     signed_projection_document: dict[str, Any] | bytes | str,
 ) -> Any:
-    """Return PENDING before any local publication or signing mutation.
+    """Use the closed local READY client; no signer or fallback is accepted."""
 
-    A future dedicated authority must implement the frozen contract in
-    ``research.readiness`` under a different OS principal or remote service.
-    It must independently reopen the authenticated mirror and immutable copy;
-    this client process must never accept a caller-injected issuer callback.
-    """
-    from research.readiness import require_ready_publication_authority
+    from paper_runtime.snapshot import (
+        _ReadyPublicationProductApi,
+        _publish_exact_four_pilot_ready_snapshot_via_authority,
+    )
+    from research.readiness import (
+        ReadyPublicationAuthorityPending,
+        _load_verified_pilot_readiness_bytes,
+    )
+    from research.research_data_profile import profile_ready
+    from scripts.local_authority_service import (
+        LocalAuthorityError,
+        LocalAuthorityPending,
+    )
 
-    del staging_db, snapshot_dir, signed_projection_document
-    require_ready_publication_authority()
+    try:
+        return _publish_exact_four_pilot_ready_snapshot_via_authority(
+            staging_db,
+            snapshot_dir,
+            signed_projection_document=signed_projection_document,
+            _product_api=_ReadyPublicationProductApi(
+                load_verified_pilot_readiness_bytes=(
+                    _load_verified_pilot_readiness_bytes
+                ),
+                verified_publication_type=VerifiedPilotReadyPublication,
+                verified_projection_evidence=_verified_projection_evidence,
+                build_profile_bound_manifest=(
+                    build_profile_bound_ready_manifest_from_snapshot_document
+                ),
+                load_exact_four_binding=load_exact_four_pilot_ready_binding,
+                ready_manifest_from_document=(
+                    ready_manifest_from_snapshot_document
+                ),
+                profile_ready=profile_ready,
+                verify_exact_four_pit_scope=(
+                    _verify_exact_four_pit_dependency_scope
+                ),
+            ),
+        )
+    except (LocalAuthorityPending, LocalAuthorityError) as exc:
+        raise ReadyPublicationAuthorityPending(
+            "READY authority PENDING; verified active local service is unavailable"
+        ) from exc
 
 
 def publish_exact_four_pilot_ready_snapshot(

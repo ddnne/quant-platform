@@ -7,7 +7,7 @@ import {
   reset,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import worker from "../src/index";
+import worker from "../src/testing";
 import type { JsdaWorkerEnv } from "../src/env";
 import {
   loadJob,
@@ -33,6 +33,18 @@ const migrations = inject<Array<{ name: string; queries: string[] }>>(
 beforeEach(async () => {
   await reset();
   await applyD1Migrations(runtimeEnv.DB, migrations);
+  await runtimeEnv.DB.prepare(
+    `UPDATE jsda_v3_cutover_control
+        SET phase='v3_active', activated_at=?, activated_source_sha=?,
+            drain_evidence_digest=?
+      WHERE singleton=1 AND phase='bridge'`,
+  )
+    .bind(
+      "2026-08-25T01:29:00.000Z",
+      "a".repeat(40),
+      `sha256:${"b".repeat(64)}`,
+    )
+    .run();
 });
 
 const ARCHIVE_A = "https://market.jsda.or.jp/archive/data/otc-20020802.csv";
@@ -106,7 +118,7 @@ async function seedWaitingRoot(
   const discoveryBody = new TextEncoder().encode("discovery fixture");
   const discoveryDigest = await sha256Hex(discoveryBody);
   await runtimeEnv.DB.prepare(
-    `UPDATE jsda_acquisition_jobs_v2
+    `UPDATE jsda_acquisition_jobs_v3
      SET state='queued', frontier_json=?, raw_key=?, content_digest=?
      WHERE work_key=?`,
   )
@@ -185,7 +197,7 @@ describe("JSDA run-scoped membership and archive adoption", () => {
       expect(await passLogCount(second.root.run_key)).toBe(1);
       expect(
         (await runtimeEnv.DB.prepare(
-          `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2
+          `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v3
             WHERE parent_work_key=?`,
         )
           .bind(second.root.work_key)
@@ -330,7 +342,7 @@ describe("JSDA run-scoped membership and archive adoption", () => {
       .bind(childKey, first.root.run_key)
       .run();
     await runtimeEnv.DB.prepare(
-      `UPDATE jsda_acquisition_jobs_v2
+      `UPDATE jsda_acquisition_jobs_v3
           SET state='completed',
               completed_at=?,
               audit_receipt_key=?,
@@ -378,7 +390,7 @@ describe("JSDA run-scoped membership and archive adoption", () => {
         (await deliver(await childJob(childKey), "identity-first-child")).explicitAcks,
       ).toEqual(["identity-first-child"]);
       await runtimeEnv.DB.prepare(
-        `UPDATE jsda_acquisition_jobs_v2 SET source_object_id=NULL WHERE work_key=?`,
+        `UPDATE jsda_acquisition_jobs_v3 SET source_object_id=NULL WHERE work_key=?`,
       )
         .bind(childKey)
         .run();

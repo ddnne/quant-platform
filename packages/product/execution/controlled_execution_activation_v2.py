@@ -11,25 +11,9 @@ from typing import Any
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from selection.budget_ledger import ResearchBudgetCapability
+from selection.screen import OfflineExperimentBudget
 
-from execution.exact_four_codec import (
-    ExactFourAuthorityPending,
-    _strict_json_loads,
-)
-from execution.exact_four_trader_v2 import (
-    _decode_canonical_base64url,
-)
-from execution.trader_webauthn_authority_v2 import (
-    ExactFourTraderCredentialRegistryV2,
-    ExactFourTraderCredentialV2,
-    ExactFourTraderRelyingPartyRegistryV2,
-    ExactFourTraderRelyingPartyV2,
-)
-from execution.controlled_execution_store_v2 import (
-    SQLiteControlledExecutionWriterV2,
-    _WRITER_CONSTRUCTION_TOKEN,
-)
-from execution.controlled_execution_types_v2 import _ControlledWriterSignerV2
 from execution.controlled_execution_budget_v2 import (
     ControlledPersistentBudgetLedgerV2,
 )
@@ -39,10 +23,25 @@ from execution.controlled_execution_runtime_v2 import (
     _build_server_controlled_execution_runtime_v2,
     open_pinned_controlled_snapshot_v2,
 )
-from selection.budget_ledger import ResearchBudgetCapability
-from selection.screen import OfflineExperimentBudget
+from execution.controlled_execution_store_v2 import (
+    _WRITER_CONSTRUCTION_TOKEN,
+    SQLiteControlledExecutionWriterV2,
+)
+from execution.controlled_execution_types_v2 import _ControlledWriterSignerV2
+from execution.exact_four_codec import (
+    ExactFourAuthorityPending,
+    _strict_json_loads,
+)
+from execution.exact_four_trader_v2 import (
+    _decode_canonical_base64url,
+)
 from execution.secure_authority_files_v2 import read_pinned_authority_file_v2
-
+from execution.trader_webauthn_authority_v2 import (
+    ExactFourTraderCredentialRegistryV2,
+    ExactFourTraderCredentialV2,
+    ExactFourTraderRelyingPartyRegistryV2,
+    ExactFourTraderRelyingPartyV2,
+)
 
 CONTROLLED_WRITER_MANIFEST_FORMAT = "controlled-exact-four-artifact-manifest/v2"
 CONTROLLED_WRITER_ARTIFACT_FORMAT = "controlled-exact-four-artifact/v2"
@@ -82,6 +81,19 @@ def _activation_absolute_path(document: dict[str, Any], field: str) -> Path:
             f"Controlled activation {field} is not one canonical absolute path"
         )
     return Path(value)
+
+
+def _decode_protected_writer_key_v2(key_bytes: bytes) -> Ed25519PrivateKey:
+    """Accept only the bootstrap's exact raw Ed25519 seed representation."""
+
+    try:
+        if type(key_bytes) is not bytes or len(key_bytes) != 32:
+            raise ValueError("Controlled Ed25519 seed must be exactly 32 bytes")
+        return Ed25519PrivateKey.from_private_bytes(key_bytes)
+    except ValueError as exc:
+        raise ExactFourAuthorityPending(
+            "Controlled protected signing key cannot be decoded"
+        ) from exc
 
 
 def _load_root_owned_activation() -> dict[str, Any]:
@@ -292,16 +304,7 @@ def _load_live_controlled_execution_writer_v2(
         raise ExactFourAuthorityPending(
             "Controlled protected signing key is absent"
         ) from exc
-    try:
-        private_key = serialization.load_pem_private_key(key_bytes, password=None)
-    except (TypeError, ValueError) as exc:
-        raise ExactFourAuthorityPending(
-            "Controlled protected signing key cannot be decoded"
-        ) from exc
-    if not isinstance(private_key, Ed25519PrivateKey):
-        raise ExactFourAuthorityPending(
-            "Controlled protected signing key is not Ed25519"
-        )
+    private_key = _decode_protected_writer_key_v2(key_bytes)
     key_id = document["signer_key_id"]
     if type(key_id) is not str or not key_id or key_id != key_id.strip():
         raise ExactFourAuthorityPending("Controlled signer key id is invalid")

@@ -1,11 +1,63 @@
 {
-  "schema_version": "cloudflare-d1-migration-manifest/v1",
-  "applied_state_policy": "UNVERIFIED is fail-closed source state; remote post-apply state belongs in immutable release evidence",
+  "schema_version": "cloudflare-d1-migration-manifest/v2",
+  "applied_state_policy": "UNVERIFIED is fail-closed source state; source policy HOLD never authorizes remote mutation, and remote post-apply state belongs in immutable release evidence",
   "targets": {
     "quant-ingest": {
       "target_role": "ingestion_source_of_truth",
       "owner": "platform/workers/ingestion-premium",
       "migration_dir": "platform/workers/ingestion-premium/migrations",
+      "application_policy": {
+        "mode": "source-only-hold/v2",
+        "owner_command": null,
+        "observation_recovery_command": "scripts/apply_ingestion_d1_migrations.py",
+        "remote_mutation_authorized": false,
+        "environment_order": [
+          "staging",
+          "production"
+        ],
+        "authorization_state": {
+          "staging": "HOLD",
+          "production": "HOLD"
+        },
+        "canonical_reservation_identity": [
+          "environment",
+          "database_id",
+          "source_sha",
+          "canonical_manifest_digest"
+        ],
+        "hold_until": [
+          "trusted-remote-cross-host-exclusive-lock",
+          "trusted-control-plane-source-sha-attestation"
+        ],
+        "local_o_excl_role": "SINGLE_HOST_CRASH_AUDIT_MARKER_ONLY",
+        "production_staging_evidence": "independent-canonical-staging-d1-reobservation",
+        "caller_staging_artifacts": "FORBIDDEN",
+        "encrypted_backup_role": "ROLLBACK_ONLY",
+        "encrypted_backup_grants_authority": false,
+        "recovery_states": {
+          "APPLIED": "fresh-exact-canonical-postflight-and-zero-pending",
+          "NOT_APPLIED": "fresh-observation-exactly-matches-recorded-preflight-baseline",
+          "UNKNOWN": "all-other-or-unobservable-states"
+        },
+        "recovery_grants_mutation_authority": false,
+        "jsda_acceptance": {
+          "endpoint": "/health/ready",
+          "http_status": 200,
+          "product_ready": true,
+          "cutover": "V3_ACTIVE",
+          "response_digest_bound_to_provenance": true,
+          "deployment_version_and_source_sha_bound": true
+        },
+        "requires": [
+          "canonical-live-database-identity",
+          "time-travel-bookmark",
+          "rollback-only-encrypted-export-checksum",
+          "exact-export-preflight",
+          "exact-export-postflight",
+          "signed-jsda-v3-cutover-authority-before-readiness",
+          "jsda-v3-readiness-smoke-before-product-acceptance"
+        ]
+      },
       "environments": {
         "base": {
           "config": "platform/workers/ingestion-premium/wrangler.toml",
@@ -113,7 +165,7 @@
         {
           "migration_id": "quant-ingest:0012_jsda_observation_identity",
           "path": "platform/workers/ingestion-premium/migrations/0012_jsda_observation_identity.sql",
-          "checksum": "sha256:f5eeac1f534ff0c1e4a8c9193f21cc1626c2863557b3f3d80be52e158e1e521e",
+          "checksum": "sha256:ca5fd557d39e467aa3d96fd4c63c92bf0c6a4289b22c72da2aed6f9d90a1667f",
           "order": 12,
           "depends_on": "quant-ingest:0011_jsda_queue_v2"
         },
@@ -165,6 +217,15 @@
       "target_role": "ops_projection_read_model",
       "owner": "platform/workers/quant-ops-mcp",
       "migration_dir": "platform/workers/quant-ops-mcp/migrations/projection",
+      "application_policy": {
+        "mode": "wrangler-canonical-owner/v1",
+        "owner_command": null,
+        "environment_order": [
+          "staging",
+          "production"
+        ],
+        "requires": []
+      },
       "environments": {
         "base": {
           "config": "platform/workers/quant-ops-mcp/wrangler.toml",
@@ -212,6 +273,15 @@
       "target_role": "ops_mcp_quota",
       "owner": "platform/workers/quant-ops-mcp",
       "migration_dir": "platform/workers/quant-ops-mcp/migrations/quota",
+      "application_policy": {
+        "mode": "wrangler-canonical-owner/v1",
+        "owner_command": null,
+        "environment_order": [
+          "staging",
+          "production"
+        ],
+        "requires": []
+      },
       "environments": {
         "base": {
           "config": "platform/workers/quant-ops-mcp/wrangler.toml",

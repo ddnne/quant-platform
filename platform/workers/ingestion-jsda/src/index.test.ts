@@ -59,7 +59,7 @@ describe("ingestion-jsda HTTP boundary", () => {
     expect(typeof worker.queue).toBe("function");
   });
 
-  it("health describes the convergent v2 hierarchy without leaking secrets", async () => {
+  it("health reports liveness without misclaiming product readiness", async () => {
     const { env } = touchingEnv();
     const response = await worker.fetch(
       new Request("https://ingestion-jsda.test/health"),
@@ -71,10 +71,54 @@ describe("ingestion-jsda HTTP boundary", () => {
     expect(body).not.toContain("COMPLETE");
     expect(JSON.parse(body)).toMatchObject({
       ok: true,
+      liveness: true,
+      product_ready: false,
+      cutover: "UNKNOWN",
       worker: "ingestion-jsda",
       queue_contract: "jsda-acquisition-job/v2",
       hierarchy: ["discover_root", "discover_year", "fetch_file"],
     });
+  });
+
+  it("rejects a formally valid hand-written v3_active self-claim", async () => {
+    const r2Ops: string[] = [];
+    const env = {
+      RAW_BUCKET: {
+        put: async () => {
+          r2Ops.push("put");
+        },
+      } as never,
+      DB: {
+        prepare: () => ({
+          first: async () => ({
+            phase: "v3_active",
+            activated_at: "2026-08-27T00:00:00Z",
+            activated_source_sha: "a".repeat(40),
+            drain_evidence_digest: `sha256:${"b".repeat(64)}`,
+          }),
+        }),
+      } as never,
+      INGESTION_RUN_TOKEN: RUN_TOKEN,
+    };
+    const ready = await worker.fetch(
+      new Request("https://ingestion-jsda.test/health/ready"),
+      env,
+    );
+    expect(ready.status).toBe(503);
+    await expect(ready.json()).resolves.toMatchObject({
+      ok: false,
+      product_ready: false,
+      cutover: "AUTHORITY_DISABLED",
+    });
+    const run = await worker.fetch(
+      new Request("https://ingestion-jsda.test/v1/run", {
+        method: "POST",
+        headers: { "X-Ingestion-Token": RUN_TOKEN },
+      }),
+      env,
+    );
+    expect(run.status).toBe(503);
+    expect(r2Ops).toEqual([]);
   });
 
   it("fails closed before D1, R2, Queue, or outbound fetch on bad methods and auth", async () => {
@@ -82,6 +126,12 @@ describe("ingestion-jsda HTTP boundary", () => {
     const cases = [
       {
         request: new Request("https://ingestion-jsda.test/health", {
+          method: "POST",
+        }),
+        status: 405,
+      },
+      {
+        request: new Request("https://ingestion-jsda.test/health/ready", {
           method: "POST",
         }),
         status: 405,

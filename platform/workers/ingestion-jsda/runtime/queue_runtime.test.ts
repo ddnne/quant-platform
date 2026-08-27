@@ -9,7 +9,7 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import worker from "../src/index";
+import worker from "../src/testing";
 import type { JsdaWorkerEnv } from "../src/env";
 import {
   claimJob,
@@ -42,6 +42,18 @@ const migrations = inject<
 beforeEach(async () => {
   await reset();
   await applyD1Migrations(runtimeEnv.DB, migrations);
+  await runtimeEnv.DB.prepare(
+    `UPDATE jsda_v3_cutover_control
+        SET phase='v3_active', activated_at=?, activated_source_sha=?,
+            drain_evidence_digest=?
+      WHERE singleton=1 AND phase='bridge'`,
+  )
+    .bind(
+      "2026-08-25T01:29:00.000Z",
+      "a".repeat(40),
+      `sha256:${"b".repeat(64)}`,
+    )
+    .run();
 });
 
 const ROLLING_URL =
@@ -80,6 +92,72 @@ async function deliver(body: unknown, id: string) {
 }
 
 describe("JSDA Queue v2 in the Workers runtime", () => {
+  it("separates liveness from cutover-bound product readiness", async () => {
+    const ready = await worker.fetch(
+      new Request("https://ingestion-jsda.test/health/ready"),
+      runtimeEnv,
+    );
+    expect(ready.status).toBe(200);
+    await expect(ready.json()).resolves.toMatchObject({
+      ok: true,
+      liveness: true,
+      product_ready: true,
+      cutover: "V3_ACTIVE",
+    });
+
+    await runtimeEnv.DB.prepare(
+      `UPDATE jsda_v3_cutover_control
+          SET phase='bridge', activated_at=NULL, activated_source_sha=NULL,
+              drain_evidence_digest=NULL
+        WHERE singleton=1`,
+    ).run();
+    const live = await worker.fetch(
+      new Request("https://ingestion-jsda.test/health"),
+      runtimeEnv,
+    );
+    expect(live.status).toBe(200);
+    await expect(live.json()).resolves.toMatchObject({
+      ok: true,
+      liveness: true,
+      product_ready: false,
+      cutover: "PENDING",
+    });
+    const pending = await worker.fetch(
+      new Request("https://ingestion-jsda.test/health/ready"),
+      runtimeEnv,
+    );
+    expect(pending.status).toBe(503);
+    await expect(pending.json()).resolves.toMatchObject({
+      ok: false,
+      product_ready: false,
+      cutover: "PENDING",
+    });
+  });
+
+  it("fails closed until audited v3 cutover activation", async () => {
+    await runtimeEnv.DB.prepare(
+      `UPDATE jsda_v3_cutover_control
+          SET phase='bridge', activated_at=NULL, activated_source_sha=NULL,
+              drain_evidence_digest=NULL
+        WHERE singleton=1`,
+    ).run();
+    const response = await worker.fetch(
+      new Request("https://ingestion-jsda.test/v1/run", {
+        method: "POST",
+        headers: { "X-Ingestion-Token": "jsda-runtime-test-token" },
+      }),
+      runtimeEnv,
+    );
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "jsda_v3_cutover_pending",
+    });
+    const count = await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v3",
+    ).first<{ n: number }>();
+    expect(count?.n).toBe(0);
+  });
+
   it("dispatches Cron roots once per scheduled instant and persists all datasets", async () => {
     const scheduledTime = new Date("2026-08-25T01:30:00.000Z");
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -94,7 +172,7 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
 
     const rows = await runtimeEnv.DB.prepare(
       `SELECT dataset, job_type, state, attempt, run_key
-         FROM jsda_acquisition_jobs_v2
+         FROM jsda_acquisition_jobs_v3
         WHERE run_key LIKE 'jsda:v2:root:%:cron:2026-08-25'
         ORDER BY dataset`,
     ).all<{
@@ -194,7 +272,7 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
     await expect(first.json()).resolves.toMatchObject({ queued: 1 });
     await expect(second.json()).resolves.toMatchObject({ queued: 0 });
     const roots = await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v3
        WHERE dataset='jsda_tokyo_repo_rates' AND job_type='discover_root'`,
     ).first<{ n: number }>();
     expect(roots?.n).toBe(1);
@@ -220,14 +298,14 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
     await registerJobs(runtimeEnv.DB, [firstYear]);
     await registerJobs(runtimeEnv.DB, [secondYear]);
     const years = await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v3
         WHERE dataset=? AND job_type='discover_year' AND target_url=?`,
     )
       .bind(firstRoot.dataset, descriptor.target_url)
       .first<{ n: number }>();
     expect(years?.n).toBe(2);
     const edges = await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS n FROM jsda_acquisition_discoveries_v2
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_discoveries_v3
         WHERE child_work_key IN (?, ?)`,
     )
       .bind(firstYear.work_key, secondYear.work_key)
@@ -322,7 +400,7 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       ),
     );
     await runtimeEnv.DB.prepare(
-      `UPDATE jsda_acquisition_jobs_v2
+      `UPDATE jsda_acquisition_jobs_v3
        SET state='queued', frontier_json=?, raw_key=?, content_digest=?
        WHERE work_key=?`,
     )
@@ -339,7 +417,7 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
     const afterFirst = await loadJob(runtimeEnv.DB, root.work_key);
     expect(afterFirst).toMatchObject({ state: "queued", cursor: 25 });
     const firstChildCount = await runtimeEnv.DB.prepare(
-      "SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2 WHERE parent_work_key=?",
+      "SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v3 WHERE parent_work_key=?",
     )
       .bind(root.work_key)
       .first<{ n: number }>();
@@ -367,13 +445,13 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       .first<{ n: number }>();
     expect(runLog?.n).toBe(0);
     const finalChildCount = await runtimeEnv.DB.prepare(
-      "SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2 WHERE parent_work_key=?",
+      "SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v3 WHERE parent_work_key=?",
     )
       .bind(root.work_key)
       .first<{ n: number }>();
     expect(finalChildCount?.n).toBe(30);
     const discoveryEdges = await runtimeEnv.DB.prepare(
-      "SELECT COUNT(*) AS n FROM jsda_acquisition_discoveries_v2 WHERE parent_work_key=?",
+      "SELECT COUNT(*) AS n FROM jsda_acquisition_discoveries_v3 WHERE parent_work_key=?",
     )
       .bind(root.work_key)
       .first<{ n: number }>();
@@ -421,7 +499,7 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       { customMetadata: { sha256: terminalDigest } },
     );
     await runtimeEnv.DB.prepare(
-      `UPDATE jsda_acquisition_jobs_v2
+      `UPDATE jsda_acquisition_jobs_v3
        SET state='completed', completed_at=?, audit_receipt_key=?,
            audit_receipt_digest=?, content_digest=?, raw_key=?
        WHERE work_key=?`,
@@ -453,7 +531,7 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
     expect(result.explicitAcks).toEqual(["completed-duplicate"]);
     expect(result.retryMessages).toEqual([]);
     const events = await runtimeEnv.DB.prepare(
-      "SELECT COUNT(*) AS n FROM jsda_acquisition_events_v2 WHERE work_key=?",
+      "SELECT COUNT(*) AS n FROM jsda_acquisition_events_v3 WHERE work_key=?",
     )
       .bind(terminal.work_key)
       .first<{ n: number }>();
@@ -468,7 +546,7 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
     );
     await registerJob(runtimeEnv.DB, root);
     await runtimeEnv.DB.prepare(
-      `UPDATE jsda_acquisition_jobs_v2
+      `UPDATE jsda_acquisition_jobs_v3
        SET state='completed', completed_at=?, audit_receipt_key=?,
            audit_receipt_digest=? WHERE work_key=?`,
     )
@@ -499,7 +577,7 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       ),
     ];
     await runtimeEnv.DB.prepare(
-      `UPDATE jsda_acquisition_jobs_v2
+      `UPDATE jsda_acquisition_jobs_v3
        SET state='queued', frontier_json=?, raw_key=?, content_digest=?
        WHERE work_key=?`,
     )
@@ -510,7 +588,7 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
         root.work_key,
       )
       .run();
-    await runtimeEnv.DB.exec("DROP TABLE jsda_acquisition_events_v2");
+    await runtimeEnv.DB.exec("DROP TABLE jsda_acquisition_events_v3");
 
     const result = await deliver(root, "run-log-down");
     expect(result.explicitAcks).toEqual([]);
@@ -576,7 +654,7 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       attempt: 2,
     });
     const events = await runtimeEnv.DB.prepare(
-      "SELECT COUNT(*) AS n FROM jsda_acquisition_events_v2 WHERE work_key=?",
+      "SELECT COUNT(*) AS n FROM jsda_acquisition_events_v3 WHERE work_key=?",
     )
       .bind(child.work_key)
       .first<{ n: number }>();
@@ -774,13 +852,13 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       await makeChildJob(secondRepo, rolling),
     ]);
     const archiveJobs = await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v3
         WHERE dataset=? AND job_type='fetch_file' AND target_url=?`,
     )
       .bind(firstOtc.dataset, archive.target_url)
       .first<{ n: number }>();
     const rollingJobs = await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v2
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v3
         WHERE dataset=? AND job_type='fetch_file' AND target_url=?`,
     )
       .bind(firstRepo.dataset, rolling.target_url)
@@ -1049,7 +1127,7 @@ describe("JSDA descendant run closure", () => {
     const discoveryBody = new TextEncoder().encode("closure discovery fixture");
     const discoveryDigest = await sha256Hex(discoveryBody);
     await runtimeEnv.DB.prepare(
-      `UPDATE jsda_acquisition_jobs_v2
+      `UPDATE jsda_acquisition_jobs_v3
        SET state='queued', frontier_json=?, raw_key=?, content_digest=?
        WHERE work_key=?`,
     )
@@ -1070,7 +1148,7 @@ describe("JSDA descendant run closure", () => {
     const waiting = await loadJob(runtimeEnv.DB, root.work_key);
     expect(waiting?.state).toBe("waiting_children");
     const children = await runtimeEnv.DB.prepare(
-      `SELECT work_key, target_url FROM jsda_acquisition_jobs_v2
+      `SELECT work_key, target_url FROM jsda_acquisition_jobs_v3
         WHERE parent_work_key=? ORDER BY target_url`,
     )
       .bind(root.work_key)
@@ -1185,7 +1263,7 @@ describe("JSDA descendant run closure", () => {
       descendant_nonterminal: 0,
     });
     const completedEvents = await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS n FROM jsda_acquisition_events_v2
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_events_v3
         WHERE work_key=? AND result='completed'`,
     )
       .bind(root.work_key)
@@ -1269,7 +1347,7 @@ describe("JSDA descendant run closure", () => {
     }
     expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("completed");
     const completedEvents = await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS n FROM jsda_acquisition_events_v2
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_events_v3
         WHERE work_key=? AND result='completed'`,
     )
       .bind(root.work_key)
@@ -1424,7 +1502,7 @@ describe("JSDA descendant run closure", () => {
     }
     expect((await loadJob(runtimeEnv.DB, root.work_key))?.state).toBe("completed");
     await runtimeEnv.DB.prepare(
-      `UPDATE jsda_acquisition_jobs_v2
+      `UPDATE jsda_acquisition_jobs_v3
           SET state='waiting_children', completed_at=NULL
         WHERE work_key=?`,
     )
