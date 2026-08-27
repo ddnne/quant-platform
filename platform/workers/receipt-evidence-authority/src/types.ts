@@ -131,7 +131,12 @@ export type ReceiptAuthorityOperationState =
 export type ReceiptAuthorityOperationSnapshot = {
   operation_id: string;
   request_digest: string;
+  capture_attempt_id: string;
+  capture_attempt_ordinal: number;
   acquisition_nonce: string;
+  collection_started_at: string;
+  capture_key: string | null;
+  capture_digest: string | null;
   state: ReceiptAuthorityOperationState;
   claims: UnsignedReceiptClaimsV2 | null;
   envelope: SignedReceiptEnvelopeV2 | null;

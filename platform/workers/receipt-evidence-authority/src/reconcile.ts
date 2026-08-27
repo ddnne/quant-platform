@@ -9,7 +9,12 @@ import {
   measuredClaims,
   receiptFromIssued,
 } from "./receipt_evidence";
-import { captureCollection } from "./raw_capture";
+import {
+  captureCollection,
+  loadCaptureState,
+  persistCaptureState,
+} from "./raw_capture";
+import type { Capture } from "./raw_capture";
 import {
   initializeD1Operation,
   reconcileStructured,
@@ -43,6 +48,13 @@ export type InternalReceiptAuthority = {
   recover(
     operationId: string,
     requestDigest: string,
+  ): Promise<ReceiptAuthorityOperationSnapshot>;
+  appendCapture(
+    operationId: string,
+    requestDigest: string,
+    attemptId: string,
+    captureKey: string,
+    captureDigest: string,
   ): Promise<ReceiptAuthorityOperationSnapshot>;
   appendDerived(
     operationId: string,
@@ -151,7 +163,9 @@ export async function executeReceiptRequest(
   const identity = issueIdentity(request);
   const requestDigest = await canonicalDigest(identity);
   const operationId = requestDigest;
-  let snapshot = await authority.begin(operationId, requestDigest);
+  let snapshot = request.operation === "issue_for_segment"
+    ? await authority.begin(operationId, requestDigest)
+    : await authority.recover(operationId, requestDigest);
   if (snapshot.state === "FINALIZED") {
     if (snapshot.result === null) throw new Error("finalized operation lost its result");
     return { ...snapshot.result, replayed: true };
@@ -167,18 +181,45 @@ export async function executeReceiptRequest(
       true,
     );
   }
-  if (request.operation === "recover_issue") {
-    throw new Error("receipt recovery has no issued envelope to recover");
-  }
   if (env.AUTHORITY_MODE !== "ACTIVE") {
     throw new Error("receipt evidence authority is PENDING activation");
   }
-  const capture = await captureCollection(
-    env,
-    identity,
-    operationId,
-    snapshot.acquisition_nonce,
-  );
+  let capture: Capture;
+  if (snapshot.capture_key === null) {
+    if (snapshot.capture_digest !== null) {
+      throw new Error("receipt authority durable capture reference is incomplete");
+    }
+    capture = await captureCollection(
+      env,
+      identity,
+      operationId,
+      snapshot.capture_attempt_id,
+      snapshot.acquisition_nonce,
+      snapshot.collection_started_at,
+    );
+    const captureState = await persistCaptureState(
+      env.AUTHORITY_EVIDENCE_BUCKET,
+      operationId,
+      snapshot.capture_attempt_id,
+      capture,
+    );
+    snapshot = await authority.appendCapture(
+      operationId,
+      requestDigest,
+      snapshot.capture_attempt_id,
+      captureState.key,
+      captureState.digest,
+    );
+  } else {
+    if (snapshot.capture_digest === null) {
+      throw new Error("receipt authority durable capture reference is incomplete");
+    }
+    capture = await loadCaptureState(
+      env.AUTHORITY_EVIDENCE_BUCKET,
+      snapshot.capture_key,
+      snapshot.capture_digest,
+    );
+  }
   const observedAt = new Date().toISOString();
   if (Date.parse(observedAt) >= Date.parse(capture.acquisitionExpiresAt)) {
     throw new Error("acquisition collection expired before reconciliation");
@@ -238,6 +279,6 @@ export async function executeReceiptRequest(
     operationId,
     requestDigest,
     durableIssued,
-    false,
+    request.operation === "recover_issue",
   );
 }

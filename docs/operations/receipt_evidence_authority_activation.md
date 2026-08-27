@@ -182,8 +182,25 @@ READY or run the controlled pilot until all independent READY gates pass.
 
 The Premium request ledger persists `PREPARED` before RPC and scheduled
 recovery resubmits only the opaque operation ID. Issuance, finalization, and
-recovery are idempotent. A crash after signature issuance but before caller
-finalization must recover the same receipt rather than mint a second one.
+recovery are idempotent. Each acquisition attempt has an authority-owned ID,
+nonce, and start time. A completed capture is stored as canonical bytes in the
+dedicated evidence bucket and its exact digest/key are committed in Durable
+Object SQLite before D1 reconciliation. `recover_issue` reloads those anchored
+bytes. If acquisition stopped with only partial raw pages, recovery marks that
+attempt `ABANDONED` and uses a new attempt identity and distinct create-only R2
+prefix; it never overwrites the partial evidence. Existing D1 operation,
+shadow rows, governed product row, change-log row, and materialization index
+must also reconcile before signing. A crash after signature issuance but
+before caller finalization must recover the same receipt rather than mint a
+second one.
+
+The acquisition context still expires fail-closed. Recovery does not overwrite
+old raw bytes, accept changed upstream bytes, extend an expired acquisition, or
+mint a replacement operation under the old request nonce. If a `COLLECTING`
+operation cannot reproduce its immutable capture within the governed context,
+an operator must retain that failed operation as evidence and start a new
+request with a fresh nonce; the old caller-ledger row is not silently promoted
+to `FINALIZED`.
 
 For an authority or verifier incident:
 

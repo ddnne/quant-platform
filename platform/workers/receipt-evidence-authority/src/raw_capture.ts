@@ -40,6 +40,76 @@ export type Capture = {
   acquisitionExpiresAt: string;
 };
 
+function captureStateKey(capture: Capture): string {
+  if (!capture.rawManifestKey.endsWith("/manifest.json")) {
+    throw new Error("capture manifest key is invalid");
+  }
+  return `${capture.rawManifestKey.slice(0, -"manifest.json".length)}capture-state.json`;
+}
+
+export async function persistCaptureState(
+  bucket: R2Bucket,
+  operationId: string,
+  captureAttemptId: string,
+  capture: Capture,
+): Promise<{ key: string; digest: string }> {
+  if (
+    !capture.rawManifestKey.includes(
+      `/${operationId.slice(7)}/attempt-${captureAttemptId}/`,
+    )
+  ) throw new Error("capture state identity is invalid");
+  const body = canonicalJson(capture);
+  const digest = await sha256Digest(body);
+  const key = captureStateKey(capture);
+  await putCreateOnly(bucket, key, body, {
+    authority: "receipt",
+    operation_id: operationId,
+    capture_attempt_id: captureAttemptId,
+    schema: "receipt-authority-capture-state/v1",
+  });
+  return { key, digest };
+}
+
+export async function loadCaptureState(
+  bucket: R2Bucket,
+  key: string,
+  expectedDigest: string,
+): Promise<Capture> {
+  const object = await bucket.get(key);
+  if (object === null) throw new Error("durable capture state disappeared");
+  const bytes = new Uint8Array(await object.arrayBuffer());
+  if (await sha256Digest(bytes) !== expectedDigest) {
+    throw new Error("durable capture state digest differs");
+  }
+  const text = new TextDecoder("utf-8", {
+    fatal: true,
+    ignoreBOM: false,
+  }).decode(bytes);
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error("durable capture state is not JSON");
+  }
+  if (
+    typeof value !== "object" || value === null || Array.isArray(value) ||
+    canonicalJson(value) !== text
+  ) throw new Error("durable capture state is not canonical");
+  const capture = value as Partial<Capture>;
+  if (
+    typeof capture.rawManifestKey !== "string" ||
+    typeof capture.rawManifestDigest !== "string" ||
+    typeof capture.rawDigest !== "string" ||
+    typeof capture.manifestFileDigest !== "string" ||
+    typeof capture.collectionDigest !== "string" ||
+    typeof capture.terminalChainDigest !== "string" ||
+    typeof capture.acquisitionExpiresAt !== "string" ||
+    !Array.isArray(capture.pages) || capture.pages.length === 0 ||
+    typeof capture.initialRequest !== "object" || capture.initialRequest === null
+  ) throw new Error("durable capture state fields are invalid");
+  return capture as Capture;
+}
+
 export async function putCreateOnly(
   bucket: R2Bucket,
   key: string,
@@ -68,9 +138,14 @@ export async function captureCollection(
   env: ReceiptAuthorityEnv,
   request: ReceiptIssueRequestV1,
   operationId: string,
+  captureAttemptId: string,
   acquisitionNonce: string,
+  collectionStartedAt: string,
 ): Promise<Capture> {
-  const started = new Date();
+  const started = new Date(collectionStartedAt);
+  if (!Number.isFinite(started.getTime()) || started.toISOString() !== collectionStartedAt) {
+    throw new Error("receipt collection start time is invalid");
+  }
   const initialRequest = await buildGovernedInitialRequest({
     environment: request.environment,
     datasetId: request.dataset_id,
@@ -97,10 +172,11 @@ export async function captureCollection(
       now: new Date(),
     });
     const digest = await sha256Digest(body);
-    const key = `raw/receipt-authority/${request.environment}/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/page-${String(index).padStart(6, "0")}.json`;
+    const key = `raw/receipt-authority/${request.environment}/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/attempt-${captureAttemptId}/page-${String(index).padStart(6, "0")}.json`;
     await putCreateOnly(env.AUTHORITY_EVIDENCE_BUCKET, key, body, {
       authority: "receipt",
       operation_id: operationId,
+      capture_attempt_id: captureAttemptId,
       dataset: request.dataset_id,
       segment_id: request.segment_id,
       page_ordinal: String(index),
@@ -149,10 +225,11 @@ export async function captureCollection(
   const collectionDigest = await canonicalDigest(captureBody);
   const captureDocument = { ...captureBody, collection_digest: collectionDigest };
   const manifestJson = canonicalJson(captureDocument);
-  const rawManifestKey = `raw/receipt-authority/${request.environment}/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/manifest.json`;
+  const rawManifestKey = `raw/receipt-authority/${request.environment}/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/attempt-${captureAttemptId}/manifest.json`;
   await putCreateOnly(env.AUTHORITY_EVIDENCE_BUCKET, rawManifestKey, manifestJson, {
     authority: "receipt",
     operation_id: operationId,
+    capture_attempt_id: captureAttemptId,
     dataset: request.dataset_id,
     segment_id: request.segment_id,
   });

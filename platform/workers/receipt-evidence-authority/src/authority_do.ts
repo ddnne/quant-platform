@@ -51,6 +51,18 @@ type OperationRow = {
   updated_at: string;
 };
 
+type CaptureAttemptRow = {
+  operation_id: string;
+  attempt_ordinal: number;
+  attempt_id: string;
+  acquisition_nonce: string;
+  state: "OPEN" | "CAPTURED" | "ABANDONED";
+  capture_key: string | null;
+  capture_digest: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 type KeyMaterial = {
   keyId: string;
   generation: number;
@@ -68,11 +80,26 @@ function parseStored<T>(value: string | null, field: string): T | null {
   }
 }
 
-function rowToSnapshot(row: OperationRow): ReceiptAuthorityOperationSnapshot {
+function rowToSnapshot(
+  row: OperationRow,
+  attempt: CaptureAttemptRow,
+): ReceiptAuthorityOperationSnapshot {
+  if (
+    attempt.operation_id !== row.operation_id ||
+    (attempt.state === "CAPTURED") !==
+      (attempt.capture_key !== null && attempt.capture_digest !== null) ||
+    (attempt.state !== "CAPTURED" &&
+      (attempt.capture_key !== null || attempt.capture_digest !== null))
+  ) throw new Error("receipt authority capture attempt storage is corrupt");
   return {
     operation_id: row.operation_id,
     request_digest: row.request_digest,
-    acquisition_nonce: row.acquisition_nonce,
+    capture_attempt_id: attempt.attempt_id,
+    capture_attempt_ordinal: attempt.attempt_ordinal,
+    acquisition_nonce: attempt.acquisition_nonce,
+    collection_started_at: attempt.created_at,
+    capture_key: attempt.capture_key,
+    capture_digest: attempt.capture_digest,
     state: row.state,
     claims: parseStored<UnsignedReceiptClaimsV2>(row.claims_json, "claims"),
     envelope: parseStored<SignedReceiptEnvelopeV2>(row.envelope_json, "envelope"),
@@ -117,6 +144,24 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
           UNIQUE(operation_id,event_type,payload_digest),
           FOREIGN KEY(operation_id) REFERENCES authority_operations(operation_id)
         );
+        CREATE TABLE IF NOT EXISTS authority_capture_attempts (
+          operation_id TEXT NOT NULL,
+          attempt_ordinal INTEGER NOT NULL CHECK (attempt_ordinal > 0),
+          attempt_id TEXT NOT NULL UNIQUE,
+          acquisition_nonce TEXT NOT NULL UNIQUE,
+          state TEXT NOT NULL CHECK (state IN ('OPEN','CAPTURED','ABANDONED')),
+          capture_key TEXT,
+          capture_digest TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(operation_id,attempt_ordinal),
+          FOREIGN KEY(operation_id) REFERENCES authority_operations(operation_id),
+          CHECK (
+            (state = 'CAPTURED' AND capture_key IS NOT NULL AND capture_digest IS NOT NULL)
+            OR
+            (state IN ('OPEN','ABANDONED') AND capture_key IS NULL AND capture_digest IS NULL)
+          )
+        );
         CREATE TABLE IF NOT EXISTS authority_key_metadata (
           key_generation INTEGER PRIMARY KEY CHECK (key_generation > 0),
           key_id TEXT NOT NULL UNIQUE,
@@ -146,6 +191,55 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
         BEFORE DELETE ON authority_key_metadata
         BEGIN
           SELECT RAISE(ABORT, 'authority key metadata is append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS authority_capture_attempts_no_delete
+        BEFORE DELETE ON authority_capture_attempts
+        BEGIN
+          SELECT RAISE(ABORT, 'authority capture attempts are append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS authority_capture_attempts_insert_collecting
+        BEFORE INSERT ON authority_capture_attempts
+        WHEN NOT EXISTS (
+          SELECT 1 FROM authority_operations AS operation
+           WHERE operation.operation_id = NEW.operation_id
+             AND operation.state = 'COLLECTING'
+        )
+        OR NEW.attempt_ordinal != COALESCE((
+          SELECT MAX(attempt.attempt_ordinal)
+            FROM authority_capture_attempts AS attempt
+           WHERE attempt.operation_id = NEW.operation_id
+        ), 0) + 1
+        BEGIN
+          SELECT RAISE(ABORT, 'authority capture attempt allocation is invalid');
+        END;
+        CREATE TRIGGER IF NOT EXISTS authority_capture_attempts_monotonic
+        BEFORE UPDATE ON authority_capture_attempts
+        WHEN OLD.operation_id IS NOT NEW.operation_id
+          OR OLD.attempt_ordinal IS NOT NEW.attempt_ordinal
+          OR OLD.attempt_id IS NOT NEW.attempt_id
+          OR OLD.acquisition_nonce IS NOT NEW.acquisition_nonce
+          OR OLD.created_at IS NOT NEW.created_at
+          OR NEW.updated_at < OLD.updated_at
+          OR NOT (
+            (
+              OLD.state = 'OPEN'
+              AND NEW.state IN ('CAPTURED','ABANDONED')
+            )
+            OR (
+              OLD.state = 'CAPTURED'
+              AND NEW.state = 'CAPTURED'
+              AND NEW.capture_key IS OLD.capture_key
+              AND NEW.capture_digest IS OLD.capture_digest
+            )
+            OR (
+              OLD.state = 'ABANDONED'
+              AND NEW.state = 'ABANDONED'
+              AND NEW.capture_key IS NULL
+              AND NEW.capture_digest IS NULL
+            )
+          )
+        BEGIN
+          SELECT RAISE(ABORT, 'authority capture attempt transition is not monotonic');
         END;
         CREATE TRIGGER IF NOT EXISTS authority_operations_no_delete
         BEFORE DELETE ON authority_operations
@@ -266,6 +360,51 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     return row;
   }
 
+  private latestCaptureAttempt(operationId: string): CaptureAttemptRow | null {
+    return this.ctx.storage.sql.exec<CaptureAttemptRow>(
+      `SELECT * FROM authority_capture_attempts
+        WHERE operation_id=? ORDER BY attempt_ordinal DESC LIMIT 1`,
+      operationId,
+    ).toArray()[0] ?? null;
+  }
+
+  private captureAttempt(
+    operationId: string,
+    attemptId: string,
+  ): CaptureAttemptRow | null {
+    return this.ctx.storage.sql.exec<CaptureAttemptRow>(
+      `SELECT * FROM authority_capture_attempts
+        WHERE operation_id=? AND attempt_id=?`,
+      operationId,
+      attemptId,
+    ).toArray()[0] ?? null;
+  }
+
+  private ensureInitialCaptureAttempt(row: OperationRow): CaptureAttemptRow {
+    const existing = this.latestCaptureAttempt(row.operation_id);
+    if (existing !== null) return existing;
+    const attemptId = randomHex(32);
+    this.ctx.storage.sql.exec(
+      `INSERT OR IGNORE INTO authority_capture_attempts
+       (operation_id,attempt_ordinal,attempt_id,acquisition_nonce,state,
+        created_at,updated_at) VALUES (?,1,?,?,'OPEN',?,?)`,
+      row.operation_id,
+      attemptId,
+      row.acquisition_nonce,
+      row.created_at,
+      row.created_at,
+    );
+    const inserted = this.latestCaptureAttempt(row.operation_id);
+    if (inserted === null) {
+      throw new Error("receipt authority capture attempt allocation failed");
+    }
+    return inserted;
+  }
+
+  private operationSnapshot(row: OperationRow): ReceiptAuthorityOperationSnapshot {
+    return rowToSnapshot(row, this.ensureInitialCaptureAttempt(row));
+  }
+
   private async ensureEvent(input: {
     operationId: string;
     eventType: string;
@@ -348,9 +487,10 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       if (existing.request_digest !== requestDigest) {
         throw new Error("receipt authority operation replay was substituted");
       }
-      return rowToSnapshot(existing);
+      return this.operationSnapshot(existing);
     }
     const nonce = randomHex(32);
+    const attemptId = randomHex(32);
     this.ctx.storage.transactionSync(() => {
       const replay = this.operation(operationId);
       if (replay !== null) {
@@ -369,6 +509,16 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
         now,
         now,
       );
+      this.ctx.storage.sql.exec(
+        `INSERT INTO authority_capture_attempts
+         (operation_id,attempt_ordinal,attempt_id,acquisition_nonce,state,
+          created_at,updated_at) VALUES (?,1,?,?,'OPEN',?,?)`,
+        operationId,
+        attemptId,
+        nonce,
+        now,
+        now,
+      );
     });
     const row = this.requireOperation(operationId, requestDigest);
     await this.ensureEvent({
@@ -377,16 +527,122 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       payloadDigest: requestDigest,
       observedAt: row.created_at,
     });
-    return rowToSnapshot(row);
+    return this.operationSnapshot(row);
   }
 
-  #recoverOperation(
+  async #recoverOperation(
     operationId: string,
     requestDigest: string,
   ): Promise<ReceiptAuthorityOperationSnapshot> {
-    return Promise.resolve(
-      rowToSnapshot(this.requireOperation(operationId, requestDigest)),
-    );
+    const row = this.requireOperation(operationId, requestDigest);
+    let attempt = this.ensureInitialCaptureAttempt(row);
+    if (row.state === "COLLECTING" && attempt.state === "OPEN") {
+      const now = new Date().toISOString();
+      const nextOrdinal = attempt.attempt_ordinal + 1;
+      const nextAttemptId = randomHex(32);
+      const nextNonce = randomHex(32);
+      this.ctx.storage.transactionSync(() => {
+        const current = this.latestCaptureAttempt(operationId);
+        if (
+          current === null || current.attempt_id !== attempt.attempt_id ||
+          current.state !== "OPEN"
+        ) throw new Error("receipt authority capture attempt recovery drifted");
+        this.ctx.storage.sql.exec(
+          `UPDATE authority_capture_attempts
+              SET state='ABANDONED',updated_at=?
+            WHERE operation_id=? AND attempt_id=? AND state='OPEN'`,
+          now,
+          operationId,
+          attempt.attempt_id,
+        );
+        this.ctx.storage.sql.exec(
+          `INSERT INTO authority_capture_attempts
+           (operation_id,attempt_ordinal,attempt_id,acquisition_nonce,state,
+            created_at,updated_at) VALUES (?,?,?,?,'OPEN',?,?)`,
+          operationId,
+          nextOrdinal,
+          nextAttemptId,
+          nextNonce,
+          now,
+          now,
+        );
+      });
+      await this.ensureEvent({
+        operationId,
+        eventType: "CAPTURE_ATTEMPT_ABANDONED",
+        payloadDigest: await canonicalDigest({
+          attempt_id: attempt.attempt_id,
+          attempt_ordinal: attempt.attempt_ordinal,
+        }),
+        observedAt: now,
+      });
+      attempt = this.latestCaptureAttempt(operationId)!;
+      await this.ensureEvent({
+        operationId,
+        eventType: "CAPTURE_ATTEMPT_STARTED",
+        payloadDigest: await canonicalDigest({
+          attempt_id: attempt.attempt_id,
+          attempt_ordinal: attempt.attempt_ordinal,
+        }),
+        observedAt: attempt.created_at,
+      });
+    }
+    return rowToSnapshot(row, attempt);
+  }
+
+  async #appendCapture(
+    operationId: string,
+    requestDigest: string,
+    attemptId: string,
+    captureKey: string,
+    captureDigest: string,
+  ): Promise<ReceiptAuthorityOperationSnapshot> {
+    const row = this.requireOperation(operationId, requestDigest);
+    if (row.state !== "COLLECTING") {
+      throw new Error("receipt authority cannot append capture after issuance");
+    }
+    const expectedPrefix =
+      `raw/receipt-authority/${this.env.ENVIRONMENT}/`;
+    if (
+      !isSha256(captureDigest) || !captureKey.startsWith(expectedPrefix) ||
+      !captureKey.includes(`/${operationId.slice(7)}/attempt-${attemptId}/`) ||
+      !captureKey.endsWith("/capture-state.json")
+    ) throw new Error("receipt authority capture reference is invalid");
+    const now = new Date().toISOString();
+    this.ctx.storage.transactionSync(() => {
+      const attempt = this.captureAttempt(operationId, attemptId);
+      const latest = this.latestCaptureAttempt(operationId);
+      if (attempt === null || latest?.attempt_id !== attemptId) {
+        throw new Error("receipt authority capture attempt was superseded");
+      }
+      if (attempt.state === "CAPTURED") {
+        if (
+          attempt.capture_digest !== captureDigest ||
+          attempt.capture_key !== captureKey
+        ) throw new Error("receipt authority capture replay was substituted");
+        return;
+      }
+      if (attempt.state !== "OPEN") {
+        throw new Error("receipt authority capture attempt was abandoned");
+      }
+      this.ctx.storage.sql.exec(
+        `UPDATE authority_capture_attempts
+            SET state='CAPTURED',capture_key=?,capture_digest=?,updated_at=?
+          WHERE operation_id=? AND attempt_id=? AND state='OPEN'`,
+        captureKey,
+        captureDigest,
+        now,
+        operationId,
+        attemptId,
+      );
+    });
+    await this.ensureEvent({
+      operationId,
+      eventType: "CAPTURE_COMMITTED",
+      payloadDigest: captureDigest,
+      observedAt: now,
+    });
+    return this.operationSnapshot(this.requireOperation(operationId, requestDigest));
   }
 
   private async loadOrCreateKey(): Promise<KeyMaterial> {
@@ -744,6 +1000,19 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
         operationId: string,
         requestDigest: string,
       ) => this.#recoverOperation(operationId, requestDigest),
+      appendCapture: (
+        operationId: string,
+        requestDigest: string,
+        attemptId: string,
+        captureKey: string,
+        captureDigest: string,
+      ) => this.#appendCapture(
+        operationId,
+        requestDigest,
+        attemptId,
+        captureKey,
+        captureDigest,
+      ),
       appendDerived: (
         operationId: string,
         requestDigest: string,

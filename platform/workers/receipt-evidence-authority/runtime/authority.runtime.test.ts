@@ -361,6 +361,221 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(replay.receipt).toEqual(recovered.receipt);
   });
 
+  it("resumes the same COLLECTING operation after a pre-sign D1 failure", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const interruptedRequest = {
+      ...request,
+      request_nonce: "1".repeat(64),
+    };
+    const operationId = await canonicalDigest(interruptedRequest);
+    await runtimeEnv.DB.prepare(
+      `CREATE TRIGGER inject_receipt_pre_sign_failure
+       BEFORE UPDATE OF state ON receipt_authority_operations
+       WHEN OLD.state='COLLECTING' AND NEW.state='STRUCTURED_COMMITTED'
+       BEGIN
+         SELECT RAISE(ABORT, 'injected receipt pre-sign failure');
+       END`,
+    ).run();
+
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment(interruptedRequest)
+    )).rejects.toThrow("injected receipt pre-sign failure");
+    const durableState = await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.sql.exec<{
+        state: string;
+        claims_json: string | null;
+        envelope_json: string | null;
+        created_at: string;
+      }>(
+        `SELECT state,claims_json,envelope_json,created_at
+           FROM authority_operations WHERE operation_id=?`,
+        operationId,
+      ).one()
+    );
+    expect(durableState).toMatchObject({
+      state: "COLLECTING",
+      claims_json: null,
+      envelope_json: null,
+    });
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT state FROM receipt_authority_operations WHERE operation_id=?`,
+    ).bind(operationId).first()).toEqual({ state: "COLLECTING" });
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS count FROM receipt_product_materializations
+        WHERE operation_id=?`,
+    ).bind(operationId).first<{ count: number }>()).toEqual({ count: 1 });
+
+    await runtimeEnv.DB.prepare(
+      "DROP TRIGGER inject_receipt_pre_sign_failure",
+    ).run();
+    const recovered = await stub.recover_issue({
+      ...interruptedRequest,
+      operation: "recover_issue",
+    });
+    expect(recovered).toMatchObject({
+      operation_id: operationId,
+      state: "FINALIZED",
+      replayed: true,
+    });
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS count FROM receipt_product_materializations
+        WHERE operation_id=?`,
+    ).bind(operationId).first<{ count: number }>()).toEqual({ count: 1 });
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS count FROM collection_receipts WHERE run_id=(
+         SELECT run_id FROM receipt_authority_operations WHERE operation_id=?
+       )`,
+    ).bind(operationId).first<{ count: number }>()).toEqual({ count: 1 });
+  });
+
+  it("branches a new immutable capture attempt after a partial raw failure", async () => {
+    installSinglePageUpstream(
+      '{"data":[{"Date":"2024-02-01","Open":1,"Close":2}],"pagination_key":"page-2"}',
+    );
+    let acquisitionCalls = 0;
+    const interruptedAcquisition = {
+      fetch_governed_page: async (
+        input: Parameters<typeof fetchGovernedPage>[0],
+      ) => {
+        acquisitionCalls += 1;
+        if (acquisitionCalls === 2) {
+          throw new Error("injected acquisition interruption");
+        }
+        return fetchGovernedPage(input, acquisitionEnv);
+      },
+    };
+    (runtimeEnv as unknown as Record<string, unknown>).JQUANTS_ACQUISITION =
+      interruptedAcquisition;
+    const { stub } = await activateRegisteredTestKey();
+    const interruptedRequest = {
+      ...request,
+      request_nonce: "6".repeat(64),
+    };
+    const operationId = await canonicalDigest(interruptedRequest);
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment(interruptedRequest)
+    )).rejects.toThrow("injected acquisition interruption");
+
+    installSinglePageUpstream();
+    installAuthorityAcquisition();
+    const recovered = await stub.recover_issue({
+      ...interruptedRequest,
+      operation: "recover_issue",
+    });
+    expect(recovered).toMatchObject({
+      operation_id: operationId,
+      state: "FINALIZED",
+      replayed: true,
+    });
+    const attempts = await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.sql.exec<{
+        attempt_ordinal: number;
+        attempt_id: string;
+        state: string;
+      }>(
+        `SELECT attempt_ordinal,attempt_id,state
+           FROM authority_capture_attempts WHERE operation_id=?
+          ORDER BY attempt_ordinal`,
+        operationId,
+      ).toArray()
+    );
+    expect(attempts.map((attempt) => ({
+      attempt_ordinal: attempt.attempt_ordinal,
+      state: attempt.state,
+    }))).toEqual([
+      { attempt_ordinal: 1, state: "ABANDONED" },
+      { attempt_ordinal: 2, state: "CAPTURED" },
+    ]);
+    expect(attempts[0]!.attempt_id).not.toBe(attempts[1]!.attempt_id);
+    const rawObjects = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list({
+      prefix: `raw/receipt-authority/production/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/`,
+    });
+    expect(rawObjects.objects.some((object) =>
+      object.key.includes(`attempt-${attempts[0]!.attempt_id}/page-000000.json`)
+    )).toBe(true);
+    expect(rawObjects.objects.some((object) =>
+      object.key.includes(`attempt-${attempts[1]!.attempt_id}/manifest.json`)
+    )).toBe(true);
+  });
+
+  it("re-proves matching existing product rows with their original ingestion time", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const first = await stub.issue_for_segment({
+      ...request,
+      request_nonce: "2".repeat(64),
+    });
+    const priorIngestedAt = "2024-03-01T00:00:00.000Z";
+    await runtimeEnv.DB.prepare(
+      `UPDATE jquants_records SET ingested_at=?
+        WHERE source='jquants' AND dataset=?`,
+    ).bind(priorIngestedAt, request.dataset_id).run();
+    await runtimeEnv.DB.prepare(
+      `UPDATE ingestion_change_log SET ingested_at=?,changed_at=?
+        WHERE table_name='jquants_records' AND source='jquants' AND dataset=?`,
+    ).bind(priorIngestedAt, priorIngestedAt, request.dataset_id).run();
+
+    const reproved = await stub.issue_for_segment({
+      ...request,
+      request_nonce: "3".repeat(64),
+    });
+    expect(reproved.state).toBe("FINALIZED");
+    const product = await runtimeEnv.DB.prepare(
+      `SELECT artifact_body,artifact_digest,row_count
+         FROM receipt_product_materializations WHERE operation_id=?`,
+    ).bind(reproved.operation_id).first<{
+      artifact_body: string;
+      artifact_digest: string;
+      row_count: number;
+    }>();
+    expect(product).not.toBeNull();
+    expect(product!.artifact_body).toContain(
+      `"ingested_at":"${priorIngestedAt}"`,
+    );
+    expect(product!.artifact_digest).toBe(
+      reproved.receipt.digests.structured_digest,
+    );
+    expect(product!.row_count).toBe(1);
+    expect(reproved.receipt.structured_row_count).toBe(1);
+    expect(reproved.receipt.digests.structured_digest).not.toBe(
+      first.receipt.digests.structured_digest,
+    );
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS count FROM jquants_records
+        WHERE source='jquants' AND dataset=?`,
+    ).bind(request.dataset_id).first<{ count: number }>()).toEqual({ count: 1 });
+  });
+
+  it("rejects re-proof when an existing product payload differs", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    await stub.issue_for_segment({
+      ...request,
+      request_nonce: "4".repeat(64),
+    });
+    await runtimeEnv.DB.prepare(
+      `UPDATE jquants_records SET payload='{}'
+        WHERE source='jquants' AND dataset=?`,
+    ).bind(request.dataset_id).run();
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment({
+        ...request,
+        request_nonce: "5".repeat(64),
+      })
+    )).rejects.toThrow(
+      "governed jquants_records fields differ from canonical raw normalization",
+    );
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS count FROM collection_receipts
+        WHERE run_id=(SELECT run_id FROM receipt_authority_operations
+          WHERE operation_id=?)`,
+    ).bind(await canonicalDigest({
+      ...request,
+      request_nonce: "5".repeat(64),
+    })).first<{ count: number }>()).toEqual({ count: 0 });
+  });
+
   it("exposes no caller-authored claims/result RPC and never signs in PENDING mode", async () => {
     const operationId = await canonicalDigest(request);
     const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
@@ -410,7 +625,7 @@ describe("Receipt Evidence Authority in workerd", () => {
         operation: "recover_issue",
         request_nonce: "a".repeat(64),
       })
-    )).rejects.toThrow("no issued envelope to recover");
+    )).rejects.toThrow("absent or substituted");
   });
 
   it("rejects a forged terminal header while immutable raw has a provider cursor", async () => {

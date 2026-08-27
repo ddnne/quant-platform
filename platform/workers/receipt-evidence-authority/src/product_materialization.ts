@@ -14,6 +14,8 @@ export type CanonicalStructuredRow = {
   row_digest: string;
 };
 
+type GovernedProductRow = Omit<CanonicalStructuredRow, "row_digest">;
+
 type ProductMaterializationRow = {
   operation_id: string;
   run_id: number;
@@ -70,7 +72,7 @@ export function canonicalProductBody(rows: CanonicalStructuredRow[]): string {
   return `${ordered.map(productLine).join("\n")}\n`;
 }
 
-function governedProductFields(row: CanonicalStructuredRow): Record<string, string> {
+function governedProductFields(row: CanonicalStructuredRow): GovernedProductRow {
   return {
     source: row.source,
     dataset: row.dataset,
@@ -83,10 +85,25 @@ function governedProductFields(row: CanonicalStructuredRow): Record<string, stri
   };
 }
 
+function governedBusinessFields(row: GovernedProductRow): Omit<
+  GovernedProductRow,
+  "ingested_at"
+> {
+  return {
+    source: row.source,
+    dataset: row.dataset,
+    natural_key: row.natural_key,
+    event_time: row.event_time,
+    available_at: row.available_at,
+    payload: row.payload,
+    raw_payload: row.raw_payload,
+  };
+}
+
 async function persistGovernedProduct(
   env: ReceiptAuthorityEnv,
   rows: CanonicalStructuredRow[],
-): Promise<void> {
+): Promise<CanonicalStructuredRow[]> {
   const primary = rows.map((row) => env.DB.prepare(
     `INSERT OR IGNORE INTO jquants_records
      (source,dataset,natural_key,event_time,available_at,ingested_at,payload,raw_payload)
@@ -105,7 +122,7 @@ async function persistGovernedProduct(
     await env.DB.batch(primary.slice(index, index + 50));
   }
 
-  const stored: Record<string, string>[] = [];
+  const stored: GovernedProductRow[] = [];
   for (let index = 0; index < rows.length; index += 50) {
     const expected = rows.slice(index, index + 50);
     const placeholders = expected.map(() => "?").join(",");
@@ -119,17 +136,47 @@ async function persistGovernedProduct(
     ).bind(
       expected[0]!.dataset,
       ...expected.map((row) => row.natural_key),
-    ).all<Record<string, string>>();
+    ).all<GovernedProductRow>();
     stored.push(...(result.results ?? []));
   }
-  const expectedProduct = rows.map(governedProductFields);
-  if (canonicalJson(stored) !== canonicalJson(expectedProduct)) {
+
+  const byNaturalKey = new Map<string, GovernedProductRow>();
+  for (const row of stored) {
+    if (byNaturalKey.has(row.natural_key)) {
+      throw new Error("governed jquants_records contains duplicate natural keys");
+    }
+    byNaturalKey.set(row.natural_key, row);
+  }
+
+  const productRows: CanonicalStructuredRow[] = [];
+  for (const expected of rows) {
+    const actual = byNaturalKey.get(expected.natural_key);
+    const expectedFields = governedProductFields(expected);
+    if (
+      actual === undefined || actual.source !== "jquants" ||
+      canonicalJson(governedBusinessFields(actual)) !==
+        canonicalJson(governedBusinessFields(expectedFields)) ||
+      !Number.isFinite(Date.parse(actual.ingested_at)) ||
+      !Number.isFinite(Date.parse(actual.available_at)) ||
+      Date.parse(actual.ingested_at) < Date.parse(actual.available_at) ||
+      Date.parse(actual.ingested_at) > Date.parse(expected.ingested_at)
+    ) {
+      throw new Error(
+        "governed jquants_records fields differ from canonical raw normalization",
+      );
+    }
+    productRows.push({
+      ...actual,
+      row_digest: await sha256Digest(canonicalJson(actual)),
+    });
+  }
+  if (productRows.length !== stored.length) {
     throw new Error(
       "governed jquants_records fields differ from canonical raw normalization",
     );
   }
 
-  const changes = rows.map((row) => env.DB.prepare(
+  const changes = productRows.map((row) => env.DB.prepare(
     `INSERT OR IGNORE INTO ingestion_change_log
      (table_name,source,dataset,natural_key,event_time,available_at,ingested_at,
       payload,raw_payload,changed_at)
@@ -148,7 +195,7 @@ async function persistGovernedProduct(
   for (let index = 0; index < changes.length; index += 50) {
     await env.DB.batch(changes.slice(index, index + 50));
   }
-  for (const row of rows) {
+  for (const row of productRows) {
     const change = await env.DB.prepare(
       `SELECT change_seq,table_name,source,dataset,natural_key,event_time,
               available_at,ingested_at,payload,raw_payload,changed_at
@@ -180,6 +227,7 @@ async function persistGovernedProduct(
       change.changed_at !== row.ingested_at
     ) throw new Error("governed product change feed differs from signed rows");
   }
+  return productRows;
 }
 
 async function requireExactObject(
@@ -220,8 +268,8 @@ export async function materializeProduct(
   if (input.rows.length === 0) {
     throw new Error("empty product materialization cannot be signed");
   }
-  await persistGovernedProduct(env, input.rows);
-  const body = canonicalProductBody(input.rows);
+  const productRows = await persistGovernedProduct(env, input.rows);
+  const body = canonicalProductBody(productRows);
   const bytes = new TextEncoder().encode(body);
   const artifactDigest = await sha256Digest(bytes);
   const dataset = input.capture.initialRequest.dataset_id;
@@ -271,7 +319,7 @@ export async function materializeProduct(
     artifact_digest: artifactDigest,
     artifact_body: body,
     structured_digest: artifactDigest,
-    row_count: input.rows.length,
+    row_count: productRows.length,
     byte_count: bytes.byteLength,
     raw_manifest_key: input.capture.rawManifestKey,
     raw_manifest_digest: input.capture.rawManifestDigest,
@@ -311,7 +359,7 @@ export async function materializeProduct(
     artifact_key: artifactKey,
     artifact_digest: artifactDigest,
     artifact_body: body,
-    row_count: input.rows.length,
+    row_count: productRows.length,
     byte_count: bytes.byteLength,
     manifest_key: manifestKey,
     manifest_digest: manifestDigest,
@@ -341,7 +389,7 @@ export async function materializeProduct(
     throw new Error("product materialization index differs from verified artifact");
   }
   return {
-    count: input.rows.length,
+    count: productRows.length,
     digest: artifactDigest,
     artifactKey,
     manifestKey,
