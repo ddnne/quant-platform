@@ -520,8 +520,8 @@ def _verify_registration_response(
         "authenticator_flags": flags,
         "attested_sign_count": sign_count,
         "counter_mode": request["counter_mode"],
-        "user_presence_verified": True,
-        "user_verification_verified": True,
+        "user_presence_flag_set": True,
+        "user_verification_flag_set": True,
     }
     return {
         "credential_id": credential_id,
@@ -617,7 +617,10 @@ def build_trader_root_activation_proposal_v2(
         "controlled_execution_uid": controlled_execution_uid,
         "controlled_execution_socket_path": str(controlled_execution_socket_path),
         "store_path": str(store_path),
-        "human_enrollment_observed": True,
+        # fmt=none proves RP/challenge/key consistency and exposes UP/UV flags,
+        # but supplies no trusted attestation root for the human ceremony.
+        "browser_registration_verified": True,
+        "human_enrollment_observed": False,
         "protected_store_observed": False,
         "enrollment_transcript_digest": transcript["transcript_digest"],
         "rp_registry": {"generation": 1, "entries": [rp_row]},
@@ -643,6 +646,7 @@ def build_trader_root_activation_proposal_v2(
         "human_presence_required_for_only_external_step": True,
         "next_admin_actions": [
             "verify the WebAuthn transcript digest and public credential",
+            "observe the required human ceremony and set human_enrollment_observed true",
             "provision the dedicated Trader principal and mode-0700 store",
             "verify the controlled_execution AF_UNIX peer and UID",
             "install a root-owned non-group/world-writable activation document",

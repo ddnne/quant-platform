@@ -231,12 +231,13 @@ def test_raw_registration_derives_key_and_binds_transcript_into_activation(
     )
     assert credential["initial_sign_count"] == 7
     assert credential["counter_mode"] == "COUNTING"
-    assert transcript["user_presence_verified"] is True
-    assert transcript["user_verification_verified"] is True
+    assert transcript["user_presence_flag_set"] is True
+    assert transcript["user_verification_flag_set"] is True
     assert activation["enrollment_transcript_digest"] == transcript[
         "transcript_digest"
     ]
-    assert activation["human_enrollment_observed"] is True
+    assert activation["browser_registration_verified"] is True
+    assert activation["human_enrollment_observed"] is False
     assert activation["protected_store_observed"] is False
     assert proposal["root_activation_document_digest"] == canonical_authority_digest(
         activation

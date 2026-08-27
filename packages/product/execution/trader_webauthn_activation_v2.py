@@ -33,6 +33,7 @@ from execution.trader_webauthn_registry_v2 import (
     ExactFourTraderRelyingPartyRegistryV2,
     ExactFourTraderRelyingPartyV2,
 )
+from execution.secure_authority_files_v2 import read_pinned_authority_file_v2
 
 
 TRADER_RP_REGISTRY_FORMAT = "exact-four-trader-rp-registry/v2"
@@ -55,18 +56,18 @@ _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 def _load_live_activation_document() -> dict[str, Any]:
     path = TRADER_AUTHORITY_ACTIVATION_PATH
     try:
-        metadata = path.lstat()
-        raw = path.read_bytes()
+        raw = read_pinned_authority_file_v2(
+            path,
+            chain_root=Path("/"),
+            directory_owner_uids={0},
+            expected_file_uid=0,
+            allowed_file_modes=frozenset(
+                {0o400, 0o440, 0o444, 0o600, 0o640, 0o644}
+            ),
+            max_bytes=1024 * 1024,
+        )
     except OSError as exc:
         raise ExactFourAuthorityPending(TRADER_AUTHORITY_LIVE_STATE) from exc
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != 0
-        or metadata.st_mode & 0o022
-    ):
-        raise ExactFourAuthorityPending(
-            "Trader activation state is not a root-owned non-writable regular file"
-        )
     document = _strict_json_loads(raw, label="Trader authority activation state")
     required = {
         "format",
@@ -75,6 +76,7 @@ def _load_live_activation_document() -> dict[str, Any]:
         "controlled_execution_uid",
         "controlled_execution_socket_path",
         "store_path",
+        "browser_registration_verified",
         "human_enrollment_observed",
         "protected_store_observed",
         "enrollment_transcript_digest",
@@ -111,6 +113,7 @@ def _load_live_exact_four_trader_authority_v2(
         or os.geteuid() != service_uid
         or type(store_text) is not str
         or type(controlled_socket_text) is not str
+        or document["browser_registration_verified"] is not True
         or document["human_enrollment_observed"] is not True
         or document["protected_store_observed"] is not True
         or type(document["enrollment_transcript_digest"]) is not str
