@@ -255,6 +255,32 @@ class MethodGrant:
     environment: str
 
 
+@dataclass(frozen=True, slots=True)
+class AuthorityRequestContext:
+    """Server-minted identity for one handler invocation.
+
+    No field is sourced from request payload.  The peer comes from kernel
+    credentials, caller from the root-provisioned UID registry, and grant from
+    the code-pinned exact method ACL.
+    """
+
+    peer: PeerIdentity
+    caller: str
+    grant: MethodGrant
+    request_id: str
+    request_digest: str
+
+    def __post_init__(self) -> None:
+        if (
+            self.caller != self.grant.caller
+            or type(self.request_id) is not str
+            or not self.request_id
+            or type(self.request_digest) is not str
+            or not self.request_digest.startswith("sha256:")
+        ):
+            raise PeerAuthenticationError("authority request context is invalid")
+
+
 class ExactMethodAcl:
     """Closed ACL derived from the code-pinned principal manifest."""
 
@@ -784,7 +810,9 @@ def call_unix_authority(
         channel.close()
 
 
-AuthorityHandler = Callable[[Mapping[str, Any], Sequence[int]], Mapping[str, Any]]
+AuthorityHandler = Callable[
+    [AuthorityRequestContext, Mapping[str, Any], Sequence[int]], Mapping[str, Any]
+]
 
 
 class UnixAuthorityService:
@@ -825,7 +853,7 @@ class UnixAuthorityService:
             raw, fds = _recv_frame(channel)
             request = parse_request(raw)
             request_id = request.request_id
-            self.acl.require(
+            grant = self.acl.require(
                 caller=caller,
                 operation=request.operation,
                 purpose=request.purpose,
@@ -837,12 +865,19 @@ class UnixAuthorityService:
             handler = self.handlers.get(request.operation)
             if handler is None:
                 raise LocalAuthorityError("authorized operation has no handler")
+            context = AuthorityRequestContext(
+                peer=peer,
+                caller=caller,
+                grant=grant,
+                request_id=request.request_id,
+                request_digest=sha256_digest(dict(request.raw)),
+            )
             result = self.ledger.execute_once(
                 request=dict(request.raw),
                 caller=caller,
                 operation=request.operation,
                 purpose=request.purpose,
-                produce=lambda: handler(request.payload, fds),
+                produce=lambda: handler(context, request.payload, fds),
             )
             response = {
                 "format": RESPONSE_FORMAT,
@@ -894,6 +929,7 @@ __all__ = [
     "RESPONSE_FORMAT",
     "AuthorityLedgerError",
     "AuthorityRequest",
+    "AuthorityRequestContext",
     "ExactMethodAcl",
     "FileEd25519KeyCustody",
     "LocalAuthorityError",

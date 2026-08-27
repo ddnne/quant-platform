@@ -197,9 +197,14 @@ def test_service_authenticates_kernel_peer_and_commits_only_after_strict_gate(
     ledger = _ledger(tmp_path)
     calls = 0
 
-    def handler(payload, fds):
+    def handler(context, payload, fds):
         nonlocal calls
         calls += 1
+        assert context.peer.uid == os.geteuid()
+        assert context.caller == "ready_publisher"
+        assert context.grant.operation == "ready:publish_profile_plan_bound"
+        assert context.request_id == "request-1"
+        assert context.request_digest == authority.sha256_digest(_request())
         assert not fds
         return {"snapshot_id": payload["snapshot_id"], "status": "SIGNED"}
 
@@ -243,7 +248,7 @@ def test_service_rejects_unmapped_peer_before_handler(
     )
     called = False
 
-    def handler(_payload, _fds):
+    def handler(_context, _payload, _fds):
         nonlocal called
         called = True
         return {"status": "UNSAFE"}
