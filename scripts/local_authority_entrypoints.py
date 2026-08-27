@@ -338,6 +338,18 @@ def _require_no_sqlite_sidecars(path: Path) -> None:
         raise LocalAuthorityError("D1 sync mirror has a live SQLite sidecar")
 
 
+def _d1_sync_path_entry_exists(path: Path) -> bool:
+    """Detect every directory entry, including a dangling symlink."""
+
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise LocalAuthorityError("D1 sync candidate state is unavailable") from exc
+    return True
+
+
 def _read_prior_d1_sync_identity(
     path: Path, *, expected_applied_cursor: int
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -1129,7 +1141,7 @@ def _recover_d1_sync_journal(
         )
         return None
 
-    candidate_exists = candidate_path.exists()
+    candidate_exists = _d1_sync_path_entry_exists(candidate_path)
     expected_candidate_file = journal["candidate_file_identity"]
     expected_candidate_sync = journal["candidate_sync_identity"]
     if committed:

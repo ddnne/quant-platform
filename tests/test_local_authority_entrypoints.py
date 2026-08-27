@@ -910,6 +910,37 @@ def test_d1_sync_file_fsynced_recovery_rejects_live_wal_without_mutation(
     assert _read_atomic_marker(live) == "new"
 
 
+def test_d1_sync_file_fsynced_recovery_rejects_dangling_candidate_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live, execute, calls = _install_atomic_sync_harness(tmp_path, monkeypatch)
+
+    def crash(point: str) -> None:
+        if point == "after_file_fsync":
+            raise _SimulatedD1SyncCrash(point)
+
+    with pytest.raises(_SimulatedD1SyncCrash, match="after_file_fsync"):
+        execute(fault=crash)
+    journal_path, _lock_path = _d1_sync_paths(live)
+    journal = _read_d1_sync_journal(journal_path)
+    assert journal is not None and journal["phase"] == "FILE_FSYNCED"
+    candidate = Path(journal["candidate_path"])
+    candidate.unlink()
+    candidate.symlink_to(tmp_path / "does-not-exist")
+    prior_live_identity = entrypoints._measure_d1_sync_file(live)
+
+    with pytest.raises(
+        service_runtime.LocalAuthorityError, match="mirror cannot be opened"
+    ):
+        execute()
+
+    assert candidate.is_symlink()
+    assert entrypoints._measure_d1_sync_file(live) == prior_live_identity
+    assert _read_d1_sync_journal(journal_path) == journal
+    assert calls["acquire"] == 1
+
+
 def _rewrite_sync_journal(path: Path, **updates: object) -> None:
     journal = _read_d1_sync_journal(path)
     assert journal is not None
