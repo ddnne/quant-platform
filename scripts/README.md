@@ -69,6 +69,23 @@ Access. PENDING staging acceptance also does not make Premium registration
 reachable; a separately reviewed private operator Service Binding/entrypoint
 is still required, and adding a public Premium route is prohibited.
 
+[`receipt_authority_staging_active_gate.py`](receipt_authority_staging_active_gate.py)
+is the staging-only, audit-only activation observer gate. It accepts only the
+reviewed source SHA, account ID, and Cloudflare API token; the Access manifest,
+staging key registry, and output directory are fixed. The gate independently
+brackets four live deployments, Access's immutable Worker destination,
+application AUD, exact `non_identity` Service Auth policy/token, and Premium
+D1 schema/attestation row. It then makes an unauthenticated rejection probe and
+one random-challenge HTTPS request to the Access-protected observer. Access
+client ID/secret values come only from
+`RECEIPT_OBSERVER_ACCESS_CLIENT_ID` and
+`RECEIPT_OBSERVER_ACCESS_CLIENT_SECRET`, and are never arguments or evidence.
+The checked-in Access manifest is deliberately `PENDING`; error `9999`, any
+covering/broader Access app, redirect, HTML, deployment/D1 drift, or old
+version/key pair remains an operational hold. A success writes only canonical,
+content-addressed, create-only local `AUDIT_ONLY` evidence and cannot authorize
+Receipt issuance, release, READY, or Pilot.
+
 Phase 6 hardening utilities:
 
 - `ops_status.py --json` — offline READY snapshot, coverage, B0 and validation status.

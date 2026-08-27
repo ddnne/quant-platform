@@ -202,6 +202,7 @@ export async function handleReceiptActivationObserverRequest(
       observer_worker_version_id: provenance.versionId,
       observer_worker_version_tag: provenance.versionTag,
       access_authenticated: true as const,
+      access_aud: ctx.access.aud,
       premium_evidence: premiumEvidence,
       premium_evidence_digest: premiumEvidence.evidence_digest,
     };

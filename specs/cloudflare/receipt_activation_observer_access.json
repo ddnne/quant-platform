@@ -1,0 +1,66 @@
+{
+  "schema_version": "receipt-activation-observer-access/v1",
+  "status": "PENDING",
+  "environment": "staging",
+  "account_id": "PENDING",
+  "worker": {
+    "logical_id": "receipt-activation-observer",
+    "script_name": "quant-platform-receipt-activation-observer-staging",
+    "id": "PENDING",
+    "scope": "worker"
+  },
+  "endpoint": {
+    "hostname": "PENDING"
+  },
+  "application": {
+    "id": "PENDING",
+    "aud": "PENDING",
+    "type": "self_hosted",
+    "destinations": [
+      {
+        "type": "worker",
+        "worker_id": "PENDING"
+      }
+    ],
+    "decision": "non_identity",
+    "decision_label": "Service Auth"
+  },
+  "policy": {
+    "id": "PENDING",
+    "name": "receipt-activation-observer-service-auth",
+    "precedence": 1,
+    "decision": "non_identity",
+    "decision_label": "Service Auth",
+    "include": [
+      {
+        "service_token": {
+          "token_id": "PENDING"
+        }
+      }
+    ],
+    "exclude": [],
+    "require": []
+  },
+  "service_token": {
+    "token_id": "PENDING",
+    "name": "receipt-activation-observer-gate"
+  },
+  "forbidden": {
+    "decisions": [
+      "allow",
+      "bypass"
+    ],
+    "selectors": [
+      "any_valid_service_token",
+      "any_valid"
+    ],
+    "covering_destinations": [
+      "worker",
+      "preview_worker",
+      "all_workers",
+      "all_preview_workers",
+      "public"
+    ]
+  },
+  "cloudflare_error_9999": "OPERATIONAL_HOLD"
+}

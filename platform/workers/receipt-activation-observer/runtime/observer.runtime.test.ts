@@ -133,6 +133,7 @@ describe("Receipt activation observer runtime boundary", () => {
       observer_worker_version_id: VERSION_ID,
       observer_worker_version_tag: `rao-s-o-${SHA}`,
       access_authenticated: true,
+      access_aud: "receipt-observer-access-aud",
     });
     const { response_digest: supplied, ...body } = document;
     expect(supplied).toBe(await canonicalDigest(body));
