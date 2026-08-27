@@ -588,6 +588,57 @@ class SQLiteAuthorityEventLedger:
             prior = row["event_digest"]
             expected_sequence += 1
 
+    def audit_read_only(self) -> Mapping[str, Any]:
+        """Validate the complete immutable chain without creating or updating it.
+
+        Staged bootstrap preflights use this method to prove that the separately
+        owned event store is readable and internally consistent.  It deliberately
+        opens SQLite in read-only/query-only mode and returns only a content
+        digest and count; it cannot append an authority event or initialize a
+        missing store.
+        """
+
+        self._require_file_metadata()
+        try:
+            conn = sqlite3.connect(
+                f"file:{self.path}?mode=ro",
+                uri=True,
+                isolation_level=None,
+                timeout=5.0,
+            )
+        except sqlite3.Error as exc:
+            raise AuthorityLedgerError(
+                "authority ledger cannot be opened read-only"
+            ) from exc
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA query_only=ON")
+            conn.execute("PRAGMA trusted_schema=OFF")
+            self._validate_chain(conn)
+            rows = conn.execute(
+                "SELECT sequence,event_digest FROM authority_events ORDER BY sequence"
+            ).fetchall()
+            tail = None if not rows else str(rows[-1]["event_digest"])
+            evidence = {
+                "schema_version": LEDGER_SCHEMA_VERSION,
+                "authority_id": self.authority_id,
+                "environment": self.environment,
+                "event_count": len(rows),
+                "tail_event_digest": tail,
+            }
+            return MappingProxyType(
+                {
+                    **evidence,
+                    "chain_digest": sha256_digest(evidence),
+                }
+            )
+        except sqlite3.Error as exc:
+            raise AuthorityLedgerError(
+                "authority ledger read-only audit failed"
+            ) from exc
+        finally:
+            conn.close()
+
     def execute_once(
         self,
         *,
