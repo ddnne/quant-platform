@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quant-platform.invalid/schemas/local-authority-anchor-protocol.schema.json",
+  "title": "Local authority external high-water anchor protocol",
+  "oneOf": [
+    {"$ref": "#/$defs/challenge_request"},
+    {"$ref": "#/$defs/challenge"},
+    {"$ref": "#/$defs/commit_request"},
+    {"$ref": "#/$defs/receipt"},
+    {"$ref": "#/$defs/resolution_request"},
+    {"$ref": "#/$defs/resolution_response"}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "nonce": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "instance": {"type": "string", "pattern": "^journal-instance:[0-9a-f]{64}$"},
+    "signature": {"type": "string", "pattern": "^ed25519:[A-Za-z0-9+/]{86}==$"},
+    "environments": {"const": ["production", "staging"]},
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "journal_schema_version", "journal_format", "journal_instance_id", "environment_set", "policy_digest", "principal_manifest_digest", "event_count", "tail_event_sequence", "tail_event_digest", "attempt_evidence_count", "attempt_evidence_set_digest", "run_state_digest"],
+      "properties": {
+        "format": {"const": "local-authority-staged-canary-anchor-candidate/v3"},
+        "journal_schema_version": {"const": 4},
+        "journal_format": {"const": "local-authority-staged-canary-journal/v4"},
+        "journal_instance_id": {"$ref": "#/$defs/instance"},
+        "environment_set": {"$ref": "#/$defs/environments"},
+        "policy_digest": {"$ref": "#/$defs/digest"},
+        "principal_manifest_digest": {"$ref": "#/$defs/digest"},
+        "event_count": {"type": "integer", "minimum": 0},
+        "tail_event_sequence": {"type": ["integer", "null"], "minimum": 1},
+        "tail_event_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "attempt_evidence_count": {"type": "integer", "minimum": 0},
+        "attempt_evidence_set_digest": {"$ref": "#/$defs/digest"},
+        "run_state_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "event_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sequence", "canary_id", "event_type", "attempt", "observed_at", "lease_token_digest", "detail_digest", "prior_event_digest", "event_digest"],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1},
+        "canary_id": {"$ref": "#/$defs/digest"},
+        "event_type": {"enum": ["LEASE_ACQUIRED", "EXPIRED_LEASE_RECOVERED", "ACTION_STARTED", "ACTION_FAILED_RETRYABLE", "ACTION_FAILED_FINAL", "CANARY_COMMITTED"]},
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 3},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "lease_token_digest": {"$ref": "#/$defs/digest"},
+        "detail_digest": {"$ref": "#/$defs/digest"},
+        "prior_event_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "event_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "attempt_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canary_id", "attempt", "challenge_digest", "resource_digest", "lease_token_digest", "lease_boot_id", "deadline_monotonic_ns", "lease_expires_at", "acquired_at", "attempt_evidence_digest"],
+      "properties": {
+        "canary_id": {"$ref": "#/$defs/digest"},
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 3},
+        "challenge_digest": {"$ref": "#/$defs/digest"},
+        "resource_digest": {"$ref": "#/$defs/digest"},
+        "lease_token_digest": {"$ref": "#/$defs/digest"},
+        "lease_boot_id": {"type": "string", "minLength": 1},
+        "deadline_monotonic_ns": {"type": "integer", "minimum": 1},
+        "lease_expires_at": {"type": "string", "format": "date-time"},
+        "acquired_at": {"type": "string", "format": "date-time"},
+        "attempt_evidence_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "run_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canary_id", "authority_id", "environment", "action", "source_sha", "runtime_bundle_digest", "resource_digest", "state", "attempt_count", "lease_token_digest", "lease_boot_id", "deadline_monotonic_ns", "lease_expires_at", "challenge_digest", "result_digest", "failure_class", "updated_at"],
+      "properties": {
+        "canary_id": {"$ref": "#/$defs/digest"},
+        "authority_id": {"type": "string", "minLength": 1},
+        "environment": {"enum": ["production", "staging"]},
+        "action": {"type": "string", "minLength": 1},
+        "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "runtime_bundle_digest": {"$ref": "#/$defs/digest"},
+        "resource_digest": {"$ref": "#/$defs/digest"},
+        "state": {"enum": ["RUNNING", "FAILED_RETRYABLE", "FAILED_FINAL", "COMMITTED"]},
+        "attempt_count": {"type": "integer", "minimum": 1, "maximum": 3},
+        "lease_token_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "lease_boot_id": {"type": ["string", "null"]},
+        "deadline_monotonic_ns": {"type": ["integer", "null"], "minimum": 1},
+        "lease_expires_at": {"type": ["string", "null"], "format": "date-time"},
+        "challenge_digest": {"$ref": "#/$defs/digest"},
+        "result_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "failure_class": {"type": ["string", "null"]},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "lineage_proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "journal_instance_id", "environment_set", "prior_anchor_digest", "prior_anchor_candidate_digest", "base_event_count", "base_tail_event_digest", "event_suffix", "previous_attempt_evidence_set_digest", "new_attempt_records", "changed_run_records", "anchor_candidate_digest"],
+      "properties": {
+        "format": {"const": "local-authority-high-water-anchor-lineage-proof/v2"},
+        "journal_instance_id": {"$ref": "#/$defs/instance"},
+        "environment_set": {"$ref": "#/$defs/environments"},
+        "prior_anchor_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "prior_anchor_candidate_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "base_event_count": {"type": "integer", "minimum": 0},
+        "base_tail_event_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "event_suffix": {"type": "array", "items": {"$ref": "#/$defs/event_record"}},
+        "previous_attempt_evidence_set_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "new_attempt_records": {"type": "array", "items": {"$ref": "#/$defs/attempt_record"}},
+        "changed_run_records": {"type": "array", "items": {"$ref": "#/$defs/run_record"}},
+        "anchor_candidate_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "challenge_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "authority_id", "journal_instance_id", "environment_set", "anchor_candidate_digest", "request_nonce", "client_key_id", "challenge_request_digest", "signature"],
+      "properties": {
+        "format": {"const": "local-authority-high-water-anchor-challenge-request/v1"},
+        "authority_id": {"const": "quant-platform-local-authority-high-water-anchor"},
+        "journal_instance_id": {"$ref": "#/$defs/instance"},
+        "environment_set": {"$ref": "#/$defs/environments"},
+        "anchor_candidate_digest": {"$ref": "#/$defs/digest"},
+        "request_nonce": {"$ref": "#/$defs/nonce"},
+        "client_key_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "challenge_request_digest": {"$ref": "#/$defs/digest"},
+        "signature": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "challenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "authority_id", "journal_instance_id", "environment_set", "anchor_candidate_digest", "challenge_request_digest", "nonce", "issued_at", "expires_at", "generation", "prior_anchor_digest", "remote_key_id", "challenge_digest", "signature"],
+      "properties": {
+        "format": {"const": "local-authority-high-water-anchor-challenge/v1"},
+        "authority_id": {"const": "quant-platform-local-authority-high-water-anchor"},
+        "journal_instance_id": {"$ref": "#/$defs/instance"},
+        "environment_set": {"$ref": "#/$defs/environments"},
+        "anchor_candidate_digest": {"$ref": "#/$defs/digest"},
+        "challenge_request_digest": {"$ref": "#/$defs/digest"},
+        "nonce": {"$ref": "#/$defs/nonce"},
+        "issued_at": {"type": "string", "format": "date-time"},
+        "expires_at": {"type": "string", "format": "date-time"},
+        "generation": {"type": "integer", "minimum": 1},
+        "prior_anchor_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "remote_key_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "challenge_digest": {"$ref": "#/$defs/digest"},
+        "signature": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "commit_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "authority_id", "journal_instance_id", "environment_set", "generation", "prior_anchor_digest", "challenge_digest", "challenge_nonce", "anchor_candidate", "anchor_candidate_digest", "lineage_proof", "lineage_proof_digest", "client_key_id", "commit_request_digest", "signature"],
+      "properties": {
+        "format": {"const": "local-authority-high-water-anchor-commit-request/v2"},
+        "authority_id": {"const": "quant-platform-local-authority-high-water-anchor"},
+        "journal_instance_id": {"$ref": "#/$defs/instance"},
+        "environment_set": {"$ref": "#/$defs/environments"},
+        "generation": {"type": "integer", "minimum": 1},
+        "prior_anchor_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "challenge_digest": {"$ref": "#/$defs/digest"},
+        "challenge_nonce": {"$ref": "#/$defs/nonce"},
+        "anchor_candidate": {"$ref": "#/$defs/candidate"},
+        "anchor_candidate_digest": {"$ref": "#/$defs/digest"},
+        "lineage_proof": {"$ref": "#/$defs/lineage_proof"},
+        "lineage_proof_digest": {"$ref": "#/$defs/digest"},
+        "client_key_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "commit_request_digest": {"$ref": "#/$defs/digest"},
+        "signature": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "authority_id", "journal_instance_id", "environment_set", "generation", "prior_anchor_digest", "challenge_digest", "commit_request_digest", "anchor_candidate_digest", "lineage_proof_digest", "accepted_at", "remote_key_id", "accepted_anchor_digest", "signature", "receipt_digest"],
+      "properties": {
+        "format": {"const": "local-authority-high-water-anchor-receipt/v2"},
+        "authority_id": {"const": "quant-platform-local-authority-high-water-anchor"},
+        "journal_instance_id": {"$ref": "#/$defs/instance"},
+        "environment_set": {"$ref": "#/$defs/environments"},
+        "generation": {"type": "integer", "minimum": 1},
+        "prior_anchor_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "challenge_digest": {"$ref": "#/$defs/digest"},
+        "commit_request_digest": {"$ref": "#/$defs/digest"},
+        "anchor_candidate_digest": {"$ref": "#/$defs/digest"},
+        "lineage_proof_digest": {"$ref": "#/$defs/digest"},
+        "accepted_at": {"type": "string", "format": "date-time"},
+        "remote_key_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "accepted_anchor_digest": {"$ref": "#/$defs/digest"},
+        "signature": {"$ref": "#/$defs/signature"},
+        "receipt_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "resolution_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "authority_id", "journal_instance_id", "environment_set", "generation", "prior_anchor_digest", "challenge_digest", "commit_request_digest", "request_nonce", "client_key_id", "resolution_request_digest", "signature"],
+      "properties": {
+        "format": {"const": "local-authority-high-water-anchor-resolution-request/v1"},
+        "authority_id": {"const": "quant-platform-local-authority-high-water-anchor"},
+        "journal_instance_id": {"$ref": "#/$defs/instance"},
+        "environment_set": {"$ref": "#/$defs/environments"},
+        "generation": {"type": "integer", "minimum": 1},
+        "prior_anchor_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "challenge_digest": {"$ref": "#/$defs/digest"},
+        "commit_request_digest": {"$ref": "#/$defs/digest"},
+        "request_nonce": {"$ref": "#/$defs/nonce"},
+        "client_key_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "resolution_request_digest": {"$ref": "#/$defs/digest"},
+        "signature": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "resolution_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "authority_id", "journal_instance_id", "environment_set", "generation", "prior_anchor_digest", "challenge_digest", "commit_request_digest", "resolution_request_digest", "status", "receipt", "current_generation", "current_anchor_digest", "resolved_at", "remote_key_id", "resolution_response_digest", "signature"],
+      "properties": {
+        "format": {"const": "local-authority-high-water-anchor-resolution-response/v1"},
+        "authority_id": {"const": "quant-platform-local-authority-high-water-anchor"},
+        "journal_instance_id": {"$ref": "#/$defs/instance"},
+        "environment_set": {"$ref": "#/$defs/environments"},
+        "generation": {"type": "integer", "minimum": 1},
+        "prior_anchor_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "challenge_digest": {"$ref": "#/$defs/digest"},
+        "commit_request_digest": {"$ref": "#/$defs/digest"},
+        "resolution_request_digest": {"$ref": "#/$defs/digest"},
+        "status": {"enum": ["ACCEPTED", "NOT_ACCEPTED"]},
+        "receipt": {"oneOf": [{"$ref": "#/$defs/receipt"}, {"type": "null"}]},
+        "current_generation": {"type": "integer", "minimum": 0},
+        "current_anchor_digest": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "resolved_at": {"type": "string", "format": "date-time"},
+        "remote_key_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "resolution_response_digest": {"$ref": "#/$defs/digest"},
+        "signature": {"$ref": "#/$defs/signature"}
+      }
+    }
+  }
+}

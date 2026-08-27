@@ -1,0 +1,9 @@
+{
+  "format": "local-authority-high-water-anchor-public-key-registry/v1",
+  "generation": 0,
+  "authority_status": "PENDING",
+  "authority_id": "quant-platform-local-authority-high-water-anchor",
+  "environment_set": ["production", "staging"],
+  "keys": [],
+  "registry_digest": "sha256:702cfdd798d15a396f788c8dabb14332a3dfffa9911058daf830fdad83fee724"
+}
