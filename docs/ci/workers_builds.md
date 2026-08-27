@@ -11,7 +11,9 @@ This document is the operator map for:
    [`scripts/workers_builds_verify_ci.sh`](../../scripts/workers_builds_verify_ci.sh),
    which hands authority to [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh).
 2. The **native GitHub check run** posted by the Cloudflare Workers & Pages GitHub App (required check).
-3. Product-lane Builds (informational only).
+3. Product-lane Builds (informational only). The dedicated Receipt authority is
+   intentionally excluded from those ordinary product lanes and uses its
+   reviewed PENDING/ACTIVE two-deployment procedure.
 
 Mass / READY / GO stay unarmed. A green check is not production publication and is
 not a research API.
@@ -52,7 +54,7 @@ receipts are not.
 | Signal | Role |
 |---|---|
 | Native GitHub check from the Cloudflare GitHub App (repo-root Build) | **required** merge check; `main` pins context `Workers Builds: quant-platform-ci-aggregate-staging` to App ID `85455` |
-| Six product-lane Workers Builds / PR comments / per-worker check runs | **informational** |
+| Six ordinary product-lane Workers Builds / PR comments / per-worker check runs | **informational**; the dedicated Receipt authority is not a product lane |
 
 Branch protection requires the exact native context above with expected source
 `checks[].app_id = 85455`. A PAT-posted context named `ci-aggregate` is not a
@@ -83,7 +85,7 @@ asdf rebuild.
   This merge check is not the production finding-ledger release gate.
 - Uses pinned `uv 0.11.26` and `uv sync --frozen --extra dev` with the tracked lockfile.
 - `pytest tests/`, catalog freeze, Evaluation IR schema/codec.
-- Six active workers run in parallel: `package-lock.json` required, `npm ci`, `npm test`, `npm run typecheck`, generated types `--check`, and Wrangler dry-runs for base, production, and isolated staging.
+- Seven active workers run in parallel: `package-lock.json` required, `npm ci`, `npm test`, `npm run typecheck`, generated types `--check`, and Wrangler dry-runs for base, production, and isolated staging.
 - [`active_worker_bindings.json`](../../specs/cloudflare/active_worker_bindings.json) freezes D1, R2, Queue/DLQ, Durable Object, Service Binding, Cron, vars, and secret names. Values of secrets are never read or stored.
 - Wrangler `[secrets].required` declarations are part of generated Env exactness for base and production. Staging declares no production secrets.
 - Wrangler, TypeScript, and Cloudflare Worker types are exact-version policy across all active workers.
@@ -121,7 +123,7 @@ Workers Builds injects `WORKERS_CI_COMMIT_SHA`. Do not invent a SHA.
 ## Product lanes (informational)
 
 Connect **the same** GitHub repository `ddnne/quant-platform` to each of the
-six product Workers if operators want per-Worker preview/history. Set **root
+six ordinary product Workers if operators want per-Worker preview/history. Set **root
 directory** to that Worker’s tree so Wrangler `name` matches the dashboard
 Worker
 ([name requirement](https://developers.cloudflare.com/workers/ci-cd/builds/troubleshoot/#workers-name-requirement)).
@@ -161,7 +163,9 @@ Active Deployment.
 | Explicit promote | `npx wrangler deploy` **or** dashboard promote of a specific version | operator, after the native check is green **and** an explicit decision to ship |
 
 **Do not** set any production-branch **deploy command** to `npx wrangler deploy`
-for the six product Workers. That would auto-promote on green CI.
+for the six ordinary product Workers. That would auto-promote on green CI. The
+seventh active Worker, `receipt-evidence-authority`, is deployed only through
+its reviewed PENDING/ACTIVE activation procedure and is not an automatic lane.
 
 Use `npx wrangler versions upload` as the production-branch deploy command (and
 the non-production command) on product lanes. Disconnecting Git does not replace
@@ -170,7 +174,8 @@ this policy — the deploy command is the switch
 
 Local **mandatory** CI is the same script: [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh).
 [`scripts/verify_all.sh`](../../scripts/verify_all.sh) is a fast local helper only.
-Six-lane `npm test` runs skip Python/catalog and are **not** `verify_ci`.
+Six ordinary product-lane `npm test` runs skip Python/catalog and are **not**
+`verify_ci`; authoritative `verify_ci` covers all seven active Workers.
 
 [Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/) Git
 integration also posts a **pull request comment** and per-worker **check runs**

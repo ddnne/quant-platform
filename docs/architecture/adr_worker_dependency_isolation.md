@@ -4,22 +4,25 @@
 |-------|-------|
 | **Status** | **Accepted (review after native-build parity exists)** |
 | **Date** | 2026-08-25 |
-| **Scope** | Six active Cloudflare Workers under `platform/workers/` |
+| **Scope** | Seven active Cloudflare Workers under `platform/workers/` |
 | **Related** | [`../ci/workers_builds.md`](../ci/workers_builds.md), [`adr_llm_friendly_refactor.md`](./adr_llm_friendly_refactor.md) |
 
 ## Context
 
 The preferred repository shape is one npm workspace, one lockfile, and shared
-TypeScript/Vitest configuration. The six active Workers are currently deployable
+TypeScript/Vitest configuration. The seven active Workers are currently deployable
 units with independent Cloudflare build roots and independent rollback surfaces.
 Changing dependency ownership while the native required check and production
 bindings are being closed would combine a release-boundary migration with the
 trust-boundary changes in Phase 6.3.1.
 
-The deprecated `ci-aggregate` Worker and its seventh lockfile were removed. The
-remaining six lockfiles belong only to active deployable Workers. Wrangler and
-Cloudflare test-tool versions are pinned to the same exact versions and checked
-by the repository-root native build.
+The deprecated `ci-aggregate` Worker and its former seventh lockfile were
+removed. The later `receipt-evidence-authority` boundary deliberately introduced
+one isolated lockfile again: it is a dedicated signing authority with an
+independent Cloudflare build root, Durable Object migration, activation
+ceremony, and rollback surface. The resulting seven lockfiles belong only to
+active deployable Workers. Wrangler and Cloudflare test-tool versions are pinned
+to the same exact versions and checked by the repository-root native build.
 
 ## Decision
 
@@ -28,7 +31,8 @@ isolation exception, not permission for dependency drift.
 
 The following are mandatory while the exception exists:
 
-- the binding manifest and native required check cover all six Workers;
+- the binding manifest and native required check cover all seven Workers from
+  the machine-readable active-Worker inventory;
 - base, production, and staging dry-runs are executed for every Worker;
 - Wrangler, Vitest, and Cloudflare runtime-test packages use repository-wide
   exact versions;
@@ -47,5 +51,8 @@ following on a review branch:
 4. per-Worker rollback does not require resolving unrelated dependency changes;
 5. the authoritative required-check name and source do not change silently.
 
-Until those conditions are demonstrated, consolidating the six lockfiles is a
-deferred refactor. Adding a seventh product lockfile is prohibited.
+Until those conditions are demonstrated, consolidating the seven lockfiles is a
+deferred refactor. The receipt-authority lockfile is the reviewed temporary
+exception for its dedicated authority and rollback boundary; adding an eighth
+active-Worker lockfile requires a new reviewed ADR amendment and matching
+machine-inventory coverage.

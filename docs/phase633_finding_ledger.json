@@ -1,6 +1,6 @@
 {
   "schema_version": "phase631-finding-ledger/v1",
-  "updated_at": "2026-08-27T13:28:58+09:00",
+  "updated_at": "2026-08-27T13:49:17+09:00",
   "merge_policy": {
     "required_p0_status": "FIXED",
     "independent_review_unresolved_p0": 0,
@@ -40,7 +40,7 @@
     {"id":"C5","area":"cloudflare_ops_ci","severity":"P1","status":"OPEN","summary":"MCP tools lacked closed output-schema digest acceptance","evidence":"Repository defines 17 closed input and output schemas and pins aggregate digest sha256:dad7cd29ef002e76ee1f9802b8685a179f94fcbd0bb2e6df685858e41c1778d3; live tools/list remains 16 and omits storage_plane_status","closure":"Deploy and accept exact 17 tool name and schema-digest parity"},
     {"id":"C6","area":"cloudflare_ops_ci","severity":"P1","status":"FIXED","summary":"Production Cron triggers were omitted from named environments","evidence":"6a37f61f"},
     {"id":"C7","area":"cloudflare_ops_ci","severity":"P1","status":"HOLD","summary":"ingestion-secrets workers.dev endpoint lacks Access","closure":"Human Zero Trust agreement, then service-token Access"},
-    {"id":"C8","area":"cloudflare_ops_ci","severity":"P1","status":"DEFERRED","summary":"Six active Worker lockfiles remain","closure":"ADR exit criteria prove native-build and rollback parity"},
+    {"id":"C8","area":"cloudflare_ops_ci","severity":"P1","status":"DEFERRED","summary":"Seven isolated active Worker lockfiles remain","closure":"ADR exit criteria prove native-build and rollback parity; the seventh is the reviewed dedicated Receipt-authority and rollback boundary"},
     {"id":"C12","area":"cloudflare_ops_ci","severity":"P1","status":"FIXED","summary":"Coverage transition authorization accepted a backward-moving verification clock","evidence":"b64b3af0; authorization time is monotonic and rollback is rejected; independent review P0/P1=0"},
     {"id":"C15","area":"cloudflare_ops_ci","severity":"P1","status":"FIXED","summary":"SQLite scalar or container coercions and stale timestamps weakened exact evidence comparison","evidence":"c0008890,8c61f840,e4ec03e1,6c048274; exact scalar/container types and current exported-at evidence are checked through the retained descriptor; independent review cfc377b4 tree 075ddb4a P0/P1=0"},
 

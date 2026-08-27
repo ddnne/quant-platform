@@ -5,7 +5,7 @@ default path. Live API paths (if any) are opt-in via env flags and are not part
 of the guard packs below.
 
 ```bash
-# Mandatory local CI (6 active workers in parallel; no VERIFY_* skips)
+# Mandatory local CI (7 active workers in parallel; no VERIFY_* skips)
 scripts/verify_ci.sh
 
 # Skippable helper only (optional VERIFY_* skips; may skip missing node_modules)
@@ -26,7 +26,7 @@ scripts/verify_all.sh
 Live residual COMPLETE / Mass status is **not** decided by tests — see
 [`docs/phase62_residual_status.md`](../docs/phase62_residual_status.md).
 Live review findings: [`docs/phase633_finding_ledger.md`](../docs/phase633_finding_ledger.md) (sole). Historical review waves remain in Git history, not the active tree.
-Mandatory local CI: [`scripts/verify_ci.sh`](../scripts/verify_ci.sh) (6 active workers, no `VERIFY_*` skips; pinned `uv sync --frozen`). [`scripts/verify_all.sh`](../scripts/verify_all.sh) is a skippable helper only. The merge gate is the live native Cloudflare GitHub App check for the repo-root `verify_ci.sh` Build. The legacy receipt aggregator has been removed. Do not add `.github/workflows`. See [`docs/ci/workers_builds.md`](../docs/ci/workers_builds.md).
+Mandatory local CI: [`scripts/verify_ci.sh`](../scripts/verify_ci.sh) (7 active workers, no `VERIFY_*` skips; pinned `uv sync --frozen`). [`scripts/verify_all.sh`](../scripts/verify_all.sh) is a skippable helper only. The merge gate is the live native Cloudflare GitHub App check for the repo-root `verify_ci.sh` Build. The legacy receipt aggregator has been removed. Do not add `.github/workflows`. See [`docs/ci/workers_builds.md`](../docs/ci/workers_builds.md).
 
 ---
 

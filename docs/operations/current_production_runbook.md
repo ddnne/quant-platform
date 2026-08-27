@@ -53,7 +53,7 @@ Stop if production D1/R2/Queue names or IDs differ from
 `preview_urls = false`, `observability.enabled = true`,
 `head_sampling_rate = 1`, and `[version_metadata] binding = "CF_VERSION_METADATA"`.
 The authenticated acceptance gate also runs `wrangler secret list --env
-production --format json` for all six Workers and requires the exact frozen
+production --format json` for all seven active Workers and requires the exact frozen
 secret-name set. It reads names and binding kinds only; values are never
 requested or printed. Missing authentication, missing names, and unexpected
 names all fail closed. Wrangler is `4.125.0`.
