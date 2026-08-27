@@ -27,3 +27,6 @@ class_name = "ReceiptEvidenceAuthority"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ReceiptEvidenceAuthority"]
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"

@@ -229,16 +229,23 @@ export async function reconcileStructured(
     checkedAt: string;
   },
 ): Promise<{ count: number; digest: string; manifestKey: string }> {
+  if (!input.capture.paginationExhausted || !input.capture.discoveryExhausted) {
+    throw new Error("structured reconciliation requires exhausted raw evidence");
+  }
   let rawCount = 0;
   const expectedRows: CanonicalStructuredRow[] = [];
+  const resolved = await resolveGovernedRequest(
+    input.capture.initialRequest,
+    input.capture.initialRequest.environment,
+    new Date(input.checkedAt),
+  );
   for (const page of input.capture.pages) {
     const bytes = await loadRawPage(env.AUTHORITY_EVIDENCE_BUCKET, page);
-    const resolved = await resolveGovernedRequest(
-      input.capture.initialRequest,
-      input.capture.initialRequest.environment,
-      new Date(input.checkedAt),
-    );
-    const rawRows = parseStrictRawPage(bytes, resolved.route).rows;
+    const rawEvidence = parseStrictRawPage(bytes, resolved.route);
+    if (rawEvidence.providerState !== page.metadata.provider_pagination_state) {
+      throw new Error("persisted provider pagination differs from raw bytes");
+    }
+    const rawRows = rawEvidence.rows;
     if (rawRows.length !== page.rowCount) {
       throw new Error("persisted raw row count differs from live capture");
     }

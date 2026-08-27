@@ -18,7 +18,9 @@ import { ReceiptEvidenceAuthority } from "../src/authority_do";
 import { authorityInstanceDigest } from "../src/authority_instance";
 import {
   capturedOfficialCalendarDescriptor,
+  loadCaptureState,
   type Capture,
+  type CaptureRecoveryContext,
 } from "../src/raw_capture";
 import {
   canonicalProductBody,
@@ -353,6 +355,107 @@ function installAuthorityAcquisition(
 ): void {
   (runtimeEnv as unknown as Record<string, unknown>).JQUANTS_ACQUISITION =
     withAcquisition(transform).JQUANTS_ACQUISITION;
+}
+
+type TestCaptureStateV2 = {
+  schema_version: "receipt-authority-capture-state/v2";
+  validator: {
+    schema_version: "receipt-authority-capture-validator/v1";
+    capture_deployment_version: string;
+    digest: string;
+  };
+  authority_binding: Record<string, unknown>;
+  capture: Capture;
+};
+
+type InterruptedCapture = {
+  stub: ReturnType<typeof runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName>;
+  context: CaptureRecoveryContext;
+  state: TestCaptureStateV2;
+};
+
+async function interruptAfterDurableCapture(
+  issueRequest: ReceiptIssueRequestV1,
+): Promise<InterruptedCapture> {
+  const { stub } = await activateRegisteredTestKey();
+  await runtimeEnv.DB.prepare(
+    `CREATE TRIGGER inject_capture_reproof_failure
+     BEFORE UPDATE OF state ON receipt_authority_operations
+     WHEN OLD.state='COLLECTING' AND NEW.state='STRUCTURED_COMMITTED'
+     BEGIN
+       SELECT RAISE(ABORT, 'injected capture reproof failure');
+     END`,
+  ).run();
+  await expect(runInDurableObject(stub, (instance) =>
+    instance.issue_for_segment(issueRequest)
+  )).rejects.toThrow("injected capture reproof failure");
+  await runtimeEnv.DB.prepare(
+    "DROP TRIGGER inject_capture_reproof_failure",
+  ).run();
+  const operationId = await canonicalDigest(issueRequest);
+  const durable = await runInDurableObject(stub, async (_instance, state) =>
+    state.storage.sql.exec<{
+      request_digest: string;
+      attempt_id: string;
+      acquisition_nonce: string;
+      created_at: string;
+      capture_key: string;
+      capture_digest: string;
+    }>(
+      `SELECT o.request_digest,a.attempt_id,a.acquisition_nonce,a.created_at,
+              a.capture_key,a.capture_digest
+         FROM authority_operations o
+         JOIN authority_capture_attempts a ON a.operation_id=o.operation_id
+        WHERE o.operation_id=? AND a.state='CAPTURED'`,
+      operationId,
+    ).one()
+  );
+  const object = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(
+    durable.capture_key,
+  );
+  if (object === null) throw new Error("test capture state missing");
+  const state = JSON.parse(await object.text()) as TestCaptureStateV2;
+  return {
+    stub,
+    context: {
+      key: durable.capture_key,
+      expectedDigest: durable.capture_digest,
+      operationId,
+      requestDigest: durable.request_digest,
+      captureAttemptId: durable.attempt_id,
+      acquisitionNonce: durable.acquisition_nonce,
+      collectionStartedAt: durable.created_at,
+      request: issueRequest,
+    },
+    state,
+  };
+}
+
+async function replaceCaptureState(
+  key: string,
+  value: unknown,
+): Promise<string> {
+  const body = canonicalJson(value);
+  await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.delete(key);
+  await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.put(key, body);
+  return sha256Digest(body);
+}
+
+function legacyFlatCaptureLoaderWouldAccept(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Partial<Capture>;
+  return typeof candidate.rawManifestKey === "string" &&
+    typeof candidate.rawManifestDigest === "string" &&
+    typeof candidate.rawDigest === "string" &&
+    typeof candidate.manifestFileDigest === "string" &&
+    typeof candidate.collectionDigest === "string" &&
+    typeof candidate.terminalChainDigest === "string" &&
+    typeof candidate.acquisitionExpiresAt === "string" &&
+    Array.isArray(candidate.pages) && candidate.pages.length > 0 &&
+    typeof candidate.initialRequest === "object" &&
+    candidate.initialRequest !== null;
 }
 
 beforeEach(async () => {
@@ -884,9 +987,9 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(captureStateObject).not.toBeNull();
     const captureState = JSON.parse(
       await captureStateObject!.text(),
-    ) as Capture;
+    ) as { capture: Capture };
     const calendarDescriptor = capturedOfficialCalendarDescriptor(
-      captureState.officialCalendarEvidence,
+      captureState.capture.officialCalendarEvidence,
     );
     expect(calendarDescriptor).toMatchObject({ raw_path: calendarKeys[0] });
     const expectedCalendarEvidenceDigest = await canonicalDigest(
@@ -917,6 +1020,228 @@ describe("Receipt Evidence Authority in workerd", () => {
       before.objects.map((object) => object.key).sort(),
     );
     expect(acquisitionCalls()).toBe(3);
+  });
+
+  it("fails closed after eviction when the anchored capture manifest disappeared", async () => {
+    installAuthorityAcquisition();
+    const interruptedRequest = {
+      ...request,
+      request_nonce: "c".repeat(64),
+    };
+    const interrupted = await interruptAfterDurableCapture(interruptedRequest);
+    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.delete(
+      interrupted.state.capture.rawManifestKey,
+    );
+    await evictDurableObject(interrupted.stub);
+    globalThis.fetch = (async () => {
+      throw new Error("recovery must not reacquire after a committed capture");
+    }) as typeof fetch;
+    await expect(runInDurableObject(interrupted.stub, (instance) =>
+      instance.recover_issue({
+        ...interruptedRequest,
+        operation: "recover_issue",
+      })
+    )).rejects.toThrow("immutable capture manifest disappeared");
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS count FROM collection_receipts",
+    ).first<{ count: number }>()).toEqual({ count: 0 });
+  });
+
+  it("rejects a changed capture manifest even when its key remains present", async () => {
+    installAuthorityAcquisition();
+    const interrupted = await interruptAfterDurableCapture({
+      ...request,
+      request_nonce: "d".repeat(64),
+    });
+    const manifestKey = interrupted.state.capture.rawManifestKey;
+    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.delete(manifestKey);
+    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.put(
+      manifestKey,
+      canonicalJson({ substituted: true }),
+    );
+    await expect(loadCaptureState(runtimeEnv, interrupted.context)).rejects.toThrow(
+      "immutable capture manifest digest differs",
+    );
+  });
+
+  it("rejects a changed raw page during durable reproof", async () => {
+    installAuthorityAcquisition();
+    const interrupted = await interruptAfterDurableCapture({
+      ...request,
+      request_nonce: "0".repeat(63) + "6",
+    });
+    const rawKey = interrupted.state.capture.pages[0]!.key;
+    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.delete(rawKey);
+    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.put(
+      rawKey,
+      '{"data":[{"Date":"2024-02-01","Open":999,"Close":2}],"pagination_key":null}',
+    );
+    await expect(loadCaptureState(runtimeEnv, interrupted.context)).rejects.toThrow(
+      "immutable raw page changed after capture",
+    );
+  });
+
+  it("rejects changed official-calendar bytes during durable reproof", async () => {
+    installMasterCalendarUpstream();
+    installAuthorityAcquisition();
+    const interrupted = await interruptAfterDurableCapture({
+      ...request,
+      dataset_id: "equities_master",
+      request_nonce: "0".repeat(63) + "7",
+    });
+    const calendar = interrupted.state.capture.officialCalendarEvidence;
+    if (calendar === null) throw new Error("test official calendar missing");
+    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.delete(calendar.key);
+    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.put(calendar.key, '{"data":[]}');
+    await expect(loadCaptureState(runtimeEnv, interrupted.context)).rejects.toThrow(
+      "immutable official calendar changed after capture",
+    );
+  });
+
+  it("uses a rollback-incompatible v2 envelope and rejects legacy flat state", async () => {
+    installAuthorityAcquisition();
+    const interrupted = await interruptAfterDurableCapture({
+      ...request,
+      request_nonce: "e".repeat(64),
+    });
+    expect(legacyFlatCaptureLoaderWouldAccept(interrupted.state)).toBe(false);
+    expect(legacyFlatCaptureLoaderWouldAccept(interrupted.state.capture)).toBe(true);
+
+    const flatDigest = await replaceCaptureState(
+      interrupted.context.key,
+      interrupted.state.capture,
+    );
+    await expect(loadCaptureState(runtimeEnv, {
+      ...interrupted.context,
+      expectedDigest: flatDigest,
+    })).rejects.toThrow("durable capture state envelope is invalid");
+  });
+
+  it("rejects missing deployment metadata and a rollback validator", async () => {
+    installAuthorityAcquisition();
+    const interrupted = await interruptAfterDurableCapture({
+      ...request,
+      request_nonce: "f".repeat(64),
+    });
+    expect(interrupted.state.validator.capture_deployment_version).toBe(
+      runtimeEnv.CF_VERSION_METADATA.id,
+    );
+    await expect(loadCaptureState({
+      ...runtimeEnv,
+      CF_VERSION_METADATA: undefined,
+    } as unknown as ReceiptAuthorityEnv, interrupted.context)).rejects.toThrow(
+      "deployment metadata is unavailable",
+    );
+    await expect(loadCaptureState({
+      ...runtimeEnv,
+      CF_VERSION_METADATA: {
+        ...runtimeEnv.CF_VERSION_METADATA,
+        id: "next-deployment-version",
+      },
+    } as ReceiptAuthorityEnv, interrupted.context)).resolves.toMatchObject({
+      rawManifestKey: interrupted.state.capture.rawManifestKey,
+      paginationExhausted: true,
+      discoveryExhausted: true,
+    });
+
+    const rollback = structuredClone(interrupted.state);
+    rollback.validator.digest = "sha256:" + "0".repeat(64);
+    const rollbackDigest = await replaceCaptureState(
+      interrupted.context.key,
+      rollback,
+    );
+    await expect(loadCaptureState(runtimeEnv, {
+      ...interrupted.context,
+      expectedDigest: rollbackDigest,
+    })).rejects.toThrow("durable capture validator is not current");
+  });
+
+  it("rejects capture operation and attempt substitution", async () => {
+    installAuthorityAcquisition();
+    const interrupted = await interruptAfterDurableCapture({
+      ...request,
+      request_nonce: "0".repeat(63) + "1",
+    });
+    await expect(loadCaptureState(runtimeEnv, {
+      ...interrupted.context,
+      captureAttemptId: "0".repeat(64),
+    })).rejects.toThrow("durable capture state authority binding differs");
+    const substitutedRequest = {
+      ...interrupted.context.request,
+      request_nonce: "0".repeat(63) + "2",
+    };
+    const substitutedOperation = await canonicalDigest(substitutedRequest);
+    await expect(loadCaptureState(runtimeEnv, {
+      ...interrupted.context,
+      operationId: substitutedOperation,
+      requestDigest: substitutedOperation,
+      request: substitutedRequest,
+    })).rejects.toThrow("durable capture state authority binding differs");
+  });
+
+  it("reconstructs raw pagination and rejects a forged terminal capture", async () => {
+    installTopixContinuationUpstream();
+    installAuthorityAcquisition();
+    const interrupted = await interruptAfterDurableCapture({
+      ...request,
+      request_nonce: "0".repeat(63) + "3",
+    });
+    expect(interrupted.state.capture.pages).toHaveLength(2);
+    const forgedState = structuredClone(interrupted.state);
+    const first = forgedState.capture.pages[0]!;
+    const rawObject = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(first.key);
+    if (rawObject === null) throw new Error("test raw page missing");
+    const raw = new Uint8Array(await rawObject.arrayBuffer());
+    const forged = await forgeSegmentExhaustion(new Response(raw, {
+      status: first.responseStatus,
+      headers: first.headers,
+    }));
+    first.headers = Object.fromEntries(forged.headers.entries());
+    first.metadata = acquisitionMetadata(forged.headers);
+    forgedState.capture.pages = [first];
+    forgedState.capture.rawDigest = first.digest;
+    forgedState.capture.terminalChainDigest = first.metadata.chain_digest!;
+    forgedState.capture.acquisitionExpiresAt =
+      first.metadata.acquisition_expires_at!;
+    const forgedDigest = await replaceCaptureState(
+      interrupted.context.key,
+      forgedState,
+    );
+    await expect(loadCaptureState(runtimeEnv, {
+      ...interrupted.context,
+      expectedDigest: forgedDigest,
+    })).rejects.toThrow("provider continuation cannot terminate the segment");
+  });
+
+  it.each([
+    ["status", (state: TestCaptureStateV2) => {
+      state.capture.pages[0]!.responseStatus = 201;
+    }, "failed independent reconciliation"],
+    ["headers", (state: TestCaptureStateV2) => {
+      delete state.capture.pages[0]!.headers["x-quant-acquisition-chain-digest"];
+    }, "response header surface drifted"],
+  ])("rejects a persisted response %s substitution", async (
+    _label,
+    mutate,
+    expected,
+  ) => {
+    installAuthorityAcquisition();
+    const interrupted = await interruptAfterDurableCapture({
+      ...request,
+      request_nonce: _label === "status"
+        ? "0".repeat(63) + "4"
+        : "0".repeat(63) + "5",
+    });
+    const changed = structuredClone(interrupted.state);
+    mutate(changed);
+    const changedDigest = await replaceCaptureState(
+      interrupted.context.key,
+      changed,
+    );
+    await expect(loadCaptureState(runtimeEnv, {
+      ...interrupted.context,
+      expectedDigest: changedDigest,
+    })).rejects.toThrow(expected);
   });
 
   it("branches a new immutable capture attempt after a partial raw failure", async () => {

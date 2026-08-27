@@ -192,7 +192,7 @@ export async function executeReceiptRequest(
     if (snapshot.capture_digest !== null) {
       throw new Error("receipt authority durable capture reference is incomplete");
     }
-    capture = await captureCollection(
+    const captured = await captureCollection(
       env,
       identity,
       operationId,
@@ -201,10 +201,16 @@ export async function executeReceiptRequest(
       snapshot.collection_started_at,
     );
     const captureState = await persistCaptureState(
-      env.AUTHORITY_EVIDENCE_BUCKET,
-      operationId,
-      snapshot.capture_attempt_id,
-      capture,
+      env,
+      {
+        operationId,
+        requestDigest,
+        captureAttemptId: snapshot.capture_attempt_id,
+        acquisitionNonce: snapshot.acquisition_nonce,
+        collectionStartedAt: snapshot.collection_started_at,
+        request: identity,
+      },
+      captured,
     );
     snapshot = await authority.appendCapture(
       operationId,
@@ -213,16 +219,20 @@ export async function executeReceiptRequest(
       captureState.key,
       captureState.digest,
     );
-  } else {
-    if (snapshot.capture_digest === null) {
-      throw new Error("receipt authority durable capture reference is incomplete");
-    }
-    capture = await loadCaptureState(
-      env.AUTHORITY_EVIDENCE_BUCKET,
-      snapshot.capture_key,
-      snapshot.capture_digest,
-    );
   }
+  if (snapshot.capture_key === null || snapshot.capture_digest === null) {
+    throw new Error("receipt authority durable capture reference is incomplete");
+  }
+  capture = await loadCaptureState(env, {
+    key: snapshot.capture_key,
+    expectedDigest: snapshot.capture_digest,
+    operationId,
+    requestDigest,
+    captureAttemptId: snapshot.capture_attempt_id,
+    acquisitionNonce: snapshot.acquisition_nonce,
+    collectionStartedAt: snapshot.collection_started_at,
+    request: identity,
+  });
   const observedAt = new Date().toISOString();
   if (Date.parse(observedAt) >= Date.parse(capture.acquisitionExpiresAt)) {
     throw new Error("acquisition collection expired before reconciliation");

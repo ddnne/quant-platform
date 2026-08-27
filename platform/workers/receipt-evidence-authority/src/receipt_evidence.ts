@@ -46,6 +46,9 @@ export async function measuredClaims(input: {
   structuredDigest: string;
   checkedAt: string;
 }): Promise<UnsignedReceiptClaimsV3> {
+  if (!input.capture.paginationExhausted || !input.capture.discoveryExhausted) {
+    throw new Error("receipt capture did not independently prove exhaustion");
+  }
   const authorityScope = await authorityInstanceScope(input.env);
   const { scope, expectedItems } = expectedScope(input.spec, input.capture.initialRequest);
   const rawCount = input.capture.pages.reduce((total, page) => total + page.rowCount, 0);
@@ -96,8 +99,8 @@ export async function measuredClaims(input: {
     structured_count: input.structuredCount,
     status: "SUCCESS" as const,
     error: null,
-    pagination_exhausted: true as const,
-    discovery_exhausted: true as const,
+    pagination_exhausted: input.capture.paginationExhausted,
+    discovery_exhausted: input.capture.discoveryExhausted,
     source_request_digest: await canonicalDigest(input.capture.initialRequest),
     raw_manifest_digest: input.capture.rawManifestDigest,
     raw_digest: input.capture.rawDigest,
