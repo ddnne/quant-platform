@@ -427,6 +427,30 @@ DURABLE_OBJECT_RPC_POLICY: dict[str, dict[str, tuple[str, ...]]] = {
             "recover_issue",
         ),
     },
+    "research-ai-gateway": {
+        "BudgetLedger": (
+            "cancelPreProvider",
+            "finalizeExact",
+            "heartbeat",
+            "markProviderStarted",
+            "release",
+            "reserve",
+            "reserveOwned",
+            "settleUncertain",
+            "snapshot",
+        ),
+    },
+}
+
+# Durable Object lifecycle handlers are reserved runtime specials, not
+# ordinary RPC methods. Model only explicitly governed classes here so older
+# class inventories retain their existing schema until separately reviewed.
+DURABLE_OBJECT_RESERVED_SPECIAL_POLICY: dict[
+    str, dict[str, tuple[bool, bool]]
+] = {
+    "research-ai-gateway": {
+        "BudgetLedger": (True, True),
+    },
 }
 
 _MODELED_CONFIG_KEYS = (
@@ -706,6 +730,18 @@ def _effective_surface(
                 "name": row["class_name"],
                 "handlers": ["class"],
                 **(
+                    {
+                        "fetch_reserved_special": reserved_specials[0],
+                        "alarm_reserved_special": reserved_specials[1],
+                    }
+                    if (
+                        reserved_specials := DURABLE_OBJECT_RESERVED_SPECIAL_POLICY.get(
+                            worker, {}
+                        ).get(row["class_name"])
+                    ) is not None
+                    else {}
+                ),
+                **(
                     {"rpc_methods": list(rpc_methods)}
                     if (
                         rpc_methods := DURABLE_OBJECT_RPC_POLICY.get(
@@ -758,7 +794,7 @@ def build_manifest() -> dict[str, Any]:
         if (WORKER_ROOT / worker / "wrangler.test.toml").is_file()
     }
     manifest = {
-        "schema_version": "cloudflare-active-worker-bindings/v6",
+        "schema_version": "cloudflare-active-worker-bindings/v7",
         "active_workers": list(ACTIVE_WORKERS),
         "config_key_policy": CONFIG_KEY_POLICY,
         "test_harness_surfaces": test_harness_surfaces,
@@ -783,7 +819,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "workers",
     }:
         raise ValueError("binding manifest fields are not closed")
-    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v6":
+    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v7":
         raise ValueError("binding manifest schema_version drift")
     if manifest["config_key_policy"] != CONFIG_KEY_POLICY:
         raise ValueError("Wrangler config-key policy drift")
@@ -934,6 +970,18 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             {
                 "name": row["class_name"],
                 "handlers": ["class"],
+                **(
+                    {
+                        "fetch_reserved_special": reserved_specials[0],
+                        "alarm_reserved_special": reserved_specials[1],
+                    }
+                    if (
+                        reserved_specials := DURABLE_OBJECT_RESERVED_SPECIAL_POLICY.get(
+                            worker, {}
+                        ).get(row["class_name"])
+                    ) is not None
+                    else {}
+                ),
                 **(
                     {"rpc_methods": list(rpc_methods)}
                     if (

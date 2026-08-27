@@ -47,7 +47,7 @@ def test_receipt_authority_uses_dedicated_evidence_and_premium_owned_migrations(
         assert "migrations_table" not in surface["d1_databases"][0]
 
 
-def test_all_named_entrypoints_and_receipt_do_have_exact_rpc_inventories() -> None:
+def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> None:
     manifest = manifest_module.build_manifest()
     expected = {
         "ingestion-secrets": [{
@@ -108,9 +108,33 @@ def test_all_named_entrypoints_and_receipt_do_have_exact_rpc_inventories() -> No
             "recover_issue",
         ],
     }]
+    budget_ledger = {
+        "name": "BudgetLedger",
+        "handlers": ["class"],
+        "fetch_reserved_special": True,
+        "alarm_reserved_special": True,
+        "rpc_methods": [
+            "cancelPreProvider",
+            "finalizeExact",
+            "heartbeat",
+            "markProviderStarted",
+            "release",
+            "reserve",
+            "reserveOwned",
+            "settleUncertain",
+            "snapshot",
+        ],
+    }
+    for environment in ("base", "production", "staging"):
+        assert manifest["workers"]["research-ai-gateway"][environment][
+            "durable_object_class_handlers"
+        ] == [budget_ledger]
+    assert manifest["test_harness_surfaces"]["research-ai-gateway"][
+        "durable_object_class_handlers"
+    ] == [budget_ledger]
 
 
-def test_receipt_operator_rpc_inventory_rejects_additional_public_method() -> None:
+def test_rpc_inventory_rejects_method_or_reserved_special_drift() -> None:
     manifest = manifest_module.build_manifest()
     mutated = copy.deepcopy(manifest)
     mutated["workers"]["ingestion-premium"]["staging"][
@@ -130,6 +154,13 @@ def test_receipt_operator_rpc_inventory_rejects_additional_public_method() -> No
     mutated["workers"]["receipt-evidence-authority"]["base"][
         "durable_object_class_handlers"
     ][0]["rpc_methods"].append("ensureKey")
+    with pytest.raises(ValueError, match="Durable Object class handlers drifted"):
+        manifest_module.validate_manifest(mutated)
+
+    mutated = copy.deepcopy(manifest)
+    mutated["workers"]["research-ai-gateway"]["production"][
+        "durable_object_class_handlers"
+    ][0]["alarm_reserved_special"] = False
     with pytest.raises(ValueError, match="Durable Object class handlers drifted"):
         manifest_module.validate_manifest(mutated)
 

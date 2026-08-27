@@ -161,6 +161,39 @@ afterEach(async () => {
 });
 
 describe("BudgetLedger in the Workers runtime", () => {
+  it("matches the exact BudgetLedger special-handler and ordinary RPC inventory", () => {
+    const rows = bindingManifest.workers["research-ai-gateway"].staging
+      .durable_object_class_handlers;
+    expect(rows).toHaveLength(1);
+    const inventory = rows[0]!;
+    expect(inventory).toEqual({
+      name: "BudgetLedger",
+      handlers: ["class"],
+      fetch_reserved_special: true,
+      alarm_reserved_special: true,
+      rpc_methods: [
+        "cancelPreProvider",
+        "finalizeExact",
+        "heartbeat",
+        "markProviderStarted",
+        "release",
+        "reserve",
+        "reserveOwned",
+        "settleUncertain",
+        "snapshot",
+      ],
+    });
+
+    const methods = Reflect.ownKeys(BudgetLedger.prototype)
+      .map(String)
+      .filter((name) => name !== "constructor");
+    expect(methods.includes("fetch")).toBe(inventory.fetch_reserved_special);
+    expect(methods.includes("alarm")).toBe(inventory.alarm_reserved_special);
+    expect(
+      methods.filter((name) => name !== "fetch" && name !== "alarm").sort(),
+    ).toEqual([...inventory.rpc_methods].sort());
+  });
+
   it("matches the exact no-fetch GatewayService RPC inventory", () => {
     const rows = bindingManifest.workers["research-ai-gateway"].staging
       .worker_entrypoints;

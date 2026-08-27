@@ -58,7 +58,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "schema_version": "cloudflare-active-worker-bindings/v6",
+  "schema_version": "cloudflare-active-worker-bindings/v7",
   "test_harness_surfaces": {
     "ingestion-jsda": {
       "account_id": null,
@@ -392,10 +392,23 @@
       "d1_databases": [],
       "durable_object_class_handlers": [
         {
+          "alarm_reserved_special": true,
+          "fetch_reserved_special": true,
           "handlers": [
             "class"
           ],
-          "name": "BudgetLedger"
+          "name": "BudgetLedger",
+          "rpc_methods": [
+            "cancelPreProvider",
+            "finalizeExact",
+            "heartbeat",
+            "markProviderStarted",
+            "release",
+            "reserve",
+            "reserveOwned",
+            "settleUncertain",
+            "snapshot"
+          ]
         }
       ],
       "durable_objects": [
@@ -1899,10 +1912,23 @@
         "d1_databases": [],
         "durable_object_class_handlers": [
           {
+            "alarm_reserved_special": true,
+            "fetch_reserved_special": true,
             "handlers": [
               "class"
             ],
-            "name": "BudgetLedger"
+            "name": "BudgetLedger",
+            "rpc_methods": [
+              "cancelPreProvider",
+              "finalizeExact",
+              "heartbeat",
+              "markProviderStarted",
+              "release",
+              "reserve",
+              "reserveOwned",
+              "settleUncertain",
+              "snapshot"
+            ]
           }
         ],
         "durable_objects": [
@@ -1976,10 +2002,23 @@
         "d1_databases": [],
         "durable_object_class_handlers": [
           {
+            "alarm_reserved_special": true,
+            "fetch_reserved_special": true,
             "handlers": [
               "class"
             ],
-            "name": "BudgetLedger"
+            "name": "BudgetLedger",
+            "rpc_methods": [
+              "cancelPreProvider",
+              "finalizeExact",
+              "heartbeat",
+              "markProviderStarted",
+              "release",
+              "reserve",
+              "reserveOwned",
+              "settleUncertain",
+              "snapshot"
+            ]
           }
         ],
         "durable_objects": [
@@ -2053,10 +2092,23 @@
         "d1_databases": [],
         "durable_object_class_handlers": [
           {
+            "alarm_reserved_special": true,
+            "fetch_reserved_special": true,
             "handlers": [
               "class"
             ],
-            "name": "BudgetLedger"
+            "name": "BudgetLedger",
+            "rpc_methods": [
+              "cancelPreProvider",
+              "finalizeExact",
+              "heartbeat",
+              "markProviderStarted",
+              "release",
+              "reserve",
+              "reserveOwned",
+              "settleUncertain",
+              "snapshot"
+            ]
           }
         ],
         "durable_objects": [
