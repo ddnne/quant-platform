@@ -57,6 +57,10 @@ if [[ -n "$pending_environment" ]]; then
     --require-api-token \
     --environment "$pending_environment" \
     --worker receipt-evidence-authority
+  "$py" "$ROOT/scripts/receipt_authority_pending_live_acceptance.py" \
+    --environment "$pending_environment" \
+    --expected-source-sha "$expected_source_sha" \
+    --expected-account-id "$CLOUDFLARE_ACCOUNT_ID"
   echo "receipt authority PENDING deployment acceptance: ok ($pending_environment)"
   exit 0
 fi

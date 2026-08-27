@@ -926,7 +926,9 @@
         "ratelimits": [],
         "route": null,
         "routes": [],
-        "secret_names": [],
+        "secret_names": [
+          "INGESTION_RUN_TOKEN"
+        ],
         "services": [
           {
             "binding": "RECEIPT_EVIDENCE_AUTHORITY",
@@ -1099,7 +1101,10 @@
         ],
         "route": null,
         "routes": [],
-        "secret_names": [],
+        "secret_names": [
+          "JQUANTS_API_KEY",
+          "JQUANTS_RPC_CURSOR_HMAC_KEY"
+        ],
         "services": [],
         "tail_consumers": [],
         "toolchain": {

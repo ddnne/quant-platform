@@ -56,6 +56,13 @@ Before either deployment:
 7. Production and staging wrapping secrets and Durable Object namespaces are
    treated as distinct authority domains.
 
+The PENDING ceremony is a three-Worker deployment, not an authority-only
+upload. `ingestion-secrets` supplies the closed acquisition RPC,
+`receipt-evidence-authority` owns reconciliation/signing state, and
+`ingestion-premium` is the sole operator-facing caller. All three live versions
+must be the same reviewed source SHA at 100% traffic. A local config check or a
+Receipt secret-name check alone is not deployment acceptance.
+
 Install the secret interactively, without putting its value on the command
 line:
 
@@ -66,6 +73,27 @@ npx wrangler secret put RECEIPT_KEY_WRAP_KEY --config wrangler.toml --env produc
 ```
 
 Keep both configurations in `PENDING` and do not add `ACTIVATED_KEY_ID` yet.
+
+Staging additionally needs three independently provisioned, staging-only
+credentials before its final source-bound deploy:
+
+```sh
+cd platform/workers/ingestion-secrets
+npx wrangler secret put JQUANTS_API_KEY --config wrangler.staging.toml
+npx wrangler secret put JQUANTS_RPC_CURSOR_HMAC_KEY --config wrangler.staging.toml
+
+cd ../ingestion-premium
+npx wrangler secret put INGESTION_RUN_TOKEN --config wrangler.staging.toml
+```
+
+The cursor HMAC value must contain at least 32 random bytes and must not match
+production. Staging deliberately has no `JQUANTS_PROXY_TOKEN`, so the legacy
+HTTP proxy remains unavailable. The Premium token is required even for the
+bodyless public-key registration handler, but the secret binding does not make
+that handler reachable. The reviewed staging manifest has no Premium
+workers.dev hostname, route, custom domain, or operator Service Binding.
+Registration therefore remains a separate source and operational blocker
+described below.
 
 ## Deployment 1: PENDING closure provisioning
 
@@ -86,25 +114,83 @@ conditions hold:
   receipt becomes eligible because of this deployment.
 
 Deploy and verify staging first. Deploy production PENDING only after the
-staging evidence is reviewed. Use the repository's reviewed release workflow;
-the illustrative Wrangler targets are:
+staging evidence is reviewed. The exact full Git SHA must appear in both the
+version tag/message and the later read-only acceptance result. Run from a clean
+checkout of that SHA; do not replace it with a short SHA.
+
+The staging targets, in dependency order, are:
 
 ```sh
-cd platform/workers/receipt-evidence-authority
-npx wrangler deploy --config wrangler.staging.toml
-npx wrangler deploy --config wrangler.toml --env production
+SOURCE_SHA="<FULL_REVIEWED_GIT_SHA>"
+
+cd platform/workers/ingestion-secrets
+npx wrangler deploy --strict --config wrangler.staging.toml \
+  --tag "receipt-pending-staging-acquisition-${SOURCE_SHA:0:12}" \
+  --message "quant-platform receipt-chain PENDING staging acquisition source ${SOURCE_SHA}"
+
+cd ../receipt-evidence-authority
+npx wrangler deploy --strict --config wrangler.staging.toml \
+  --tag "receipt-pending-staging-authority-${SOURCE_SHA:0:12}" \
+  --message "quant-platform receipt-chain PENDING staging authority source ${SOURCE_SHA}"
+
+cd ../ingestion-premium
+npx wrangler deploy --strict --config wrangler.staging.toml \
+  --tag "receipt-pending-staging-caller-${SOURCE_SHA:0:12}" \
+  --message "quant-platform receipt-chain PENDING staging caller source ${SOURCE_SHA}"
 ```
 
-From an approved operator environment, call the Premium registration endpoint
-with the token supplied through a protected environment variable or secret
-manager. Do not enable shell tracing and do not print the token:
+The Bash/Zsh parameter expansion above keeps the first 12 hex characters for the tag;
+the message retains all 40. Use the analogous `production` role strings and
+each production config/`--env production` only after staging acceptance.
+
+Immediately after deployment, run the repository acceptance wrapper from
+repository root. It first runs frozen CI and the source-only PENDING gate, then
+uses `wrangler deployments status`, `wrangler versions view`, and GET-only
+Cloudflare API inventory. It brackets the complete three-Worker chain before
+and after every source download, rebuilds each Worker from the clean reviewed
+Git SHA with a credential-free deterministic `wrangler deploy --dry-run`, and
+requires the live downloaded main-module bytes to match the local build
+exactly. The SHA must also equal both local and remotely observed official
+`origin/main`; version messages and tags are never accepted as source
+provenance by themselves.
+It also verifies exact Worker/version/100% traffic/bindings/resources plus
+workers.dev, previews, routes, custom domains, Cron triggers, Logpush and tail
+consumers for all three Workers, and rejects any extra capability surface.
+Wrangler returns secret names only; the verifier never reads or emits values.
+Authenticated Wrangler downloads and inventories receive only the expected
+account ID and API token in a fresh isolated home. They cannot inherit the
+operator's Wrangler OAuth session or unrelated ambient secrets.
+
+Exact module equality is a mandatory acceptance condition. The Cloudflare
+script `etag` is retained as an observed identifier but is not treated as a
+local bundle hash. If dashboard download shape changes or the live module
+digest/size differs from the reviewed dry-run output, the result is `HOLD`;
+do not infer source provenance from the message, tag, or `etag`.
 
 ```sh
-curl --fail-with-body --silent --show-error \
-  --request POST \
-  --header "X-Ingestion-Token: ${INGESTION_RUN_TOKEN}" \
-  "${PREMIUM_ORIGIN}/v1/admin/receipt-evidence/public-key-registration"
+scripts/verify_cloudflare_deployment_acceptance.sh \
+  --pending-receipt-authority staging \
+  --expected-source-sha "${SOURCE_SHA}"
 ```
+
+Preserve its one-line JSON as immutable non-secret evidence. A PASS is only
+`PENDING_LIVE_ACCEPTANCE_ONLY`: active key count remains zero, positive Receipt
+operations remain forbidden, and the result is explicitly research-ineligible.
+
+**STOP / HOLD after staging PENDING acceptance.** There is currently no
+`PREMIUM_ORIGIN`: Premium has `workers_dev=false`, no route and no custom
+domain. Adding any of those public surfaces to make the old `curl` example work
+is prohibited. The next reviewed source change must expose a closed operator
+capability, such as a dedicated Access-protected operator Worker calling a
+typed Premium Service Binding entrypoint. Its caller identity, allowed
+operation, bindings, authentication, rate limit and public surface must be
+frozen in the binding manifest and checked by this live verifier. Until that
+exists, do not generate a key or claim that registration is executable.
+
+After that private operator entrypoint is reviewed, an approved operator may
+invoke only the bodyless public-key registration operation. The token or
+service credential must come from a protected secret manager, with shell
+tracing disabled and without printing it.
 
 Preserve the non-secret response, source/deployment SHA, environment, Worker
 version, Durable Object generation, and response digest as immutable release
@@ -244,11 +330,19 @@ with a changed request, and post-sign structured-row mutation all fail closed.
 ## Current status
 
 The repository contains the inactive implementation and test evidence only.
-Staging and production remain PENDING and unprovisioned. The first deployment,
-secret installation, public registration capture, registry review, ACTIVE
-deployment, segment re-proof, and final operational sign-off remain explicit
-human/account-authorized actions. The source Worker now has only the dedicated
-authority bucket and no shared `quant-structured` binding. D2 remains
-operationally open until environment/resource-bound claims and registry are
-activated with a fresh key and every eligible segment is re-proved through the
-deployed authority path.
+Staging and production remain PENDING and unprovisioned. The checked-in
+deployment contract now includes the minimum staging acquisition/caller secret
+names and a fail-closed live three-Worker acceptance verifier. It does not
+install their values, deploy, migrate, generate a key, or call registration.
+Staging registration remains HOLD because no closed operator-to-Premium
+entrypoint exists. Production acceptance additionally remains C7 HOLD because
+the acquisition Worker's workers.dev hostname is enabled and no Cloudflare
+Access application/policy is provisioned or verified; the live collector
+intentionally refuses to report a production PASS in that state.
+The first deployment, secret installation, public registration capture,
+registry review, ACTIVE deployment, segment re-proof, and final operational
+sign-off remain account-authorized actions. The source Worker has only the
+dedicated authority bucket and no shared `quant-structured` binding. D2/D3
+remain operationally open until the exact live chain and environment/resource-
+bound registry are activated with fresh keys and eligible segments are
+re-proved through the deployed authority path.

@@ -270,6 +270,11 @@ PRODUCTION_SECRET_NAMES: dict[str, tuple[str, ...]] = {
 }
 
 STAGING_SECRET_NAMES: dict[str, tuple[str, ...]] = {
+    "ingestion-premium": ("INGESTION_RUN_TOKEN",),
+    "ingestion-secrets": (
+        "JQUANTS_API_KEY",
+        "JQUANTS_RPC_CURSOR_HMAC_KEY",
+    ),
     "receipt-evidence-authority": ("RECEIPT_KEY_WRAP_KEY",),
 }
 

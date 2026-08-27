@@ -42,6 +42,32 @@ document, but no production release CLI accepts a caller-selected ledger.
 runs mandatory CI and then compares live production `wrangler secret list`
 names with the frozen manifest. It requires Cloudflare API token/account
 presence, requests names only, never prints values, and fails closed on drift.
+Its scoped `--pending-receipt-authority` mode also invokes the exact live
+three-Worker verifier described below; the local PENDING gate alone is not an
+accepted post-deploy result.
+
+[`receipt_authority_pending_live_acceptance.py`](receipt_authority_pending_live_acceptance.py)
+is the GET-only post-deploy acceptance for the PENDING Receipt chain. It binds
+the exact reviewed source SHA to one 100%-traffic version of acquisition,
+authority and caller Workers. For each Worker it compares the live downloaded
+main-module bytes to a credential-free deterministic dry-run build from the
+clean reviewed commit; the SHA must equal locally tracked and remotely observed
+official `origin/main`, so a self-reported version message/tag or caller-chosen
+clean commit is insufficient. A chain-wide before/after observation detects an
+earlier Worker changing while a later Worker is inspected. Authenticated
+Wrangler subprocesses use a fresh isolated home containing only the expected
+Cloudflare account/token, not ambient OAuth or unrelated secrets.
+It also compares the complete live binding/resource inventory with the frozen
+manifest, rejects extra capability surfaces, and proves the expected
+workers.dev, preview, route, custom-domain, Cron, Logpush and tail-consumer
+surfaces, including closed script/runtime/observability settings. Secret values
+are neither requested nor emitted. Its result remains
+research-ineligible and cannot authorize an ACTIVE authority, Receipt
+issuance, Coverage, READY, or Pilot. Production stays C7 `HOLD` while the
+ingestion-secrets workers.dev surface lacks independently verified Cloudflare
+Access. PENDING staging acceptance also does not make Premium registration
+reachable; a separately reviewed private operator Service Binding/entrypoint
+is still required, and adding a public Premium route is prohibited.
 
 Phase 6 hardening utilities:
 
