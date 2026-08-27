@@ -22,17 +22,28 @@ Cloudflare administration remains the separately declared residual risk.
 
 The authority Worker is callable only through its typed Service Binding. Its
 `fetch()` handler returns a fixed `404` with `cache-control: no-store` for every
-request. The only operator-facing registration path is the authenticated
-Premium operation:
+request. Premium likewise has no Receipt HTTP route: the former reconcile,
+recover, and public-key-registration paths return `404` even when a valid
+`INGESTION_RUN_TOKEN`, body, query, or caller claim is supplied.
 
-```text
-POST /v1/admin/receipt-evidence/public-key-registration
-```
+The binding manifest separately freezes the reserved `fetch` special and the
+ordinary RPC methods for all four named WorkerEntrypoints. The Receipt Durable
+Object exposes exactly five RPC methods: public-key registration, governed
+issue/recovery, and the two audit-only recovery-canary operations. Key loading,
+event transactions, operation lookup and every other internal helper use
+JavaScript `#private` methods, not TypeScript-only `private`; workerd rejects the
+former helper names before key, Durable Object, D1 or R2 state can change.
 
-That operation accepts no body and no query parameters, requires the existing
-Premium `INGESTION_RUN_TOKEN`, and returns only the Ed25519 public-key
-registration proposal. It cannot return the AES wrapping secret, wrapped
-PKCS#8 ciphertext, or an unwrapped private key.
+`PremiumReceiptOperatorService` is a named, typed Service Binding entrypoint
+with no `fetch()` method. Its only PENDING action is the argument-free
+`pending_public_key_registration()` proposal. The authority derives and the
+Premium entrypoint revalidates the action, environment, complete deployment
+source SHA, Worker versions, authority resource digest, key identity, and
+`operation_binding_digest`. It cannot return the AES wrapping secret, wrapped
+PKCS#8 ciphertext, or an unwrapped private key. A caller principal/Worker is not
+yet bound to this entrypoint. The typed Premium surface is therefore only a
+source-level partial boundary; it remains operationally unreachable and is not
+an implemented operator-to-Premium principal chain.
 
 `RECEIPT_KEY_WRAP_KEY` is a 32-byte, independently generated wrapping key
 encoded as exactly 64 lowercase hexadecimal characters. Put
@@ -48,7 +59,7 @@ Before either deployment:
 2. The active-binding manifest is clean for base, production, and staging.
 3. A D1 backup and checksum evidence exist for the target environment.
 4. Canonical ingestion migrations through
-   `0018_receipt_product_materialization.sql` have been reviewed and applied by
+   `0019_receipt_authority_recovery_smoke.sql` have been reviewed and applied by
    the single ingestion migration owner.
 5. The target D1/R2 bindings, Durable Object migration, and typed acquisition
    and receipt Service Bindings match the reviewed manifest.
@@ -88,12 +99,10 @@ npx wrangler secret put INGESTION_RUN_TOKEN --config wrangler.staging.toml
 
 The cursor HMAC value must contain at least 32 random bytes and must not match
 production. Staging deliberately has no `JQUANTS_PROXY_TOKEN`, so the legacy
-HTTP proxy remains unavailable. The Premium token is required even for the
-bodyless public-key registration handler, but the secret binding does not make
-that handler reachable. The reviewed staging manifest has no Premium
-workers.dev hostname, route, custom domain, or operator Service Binding.
-Registration therefore remains a separate source and operational blocker
-described below.
+HTTP proxy remains unavailable. The Premium token does not authorize any
+Receipt operation. The reviewed staging manifest has no Premium workers.dev
+hostname, route, custom domain, or operator caller Service Binding.
+Registration therefore remains an operational blocker described below.
 
 ## Deployment 1: PENDING closure provisioning
 
@@ -108,8 +117,9 @@ conditions hold:
   `404`.
 - `issue_for_segment` and `recover_issue` fail closed before acquisition,
   receipt persistence, or coverage publication.
-- The authenticated Premium registration operation is the only way to trigger
-  key creation and retrieve public registration data.
+- The argument-free typed Premium registration capability is the only way to
+  trigger key creation and retrieve public registration data; no operator
+  caller is deployed yet.
 - No collection receipt, coverage state, READY state, or existing signed
   receipt becomes eligible because of this deployment.
 
@@ -125,23 +135,24 @@ SOURCE_SHA="<FULL_REVIEWED_GIT_SHA>"
 
 cd platform/workers/ingestion-secrets
 npx wrangler deploy --strict --config wrangler.staging.toml \
-  --tag "receipt-pending-staging-acquisition-${SOURCE_SHA:0:12}" \
+  --tag "rp-s-a-${SOURCE_SHA}" \
   --message "quant-platform receipt-chain PENDING staging acquisition source ${SOURCE_SHA}"
 
 cd ../receipt-evidence-authority
 npx wrangler deploy --strict --config wrangler.staging.toml \
-  --tag "receipt-pending-staging-authority-${SOURCE_SHA:0:12}" \
+  --tag "rp-s-r-${SOURCE_SHA}" \
   --message "quant-platform receipt-chain PENDING staging authority source ${SOURCE_SHA}"
 
 cd ../ingestion-premium
 npx wrangler deploy --strict --config wrangler.staging.toml \
-  --tag "receipt-pending-staging-caller-${SOURCE_SHA:0:12}" \
+  --tag "rp-s-c-${SOURCE_SHA}" \
   --message "quant-platform receipt-chain PENDING staging caller source ${SOURCE_SHA}"
 ```
 
-The Bash/Zsh parameter expansion above keeps the first 12 hex characters for the tag;
-the message retains all 40. Use the analogous `production` role strings and
-each production config/`--env production` only after staging acceptance.
+The compact `rp-{environment}-{role}` prefix keeps the tag bounded while the
+tag and message both retain all 40 source-SHA characters. Use `p` for the
+production environment and each production config/`--env production` only
+after staging acceptance.
 
 Immediately after deployment, run the repository acceptance wrapper from
 repository root. It first runs frozen CI and the source-only PENDING gate, then
@@ -177,20 +188,13 @@ Preserve its one-line JSON as immutable non-secret evidence. A PASS is only
 `PENDING_LIVE_ACCEPTANCE_ONLY`: active key count remains zero, positive Receipt
 operations remain forbidden, and the result is explicitly research-ineligible.
 
-**STOP / HOLD after staging PENDING acceptance.** There is currently no
-`PREMIUM_ORIGIN`: Premium has `workers_dev=false`, no route and no custom
-domain. Adding any of those public surfaces to make the old `curl` example work
-is prohibited. The next reviewed source change must expose a closed operator
-capability, such as a dedicated Access-protected operator Worker calling a
-typed Premium Service Binding entrypoint. Its caller identity, allowed
-operation, bindings, authentication, rate limit and public surface must be
-frozen in the binding manifest and checked by this live verifier. Until that
-exists, do not generate a key or claim that registration is executable.
-
-After that private operator entrypoint is reviewed, an approved operator may
-invoke only the bodyless public-key registration operation. The token or
-service credential must come from a protected secret manager, with shell
-tracing disabled and without printing it.
+**STOP / HOLD after staging PENDING acceptance.** There is no `PREMIUM_ORIGIN`:
+Premium has `workers_dev=false`, no route and no custom domain. Adding any of
+those public surfaces to make an old `curl` example work is prohibited. The
+typed Premium capability and exact named-handler acceptance are now checked in,
+but no operator principal/Worker owns a Service Binding to it. Until that
+separately reviewed, no-public-surface caller is configured and accepted, do
+not generate a key or claim that registration is executable.
 
 Preserve the non-secret response, source/deployment SHA, environment, Worker
 version, Durable Object generation, and response digest as immutable release
@@ -234,20 +238,63 @@ reviewed public-key registry.
 
 ## Deployment 2: ACTIVE
 
-**Currently blocked.** The ordinary all-P0 strict gate correctly rejects this
-deployment, while ACTIVE smoke evidence is itself required to close the OPEN
-Receipt and authority-isolation rows. Stop after the PENDING ceremony until a
-reviewed next PR adds a narrowly scoped, expiring
-authority/action/environment/SHA/resource-bound staged gate and forces staging
-outputs to remain research-ineligible. A generic `ignore P0` switch is not an
-acceptable substitute, and this runbook does not authorize ACTIVE deployment
-under the current gate.
+**Operationally blocked.** The source tree now contains the narrow
+`receipt_authority_staging_active_gate.py` validator and an ACTIVE-staging Cron
+audit canary. The canary uses domain-separated `AUDIT_ONLY` begin/recover RPCs,
+dedicated Durable Object tables and an append-only three-event chain:
+`INITIAL_COMMITTED`, `RECOVERY_COMPLETED`, then `REPLAY_CONFIRMED`. The first
+recover call persists `RECOVERED_PENDING_REPLAY` without any signed
+attestation. Only the second identical recover call appends the authority-owned
+replay event, transitions to `AUDIT_FINALIZED`, and signs. It never
+calls ordinary `issue_for_segment`/`recover_issue`, never writes
+`collection_receipts`, Coverage, product raw/structured state or authority R2,
+and cannot produce `TRUSTED_COLLECTION`. Premium D1 stores only the canonical
+signed audit attestation and its separately named whole-envelope digest. The
+ACTIVE audit method can only read that attestation; the only other exact RPC is
+the argument-free PENDING registration proposal. Neither operator method can
+initiate a positive Receipt operation.
+
+The public gate owns one fixed gitignored ops attestation path and the pinned
+staging registry path; only its private test core accepts mappings or alternate
+paths. It collects the live documents itself with GET-only Cloudflare calls and
+isolated Wrangler homes, reads the attestation once as canonical JSON, and
+remeasures the exact three-Worker deployment bracket, module bytes, bindings,
+Durable Object
+migration tag, secret-name and public surfaces, and verifies the complete
+initial/first-recovery/replay-confirmation operation chain with the real
+Ed25519 key from the pinned staging registry. Its public API accepts neither
+live evidence mappings, paths, a registry/verifier override, nor an in-memory
+attestation/Receipt. The signed-claims digest and whole signed-
+attestation digest are distinct. It accepts no count, product digest or GO
+override and marks output `AUDIT_ONLY` and research-ineligible.
+
+This is only a source-level partial safety boundary, not permission to activate.
+The active registry,
+ACTIVE vars, migration, deployment, closed operator caller, and live recovery
+evidence do not exist. The ordinary all-P0 gate still rejects release. A generic
+`ignore P0` switch is not an acceptable substitute, and this runbook does not
+authorize ACTIVE deployment under the current gate.
+
+The staging gate treats the authority deployment version, Premium caller
+deployment version, active key ID, and exact registry digest as one immutable
+activation pair. Any authority deploy, authority version replacement, key
+rotation, or registry change requires a coordinated Premium redeploy *after*
+the authority deploy. That redeploy must create a new Cloudflare caller version
+and a new version-scoped Premium D1 audit row. Never update or reuse an older
+row or attestation. The gate rejects the old signed attestation after the
+authority side changes and continues to reject a newly signed authority
+attestation until the newer caller version is selected and bound to the same
+key/registry surface.
 
 Activation is a separate reviewed change. Set:
 
 ```toml
 AUTHORITY_MODE = "ACTIVE"
 ACTIVATED_KEY_ID = "<exact reviewed registration key_id>"
+AUTHORITY_REGISTRY_DIGEST = "<exact reviewed scoped registry digest>"
+RECEIPT_AUTHORITY_OPERATION_MODE = "ACTIVE" # Premium staging only
+RECEIPT_AUTHORITY_ACTIVE_KEY_ID = "<same exact key_id>" # Premium staging only
+RECEIPT_AUTHORITY_REGISTRY_DIGEST = "<same exact registry digest>" # Premium staging only
 ```
 
 The ordinary strict activation gate applies to this deployment; the PENDING
@@ -260,9 +307,13 @@ exception no longer applies. At minimum, require:
 3. The current source SHA passes typecheck, workerd runtime tests, and
    base/production/staging dry-runs.
 4. No unresolved receipt-authority P0 remains.
-5. Staging activation, exact-segment reconciliation, recovery, signature
-   verification, and post-sign immutability smoke tests pass.
+5. Staging audit activation, dedicated-state recovery/replay, signature
+   verification, and no-product-write smoke tests pass. This audit canary is not
+   exact-segment reconciliation and cannot satisfy D2 reproof.
 6. Rollback ownership and monitoring are live.
+7. The selected Premium caller version was deployed after the selected
+   authority version; the signed attestation names both exact versions and the
+   registry-derived key. An older pair or mutable row is not accepted.
 
 Both checked-in scoped registries remain `PENDING` with no active key. This
 runbook does not authorize changing either registry or Worker to `ACTIVE` while
@@ -334,8 +385,10 @@ Staging and production remain PENDING and unprovisioned. The checked-in
 deployment contract now includes the minimum staging acquisition/caller secret
 names and a fail-closed live three-Worker acceptance verifier. It does not
 install their values, deploy, migrate, generate a key, or call registration.
-Staging registration remains HOLD because no closed operator-to-Premium
-entrypoint exists. Production acceptance additionally remains C7 HOLD because
+Staging registration remains HOLD because the typed Premium entrypoint has no
+bound operator caller principal/Worker. The source-only ACTIVE validator and
+Cron recovery canary are present, but have not been migrated, deployed, or
+measured. Production acceptance additionally remains C7 HOLD because
 the acquisition Worker's workers.dev hostname is enabled and no Cloudflare
 Access application/policy is provisioned or verified; the live collector
 intentionally refuses to report a production PASS in that state.
