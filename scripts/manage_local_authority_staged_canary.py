@@ -87,7 +87,7 @@ PRAGMA synchronous=FULL;
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS staged_canary_meta (
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-  schema_version INTEGER NOT NULL CHECK(schema_version=1),
+  schema_version INTEGER NOT NULL CHECK(schema_version=2),
   journal_format TEXT NOT NULL,
   policy_digest TEXT NOT NULL,
   principal_manifest_digest TEXT NOT NULL,
@@ -115,6 +115,21 @@ CREATE TABLE IF NOT EXISTS staged_canary_runs (
   failure_class TEXT,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS staged_canary_attempts (
+  canary_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL CHECK(attempt BETWEEN 1 AND 3),
+  challenge_json TEXT NOT NULL,
+  challenge_digest TEXT NOT NULL,
+  resource_json TEXT NOT NULL,
+  resource_digest TEXT NOT NULL,
+  lease_token_digest TEXT NOT NULL,
+  lease_boot_id TEXT NOT NULL,
+  deadline_monotonic_ns INTEGER NOT NULL CHECK(deadline_monotonic_ns > 0),
+  lease_expires_at TEXT NOT NULL,
+  acquired_at TEXT NOT NULL,
+  PRIMARY KEY(canary_id, attempt),
+  FOREIGN KEY(canary_id) REFERENCES staged_canary_runs(canary_id)
+);
 CREATE TABLE IF NOT EXISTS staged_canary_events (
   sequence INTEGER PRIMARY KEY,
   canary_id TEXT NOT NULL,
@@ -133,9 +148,15 @@ BEGIN SELECT RAISE(ABORT, 'immutable staged canary event'); END;
 CREATE TRIGGER IF NOT EXISTS staged_canary_events_no_delete
 BEFORE DELETE ON staged_canary_events
 BEGIN SELECT RAISE(ABORT, 'immutable staged canary event'); END;
+CREATE TRIGGER IF NOT EXISTS staged_canary_attempts_no_update
+BEFORE UPDATE ON staged_canary_attempts
+BEGIN SELECT RAISE(ABORT, 'immutable staged canary attempt'); END;
+CREATE TRIGGER IF NOT EXISTS staged_canary_attempts_no_delete
+BEFORE DELETE ON staged_canary_attempts
+BEGIN SELECT RAISE(ABORT, 'immutable staged canary attempt'); END;
 """
 _JOURNAL_SCHEMA_DIGEST = (
-    "sha256:91b8ef440a2167d0c097d8d64e9cd420a2eff29ce6e40de491de41b60b17ec97"
+    "sha256:fa9aedb78036bf97a619c7a85461240ab490d035eb82b319e9f52bf1c6570c79"
 )
 _RESOURCE_TOP_FIELDS = {
     "format",
@@ -514,7 +535,7 @@ def _connect_journal(*, create: bool, read_only: bool = False) -> sqlite3.Connec
                 "SELECT * FROM staged_canary_meta WHERE singleton=1"
             ).fetchone()
             expected = (
-                1,
+                2,
                 JOURNAL_FORMAT,
                 policy.digest,
                 PINNED_MANIFEST_DIGEST,
@@ -859,7 +880,7 @@ def _validate_journal(connection: sqlite3.Connection, *, policy_digest: str) -> 
     ).fetchall()
     if [tuple(row) for row in meta] != [
         (
-            1,
+            2,
             JOURNAL_FORMAT,
             policy_digest,
             PINNED_MANIFEST_DIGEST,
@@ -871,6 +892,15 @@ def _validate_journal(connection: sqlite3.Connection, *, policy_digest: str) -> 
         row["canary_id"]: row
         for row in connection.execute("SELECT * FROM staged_canary_runs")
     }
+    attempts_by_canary: dict[str, list[sqlite3.Row]] = {
+        canary_id: [] for canary_id in runs
+    }
+    for attempt_row in connection.execute(
+        "SELECT * FROM staged_canary_attempts ORDER BY canary_id,attempt"
+    ):
+        if attempt_row["canary_id"] not in runs:
+            raise StagedCanaryError("staged canary attempt has no run lineage")
+        attempts_by_canary[attempt_row["canary_id"]].append(attempt_row)
     events_by_canary: dict[str, list[sqlite3.Row]] = {
         canary_id: [] for canary_id in runs
     }
@@ -922,6 +952,7 @@ def _validate_journal(connection: sqlite3.Connection, *, policy_digest: str) -> 
     }
     for canary_id, row in runs.items():
         events = events_by_canary[canary_id]
+        attempts = attempts_by_canary[canary_id]
         challenge = (
             _strict_json(
                 row["challenge_json"].encode("utf-8"),
@@ -1042,6 +1073,93 @@ def _validate_journal(connection: sqlite3.Connection, *, policy_digest: str) -> 
         ):
             raise StagedCanaryError("staged canary run state is invalid")
         _parse_time(row["updated_at"], label="archived run updated_at")
+        if (
+            len(attempts) != row["attempt_count"]
+            or [attempt["attempt"] for attempt in attempts]
+            != list(range(1, int(row["attempt_count"]) + 1))
+        ):
+            raise StagedCanaryError(
+                "staged canary immutable attempt history is not contiguous"
+            )
+        attempt_evidence: dict[int, tuple[dict[str, Any], sqlite3.Row]] = {}
+        for attempt_row in attempts:
+            attempt_challenge = _strict_json(
+                attempt_row["challenge_json"].encode("utf-8"),
+                label="stored immutable canary attempt challenge",
+            )
+            attempt_resources = _strict_json(
+                attempt_row["resource_json"].encode("utf-8"),
+                label="stored immutable canary attempt resources",
+            )
+            attempt_lineage = dict(row)
+            attempt_lineage["resource_digest"] = attempt_row["resource_digest"]
+            _validate_archived_challenge(
+                attempt_challenge,
+                row=attempt_lineage,
+                action=action,
+                policy_digest=policy_digest,
+            )
+            _validate_archived_resources(
+                attempt_resources,
+                row=attempt_lineage,
+                action=action,
+            )
+            acquired_at = _parse_time(
+                attempt_row["acquired_at"],
+                label="archived immutable attempt acquired_at",
+            )
+            issued_at = _parse_time(
+                attempt_challenge["issued_at"],
+                label="archived immutable attempt issued_at",
+            )
+            expires_at = _parse_time(
+                attempt_challenge["expires_at"],
+                label="archived immutable attempt expires_at",
+            )
+            if (
+                canonical_json_bytes(attempt_challenge).decode("utf-8")
+                != attempt_row["challenge_json"]
+                or canonical_json_bytes(attempt_resources).decode("utf-8")
+                != attempt_row["resource_json"]
+                or _digest(attempt_challenge) != attempt_row["challenge_digest"]
+                or attempt_resources["resource_digest"]
+                != attempt_row["resource_digest"]
+                or type(attempt_row["lease_token_digest"]) is not str
+                or _DIGEST_RE.fullmatch(attempt_row["lease_token_digest"]) is None
+                or type(attempt_row["lease_boot_id"]) is not str
+                or not attempt_row["lease_boot_id"]
+                or attempt_row["deadline_monotonic_ns"]
+                != attempt_challenge["deadline_monotonic_ns"]
+                or attempt_row["lease_expires_at"]
+                != attempt_challenge["expires_at"]
+                or not issued_at <= acquired_at <= expires_at
+            ):
+                raise StagedCanaryError(
+                    "staged canary immutable attempt evidence is invalid"
+                )
+            attempt_evidence[int(attempt_row["attempt"])] = (
+                attempt_challenge,
+                attempt_row,
+            )
+        latest_challenge, latest_attempt = attempt_evidence[int(row["attempt_count"])]
+        if (
+            row["challenge_json"] != latest_attempt["challenge_json"]
+            or row["resource_json"] != latest_attempt["resource_json"]
+            or row["resource_digest"] != latest_attempt["resource_digest"]
+            or row["state"] == "RUNNING"
+            and (
+                _digest(row["lease_token"].encode("ascii"))
+                != latest_attempt["lease_token_digest"]
+                or row["lease_boot_id"] != latest_attempt["lease_boot_id"]
+                or row["deadline_monotonic_ns"]
+                != latest_attempt["deadline_monotonic_ns"]
+                or row["lease_expires_at"] != latest_attempt["lease_expires_at"]
+            )
+            or latest_challenge != challenge
+        ):
+            raise StagedCanaryError(
+                "staged canary current run is not the latest immutable attempt"
+            )
         by_attempt: dict[int, list[str]] = {}
         for event in events:
             by_attempt.setdefault(int(event["attempt"]), []).append(
@@ -1051,7 +1169,12 @@ def _validate_journal(connection: sqlite3.Connection, *, policy_digest: str) -> 
             raise StagedCanaryError("staged canary attempt history is not contiguous")
         for attempt in range(1, int(row["attempt_count"]) + 1):
             attempt_events = [event for event in events if event["attempt"] == attempt]
-            if len({event["lease_token_digest"] for event in attempt_events}) != 1:
+            immutable_challenge, immutable_attempt = attempt_evidence[attempt]
+            if (
+                len({event["lease_token_digest"] for event in attempt_events}) != 1
+                or attempt_events[0]["lease_token_digest"]
+                != immutable_attempt["lease_token_digest"]
+            ):
                 raise StagedCanaryError("staged canary attempt changed lease identity")
             history = by_attempt[attempt]
             if attempt == 1:
@@ -1087,17 +1210,16 @@ def _validate_journal(connection: sqlite3.Connection, *, policy_digest: str) -> 
                     raise StagedCanaryError(
                         "retried canary attempt did not fail retryably"
                     )
-        challenge_digest = _digest(challenge)
         for event in events:
             if (
-                event["attempt"] == row["attempt_count"]
-                and event["event_type"]
+                event["event_type"]
                 in {
                     "LEASE_ACQUIRED",
                     "EXPIRED_LEASE_RECOVERED",
                     "ACTION_STARTED",
                 }
-                and event["detail_digest"] != challenge_digest
+                and event["detail_digest"]
+                != attempt_evidence[int(event["attempt"])][1]["challenge_digest"]
             ):
                 raise StagedCanaryError(
                     "staged canary event challenge lineage is invalid"
@@ -1378,6 +1500,7 @@ def _acquire_lease(
             deadline_monotonic_ns=deadline_ns,
         )
         challenge_json = canonical_json_bytes(challenge).decode("utf-8")
+        acquired_at = challenge["issued_at"]
         values = (
             authority_id,
             environment,
@@ -1396,7 +1519,7 @@ def _acquire_lease(
             None,
             None,
             None,
-            _time_text(_utc_now()),
+            acquired_at,
             canary_id,
         )
         if row is None:
@@ -1414,6 +1537,22 @@ def _acquire_lease(
                 "failure_class=?,updated_at=? WHERE canary_id=?",
                 values,
             )
+        connection.execute(
+            "INSERT INTO staged_canary_attempts VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                canary_id,
+                attempt,
+                challenge_json,
+                _digest(challenge),
+                resource_json,
+                resources["resource_digest"],
+                _digest(token.encode("ascii")),
+                boot_id,
+                deadline_ns,
+                challenge["expires_at"],
+                acquired_at,
+            ),
+        )
         if recovered:
             _append_event(
                 connection,
@@ -1920,6 +2059,11 @@ def plan(*, authority_id: str, environment: str) -> Mapping[str, Any]:
         raise StagedCanaryError(
             "staged canary selector is excluded and remains PENDING"
         )
+    operational_blockers = ["EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED"]
+    if authority_id == "controlled_execution":
+        operational_blockers.append(
+            "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED"
+        )
     return {
         "format": "local-authority-staged-canary-plan/v1",
         "mode": "DRY_RUN",
@@ -1930,6 +2074,10 @@ def plan(*, authority_id: str, environment: str) -> Mapping[str, Any]:
         "proof_kind": action.proof_kind,
         "policy_digest": policy.digest,
         "canonical_journal_path": str(CANONICAL_JOURNAL_PATH),
+        "journal_schema_version": 2,
+        "anchor_candidate_format": (
+            "local-authority-staged-canary-anchor-candidate/v1"
+        ),
         "caller_selectable_path": False,
         "caller_selectable_owner": False,
         "caller_selectable_source_sha": False,
@@ -1942,16 +2090,21 @@ def plan(*, authority_id: str, environment: str) -> Mapping[str, Any]:
         "trusted_root_required": True,
         "privileged_rollback_evident": False,
         "durability_scope": "POST_INITIALIZATION_CRASH_AND_POWER_LOSS_ONLY",
-        "historical_attempt_evidence_complete": False,
+        "historical_attempt_evidence_complete": True,
         "operational_high_water_anchor_required": True,
+        "trusted_root_inside_local_boundary": True,
+        "external_anchor_admin_separation_required": True,
+        "operational_state": "HOLD",
+        "operational_blockers": operational_blockers,
         "strict_boundaries": dict(STRICT_BOUNDARIES),
     }
 
 
 def audit() -> Mapping[str, Any]:
+    policy = load_policy()
     connection = _connect_journal(create=False, read_only=True)
     try:
-        _validate_journal(connection, policy_digest=load_policy().digest)
+        _validate_journal(connection, policy_digest=policy.digest)
         rows = [
             {
                 "canary_id": row["canary_id"],
@@ -1973,8 +2126,26 @@ def audit() -> Mapping[str, Any]:
         event_count = connection.execute(
             "SELECT COUNT(*) FROM staged_canary_events"
         ).fetchone()[0]
+        attempt_evidence_count = connection.execute(
+            "SELECT COUNT(*) FROM staged_canary_attempts"
+        ).fetchone()[0]
+        tail = connection.execute(
+            "SELECT sequence,event_digest FROM staged_canary_events "
+            "ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
     finally:
         connection.close()
+    anchor_candidate = {
+        "format": "local-authority-staged-canary-anchor-candidate/v1",
+        "journal_schema_version": 2,
+        "journal_format": JOURNAL_FORMAT,
+        "policy_digest": policy.digest,
+        "principal_manifest_digest": PINNED_MANIFEST_DIGEST,
+        "event_count": event_count,
+        "tail_event_digest": None if tail is None else tail["event_digest"],
+        "attempt_evidence_count": attempt_evidence_count,
+        "run_state_digest": _digest({"runs": rows}),
+    }
     return {
         "format": "local-authority-staged-canary-audit/v1",
         "mutation_performed": False,
@@ -1983,11 +2154,23 @@ def audit() -> Mapping[str, Any]:
         "trusted_root_required": True,
         "privileged_rollback_evident": False,
         "durability_scope": "POST_INITIALIZATION_CRASH_AND_POWER_LOSS_ONLY",
-        "historical_attempt_evidence_complete": False,
+        "historical_attempt_evidence_complete": True,
         "operational_high_water_anchor_required": True,
+        "trusted_root_inside_local_boundary": True,
+        "external_anchor_admin_separation_required": True,
+        "operational_state": "HOLD",
+        "operational_blockers": [
+            "EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED",
+            "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED",
+        ],
         "strict_boundaries": dict(STRICT_BOUNDARIES),
         "canonical_journal_path": str(CANONICAL_JOURNAL_PATH),
+        "journal_schema_version": 2,
         "event_count": event_count,
+        "tail_event_digest": anchor_candidate["tail_event_digest"],
+        "attempt_evidence_count": attempt_evidence_count,
+        "anchor_candidate": anchor_candidate,
+        "anchor_candidate_digest": _digest(anchor_candidate),
         "runs": rows,
     }
 

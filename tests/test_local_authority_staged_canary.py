@@ -386,6 +386,22 @@ def _insert_archived_ready_run(
             ),
         )
         challenge_digest = canary._digest(challenge)
+        connection.execute(
+            "INSERT INTO staged_canary_attempts VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                canary_id,
+                1,
+                challenge_json,
+                challenge_digest,
+                resource_json,
+                resources["resource_digest"],
+                canary._digest(token.encode("ascii")),
+                "test-boot",
+                deadline,
+                challenge["expires_at"],
+                datetime.now(UTC).isoformat(timespec="microseconds"),
+            ),
+        )
         manager._append_event(
             connection,
             canary_id=canary_id,
@@ -483,8 +499,22 @@ def test_public_cli_has_no_generic_permit_completion_or_identity_inputs() -> Non
     assert plan["trusted_root_required"] is True
     assert plan["privileged_rollback_evident"] is False
     assert plan["durability_scope"] == ("POST_INITIALIZATION_CRASH_AND_POWER_LOSS_ONLY")
-    assert plan["historical_attempt_evidence_complete"] is False
+    assert plan["historical_attempt_evidence_complete"] is True
     assert plan["operational_high_water_anchor_required"] is True
+    assert plan["operational_state"] == "HOLD"
+    assert plan["operational_blockers"] == [
+        "EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED"
+    ]
+    assert plan["trusted_root_inside_local_boundary"] is True
+    assert plan["external_anchor_admin_separation_required"] is True
+
+    controlled = manager.plan(
+        authority_id="controlled_execution", environment="staging"
+    )
+    assert controlled["operational_blockers"] == [
+        "EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED",
+        "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED",
+    ]
 
 
 def test_unsigned_trader_is_structurally_excluded_and_remains_pending() -> None:
@@ -754,6 +784,82 @@ def test_sealed_workflow_recovers_expired_lease_and_bounds_retries(
         assert connection.execute(
             "SELECT state,attempt_count FROM staged_canary_runs"
         ).fetchone() == ("FAILED_FINAL", 3)
+
+
+def test_retry_snapshots_are_immutable_and_anchor_candidate_binds_the_tail(
+    isolated_journal: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshots = [
+        _archived_ready_resources(Ed25519PrivateKey.generate()) for _ in range(2)
+    ]
+    _patch_operational_inputs(monkeypatch, snapshots[0])
+    harness = SealedCanaryWorkflowHarness.from_sealed_run(manager.run_canary)
+    canary_id = ""
+    for snapshot in snapshots:
+        monkeypatch.setattr(
+            manager,
+            "observe_preflight_resources",
+            lambda _snapshot=snapshot, **_kwargs: _snapshot,
+        )
+        canary_id, token, _challenge_doc, _ = harness.acquire(
+            authority_id="ready", environment="staging"
+        )
+        harness.start(canary_id=canary_id, token=token)
+        harness.fail(
+            canary_id=canary_id,
+            token=token,
+            failure_class="SyntheticFailure",
+        )
+
+    result = manager.audit()
+    assert result["historical_attempt_evidence_complete"] is True
+    assert result["attempt_evidence_count"] == 2
+    assert result["event_count"] == 6
+    assert result["tail_event_digest"].startswith("sha256:")
+    assert result["anchor_candidate"]["tail_event_digest"] == result[
+        "tail_event_digest"
+    ]
+    assert result["anchor_candidate_digest"] == canary._digest(
+        result["anchor_candidate"]
+    )
+
+    with sqlite3.connect(isolated_journal) as connection:
+        attempts = connection.execute(
+            "SELECT attempt,challenge_json,resource_digest "
+            "FROM staged_canary_attempts WHERE canary_id=? ORDER BY attempt",
+            (canary_id,),
+        ).fetchall()
+        assert [row[0] for row in attempts] == [1, 2]
+        assert attempts[0][1] != attempts[1][1]
+        assert attempts[0][2] != attempts[1][2]
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            connection.execute(
+                "UPDATE staged_canary_attempts SET resource_digest=? "
+                "WHERE canary_id=? AND attempt=1",
+                ("sha256:" + "f" * 64, canary_id),
+            )
+
+
+def test_missing_immutable_retry_snapshot_is_detected(
+    isolated_journal: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = Ed25519PrivateKey.generate()
+    resources = _archived_ready_resources(private)
+    _patch_operational_inputs(monkeypatch, resources)
+    _insert_archived_ready_run(private)
+    with sqlite3.connect(isolated_journal) as connection:
+        trigger_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+            "AND name='staged_canary_attempts_no_delete'"
+        ).fetchone()[0]
+        connection.execute("DROP TRIGGER staged_canary_attempts_no_delete")
+        connection.execute("DELETE FROM staged_canary_attempts")
+        connection.execute(trigger_sql)
+        connection.commit()
+    with pytest.raises(canary.StagedCanaryError, match="attempt history"):
+        manager.audit()
 
 
 def test_three_stranded_leases_terminalize_when_recovery_is_exhausted(
@@ -1261,8 +1367,13 @@ def test_audit_opens_the_existing_canonical_journal_in_sqlite_read_only_mode(
     assert result["durability_scope"] == (
         "POST_INITIALIZATION_CRASH_AND_POWER_LOSS_ONLY"
     )
-    assert result["historical_attempt_evidence_complete"] is False
+    assert result["historical_attempt_evidence_complete"] is True
     assert result["operational_high_water_anchor_required"] is True
+    assert result["operational_state"] == "HOLD"
+    assert result["operational_blockers"] == [
+        "EXTERNAL_HIGH_WATER_ANCHOR_NOT_PROVISIONED",
+        "CONTROLLED_WAL_QUIESCENCE_TRANSITION_NOT_IMPLEMENTED",
+    ]
 
 
 def test_governed_resource_below_writable_ancestor_is_rejected(

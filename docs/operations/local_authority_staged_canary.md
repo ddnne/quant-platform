@@ -40,14 +40,20 @@ therefore inside this diagnostic's trust boundary. `plan` and `audit` report
 `trusted_root_required:true`, `privileged_rollback_evident:false`, and
 `durability_scope:POST_INITIALIZATION_CRASH_AND_POWER_LOSS_ONLY`. A same-file
 hash chain cannot upgrade that assurance; an external high-water anchor is
-required before any operational ceremony.
+required before any operational ceremony. The machine-readable plan/audit
+therefore remains `operational_state:HOLD`, names the absent external anchor,
+and also names the missing WAL-quiescence transition for Controlled.
 
-Retries retain a contiguous hash-chained event history and the latest complete
-challenge/resource snapshot, but the current schema overwrites prior attempt
-snapshots. It therefore reports `historical_attempt_evidence_complete:false`.
-Immutable per-attempt challenge/resource evidence is a P2 audit-fidelity
-prerequisite for the future external-anchor ceremony, not evidence supplied by
-this source contract.
+Journal schema v2 retains every challenge, resource snapshot, lease identity,
+deadline, and acquisition time in an immutable per-attempt row. The event chain
+binds each attempt to that challenge digest, so `plan` and `audit` report
+`historical_attempt_evidence_complete:true`. `audit` also emits a canonical
+`local-authority-staged-canary-anchor-candidate/v1` containing the event count,
+tail digest, attempt count, and run-state digest. This closes the local
+audit-fidelity prerequisite; it is not an external anchor or an authorization
+to execute the canary. A pre-v2 journal fails schema validation and must be
+quarantined under the trusted-root recovery process rather than upgraded in
+place.
 
 The manager exposes only `plan`, `audit`, and an atomic `run`. `run` acquires a
 durable bounded lease, rechecks its monotonic deadline under the journal write
@@ -77,6 +83,27 @@ strict boundaries.
 Raw service-signed canary bytes are noncanonical diagnostics. Any future
 consumer or external anchor must require the root manager's committed journal
 chain; it must never accept a runner response by itself.
+
+The external anchor must issue a fresh journal-instance and environment-set
+bound challenge, enforce a monotonic generation and exact prior-anchor digest
+with compare-and-swap,
+persist the accepted candidate in an append-only or rollback-evident system,
+and return a signed receipt from an independently pinned key. The local root
+administrator must not hold the anchor control-plane credentials or a deletion
+capability. Merely copying `journal.sqlite3`, its hash, or the audit JSON to
+another root-writable path does not meet this requirement.
+
+Controlled's product writer normally uses WAL, while its canary audit requires
+a sidecar-free DELETE-mode database. Before Controlled can enter this ceremony,
+a separately reviewed authority-owned transition must: stop new IPC and prove
+the writer quiescent; retain the same pinned database inode; acquire an
+exclusive SQLite lock as the Controlled UID; run a truncating checkpoint and
+require the exact successful empty result; switch to DELETE mode; close and
+fsync the database and parent directory; prove WAL, SHM, and rollback sidecars
+absent; run the bounded canary; and only then resume the writer. Root deleting
+sidecars, copying the main file, or changing `journal_mode` while a writer can
+still run is forbidden. This transition is not yet implemented, so the
+Controlled operational canary remains HOLD.
 
 Trader is not actionable in this canary plane. Its inactive WebAuthn preflight
 has no authority-held signature, so a Python/root orchestrator could otherwise
