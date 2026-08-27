@@ -379,7 +379,10 @@ def _install_atomic_sync_harness(
         seal_authenticated_export,
         **_kwargs,
     ):
+        if sync_runtime._last_change_seq(store) == 1:
+            return 0, 0, 0, []
         store._conn.execute("UPDATE atomic_sync_marker SET value='new'")
+        sync_runtime._record_change_seq(store, 1)
         store._conn.commit()
         seal_authenticated_export(object())
         return 9, 8, 1, []
@@ -426,6 +429,7 @@ def _install_atomic_sync_harness(
 
     def read_candidate(path: Path, *, require_fresh: bool = True):
         del require_fresh
+        entrypoints._require_no_sqlite_sidecars(path)
         with sqlite3.connect(path) as conn:
             return identity(conn)
 
@@ -436,11 +440,12 @@ def _install_atomic_sync_harness(
         environment: str = "production",
         source_sha: str = "sha256:" + "1" * 64,
         tool_digest: str = "sha256:" + "2" * 64,
+        expected_applied_cursor: int = 0,
         fault=None,
     ):
         return _execute_governed_remote_sync(
             governed_db_path=live,
-            expected_applied_cursor=0,
+            expected_applied_cursor=expected_applied_cursor,
             credential_token="x" * 32,
             node_executable_path=tmp_path / "node",
             wrangler_cli_path=tmp_path / "wrangler.js",
@@ -501,8 +506,97 @@ def test_d1_sync_crash_recovery_preserves_or_completes_exact_candidate(
     journal, _lock = _d1_sync_paths(live)
     assert _read_d1_sync_journal(journal)["phase"] == "COMMITTED"
     assert execute() == result
+    assert _read_d1_sync_journal(journal)["phase"] == "COMMITTED"
+    assert execute() == result
+    assert _read_d1_sync_journal(journal)["phase"] == "COMMITTED"
+    execute(expected_applied_cursor=1)
     assert not journal.exists()
     assert not list(tmp_path.glob(f".{live.name}.d1-sync-*.sqlite3"))
+
+
+def test_d1_sync_committed_replay_survives_repeated_outer_ledger_crashes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live, execute, calls = _install_atomic_sync_harness(tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path, "d1_sync")
+    request = {
+        "format": service_runtime.REQUEST_FORMAT,
+        "request_id": "d1-sync-outer-crash-replay",
+        "operation": "d1_sync:sync_now",
+        "purpose": "sync_current",
+        "payload": {"expected_applied_cursor": 0},
+    }
+
+    def crash_after_handler_effect() -> object:
+        execute()
+        raise _SimulatedD1SyncCrash("after handler effect")
+
+    for _attempt in range(3):
+        with pytest.raises(_SimulatedD1SyncCrash, match="after handler effect"):
+            ledger.execute_once(
+                request=request,
+                caller="ops_scheduler",
+                operation="d1_sync:sync_now",
+                purpose="sync_current",
+                produce=crash_after_handler_effect,
+            )
+        journal, _lock = _d1_sync_paths(live)
+        assert _read_d1_sync_journal(journal)["phase"] == "COMMITTED"
+
+    result = ledger.execute_once(
+        request=request,
+        caller="ops_scheduler",
+        operation="d1_sync:sync_now",
+        purpose="sync_current",
+        produce=execute,
+    )
+    assert result["applied_change_seq"] == 1
+    assert calls["acquire"] == 1
+    assert _read_d1_sync_journal(journal)["phase"] == "COMMITTED"
+
+    # A distinct request presenting the committed cursor is the durable ack.
+    # Its no-change acquisition can then consume the old receipt safely.
+    execute(expected_applied_cursor=1)
+    assert not journal.exists()
+
+
+def test_d1_sync_file_fsynced_recovery_rejects_live_wal_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live, execute, calls = _install_atomic_sync_harness(tmp_path, monkeypatch)
+
+    def crash(point: str) -> None:
+        if point == "after_file_fsync":
+            raise _SimulatedD1SyncCrash(point)
+
+    with pytest.raises(_SimulatedD1SyncCrash, match="after_file_fsync"):
+        execute(fault=crash)
+    journal_path, _lock_path = _d1_sync_paths(live)
+    journal = _read_d1_sync_journal(journal_path)
+    assert journal is not None and journal["phase"] == "FILE_FSYNCED"
+    candidate = Path(journal["candidate_path"])
+    prior_live_identity = entrypoints._measure_d1_sync_file(live)
+    candidate_identity = entrypoints._measure_d1_sync_file(candidate)
+
+    wal = Path(f"{live}-wal")
+    wal.write_bytes(b"stale-or-concurrent-wal")
+    wal.chmod(0o600)
+    with pytest.raises(
+        service_runtime.LocalAuthorityError, match="live SQLite sidecar"
+    ):
+        execute()
+
+    assert entrypoints._measure_d1_sync_file(live) == prior_live_identity
+    assert entrypoints._measure_d1_sync_file(candidate) == candidate_identity
+    assert _read_d1_sync_journal(journal_path) == journal
+    assert wal.read_bytes() == b"stale-or-concurrent-wal"
+    assert calls["acquire"] == 1
+
+    wal.unlink()
+    assert execute()["applied_change_seq"] == 1
+    assert _read_atomic_marker(live) == "new"
 
 
 def _rewrite_sync_journal(path: Path, **updates: object) -> None:

@@ -867,6 +867,11 @@ def _recover_d1_sync_journal(
             "D1 sync journal prior_applied_cursor binding differs"
         )
     candidate_path = Path(journal["candidate_path"])
+    # A WAL/SHM/rollback-journal entry means the pathname is not the single
+    # frozen SQLite file recorded by this protocol.  Reject it before any
+    # recovery cleanup or replacement can mutate state.  This check is also
+    # repeated at the FILE_FSYNCED handoff below to close the recovery window.
+    _require_no_sqlite_sidecars(governed_db_path)
     live_identity = _measure_d1_sync_file(governed_db_path)
     prior_identity = journal["prior_mirror_identity"]
     if journal["phase"] not in {"FILE_FSYNCED", "COMMITTED"}:
@@ -891,14 +896,18 @@ def _recover_d1_sync_journal(
             raise LocalAuthorityError("D1 sync committed mirror audit differs")
         _fsync_directory(governed_db_path.parent)
         result = dict(journal["sync_result"])
+        if expected_applied_cursor == journal["prior_applied_cursor"]:
+            # The governed mirror and this receipt commit before the outer
+            # authority event ledger.  A crash in that gap can repeat any
+            # number of times, so an old-cursor replay must never consume the
+            # only durable receipt.  A later request presenting the committed
+            # cursor acknowledges the handoff and may clear it before starting
+            # the next acquisition.
+            return result
         _remove_d1_sync_journal(
             journal_path, expected_digest=journal["record_digest"]
         )
-        return (
-            result
-            if expected_applied_cursor == journal["prior_applied_cursor"]
-            else None
-        )
+        return None
     if candidate_exists:
         candidate_file = _measure_d1_sync_file(candidate_path)
         if candidate_file != expected_candidate_file:
@@ -915,6 +924,12 @@ def _recover_d1_sync_journal(
                 journal_path, expected_digest=journal["record_digest"]
             )
             return None
+        _require_no_sqlite_sidecars(governed_db_path)
+        if _measure_d1_sync_file(governed_db_path) != prior_identity:
+            raise LocalAuthorityError(
+                "D1 sync recovery found an ambiguous live mirror"
+            )
+        _require_no_sqlite_sidecars(governed_db_path)
         os.replace(candidate_path, governed_db_path)
         _fsync_directory(governed_db_path.parent)
     elif live_identity == expected_candidate_file:
