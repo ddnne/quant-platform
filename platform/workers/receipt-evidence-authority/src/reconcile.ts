@@ -160,6 +160,12 @@ export async function executeReceiptRequest(
   if (request.environment !== env.ENVIRONMENT) {
     throw new Error("receipt authority environment mismatch");
   }
+  // PENDING is a provisioning-only state. Reject before begin/recover so a
+  // caller cannot create operation/event rows, touch acquisition, or obtain a
+  // replayed positive result through the narrow first-deployment exception.
+  if (env.AUTHORITY_MODE !== "ACTIVE") {
+    throw new Error("receipt evidence authority is PENDING activation");
+  }
   const identity = issueIdentity(request);
   const requestDigest = await canonicalDigest(identity);
   const operationId = requestDigest;
@@ -180,9 +186,6 @@ export async function executeReceiptRequest(
       recoveredIssued,
       true,
     );
-  }
-  if (env.AUTHORITY_MODE !== "ACTIVE") {
-    throw new Error("receipt evidence authority is PENDING activation");
   }
   let capture: Capture;
   if (snapshot.capture_key === null) {

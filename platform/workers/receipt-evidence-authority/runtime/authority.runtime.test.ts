@@ -185,10 +185,14 @@ async function activateRegisteredTestKey(): Promise<{
   const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
     "receipt:production",
   );
-  const registration = await stub.public_key_registration();
-  await runInDurableObject(stub, async (instance) => {
+  const registration = await runInDurableObject(stub, async (instance) => {
     const internal = instance as unknown as { env: ReceiptAuthorityEnv };
-    internal.env.ACTIVATED_KEY_ID = registration.key_id;
+    internal.env.AUTHORITY_MODE = "PENDING";
+    internal.env.ACTIVATED_KEY_ID = undefined;
+    const pendingRegistration = await instance.public_key_registration();
+    internal.env.AUTHORITY_MODE = "ACTIVE";
+    internal.env.ACTIVATED_KEY_ID = pendingRegistration.key_id;
+    return pendingRegistration;
   });
   return { stub, registration };
 }
@@ -203,6 +207,8 @@ function installAuthorityAcquisition(
 beforeEach(async () => {
   await reset();
   (runtimeEnv as unknown as { AUTHORITY_MODE: string }).AUTHORITY_MODE = "ACTIVE";
+  (runtimeEnv as unknown as { ACTIVATED_KEY_ID?: string }).ACTIVATED_KEY_ID =
+    undefined;
   await applyD1Migrations(runtimeEnv.DB, migrations);
   installSinglePageUpstream();
 });
@@ -424,14 +430,22 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(actual).toEqual(expected);
     expect(actual).toEqual(["A", "z", "é", "あ", "😀"]);
   });
-  it("has no public HTTP surface and exposes only typed service RPC", async () => {
+  it("has no public HTTP surface and permits provisioning only while PENDING", async () => {
     const rpc = workerExports.default as unknown as ReceiptEvidenceAuthorityRpc & Fetcher;
     const response = await rpc.fetch(new Request("https://authority.invalid/health"));
     expect(response.status).toBe(404);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.text()).toBe("");
 
-    const registration = await rpc.public_key_registration();
+    const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
+      "receipt:production",
+    );
+    const registration = await runInDurableObject(stub, async (instance) => {
+      const internal = instance as unknown as { env: ReceiptAuthorityEnv };
+      internal.env.AUTHORITY_MODE = "PENDING";
+      internal.env.ACTIVATED_KEY_ID = undefined;
+      return instance.public_key_registration();
+    });
     expect(registration).toMatchObject({
       schema_version: "receipt-public-key-registration/v1",
       purpose: "receipt_verification",
@@ -458,6 +472,14 @@ describe("Receipt Evidence Authority in workerd", () => {
         generated_at: registration.generated_at,
       }),
     );
+    await runInDurableObject(stub, async (instance) => {
+      const internal = instance as unknown as { env: ReceiptAuthorityEnv };
+      internal.env.AUTHORITY_MODE = "ACTIVE";
+      internal.env.ACTIVATED_KEY_ID = registration.key_id;
+      await expect(instance.public_key_registration()).rejects.toThrow(
+        "requires unactivated PENDING mode",
+      );
+    });
   });
 
   it("replays a durable receipt after eviction without a claims RPC seam", async () => {
@@ -497,7 +519,18 @@ describe("Receipt Evidence Authority in workerd", () => {
     });
     await evictDurableObject(stub);
 
-    const afterEvictionRegistration = await stub.public_key_registration();
+    const afterEvictionRegistration = await runInDurableObject(
+      stub,
+      async (instance) => {
+        const internal = instance as unknown as { env: ReceiptAuthorityEnv };
+        internal.env.AUTHORITY_MODE = "PENDING";
+        internal.env.ACTIVATED_KEY_ID = undefined;
+        const pendingRegistration = await instance.public_key_registration();
+        internal.env.AUTHORITY_MODE = "ACTIVE";
+        internal.env.ACTIVATED_KEY_ID = pendingRegistration.key_id;
+        return pendingRegistration;
+      },
+    );
     expect(afterEvictionRegistration.key_id).toBe(registration.key_id);
     expect(afterEvictionRegistration.public_key_base64).toBe(
       registration.public_key_base64,
@@ -809,7 +842,6 @@ describe("Receipt Evidence Authority in workerd", () => {
   });
 
   it("exposes no caller-authored claims/result RPC and never signs in PENDING mode", async () => {
-    const operationId = await canonicalDigest(request);
     const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
       "receipt:production",
     );
@@ -824,7 +856,13 @@ describe("Receipt Evidence Authority in workerd", () => {
           .not.toContain(method);
       });
     }
-    installAuthorityAcquisition();
+    let acquisitionCalls = 0;
+    (runtimeEnv as unknown as Record<string, unknown>).JQUANTS_ACQUISITION = {
+      fetch_governed_page: async () => {
+        acquisitionCalls += 1;
+        throw new Error("PENDING authority reached acquisition");
+      },
+    };
     await runInDurableObject(stub, async (instance) => {
       (instance as unknown as { env: ReceiptAuthorityEnv }).env.AUTHORITY_MODE =
         "PENDING";
@@ -839,6 +877,19 @@ describe("Receipt Evidence Authority in workerd", () => {
       "SELECT COUNT(*) AS count FROM collection_receipts",
     ).first<{ count: number }>();
     expect(receiptCount?.count).toBe(0);
+    expect(acquisitionCalls).toBe(0);
+    expect((await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list()).objects).toEqual([]);
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(state.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM authority_operations",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM authority_events",
+      ).one().count).toBe(0);
+    });
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS count FROM receipt_authority_requests",
+    ).first<{ count: number }>()).toEqual({ count: 0 });
 
     await runInDurableObject(stub, async (instance) => {
       (instance as unknown as { env: ReceiptAuthorityEnv }).env.AUTHORITY_MODE =
@@ -857,7 +908,7 @@ describe("Receipt Evidence Authority in workerd", () => {
         operation: "recover_issue",
         request_nonce: "a".repeat(64),
       })
-    )).rejects.toThrow("absent or substituted");
+    )).rejects.toThrow("PENDING activation");
   });
 
   it("rejects a forged terminal header while immutable raw has a provider cursor", async () => {
@@ -1111,25 +1162,6 @@ describe("Receipt Evidence Authority in workerd", () => {
       JQUANTS_API_KEY: "unused-by-receipt-route",
       RECEIPT_EVIDENCE_AUTHORITY: rpc,
     } as unknown as PremiumEnv;
-    const registrationResponse = await premiumWorker.fetch(new Request(
-      "https://premium.invalid/v1/admin/receipt-evidence/public-key-registration",
-      {
-        method: "POST",
-        headers: {
-          "x-ingestion-token": "workerd-premium-receipt-route-token",
-        },
-      },
-    ), premiumEnv);
-    expect(registrationResponse.status).toBe(200);
-    expect(await registrationResponse.json<Record<string, unknown>>()).toMatchObject({
-      ok: true,
-      registration: {
-        authority_status: "PENDING",
-        algorithm: "Ed25519",
-        private_key_extractable: false,
-        status: "pending",
-      },
-    });
     const response = await premiumWorker.fetch(new Request(
       "https://premium.invalid/v1/admin/receipt-evidence/reconcile" +
         "?dataset=indices_bars_daily_topix&segment=2024-02",
@@ -1197,7 +1229,12 @@ describe("Receipt Evidence Authority in workerd", () => {
     const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
       "receipt:production",
     );
-    const first = await stub.public_key_registration();
+    const first = await runInDurableObject(stub, async (instance) => {
+      const internal = instance as unknown as { env: ReceiptAuthorityEnv };
+      internal.env.AUTHORITY_MODE = "PENDING";
+      internal.env.ACTIVATED_KEY_ID = undefined;
+      return instance.public_key_registration();
+    });
     const rotated = await runInDurableObject(stub, async (instance) => {
       const internal = instance as unknown as {
         env: ReceiptAuthorityEnv;

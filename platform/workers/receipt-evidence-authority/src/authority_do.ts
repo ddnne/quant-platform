@@ -1019,6 +1019,14 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
   }
 
   async public_key_registration(): Promise<ReceiptPublicKeyRegistrationV1> {
+    if (
+      this.env.AUTHORITY_MODE !== "PENDING" ||
+      this.env.ACTIVATED_KEY_ID !== undefined
+    ) {
+      throw new Error(
+        "receipt public-key registration requires unactivated PENDING mode",
+      );
+    }
     const key = await this.ensureKey();
     const scope = await authorityInstanceScope(this.env);
     const body = {

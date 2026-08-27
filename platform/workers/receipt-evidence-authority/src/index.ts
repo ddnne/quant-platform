@@ -34,6 +34,11 @@ export class ReceiptAuthorityService
   issue_for_segment(
     request: ReceiptIssueRequestV1,
   ): Promise<ReceiptIssueResultV1> {
+    if (this.env.AUTHORITY_MODE !== "ACTIVE") {
+      return Promise.reject(
+        new Error("receipt evidence authority is PENDING activation"),
+      );
+    }
     const authority = receiptAuthorityStub(this.env);
     return authority.issue_for_segment(request);
   }
@@ -41,11 +46,24 @@ export class ReceiptAuthorityService
   recover_issue(
     request: ReceiptRecoveryRequestV1,
   ): Promise<ReceiptIssueResultV1> {
+    if (this.env.AUTHORITY_MODE !== "ACTIVE") {
+      return Promise.reject(
+        new Error("receipt evidence authority is PENDING activation"),
+      );
+    }
     const authority = receiptAuthorityStub(this.env);
     return authority.recover_issue(request);
   }
 
   async public_key_registration(): Promise<ReceiptPublicKeyRegistrationV1> {
+    if (
+      this.env.AUTHORITY_MODE !== "PENDING" ||
+      this.env.ACTIVATED_KEY_ID !== undefined
+    ) {
+      throw new Error(
+        "receipt public-key registration requires unactivated PENDING mode",
+      );
+    }
     const authority = receiptAuthorityStub(this.env);
     return authority.public_key_registration();
   }

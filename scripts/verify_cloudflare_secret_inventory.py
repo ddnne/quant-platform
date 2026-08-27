@@ -25,9 +25,12 @@ class SecretInventoryError(RuntimeError):
     """A live secret-name inventory could not be proven exact."""
 
 
-def expected_production_secret_names(
+def expected_secret_names(
+    environment: str,
     manifest_path: Path = MANIFEST,
 ) -> dict[str, tuple[str, ...]]:
+    if environment not in {"production", "staging"}:
+        raise SecretInventoryError("secret inventory environment is invalid")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     active = manifest.get("active_workers")
     workers = manifest.get("workers")
@@ -38,10 +41,10 @@ def expected_production_secret_names(
         if not isinstance(worker, str) or not worker:
             raise SecretInventoryError("active Worker name is invalid")
         try:
-            names = workers[worker]["production"]["secret_names"]
+            names = workers[worker][environment]["secret_names"]
         except (KeyError, TypeError) as exc:
             raise SecretInventoryError(
-                f"{worker}: production secret-name policy is missing"
+                f"{worker}: {environment} secret-name policy is missing"
             ) from exc
         if (
             not isinstance(names, list)
@@ -49,10 +52,18 @@ def expected_production_secret_names(
             or names != sorted(set(names))
         ):
             raise SecretInventoryError(
-                f"{worker}: production secret-name policy is not exact"
+                f"{worker}: {environment} secret-name policy is not exact"
             )
         expected[worker] = tuple(names)
     return expected
+
+
+def expected_production_secret_names(
+    manifest_path: Path = MANIFEST,
+) -> dict[str, tuple[str, ...]]:
+    """Compatibility wrapper for the ordinary production acceptance path."""
+
+    return expected_secret_names("production", manifest_path)
 
 
 def parse_wrangler_secret_list(raw: str) -> tuple[str, ...]:
@@ -80,16 +91,24 @@ def parse_wrangler_secret_list(raw: str) -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
-def wrangler_command(worker: str) -> tuple[str, ...]:
+def wrangler_command(
+    worker: str, *, environment: str = "production"
+) -> tuple[str, ...]:
+    if environment not in {"production", "staging"}:
+        raise SecretInventoryError("secret inventory environment is invalid")
     executable = WORKER_ROOT / worker / "node_modules" / ".bin" / "wrangler"
     if not executable.is_file():
         raise SecretInventoryError(f"{worker}: pinned Wrangler is not installed")
+    target = (
+        ("--config", "wrangler.staging.toml")
+        if environment == "staging"
+        else ("--env", "production")
+    )
     return (
         str(executable),
         "secret",
         "list",
-        "--env",
-        "production",
+        *target,
         "--format",
         "json",
     )
@@ -101,10 +120,11 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 def live_secret_names(
     worker: str,
     *,
+    environment: str = "production",
     runner: Runner = subprocess.run,
 ) -> tuple[str, ...]:
     completed = runner(
-        wrangler_command(worker),
+        wrangler_command(worker, environment=environment),
         cwd=WORKER_ROOT / worker,
         capture_output=True,
         text=True,
@@ -120,22 +140,23 @@ def live_secret_names(
 def verify_live_secret_inventory(
     workers: Sequence[str] | None = None,
     *,
+    environment: str = "production",
     manifest_path: Path = MANIFEST,
     runner: Runner = subprocess.run,
 ) -> list[str]:
-    expected = expected_production_secret_names(manifest_path)
+    expected = expected_secret_names(environment, manifest_path)
     selected = list(workers) if workers is not None else list(expected)
     if not selected or any(worker not in expected for worker in selected):
         raise SecretInventoryError("requested Worker inventory is not active")
     verified: list[str] = []
     for worker in selected:
-        live = live_secret_names(worker, runner=runner)
+        live = live_secret_names(worker, environment=environment, runner=runner)
         policy = expected[worker]
         if live != policy:
             missing = sorted(set(policy) - set(live))
             unexpected = sorted(set(live) - set(policy))
             raise SecretInventoryError(
-                f"{worker}: production secret-name drift; "
+                f"{worker}: {environment} secret-name drift; "
                 f"missing={missing!r} unexpected={unexpected!r}"
             )
         verified.append(worker)
@@ -146,6 +167,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--worker", action="append", dest="workers")
     parser.add_argument(
+        "--environment",
+        choices=("production", "staging"),
+        default="production",
+    )
+    parser.add_argument(
         "--require-api-token",
         action="store_true",
         help="fail before any request unless CLOUDFLARE_API_TOKEN is present",
@@ -153,17 +179,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.require_api_token and not os.environ.get("CLOUDFLARE_API_TOKEN"):
         print(
-            "CLOUDFLARE_API_TOKEN is required for production secret acceptance",
+            f"CLOUDFLARE_API_TOKEN is required for {args.environment} secret acceptance",
             file=sys.stderr,
         )
         return 1
     try:
-        verified = verify_live_secret_inventory(args.workers)
+        verified = verify_live_secret_inventory(
+            args.workers, environment=args.environment
+        )
     except SecretInventoryError as exc:
-        print(f"production secret inventory: {exc}", file=sys.stderr)
+        print(f"{args.environment} secret inventory: {exc}", file=sys.stderr)
         return 1
     print(
-        f"production secret inventory: ok ({len(verified)} active Workers; names only)"
+        f"{args.environment} secret inventory: ok "
+        f"({len(verified)} active Workers; names only)"
     )
     return 0
 

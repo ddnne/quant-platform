@@ -10,6 +10,7 @@ from scripts import verify_cloudflare_secret_inventory as secret_inventory_modul
 from scripts.verify_cloudflare_secret_inventory import (
     SecretInventoryError,
     expected_production_secret_names,
+    expected_secret_names,
     live_secret_names,
     parse_wrangler_secret_list,
     verify_live_secret_inventory,
@@ -97,3 +98,30 @@ def test_command_is_read_only_production_name_inventory() -> None:
         "--format",
         "json",
     )
+
+
+def test_staging_inventory_uses_exact_standalone_config_and_receipt_secret() -> None:
+    expected = expected_secret_names("staging")
+    assert expected["receipt-evidence-authority"] == ("RECEIPT_KEY_WRAP_KEY",)
+    command = wrangler_command(
+        "receipt-evidence-authority", environment="staging"
+    )
+    assert command[1:] == (
+        "secret",
+        "list",
+        "--config",
+        "wrangler.staging.toml",
+        "--format",
+        "json",
+    )
+
+    def runner(_command: tuple[str, ...], **_kwargs: object):
+        return _completed(
+            [{"name": "RECEIPT_KEY_WRAP_KEY", "type": "secret_text"}]
+        )
+
+    assert verify_live_secret_inventory(
+        ["receipt-evidence-authority"],
+        environment="staging",
+        runner=runner,
+    ) == ["receipt-evidence-authority"]

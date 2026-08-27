@@ -10,7 +10,20 @@ if [[ -z "$gate_py" ]]; then
   echo "Python is required for the pinned finding-ledger release gate" >&2
   exit 1
 fi
-"$gate_py" "$ROOT/scripts/finding_ledger_gate.py"
+
+pending_environment=""
+expected_source_sha=""
+if [[ "$#" -eq 0 ]]; then
+  "$gate_py" "$ROOT/scripts/finding_ledger_gate.py"
+elif [[ "$#" -eq 4 && "$1" == "--pending-receipt-authority" && \
+        "$3" == "--expected-source-sha" && \
+        ( "$2" == "staging" || "$2" == "production" ) ]]; then
+  pending_environment="$2"
+  expected_source_sha="$4"
+else
+  echo "usage: $0 [--pending-receipt-authority staging|production --expected-source-sha SHA]" >&2
+  exit 2
+fi
 
 if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
   echo "CLOUDFLARE_API_TOKEN is required for production acceptance" >&2
@@ -36,7 +49,18 @@ if [[ ! -x "$py" ]]; then
   exit 1
 fi
 
-"$py" "$ROOT/scripts/verify_cloudflare_secret_inventory.py" \
-  --require-api-token
+if [[ -n "$pending_environment" ]]; then
+  "$py" "$ROOT/scripts/receipt_authority_pending_gate.py" \
+    --environment "$pending_environment" \
+    --expected-source-sha "$expected_source_sha"
+  "$py" "$ROOT/scripts/verify_cloudflare_secret_inventory.py" \
+    --require-api-token \
+    --environment "$pending_environment" \
+    --worker receipt-evidence-authority
+  echo "receipt authority PENDING deployment acceptance: ok ($pending_environment)"
+  exit 0
+fi
+
+"$py" "$ROOT/scripts/verify_cloudflare_secret_inventory.py" --require-api-token
 
 echo "cloudflare deployment acceptance: ok"
