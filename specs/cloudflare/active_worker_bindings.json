@@ -322,7 +322,9 @@
         "RECEIPT_KEY_GENERATION": "1",
         "RECEIPT_KEY_WRAP_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
       },
-      "version_metadata": {},
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      },
       "workers_dev": false
     },
     "research-ai-gateway": {
