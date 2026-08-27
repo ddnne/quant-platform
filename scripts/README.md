@@ -46,17 +46,29 @@ presence, requests names only, never prints values, and fails closed on drift.
 Phase 6 hardening utilities:
 
 - `ops_status.py --json` — offline READY snapshot, coverage, B0 and validation status.
-- `encrypt_d1_backup.py` — stream a fresh production D1 SQL export into a
+- `encrypt_d1_backup.py` — stream a fresh governed production or staging D1 SQL export into a
   temporary SQLite restore, run `integrity_check`, verify the fixed
-  `quant-ingest` database ID plus the canonical minimum schema and non-empty
+  environment-specific `quant-ingest` database ID from the canonical migration
+  manifest plus the canonical minimum schema and non-empty
   production evidence, then encrypt with AES-256-GCM. Database/export/restore
-  evidence, format/cipher, nonce, and key fingerprint are authenticated in
-  the v2 header. Only a successfully decrypted
+  evidence, environment, format/cipher, nonce, and key fingerprint are
+  authenticated in the v3 header. Only a successfully decrypted
   and re-verified artifact is atomically published; the plaintext is then
   removed by default. Any restore/schema/encryption failure retains the source
   and leaves the target unpublished. Retention requires the explicit unsafe
   `--keep-source` opt-in. The raw 32-byte key stays outside the repository with
   mode `0600`; neither SQL contents nor key material is logged.
+- `d1_ingestion_migration_validation.py` — restore a remote export locally,
+  require canonical migration-history prefix and FK/integrity checks, replay
+  pending 0011-0018 on an isolated copy, and prove exact final schema plus
+  populated v2-to-v3 JSDA preservation. Recorded partial/malformed states fail.
+- `apply_ingestion_d1_migrations.py` — the canonical remote Wrangler owner for
+  `quant-ingest`: manifest-bound identity, Time Travel bookmark, encrypted
+  preflight backup/checksum, exact pre/post exports, staging first, and
+  same-source staging evidence plus its authenticated encrypted backup before
+  production. It publishes create-only PREPARED evidence before any apply (so
+  the bookmark and backup survive a crash), then separate exact postflight
+  evidence. It never accepts caller-selected database name/ID.
 - `build_release_evidence.py` — validate normalized post-deploy observations
   and emit a content-addressed, read-only, non-secret v3 manifest suitable for
   a GitHub Release. Every check/build/deployment/migration/smoke/MCP observation
@@ -73,6 +85,7 @@ Production backup example (timestamps and final SHA must be the observed values)
 uv run python scripts/encrypt_d1_backup.py encrypt \
   quant-ingest.sql quant-ingest.sql.enc \
   --key /secure/private/d1_backup_aes256.key \
+  --environment production \
   --database-name quant-ingest \
   --database-id be6fdcf8-40be-41fc-9535-7facd1fc2ffc \
   --exported-at 2026-08-25T06:00:00Z \

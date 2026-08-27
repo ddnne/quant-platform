@@ -2,6 +2,11 @@
 /** JSDA acquisition: stable queue work graph, immutable raw, D1 progress. */
 
 import { authorized } from "./authorized";
+import {
+  loadV3CutoverStatus,
+  requireV3CutoverActive,
+  type V3CutoverStatus,
+} from "./cutover";
 import type { JsdaWorkerEnv } from "./env";
 import { json } from "./http_json";
 import { consumeDlqMessage, consumeQueueMessage } from "./queue_consumer";
@@ -19,17 +24,36 @@ export type { JsdaQueueJob } from "./queue_contract";
 export default {
   async fetch(request: Request, env: JsdaWorkerEnv): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/health") {
+    if (url.pathname === "/health" || url.pathname === "/health/ready") {
       if (request.method !== "GET") return json({ error: "GET required" }, 405);
-      return json({
+      let status: V3CutoverStatus = {
+        productReady: false,
+        cutover: "UNKNOWN",
+      };
+      try {
+        status = await loadV3CutoverStatus(env.DB);
+      } catch {
+        // Liveness stays observable while readiness fails closed.
+      }
+      const body = {
         ok: true,
+        liveness: true,
+        product_ready: status.productReady,
+        cutover: status.cutover,
         worker: "ingestion-jsda",
         queue_contract: "jsda-acquisition-job/v2",
         hierarchy: ["discover_root", "discover_year", "fetch_file"],
         datasets: 3,
         allowlist: allowedHosts(),
         note: "source-object/observation/artifact identities; D1-authoritative queue progress",
-      });
+      };
+      if (url.pathname === "/health/ready") {
+        return json(
+          { ...body, ok: status.productReady },
+          status.productReady ? 200 : 503,
+        );
+      }
+      return json(body);
     }
 
     if (url.pathname === "/v1/run") {
@@ -44,6 +68,11 @@ export default {
           return json({ error: "invalid dataset" }, 400);
         }
         dataset = requestedDataset;
+      }
+      try {
+        await requireV3CutoverActive(env.DB);
+      } catch {
+        return json({ error: "jsda_v3_cutover_pending" }, 503);
       }
       const result = await enqueueRoots(env, "manual", dataset);
       return json(
@@ -65,6 +94,7 @@ export default {
     env: JsdaWorkerEnv,
     ctx: ExecutionContext,
   ): Promise<void> {
+    await requireV3CutoverActive(env.DB);
     ctx.waitUntil(
       enqueueRoots(
         env,
@@ -80,6 +110,7 @@ export default {
     env: JsdaWorkerEnv,
     _ctx: ExecutionContext,
   ): Promise<void> {
+    await requireV3CutoverActive(env.DB);
     const dlq = isJsdaDlqQueue(batch.queue, env.JSDA_DLQ_QUEUE);
     for (const message of batch.messages) {
       if (dlq) await consumeDlqMessage(message, env, batch.queue);

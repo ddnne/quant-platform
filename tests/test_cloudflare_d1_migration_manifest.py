@@ -43,3 +43,22 @@ def test_remote_applied_state_is_never_fabricated() -> None:
         assert production["applied_state"] == "UNVERIFIED"
         assert staging["applied_state"] == "UNVERIFIED"
         assert production["database_name"] != staging["database_name"]
+
+
+def test_ingestion_apply_policy_is_staging_first_and_fail_closed() -> None:
+    policy = build_manifest()["targets"]["quant-ingest"]["application_policy"]
+    assert policy == {
+        "mode": "guarded-staging-first/v1",
+        "owner_command": "scripts/apply_ingestion_d1_migrations.py",
+        "environment_order": ["staging", "production"],
+        "requires": [
+            "canonical-live-database-identity",
+            "time-travel-bookmark",
+            "encrypted-export-checksum",
+            "exact-export-preflight",
+            "exact-export-postflight",
+            "same-source-staging-acceptance-before-production",
+            "authenticated-staging-backup-before-production",
+            "jsda-v3-readiness-smoke-before-product-acceptance",
+        ],
+    }

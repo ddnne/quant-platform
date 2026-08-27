@@ -185,13 +185,13 @@ function insertEventStatement(
 ): D1PreparedStatement {
   return db
     .prepare(
-      `INSERT INTO jsda_acquisition_events_v2
+      `INSERT INTO jsda_acquisition_events_v3
        (work_key, run_key, dataset, job_type, segment_id, attempt, cursor,
         result, reason_code, detail, content_digest, raw_key,
         audit_receipt_key, audit_receipt_digest, occurred_at)
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
        WHERE EXISTS (
-         SELECT 1 FROM jsda_acquisition_jobs_v2
+         SELECT 1 FROM jsda_acquisition_jobs_v3
           WHERE work_key=? AND attempt=? AND state=?
             AND audit_receipt_key=? AND audit_receipt_digest=?
        )`,
@@ -271,7 +271,7 @@ function insertJobStatement(
 ): D1PreparedStatement {
   return db
     .prepare(
-      `INSERT OR IGNORE INTO jsda_acquisition_jobs_v2
+      `INSERT OR IGNORE INTO jsda_acquisition_jobs_v3
        (work_key, run_key, dataset, job_type, target_url, segment_id,
         parent_work_key, contract_digest, state, attempt, cursor,
         requested_by, requested_at, first_seen_at, updated_at,
@@ -313,7 +313,7 @@ function allocateObservationStatements(
               SELECT 1 FROM jsda_observations WHERE observation_key=?
             )
             AND EXISTS (
-              SELECT 1 FROM jsda_acquisition_jobs_v2
+              SELECT 1 FROM jsda_acquisition_jobs_v3
                WHERE work_key=? AND state='pending'
             )`,
       )
@@ -328,7 +328,7 @@ function allocateObservationStatements(
            FROM jsda_source_objects so
           WHERE so.source_object_id=?
             AND EXISTS (
-              SELECT 1 FROM jsda_acquisition_jobs_v2
+              SELECT 1 FROM jsda_acquisition_jobs_v3
                WHERE work_key=? AND state='pending'
             )`,
       )
@@ -357,7 +357,7 @@ function backfillIdentityStatement(
 ): D1PreparedStatement {
   return db
     .prepare(
-      `UPDATE jsda_acquisition_jobs_v2
+      `UPDATE jsda_acquisition_jobs_v3
           SET source_object_id=COALESCE(source_object_id, ?),
               freshness=COALESCE(freshness, ?),
               observation_epoch=COALESCE(observation_epoch, ?),
@@ -389,7 +389,7 @@ function backfillCompletedObservationStatements(
               SELECT 1 FROM jsda_observations WHERE observation_key=?
             )
             AND EXISTS (
-              SELECT 1 FROM jsda_acquisition_jobs_v2
+              SELECT 1 FROM jsda_acquisition_jobs_v3
                WHERE work_key=? AND state='completed'
                  AND audit_receipt_key IS NOT NULL
                  AND audit_receipt_digest IS NOT NULL
@@ -407,7 +407,7 @@ function backfillCompletedObservationStatements(
          SELECT ?, ?, j.work_key, j.run_key, j.dataset, j.target_url, ?, ?,
                 so.next_observation_seq - 1, 'completed',
                 j.content_digest, j.raw_key, COALESCE(j.completed_at, ?), ?, ?
-           FROM jsda_acquisition_jobs_v2 AS j
+           FROM jsda_acquisition_jobs_v3 AS j
            JOIN jsda_source_objects AS so
              ON so.source_object_id=?
           WHERE j.work_key=?
@@ -497,7 +497,7 @@ function insertMembershipStatement(
               END,
               CASE WHEN child.run_key!=? THEN ? ELSE NULL END,
               ?
-         FROM jsda_acquisition_jobs_v2 AS child
+         FROM jsda_acquisition_jobs_v3 AS child
         WHERE child.work_key=?`,
     )
     .bind(
@@ -589,7 +589,7 @@ function updateObservationTerminalStatement(
        SET state=?, content_digest=?, raw_key=?, observed_at=?, updated_at=?
        WHERE observation_key=? AND work_key=?
          AND EXISTS (
-           SELECT 1 FROM jsda_acquisition_jobs_v2
+           SELECT 1 FROM jsda_acquisition_jobs_v3
             WHERE work_key=? AND attempt=? AND state=?
               AND audit_receipt_key=? AND audit_receipt_digest=?
          )`,
@@ -653,7 +653,7 @@ function casCurrentSourceObjectStatement(
           AND obs.content_digest=?
           AND obs.raw_key=?
           AND EXISTS (
-            SELECT 1 FROM jsda_acquisition_jobs_v2
+            SELECT 1 FROM jsda_acquisition_jobs_v3
              WHERE work_key=? AND attempt=? AND state='completed'
                AND audit_receipt_key=? AND audit_receipt_digest=?
           )
@@ -704,7 +704,7 @@ function insertRunTerminalLogStatement(
         WHERE rc.run_key=?
           AND rc.closure_state IN ('completed', 'failed', 'partial')
           AND EXISTS (
-            SELECT 1 FROM jsda_acquisition_jobs_v2
+            SELECT 1 FROM jsda_acquisition_jobs_v3
              WHERE work_key=? AND attempt=? AND state=? AND job_type='discover_root'
                AND audit_receipt_key=? AND audit_receipt_digest=?
           )
@@ -861,7 +861,7 @@ function recomputeRunClosureStatement(
               ),
               frontier_exhausted=CASE
                 WHEN (
-                  SELECT state FROM jsda_acquisition_jobs_v2 WHERE work_key=?
+                  SELECT state FROM jsda_acquisition_jobs_v3 WHERE work_key=?
                 ) IN ('waiting_children','completed','rejected') THEN 1
                 ELSE frontier_exhausted
               END,
@@ -1011,7 +1011,7 @@ export async function registerJobs(
     statements.push(
       db
         .prepare(
-          `INSERT OR IGNORE INTO jsda_acquisition_discoveries_v2
+          `INSERT OR IGNORE INTO jsda_acquisition_discoveries_v3
            (parent_work_key, child_work_key, run_key, discovered_at)
            VALUES (?, ?, ?, ?)`,
         )
@@ -1039,7 +1039,7 @@ export async function registerJobs(
 
 export async function loadJob(db: D1Database, workKey: string): Promise<JobRow | null> {
   return db
-    .prepare(`SELECT ${JOB_SELECT} FROM jsda_acquisition_jobs_v2 WHERE work_key = ?`)
+    .prepare(`SELECT ${JOB_SELECT} FROM jsda_acquisition_jobs_v3 WHERE work_key = ?`)
     .bind(workKey)
     .first<JobRow>();
 }
@@ -1239,7 +1239,7 @@ export async function loadPendingRunJobs(
   const rows = await db
     .prepare(
       `SELECT ${JOB_SELECT}
-         FROM jsda_acquisition_jobs_v2
+         FROM jsda_acquisition_jobs_v3
         WHERE run_key=? AND state IN ('pending', 'failed_transient')
         ORDER BY work_key`,
     )
@@ -1258,7 +1258,7 @@ export async function markJobsQueued(
     workKeys.map((workKey) =>
       db
         .prepare(
-          `UPDATE jsda_acquisition_jobs_v2
+          `UPDATE jsda_acquisition_jobs_v3
            SET state='queued', enqueued_at=?, updated_at=?, last_error=NULL
            WHERE work_key=? AND state IN ('pending', 'failed_transient')`,
         )
@@ -1275,7 +1275,7 @@ export async function claimJob(
 ): Promise<JobRow | null> {
   const result = await db
     .prepare(
-      `UPDATE jsda_acquisition_jobs_v2
+      `UPDATE jsda_acquisition_jobs_v3
        SET state='running', attempt=attempt+1, started_at=?, updated_at=?,
            lease_until=?, last_error=NULL
        WHERE work_key=? AND (
@@ -1299,7 +1299,7 @@ export async function persistFrontier(
 ): Promise<void> {
   const result = await db
     .prepare(
-      `UPDATE jsda_acquisition_jobs_v2
+      `UPDATE jsda_acquisition_jobs_v3
        SET frontier_json=?, raw_key=?, content_digest=?, updated_at=?
        WHERE work_key=? AND state='running' AND attempt=?`,
     )
@@ -1323,7 +1323,7 @@ export async function persistFetchedArtifact(
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
-        `UPDATE jsda_acquisition_jobs_v2
+        `UPDATE jsda_acquisition_jobs_v3
          SET raw_key=?, content_digest=?, updated_at=?
          WHERE work_key=? AND state='running' AND attempt=?`,
       )
@@ -1342,7 +1342,7 @@ export async function persistFetchedArtifact(
            SET content_digest=?, raw_key=?, updated_at=?
            WHERE observation_key=? AND work_key=?
              AND EXISTS (
-               SELECT 1 FROM jsda_acquisition_jobs_v2
+               SELECT 1 FROM jsda_acquisition_jobs_v3
                 WHERE work_key=? AND state='running' AND attempt=?
                   AND raw_key=? AND content_digest=?
              )`,
@@ -1377,7 +1377,7 @@ export async function advanceContinuationCursor(
 ): Promise<void> {
   const result = await db
     .prepare(
-      `UPDATE jsda_acquisition_jobs_v2
+      `UPDATE jsda_acquisition_jobs_v3
        SET cursor=?, updated_at=?
        WHERE work_key=? AND state='running' AND attempt=?`,
     )
@@ -1408,7 +1408,7 @@ export async function markContinuationQueued(
   const results = await db.batch([
     db
       .prepare(
-        `UPDATE jsda_acquisition_jobs_v2
+        `UPDATE jsda_acquisition_jobs_v3
          SET state='queued', cursor=?, enqueued_at=?, updated_at=?,
              audit_receipt_key=?, audit_receipt_digest=?
          WHERE work_key=? AND state='running' AND attempt=?`,
@@ -1447,7 +1447,7 @@ export async function markFrontierExhausted(
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
-        `UPDATE jsda_acquisition_jobs_v2
+        `UPDATE jsda_acquisition_jobs_v3
          SET state='waiting_children', cursor=?, lease_until=NULL, updated_at=?,
              last_error=NULL, audit_receipt_key=?, audit_receipt_digest=?
          WHERE work_key=? AND state='running' AND attempt=?`,
@@ -1516,7 +1516,7 @@ export async function completeJob(
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
-        `UPDATE jsda_acquisition_jobs_v2
+        `UPDATE jsda_acquisition_jobs_v3
          SET state='completed', cursor=?, lease_until=NULL, completed_at=?, updated_at=?,
              last_error=NULL, content_digest=?, raw_key=?,
              audit_receipt_key=?, audit_receipt_digest=?
@@ -1525,10 +1525,10 @@ export async function completeJob(
            AND (
              source_object_id IS NOT NULL AND EXISTS (
                SELECT 1 FROM jsda_observations AS observation
-                WHERE observation.observation_key=jsda_acquisition_jobs_v2.work_key
-                  AND observation.work_key=jsda_acquisition_jobs_v2.work_key
+                WHERE observation.observation_key=jsda_acquisition_jobs_v3.work_key
+                  AND observation.work_key=jsda_acquisition_jobs_v3.work_key
                   AND observation.source_object_id=
-                      jsda_acquisition_jobs_v2.source_object_id
+                      jsda_acquisition_jobs_v3.source_object_id
              )
            )`,
       )
@@ -1585,7 +1585,7 @@ export async function rejectJob(
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
-        `UPDATE jsda_acquisition_jobs_v2
+        `UPDATE jsda_acquisition_jobs_v3
          SET state='rejected', lease_until=NULL, completed_at=?, updated_at=?,
              last_error=?, audit_receipt_key=?, audit_receipt_digest=?
          WHERE work_key=? AND state='running' AND attempt=?
@@ -1593,10 +1593,10 @@ export async function rejectJob(
              job_type != 'fetch_file' OR (
                source_object_id IS NOT NULL AND EXISTS (
                  SELECT 1 FROM jsda_observations AS observation
-                  WHERE observation.observation_key=jsda_acquisition_jobs_v2.work_key
-                    AND observation.work_key=jsda_acquisition_jobs_v2.work_key
+                  WHERE observation.observation_key=jsda_acquisition_jobs_v3.work_key
+                    AND observation.work_key=jsda_acquisition_jobs_v3.work_key
                     AND observation.source_object_id=
-                        jsda_acquisition_jobs_v2.source_object_id
+                        jsda_acquisition_jobs_v3.source_object_id
                )
              )
            )`,
@@ -1642,7 +1642,7 @@ export async function recordTransientFailure(
   const results = await db.batch([
     db
       .prepare(
-        `UPDATE jsda_acquisition_jobs_v2
+        `UPDATE jsda_acquisition_jobs_v3
          SET state='failed_transient', lease_until=NULL, updated_at=?, last_error=?,
              audit_receipt_key=?, audit_receipt_digest=?
          WHERE work_key=? AND state='running' AND attempt=?`,
@@ -1746,7 +1746,7 @@ export async function completeWaitingAncestor(
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
-        `UPDATE jsda_acquisition_jobs_v2
+        `UPDATE jsda_acquisition_jobs_v3
          SET state='completed', lease_until=NULL, completed_at=?, updated_at=?,
              last_error=NULL, audit_receipt_key=?, audit_receipt_digest=?
          WHERE work_key=? AND state='waiting_children'
@@ -1800,7 +1800,7 @@ export async function failWaitingAncestor(
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
-        `UPDATE jsda_acquisition_jobs_v2
+        `UPDATE jsda_acquisition_jobs_v3
          SET state='rejected', lease_until=NULL, completed_at=?, updated_at=?,
              last_error=?, audit_receipt_key=?, audit_receipt_digest=?
          WHERE work_key=? AND state IN ('waiting_children', 'completed')
@@ -1905,7 +1905,7 @@ export async function rejectFromDeadLetter(
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
-        `UPDATE jsda_acquisition_jobs_v2
+        `UPDATE jsda_acquisition_jobs_v3
          SET state='rejected', lease_until=NULL, completed_at=?, updated_at=?,
              last_error=?, audit_receipt_key=?, audit_receipt_digest=?
          WHERE work_key=? AND state IN
@@ -1914,10 +1914,10 @@ export async function rejectFromDeadLetter(
              job_type != 'fetch_file' OR (
                source_object_id IS NOT NULL AND EXISTS (
                  SELECT 1 FROM jsda_observations AS observation
-                  WHERE observation.observation_key=jsda_acquisition_jobs_v2.work_key
-                    AND observation.work_key=jsda_acquisition_jobs_v2.work_key
+                  WHERE observation.observation_key=jsda_acquisition_jobs_v3.work_key
+                    AND observation.work_key=jsda_acquisition_jobs_v3.work_key
                     AND observation.source_object_id=
-                        jsda_acquisition_jobs_v2.source_object_id
+                        jsda_acquisition_jobs_v3.source_object_id
                )
              )
            )`,

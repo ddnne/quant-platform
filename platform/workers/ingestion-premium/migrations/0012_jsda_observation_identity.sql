@@ -2,27 +2,16 @@
 -- SourceObject: stable canonical official URL/locator.
 -- Observation: D1-owned monotonic generation of that object.
 -- Artifact: immutable content digest; locations are separate R2 keys.
--- v2 job rows remain the work graph; rolling URLs may be re-observed.
+-- v2 job rows remain immutable cutover history; v3 is the active work graph.
 -- Discovery frontier exhaustion is not terminal success: a parent stays
 -- waiting_children until every governed descendant is durably terminal.
 
--- D1 applies each statement independently, so PRAGMA foreign_keys does not
--- cover a RENAME. Copy, drop children, then recreate the parent with the
--- expanded state/result checks.
-CREATE TABLE jsda_acquisition_jobs_v2_next AS
-SELECT * FROM jsda_acquisition_jobs_v2;
-
-CREATE TABLE jsda_acquisition_events_v2_next AS
-SELECT * FROM jsda_acquisition_events_v2;
-
-CREATE TABLE jsda_acquisition_discoveries_v2_next AS
-SELECT * FROM jsda_acquisition_discoveries_v2;
-
-DROP TABLE jsda_acquisition_events_v2;
-DROP TABLE jsda_acquisition_discoveries_v2;
-DROP TABLE jsda_acquisition_jobs_v2;
-
-CREATE TABLE jsda_acquisition_jobs_v2 (
+-- D1 migrations must remain safe even if a provider interruption commits only
+-- a prefix of this file.  The v2 graph therefore remains immutable audit and
+-- rollback history.  A fully constrained v3 graph is built beside it, v2
+-- writes are bridged before the populated copy, and every later statement is
+-- idempotent.  No table or row is dropped by this migration.
+CREATE TABLE IF NOT EXISTS jsda_acquisition_jobs_v3 (
     work_key               TEXT PRIMARY KEY,
     run_key                TEXT NOT NULL,
     dataset                TEXT NOT NULL,
@@ -60,7 +49,147 @@ CREATE TABLE jsda_acquisition_jobs_v2 (
            (job_type != 'discover_root' AND parent_work_key IS NOT NULL))
 );
 
-INSERT INTO jsda_acquisition_jobs_v2 (
+-- Deployment is a separate, explicit cutover.  While phase=bridge, drained
+-- v2 instances may finish in-flight writes and the bridge copies them.  The
+-- v3 Worker itself refuses product work until a separate audited cutover
+-- authority changes this singleton to v3_active after old consumers/Cron are
+-- stopped and leases drain.  Hand-written UPDATE is not an activation proof.
+CREATE TABLE IF NOT EXISTS jsda_v3_cutover_control (
+    singleton                 INTEGER PRIMARY KEY CHECK (singleton = 1),
+    phase                     TEXT NOT NULL CHECK (phase IN ('bridge', 'v3_active')),
+    activated_at              TEXT,
+    activated_source_sha      TEXT,
+    drain_evidence_digest     TEXT,
+    CHECK (
+        phase = 'bridge'
+        OR (
+            activated_at IS NOT NULL
+            AND length(activated_source_sha) = 40
+            AND activated_source_sha NOT GLOB '*[^0-9a-f]*'
+            AND substr(drain_evidence_digest, 1, 7) = 'sha256:'
+            AND length(drain_evidence_digest) = 71
+            AND substr(drain_evidence_digest, 8) NOT GLOB '*[^0-9a-f]*'
+        )
+    )
+);
+
+INSERT OR IGNORE INTO jsda_v3_cutover_control (singleton, phase)
+VALUES (1, 'bridge');
+
+-- Close the old-Worker write race before taking the populated snapshot.  The
+-- bridge deliberately updates only the v2/common columns; a resumed migration
+-- must not erase v3 identity fields already derived by a prior prefix.
+CREATE TRIGGER IF NOT EXISTS jsda_migration_v2_jobs_insert_to_v3
+AFTER INSERT ON jsda_acquisition_jobs_v2
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'bridge'
+BEGIN
+    INSERT INTO jsda_acquisition_jobs_v3 (
+        work_key, run_key, dataset, job_type, target_url, segment_id,
+        parent_work_key, contract_digest, state, attempt, cursor, frontier_json,
+        last_error, content_digest, raw_key, audit_receipt_key,
+        audit_receipt_digest, requested_by, requested_at, first_seen_at,
+        enqueued_at, started_at, completed_at, updated_at, lease_until
+    )
+    VALUES (
+        NEW.work_key, NEW.run_key, NEW.dataset, NEW.job_type, NEW.target_url,
+        NEW.segment_id, NEW.parent_work_key, NEW.contract_digest, NEW.state,
+        NEW.attempt, NEW.cursor, NEW.frontier_json, NEW.last_error,
+        NEW.content_digest, NEW.raw_key, NEW.audit_receipt_key,
+        NEW.audit_receipt_digest, NEW.requested_by, NEW.requested_at,
+        NEW.first_seen_at, NEW.enqueued_at, NEW.started_at, NEW.completed_at,
+        NEW.updated_at, NEW.lease_until
+    )
+    ON CONFLICT(work_key) DO UPDATE SET
+        run_key=excluded.run_key,
+        dataset=excluded.dataset,
+        job_type=excluded.job_type,
+        target_url=excluded.target_url,
+        segment_id=excluded.segment_id,
+        parent_work_key=excluded.parent_work_key,
+        contract_digest=excluded.contract_digest,
+        state=excluded.state,
+        attempt=excluded.attempt,
+        cursor=excluded.cursor,
+        frontier_json=excluded.frontier_json,
+        last_error=excluded.last_error,
+        content_digest=excluded.content_digest,
+        raw_key=excluded.raw_key,
+        audit_receipt_key=excluded.audit_receipt_key,
+        audit_receipt_digest=excluded.audit_receipt_digest,
+        requested_by=excluded.requested_by,
+        requested_at=excluded.requested_at,
+        first_seen_at=excluded.first_seen_at,
+        enqueued_at=excluded.enqueued_at,
+        started_at=excluded.started_at,
+        completed_at=excluded.completed_at,
+        updated_at=excluded.updated_at,
+        lease_until=excluded.lease_until
+    WHERE jsda_acquisition_jobs_v3.updated_at <= excluded.updated_at;
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_migration_v2_jobs_update_to_v3
+AFTER UPDATE ON jsda_acquisition_jobs_v2
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'bridge'
+BEGIN
+    INSERT INTO jsda_acquisition_jobs_v3 (
+        work_key, run_key, dataset, job_type, target_url, segment_id,
+        parent_work_key, contract_digest, state, attempt, cursor, frontier_json,
+        last_error, content_digest, raw_key, audit_receipt_key,
+        audit_receipt_digest, requested_by, requested_at, first_seen_at,
+        enqueued_at, started_at, completed_at, updated_at, lease_until
+    )
+    VALUES (
+        NEW.work_key, NEW.run_key, NEW.dataset, NEW.job_type, NEW.target_url,
+        NEW.segment_id, NEW.parent_work_key, NEW.contract_digest, NEW.state,
+        NEW.attempt, NEW.cursor, NEW.frontier_json, NEW.last_error,
+        NEW.content_digest, NEW.raw_key, NEW.audit_receipt_key,
+        NEW.audit_receipt_digest, NEW.requested_by, NEW.requested_at,
+        NEW.first_seen_at, NEW.enqueued_at, NEW.started_at, NEW.completed_at,
+        NEW.updated_at, NEW.lease_until
+    )
+    ON CONFLICT(work_key) DO UPDATE SET
+        run_key=excluded.run_key,
+        dataset=excluded.dataset,
+        job_type=excluded.job_type,
+        target_url=excluded.target_url,
+        segment_id=excluded.segment_id,
+        parent_work_key=excluded.parent_work_key,
+        contract_digest=excluded.contract_digest,
+        state=excluded.state,
+        attempt=excluded.attempt,
+        cursor=excluded.cursor,
+        frontier_json=excluded.frontier_json,
+        last_error=excluded.last_error,
+        content_digest=excluded.content_digest,
+        raw_key=excluded.raw_key,
+        audit_receipt_key=excluded.audit_receipt_key,
+        audit_receipt_digest=excluded.audit_receipt_digest,
+        requested_by=excluded.requested_by,
+        requested_at=excluded.requested_at,
+        first_seen_at=excluded.first_seen_at,
+        enqueued_at=excluded.enqueued_at,
+        started_at=excluded.started_at,
+        completed_at=excluded.completed_at,
+        updated_at=excluded.updated_at,
+        lease_until=excluded.lease_until
+    WHERE jsda_acquisition_jobs_v3.updated_at <= excluded.updated_at;
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v2_jobs_insert_retired
+BEFORE INSERT ON jsda_acquisition_jobs_v2
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'v3_active'
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v2 acquisition graph is retired');
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v2_jobs_update_retired
+BEFORE UPDATE ON jsda_acquisition_jobs_v2
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'v3_active'
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v2 acquisition graph is retired');
+END;
+
+INSERT INTO jsda_acquisition_jobs_v3 (
     work_key, run_key, dataset, job_type, target_url, segment_id,
     parent_work_key, contract_digest, state, attempt, cursor, frontier_json,
     last_error, content_digest, raw_key, audit_receipt_key, audit_receipt_digest,
@@ -73,12 +202,37 @@ SELECT
     last_error, content_digest, raw_key, audit_receipt_key, audit_receipt_digest,
     requested_by, requested_at, first_seen_at, enqueued_at, started_at,
     completed_at, updated_at, lease_until
-  FROM jsda_acquisition_jobs_v2_next;
+  FROM jsda_acquisition_jobs_v2
+ WHERE 1
+ON CONFLICT(work_key) DO UPDATE SET
+    run_key=excluded.run_key,
+    dataset=excluded.dataset,
+    job_type=excluded.job_type,
+    target_url=excluded.target_url,
+    segment_id=excluded.segment_id,
+    parent_work_key=excluded.parent_work_key,
+    contract_digest=excluded.contract_digest,
+    state=excluded.state,
+    attempt=excluded.attempt,
+    cursor=excluded.cursor,
+    frontier_json=excluded.frontier_json,
+    last_error=excluded.last_error,
+    content_digest=excluded.content_digest,
+    raw_key=excluded.raw_key,
+    audit_receipt_key=excluded.audit_receipt_key,
+    audit_receipt_digest=excluded.audit_receipt_digest,
+    requested_by=excluded.requested_by,
+    requested_at=excluded.requested_at,
+    first_seen_at=excluded.first_seen_at,
+    enqueued_at=excluded.enqueued_at,
+    started_at=excluded.started_at,
+    completed_at=excluded.completed_at,
+    updated_at=excluded.updated_at,
+    lease_until=excluded.lease_until;
 
-DROP TABLE jsda_acquisition_jobs_v2_next;
-
-CREATE TABLE jsda_acquisition_events_v2 (
+CREATE TABLE IF NOT EXISTS jsda_acquisition_events_v3 (
     event_id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    legacy_event_id        INTEGER,
     work_key               TEXT NOT NULL,
     run_key                TEXT NOT NULL,
     dataset                TEXT NOT NULL,
@@ -96,11 +250,34 @@ CREATE TABLE jsda_acquisition_events_v2 (
     audit_receipt_key      TEXT NOT NULL,
     audit_receipt_digest   TEXT NOT NULL,
     occurred_at            TEXT NOT NULL,
-    FOREIGN KEY (work_key) REFERENCES jsda_acquisition_jobs_v2(work_key)
+    FOREIGN KEY (work_key) REFERENCES jsda_acquisition_jobs_v3(work_key)
 );
 
-INSERT INTO jsda_acquisition_events_v2 (
-    event_id, work_key, run_key, dataset, job_type, segment_id, attempt, cursor,
+CREATE TRIGGER IF NOT EXISTS jsda_migration_v2_events_insert_to_v3
+AFTER INSERT ON jsda_acquisition_events_v2
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'bridge'
+BEGIN
+    INSERT OR IGNORE INTO jsda_acquisition_events_v3 (
+        legacy_event_id, work_key, run_key, dataset, job_type, segment_id, attempt,
+        cursor, result, reason_code, detail, content_digest, raw_key,
+        audit_receipt_key, audit_receipt_digest, occurred_at
+    ) VALUES (
+        NEW.event_id, NEW.work_key, NEW.run_key, NEW.dataset, NEW.job_type,
+        NEW.segment_id, NEW.attempt, NEW.cursor, NEW.result, NEW.reason_code,
+        NEW.detail, NEW.content_digest, NEW.raw_key, NEW.audit_receipt_key,
+        NEW.audit_receipt_digest, NEW.occurred_at
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v2_events_insert_retired
+BEFORE INSERT ON jsda_acquisition_events_v2
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'v3_active'
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v2 acquisition graph is retired');
+END;
+
+INSERT OR IGNORE INTO jsda_acquisition_events_v3 (
+    legacy_event_id, work_key, run_key, dataset, job_type, segment_id, attempt, cursor,
     result, reason_code, detail, content_digest, raw_key,
     audit_receipt_key, audit_receipt_digest, occurred_at
 )
@@ -108,36 +285,59 @@ SELECT
     event_id, work_key, run_key, dataset, job_type, segment_id, attempt, cursor,
     result, reason_code, detail, content_digest, raw_key,
     audit_receipt_key, audit_receipt_digest, occurred_at
-  FROM jsda_acquisition_events_v2_next;
+  FROM jsda_acquisition_events_v2 AS legacy
+ WHERE NOT EXISTS (
+       SELECT 1
+         FROM jsda_acquisition_events_v3 AS current
+        WHERE current.legacy_event_id = legacy.event_id
+   );
 
-DROP TABLE jsda_acquisition_events_v2_next;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_jsda_events_v3_legacy_event
+    ON jsda_acquisition_events_v3 (legacy_event_id)
+    WHERE legacy_event_id IS NOT NULL;
 
-CREATE TABLE jsda_acquisition_discoveries_v2 (
+CREATE TABLE IF NOT EXISTS jsda_acquisition_discoveries_v3 (
     parent_work_key        TEXT NOT NULL,
     child_work_key         TEXT NOT NULL,
     run_key                TEXT NOT NULL,
     discovered_at          TEXT NOT NULL,
     PRIMARY KEY (parent_work_key, child_work_key),
-    FOREIGN KEY (parent_work_key) REFERENCES jsda_acquisition_jobs_v2(work_key),
-    FOREIGN KEY (child_work_key) REFERENCES jsda_acquisition_jobs_v2(work_key)
+    FOREIGN KEY (parent_work_key) REFERENCES jsda_acquisition_jobs_v3(work_key),
+    FOREIGN KEY (child_work_key) REFERENCES jsda_acquisition_jobs_v3(work_key)
 );
 
-INSERT INTO jsda_acquisition_discoveries_v2 (
+CREATE TRIGGER IF NOT EXISTS jsda_migration_v2_discoveries_insert_to_v3
+AFTER INSERT ON jsda_acquisition_discoveries_v2
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'bridge'
+BEGIN
+    INSERT OR IGNORE INTO jsda_acquisition_discoveries_v3 (
+        parent_work_key, child_work_key, run_key, discovered_at
+    ) VALUES (
+        NEW.parent_work_key, NEW.child_work_key, NEW.run_key, NEW.discovered_at
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v2_discoveries_insert_retired
+BEFORE INSERT ON jsda_acquisition_discoveries_v2
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'v3_active'
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v2 acquisition graph is retired');
+END;
+
+INSERT OR IGNORE INTO jsda_acquisition_discoveries_v3 (
     parent_work_key, child_work_key, run_key, discovered_at
 )
 SELECT parent_work_key, child_work_key, run_key, discovered_at
-  FROM jsda_acquisition_discoveries_v2_next;
+  FROM jsda_acquisition_discoveries_v2;
 
-DROP TABLE jsda_acquisition_discoveries_v2_next;
-
-CREATE INDEX IF NOT EXISTS ix_jsda_discoveries_v2_run
-    ON jsda_acquisition_discoveries_v2 (run_key, parent_work_key, child_work_key);
+CREATE INDEX IF NOT EXISTS ix_jsda_discoveries_v3_run
+    ON jsda_acquisition_discoveries_v3 (run_key, parent_work_key, child_work_key);
 
 -- Backfill the same table-driven locator policy used by the Worker. Treating
 -- every legacy URL as an archive would put an already-seen rolling locator
 -- under the URL-unique archive index and prevent every later run-scoped
 -- observation from being registered.
-UPDATE jsda_acquisition_jobs_v2
+UPDATE jsda_acquisition_jobs_v3
    SET freshness = CASE
          WHEN dataset = 'jsda_tokyo_repo_rates' THEN 'rolling'
          WHEN dataset = 'jsda_corporate_bond_transactions'
@@ -177,7 +377,7 @@ UPDATE jsda_acquisition_jobs_v2
  WHERE job_type = 'fetch_file'
    AND freshness IS NULL;
 
-UPDATE jsda_acquisition_jobs_v2
+UPDATE jsda_acquisition_jobs_v3
    SET observation_epoch = CASE
          WHEN freshness = 'rolling' THEN run_key
          ELSE 'archive'
@@ -185,24 +385,22 @@ UPDATE jsda_acquisition_jobs_v2
  WHERE job_type = 'fetch_file'
    AND observation_epoch IS NULL;
 
-DROP INDEX IF EXISTS ux_jsda_jobs_v2_fetched_file_url;
-
-CREATE UNIQUE INDEX IF NOT EXISTS ux_jsda_jobs_v2_archive_file_url
-    ON jsda_acquisition_jobs_v2 (dataset, job_type, target_url)
+CREATE UNIQUE INDEX IF NOT EXISTS ux_jsda_jobs_v3_archive_file_url
+    ON jsda_acquisition_jobs_v3 (dataset, job_type, target_url)
     WHERE job_type = 'fetch_file' AND freshness = 'archive';
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_jsda_jobs_v2_rolling_file_epoch
-    ON jsda_acquisition_jobs_v2 (dataset, job_type, target_url, run_key)
+CREATE UNIQUE INDEX IF NOT EXISTS ux_jsda_jobs_v3_rolling_file_epoch
+    ON jsda_acquisition_jobs_v3 (dataset, job_type, target_url, run_key)
     WHERE job_type = 'fetch_file' AND freshness = 'rolling';
 
-CREATE INDEX IF NOT EXISTS ix_jsda_jobs_v2_state_updated
-    ON jsda_acquisition_jobs_v2 (state, updated_at, work_key);
+CREATE INDEX IF NOT EXISTS ix_jsda_jobs_v3_state_updated
+    ON jsda_acquisition_jobs_v3 (state, updated_at, work_key);
 
-CREATE INDEX IF NOT EXISTS ix_jsda_jobs_v2_run_parent
-    ON jsda_acquisition_jobs_v2 (run_key, parent_work_key, job_type, state);
+CREATE INDEX IF NOT EXISTS ix_jsda_jobs_v3_run_parent
+    ON jsda_acquisition_jobs_v3 (run_key, parent_work_key, job_type, state);
 
-CREATE INDEX IF NOT EXISTS ix_jsda_events_v2_run_time
-    ON jsda_acquisition_events_v2 (run_key, occurred_at, event_id);
+CREATE INDEX IF NOT EXISTS ix_jsda_events_v3_run_time
+    ON jsda_acquisition_events_v3 (run_key, occurred_at, event_id);
 
 CREATE TABLE IF NOT EXISTS jsda_source_objects (
     source_object_id           TEXT PRIMARY KEY,
@@ -260,7 +458,7 @@ CREATE TABLE IF NOT EXISTS jsda_observations (
     first_seen_at            TEXT NOT NULL,
     updated_at               TEXT NOT NULL,
     FOREIGN KEY (source_object_id) REFERENCES jsda_source_objects(source_object_id),
-    FOREIGN KEY (work_key) REFERENCES jsda_acquisition_jobs_v2(work_key)
+    FOREIGN KEY (work_key) REFERENCES jsda_acquisition_jobs_v3(work_key)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_jsda_observations_epoch
@@ -307,9 +505,9 @@ CREATE TABLE IF NOT EXISTS jsda_run_membership (
     adopted_at                 TEXT,
     updated_at                 TEXT NOT NULL,
     PRIMARY KEY (run_key, parent_work_key, child_work_key),
-    FOREIGN KEY (root_work_key) REFERENCES jsda_acquisition_jobs_v2(work_key),
-    FOREIGN KEY (parent_work_key) REFERENCES jsda_acquisition_jobs_v2(work_key),
-    FOREIGN KEY (child_work_key) REFERENCES jsda_acquisition_jobs_v2(work_key),
+    FOREIGN KEY (root_work_key) REFERENCES jsda_acquisition_jobs_v3(work_key),
+    FOREIGN KEY (parent_work_key) REFERENCES jsda_acquisition_jobs_v3(work_key),
+    FOREIGN KEY (child_work_key) REFERENCES jsda_acquisition_jobs_v3(work_key),
     CHECK (
         membership_kind = 'enqueued'
         OR adopted_at IS NOT NULL
@@ -336,13 +534,13 @@ CREATE INDEX IF NOT EXISTS ix_jsda_run_membership_parent
     ON jsda_run_membership (parent_work_key, run_key, terminal_state);
 
 -- Years first, then roots: a newly rejected year must fail its completed root.
-UPDATE jsda_acquisition_jobs_v2
+UPDATE jsda_acquisition_jobs_v3
    SET state = 'rejected',
        last_error = COALESCE(
          (
            SELECT child.last_error
-             FROM jsda_acquisition_jobs_v2 AS child
-            WHERE child.parent_work_key = jsda_acquisition_jobs_v2.work_key
+             FROM jsda_acquisition_jobs_v3 AS child
+            WHERE child.parent_work_key = jsda_acquisition_jobs_v3.work_key
               AND child.state = 'rejected'
             ORDER BY child.updated_at, child.work_key
             LIMIT 1
@@ -355,18 +553,18 @@ UPDATE jsda_acquisition_jobs_v2
    AND audit_receipt_digest IS NOT NULL
    AND EXISTS (
      SELECT 1
-       FROM jsda_acquisition_jobs_v2 AS child
-      WHERE child.parent_work_key = jsda_acquisition_jobs_v2.work_key
+       FROM jsda_acquisition_jobs_v3 AS child
+      WHERE child.parent_work_key = jsda_acquisition_jobs_v3.work_key
         AND child.state = 'rejected'
    );
 
-UPDATE jsda_acquisition_jobs_v2
+UPDATE jsda_acquisition_jobs_v3
    SET state = 'rejected',
        last_error = COALESCE(
          (
            SELECT child.last_error
-             FROM jsda_acquisition_jobs_v2 AS child
-            WHERE child.parent_work_key = jsda_acquisition_jobs_v2.work_key
+             FROM jsda_acquisition_jobs_v3 AS child
+            WHERE child.parent_work_key = jsda_acquisition_jobs_v3.work_key
               AND child.state = 'rejected'
             ORDER BY child.updated_at, child.work_key
             LIMIT 1
@@ -379,12 +577,12 @@ UPDATE jsda_acquisition_jobs_v2
    AND audit_receipt_digest IS NOT NULL
    AND EXISTS (
      SELECT 1
-       FROM jsda_acquisition_jobs_v2 AS child
-      WHERE child.parent_work_key = jsda_acquisition_jobs_v2.work_key
+       FROM jsda_acquisition_jobs_v3 AS child
+      WHERE child.parent_work_key = jsda_acquisition_jobs_v3.work_key
         AND child.state = 'rejected'
    );
 
-UPDATE jsda_acquisition_jobs_v2
+UPDATE jsda_acquisition_jobs_v3
    SET state = 'waiting_children'
  WHERE job_type = 'discover_year'
    AND state = 'completed'
@@ -392,12 +590,12 @@ UPDATE jsda_acquisition_jobs_v2
    AND audit_receipt_digest IS NOT NULL
    AND EXISTS (
      SELECT 1
-       FROM jsda_acquisition_jobs_v2 AS child
-      WHERE child.parent_work_key = jsda_acquisition_jobs_v2.work_key
+       FROM jsda_acquisition_jobs_v3 AS child
+      WHERE child.parent_work_key = jsda_acquisition_jobs_v3.work_key
         AND child.state NOT IN ('completed', 'rejected')
    );
 
-UPDATE jsda_acquisition_jobs_v2
+UPDATE jsda_acquisition_jobs_v3
    SET state = 'waiting_children'
  WHERE job_type = 'discover_root'
    AND state = 'completed'
@@ -405,8 +603,8 @@ UPDATE jsda_acquisition_jobs_v2
    AND audit_receipt_digest IS NOT NULL
    AND EXISTS (
      SELECT 1
-       FROM jsda_acquisition_jobs_v2 AS child
-      WHERE child.parent_work_key = jsda_acquisition_jobs_v2.work_key
+       FROM jsda_acquisition_jobs_v3 AS child
+      WHERE child.parent_work_key = jsda_acquisition_jobs_v3.work_key
         AND child.state NOT IN ('completed', 'rejected')
    );
 
@@ -509,17 +707,17 @@ SELECT
     END,
     CASE WHEN child.run_key != d.run_key THEN d.discovered_at ELSE NULL END,
     d.discovered_at
-  FROM jsda_acquisition_discoveries_v2 AS d
-  JOIN jsda_acquisition_jobs_v2 AS child
+  FROM jsda_acquisition_discoveries_v3 AS d
+  JOIN jsda_acquisition_jobs_v3 AS child
     ON child.work_key = d.child_work_key;
 
-UPDATE jsda_acquisition_jobs_v2
+UPDATE jsda_acquisition_jobs_v3
    SET state = 'rejected',
        last_error = COALESCE(
          (
            SELECT failure_detail FROM jsda_run_membership
-            WHERE parent_work_key = jsda_acquisition_jobs_v2.work_key
-              AND run_key = jsda_acquisition_jobs_v2.run_key
+            WHERE parent_work_key = jsda_acquisition_jobs_v3.work_key
+              AND run_key = jsda_acquisition_jobs_v3.run_key
               AND terminal_state = 'rejected'
             ORDER BY updated_at, child_work_key
             LIMIT 1
@@ -533,18 +731,18 @@ UPDATE jsda_acquisition_jobs_v2
    AND audit_receipt_digest IS NOT NULL
    AND EXISTS (
      SELECT 1 FROM jsda_run_membership
-      WHERE parent_work_key = jsda_acquisition_jobs_v2.work_key
-        AND run_key = jsda_acquisition_jobs_v2.run_key
+      WHERE parent_work_key = jsda_acquisition_jobs_v3.work_key
+        AND run_key = jsda_acquisition_jobs_v3.run_key
         AND terminal_state = 'rejected'
    );
 
-UPDATE jsda_acquisition_jobs_v2
+UPDATE jsda_acquisition_jobs_v3
    SET state = 'rejected',
        last_error = COALESCE(
          (
            SELECT failure_detail FROM jsda_run_membership
-            WHERE parent_work_key = jsda_acquisition_jobs_v2.work_key
-              AND run_key = jsda_acquisition_jobs_v2.run_key
+            WHERE parent_work_key = jsda_acquisition_jobs_v3.work_key
+              AND run_key = jsda_acquisition_jobs_v3.run_key
               AND terminal_state = 'rejected'
             ORDER BY updated_at, child_work_key
             LIMIT 1
@@ -558,12 +756,12 @@ UPDATE jsda_acquisition_jobs_v2
    AND audit_receipt_digest IS NOT NULL
    AND EXISTS (
      SELECT 1 FROM jsda_run_membership
-      WHERE parent_work_key = jsda_acquisition_jobs_v2.work_key
-        AND run_key = jsda_acquisition_jobs_v2.run_key
+      WHERE parent_work_key = jsda_acquisition_jobs_v3.work_key
+        AND run_key = jsda_acquisition_jobs_v3.run_key
         AND terminal_state = 'rejected'
    );
 
-UPDATE jsda_acquisition_jobs_v2
+UPDATE jsda_acquisition_jobs_v3
    SET state = 'waiting_children'
  WHERE job_type = 'discover_year'
    AND state = 'completed'
@@ -571,12 +769,12 @@ UPDATE jsda_acquisition_jobs_v2
    AND audit_receipt_digest IS NOT NULL
    AND EXISTS (
      SELECT 1 FROM jsda_run_membership
-      WHERE parent_work_key = jsda_acquisition_jobs_v2.work_key
-        AND run_key = jsda_acquisition_jobs_v2.run_key
+      WHERE parent_work_key = jsda_acquisition_jobs_v3.work_key
+        AND run_key = jsda_acquisition_jobs_v3.run_key
         AND terminal_state IN ('pending', 'queued', 'running', 'waiting_children', 'failed_transient')
    );
 
-UPDATE jsda_acquisition_jobs_v2
+UPDATE jsda_acquisition_jobs_v3
    SET state = 'waiting_children'
  WHERE job_type = 'discover_root'
    AND state = 'completed'
@@ -584,13 +782,13 @@ UPDATE jsda_acquisition_jobs_v2
    AND audit_receipt_digest IS NOT NULL
    AND EXISTS (
      SELECT 1 FROM jsda_run_membership
-      WHERE parent_work_key = jsda_acquisition_jobs_v2.work_key
-        AND run_key = jsda_acquisition_jobs_v2.run_key
+      WHERE parent_work_key = jsda_acquisition_jobs_v3.work_key
+        AND run_key = jsda_acquisition_jobs_v3.run_key
         AND terminal_state IN ('pending', 'queued', 'running', 'waiting_children', 'failed_transient')
    );
 
 CREATE TRIGGER IF NOT EXISTS jsda_run_membership_enqueued_insert
-AFTER INSERT ON jsda_acquisition_jobs_v2
+AFTER INSERT ON jsda_acquisition_jobs_v3
 WHEN NEW.parent_work_key IS NOT NULL
 BEGIN
     INSERT OR IGNORE INTO jsda_run_membership (
@@ -621,7 +819,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS jsda_run_membership_enqueued_sync
 AFTER UPDATE OF state, content_digest, raw_key, audit_receipt_key,
                 audit_receipt_digest, last_error
-ON jsda_acquisition_jobs_v2
+ON jsda_acquisition_jobs_v3
 WHEN NEW.parent_work_key IS NOT NULL
  AND (
    NEW.state != 'completed'
@@ -681,7 +879,7 @@ CREATE TABLE IF NOT EXISTS jsda_job_closures (
     failure_detail               TEXT,
     closed_at                    TEXT,
     updated_at                   TEXT NOT NULL,
-    FOREIGN KEY (work_key) REFERENCES jsda_acquisition_jobs_v2(work_key)
+    FOREIGN KEY (work_key) REFERENCES jsda_acquisition_jobs_v3(work_key)
 );
 
 CREATE INDEX IF NOT EXISTS ix_jsda_job_closures_run
@@ -712,7 +910,7 @@ CREATE TABLE IF NOT EXISTS jsda_run_closures (
     failure_detail               TEXT,
     closed_at                    TEXT,
     updated_at                   TEXT NOT NULL,
-    FOREIGN KEY (root_work_key) REFERENCES jsda_acquisition_jobs_v2(work_key)
+    FOREIGN KEY (root_work_key) REFERENCES jsda_acquisition_jobs_v3(work_key)
 );
 
 CREATE INDEX IF NOT EXISTS ix_jsda_run_closures_state
@@ -721,13 +919,13 @@ CREATE INDEX IF NOT EXISTS ix_jsda_run_closures_state
 INSERT OR IGNORE INTO jsda_run_closures
     (run_key, root_work_key, dataset, closure_state, updated_at)
 SELECT work_key, work_key, dataset, 'open', updated_at
-  FROM jsda_acquisition_jobs_v2
+  FROM jsda_acquisition_jobs_v3
  WHERE job_type = 'discover_root';
 
 INSERT OR IGNORE INTO jsda_job_closures
     (work_key, run_key, parent_work_key, job_type, closure_state, updated_at)
 SELECT work_key, run_key, parent_work_key, job_type, 'open', updated_at
-  FROM jsda_acquisition_jobs_v2
+  FROM jsda_acquisition_jobs_v3
  WHERE job_type IN ('discover_root', 'discover_year');
 
 UPDATE jsda_job_closures
@@ -767,7 +965,7 @@ UPDATE jsda_job_closures
        ),
        frontier_exhausted = CASE
          WHEN (
-           SELECT state FROM jsda_acquisition_jobs_v2
+           SELECT state FROM jsda_acquisition_jobs_v3
             WHERE work_key = jsda_job_closures.work_key
          ) IN ('waiting_children', 'completed', 'rejected') THEN 1
          ELSE frontier_exhausted
@@ -840,7 +1038,7 @@ UPDATE jsda_run_closures
        ),
        frontier_exhausted = CASE
          WHEN (
-           SELECT state FROM jsda_acquisition_jobs_v2
+           SELECT state FROM jsda_acquisition_jobs_v3
             WHERE work_key = jsda_run_closures.root_work_key
          ) IN ('waiting_children', 'completed', 'rejected') THEN 1
          ELSE frontier_exhausted

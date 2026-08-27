@@ -6,6 +6,24 @@
       "target_role": "ingestion_source_of_truth",
       "owner": "platform/workers/ingestion-premium",
       "migration_dir": "platform/workers/ingestion-premium/migrations",
+      "application_policy": {
+        "mode": "guarded-staging-first/v1",
+        "owner_command": "scripts/apply_ingestion_d1_migrations.py",
+        "environment_order": [
+          "staging",
+          "production"
+        ],
+        "requires": [
+          "canonical-live-database-identity",
+          "time-travel-bookmark",
+          "encrypted-export-checksum",
+          "exact-export-preflight",
+          "exact-export-postflight",
+          "same-source-staging-acceptance-before-production",
+          "authenticated-staging-backup-before-production",
+          "jsda-v3-readiness-smoke-before-product-acceptance"
+        ]
+      },
       "environments": {
         "base": {
           "config": "platform/workers/ingestion-premium/wrangler.toml",
@@ -113,7 +131,7 @@
         {
           "migration_id": "quant-ingest:0012_jsda_observation_identity",
           "path": "platform/workers/ingestion-premium/migrations/0012_jsda_observation_identity.sql",
-          "checksum": "sha256:f5eeac1f534ff0c1e4a8c9193f21cc1626c2863557b3f3d80be52e158e1e521e",
+          "checksum": "sha256:ca5fd557d39e467aa3d96fd4c63c92bf0c6a4289b22c72da2aed6f9d90a1667f",
           "order": 12,
           "depends_on": "quant-ingest:0011_jsda_queue_v2"
         },
@@ -165,6 +183,15 @@
       "target_role": "ops_projection_read_model",
       "owner": "platform/workers/quant-ops-mcp",
       "migration_dir": "platform/workers/quant-ops-mcp/migrations/projection",
+      "application_policy": {
+        "mode": "wrangler-canonical-owner/v1",
+        "owner_command": null,
+        "environment_order": [
+          "staging",
+          "production"
+        ],
+        "requires": []
+      },
       "environments": {
         "base": {
           "config": "platform/workers/quant-ops-mcp/wrangler.toml",
@@ -212,6 +239,15 @@
       "target_role": "ops_mcp_quota",
       "owner": "platform/workers/quant-ops-mcp",
       "migration_dir": "platform/workers/quant-ops-mcp/migrations/quota",
+      "application_policy": {
+        "mode": "wrangler-canonical-owner/v1",
+        "owner_command": null,
+        "environment_order": [
+          "staging",
+          "production"
+        ],
+        "requires": []
+      },
       "environments": {
         "base": {
           "config": "platform/workers/quant-ops-mcp/wrangler.toml",

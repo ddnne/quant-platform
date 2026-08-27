@@ -46,6 +46,36 @@ TARGETS: Mapping[str, Mapping[str, str]] = {
     },
 }
 
+APPLICATION_POLICIES: Mapping[str, Mapping[str, Any]] = {
+    "quant-ingest": {
+        "mode": "guarded-staging-first/v1",
+        "owner_command": "scripts/apply_ingestion_d1_migrations.py",
+        "environment_order": ["staging", "production"],
+        "requires": [
+            "canonical-live-database-identity",
+            "time-travel-bookmark",
+            "encrypted-export-checksum",
+            "exact-export-preflight",
+            "exact-export-postflight",
+            "same-source-staging-acceptance-before-production",
+            "authenticated-staging-backup-before-production",
+            "jsda-v3-readiness-smoke-before-product-acceptance",
+        ],
+    },
+    "quant-ops-projection": {
+        "mode": "wrangler-canonical-owner/v1",
+        "owner_command": None,
+        "environment_order": ["staging", "production"],
+        "requires": [],
+    },
+    "quant-ops-quota": {
+        "mode": "wrangler-canonical-owner/v1",
+        "owner_command": None,
+        "environment_order": ["staging", "production"],
+        "requires": [],
+    },
+}
+
 
 def _load_toml(path: Path) -> dict[str, Any]:
     with path.open("rb") as handle:
@@ -142,6 +172,7 @@ def build_manifest() -> dict[str, Any]:
             "target_role": policy["target_role"],
             "owner": owner,
             "migration_dir": str((ROOT / owner / migration_dir).relative_to(ROOT)),
+            "application_policy": dict(APPLICATION_POLICIES[target_name]),
             "environments": environments,
             "migrations": _migrations(target_name, owner, migration_dir),
         }
@@ -166,6 +197,8 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         policy = TARGETS[str(target_name)]
         if target.get("owner") != policy["owner"]:
             raise ValueError(f"{target_name}: migration owner drift")
+        if target.get("application_policy") != APPLICATION_POLICIES[target_name]:
+            raise ValueError(f"{target_name}: migration application policy drift")
         migrations = target.get("migrations") or []
         for order, migration in enumerate(migrations, start=1):
             if migration.get("order") != order:

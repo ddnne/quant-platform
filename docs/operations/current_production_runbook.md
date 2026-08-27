@@ -85,14 +85,15 @@ Do not hand-loop a subset of SQL files. Do not apply Ops projection SQL to
 `quant-ingest`. `ingestion-premium` owns `quant-ingest`; `quant-ops-mcp` owns
 `quant-ops-projection` and `quant-ops-quota`.
 
-### quant-ingest 0013 quarantine
+### quant-ingest guarded 0011-0018 sequence
 
-Do **not** run generic `wrangler d1 migrations apply quant-ingest` while
-`0013_restore_specialized_jquants_schema.sql` is pending. Its additive
-`IF NOT EXISTS` statements cannot distinguish an absent object from a
-same-name malformed object, and a migration-history row does not prove exact
-postflight. Migration 0013 stays quarantined until one reviewed authority
-orchestrates all of the following against the same authenticated D1 identity:
+Do **not** run generic `wrangler d1 migrations apply quant-ingest` for this
+chain. Migration 0012 now copies the populated v2 JSDA graph into a separately
+constrained v3 graph, installs v2-to-v3 bridge triggers before copying, and
+never drops v2 data. Every statement is resumable, but a migration-history row
+alone still does not prove exact schema or data preservation. The canonical
+owner is `scripts/apply_ingestion_d1_migrations.py`; it orchestrates all of the
+following against the same authenticated D1 identity:
 
 1. bind `environment`, binding, database name, and database ID to the canonical
    manifest rather than caller input;
@@ -100,19 +101,46 @@ orchestrates all of the following against the same authenticated D1 identity:
    bookmark before any apply;
 3. run exact preflight with no attached/TEMP deputy, accepting only absent or
    exact canonical `sqlite_master`/PRAGMA structure;
-4. apply the exact reviewed 0013 checksum after confirmed 0012;
-5. run independent exact postflight even when 0013 already has a history row,
-   then bind the pre/post schema digests and observed history to immutable
-   release evidence.
+4. simulate every pending canonical migration on a local copy of the remote
+   export, including interruption recovery and v2/v3 preservation;
+5. apply the exact manifest chain through the pinned local Wrangler;
+6. take a second independent remote export and require exact schema, exact
+   migration history, empty FK check, and v2/v3 row preservation;
+7. bind the bookmark, encrypted backup checksum, pre/post digests, source SHA,
+   and environment to create-only evidence.
 
 [`scripts/d1_specialized_schema_validation.py`](../../scripts/d1_specialized_schema_validation.py)
-implements only read-only local SQLite validation. It does not authenticate a
-live D1, create a backup/bookmark, apply SQL, or mint release evidence. Its
-machine-readable result remains `UNVERIFIED` and cannot close A2 or A6. Until
-the governed orchestration above exists, stop rather than bypass this hold.
+remains the narrow 0013 semantic contract. The guarded owner additionally uses
+[`scripts/d1_ingestion_migration_validation.py`](../../scripts/d1_ingestion_migration_validation.py)
+for the complete chain. Both production and staging database name/ID and
+migration table come only from the canonical manifest; caller-supplied database
+identity is not accepted.
 
 ```bash
 .venv/bin/python scripts/cloudflare_d1_migration_manifest.py
+
+cd platform/workers/ingestion-premium
+npm ci
+cd ../../..
+
+# First: distinct staging account/resources and a staging-only backup key.
+.venv/bin/python scripts/apply_ingestion_d1_migrations.py \
+  --environment staging \
+  --backup-target /secure/private/quant-ingest-staging.preapply.sql.enc \
+  --backup-key /secure/private/d1_staging_backup_aes256.key \
+  --prepare-evidence-target /secure/private/quant-ingest-staging.prepared.json \
+  --evidence-target /secure/private/quant-ingest-staging.migration.json
+
+# Review staging postflight, then use the exact same merged source SHA.
+.venv/bin/python scripts/apply_ingestion_d1_migrations.py \
+  --environment production \
+  --backup-target /secure/private/quant-ingest.preapply.sql.enc \
+  --backup-key /secure/private/d1_production_backup_aes256.key \
+  --prepare-evidence-target /secure/private/quant-ingest.prepared.json \
+  --evidence-target /secure/private/quant-ingest.migration.json \
+  --staging-evidence /secure/private/quant-ingest-staging.migration.json \
+  --staging-backup /secure/private/quant-ingest-staging.preapply.sql.enc \
+  --staging-backup-key /secure/private/d1_staging_backup_aes256.key
 
 cd platform/workers/quant-ops-mcp
 npx wrangler d1 migrations apply quant-ops-projection --remote --env production
@@ -122,7 +150,30 @@ cd ../../..
 
 JSDA observation identity lives in
 `platform/workers/ingestion-premium/migrations/0012_jsda_observation_identity.sql`
-and precedes quarantined migration 0013 in the canonical `quant-ingest` chain.
+and precedes migration 0013 in the canonical `quant-ingest` chain. The Worker
+reads/writes v3 after this source revision. Do not roll it back to a v2-only
+Worker while retaining post-cutover D1 state. A rollback across this boundary
+is coordinated: stop writers, restore the recorded Time Travel bookmark (or
+verified encrypted export), then restore the old Worker. A failed unrecorded
+prefix should instead be resumed only through the same guarded owner; a
+recorded-but-partial or malformed state fails closed and requires review.
+
+Migration success intentionally leaves `jsda_v3_cutover_control.phase` at
+`bridge`. The v3 Worker returns/retries `JSDA_V3_CUTOVER_PENDING` and the v2
+bridge rejects stale updates that would overwrite newer v3 state. Do not hand
+edit the singleton. Activation requires a separate reviewed authority that
+proves Cron/producer/consumer disablement, zero in-flight leases, the deployed
+v3 source SHA, and an immutable drain-evidence digest before setting
+`v3_active`; the database then aborts any late v2 insert/update. That activation
+authority is not part of this migration apply command, so source migration
+readiness is not a claim that production JSDA is already cut over.
+
+`GET /health` is liveness only and reports `product_ready` plus the observed
+cutover phase. It must never be used as the JSDA product smoke. Deployment
+acceptance must call `GET /health/ready` and require HTTP 200,
+`product_ready:true`, and `cutover:"V3_ACTIVE"` for the deployed version. HTTP
+503 with `PENDING` is the expected fail-closed result before the separate
+cutover authority completes; it is not a successful product deployment.
 
 ## 3. Publish the signed Ops projection
 

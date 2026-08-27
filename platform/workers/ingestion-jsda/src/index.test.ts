@@ -59,7 +59,7 @@ describe("ingestion-jsda HTTP boundary", () => {
     expect(typeof worker.queue).toBe("function");
   });
 
-  it("health describes the convergent v2 hierarchy without leaking secrets", async () => {
+  it("health reports liveness without misclaiming product readiness", async () => {
     const { env } = touchingEnv();
     const response = await worker.fetch(
       new Request("https://ingestion-jsda.test/health"),
@@ -71,6 +71,9 @@ describe("ingestion-jsda HTTP boundary", () => {
     expect(body).not.toContain("COMPLETE");
     expect(JSON.parse(body)).toMatchObject({
       ok: true,
+      liveness: true,
+      product_ready: false,
+      cutover: "UNKNOWN",
       worker: "ingestion-jsda",
       queue_contract: "jsda-acquisition-job/v2",
       hierarchy: ["discover_root", "discover_year", "fetch_file"],
@@ -82,6 +85,12 @@ describe("ingestion-jsda HTTP boundary", () => {
     const cases = [
       {
         request: new Request("https://ingestion-jsda.test/health", {
+          method: "POST",
+        }),
+        status: 405,
+      },
+      {
+        request: new Request("https://ingestion-jsda.test/health/ready", {
           method: "POST",
         }),
         status: 405,

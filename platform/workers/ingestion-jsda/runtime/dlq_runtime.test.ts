@@ -26,6 +26,18 @@ const migrations = inject<Array<{ name: string; queries: string[] }>>(
 beforeEach(async () => {
   await reset();
   await applyD1Migrations(runtimeEnv.DB, migrations);
+  await runtimeEnv.DB.prepare(
+    `UPDATE jsda_v3_cutover_control
+        SET phase='v3_active', activated_at=?, activated_source_sha=?,
+            drain_evidence_digest=?
+      WHERE singleton=1 AND phase='bridge'`,
+  )
+    .bind(
+      "2026-08-25T01:29:00.000Z",
+      "a".repeat(40),
+      `sha256:${"b".repeat(64)}`,
+    )
+    .run();
 });
 
 const FILE_A = "https://market.jsda.or.jp/archive/data/otc-20020802.csv";
@@ -78,7 +90,7 @@ async function seedWaitingChild() {
   await registerJob(runtimeEnv.DB, root);
   const frontier: ChildDescriptor[] = [await descriptorForFile(FILE_A)];
   await runtimeEnv.DB.prepare(
-    `UPDATE jsda_acquisition_jobs_v2
+    `UPDATE jsda_acquisition_jobs_v3
      SET state='queued', frontier_json=?, raw_key=?, content_digest=?
      WHERE work_key=?`,
   )
@@ -97,7 +109,7 @@ async function seedWaitingChild() {
   );
   expect(seeded.explicitAcks).toEqual(["dlq-seed-root"]);
   const children = await runtimeEnv.DB.prepare(
-    `SELECT work_key FROM jsda_acquisition_jobs_v2 WHERE parent_work_key=?`,
+    `SELECT work_key FROM jsda_acquisition_jobs_v3 WHERE parent_work_key=?`,
   )
     .bind(root.work_key)
     .all<{ work_key: string }>();
@@ -187,7 +199,7 @@ describe("JSDA DLQ terminal convergence", () => {
     );
     expect(second.explicitAcks).toEqual(["dlq-second"]);
     const rejectEvents = await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS n FROM jsda_acquisition_events_v2
+      `SELECT COUNT(*) AS n FROM jsda_acquisition_events_v3
         WHERE work_key=? AND result='rejected' AND reason_code='dead_lettered'`,
     )
       .bind(childKey)
@@ -198,7 +210,7 @@ describe("JSDA DLQ terminal convergence", () => {
 
   it("retries without ack when DLQ evidence cannot be written to D1", async () => {
     const { childKey } = await seedWaitingChild();
-    await runtimeEnv.DB.exec("DROP TABLE jsda_acquisition_events_v2");
+    await runtimeEnv.DB.exec("DROP TABLE jsda_acquisition_events_v3");
     const result = await deliverOn(
       "quant-jsda-ingestion-dlq-test",
       await childJob(childKey),
