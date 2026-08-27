@@ -375,17 +375,32 @@ def test_receipt_worker_resource_graph_and_private_surface_are_exact() -> None:
     assert any(
         row.get("binding_name") == "JQUANTS_ACQUISITION" for row in resources
     )
-    assert any("quant-structured-staging" in row["resource_ref"] for row in resources)
+    assert {
+        (row["resource_ref"], row["access"])
+        for row in resources
+        if row["kind"] == "r2"
+    } == {
+        (
+            "cloudflare:staging:r2:quant-receipt-evidence-staging",
+            "authority_evidence_create_only_readback",
+        ),
+        (
+            "cloudflare:staging:r2:quant-structured-staging",
+            "shared_product_write_readback_nonexclusive",
+        ),
+    }
     assert not any(
         "receipt-evidence-authority" in row["resource_ref"]
         for row in resources
         if row["kind"] == "service_binding"
     )
-    assert receipt["capabilities"][:3] == [
+    assert receipt["capabilities"][:4] == [
         "jquants_acquisition:fetch_governed_page",
-        "raw_immutable:create_only",
-        "structured_immutable:create_only",
+        "authority_evidence_r2:create_only_readback",
+        "product_materialization_d1:write_exact",
+        "product_materialization_r2:write_readback",
     ]
+    assert "structured_immutable:create_only" not in receipt["capabilities"]
 
 
 @pytest.mark.parametrize(

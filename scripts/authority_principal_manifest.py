@@ -324,9 +324,11 @@ EXPECTED_PROVIDES = {
 EXPECTED_CAPABILITIES = {
     "receipt": (
         "jquants_acquisition:fetch_governed_page",
-        "raw_immutable:create_only",
-        "structured_immutable:create_only",
+        "authority_evidence_r2:create_only_readback",
+        "product_materialization_d1:write_exact",
+        "product_materialization_r2:write_readback",
         "structured_natural_key:segment_read",
+        "ingestion_evidence:append_run_raw",
         "receipt_ledger:append",
         "receipt_signature:sign",
         "receipt_key_registration:export_public",
@@ -426,7 +428,7 @@ EXPECTED_RESIDUAL_RISK = "cloudflare_workers_scripts_write_account_scope"
 # contains its own body digest; this independent code pin prevents a caller from
 # changing the contract and merely recomputing that self-declared digest.
 PINNED_MANIFEST_DIGEST = (
-    "sha256:5217997c4394b48ca7eb513afd960329c37c9fcaff2b1d388450e30a062d3c99"
+    "sha256:2fa6f242d266ca832bcd446ac3349e71536049463f40804d6ae2ec17ad39c982"
 )
 
 _BROAD_CAPABILITY_TOKENS = frozenset(
@@ -551,8 +553,10 @@ def _expected_cloudflare_resources(
             {
                 "provider": "cloudflare",
                 "kind": "r2",
-                "resource_ref": f"cloudflare:{environment}:r2:quant-raw{suffix}",
-                "access": "create_only_read",
+                "resource_ref": (
+                    f"cloudflare:{environment}:r2:quant-receipt-evidence{suffix}"
+                ),
+                "access": "authority_evidence_create_only_readback",
             },
             {
                 "provider": "cloudflare",
@@ -560,13 +564,13 @@ def _expected_cloudflare_resources(
                 "resource_ref": (
                     f"cloudflare:{environment}:r2:quant-structured{suffix}"
                 ),
-                "access": "create_only_read",
+                "access": "shared_product_write_readback_nonexclusive",
             },
             {
                 "provider": "cloudflare",
                 "kind": "d1",
                 "resource_ref": f"cloudflare:{environment}:d1:quant-ingest{suffix}",
-                "access": "segment_reconcile_receipt_append",
+                "access": "segment_product_evidence_read_write",
             },
             {
                 "provider": "cloudflare",

@@ -159,9 +159,11 @@
       ],
       "capabilities": [
         "jquants_acquisition:fetch_governed_page",
-        "raw_immutable:create_only",
-        "structured_immutable:create_only",
+        "authority_evidence_r2:create_only_readback",
+        "product_materialization_d1:write_exact",
+        "product_materialization_r2:write_readback",
         "structured_natural_key:segment_read",
+        "ingestion_evidence:append_run_raw",
         "receipt_ledger:append",
         "receipt_signature:sign",
         "receipt_key_registration:export_public"
@@ -202,20 +204,20 @@
             {
               "provider": "cloudflare",
               "kind": "r2",
-              "resource_ref": "cloudflare:staging:r2:quant-raw-staging",
-              "access": "create_only_read"
+              "resource_ref": "cloudflare:staging:r2:quant-receipt-evidence-staging",
+              "access": "authority_evidence_create_only_readback"
             },
             {
               "provider": "cloudflare",
               "kind": "r2",
               "resource_ref": "cloudflare:staging:r2:quant-structured-staging",
-              "access": "create_only_read"
+              "access": "shared_product_write_readback_nonexclusive"
             },
             {
               "provider": "cloudflare",
               "kind": "d1",
               "resource_ref": "cloudflare:staging:d1:quant-ingest-staging",
-              "access": "segment_reconcile_receipt_append"
+              "access": "segment_product_evidence_read_write"
             },
             {
               "provider": "cloudflare",
@@ -261,20 +263,20 @@
             {
               "provider": "cloudflare",
               "kind": "r2",
-              "resource_ref": "cloudflare:production:r2:quant-raw",
-              "access": "create_only_read"
+              "resource_ref": "cloudflare:production:r2:quant-receipt-evidence",
+              "access": "authority_evidence_create_only_readback"
             },
             {
               "provider": "cloudflare",
               "kind": "r2",
               "resource_ref": "cloudflare:production:r2:quant-structured",
-              "access": "create_only_read"
+              "access": "shared_product_write_readback_nonexclusive"
             },
             {
               "provider": "cloudflare",
               "kind": "d1",
               "resource_ref": "cloudflare:production:d1:quant-ingest",
-              "access": "segment_reconcile_receipt_append"
+              "access": "segment_product_evidence_read_write"
             },
             {
               "provider": "cloudflare",
@@ -813,5 +815,5 @@
       }
     }
   },
-  "manifest_digest": "sha256:5217997c4394b48ca7eb513afd960329c37c9fcaff2b1d388450e30a062d3c99"
+  "manifest_digest": "sha256:2fa6f242d266ca832bcd446ac3349e71536049463f40804d6ae2ec17ad39c982"
 }
