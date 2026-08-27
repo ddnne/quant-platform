@@ -48,7 +48,7 @@ function productLine(row: CanonicalStructuredRow): string {
   });
 }
 
-function compareUtf8Text(left: string, right: string): number {
+export function compareUtf8Text(left: string, right: string): number {
   const encoder = new TextEncoder();
   const leftBytes = encoder.encode(left);
   const rightBytes = encoder.encode(right);

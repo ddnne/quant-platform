@@ -15,7 +15,10 @@ import type {
 } from "../../ingestion-secrets/src/jquants_acquisition_types";
 import { canonicalDigest, sha256Digest } from "../src/canonical";
 import { ReceiptEvidenceAuthority } from "../src/authority_do";
-import { canonicalProductBody } from "../src/product_materialization";
+import {
+  canonicalProductBody,
+  compareUtf8Text,
+} from "../src/product_materialization";
 import {
   unwrapEd25519PrivateKey,
   wrapEd25519PrivateKey,
@@ -225,6 +228,24 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(await sha256Digest(new TextEncoder().encode(body))).toBe(
       "sha256:fc5f92e255656fa9c17298cc492b6f72ee1c647fa47a749174ea66c290f9dc8e",
     );
+  });
+  it("uses SQLite BINARY-compatible UTF-8 order for non-ASCII natural keys", () => {
+    const keys = ["あ", "z", "é", "A", "😀"];
+    const actual = [...keys].sort(compareUtf8Text);
+    const encoder = new TextEncoder();
+    const expected = [...keys].sort((left, right) => {
+      const leftBytes = encoder.encode(left);
+      const rightBytes = encoder.encode(right);
+      const length = Math.min(leftBytes.length, rightBytes.length);
+      for (let index = 0; index < length; index += 1) {
+        if (leftBytes[index] !== rightBytes[index]) {
+          return leftBytes[index]! - rightBytes[index]!;
+        }
+      }
+      return leftBytes.length - rightBytes.length;
+    });
+    expect(actual).toEqual(expected);
+    expect(actual).toEqual(["A", "z", "é", "あ", "😀"]);
   });
   it("has no public HTTP surface and exposes only typed service RPC", async () => {
     const rpc = workerExports.default as unknown as ReceiptEvidenceAuthorityRpc & Fetcher;

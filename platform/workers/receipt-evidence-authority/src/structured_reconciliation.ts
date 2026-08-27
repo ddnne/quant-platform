@@ -17,6 +17,7 @@ import {
   type Capture,
 } from "./raw_capture";
 import {
+  compareUtf8Text,
   materializeProduct,
   type CanonicalStructuredRow,
 } from "./product_materialization";
@@ -252,7 +253,7 @@ export async function reconcileStructured(
     throw new Error("structured natural-key readback does not reconcile raw rows");
   }
   expectedRows.sort((left, right) =>
-    left.natural_key.localeCompare(right.natural_key)
+    compareUtf8Text(left.natural_key, right.natural_key)
   );
   if (canonicalJson(stored) !== canonicalJson(expectedRows)) {
     throw new Error(
