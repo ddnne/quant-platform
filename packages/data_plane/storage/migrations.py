@@ -581,6 +581,34 @@ MIGRATIONS: tuple[Migration, ...] = (
         END;
         """,
     ),
+    Migration(
+        13,
+        "phase631_receipt_product_materializations",
+        """
+        CREATE TABLE IF NOT EXISTS receipt_product_materializations (
+            operation_id        TEXT PRIMARY KEY,
+            run_id              INTEGER NOT NULL UNIQUE,
+            source              TEXT NOT NULL CHECK (source = 'jquants'),
+            dataset             TEXT NOT NULL,
+            segment_id          TEXT NOT NULL,
+            artifact_key        TEXT NOT NULL UNIQUE,
+            artifact_digest     TEXT NOT NULL,
+            artifact_body       TEXT NOT NULL,
+            row_count           INTEGER NOT NULL CHECK (row_count > 0),
+            byte_count          INTEGER NOT NULL CHECK (byte_count > 0),
+            manifest_key        TEXT NOT NULL UNIQUE,
+            manifest_digest     TEXT NOT NULL,
+            raw_manifest_key    TEXT NOT NULL,
+            raw_manifest_digest TEXT NOT NULL,
+            raw_page_count      INTEGER NOT NULL CHECK (raw_page_count > 0),
+            raw_row_count       INTEGER NOT NULL CHECK (raw_row_count > 0),
+            raw_bytes           INTEGER NOT NULL CHECK (raw_bytes > 0),
+            committed_at        TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_receipt_product_segment
+            ON receipt_product_materializations(dataset,segment_id,run_id);
+        """,
+    ),
 )
 
 

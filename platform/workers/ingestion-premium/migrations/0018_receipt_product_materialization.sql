@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS receipt_product_materializations (
     segment_id          TEXT NOT NULL,
     artifact_key        TEXT NOT NULL UNIQUE,
     artifact_digest     TEXT NOT NULL,
+    artifact_body       TEXT NOT NULL,
     row_count           INTEGER NOT NULL CHECK (row_count > 0),
     byte_count          INTEGER NOT NULL CHECK (byte_count > 0),
     manifest_key        TEXT NOT NULL UNIQUE,

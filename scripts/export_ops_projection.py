@@ -41,6 +41,11 @@ from _bootstrap import ensure_repo_root  # noqa: E402
 ROOT = ensure_repo_root()
 
 from ops.projection_content import build_projection_content_manifest  # noqa: E402
+from ops.receipt_product import (  # noqa: E402
+    canonical_product_artifact_bytes,
+    product_artifact_body_digest,
+    product_artifact_digest,
+)
 from ops.projection_contract_snapshot import ProjectionContractSnapshot  # noqa: E402
 from ops.d1_sync_signing import d1_sync_digest  # noqa: E402
 from ops.projection_candidate import (  # noqa: E402
@@ -487,8 +492,13 @@ def _read_latest_runs(
     if duplicate_identity is not None:
         raise RuntimeError("ingestion_run_log contains a duplicate authority id")
     conn.row_factory = sqlite3.Row
+    authority_column = (
+        "authority_operation_id"
+        if "authority_operation_id" in available
+        else "NULL AS authority_operation_id"
+    )
     rows = conn.execute(
-        "SELECT id,ran_at,source,runtime,status,detail "
+        "SELECT id,ran_at,source,runtime,status,detail," + authority_column + " "
         "FROM main.ingestion_run_log "
         "ORDER BY id DESC,source,ran_at,runtime,status,detail LIMIT 100"
     ).fetchall()
@@ -512,6 +522,41 @@ def _canonical_jsda_datasets(
     if not datasets:
         raise RuntimeError("projection source inventory has no canonical JSDA datasets")
     return datasets
+
+
+def _decode_receipt_digests(
+    raw: Any, *, dataset: str, run_id: int
+) -> dict[str, Any]:
+    if type(raw) is not str:
+        raise RuntimeError(
+            f"collection_receipts has non-text digests_json for {dataset}/{run_id}"
+        )
+
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        decoded: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in decoded:
+                raise ValueError(f"duplicate key {key!r}")
+            decoded[key] = value
+        return decoded
+
+    try:
+        decoded = json.loads(
+            raw,
+            object_pairs_hook=reject_duplicates,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"non-finite value {value!r}")
+            ),
+        )
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"collection_receipts has invalid digests_json for {dataset}/{run_id}"
+        ) from exc
+    if type(decoded) is not dict:
+        raise RuntimeError(
+            f"collection_receipts digests_json is not an object for {dataset}/{run_id}"
+        )
+    return decoded
 
 
 def _read_latest_validation(
@@ -647,39 +692,6 @@ def _read_current_raw_acquisition_segments(
                 "collection_receipts run_id is not authority-bound to its source run"
             )
 
-    def decode_digests(raw: Any, *, dataset: str, run_id: int) -> dict[str, Any]:
-        if type(raw) is not str:
-            raise RuntimeError(
-                f"collection_receipts has non-text digests_json for {dataset}/{run_id}"
-            )
-
-        def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-            decoded: dict[str, Any] = {}
-            for key, value in pairs:
-                if key in decoded:
-                    raise ValueError(f"duplicate key {key!r}")
-                decoded[key] = value
-            return decoded
-
-        def reject_nonfinite(value: str) -> None:
-            raise ValueError(f"non-finite value {value!r}")
-
-        try:
-            decoded = json.loads(
-                raw,
-                object_pairs_hook=reject_duplicates,
-                parse_constant=reject_nonfinite,
-            )
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise RuntimeError(
-                f"collection_receipts has invalid digests_json for {dataset}/{run_id}"
-            ) from exc
-        if type(decoded) is not dict:
-            raise RuntimeError(
-                f"collection_receipts digests_json is not an object for {dataset}/{run_id}"
-            )
-        return decoded
-
     conn.row_factory = sqlite3.Row
     receipt_rows = conn.execute(
         "SELECT source,dataset,segment_id,run_id,digests_json "
@@ -716,7 +728,9 @@ def _read_current_raw_acquisition_segments(
                 "collection_receipts dataset/source mismatches frozen canonical "
                 f"inventory: {dataset} expects {expected_source}, got {source}"
             )
-        digests = decode_digests(row["digests_json"], dataset=dataset, run_id=run_id)
+        digests = _decode_receipt_digests(
+            row["digests_json"], dataset=dataset, run_id=run_id
+        )
         identity = (source, dataset, segment_id, run_id)
         recovered_only = is_recovered_only_digests(digests)
         if recovered_only:
@@ -832,6 +846,206 @@ def _read_current_raw_acquisition_segments(
             }
         )
     return projected
+
+
+def _read_receipt_product_materializations(
+    conn: sqlite3.Connection,
+    generation_id: str,
+) -> list[dict[str, Any]]:
+    receipt_columns = {
+        "source", "dataset", "segment_id", "segment_start", "segment_end",
+        "run_id", "structured_row_count", "digests_json",
+    }
+    if not receipt_columns <= _columns(conn, "collection_receipts"):
+        return []
+    conn.row_factory = sqlite3.Row
+    trusted_receipts: dict[tuple[str, str, str, int], dict[str, Any]] = {}
+    for row in conn.execute(
+        "SELECT source,dataset,segment_id,segment_start,segment_end,run_id,"
+        "structured_row_count,digests_json "
+        "FROM main.collection_receipts"
+    ).fetchall():
+        digests = _decode_receipt_digests(
+            row["digests_json"],
+            dataset=str(row["dataset"]),
+            run_id=int(row["run_id"]),
+        )
+        if not (
+            digests.get("eligibility") == "TRUSTED_COLLECTION"
+            and digests.get("issuer_class") == "SignedReceiptAuthority"
+        ):
+            continue
+        identity = (
+            str(row["source"]),
+            str(row["dataset"]),
+            str(row["segment_id"]),
+            int(row["run_id"]),
+        )
+        trusted_receipts[identity] = {
+            "digests": digests,
+            "structured_row_count": int(row["structured_row_count"]),
+            "segment_start": str(row["segment_start"]),
+            "segment_end": str(row["segment_end"]),
+        }
+    if not trusted_receipts:
+        return []
+
+    required = {
+        "operation_id", "run_id", "source", "dataset", "segment_id",
+        "artifact_key", "artifact_digest", "artifact_body", "row_count", "byte_count",
+        "manifest_key", "manifest_digest", "raw_manifest_key",
+        "raw_manifest_digest", "raw_page_count", "raw_row_count", "raw_bytes",
+        "committed_at",
+    }
+    available = _columns(conn, "receipt_product_materializations")
+    if not required <= available:
+        raise RuntimeError(
+            "trusted receipts have no exact product materialization export: missing="
+            + ",".join(sorted(required - available))
+        )
+    rows = conn.execute(
+        "SELECT " + ",".join(sorted(required))
+        + " FROM main.receipt_product_materializations ORDER BY run_id,operation_id"
+    ).fetchall()
+    observed: dict[tuple[str, str, str, int], dict[str, Any]] = {}
+    for raw in rows:
+        row = dict(raw)
+        try:
+            identity = (
+                str(row["source"]),
+                str(row["dataset"]),
+                str(row["segment_id"]),
+                int(row["run_id"]),
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("product materialization identity is invalid") from exc
+        if identity in observed:
+            raise RuntimeError("duplicate product materialization identity")
+        if identity not in trusted_receipts:
+            raise RuntimeError(
+                "product materialization has no exact trusted receipt: "
+                + "/".join(map(str, identity))
+            )
+        receipt = trusted_receipts[identity]
+        digests = receipt["digests"]
+        structured_count = receipt["structured_row_count"]
+        sha_fields = (
+            "artifact_digest", "manifest_digest", "raw_manifest_digest"
+        )
+        if (
+            not isinstance(row["operation_id"], str)
+            or not row["operation_id"].startswith("sha256:")
+            or len(row["operation_id"]) != 71
+            or any(
+                not isinstance(row[field], str)
+                or not row[field].startswith("sha256:")
+                or len(row[field]) != 71
+                for field in sha_fields
+            )
+            or row["artifact_digest"] != digests.get("structured_digest")
+            or product_artifact_body_digest(row["artifact_body"])
+            != row["artifact_digest"]
+            or len(row["artifact_body"].encode("utf-8")) != row["byte_count"]
+            or row["raw_manifest_digest"] != digests.get("raw_manifest_digest")
+            or row["row_count"] != structured_count
+            or not isinstance(row["byte_count"], int)
+            or row["byte_count"] <= 0
+            or not isinstance(row["raw_page_count"], int)
+            or row["raw_page_count"] <= 0
+            or not isinstance(row["raw_row_count"], int)
+            or row["raw_row_count"] <= 0
+            or not isinstance(row["raw_bytes"], int)
+            or row["raw_bytes"] <= 0
+            or not all(
+                isinstance(row[field], str) and bool(row[field])
+                for field in ("artifact_key", "manifest_key", "raw_manifest_key")
+            )
+        ):
+            raise RuntimeError(
+                "trusted receipt/product materialization digest chain differs: "
+                + "/".join(map(str, identity))
+            )
+        run_columns = _columns(conn, "ingestion_run_log")
+        if "authority_operation_id" not in run_columns:
+            raise RuntimeError(
+                "trusted receipt run is missing authority operation binding"
+            )
+        run = conn.execute(
+            "SELECT id,source,runtime,status,authority_operation_id "
+            "FROM main.ingestion_run_log WHERE id=?",
+            (identity[3],),
+        ).fetchall()
+        if len(run) != 1 or (
+            run[0]["id"] != identity[3]
+            or run[0]["source"] != "jquants"
+            or run[0]["runtime"] != "receipt-evidence-authority"
+            or run[0]["status"] != "SUCCESS"
+            or run[0]["authority_operation_id"] != row["operation_id"]
+        ):
+            raise RuntimeError(
+                "product materialization is not bound to exact ingestion run: "
+                + "/".join(map(str, identity))
+            )
+        raw_evidence = conn.execute(
+            "SELECT manifest_key,page_count,row_count,raw_bytes,data_digest "
+            "FROM main.raw_retention_manifests WHERE dataset=? AND run_id=?",
+            (identity[1], identity[3]),
+        ).fetchall()
+        if len(raw_evidence) != 1 or (
+            raw_evidence[0]["manifest_key"] != row["raw_manifest_key"]
+            or raw_evidence[0]["page_count"] != row["raw_page_count"]
+            or raw_evidence[0]["row_count"] != row["raw_row_count"]
+            or raw_evidence[0]["raw_bytes"] != row["raw_bytes"]
+            or raw_evidence[0]["data_digest"] != row["raw_manifest_digest"]
+        ):
+            raise RuntimeError(
+                "product materialization is not bound to exact raw evidence: "
+                + "/".join(map(str, identity))
+            )
+        product_rows = [
+            dict(product_row)
+            for product_row in conn.execute(
+                "SELECT source,dataset,natural_key,event_time,available_at,"
+                "ingested_at,payload,raw_payload FROM main.jquants_records "
+                "WHERE source=? AND dataset=? "
+                "AND substr(event_time,1,10)>=? AND substr(event_time,1,10)<=? "
+                "ORDER BY natural_key",
+                (
+                    identity[0],
+                    identity[1],
+                    receipt["segment_start"][:10],
+                    receipt["segment_end"][:10],
+                ),
+            ).fetchall()
+        ]
+        try:
+            observed_digest = product_artifact_digest(product_rows)
+        except ValueError as exc:
+            raise RuntimeError(
+                "governed product materialization cannot be reproduced: "
+                + "/".join(map(str, identity))
+            ) from exc
+        if (
+            len(product_rows) != structured_count
+            or observed_digest != row["artifact_digest"]
+            or canonical_product_artifact_bytes(product_rows).decode("utf-8")
+            != row["artifact_body"]
+        ):
+            raise RuntimeError(
+                "governed product rows differ from signed materialization: "
+                + "/".join(map(str, identity))
+            )
+        observed[identity] = row
+    missing = set(trusted_receipts) - set(observed)
+    if missing:
+        raise RuntimeError(
+            "trusted receipt product materialization is missing: "
+            + ",".join("/".join(map(str, item)) for item in sorted(missing))
+        )
+    return [
+        {"projection_generation_id": generation_id, **observed[identity]}
+        for identity in sorted(observed)
+    ]
 
 
 def _read_sla_rows(
@@ -1125,6 +1339,9 @@ def _render_projection_bundle(
         raw_segments = _read_current_raw_acquisition_segments(
             conn, gen, contract_snapshot
         )
+        product_materializations = _read_receipt_product_materializations(
+            conn, gen
+        )
         applied_cursor, applied_updated_at = _read_applied_cursor(conn)
         if source_cursor is None:
             source_cursor = coerce_applied_seq(
@@ -1205,6 +1422,7 @@ def _render_projection_bundle(
             "runs": runs,
             "validation": validation,
             "raw_segments": raw_segments,
+            "product_materializations": product_materializations,
             "watermarks": watermarks,
             "b0": b0,
             "ready_state": ready_state,
@@ -1311,7 +1529,7 @@ def _render_projection_bundle(
         ), sla_rows),
         ("ingestion_run_log", (
             "projection_generation_id", "id", "ran_at", "source", "runtime",
-            "status", "detail",
+            "status", "detail", "authority_operation_id",
         ), runs),
         ("ingestion_validation", (
             "projection_generation_id", "run_id", "dataset", "status",
@@ -1322,6 +1540,13 @@ def _render_projection_bundle(
             "manifest_key", "page_count", "row_count", "raw_bytes", "data_digest",
             "completeness", "created_at", "reason",
         ), raw_segments),
+        ("receipt_product_materializations", (
+            "projection_generation_id", "operation_id", "run_id", "source",
+            "dataset", "segment_id", "artifact_key", "artifact_digest",
+            "artifact_body", "row_count", "byte_count", "manifest_key", "manifest_digest",
+            "raw_manifest_key", "raw_manifest_digest", "raw_page_count",
+            "raw_row_count", "raw_bytes", "committed_at",
+        ), product_materializations),
         ("ingestion_watermarks", (
             "projection_generation_id", "dataset", "last_event_date",
             "last_ingested_at", "last_export_cursor",
@@ -1361,6 +1586,9 @@ def _render_projection_bundle(
     evidence_digests = {
         "coverage": coverage_digest,
         "raw_retention": _content_digest({"raw_retention": raw_segments}),
+        "product_materializations": _content_digest(
+            {"product_materializations": product_materializations}
+        ),
         "validation": _content_digest({"validation": validation}),
         "ready": _content_digest(
             {"state": ready_state, "snapshots": ready_rows, "quality": quality_rows}
@@ -1440,6 +1668,7 @@ def _render_projection_bundle(
         "dataset_coverage", "coverage_segments", "endpoint_inventory",
         "collection_sla_status", "ingestion_run_log", "ingestion_validation",
         "raw_retention_manifests", "ingestion_watermarks", "ops_sync_feed",
+        "receipt_product_materializations",
         "ops_projection_metadata", "ops_b0_status", "ops_ready_state",
         "ops_ready_snapshots", "ops_snapshot_quality",
         "ops_storage_plane_status", "ops_alerts",

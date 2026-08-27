@@ -25,6 +25,7 @@ PROJECTED_CONTENT_TABLES = (
     "ops_storage_plane_status",
     "ops_sync_feed",
     "raw_retention_manifests",
+    "receipt_product_materializations",
 )
 
 

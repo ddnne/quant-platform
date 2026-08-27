@@ -335,6 +335,7 @@ def reconcile_test_evidence(
     checked_at: str,
     source_request: Mapping[str, Any] | None = None,
     extra_evidence: Mapping[str, Any] | None = None,
+    structured_digest: str | None = None,
 ) -> TestReconciledEvidence:
     """Build closed claims strictly for verifier/policy unit tests."""
     pages = tuple(bytes(page) for page in raw_pages)
@@ -392,7 +393,11 @@ def reconcile_test_evidence(
         ),
         "raw_manifest_digest": canonical_evidence_digest({"pages": manifest}),
         "raw_digest": raw_digest,
-        "structured_digest": canonical_evidence_digest(list(structured_rows)),
+        "structured_digest": (
+            structured_digest
+            if structured_digest is not None
+            else canonical_evidence_digest(list(structured_rows))
+        ),
         "structured_generation": int(run_id),
         "scope_digest": canonical_evidence_digest(scope),
         "run_id": int(run_id),

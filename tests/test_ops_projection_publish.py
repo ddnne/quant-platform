@@ -48,7 +48,9 @@ from tests.ops_projection_signing_support import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION = ROOT / "platform/workers/quant-ops-mcp/migrations/projection/0001_ops_projection.sql"
+MIGRATIONS = sorted(
+    (ROOT / "platform/workers/quant-ops-mcp/migrations/projection").glob("*.sql")
+)
 
 
 def verify_pinned_ops_projection(document):
@@ -138,7 +140,8 @@ def _source(path: Path) -> None:
 
 def _target() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
-    conn.executescript(MIGRATION.read_text(encoding="utf-8"))
+    for migration in MIGRATIONS:
+        conn.executescript(migration.read_text(encoding="utf-8"))
     return conn
 
 
@@ -1031,7 +1034,8 @@ def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
     assert envelope["b0_status"] == "UNKNOWN"
     assert envelope["b4_status"] == "UNKNOWN"
     assert set(envelope["evidence_digests"]) == {
-        "coverage", "raw_retention", "ready", "storage", "sync", "validation"
+        "coverage", "product_materializations", "raw_retention", "ready",
+        "storage", "sync", "validation"
     }
     derived = registry.verified_dataset_evidence(
         signed_envelope, ["equities_bars_daily"]

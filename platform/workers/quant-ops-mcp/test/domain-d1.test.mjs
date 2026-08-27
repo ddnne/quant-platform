@@ -41,6 +41,9 @@ function d1(db) {
 const projectionMigration = readFileSync(
   new URL("../migrations/projection/0001_ops_projection.sql", import.meta.url),
   "utf8",
+) + readFileSync(
+  new URL("../migrations/projection/0002_receipt_product_materializations.sql", import.meta.url),
+  "utf8",
 );
 const quotaMigration = readFileSync(
   new URL("../migrations/quota/0001_remote_daily_quota.sql", import.meta.url),

@@ -11,9 +11,8 @@ from storage.sqlite_store import SqliteStore
 from tests.ops_projection_signing_support import render_projection_bundle_for_test
 
 ROOT = Path(__file__).resolve().parents[1]
-PROJECTION_MIGRATION = (
-    ROOT
-    / "platform/workers/quant-ops-mcp/migrations/projection/0001_ops_projection.sql"
+PROJECTION_MIGRATIONS = sorted(
+    (ROOT / "platform/workers/quant-ops-mcp/migrations/projection").glob("*.sql")
 )
 
 
@@ -81,7 +80,8 @@ def _source_db(path: Path, *, applied: int | None) -> None:
 
 def _target() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
-    conn.executescript(PROJECTION_MIGRATION.read_text(encoding="utf-8"))
+    for migration in PROJECTION_MIGRATIONS:
+        conn.executescript(migration.read_text(encoding="utf-8"))
     return conn
 
 

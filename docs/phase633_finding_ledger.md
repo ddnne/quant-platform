@@ -20,8 +20,8 @@ pass.
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
 | D1 | Fixed allowlists were intersected with PIT master only on the first day | FIXED | `d99083f4`; daily listing/delisting invariant tests |
-| D2 | COMPLETE issuer accepted caller-originated parsed rows, counts, digests, and exhaustion state | OPEN | `3ced05dc` contains product minting behind a one-shot reconciled-evidence handle, but a separately privileged authority must still reparse immutable raw, normalize canonically, reread exact natural keys, prove exhaustion, rotate the key, and reprove eligible datasets |
-| D3 | A same-UID importable signing oracle could mint signed SUCCESS outside governed ingestion | OPEN | `3ced05dc` makes product receipt crypto verify-only and removes HOME/env private-key fallback; closure still requires a dedicated evidence-authority principal with a fresh key and a non-COMPLETE recovery path |
+| D2 | COMPLETE issuer accepted caller-originated parsed rows, counts, digests, and exhaustion state | OPEN | The source candidate removes the claims DTO/RPC seam, reparses authority-acquired raw, exact-compares D1 product rows, signs the product artifact digest, and rehashes the same exported bytes through sync, Ops projection, and READY. The shared `quant-structured` product bucket is not authority-exclusive or create-only, however, and READY does not yet refetch the live R2 object, so a post-write replacement remains undetected. Closure still requires an authority-owned immutable/versioned product evidence surface (or exact live object version/etag refetch), a fresh activated key, and eligible-dataset reproof. |
+| D3 | A same-UID importable signing oracle could mint signed SUCCESS outside governed ingestion | OPEN | The source candidate exposes only a closed dataset/segment request and keeps signing/finalization inside the authority-owned pipeline. Operational closure still requires the dedicated evidence-authority principal, fresh key activation, non-COMPLETE recovery path, and D2 product-object immutability proof. |
 | D4 | JSDA publication labels were used as quote-effective dates | FIXED | `56d4fcf9`; `2002-08-02 -> 2002-08-01`, `2002-08-05 -> 2002-08-02` |
 | D7 | Signed receipt closure inputs could change between verification and serialization | FIXED | `3836f069`; exact receipt, digest and claims are frozen once before signing; independent review P0/P1=0 |
 
@@ -112,7 +112,11 @@ A7 is structurally fixed by the single pinned finding-ledger authority and its
 four fail-closed release entrypoints. The Coverage/READY candidate still has P0
 rows D2, D3, R5, R10, R11, C4, C10 and A2 unresolved. D7 and the
 C11/C13/C14 descriptor boundary fixes do not substitute for the dedicated
-Receipt or trusted renderer/signing principals required by D2/D3/C4/A2. Raw
+Receipt or trusted renderer/signing principals required by D2/D3/C4/A2. The
+source candidate's digest-preserving D1/R2 export chain does not make the shared
+`quant-structured` bucket authority-exclusive and cannot detect replacement of
+the live R2 object after its initial readback; that residual remains part of D2.
+Raw
 same-inode same-UID pwrite and private-consumer isolation remain under A2; C9
 and C12 likewise do not close the separately provisioned transition authority
 required by C10. Release, publication and Controlled Pilot remain blocked.

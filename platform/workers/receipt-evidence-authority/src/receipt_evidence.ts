@@ -124,7 +124,8 @@ export async function commitReceipt(
   const receiptDigest = await canonicalDigest(receipt);
   const operation = await env.DB.prepare(
     `SELECT run_id,dataset,segment_id,state,raw_manifest_key,
-            raw_manifest_digest,raw_page_count,raw_row_count,raw_bytes
+            raw_manifest_digest,raw_page_count,raw_row_count,raw_bytes,
+            structured_manifest_key,structured_digest
        FROM receipt_authority_operations WHERE operation_id=?`,
   ).bind(operationId).first<{
     run_id: number;
@@ -136,6 +137,8 @@ export async function commitReceipt(
     raw_page_count: number;
     raw_row_count: number;
     raw_bytes: number;
+    structured_manifest_key: string;
+    structured_digest: string;
   }>();
   if (
     operation === null ||
@@ -146,13 +149,41 @@ export async function commitReceipt(
     operation.raw_page_count !== receipt.raw_page_count ||
     operation.raw_row_count !== receipt.raw_row_count ||
     operation.raw_manifest_digest !== receipt.digests.raw_manifest_digest ||
+    operation.structured_digest !== receipt.digests.structured_digest ||
+    !operation.structured_manifest_key ||
     !operation.raw_manifest_key || operation.raw_bytes <= 0
   ) throw new Error("receipt commit is not bound to the measured run/raw evidence");
+  const product = await env.DB.prepare(
+    `SELECT operation_id,run_id,source,dataset,segment_id,artifact_key,
+            artifact_digest,artifact_body,row_count,byte_count,manifest_key,manifest_digest,
+            raw_manifest_key,raw_manifest_digest,raw_page_count,raw_row_count,
+            raw_bytes,committed_at
+       FROM receipt_product_materializations WHERE operation_id=?`,
+  ).bind(operationId).first<Record<string, unknown>>();
+  if (
+    product === null || product.operation_id !== operationId ||
+    product.run_id !== receipt.run_id || product.source !== receipt.source ||
+    product.dataset !== receipt.dataset || product.segment_id !== receipt.segment_id ||
+    product.artifact_digest !== receipt.digests.structured_digest ||
+    typeof product.artifact_body !== "string" || !product.artifact_body ||
+    product.row_count !== receipt.structured_row_count ||
+    product.manifest_key !== operation.structured_manifest_key ||
+    product.raw_manifest_key !== operation.raw_manifest_key ||
+    product.raw_manifest_digest !== operation.raw_manifest_digest ||
+    product.raw_page_count !== receipt.raw_page_count ||
+    product.raw_row_count !== receipt.raw_row_count ||
+    product.raw_bytes !== operation.raw_bytes ||
+    product.committed_at !== receipt.checked_at ||
+    typeof product.artifact_key !== "string" || !product.artifact_key ||
+    typeof product.manifest_digest !== "string" || !product.manifest_digest ||
+    typeof product.byte_count !== "number" || product.byte_count <= 0
+  ) throw new Error("signed digest is not bound to the product materialization");
   const successDetail = canonicalJson({
     schema_version: "receipt-authority-ingestion-result/v1",
     operation_id: operationId,
     receipt_digest: receiptDigest,
     structured_digest: receipt.digests.structured_digest,
+    product_artifact_key: product.artifact_key,
     raw_manifest_digest: operation.raw_manifest_digest,
   });
   await env.DB.batch([

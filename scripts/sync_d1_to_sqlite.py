@@ -180,6 +180,7 @@ _NO_AVAILABLE_AT_TABLES = frozenset({
     "raw_retention_manifests",
     "coverage_segments",
     "collection_receipts",
+    "receipt_product_materializations",
 })
 
 
@@ -215,7 +216,8 @@ def _ensure_control_tables(conn: sqlite3.Connection) -> None:
             failed INTEGER,
             rows_inserted INTEGER,
             raw_bytes INTEGER,
-            triggered_by TEXT
+            triggered_by TEXT,
+            authority_operation_id TEXT
         );
         CREATE TABLE IF NOT EXISTS ingestion_watermarks (
             dataset TEXT PRIMARY KEY,
@@ -270,7 +272,38 @@ def _ensure_control_tables(conn: sqlite3.Connection) -> None:
             detail_json TEXT NOT NULL,
             PRIMARY KEY (source, dataset, segment_id, policy_version)
         );
+        CREATE TABLE IF NOT EXISTS receipt_product_materializations (
+            operation_id TEXT PRIMARY KEY,
+            run_id INTEGER NOT NULL UNIQUE,
+            source TEXT NOT NULL,
+            dataset TEXT NOT NULL,
+            segment_id TEXT NOT NULL,
+            artifact_key TEXT NOT NULL UNIQUE,
+            artifact_digest TEXT NOT NULL,
+            artifact_body TEXT NOT NULL,
+            row_count INTEGER NOT NULL,
+            byte_count INTEGER NOT NULL,
+            manifest_key TEXT NOT NULL UNIQUE,
+            manifest_digest TEXT NOT NULL,
+            raw_manifest_key TEXT NOT NULL,
+            raw_manifest_digest TEXT NOT NULL,
+            raw_page_count INTEGER NOT NULL,
+            raw_row_count INTEGER NOT NULL,
+            raw_bytes INTEGER NOT NULL,
+            committed_at TEXT NOT NULL
+        );
         """
+    )
+    run_columns = _local_table_columns(conn, "ingestion_run_log")
+    if "authority_operation_id" not in run_columns:
+        conn.execute(
+            "ALTER TABLE ingestion_run_log ADD COLUMN authority_operation_id TEXT"
+        )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS "
+        "ux_local_ingestion_run_authority_operation "
+        "ON ingestion_run_log(authority_operation_id) "
+        "WHERE authority_operation_id IS NOT NULL"
     )
     conn.execute(
         """
@@ -372,6 +405,8 @@ def _sync_control_plane(
                 }
             )
         )
+    elif table == "receipt_product_materializations" and "operation_id" in cols:
+        sql = f"INSERT OR IGNORE INTO {table} ({col_list}) VALUES ({placeholders})"
     elif "id" in cols:
         sql = (
             f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})"
@@ -381,6 +416,15 @@ def _sync_control_plane(
     n = 0
     for row in cleaned:
         conn.execute(sql, [row.get(c) for c in cols])
+        if table == "receipt_product_materializations":
+            stored = conn.execute(
+                f"SELECT {col_list} FROM {table} WHERE operation_id=?",
+                (row["operation_id"],),
+            ).fetchone()
+            if stored is None or dict(zip(cols, stored, strict=True)) != row:
+                raise ValueError(
+                    "local receipt product materialization differs from export"
+                )
         n += 1
     conn.commit()
     return len(rows), n

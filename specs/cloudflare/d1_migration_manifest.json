@@ -155,7 +155,7 @@
         {
           "migration_id": "quant-ingest:0018_receipt_product_materialization",
           "path": "platform/workers/ingestion-premium/migrations/0018_receipt_product_materialization.sql",
-          "checksum": "sha256:df0c2a1df86a3c32e99167b9dfb054fcb11076f7c7e1f33f6aa6e8350b9b32c4",
+          "checksum": "sha256:75f98077836325a2e9e746bc9e38d0495a91f11e8fb8b338ac4a06d9480e1cde",
           "order": 18,
           "depends_on": "quant-ingest:0017_receipt_authority_run_evidence"
         }
@@ -198,6 +198,13 @@
           "checksum": "sha256:18fe5cbae5d404e9f111b4c841047db8b72c25f9cc70c7fe5d5ffcf8ff4b30f0",
           "order": 1,
           "depends_on": null
+        },
+        {
+          "migration_id": "quant-ops-projection:0002_receipt_product_materializations",
+          "path": "platform/workers/quant-ops-mcp/migrations/projection/0002_receipt_product_materializations.sql",
+          "checksum": "sha256:368327caabf5e077fea65b7c21be2c9ad205166b34cff069fe6c1bc6e47ffc4f",
+          "order": 2,
+          "depends_on": "quant-ops-projection:0001_ops_projection"
         }
       ]
     },

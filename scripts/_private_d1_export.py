@@ -61,6 +61,7 @@ GOVERNED_D1_SYNC_TABLES: tuple[str, ...] = (
     "raw_retention_manifests",
     "coverage_segments",
     "collection_receipts",
+    "receipt_product_materializations",
 )
 
 

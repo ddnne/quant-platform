@@ -22,6 +22,7 @@ export const PROJECTED_CONTENT_TABLES = Object.freeze([
   "ops_storage_plane_status",
   "ops_sync_feed",
   "raw_retention_manifests",
+  "receipt_product_materializations",
 ]);
 
 const PROJECTED_CONTENT_TABLE_SET = new Set(PROJECTED_CONTENT_TABLES);

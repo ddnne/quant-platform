@@ -10,6 +10,16 @@ The implementation commit does not provision Cloudflare resources, install a
 secret, run a migration, deploy a Worker, register a key, or make an existing
 receipt eligible for `COMPLETE`.
 
+The authority's dedicated evidence bucket and the shared research product
+bucket are different capabilities. `RECEIPT_EVIDENCE_BUCKET` holds
+authority-owned reconciliation evidence. `PRODUCT_MATERIALIZATION_BUCKET`
+points at shared `quant-structured`; other product-plane bindings can write to
+that bucket, so it is neither authority-exclusive nor a create-only capability.
+The source pipeline performs an exact write/readback and carries those exact
+bytes through export, sync, Ops projection, and READY, but it does not yet
+refetch the live R2 object at READY time. Post-write R2 replacement detection
+therefore remains a D2 activation blocker.
+
 ## Safety boundary
 
 The authority Worker is callable only through its typed Service Binding. Its
@@ -197,4 +207,8 @@ The repository contains the inactive implementation and test evidence only.
 Staging and production remain PENDING and unprovisioned. The first deployment,
 secret installation, public registration capture, registry review, ACTIVE
 deployment, segment re-proof, and final operational sign-off remain explicit
-human/account-authorized actions.
+human/account-authorized actions. The shared-product R2 version/etag or
+authority-exclusive immutability design and live refetch verification must also
+be reviewed and implemented before D2 can close; the current exported
+`artifact_body` detects downstream export/sync/projection mutation but is not
+evidence that the shared live object remained unchanged after initial readback.

@@ -13,8 +13,9 @@ import {
 import type {
   AcquisitionResponseMetadataV2,
 } from "../../ingestion-secrets/src/jquants_acquisition_types";
-import { canonicalDigest } from "../src/canonical";
+import { canonicalDigest, sha256Digest } from "../src/canonical";
 import { ReceiptEvidenceAuthority } from "../src/authority_do";
+import { canonicalProductBody } from "../src/product_materialization";
 import {
   unwrapEd25519PrivateKey,
   wrapEd25519PrivateKey,
@@ -207,6 +208,24 @@ afterEach(() => {
 });
 
 describe("Receipt Evidence Authority in workerd", () => {
+  it("renders the cross-language product JSONL vector in UTF-8 key order", async () => {
+    const rows = ["z-key", "a-key"].map((naturalKey) => ({
+      source: "jquants" as const,
+      dataset: "indices_bars_daily_topix",
+      natural_key: naturalKey,
+      event_time: "2024-02-01T00:00:00Z",
+      available_at: "2024-02-01T00:00:00Z",
+      ingested_at: "2024-02-02T00:00:00Z",
+      payload: `{"key":"${naturalKey}"}`,
+      raw_payload: `{"key":"${naturalKey}"}`,
+      row_digest: "sha256:" + "0".repeat(64),
+    }));
+    const body = canonicalProductBody(rows);
+    expect(body.indexOf("a-key")).toBeLessThan(body.indexOf("z-key"));
+    expect(await sha256Digest(new TextEncoder().encode(body))).toBe(
+      "sha256:fc5f92e255656fa9c17298cc492b6f72ee1c647fa47a749174ea66c290f9dc8e",
+    );
+  });
   it("has no public HTTP surface and exposes only typed service RPC", async () => {
     const rpc = workerExports.default as unknown as ReceiptEvidenceAuthorityRpc & Fetcher;
     const response = await rpc.fetch(new Request("https://authority.invalid/health"));
@@ -430,6 +449,33 @@ describe("Receipt Evidence Authority in workerd", () => {
     ).first<{ count: number }>()).toEqual({ count: 0 });
   });
 
+  it("rejects a poisoned research product preinsert before signing", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    await runtimeEnv.DB.prepare(
+      `CREATE TRIGGER poison_governed_product
+       AFTER INSERT ON receipt_authority_operations
+       BEGIN
+         INSERT INTO jquants_records
+         (source,dataset,natural_key,event_time,available_at,ingested_at,payload,raw_payload)
+         VALUES ('jquants',NEW.dataset,'{"Date":"2024-02-01"}',
+                 '2024-02-01T00:00:00Z','2024-02-01T00:00:00Z',NEW.checked_at,
+                 '{}','{"Date":"2024-02-01","Open":1,"Close":2}');
+       END`,
+    ).run();
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment({
+        ...request,
+        request_nonce: "8".repeat(64),
+      })
+    )).rejects.toThrow(
+      "governed jquants_records fields differ from canonical raw normalization",
+    );
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS count FROM collection_receipts",
+    ).first<{ count: number }>()).toEqual({ count: 0 });
+  });
+
   it("makes reconciled rows, committed receipts, and authority history append-only", async () => {
     const { stub } = await activateRegisteredTestKey();
     installAuthorityAcquisition();
@@ -465,6 +511,38 @@ describe("Receipt Evidence Authority in workerd", () => {
       row_count: 1,
       completeness: "ACQUIRED",
     });
+    const product = await runtimeEnv.DB.prepare(
+      `SELECT artifact_key,artifact_digest,row_count,manifest_key
+         FROM receipt_product_materializations WHERE run_id=?`,
+    ).bind(operation!.run_id).first<{
+      artifact_key: string;
+      artifact_digest: string;
+      row_count: number;
+      manifest_key: string;
+    }>();
+    expect(product).not.toBeNull();
+    expect(product!.artifact_digest).toBe(
+      result.receipt.digests.structured_digest,
+    );
+    expect(product!.row_count).toBe(result.receipt.structured_row_count);
+    const artifact = await runtimeEnv.PRODUCT_MATERIALIZATION_BUCKET.get(
+      product!.artifact_key,
+    );
+    expect(artifact).not.toBeNull();
+    expect(await sha256Digest(new Uint8Array(await artifact!.arrayBuffer())))
+      .toBe(product!.artifact_digest);
+    expect(await runtimeEnv.PRODUCT_MATERIALIZATION_BUCKET.get(
+      product!.manifest_key,
+    )).not.toBeNull();
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS count FROM jquants_records
+        WHERE source='jquants' AND dataset='indices_bars_daily_topix'`,
+    ).first<{ count: number }>()).toEqual({ count: 1 });
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS count FROM ingestion_change_log
+        WHERE table_name='jquants_records'
+          AND dataset='indices_bars_daily_topix'`,
+    ).first<{ count: number }>()).toEqual({ count: 1 });
 
     await expect(runtimeEnv.DB.prepare(
       `UPDATE receipt_authority_structured_rows SET payload='{}'

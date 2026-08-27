@@ -198,6 +198,7 @@ export async function executeReceiptRequest(
   const checkedAt = operation.checkedAt;
   const structured = await reconcileStructured(env, {
     operationId,
+    runId: operation.runId,
     capture,
     spec,
     checkedAt,

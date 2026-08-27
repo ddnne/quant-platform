@@ -1,6 +1,6 @@
 {
   "schema_version": "phase631-finding-ledger/v1",
-  "updated_at": "2026-08-26T16:44:05+09:00",
+  "updated_at": "2026-08-27T10:41:39+09:00",
   "merge_policy": {
     "required_p0_status": "FIXED",
     "independent_review_unresolved_p0": 0,
@@ -8,8 +8,8 @@
   },
   "findings": [
     {"id":"D1","area":"data_pit_receipt","severity":"P0","status":"FIXED","summary":"Fixed allowlist was not intersected with daily PIT master","evidence":"d99083f4"},
-    {"id":"D2","area":"data_pit_receipt","severity":"P0","status":"OPEN","summary":"COMPLETE issuer accepted caller-originated collection claims","evidence":"3ced05dc; product minting contained behind one-shot reconciled evidence","closure":"Dedicated authority principal reparses immutable raw, normalizes canonically, rereads exact natural keys, proves exhaustion, rotates the key and reproves eligible datasets"},
-    {"id":"D3","area":"data_pit_receipt","severity":"P0","status":"OPEN","summary":"Same-UID receipt signing oracle remained importable","evidence":"3ced05dc; product receipt crypto verify-only and HOME or env private-key fallback removed","closure":"Dedicated evidence-authority principal owns a fresh key and accepts only governed reconciliation handles; recovery remains non-COMPLETE"},
+    {"id":"D2","area":"data_pit_receipt","severity":"P0","status":"OPEN","summary":"COMPLETE issuer accepted caller-originated collection claims","evidence":"Source candidate removes the claims DTO and RPC seam, reparses authority-acquired raw, exact-compares D1 product rows, signs the product artifact digest, and rehashes exported bytes through sync Ops projection and READY; shared quant-structured remains non-exclusive and post-write live R2 replacement is not detected","closure":"Give the authority an immutable or version-pinned product evidence surface, refetch and verify the exact live object version before READY, activate a fresh key, and reprove eligible datasets"},
+    {"id":"D3","area":"data_pit_receipt","severity":"P0","status":"OPEN","summary":"Same-UID receipt signing oracle remained importable","evidence":"Source candidate exposes only a closed dataset and segment request and keeps signing and finalization inside the authority-owned pipeline","closure":"Provision and activate a dedicated evidence-authority principal and fresh key, preserve a non-COMPLETE recovery path, and close D2 product-object immutability"},
     {"id":"D4","area":"data_pit_receipt","severity":"P0","status":"FIXED","summary":"JSDA publication label was used as quote-effective date","evidence":"56d4fcf9"},
     {"id":"D7","area":"data_pit_receipt","severity":"P0","status":"FIXED","summary":"Signed receipt closure inputs could change between verification and serialization","evidence":"3836f069; exact receipt, digest and claims are frozen once before signing; independent review P0/P1=0"},
     {"id":"D5","area":"data_pit_receipt","severity":"P1","status":"HOLD","summary":"Existing COMPLETE receipts predate final trusted path","closure":"Trusted reproof before COMPLETE eligibility"},

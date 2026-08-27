@@ -14,25 +14,16 @@ import {
 import { parseStrictRawPage } from "./pagination_proof";
 import {
   loadRawPage,
-  putCreateOnly,
   type Capture,
 } from "./raw_capture";
+import {
+  materializeProduct,
+  type CanonicalStructuredRow,
+} from "./product_materialization";
 import type {
   ReceiptAuthorityEnv,
   ReceiptIssueRequestV1,
 } from "./types";
-
-type StructuredRow = {
-  natural_key: string;
-  source: "jquants";
-  dataset: string;
-  event_time: string;
-  available_at: string;
-  ingested_at: string;
-  payload: string;
-  raw_payload: string;
-  row_digest: string;
-};
 
 type D1Operation = {
   operation_id: string;
@@ -155,8 +146,8 @@ async function normalizeRows(
   rows: Record<string, unknown>[],
   spec: DatasetSpec,
   checkedAt: string,
-): Promise<StructuredRow[]> {
-  const result: StructuredRow[] = [];
+): Promise<CanonicalStructuredRow[]> {
+  const result: CanonicalStructuredRow[] = [];
   for (const row of rows) {
     const key = await naturalKey(row, spec);
     const availableAt = pickAvailableAt(row, spec.id, checkedAt);
@@ -181,7 +172,7 @@ async function normalizeRows(
 async function persistStructuredRows(
   env: ReceiptAuthorityEnv,
   operationId: string,
-  rows: StructuredRow[],
+  rows: CanonicalStructuredRow[],
 ): Promise<void> {
   const statements = rows.map((row) => env.DB.prepare(
     `INSERT OR IGNORE INTO receipt_authority_structured_rows
@@ -208,8 +199,8 @@ async function persistStructuredRows(
 async function readStructuredRows(
   env: ReceiptAuthorityEnv,
   operationId: string,
-): Promise<StructuredRow[]> {
-  const rows: StructuredRow[] = [];
+): Promise<CanonicalStructuredRow[]> {
+  const rows: CanonicalStructuredRow[] = [];
   let after = "";
   while (true) {
     const page = await env.DB.prepare(
@@ -218,7 +209,7 @@ async function readStructuredRows(
        FROM receipt_authority_structured_rows
        WHERE operation_id=? AND natural_key>?
        ORDER BY natural_key LIMIT 200`,
-    ).bind(operationId, after).all<StructuredRow>();
+    ).bind(operationId, after).all<CanonicalStructuredRow>();
     const batch = page.results ?? [];
     rows.push(...batch);
     if (batch.length < 200) break;
@@ -227,36 +218,18 @@ async function readStructuredRows(
   return rows;
 }
 
-async function structuredDigest(rows: StructuredRow[]): Promise<{
-  digest: string;
-  chunks: string[];
-}> {
-  const chunks: string[] = [];
-  for (let index = 0; index < rows.length; index += 200) {
-    chunks.push(await canonicalDigest(rows.slice(index, index + 200)));
-  }
-  return {
-    digest: await canonicalDigest({
-      schema_version: "receipt-structured-digest/v1",
-      row_count: rows.length,
-      chunk_size: 200,
-      chunks,
-    }),
-    chunks,
-  };
-}
-
 export async function reconcileStructured(
   env: ReceiptAuthorityEnv,
   input: {
     operationId: string;
+    runId: number;
     capture: Capture;
     spec: DatasetSpec;
     checkedAt: string;
   },
 ): Promise<{ count: number; digest: string; manifestKey: string }> {
   let rawCount = 0;
-  const expectedRows: StructuredRow[] = [];
+  const expectedRows: CanonicalStructuredRow[] = [];
   for (const page of input.capture.pages) {
     const bytes = await loadRawPage(env.AUTHORITY_EVIDENCE_BUCKET, page);
     const resolved = await resolveGovernedRequest(
@@ -302,43 +275,35 @@ export async function reconcileStructured(
       measured !== row.row_digest
     ) throw new Error("structured D1 row changed after canonical normalization");
   }
-  const measured = await structuredDigest(stored);
-  const manifest = {
-    schema_version: "receipt-structured-manifest/v1",
-    operation_id: input.operationId,
-    source: "jquants" as const,
-    dataset: input.spec.id,
-    row_count: stored.length,
-    digest_algorithm: "receipt-structured-digest/v1",
-    chunk_size: 200,
-    chunk_digests: measured.chunks,
-    structured_digest: measured.digest,
-  };
-  const manifestJson = canonicalJson(manifest);
-  const manifestKey = `structured/receipt-authority/${input.capture.initialRequest.environment}/${input.spec.id}/${input.capture.initialRequest.segment_id}/${input.operationId.slice(7)}/manifest.json`;
-  await putCreateOnly(env.PRODUCT_MATERIALIZATION_BUCKET, manifestKey, manifestJson, {
-    authority: "receipt",
-    operation_id: input.operationId,
-    dataset: input.spec.id,
-    segment_id: input.capture.initialRequest.segment_id,
+  const product = await materializeProduct(env, {
+    operationId: input.operationId,
+    runId: input.runId,
+    capture: input.capture,
+    rows: stored,
+    checkedAt: input.checkedAt,
   });
-  const reread = await env.PRODUCT_MATERIALIZATION_BUCKET.get(manifestKey);
-  if (reread === null || await reread.text() !== manifestJson) {
-    throw new Error("structured immutable manifest readback failed");
-  }
   await env.DB.prepare(
     `UPDATE receipt_authority_operations
      SET state='STRUCTURED_COMMITTED',structured_manifest_key=?,
          structured_digest=?,updated_at=?
      WHERE operation_id=? AND state IN ('COLLECTING','STRUCTURED_COMMITTED')`,
-  ).bind(manifestKey, measured.digest, input.checkedAt, input.operationId).run();
+  ).bind(
+    product.manifestKey,
+    product.digest,
+    input.checkedAt,
+    input.operationId,
+  ).run();
   const operation = await env.DB.prepare(
     "SELECT * FROM receipt_authority_operations WHERE operation_id=?",
   ).bind(input.operationId).first<D1Operation>();
   if (
     operation === null || operation.state !== "STRUCTURED_COMMITTED" ||
-    operation.structured_manifest_key !== manifestKey ||
-    operation.structured_digest !== measured.digest
+    operation.structured_manifest_key !== product.manifestKey ||
+    operation.structured_digest !== product.digest
   ) throw new Error("structured D1 commit state failed");
-  return { count: stored.length, digest: measured.digest, manifestKey };
+  return {
+    count: product.count,
+    digest: product.digest,
+    manifestKey: product.manifestKey,
+  };
 }

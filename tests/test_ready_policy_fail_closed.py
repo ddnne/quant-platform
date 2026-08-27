@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from data_contracts.coverage import (
+    all_coverage_contracts,
     coverage_policy_binding,
     coverage_policy_set_binding,
 )
@@ -18,6 +20,10 @@ from ingestion.jquants.normalize import normalize_generic
 from ops.projection_content import (
     PROJECTED_CONTENT_TABLES,
     build_projection_content_manifest,
+)
+from ops.receipt_product import (
+    canonical_product_artifact_bytes,
+    product_artifact_digest,
 )
 from ops.projection_signing import (
     ENVELOPE_SCHEMA,
@@ -57,6 +63,7 @@ from tests.ops_projection_signing_support import (
     TestOpsProjectionSigningKey,
     TestOpsProjectionVerifier,
     make_test_ops_projection_verifier,
+    render_projection_bundle_for_test,
 )
 from tests.receipt_test_support import (
     TestSignedReceiptAuthority as _TestSignedReceiptAuthority,
@@ -979,13 +986,24 @@ def _mini_exact_scope_binding() -> SimpleNamespace:
         period_end="2023-01-06",
         dataset_scopes=tuple(scope for _ in _SCOPE_DATASETS),
     )
-    return SimpleNamespace(
+    binding = SimpleNamespace(
         profiles=(profile,),
         required_datasets=_SCOPE_DATASETS,
+        profile_id="mini-exact-four-v1",
+        profile_version="1",
         profile_digest=canonical_digest({"profile": "mini-exact-four"}),
+        plan_ids=("mini-plan-1", "mini-plan-2", "mini-plan-3", "mini-plan-4"),
         plan_set_digest=canonical_digest({"plans": "mini-exact-four"}),
         closure_set_digest=canonical_digest({"closure": "mini-exact-four"}),
+        publication_scope="PILOT",
+        feature_dependencies=(),
+        contract_versions={},
     )
+    binding.to_dict = lambda: {
+        "feature_dependencies": [],
+        "contract_versions": {},
+    }
+    return binding
 
 
 def _seed_exact_pit_scope(
@@ -1051,6 +1069,30 @@ def _seed_exact_pit_scope(
         "indices_bars_daily_topix": "2023-01-06T16:00:00+09:00",
     }
     with SqliteStore(db_path) as store:
+        store._conn.execute(  # noqa: SLF001
+            "ALTER TABLE ingestion_run_log ADD COLUMN authority_operation_id TEXT"
+        )
+        store._conn.executescript(  # noqa: SLF001
+            """
+            CREATE TABLE ingestion_change_log (
+                change_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                table_name TEXT NOT NULL,
+                source TEXT NOT NULL,
+                dataset TEXT NOT NULL,
+                natural_key TEXT NOT NULL,
+                event_time TEXT NOT NULL,
+                available_at TEXT NOT NULL,
+                ingested_at TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                raw_payload TEXT,
+                changed_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX ux_ingestion_change_log_version
+                ON ingestion_change_log
+                   (table_name,source,dataset,natural_key,available_at,
+                    ingested_at,payload);
+            """
+        )
         for dataset_id in _SCOPE_DATASETS:
             store.upsert(
                 "jquants_records",
@@ -1086,6 +1128,34 @@ def _seed_exact_pit_scope(
                 },
                 expected_items=len(structured),
             )
+            artifact_body = canonical_product_artifact_bytes(structured).decode(
+                "utf-8"
+            )
+            artifact_digest = product_artifact_digest(structured)
+            operation_id = canonical_digest(
+                {"operation": "exact-pit-scope", "dataset": dataset_id}
+            )
+            checked_at = "2026-08-25T00:00:00+00:00"
+            store._conn.executemany(  # noqa: SLF001
+                "INSERT OR IGNORE INTO ingestion_change_log "
+                "(table_name,source,dataset,natural_key,event_time,available_at,"
+                "ingested_at,payload,raw_payload,changed_at) "
+                "VALUES ('jquants_records',?,?,?,?,?,?,?,?,?)",
+                [
+                    (
+                        row["source"],
+                        row["dataset"],
+                        row["natural_key"],
+                        row["event_time"],
+                        row["available_at"],
+                        row["ingested_at"],
+                        row["payload"],
+                        row["raw_payload"],
+                        row["ingested_at"],
+                    )
+                    for row in structured
+                ],
+            )
             evidence = reconcile_test_evidence(
                 required=required,
                 run_id=run_id,
@@ -1097,10 +1167,64 @@ def _seed_exact_pit_scope(
                 ],
                 raw_records=payloads[dataset_id],
                 structured_records=structured,
-                checked_at="2026-08-25T00:00:00+00:00",
+                checked_at=checked_at,
                 source_request={"fixture": "exact-pit-scope"},
+                structured_digest=artifact_digest,
             )
             record_collection_receipt(store._conn, authority.issue(evidence))  # noqa: SLF001
+            raw_manifest_digest = str(evidence.claims["raw_manifest_digest"])
+            raw_body = json.dumps(
+                {"data": payloads[dataset_id]}, sort_keys=True
+            ).encode("utf-8")
+            store._conn.execute(  # noqa: SLF001
+                "INSERT INTO ingestion_run_log "
+                "(id,ran_at,source,runtime,status,detail,authority_operation_id) "
+                "VALUES (?,?,'jquants','receipt-evidence-authority','SUCCESS','{}',?)",
+                (run_id, checked_at, operation_id),
+            )
+            store._conn.execute(  # noqa: SLF001
+                "INSERT INTO raw_retention_manifests "
+                "(dataset,run_id,manifest_key,page_count,row_count,raw_bytes,"
+                "data_digest,completeness,created_at) "
+                "VALUES (?,?,?,?,?,?,?,'COMPLETE',?)",
+                (
+                    dataset_id,
+                    run_id,
+                    f"raw/{dataset_id}/{run_id}.manifest.json",
+                    1,
+                    len(payloads[dataset_id]),
+                    len(raw_body),
+                    raw_manifest_digest,
+                    checked_at,
+                ),
+            )
+            store._conn.execute(  # noqa: SLF001
+                "INSERT INTO receipt_product_materializations "
+                "(operation_id,run_id,source,dataset,segment_id,artifact_key,"
+                "artifact_digest,artifact_body,row_count,byte_count,manifest_key,"
+                "manifest_digest,raw_manifest_key,raw_manifest_digest,"
+                "raw_page_count,raw_row_count,raw_bytes,committed_at) "
+                "VALUES (?,?,'jquants',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    operation_id,
+                    run_id,
+                    dataset_id,
+                    required.segment_id,
+                    f"structured/{dataset_id}/{run_id}.jsonl",
+                    artifact_digest,
+                    artifact_body,
+                    len(structured),
+                    len(artifact_body.encode("utf-8")),
+                    f"structured/{dataset_id}/{run_id}.manifest.json",
+                    canonical_digest({"artifact_digest": artifact_digest}),
+                    f"raw/{dataset_id}/{run_id}.manifest.json",
+                    raw_manifest_digest,
+                    1,
+                    len(payloads[dataset_id]),
+                    len(raw_body),
+                    checked_at,
+                ),
+            )
         store._conn.commit()  # noqa: SLF001
     return db_path, _mini_exact_scope_binding()
 
@@ -1121,6 +1245,224 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
         _SCOPE_DATASETS
     )
     assert all(row["receipt_digests"] for row in proof["entries"])
+
+
+def test_product_jsonl_vector_matches_authority_utf8_order() -> None:
+    rows = [
+        {
+            "source": "jquants",
+            "dataset": "indices_bars_daily_topix",
+            "natural_key": natural_key,
+            "event_time": "2024-02-01T00:00:00Z",
+            "available_at": "2024-02-01T00:00:00Z",
+            "ingested_at": "2024-02-02T00:00:00Z",
+            "payload": f'{{"key":"{natural_key}"}}',
+            "raw_payload": f'{{"key":"{natural_key}"}}',
+        }
+        for natural_key in ("z-key", "a-key")
+    ]
+    body = canonical_product_artifact_bytes(rows)
+    assert body.index(b"a-key") < body.index(b"z-key")
+    assert product_artifact_digest(rows) == (
+        "sha256:fc5f92e255656fa9c17298cc492b6f72"
+        "ee1c647fa47a749174ea66c290f9dc8e"
+    )
+
+
+def test_signed_product_digest_survives_sync_projection_and_ready(
+    tmp_path,
+    receipt_ed25519_keys,
+) -> None:
+    source_path, binding = _seed_exact_pit_scope(
+        tmp_path, receipt_ed25519_keys
+    )
+    mirror_path = tmp_path / "receipt-product-mirror.sqlite"
+    with SqliteStore(mirror_path) as mirror, sqlite3.connect(source_path) as source:
+        source.row_factory = sqlite3.Row
+        sync_script._ensure_control_tables(mirror._conn)  # noqa: SLF001
+        source_max = sync_script._source_change_seq(source)
+        _pages, seen_changes, registered_changes, applied_cursor = (
+            sync_script._sync_export_changes(
+                mirror,
+                source,
+                page_limit=5,
+                source_max_seq=source_max,
+            )
+        )
+        assert seen_changes == registered_changes
+        assert applied_cursor == source_max > 0
+        for table in (
+            "ingestion_run_log",
+            "raw_retention_manifests",
+            "collection_receipts",
+            "receipt_product_materializations",
+        ):
+            rows = [
+                dict(row)
+                for row in source.execute(f"SELECT * FROM {table}").fetchall()
+            ]
+            seen, registered = sync_script._sync_one(mirror, table, rows)
+            assert (seen, registered) == (len(rows), len(rows))
+
+        coverage_rows = []
+        for contract in all_coverage_contracts():
+            policy = coverage_policy_binding(contract.dataset_id)
+            coverage_rows.append(
+                (
+                    contract.dataset_id,
+                    "COMPLETE",
+                    policy["policy_version"],
+                    contract.collection_scope,
+                    contract.history_target_start,
+                    contract.history_target_end_rule,
+                    contract.coverage_mode,
+                    contract.expected_frequency,
+                    contract.universe_rule,
+                    int(contract.raw_retention_required),
+                    int(contract.structured_reconciliation_required),
+                    contract.governance_tier,
+                    "2023-01-02",
+                    "2023-01-06",
+                    1,
+                    5,
+                    "2026-08-25T00:00:00Z",
+                    "{}",
+                )
+            )
+        mirror._conn.executemany(  # noqa: SLF001
+            "INSERT INTO dataset_coverage "
+            "(dataset,status,policy_version,collection_scope,"
+            "history_target_start,history_target_end_rule,coverage_mode,"
+            "expected_frequency,universe_rule,raw_retention_required,"
+            "structured_reconciliation_required,governance_tier,"
+            "observed_start,observed_end,row_count,source_run_id,evaluated_at,"
+            "detail_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            coverage_rows,
+        )
+        mirror._conn.commit()  # noqa: SLF001
+
+    dependency_proof = _verify_exact_four_pit_dependency_scope(
+        mirror_path, binding
+    )
+    product_digests = {
+        digest
+        for entry in dependency_proof["entries"]
+        for digest in entry["product_artifact_digests"]
+    }
+    assert len(product_digests) == len(_SCOPE_DATASETS)
+
+    bundle = render_projection_bundle_for_test(
+        mirror_path,
+        generation_id="projgen-receipt-product-e2e",
+        producer_commit_sha="e" * 40,
+        source_cursor=source_max,
+        export_cursor=source_max,
+        refresh_status="success",
+        last_success_at="2026-08-25T00:00:00Z",
+    )
+    target = sqlite3.connect(":memory:")
+    migration_dir = (
+        Path(__file__).resolve().parents[1]
+        / "platform/workers/quant-ops-mcp/migrations/projection"
+    )
+    for migration in sorted(migration_dir.glob("*.sql")):
+        target.executescript(migration.read_text(encoding="utf-8"))
+    target.executescript(bundle.sql)
+    projected_digests = {
+        str(row[0])
+        for row in target.execute(
+            "SELECT artifact_digest FROM receipt_product_materializations "
+            "WHERE projection_generation_id=?",
+            (bundle.generation_id,),
+        )
+    }
+    target.close()
+    assert projected_digests == product_digests
+
+    policy_set = coverage_policy_set_binding(list(binding.required_datasets))
+    profile_evidence = {
+        dataset_id: {
+            "status": "COMPLETE",
+            "coverage_mode": official_mode(dataset_id),
+            **dict(coverage_policy_binding(dataset_id)),
+            "projection_status": "FRESH",
+            "source_generation": str(source_max),
+            "export_cursor": str(source_max),
+            "applied_cursor": str(source_max),
+            "signed_projection_document_digest": bundle.content_digest,
+        }
+        for dataset_id in binding.required_datasets
+    }
+    coverage_proof_id = canonical_digest({"coverage": "e2e-record"})
+    coverage_proof_digest = canonical_digest({"coverage": "e2e-proof"})
+    ready_document = {
+        "state": "READY",
+        "snapshot_id": canonical_digest({"snapshot": "e2e"}),
+        "required_datasets": list(binding.required_datasets),
+        "coverage_policy_version": policy_set["policy_version"],
+        "coverage_policy_digest": policy_set["policy_digest"],
+        "coverage_proof": {
+            "proof_digest": coverage_proof_digest,
+            "policy_version": policy_set["policy_version"],
+            "policy_digest": policy_set["policy_digest"],
+            "receipt_count": len(product_digests),
+        },
+        "coverage_proof_id": coverage_proof_id,
+        "profile_coverage_evidence": profile_evidence,
+        "dependency_scope_evidence": dependency_proof,
+        "raw_manifests": {digest: "verified" for digest in product_digests},
+        "validations": [{"status": "PASS"}],
+        "quality": {
+            "status": "PASS",
+            "failures": [],
+            "results": [{"check_id": "B4", "status": "pass"}],
+        },
+        "ready_evidence": {
+            "passed": True,
+            "items": [
+                {
+                    "name": name,
+                    "passed": True,
+                    "detail": (
+                        {"b0_status": "PASS", "quality_status": "PASS"}
+                        if name == "QualityEvidence"
+                        else {
+                            "source_generation": source_max,
+                            "applied_sync_generation": source_max,
+                        }
+                        if name == "SyncGenerationEvidence"
+                        else {}
+                    ),
+                }
+                for name in (
+                    "CoverageEvidence",
+                    "RawRetentionEvidence",
+                    "ValidationEvidence",
+                    "NaturalKeyEvidence",
+                    "QualityEvidence",
+                    "SyncGenerationEvidence",
+                )
+            ],
+        },
+        "change_seq": source_max,
+        "created_at": "2026-08-25T00:00:00Z",
+        "committed_at": "2026-08-25T00:00:01Z",
+        "quality_policy_version": "test-b0-b4/v1",
+    }
+    manifest = build_profile_bound_ready_manifest_from_snapshot_document(
+        ready_document,
+        profile=binding,
+    )
+    assert manifest.receipt_proof_digest == canonical_digest(
+        {
+            "coverage_receipt_count": len(product_digests),
+            "trusted_receipt_proof_digest": coverage_proof_digest,
+            "coverage_proof_id": coverage_proof_id,
+            "product_materialization_digest": dependency_proof[
+                "product_materialization_digest"
+            ],
+        }
+    )
 
 
 @pytest.mark.parametrize(
@@ -1183,6 +1525,34 @@ def test_exact_pit_dependency_scope_rejects_unreceipted_natural_keys(
             "DELETE FROM collection_receipts "
             "WHERE dataset='indices_bars_daily_topix'"
         )
+    with pytest.raises(MassResearchDisabledError, match="signed receipt"):
+        _verify_exact_four_pit_dependency_scope(db_path, binding)
+
+
+@pytest.mark.parametrize("attack", ("missing", "r2_readback_body", "product_row"))
+def test_exact_pit_dependency_scope_rejects_missing_or_tampered_product(
+    tmp_path,
+    receipt_ed25519_keys,
+    attack: str,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
+    with sqlite3.connect(db_path) as conn:
+        if attack == "missing":
+            conn.execute(
+                "DELETE FROM receipt_product_materializations "
+                "WHERE dataset='indices_bars_daily_topix'"
+            )
+        elif attack == "r2_readback_body":
+            conn.execute(
+                "UPDATE receipt_product_materializations "
+                "SET artifact_body=artifact_body || ' ' "
+                "WHERE dataset='indices_bars_daily_topix'"
+            )
+        else:
+            conn.execute(
+                "UPDATE jquants_records SET raw_payload='{}' "
+                "WHERE dataset='indices_bars_daily_topix'"
+            )
     with pytest.raises(MassResearchDisabledError, match="signed receipt"):
         _verify_exact_four_pit_dependency_scope(db_path, binding)
 

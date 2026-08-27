@@ -9,7 +9,9 @@ from scripts.export_ops_projection import render_projection_bundle
 from storage.sqlite_store import SqliteStore
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION = ROOT / "platform/workers/quant-ops-mcp/migrations/projection/0001_ops_projection.sql"
+MIGRATIONS = sorted(
+    (ROOT / "platform/workers/quant-ops-mcp/migrations/projection").glob("*.sql")
+)
 
 
 def _seed_jsda(path: Path) -> None:
@@ -76,7 +78,8 @@ def test_projection_populates_dedicated_jsda_read_model_without_local_paths(
     )
     assert str(tmp_path) not in bundle.sql
     target = sqlite3.connect(":memory:")
-    target.executescript(MIGRATION.read_text(encoding="utf-8"))
+    for migration in MIGRATIONS:
+        target.executescript(migration.read_text(encoding="utf-8"))
     target.executescript(bundle.sql)
     assert target.execute(
         "SELECT dataset,status,policy_version FROM dataset_coverage "

@@ -73,7 +73,7 @@
             "ingestion_watermarks", "ops_alerts", "ops_b0_status",
             "ops_projection_metadata", "ops_ready_snapshots", "ops_ready_state",
             "ops_snapshot_quality", "ops_storage_plane_status", "ops_sync_feed",
-            "raw_retention_manifests"
+            "raw_retention_manifests", "receipt_product_materializations"
           ],
           "properties": {
             "collection_sla_status": { "$ref": "#/$defs/tableContent" },
@@ -91,7 +91,8 @@
             "ops_snapshot_quality": { "$ref": "#/$defs/tableContent" },
             "ops_storage_plane_status": { "$ref": "#/$defs/tableContent" },
             "ops_sync_feed": { "$ref": "#/$defs/tableContent" },
-            "raw_retention_manifests": { "$ref": "#/$defs/tableContent" }
+            "raw_retention_manifests": { "$ref": "#/$defs/tableContent" },
+            "receipt_product_materializations": { "$ref": "#/$defs/tableContent" }
           }
         },
         "row_counts": { "$ref": "#/$defs/rowCounts" }
@@ -142,7 +143,7 @@
         "ingestion_watermarks", "ops_alerts", "ops_b0_status",
         "ops_projection_metadata", "ops_ready_snapshots", "ops_ready_state",
         "ops_snapshot_quality", "ops_storage_plane_status", "ops_sync_feed",
-        "raw_retention_manifests"
+        "raw_retention_manifests", "receipt_product_materializations"
       ],
       "properties": {
         "collection_sla_status": { "type": "integer", "minimum": 0 },
@@ -160,7 +161,8 @@
         "ops_snapshot_quality": { "type": "integer", "minimum": 0 },
         "ops_storage_plane_status": { "type": "integer", "minimum": 0 },
         "ops_sync_feed": { "type": "integer", "minimum": 0 },
-        "raw_retention_manifests": { "type": "integer", "minimum": 0 }
+        "raw_retention_manifests": { "type": "integer", "minimum": 0 },
+        "receipt_product_materializations": { "type": "integer", "minimum": 0 }
       }
     }
   }

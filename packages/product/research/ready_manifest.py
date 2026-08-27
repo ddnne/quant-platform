@@ -970,6 +970,9 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
                 "coverage_receipt_count": coverage_proof.get("receipt_count"),
                 "trusted_receipt_proof_digest": coverage_proof["proof_digest"],
                 "coverage_proof_id": coverage_proof_id,
+                "product_materialization_digest": dependency_scope[
+                    "product_materialization_digest"
+                ],
             }
         ),
         validation_proof_digest=canonical_digest(validations),
@@ -1027,7 +1030,11 @@ def _verify_exact_four_pit_dependency_scope(
         resolve_tse_prime_with_fins,
     )
     from storage.coverage_ledger import CollectionReceipt
-    from storage.receipt_crypto import canonical_evidence_digest
+    from ops.receipt_product import (
+        canonical_product_artifact_bytes,
+        product_artifact_body_digest,
+        product_artifact_digest,
+    )
     from storage.verified_receipt import require_verified_collection_closure
 
     periods = {
@@ -1349,12 +1356,40 @@ def _verify_exact_four_pit_dependency_scope(
             raise MassResearchDisabledError(
                 "PIT dependency scope requires signed collection receipt columns"
             )
+        product_columns = {
+            str(row[1])
+            for row in conn.execute(
+                "PRAGMA table_info(receipt_product_materializations)"
+            )
+        }
+        required_product_columns = {
+            "operation_id", "run_id", "source", "dataset", "segment_id",
+            "artifact_key", "artifact_digest", "artifact_body", "row_count",
+            "byte_count",
+            "manifest_key", "manifest_digest", "raw_manifest_key",
+            "raw_manifest_digest", "raw_page_count", "raw_row_count",
+            "raw_bytes", "committed_at",
+        }
+        if not required_product_columns <= product_columns:
+            raise MassResearchDisabledError(
+                "PIT dependency scope requires receipt product materializations"
+            )
+        run_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(ingestion_run_log)")
+        }
+        if "authority_operation_id" not in run_columns:
+            raise MassResearchDisabledError(
+                "PIT dependency scope requires authority-bound ingestion runs"
+            )
         receipt_rows = conn.execute(
             "SELECT * FROM collection_receipts WHERE source='jquants' "
             f"AND dataset IN ({placeholders}) ORDER BY checked_at,run_id",
             required_datasets,
         ).fetchall()
-        verified_segments: dict[str, list[tuple[str, str, str]]] = {
+        verified_segments: dict[
+            str, list[tuple[str, str, str, str]]
+        ] = {
             dataset_id: [] for dataset_id in required_datasets
         }
         for raw in receipt_rows:
@@ -1402,13 +1437,68 @@ def _verify_exact_four_pit_dependency_scope(
                     <= closure.segment_end[:10]
                 ]
                 segment_rows.sort(key=lambda row: str(row["natural_key"]))
+                product_rows = conn.execute(
+                    "SELECT * FROM receipt_product_materializations "
+                    "WHERE source=? AND dataset=? AND segment_id=? AND run_id=?",
+                    (
+                        closure.source,
+                        closure.dataset,
+                        closure.segment_id,
+                        closure.run_id,
+                    ),
+                ).fetchall()
+                if len(product_rows) != 1:
+                    continue
+                product = dict(product_rows[0])
+                run_rows = conn.execute(
+                    "SELECT id,source,runtime,status,authority_operation_id "
+                    "FROM ingestion_run_log WHERE id=?",
+                    (closure.run_id,),
+                ).fetchall()
+                raw_manifests = conn.execute(
+                    "SELECT dataset,run_id,manifest_key,page_count,row_count,"
+                    "raw_bytes,data_digest FROM raw_retention_manifests "
+                    "WHERE dataset=? AND run_id=?",
+                    (closure.dataset, closure.run_id),
+                ).fetchall()
+                observed_product_digest = product_artifact_digest(segment_rows)
                 if (
                     closure.status != "SUCCESS"
                     or not closure.pagination_exhausted
                     or not closure.discovery_exhausted
                     or len(segment_rows) != closure.structured_row_count
-                    or canonical_evidence_digest(segment_rows)
-                    != closure.structured_digest
+                    or observed_product_digest != closure.structured_digest
+                    or product["artifact_digest"] != observed_product_digest
+                    or product_artifact_body_digest(product["artifact_body"])
+                    != observed_product_digest
+                    or len(product["artifact_body"].encode("utf-8"))
+                    != product["byte_count"]
+                    or canonical_product_artifact_bytes(segment_rows).decode(
+                        "utf-8"
+                    )
+                    != product["artifact_body"]
+                    or product["row_count"] != closure.structured_row_count
+                    or product["raw_manifest_digest"]
+                    != closure.raw_manifest_digest
+                    or product["raw_page_count"] != closure.raw_page_count
+                    or product["raw_row_count"] != closure.raw_row_count
+                    or len(run_rows) != 1
+                    or run_rows[0]["id"] != closure.run_id
+                    or run_rows[0]["source"] != closure.source
+                    or run_rows[0]["runtime"] != "receipt-evidence-authority"
+                    or run_rows[0]["status"] != "SUCCESS"
+                    or run_rows[0]["authority_operation_id"]
+                    != product["operation_id"]
+                    or len(raw_manifests) != 1
+                    or raw_manifests[0]["manifest_key"]
+                    != product["raw_manifest_key"]
+                    or raw_manifests[0]["page_count"]
+                    != closure.raw_page_count
+                    or raw_manifests[0]["row_count"]
+                    != closure.raw_row_count
+                    or raw_manifests[0]["raw_bytes"] != product["raw_bytes"]
+                    or raw_manifests[0]["data_digest"]
+                    != closure.raw_manifest_digest
                 ):
                     continue
             except Exception:
@@ -1418,6 +1508,7 @@ def _verify_exact_four_pit_dependency_scope(
                     closure.segment_start[:10],
                     closure.segment_end[:10],
                     closure.receipt_digest,
+                    closure.structured_digest,
                 )
             )
 
@@ -1432,11 +1523,12 @@ def _verify_exact_four_pit_dependency_scope(
                 row["natural_key"]: row for row in rows_by_dataset[dataset_id]
             }
             used_receipts: set[str] = set()
+            used_products: set[str] = set()
             for natural_key in selected:
                 event_date = row_by_key[natural_key]["event_date"]
                 matches = [
-                    receipt_digest
-                    for segment_start, segment_end, receipt_digest
+                    (receipt_digest, product_digest)
+                    for segment_start, segment_end, receipt_digest, product_digest
                     in verified_segments[dataset_id]
                     if segment_start <= event_date <= segment_end
                 ]
@@ -1445,7 +1537,9 @@ def _verify_exact_four_pit_dependency_scope(
                         "PIT dependency scope natural key is not bound to a "
                         f"current signed receipt: {dataset_id}/{natural_key}"
                     )
-                used_receipts.add(sorted(matches)[-1])
+                receipt_digest, product_digest = sorted(matches)[-1]
+                used_receipts.add(receipt_digest)
+                used_products.add(product_digest)
             entries.append(
                 {
                     "dataset_id": dataset_id,
@@ -1454,6 +1548,10 @@ def _verify_exact_four_pit_dependency_scope(
                     "receipt_digests": sorted(used_receipts),
                     "receipt_set_digest": canonical_digest(
                         sorted(used_receipts)
+                    ),
+                    "product_artifact_digests": sorted(used_products),
+                    "product_artifact_set_digest": canonical_digest(
+                        sorted(used_products)
                     ),
                 }
             )
@@ -1485,6 +1583,17 @@ def _verify_exact_four_pit_dependency_scope(
         "period_end": period_end,
         "lookback_trading_days": max_lookback,
         "entries": entries,
+        "product_materialization_digest": canonical_digest(
+            [
+                {
+                    "dataset_id": entry["dataset_id"],
+                    "product_artifact_digests": entry[
+                        "product_artifact_digests"
+                    ],
+                }
+                for entry in entries
+            ]
+        ),
     }
     return {**body, "proof_digest": canonical_digest(body)}
 
