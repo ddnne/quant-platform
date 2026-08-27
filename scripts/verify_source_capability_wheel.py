@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ACTIVE_ROUTES = frozenset(
     {
         "equities_bars_daily",
+        "equities_master",
         "fins_details",
         "fins_dividend",
         "fins_earnings_date",
