@@ -368,7 +368,7 @@ def test_live_chain_requires_exact_named_handlers_and_migration_tag(
         )
 
 
-@pytest.mark.parametrize("role", ["acquisition", "caller"])
+@pytest.mark.parametrize("role", ["acquisition"])
 def test_live_chain_rejects_named_handlers_or_migration_tag_without_manifest_authority(
     role: str,
 ) -> None:
@@ -379,6 +379,24 @@ def test_live_chain_rejects_named_handlers_or_migration_tag_without_manifest_aut
     ]
     resources["script_runtime"]["migration_tag"] = "v1"
     with pytest.raises(live.ReceiptPendingLiveAcceptanceError):
+        live.validate_live_pending_receipt_chain(
+            environment="staging",
+            source_sha=SHA,
+            account_id=ACCOUNT,
+            deployments=deployments,
+            versions=versions,
+            public_surfaces=public,
+            source_provenance=source_provenance,
+        )
+
+
+def test_live_chain_requires_the_closed_premium_operator_entrypoint() -> None:
+    deployments, versions, public, source_provenance = _documents("staging")
+    versions["caller"]["resources"]["script"]["named_handlers"] = []
+    with pytest.raises(
+        live.ReceiptPendingLiveAcceptanceError,
+        match="script handler, source, or etag drifted",
+    ):
         live.validate_live_pending_receipt_chain(
             environment="staging",
             source_sha=SHA,

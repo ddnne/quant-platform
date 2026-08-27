@@ -145,19 +145,38 @@ def _source_sha(value: str) -> str:
     return value
 
 
-def deployment_message(role: str, environment: str, source_sha: str) -> str:
+def deployment_message(
+    role: str,
+    environment: str,
+    source_sha: str,
+    authority_mode: str = "PENDING",
+) -> str:
     if role not in {item[0] for item in CHAIN}:
         raise ReceiptPendingLiveAcceptanceError("Receipt chain role is not closed")
+    if authority_mode not in {"PENDING", "ACTIVE"}:
+        raise ReceiptPendingLiveAcceptanceError("Receipt chain mode is not closed")
     return (
-        f"quant-platform receipt-chain PENDING {environment} "
+        f"quant-platform receipt-chain {authority_mode} {environment} "
         f"{role} source {source_sha}"
     )
 
 
-def version_tag(role: str, environment: str, source_sha: str) -> str:
+def version_tag(
+    role: str,
+    environment: str,
+    source_sha: str,
+    authority_mode: str = "PENDING",
+) -> str:
     if role not in {item[0] for item in CHAIN}:
         raise ReceiptPendingLiveAcceptanceError("Receipt chain role is not closed")
-    return f"receipt-pending-{environment}-{role}-{source_sha[:12]}"
+    environment_code = {"staging": "s", "production": "p"}[environment]
+    role_code = {"acquisition": "a", "authority": "r", "caller": "c"}[role]
+    # Keep the tag under Cloudflare's limit while preserving the complete
+    # reviewed source identity for runtime provenance revalidation.
+    mode_code = {"PENDING": "rp", "ACTIVE": "ra"}.get(authority_mode)
+    if mode_code is None:
+        raise ReceiptPendingLiveAcceptanceError("Receipt chain mode is not closed")
+    return f"{mode_code}-{environment_code}-{role_code}-{source_sha}"
 
 
 def _timestamp(value: Any, *, label: str) -> str:
@@ -284,11 +303,14 @@ def _validate_bindings(
 
 
 def _expected_named_handlers(surface: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Derive the deployed class export surface from frozen DO bindings."""
+    """Return the complete frozen named class capability surface."""
 
     return [
-        {"name": row["class_name"], "handlers": ["class"]}
-        for row in surface["durable_objects"]
+        {"name": row["name"], "handlers": list(row["handlers"])}
+        for row in (
+            *surface["worker_entrypoints"],
+            *surface["durable_object_class_handlers"],
+        )
     ]
 
 
@@ -305,6 +327,7 @@ def _validate_deployment(
     role: str,
     environment: str,
     source_sha: str,
+    authority_mode: str = "PENDING",
 ) -> tuple[str, str, str]:
     deployment = _mapping(value, label=f"{role} deployment")
     deployment_id = deployment.get("id")
@@ -319,7 +342,9 @@ def _validate_deployment(
     annotations = _mapping(
         deployment.get("annotations"), label=f"{role} deployment annotations"
     )
-    expected_message = deployment_message(role, environment, source_sha)
+    expected_message = deployment_message(
+        role, environment, source_sha, authority_mode
+    )
     if annotations.get("workers/message") != expected_message:
         raise ReceiptPendingLiveAcceptanceError(
             f"{role} deployment is not bound to the reviewed source SHA"
@@ -352,6 +377,7 @@ def _validate_version(
     source_sha: str,
     version_id: str,
     surface: Mapping[str, Any],
+    authority_mode: str = "PENDING",
 ) -> dict[str, Any]:
     version = _mapping(value, label=f"{role} version")
     if version.get("id") != version_id:
@@ -363,9 +389,9 @@ def _validate_version(
     )
     if (
         annotations.get("workers/message")
-        != deployment_message(role, environment, source_sha)
+        != deployment_message(role, environment, source_sha, authority_mode)
         or annotations.get("workers/tag")
-        != version_tag(role, environment, source_sha)
+        != version_tag(role, environment, source_sha, authority_mode)
     ):
         raise ReceiptPendingLiveAcceptanceError(
             f"{role} version annotations are not source-bound"
@@ -434,7 +460,9 @@ def _validate_version(
         "worker_name": surface["name"],
         "deployment_version_id": version_id,
         "version_created_on": created_on,
-        "version_tag": version_tag(role, environment, source_sha),
+        "version_tag": version_tag(
+            role, environment, source_sha, authority_mode
+        ),
         # Cloudflare documents this as an opaque etag, not a local bundle hash.
         "cloudflare_script_etag": script["etag"],
         "binding_digest": _canonical_digest(bindings),

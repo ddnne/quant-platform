@@ -13,7 +13,8 @@ import {
   type Reservation,
 } from "./budget_do";
 import { BudgetLedger } from "./budget_http";
-import type { GatewayEnv } from "./index";
+import { GatewayService, type GatewayEnv } from "./index";
+import bindingManifest from "../../../../specs/cloudflare/active_worker_bindings.json";
 
 const runtimeEnv = env as GatewayEnv;
 // A DO eviction forces a fresh workerd isolate. Six Worker lanes run in
@@ -160,6 +161,24 @@ afterEach(async () => {
 });
 
 describe("BudgetLedger in the Workers runtime", () => {
+  it("matches the exact no-fetch GatewayService RPC inventory", () => {
+    const rows = bindingManifest.workers["research-ai-gateway"].staging
+      .worker_entrypoints;
+    expect(rows).toHaveLength(1);
+    const inventory = rows[0]!;
+    expect(inventory).toMatchObject({
+      name: "GatewayService",
+      fetch_reserved_special: false,
+      rpc_methods: ["complete"],
+    });
+    expect(
+      Reflect.ownKeys(GatewayService.prototype)
+        .map(String)
+        .filter((name) => name !== "constructor")
+        .sort(),
+    ).toEqual([...inventory.rpc_methods].sort());
+  });
+
   it("exposes the closed GatewayService RPC entrypoint without header auth", async () => {
     const service = workerExports.GatewayService as {
       complete(body: unknown): Promise<{ http_status: number; body: unknown }>;

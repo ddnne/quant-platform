@@ -47,6 +47,93 @@ def test_receipt_authority_uses_dedicated_evidence_and_premium_owned_migrations(
         assert "migrations_table" not in surface["d1_databases"][0]
 
 
+def test_all_named_entrypoints_and_receipt_do_have_exact_rpc_inventories() -> None:
+    manifest = manifest_module.build_manifest()
+    expected = {
+        "ingestion-secrets": [{
+            "name": "IngestionSecretsService",
+            "handlers": ["class"],
+            "fetch_reserved_special": True,
+            "rpc_methods": ["fetch_governed_page"],
+        }],
+        "receipt-evidence-authority": [{
+            "name": "ReceiptAuthorityService",
+            "handlers": ["class"],
+            "fetch_reserved_special": True,
+            "rpc_methods": [
+                "begin_audit_recovery_canary",
+                "issue_for_segment",
+                "public_key_registration",
+                "recover_audit_recovery_canary",
+                "recover_issue",
+            ],
+        }],
+        "ingestion-premium": [{
+            "name": "PremiumReceiptOperatorService",
+            "handlers": ["class"],
+            "fetch_reserved_special": False,
+            "rpc_methods": [
+                "pending_public_key_registration",
+                "staging_recovery_audit_attestation",
+            ],
+        }],
+        "research-ai-gateway": [{
+            "name": "GatewayService",
+            "handlers": ["class"],
+            "fetch_reserved_special": False,
+            "rpc_methods": ["complete"],
+        }],
+    }
+    for environment in ("base", "production", "staging"):
+        for worker, inventory in expected.items():
+            assert manifest["workers"][worker][environment][
+                "worker_entrypoints"
+            ] == inventory
+        premium = manifest["workers"]["ingestion-premium"][environment]
+        assert premium["durable_object_class_handlers"] == []
+        assert premium["workers_dev"] is False
+        assert premium["preview_urls"] is False
+        assert premium["route"] is None
+        assert premium["routes"] == []
+    assert manifest["workers"]["receipt-evidence-authority"]["staging"][
+        "durable_object_class_handlers"
+    ] == [{
+        "name": "ReceiptEvidenceAuthority",
+        "handlers": ["class"],
+        "rpc_methods": [
+            "begin_audit_recovery_canary",
+            "issue_for_segment",
+            "public_key_registration",
+            "recover_audit_recovery_canary",
+            "recover_issue",
+        ],
+    }]
+
+
+def test_receipt_operator_rpc_inventory_rejects_additional_public_method() -> None:
+    manifest = manifest_module.build_manifest()
+    mutated = copy.deepcopy(manifest)
+    mutated["workers"]["ingestion-premium"]["staging"][
+        "worker_entrypoints"
+    ][0]["rpc_methods"].append("unexpected_positive_rpc")
+    with pytest.raises(ValueError, match="WorkerEntrypoint RPC surface drifted"):
+        manifest_module.validate_manifest(mutated)
+
+    mutated = copy.deepcopy(manifest)
+    mutated["workers"]["ingestion-secrets"]["production"][
+        "worker_entrypoints"
+    ][0]["fetch_reserved_special"] = False
+    with pytest.raises(ValueError, match="WorkerEntrypoint RPC surface drifted"):
+        manifest_module.validate_manifest(mutated)
+
+    mutated = copy.deepcopy(manifest)
+    mutated["workers"]["receipt-evidence-authority"]["base"][
+        "durable_object_class_handlers"
+    ][0]["rpc_methods"].append("ensureKey")
+    with pytest.raises(ValueError, match="Durable Object class handlers drifted"):
+        manifest_module.validate_manifest(mutated)
+
+
 def test_canonical_inventory_equals_every_deployable_worker_directory() -> None:
     assert manifest_module._deployable_worker_directories() == (  # noqa: SLF001
         manifest_module.ACTIVE_WORKERS

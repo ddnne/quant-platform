@@ -382,6 +382,53 @@ def _package_scripts(worker: str) -> dict[str, str]:
 REQUIRED_OBSERVABILITY = {"enabled": True, "head_sampling_rate": 1.0}
 VERSION_METADATA_BINDING = "CF_VERSION_METADATA"
 
+# Named WorkerEntrypoints are RPC capability surfaces even without a route.
+# `fetch` is a reserved special handler, not an ordinary RPC method, so freeze
+# it independently. Keep Durable Object RPC inventories separate as well.
+WORKER_ENTRYPOINT_RPC_POLICY: dict[
+    str, dict[str, tuple[bool, tuple[str, ...]]]
+] = {
+    "ingestion-secrets": {
+        "IngestionSecretsService": (True, ("fetch_governed_page",)),
+    },
+    "receipt-evidence-authority": {
+        "ReceiptAuthorityService": (
+            True,
+            (
+                "begin_audit_recovery_canary",
+                "issue_for_segment",
+                "public_key_registration",
+                "recover_audit_recovery_canary",
+                "recover_issue",
+            ),
+        ),
+    },
+    "ingestion-premium": {
+        "PremiumReceiptOperatorService": (
+            False,
+            (
+                "pending_public_key_registration",
+                "staging_recovery_audit_attestation",
+            ),
+        ),
+    },
+    "research-ai-gateway": {
+        "GatewayService": (False, ("complete",)),
+    },
+}
+
+DURABLE_OBJECT_RPC_POLICY: dict[str, dict[str, tuple[str, ...]]] = {
+    "receipt-evidence-authority": {
+        "ReceiptEvidenceAuthority": (
+            "begin_audit_recovery_canary",
+            "issue_for_segment",
+            "public_key_registration",
+            "recover_audit_recovery_canary",
+            "recover_issue",
+        ),
+    },
+}
+
 _MODELED_CONFIG_KEYS = (
     "account_id",
     "ai",
@@ -641,6 +688,35 @@ def _effective_surface(
         "toolchain": pinned_toolchain,
         "observability": dict(sorted((observability or {}).items())),
         "version_metadata": dict(sorted((version_metadata or {}).items())),
+        "worker_entrypoints": [
+            {
+                "name": name,
+                "handlers": ["class"],
+                "fetch_reserved_special": fetch_reserved_special,
+                "rpc_methods": list(methods),
+            }
+            for name, (fetch_reserved_special, methods) in (
+                WORKER_ENTRYPOINT_RPC_POLICY.get(
+                worker, {}
+                ).items()
+            )
+        ],
+        "durable_object_class_handlers": [
+            {
+                "name": row["class_name"],
+                "handlers": ["class"],
+                **(
+                    {"rpc_methods": list(rpc_methods)}
+                    if (
+                        rpc_methods := DURABLE_OBJECT_RPC_POLICY.get(
+                            worker, {}
+                        ).get(row["class_name"])
+                    ) is not None
+                    else {}
+                ),
+            }
+            for row in _json_rows(durable_objects.get("bindings"))
+        ],
     }
 
 
@@ -682,7 +758,7 @@ def build_manifest() -> dict[str, Any]:
         if (WORKER_ROOT / worker / "wrangler.test.toml").is_file()
     }
     manifest = {
-        "schema_version": "cloudflare-active-worker-bindings/v4",
+        "schema_version": "cloudflare-active-worker-bindings/v6",
         "active_workers": list(ACTIVE_WORKERS),
         "config_key_policy": CONFIG_KEY_POLICY,
         "test_harness_surfaces": test_harness_surfaces,
@@ -707,7 +783,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "workers",
     }:
         raise ValueError("binding manifest fields are not closed")
-    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v4":
+    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v6":
         raise ValueError("binding manifest schema_version drift")
     if manifest["config_key_policy"] != CONFIG_KEY_POLICY:
         raise ValueError("Wrangler config-key policy drift")
@@ -843,6 +919,45 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError(f"{worker}: staging routes must be empty")
         if staging["secret_names"] != sorted(STAGING_SECRET_NAMES.get(worker, ())):
             raise ValueError(f"{worker}: staging secret-name policy drifted")
+        expected_entrypoints = [
+            {
+                "name": name,
+                "handlers": ["class"],
+                "fetch_reserved_special": fetch_reserved_special,
+                "rpc_methods": list(methods),
+            }
+            for name, (fetch_reserved_special, methods) in (
+                WORKER_ENTRYPOINT_RPC_POLICY.get(worker, {}).items()
+            )
+        ]
+        expected_do_handlers = [
+            {
+                "name": row["class_name"],
+                "handlers": ["class"],
+                **(
+                    {"rpc_methods": list(rpc_methods)}
+                    if (
+                        rpc_methods := DURABLE_OBJECT_RPC_POLICY.get(
+                            worker, {}
+                        ).get(row["class_name"])
+                    ) is not None
+                    else {}
+                ),
+            }
+            for row in staging["durable_objects"]
+        ]
+        for target in ("base", "production", "staging"):
+            if environments[target]["worker_entrypoints"] != expected_entrypoints:
+                raise ValueError(
+                    f"{worker}/{target}: WorkerEntrypoint RPC surface drifted"
+                )
+            if (
+                environments[target]["durable_object_class_handlers"]
+                != expected_do_handlers
+            ):
+                raise ValueError(
+                    f"{worker}/{target}: Durable Object class handlers drifted"
+                )
         for table, fields in {
             "d1_databases": ("database_name",),
             "r2_buckets": ("bucket_name", "preview_bucket_name"),
@@ -964,6 +1079,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             "RECEIPT_AUTHORITY_ENVIRONMENT": (
                 "staging" if environment == "staging" else "production"
             ),
+            "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING",
         }:
             raise ValueError(
                 f"ingestion-premium/{environment}: Receipt environment policy drift"

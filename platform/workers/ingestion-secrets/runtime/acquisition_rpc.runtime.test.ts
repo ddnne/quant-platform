@@ -1,7 +1,9 @@
 import { exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import canonicalVectorsDocument from "../../../../specs/authorities/jquants_acquisition_canonical_vectors.json";
+import bindingManifest from "../../../../specs/cloudflare/active_worker_bindings.json";
 import generatedRegistry from "../src/generated/jquants_acquisition_registry";
+import { IngestionSecretsService } from "../src/index";
 import {
   ACQUISITION_RESPONSE_HEADER_NAMES,
   fetchGovernedPage,
@@ -204,6 +206,25 @@ afterEach(() => {
 });
 
 describe("governed J-Quants WorkerEntrypoint RPC", () => {
+  it("matches the exact manifest RPC inventory and reserved fetch special", () => {
+    const rows = bindingManifest.workers["ingestion-secrets"].staging
+      .worker_entrypoints;
+    expect(rows).toHaveLength(1);
+    const inventory = rows[0]!;
+    expect(inventory).toMatchObject({
+      name: "IngestionSecretsService",
+      fetch_reserved_special: true,
+      rpc_methods: ["fetch_governed_page"],
+    });
+    const methods = Reflect.ownKeys(IngestionSecretsService.prototype)
+      .map(String)
+      .filter((name) => name !== "constructor");
+    expect(methods.includes("fetch")).toBe(true);
+    expect(methods.filter((name) => name !== "fetch").sort()).toEqual(
+      [...inventory.rpc_methods].sort(),
+    );
+  });
+
   it("matches the shared ASCII and Unicode canonical JSON vectors", async () => {
     const expectedIds = [
       "ascii-pagination-key",
