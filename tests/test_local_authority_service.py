@@ -184,11 +184,14 @@ def test_exact_acl_binds_peer_operation_purpose_and_environment() -> None:
     trader_acl = authority.ExactMethodAcl(
         authority_id="trader", environment="production"
     )
-    assert trader_acl.require(
-        caller="controlled_pilot_orchestrator",
-        operation="trader:authorize_exact_four_batch_human_present",
-        purpose="exact_four_human_approval",
-    ).caller == "controlled_pilot_orchestrator"
+    assert (
+        trader_acl.require(
+            caller="controlled_pilot_orchestrator",
+            operation="trader:authorize_exact_four_batch_human_present",
+            purpose="exact_four_human_approval",
+        ).caller
+        == "controlled_pilot_orchestrator"
+    )
 
 
 def test_service_authenticates_kernel_peer_and_commits_only_after_strict_gate(
@@ -298,3 +301,61 @@ def test_strict_request_rejects_floats_and_undeclared_fields() -> None:
     invalid["caller"] = "ready_publisher"
     with pytest.raises(authority.LocalAuthorityError, match="fields are not closed"):
         authority.parse_request(authority.canonical_json_bytes(invalid))
+
+
+def test_group_connectable_unix_socket_still_rejects_unmapped_peer_uid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    socket_path = Path("/tmp") / f"qp-peer-acl-{os.getpid()}.sock"
+    socket_path.unlink(missing_ok=True)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    os.chown(socket_path, -1, os.getegid())
+    socket_path.chmod(0o660)
+    socket_mode = socket_path.stat().st_mode & 0o777
+    socket_gid = socket_path.stat().st_gid
+    listener.listen(1)
+    called = False
+
+    def handler(_context, _payload, _fds):
+        nonlocal called
+        called = True
+        return {"status": "UNSAFE"}
+
+    monkeypatch.setattr(
+        authority, "require_pinned_finding_ledger_gate", lambda: object()
+    )
+    service = authority.UnixAuthorityService(
+        authority_id="ready",
+        environment="staging",
+        peers=authority.PeerPrincipalRegistry({os.geteuid() + 1: "ready_publisher"}),
+        ledger=_ledger(tmp_path),
+        handlers={"ready:publish_profile_plan_bound": handler},
+    )
+
+    def serve() -> None:
+        channel, _ = listener.accept()
+        try:
+            service.serve_connection(channel)
+        finally:
+            channel.close()
+
+    worker = threading.Thread(target=serve)
+    worker.start()
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        client.connect(str(socket_path))
+        body = authority.canonical_json_bytes(_request("group-peer"))
+        client.sendall(struct.pack("!I", len(body)) + body)
+        length = struct.unpack("!I", client.recv(4, socket.MSG_WAITALL))[0]
+        response = json.loads(client.recv(length, socket.MSG_WAITALL))
+    finally:
+        client.close()
+        worker.join(timeout=5)
+        listener.close()
+        socket_path.unlink(missing_ok=True)
+    assert not worker.is_alive()
+    assert (socket_mode, socket_gid) == (0o660, os.getegid())
+    assert response["status"] == "REJECTED"
+    assert response["request_id"] == "UNKNOWN"
+    assert called is False

@@ -11,6 +11,7 @@ This module never creates those resources.
 from __future__ import annotations
 
 import base64
+import grp
 import hashlib
 import json
 import os
@@ -54,6 +55,8 @@ _ROW_FIELDS = {
     "service_home",
     "service_shell",
     "hidden_identity",
+    "caller_group",
+    "caller_group_gid",
     "key_backend",
     "key_id",
     "public_key_base64",
@@ -63,6 +66,15 @@ _ROW_FIELDS = {
     "runtime_config_path",
     "runtime_config_file_digest",
     "runtime_config_observation",
+    "runtime_bundle_path",
+    "runtime_bundle_digest",
+    "runtime_bundle_observation",
+    "runtime_entrypoint_path",
+    "runtime_entrypoint_digest",
+    "runtime_entrypoint_observation",
+    "runtime_python_path",
+    "runtime_python_digest",
+    "runtime_python_observation",
     "key_path",
     "key_observation",
     "ledger_path",
@@ -151,6 +163,86 @@ def stat_observation(info: os.stat_result) -> dict[str, int]:
         "mode": stat.S_IMODE(info.st_mode),
         "nlink": int(info.st_nlink),
     }
+
+
+def regular_file_digest(path: Path) -> str:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise ActivationStateError(f"protected file is unavailable: {path}") from exc
+    digest = hashlib.sha256()
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise ActivationStateError(f"protected file metadata is unsafe: {path}")
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(fd)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise ActivationStateError(f"protected file changed while read: {path}")
+    finally:
+        os.close(fd)
+    return "sha256:" + digest.hexdigest()
+
+
+def runtime_bundle_tree_digest(path: Path, *, expected_owner_uid: int) -> str:
+    """Hash every immutable bundle path, mode, and file content without links."""
+
+    try:
+        root_info = path.lstat()
+    except OSError as exc:
+        raise ActivationStateError("runtime bundle is unavailable") from exc
+    if (
+        not stat.S_ISDIR(root_info.st_mode)
+        or root_info.st_uid != expected_owner_uid
+        or stat.S_IMODE(root_info.st_mode) not in {0o555, 0o755}
+    ):
+        raise ActivationStateError("runtime bundle root metadata is unsafe")
+    inventory: list[dict[str, Any]] = []
+    for current, directory_names, file_names in os.walk(path, followlinks=False):
+        current_path = Path(current)
+        directory_names.sort()
+        file_names.sort()
+        for name in [*directory_names, *file_names]:
+            target = current_path / name
+            info = target.lstat()
+            relative = target.relative_to(path).as_posix()
+            mode = stat.S_IMODE(info.st_mode)
+            if info.st_uid != expected_owner_uid or (
+                stat.S_ISREG(info.st_mode) and info.st_nlink != 1
+            ):
+                raise ActivationStateError(
+                    "runtime bundle owner/link metadata is unsafe"
+                )
+            if stat.S_ISDIR(info.st_mode):
+                if mode not in {0o555, 0o755}:
+                    raise ActivationStateError("runtime bundle directory is writable")
+                kind = "directory"
+                digest = None
+            elif stat.S_ISREG(info.st_mode):
+                if mode not in {0o444, 0o555}:
+                    raise ActivationStateError("runtime bundle file is writable")
+                kind = "file"
+                digest = regular_file_digest(target)
+            else:
+                raise ActivationStateError(
+                    "runtime bundle contains a special file or link"
+                )
+            inventory.append(
+                {"path": relative, "kind": kind, "mode": mode, "digest": digest}
+            )
+    if not inventory:
+        raise ActivationStateError("runtime bundle inventory is empty")
+    return _digest_bytes(canonical_json_bytes({"entries": inventory}))
 
 
 def public_key_fingerprint(public_key_base64: str) -> str:
@@ -287,7 +379,7 @@ def validate_activation_state(document: Mapping[str, Any]) -> Mapping[str, Any]:
                 f"activation deployments[{index}] identity is invalid"
             )
         identities.add(identity)
-        for name in ("service_uid", "service_gid"):
+        for name in ("service_uid", "service_gid", "caller_group_gid"):
             if type(row[name]) is not int or row[name] < 0:
                 raise ActivationStateError(
                     f"activation deployments[{index}].{name} is invalid"
@@ -296,6 +388,7 @@ def validate_activation_state(document: Mapping[str, Any]) -> Mapping[str, Any]:
             "service_user",
             "service_home",
             "service_shell",
+            "caller_group",
             "key_backend",
             "key_id",
             "public_key_base64",
@@ -304,6 +397,12 @@ def validate_activation_state(document: Mapping[str, Any]) -> Mapping[str, Any]:
             "registry_file_digest",
             "runtime_config_path",
             "runtime_config_file_digest",
+            "runtime_bundle_path",
+            "runtime_bundle_digest",
+            "runtime_entrypoint_path",
+            "runtime_entrypoint_digest",
+            "runtime_python_path",
+            "runtime_python_digest",
             "key_path",
             "ledger_path",
             "socket_path",
@@ -324,6 +423,11 @@ def validate_activation_state(document: Mapping[str, Any]) -> Mapping[str, Any]:
             )
         _validate_observation(row["key_observation"], field="key")
         _validate_observation(row["runtime_config_observation"], field="runtime config")
+        _validate_observation(row["runtime_bundle_observation"], field="runtime bundle")
+        _validate_observation(
+            row["runtime_entrypoint_observation"], field="runtime entrypoint"
+        )
+        _validate_observation(row["runtime_python_observation"], field="runtime python")
         _validate_observation(row["ledger_observation"], field="ledger")
         _validate_observation(row["socket_observation"], field="socket")
     if value["state_digest"] != state_body_digest(value):
@@ -382,7 +486,13 @@ def _require_live_observation(
         info = path.lstat()
     except OSError as exc:
         raise ActivationStateError(f"activation {kind} is unavailable") from exc
-    expected_kind = stat.S_ISSOCK if kind == "socket" else stat.S_ISREG
+    expected_kind = (
+        stat.S_ISSOCK
+        if kind == "socket"
+        else stat.S_ISDIR
+        if kind == "runtime bundle"
+        else stat.S_ISREG
+    )
     if not expected_kind(info.st_mode) or info.st_uid not in owner_uids:
         raise ActivationStateError(f"activation {kind} type or owner is invalid")
     if stat_observation(info) != dict(recorded):
@@ -395,8 +505,14 @@ def _require_live_observation(
         and mode != 0o600
         or kind == "runtime config"
         and mode not in {0o440, 0o444}
+        or kind == "runtime bundle"
+        and mode not in {0o555, 0o755}
+        or kind == "runtime entrypoint"
+        and mode not in {0o444, 0o555}
+        or kind == "runtime python"
+        and (mode & 0o022 or not mode & 0o111)
         or kind == "socket"
-        and mode & 0o077
+        and mode != 0o660
     ):
         raise ActivationStateError(f"activation {kind} permissions are unsafe")
 
@@ -408,6 +524,7 @@ def require_active_service_identity(
     path: Path = ACTIVATION_STATE_PATH,
     expected_root_uid: int = 0,
     current_euid: int | None = None,
+    current_egid: int | None = None,
     _protected_root: Path = Path(
         "/Library/Application Support/quant-platform/authorities"
     ),
@@ -453,6 +570,7 @@ def require_active_service_identity(
         "key_path": str(declared_key),
         "ledger_path": str(declared_ledger),
         "socket_path": declared["socket_path"],
+        "caller_group": f"qp_{environment}_{authority_id}_callers",
     }
     if any(row[name] != value for name, value in expected.items()):
         raise ActivationStateError("activation state drifts from declared deployment")
@@ -470,6 +588,17 @@ def require_active_service_identity(
         or (os.geteuid() if current_euid is None else current_euid) != account.pw_uid
     ):
         raise ActivationStateError("activated service identity no longer matches")
+    try:
+        caller_group = grp.getgrnam(row["caller_group"])
+    except KeyError as exc:
+        raise ActivationStateError("activated caller group is absent") from exc
+    if (
+        caller_group.gr_gid != row["caller_group_gid"]
+        or (os.getegid() if current_egid is None else current_egid)
+        != caller_group.gr_gid
+        or row["socket_observation"]["owner_gid"] != caller_group.gr_gid
+    ):
+        raise ActivationStateError("activated caller group identity no longer matches")
     _require_live_observation(
         Path(row["key_path"]),
         row["key_observation"],
@@ -490,6 +619,42 @@ def require_active_service_identity(
     runtime_config_raw = Path(row["runtime_config_path"]).read_bytes()
     if _digest_bytes(runtime_config_raw) != row["runtime_config_file_digest"]:
         raise ActivationStateError("activation runtime config changed after audit")
+    _require_live_observation(
+        Path(row["runtime_bundle_path"]),
+        row["runtime_bundle_observation"],
+        kind="runtime bundle",
+        owner_uids={expected_root_uid},
+    )
+    if (
+        runtime_bundle_tree_digest(
+            Path(row["runtime_bundle_path"]),
+            expected_owner_uid=expected_root_uid,
+        )
+        != row["runtime_bundle_digest"]
+    ):
+        raise ActivationStateError("activation runtime bundle changed after audit")
+    entrypoint = Path(row["runtime_entrypoint_path"])
+    try:
+        entrypoint.relative_to(Path(row["runtime_bundle_path"]))
+    except ValueError as exc:
+        raise ActivationStateError("runtime entrypoint escapes its bundle") from exc
+    _require_live_observation(
+        entrypoint,
+        row["runtime_entrypoint_observation"],
+        kind="runtime entrypoint",
+        owner_uids={expected_root_uid},
+    )
+    if regular_file_digest(entrypoint) != row["runtime_entrypoint_digest"]:
+        raise ActivationStateError("activation runtime entrypoint changed after audit")
+    runtime_python = Path(row["runtime_python_path"])
+    _require_live_observation(
+        runtime_python,
+        row["runtime_python_observation"],
+        kind="runtime python",
+        owner_uids={expected_root_uid},
+    )
+    if regular_file_digest(runtime_python) != row["runtime_python_digest"]:
+        raise ActivationStateError("activation runtime Python changed after audit")
     _require_live_observation(
         Path(row["ledger_path"]),
         row["ledger_observation"],
@@ -531,7 +696,9 @@ __all__ = [
     "load_activation_state",
     "public_key_fingerprint",
     "public_key_from_seed",
+    "regular_file_digest",
     "require_active_service_identity",
+    "runtime_bundle_tree_digest",
     "stat_observation",
     "state_body_digest",
     "validate_activation_state",

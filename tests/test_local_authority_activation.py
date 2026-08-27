@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import socket
+import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -60,7 +61,8 @@ def _active_fixture(
     socket_path = Path(tempfile.mkdtemp(prefix="qp-a-", dir="/tmp")) / "r.sock"
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(str(socket_path))
-    socket_path.chmod(0o600)
+    os.chown(socket_path, -1, gid)
+    socket_path.chmod(0o660)
 
     repository = tmp_path / "repository"
     registry_path = repository / "specs/ready/readiness_verify_public_keys.json"
@@ -85,6 +87,16 @@ def _active_fixture(
     runtime_config_raw = b'{"format":"test-runtime-config/v1"}'
     runtime_config_path.write_bytes(runtime_config_raw)
     runtime_config_path.chmod(0o444)
+
+    runtime_bundle = tmp_path / "bundle"
+    runtime_scripts = runtime_bundle / "scripts"
+    runtime_scripts.mkdir(parents=True)
+    runtime_entrypoint = runtime_scripts / "run_local_authority.py"
+    runtime_entrypoint.write_text("# immutable test entrypoint\n", encoding="utf-8")
+    runtime_entrypoint.chmod(0o444)
+    runtime_scripts.chmod(0o555)
+    runtime_bundle.chmod(0o555)
+    runtime_python = Path(sys.executable).resolve(strict=True)
 
     manifest = {
         "principals": {
@@ -116,6 +128,11 @@ def _active_fixture(
             pw_shell="/usr/bin/false",
         ),
     )
+    monkeypatch.setattr(
+        activation.grp,
+        "getgrnam",
+        lambda _name: SimpleNamespace(gr_gid=gid),
+    )
 
     row = {
         "authority_id": "ready",
@@ -127,6 +144,8 @@ def _active_fixture(
         "service_home": "/var/empty",
         "service_shell": "/usr/bin/false",
         "hidden_identity": True,
+        "caller_group": "qp_staging_ready_callers",
+        "caller_group_gid": gid,
         "key_backend": "protected_local_key",
         "key_id": "ready-staging-v1",
         "public_key_base64": public_b64,
@@ -137,6 +156,23 @@ def _active_fixture(
         "runtime_config_file_digest": _digest(runtime_config_raw),
         "runtime_config_observation": activation.stat_observation(
             runtime_config_path.lstat()
+        ),
+        "runtime_bundle_path": str(runtime_bundle),
+        "runtime_bundle_digest": activation.runtime_bundle_tree_digest(
+            runtime_bundle, expected_owner_uid=uid
+        ),
+        "runtime_bundle_observation": activation.stat_observation(
+            runtime_bundle.lstat()
+        ),
+        "runtime_entrypoint_path": str(runtime_entrypoint),
+        "runtime_entrypoint_digest": activation.regular_file_digest(runtime_entrypoint),
+        "runtime_entrypoint_observation": activation.stat_observation(
+            runtime_entrypoint.lstat()
+        ),
+        "runtime_python_path": str(runtime_python),
+        "runtime_python_digest": activation.regular_file_digest(runtime_python),
+        "runtime_python_observation": activation.stat_observation(
+            runtime_python.lstat()
         ),
         "key_path": str(key_path),
         "key_observation": activation.stat_observation(key_path.lstat()),
@@ -172,6 +208,7 @@ def test_active_state_binds_manifest_gate_uid_key_registry_ledger_and_socket(
             path=state_path,
             expected_root_uid=os.geteuid(),
             current_euid=os.geteuid(),
+            current_egid=os.getegid(),
             _protected_root=protected,
             _repository_root=repository,
         )
@@ -204,6 +241,7 @@ def test_active_state_fails_closed_when_live_key_inode_changes(
                 path=state_path,
                 expected_root_uid=os.geteuid(),
                 current_euid=os.geteuid(),
+                current_egid=os.getegid(),
                 _protected_root=protected,
                 _repository_root=repository,
             )
