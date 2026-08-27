@@ -286,6 +286,7 @@ class ControlledExecutionEvidenceValidatorV2:
         if (
             document["approval_subject_id"] != subject.approval_subject_id
             or subject_document != subject.to_dict()
+            or subject.environment != self.environment
         ):
             raise ControlledExecutionWriterV2Error(
                 "Trader handoff approval subject content id is invalid"
@@ -600,6 +601,13 @@ class ControlledExecutionEvidenceValidatorV2:
             "format": "bounded-controlled-pilot-execution-context/v2",
             "environment": self.environment,
             "pilot_run_id": subject["pilot_run_id"],
+            "ready_environment": subject["environment"],
+            "ready_authority_instance_id": subject[
+                "ready_authority_instance_id"
+            ],
+            "ready_authority_resource_digest": subject[
+                "ready_authority_resource_digest"
+            ],
             "readiness_attestation_id": subject["readiness_attestation_id"],
             "trader_authorization_id": handoff["handoff_id"],
             "trader_handoff_digest": _sha256_bytes(canonical_handoff),

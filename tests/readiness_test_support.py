@@ -23,6 +23,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from research.readiness import (
     ReadinessPublicKeyRegistry,
     VerifiedPilotReadiness,
+    derive_ready_authority_resource_digest,
+    ready_authority_instance_id,
 )
 from research.ready_manifest import (
     ReadyManifest,
@@ -39,10 +41,18 @@ class _TestReadinessSigner:
 
     __test__ = False
 
-    def __init__(self, *, key_id: str, private_key: Ed25519PrivateKey) -> None:
+    def __init__(
+        self,
+        *,
+        key_id: str,
+        private_key: Ed25519PrivateKey,
+        environment: str,
+    ) -> None:
         if type(key_id) is not str or not key_id.strip():
             raise ValueError("test readiness key_id required")
         self.key_id = key_id.strip()
+        self.environment = environment
+        self.authority_instance_id = ready_authority_instance_id(environment)
         self._private_key = private_key
 
     def sign(self, body: dict[str, Any]) -> str:
@@ -57,8 +67,14 @@ class _TestReadinessSigner:
             self.public_keys()
         )
 
-    def public_keys(self) -> dict[str, Ed25519PublicKey]:
-        return {self.key_id: self._private_key.public_key()}
+    def public_keys(
+        self,
+    ) -> dict[tuple[str, str, str], Ed25519PublicKey]:
+        return {
+            (self.environment, self.authority_instance_id, self.key_id): (
+                self._private_key.public_key()
+            )
+        }
 
     # Compatibility for existing tests; this class is never shipped by product.
     def _public_registry(self) -> ReadinessPublicKeyRegistry:
@@ -69,10 +85,15 @@ def make_readiness_signer(
     *,
     key_id: str = "test-readiness-v1",
     private_key: Ed25519PrivateKey | None = None,
+    environment: str = "staging",
 ) -> _TestReadinessSigner:
     """Create a private publication signer strictly for test fixtures."""
     key = private_key or Ed25519PrivateKey.generate()
-    return _TestReadinessSigner(key_id=key_id, private_key=key)
+    return _TestReadinessSigner(
+        key_id=key_id,
+        private_key=key,
+        environment=environment,
+    )
 
 
 def mint_pilot_readiness(
@@ -83,6 +104,8 @@ def mint_pilot_readiness(
     profile_binding: Any | None = None,
     now: datetime | None = None,
     ttl_seconds: int = 3600,
+    environment: str | None = None,
+    signed_projection_document_digest: str | None = None,
 ) -> VerifiedPilotReadiness:
     """Mint a synthetic capability without adding a product signing seam."""
     if not isinstance(manifest, ReadyManifest):
@@ -99,6 +122,15 @@ def mint_pilot_readiness(
     binding = profile_binding or load_exact_four_pilot_ready_binding()
     validate_ready_manifest_profile_binding(manifest, profile=binding)
     signer = publisher or make_readiness_signer()
+    readiness_environment = environment or signer.environment
+    if signer.environment != readiness_environment:
+        raise MassResearchDisabledError(
+            "test signer environment does not match READY environment"
+        )
+    authority_instance_id = ready_authority_instance_id(readiness_environment)
+    projection_digest = signed_projection_document_digest or canonical_digest(
+        {"test_signed_projection": manifest.snapshot_id}
+    )
     clock = now or datetime.now(timezone.utc)
     expires = clock + timedelta(seconds=max(60, ttl_seconds))
     evidence = {
@@ -107,6 +139,16 @@ def mint_pilot_readiness(
     }
     body = {
         "attestation_id": str(uuid4()),
+        "environment": readiness_environment,
+        "authority_instance_id": authority_instance_id,
+        "authority_resource_digest": derive_ready_authority_resource_digest(
+            environment=readiness_environment,
+            authority_instance_id=authority_instance_id,
+            snapshot_id=manifest.snapshot_id,
+            immutable_db_digest=immutable_db_digest,
+            ready_manifest_digest=manifest.to_dict()["manifest_digest"],
+            signed_projection_document_digest=projection_digest,
+        ),
         "readiness_scope": VerifiedPilotReadiness.EXPECTED_SCOPE,
         "snapshot_id": manifest.snapshot_id,
         "profile_id": manifest.profile_id,
@@ -144,6 +186,8 @@ def mint_pilot_readiness(
     )
     minted = VerifiedPilotReadiness(signature=signature, **body)
     if not signer.public_registry().verify(
+        expected_environment=readiness_environment,
+        authority_instance_id=authority_instance_id,
         key_id=minted.key_id,
         body=minted.to_canonical_body(),
         signature=minted.signature,
@@ -167,4 +211,8 @@ def controlled_pilot_scheduler(
         "load_pinned",
         return_value=verifier,
     ):
-        return ControlledPilotScheduler(**kwargs)
+        expected_environment = kwargs.pop("expected_environment", "staging")
+        return ControlledPilotScheduler(
+            expected_environment=expected_environment,
+            **kwargs,
+        )

@@ -21,10 +21,10 @@ EXACT_FOUR_AUTHORITY_SCHEMA_REL = (
     Path("specs") / "ready" / "exact_four_authority_protocol.schema.json"
 )
 PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_DIGEST = (
-    "sha256:5654d2e8c5e19ac96de7eda23fcb54ded9194e533c68bb1fe4fbdd14cdb12b53"
+    "sha256:a7b68cdb782a0b90f0a56860b0ab3762c30548f137b4af3405292f63b0d14cac"
 )
 PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_RAW_DIGEST = (
-    "sha256:39f8d317da87c0658d536e90594a0fd3d762bd1e622b13c079d0bcad2e8dca05"
+    "sha256:bf0b26d1447078e223bc20a7c07fdddc605b7b655c3138e46b235a972b99e3d4"
 )
 EXACT_FOUR_RESULT_SCHEMA_REL = (
     Path("specs") / "ready" / "exact_four_result_manifest.schema.json"

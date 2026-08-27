@@ -96,24 +96,34 @@ def _ready_evidence(
         created_at=(now - timedelta(minutes=2)).isoformat(),
         published_at=(now - timedelta(minutes=1)).isoformat(),
     )
-    signer = make_readiness_signer(key_id="test-ready-authority-v1")
+    signer = make_readiness_signer(
+        key_id="test-ready-authority-v1",
+        environment="staging",
+    )
     immutable = _digest("immutable-db")
+    projection_digest = _digest("signed-projection")
     readiness = mint_pilot_readiness(
         manifest,
         publisher=signer,
         immutable_db_digest=immutable,
         now=now,
         ttl_seconds=1_200,
+        signed_projection_document_digest=projection_digest,
     )
     monkeypatch.setattr(
         readiness_module.ReadinessPublicKeyRegistry,
         "load_pinned",
-        classmethod(lambda cls: signer.public_registry()),
+        classmethod(
+            lambda cls, *, expected_environment: signer.public_registry()
+        ),
     )
     monkeypatch.setattr(readiness_module, "_now", lambda: now)
     attestation = _canonical(readiness.to_dict())
     result = {
         "status": "SIGNED",
+        "environment": readiness.environment,
+        "authority_instance_id": readiness.authority_instance_id,
+        "authority_resource_digest": readiness.authority_resource_digest,
         "snapshot_id": snapshot_id,
         "attestation_id": readiness.attestation_id,
         "attestation_base64": base64.b64encode(attestation).decode("ascii"),
@@ -121,7 +131,7 @@ def _ready_evidence(
         + hashlib.sha256(attestation).hexdigest(),
         "ready_manifest_digest": manifest.to_dict()["manifest_digest"],
         "immutable_db_digest": immutable,
-        "signed_projection_document_digest": _digest("signed-projection"),
+        "signed_projection_document_digest": projection_digest,
         "issuer_key_id": readiness.key_id,
     }
     response = {
@@ -130,7 +140,10 @@ def _ready_evidence(
         "status": "COMMITTED",
         "result": result,
     }
-    return verify_ready_authority_response_v2(_canonical(response))
+    return verify_ready_authority_response_v2(
+        _canonical(response),
+        expected_environment="staging",
+    )
 
 
 def _authority(
@@ -142,7 +155,7 @@ def _authority(
 ) -> tuple[Any, ec.EllipticCurvePrivateKey, Any, Any]:
     private_key = ec.generate_private_key(ec.SECP256R1())
     rp = ExactFourTraderRelyingPartyV2(
-        environment="test",
+        environment="staging",
         policy_id="exact-four-trader-test-rp/v2",
         policy_generation=1,
         rp_id="trader.test.invalid",
@@ -151,7 +164,7 @@ def _authority(
     )
     rps = ExactFourTraderRelyingPartyRegistryV2((rp,), generation=1)
     credential = ExactFourTraderCredentialV2(
-        environment="test",
+        environment="staging",
         credential_id=hashlib.sha256(b"test-webauthn-credential").digest(),
         public_key=private_key.public_key(),
         rp_policy_digest=rp.policy_digest,
@@ -170,6 +183,22 @@ def _authority(
         server_bound=server_bound,
     )
     return authority, private_key, rp, credential
+
+
+def test_signed_staging_ready_response_cannot_authorize_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    staging = _ready_evidence(now, monkeypatch)
+
+    with pytest.raises(
+        ExactFourTraderAuthorityV2Error,
+        match="pinned verifier",
+    ):
+        verify_ready_authority_response_v2(
+            staging.canonical_response,
+            expected_environment="production",
+        )
 
 
 def _assertion(

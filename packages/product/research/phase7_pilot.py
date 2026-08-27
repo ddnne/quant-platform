@@ -92,8 +92,11 @@ def _require_signed_readiness(
     readiness: object | None,
     *,
     binding: object,
+    expected_environment: str,
 ) -> VerifiedPilotReadiness:
-    readiness = verify_pinned_pilot_readiness(readiness)
+    readiness = verify_pinned_pilot_readiness(
+        readiness, expected_environment=expected_environment
+    )
     if (
         tuple(readiness.plan_ids) != tuple(getattr(binding, "plan_ids", ()))
         or readiness.profile_digest != getattr(binding, "profile_digest", None)
@@ -185,6 +188,7 @@ def _require_pilot_hypothesis_count(n: int) -> int:
 
 def _validated_controlled_pilot_scheduler_state(
     *,
+    expected_environment: str,
     readiness: VerifiedPilotReadiness | None,
     budget: ResearchBudgetCapability | None,
     plan: ExperimentPlan | None,
@@ -226,6 +230,7 @@ def _validated_controlled_pilot_scheduler_state(
     verified_readiness = _require_signed_readiness(
         readiness,
         binding=binding,
+        expected_environment=expected_environment,
     )
     evaluation_service = _require_authorized_evaluation_service(
         authorized_evaluation_service
@@ -261,6 +266,7 @@ class ControlledPilotScheduler:
     def __init__(
         self,
         *,
+        expected_environment: str | None = None,
         readiness: VerifiedPilotReadiness | None = None,
         budget: ResearchBudgetCapability | None = None,
         plan: ExperimentPlan | None = None,
@@ -279,6 +285,10 @@ class ControlledPilotScheduler:
                     "controlled pilot n_hypotheses requires an exact int"
                 )
             _require_pilot_hypothesis_count(n_hypotheses)
+        if expected_environment not in {"staging", "production"}:
+            raise MassResearchDisabledError(
+                "controlled pilot requires explicit staging or production environment"
+            )
         (
             controlled_policy,
             controlled_budget,
@@ -287,6 +297,7 @@ class ControlledPilotScheduler:
             evaluation_service,
             artifact_store,
         ) = _validated_controlled_pilot_scheduler_state(
+            expected_environment=expected_environment,
             readiness=readiness,
             budget=budget,
             plan=plan,

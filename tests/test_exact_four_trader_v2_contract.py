@@ -128,6 +128,9 @@ def _readiness(*, pilot_run_id: str = "pilot-run-trader-v2") -> tuple[
     return (
         PilotReadinessAttestationClaimsV2(
             pilot_run_id=pilot_run_id,
+            environment="staging",
+            ready_authority_instance_id="ready-authority/staging/v1",
+            ready_authority_resource_digest=_digest("ready-resource"),
             snapshot=snapshot,
             exact_four=exact_four,
             issued_at=_iso(now - timedelta(minutes=5)),

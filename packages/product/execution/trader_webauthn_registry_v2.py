@@ -25,6 +25,8 @@ from execution.exact_four_trader_v2 import (
 )
 from research.readiness import (
     VerifiedPilotReadiness,
+    derive_ready_authority_resource_digest,
+    ready_authority_instance_id,
     verify_pinned_pilot_readiness,
 )
 from selection.budget_ledger import MassResearchDisabledError
@@ -115,6 +117,9 @@ def _sha256_bytes(value: bytes) -> str:
 _READY_RESPONSE_RESULT_FIELDS = frozenset(
     {
         "status",
+        "environment",
+        "authority_instance_id",
+        "authority_resource_digest",
         "snapshot_id",
         "attestation_id",
         "attestation_base64",
@@ -162,8 +167,15 @@ class VerifiedReadyAuthorityEvidenceV2:
 
 def verify_ready_authority_response_v2(
     raw: bytes | str,
+    *,
+    expected_environment: str,
 ) -> VerifiedReadyAuthorityEvidenceV2:
     """Verify the READY service response; no caller trust root or clock exists."""
+
+    if expected_environment not in {"staging", "production"}:
+        raise ExactFourTraderAuthorityV2Error(
+            "READY response verifier requires the expected environment"
+        )
 
     response = _strict_json_loads(raw, label="READY local authority response")
     if set(response) != {"format", "request_id", "status", "result"} or (
@@ -225,6 +237,7 @@ def verify_ready_authority_response_v2(
         candidate = VerifiedPilotReadiness(**init_payload)
         verified = verify_pinned_pilot_readiness(
             candidate,
+            expected_environment=expected_environment,
             expected_snapshot_id=result.get("snapshot_id"),
             expected_ready_manifest_digest=result.get("ready_manifest_digest"),
         )
@@ -232,8 +245,33 @@ def verify_ready_authority_response_v2(
         raise ExactFourTraderAuthorityV2Error(
             "READY attestation is not current under the pinned verifier"
         ) from exc
+    try:
+        expected_resource_digest = derive_ready_authority_resource_digest(
+            environment=expected_environment,
+            authority_instance_id=ready_authority_instance_id(
+                expected_environment
+            ),
+            snapshot_id=verified.snapshot_id,
+            immutable_db_digest=verified.immutable_db_digest,
+            ready_manifest_digest=verified.ready_manifest_digest,
+            signed_projection_document_digest=result.get(
+                "signed_projection_document_digest"
+            ),
+        )
+    except MassResearchDisabledError as exc:
+        raise ExactFourTraderAuthorityV2Error(
+            "READY authority resource identity is malformed"
+        ) from exc
     if (
-        verified.attestation_id != result.get("attestation_id")
+        verified.environment != expected_environment
+        or result.get("environment") != expected_environment
+        or verified.authority_instance_id
+        != ready_authority_instance_id(expected_environment)
+        or result.get("authority_instance_id")
+        != verified.authority_instance_id
+        or verified.authority_resource_digest != expected_resource_digest
+        or result.get("authority_resource_digest") != expected_resource_digest
+        or verified.attestation_id != result.get("attestation_id")
         or verified.snapshot_id != result.get("snapshot_id")
         or verified.ready_manifest_digest != result.get("ready_manifest_digest")
         or verified.immutable_db_digest != result.get("immutable_db_digest")
@@ -247,6 +285,9 @@ def verify_ready_authority_response_v2(
     exact_four = load_exact_four_execution_binding()
     subject = UnverifiedExactFourTraderApprovalSubjectV2(
         pilot_run_id=response["request_id"],
+        environment=verified.environment,
+        ready_authority_instance_id=verified.authority_instance_id,
+        ready_authority_resource_digest=verified.authority_resource_digest,
         readiness_attestation_id=result["attestation_digest"],
         snapshot_id=verified.snapshot_id,
         ready_manifest_digest=verified.ready_manifest_digest,
@@ -269,12 +310,17 @@ def verify_ready_authority_response_v2(
 
 def _require_ready_authority_evidence_v2(
     value: Any,
+    *,
+    expected_environment: str,
 ) -> VerifiedReadyAuthorityEvidenceV2:
     if type(value) is not VerifiedReadyAuthorityEvidenceV2:
         raise ExactFourTraderAuthorityV2Error(
             "exact verified READY authority evidence is required"
         )
-    reverified = verify_ready_authority_response_v2(value.canonical_response)
+    reverified = verify_ready_authority_response_v2(
+        value.canonical_response,
+        expected_environment=expected_environment,
+    )
     if (
         reverified.response_digest != value.response_digest
         or reverified.subject != value.subject

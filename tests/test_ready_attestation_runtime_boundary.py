@@ -198,7 +198,7 @@ def test_ready_json_rejects_duplicate_keys_and_nonfinite_constants(
 
     sidecar.write_bytes(duplicate)
     with pytest.raises(MassResearchDisabledError, match="ambiguous or invalid"):
-        load_verified_pilot_readiness(sidecar)
+        load_verified_pilot_readiness(sidecar, expected_environment="staging")
 
     with pytest.raises(
         runtime_attestation.ReadyAttestationVerificationError,

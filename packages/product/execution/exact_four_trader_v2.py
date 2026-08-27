@@ -72,10 +72,10 @@ EXACT_FOUR_TRADER_AUTHORIZATION_SCHEMA_REL = (
     Path("specs") / "ready" / "exact_four_trader_authorization_v2.schema.json"
 )
 PINNED_EXACT_FOUR_TRADER_AUTHORIZATION_SCHEMA_DIGEST = (
-    "sha256:7bd30bbe97b0bac99c0b41877442a62f92712a504b249afecb70a96f65966386"
+    "sha256:d08e8b65af9c458e20fc71d810e7834c51277128d30f0b80a056e26c13fc141d"
 )
 PINNED_EXACT_FOUR_TRADER_AUTHORIZATION_SCHEMA_RAW_DIGEST = (
-    "sha256:ee0ca02ae3958cf21418527ae21b835bd733374ed9541d3696c8db7d9df1d0ec"
+    "sha256:41d2691a63cf3ca6f6eed3748d3a969062ea46e899e33ff359280240115f4bd6"
 )
 
 _UUID4_RE = re.compile(
@@ -209,6 +209,9 @@ class UnverifiedExactFourTraderApprovalSubjectV2:
     """Audit-only subject compiled from unsigned READY claims."""
 
     pilot_run_id: str
+    environment: str
+    ready_authority_instance_id: str
+    ready_authority_resource_digest: str
     readiness_attestation_id: str
     snapshot_id: str
     ready_manifest_digest: str
@@ -240,7 +243,17 @@ class UnverifiedExactFourTraderApprovalSubjectV2:
                 "Trader pre-approval subject identity is not canonical"
             )
         _require_text(self.pilot_run_id, "pilot_run_id")
+        if (
+            type(self.environment) is not str
+            or self.environment not in {"staging", "production"}
+            or self.ready_authority_instance_id
+            != f"ready-authority/{self.environment}/v1"
+        ):
+            raise ExactFourAuthorityContractError(
+                "Trader pre-approval READY authority scope is invalid"
+            )
         for name in (
+            "ready_authority_resource_digest",
             "readiness_attestation_id",
             "snapshot_id",
             "ready_manifest_digest",
@@ -288,6 +301,11 @@ class UnverifiedExactFourTraderApprovalSubjectV2:
             "authority_scope": self.authority_scope,
             "execution_mode": self.execution_mode,
             "pilot_run_id": self.pilot_run_id,
+            "environment": self.environment,
+            "ready_authority_instance_id": self.ready_authority_instance_id,
+            "ready_authority_resource_digest": (
+                self.ready_authority_resource_digest
+            ),
             "readiness_attestation_id": self.readiness_attestation_id,
             "snapshot_id": self.snapshot_id,
             "ready_manifest_digest": self.ready_manifest_digest,
@@ -329,6 +347,11 @@ def compile_unverified_exact_four_trader_approval_subject_v2(
     snapshot = readiness.snapshot
     return UnverifiedExactFourTraderApprovalSubjectV2(
         pilot_run_id=readiness.pilot_run_id,
+        environment=readiness.environment,
+        ready_authority_instance_id=readiness.ready_authority_instance_id,
+        ready_authority_resource_digest=(
+            readiness.ready_authority_resource_digest
+        ),
         readiness_attestation_id=readiness.attestation_id,
         snapshot_id=snapshot.snapshot_id,
         ready_manifest_digest=snapshot.ready_manifest_digest,

@@ -61,7 +61,7 @@ class _TestExactMethodAcl:
 
     def __init__(self, *, authority_id: str, environment: str) -> None:
         assert authority_id in {"trader", "controlled_execution"}
-        assert environment == "test"
+        assert environment == "staging"
         self.authority_id = authority_id
         self.environment = environment
 
@@ -98,13 +98,13 @@ def _service(
     ledger = SQLiteAuthorityEventLedger(
         ledger_dir / "events.sqlite3",
         authority_id=authority_id,
-        environment="test",
+        environment="staging",
         expected_uid=os.geteuid(),
     )
     ledger.initialize()
     return UnixAuthorityService(
         authority_id=authority_id,
-        environment="test",
+        environment="staging",
         peers=PeerPrincipalRegistry({os.geteuid(): caller}),
         ledger=ledger,
         handlers={handler.operation: handler},
@@ -307,7 +307,7 @@ def test_bad_controlled_peer_or_missing_fd_never_invokes_executor(
 
     wrong_peer_service = UnixAuthorityService(
         authority_id="controlled_execution",
-        environment="test",
+        environment="staging",
         peers=PeerPrincipalRegistry({os.geteuid() + 1: "trader"}),
         ledger=missing_fd_service.ledger,
         handlers={adapter.operation: adapter},
@@ -538,9 +538,9 @@ def test_context_digest_is_bound_to_payload_before_controlled_execution(
         caller="trader",
         grant=MethodGrant(
             "trader",
-            CONTROLLED_TRADER_HANDOFF_OPERATION,
-            CONTROLLED_TRADER_HANDOFF_PURPOSE,
-            "test",
+                CONTROLLED_TRADER_HANDOFF_OPERATION,
+                CONTROLLED_TRADER_HANDOFF_PURPOSE,
+                "staging",
         ),
         request_id=handoff.handoff_id,
         request_digest=canonical_authority_digest(request),

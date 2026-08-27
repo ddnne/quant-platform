@@ -367,6 +367,9 @@
         "issuer",
         "authority_scope",
         "pilot_run_id",
+        "environment",
+        "ready_authority_instance_id",
+        "ready_authority_resource_digest",
         "snapshot",
         "exact_four",
         "issued_at",
@@ -378,6 +381,12 @@
         "issuer": { "const": "PilotReadyPublicationService/v2" },
         "authority_scope": { "const": "VERIFIED_PILOT_READINESS" },
         "pilot_run_id": { "$ref": "#/$defs/nonEmpty" },
+        "environment": { "enum": ["staging", "production"] },
+        "ready_authority_instance_id": {
+          "type": "string",
+          "pattern": "^ready-authority/(?:staging|production)/v1$"
+        },
+        "ready_authority_resource_digest": { "$ref": "#/$defs/digest" },
         "snapshot": { "$ref": "#/$defs/snapshot" },
         "exact_four": { "$ref": "#/$defs/exactFour" },
         "issued_at": { "type": "string", "format": "date-time" },

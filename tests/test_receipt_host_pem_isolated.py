@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from research.readiness import (
     ReadinessPublicKeyRegistry,
     ReadyPublicationAuthorityPending,
+    ready_authority_instance_id,
     require_ready_publication_authority,
 )
 from ingestion.runtime_authority import (
@@ -873,12 +874,18 @@ def test_readiness_env_path_key_id_and_registry_cannot_self_root(
         )
     )
     registry = ReadinessPublicKeyRegistry(
-        {"pinned-readiness": pinned_key.public_key()}
+        {
+            (
+                "staging",
+                ready_authority_instance_id("staging"),
+                "pinned-readiness",
+            ): pinned_key.public_key()
+        }
     )
     monkeypatch.setattr(
         ReadinessPublicKeyRegistry,
         "load_pinned",
-        classmethod(lambda cls: registry),
+        classmethod(lambda cls, *, expected_environment: registry),
     )
 
     attacker_key = Ed25519PrivateKey.generate()

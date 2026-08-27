@@ -44,6 +44,9 @@
         "authority_scope",
         "execution_mode",
         "pilot_run_id",
+        "environment",
+        "ready_authority_instance_id",
+        "ready_authority_resource_digest",
         "readiness_attestation_id",
         "snapshot_id",
         "ready_manifest_digest",
@@ -65,6 +68,12 @@
         "authority_scope": { "const": "EXACT_FOUR_TRADER_PRE_APPROVAL" },
         "execution_mode": { "const": "paper" },
         "pilot_run_id": { "$ref": "#/$defs/nonEmpty" },
+        "environment": { "enum": ["staging", "production"] },
+        "ready_authority_instance_id": {
+          "type": "string",
+          "pattern": "^ready-authority/(?:staging|production)/v1$"
+        },
+        "ready_authority_resource_digest": { "$ref": "#/$defs/digest" },
         "readiness_attestation_id": { "$ref": "#/$defs/digest" },
         "snapshot_id": { "$ref": "#/$defs/digest" },
         "ready_manifest_digest": { "$ref": "#/$defs/digest" },

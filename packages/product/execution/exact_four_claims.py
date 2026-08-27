@@ -229,6 +229,9 @@ class PilotReadinessAttestationClaimsV2:
     """Unsigned, content-addressed READY claims; never a verified capability."""
 
     pilot_run_id: str
+    environment: str
+    ready_authority_instance_id: str
+    ready_authority_resource_digest: str
     snapshot: ReadySnapshotLineage
     exact_four: ExactFourExecutionBinding
     issued_at: str
@@ -243,6 +246,19 @@ class PilotReadinessAttestationClaimsV2:
                 "READY claims require exact ReadySnapshotLineage"
             )
         _require_text(self.pilot_run_id, "pilot_run_id")
+        if (
+            type(self.environment) is not str
+            or self.environment not in {"staging", "production"}
+            or self.ready_authority_instance_id
+            != f"ready-authority/{self.environment}/v1"
+        ):
+            raise ExactFourAuthorityContractError(
+                "READY claims authority environment/instance is invalid"
+            )
+        _require_digest(
+            self.ready_authority_resource_digest,
+            "ready_authority_resource_digest",
+        )
         if type(self.exact_four) is not ExactFourExecutionBinding:
             raise ExactFourAuthorityContractError(
                 "READY claims require exact ExactFourExecutionBinding"
@@ -291,6 +307,11 @@ class PilotReadinessAttestationClaimsV2:
             "issuer": self.issuer,
             "authority_scope": self.authority_scope,
             "pilot_run_id": self.pilot_run_id,
+            "environment": self.environment,
+            "ready_authority_instance_id": self.ready_authority_instance_id,
+            "ready_authority_resource_digest": (
+                self.ready_authority_resource_digest
+            ),
             "snapshot": self.snapshot.to_dict(),
             "exact_four": self.exact_four.to_dict(),
             "issued_at": self.issued_at,

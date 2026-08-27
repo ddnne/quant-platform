@@ -34,6 +34,9 @@ MASS_READINESS_ENABLED: bool = False
 _MASS_AUTHORITY_TOKEN = object()
 
 READY_PUBLICATION_AUTHORITY_CONTRACT = "ready-publication-authority/v1"
+READY_AUTHORITY_RESOURCE_FORMAT = "ready-authority-resource/v1"
+READY_AUTHORITY_INSTANCE_SUFFIX = "v1"
+_READY_ENVIRONMENTS = frozenset({"staging", "production"})
 READY_PUBLICATION_REQUIRED_CHECKS = (
     "authenticated_immutable_ops_mirror",
     "canonical_exact_four_plan_closure_profile",
@@ -125,6 +128,57 @@ def _canonical_bytes(body: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def ready_authority_instance_id(environment: str) -> str:
+    """Return the sole governed READY authority instance for an environment."""
+
+    if type(environment) is not str or environment not in _READY_ENVIRONMENTS:
+        raise MassResearchDisabledError(
+            "READY authority environment must be staging or production"
+        )
+    return f"ready-authority/{environment}/{READY_AUTHORITY_INSTANCE_SUFFIX}"
+
+
+def derive_ready_authority_resource_digest(
+    *,
+    environment: str,
+    authority_instance_id: str,
+    snapshot_id: str,
+    immutable_db_digest: str,
+    ready_manifest_digest: str,
+    signed_projection_document_digest: str,
+) -> str:
+    """Bind one signed READY decision to its environment and immutable inputs."""
+
+    expected_instance = ready_authority_instance_id(environment)
+    if authority_instance_id != expected_instance:
+        raise MassResearchDisabledError(
+            "READY authority instance is not canonical for the environment"
+        )
+    values = (
+        snapshot_id,
+        immutable_db_digest,
+        ready_manifest_digest,
+        signed_projection_document_digest,
+    )
+    if any(not _is_sha256(value) for value in values):
+        raise MassResearchDisabledError(
+            "READY authority resource inputs require canonical sha256 digests"
+        )
+    return _digest(
+        {
+            "format": READY_AUTHORITY_RESOURCE_FORMAT,
+            "environment": environment,
+            "authority_instance_id": authority_instance_id,
+            "snapshot_id": snapshot_id,
+            "immutable_db_digest": immutable_db_digest,
+            "ready_manifest_digest": ready_manifest_digest,
+            "signed_projection_document_digest": (
+                signed_projection_document_digest
+            ),
+        }
+    )
+
+
 def _decode_signature(signature: str) -> bytes:
     prefix = "ed25519:"
     if not signature.startswith(prefix):
@@ -139,29 +193,63 @@ def _decode_signature(signature: str) -> bytes:
 class ReadinessPublicKeyRegistry:
     """Immutable verifier registry containing public keys only."""
 
-    _keys: Mapping[str, Ed25519PublicKey]
+    _keys: Mapping[tuple[str, str, str], Ed25519PublicKey]
 
     def __post_init__(self) -> None:
-        normalized: dict[str, Ed25519PublicKey] = {}
-        for raw_key_id, key in self._keys.items():
-            key_id = str(raw_key_id).strip()
-            if not key_id or not isinstance(key, Ed25519PublicKey):
+        normalized: dict[tuple[str, str, str], Ed25519PublicKey] = {}
+        for raw_scope, key in self._keys.items():
+            if (
+                type(raw_scope) is not tuple
+                or len(raw_scope) != 3
+                or any(type(item) is not str or not item for item in raw_scope)
+                or not isinstance(key, Ed25519PublicKey)
+            ):
                 raise MassResearchDisabledError(
-                    "readiness registry entries require key_id and Ed25519 public key"
+                    "readiness registry entries require an exact "
+                    "(environment, authority_instance_id, key_id) scope"
                 )
-            normalized[key_id] = key
+            environment, authority_instance_id, key_id = raw_scope
+            if (
+                environment not in _READY_ENVIRONMENTS
+                or authority_instance_id
+                != ready_authority_instance_id(environment)
+                or any(item != item.strip() for item in raw_scope)
+            ):
+                raise MassResearchDisabledError(
+                    "readiness registry key scope is not canonical"
+                )
+            normalized[(environment, authority_instance_id, key_id)] = key
         object.__setattr__(self, "_keys", MappingProxyType(normalized))
 
     @classmethod
     def from_document(cls, document: Mapping[str, Any]) -> "ReadinessPublicKeyRegistry":
-        if document.get("schema_version") != 1:
+        expected_document_fields = {
+            "schema_version",
+            "purpose",
+            "environment",
+            "authority_instance_id",
+            "keys",
+        }
+        if set(document) != expected_document_fields or document.get(
+            "schema_version"
+        ) != 2:
             raise MassResearchDisabledError(
-                "readiness public key registry schema_version must be 1"
+                "readiness public key registry must be one exact v2 document"
+            )
+        environment = document.get("environment")
+        authority_instance_id = document.get("authority_instance_id")
+        if (
+            environment not in {"staging", "production"}
+            or document.get("purpose") != "readiness_attestation_verification"
+            or authority_instance_id != ready_authority_instance_id(environment)
+        ):
+            raise MassResearchDisabledError(
+                "readiness public key registry authority scope is invalid"
             )
         rows = document.get("keys")
         if not isinstance(rows, list) or not rows:
             raise MassResearchDisabledError("readiness public key registry keys missing")
-        keys: dict[str, Ed25519PublicKey] = {}
+        keys: dict[tuple[str, str, str], Ed25519PublicKey] = {}
         seen_ids: set[str] = set()
         for row in rows:
             if not isinstance(row, Mapping):
@@ -190,7 +278,7 @@ class ReadinessPublicKeyRegistry:
                 )
             seen_ids.add(key_id)
             if status == "active":
-                keys[key_id] = key
+                keys[(environment, authority_instance_id, key_id)] = key
         if len(keys) > 1:
             raise MassResearchDisabledError(
                 "readiness public key registry must have at most one active key"
@@ -213,7 +301,9 @@ class ReadinessPublicKeyRegistry:
         return cls.from_document(document)
 
     @classmethod
-    def load_pinned(cls) -> "ReadinessPublicKeyRegistry":
+    def load_pinned(
+        cls, *, expected_environment: str
+    ) -> "ReadinessPublicKeyRegistry":
         """Load only the code-pinned lower-plane verifier trust root."""
         from paper_runtime.readiness_attestation import (
             ReadyAttestationVerificationError,
@@ -221,14 +311,32 @@ class ReadinessPublicKeyRegistry:
         )
 
         try:
-            return cls(load_pinned_readiness_public_keys())
+            return cls(
+                load_pinned_readiness_public_keys(
+                    expected_environment=expected_environment
+                )
+            )
         except ReadyAttestationVerificationError as exc:
             raise MassResearchDisabledError(
                 "cannot load the pinned readiness public key registry"
             ) from exc
 
-    def verify(self, *, key_id: str, body: Mapping[str, Any], signature: str) -> bool:
-        key = self._keys.get(str(key_id))
+    def verify(
+        self,
+        *,
+        expected_environment: str,
+        authority_instance_id: str,
+        key_id: str,
+        body: Mapping[str, Any],
+        signature: str,
+    ) -> bool:
+        if authority_instance_id != ready_authority_instance_id(
+            expected_environment
+        ):
+            return False
+        key = self._keys.get(
+            (expected_environment, authority_instance_id, str(key_id))
+        )
         if key is None:
             return False
         try:
@@ -246,6 +354,9 @@ class _VerifiedReadiness:
     FORMAT: ClassVar[str] = "verified-readiness-attestation/v1"
 
     attestation_id: str
+    environment: str
+    authority_instance_id: str
+    authority_resource_digest: str
     readiness_scope: str
     snapshot_id: str
     profile_id: str
@@ -287,6 +398,18 @@ class _VerifiedReadiness:
             expected_scope = "MASS"
         else:
             raise ValueError("readiness capability requires an exact final scope type")
+        environment = object.__getattribute__(self, "environment")
+        authority_instance_id = object.__getattribute__(self, "authority_instance_id")
+        authority_resource_digest = object.__getattribute__(
+            self, "authority_resource_digest"
+        )
+        if (
+            type(environment) is not str
+            or environment not in _READY_ENVIRONMENTS
+            or authority_instance_id != ready_authority_instance_id(environment)
+            or not _is_sha256(authority_resource_digest)
+        ):
+            raise ValueError("readiness authority environment/resource scope is invalid")
         readiness_scope = object.__getattribute__(self, "readiness_scope")
         if type(readiness_scope) is not str or readiness_scope != expected_scope:
             raise ValueError(
@@ -298,6 +421,9 @@ class _VerifiedReadiness:
         return {
             "format": self.FORMAT,
             "attestation_id": self.attestation_id,
+            "environment": self.environment,
+            "authority_instance_id": self.authority_instance_id,
+            "authority_resource_digest": self.authority_resource_digest,
             "readiness_scope": self.readiness_scope,
             "snapshot_id": self.snapshot_id,
             "profile_id": self.profile_id,
@@ -335,7 +461,7 @@ class _VerifiedReadiness:
         """Serialize the complete signed capability for immutable retention."""
         return {**self.to_canonical_body(), "signature": self.signature}
 
-    def is_valid(self) -> bool:
+    def is_valid(self, *, expected_environment: str) -> bool:
         """Verify only through the configured pinned product trust root.
 
         The DTO deliberately accepts no caller registry, expected binding, or
@@ -344,16 +470,18 @@ class _VerifiedReadiness:
         """
 
         try:
-            self.require_valid()
+            self.require_valid(expected_environment=expected_environment)
         except (MassResearchDisabledError, TypeError, ValueError):
             return False
         return True
 
-    def require_valid(self) -> "_VerifiedReadiness":
+    def require_valid(self, *, expected_environment: str) -> "_VerifiedReadiness":
         """Return a freshly materialized, pinned capability or fail closed."""
 
         if type(self) is VerifiedPilotReadiness:
-            return verify_pinned_pilot_readiness(self)
+            return verify_pinned_pilot_readiness(
+                self, expected_environment=expected_environment
+            )
         raise MassResearchDisabledError(
             f"{type(self).__name__} cannot be verified by an enabled authority"
         )
@@ -374,8 +502,10 @@ class VerifiedPilotReadiness(_VerifiedReadiness):
 def load_verified_pilot_readiness(
     path: str | Path,
     *,
+    expected_environment: str,
     expected_snapshot_id: str | None = None,
     expected_ready_manifest_digest: str | None = None,
+    expected_authority_resource_digest: str | None = None,
 ) -> VerifiedPilotReadiness:
     """Strictly load and verify an exact-four readiness sidecar.
 
@@ -473,8 +603,10 @@ def load_verified_pilot_readiness(
         )
     return verify_pinned_pilot_readiness(
         readiness,
+        expected_environment=expected_environment,
         expected_snapshot_id=expected_snapshot_id,
         expected_ready_manifest_digest=expected_ready_manifest_digest,
+        expected_authority_resource_digest=expected_authority_resource_digest,
     )
 
 
@@ -530,6 +662,9 @@ def _canonical_pilot_body(values: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "format": VerifiedPilotReadiness.FORMAT,
         "attestation_id": values["attestation_id"],
+        "environment": values["environment"],
+        "authority_instance_id": values["authority_instance_id"],
+        "authority_resource_digest": values["authority_resource_digest"],
         "readiness_scope": values["readiness_scope"],
         "snapshot_id": values["snapshot_id"],
         "profile_id": values["profile_id"],
@@ -569,8 +704,10 @@ def _verify_exact_pilot_readiness_values(
     *,
     registry: ReadinessPublicKeyRegistry,
     clock: datetime,
+    expected_environment: str,
     expected_snapshot_id: str | None = None,
     expected_ready_manifest_digest: str | None = None,
+    expected_authority_resource_digest: str | None = None,
 ) -> VerifiedPilotReadiness:
     """Non-overridable verifier over one frozen exact capability value set."""
 
@@ -580,6 +717,13 @@ def _verify_exact_pilot_readiness_values(
         )
     if clock.tzinfo is None:
         raise MassResearchDisabledError("readiness verifier clock must be aware")
+    if (
+        type(expected_environment) is not str
+        or expected_environment not in _READY_ENVIRONMENTS
+    ):
+        raise MassResearchDisabledError(
+            "expected READY environment must be staging or production"
+        )
     if expected_snapshot_id is not None and type(expected_snapshot_id) is not str:
         raise MassResearchDisabledError("expected snapshot id must be an exact string")
     if (
@@ -588,6 +732,13 @@ def _verify_exact_pilot_readiness_values(
     ):
         raise MassResearchDisabledError(
             "expected ReadyManifest digest must be an exact string"
+        )
+    if (
+        expected_authority_resource_digest is not None
+        and not _is_sha256(expected_authority_resource_digest)
+    ):
+        raise MassResearchDisabledError(
+            "expected READY authority resource digest must be canonical sha256"
         )
     values = _materialize_exact_pilot_readiness(readiness)
 
@@ -617,11 +768,15 @@ def _verify_exact_pilot_readiness_values(
         "b0_quality_proof_digest",
         "b4_quality_proof_digest",
         "evidence_digest",
+        "authority_resource_digest",
     )
     if any(not _is_sha256(values[field]) for field in digest_fields):
         raise MassResearchDisabledError("readiness proof digest is malformed")
     if (
         values["readiness_scope"] != "PILOT"
+        or values["environment"] != expected_environment
+        or values["authority_instance_id"]
+        != ready_authority_instance_id(expected_environment)
         or values["ready_state"] != "READY"
         or values["issuer"] != "ReadyPublicationService/v3"
         or values["profile_id"] != binding.profile_id
@@ -642,6 +797,11 @@ def _verify_exact_pilot_readiness_values(
             expected_ready_manifest_digest is not None
             and values["ready_manifest_digest"]
             != expected_ready_manifest_digest
+        )
+        or (
+            expected_authority_resource_digest is not None
+            and values["authority_resource_digest"]
+            != expected_authority_resource_digest
         )
     ):
         raise MassResearchDisabledError(
@@ -672,7 +832,13 @@ def _verify_exact_pilot_readiness_values(
         raise MassResearchDisabledError(
             "pilot readiness is expired or time-incoherent"
         )
-    key = object.__getattribute__(registry, "_keys").get(values["key_id"])
+    key = object.__getattribute__(registry, "_keys").get(
+        (
+            expected_environment,
+            values["authority_instance_id"],
+            values["key_id"],
+        )
+    )
     if key is None:
         raise MassResearchDisabledError("pilot readiness issuer is untrusted")
     body = _canonical_pilot_body(values)
@@ -688,17 +854,23 @@ def _verify_exact_pilot_readiness_values(
 def verify_pinned_pilot_readiness(
     readiness: object,
     *,
+    expected_environment: str,
     expected_snapshot_id: str | None = None,
     expected_ready_manifest_digest: str | None = None,
+    expected_authority_resource_digest: str | None = None,
 ) -> VerifiedPilotReadiness:
     """Verify an exact pilot capability against only the pinned trust root."""
 
     return _verify_exact_pilot_readiness_values(
         readiness,
-        registry=ReadinessPublicKeyRegistry.load_pinned(),
+        registry=ReadinessPublicKeyRegistry.load_pinned(
+            expected_environment=expected_environment
+        ),
         clock=_now(),
+        expected_environment=expected_environment,
         expected_snapshot_id=expected_snapshot_id,
         expected_ready_manifest_digest=expected_ready_manifest_digest,
+        expected_authority_resource_digest=expected_authority_resource_digest,
     )
 
 
@@ -814,11 +986,13 @@ class ResearchReadinessService:
         self,
         readiness: _VerifiedReadiness,
         *,
+        expected_environment: str,
         expected_snapshot_id: str | None = None,
     ) -> _VerifiedReadiness:
         if type(readiness) is VerifiedPilotReadiness:
             return verify_pinned_pilot_readiness(
                 readiness,
+                expected_environment=expected_environment,
                 expected_snapshot_id=expected_snapshot_id,
             )
         if type(readiness) is VerifiedMassReadiness:

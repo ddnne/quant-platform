@@ -167,7 +167,10 @@ class TraderAuthorizeExactFourBatchHumanPresentV2:
                     payload["ready_response_base64"],
                     field="READY response",
                 )
-                readiness = verify_ready_authority_response_v2(ready_raw)
+                readiness = verify_ready_authority_response_v2(
+                    ready_raw,
+                    expected_environment=self.authority.environment,
+                )
                 challenge = self.authority.issue_challenge(readiness)
                 return {
                     "status": "CHALLENGE_ISSUED",
@@ -202,7 +205,10 @@ class TraderAuthorizeExactFourBatchHumanPresentV2:
             challenge_document = payload["challenge"]
             if type(challenge_document) is not dict:
                 raise LocalAuthorityError("Trader challenge must be one exact object")
-            readiness = verify_ready_authority_response_v2(ready_raw)
+            readiness = verify_ready_authority_response_v2(
+                ready_raw,
+                expected_environment=self.authority.environment,
+            )
             challenge = IssuedExactFourTraderChallengeV2.from_document(
                 challenge_document
             )

@@ -1211,7 +1211,7 @@ def _create_test_controlled_execution_writer_v2(
         raise ControlledExecutionWriterV2Error(
             "test Controlled writer key id must use .invalid"
         )
-    rp = relying_parties.require("test")
+    rp = relying_parties.require("staging")
     if not rp.rp_id.endswith(".invalid"):
         raise ControlledExecutionWriterV2Error(
             "test Controlled writer RP must use the reserved .invalid suffix"
@@ -1219,7 +1219,7 @@ def _create_test_controlled_execution_writer_v2(
     signer = _ControlledWriterSignerV2(key_id=key_id, private_key=private_key)
     return SQLiteControlledExecutionWriterV2(
         store_path,
-        environment="test",
+        environment="staging",
         signer=signer,
         clock=clock,
         trader_uid=os.geteuid() if trader_uid is None else trader_uid,

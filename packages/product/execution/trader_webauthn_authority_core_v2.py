@@ -137,7 +137,9 @@ class ExactFourTraderWebAuthnAuthorityV2:
         readiness: VerifiedReadyAuthorityEvidenceV2,
     ) -> IssuedExactFourTraderChallengeV2:
         self._require_positive_operation()
-        verified_ready = _require_ready_authority_evidence_v2(readiness)
+        verified_ready = _require_ready_authority_evidence_v2(
+            readiness, expected_environment=self.environment
+        )
         subject = verified_ready.subject
         now = self._clock()
         issued_at = _iso_utc(now, "Trader challenge clock")
@@ -188,7 +190,9 @@ class ExactFourTraderWebAuthnAuthorityV2:
         assertion_raw: bytes | str,
     ) -> CommittedExactFourTraderHandoffV2:
         self._require_positive_operation()
-        verified_ready = _require_ready_authority_evidence_v2(readiness)
+        verified_ready = _require_ready_authority_evidence_v2(
+            readiness, expected_environment=self.environment
+        )
         subject = verified_ready.subject
         if type(challenge) is not IssuedExactFourTraderChallengeV2:
             raise ExactFourTraderAuthorityV2Error(
@@ -388,7 +392,7 @@ def _create_test_exact_four_trader_authority_v2(
 ) -> ExactFourTraderWebAuthnAuthorityV2:
     """Construct an intentionally non-activatable authority for behavior tests."""
 
-    environment = "test"
+    environment = "staging"
     rp = relying_parties.require(environment)
     if not rp.rp_id.endswith(".invalid"):
         raise ExactFourTraderAuthorityV2Error(

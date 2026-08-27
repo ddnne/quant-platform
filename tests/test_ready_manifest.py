@@ -42,6 +42,7 @@ from research.readiness import (
     ready_publication_authority_status,
     require_ready_publication_authority,
     load_verified_pilot_readiness,
+    ready_authority_instance_id,
 )
 from selection.budget_ledger import MassResearchDisabledError
 from tests.readiness_test_support import (
@@ -121,7 +122,10 @@ def test_pilot_readiness_sidecar_loader_is_strict_public_key_only(
     registry.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
+                "purpose": "readiness_attestation_verification",
+                "environment": "staging",
+                "authority_instance_id": ready_authority_instance_id("staging"),
                 "keys": [
                     {
                         "key_id": "sidecar-loader-test",
@@ -138,20 +142,34 @@ def test_pilot_readiness_sidecar_loader_is_strict_public_key_only(
     monkeypatch.setattr(
         ReadinessPublicKeyRegistry,
         "load_pinned",
-        classmethod(lambda cls: trusted_registry),
+        classmethod(
+            lambda cls, *, expected_environment: trusted_registry
+            if expected_environment == "staging"
+            else ReadinessPublicKeyRegistry({})
+        ),
     )
     loaded = load_verified_pilot_readiness(
         sidecar,
+        expected_environment="staging",
         expected_snapshot_id=manifest.snapshot_id,
         expected_ready_manifest_digest=manifest.to_dict()["manifest_digest"],
     )
     assert loaded == readiness
+    with pytest.raises(
+        MassResearchDisabledError,
+        match="canonical exact-four binding",
+    ):
+        load_verified_pilot_readiness(
+            sidecar,
+            expected_environment="staging",
+            expected_authority_resource_digest=_digest("wrong-resource"),
+        )
 
     tampered = readiness.to_dict()
     tampered["caller_override"] = True
     sidecar.write_text(json.dumps(tampered), encoding="utf-8")
     with pytest.raises(MassResearchDisabledError, match="fields are not closed"):
-        load_verified_pilot_readiness(sidecar)
+        load_verified_pilot_readiness(sidecar, expected_environment="staging")
 
     expired = mint_pilot_readiness(
         manifest,
@@ -162,7 +180,7 @@ def test_pilot_readiness_sidecar_loader_is_strict_public_key_only(
     )
     sidecar.write_text(json.dumps(expired.to_dict()), encoding="utf-8")
     with pytest.raises(MassResearchDisabledError, match="expired"):
-        load_verified_pilot_readiness(sidecar)
+        load_verified_pilot_readiness(sidecar, expected_environment="staging")
 
 
 def test_readiness_registry_requires_status_and_allows_zero_or_one_active() -> None:
@@ -176,14 +194,20 @@ def test_readiness_registry_requires_status_and_allows_zero_or_one_active() -> N
         "algorithm": "Ed25519",
         "public_key_b64": encoded,
     }
+    base = {
+        "schema_version": 2,
+        "purpose": "readiness_attestation_verification",
+        "environment": "staging",
+        "authority_instance_id": ready_authority_instance_id("staging"),
+    }
     with pytest.raises(MassResearchDisabledError, match="explicit active/revoked"):
         ReadinessPublicKeyRegistry.from_document(
-            {"schema_version": 1, "keys": [row]}
+            {**base, "keys": [row]}
         )
     with pytest.raises(MassResearchDisabledError, match="at most one active"):
         ReadinessPublicKeyRegistry.from_document(
             {
-                "schema_version": 1,
+                **base,
                 "keys": [
                     {**row, "status": "active"},
                     {**row, "key_id": "readiness-b", "status": "active"},
@@ -192,11 +216,13 @@ def test_readiness_registry_requires_status_and_allows_zero_or_one_active() -> N
         )
     pending = ReadinessPublicKeyRegistry.from_document(
         {
-            "schema_version": 1,
+            **base,
             "keys": [{**row, "status": "revoked"}],
         }
     )
     assert not pending.verify(
+        expected_environment="staging",
+        authority_instance_id=ready_authority_instance_id("staging"),
         key_id="readiness-a",
         body={"status": "READY"},
         signature="ed25519:" + base64.b64encode(b"invalid").decode("ascii"),
@@ -227,8 +253,10 @@ def test_caller_environment_registry_cannot_self_root_pilot_readiness(
     attacker_registry.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "purpose": "readiness_attestation_verification",
+                "environment": "staging",
+                "authority_instance_id": ready_authority_instance_id("staging"),
                 "keys": [
                     {
                         "key_id": "attacker-readiness",
@@ -244,8 +272,15 @@ def test_caller_environment_registry_cannot_self_root_pilot_readiness(
     monkeypatch.setenv(
         "QUANT_READINESS_PUBLIC_KEY_REGISTRY", str(attacker_registry)
     )
+    monkeypatch.setattr(
+        ReadinessPublicKeyRegistry,
+        "load_pinned",
+        classmethod(
+            lambda cls, *, expected_environment: ReadinessPublicKeyRegistry({})
+        ),
+    )
     with pytest.raises(MassResearchDisabledError, match="untrusted"):
-        load_verified_pilot_readiness(sidecar)
+        load_verified_pilot_readiness(sidecar, expected_environment="staging")
 
 
 def test_single_ready_manifest_schema_is_the_publish_gate() -> None:
@@ -338,6 +373,8 @@ def test_ready_manifest_offline_e2e_serialize_reload_mint(
     assert readiness.coverage_proof_digest == built.coverage_proof_digest
     assert readiness.b0_quality_proof_digest.startswith("sha256:")
     assert readiness_publisher._public_registry().verify(
+        expected_environment="staging",
+        authority_instance_id=ready_authority_instance_id("staging"),
         key_id=readiness.key_id,
         body=readiness.to_canonical_body(),
         signature=readiness.signature,

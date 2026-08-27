@@ -114,6 +114,9 @@ def _claims(*, at: datetime | None = None) -> tuple[
     now = at or datetime.now(timezone.utc)
     readiness = PilotReadinessAttestationClaimsV2(
         pilot_run_id="pilot-run-20260826-001",
+        environment="staging",
+        ready_authority_instance_id="ready-authority/staging/v1",
+        ready_authority_resource_digest=_digest("ready-resource"),
         snapshot=_snapshot(),
         exact_four=exact_four,
         issued_at=_iso(now - timedelta(minutes=5)),

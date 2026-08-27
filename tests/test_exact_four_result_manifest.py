@@ -96,6 +96,9 @@ def _authority_chain() -> tuple[
     exact_four = load_exact_four_execution_binding()
     readiness = PilotReadinessAttestationClaimsV2(
         pilot_run_id="pilot-run-result-manifest-001",
+        environment="staging",
+        ready_authority_instance_id="ready-authority/staging/v1",
+        ready_authority_resource_digest=_digest("ready-resource"),
         snapshot=_snapshot(),
         exact_four=exact_four,
         issued_at=(now - timedelta(minutes=5)).isoformat(),
@@ -261,6 +264,9 @@ def test_historical_validators_reject_future_ready_trader_execution_chain(
     exact_four = load_exact_four_execution_binding()
     readiness = PilotReadinessAttestationClaimsV2(
         pilot_run_id="pilot-run-future-result-manifest-001",
+        environment="staging",
+        ready_authority_instance_id="ready-authority/staging/v1",
+        ready_authority_resource_digest=_digest("ready-resource-future"),
         snapshot=_snapshot(),
         exact_four=exact_four,
         issued_at=(future_clock - timedelta(minutes=5)).isoformat(),
