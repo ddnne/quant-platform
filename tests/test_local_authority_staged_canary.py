@@ -576,7 +576,7 @@ def test_public_cli_has_no_generic_permit_completion_or_identity_inputs() -> Non
     command = next(
         action for action in manager._parser()._actions if action.dest == "command"
     )
-    assert set(command.choices) == {"plan", "audit", "run"}
+    assert set(command.choices) == {"plan", "audit", "run", "initialize-journal"}
     assert not hasattr(manager, "issue_permit")
     assert not hasattr(manager, "complete_permit")
     plan = manager.plan(authority_id="ready", environment="staging")
@@ -821,6 +821,65 @@ def test_public_cli_run_returns_hold_without_mutation(
     assert "staged authority canary rejected: operational HOLD" in captured.err
     assert captured.out == ""
     assert not isolated_journal.exists()
+
+
+def test_root_initializer_creates_only_one_fresh_v4_journal(
+    isolated_journal: Path,
+) -> None:
+    first = manager.initialize_journal()
+    assert first["status"] == "CREATED_VERIFIED"
+    assert first["journal_schema_version"] == 4
+    assert first["canary_executed"] is False
+    assert first["authority_operation_executed"] is False
+    assert first["research_eligible"] is False
+    assert first["operational_state"] == "HOLD"
+    instance = first["journal_instance_id"]
+    assert instance.startswith("journal-instance:")
+    second = manager.initialize_journal()
+    assert second["status"] == "ALREADY_PRESENT_VERIFIED"
+    assert second["journal_instance_id"] == instance
+    with sqlite3.connect(isolated_journal) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM staged_canary_runs"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT schema_version,journal_format FROM staged_canary_meta"
+        ).fetchone() == (4, canary.JOURNAL_FORMAT)
+
+
+def test_journal_initializer_requires_root_before_creating_any_path(
+    isolated_journal: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        manager,
+        "_require_human_root",
+        lambda: (_ for _ in ()).throw(
+            canary.StagedCanaryError("human root is required")
+        ),
+    )
+    with pytest.raises(canary.StagedCanaryError, match="root"):
+        manager.initialize_journal()
+    assert not isolated_journal.exists()
+
+
+def test_initialize_journal_cli_has_no_selectors_and_never_runs_canary(
+    isolated_journal: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        manager,
+        "run_canary",
+        lambda **_kwargs: pytest.fail("initializer must not dispatch a canary"),
+    )
+    assert manager.main(["initialize-journal"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "CREATED_VERIFIED"
+    assert result["canary_executed"] is False
+    assert manager.main(
+        ["initialize-journal", "--authority", "ready"]
+    ) == 2
+    assert "does not accept selectors" in capsys.readouterr().err
 
 
 
@@ -1340,21 +1399,21 @@ def test_journal_exact_schema_rejects_an_extra_object(
         manager.audit()
 
 
-def test_pre_v3_journal_identity_fails_closed_without_in_place_upgrade(
+def test_pre_v4_journal_identity_fails_closed_without_in_place_upgrade(
     isolated_journal: Path,
 ) -> None:
     manager._prepare_canonical_state_root()
     legacy_schema = manager._SCHEMA.replace(
+        "CHECK(schema_version=4)",
         "CHECK(schema_version=3)",
-        "CHECK(schema_version=2)",
-    )
+    ).replace("  journal_instance_id TEXT NOT NULL UNIQUE,\n", "")
     with sqlite3.connect(isolated_journal) as connection:
         connection.executescript(legacy_schema)
         connection.execute(
             "INSERT INTO staged_canary_meta VALUES(1,?,?,?,?,?)",
             (
-                2,
-                "local-authority-staged-canary-journal/v2",
+                3,
+                "local-authority-staged-canary-journal/v3",
                 canary.load_policy().digest,
                 canary.PINNED_MANIFEST_DIGEST,
                 str(isolated_journal),

@@ -69,7 +69,8 @@
         "jquants_acquisition_collection",
         "exact_four_authority_protocol",
         "exact_four_result_manifest",
-        "exact_four_trader_authorization_v2"
+        "exact_four_trader_authorization_v2",
+        "local_authority_high_water_anchor"
       ],
       "properties": {
         "receipt_verify_public_keys": {
@@ -85,6 +86,9 @@
           "$ref": "#/$defs/sha256"
         },
         "exact_four_trader_authorization_v2": {
+          "$ref": "#/$defs/sha256"
+        },
+        "local_authority_high_water_anchor": {
           "$ref": "#/$defs/sha256"
         }
       }
