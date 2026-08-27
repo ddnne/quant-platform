@@ -133,70 +133,95 @@ def _require_live_controlled_store_identity_v2(
     return observed.st_dev, observed.st_ino
 
 
-def _provision_live_controlled_store_v2(
+def _open_or_provision_pinned_live_controlled_store_v2(
     path: Path,
     *,
     expected_uid: int,
-) -> tuple[int, int]:
-    """Create the missing live store inode without exposing a permissive file."""
+) -> tuple[int, tuple[int, int]]:
+    """Pin the exact live store, creating it without closing the new inode."""
 
-    flags = (
+    existing_flags = (
+        os.O_RDWR
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    create_flags = (
         os.O_RDWR
         | os.O_CREAT
         | os.O_EXCL
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
+    created = False
     try:
-        descriptor = os.open(path, flags, 0o600)
-    except FileExistsError:
-        identity = _require_live_controlled_store_identity_v2(
-            path,
-            expected_uid=expected_uid,
-            allow_missing=False,
-        )
-        if identity is None:  # pragma: no cover - closed by allow_missing=False
+        descriptor = os.open(path, existing_flags)
+    except FileNotFoundError:
+        try:
+            descriptor = os.open(path, create_flags, 0o600)
+            created = True
+        except FileExistsError:
+            try:
+                descriptor = os.open(path, existing_flags)
+            except OSError as exc:
+                raise ExactFourAuthorityPending(
+                    "Controlled protected store creation race cannot be pinned"
+                ) from exc
+        except OSError as exc:
             raise ExactFourAuthorityPending(
-                "Controlled protected store race was not resolved"
-            )
-        return identity
+                "Controlled protected store cannot be provisioned"
+            ) from exc
     except OSError as exc:
         raise ExactFourAuthorityPending(
-            "Controlled protected store cannot be provisioned"
+            "Controlled store is not a private single-link service store"
         ) from exc
     try:
-        os.fchmod(descriptor, 0o600)
+        if created:
+            os.fchmod(descriptor, 0o600)
         observed = os.fstat(descriptor)
+        lexical = path.lstat()
         if (
             not stat.S_ISREG(observed.st_mode)
             or observed.st_uid != expected_uid
             or stat.S_IMODE(observed.st_mode) != 0o600
             or observed.st_nlink != 1
+            or not stat.S_ISREG(lexical.st_mode)
+            or lexical.st_uid != expected_uid
+            or stat.S_IMODE(lexical.st_mode) != 0o600
+            or lexical.st_nlink != 1
+            or (lexical.st_dev, lexical.st_ino)
+            != (observed.st_dev, observed.st_ino)
         ):
             raise ExactFourAuthorityPending(
-                "Controlled protected store creation identity drifted"
+                "Controlled store is not a private single-link service store"
             )
-        os.fsync(descriptor)
         identity = (observed.st_dev, observed.st_ino)
-    finally:
-        os.close(descriptor)
-    parent_flags = (
-        os.O_RDONLY
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
-    try:
-        parent_descriptor = os.open(path.parent, parent_flags)
+        os.fsync(descriptor)
+        parent_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            parent_descriptor = os.open(path.parent, parent_flags)
+        except OSError as exc:
+            raise ExactFourAuthorityPending(
+                "Controlled store directory cannot be synchronized"
+            ) from exc
+        try:
+            os.fsync(parent_descriptor)
+        finally:
+            os.close(parent_descriptor)
     except OSError as exc:
+        os.close(descriptor)
         raise ExactFourAuthorityPending(
-            "Controlled store directory cannot be synchronized"
+            "Controlled protected store cannot be validated while pinned"
         ) from exc
-    try:
-        os.fsync(parent_descriptor)
-    finally:
-        os.close(parent_descriptor)
-    return identity
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor, identity
 
 
 def _audit_live_controlled_store_read_only_v2(
@@ -756,37 +781,50 @@ def _load_live_controlled_execution_writer_v2(
         _load_live_controlled_execution_writer_material_v2()
     )
     service_uid = os.geteuid()
-    identity = _require_live_controlled_store_identity_v2(
+    pinned_descriptor, identity = _open_or_provision_pinned_live_controlled_store_v2(
         store_path,
         expected_uid=service_uid,
-        allow_missing=True,
     )
-    if identity is None:
-        identity = _provision_live_controlled_store_v2(
+    try:
+        pinned = os.fstat(pinned_descriptor)
+        if (
+            (pinned.st_dev, pinned.st_ino) != identity
+            or not stat.S_ISREG(pinned.st_mode)
+            or pinned.st_uid != service_uid
+            or stat.S_IMODE(pinned.st_mode) != 0o600
+            or pinned.st_nlink != 1
+        ):
+            raise ExactFourAuthorityPending(
+                "Controlled store changed before live writer initialization"
+            )
+        writer = SQLiteControlledExecutionWriterV2(
+            store_path,
+            environment=environment,
+            signer=signer,
+            clock=lambda: datetime.now(UTC),
+            trader_uid=trader_uid,
+            relying_parties=rps,
+            credentials=credentials,
+            server_bound=server_bound,
+            test_mode=False,
+            _token=_WRITER_CONSTRUCTION_TOKEN,
+        )
+        initialized_identity = _require_live_controlled_store_identity_v2(
             store_path,
             expected_uid=service_uid,
+            allow_missing=False,
         )
-    writer = SQLiteControlledExecutionWriterV2(
-        store_path,
-        environment=environment,
-        signer=signer,
-        clock=lambda: datetime.now(UTC),
-        trader_uid=trader_uid,
-        relying_parties=rps,
-        credentials=credentials,
-        server_bound=server_bound,
-        test_mode=False,
-        _token=_WRITER_CONSTRUCTION_TOKEN,
-    )
-    initialized_identity = _require_live_controlled_store_identity_v2(
-        store_path,
-        expected_uid=service_uid,
-        allow_missing=False,
-    )
-    if initialized_identity != identity:
-        raise ExactFourAuthorityPending(
-            "Controlled store identity changed during live writer initialization"
-        )
+        pinned_after = os.fstat(pinned_descriptor)
+        if (
+            initialized_identity != identity
+            or (pinned_after.st_dev, pinned_after.st_ino) != identity
+            or pinned_after.st_nlink != 1
+        ):
+            raise ExactFourAuthorityPending(
+                "Controlled store identity changed during live writer initialization"
+            )
+    finally:
+        os.close(pinned_descriptor)
     return writer
 
 

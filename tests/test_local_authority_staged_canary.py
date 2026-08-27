@@ -9,6 +9,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -665,9 +666,14 @@ def test_module_monkeypatch_cannot_bypass_sealed_entrance_checks(
 ) -> None:
     monkeypatch.setattr(manager, "_require_human_root", lambda: None)
     monkeypatch.setattr(manager, "_require_protected_manager_binding", lambda: None)
+    expected_rejection = (
+        "interactive human sudo|Python -I"
+        if sys.platform == "darwin"
+        else "support macOS only"
+    )
     with pytest.raises(
         canary.StagedCanaryError,
-        match="interactive human sudo|Python -I",
+        match=expected_rejection,
     ):
         manager.run_canary(authority_id="ready", environment="staging")
     assert not isolated_journal.exists()
@@ -1280,38 +1286,47 @@ def test_governed_resource_below_writable_ancestor_is_rejected(
 
 
 def test_governed_resource_path_swap_during_digest_is_rejected(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    resource = tmp_path / "resource"
-    displaced = tmp_path / "displaced"
-    resource.write_bytes(b"fixed")
-    resource.chmod(0o600)
-    read = canary.os.read
-    swapped = False
+    # pytest's Linux base directory is normally below world-writable /tmp,
+    # which the governed-resource contract correctly rejects before reaching
+    # the descriptor/path swap check.  A private directory below the user's
+    # home has a non-writeable ancestor chain on both macOS and Linux.
+    with tempfile.TemporaryDirectory(
+        prefix="quant-platform-canary-",
+        dir=Path.home(),
+    ) as directory:
+        safe_root = Path(directory)
+        safe_root.chmod(0o700)
+        resource = safe_root / "resource"
+        displaced = safe_root / "displaced"
+        resource.write_bytes(b"fixed")
+        resource.chmod(0o600)
+        read = canary.os.read
+        swapped = False
 
-    def swap_then_read(descriptor: int, length: int) -> bytes:
-        nonlocal swapped
-        if not swapped:
-            swapped = True
-            resource.rename(displaced)
-            resource.write_bytes(b"fixed")
-            resource.chmod(0o600)
-        return read(descriptor, length)
+        def swap_then_read(descriptor: int, length: int) -> bytes:
+            nonlocal swapped
+            if not swapped:
+                swapped = True
+                resource.rename(displaced)
+                resource.write_bytes(b"fixed")
+                resource.chmod(0o600)
+            return read(descriptor, length)
 
-    monkeypatch.setattr(canary.os, "read", swap_then_read)
-    with pytest.raises(
-        canary.StagedCanaryError,
-        match="changed during observation|path changed",
-    ):
-        canary._safe_observation(
-            resource,
-            label="swapped resource",
-            owner_uids={os.geteuid()},
-            kinds={"file"},
-            allowed_modes={0o600},
-            include_digest=True,
-        )
+        monkeypatch.setattr(canary.os, "read", swap_then_read)
+        with pytest.raises(
+            canary.StagedCanaryError,
+            match="changed during observation|path changed",
+        ):
+            canary._safe_observation(
+                resource,
+                label="swapped resource",
+                owner_uids={os.geteuid()},
+                kinds={"file"},
+                allowed_modes={0o600},
+                include_digest=True,
+            )
 
 
 def test_controlled_read_only_preflight_never_initializes_or_changes_store(
@@ -1650,8 +1665,8 @@ def test_controlled_inactive_canary_audits_exact_store_via_pinned_descriptor(
         )
 
 
-@pytest.mark.parametrize("unsafe_kind", ("symlink", "wrong_mode"))
-def test_controlled_live_writer_rejects_unsafe_existing_store_before_open(
+@pytest.mark.parametrize("unsafe_kind", ("symlink", "fifo", "wrong_mode"))
+def test_controlled_live_writer_rejects_unsafe_store_before_writer_construction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     unsafe_kind: str,
@@ -1664,6 +1679,8 @@ def test_controlled_live_writer_rejects_unsafe_existing_store_before_open(
     target.chmod(0o600)
     if unsafe_kind == "symlink":
         store.symlink_to(target)
+    elif unsafe_kind == "fifo":
+        os.mkfifo(store, 0o600)
     else:
         store.write_bytes(b"unsafe-mode")
         store.chmod(0o640)
