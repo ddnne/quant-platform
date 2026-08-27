@@ -10,6 +10,7 @@ import sqlite3
 import struct
 import threading
 import time
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -441,3 +442,105 @@ def test_processing_deadline_rejects_result_without_ledger_commit(
     assert response["error"] == "LocalAuthorityError"
     with sqlite3.connect(ledger.path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM authority_events").fetchone() == (0,)
+
+
+def test_descriptor_policy_separates_linked_mirror_from_unlinked_trader_handoff(
+    tmp_path: Path,
+) -> None:
+    linked = tmp_path / "mirror.sqlite3"
+    linked.write_bytes(b"governed mirror")
+    with linked.open("r+b") as stream:
+        stream.truncate(authority.MAX_FRAME_BYTES + 1)
+    linked.chmod(0o600)
+    linked_fd = os.open(linked, os.O_RDONLY)
+    try:
+        authority._validate_read_only_transfer_fd(
+            linked_fd,
+            policy=authority.ReadOnlyDescriptorPolicy.GOVERNED_LINKED_FILE,
+        )
+        with pytest.raises(authority.LocalAuthorityError, match="unlinked"):
+            authority._validate_read_only_transfer_fd(
+                linked_fd,
+                policy=authority.ReadOnlyDescriptorPolicy.UNLINKED_TRADER_HANDOFF,
+            )
+    finally:
+        os.close(linked_fd)
+
+    writable_fd, name = tempfile.mkstemp(dir=tmp_path)
+    unlinked_fd = -1
+    try:
+        os.write(writable_fd, b"canonical Trader handoff")
+        os.fsync(writable_fd)
+        os.fchmod(writable_fd, 0o400)
+        os.close(writable_fd)
+        writable_fd = -1
+        unlinked_fd = os.open(name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+        os.unlink(name)
+        authority._validate_read_only_transfer_fd(
+            unlinked_fd,
+            policy=authority.ReadOnlyDescriptorPolicy.UNLINKED_TRADER_HANDOFF,
+        )
+        with pytest.raises(authority.LocalAuthorityError, match="singly linked"):
+            authority._validate_read_only_transfer_fd(
+                unlinked_fd,
+                policy=authority.ReadOnlyDescriptorPolicy.GOVERNED_LINKED_FILE,
+            )
+    finally:
+        if writable_fd >= 0:
+            os.close(writable_fd)
+        if unlinked_fd >= 0:
+            os.close(unlinked_fd)
+        Path(name).unlink(missing_ok=True)
+
+
+def test_unlinked_handoff_client_is_closed_to_exact_method_and_purpose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    def delegated(path, request, **kwargs):
+        observed.update(path=path, request=request, **kwargs)
+        return {"status": "CONTROLLED_ARTIFACTS_COMMITTED"}
+
+    monkeypatch.setattr(authority, "_call_unix_authority", delegated)
+    request = {
+        "format": authority.REQUEST_FORMAT,
+        "request_id": "handoff-1",
+        "operation": "controlled_execution:consume_trader_handoff",
+        "purpose": "exact_four_one_shot_execution",
+        "payload": {
+            "handoff_id": "handoff-1",
+            "handoff_digest": "sha256:" + "1" * 64,
+        },
+    }
+    result = authority.call_controlled_execution_with_trader_handoff(
+        "/tmp/controlled.sock",
+        request,
+        expected_server_uid=501,
+        unlinked_read_only_fd=9,
+    )
+    assert result["status"] == "CONTROLLED_ARTIFACTS_COMMITTED"
+    assert observed["descriptor_policy"] is (
+        authority.ReadOnlyDescriptorPolicy.UNLINKED_TRADER_HANDOFF
+    )
+    assert observed["read_only_fd"] == 9
+
+    wrong = dict(request)
+    wrong["purpose"] = "render_owned_mirror_projection"
+    with pytest.raises(authority.LocalAuthorityError, match="exact controlled"):
+        authority.call_controlled_execution_with_trader_handoff(
+            "/tmp/controlled.sock",
+            wrong,
+            expected_server_uid=501,
+            unlinked_read_only_fd=9,
+        )
+    with pytest.raises(TypeError):
+        authority.call_unix_authority(
+            "/tmp/controlled.sock",
+            request,
+            expected_server_uid=501,
+            read_only_fd=9,
+            descriptor_policy=(  # type: ignore[call-arg]
+                authority.ReadOnlyDescriptorPolicy.UNLINKED_TRADER_HANDOFF
+            ),
+        )

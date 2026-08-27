@@ -26,6 +26,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, NoReturn
@@ -50,12 +51,15 @@ MAX_FRAME_BYTES = 4 * 1024 * 1024
 MAX_FILE_DESCRIPTORS = 1
 DEFAULT_IO_TIMEOUT_SECONDS = 5.0
 DEFAULT_PROCESSING_TIMEOUT_SECONDS = 30.0
-_UNLINKED_DESCRIPTOR_METHOD = (
-    "controlled_execution:consume_trader_handoff",
-    "exact_four_one_shot_execution",
-)
 DEFAULT_ACCEPT_POLL_SECONDS = 0.5
 DEFAULT_MAX_CONCURRENT_CONNECTIONS = 16
+
+
+class ReadOnlyDescriptorPolicy(Enum):
+    """Closed descriptor shapes accepted by the generic Unix client."""
+
+    GOVERNED_LINKED_FILE = "governed_linked_file"
+    UNLINKED_TRADER_HANDOFF = "unlinked_trader_handoff"
 
 
 class LocalAuthorityError(RuntimeError):
@@ -764,12 +768,47 @@ def _send_frame(channel: socket.socket, payload: Mapping[str, Any]) -> None:
     channel.sendall(struct.pack("!I", len(body)) + body)
 
 
-def call_unix_authority(
+def _validate_read_only_transfer_fd(
+    fd: int, *, policy: ReadOnlyDescriptorPolicy
+) -> None:
+    if type(policy) is not ReadOnlyDescriptorPolicy:
+        raise LocalAuthorityError("authority descriptor policy is invalid")
+    try:
+        access_mode = os.O_ACCMODE & fcntl.fcntl(fd, fcntl.F_GETFL)
+        descriptor_flags = fcntl.fcntl(fd, fcntl.F_GETFD)
+        info = os.fstat(fd)
+    except OSError as exc:
+        raise LocalAuthorityError("authority descriptor is unavailable") from exc
+    if (
+        access_mode != os.O_RDONLY
+        or descriptor_flags & fcntl.FD_CLOEXEC == 0
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or info.st_size <= 0
+    ):
+        raise LocalAuthorityError("authority descriptor metadata is unsafe")
+    if policy is ReadOnlyDescriptorPolicy.GOVERNED_LINKED_FILE:
+        if info.st_nlink != 1 or stat.S_IMODE(info.st_mode) & 0o077:
+            raise LocalAuthorityError(
+                "governed authority descriptor must be singly linked and protected"
+            )
+    elif (
+        info.st_nlink != 0
+        or stat.S_IMODE(info.st_mode) != 0o400
+        or info.st_size > MAX_FRAME_BYTES
+    ):
+        raise LocalAuthorityError(
+            "Trader handoff descriptor must be unlinked and mode 0400"
+        )
+
+
+def _call_unix_authority(
     socket_path: str | Path,
     request: Mapping[str, Any],
     *,
     expected_server_uid: int,
     read_only_fd: int | None = None,
+    descriptor_policy: ReadOnlyDescriptorPolicy,
     timeout_seconds: float = DEFAULT_IO_TIMEOUT_SECONDS,
 ) -> Mapping[str, Any]:
     """Call one authority while authenticating the server by kernel UID."""
@@ -795,30 +834,15 @@ def call_unix_authority(
             raise LocalAuthorityError("authority request exceeds frame limit")
         header = struct.pack("!I", len(body))
         if read_only_fd is None:
+            if descriptor_policy is not ReadOnlyDescriptorPolicy.GOVERNED_LINKED_FILE:
+                raise LocalAuthorityError(
+                    "non-default descriptor policy requires one descriptor"
+                )
             channel.sendall(header + body)
         else:
-            try:
-                flags = os.O_ACCMODE & fcntl.fcntl(read_only_fd, fcntl.F_GETFL)
-                info = os.fstat(read_only_fd)
-            except OSError as exc:
-                raise LocalAuthorityError(
-                    "authority descriptor is unavailable"
-                ) from exc
-            operation = request.get("operation")
-            purpose = request.get("purpose")
-            expected_nlink = (
-                0
-                if (operation, purpose) == _UNLINKED_DESCRIPTOR_METHOD
-                else 1
+            _validate_read_only_transfer_fd(
+                read_only_fd, policy=descriptor_policy
             )
-            if (
-                flags != os.O_RDONLY
-                or not stat.S_ISREG(info.st_mode)
-                or info.st_nlink != expected_nlink
-            ):
-                raise LocalAuthorityError(
-                    "authority descriptor link identity is invalid for the method"
-                )
             rights = array.array("i", [read_only_fd])
             sent = channel.sendmsg(
                 [header],
@@ -854,6 +878,66 @@ def call_unix_authority(
         raise LocalAuthorityError("authority call transport failed") from exc
     finally:
         channel.close()
+
+
+def call_unix_authority(
+    socket_path: str | Path,
+    request: Mapping[str, Any],
+    *,
+    expected_server_uid: int,
+    read_only_fd: int | None = None,
+    timeout_seconds: float = DEFAULT_IO_TIMEOUT_SECONDS,
+) -> Mapping[str, Any]:
+    """Call a normal authority; any transferred FD must be linked/governed."""
+
+    return _call_unix_authority(
+        socket_path,
+        request,
+        expected_server_uid=expected_server_uid,
+        read_only_fd=read_only_fd,
+        descriptor_policy=ReadOnlyDescriptorPolicy.GOVERNED_LINKED_FILE,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def call_controlled_execution_with_trader_handoff(
+    socket_path: str | Path,
+    request: Mapping[str, Any],
+    *,
+    expected_server_uid: int,
+    unlinked_read_only_fd: int,
+    timeout_seconds: float = DEFAULT_IO_TIMEOUT_SECONDS,
+) -> Mapping[str, Any]:
+    """Send the sole allowed unlinked FD on the exact Trader handoff method."""
+
+    payload = request.get("payload") if type(request) is dict else None
+    if (
+        type(request) is not dict
+        or set(request)
+        != {"format", "request_id", "operation", "purpose", "payload"}
+        or request.get("format") != REQUEST_FORMAT
+        or request.get("operation")
+        != "controlled_execution:consume_trader_handoff"
+        or request.get("purpose") != "exact_four_one_shot_execution"
+        or type(payload) is not dict
+        or set(payload) != {"handoff_id", "handoff_digest"}
+        or request.get("request_id") != payload.get("handoff_id")
+        or type(payload.get("handoff_id")) is not str
+        or not payload["handoff_id"]
+        or type(payload.get("handoff_digest")) is not str
+        or not payload["handoff_digest"].startswith("sha256:")
+    ):
+        raise LocalAuthorityError(
+            "unlinked Trader descriptor requires the exact controlled handoff method"
+        )
+    return _call_unix_authority(
+        socket_path,
+        request,
+        expected_server_uid=expected_server_uid,
+        read_only_fd=unlinked_read_only_fd,
+        descriptor_policy=ReadOnlyDescriptorPolicy.UNLINKED_TRADER_HANDOFF,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 AuthorityHandler = Callable[
@@ -1074,8 +1158,10 @@ __all__ = [
     "PeerAuthenticationError",
     "PeerIdentity",
     "PeerPrincipalRegistry",
+    "ReadOnlyDescriptorPolicy",
     "SQLiteAuthorityEventLedger",
     "UnixAuthorityService",
+    "call_controlled_execution_with_trader_handoff",
     "call_unix_authority",
     "canonical_json_bytes",
     "canonical_json_text",
