@@ -599,7 +599,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--environment", choices=("staging", "production"), required=True
     )
+    parser.add_argument(
+        "--staged-canary-preflight",
+        action="store_true",
+        help=(
+            "run only the root-orchestrated research-ineligible inactive "
+            "preflight; never serve a product operation"
+        ),
+    )
     args = parser.parse_args(argv)
+    if args.staged_canary_preflight:
+        from scripts.local_authority_staged_canary import runner_main
+
+        return runner_main(
+            authority_id=args.authority,
+            environment=args.environment,
+        )
     try:
         serve_forever(authority_id=args.authority, environment=args.environment)
     except (AuthorityRunnerError, LocalAuthorityError, FindingLedgerError) as exc:

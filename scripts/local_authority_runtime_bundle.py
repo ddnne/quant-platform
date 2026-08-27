@@ -38,6 +38,24 @@ from scripts.local_authority_files import (
     read_protected_authority_file,
 )
 
+_RUNTIME_ARCHIVE_EXCLUSIONS = ("tests",)
+
+
+def _git_runtime_archive_command(source_sha: str) -> list[str]:
+    """Archive reviewed product source without test-only introspection helpers."""
+
+    return [
+        "/usr/bin/git",
+        "-C",
+        str(_ROOT),
+        "archive",
+        "--format=tar",
+        source_sha,
+        "--",
+        ".",
+        *(f":(exclude){path}" for path in _RUNTIME_ARCHIVE_EXCLUSIONS),
+    ]
+
 
 def _require_root_owned_executable(path: Path) -> Path:
     try:
@@ -186,8 +204,10 @@ def _d1_remote_sync_prerequisite_plan() -> dict[str, Any]:
             protected = info.st_uid == 0 and not stat.S_IMODE(info.st_mode) & 0o022
             for parent in (resolved.parent, *resolved.parents):
                 parent_info = parent.lstat()
-                protected = protected and parent_info.st_uid == 0 and not (
-                    stat.S_IMODE(parent_info.st_mode) & 0o022
+                protected = (
+                    protected
+                    and parent_info.st_uid == 0
+                    and not (stat.S_IMODE(parent_info.st_mode) & 0o022)
                 )
             node_observation = {
                 "status": "OBSERVED",
@@ -305,7 +325,8 @@ def install_runtime_bundle(
         "requires_human_sudo": True,
         "strict_gate_required": False,
         "positive_activation_forbidden": True,
-        "source": "git archive of the reviewed exact commit only",
+        "source": "git archive of reviewed product source at the exact commit",
+        "excluded_test_only_paths": list(_RUNTIME_ARCHIVE_EXCLUSIONS),
         "destination_root": str(RUNTIME_BUNDLES_ROOT),
         "runtime_manifest": str(RUNTIME_BUNDLE_MANIFEST_PATH),
         "launchd_uses_checkout_or_uv": False,
@@ -339,14 +360,7 @@ def install_runtime_bundle(
     python_path = _require_root_owned_executable(root_python)
     _validate_root_python_dependencies(python_path)
     archive = subprocess.run(
-        [
-            "/usr/bin/git",
-            "-C",
-            str(_ROOT),
-            "archive",
-            "--format=tar",
-            expected_source_sha,
-        ],
+        _git_runtime_archive_command(expected_source_sha),
         check=False,
         capture_output=True,
     )

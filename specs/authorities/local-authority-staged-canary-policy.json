@@ -1,0 +1,112 @@
+{
+  "schema_version": "local-authority-staged-canary-policy/v1",
+  "classification": "CANARY_NOT_RESEARCH_ELIGIBLE",
+  "scope": "SIGNED_LOCAL_OS_AUTHORITIES_ONLY",
+  "principal_manifest_digest": "sha256:f1ce07989ee97c87690b3341f14b0cad7a27eb2a62eff489d330420647aeb0b0",
+  "state_root": "/Library/Application Support/quant-platform/authorities/staged-canary",
+  "journal_path": "/Library/Application Support/quant-platform/authorities/staged-canary/journal.sqlite3",
+  "source_sha_binding": {
+    "manifest_path": "/Library/Application Support/quant-platform/authorities/runtime-bundle.json",
+    "manifest_format": "local-authority-runtime-bundle/v1",
+    "field": "source_sha",
+    "required_owner_uid": 0
+  },
+  "lease_seconds": 120,
+  "maximum_attempts": 3,
+  "attempt_family": "AUTHORITY_ENVIRONMENT_ACTION_SOURCE_SHA",
+  "strict_boundaries": {
+    "release": false,
+    "ready_publication": false,
+    "receipt_complete": false,
+    "controlled_pilot": false,
+    "mass_research": false
+  },
+  "authorities": [
+    {
+      "authority_id": "d1_sync",
+      "action": "d1_sync:inactive_signing_preflight",
+      "environments": ["staging", "production"],
+      "proof_kind": "ED25519_PROTECTED_KEY_PREFLIGHT",
+      "resource_roles": [
+        "service_identity",
+        "runtime_bundle_source_sha",
+        "runtime_config",
+        "protected_signing_key_public_identity",
+        "authority_event_ledger",
+        "governed_db",
+        "cloudflare_token_metadata_only",
+        "node_executable",
+        "wrangler_cli",
+        "wrangler_cli_tree",
+        "wrangler_config",
+        "wrangler_lock"
+      ]
+    },
+    {
+      "authority_id": "ops_projection",
+      "action": "ops_projection:inactive_signing_preflight",
+      "environments": ["staging", "production"],
+      "proof_kind": "ED25519_PROTECTED_KEY_PREFLIGHT",
+      "resource_roles": [
+        "service_identity",
+        "runtime_bundle_source_sha",
+        "runtime_config",
+        "protected_signing_key_public_identity",
+        "authority_event_ledger",
+        "artifact_store"
+      ]
+    },
+    {
+      "authority_id": "coverage_transition",
+      "action": "coverage_transition:inactive_signing_preflight",
+      "environments": ["staging", "production"],
+      "proof_kind": "ED25519_PROTECTED_KEY_PREFLIGHT",
+      "resource_roles": [
+        "service_identity",
+        "runtime_bundle_source_sha",
+        "runtime_config",
+        "protected_signing_key_public_identity",
+        "authority_event_ledger"
+      ]
+    },
+    {
+      "authority_id": "ready",
+      "action": "ready:inactive_signing_preflight",
+      "environments": ["staging", "production"],
+      "proof_kind": "ED25519_PROTECTED_KEY_PREFLIGHT",
+      "resource_roles": [
+        "service_identity",
+        "runtime_bundle_source_sha",
+        "runtime_config",
+        "protected_signing_key_public_identity",
+        "authority_event_ledger",
+        "snapshot_root"
+      ]
+    },
+    {
+      "authority_id": "controlled_execution",
+      "action": "controlled_execution:inactive_signing_preflight",
+      "environments": ["staging", "production"],
+      "proof_kind": "ED25519_PROTECTED_KEY_PREFLIGHT",
+      "resource_roles": [
+        "service_identity",
+        "runtime_bundle_source_sha",
+        "runtime_config",
+        "protected_signing_key_public_identity",
+        "authority_event_ledger",
+        "root_owned_controlled_activation",
+        "controlled_store"
+      ]
+    }
+  ],
+  "excluded_authorities": [
+    {
+      "authority_id": "receipt",
+      "reason": "Cloudflare Service Binding and deployed-version identity require a separately authenticated Cloudflare canary protocol; caller-supplied evidence is forbidden"
+    },
+    {
+      "authority_id": "trader",
+      "reason": "Unsigned local WebAuthn preflight output cannot prove authority-run provenance; kernel-authenticated IPC or an authority-held attestation key is required and caller-supplied evidence is forbidden"
+    }
+  ]
+}

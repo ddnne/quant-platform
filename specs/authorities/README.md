@@ -104,3 +104,10 @@ described in the ADR must also succeed; those deployment gates remain pending.
 The account-wide scope of Cloudflare Workers Scripts Write remains an explicit
 open residual risk. The Worker, Service Binding, Durable Object, and key-custody
 split does not make that deployment permission resource-scoped.
+
+The local-only staged bootstrap canary contract is frozen in
+`local-authority-staged-canary-policy.json` and operated according to
+`docs/operations/local_authority_staged_canary.md`. It cannot activate a
+product authority or satisfy the all-P0 release/READY/Pilot gate. Receipt is
+not accepted through this local journal because a caller file cannot prove a
+Cloudflare Service Binding or deployed version.
