@@ -36,7 +36,11 @@ def _token(index: int) -> str:
     return f"jqa2.{encoded}.{signature}"
 
 
-def _metadata_headers(metadata: Mapping[str, Any]) -> dict[str, str]:
+def _metadata_headers(
+    metadata: Mapping[str, Any],
+    *,
+    official_calendar_raw: bytes | None = None,
+) -> dict[str, str]:
     def value(item: Any) -> str:
         return "NONE" if item is None else str(item)
 
@@ -66,6 +70,26 @@ def _metadata_headers(metadata: Mapping[str, Any]) -> dict[str, str]:
         "x-quant-acquisition-environment": value(metadata["environment"]),
         "x-quant-acquisition-evidence-state": str(metadata["evidence_state"]),
         "x-quant-acquisition-metadata-digest": _digest(dict(metadata)),
+        "x-quant-acquisition-official-calendar-path": (
+            "/v2/markets/calendar"
+            if official_calendar_raw is not None
+            else "NONE"
+        ),
+        "x-quant-acquisition-official-calendar-raw-base64": (
+            base64.b64encode(official_calendar_raw).decode("ascii")
+            if official_calendar_raw is not None
+            else "NONE"
+        ),
+        "x-quant-acquisition-official-calendar-raw-digest": (
+            _digest(official_calendar_raw)
+            if official_calendar_raw is not None
+            else "NONE"
+        ),
+        "x-quant-acquisition-official-calendar-raw-size": (
+            str(len(official_calendar_raw))
+            if official_calendar_raw is not None
+            else "NONE"
+        ),
         "x-quant-acquisition-page-ordinal": value(metadata["page_ordinal"]),
         "x-quant-acquisition-pagination-state": str(metadata["pagination_state"]),
         "x-quant-acquisition-previous-chain-digest": value(
@@ -379,7 +403,14 @@ def build_live_acquisition(
                 "raw_size": len(raw),
                 "raw_digest": body_digest,
                 "response_status": 200,
-                "headers": _metadata_headers(metadata),
+                "headers": _metadata_headers(
+                    metadata,
+                    official_calendar_raw=(
+                        official_calendar_raw
+                        if route.requires_official_calendar and index == 0
+                        else None
+                    ),
+                ),
                 "metadata": metadata,
             }
         )

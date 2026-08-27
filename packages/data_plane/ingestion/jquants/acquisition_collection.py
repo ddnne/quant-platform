@@ -343,7 +343,7 @@ def _target_registry() -> _TargetRegistry:
     for name, expected_count in (
         ("request_fields", 14),
         ("response_metadata_fields", 34),
-        ("response_header_fields", 37),
+        ("response_header_fields", 41),
     ):
         values = surface.get(name)
         if (
@@ -791,7 +791,7 @@ def _header_int(value: str, name: str) -> int | None:
 def _metadata_from_headers(headers: Mapping[str, str]) -> dict[str, Any]:
     header_names = _rpc_surface().header_names
     if set(headers) != set(header_names) or len(headers) != len(header_names):
-        raise ValueError("response headers are not the exact 37-field target surface")
+        raise ValueError("response headers are not the exact 41-field target surface")
     if any(type(key) is not str or type(value) is not str for key, value in headers.items()):
         raise ValueError("response header names and values must be strings")
     if headers["cache-control"] != "no-store":

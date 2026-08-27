@@ -1373,7 +1373,7 @@
   "maximum_redirects": 0,
   "maximum_segment_pages": 8192,
   "official_origin": "https://api.jquants.com",
-  "registry_digest": "sha256:c1e869c95b0426926fc6db92a8438b327ed980abc8188deb096cc0a982c9c3c8",
+  "registry_digest": "sha256:1355e440a0a58356c90854646cdb82b5fd1dcc1e39adc8aa6fa5ea48a9211b52",
   "rpc_surface": {
     "request_fields": [
       "schema_version",
@@ -1409,6 +1409,10 @@
       "x-quant-acquisition-environment",
       "x-quant-acquisition-evidence-state",
       "x-quant-acquisition-metadata-digest",
+      "x-quant-acquisition-official-calendar-path",
+      "x-quant-acquisition-official-calendar-raw-base64",
+      "x-quant-acquisition-official-calendar-raw-digest",
+      "x-quant-acquisition-official-calendar-raw-size",
       "x-quant-acquisition-page-ordinal",
       "x-quant-acquisition-pagination-state",
       "x-quant-acquisition-previous-chain-digest",
@@ -1472,7 +1476,7 @@
     "canonical_dataset_registry": "packages/data_plane/data_contracts/canonical_datasets.json",
     "collection_coverage": "packages/data_plane/data_contracts/collection_coverage.json",
     "jquants_acquisition_rpc_schema": "specs/authorities/jquants_acquisition_rpc.schema.json",
-    "jquants_acquisition_rpc_schema_digest": "sha256:01eb2c7583294d381330c2683f18a7d41e21b93435c9b3aea188f93fd4ca0807",
+    "jquants_acquisition_rpc_schema_digest": "sha256:c411c97c6e3d36fa944d13169c6093940de8292e73f4a54171e11b52358a73ff",
     "official_client_revision": "e38614ea3d66c4420597ff148c4848693692d6d9",
     "premium_contract": "packages/data_plane/data_contracts/jquants_premium_core.json",
     "source_capability_directory": "packages/data_plane/data_contracts/source_capability_contracts"

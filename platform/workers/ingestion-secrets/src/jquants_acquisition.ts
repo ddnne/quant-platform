@@ -60,6 +60,10 @@ export const ACQUISITION_RESPONSE_HEADER_NAMES = [
   "x-quant-acquisition-environment",
   "x-quant-acquisition-evidence-state",
   "x-quant-acquisition-metadata-digest",
+  "x-quant-acquisition-official-calendar-path",
+  "x-quant-acquisition-official-calendar-raw-base64",
+  "x-quant-acquisition-official-calendar-raw-digest",
+  "x-quant-acquisition-official-calendar-raw-size",
   "x-quant-acquisition-page-ordinal",
   "x-quant-acquisition-pagination-state",
   "x-quant-acquisition-previous-chain-digest",
@@ -103,6 +107,12 @@ function errorBytes(code: string): Uint8Array {
 
 function headerValue(value: string | number | null): string {
   return value === null ? "NONE" : String(value);
+}
+
+function base64Bytes(value: Uint8Array): string {
+  let binary = "";
+  for (const byte of value) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 function blankMetadata(
@@ -184,9 +194,23 @@ async function responseWithMetadata(
   body: Uint8Array,
   status: number,
   metadata: AcquisitionResponseMetadataV2,
+  officialCalendarRaw: Uint8Array | null = null,
 ): Promise<Response> {
   const actualBodyDigest = await sha256Digest(body);
   if (actualBodyDigest !== metadata.body_digest) throw new Error("body digest mismatch");
+  const officialCalendarDigest = officialCalendarRaw === null
+    ? null
+    : await sha256Digest(officialCalendarRaw);
+  if (
+    officialCalendarRaw !== null &&
+    (
+      metadata.dataset_id !== "equities_master" ||
+      metadata.page_ordinal !== 0 ||
+      metadata.evidence_state !== "RAW_PAGE"
+    )
+  ) {
+    throw new Error("official calendar raw evidence is outside the first master page");
+  }
   const metadataDigest = await canonicalDigest(metadata);
   const headers = new Headers({
     "cache-control": "no-store",
@@ -206,6 +230,18 @@ async function responseWithMetadata(
     "x-quant-acquisition-environment": headerValue(metadata.environment),
     "x-quant-acquisition-evidence-state": metadata.evidence_state,
     "x-quant-acquisition-metadata-digest": metadataDigest,
+    "x-quant-acquisition-official-calendar-path": headerValue(
+      officialCalendarRaw === null ? null : OFFICIAL_CALENDAR_PATH,
+    ),
+    "x-quant-acquisition-official-calendar-raw-base64": headerValue(
+      officialCalendarRaw === null ? null : base64Bytes(officialCalendarRaw),
+    ),
+    "x-quant-acquisition-official-calendar-raw-digest": headerValue(
+      officialCalendarDigest,
+    ),
+    "x-quant-acquisition-official-calendar-raw-size": headerValue(
+      officialCalendarRaw?.byteLength ?? null,
+    ),
     "x-quant-acquisition-page-ordinal": headerValue(metadata.page_ordinal),
     "x-quant-acquisition-pagination-state": metadata.pagination_state,
     "x-quant-acquisition-previous-chain-digest": headerValue(metadata.previous_chain_digest),
@@ -498,7 +534,10 @@ async function captureOfficialCalendar(
   resolved: ResolvedGovernedRequest,
   apiKey: string,
   limits: TargetRegistryLimits,
-): Promise<OfficialBusinessCalendarBinding> {
+): Promise<{
+  binding: OfficialBusinessCalendarBinding;
+  raw: Uint8Array;
+}> {
   if (!resolved.route.requiresOfficialCalendar) {
     throw new AcquisitionRequestRejected("official_calendar_route");
   }
@@ -518,7 +557,12 @@ async function captureOfficialCalendar(
     throw new AcquisitionRequestRejected("official_calendar_response");
   }
   const raw = await readBoundedBody(response, limits.maximumPageBytes);
-  return deriveOfficialBusinessCalendar(raw, resolved.segmentStart, resolved.segmentEnd);
+  return {
+    binding: await deriveOfficialBusinessCalendar(
+      raw, resolved.segmentStart, resolved.segmentEnd,
+    ),
+    raw,
+  };
 }
 
 function audit(
@@ -563,6 +607,7 @@ export async function fetchGovernedPage(
   }
   const limits = targetRegistryLimits();
   let session: AcquisitionSession | null = null;
+  let officialCalendarRaw: Uint8Array | null = null;
   try {
     if (resolved.request.continuation_token !== null) {
       session = await consumeContinuationToken(
@@ -603,8 +648,9 @@ export async function fetchGovernedPage(
         resolved, env.JQUANTS_API_KEY, limits,
       );
       session = await initialAcquisitionSession(
-        env.JQUANTS_RPC_CURSOR_HMAC_KEY, resolved, now, limits, calendar,
+        env.JQUANTS_RPC_CURSOR_HMAC_KEY, resolved, now, limits, calendar.binding,
       );
+      officialCalendarRaw = calendar.raw;
       validateSession(resolved, session);
     } catch {
       const response = await errorResponse(
@@ -789,7 +835,12 @@ export async function fetchGovernedPage(
     previous_chain_digest: session.previousChainDigest,
     chain_digest: chainDigest,
   };
-  const response = await responseWithMetadata(body, upstream.status, metadata);
+  const response = await responseWithMetadata(
+    body,
+    upstream.status,
+    metadata,
+    officialCalendarRaw,
+  );
   audit(resolved, session.acquisitionId, evidenceState, response.status);
   return response;
 }

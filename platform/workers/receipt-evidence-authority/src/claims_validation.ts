@@ -37,6 +37,13 @@ const REQUIRED_ACQUISITION_DIGESTS = [
   "acquisition_collection_digest",
   "acquisition_terminal_chain_digest",
 ] as const;
+const REQUIRED_MASTER_CALENDAR_DIGESTS = [
+  "official_calendar_evidence_digest",
+  "official_calendar_raw_body_digest",
+  "official_calendar_query_digest",
+  "official_business_dates_digest",
+  "official_calendar_binding_digest",
+] as const;
 
 /** Validate only DO-derived claims immediately before signing. */
 export function requireDerivedClaims(value: unknown): UnsignedReceiptClaimsV3 {
@@ -54,6 +61,9 @@ export function requireDerivedClaims(value: unknown): UnsignedReceiptClaimsV3 {
     "structured_generation",
     "run_id",
   ] as const;
+  const requiredExtraDigests = value.dataset === "equities_master"
+    ? [...REQUIRED_ACQUISITION_DIGESTS, ...REQUIRED_MASTER_CALENDAR_DIGESTS]
+    : [...REQUIRED_ACQUISITION_DIGESTS];
   if (
     (value.environment !== "production" && value.environment !== "staging") ||
     !isSha256(value.authority_instance_digest) ||
@@ -80,8 +90,8 @@ export function requireDerivedClaims(value: unknown): UnsignedReceiptClaimsV3 {
     typeof value.checked_at !== "string" ||
     !Number.isFinite(Date.parse(value.checked_at)) ||
     extraDigests === null ||
-    !exactKeys(extraDigests, REQUIRED_ACQUISITION_DIGESTS) ||
-    REQUIRED_ACQUISITION_DIGESTS.some(
+    !exactKeys(extraDigests, requiredExtraDigests) ||
+    requiredExtraDigests.some(
       (field) => !isSha256(extraDigests[field]),
     )
   ) {

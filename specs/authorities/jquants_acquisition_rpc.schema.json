@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://quant-platform.invalid/specs/authorities/jquants_acquisition_rpc.schema.json",
   "title": "Pending typed J-Quants acquisition WorkerEntrypoint RPC v2",
-  "description": "The RPC returns a transferable Response stream, not a JSON response object. RAW_PAGE and RAW_ONLY bodies are the exact successful upstream bytes. REJECTED and FAILED bodies are target-generated JSON. Only the closed response_headers set is target-authored; no upstream header is passed through. HMAC continuation state authenticates live navigation only and is not standalone COMPLETE receipt evidence.",
+  "description": "The RPC returns a transferable Response stream, not a JSON response object. RAW_PAGE and RAW_ONLY bodies are the exact successful upstream bytes. REJECTED and FAILED bodies are target-generated JSON. Only the closed response_headers set is target-authored; no upstream header is passed through. The first equities_master RAW_PAGE additionally carries the exact official-calendar upstream bytes and their digest in the closed header channel so Receipt can persist, read back, and parse that evidence without relying on a continuation cursor. HMAC continuation state authenticates live navigation only and is not standalone COMPLETE receipt evidence.",
   "x-quant-canonicalization": "RFC8259 UTF-8, lexicographically sorted object keys, no whitespace; metadata_digest is computed over response_metadata without a metadata_digest field",
   "x-quant-response-transport": {
     "runtime_type": "Response",
@@ -244,6 +244,10 @@
         "x-quant-acquisition-cursor-key-id", "x-quant-acquisition-dataset",
         "x-quant-acquisition-dataset-contract-digest", "x-quant-acquisition-environment",
         "x-quant-acquisition-evidence-state", "x-quant-acquisition-metadata-digest",
+        "x-quant-acquisition-official-calendar-path",
+        "x-quant-acquisition-official-calendar-raw-base64",
+        "x-quant-acquisition-official-calendar-raw-digest",
+        "x-quant-acquisition-official-calendar-raw-size",
         "x-quant-acquisition-page-ordinal", "x-quant-acquisition-pagination-state",
         "x-quant-acquisition-previous-chain-digest", "x-quant-acquisition-previous-request-digest",
         "x-quant-acquisition-provider-page-ordinal", "x-quant-acquisition-provider-pagination-state",
@@ -273,6 +277,15 @@
         "x-quant-acquisition-environment": {"enum": ["NONE", "staging", "production"]},
         "x-quant-acquisition-evidence-state": {"enum": ["RAW_PAGE", "RAW_ONLY", "REJECTED", "FAILED"]},
         "x-quant-acquisition-metadata-digest": {"$ref": "#/$defs/sha256"},
+        "x-quant-acquisition-official-calendar-path": {"enum": ["NONE", "/v2/markets/calendar"]},
+        "x-quant-acquisition-official-calendar-raw-base64": {
+          "oneOf": [
+            {"const": "NONE"},
+            {"type": "string", "not": {"const": "NONE"}, "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$", "minLength": 4, "maxLength": 87384}
+          ]
+        },
+        "x-quant-acquisition-official-calendar-raw-digest": {"$ref": "#/$defs/header_nullable_sha256"},
+        "x-quant-acquisition-official-calendar-raw-size": {"$ref": "#/$defs/header_nullable_integer"},
         "x-quant-acquisition-page-ordinal": {"$ref": "#/$defs/header_nullable_integer"},
         "x-quant-acquisition-pagination-state": {"$ref": "#/$defs/pagination_state"},
         "x-quant-acquisition-previous-chain-digest": {"$ref": "#/$defs/header_nullable_sha256"},
@@ -295,6 +308,36 @@
         "x-quant-acquisition-upstream-status": {"type": "string", "pattern": "^(?:NONE|[1-5][0-9]{2})$"}
       },
       "allOf": [
+        {
+          "if": {
+            "properties": {
+              "x-quant-acquisition-dataset": {"const": "equities_master"},
+              "x-quant-acquisition-evidence-state": {"const": "RAW_PAGE"},
+              "x-quant-acquisition-page-ordinal": {"const": "0"}
+            },
+            "required": [
+              "x-quant-acquisition-dataset",
+              "x-quant-acquisition-evidence-state",
+              "x-quant-acquisition-page-ordinal"
+            ]
+          },
+          "then": {
+            "properties": {
+              "x-quant-acquisition-official-calendar-path": {"const": "/v2/markets/calendar"},
+              "x-quant-acquisition-official-calendar-raw-base64": {"type": "string", "not": {"const": "NONE"}},
+              "x-quant-acquisition-official-calendar-raw-digest": {"$ref": "#/$defs/sha256"},
+              "x-quant-acquisition-official-calendar-raw-size": {"type": "string", "pattern": "^[1-9][0-9]*$"}
+            }
+          },
+          "else": {
+            "properties": {
+              "x-quant-acquisition-official-calendar-path": {"const": "NONE"},
+              "x-quant-acquisition-official-calendar-raw-base64": {"const": "NONE"},
+              "x-quant-acquisition-official-calendar-raw-digest": {"const": "NONE"},
+              "x-quant-acquisition-official-calendar-raw-size": {"const": "NONE"}
+            }
+          }
+        },
         {
           "if": {
             "properties": {

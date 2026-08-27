@@ -39,12 +39,20 @@ const OFFICIAL_CALENDAR_CURSOR_KEYS = [
 ] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-type OfficialCalendarProof = {
+export type OfficialCalendarProof = {
   rawBodyDigest: string;
   calendarQueryDigest: string;
   businessDatesDigest: string;
   bindingDigest: string;
   businessDates: readonly string[];
+};
+
+export type OfficialCalendarRawEvidence = {
+  path: "/v2/markets/calendar";
+  size: number;
+  digest: string;
+  bytes: Uint8Array;
+  proof: OfficialCalendarProof;
 };
 
 type CursorProof = {
@@ -177,6 +185,159 @@ function validDate(value: unknown): value is string {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+function decodeCanonicalBase64(value: string): Uint8Array {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    throw new Error("official calendar raw evidence base64 is invalid");
+  }
+  let binary: string;
+  try {
+    binary = atob(value);
+  } catch {
+    throw new Error("official calendar raw evidence base64 is invalid");
+  }
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  let canonical = "";
+  for (const byte of bytes) canonical += String.fromCharCode(byte);
+  if (btoa(canonical) !== value) {
+    throw new Error("official calendar raw evidence base64 is not canonical");
+  }
+  return bytes;
+}
+
+function inclusiveCalendarDays(segmentStart: string, segmentEnd: string): number {
+  const start = Date.parse(`${segmentStart}T00:00:00Z`);
+  const end = Date.parse(`${segmentEnd}T00:00:00Z`);
+  const days = (end - start) / 86_400_000 + 1;
+  if (!Number.isSafeInteger(days) || days < 1 || days > 31) {
+    throw new Error("official calendar raw evidence range is invalid");
+  }
+  return days;
+}
+
+/** Independently parse the exact official calendar bytes inside Receipt. */
+export async function deriveOfficialCalendarProof(
+  raw: Uint8Array,
+  segmentStart: string,
+  segmentEnd: string,
+): Promise<OfficialCalendarProof> {
+  if (raw.byteLength < 1 || raw.byteLength > 65_536) {
+    throw new Error("official calendar raw evidence size is invalid");
+  }
+  let text: string;
+  let value: unknown;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(raw);
+    const top = inspectStrictJsonObject(text);
+    if (top.size !== 1 || top.get("data")?.kind !== "array") {
+      throw new SyntaxError("official calendar envelope");
+    }
+    value = JSON.parse(text);
+  } catch {
+    throw new Error("official calendar raw evidence is not canonical source JSON");
+  }
+  if (
+    !isPlainObject(value) || !exactKeys(value, ["data"]) ||
+    !Array.isArray(value.data) ||
+    value.data.length !== inclusiveCalendarDays(segmentStart, segmentEnd)
+  ) {
+    throw new Error("official calendar raw evidence is not a complete day sequence");
+  }
+  const businessDates: string[] = [];
+  for (let ordinal = 0; ordinal < value.data.length; ordinal += 1) {
+    const row = value.data[ordinal];
+    const expectedDate = addDays(segmentStart, ordinal);
+    if (
+      !isPlainObject(row) || !exactKeys(row, ["Date", "HolDiv"]) ||
+      row.Date !== expectedDate ||
+      typeof row.HolDiv !== "string" ||
+      !["0", "1", "2", "3"].includes(row.HolDiv)
+    ) {
+      throw new Error("official calendar raw evidence row sequence is invalid");
+    }
+    if (row.HolDiv === "1" || row.HolDiv === "2") businessDates.push(expectedDate);
+  }
+  if (businessDates.length === 0) {
+    throw new Error("official calendar raw evidence has no TSE business date");
+  }
+  const orderedQuery = [["from", segmentStart], ["to", segmentEnd]];
+  const rawBodyDigest = await sha256Digest(raw);
+  const calendarQueryDigest = await canonicalDigest({
+    schema_version: "jquants-acquisition-query/v2",
+    path: "/v2/markets/calendar",
+    ordered_query: orderedQuery,
+  });
+  const businessDatesDigest = await canonicalDigest({
+    schema_version: "jquants-official-business-dates/v1",
+    segment_start: segmentStart,
+    segment_end: segmentEnd,
+    dates: businessDates,
+  });
+  const bindingDigest = await canonicalDigest({
+    schema_version: "jquants-official-business-calendar-binding/v1",
+    path: "/v2/markets/calendar",
+    ordered_query: orderedQuery,
+    raw_body_digest: rawBodyDigest,
+    calendar_query_digest: calendarQueryDigest,
+    business_dates_digest: businessDatesDigest,
+    business_dates: businessDates,
+  });
+  return {
+    rawBodyDigest,
+    calendarQueryDigest,
+    businessDatesDigest,
+    bindingDigest,
+    businessDates: Object.freeze([...businessDates]),
+  };
+}
+
+async function calendarRawEvidenceFromHeaders(
+  headers: Record<string, string>,
+  request: JquantsAcquisitionRequestV2,
+  route: GovernedRoute,
+  index: number,
+): Promise<OfficialCalendarRawEvidence | null> {
+  const path = headers["x-quant-acquisition-official-calendar-path"]!;
+  const encoded = headers["x-quant-acquisition-official-calendar-raw-base64"]!;
+  const digest = headers["x-quant-acquisition-official-calendar-raw-digest"]!;
+  const sizeText = headers["x-quant-acquisition-official-calendar-raw-size"]!;
+  const values = [path, encoded, digest, sizeText];
+  const absent = values.every((item) => item === "NONE");
+  if (!absent && values.some((item) => item === "NONE")) {
+    throw new Error("official calendar raw evidence headers are incomplete");
+  }
+  if (!route.requiresOfficialCalendar) {
+    if (!absent) throw new Error("non-calendar acquisition carried raw calendar evidence");
+    return null;
+  }
+  if (index !== 0 || request.continuation_token !== null) {
+    if (!absent) throw new Error("official calendar raw evidence was replayed after page zero");
+    return null;
+  }
+  if (absent) throw new Error("first master page omitted official calendar raw evidence");
+  if (
+    path !== "/v2/markets/calendar" ||
+    !isSha256(digest) ||
+    !/^[1-9][0-9]*$/.test(sizeText)
+  ) {
+    throw new Error("official calendar raw evidence identity is invalid");
+  }
+  const size = Number(sizeText);
+  if (!Number.isSafeInteger(size) || size > 65_536) {
+    throw new Error("official calendar raw evidence size is invalid");
+  }
+  const bytes = decodeCanonicalBase64(encoded);
+  if (bytes.byteLength !== size || await sha256Digest(bytes) !== digest) {
+    throw new Error("official calendar raw evidence body/digest mismatch");
+  }
+  const proof = await deriveOfficialCalendarProof(
+    bytes, request.segment_start, request.segment_end,
+  );
+  if (proof.rawBodyDigest !== digest) {
+    throw new Error("official calendar raw evidence derived digest mismatch");
+  }
+  return { path, size, digest, bytes, proof };
+}
+
 function officialCalendarFields(
   calendar: OfficialCalendarProof | null,
 ): Record<(typeof OFFICIAL_CALENDAR_CURSOR_KEYS)[number], unknown> {
@@ -272,6 +433,7 @@ async function cursorProof(
   request: JquantsAcquisitionRequestV2,
   route: GovernedRoute,
   metadata: AcquisitionResponseMetadataV2,
+  trustedCalendar: OfficialCalendarProof | null,
 ): Promise<CursorProof> {
   const currentPayload = request.continuation_token === null
     ? null
@@ -286,20 +448,24 @@ async function cursorProof(
     ? null
     : await validateOfficialCalendarPayload(responsePayload, request, route, "response");
   if (!route.requiresOfficialCalendar) {
+    if (trustedCalendar !== null) {
+      throw new Error("non-calendar acquisition received trusted calendar state");
+    }
     return { currentPayload, responsePayload, officialCalendar: null };
   }
-  const officialCalendar = currentCalendar ?? responseCalendar;
-  if (officialCalendar === null) {
-    throw new Error("official calendar proof is absent from the acquisition chain");
+  if (trustedCalendar === null) {
+    throw new Error("official calendar raw proof is absent from the acquisition chain");
   }
-  if (
-    currentCalendar !== null && responseCalendar !== null &&
-    canonicalJson(officialCalendarFields(currentCalendar)) !==
-      canonicalJson(officialCalendarFields(responseCalendar))
-  ) {
-    throw new Error("official calendar changed across the acquisition chain");
+  for (const claimed of [currentCalendar, responseCalendar]) {
+    if (
+      claimed !== null &&
+      canonicalJson(officialCalendarFields(claimed)) !==
+        canonicalJson(officialCalendarFields(trustedCalendar))
+    ) {
+      throw new Error("continuation calendar differs from immutable raw evidence");
+    }
   }
-  return { currentPayload, responsePayload, officialCalendar };
+  return { currentPayload, responsePayload, officialCalendar: trustedCalendar };
 }
 
 function addDays(value: string, days: number): string {
@@ -728,16 +894,25 @@ export async function validateAcquisitionPage(input: {
   environment: "staging" | "production";
   index: number;
   prior: PriorAcquisitionPage | null;
+  officialCalendar: OfficialCalendarProof | null;
   now: Date;
 }): Promise<{
   headers: Record<string, string>;
   metadata: AcquisitionResponseMetadataV2;
   rows: Record<string, unknown>[];
+  officialCalendarRaw: OfficialCalendarRawEvidence | null;
+  officialCalendar: OfficialCalendarProof | null;
 }> {
   const headers = responseHeaders(input.response);
   const metadata = metadataFromHeaders(headers);
   const resolved = await resolveGovernedRequest(input.request, input.environment, input.now);
-  const proof = await cursorProof(input.request, resolved.route, metadata);
+  const officialCalendarRaw = await calendarRawEvidenceFromHeaders(
+    headers, input.request, resolved.route, input.index,
+  );
+  const trustedCalendar = officialCalendarRaw?.proof ?? input.officialCalendar;
+  const proof = await cursorProof(
+    input.request, resolved.route, metadata, trustedCalendar,
+  );
   if (
     input.response.status !== 200 || metadata.upstream_http_status !== 200 ||
     metadata.evidence_state !== "RAW_PAGE" ||
@@ -797,5 +972,11 @@ export async function validateAcquisitionPage(input: {
     raw,
     proof,
   });
-  return { headers, metadata, rows: raw.rows };
+  return {
+    headers,
+    metadata,
+    rows: raw.rows,
+    officialCalendarRaw,
+    officialCalendar: proof.officialCalendar,
+  };
 }

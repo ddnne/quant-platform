@@ -99,6 +99,10 @@ def _jquants_response_headers(metadata: dict[str, object]) -> dict[str, object]:
         "x-quant-acquisition-environment": _header_value(metadata["environment"]),
         "x-quant-acquisition-evidence-state": metadata["evidence_state"],
         "x-quant-acquisition-metadata-digest": _digest("e"),
+        "x-quant-acquisition-official-calendar-path": "NONE",
+        "x-quant-acquisition-official-calendar-raw-base64": "NONE",
+        "x-quant-acquisition-official-calendar-raw-digest": "NONE",
+        "x-quant-acquisition-official-calendar-raw-size": "NONE",
         "x-quant-acquisition-page-ordinal": _header_value(
             metadata["page_ordinal"]
         ),
@@ -840,7 +844,7 @@ def test_jquants_collection_is_closed_over_live_rpc_evidence() -> None:
         "response_headers"
     ]
     headers = collection["pages"][0]["headers"]
-    assert len(headers) == 37
+    assert len(headers) == 41
     assert set(headers) == set(rpc_headers["required"])
 
 

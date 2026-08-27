@@ -9,7 +9,7 @@
     "authority_event": "sha256:d42e86b7951dee725ae36df03f7bf74c44950657c970676043028b818ec55a05",
     "trader_webauthn_challenge": "sha256:7e43c2ec753fcf2fd1ba41ff55e9e3aa1573c6435e32fb8bf15a878ddb363bc2",
     "trader_webauthn_assertion": "sha256:6ca17bfe47cf361f8d41338ca5eb62befaa7d563ab3de38872efc6fa4559e415",
-    "jquants_acquisition_rpc": "sha256:01eb2c7583294d381330c2683f18a7d41e21b93435c9b3aea188f93fd4ca0807"
+    "jquants_acquisition_rpc": "sha256:c411c97c6e3d36fa944d13169c6093940de8292e73f4a54171e11b52358a73ff"
   },
   "parallel_protocol_schema_digests": {
     "receipt_verify_public_keys": "sha256:ddd0537fd643cec7698ea089ce4e4fdae34b61423a03c586b6b683740e7b5626",
@@ -802,5 +802,5 @@
       }
     }
   },
-  "manifest_digest": "sha256:48fe3f20ba0ca7635c3a61af84319c420950975cd64d1483fb2b3c56dd190187"
+  "manifest_digest": "sha256:f1ce07989ee97c87690b3341f14b0cad7a27eb2a62eff489d330420647aeb0b0"
 }

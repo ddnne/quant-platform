@@ -223,7 +223,7 @@ def _closed_rpc_surface(schema: dict[str, Any]) -> dict[str, list[str]]:
     for definition_name, output_name, expected_count in (
         ("request", "request_fields", 14),
         ("response_metadata", "response_metadata_fields", 34),
-        ("response_headers", "response_header_fields", 37),
+        ("response_headers", "response_header_fields", 41),
     ):
         definition = definitions.get(definition_name)
         if type(definition) is not dict:

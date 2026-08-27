@@ -10,7 +10,9 @@ import type {
   JquantsAcquisitionRequestV2,
 } from "../../ingestion-secrets/src/jquants_acquisition_types";
 import {
+  deriveOfficialCalendarProof,
   validateAcquisitionPage,
+  type OfficialCalendarProof,
 } from "./pagination_proof";
 import type {
   ReceiptAuthorityEnv,
@@ -38,7 +40,73 @@ export type Capture = {
   collectionDigest: string;
   terminalChainDigest: string;
   acquisitionExpiresAt: string;
+  officialCalendarEvidence: CapturedOfficialCalendar | null;
 };
+
+export type CapturedOfficialCalendar = {
+  key: string;
+  path: "/v2/markets/calendar";
+  size: number;
+  digest: string;
+  calendarQueryDigest: string;
+  businessDatesDigest: string;
+  bindingDigest: string;
+  businessDates: readonly string[];
+};
+
+export function capturedOfficialCalendarDescriptor(
+  evidence: CapturedOfficialCalendar | null,
+): Record<string, unknown> | null {
+  if (evidence === null) return null;
+  return {
+    raw_path: evidence.key,
+    source_path: evidence.path,
+    raw_size: evidence.size,
+    raw_digest: evidence.digest,
+    calendar_query_digest: evidence.calendarQueryDigest,
+    business_dates_digest: evidence.businessDatesDigest,
+    binding_digest: evidence.bindingDigest,
+    business_dates: evidence.businessDates,
+  };
+}
+
+function proofFromCapturedCalendar(
+  evidence: CapturedOfficialCalendar,
+): OfficialCalendarProof {
+  return {
+    rawBodyDigest: evidence.digest,
+    calendarQueryDigest: evidence.calendarQueryDigest,
+    businessDatesDigest: evidence.businessDatesDigest,
+    bindingDigest: evidence.bindingDigest,
+    businessDates: evidence.businessDates,
+  };
+}
+
+async function loadOfficialCalendarEvidence(
+  bucket: R2Bucket,
+  evidence: CapturedOfficialCalendar,
+  initialRequest: JquantsAcquisitionRequestV2,
+): Promise<OfficialCalendarProof> {
+  const object = await bucket.get(evidence.key);
+  if (object === null) throw new Error("immutable official calendar disappeared");
+  const bytes = new Uint8Array(await object.arrayBuffer());
+  if (
+    bytes.byteLength !== evidence.size ||
+    await sha256Digest(bytes) !== evidence.digest
+  ) {
+    throw new Error("immutable official calendar changed after capture");
+  }
+  const derived = await deriveOfficialCalendarProof(
+    bytes, initialRequest.segment_start, initialRequest.segment_end,
+  );
+  if (
+    canonicalJson(derived) !==
+      canonicalJson(proofFromCapturedCalendar(evidence))
+  ) {
+    throw new Error("immutable official calendar proof differs after readback");
+  }
+  return derived;
+}
 
 function captureStateKey(capture: Capture): string {
   if (!capture.rawManifestKey.endsWith("/manifest.json")) {
@@ -105,9 +173,34 @@ export async function loadCaptureState(
     typeof capture.terminalChainDigest !== "string" ||
     typeof capture.acquisitionExpiresAt !== "string" ||
     !Array.isArray(capture.pages) || capture.pages.length === 0 ||
-    typeof capture.initialRequest !== "object" || capture.initialRequest === null
+    typeof capture.initialRequest !== "object" || capture.initialRequest === null ||
+    !(capture.officialCalendarEvidence === null ||
+      (typeof capture.officialCalendarEvidence === "object" &&
+        capture.officialCalendarEvidence !== null))
   ) throw new Error("durable capture state fields are invalid");
-  return capture as Capture;
+  const restored = capture as Capture;
+  const initial = restored.initialRequest;
+  if (initial.dataset_id === "equities_master") {
+    const evidence = restored.officialCalendarEvidence;
+    const expectedCalendarKey = restored.rawManifestKey.endsWith("/manifest.json")
+      ? `${restored.rawManifestKey.slice(0, -"manifest.json".length)}official-calendar.json`
+      : "";
+    if (
+      evidence === null || evidence.path !== "/v2/markets/calendar" ||
+      typeof evidence.key !== "string" ||
+      evidence.key !== expectedCalendarKey ||
+      !Number.isSafeInteger(evidence.size) || evidence.size < 1 ||
+      typeof evidence.digest !== "string" ||
+      typeof evidence.calendarQueryDigest !== "string" ||
+      typeof evidence.businessDatesDigest !== "string" ||
+      typeof evidence.bindingDigest !== "string" ||
+      !Array.isArray(evidence.businessDates)
+    ) throw new Error("durable official calendar capture fields are invalid");
+    await loadOfficialCalendarEvidence(bucket, evidence, initial);
+  } else if (restored.officialCalendarEvidence !== null) {
+    throw new Error("non-master durable capture carried official calendar evidence");
+  }
+  return restored;
 }
 
 export async function putCreateOnly(
@@ -155,6 +248,8 @@ export async function captureCollection(
   });
   const limits = targetRegistryLimits();
   const pages: CapturedPage[] = [];
+  let officialCalendarEvidence: CapturedOfficialCalendar | null = null;
+  let officialCalendarProof: OfficialCalendarProof | null = null;
   let current = initialRequest;
   for (let index = 0; index < limits.maximumSegmentPages; index += 1) {
     const response = await env.JQUANTS_ACQUISITION.fetch_governed_page(current);
@@ -169,8 +264,52 @@ export async function captureCollection(
       environment: request.environment,
       index,
       prior: pages.at(-1) ?? null,
+      officialCalendar: officialCalendarProof,
       now: new Date(),
     });
+    if (verified.officialCalendarRaw !== null) {
+      if (officialCalendarEvidence !== null || index !== 0) {
+        throw new Error("official calendar raw evidence was captured more than once");
+      }
+      const rawCalendar = verified.officialCalendarRaw;
+      const calendarKey =
+        `raw/receipt-authority/${request.environment}/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/attempt-${captureAttemptId}/official-calendar.json`;
+      await putCreateOnly(
+        env.AUTHORITY_EVIDENCE_BUCKET,
+        calendarKey,
+        rawCalendar.bytes,
+        {
+          authority: "receipt",
+          operation_id: operationId,
+          capture_attempt_id: captureAttemptId,
+          dataset: request.dataset_id,
+          segment_id: request.segment_id,
+          schema: "jquants-official-calendar-raw/v1",
+          digest: rawCalendar.digest,
+        },
+      );
+      officialCalendarEvidence = {
+        key: calendarKey,
+        path: rawCalendar.path,
+        size: rawCalendar.size,
+        digest: rawCalendar.digest,
+        calendarQueryDigest: rawCalendar.proof.calendarQueryDigest,
+        businessDatesDigest: rawCalendar.proof.businessDatesDigest,
+        bindingDigest: rawCalendar.proof.bindingDigest,
+        businessDates: rawCalendar.proof.businessDates,
+      };
+      officialCalendarProof = await loadOfficialCalendarEvidence(
+        env.AUTHORITY_EVIDENCE_BUCKET,
+        officialCalendarEvidence,
+        initialRequest,
+      );
+    } else if (
+      verified.officialCalendar !== null &&
+      officialCalendarProof !== null &&
+      canonicalJson(verified.officialCalendar) !== canonicalJson(officialCalendarProof)
+    ) {
+      throw new Error("acquisition page calendar differs from immutable capture");
+    }
     const digest = await sha256Digest(body);
     const key = `raw/receipt-authority/${request.environment}/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/attempt-${captureAttemptId}/page-${String(index).padStart(6, "0")}.json`;
     await putCreateOnly(env.AUTHORITY_EVIDENCE_BUCKET, key, body, {
@@ -207,6 +346,12 @@ export async function captureCollection(
   if (Date.now() >= Date.parse(terminal.metadata.acquisition_expires_at)) {
     throw new Error("acquisition collection expired before persistence");
   }
+  if (
+    (request.dataset_id === "equities_master") !==
+      (officialCalendarEvidence !== null)
+  ) {
+    throw new Error("official calendar capture does not match the governed dataset");
+  }
 
   const capturePages = pages.map((page) => ({
     raw_path: page.key,
@@ -220,6 +365,9 @@ export async function captureCollection(
     schema_version: "jquants-acquisition-collection/v2",
     capture_mode: "LIVE_SERVICE_BINDING_RESPONSE",
     initial_request: initialRequest,
+    official_calendar_evidence: capturedOfficialCalendarDescriptor(
+      officialCalendarEvidence,
+    ),
     pages: capturePages,
   };
   const collectionDigest = await canonicalDigest(captureBody);
@@ -238,11 +386,17 @@ export async function captureCollection(
     digest: page.digest,
     size: page.size,
   }));
+  const rawManifest = {
+    pages: pageManifest,
+    official_calendar_evidence: capturedOfficialCalendarDescriptor(
+      officialCalendarEvidence,
+    ),
+  };
   return {
     initialRequest,
     pages,
     rawManifestKey,
-    rawManifestDigest: await canonicalDigest({ pages: pageManifest }),
+    rawManifestDigest: await canonicalDigest(rawManifest),
     rawDigest: pages.length === 1
       ? pages[0]!.digest
       : await canonicalDigest({ pages: pageManifest }),
@@ -250,6 +404,7 @@ export async function captureCollection(
     collectionDigest,
     terminalChainDigest: terminal.metadata.chain_digest,
     acquisitionExpiresAt: terminal.metadata.acquisition_expires_at,
+    officialCalendarEvidence,
   };
 }
 

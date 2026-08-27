@@ -427,7 +427,7 @@ EXPECTED_RESIDUAL_RISK = "cloudflare_workers_scripts_write_account_scope"
 # contains its own body digest; this independent code pin prevents a caller from
 # changing the contract and merely recomputing that self-declared digest.
 PINNED_MANIFEST_DIGEST = (
-    "sha256:48fe3f20ba0ca7635c3a61af84319c420950975cd64d1483fb2b3c56dd190187"
+    "sha256:f1ce07989ee97c87690b3341f14b0cad7a27eb2a62eff489d330420647aeb0b0"
 )
 
 _BROAD_CAPABILITY_TOKENS = frozenset(

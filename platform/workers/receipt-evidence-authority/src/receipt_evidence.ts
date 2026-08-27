@@ -4,7 +4,10 @@ import {
 } from "../../ingestion-secrets/src/jquants_acquisition_registry";
 import type { JquantsAcquisitionRequestV2 } from "../../ingestion-secrets/src/jquants_acquisition_types";
 import type { DatasetSpec } from "../../ingestion-premium/src/catalog";
-import type { Capture } from "./raw_capture";
+import {
+  capturedOfficialCalendarDescriptor,
+  type Capture,
+} from "./raw_capture";
 import { authorityInstanceScope } from "./authority_instance";
 import type {
   CollectionReceiptV3,
@@ -66,6 +69,25 @@ export async function measuredClaims(input: {
   };
   const scopeDigest = await canonicalDigest(scopeBody);
   const unit = String(scope.expected_item_unit);
+  const officialCalendarEvidence = capturedOfficialCalendarDescriptor(
+    input.capture.officialCalendarEvidence,
+  );
+  const officialCalendarDigests: Record<string, string> =
+    input.capture.officialCalendarEvidence === null
+    ? {}
+    : {
+      official_calendar_evidence_digest: await canonicalDigest(
+        officialCalendarEvidence!,
+      ),
+      official_calendar_raw_body_digest:
+        input.capture.officialCalendarEvidence.digest,
+      official_calendar_query_digest:
+        input.capture.officialCalendarEvidence.calendarQueryDigest,
+      official_business_dates_digest:
+        input.capture.officialCalendarEvidence.businessDatesDigest,
+      official_calendar_binding_digest:
+        input.capture.officialCalendarEvidence.bindingDigest,
+    };
   const observation = {
     ...scopeBody,
     observed_items: unit === "source_query" ? 1 : rawCount,
@@ -88,6 +110,7 @@ export async function measuredClaims(input: {
       acquisition_collection_manifest_file_digest: input.capture.manifestFileDigest,
       acquisition_collection_digest: input.capture.collectionDigest,
       acquisition_terminal_chain_digest: input.capture.terminalChainDigest,
+      ...officialCalendarDigests,
     },
   };
   return {

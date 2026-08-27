@@ -1,5 +1,9 @@
 import { canonicalJson, sha256Digest } from "./canonical";
-import { putCreateOnly, type Capture } from "./raw_capture";
+import {
+  capturedOfficialCalendarDescriptor,
+  putCreateOnly,
+  type Capture,
+} from "./raw_capture";
 import type { ReceiptAuthorityEnv } from "./types";
 
 export type CanonicalStructuredRow = {
@@ -327,6 +331,9 @@ export async function materializeProduct(
     raw_page_count: rawPageCount,
     raw_row_count: rawRowCount,
     raw_bytes: rawBytes,
+    official_calendar_evidence: capturedOfficialCalendarDescriptor(
+      input.capture.officialCalendarEvidence,
+    ),
     committed_at: input.checkedAt,
   };
   const manifestJson = canonicalJson(manifest);

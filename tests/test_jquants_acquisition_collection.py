@@ -289,7 +289,7 @@ def test_rpc_surface_is_available_from_packaged_registry_without_specs() -> None
     surface = acquisition._rpc_surface()
     assert len(surface.request_keys) == 14
     assert len(surface.metadata_keys) == 34
-    assert len(surface.header_names) == 37
+    assert len(surface.header_names) == 41
     assert acquisition._SHARED_REGISTRY_PATH.parent.name == "data_contracts"
 
 
