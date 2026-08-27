@@ -118,6 +118,34 @@ export type ReceiptIssueResultV1 = {
   receipt: CollectionReceiptV2;
 };
 
+export type ReceiptAuthorityOperationState =
+  | "COLLECTING"
+  | "ISSUED_PENDING_FINALIZE"
+  | "FINALIZED";
+
+/**
+ * Internal durable snapshot.  This is deliberately absent from both RPC
+ * interfaces below: callers can request a governed dataset/segment operation,
+ * but cannot supply or recover a signable claims DTO.
+ */
+export type ReceiptAuthorityOperationSnapshot = {
+  operation_id: string;
+  request_digest: string;
+  acquisition_nonce: string;
+  state: ReceiptAuthorityOperationState;
+  claims: UnsignedReceiptClaimsV2 | null;
+  envelope: SignedReceiptEnvelopeV2 | null;
+  envelope_digest: string | null;
+  receipt_digest: string | null;
+  result: ReceiptIssueResultV1 | null;
+};
+
+export type ReceiptAuthorityIssuedRecord = {
+  claims: UnsignedReceiptClaimsV2;
+  envelope: SignedReceiptEnvelopeV2;
+  envelope_digest: string;
+};
+
 export type ReceiptPublicKeyRegistrationV1 = {
   schema_version: "receipt-public-key-registration/v1";
   purpose: "receipt_verification";
@@ -141,12 +169,18 @@ export interface ReceiptEvidenceAuthorityRpc {
 
 export type ReceiptAuthorityEnv = Omit<
   Cloudflare.Env,
-  "ENVIRONMENT" | "AUTHORITY_MODE" | "JQUANTS_ACQUISITION"
+  | "ENVIRONMENT"
+  | "AUTHORITY_MODE"
+  | "JQUANTS_ACQUISITION"
+  | "AUTHORITY_EVIDENCE_BUCKET"
+  | "PRODUCT_MATERIALIZATION_BUCKET"
 > & {
   ENVIRONMENT: AuthorityEnvironment;
   AUTHORITY_MODE: AuthorityMode;
   ACTIVATED_KEY_ID?: string;
   RECEIPT_KEY_WRAP_KEY: string;
   RECEIPT_KEY_GENERATION: string;
+  AUTHORITY_EVIDENCE_BUCKET: R2Bucket;
+  PRODUCT_MATERIALIZATION_BUCKET: R2Bucket;
   JQUANTS_ACQUISITION: Service<IngestionSecretsWorker>;
 };

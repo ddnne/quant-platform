@@ -12,19 +12,17 @@ RECEIPT_KEY_WRAP_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef01234567
 RECEIPT_KEY_GENERATION = "1"
 
 [[r2_buckets]]
-binding = "RAW_BUCKET"
-bucket_name = "quant-raw-receipt-test"
+binding = "AUTHORITY_EVIDENCE_BUCKET"
+bucket_name = "quant-receipt-evidence-test"
 
 [[r2_buckets]]
-binding = "STRUCTURED_BUCKET"
+binding = "PRODUCT_MATERIALIZATION_BUCKET"
 bucket_name = "quant-structured-receipt-test"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "quant-ingest-receipt-test"
 database_id = "00000000-0000-0000-0000-000000000014"
-migrations_dir = "../ingestion-premium/migrations"
-migrations_table = "d1_migrations_ingestion"
 
 [[durable_objects.bindings]]
 name = "RECEIPT_EVIDENCE_AUTHORITY_DO"

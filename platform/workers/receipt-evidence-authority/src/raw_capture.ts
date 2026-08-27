@@ -98,7 +98,7 @@ export async function captureCollection(
     });
     const digest = await sha256Digest(body);
     const key = `raw/receipt-authority/${request.environment}/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/page-${String(index).padStart(6, "0")}.json`;
-    await putCreateOnly(env.RAW_BUCKET, key, body, {
+    await putCreateOnly(env.AUTHORITY_EVIDENCE_BUCKET, key, body, {
       authority: "receipt",
       operation_id: operationId,
       dataset: request.dataset_id,
@@ -150,7 +150,7 @@ export async function captureCollection(
   const captureDocument = { ...captureBody, collection_digest: collectionDigest };
   const manifestJson = canonicalJson(captureDocument);
   const rawManifestKey = `raw/receipt-authority/${request.environment}/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/manifest.json`;
-  await putCreateOnly(env.RAW_BUCKET, rawManifestKey, manifestJson, {
+  await putCreateOnly(env.AUTHORITY_EVIDENCE_BUCKET, rawManifestKey, manifestJson, {
     authority: "receipt",
     operation_id: operationId,
     dataset: request.dataset_id,

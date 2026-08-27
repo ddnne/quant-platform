@@ -3,15 +3,7 @@ import {
   canonicalJson,
 } from "../../ingestion-secrets/src/jquants_acquisition_registry";
 import { datasetById } from "../../ingestion-premium/src/catalog";
-import {
-  exactKeys,
-  isPlainObject,
-  operationRunId,
-} from "./canonical";
-import type {
-  IssuedRecord,
-  OperationSnapshot,
-} from "./authority_do";
+import { exactKeys, isPlainObject } from "./canonical";
 import {
   commitReceipt,
   measuredClaims,
@@ -24,6 +16,8 @@ import {
 } from "./structured_reconciliation";
 import type {
   ReceiptAuthorityEnv,
+  ReceiptAuthorityIssuedRecord,
+  ReceiptAuthorityOperationSnapshot,
   ReceiptIssueRequestV1,
   ReceiptIssueResultV1,
   ReceiptRecoveryRequestV1,
@@ -41,21 +35,21 @@ const REQUEST_KEYS = [
 ] as const;
 const MAX_CONTEXT_AGE_MS = 15 * 60 * 1000;
 
-type AuthorityStub = {
-  begin_operation(
+export type InternalReceiptAuthority = {
+  begin(
     operationId: string,
     requestDigest: string,
-  ): Promise<OperationSnapshot>;
-  recover_operation(
+  ): Promise<ReceiptAuthorityOperationSnapshot>;
+  recover(
     operationId: string,
     requestDigest: string,
-  ): Promise<OperationSnapshot>;
-  append_issued(
+  ): Promise<ReceiptAuthorityOperationSnapshot>;
+  appendDerived(
     operationId: string,
     requestDigest: string,
     claims: UnsignedReceiptClaimsV2,
-  ): Promise<IssuedRecord>;
-  finalize_committed(
+  ): Promise<ReceiptAuthorityIssuedRecord>;
+  finalizeCommitted(
     operationId: string,
     requestDigest: string,
     receiptDigest: string,
@@ -100,10 +94,10 @@ function issueIdentity(request: ReceiptRequestV1): ReceiptIssueRequestV1 {
 
 async function finalizeIssued(
   env: ReceiptAuthorityEnv,
-  authority: AuthorityStub,
+  authority: InternalReceiptAuthority,
   operationId: string,
   requestDigest: string,
-  issued: IssuedRecord,
+  issued: ReceiptAuthorityIssuedRecord,
   replayed: boolean,
 ): Promise<ReceiptIssueResultV1> {
   const receipt = receiptFromIssued(issued);
@@ -116,7 +110,7 @@ async function finalizeIssued(
     receipt_digest: receiptDigest,
     receipt,
   };
-  const finalized = await authority.finalize_committed(
+  const finalized = await authority.finalizeCommitted(
     operationId,
     requestDigest,
     receiptDigest,
@@ -125,7 +119,9 @@ async function finalizeIssued(
   return replayed ? { ...finalized, replayed: true } : finalized;
 }
 
-function issuedFromSnapshot(snapshot: OperationSnapshot): IssuedRecord | null {
+function issuedFromSnapshot(
+  snapshot: ReceiptAuthorityOperationSnapshot,
+): ReceiptAuthorityIssuedRecord | null {
   if (
     snapshot.claims === null || snapshot.envelope === null ||
     snapshot.envelope_digest === null
@@ -145,6 +141,7 @@ function issuedFromSnapshot(snapshot: OperationSnapshot): IssuedRecord | null {
 export async function executeReceiptRequest(
   env: ReceiptAuthorityEnv,
   rawRequest: ReceiptIssueRequestV1 | ReceiptRecoveryRequestV1,
+  authority: InternalReceiptAuthority,
   faults: FaultInjection = {},
 ): Promise<ReceiptIssueResultV1> {
   const request = requireRequest(rawRequest);
@@ -154,10 +151,7 @@ export async function executeReceiptRequest(
   const identity = issueIdentity(request);
   const requestDigest = await canonicalDigest(identity);
   const operationId = requestDigest;
-  const authority = env.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
-    `receipt:${request.environment}`,
-  ) as unknown as AuthorityStub;
-  let snapshot = await authority.begin_operation(operationId, requestDigest);
+  let snapshot = await authority.begin(operationId, requestDigest);
   if (snapshot.state === "FINALIZED") {
     if (snapshot.result === null) throw new Error("finalized operation lost its result");
     return { ...snapshot.result, replayed: true };
@@ -185,24 +179,23 @@ export async function executeReceiptRequest(
     operationId,
     snapshot.acquisition_nonce,
   );
-  const checkedAt = new Date().toISOString();
-  if (Date.parse(checkedAt) >= Date.parse(capture.acquisitionExpiresAt)) {
+  const observedAt = new Date().toISOString();
+  if (Date.parse(observedAt) >= Date.parse(capture.acquisitionExpiresAt)) {
     throw new Error("acquisition collection expired before reconciliation");
   }
   const spec = datasetById(request.dataset_id);
   if (spec === undefined || spec.coverage.policy_version !== "collection-coverage/v3") {
     throw new Error("dataset is outside the Receipt V3 authority inventory");
   }
-  const runId = operationRunId(operationId);
-  await initializeD1Operation(env, {
+  const operation = await initializeD1Operation(env, {
     operationId,
     requestDigest,
-    runId,
     request: identity,
     initial: capture.initialRequest,
     capture,
-    checkedAt,
+    checkedAt: observedAt,
   });
+  const checkedAt = operation.checkedAt;
   const structured = await reconcileStructured(env, {
     operationId,
     capture,
@@ -217,14 +210,14 @@ export async function executeReceiptRequest(
   }
   const claims = await measuredClaims({
     requestDigest,
-    runId,
+    runId: operation.runId,
     spec,
     capture,
     structuredCount: structured.count,
     structuredDigest: structured.digest,
     checkedAt,
   });
-  const issued = await authority.append_issued(
+  const issued = await authority.appendDerived(
     operationId,
     requestDigest,
     claims,
@@ -232,7 +225,7 @@ export async function executeReceiptRequest(
   if (faults.crashAfterIssueBeforeFinalize) {
     throw new Error("injected crash after issue before finalize");
   }
-  snapshot = await authority.recover_operation(operationId, requestDigest);
+  snapshot = await authority.recover(operationId, requestDigest);
   const durableIssued = issuedFromSnapshot(snapshot);
   if (
     durableIssued === null || durableIssued.envelope_digest !== issued.envelope_digest ||

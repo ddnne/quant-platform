@@ -144,6 +144,20 @@
           "checksum": "sha256:c528888f58d7c11a764485d0a54d5470137bcbf266144c070307bfb38ba84a98",
           "order": 16,
           "depends_on": "quant-ingest:0015_receipt_authority_requests"
+        },
+        {
+          "migration_id": "quant-ingest:0017_receipt_authority_run_evidence",
+          "path": "platform/workers/ingestion-premium/migrations/0017_receipt_authority_run_evidence.sql",
+          "checksum": "sha256:bf400e2bc0518bd4d272165742c588e79fab0493fd78fb6b55f4d5179331597c",
+          "order": 17,
+          "depends_on": "quant-ingest:0016_receipt_authority_immutability"
+        },
+        {
+          "migration_id": "quant-ingest:0018_receipt_product_materialization",
+          "path": "platform/workers/ingestion-premium/migrations/0018_receipt_product_materialization.sql",
+          "checksum": "sha256:df0c2a1df86a3c32e99167b9dfb054fcb11076f7c7e1f33f6aa6e8350b9b32c4",
+          "order": 18,
+          "depends_on": "quant-ingest:0017_receipt_authority_run_evidence"
         }
       ]
     },

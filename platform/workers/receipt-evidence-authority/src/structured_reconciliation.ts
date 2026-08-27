@@ -46,6 +46,9 @@ type D1Operation = {
   state: "COLLECTING" | "STRUCTURED_COMMITTED" | "RECEIPT_COMMITTED";
   raw_manifest_key: string | null;
   raw_manifest_digest: string | null;
+  raw_page_count: number | null;
+  raw_row_count: number | null;
+  raw_bytes: number | null;
   structured_manifest_key: string | null;
   structured_digest: string | null;
   receipt_digest: string | null;
@@ -58,23 +61,65 @@ export async function initializeD1Operation(
   input: {
     operationId: string;
     requestDigest: string;
-    runId: number;
     request: ReceiptIssueRequestV1;
     initial: JquantsAcquisitionRequestV2;
     capture: Capture;
     checkedAt: string;
   },
-): Promise<void> {
+): Promise<{ runId: number; checkedAt: string }> {
+  const runDetail = canonicalJson({
+    schema_version: "receipt-authority-ingestion-run/v1",
+    operation_id: input.operationId,
+    request_digest: input.requestDigest,
+    environment: input.request.environment,
+    dataset: input.request.dataset_id,
+    segment_id: input.request.segment_id,
+    raw_manifest_key: input.capture.rawManifestKey,
+    raw_manifest_digest: input.capture.rawManifestDigest,
+  });
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO ingestion_run_log
+     (ran_at,source,runtime,status,detail,authority_operation_id)
+     VALUES (?,'jquants','receipt-evidence-authority','RUNNING',?,?)`,
+  ).bind(input.checkedAt, runDetail, input.operationId).run();
+  const run = await env.DB.prepare(
+    `SELECT id,ran_at,source,runtime,status,detail,authority_operation_id
+       FROM ingestion_run_log WHERE authority_operation_id=?`,
+  ).bind(input.operationId).first<{
+    id: number;
+    ran_at: string;
+    source: string;
+    runtime: string;
+    status: string;
+    detail: string;
+    authority_operation_id: string;
+  }>();
+  if (
+    run === null || !Number.isSafeInteger(run.id) || run.id <= 0 ||
+    run.source !== "jquants" || run.runtime !== "receipt-evidence-authority" ||
+    run.status !== "RUNNING" || run.detail !== runDetail ||
+    run.authority_operation_id !== input.operationId ||
+    !Number.isFinite(Date.parse(run.ran_at))
+  ) throw new Error("ingestion run allocation differs from authority request");
+  const rawPageCount = input.capture.pages.length;
+  const rawRowCount = input.capture.pages.reduce(
+    (total, page) => total + page.rowCount,
+    0,
+  );
+  const rawBytes = input.capture.pages.reduce(
+    (total, page) => total + page.size,
+    0,
+  );
   await env.DB.prepare(
     `INSERT OR IGNORE INTO receipt_authority_operations
      (operation_id,request_digest,run_id,environment,dataset,segment_id,
       segment_start,segment_end,state,raw_manifest_key,raw_manifest_digest,
-      checked_at,updated_at)
-     VALUES (?,?,?,?,?,?,?,?,'COLLECTING',?,?,?,?)`,
+      raw_page_count,raw_row_count,raw_bytes,checked_at,updated_at)
+     VALUES (?,?,?,?,?,?,?,?,'COLLECTING',?,?,?,?,?,?,?)`,
   ).bind(
     input.operationId,
     input.requestDigest,
-    input.runId,
+    run.id,
     input.request.environment,
     input.request.dataset_id,
     input.request.segment_id,
@@ -82,22 +127,28 @@ export async function initializeD1Operation(
     input.initial.segment_end,
     input.capture.rawManifestKey,
     input.capture.rawManifestDigest,
-    input.checkedAt,
-    input.checkedAt,
+    rawPageCount,
+    rawRowCount,
+    rawBytes,
+    run.ran_at,
+    run.ran_at,
   ).run();
   const row = await env.DB.prepare(
     "SELECT * FROM receipt_authority_operations WHERE operation_id=?",
   ).bind(input.operationId).first<D1Operation>();
   if (
     row === null || row.request_digest !== input.requestDigest ||
-    row.run_id !== input.runId || row.environment !== input.request.environment ||
+    row.run_id !== run.id || row.environment !== input.request.environment ||
     row.dataset !== input.request.dataset_id || row.segment_id !== input.request.segment_id ||
     row.segment_start !== input.initial.segment_start ||
     row.segment_end !== input.initial.segment_end ||
     row.raw_manifest_key !== input.capture.rawManifestKey ||
     row.raw_manifest_digest !== input.capture.rawManifestDigest ||
-    row.checked_at !== input.checkedAt
+    row.raw_page_count !== rawPageCount || row.raw_row_count !== rawRowCount ||
+    row.raw_bytes !== rawBytes ||
+    row.checked_at !== run.ran_at
   ) throw new Error("D1 receipt operation replay differs from authority measurement");
+  return { runId: run.id, checkedAt: run.ran_at };
 }
 
 async function normalizeRows(
@@ -205,8 +256,9 @@ export async function reconcileStructured(
   },
 ): Promise<{ count: number; digest: string; manifestKey: string }> {
   let rawCount = 0;
+  const expectedRows: StructuredRow[] = [];
   for (const page of input.capture.pages) {
-    const bytes = await loadRawPage(env.RAW_BUCKET, page);
+    const bytes = await loadRawPage(env.AUTHORITY_EVIDENCE_BUCKET, page);
     const resolved = await resolveGovernedRequest(
       input.capture.initialRequest,
       input.capture.initialRequest.environment,
@@ -217,16 +269,22 @@ export async function reconcileStructured(
       throw new Error("persisted raw row count differs from live capture");
     }
     rawCount += rawRows.length;
-    await persistStructuredRows(
-      env,
-      input.operationId,
-      await normalizeRows(rawRows, input.spec, input.checkedAt),
-    );
+    const normalized = await normalizeRows(rawRows, input.spec, input.checkedAt);
+    expectedRows.push(...normalized);
+    await persistStructuredRows(env, input.operationId, normalized);
   }
   if (rawCount === 0) throw new Error("zero-row collection cannot mint SUCCESS");
   const stored = await readStructuredRows(env, input.operationId);
   if (stored.length !== rawCount) {
     throw new Error("structured natural-key readback does not reconcile raw rows");
+  }
+  expectedRows.sort((left, right) =>
+    left.natural_key.localeCompare(right.natural_key)
+  );
+  if (canonicalJson(stored) !== canonicalJson(expectedRows)) {
+    throw new Error(
+      "persisted structured fields differ from canonical raw normalization",
+    );
   }
   for (const row of stored) {
     const measured = await canonicalDigest({
@@ -258,13 +316,13 @@ export async function reconcileStructured(
   };
   const manifestJson = canonicalJson(manifest);
   const manifestKey = `structured/receipt-authority/${input.capture.initialRequest.environment}/${input.spec.id}/${input.capture.initialRequest.segment_id}/${input.operationId.slice(7)}/manifest.json`;
-  await putCreateOnly(env.STRUCTURED_BUCKET, manifestKey, manifestJson, {
+  await putCreateOnly(env.PRODUCT_MATERIALIZATION_BUCKET, manifestKey, manifestJson, {
     authority: "receipt",
     operation_id: input.operationId,
     dataset: input.spec.id,
     segment_id: input.capture.initialRequest.segment_id,
   });
-  const reread = await env.STRUCTURED_BUCKET.get(manifestKey);
+  const reread = await env.PRODUCT_MATERIALIZATION_BUCKET.get(manifestKey);
   if (reread === null || await reread.text() !== manifestJson) {
     throw new Error("structured immutable manifest readback failed");
   }

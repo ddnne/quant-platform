@@ -271,9 +271,7 @@
         {
           "binding": "DB",
           "database_id": "00000000-0000-0000-0000-000000000014",
-          "database_name": "quant-ingest-receipt-test",
-          "migrations_dir": "../ingestion-premium/migrations",
-          "migrations_table": "d1_migrations_ingestion"
+          "database_name": "quant-ingest-receipt-test"
         }
       ],
       "durable_objects": [
@@ -300,11 +298,11 @@
       "queue_producers": [],
       "r2_buckets": [
         {
-          "binding": "RAW_BUCKET",
-          "bucket_name": "quant-raw-receipt-test"
+          "binding": "AUTHORITY_EVIDENCE_BUCKET",
+          "bucket_name": "quant-receipt-evidence-test"
         },
         {
-          "binding": "STRUCTURED_BUCKET",
+          "binding": "PRODUCT_MATERIALIZATION_BUCKET",
           "bucket_name": "quant-structured-receipt-test"
         }
       ],
@@ -1380,9 +1378,7 @@
           {
             "binding": "DB",
             "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
-            "database_name": "quant-ingest",
-            "migrations_dir": "../ingestion-premium/migrations",
-            "migrations_table": "d1_migrations_ingestion"
+            "database_name": "quant-ingest"
           }
         ],
         "durable_objects": [
@@ -1412,11 +1408,11 @@
         "queue_producers": [],
         "r2_buckets": [
           {
-            "binding": "RAW_BUCKET",
-            "bucket_name": "quant-raw"
+            "binding": "AUTHORITY_EVIDENCE_BUCKET",
+            "bucket_name": "quant-receipt-evidence"
           },
           {
-            "binding": "STRUCTURED_BUCKET",
+            "binding": "PRODUCT_MATERIALIZATION_BUCKET",
             "bucket_name": "quant-structured"
           }
         ],
@@ -1462,9 +1458,7 @@
           {
             "binding": "DB",
             "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
-            "database_name": "quant-ingest",
-            "migrations_dir": "../ingestion-premium/migrations",
-            "migrations_table": "d1_migrations_ingestion"
+            "database_name": "quant-ingest"
           }
         ],
         "durable_objects": [
@@ -1494,11 +1488,11 @@
         "queue_producers": [],
         "r2_buckets": [
           {
-            "binding": "RAW_BUCKET",
-            "bucket_name": "quant-raw"
+            "binding": "AUTHORITY_EVIDENCE_BUCKET",
+            "bucket_name": "quant-receipt-evidence"
           },
           {
-            "binding": "STRUCTURED_BUCKET",
+            "binding": "PRODUCT_MATERIALIZATION_BUCKET",
             "bucket_name": "quant-structured"
           }
         ],
@@ -1544,9 +1538,7 @@
           {
             "binding": "DB",
             "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
-            "database_name": "quant-ingest-staging",
-            "migrations_dir": "../ingestion-premium/migrations",
-            "migrations_table": "d1_migrations_ingestion"
+            "database_name": "quant-ingest-staging"
           }
         ],
         "durable_objects": [
@@ -1576,11 +1568,11 @@
         "queue_producers": [],
         "r2_buckets": [
           {
-            "binding": "RAW_BUCKET",
-            "bucket_name": "quant-raw-staging"
+            "binding": "AUTHORITY_EVIDENCE_BUCKET",
+            "bucket_name": "quant-receipt-evidence-staging"
           },
           {
-            "binding": "STRUCTURED_BUCKET",
+            "binding": "PRODUCT_MATERIALIZATION_BUCKET",
             "bucket_name": "quant-structured-staging"
           }
         ],

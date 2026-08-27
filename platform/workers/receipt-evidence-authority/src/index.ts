@@ -1,5 +1,4 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { executeReceiptRequest } from "./reconcile";
 import type {
   ReceiptAuthorityEnv,
   ReceiptEvidenceAuthorityRpc,
@@ -28,19 +27,25 @@ export class ReceiptAuthorityService
   issue_for_segment(
     request: ReceiptIssueRequestV1,
   ): Promise<ReceiptIssueResultV1> {
-    return executeReceiptRequest(this.env, request);
+    const authority = this.env.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
+      `receipt:${this.env.ENVIRONMENT}`,
+    ) as unknown as ReceiptEvidenceAuthorityRpc;
+    return authority.issue_for_segment(request);
   }
 
   recover_issue(
     request: ReceiptRecoveryRequestV1,
   ): Promise<ReceiptIssueResultV1> {
-    return executeReceiptRequest(this.env, request);
+    const authority = this.env.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
+      `receipt:${this.env.ENVIRONMENT}`,
+    ) as unknown as ReceiptEvidenceAuthorityRpc;
+    return authority.recover_issue(request);
   }
 
   async public_key_registration(): Promise<ReceiptPublicKeyRegistrationV1> {
     const authority = this.env.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
       `receipt:${this.env.ENVIRONMENT}`,
-    );
+    ) as unknown as ReceiptEvidenceAuthorityRpc;
     return authority.public_key_registration();
   }
 }

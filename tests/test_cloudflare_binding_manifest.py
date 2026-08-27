@@ -26,6 +26,35 @@ def test_frozen_manifest_equals_effective_wrangler_surfaces() -> None:
     assert "ci-aggregate" not in frozen["workers"]
 
 
+def test_receipt_authority_uses_dedicated_evidence_and_premium_owned_migrations() -> None:
+    receipt = manifest_module.build_manifest()["workers"][
+        "receipt-evidence-authority"
+    ]
+    for environment, evidence_bucket in {
+        "base": "quant-receipt-evidence",
+        "production": "quant-receipt-evidence",
+        "staging": "quant-receipt-evidence-staging",
+    }.items():
+        surface = receipt[environment]
+        assert surface["r2_buckets"] == [
+            {
+                "binding": "AUTHORITY_EVIDENCE_BUCKET",
+                "bucket_name": evidence_bucket,
+            },
+            {
+                "binding": "PRODUCT_MATERIALIZATION_BUCKET",
+                "bucket_name": (
+                    "quant-structured-staging"
+                    if environment == "staging"
+                    else "quant-structured"
+                ),
+            },
+        ]
+        assert len(surface["d1_databases"]) == 1
+        assert "migrations_dir" not in surface["d1_databases"][0]
+        assert "migrations_table" not in surface["d1_databases"][0]
+
+
 def test_canonical_inventory_equals_every_deployable_worker_directory() -> None:
     assert manifest_module._deployable_worker_directories() == (  # noqa: SLF001
         manifest_module.ACTIVE_WORKERS

@@ -13,19 +13,17 @@ AUTHORITY_MODE = "PENDING"
 RECEIPT_KEY_GENERATION = "1"
 
 [[r2_buckets]]
-binding = "RAW_BUCKET"
-bucket_name = "quant-raw"
+binding = "AUTHORITY_EVIDENCE_BUCKET"
+bucket_name = "quant-receipt-evidence"
 
 [[r2_buckets]]
-binding = "STRUCTURED_BUCKET"
+binding = "PRODUCT_MATERIALIZATION_BUCKET"
 bucket_name = "quant-structured"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
-migrations_dir = "../ingestion-premium/migrations"
-migrations_table = "d1_migrations_ingestion"
 
 [[durable_objects.bindings]]
 name = "RECEIPT_EVIDENCE_AUTHORITY_DO"
@@ -61,19 +59,17 @@ AUTHORITY_MODE = "PENDING"
 RECEIPT_KEY_GENERATION = "1"
 
 [[env.production.r2_buckets]]
-binding = "RAW_BUCKET"
-bucket_name = "quant-raw"
+binding = "AUTHORITY_EVIDENCE_BUCKET"
+bucket_name = "quant-receipt-evidence"
 
 [[env.production.r2_buckets]]
-binding = "STRUCTURED_BUCKET"
+binding = "PRODUCT_MATERIALIZATION_BUCKET"
 bucket_name = "quant-structured"
 
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
-migrations_dir = "../ingestion-premium/migrations"
-migrations_table = "d1_migrations_ingestion"
 
 [[env.production.durable_objects.bindings]]
 name = "RECEIPT_EVIDENCE_AUTHORITY_DO"

@@ -3,22 +3,26 @@ import {
   arrayBufferToBase64,
   canonicalDigest,
   canonicalJson,
-  exactKeys,
-  isPlainObject,
   isSha256,
   randomHex,
   sha256Digest,
   utf8Base64,
 } from "./canonical";
+import { requireDerivedClaims } from "./claims_validation";
 import {
   unwrapEd25519PrivateKey,
   wrapEd25519PrivateKey,
   type WrappedPrivateKey,
 } from "./key_crypto";
+import { executeReceiptRequest } from "./reconcile";
 import type {
   ReceiptAuthorityEnv,
+  ReceiptAuthorityIssuedRecord,
+  ReceiptAuthorityOperationSnapshot,
+  ReceiptIssueRequestV1,
   ReceiptIssueResultV1,
   ReceiptPublicKeyRegistrationV1,
+  ReceiptRecoveryRequestV1,
   SignedReceiptClaimsV2,
   SignedReceiptEnvelopeV2,
   UnsignedReceiptClaimsV2,
@@ -47,24 +51,6 @@ type OperationRow = {
   updated_at: string;
 };
 
-export type OperationSnapshot = {
-  operation_id: string;
-  request_digest: string;
-  acquisition_nonce: string;
-  state: OperationState;
-  claims: UnsignedReceiptClaimsV2 | null;
-  envelope: SignedReceiptEnvelopeV2 | null;
-  envelope_digest: string | null;
-  receipt_digest: string | null;
-  result: ReceiptIssueResultV1 | null;
-};
-
-export type IssuedRecord = {
-  claims: UnsignedReceiptClaimsV2;
-  envelope: SignedReceiptEnvelopeV2;
-  envelope_digest: string;
-};
-
 type KeyMaterial = {
   keyId: string;
   generation: number;
@@ -72,85 +58,6 @@ type KeyMaterial = {
   publicKeyBase64: string;
   generatedAt: string;
 };
-
-const UNSIGNED_CLAIM_KEYS = [
-  "coverage_policy_version",
-  "source",
-  "dataset",
-  "segment_id",
-  "segment_start",
-  "segment_end",
-  "expected_scope",
-  "expected_items",
-  "observed_items",
-  "raw_page_count",
-  "raw_count",
-  "structured_count",
-  "status",
-  "error",
-  "pagination_exhausted",
-  "discovery_exhausted",
-  "source_request_digest",
-  "raw_manifest_digest",
-  "raw_digest",
-  "structured_digest",
-  "structured_generation",
-  "scope_digest",
-  "observation_digest",
-  "run_id",
-  "checked_at",
-  "extra_digests",
-] as const;
-
-const REQUIRED_ACQUISITION_DIGESTS = [
-  "acquisition_collection_manifest_file_digest",
-  "acquisition_collection_digest",
-  "acquisition_terminal_chain_digest",
-] as const;
-
-function requireUnsignedClaims(value: unknown): UnsignedReceiptClaimsV2 {
-  if (!isPlainObject(value) || !exactKeys(value, UNSIGNED_CLAIM_KEYS)) {
-    throw new TypeError("receipt authority claims are not closed");
-  }
-  const extraDigests = isPlainObject(value.extra_digests)
-    ? value.extra_digests
-    : null;
-  const integerFields = [
-    "observed_items",
-    "raw_page_count",
-    "raw_count",
-    "structured_count",
-    "structured_generation",
-    "run_id",
-  ] as const;
-  if (
-    value.coverage_policy_version !== "collection-coverage/v3" ||
-    value.source !== "jquants" ||
-    typeof value.dataset !== "string" || value.dataset.length === 0 ||
-    typeof value.segment_id !== "string" || !/^\d{4}-\d{2}$/.test(value.segment_id) ||
-    typeof value.segment_start !== "string" ||
-    typeof value.segment_end !== "string" ||
-    !isPlainObject(value.expected_scope) ||
-    !(value.expected_items === null ||
-      (Number.isSafeInteger(value.expected_items) && Number(value.expected_items) >= 0)) ||
-    integerFields.some((field) =>
-      !Number.isSafeInteger(value[field]) || Number(value[field]) < 0
-    ) ||
-    value.status !== "SUCCESS" || value.error !== null ||
-    value.pagination_exhausted !== true || value.discovery_exhausted !== true ||
-    !isSha256(value.source_request_digest) ||
-    !isSha256(value.raw_manifest_digest) || !isSha256(value.raw_digest) ||
-    !isSha256(value.structured_digest) || !isSha256(value.scope_digest) ||
-    !isSha256(value.observation_digest) ||
-    typeof value.checked_at !== "string" || !Number.isFinite(Date.parse(value.checked_at)) ||
-    extraDigests === null ||
-    !exactKeys(extraDigests, REQUIRED_ACQUISITION_DIGESTS) ||
-    REQUIRED_ACQUISITION_DIGESTS.some((field) => !isSha256(extraDigests[field]))
-  ) {
-    throw new TypeError("receipt authority claims failed invariant validation");
-  }
-  return value as UnsignedReceiptClaimsV2;
-}
 
 function parseStored<T>(value: string | null, field: string): T | null {
   if (value === null) return null;
@@ -161,7 +68,7 @@ function parseStored<T>(value: string | null, field: string): T | null {
   }
 }
 
-function rowToSnapshot(row: OperationRow): OperationSnapshot {
+function rowToSnapshot(row: OperationRow): ReceiptAuthorityOperationSnapshot {
   return {
     operation_id: row.operation_id,
     request_digest: row.request_digest,
@@ -428,10 +335,10 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     throw new Error("receipt authority event append contention");
   }
 
-  async begin_operation(
+  async #beginOperation(
     operationId: string,
     requestDigest: string,
-  ): Promise<OperationSnapshot> {
+  ): Promise<ReceiptAuthorityOperationSnapshot> {
     if (!isSha256(operationId) || operationId !== requestDigest) {
       throw new TypeError("operation identity must equal the request digest");
     }
@@ -473,11 +380,13 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     return rowToSnapshot(row);
   }
 
-  async recover_operation(
+  #recoverOperation(
     operationId: string,
     requestDigest: string,
-  ): Promise<OperationSnapshot> {
-    return rowToSnapshot(this.requireOperation(operationId, requestDigest));
+  ): Promise<ReceiptAuthorityOperationSnapshot> {
+    return Promise.resolve(
+      rowToSnapshot(this.requireOperation(operationId, requestDigest)),
+    );
   }
 
   private async loadOrCreateKey(): Promise<KeyMaterial> {
@@ -652,12 +561,12 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     };
   }
 
-  async append_issued(
+  async #appendIssued(
     operationId: string,
     requestDigest: string,
     rawClaims: UnsignedReceiptClaimsV2,
-  ): Promise<IssuedRecord> {
-    const claims = requireUnsignedClaims(rawClaims);
+  ): Promise<ReceiptAuthorityIssuedRecord> {
+    const claims = requireDerivedClaims(rawClaims);
     const row = this.requireOperation(operationId, requestDigest);
     const claimsJson = canonicalJson(claims);
     const claimsDigest = await sha256Digest(claimsJson);
@@ -780,7 +689,7 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     return { claims, envelope, envelope_digest: envelopeDigest };
   }
 
-  async finalize_committed(
+  async #finalizeCommitted(
     operationId: string,
     requestDigest: string,
     receiptDigest: string,
@@ -823,5 +732,46 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       observedAt: now,
     });
     return result;
+  }
+
+  #internalAuthority() {
+    return {
+      begin: (
+        operationId: string,
+        requestDigest: string,
+      ) => this.#beginOperation(operationId, requestDigest),
+      recover: (
+        operationId: string,
+        requestDigest: string,
+      ) => this.#recoverOperation(operationId, requestDigest),
+      appendDerived: (
+        operationId: string,
+        requestDigest: string,
+        claims: UnsignedReceiptClaimsV2,
+      ) => this.#appendIssued(operationId, requestDigest, claims),
+      finalizeCommitted: (
+        operationId: string,
+        requestDigest: string,
+        receiptDigest: string,
+        result: ReceiptIssueResultV1,
+      ) => this.#finalizeCommitted(
+        operationId,
+        requestDigest,
+        receiptDigest,
+        result,
+      ),
+    };
+  }
+
+  issue_for_segment(
+    request: ReceiptIssueRequestV1,
+  ): Promise<ReceiptIssueResultV1> {
+    return executeReceiptRequest(this.env, request, this.#internalAuthority());
+  }
+
+  recover_issue(
+    request: ReceiptRecoveryRequestV1,
+  ): Promise<ReceiptIssueResultV1> {
+    return executeReceiptRequest(this.env, request, this.#internalAuthority());
   }
 }

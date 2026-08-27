@@ -4,12 +4,12 @@ import {
 } from "../../ingestion-secrets/src/jquants_acquisition_registry";
 import type { JquantsAcquisitionRequestV2 } from "../../ingestion-secrets/src/jquants_acquisition_types";
 import type { DatasetSpec } from "../../ingestion-premium/src/catalog";
-import type { IssuedRecord } from "./authority_do";
 import type { Capture } from "./raw_capture";
 import type {
   CollectionReceiptV2,
   JsonValue,
   ReceiptAuthorityEnv,
+  ReceiptAuthorityIssuedRecord,
   UnsignedReceiptClaimsV2,
 } from "./types";
 
@@ -91,7 +91,9 @@ export async function measuredClaims(input: {
   };
 }
 
-export function receiptFromIssued(issued: IssuedRecord): CollectionReceiptV2 {
+export function receiptFromIssued(
+  issued: ReceiptAuthorityIssuedRecord,
+): CollectionReceiptV2 {
   const claims = issued.claims;
   return {
     source: "jquants",
@@ -120,14 +122,48 @@ export async function commitReceipt(
   receipt: CollectionReceiptV2,
 ): Promise<string> {
   const receiptDigest = await canonicalDigest(receipt);
-  await env.DB.prepare(
+  const operation = await env.DB.prepare(
+    `SELECT run_id,dataset,segment_id,state,raw_manifest_key,
+            raw_manifest_digest,raw_page_count,raw_row_count,raw_bytes
+       FROM receipt_authority_operations WHERE operation_id=?`,
+  ).bind(operationId).first<{
+    run_id: number;
+    dataset: string;
+    segment_id: string;
+    state: string;
+    raw_manifest_key: string;
+    raw_manifest_digest: string;
+    raw_page_count: number;
+    raw_row_count: number;
+    raw_bytes: number;
+  }>();
+  if (
+    operation === null ||
+    (operation.state !== "STRUCTURED_COMMITTED" &&
+      operation.state !== "RECEIPT_COMMITTED") ||
+    operation.run_id !== receipt.run_id || operation.dataset !== receipt.dataset ||
+    operation.segment_id !== receipt.segment_id ||
+    operation.raw_page_count !== receipt.raw_page_count ||
+    operation.raw_row_count !== receipt.raw_row_count ||
+    operation.raw_manifest_digest !== receipt.digests.raw_manifest_digest ||
+    !operation.raw_manifest_key || operation.raw_bytes <= 0
+  ) throw new Error("receipt commit is not bound to the measured run/raw evidence");
+  const successDetail = canonicalJson({
+    schema_version: "receipt-authority-ingestion-result/v1",
+    operation_id: operationId,
+    receipt_digest: receiptDigest,
+    structured_digest: receipt.digests.structured_digest,
+    raw_manifest_digest: operation.raw_manifest_digest,
+  });
+  await env.DB.batch([
+    env.DB.prepare(
     `INSERT OR IGNORE INTO collection_receipts
      (source,dataset,segment_id,segment_start,segment_end,expected_scope,
       expected_items,observed_items,raw_page_count,raw_row_count,
       structured_row_count,pagination_exhausted,digests_json,run_id,status,
       error,checked_at)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'SUCCESS',NULL,?)`,
-  ).bind(
+    ).bind(
     receipt.source,
     receipt.dataset,
     receipt.segment_id,
@@ -142,8 +178,33 @@ export async function commitReceipt(
     1,
     JSON.stringify(receipt.digests),
     receipt.run_id,
-    receipt.checked_at,
-  ).run();
+      receipt.checked_at,
+    ),
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO raw_retention_manifests
+       (dataset,run_id,manifest_key,page_count,row_count,raw_bytes,data_digest,
+        completeness,created_at)
+       VALUES (?,?,?,?,?,?,?,'ACQUIRED',?)`,
+    ).bind(
+      receipt.dataset,
+      receipt.run_id,
+      operation.raw_manifest_key,
+      operation.raw_page_count,
+      operation.raw_row_count,
+      operation.raw_bytes,
+      operation.raw_manifest_digest,
+      receipt.checked_at,
+    ),
+    env.DB.prepare(
+      `UPDATE receipt_authority_operations
+       SET state='RECEIPT_COMMITTED',receipt_digest=?,updated_at=?
+       WHERE operation_id=? AND state IN ('STRUCTURED_COMMITTED','RECEIPT_COMMITTED')`,
+    ).bind(receiptDigest, receipt.checked_at, operationId),
+    env.DB.prepare(
+      `UPDATE ingestion_run_log SET status='SUCCESS',detail=?
+       WHERE id=? AND authority_operation_id=? AND status IN ('RUNNING','SUCCESS')`,
+    ).bind(successDetail, receipt.run_id, operationId),
+  ]);
   const row = await env.DB.prepare(
     `SELECT source,dataset,segment_id,segment_start,segment_end,expected_scope,
             expected_items,observed_items,raw_page_count,raw_row_count,
@@ -180,10 +241,29 @@ export async function commitReceipt(
   if (canonicalJson(restored) !== canonicalJson(receipt)) {
     throw new Error("persisted receipt differs from signed authority result");
   }
-  await env.DB.prepare(
-    `UPDATE receipt_authority_operations
-     SET state='RECEIPT_COMMITTED',receipt_digest=?,updated_at=?
-     WHERE operation_id=? AND state IN ('STRUCTURED_COMMITTED','RECEIPT_COMMITTED')`,
-  ).bind(receiptDigest, new Date().toISOString(), operationId).run();
+  const raw = await env.DB.prepare(
+    `SELECT dataset,run_id,manifest_key,page_count,row_count,raw_bytes,
+            data_digest,completeness,created_at
+       FROM raw_retention_manifests WHERE dataset=? AND run_id=?`,
+  ).bind(receipt.dataset, receipt.run_id).first<Record<string, unknown>>();
+  if (
+    raw === null || raw.dataset !== receipt.dataset || raw.run_id !== receipt.run_id ||
+    raw.manifest_key !== operation.raw_manifest_key ||
+    raw.page_count !== operation.raw_page_count ||
+    raw.row_count !== operation.raw_row_count || raw.raw_bytes !== operation.raw_bytes ||
+    raw.data_digest !== operation.raw_manifest_digest ||
+    raw.completeness !== "ACQUIRED" || raw.created_at !== receipt.checked_at
+  ) throw new Error("persisted raw retention evidence differs from signed receipt");
+  const committed = await env.DB.prepare(
+    `SELECT operation.state,operation.receipt_digest,run.status,run.detail
+       FROM receipt_authority_operations AS operation
+       JOIN ingestion_run_log AS run ON run.id=operation.run_id
+      WHERE operation.operation_id=? AND run.authority_operation_id=?`,
+  ).bind(operationId, operationId).first<Record<string, unknown>>();
+  if (
+    committed === null || committed.state !== "RECEIPT_COMMITTED" ||
+    committed.receipt_digest !== receiptDigest || committed.status !== "SUCCESS" ||
+    committed.detail !== successDetail
+  ) throw new Error("receipt run finalization did not commit exactly");
   return receiptDigest;
 }

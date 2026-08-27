@@ -19,7 +19,6 @@ import {
   unwrapEd25519PrivateKey,
   wrapEd25519PrivateKey,
 } from "../src/key_crypto";
-import { executeReceiptRequest } from "../src/reconcile";
 import premiumWorker, {
   type Env as PremiumEnv,
 } from "../../ingestion-premium/src/index";
@@ -27,7 +26,6 @@ import type {
   ReceiptAuthorityEnv,
   ReceiptEvidenceAuthorityRpc,
   ReceiptIssueRequestV1,
-  UnsignedReceiptClaimsV2,
 } from "../src/types";
 
 const runtimeEnv = env as ReceiptAuthorityEnv;
@@ -190,8 +188,16 @@ async function activateRegisteredTestKey(): Promise<{
   return { stub, registration };
 }
 
+function installAuthorityAcquisition(
+  transform?: (response: Response) => Promise<Response>,
+): void {
+  (runtimeEnv as unknown as Record<string, unknown>).JQUANTS_ACQUISITION =
+    withAcquisition(transform).JQUANTS_ACQUISITION;
+}
+
 beforeEach(async () => {
   await reset();
+  (runtimeEnv as unknown as { AUTHORITY_MODE: string }).AUTHORITY_MODE = "ACTIVE";
   await applyD1Migrations(runtimeEnv.DB, migrations);
   installSinglePageUpstream();
 });
@@ -235,33 +241,22 @@ describe("Receipt Evidence Authority in workerd", () => {
     );
   });
 
-  it("recovers an issued envelope after eviction and rejects claims replay", async () => {
-    const authorityEnv = withAcquisition();
+  it("replays a durable receipt after eviction without a claims RPC seam", async () => {
+    installAuthorityAcquisition();
     const { stub, registration } = await activateRegisteredTestKey();
-    await expect(executeReceiptRequest(
-      authorityEnv,
-      request,
-      { crashAfterIssueBeforeFinalize: true },
-    )).rejects.toThrow("injected crash after issue before finalize");
+    const issued = await stub.issue_for_segment(request);
 
     const operationId = await canonicalDigest(request);
-    const pending = await stub.recover_operation(operationId, operationId);
-    expect(pending.state).toBe("ISSUED_PENDING_FINALIZE");
-    expect(pending.envelope).not.toBeNull();
-    expect(pending.claims).not.toBeNull();
-
-    const substituted = {
-      ...pending.claims!,
-      observed_items: pending.claims!.observed_items + 1,
-    } satisfies UnsignedReceiptClaimsV2;
-    await expect(runInDurableObject(stub, async (instance) =>
-      instance.append_issued(operationId, operationId, substituted)
-    )).rejects.toThrow("claims replay was substituted");
-
-    await runInDurableObject(stub, async (
-      _instance: ReceiptEvidenceAuthority,
-      state,
-    ) => {
+    const pending = await runInDurableObject(stub, async (_instance, state) => {
+      const operation = state.storage.sql.exec<{
+        state: string;
+        claims_json: string | null;
+        envelope_json: string | null;
+      }>(
+        `SELECT state,claims_json,envelope_json FROM authority_operations
+         WHERE operation_id=?`,
+        operationId,
+      ).one();
       const wrapped = state.storage.sql.exec<{
         wrap_algorithm: string;
         wrapped_private_key_base64: string;
@@ -271,22 +266,15 @@ describe("Receipt Evidence Authority in workerd", () => {
       ).one();
       expect(wrapped.wrap_algorithm).toBe("AES-GCM");
       expect(wrapped.wrapped_private_key_base64.length).toBeGreaterThan(64);
-      const operational = await (
-        _instance as unknown as {
-          ensureKey(): Promise<{ privateKey: CryptoKey }>;
-        }
-      ).ensureKey();
-      expect(operational.privateKey.type).toBe("private");
-      expect(operational.privateKey.extractable).toBe(false);
-      await expect(
-        crypto.subtle.exportKey("pkcs8", operational.privateKey),
-      ).rejects.toThrow();
-      await expect(state.storage.put(
-        "unsupported-direct-cryptokey",
-        operational.privateKey,
-      )).rejects.toThrow(/Could not serialize.*CryptoKey/);
-      expect(await state.storage.get("unsupported-direct-cryptokey"))
-        .toBeUndefined();
+      return operation;
+    });
+    expect(pending.state).toBe("FINALIZED");
+    expect(pending.claims_json).not.toBeNull();
+    expect(pending.envelope_json).not.toBeNull();
+    await runInDurableObject(stub, async (instance) => {
+      const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(instance));
+      expect(methods).not.toContain("append_issued");
+      expect(methods).not.toContain("finalize_committed");
     });
     await evictDurableObject(stub);
 
@@ -296,7 +284,7 @@ describe("Receipt Evidence Authority in workerd", () => {
       registration.public_key_base64,
     );
 
-    const recovered = await executeReceiptRequest(authorityEnv, {
+    const recovered = await stub.recover_issue({
       ...request,
       operation: "recover_issue",
     });
@@ -305,7 +293,10 @@ describe("Receipt Evidence Authority in workerd", () => {
       state: "FINALIZED",
       replayed: true,
     });
-    expect(recovered.receipt.digests).toEqual(pending.envelope);
+    expect(recovered.receipt_digest).toBe(issued.receipt_digest);
+    expect(recovered.receipt.digests).toEqual(
+      JSON.parse(pending.envelope_json!),
+    );
 
     const publicKey = await crypto.subtle.importKey(
       "raw",
@@ -324,72 +315,129 @@ describe("Receipt Evidence Authority in workerd", () => {
       decodeBase64(recovered.receipt.digests.signed_body_b64),
     )).toBe(true);
 
-    const replay = await executeReceiptRequest(authorityEnv, request);
+    const replay = await stub.issue_for_segment(request);
     expect(replay.replayed).toBe(true);
     expect(replay.receipt_digest).toBe(recovered.receipt_digest);
     expect(replay.receipt).toEqual(recovered.receipt);
   });
 
-  it("rejects operation identity substitution and never signs in PENDING mode", async () => {
+  it("exposes no caller-authored claims/result RPC and never signs in PENDING mode", async () => {
     const operationId = await canonicalDigest(request);
     const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
       "receipt:production",
     );
-    await stub.begin_operation(operationId, operationId);
-    await expect(runInDurableObject(stub, async (instance) =>
-      instance.begin_operation(operationId, `sha256:${"f".repeat(64)}`)
-    )).rejects.toThrow("operation identity must equal the request digest");
-
-    await expect(executeReceiptRequest({
-      ...withAcquisition(),
-      AUTHORITY_MODE: "PENDING",
-    }, {
-      ...request,
-      request_nonce: "b".repeat(64),
-    })).rejects.toThrow("PENDING activation");
+    for (const method of [
+      "begin_operation",
+      "recover_operation",
+      "append_issued",
+      "finalize_committed",
+    ]) {
+      await runInDurableObject(stub, async (instance) => {
+        expect(Object.getOwnPropertyNames(Object.getPrototypeOf(instance)))
+          .not.toContain(method);
+      });
+    }
+    installAuthorityAcquisition();
+    await runInDurableObject(stub, async (instance) => {
+      (instance as unknown as { env: ReceiptAuthorityEnv }).env.AUTHORITY_MODE =
+        "PENDING";
+    });
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment({
+        ...request,
+        request_nonce: "b".repeat(64),
+      })
+    )).rejects.toThrow("PENDING activation");
     const receiptCount = await runtimeEnv.DB.prepare(
       "SELECT COUNT(*) AS count FROM collection_receipts",
     ).first<{ count: number }>();
     expect(receiptCount?.count).toBe(0);
 
-    await expect(executeReceiptRequest({
-      ...withAcquisition(),
-      AUTHORITY_MODE: "ACTIVE_TEST" as never,
-    }, {
-      ...request,
-      request_nonce: "d".repeat(64),
-    })).rejects.toThrow("PENDING activation");
+    await runInDurableObject(stub, async (instance) => {
+      (instance as unknown as { env: ReceiptAuthorityEnv }).env.AUTHORITY_MODE =
+        "ACTIVE_TEST" as never;
+    });
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment({
+        ...request,
+        request_nonce: "d".repeat(64),
+      })
+    )).rejects.toThrow("PENDING activation");
 
-    await expect(executeReceiptRequest(withAcquisition(), {
-      ...request,
-      operation: "recover_issue",
-      request_nonce: "a".repeat(64),
-    })).rejects.toThrow("no issued envelope to recover");
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.recover_issue({
+        ...request,
+        operation: "recover_issue",
+        request_nonce: "a".repeat(64),
+      })
+    )).rejects.toThrow("no issued envelope to recover");
   });
 
   it("rejects a forged terminal header while immutable raw has a provider cursor", async () => {
     installSinglePageUpstream('{"data":[],"pagination_key":"page-2"}');
-    await expect(executeReceiptRequest(
-      withAcquisition(forgeSegmentExhaustion),
-      { ...request, request_nonce: "e".repeat(64) },
+    installAuthorityAcquisition(forgeSegmentExhaustion);
+    const { stub } = await activateRegisteredTestKey();
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment({
+        ...request,
+        request_nonce: "e".repeat(64),
+      })
     )).rejects.toThrow("provider continuation cannot terminate the segment");
   });
 
   it("rejects a forged terminal header before the final deterministic slice", async () => {
     installSinglePageUpstream('{"data":[],"pagination_key":null}');
-    await expect(executeReceiptRequest(
-      withAcquisition(forgeSegmentExhaustion),
-      {
+    installAuthorityAcquisition(forgeSegmentExhaustion);
+    const { stub } = await activateRegisteredTestKey();
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment({
         ...request,
         dataset_id: "fins_summary",
         request_nonce: "f".repeat(64),
-      },
+      })
     )).rejects.toThrow("sliced acquisition terminated before the final date");
+  });
+
+  it("rejects an exact-key poisoned preinsert instead of self-digesting it", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    await runtimeEnv.DB.prepare(
+      `CREATE TRIGGER poison_receipt_structured_row
+       AFTER INSERT ON receipt_authority_operations
+       BEGIN
+         INSERT INTO receipt_authority_structured_rows
+         (operation_id,natural_key,source,dataset,event_time,available_at,
+          ingested_at,payload,raw_payload,row_digest)
+         VALUES (
+           NEW.operation_id,'{"Date":"2024-02-01"}','jquants',NEW.dataset,
+           '2024-02-01T15:00:00+09:00','2024-02-01T15:00:00+09:00',
+           NEW.checked_at,'{}',
+           '{"Date":"2024-02-01","Open":1,"Close":2}',
+           'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+         );
+       END`,
+    ).run();
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment({
+        ...request,
+        request_nonce: "7".repeat(64),
+      })
+    )).rejects.toThrow(
+      "persisted structured fields differ from canonical raw normalization",
+    );
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS count FROM collection_receipts",
+    ).first<{ count: number }>()).toEqual({ count: 0 });
   });
 
   it("makes reconciled rows, committed receipts, and authority history append-only", async () => {
     const { stub } = await activateRegisteredTestKey();
-    const result = await executeReceiptRequest(withAcquisition(), {
+    installAuthorityAcquisition();
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO ingestion_run_log(ran_at,source,runtime,status,detail)
+       VALUES ('2024-01-01T00:00:00Z','jquants','prior-test','SUCCESS','{}')`,
+    ).run();
+    const result = await stub.issue_for_segment({
       ...request,
       request_nonce: "9".repeat(64),
     });
@@ -397,6 +445,26 @@ describe("Receipt Evidence Authority in workerd", () => {
       `SELECT run_id FROM receipt_authority_operations WHERE operation_id=?`,
     ).bind(result.operation_id).first<{ run_id: number }>();
     expect(operation).not.toBeNull();
+    expect(operation!.run_id).toBeGreaterThan(1);
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT source,runtime,status,authority_operation_id
+         FROM ingestion_run_log WHERE id=?`,
+    ).bind(operation!.run_id).first()).toMatchObject({
+      source: "jquants",
+      runtime: "receipt-evidence-authority",
+      status: "SUCCESS",
+      authority_operation_id: result.operation_id,
+    });
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT dataset,run_id,page_count,row_count,completeness
+         FROM raw_retention_manifests WHERE run_id=?`,
+    ).bind(operation!.run_id).first()).toMatchObject({
+      dataset: "indices_bars_daily_topix",
+      run_id: operation!.run_id,
+      page_count: 1,
+      row_count: 1,
+      completeness: "ACQUIRED",
+    });
 
     await expect(runtimeEnv.DB.prepare(
       `UPDATE receipt_authority_structured_rows SET payload='{}'

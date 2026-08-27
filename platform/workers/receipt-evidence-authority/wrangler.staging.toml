@@ -13,19 +13,17 @@ AUTHORITY_MODE = "PENDING"
 RECEIPT_KEY_GENERATION = "1"
 
 [[r2_buckets]]
-binding = "RAW_BUCKET"
-bucket_name = "quant-raw-staging"
+binding = "AUTHORITY_EVIDENCE_BUCKET"
+bucket_name = "quant-receipt-evidence-staging"
 
 [[r2_buckets]]
-binding = "STRUCTURED_BUCKET"
+binding = "PRODUCT_MATERIALIZATION_BUCKET"
 bucket_name = "quant-structured-staging"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "quant-ingest-staging"
 database_id = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
-migrations_dir = "../ingestion-premium/migrations"
-migrations_table = "d1_migrations_ingestion"
 
 [[durable_objects.bindings]]
 name = "RECEIPT_EVIDENCE_AUTHORITY_DO"
