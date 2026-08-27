@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 import subprocess
 from pathlib import Path
 
@@ -16,6 +17,10 @@ from scripts.verify_cloudflare_secret_inventory import (
     verify_live_secret_inventory,
     wrangler_command,
 )
+
+
+ACCOUNT_ID = "test-account-id"
+API_TOKEN = "test-read-only-api-token"
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +66,11 @@ def test_exact_live_inventory_matches_every_active_worker() -> None:
             [{"name": name, "type": "secret_text"} for name in expected[worker]]
         )
 
-    assert verify_live_secret_inventory(runner=runner) == list(expected)
+    assert verify_live_secret_inventory(
+        account_id=ACCOUNT_ID,
+        api_token=API_TOKEN,
+        runner=runner,
+    ) == list(expected)
 
 
 def test_missing_or_unexpected_live_name_fails_closed() -> None:
@@ -69,7 +78,12 @@ def test_missing_or_unexpected_live_name_fails_closed() -> None:
         return _completed([{"name": "UNEXPECTED", "type": "secret_text"}])
 
     with pytest.raises(SecretInventoryError, match="production secret-name drift"):
-        verify_live_secret_inventory(["ingestion-jsda"], runner=runner)
+        verify_live_secret_inventory(
+            ["ingestion-jsda"],
+            account_id=ACCOUNT_ID,
+            api_token=API_TOKEN,
+            runner=runner,
+        )
 
 
 def test_wrangler_failure_does_not_relay_command_output() -> None:
@@ -84,8 +98,96 @@ def test_wrangler_failure_does_not_relay_command_output() -> None:
         )
 
     with pytest.raises(SecretInventoryError) as captured:
-        live_secret_names("ingestion-jsda", runner=runner)
+        live_secret_names(
+            "ingestion-jsda",
+            account_id=ACCOUNT_ID,
+            api_token=API_TOKEN,
+            runner=runner,
+        )
     assert secret_value not in str(captured.value)
+
+
+def test_live_inventory_uses_fresh_minimum_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", "/ambient/oauth-home-must-not-pass")
+    monkeypatch.setenv("WRANGLER_HOME", "/ambient/wrangler-must-not-pass")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "ambient-token-must-not-pass")
+    monkeypatch.setenv("CLOUDFLARE_API_KEY", "ambient-key-must-not-pass")
+    monkeypatch.setenv("CLOUDFLARE_EMAIL", "ambient-email-must-not-pass")
+    monkeypatch.setenv("UNRELATED_SECRET", "must-not-pass")
+    observed_root: Path | None = None
+
+    def runner(_command: tuple[str, ...], **kwargs: object):
+        nonlocal observed_root
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        assert set(environment) == {
+            "PATH",
+            "LANG",
+            "HOME",
+            "WRANGLER_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "TMPDIR",
+            "CI",
+            "NO_COLOR",
+            "WRANGLER_SEND_METRICS",
+            "CLOUDFLARE_ACCOUNT_ID",
+            "CLOUDFLARE_API_TOKEN",
+        }
+        assert environment["CLOUDFLARE_ACCOUNT_ID"] == ACCOUNT_ID
+        assert environment["CLOUDFLARE_API_TOKEN"] == API_TOKEN
+        assert kwargs["timeout"] == 60
+        observed_root = Path(environment["TMPDIR"])
+        assert observed_root.is_dir()
+        assert stat.S_IMODE(observed_root.stat().st_mode) == 0o700
+        for name in (
+            "HOME",
+            "WRANGLER_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+        ):
+            directory = Path(environment[name])
+            assert directory.parent == observed_root
+            assert directory.is_dir()
+            assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+        return _completed([{"name": "JQUANTS_AUTH_TOKEN", "type": "secret_text"}])
+
+    assert live_secret_names(
+        "ingestion-jsda",
+        account_id=ACCOUNT_ID,
+        api_token=API_TOKEN,
+        runner=runner,
+    ) == ("JQUANTS_AUTH_TOKEN",)
+    assert observed_root is not None
+    assert not observed_root.exists()
+
+
+def test_live_inventory_timeout_fails_closed() -> None:
+    def runner(command: tuple[str, ...], **kwargs: object):
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    with pytest.raises(SecretInventoryError, match="wrangler secret list failed"):
+        live_secret_names(
+            "ingestion-jsda",
+            account_id=ACCOUNT_ID,
+            api_token=API_TOKEN,
+            runner=runner,
+        )
+
+
+def test_cli_does_not_fall_back_to_ambient_wrangler_oauth(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("CLOUDFLARE_API_TOKEN", raising=False)
+    monkeypatch.delenv("CLOUDFLARE_ACCOUNT_ID", raising=False)
+    monkeypatch.setenv("HOME", "/ambient/oauth-home-must-not-authorize")
+    assert secret_inventory_module.main([]) == 1
+    assert "CLOUDFLARE_API_TOKEN is required" in capsys.readouterr().err
 
 
 def test_command_is_read_only_production_name_inventory() -> None:
@@ -123,5 +225,7 @@ def test_staging_inventory_uses_exact_standalone_config_and_receipt_secret() -> 
     assert verify_live_secret_inventory(
         ["receipt-evidence-authority"],
         environment="staging",
+        account_id=ACCOUNT_ID,
+        api_token=API_TOKEN,
         runner=runner,
     ) == ["receipt-evidence-authority"]
