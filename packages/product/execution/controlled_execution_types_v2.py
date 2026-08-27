@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Callable, Mapping, NoReturn
+from typing import Any, Mapping, NoReturn
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -29,36 +29,6 @@ _VERIFIED_EXECUTOR_OUTPUT_TOKEN = object()
 
 class ControlledExecutionWriterV2Error(ExactFourAuthorityContractError):
     """A peer, handoff, signature, or immutable transaction was rejected."""
-
-
-class _OneCallControlledPilotAuthorizationV2:
-    """Stack-local executor permit invalidated immediately after one callback."""
-
-    __slots__ = ("_context", "_active", "_used")
-
-    def __init__(self, context: Mapping[str, Any]) -> None:
-        self._context = MappingProxyType(dict(context))
-        self._active = True
-        self._used = False
-
-    def invoke(
-        self,
-        bounded_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]],
-    ) -> Mapping[str, Any]:
-        if not self._active or self._used or not callable(bounded_executor):
-            raise ControlledExecutionWriterV2Error(
-                "bounded Controlled executor authorization is not available"
-            )
-        self._used = True
-        try:
-            result = bounded_executor(self._context)
-            if type(result) is not dict:
-                raise ControlledExecutionWriterV2Error(
-                    "bounded Controlled executor must return one exact output object"
-                )
-            return result
-        finally:
-            self._active = False
 
 
 @dataclass(frozen=True, slots=True, init=False)

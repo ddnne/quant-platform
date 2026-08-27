@@ -30,6 +30,18 @@ from execution.controlled_execution_store_v2 import (
     _WRITER_CONSTRUCTION_TOKEN,
 )
 from execution.controlled_execution_types_v2 import _ControlledWriterSignerV2
+from execution.controlled_execution_budget_v2 import (
+    ControlledPersistentBudgetLedgerV2,
+)
+from execution.controlled_execution_runtime_v2 import (
+    ControlledExecutionRuntimeV2,
+    UnixControlledExecutionProviderV2,
+    _build_server_controlled_execution_runtime_v2,
+    open_pinned_controlled_snapshot_v2,
+)
+from selection.budget_ledger import ResearchBudgetCapability
+from selection.screen import OfflineExperimentBudget
+from execution.secure_authority_files_v2 import read_pinned_authority_file_v2
 
 
 CONTROLLED_WRITER_MANIFEST_FORMAT = "controlled-exact-four-artifact-manifest/v2"
@@ -55,21 +67,38 @@ CONTROLLED_EXECUTION_ACTIVATION_PATH = Path(
 
 _MAX_FRAME_BYTES = 1024 * 1024
 _MAX_HANDOFF_BYTES = 1024 * 1024
+
+
+def _activation_absolute_path(document: dict[str, Any], field: str) -> Path:
+    value = document.get(field)
+    if (
+        type(value) is not str
+        or not value
+        or value != value.strip()
+        or not os.path.isabs(value)
+        or os.path.abspath(value) != value
+    ):
+        raise ExactFourAuthorityPending(
+            f"Controlled activation {field} is not one canonical absolute path"
+        )
+    return Path(value)
+
+
 def _load_root_owned_activation() -> dict[str, Any]:
     path = CONTROLLED_EXECUTION_ACTIVATION_PATH
     try:
-        metadata = path.lstat()
-        raw = path.read_bytes()
+        raw = read_pinned_authority_file_v2(
+            path,
+            chain_root=Path("/"),
+            directory_owner_uids={0},
+            expected_file_uid=0,
+            allowed_file_modes=frozenset(
+                {0o400, 0o440, 0o444, 0o600, 0o640, 0o644}
+            ),
+            max_bytes=1024 * 1024,
+        )
     except OSError as exc:
         raise ExactFourAuthorityPending(CONTROLLED_WRITER_LIVE_STATE) from exc
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != 0
-        or metadata.st_mode & 0o022
-    ):
-        raise ExactFourAuthorityPending(
-            "Controlled activation state is not a root-owned non-writable file"
-        )
     document = _strict_json_loads(raw, label="Controlled authority activation state")
     required = {
         "format",
@@ -79,6 +108,13 @@ def _load_root_owned_activation() -> dict[str, Any]:
         "store_path",
         "signer_key_id",
         "private_key_path",
+        "budget_id",
+        "budget_ledger_path",
+        "immutable_snapshot_path",
+        "signed_projection_path",
+        "provider_socket_path",
+        "provider_uid",
+        "provider_timeout_seconds",
         "protected_store_observed",
         "protected_signing_key_observed",
         "rp_registry",
@@ -214,8 +250,8 @@ def _load_live_controlled_execution_writer_v2(
         raise ExactFourAuthorityPending(
             "Controlled principal, protected store, key, or Trader peer is absent"
         )
-    store_path = Path(document["store_path"])
-    key_path = Path(document["private_key_path"])
+    store_path = _activation_absolute_path(document, "store_path")
+    key_path = _activation_absolute_path(document, "private_key_path")
     if (
         not store_path.is_absolute()
         or not key_path.is_absolute()
@@ -244,20 +280,18 @@ def _load_live_controlled_execution_writer_v2(
                 "Controlled store is not service-owned and private"
             )
     try:
-        key_metadata = key_path.lstat()
-        key_bytes = key_path.read_bytes()
+        key_bytes = read_pinned_authority_file_v2(
+            key_path,
+            chain_root=Path("/"),
+            directory_owner_uids={0, service_uid},
+            expected_file_uid=service_uid,
+            allowed_file_modes=frozenset({0o400, 0o600}),
+            max_bytes=64 * 1024,
+        )
     except OSError as exc:
         raise ExactFourAuthorityPending(
             "Controlled protected signing key is absent"
         ) from exc
-    if (
-        not stat.S_ISREG(key_metadata.st_mode)
-        or key_metadata.st_uid != service_uid
-        or stat.S_IMODE(key_metadata.st_mode) not in {0o400, 0o600}
-    ):
-        raise ExactFourAuthorityPending(
-            "Controlled signing key ownership or mode is invalid"
-        )
     try:
         private_key = serialization.load_pem_private_key(key_bytes, password=None)
     except (TypeError, ValueError) as exc:
@@ -281,7 +315,113 @@ def _load_live_controlled_execution_writer_v2(
         relying_parties=rps,
         credentials=credentials,
         server_bound=server_bound,
+        test_mode=False,
         _token=_WRITER_CONSTRUCTION_TOKEN,
+    )
+
+
+def _load_live_controlled_execution_runtime_v2() -> ControlledExecutionRuntimeV2:
+    """Build the fixed provider/budget/snapshot runtime from root activation."""
+
+    document = _load_root_owned_activation()
+    environment = document["environment"]
+    service_uid = document["service_uid"]
+    provider_uid = document["provider_uid"]
+    budget_id = document["budget_id"]
+    budget_path = _activation_absolute_path(document, "budget_ledger_path")
+    snapshot_path = _activation_absolute_path(document, "immutable_snapshot_path")
+    projection_path = _activation_absolute_path(document, "signed_projection_path")
+    provider_socket = _activation_absolute_path(document, "provider_socket_path")
+    timeout_seconds = document.get("provider_timeout_seconds")
+    if (
+        environment not in {"staging", "production"}
+        or type(service_uid) is not int
+        or service_uid <= 0
+        or os.geteuid() != service_uid
+        or type(provider_uid) is not int
+        or provider_uid <= 0
+        or provider_uid == service_uid
+        or type(budget_id) is not str
+        or not budget_id
+        or budget_id != budget_id.strip()
+        or type(timeout_seconds) not in {int, float}
+        or not 0 < float(timeout_seconds) <= 300
+        or document["protected_store_observed"] is not True
+    ):
+        raise ExactFourAuthorityPending(
+            "Controlled runtime principal, budget, snapshot, or provider is absent"
+        )
+    for path, label in (
+        (budget_path, "budget ledger"),
+        (snapshot_path, "immutable snapshot"),
+        (projection_path, "signed projection"),
+    ):
+        if not path.is_absolute() or not path.parent.exists():
+            raise ExactFourAuthorityPending(
+                f"Controlled {label} protected path is absent"
+            )
+    try:
+        provider_metadata = provider_socket.lstat()
+    except OSError as exc:
+        raise ExactFourAuthorityPending(
+            "Controlled provider socket is absent"
+        ) from exc
+    if (
+        not stat.S_ISSOCK(provider_metadata.st_mode)
+        or provider_metadata.st_uid != provider_uid
+        or provider_metadata.st_mode & 0o002
+    ):
+        raise ExactFourAuthorityPending(
+            "Controlled provider socket identity or permissions are invalid"
+        )
+    try:
+        budget_parent = budget_path.parent.lstat()
+        budget_metadata = budget_path.lstat()
+    except OSError as exc:
+        raise ExactFourAuthorityPending(
+            "Controlled budget ledger must be pre-provisioned"
+        ) from exc
+    if (
+        not stat.S_ISDIR(budget_parent.st_mode)
+        or budget_parent.st_uid != service_uid
+        or stat.S_IMODE(budget_parent.st_mode) != 0o700
+        or not stat.S_ISREG(budget_metadata.st_mode)
+        or budget_metadata.st_uid != service_uid
+        or budget_metadata.st_nlink != 1
+        or stat.S_IMODE(budget_metadata.st_mode) != 0o600
+    ):
+        raise ExactFourAuthorityPending(
+            "Controlled budget ledger is not a private single-link service store"
+        )
+    budget = ResearchBudgetCapability(
+        budget_id=budget_id,
+        ledger_path=budget_path,
+        limits=OfflineExperimentBudget(),
+    )
+    clock = lambda: datetime.now(timezone.utc)
+    budget_ledger = ControlledPersistentBudgetLedgerV2(
+        budget=budget,
+        environment=environment,
+        clock=clock,
+    )
+    # Startup never retries work with an unknown provider outcome.
+    budget_ledger.recover_unfinished()
+    snapshot = open_pinned_controlled_snapshot_v2(
+        snapshot_path=str(snapshot_path),
+        projection_path=str(projection_path),
+        expected_uid=0,
+        chain_root="/",
+    )
+    provider = UnixControlledExecutionProviderV2(
+        socket_path=str(provider_socket),
+        provider_uid=provider_uid,
+        timeout_seconds=timeout_seconds,
+    )
+    return _build_server_controlled_execution_runtime_v2(
+        environment=environment,
+        provider=provider,
+        budget=budget_ledger,
+        snapshot=snapshot,
     )
 
 
@@ -296,6 +436,13 @@ def _open_server_bound_controlled_execution_writer_v2(
     """Execution adapter hook used only inside UnixAuthorityService."""
 
     return _load_live_controlled_execution_writer_v2(server_bound=True)
+
+
+def _open_server_bound_controlled_execution_runtime_v2(
+) -> ControlledExecutionRuntimeV2:
+    """Provider runtime hook used only by the local AuthorityServer adapter."""
+
+    return _load_live_controlled_execution_runtime_v2()
 
 
 __all__ = [

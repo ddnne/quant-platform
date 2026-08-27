@@ -6,7 +6,7 @@ Trader handler performs a two-phase WebAuthn ceremony, commits the assertion in
 its authority-owned ledger, then passes the committed canonical handoff to the
 kernel-authenticated Controlled service as one unlinked read-only descriptor.
 The Controlled handler independently verifies and reserves that handoff before
-invoking its process-configured one-call executor.
+using its server-constructed budget/snapshot/provider runtime.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +22,10 @@ from execution.controlled_execution_writer_v2 import (
     CONTROLLED_TRADER_HANDOFF_OPERATION,
     CONTROLLED_TRADER_HANDOFF_PURPOSE,
     SQLiteControlledExecutionWriterV2,
+    _open_server_bound_controlled_execution_runtime_v2,
     _open_server_bound_controlled_execution_writer_v2,
 )
+from execution.controlled_execution_runtime_v2 import ControlledExecutionRuntimeV2
 from execution.exact_four_codec import (
     ExactFourAuthorityContractError,
     _canonical_bytes,
@@ -277,18 +279,27 @@ class ControlledExecutionConsumeTraderHandoffV2:
         self,
         *,
         writer: SQLiteControlledExecutionWriterV2,
-        bounded_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+        execution_runtime: ControlledExecutionRuntimeV2,
     ) -> None:
         if (
             type(writer) is not SQLiteControlledExecutionWriterV2
-            or not callable(bounded_executor)
+            or not (
+                (
+                    writer._test_mode is False
+                    and type(execution_runtime) is ControlledExecutionRuntimeV2
+                    and execution_runtime._production_bound is True
+                )
+                or (
+                    writer._test_mode is True
+                    and isinstance(
+                        execution_runtime, ControlledExecutionRuntimeV2
+                    )
+                )
+            )
         ):
             raise LocalAuthorityError("Controlled handler configuration is invalid")
         self.writer = writer
-        # This callback is fixed at process construction.  It is never sourced
-        # from request JSON and receives its one-call context only after the
-        # WebAuthn handoff reservation transaction commits.
-        self._bounded_executor = bounded_executor
+        self._execution_runtime = execution_runtime
 
     def __call__(
         self,
@@ -309,7 +320,7 @@ class ControlledExecutionConsumeTraderHandoffV2:
                 context,
                 payload,
                 fds,
-                self._bounded_executor,
+                self._execution_runtime,
             )
         except LocalAuthorityError:
             raise
@@ -354,14 +365,12 @@ def open_live_trader_authority_handler_v2(
 
 
 def open_live_controlled_execution_handler_v2(
-    *,
-    bounded_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]],
 ) -> ControlledExecutionConsumeTraderHandoffV2:
     """Build the positive Controlled handler only for UnixAuthorityService."""
 
     return ControlledExecutionConsumeTraderHandoffV2(
         writer=_open_server_bound_controlled_execution_writer_v2(),
-        bounded_executor=bounded_executor,
+        execution_runtime=_open_server_bound_controlled_execution_runtime_v2(),
     )
 
 

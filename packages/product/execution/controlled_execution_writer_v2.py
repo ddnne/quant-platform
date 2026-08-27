@@ -5,6 +5,7 @@ from scripts.finding_ledger_gate import require_pinned_finding_ledger_gate
 
 from execution.controlled_execution_activation_v2 import (
     CONTROLLED_EXECUTION_ACTIVATION_PATH,
+    _load_live_controlled_execution_runtime_v2,
     _load_live_controlled_execution_writer_v2,
 )
 from execution.controlled_execution_store_v2 import (
@@ -32,6 +33,12 @@ def _open_server_bound_controlled_execution_writer_v2(
     """Execution adapter hook used only inside UnixAuthorityService."""
 
     return _load_live_controlled_execution_writer_v2(server_bound=True)
+
+
+def _open_server_bound_controlled_execution_runtime_v2():
+    """Build the server-only sealed budget/snapshot/provider runtime."""
+
+    return _load_live_controlled_execution_runtime_v2()
 
 
 __all__ = [

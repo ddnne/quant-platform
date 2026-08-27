@@ -38,6 +38,7 @@ from execution.exact_four_results import (
     RiskResultEvidenceV2,
     _pair_set_digest,
 )
+from execution.controlled_execution_runtime_v2 import ControlledProviderTimeoutV2
 from execution.trader_webauthn_authority_v2 import (
     ExactFourTraderCredentialRegistryV2,
     ExactFourTraderRelyingPartyRegistryV2,
@@ -47,6 +48,9 @@ from tests.test_trader_webauthn_authority_v2 import (
     _authority,
     _canonical,
     _ready_evidence,
+)
+from tests.controlled_execution_runtime_test_support import (
+    make_test_controlled_execution_runtime,
 )
 
 
@@ -219,7 +223,9 @@ def _serve(
     )
     try:
         trader.send_handoff(trader_side, handoff)
-        return writer.receive_and_execute(controlled_side, executor)
+        return writer.receive_and_execute(
+            controlled_side, make_test_controlled_execution_runtime(executor)
+        )
     finally:
         trader_side.close()
         controlled_side.close()
@@ -372,7 +378,9 @@ def test_bad_peer_and_bad_fd_never_invoke_executor(
     try:
         trader_side.sendall(struct.pack("!I", len(body)) + body)
         with pytest.raises(ControlledExecutionWriterV2Error, match="exactly one"):
-            writer2.receive_and_execute(controlled_side, execute)
+            writer2.receive_and_execute(
+                controlled_side, make_test_controlled_execution_runtime(execute)
+            )
     finally:
         trader_side.close()
         controlled_side.close()
@@ -439,7 +447,9 @@ def test_bad_webauthn_signature_never_invokes_executor(
     try:
         _send_raw_handoff(trader_side, tmp_path, attacked)
         with pytest.raises(ControlledExecutionWriterV2Error, match="signature"):
-            writer.receive_and_execute(controlled_side, execute)
+            writer.receive_and_execute(
+                controlled_side, make_test_controlled_execution_runtime(execute)
+            )
     finally:
         trader_side.close()
         controlled_side.close()
@@ -477,7 +487,9 @@ def test_same_assertion_rewrapped_as_new_trader_event_is_rejected_by_controlled_
             ControlledExecutionWriterV2Error,
             match="counter|reservation",
         ):
-            writer.receive_and_execute(controlled_side, must_not_run)
+            writer.receive_and_execute(
+                controlled_side, make_test_controlled_execution_runtime(must_not_run)
+            )
     finally:
         trader_side.close()
         controlled_side.close()
@@ -508,7 +520,10 @@ def test_equal_or_rollback_counter_event_is_rejected_before_reservation(
     try:
         _send_raw_handoff(trader_side, tmp_path, attacked)
         with pytest.raises(ControlledExecutionWriterV2Error, match="counter"):
-            writer.receive_and_execute(controlled_side, _bounded_output)
+            writer.receive_and_execute(
+                controlled_side,
+                make_test_controlled_execution_runtime(_bounded_output),
+            )
     finally:
         trader_side.close()
         controlled_side.close()
@@ -551,6 +566,83 @@ def test_concurrent_same_handoff_reservations_invoke_only_one_executor(
     assert calls == 1
     assert writer.handoff_count() == 1
     assert writer.attempt_outcome(handoff.handoff_id) == "SUCCEEDED"
+
+
+def test_provider_timeout_after_handoff_consume_is_settled_and_never_retried(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trader, handoff, writer, _now = _committed_system(tmp_path, monkeypatch)
+    _allow_positive_gate(monkeypatch)
+    calls = 0
+
+    def timeout(_context: Mapping[str, Any]) -> Mapping[str, Any]:
+        nonlocal calls
+        calls += 1
+        assert writer.handoff_count() == 1
+        raise ControlledProviderTimeoutV2("test provider timeout")
+
+    runtime = make_test_controlled_execution_runtime(timeout)
+    trader_side, controlled_side = socket.socketpair(
+        socket.AF_UNIX, socket.SOCK_STREAM
+    )
+    try:
+        trader.send_handoff(trader_side, handoff)
+        with pytest.raises(ControlledProviderTimeoutV2):
+            writer.receive_and_execute(controlled_side, runtime)
+    finally:
+        trader_side.close()
+        controlled_side.close()
+    assert calls == 1
+    assert writer.handoff_count() == 1
+    assert writer.attempt_outcome(handoff.handoff_id) == "FAILED"
+    assert runtime.settlements == ["timeout"]
+    with pytest.raises(ControlledExecutionWriterV2Error, match="retry policy is DENY"):
+        _serve(trader, handoff, writer, _bounded_output)
+    assert calls == 1
+
+
+@pytest.mark.parametrize("snapshot_failure_check", [1, 2])
+def test_snapshot_is_reverified_after_provider_and_immediately_before_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    snapshot_failure_check: int,
+) -> None:
+    trader, handoff, writer, _now = _committed_system(tmp_path, monkeypatch)
+    _allow_positive_gate(monkeypatch)
+    calls = 0
+
+    def execute(context: Mapping[str, Any]) -> Mapping[str, Any]:
+        nonlocal calls
+        calls += 1
+        return _bounded_output(context)
+
+    runtime = make_test_controlled_execution_runtime(
+        execute,
+        snapshot_failure_check=snapshot_failure_check,
+    )
+    trader_side, controlled_side = socket.socketpair(
+        socket.AF_UNIX, socket.SOCK_STREAM
+    )
+    try:
+        trader.send_handoff(trader_side, handoff)
+        with pytest.raises(RuntimeError, match="snapshot drifted"):
+            writer.receive_and_execute(controlled_side, runtime)
+    finally:
+        trader_side.close()
+        controlled_side.close()
+    assert calls == 1
+    assert writer.handoff_count() == 1
+    assert writer.artifact_count() == 0
+    assert writer.attempt_outcome(handoff.handoff_id) == "FAILED"
+    expected_outcome = "schema_reject" if snapshot_failure_check == 1 else "commit_error"
+    assert runtime.settlements == [expected_outcome]
+    assert runtime.attempts[0].snapshot_reverification_count == (
+        snapshot_failure_check
+    )
+    with pytest.raises(ControlledExecutionWriterV2Error, match="retry policy is DENY"):
+        _serve(trader, handoff, writer, _bounded_output)
+    assert calls == 1
 
 
 @pytest.mark.parametrize(

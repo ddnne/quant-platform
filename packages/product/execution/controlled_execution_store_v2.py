@@ -7,7 +7,7 @@ import os
 import socket
 import sqlite3
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
@@ -37,9 +37,12 @@ from execution.controlled_execution_types_v2 import (
     ControlledExecutionWriterV2Error,
     WrittenExactFourControlledArtifactsV2,
     _ControlledWriterSignerV2,
-    _OneCallControlledPilotAuthorizationV2,
     _VerifiedBoundedExecutionOutputV2,
     _WRITTEN_BUNDLE_TOKEN,
+)
+from execution.controlled_execution_runtime_v2 import (
+    ControlledExecutionRuntimeV2,
+    ControlledProviderTimeoutV2,
 )
 from execution.controlled_execution_validation_v2 import (
     ControlledExecutionEvidenceValidatorV2,
@@ -67,124 +70,10 @@ CONTROLLED_EXECUTION_ACTIVATION_PATH = Path(
     "/etc/quant-platform/authorities/controlled_execution/activation.json"
 )
 
-_MAX_FRAME_BYTES = 1024 * 1024
-_MAX_HANDOFF_BYTES = 1024 * 1024
-_MAX_CLOCK_SKEW = timedelta(seconds=5)
 _WRITER_CONSTRUCTION_TOKEN = object()
 
 _REQUEST_FIELDS = frozenset(
     {"format", "request_id", "operation", "purpose", "payload"}
-)
-_CHALLENGE_FIELDS = frozenset(
-    {
-        "format",
-        "environment",
-        "status",
-        "challenge_id",
-        "challenge_base64url",
-        "approval_subject_id",
-        "rp_policy_generation",
-        "rp_policy_digest",
-        "rp_id",
-        "origin",
-        "user_presence_required",
-        "user_verification_required",
-        "issued_at",
-        "expires_at",
-        "one_use_key",
-        "challenge_digest",
-    }
-)
-_ASSERTION_FIELDS = frozenset(
-    {
-        "format",
-        "environment",
-        "status",
-        "challenge_id",
-        "challenge_digest",
-        "approval_subject_id",
-        "rp_policy_generation",
-        "rp_policy_digest",
-        "credential_id_base64url",
-        "authenticator_data_base64url",
-        "client_data_json_base64url",
-        "signature_base64url",
-        "rp_id",
-        "origin",
-        "user_present",
-        "user_verified",
-        "sign_count",
-        "asserted_at",
-        "one_use_key",
-        "assertion_digest",
-    }
-)
-_CREDENTIAL_EVIDENCE_FIELDS = frozenset(
-    {
-        "format",
-        "environment",
-        "credential_id_base64url",
-        "credential_public_key_digest",
-        "credential_algorithm",
-        "key_backend",
-        "credential_registry_generation",
-        "credential_registry_digest",
-        "rp_policy_digest",
-        "counter_mode",
-    }
-)
-_TRADER_EVENT_FIELDS = frozenset(
-    {
-        "format",
-        "environment",
-        "ledger_backend_id",
-        "sequence",
-        "event_id",
-        "prior_event_digest",
-        "request_digest",
-        "approval_subject_id",
-        "challenge_id",
-        "challenge_digest",
-        "assertion_digest",
-        "one_use_key",
-        "one_use_prior_status",
-        "one_use_result_status",
-        "one_use_cas_status",
-        "credential_id_base64url",
-        "credential_registry_generation",
-        "credential_registry_digest",
-        "counter_mode",
-        "prior_sign_count",
-        "asserted_sign_count",
-        "result_sign_count",
-        "counter_cas_status",
-        "transaction_status",
-        "committed_at",
-        "automatic_promotion",
-        "mass_research_enabled",
-        "live_trading_enabled",
-        "event_digest",
-    }
-)
-_HANDOFF_FIELDS = frozenset(
-    {
-        "format",
-        "environment",
-        "handoff_status",
-        "ready_authority_response_digest",
-        "approval_subject_id",
-        "approval_subject",
-        "challenge_evidence",
-        "assertion_evidence",
-        "credential_registry_evidence",
-        "one_use_counter_event",
-        "issued_at",
-        "expires_at",
-        "automatic_promotion",
-        "mass_research_enabled",
-        "live_trading_enabled",
-        "handoff_id",
-    }
 )
 
 
@@ -201,28 +90,6 @@ def _require_digest(value: Any, label: str) -> str:
     ):
         raise ControlledExecutionWriterV2Error(
             f"{label} must be a canonical sha256 digest"
-        )
-    return value
-
-
-def _require_uuid4(value: Any, label: str) -> str:
-    if type(value) is not str:
-        raise ControlledExecutionWriterV2Error(f"{label} must be canonical UUID4")
-    try:
-        parsed = uuid.UUID(value)
-    except (ValueError, AttributeError) as exc:
-        raise ControlledExecutionWriterV2Error(
-            f"{label} must be canonical UUID4"
-        ) from exc
-    if parsed.version != 4 or str(parsed) != value:
-        raise ControlledExecutionWriterV2Error(f"{label} must be canonical UUID4")
-    return value
-
-
-def _require_bytes(value: Any, label: str) -> bytes:
-    if type(value) is not bytes or not value:
-        raise ControlledExecutionWriterV2Error(
-            f"{label} must be exact non-empty bytes"
         )
     return value
 
@@ -248,6 +115,7 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
         "_rps",
         "_credentials",
         "_server_bound",
+        "_test_mode",
     )
 
     def __init__(
@@ -261,6 +129,7 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
         relying_parties: ExactFourTraderRelyingPartyRegistryV2,
         credentials: ExactFourTraderCredentialRegistryV2,
         server_bound: bool,
+        test_mode: bool,
         _token: object,
     ) -> None:
         if _token is not _WRITER_CONSTRUCTION_TOKEN:
@@ -275,7 +144,7 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
             )
         if type(trader_uid) is not int or trader_uid < 0:
             raise ControlledExecutionWriterV2Error("Trader peer UID is invalid")
-        if type(server_bound) is not bool:
+        if type(server_bound) is not bool or type(test_mode) is not bool:
             raise ControlledExecutionWriterV2Error(
                 "Controlled AuthorityServer binding is invalid"
             )
@@ -295,6 +164,7 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
         self._rps = relying_parties
         self._credentials = credentials
         self._server_bound = server_bound
+        self._test_mode = test_mode
         self._initialize()
 
     def _require_positive_operation(self) -> None:
@@ -1006,7 +876,7 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
         request_id: str,
         payload: Mapping[str, Any],
         handoff_bytes: bytes,
-        bounded_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+        execution_runtime: ControlledExecutionRuntimeV2,
     ) -> WrittenExactFourControlledArtifactsV2:
         if (
             peer_uid != self._trader_uid
@@ -1037,16 +907,61 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
             handoff,
             canonical_handoff=handoff_bytes,
         )
-        one_call = _OneCallControlledPilotAuthorizationV2(context)
+        if not (
+            (
+                self._test_mode is False
+                and type(execution_runtime) is ControlledExecutionRuntimeV2
+                and execution_runtime._production_bound is True
+            )
+            or (
+                self._test_mode is True
+                and isinstance(execution_runtime, ControlledExecutionRuntimeV2)
+            )
+        ):
+            error = ControlledExecutionWriterV2Error(
+                "server-constructed Controlled execution runtime is required"
+            )
+            self._record_failed_attempt(handoff["handoff_id"], error)
+            raise error
+        attempt = None
+        stage = "reserve"
         try:
-            raw_output = one_call.invoke(bounded_executor)
-            output = self._verify_executor_output(raw_output, context=context)
-            return self._commit_verified_handoff(
+            attempt = execution_runtime.begin(context)
+            stage = "provider"
+            raw_output = attempt.invoke()
+            stage = "snapshot"
+            attempt.reverify_snapshot()
+            stage = "schema"
+            output = self._verify_executor_output(
+                raw_output, context=attempt.context
+            )
+            stage = "commit"
+            attempt.reverify_snapshot()
+            written = self._commit_verified_handoff(
                 handoff=handoff,
                 canonical_handoff=handoff_bytes,
                 output=output,
             )
+            stage = "settlement"
+            attempt.settle(outcome="success")
+            return written
         except BaseException as exc:
+            if attempt is not None and stage != "settlement":
+                if isinstance(exc, ControlledProviderTimeoutV2):
+                    outcome = "timeout"
+                elif stage == "provider":
+                    outcome = "provider_error"
+                elif stage in {"snapshot", "schema"}:
+                    outcome = "schema_reject"
+                else:
+                    outcome = "commit_error"
+                try:
+                    attempt.settle(outcome=outcome, error=exc)
+                except BaseException as settlement_error:
+                    self._record_failed_attempt(
+                        handoff["handoff_id"], settlement_error
+                    )
+                    raise settlement_error from exc
             self._record_failed_attempt(handoff["handoff_id"], exc)
             raise
 
@@ -1055,7 +970,7 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
         context: AuthorityRequestContext,
         payload: Mapping[str, Any],
         fds: Sequence[int],
-        bounded_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+        execution_runtime: ControlledExecutionRuntimeV2,
     ) -> WrittenExactFourControlledArtifactsV2:
         """Consume only a server-authenticated Trader request and one SCM FD."""
 
@@ -1096,13 +1011,13 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
             request_id=context.request_id,
             payload=exact_payload,
             handoff_bytes=handoff_bytes,
-            bounded_executor=bounded_executor,
+            execution_runtime=execution_runtime,
         )
 
     def receive_and_execute(
         self,
         channel: socket.socket,
-        bounded_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+        execution_runtime: ControlledExecutionRuntimeV2,
     ) -> WrittenExactFourControlledArtifactsV2:
         """Compatibility transport used by tests; live launch requires the server."""
 
@@ -1142,7 +1057,7 @@ class SQLiteControlledExecutionWriterV2(ControlledExecutionEvidenceValidatorV2):
             request_id=request["request_id"],
             payload=payload,
             handoff_bytes=handoff_bytes,
-            bounded_executor=bounded_executor,
+            execution_runtime=execution_runtime,
         )
 
     def artifact_count(self) -> int:
@@ -1226,6 +1141,7 @@ def _create_test_controlled_execution_writer_v2(
         relying_parties=relying_parties,
         credentials=credentials,
         server_bound=server_bound,
+        test_mode=True,
         _token=_WRITER_CONSTRUCTION_TOKEN,
     )
 

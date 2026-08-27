@@ -37,6 +37,7 @@ from scripts.execution_authority_entrypoints import (
     TRADER_PHASE_VERIFY_ASSERTION,
     ControlledExecutionConsumeTraderHandoffV2,
     TraderAuthorizeExactFourBatchHumanPresentV2,
+    open_live_controlled_execution_handler_v2,
 )
 from scripts.finding_ledger_gate import FindingLedgerError
 import scripts.local_authority_service as local_service_module
@@ -49,6 +50,9 @@ from scripts.local_authority_service import (
     decode_strict_json,
 )
 from tests.test_controlled_execution_writer_v2 import _bounded_output
+from tests.controlled_execution_runtime_test_support import (
+    make_test_controlled_execution_runtime,
+)
 from tests.test_trader_webauthn_authority_v2 import (
     _assertion,
     _authority,
@@ -84,6 +88,13 @@ class _TestExactMethodAcl:
                 "test exact method ACL rejected the request"
             )
         return MethodGrant(caller, operation, purpose, self.environment)
+
+
+def test_live_controlled_handler_has_no_callable_or_runtime_injection() -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        open_live_controlled_execution_handler_v2(  # type: ignore[call-arg]
+            bounded_executor=lambda _context: {}
+        )
 
 
 def _service(
@@ -280,7 +291,7 @@ def test_bad_controlled_peer_or_missing_fd_never_invokes_executor(
 
     adapter = ControlledExecutionConsumeTraderHandoffV2(
         writer=writer,
-        bounded_executor=executor,
+        execution_runtime=make_test_controlled_execution_runtime(executor),
     )
     missing_fd_service = _service(
         tmp_path,
@@ -365,9 +376,10 @@ def test_two_phase_trader_to_controlled_authority_executes_once_after_reservatio
         assert writer.handoff_count() == 1
         return _bounded_output(context)
 
+    execution_runtime = make_test_controlled_execution_runtime(executor)
     controlled_adapter = ControlledExecutionConsumeTraderHandoffV2(
         writer=writer,
-        bounded_executor=executor,
+        execution_runtime=execution_runtime,
     )
     controlled_service = _service(
         tmp_path,
@@ -467,6 +479,7 @@ def test_two_phase_trader_to_controlled_authority_executes_once_after_reservatio
     assert calls == 1
     assert writer.handoff_count() == 1
     assert writer.attempt_outcome(result["handoff_id"]) == "SUCCEEDED"
+    assert execution_runtime.settlements == ["success"]
     assert authority.ledger.event_count() == 1
 
     # The outer Trader AuthorityServer ledger returns the committed audit result
@@ -521,7 +534,7 @@ def test_context_digest_is_bound_to_payload_before_controlled_execution(
 
     adapter = ControlledExecutionConsumeTraderHandoffV2(
         writer=writer,
-        bounded_executor=executor,
+        execution_runtime=make_test_controlled_execution_runtime(executor),
     )
     original_payload = {
         "handoff_id": handoff.handoff_id,
