@@ -13,6 +13,7 @@ from datetime import date
 from pathlib import Path
 
 from core.universe import RawFixedUniverseError, ResolvedDailyUniverse
+from paper_runtime.personal_read_session import _personal_paper_read_session
 from paper_runtime.snapshot_identity import data_snapshot_id
 from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult, run_paper
 from strategies.spec import (
@@ -49,7 +50,11 @@ def _require_explicit_period(config: PaperRunConfig) -> None:
         raise PersonalPaperExecutionRejected(
             "personal paper execution requires an explicit ISO date period"
         ) from exc
-    if start.isoformat() != config.start or end.isoformat() != config.end or start > end:
+    if (
+        start.isoformat() != config.start
+        or end.isoformat() != config.end
+        or start > end
+    ):
         raise PersonalPaperExecutionRejected(
             "personal paper execution requires an explicit ISO date period"
         )
@@ -153,7 +158,10 @@ class PersonalPaperExecutionService:
             )
 
         strategy = interpret_strategy_spec(spec)
-        result = run_paper(strategy, config, store=None)
+        # Only the immutable paper computation opts into connection reuse.
+        # The before/after snapshot verification remains outside this scope.
+        with _personal_paper_read_session(db_path):
+            result = run_paper(strategy, config, store=None)
 
         try:
             after = data_snapshot_id(db_path)
@@ -163,7 +171,10 @@ class PersonalPaperExecutionService:
             raise PersonalPaperExecutionRejected(
                 "database snapshot changed during personal paper execution"
             )
-        if type(result) is not PaperRunResult or result.lifecycle is not Lifecycle.DRAFT:
+        if (
+            type(result) is not PaperRunResult
+            or result.lifecycle is not Lifecycle.DRAFT
+        ):
             raise PersonalPaperExecutionRejected(
                 "personal paper execution returned a noncanonical DRAFT result"
             )
