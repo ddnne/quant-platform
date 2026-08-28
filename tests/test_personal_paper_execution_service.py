@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date, timedelta
 
+import pit.query as query_module
 import pytest
-
+from _coreseed import CODES, seed_db
 from agents import ComposedMemo
 from agents.strategist import StrategistAgent
 from execution.personal_paper_service import (
@@ -15,10 +17,8 @@ from execution.personal_paper_service import (
 )
 from paper_runtime import data_snapshot_id
 from research.universe_contract import ResolvedUniverseMembership
-from strategies.paper import Lifecycle, PaperRunConfig
-from strategies.spec import FeatureRef, iter_feature_refs
-
-from _coreseed import CODES, seed_db
+from strategies.paper import Lifecycle, PaperRunConfig, run_paper
+from strategies.spec import FeatureRef, interpret_strategy_spec, iter_feature_refs
 
 
 def _weekdays(count: int) -> list[str]:
@@ -85,6 +85,77 @@ def test_personal_service_executes_exact_draft_against_pinned_snapshot(tmp_path)
     assert result.reproducibility["feature_versions"] == {
         ref.id: ref.version for ref in refs
     }
+
+
+def test_personal_service_reuses_one_pit_connection_without_changing_result(
+    tmp_path,
+    monkeypatch,
+):
+    spec, config, snapshot_id, refs = _case(tmp_path)
+    baseline = query_module._scoped_read_connection(config.db_path)
+    assert baseline is None
+    expected = run_paper(interpret_strategy_spec(spec), config, store=None)
+
+    real_connect = query_module.connect_readonly
+    connection_count = 0
+
+    def counting_connect(db_path):
+        nonlocal connection_count
+        connection_count += 1
+        return real_connect(db_path)
+
+    monkeypatch.setattr(query_module, "connect_readonly", counting_connect)
+    actual = _execute(PersonalPaperExecutionService(), spec, config, snapshot_id, refs)
+
+    assert connection_count == 1
+    assert actual == expected
+    assert query_module._scoped_read_connection(config.db_path) is None
+
+
+def test_personal_service_scopes_only_run_paper_not_snapshot_verification(
+    tmp_path,
+    monkeypatch,
+):
+    spec, config, snapshot_id, refs = _case(tmp_path)
+    from execution import personal_paper_service as module
+
+    events: list[tuple[str, bool]] = []
+    active = False
+    real_snapshot_id = module.data_snapshot_id
+    real_run_paper = module.run_paper
+
+    @contextmanager
+    def observed_scope(_db_path):
+        nonlocal active
+        active = True
+        events.append(("scope-enter", active))
+        try:
+            yield
+        finally:
+            active = False
+            events.append(("scope-exit", active))
+
+    def observed_snapshot_id(db_path):
+        events.append(("snapshot", active))
+        return real_snapshot_id(db_path)
+
+    def observed_run_paper(*args, **kwargs):
+        events.append(("run-paper", active))
+        return real_run_paper(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_personal_paper_read_session", observed_scope)
+    monkeypatch.setattr(module, "data_snapshot_id", observed_snapshot_id)
+    monkeypatch.setattr(module, "run_paper", observed_run_paper)
+
+    _execute(PersonalPaperExecutionService(), spec, config, snapshot_id, refs)
+
+    assert events == [
+        ("snapshot", False),
+        ("scope-enter", True),
+        ("run-paper", True),
+        ("scope-exit", False),
+        ("snapshot", False),
+    ]
 
 
 def test_personal_service_rejects_non_draft(tmp_path):

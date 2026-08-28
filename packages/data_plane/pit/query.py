@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -34,6 +37,11 @@ DEFAULT_DB_PATH = Path("data/structured/ingestion.sqlite")
 # Columns that hold a verbatim/source JSON blob; decoded into Python objects
 # in returned rows when the stored string is valid JSON.
 _JSON_PAYLOAD_COLS = ("raw_payload", "payload")
+
+# Explicitly scoped personal-paper reads may reuse one read-only SQLite handle
+# within the calling thread.  The default API never populates this state and
+# therefore continues to open and close one connection per query.
+_READ_SCOPE_STATE = threading.local()
 
 
 def normalize_as_of(as_of: Any = _NOT_GIVEN) -> str:
@@ -148,6 +156,78 @@ def connect_readonly(db_path: Any = None) -> sqlite3.Connection:
     return conn
 
 
+def _read_scope_key(db_path: Any) -> str:
+    """Return the exact resolved database identity used by a read scope."""
+
+    path = resolve_db_path(db_path)
+    descriptor_backed = (
+        path.is_absolute()
+        and path.parent in {Path("/dev/fd"), Path("/proc/self/fd")}
+        and path.name.isdigit()
+    )
+    return str(path if descriptor_backed else path.resolve())
+
+
+def _thread_read_scopes() -> dict[str, tuple[sqlite3.Connection, int]]:
+    scopes = getattr(_READ_SCOPE_STATE, "connections", None)
+    if scopes is None:
+        scopes = {}
+        _READ_SCOPE_STATE.connections = scopes
+    return scopes
+
+
+@contextmanager
+def _readonly_connection_scope(db_path: Any) -> Iterator[None]:
+    """Reuse one read-only connection for one explicit synchronous scope.
+
+    The scope is private infrastructure for an immutable personal-paper run.
+    It is keyed by the exact resolved DB path and stored in thread-local state,
+    so another database or thread can never inherit the handle.  Nesting the
+    same path reuses the outer handle and only the outermost exit closes it.
+
+    No transaction spans the scope: :func:`run_query` retains its per-query
+    ``BEGIN``/rollback boundary.  The yielded value is deliberately ``None``
+    rather than a raw SQL capability.
+    """
+
+    key = _read_scope_key(db_path)
+    scopes = _thread_read_scopes()
+    active = scopes.get(key)
+    if active is None:
+        connection = connect_readonly(Path(key))
+        scopes[key] = (connection, 1)
+    else:
+        connection, depth = active
+        scopes[key] = (connection, depth + 1)
+    try:
+        yield
+    finally:
+        current = scopes.get(key)
+        if current is not None and current[1] > 1:
+            scopes[key] = (current[0], current[1] - 1)
+        elif current is not None:
+            scopes.pop(key, None)
+            try:
+                current[0].rollback()
+            finally:
+                try:
+                    current[0].close()
+                finally:
+                    if not scopes:
+                        try:
+                            del _READ_SCOPE_STATE.connections
+                        except AttributeError:
+                            pass
+
+
+def _scoped_read_connection(db_path: Any) -> sqlite3.Connection | None:
+    scopes = getattr(_READ_SCOPE_STATE, "connections", None)
+    if not scopes:
+        return None
+    active = scopes.get(_read_scope_key(db_path))
+    return None if active is None else active[0]
+
+
 def _decode_row(row: sqlite3.Row) -> dict[str, Any]:
     """Row -> dict, decoding JSON payload columns into Python objects.
 
@@ -218,7 +298,10 @@ def run_query(
         keyset_sql = "(" + " OR ".join(branches) + ")"
     if limit is not None and (not isinstance(limit, int) or limit < 1):
         raise ValueError("limit must be a positive integer")
-    conn = connect_readonly(db_path)
+    conn = _scoped_read_connection(db_path)
+    close_connection = conn is None
+    if conn is None:
+        conn = connect_readonly(db_path)
     try:
         # Pin revision discovery and the fact read to one SQLite snapshot.
         # Without an explicit read transaction, a concurrent amendment could
@@ -275,4 +358,5 @@ def run_query(
         try:
             conn.rollback()
         finally:
-            conn.close()
+            if close_connection:
+                conn.close()
