@@ -205,6 +205,7 @@ python scripts/run_ingestion_once.py --source {jquants|jsda|all} --runtime local
 - `--mode {incremental|backfill}` — J-Quants カタログ取得モード（既定 `incremental`。`incremental` は直近約5日、`backfill` は全範囲）。
 - `--dataset NAME` — J-Quants カタログのデータセット id（繰り返し可・カンマ区切り可。`fins_dividend` 等）。指定時は汎用テーブル `jquants_records` へ蓄積。未指定時は curate 済み3系列 + `fins/summary` raw の従来経路。
 - `--personal-draft` — 個人用DRAFT研究向けの明示的なlocal-onlyモード。`--source jquants --dataset ...` が必須。既定DBは専用の `data/structured/personal-ingestion.sqlite`。immutable raw manifest とPIT正規化行だけを保存し、署名receipt・Coverage COMPLETE・READY・完全性を発行/主張しない。`run_historical_backfill.py` からも同じflagを指定できる。
+- `hydrate_personal_history.py` — 4系列だけを専用SQLiteへ低速・逐次・再開可能に保存する個人DRAFT用hydrator。既定はdry-runで、実行には`--execute`が必須。raw本文は保存せずpage SHA-256と件数だけをcheckpointし、masterの`Date 08:00 JST`は訂正publication時刻を復元しない近似である。receipt・Coverage・READY・controlled/live適格性・完全性は一切主張しない。
 - `--code/--from-date/--to-date` — J-Quants の銘柄・日付絞り込み。
 - `--workers N` — J-Quants 並列ワーカ数（データセット×日付ウィンドウのジョブ数。レート制限は共有で Premium 約500/min に抑える。既定8）。
 - `--chunk-days N` — `from/to` 長期間を N 日グリッドに分割して並列バックフィル（J-Quants、既定30）。
