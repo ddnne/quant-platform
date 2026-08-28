@@ -357,25 +357,38 @@ verify_worker() {
   done
 }
 
-echo "==> active Worker lanes (parallel, fail-closed aggregation)"
+MAX_WORKER_LANES=4
+echo "==> active Worker lanes (max $MAX_WORKER_LANES parallel, fail-closed aggregation)"
 worker_pids=()
 worker_names=()
+worker_failed=0
+
+wait_worker_wave() {
+  local i name
+  for i in "${!worker_pids[@]}"; do
+    name="${worker_names[$i]}"
+    if ! wait "${worker_pids[$i]}"; then
+      worker_failed=1
+      echo "worker lane failed: $name" >&2
+    fi
+    cat "$ci_log_dir/$name.log"
+  done
+  worker_pids=()
+  worker_names=()
+}
+
 for dir in "${WORKERS[@]}"; do
   name="$(basename "$dir")"
   worker_names+=("$name")
   (verify_worker "$dir") >"$ci_log_dir/$name.log" 2>&1 &
   worker_pids+=("$!")
-done
-
-worker_failed=0
-for i in "${!worker_pids[@]}"; do
-  name="${worker_names[$i]}"
-  if ! wait "${worker_pids[$i]}"; then
-    worker_failed=1
-    echo "worker lane failed: $name" >&2
+  if [[ "${#worker_pids[@]}" -ge "$MAX_WORKER_LANES" ]]; then
+    wait_worker_wave
   fi
-  cat "$ci_log_dir/$name.log"
 done
+if [[ "${#worker_pids[@]}" -gt 0 ]]; then
+  wait_worker_wave
+fi
 if [[ "$worker_failed" -ne 0 ]]; then
   echo "one or more active Worker lanes failed" >&2
   exit 1
