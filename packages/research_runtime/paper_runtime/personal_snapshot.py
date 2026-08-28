@@ -428,6 +428,11 @@ def _observed_dataset_evidence(
                 "WHERE source='jquants'"
             ).fetchone()
             if typed is not None and int(typed["row_count"] or 0) > 0:
+                generic = by_dataset.get("equities_bars_daily")
+                if generic is not None and int(generic["row_count"] or 0) > 0:
+                    raise PersonalSnapshotError(
+                        "personal snapshot cannot mix generic and typed daily bars"
+                    )
                 by_dataset["equities_bars_daily"] = dict(typed)
 
     evidence: list[dict[str, Any]] = []

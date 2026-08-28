@@ -293,6 +293,32 @@ def test_materialize_accepts_typed_personal_bars_with_generic_calendar(
     ]
 
 
+def test_materialize_rejects_mixed_generic_and_typed_bars(tmp_path: Path) -> None:
+    source = tmp_path / "mixed.sqlite"
+    writer = _open_wal_source(source)
+    try:
+        writer.executescript(
+            """
+            CREATE TABLE jquants_daily_bars (
+                source TEXT NOT NULL,
+                code TEXT NOT NULL,
+                date TEXT NOT NULL,
+                event_time TEXT NOT NULL,
+                available_at TEXT NOT NULL,
+                PRIMARY KEY (source,code,date)
+            );
+            INSERT INTO jquants_daily_bars VALUES
+                ('jquants','1301','2024-01-02','2024-01-02T15:00:00+09:00',
+                 '2024-01-02T15:00:00+09:00');
+            """
+        )
+        writer.commit()
+        with pytest.raises(PersonalSnapshotError, match="mix generic and typed"):
+            _materialize(source, tmp_path / "snapshots")
+    finally:
+        writer.close()
+
+
 def test_materialize_is_idempotent_for_same_database_and_canonical_scope(
     tmp_path: Path,
 ) -> None:

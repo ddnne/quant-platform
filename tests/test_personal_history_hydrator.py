@@ -402,6 +402,41 @@ def test_typed_bar_materialization_is_atomic_and_idempotent(tmp_path):
     store.close()
 
 
+def test_typed_bar_materialization_rejects_partial_generic_mixture(tmp_path):
+    store = SqliteStore(tmp_path / "partial-mixture.sqlite")
+    hydrator = PersonalHistoryHydrator(
+        client=_HistoryClient(), store=store, plan=_plan()
+    )
+    rows = _compact_bars(
+        [
+            {"Code": "1001", "Date": "2025-01-06", "Close": 101},
+            {"Code": "1002", "Date": "2025-01-06", "Close": 102},
+        ],
+        trading_day="2025-01-06",
+        prime_union=frozenset({"1001", "1002"}),
+        ingested_at="2025-01-06T16:00:00+09:00",
+    )
+    store.upsert("jquants_records", rows)
+    store._conn.execute(
+        "INSERT INTO personal_history_segments ("
+        "dataset,segment_id,query_start,query_end,query_params,state,"
+        "pit_policy,rows_fetched,rows_written) "
+        "VALUES ('equities_bars_daily','bars:2025-01-06',"
+        "'2025-01-06','2025-01-06','{}','OBSERVED',?,2,2)",
+        ("canonical_session_close/v1",),
+    )
+    store._conn.commit()
+    assert hydrator._materialize_typed_bars() == 2
+    assert len(_typed_bars(store)) == 2
+
+    store.upsert("jquants_records", rows[:1])
+    with pytest.raises(PersonalHistoryError, match="generic bar count"):
+        hydrator._materialize_typed_bars()
+    assert len(_rows(store, "equities_bars_daily")) == 1
+    assert len(_typed_bars(store)) == 2
+    store.close()
+
+
 def test_bar_breadth_failure_is_checkpointed_without_complete_claim(tmp_path):
     store = SqliteStore(tmp_path / "thin.sqlite")
     client = _HistoryClient(omit_bar=("2025-01-06", "1002"))

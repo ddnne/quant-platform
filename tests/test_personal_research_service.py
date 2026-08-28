@@ -148,24 +148,6 @@ def personal_db(tmp_path: Path) -> tuple[Path, str, str]:
                     "volume": 1000.0,
                 }
             )
-            payload = {
-                "Code": code,
-                "Date": day,
-                "Open": close,
-                "High": close,
-                "Low": close,
-                "Close": close,
-                "AdjustmentClose": close,
-                "Volume": 1000.0,
-            }
-            generic.append(
-                _generic(
-                    "equities_bars_daily",
-                    payload,
-                    event=available,
-                    available=available,
-                )
-            )
     store.upsert("jquants_daily_bars", bars)
     store.upsert("jquants_records", generic)
     store.close()

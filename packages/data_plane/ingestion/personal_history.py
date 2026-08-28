@@ -1225,13 +1225,13 @@ class PersonalHistoryHydrator:
             raise PersonalHistoryError(
                 "generic bars have no completed checkpoint evidence"
             )
-        if typed_count not in {0, expected_count}:
-            raise PersonalHistoryError(
-                "pre-existing typed bars do not match completed checkpoints"
-            )
-        if typed_count == 0 and generic_count != expected_count:
+        if generic_count != expected_count:
             raise PersonalHistoryError(
                 "generic bar count does not match completed checkpoints"
+            )
+        if typed_count:
+            raise PersonalHistoryError(
+                "generic and typed bars cannot coexist before materialization"
             )
 
         malformed = int(
