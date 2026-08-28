@@ -16,12 +16,65 @@ from typing import List, Optional
 from .common.available_at import validate_available_at
 from .common.paths import raw_path
 from .common.timeutil import now_iso
-from .pipeline_receipts import (
-    _index_text_for_plan,
-    _plan_required_segments,
-    emit_catalog_job_receipt,
-    rollback_governed_catalog_write,
+
+
+_PERSONAL_DRAFT_GOVERNANCE_TABLES = frozenset(
+    {
+        "collection_receipts",
+        "coverage_complete_transition_tombstones",
+        "coverage_segments",
+        "dataset_coverage",
+        "ingestion_validation",
+        "ingestion_watermarks",
+        "local_coverage_proofs",
+        "local_coverage_proofs_v2",
+        "local_snapshot_manifests",
+        "local_snapshot_policy",
+        "raw_retention_manifests",
+        "receipt_product_materializations",
+        "snapshot_publications",
+        "snapshot_quality_results",
+    }
 )
+
+
+def _assert_personal_draft_store_is_unmanaged(store) -> None:
+    """Keep unsigned personal rows out of a governed evidence database."""
+    connection = getattr(store, "_conn", None)
+    if connection is None:
+        raise ValueError("personal DRAFT ingestion requires a local SQLite store")
+    tables = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    occupied = []
+    for table in sorted(tables & _PERSONAL_DRAFT_GOVERNANCE_TABLES):
+        quoted = '"' + table.replace('"', '""') + '"'
+        if connection.execute(f"SELECT 1 FROM {quoted} LIMIT 1").fetchone():
+            occupied.append(table)
+    if occupied:
+        raise ValueError(
+            "personal DRAFT ingestion refuses a managed/governed database; "
+            "use a dedicated personal SQLite file (evidence found in: "
+            + ", ".join(occupied)
+            + ")"
+        )
+
+
+def _index_text_for_plan(*args, **kwargs):
+    """Compatibility shim; load governed receipt code only when requested."""
+    from .pipeline_receipts import _index_text_for_plan as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def _plan_required_segments(*args, **kwargs):
+    """Compatibility shim; load governed receipt code only when requested."""
+    from .pipeline_receipts import _plan_required_segments as implementation
+
+    return implementation(*args, **kwargs)
 
 
 @dataclass
@@ -197,8 +250,24 @@ def run_jquants(
     mode: str = "incremental",
     max_workers: int = 8,
     chunk_days: int = 30,
+    personal_draft: bool = False,
 ) -> List[RunReport]:
-    """J-Quants pass: catalog-driven ``datasets`` or the Phase-1 curated path."""
+    """J-Quants pass: catalog-driven ``datasets`` or the Phase-1 curated path.
+
+    ``personal_draft`` is an explicit local-only catalog mode.  It persists
+    immutable raw evidence and PIT-normalized facts for personal research, but
+    deliberately does not open a receipt authority or make a completeness
+    claim.  The governed default remains fail-closed when no receipt capability
+    is available.
+    """
+    if personal_draft:
+        if runtime != "local":
+            raise ValueError("personal DRAFT ingestion requires runtime=local")
+        if not datasets:
+            raise ValueError(
+                "personal DRAFT ingestion requires explicit catalog datasets"
+            )
+        _assert_personal_draft_store_is_unmanaged(store)
     via_proxy = getattr(http, "name", "") == "cf-jquants-proxy"
     if not api_key and not via_proxy:
         return [
@@ -218,25 +287,29 @@ def run_jquants(
     reports: List[RunReport] = []
 
     if datasets:
-        from .runtime_authority import _open_governed_receipt_service
+        receipt_service = None
+        if not personal_draft:
+            from .runtime_authority import _open_governed_receipt_service
 
-        try:
-            receipt_service = _open_governed_receipt_service()
-        except Exception:  # noqa: BLE001
-            # Raw acquisition may still proceed as recovery-only evidence, but
-            # no structured fact/receipt transaction can begin.
-            receipt_service = None
-        if receipt_service is not None:
             try:
-                # Governed SUCCESS never trusts the caller-supplied HttpClient.
-                client = receipt_service.open_jquants_client(
-                    api_key=api_key,
-                    via_cf_proxy=via_proxy,
-                )
+                receipt_service = _open_governed_receipt_service()
             except Exception:  # noqa: BLE001
-                # Continue immutable raw acquisition through the caller client,
-                # but its results cannot pass persist_jquants_collection().
-                pass
+                # Raw acquisition may still proceed as recovery-only evidence,
+                # but no structured fact/receipt transaction can begin.
+                receipt_service = None
+            if receipt_service is not None:
+                try:
+                    # Governed SUCCESS never trusts the caller-supplied
+                    # HttpClient.
+                    client = receipt_service.open_jquants_client(
+                        api_key=api_key,
+                        via_cf_proxy=via_proxy,
+                    )
+                except Exception:  # noqa: BLE001
+                    # Continue immutable raw acquisition through the caller
+                    # client, but its results cannot pass
+                    # persist_jquants_collection().
+                    pass
         return _run_jquants_catalog(
             client=client,
             reg=reg,
@@ -252,6 +325,7 @@ def run_jquants(
             max_workers=max_workers,
             chunk_days=chunk_days,
             receipt_service=receipt_service,
+            personal_draft=personal_draft,
         )
 
     try:
@@ -349,6 +423,7 @@ def _run_jquants_catalog(
     max_workers: int = 8,
     chunk_days: int = 30,
     receipt_service=None,
+    personal_draft: bool = False,
 ) -> List[RunReport]:
     """Catalog-driven parallel fetch → raw → normalize_generic → jquants_records."""
     from .jquants import normalize as JN
@@ -432,12 +507,22 @@ def _run_jquants_catalog(
                         "pagination_out": page.pagination_out,
                     })
                 manifest = {
-                    "schema_version": "jquants-pagination-evidence/v1",
+                    "schema_version": (
+                        "jquants-personal-draft-raw-manifest/v1"
+                        if personal_draft
+                        else "jquants-pagination-evidence/v1"
+                    ),
                     "source": "jquants",
                     "dataset": job.dataset_id,
                     "base_params": dict(fetch_result.base_params),
                     "pages": manifest_pages,
                 }
+                if personal_draft:
+                    manifest.update({
+                        "research_state": "PERSONAL_DRAFT",
+                        "completeness_claim": "NONE",
+                        "trusted_receipt": "NOT_ISSUED",
+                    })
                 manifest_path = save_raw(
                     data_base,
                     "jquants",
@@ -450,6 +535,23 @@ def _run_jquants_catalog(
                     ).encode("utf-8"),
                     when,
                 )
+                if personal_draft:
+                    norm = JN.normalize_generic(
+                        rows, dataset=job.dataset_id, ingested_at=when
+                    )
+                    n = reg.register("jquants_records", norm)
+                    return RunReport(
+                        "jquants",
+                        kind,
+                        fetched=len(rows),
+                        registered=n,
+                        raw_path=str(manifest_path),
+                    )
+                from .pipeline_receipts import (
+                    emit_catalog_job_receipt,
+                    rollback_governed_catalog_write,
+                )
+
                 if receipt_service is None:
                     return RunReport(
                         "jquants",
