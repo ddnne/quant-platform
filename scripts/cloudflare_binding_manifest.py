@@ -465,6 +465,9 @@ DURABLE_OBJECT_RPC_POLICY: dict[str, dict[str, tuple[str, ...]]] = {
             "snapshot",
         ),
     },
+    "research-mass-eval": {
+        "PersonalResearchContainer": (),
+    },
 }
 
 # Durable Object lifecycle handlers are reserved runtime specials, not
@@ -475,6 +478,9 @@ DURABLE_OBJECT_RESERVED_SPECIAL_POLICY: dict[
 ] = {
     "research-ai-gateway": {
         "BudgetLedger": (True, True),
+    },
+    "research-mass-eval": {
+        "PersonalResearchContainer": (True, True),
     },
 }
 
@@ -622,6 +628,7 @@ _MODELED_CONFIG_KEYS = (
     "ai",
     "compatibility_date",
     "compatibility_flags",
+    "containers",
     "d1_databases",
     "durable_objects",
     "kv_namespaces",
@@ -850,6 +857,7 @@ def _effective_surface(
         "main": scalar("main"),
         "compatibility_date": scalar("compatibility_date"),
         "compatibility_flags": sorted(scalar("compatibility_flags", default=[]) or []),
+        "containers": _json_rows(section.get("containers")),
         "workers_dev": bool(scalar("workers_dev", default=True)),
         "preview_urls": bool(scalar("preview_urls", default=True)),
         "routes": _json_rows(routes),
@@ -965,7 +973,7 @@ def build_manifest() -> dict[str, Any]:
         if (WORKER_ROOT / worker / "wrangler.test.toml").is_file()
     }
     body = {
-        "schema_version": "cloudflare-active-worker-bindings/v8",
+        "schema_version": "cloudflare-active-worker-bindings/v9",
         "active_workers": list(ACTIVE_WORKERS),
         "config_key_policy": CONFIG_KEY_POLICY,
         "test_harness_surfaces": test_harness_surfaces,
@@ -992,7 +1000,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "workers",
     }:
         raise ValueError("binding manifest fields are not closed")
-    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v8":
+    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v9":
         raise ValueError("binding manifest schema_version drift")
     if DEFAULT_FETCH_RESERVED_SPECIAL_POLICY != frozenset(ACTIVE_WORKERS):
         raise ValueError("default fetch reserved-special policy drift")
@@ -1194,6 +1202,54 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         }
     ]:
         raise ValueError("mass-eval must use the typed GatewayService binding")
+
+    personal_container = [
+        {
+            "class_name": "PersonalResearchContainer",
+            "image": "./Dockerfile",
+            "image_build_context": "../../..",
+            "instance_type": "standard-2",
+            "max_instances": 1,
+        }
+    ]
+    personal_binding = [
+        {
+            "class_name": "PersonalResearchContainer",
+            "name": "PERSONAL_RESEARCH_CONTAINER",
+        }
+    ]
+    personal_migration = [
+        {
+            "new_sqlite_classes": ["PersonalResearchContainer"],
+            "tag": "personal-research-container-v1",
+        }
+    ]
+    for environment in ("base", "production", "staging"):
+        mass = workers["research-mass-eval"][environment]
+        if mass["containers"] != personal_container:
+            raise ValueError(
+                f"research-mass-eval/{environment}: personal Container drift"
+            )
+        if mass["durable_objects"] != personal_binding:
+            raise ValueError(
+                f"research-mass-eval/{environment}: personal Container binding drift"
+            )
+        if mass["migrations"] != personal_migration:
+            raise ValueError(
+                f"research-mass-eval/{environment}: personal Container migration drift"
+            )
+    for environment in ("base", "production"):
+        if workers["research-mass-eval"][environment]["workers_dev"] is not True:
+            raise ValueError(
+                f"research-mass-eval/{environment}: token-gated personal route missing"
+            )
+    if workers["research-mass-eval"]["staging"]["workers_dev"] is not False:
+        raise ValueError("research-mass-eval/staging: workers_dev must remain false")
+    mass_test = manifest["test_harness_surfaces"].get("research-mass-eval")
+    if not isinstance(mass_test, dict) or any(
+        mass_test[field] != [] for field in ("containers", "durable_objects")
+    ):
+        raise ValueError("research-mass-eval/test: Container must stay unbound")
 
     observer_names = {
         "base": "quant-platform-receipt-activation-observer",

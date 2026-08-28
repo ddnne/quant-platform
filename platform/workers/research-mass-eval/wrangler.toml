@@ -19,8 +19,8 @@
 # Deploy:
 #   cd platform/workers/research-mass-eval && npm install && npx wrangler deploy --env production
 #
-# Public surface: none. Internal/admin only. No public research execution.
-# workers_dev=false: no stable *.workers.dev hostname.
+# Public surface: token-gated workers.dev for the personal DRAFT Container.
+# Existing Mass/Phase7 routes remain capability-gated NO-GO/OFF.
 # preview_urls=false: version preview URLs are not a research API
 # (wrangler 4.125.0 supports preview_urls).
 # Staging is not [env.staging] in this file (would share the production
@@ -30,8 +30,23 @@
 name = "quant-platform-research-mass-eval"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
-workers_dev = false
+workers_dev = true
 preview_urls = false
+
+[[containers]]
+class_name = "PersonalResearchContainer"
+image = "./Dockerfile"
+image_build_context = "../../.."
+max_instances = 1
+instance_type = "standard-2"
+
+[[durable_objects.bindings]]
+name = "PERSONAL_RESEARCH_CONTAINER"
+class_name = "PersonalResearchContainer"
+
+[[migrations]]
+tag = "personal-research-container-v1"
+new_sqlite_classes = ["PersonalResearchContainer"]
 
 [secrets]
 required = ["MASS_EVAL_TOKEN"]
@@ -68,8 +83,19 @@ binding = "CF_VERSION_METADATA"
 
 [env.production]
 name = "quant-platform-research-mass-eval"
-workers_dev = false
+workers_dev = true
 preview_urls = false
+
+[[env.production.containers]]
+class_name = "PersonalResearchContainer"
+image = "./Dockerfile"
+image_build_context = "../../.."
+max_instances = 1
+instance_type = "standard-2"
+
+[[env.production.durable_objects.bindings]]
+name = "PERSONAL_RESEARCH_CONTAINER"
+class_name = "PersonalResearchContainer"
 
 [env.production.secrets]
 required = ["MASS_EVAL_TOKEN"]

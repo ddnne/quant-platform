@@ -17,7 +17,6 @@ WORKERS_ROOT = ROOT / "platform" / "workers"
 INTERNAL_PRODUCT = (
     "ingestion-premium",
     "ingestion-jsda",
-    "research-mass-eval",
     "research-ai-gateway",
 )
 
@@ -26,6 +25,7 @@ WORKERS_DEV_TRUE_EXCEPTIONS = frozenset(
     {
         "quant-ops-mcp",  # GitHub OAuth callback host
         "ingestion-secrets",  # Access-protected transition proxy
+        "research-mass-eval",  # token-gated personal DRAFT Container
     }
 )
 
