@@ -3,6 +3,37 @@
 日本株・開示・債券データを用いた量化研究／Paper／FoF 基盤。  
 正本は GitHub リポジトリ 1 本（公開・非公開は運用で変更可）。
 
+## 個人利用の推奨入口
+
+通常の戦略検証には、署名付きREADYやMass Researchを待たず、ローカルの同期済み
+SQLiteからDRAFT Paperを作る次の入口を使います。
+
+```bash
+uv sync --frozen --extra dev
+uv run qp-research \
+  --db data/structured/ingestion.sqlite \
+  --end 2026-08-27
+```
+
+このv1コマンドはリポジトリcheckout内（またはその`.venv`）で実行します。既定では4つの
+小さなclosed `StrategySpec`を直列実行し、4期間のvalidationと取引費用stressだけで
+`HOLD`候補を決めます。最後の12か月は再利用可能な参考値で、選択条件には使いません。
+入力DBはSQLite Backup APIで不変コピーされ、結果はcontent-addressed JSON/Markdownへ
+保存されます。
+
+分析前には、管理対象DBなら最新validation/watermark、日次ユニバースの価格行99.5%以上、
+Prime銘柄と財務データの交差95%以上、RAW価格の分割・併合らしい不連続を確認します。
+不連続候補をvalidationまたはcost stressで実際に売買した戦略だけを`REJECT`し、Prime全体に
+通常の分割が1件あるだけでは全分析を停止しません（未売買銘柄による順位への小さな影響は
+除去せず、レポートへ明示します）。
+これらはローカルDBの`OBSERVED`な健全性確認であり、上流データの完全性を署名証明するもの
+ではありません。分析不能時は全候補を`SKIPPED`にしてexit 2、予期しない候補エラーはexit 1、
+正常に評価できた場合（全件`REJECT`を含む）はexit 0です。自動昇格・発注・broker接続・
+LLM呼び出しは行いません。
+
+これは個人用Paper経路です。下記のControlled Pilot / Mass / Live authority群とは分離され、
+それらをGOにするものではありません。
+
 ## 現状（Phase 6.2 code-complete / Phase 7 NO-GO until live ready）
 
 **Phase 1（Ingestion）＋ Phase 2（PIT Data API）＋ Phase 3（コアエンジン最小）＋

@@ -15,9 +15,11 @@ from research.artifacts import (
 )
 from research.dependency_closure import (
     PLAN_DEPENDENCY_CLOSURE_VERSION,
+    ContractDependency,
     PlanDependencyClosure,
     PlanDependencyClosureError,
     build_plan_dependency_closure,
+    build_strategy_dependency_closure,
     experiment_plan_digest,
     resolve_strategy_spec,
     verify_plan_dependency_closure,
@@ -29,7 +31,13 @@ from research.experiment_plans import (
     load_experiment_plans,
 )
 from research.research_data_profile import PROFILE_VERSION_V2
-from strategies.spec import iter_feature_refs, strategy_spec_digest
+from strategies.spec import (
+    FeatureRef,
+    StrategySpec,
+    TopKRule,
+    iter_feature_refs,
+    strategy_spec_digest,
+)
 
 
 _EXPECTED_REFS = {
@@ -135,6 +143,111 @@ def test_feature_lookback_is_machine_readable_and_digest_bound() -> None:
     assert momentum.required_lookback_trading_days == 10
     event = closures["exp-event-post-hold5"]
     assert event.required_lookback_trading_days == 0
+
+
+def test_generic_compiler_accepts_canonical_strategy_outside_pilot_registry() -> None:
+    spec = StrategySpec(
+        strategy_id="personal_momentum_top3",
+        rule=TopKRule(
+            feature=FeatureRef(
+                id="momentum_n",
+                version="1.0.0",
+                params={"n": 20},
+            ),
+            k=3,
+        ),
+    )
+    with pytest.raises(PlanDependencyClosureError, match="unknown exact"):
+        resolve_strategy_spec(spec.strategy_id, spec.version, strategy_spec_digest(spec))
+
+    closure = build_strategy_dependency_closure(
+        plan_id="personal-momentum-plan",
+        plan_digest="sha256:" + "a" * 64,
+        spec=spec,
+        universe_dependencies=(
+            ContractDependency(
+                kind="universe",
+                dependency_id="personal-tse-prime",
+                version="universe-dependency/v1",
+                dataset_dependencies=("equities_master",),
+            ),
+        ),
+        evaluation_dependency=ContractDependency(
+            kind="evaluation",
+            dependency_id="personal-walk-forward",
+            version="evaluation-dependency/v1",
+            dataset_dependencies=("equities_bars_daily", "markets_calendar"),
+        ),
+        risk_dependency=ContractDependency(
+            kind="risk",
+            dependency_id="personal-risk",
+            version="risk-dependency/v1",
+            dataset_dependencies=("equities_bars_daily",),
+        ),
+        cost_dependency=ContractDependency(
+            kind="cost",
+            dependency_id="personal-cost-10bp",
+            version="cost-dependency/v1",
+        ),
+        research_data_profile_id="personal-research-profile",
+        period_start="2020-01-01",
+        period_end="2025-12-31",
+    )
+
+    assert closure.strategy_spec_id == spec.strategy_id
+    assert closure.strategy_spec_hash == strategy_spec_digest(spec)
+    assert closure.required_datasets == (
+        "equities_bars_daily",
+        "equities_master",
+        "markets_calendar",
+    )
+    assert closure.feature_dependencies[0].dataset_dependencies == (
+        "equities_bars_daily",
+    )
+    assert closure.required_lookback_trading_days == 20
+    assert next(
+        scope
+        for scope in closure.dataset_scopes
+        if scope.dataset_id == "equities_bars_daily"
+    ).required_lookback_trading_days == 20
+
+
+def test_generic_compiler_resolves_versioned_feature_default_lookback() -> None:
+    spec = StrategySpec(
+        strategy_id="personal_default_momentum",
+        rule=TopKRule(
+            feature=FeatureRef(
+                id="momentum_n",
+                version="1.0.0",
+                params={},
+            ),
+            k=3,
+        ),
+    )
+
+    def dependency(kind: str) -> ContractDependency:
+        return ContractDependency(
+            kind=kind,
+            dependency_id=f"personal-{kind}",
+            version=f"{kind}-dependency/v1",
+        )
+
+    closure = build_strategy_dependency_closure(
+        plan_id="personal-default-momentum-plan",
+        plan_digest="sha256:" + "b" * 64,
+        spec=spec,
+        universe_dependencies=(dependency("universe"),),
+        evaluation_dependency=dependency("evaluation"),
+        risk_dependency=dependency("risk"),
+        cost_dependency=dependency("cost"),
+        research_data_profile_id="personal-research-profile",
+        period_start="2020-01-01",
+        period_end="2025-12-31",
+    )
+
+    assert closure.feature_dependencies[0].params == {}
+    assert closure.required_lookback_trading_days == 20
+    assert closure.dataset_scopes[0].required_lookback_trading_days == 20
 
 
 @pytest.mark.parametrize(
