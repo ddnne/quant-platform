@@ -1166,6 +1166,237 @@ class PersonalHistoryHydrator:
                 expected_rows=len(expected),
             )
 
+    def _materialize_typed_bars(self) -> int:
+        """Move completed compact bars to the indexed typed PIT table.
+
+        Segment writes stay in ``jquants_records`` so a failed/resumed fetch
+        keeps the existing atomic fact+checkpoint contract.  Once every bar
+        segment is terminal, this single transaction makes the query-optimized
+        representation authoritative and removes the JSON rows that would
+        otherwise be decoded on every research read.
+        """
+        expected_count = int(
+            self._connection.execute(
+                "SELECT COALESCE(SUM(rows_written),0) "
+                "FROM personal_history_segments "
+                "WHERE dataset='equities_bars_daily' "
+                "AND state IN ('OBSERVED','OBSERVED_EMPTY')"
+            ).fetchone()[0]
+        )
+        revisions = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM jquants_records_revisions "
+                "WHERE source='jquants' AND dataset='equities_bars_daily'"
+            ).fetchone()[0]
+        )
+        if revisions:
+            raise PersonalHistoryError(
+                "personal history cannot materialize revised generic bars"
+            )
+        typed_revisions = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM jquants_daily_bars_revisions "
+                "WHERE source='jquants'"
+            ).fetchone()[0]
+        )
+        if typed_revisions:
+            raise PersonalHistoryError(
+                "personal history cannot use revised typed bars"
+            )
+        generic_count = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM jquants_records "
+                "WHERE source='jquants' AND dataset='equities_bars_daily'"
+            ).fetchone()[0]
+        )
+        typed_count = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM jquants_daily_bars "
+                "WHERE source='jquants'"
+            ).fetchone()[0]
+        )
+        if generic_count == 0:
+            if expected_count < 1 or typed_count != expected_count:
+                raise PersonalHistoryError(
+                    "typed bar count does not match completed bar checkpoints"
+                )
+            return 0
+        if expected_count < 1:
+            raise PersonalHistoryError(
+                "generic bars have no completed checkpoint evidence"
+            )
+        if typed_count not in {0, expected_count}:
+            raise PersonalHistoryError(
+                "pre-existing typed bars do not match completed checkpoints"
+            )
+        if typed_count == 0 and generic_count != expected_count:
+            raise PersonalHistoryError(
+                "generic bar count does not match completed checkpoints"
+            )
+
+        malformed = int(
+            self._connection.execute(
+                """
+                SELECT COUNT(*) FROM jquants_records
+                WHERE source='jquants' AND dataset='equities_bars_daily'
+                  AND CASE
+                    WHEN payload IS NULL OR json_valid(payload)=0 THEN 1
+                    WHEN json_type(payload) <> 'object' THEN 1
+                    WHEN trim(CAST(json_extract(payload,'$.Code') AS TEXT)) = ''
+                         OR json_extract(payload,'$.Code') IS NULL THEN 1
+                    WHEN length(CAST(json_extract(payload,'$.Date') AS TEXT)) < 10
+                         OR json_extract(payload,'$.Date') IS NULL THEN 1
+                    WHEN json_extract(payload,'$.Close') IS NULL THEN 1
+                    ELSE 0
+                  END = 1
+                """
+            ).fetchone()[0]
+        )
+        if malformed:
+            raise PersonalHistoryError(
+                f"personal history has {malformed} malformed generic bar row(s)"
+            )
+        duplicate = self._connection.execute(
+            """
+            SELECT 1 FROM jquants_records
+            WHERE source='jquants' AND dataset='equities_bars_daily'
+            GROUP BY CAST(json_extract(payload,'$.Code') AS TEXT),
+                     substr(CAST(json_extract(payload,'$.Date') AS TEXT),1,10)
+            HAVING COUNT(*) > 1 LIMIT 1
+            """
+        ).fetchone()
+        if duplicate is not None:
+            raise PersonalHistoryError(
+                "personal history generic bars contain duplicate typed keys"
+            )
+
+        self._guard_capacity(
+            phase="before typed bar materialization",
+            additional_bytes=generic_count * 256,
+        )
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._connection.execute(
+                """
+                INSERT INTO jquants_daily_bars (
+                    source,code,date,event_time,available_at,ingested_at,
+                    open,high,low,close,volume,turnover_value,
+                    adjustment_open,adjustment_high,adjustment_low,
+                    adjustment_close,adjustment_volume,raw_payload
+                )
+                SELECT
+                    source,
+                    CAST(json_extract(payload,'$.Code') AS TEXT),
+                    substr(CAST(json_extract(payload,'$.Date') AS TEXT),1,10),
+                    event_time,available_at,ingested_at,
+                    NULL,NULL,NULL,
+                    CAST(json_extract(payload,'$.Close') AS REAL),
+                    CAST(json_extract(payload,'$.Volume') AS REAL),
+                    CAST(json_extract(payload,'$.TurnoverValue') AS REAL),
+                    NULL,NULL,NULL,
+                    CAST(json_extract(payload,'$.AdjustmentClose') AS REAL),
+                    CAST(json_extract(payload,'$.AdjustmentVolume') AS REAL),
+                    NULL
+                FROM jquants_records
+                WHERE source='jquants' AND dataset='equities_bars_daily'
+                ON CONFLICT(source,code,date) DO UPDATE SET
+                    event_time=excluded.event_time,
+                    available_at=excluded.available_at,
+                    ingested_at=excluded.ingested_at,
+                    open=excluded.open,
+                    high=excluded.high,
+                    low=excluded.low,
+                    close=excluded.close,
+                    volume=excluded.volume,
+                    turnover_value=excluded.turnover_value,
+                    adjustment_open=excluded.adjustment_open,
+                    adjustment_high=excluded.adjustment_high,
+                    adjustment_low=excluded.adjustment_low,
+                    adjustment_close=excluded.adjustment_close,
+                    adjustment_volume=excluded.adjustment_volume,
+                    raw_payload=NULL
+                """
+            )
+            mismatched = int(
+                self._connection.execute(
+                    """
+                    SELECT COUNT(*) FROM jquants_records AS records
+                    JOIN jquants_daily_bars AS bars
+                      ON bars.source=records.source
+                     AND bars.code=CAST(json_extract(records.payload,'$.Code') AS TEXT)
+                     AND bars.date=substr(
+                         CAST(json_extract(records.payload,'$.Date') AS TEXT),1,10
+                     )
+                    WHERE records.source='jquants'
+                      AND records.dataset='equities_bars_daily'
+                      AND NOT (
+                          bars.event_time IS records.event_time
+                          AND bars.available_at IS records.available_at
+                          AND bars.ingested_at IS records.ingested_at
+                          AND bars.open IS NULL
+                          AND bars.high IS NULL
+                          AND bars.low IS NULL
+                          AND bars.close IS CAST(
+                              json_extract(records.payload,'$.Close') AS REAL
+                          )
+                          AND bars.volume IS CAST(
+                              json_extract(records.payload,'$.Volume') AS REAL
+                          )
+                          AND bars.turnover_value IS CAST(
+                              json_extract(
+                                  records.payload,'$.TurnoverValue'
+                              ) AS REAL
+                          )
+                          AND bars.adjustment_open IS NULL
+                          AND bars.adjustment_high IS NULL
+                          AND bars.adjustment_low IS NULL
+                          AND bars.adjustment_close IS CAST(
+                              json_extract(
+                                  records.payload,'$.AdjustmentClose'
+                              ) AS REAL
+                          )
+                          AND bars.adjustment_volume IS CAST(
+                              json_extract(
+                                  records.payload,'$.AdjustmentVolume'
+                              ) AS REAL
+                          )
+                          AND bars.raw_payload IS NULL
+                      )
+                    """
+                ).fetchone()[0]
+            )
+            if mismatched:
+                raise PersonalHistoryError(
+                    "typed bar materialization content does not reconcile"
+                )
+            materialized_count = int(
+                self._connection.execute(
+                    "SELECT COUNT(*) FROM jquants_daily_bars "
+                    "WHERE source='jquants'"
+                ).fetchone()[0]
+            )
+            if materialized_count != expected_count:
+                raise PersonalHistoryError(
+                    "typed bar materialization count does not match checkpoints"
+                )
+            deleted = self._connection.execute(
+                "DELETE FROM jquants_records WHERE source='jquants' "
+                "AND dataset='equities_bars_daily'"
+            ).rowcount
+            if int(deleted) != generic_count:
+                raise PersonalHistoryError(
+                    "typed bar materialization did not remove every generic row"
+                )
+            self._connection.commit()
+        except Exception as exc:
+            self._connection.rollback()
+            if isinstance(exc, PersonalHistoryError):
+                raise
+            raise PersonalHistoryError(
+                f"typed bar materialization failed: {exc}"
+            ) from exc
+        return generic_count
+
     def _validate_draft_boundary(self) -> None:
         _assert_personal_draft_store_is_unmanaged(self.store)
         active = self._connection.execute(
@@ -1184,6 +1415,77 @@ class PersonalHistoryHydrator:
         if int(duplicated):
             raise PersonalHistoryError(
                 "personal history rows contain forbidden raw_payload copies"
+            )
+        generic_bars = int(
+            self._connection.execute(
+                "SELECT "
+                "(SELECT COUNT(*) FROM jquants_records WHERE source='jquants' "
+                " AND dataset='equities_bars_daily') + "
+                "(SELECT COUNT(*) FROM jquants_records_revisions "
+                " WHERE source='jquants' AND dataset='equities_bars_daily')"
+            ).fetchone()[0]
+        )
+        if generic_bars:
+            raise PersonalHistoryError(
+                "personal history generic bars remain after typed materialization"
+            )
+        typed_bars = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM jquants_daily_bars "
+                "WHERE source='jquants'"
+            ).fetchone()[0]
+        )
+        expected_bars = int(
+            self._connection.execute(
+                "SELECT COALESCE(SUM(rows_written),0) "
+                "FROM personal_history_segments "
+                "WHERE dataset='equities_bars_daily' "
+                "AND state IN ('OBSERVED','OBSERVED_EMPTY')"
+            ).fetchone()[0]
+        )
+        if expected_bars < 1 or typed_bars != expected_bars:
+            raise PersonalHistoryError(
+                "personal history typed bars do not match completed checkpoints"
+            )
+        typed_revisions = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM jquants_daily_bars_revisions "
+                "WHERE source='jquants'"
+            ).fetchone()[0]
+        )
+        if typed_revisions:
+            raise PersonalHistoryError(
+                "personal history typed bar revisions are forbidden"
+            )
+        day_mismatch = self._connection.execute(
+            """
+            SELECT 1 FROM personal_history_segments AS segments
+            LEFT JOIN (
+                SELECT date,COUNT(*) AS row_count
+                FROM jquants_daily_bars WHERE source='jquants'
+                GROUP BY date
+            ) AS bars ON bars.date=segments.query_start
+            WHERE segments.dataset='equities_bars_daily'
+              AND segments.state IN ('OBSERVED','OBSERVED_EMPTY')
+              AND COALESCE(bars.row_count,0) <> segments.rows_written
+            LIMIT 1
+            """
+        ).fetchone()
+        if day_mismatch is not None:
+            raise PersonalHistoryError(
+                "personal history typed bar day counts do not match checkpoints"
+            )
+        typed_raw = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM jquants_daily_bars "
+                "WHERE source='jquants' AND ("
+                "raw_payload IS NOT NULL OR trim(code)='' OR close IS NULL "
+                "OR date <> substr(event_time,1,10))"
+            ).fetchone()[0]
+        )
+        if typed_raw:
+            raise PersonalHistoryError(
+                "personal history typed bars violate compact PIT invariants"
             )
         policies = {
             str(row[0])
@@ -1222,6 +1524,7 @@ class PersonalHistoryHydrator:
             self._hydrate_bars(bar_start=bar_start, trading=trading)
             self._checkpoint_wal()
             self._guard_capacity(phase="after bars stage")
+            self._materialize_typed_bars()
             self._manifest_status("VALIDATING")
             self._validate_draft_boundary()
             self._manifest_status("COMPLETE_DRAFT")
