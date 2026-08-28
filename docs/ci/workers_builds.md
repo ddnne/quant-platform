@@ -162,15 +162,23 @@ Active Deployment.
 | Version upload (optional, not promote) | `npx wrangler versions upload` | preview / non-production; or production-branch CI that must **not** go live |
 | Explicit promote | `npx wrangler deploy` **or** dashboard promote of a specific version | operator, after the native check is green **and** an explicit decision to ship |
 
-**Do not** set any production-branch **deploy command** to `npx wrangler deploy`
-for the six ordinary product Workers. That would auto-promote on green CI. The
-seventh active Worker, `receipt-evidence-authority`, is deployed only through
-its reviewed PENDING/ACTIVE activation procedure and is not an automatic lane.
+**Do not** set a production-branch **deploy command** to `npx wrangler deploy`
+for the five non-Container product Workers. That would auto-promote on green
+CI. The seventh active Worker, `receipt-evidence-authority`, is deployed only
+through its reviewed PENDING/ACTIVE activation procedure and is not an
+automatic lane.
 
 Use `npx wrangler versions upload` as the production-branch deploy command (and
-the non-production command) on product lanes. Disconnecting Git does not replace
-this policy — the deploy command is the switch
+the non-production command) on non-Container product lanes. Disconnecting Git
+does not replace this policy — the deploy command is the switch
 ([disable automatic deployments](https://developers.cloudflare.com/workers/ci-cd/builds/#disconnecting-builds)).
+
+`research-mass-eval` is the narrow exception: Cloudflare documents that
+`versions upload` does not update Container images. Its path-scoped production
+lane therefore uses `npx wrangler deploy --env production` after the same
+required repo-root check. `max_instances=1`, DRAFT-only execution and all
+Mass/READY/GO freezes remain in the deployed configuration
+([Container Builds behavior](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#how-workers-builds-works)).
 
 Local **mandatory** CI is the same script: [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh).
 [`scripts/verify_all.sh`](../../scripts/verify_all.sh) is a fast local helper only.
@@ -219,7 +227,7 @@ research execution, and not an ingest API.
 |---|---|---|---|---|
 | quant-ops-mcp | `quant-platform-ops-read-mcp` | `workers_dev=true` (OAuth callback host) | `true` | remote public, OAuth required, read-only |
 | research-ai-gateway | `quant-platform-research-ai-gateway` | `preview_urls` only | `false` | service binding only; not a public research API |
-| research-mass-eval | `quant-platform-research-mass-eval` | `preview_urls` only | `false` | internal/admin; no public research execution |
+| research-mass-eval | `quant-platform-research-mass-eval` | no version preview | `true` | bearer-token personal DRAFT Container; Mass remains NO-GO |
 | ingestion-premium | `quant-platform-ingestion-premium` | `preview_urls` only | `false` | cron/internal |
 | ingestion-jsda | `quant-platform-ingestion-jsda` | `preview_urls` only | `false` | cron/internal |
 | ingestion-secrets | `quant-platform-ingestion-secrets` | `workers_dev=true` (token-gated proxy host) | `true` | narrow authenticated proxy |
