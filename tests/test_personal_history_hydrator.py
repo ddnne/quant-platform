@@ -23,7 +23,12 @@ from ingestion.personal_history import (
     build_personal_history_plan,
 )
 from pit.api import get_equity_master
-from scripts.hydrate_personal_history import _effective_rpm, main as cli_main
+from scripts.hydrate_personal_history import (
+    DEFAULT_RPM,
+    _effective_rpm,
+    _parser,
+    main as cli_main,
+)
 from storage.sqlite_store import SqliteStore
 
 
@@ -439,6 +444,7 @@ def test_dry_run_does_not_fetch_or_create_database(tmp_path, monkeypatch, capsys
     assert not db.exists()
     output = capsys.readouterr().out
     assert '"completeness_claim": "NONE"' in output
+    assert '"requests_per_minute": 30.0' in output
     assert "dry-run complete" in output
 
 
@@ -465,6 +471,11 @@ def test_plan_rejects_future_reversed_and_excessive_lookback() -> None:
 
 
 def test_saved_proxy_rate_is_clamped_but_direct_rate_is_not() -> None:
+    assert DEFAULT_RPM == 30.0
+    help_text = " ".join(_parser().format_help().split())
+    assert "default: conservative 30 rpm" in help_text
+    assert _effective_rpm(DEFAULT_RPM, via_proxy=True) == 30
+    assert _effective_rpm(DEFAULT_RPM, via_proxy=False) == 30
     assert _effective_rpm(120, via_proxy=True) == 60
     assert _effective_rpm(120, via_proxy=False) == 120
 

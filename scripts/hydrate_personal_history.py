@@ -45,7 +45,7 @@ from storage.sqlite_store import SqliteStore  # noqa: E402
 
 
 _UA = "quant-platform-personal-history/0.1 (+personal-draft; JST)"
-DEFAULT_RPM = 120.0
+DEFAULT_RPM = 30.0
 PROXY_MAX_RPM = 60.0
 
 
@@ -79,7 +79,10 @@ def _parser() -> argparse.ArgumentParser:
         "--requests-per-minute",
         type=float,
         default=DEFAULT_RPM,
-        help="shared sequential request pace (default: conservative 120 rpm)",
+        help=(
+            "shared sequential request pace "
+            f"(default: conservative {DEFAULT_RPM:g} rpm)"
+        ),
     )
     parser.add_argument(
         "--max-db-gib",
