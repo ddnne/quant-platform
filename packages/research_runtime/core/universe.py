@@ -309,7 +309,11 @@ def load_master(as_of: Any, *, db_path: Any = None) -> EquityMasterMap:
     """
     if not _nonempty_str(as_of):
         raise ValueError("load_master requires as_of")
-    result = pit.get_equity_master(as_of=as_of, db_path=db_path)
+    result = pit.get_equity_master(
+        as_of=as_of,
+        latest_snapshot=True,
+        db_path=db_path,
+    )
     latest_snapshot = max(
         (row.get("snapshot_date") or "" for row in result.rows), default=""
     )

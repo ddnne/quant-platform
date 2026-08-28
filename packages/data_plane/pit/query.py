@@ -220,15 +220,27 @@ def run_query(
         raise ValueError("limit must be a positive integer")
     conn = connect_readonly(db_path)
     try:
+        # Pin revision discovery and the fact read to one SQLite snapshot.
+        # Without an explicit read transaction, a concurrent amendment could
+        # archive the visible primary row after the empty-revision check and
+        # before the SELECT, producing a mixed-generation result.
+        conn.execute("BEGIN")
         revision_table = REVISION_TABLES.get(table)
-        has_revision_table = False
+        has_revision_rows = False
         if revision_table is not None:
             has_revision_table = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
                 (revision_table,),
             ).fetchone() is not None
+            if has_revision_table:
+                # Personal DRAFT databases normally have the revision schema
+                # but no amendments.  Avoid paying for a UNION + window rank
+                # on every feature read until a revision actually exists.
+                has_revision_rows = conn.execute(
+                    f"SELECT 1 FROM {revision_table} LIMIT 1"
+                ).fetchone() is not None
 
-        if has_revision_table:
+        if has_revision_rows:
             key_cols = NATURAL_KEYS[table]
             partition_by = ",".join(key_cols)
             sql = (
@@ -260,4 +272,7 @@ def run_query(
         cur = conn.execute(sql, bound)
         return [_decode_row(r) for r in cur.fetchall()]
     finally:
-        conn.close()
+        try:
+            conn.rollback()
+        finally:
+            conn.close()

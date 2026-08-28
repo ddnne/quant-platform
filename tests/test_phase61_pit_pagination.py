@@ -1,17 +1,15 @@
-"""Structural regressions for PIT-owned SQL keyset pagination."""
+"""Behavioral regressions for PIT-owned SQL keyset pagination."""
 
 from __future__ import annotations
 
 from contextlib import nullcontext
 from types import SimpleNamespace
 
-import pytest
-
 import pit.query as pit_query
+import pytest
 from data_access import QuantDataAccess, QuantDataConfig
 from pit import get_jquants_records
 from storage.sqlite_store import SqliteStore
-
 
 AS_OF = "2025-01-02T09:00:00+09:00"
 EVENT_TIME = "2025-01-01T15:30:00+09:00"
@@ -37,26 +35,14 @@ def test_data_access_page_size_200_is_bounded_in_sql(tmp_path, monkeypatch):
     with SqliteStore(path) as store:
         store.upsert("jquants_records", [_record(index) for index in range(205)])
 
-    statements: list[tuple[str, tuple[object, ...]]] = []
-    real_connect = pit_query.connect_readonly
+    decoded: list[dict] = []
+    real_decode = pit_query._decode_row
 
-    class RecordingConnection:
-        def __init__(self, inner):
-            self.inner = inner
+    def count_decode(row):
+        decoded.append(dict(row))
+        return real_decode(row)
 
-        def execute(self, sql, params=()):
-            if "SELECT * FROM pit_ranked" in sql:
-                statements.append((sql, tuple(params)))
-            return self.inner.execute(sql, params)
-
-        def close(self):
-            self.inner.close()
-
-    monkeypatch.setattr(
-        pit_query,
-        "connect_readonly",
-        lambda db_path: RecordingConnection(real_connect(db_path)),
-    )
+    monkeypatch.setattr(pit_query, "_decode_row", count_decode)
     access = QuantDataAccess(
         QuantDataConfig(snapshot_dir=tmp_path, default_page_size=200)
     )
@@ -80,10 +66,10 @@ def test_data_access_page_size_200_is_bounded_in_sql(tmp_path, monkeypatch):
 
     assert first["returned"] == 200
     assert first["next_page_token"]
-    first_sql, first_params = statements[-1]
-    assert "ORDER BY event_time, natural_key, source LIMIT ?" in first_sql
-    assert first_params[-1] == 201
+    # The reader materializes exactly one look-ahead row, not all 205 rows.
+    assert len(decoded) == 201
 
+    decoded.clear()
     second = access.query_dataset(
         dataset="equities_bars_daily",
         as_of=AS_OF,
@@ -96,11 +82,8 @@ def test_data_access_page_size_200_is_bounded_in_sql(tmp_path, monkeypatch):
         f"key-{index:04d}" for index in range(200, 205)
     ]
     assert second["next_page_token"] is None
-    second_sql, second_params = statements[-1]
-    assert "event_time > ?" in second_sql
-    assert "natural_key > ?" in second_sql
-    assert "source > ?" in second_sql
-    assert second_params[-1] == 201
+    # The keyset resumes after row 199 and decodes only the remaining five.
+    assert len(decoded) == 5
 
 
 def test_keyset_cursor_uses_source_tiebreaker_and_binds_snapshot_query(tmp_path):
