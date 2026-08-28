@@ -10,6 +10,7 @@ is content addressed and later re-derived from the immutable READY artifact.
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -27,6 +28,10 @@ from selection.budget_ledger import MassResearchDisabledError
 EXACT_FOUR_UNIVERSE_RULE_ID = "tse_prime_with_fins"
 EXACT_FOUR_UNIVERSE_RULE_VERSION = "tse-prime-with-fins/v1"
 TSE_PRIME_MARKET_CODE = "0111"
+UNIVERSE_BREADTH_EVIDENCE_FORMAT = (
+    "observed-tse-prime-with-fins-breadth/v1"
+)
+_VersionIdentity = tuple[str, str, str]
 
 
 def _canonical_digest(payload: Any) -> str:
@@ -213,9 +218,6 @@ def _load_governed_rows(
     try:
         conn = sqlite3.connect(uri, uri=True)
         conn.row_factory = sqlite3.Row
-        columns = {
-            str(row[1]) for row in conn.execute("PRAGMA table_info(jquants_records)")
-        }
         required = {
             "source",
             "dataset",
@@ -226,18 +228,34 @@ def _load_governed_rows(
             "payload",
             "raw_payload",
         }
-        if not required <= columns:
-            raise MassResearchDisabledError(
-                "controlled universe requires the canonical jquants_records schema"
-            )
         placeholders = ",".join("?" for _ in dataset_ids)
-        rows = conn.execute(
-            "SELECT source,dataset,natural_key,event_time,available_at,"
-            "ingested_at,payload,raw_payload FROM jquants_records "
-            f"WHERE source='jquants' AND dataset IN ({placeholders}) "
-            "ORDER BY dataset,event_time,natural_key",
-            tuple(dataset_ids),
-        ).fetchall()
+        rows: list[sqlite3.Row] = []
+        for table in ("jquants_records", "jquants_records_revisions"):
+            columns = {
+                str(row[1])
+                for row in conn.execute(f"PRAGMA table_info({table})")
+            }
+            if not columns:
+                if table == "jquants_records":
+                    raise MassResearchDisabledError(
+                        "controlled universe requires the canonical "
+                        "jquants_records schema"
+                    )
+                continue
+            if not required <= columns:
+                raise MassResearchDisabledError(
+                    f"controlled universe requires canonical {table} schema"
+                )
+            rows.extend(
+                conn.execute(
+                    "SELECT source,dataset,natural_key,event_time,available_at,"
+                    f"ingested_at,payload,raw_payload FROM {table} "
+                    f"WHERE source='jquants' AND dataset IN ({placeholders}) "
+                    "ORDER BY dataset,event_time,natural_key,available_at,"
+                    "ingested_at",
+                    tuple(dataset_ids),
+                ).fetchall()
+            )
     except sqlite3.Error as exc:
         raise MassResearchDisabledError(
             "controlled universe snapshot query failed closed"
@@ -258,6 +276,9 @@ def _load_governed_rows(
         row["_event"] = _parse_datetime(
             row.get("event_time"), label=f"{dataset_id}.event_time"
         )
+        row["_ingested"] = _parse_datetime(
+            row.get("ingested_at"), label=f"{dataset_id}.ingested_at"
+        )
         grouped[dataset_id].append(row)
     return {key: tuple(value) for key, value in grouped.items()}
 
@@ -269,59 +290,177 @@ def resolve_tse_prime_with_fins(
     period_end: str,
 ) -> ResolvedUniverseMembership:
     """Resolve the governed exact-four universe from an immutable PIT DB."""
+    membership, _evidence = resolve_tse_prime_with_fins_evidence(
+        db_path,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    return membership
+
+
+def resolve_tse_prime_with_fins_evidence(
+    db_path: str | Path,
+    *,
+    period_start: str,
+    period_end: str,
+) -> tuple[ResolvedUniverseMembership, dict[str, Any]]:
+    """Resolve membership and report observed, non-authoritative breadth.
+
+    The evidence only describes rows visible in the supplied immutable DB.  It
+    deliberately makes no upstream-completeness claim and applies no pass
+    threshold.
+    """
     rows = _load_governed_rows(
         db_path, ("markets_calendar", "equities_master", "fins_summary")
     )
-    calendar_by_date: dict[str, dict[str, Any]] = {}
-    for row in rows["markets_calendar"]:
-        day = str(row["event_time"])[:10]
-        if period_start <= day <= period_end:
-            if day in calendar_by_date:
-                raise MassResearchDisabledError(
-                    f"markets_calendar has duplicate natural keys for {day}"
+    activation_events: list[
+        tuple[datetime, str, str, datetime, datetime, int, dict[str, Any]]
+    ] = []
+    calendar_candidate_days: set[str] = set()
+    insertion_order = 0
+    for dataset_rows in rows.values():
+        for row in dataset_rows:
+            dataset_id = str(row["dataset"])
+            if dataset_id == "markets_calendar":
+                calendar_candidate_days.add(str(row["event_time"])[:10])
+            activation_events.append(
+                (
+                    max(row["_event"], row["_available"]),
+                    dataset_id,
+                    str(row["natural_key"]),
+                    row["_available"],
+                    row["_ingested"],
+                    insertion_order,
+                    row,
                 )
-            calendar_by_date[day] = row
+            )
+            insertion_order += 1
+    activation_events.sort(key=lambda item: item[:-1])
 
-    decision_dates: list[str] = []
-    for day in _calendar_dates(period_start, period_end):
-        row = calendar_by_date.get(day)
-        if row is None:
+    requested_days = _calendar_dates(period_start, period_end)
+    for day in requested_days:
+        if day not in calendar_candidate_days:
             raise MassResearchDisabledError(
                 f"markets_calendar is missing required date {day}"
             )
+
+    latest_versions: dict[_VersionIdentity, dict[str, Any]] = {}
+    calendar_by_day: dict[
+        str, dict[_VersionIdentity, dict[str, Any]]
+    ] = {}
+    master_by_snapshot: dict[
+        str, dict[_VersionIdentity, dict[str, Any]]
+    ] = {}
+    master_day_heap: list[tuple[int, str]] = []
+    fins_code_counts: dict[str, int] = {}
+
+    def remove_active(
+        identity: _VersionIdentity, row: dict[str, Any]
+    ) -> None:
+        dataset_id = str(row["dataset"])
+        if dataset_id == "markets_calendar":
+            day = str(row["event_time"])[:10]
+            bucket = calendar_by_day.get(day)
+            if bucket is not None:
+                bucket.pop(identity, None)
+                if not bucket:
+                    del calendar_by_day[day]
+        elif dataset_id == "equities_master":
+            day = str(row["event_time"])[:10]
+            bucket = master_by_snapshot.get(day)
+            if bucket is not None:
+                bucket.pop(identity, None)
+                if not bucket:
+                    del master_by_snapshot[day]
+        elif dataset_id == "fins_summary":
+            code = _pick(row["_payload"], "Code", "code")
+            if code:
+                remaining = fins_code_counts.get(code, 0) - 1
+                if remaining > 0:
+                    fins_code_counts[code] = remaining
+                else:
+                    fins_code_counts.pop(code, None)
+
+    def add_active(identity: _VersionIdentity, row: dict[str, Any]) -> None:
+        dataset_id = str(row["dataset"])
+        if dataset_id == "markets_calendar":
+            day = str(row["event_time"])[:10]
+            calendar_by_day.setdefault(day, {})[identity] = row
+        elif dataset_id == "equities_master":
+            day = str(row["event_time"])[:10]
+            if day not in master_by_snapshot:
+                master_by_snapshot[day] = {}
+                heapq.heappush(
+                    master_day_heap,
+                    (-date.fromisoformat(day).toordinal(), day),
+                )
+            master_by_snapshot[day][identity] = row
+        elif dataset_id == "fins_summary":
+            code = _pick(row["_payload"], "Code", "code")
+            if code:
+                fins_code_counts[code] = fins_code_counts.get(code, 0) + 1
+
+    def activate(row: dict[str, Any]) -> None:
+        identity: _VersionIdentity = (
+            str(row["source"]),
+            str(row["dataset"]),
+            str(row["natural_key"]),
+        )
+        previous = latest_versions.get(identity)
+        version = (row["_available"], row["_ingested"])
+        if previous is not None and version <= (
+            previous["_available"],
+            previous["_ingested"],
+        ):
+            return
+        if previous is not None:
+            remove_active(identity, previous)
+        latest_versions[identity] = row
+        add_active(identity, row)
+
+    memberships: list[tuple[str, tuple[str, ...]]] = []
+    daily_observations: list[dict[str, Any]] = []
+    event_index = 0
+    saw_trading_day = False
+    for day in requested_days:
         as_of = _parse_datetime(close_as_of(day), label="decision_as_of")
-        if row["_available"] > as_of:
+        while (
+            event_index < len(activation_events)
+            and activation_events[event_index][0] <= as_of
+        ):
+            activate(activation_events[event_index][-1])
+            event_index += 1
+
+        visible_calendar = calendar_by_day.get(day)
+        if not visible_calendar:
             raise MassResearchDisabledError(
                 f"markets_calendar row for {day} is not PIT-visible"
             )
+        if len(visible_calendar) != 1:
+            raise MassResearchDisabledError(
+                f"markets_calendar has duplicate natural keys for {day}"
+            )
+        calendar_row = next(iter(visible_calendar.values()))
         holiday = _pick(
-            row["_payload"], "HolidayDivision", "HolDiv", "holiday_division"
+            calendar_row["_payload"],
+            "HolidayDivision",
+            "HolDiv",
+            "holiday_division",
         )
-        if holiday == "1":
-            decision_dates.append(day)
-    if not decision_dates:
-        raise MassResearchDisabledError("controlled universe has no trading dates")
+        if holiday != "1":
+            continue
+        saw_trading_day = True
 
-    memberships: list[tuple[str, tuple[str, ...]]] = []
-    for day in decision_dates:
-        as_of = _parse_datetime(close_as_of(day), label="decision_as_of")
-        visible_master = [
-            row
-            for row in rows["equities_master"]
-            if row["_available"] <= as_of
-            and row["_event"] <= as_of
-            and str(row["event_time"])[:10] <= day
-        ]
-        if not visible_master:
+        while master_day_heap and master_day_heap[0][1] not in master_by_snapshot:
+            heapq.heappop(master_day_heap)
+        if not master_day_heap:
             raise MassResearchDisabledError(
                 f"equities_master has no PIT-visible snapshot for {day}"
             )
-        latest_snapshot = max(str(row["event_time"])[:10] for row in visible_master)
+        latest_snapshot = master_day_heap[0][1]
         prime_codes: set[str] = set()
         seen_master: set[str] = set()
-        for row in visible_master:
-            if str(row["event_time"])[:10] != latest_snapshot:
-                continue
+        for row in master_by_snapshot[latest_snapshot].values():
             payload = row["_payload"]
             code = _pick(payload, "Code", "code")
             if not code or code in seen_master:
@@ -333,24 +472,66 @@ def resolve_tse_prime_with_fins(
             if market_code == TSE_PRIME_MARKET_CODE:
                 prime_codes.add(code)
 
-        fins_codes = {
-            _pick(row["_payload"], "Code", "code")
-            for row in rows["fins_summary"]
-            if row["_available"] <= as_of and row["_event"] <= as_of
-        }
-        fins_codes.discard("")
-        resolved = tuple(sorted(prime_codes & fins_codes))
+        resolved = tuple(
+            sorted(code for code in prime_codes if fins_code_counts.get(code, 0) > 0)
+        )
         if not resolved:
             raise MassResearchDisabledError(
                 f"tse_prime_with_fins resolves empty at {day}"
             )
         memberships.append((day, resolved))
+        daily_observations.append(
+            {
+                "decision_date": day,
+                "prime_master_count": len(prime_codes),
+                "resolved_fins_intersection_count": len(resolved),
+                "resolved_fins_intersection_ratio": (
+                    len(resolved) / len(prime_codes)
+                ),
+            }
+        )
 
-    return ResolvedUniverseMembership(
+    if not saw_trading_day:
+        raise MassResearchDisabledError("controlled universe has no trading dates")
+
+    membership = ResolvedUniverseMembership(
         period_start=period_start,
         period_end=period_end,
         decision_memberships=tuple(memberships),
     )
+    total_prime = sum(
+        int(item["prime_master_count"]) for item in daily_observations
+    )
+    total_resolved = sum(
+        int(item["resolved_fins_intersection_count"])
+        for item in daily_observations
+    )
+    minimum_daily_ratio = min(
+        float(item["resolved_fins_intersection_ratio"])
+        for item in daily_observations
+    )
+    worst_days = [
+        str(item["decision_date"])
+        for item in daily_observations
+        if float(item["resolved_fins_intersection_ratio"])
+        == minimum_daily_ratio
+    ]
+    evidence = {
+        "format": UNIVERSE_BREADTH_EVIDENCE_FORMAT,
+        "evidence_kind": "OBSERVED",
+        "rule_id": EXACT_FOUR_UNIVERSE_RULE_ID,
+        "rule_version": EXACT_FOUR_UNIVERSE_RULE_VERSION,
+        "period_start": period_start,
+        "period_end": period_end,
+        "daily_observations": daily_observations,
+        "total_prime_master_observations": total_prime,
+        "total_resolved_fins_intersection_observations": total_resolved,
+        "overall_ratio": total_resolved / total_prime,
+        "minimum_daily_ratio": minimum_daily_ratio,
+        "worst_days": worst_days,
+        "source_complete_claim": False,
+    }
+    return membership, evidence
 
 
 __all__ = [
@@ -360,5 +541,7 @@ __all__ = [
     "EXACT_FOUR_UNIVERSE_RULE_VERSION",
     "ResolvedUniverseMembership",
     "TSE_PRIME_MARKET_CODE",
+    "UNIVERSE_BREADTH_EVIDENCE_FORMAT",
     "resolve_tse_prime_with_fins",
+    "resolve_tse_prime_with_fins_evidence",
 ]

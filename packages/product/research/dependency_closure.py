@@ -267,6 +267,21 @@ def _contract(
         ) from exc
 
 
+def _require_contract_kind(
+    dependency: ContractDependency,
+    expected_kind: str,
+) -> ContractDependency:
+    if not isinstance(dependency, ContractDependency):
+        raise PlanDependencyClosureError(
+            f"{expected_kind} dependency must be a ContractDependency"
+        )
+    if dependency.kind != expected_kind:
+        raise PlanDependencyClosureError(
+            f"expected {expected_kind} dependency, got {dependency.kind!r}"
+        )
+    return dependency
+
+
 @dataclass(frozen=True, slots=True)
 class PlanDependencyClosure:
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -373,24 +388,42 @@ class PlanDependencyClosure:
         return body
 
 
-def build_plan_dependency_closure(plan: ExperimentPlan) -> PlanDependencyClosure:
-    """Compile and bind all transitive dependencies for one v2 plan."""
-    if not isinstance(plan, ExperimentPlan) or plan.version != EXPERIMENT_PLAN_VERSION:
-        raise PlanDependencyClosureError("ExperimentPlan v2 required")
-    spec = resolve_strategy_spec(
-        plan.strategy_spec_id,
-        plan.strategy_spec_version,
-        plan.strategy_spec_hash,
-    )
-    expected_refs = tuple(ref.to_dict() for ref in iter_feature_refs(spec))
-    declared_refs = tuple(ref.to_dict() for ref in plan.feature_refs)
-    if declared_refs != expected_refs:
+def build_strategy_dependency_closure(
+    plan_id: str,
+    plan_digest: str,
+    spec: StrategySpec,
+    universe_dependencies: Sequence[ContractDependency],
+    evaluation_dependency: ContractDependency,
+    risk_dependency: ContractDependency,
+    cost_dependency: ContractDependency,
+    research_data_profile_id: str,
+    period_start: str,
+    period_end: str,
+) -> PlanDependencyClosure:
+    """Compile a dependency closure for any canonical ``StrategySpec``.
+
+    Strategy selection is intentionally outside this compiler.  The caller
+    supplies the exact spec and governed non-feature contracts; this function
+    resolves every exact ``FeatureRef`` from the spec and derives the complete
+    dataset and lookback scope.
+    """
+    if not isinstance(spec, StrategySpec):
+        raise PlanDependencyClosureError("canonical StrategySpec required")
+    if isinstance(universe_dependencies, (str, bytes)):
         raise PlanDependencyClosureError(
-            "ExperimentPlan feature_refs must exactly match StrategySpec rule order"
+            "universe dependencies must be ContractDependency values"
         )
+    universe = tuple(
+        _require_contract_kind(dependency, "universe")
+        for dependency in universe_dependencies
+    )
+    evaluation = _require_contract_kind(evaluation_dependency, "evaluation")
+    risk = _require_contract_kind(risk_dependency, "risk")
+    cost = _require_contract_kind(cost_dependency, "cost")
 
     feature_dependencies: list[ResolvedFeatureDependency] = []
-    for ordinal, ref in enumerate(plan.feature_refs):
+    feature_lookbacks: list[int] = []
+    for ordinal, ref in enumerate(iter_feature_refs(spec)):
         try:
             definition = resolve_feature_ref(ref)
         except Exception as exc:
@@ -407,7 +440,86 @@ def build_plan_dependency_closure(plan: ExperimentPlan) -> PlanDependencyClosure
                 dataset_dependencies=definition.dataset_dependencies,
             )
         )
+        # FeatureRef omits optional values that intentionally use the exact
+        # versioned FeatureDefinition defaults.  Scope calculation must use
+        # those effective parameters without rewriting the caller's canonical
+        # FeatureRef (and therefore without changing explicit-plan digests).
+        effective_params = dict(definition.inputs.optional_kwargs)
+        effective_params.update(ref.params)
+        feature_lookbacks.append(
+            max(
+                (
+                    int(value)
+                    for key, value in effective_params.items()
+                    if key
+                    in {"n", "lookback", "lookback_days", "window", "window_days"}
+                    and isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value > 0
+                ),
+                default=0,
+            )
+        )
 
+    required_datasets: set[str] = set()
+    for dependency in feature_dependencies:
+        required_datasets.update(dependency.dataset_dependencies)
+    for dependency in (*universe, evaluation, risk, cost):
+        required_datasets.update(dependency.dataset_dependencies)
+
+    lookback_by_dataset = {dataset_id: 0 for dataset_id in required_datasets}
+    for dependency, lookback in zip(
+        feature_dependencies, feature_lookbacks, strict=True
+    ):
+        for dataset_id in dependency.dataset_dependencies:
+            lookback_by_dataset[dataset_id] = max(
+                lookback_by_dataset.get(dataset_id, 0), lookback
+            )
+    dataset_scopes = tuple(
+        DatasetDependencyScope(
+            dataset_id=dataset_id,
+            period_start=period_start,
+            period_end=period_end,
+            required_lookback_trading_days=lookback_by_dataset[dataset_id],
+        )
+        for dataset_id in sorted(required_datasets)
+    )
+
+    return PlanDependencyClosure(
+        plan_id=plan_id,
+        plan_digest=plan_digest,
+        strategy_spec_id=spec.strategy_id,
+        strategy_spec_version=spec.version,
+        strategy_spec_hash=strategy_spec_digest(spec),
+        feature_dependencies=tuple(feature_dependencies),
+        universe_dependencies=universe,
+        evaluation_dependency=evaluation,
+        risk_dependency=risk,
+        cost_dependency=cost,
+        research_data_profile_id=research_data_profile_id,
+        required_datasets=tuple(sorted(required_datasets)),
+        period_start=period_start,
+        period_end=period_end,
+        required_lookback_trading_days=max(lookback_by_dataset.values(), default=0),
+        dataset_scopes=dataset_scopes,
+    )
+
+
+def build_plan_dependency_closure(plan: ExperimentPlan) -> PlanDependencyClosure:
+    """Compile and bind all transitive dependencies for one v2 plan."""
+    if not isinstance(plan, ExperimentPlan) or plan.version != EXPERIMENT_PLAN_VERSION:
+        raise PlanDependencyClosureError("ExperimentPlan v2 required")
+    spec = resolve_strategy_spec(
+        plan.strategy_spec_id,
+        plan.strategy_spec_version,
+        plan.strategy_spec_hash,
+    )
+    expected_refs = tuple(ref.to_dict() for ref in iter_feature_refs(spec))
+    declared_refs = tuple(ref.to_dict() for ref in plan.feature_refs)
+    if declared_refs != expected_refs:
+        raise PlanDependencyClosureError(
+            "ExperimentPlan feature_refs must exactly match StrategySpec rule order"
+        )
     universe_dependencies = tuple(
         _contract(_UNIVERSE_DEPENDENCIES, item, "universe")
         for item in plan.universe
@@ -417,57 +529,17 @@ def build_plan_dependency_closure(plan: ExperimentPlan) -> PlanDependencyClosure
     )
     risk = _contract(_RISK_DEPENDENCIES, plan.risk_policy, "risk")
     cost = _contract(_COST_DEPENDENCIES, plan.cost_scenario, "cost")
-
-    required_datasets: set[str] = set()
-    for dependency in feature_dependencies:
-        required_datasets.update(dependency.dataset_dependencies)
-    for dependency in (*universe_dependencies, evaluation, risk, cost):
-        required_datasets.update(dependency.dataset_dependencies)
-
-    lookback_by_dataset = {dataset_id: 0 for dataset_id in required_datasets}
-    for dependency in feature_dependencies:
-        lookback = max(
-            (
-                int(value)
-                for key, value in dependency.params.items()
-                if key in {"n", "lookback", "lookback_days", "window", "window_days"}
-                and isinstance(value, int)
-                and not isinstance(value, bool)
-                and value > 0
-            ),
-            default=0,
-        )
-        for dataset_id in dependency.dataset_dependencies:
-            lookback_by_dataset[dataset_id] = max(
-                lookback_by_dataset.get(dataset_id, 0), lookback
-            )
-    dataset_scopes = tuple(
-        DatasetDependencyScope(
-            dataset_id=dataset_id,
-            period_start=plan.period_start,
-            period_end=plan.period_end,
-            required_lookback_trading_days=lookback_by_dataset[dataset_id],
-        )
-        for dataset_id in sorted(required_datasets)
-    )
-
-    return PlanDependencyClosure(
+    return build_strategy_dependency_closure(
         plan_id=plan.plan_id,
         plan_digest=experiment_plan_digest(plan),
-        strategy_spec_id=spec.strategy_id,
-        strategy_spec_version=spec.version,
-        strategy_spec_hash=strategy_spec_digest(spec),
-        feature_dependencies=tuple(feature_dependencies),
+        spec=spec,
         universe_dependencies=universe_dependencies,
         evaluation_dependency=evaluation,
         risk_dependency=risk,
         cost_dependency=cost,
         research_data_profile_id=plan.research_data_profile_id,
-        required_datasets=tuple(sorted(required_datasets)),
         period_start=plan.period_start,
         period_end=plan.period_end,
-        required_lookback_trading_days=max(lookback_by_dataset.values(), default=0),
-        dataset_scopes=dataset_scopes,
     )
 
 
@@ -489,6 +561,7 @@ __all__ = [
     "PlanDependencyClosureError",
     "ResolvedFeatureDependency",
     "build_plan_dependency_closure",
+    "build_strategy_dependency_closure",
     "experiment_plan_digest",
     "pilot_strategy_specs",
     "resolve_strategy_spec",
