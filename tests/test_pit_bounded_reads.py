@@ -90,6 +90,96 @@ def test_empty_revision_table_uses_direct_path_without_window_capability(
     ]
 
 
+def test_revision_check_and_fact_read_share_one_sqlite_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "snapshot-race.sqlite"
+    with SqliteStore(path) as store:
+        store.upsert("jquants_daily_bars", [_typed_bar("2025-04-01", 100.0)])
+
+    writer_fired = False
+
+    def publish_amendment() -> None:
+        nonlocal writer_fired
+        writer_fired = True
+        with sqlite3.connect(path) as writer:
+            writer.execute(
+                "INSERT INTO jquants_daily_bars_revisions "
+                "SELECT * FROM jquants_daily_bars"
+            )
+            writer.execute(
+                "UPDATE jquants_daily_bars SET close = ?, available_at = ?, "
+                "ingested_at = ? WHERE source = ? AND code = ? AND date = ?",
+                (
+                    999.0,
+                    "2025-05-01T09:00:00+09:00",
+                    "2025-05-01T09:00:00+09:00",
+                    "jquants",
+                    CODE,
+                    "2025-04-01",
+                ),
+            )
+
+    real_connect = query_module.connect_readonly
+
+    class HookCursor:
+        def __init__(self, inner) -> None:
+            self.inner = inner
+
+        def fetchone(self):
+            row = self.inner.fetchone()
+            # The first empty scalar read is the empty revision marker. Commit
+            # an amendment immediately after that observation, before the fact
+            # SELECT is prepared.
+            if row is None and not writer_fired:
+                publish_amendment()
+            return row
+
+        def fetchall(self):
+            return self.inner.fetchall()
+
+    class HookConnection:
+        def __init__(self, inner) -> None:
+            self.inner = inner
+
+        def execute(self, sql, params=()):
+            return HookCursor(self.inner.execute(sql, params))
+
+        def rollback(self) -> None:
+            self.inner.rollback()
+
+        def close(self) -> None:
+            self.inner.close()
+
+    monkeypatch.setattr(
+        query_module,
+        "connect_readonly",
+        lambda db_path: HookConnection(real_connect(db_path)),
+    )
+
+    rows = query_module.run_query(
+        path,
+        as_of=AS_OF,
+        table="jquants_daily_bars",
+        extra_where="code = ?",
+        params=[CODE],
+        order_by="date",
+    )
+
+    assert writer_fired is True
+    assert [(row["date"], row["close"]) for row in rows] == [
+        ("2025-04-01", 100.0)
+    ]
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT close FROM jquants_daily_bars"
+        ).fetchone()[0] == 999.0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM jquants_daily_bars_revisions"
+        ).fetchone()[0] == 1
+
+
 def test_latest_n_ranks_visible_revision_before_sql_limit(tmp_path: Path) -> None:
     path = tmp_path / "revisions.sqlite"
     with SqliteStore(path) as store:
