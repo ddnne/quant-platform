@@ -15,12 +15,14 @@ import itertools
 import json
 import os
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 from urllib.parse import quote
 
+import features
 from agents.risk_agent import RiskAgent
 from core.execution import close_as_of
 from execution.personal_paper_service import PersonalPaperExecutionService
@@ -29,6 +31,10 @@ from paper_runtime.personal_snapshot import (
     materialize_personal_snapshot,
     verify_personal_snapshot,
 )
+from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
+from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult
+from strategies.spec import StrategySpec, iter_feature_refs, strategy_spec_digest
+
 from research.dependency_closure import (
     ContractDependency,
     PlanDependencyClosure,
@@ -44,13 +50,11 @@ from research.universe_contract import (
     ResolvedUniverseMembership,
     resolve_tse_prime_with_fins_evidence,
 )
-from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult
-from strategies.spec import FeatureRef, StrategySpec, iter_feature_refs, strategy_spec_digest
 
 
-PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v1"
-PERSONAL_DECISION_POLICY = "personal_drawdown_cost_stress/v1"
-PERSONAL_DATA_PROFILE = "personal-japan-equities-paper/v1"
+PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v2"
+PERSONAL_DECISION_POLICY = "personal_drawdown_cost_stress/v2"
+PERSONAL_DATA_PROFILE = "personal-japan-equities-paper/v2"
 PERSONAL_BAR_COVERAGE_EVIDENCE = "observed-pit-market-breadth/v1"
 
 
@@ -152,21 +156,28 @@ def default_personal_specs() -> tuple[StrategySpec, ...]:
     return (
         build_multi_day_hold_strategy_spec(
             hold_days=10,
+            momentum_feature_id="retrospective_split_adjusted_momentum_n",
             strategy_id="personal_momentum_topk_hold10",
         ),
         build_multi_day_hold_strategy_spec(
             hold_days=5,
             momentum_n=5,
+            momentum_feature_id="retrospective_split_adjusted_momentum_n",
             strategy_id="personal_momentum_topk_hold5",
         ),
         build_cross_section_hold_strategy_spec(
             hold_days=10,
             allow_short=False,
+            momentum_feature_id="retrospective_split_adjusted_momentum_n",
             strategy_id="personal_cross_section_momentum_hold10_long_only",
         ),
         build_fundamentals_hold_strategy_spec(
             hold_days=10,
             allow_short=False,
+            momentum_feature_id="retrospective_split_adjusted_momentum_n",
+            value_feature_id=(
+                "retrospective_split_safe_fundamental_value_score"
+            ),
             strategy_id="personal_value_momentum_hold10_long_only",
         ),
     )
@@ -263,6 +274,23 @@ def _validated_specs(
     identities = tuple((spec.strategy_id, spec.version) for spec in specs)
     if len(identities) != len(set(identities)):
         raise PersonalResearchInputError("candidate identities must be unique")
+    for spec in specs:
+        for ref in iter_feature_refs(spec):
+            try:
+                definition = features.get(ref.id, version=ref.version)
+            except KeyError as exc:
+                raise PersonalResearchInputError(
+                    f"unknown exact feature {ref.id!r}@{ref.version!r}"
+                ) from exc
+            if definition.price_basis not in {
+                None,
+                PERSONAL_RETROSPECTIVE_ADJUSTED,
+            }:
+                raise PersonalResearchInputError(
+                    "personal retrospective runs cannot mix a RAW or "
+                    f"PIT-adjusted price feature: {ref.id!r}@{ref.version!r} "
+                    f"declares {definition.price_basis!r}"
+                )
     return specs
 
 
@@ -641,7 +669,14 @@ def _universe_corporate_action_check(
     universe: ResolvedUniverseMembership,
     lookback_days: int,
 ) -> dict[str, Any]:
-    """Check the full evaluated universe, including the pre-start lookback."""
+    """Classify handled split boundaries and unexplained adjusted-price jumps.
+
+    Vendor factor boundaries are expected under the explicitly retrospective
+    DRAFT basis and therefore are evidence, not automatic rejection. Only an
+    adjusted-close discontinuity that remains after vendor split adjustment
+    is an unexplained temporal event. Candidate exposure is checked later,
+    separately for each fold, so a future event cannot reject an earlier fold.
+    """
 
     expected_codes = {
         code
@@ -651,11 +686,13 @@ def _universe_corporate_action_check(
     if not expected_codes:
         return {
             "status": "UNKNOWN",
-            "price_basis": "RAW",
+            "price_basis": PERSONAL_RETROSPECTIVE_ADJUSTED,
             "reason": "resolved_universe_empty",
             "checked_codes": 0,
             "affected_codes": [],
             "suspicious_jump_codes": [],
+            "supported_factor_events": [],
+            "unexplained_events": [],
         }
     start = (
         date.fromisoformat(universe.period_start) - timedelta(days=lookback_days)
@@ -671,7 +708,8 @@ def _universe_corporate_action_check(
             if table in tables:
                 selects.append(
                     "SELECT code,date AS day,close AS raw_close,"
-                    "adjustment_close AS adjusted_close,available_at,ingested_at "
+                    "adjustment_close AS adjusted_close,volume AS raw_volume,"
+                    "adjustment_volume AS adjusted_volume,available_at,ingested_at "
                     f"FROM {table} "
                     "WHERE source='jquants' AND date BETWEEN ? AND ? "
                     "AND available_at <= ?"
@@ -701,12 +739,33 @@ def _universe_corporate_action_check(
             "json_extract(raw_payload, '$.AdjClose'),"
             "json_extract(raw_payload, '$.AdjC')) END)"
         )
+        raw_volume_sql = (
+            "COALESCE("
+            "CASE WHEN json_valid(payload) "
+            "THEN json_extract(payload, '$.Volume') END,"
+            "CASE WHEN json_valid(raw_payload) "
+            "THEN json_extract(raw_payload, '$.Volume') END)"
+        )
+        adjusted_volume_sql = (
+            "COALESCE("
+            "CASE WHEN json_valid(payload) THEN COALESCE("
+            "json_extract(payload, '$.AdjustmentVolume'),"
+            "json_extract(payload, '$.AdjVolume'),"
+            "json_extract(payload, '$.AdjVo')) END,"
+            "CASE WHEN json_valid(raw_payload) THEN COALESCE("
+            "json_extract(raw_payload, '$.AdjustmentVolume'),"
+            "json_extract(raw_payload, '$.AdjVolume'),"
+            "json_extract(raw_payload, '$.AdjVo')) END)"
+        )
         for table in ("jquants_records", "jquants_records_revisions"):
             if table in tables:
                 selects.append(
                     f"SELECT {code_sql} AS code,substr(event_time,1,10) AS day,"
                     f"{raw_close_sql} AS raw_close,"
-                    f"{adjusted_close_sql} AS adjusted_close,available_at,ingested_at "
+                    f"{adjusted_close_sql} AS adjusted_close,"
+                    f"{raw_volume_sql} AS raw_volume,"
+                    f"{adjusted_volume_sql} AS adjusted_volume,"
+                    "available_at,ingested_at "
                     f"FROM {table} "
                     "WHERE source='jquants' AND dataset='equities_bars_daily' "
                     "AND substr(event_time,1,10) BETWEEN ? AND ? "
@@ -715,29 +774,32 @@ def _universe_corporate_action_check(
         if not selects:
             return {
                 "status": "UNKNOWN",
-                "price_basis": "RAW",
+                "price_basis": PERSONAL_RETROSPECTIVE_ADJUSTED,
                 "reason": "bar_tables_missing",
                 "checked_codes": 0,
                 "affected_codes": [],
                 "suspicious_jump_codes": [],
+                "supported_factor_events": [],
+                "unexplained_events": [],
             }
         params: list[str] = []
         for _ in selects:
             params.extend((start, end, end_as_of))
         cursor = connection.execute(
-            "SELECT code,day,raw_close,adjusted_close,available_at,ingested_at FROM ("
+            "SELECT code,day,raw_close,adjusted_close,raw_volume,adjusted_volume,"
+            "available_at,ingested_at FROM ("
             + " UNION ALL ".join(selects)
             + ") WHERE code IS NOT NULL AND day IS NOT NULL "
             "ORDER BY code,day,available_at,ingested_at",
             params,
         )
-        affected: set[str] = set()
-        suspicious: set[str] = set()
+        supported_events: list[dict[str, Any]] = []
+        unexplained_events: list[dict[str, Any]] = []
         observed_codes: set[str] = set()
+        missing_adjusted_codes: set[str] = set()
         adjusted_observations = 0
         observations = 0
-        previous_close: dict[str, float] = {}
-        previous_adjustment_factor: dict[str, float] = {}
+        previous: dict[str, tuple[str, float, float, float | None]] = {}
         for (code, _day), rows in itertools.groupby(
             cursor, key=lambda row: (str(row[0]), str(row[1]))
         ):
@@ -745,66 +807,178 @@ def _universe_corporate_action_check(
                 continue
             versions = list(rows)
             latest_marker = max(
-                (str(row[4] or ""), str(row[5] or "")) for row in versions
+                (str(row[6] or ""), str(row[7] or "")) for row in versions
             )
             pairs = [
-                (row[2], row[3])
+                (row[2], row[3], row[4], row[5])
                 for row in versions
                 if row[2] is not None
-                and (str(row[4] or ""), str(row[5] or "")) == latest_marker
+                and (str(row[6] or ""), str(row[7] or "")) == latest_marker
             ]
             if not pairs:
                 continue
             observed_codes.add(code)
             observations += 1
             raw_value = float(pairs[-1][0])
-            adjusted_values = [float(adj) for _raw, adj in pairs if adj is not None]
-            if adjusted_values:
-                adjusted_observations += 1
-                if raw_value != 0.0:
-                    adjustment_factor = adjusted_values[-1] / raw_value
-                    previous_factor = previous_adjustment_factor.get(code)
-                    if (
-                        previous_factor is not None
-                        and previous_factor != 0.0
-                        and abs(adjustment_factor / previous_factor - 1.0) > 0.01
-                    ):
-                        affected.add(code)
-                    previous_adjustment_factor[code] = adjustment_factor
-            previous = previous_close.get(code)
-            if previous is not None and previous > 0.0 and raw_value > 0.0:
-                if abs(raw_value / previous - 1.0) > 0.35:
-                    suspicious.add(code)
-            previous_close[code] = raw_value
+            adjusted_value = pairs[-1][1]
+            if adjusted_value is None or raw_value <= 0.0:
+                missing_adjusted_codes.add(code)
+                continue
+            adjusted = float(adjusted_value)
+            if adjusted <= 0.0:
+                missing_adjusted_codes.add(code)
+                continue
+            adjusted_observations += 1
+            price_ratio = adjusted / raw_value
+            raw_volume = pairs[-1][2]
+            adjusted_volume = pairs[-1][3]
+            volume_ratio: float | None = None
+            if (
+                raw_volume is not None
+                and float(raw_volume) != 0.0
+                and adjusted_volume is not None
+            ):
+                volume_ratio = float(adjusted_volume) / float(raw_volume)
+            prior = previous.get(code)
+            if prior is not None:
+                prior_day, prior_adjusted, prior_price_ratio, prior_volume_ratio = prior
+                price_factor_changed = (
+                    prior_price_ratio != 0.0
+                    and abs(price_ratio / prior_price_ratio - 1.0) > 0.01
+                )
+                volume_factor_changed = (
+                    volume_ratio is not None
+                    and prior_volume_ratio is not None
+                    and prior_volume_ratio != 0.0
+                    and abs(volume_ratio / prior_volume_ratio - 1.0) > 0.01
+                )
+                if price_factor_changed or volume_factor_changed:
+                    supported_events.append(
+                        {
+                            "code": code,
+                            "date": _day,
+                            "previous_date": prior_day,
+                            "price_ratio_changed": price_factor_changed,
+                            "volume_ratio_changed": volume_factor_changed,
+                        }
+                    )
+                adjusted_return = adjusted / prior_adjusted - 1.0
+                if abs(adjusted_return) > 0.35:
+                    unexplained_events.append(
+                        {
+                            "code": code,
+                            "date": _day,
+                            "previous_date": prior_day,
+                            "adjusted_close_return": adjusted_return,
+                        }
+                    )
+            previous[code] = (_day, adjusted, price_ratio, volume_ratio)
     finally:
         connection.close()
     missing_codes = sorted(expected_codes - observed_codes)
-    risk_codes = sorted(affected | suspicious)
-    warned = bool(risk_codes or missing_codes)
+    supported_codes = sorted({event["code"] for event in supported_events})
+    unexplained_codes = sorted({event["code"] for event in unexplained_events})
+    warned = bool(unexplained_events or missing_codes or missing_adjusted_codes)
     adjustment_ratio = (
         adjusted_observations / observations if observations else 0.0
     )
     return {
         "status": "WARN" if warned else "PASS",
-        "price_basis": "RAW",
+        "price_basis": PERSONAL_RETROSPECTIVE_ADJUSTED,
         "reason": (
-            "raw_corporate_action_risk_detected"
+            "unexplained_adjusted_price_event_or_missing_evidence"
             if warned
-            else "no_raw_corporate_action_discontinuity_detected"
+            else "supported_factor_events_handled_by_retrospective_basis"
         ),
         "checked_codes": len(expected_codes),
         "lookback_start": start,
         "period_end": end,
         "adjustment_observation_ratio": adjustment_ratio,
-        "affected_codes": sorted(affected),
-        "suspicious_jump_codes": sorted(suspicious),
-        "risk_codes": risk_codes,
+        "affected_codes": supported_codes,
+        "suspicious_jump_codes": unexplained_codes,
+        "risk_codes": unexplained_codes,
+        "supported_factor_events": supported_events,
+        "unexplained_events": unexplained_events,
         "missing_codes": missing_codes,
-        "raw_jump_threshold": 0.35,
+        "missing_adjusted_codes": sorted(missing_adjusted_codes),
+        "adjusted_jump_threshold": 0.35,
         "adjustment_factor_change_threshold": 0.01,
-        "handling": "reject_candidate_if_validation_or_stress_fills_risk_code",
+        "handling": (
+            "supported_factor_events_are_handled; reject_only_fold_local_"
+            "exposure_to_unexplained_adjusted_price_events"
+        ),
+        "future_event_policy": "never_reject_an_earlier_fold",
         "unfilled_rank_bias_possible": True,
         "source_complete_claim": False,
+    }
+
+
+def _unexplained_event_exposure(
+    trades: Sequence[dict[str, Any]],
+    events: Sequence[dict[str, Any]],
+    *,
+    period_start: str,
+    period_end: str,
+    lookback_days: int,
+) -> dict[str, Any]:
+    """Evaluate temporal exposure without making a code-level lifetime ban."""
+    event_window_start = (
+        date.fromisoformat(period_start) - timedelta(days=lookback_days)
+    ).isoformat()
+    fold_events = tuple(
+        event
+        for event in events
+        if event_window_start <= str(event.get("date") or "") <= period_end
+    )
+    affected_codes: set[str] = set()
+    affected_events: list[dict[str, Any]] = []
+    for event in fold_events:
+        code = str(event.get("code") or "").strip()
+        event_date = str(event.get("date") or "")[:10]
+        code_trades = [
+            trade
+            for trade in trades
+            if str(trade.get("code") or "").strip() == code
+        ]
+        event_in_execution_period = period_start <= event_date <= period_end
+        held_before = sum(
+            float(trade.get("shares") or 0.0)
+            for trade in code_trades
+            if str(trade.get("fill_date") or "")[:10] < event_date
+        ) if event_in_execution_period else 0.0
+        event_signal_window_end = (
+            date.fromisoformat(event_date) + timedelta(days=lookback_days)
+        ).isoformat()
+        traded_with_event_in_signal_window = any(
+            event_date
+            <= str(trade.get("decision_date") or "")[:10]
+            <= event_signal_window_end
+            for trade in code_trades
+        )
+        if abs(held_before) > 1e-12 or traded_with_event_in_signal_window:
+            affected_codes.add(code)
+            affected_events.append(
+                {
+                    "code": code,
+                    "date": event_date,
+                    "held_across_event": abs(held_before) > 1e-12,
+                    "traded_with_event_in_signal_window": (
+                        traded_with_event_in_signal_window
+                    ),
+                }
+            )
+    affected_trades = sorted(affected_codes)
+    return {
+        "status": "FAIL" if affected_trades else "PASS",
+        "affected_traded_codes": affected_trades,
+        "reason": (
+            "fold_local_exposure_to_unexplained_adjusted_price_event"
+            if affected_trades
+            else "no_fold_local_exposure_to_unexplained_adjusted_price_event"
+        ),
+        "events_considered": len(fold_events),
+        "affected_events": affected_events,
+        "event_window_start": event_window_start,
     }
 
 
@@ -814,7 +988,7 @@ def _paper_evidence(
     config: PaperRunConfig,
     output_root: Path,
     max_drawdown: float,
-    corporate_action_codes: frozenset[str],
+    unexplained_corporate_action_events: tuple[dict[str, Any], ...],
 ) -> tuple[dict[str, Any], list[float]]:
     paper_path = _write_artifact(
         output_root, "paper", "json", _canonical_bytes(_portable_paper_document(result))
@@ -826,12 +1000,13 @@ def _paper_evidence(
     returns = _daily_returns(result, config.starting_capital)
     sharpe = sharpe_ratio(returns, periods_per_year=252.0).get("sharpe")
     metrics = result.metrics
-    traded_codes = {
-        str(trade.get("code") or "").strip()
-        for trade in result.trades
-        if str(trade.get("code") or "").strip()
-    }
-    affected_trades = sorted(traded_codes & corporate_action_codes)
+    event_exposure = _unexplained_event_exposure(
+        result.trades,
+        unexplained_corporate_action_events,
+        period_start=config.start,
+        period_end=config.end,
+        lookback_days=config.lookback_days,
+    )
     return (
         {
             "run_id": result.run_id,
@@ -846,10 +1021,7 @@ def _paper_evidence(
             "max_drawdown": abs(float(metrics.get("max_drawdown", 0.0))),
             "fills": int(metrics.get("num_trades", len(result.trades))),
             "risk_status": risk["status"],
-            "corporate_action_trade_check": {
-                "status": "FAIL" if affected_trades else "PASS",
-                "affected_traded_codes": affected_trades,
-            },
+            "corporate_action_trade_check": event_exposure,
             "paper_artifact": paper_path,
             "risk_artifact": risk_path,
         },
@@ -869,7 +1041,7 @@ def _run_one(
     lookback_days: int,
     output_root: Path,
     max_drawdown: float,
-    corporate_action_codes: frozenset[str],
+    unexplained_corporate_action_events: tuple[dict[str, Any], ...],
 ) -> tuple[dict[str, Any], list[float]]:
     period_universe = ResolvedUniverseMembership(
         period_start=period[0],
@@ -890,6 +1062,7 @@ def _run_one(
         starting_capital=1_000_000.0,
         lookback_days=_calendar_lookback_days(lookback_days),
         lifecycle=Lifecycle.DRAFT,
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
         short_financing_enabled=False,
     )
     result = executor.execute(
@@ -903,7 +1076,9 @@ def _run_one(
         config=config,
         output_root=output_root,
         max_drawdown=max_drawdown,
-        corporate_action_codes=corporate_action_codes,
+        unexplained_corporate_action_events=(
+            unexplained_corporate_action_events
+        ),
     )
 
 
@@ -918,7 +1093,7 @@ def _candidate_evaluation(
     holdout_period: tuple[str, str],
     output_root: Path,
     policy: PersonalResearchPolicy,
-    corporate_action_codes: frozenset[str],
+    unexplained_corporate_action_events: tuple[dict[str, Any], ...],
 ) -> dict[str, Any]:
     validation_runs: list[dict[str, Any]] = []
     pooled_returns: list[float] = []
@@ -934,7 +1109,9 @@ def _candidate_evaluation(
             lookback_days=closure.required_lookback_trading_days,
             output_root=output_root,
             max_drawdown=policy.max_drawdown,
-            corporate_action_codes=corporate_action_codes,
+            unexplained_corporate_action_events=(
+                unexplained_corporate_action_events
+            ),
         )
         validation_runs.append(evidence)
         pooled_returns.extend(returns)
@@ -992,7 +1169,9 @@ def _candidate_evaluation(
         lookback_days=closure.required_lookback_trading_days,
         output_root=output_root,
         max_drawdown=policy.max_drawdown,
-        corporate_action_codes=corporate_action_codes,
+        unexplained_corporate_action_events=(
+            unexplained_corporate_action_events
+        ),
     )
     stress_checks = {
         "positive_return": stress["total_return_post_cost"] > 0.0,
@@ -1021,7 +1200,9 @@ def _candidate_evaluation(
         lookback_days=closure.required_lookback_trading_days,
         output_root=output_root,
         max_drawdown=policy.max_drawdown,
-        corporate_action_codes=corporate_action_codes,
+        unexplained_corporate_action_events=(
+            unexplained_corporate_action_events
+        ),
     )
     holdout_checks = {
         "positive_return": holdout["total_return_post_cost"] > 0.0,
@@ -1054,6 +1235,7 @@ def _markdown(report: dict[str, Any]) -> str:
         f"- Candidates: {report['summary']['candidate_count']}",
         f"- Evaluated: {report['summary']['evaluated_count']}",
         f"- HOLD: {report['summary']['hold_count']}",
+        f"- Price basis: {report['price_basis']['id']} (retrospective DRAFT only)",
         "- Live orders: disabled",
         "- Automatic promotion: disabled",
         "- Model calls / estimated AI cost: 0 / USD 0",
@@ -1219,8 +1401,8 @@ class PersonalResearchService:
                             holdout_period=holdout_period,
                             output_root=output_root,
                             policy=self.policy,
-                            corporate_action_codes=frozenset(
-                                corporate_actions.get("risk_codes", ())
+                            unexplained_corporate_action_events=tuple(
+                                corporate_actions.get("unexplained_events", ())
                             ),
                         )
                     )
@@ -1279,6 +1461,16 @@ class PersonalResearchService:
                 "corporate_actions": corporate_actions,
                 "source_sync": source_sync,
                 "universe_breadth": universe_breadth,
+            },
+            "price_basis": {
+                "id": PERSONAL_RETROSPECTIVE_ADJUSTED,
+                "source": "vendor_adjusted_ohlcv",
+                "time_semantics": "retrospective_not_point_in_time",
+                "position_units": "synthetic_split_adjusted_units",
+                "supported_actions": "vendor_splits_and_reverse_splits",
+                "unexplained_action_policy": "fold_local_exposure_fail_closed",
+                "lifecycle": "DRAFT_only",
+                "live_trading_eligible": False,
             },
             "candidates": candidates,
             "summary": {

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from price_basis import RAW
+from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED, RAW
 
 from .registry import register
 from .types import FeatureDefinition, FeatureInput, FeatureOutput, FeatureVersion
@@ -47,6 +47,51 @@ def _recent_close_rows(ctx, *, code: str, required: int) -> list[tuple[str, floa
     )
     if len(rows) < required:
         rows = _parse_close_rows(ctx.get_equity_bars_daily(code=code).rows)
+    return rows
+
+
+def _parse_retrospective_adjusted_close_rows(
+    rows: list[dict[str, Any]],
+) -> list[tuple[str, float]]:
+    """Extract vendor-adjusted closes without a RAW or row-dropping fallback."""
+    out: list[tuple[str, float]] = []
+    for row in rows:
+        day = row.get("date")
+        if day is None:
+            continue
+        value = row.get("adjustment_close")
+        if value is None:
+            raise ValueError(
+                "retrospective adjusted momentum requires adjustment_close; "
+                f"missing for {row.get('code')} {day}"
+            )
+        try:
+            price = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "retrospective adjusted momentum received non-numeric "
+                f"adjustment_close for {row.get('code')} {day}"
+            ) from exc
+        if price <= 0.0:
+            raise ValueError(
+                "retrospective adjusted momentum requires positive "
+                f"adjustment_close for {row.get('code')} {day}"
+            )
+        out.append((str(day), price))
+    out.sort(key=lambda item: item[0])
+    return out
+
+
+def _recent_retrospective_adjusted_close_rows(
+    ctx, *, code: str, required: int
+) -> list[tuple[str, float]]:
+    rows = _parse_retrospective_adjusted_close_rows(
+        ctx.get_equity_bars_daily(code=code, latest_n=required).rows
+    )
+    if len(rows) < required:
+        rows = _parse_retrospective_adjusted_close_rows(
+            ctx.get_equity_bars_daily(code=code).rows
+        )
     return rows
 
 
@@ -179,6 +224,78 @@ MomentumN: FeatureDefinition = register(
 )
 
 
+# --- personal retrospective split-adjusted momentum -----------------------
+
+def _retrospective_split_adjusted_momentum_n(ctx) -> FeatureOutput:
+    """N-session momentum in vendor-restated synthetic split units.
+
+    This is intentionally a separate identity from ``momentum_n``.  It is
+    suitable only for the local personal DRAFT workflow and makes no PIT or
+    live-trading claim.
+    """
+    code = ctx.get_input("code")
+    n = int(ctx.get_input("n", 20))
+    if n < 1:
+        return FeatureOutput(
+            value=None, metadata={"code": code, "reason": "n must be >= 1"}
+        )
+    rows = _recent_retrospective_adjusted_close_rows(
+        ctx, code=code, required=n + 1
+    )
+    if len(rows) < n + 1:
+        return FeatureOutput(
+            value=None,
+            metadata={
+                "code": code,
+                "rows_seen": len(rows),
+                "n": n,
+                "reason": f"insufficient history (need >= {n + 1} closes)",
+            },
+        )
+    base_date, base_close = rows[-n - 1]
+    last_date, last_close = rows[-1]
+    value = (last_close - base_close) / base_close
+    return FeatureOutput(
+        value=value,
+        metadata={
+            "code": code,
+            "rows_seen": len(rows),
+            "n": n,
+            "base_date": base_date,
+            "base_adjustment_close": base_close,
+            "last_date": last_date,
+            "last_adjustment_close": last_close,
+            "price_source": "vendor_adjustment_close",
+            "time_semantics": "retrospective_not_point_in_time",
+            "lifecycle": "DRAFT_only",
+            "live_trading_eligible": False,
+        },
+    )
+
+
+RetrospectiveSplitAdjustedMomentumN: FeatureDefinition = register(
+    FeatureDefinition(
+        id="retrospective_split_adjusted_momentum_n",
+        version=FeatureVersion(1, 0, 0),
+        inputs=FeatureInput(
+            required_kwargs=("code",),
+            optional_kwargs={"n": 20},
+            as_of_rule="session_close",
+        ),
+        description=(
+            "N-session momentum from vendor AdjustmentClose. Retrospective, "
+            "synthetic split units; local DRAFT only; not PIT or live eligible."
+        ),
+        compute=_retrospective_split_adjusted_momentum_n,
+        dataset_dependencies=("equities_bars_daily",),
+        tags=("price", "daily", "momentum", "retrospective", "personal"),
+        intended_role="signal",
+        status="approved",
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+    )
+)
+
+
 # --- volatility_n -----------------------------------------------------------
 
 def _volatility_n(ctx) -> FeatureOutput:
@@ -250,4 +367,9 @@ VolatilityN: FeatureDefinition = register(
 )
 
 
-__all__ = ["Return1d", "MomentumN", "VolatilityN"]
+__all__ = [
+    "MomentumN",
+    "RetrospectiveSplitAdjustedMomentumN",
+    "Return1d",
+    "VolatilityN",
+]

@@ -51,6 +51,7 @@ from .execution import (
 from .metrics import compute_metrics, max_drawdown
 from .result import BacktestResult
 from price_basis import (
+    PERSONAL_RETROSPECTIVE_ADJUSTED,
     PIT_ADJUSTED,
     RAW,
     PriceBasis,
@@ -85,6 +86,7 @@ __all__ = [
     # price basis
     "PriceBasis",
     "RAW",
+    "PERSONAL_RETROSPECTIVE_ADJUSTED",
     "PIT_ADJUSTED",
     "UnsupportedPriceBasis",
     # execution

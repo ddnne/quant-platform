@@ -44,6 +44,7 @@ from .runtime import compute, compute_many
 from .v0 import (
     Return1d,
     MomentumN,
+    RetrospectiveSplitAdjustedMomentumN,
     VolatilityN,
 )
 from .complete21_min import (
@@ -59,6 +60,7 @@ from .complete21_min import (
     MarginAlertFlag,
     FuturesActivityProxy,
     FundamentalValueScore,
+    RetrospectiveSplitSafeFundamentalValueScore,
 )
 from .minimal_signal import (
     SIGNAL_ID as MINIMAL_SIGNAL_ID,
@@ -119,6 +121,7 @@ __all__ = [
     # built-in features (v0)
     "Return1d",
     "MomentumN",
+    "RetrospectiveSplitAdjustedMomentumN",
     "VolatilityN",
     # COMPLETE 21 min features (candidate)
     "VolumeChange1d",
@@ -132,6 +135,8 @@ __all__ = [
     "Return1dC21",
     "MarginAlertFlag",
     "FuturesActivityProxy",
+    "FundamentalValueScore",
+    "RetrospectiveSplitSafeFundamentalValueScore",
     # minimal signal (W52 candidate-only; no mass / READY / orders)
     "MINIMAL_SIGNAL_ID",
     "MINIMAL_SIGNAL_VERSION",
@@ -170,4 +175,4 @@ __all__ = [
     "__version__",
 ]
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"

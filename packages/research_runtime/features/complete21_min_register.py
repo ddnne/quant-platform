@@ -6,7 +6,7 @@ unchanged. No READY / Mass / GO. Permanent DEFER is enforced in compute.
 
 from __future__ import annotations
 
-from price_basis import RAW
+from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED, RAW
 
 from .complete21_min_compute import (
     _CALENDAR_DATASETS,
@@ -28,6 +28,7 @@ from .complete21_min_compute import (
     _margin_interest_change_1d,
     _repo_rate_change,
     _repo_rate_level,
+    _retrospective_split_safe_fundamental_value_score,
     _return_1d_c21,
     _short_ratio_level,
     _topix_relative_1d,
@@ -305,5 +306,28 @@ FundamentalValueScore: FeatureDefinition = register(
         intended_role="signal",
         status="approved",
         price_basis=RAW,
+    )
+)
+
+
+RetrospectiveSplitSafeFundamentalValueScore: FeatureDefinition = register(
+    FeatureDefinition(
+        id="retrospective_split_safe_fundamental_value_score",
+        version=FeatureVersion(1, 0, 0),
+        inputs=FeatureInput(
+            required_kwargs=("code",),
+            as_of_rule="session_close",
+        ),
+        description=(
+            "Raw BPS/price (or EPS/price) with a retrospective vendor split "
+            "factor and adjusted-price continuity blackout from the selected "
+            "statement anchor. Local DRAFT only; not PIT or live eligible."
+        ),
+        compute=_retrospective_split_safe_fundamental_value_score,
+        dataset_dependencies=_FUND_VALUE_DATASETS,
+        tags=("fundamentals", "value", "split-safe", "retrospective", "personal"),
+        intended_role="signal",
+        status="approved",
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
     )
 )

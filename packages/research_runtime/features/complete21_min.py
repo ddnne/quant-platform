@@ -9,17 +9,17 @@ No READY / Mass / GO. Catalog registration lives in
 from __future__ import annotations
 
 from .complete21_min_compute import (
-    _CALENDAR_DATASETS,
-    _DISC_DATASETS,
-    _FUND_VALUE_DATASETS,
-    _FUTURES_DATASETS,
-    _MARGIN_ALERT_DATASETS,
-    _MARGIN_DATASETS,
-    _REPO_DATASETS,
-    _RETURN_C21_DATASETS,
-    _SHORT_RATIO_DATASETS,
-    _TOPIX_REL_DATASETS,
-    _VOLUME_DATASETS,
+    _CALENDAR_DATASETS,  # noqa: F401 - public contract audit surface
+    _DISC_DATASETS,  # noqa: F401 - public contract audit surface
+    _FUND_VALUE_DATASETS,  # noqa: F401 - public contract audit surface
+    _FUTURES_DATASETS,  # noqa: F401 - public contract audit surface
+    _MARGIN_ALERT_DATASETS,  # noqa: F401 - public contract audit surface
+    _MARGIN_DATASETS,  # noqa: F401 - public contract audit surface
+    _REPO_DATASETS,  # noqa: F401 - public contract audit surface
+    _RETURN_C21_DATASETS,  # noqa: F401 - public contract audit surface
+    _SHORT_RATIO_DATASETS,  # noqa: F401 - public contract audit surface
+    _TOPIX_REL_DATASETS,  # noqa: F401 - public contract audit surface
+    _VOLUME_DATASETS,  # noqa: F401 - public contract audit surface
     disclosure_flag_from_count,
     futures_activity_from_volume_pairs,
     is_trading_day_from_division,
@@ -35,6 +35,7 @@ from .complete21_min_compute import (
 from .complete21_min_register import (
     DisclosureFlagFins,
     FundamentalValueScore,
+    RetrospectiveSplitSafeFundamentalValueScore,
     FuturesActivityProxy,
     IsTradingDay,
     MarginAlertFlag,
@@ -61,6 +62,7 @@ __all__ = [
     "MarginAlertFlag",
     "FuturesActivityProxy",
     "FundamentalValueScore",
+    "RetrospectiveSplitSafeFundamentalValueScore",
     "volume_change_from_pairs",
     "simple_return_from_closes",
     "topix_relative_from_returns",
