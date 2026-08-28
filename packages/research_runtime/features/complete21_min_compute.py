@@ -291,8 +291,10 @@ def _volume_change_1d(ctx) -> FeatureOutput:
         _VOLUME_DATASETS, context="feature volume_change_1d"
     )
     code = ctx.get_input("code")
-    res = ctx.get_equity_bars_daily(code=code)
+    res = ctx.get_equity_bars_daily(code=code, latest_n=2)
     pairs = _parse_volume_rows(res.rows)
+    if len(pairs) < 2:
+        pairs = _parse_volume_rows(ctx.get_equity_bars_daily(code=code).rows)
     value, meta = volume_change_from_pairs(pairs)
     meta = {**meta, "code": code, "datasets": list(_VOLUME_DATASETS)}
     return FeatureOutput(value=value, metadata=meta)
@@ -334,7 +336,11 @@ def _disclosure_flag_fins(ctx) -> FeatureOutput:
     )
     code = ctx.get_input("code")
     res = ctx.get_jquants_records(dataset="fins_summary", code=code)
-    n = len(res.rows) if res is not None and getattr(res, "rows", None) is not None else 0
+    n = (
+        len(res.rows)
+        if res is not None and getattr(res, "rows", None) is not None
+        else 0
+    )
     value, meta = disclosure_flag_from_count(n)
     meta = {**meta, "code": code, "datasets": list(_DISC_DATASETS)}
     return FeatureOutput(value=value, metadata=meta)
@@ -484,8 +490,10 @@ def _return_1d_c21(ctx) -> FeatureOutput:
         _RETURN_C21_DATASETS, context="feature return_1d_c21"
     )
     code = ctx.get_input("code")
-    res = ctx.get_equity_bars_daily(code=code)
+    res = ctx.get_equity_bars_daily(code=code, latest_n=2)
     pairs = _parse_close_rows(res.rows)
+    if len(pairs) < 2:
+        pairs = _parse_close_rows(ctx.get_equity_bars_daily(code=code).rows)
     value, meta = simple_return_from_closes(pairs)
     meta = {
         **meta,
@@ -506,7 +514,11 @@ def _margin_alert_flag(ctx) -> FeatureOutput:
     )
     code = ctx.get_input("code")
     res = ctx.get_jquants_records(dataset="markets_margin_alert", code=code)
-    n = len(res.rows) if res is not None and getattr(res, "rows", None) is not None else 0
+    n = (
+        len(res.rows)
+        if res is not None and getattr(res, "rows", None) is not None
+        else 0
+    )
     value, meta = margin_alert_flag_from_count(n)
     meta = {**meta, "code": code, "datasets": list(_MARGIN_ALERT_DATASETS)}
     return FeatureOutput(value=value, metadata=meta)
@@ -564,10 +576,15 @@ def _fundamental_value_score(ctx) -> FeatureOutput:
         _FUND_VALUE_DATASETS, context="feature fundamental_value_score"
     )
     code = ctx.get_input("code")
-    bar_res = ctx.get_equity_bars_daily(code=code)
+    bar_res = ctx.get_equity_bars_daily(code=code, latest_n=1)
     closes = _parse_close_rows(
         list(bar_res.rows) if bar_res is not None and bar_res.rows else []
     )
+    if not closes:
+        bar_res = ctx.get_equity_bars_daily(code=code)
+        closes = _parse_close_rows(
+            list(bar_res.rows) if bar_res is not None and bar_res.rows else []
+        )
     if not closes:
         return FeatureOutput(
             value=None,

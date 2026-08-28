@@ -40,12 +40,21 @@ def _parse_close_rows(rows: list[dict[str, Any]]) -> list[tuple[str, float]]:
     return out
 
 
+def _recent_close_rows(ctx, *, code: str, required: int) -> list[tuple[str, float]]:
+    """Bound the common case; preserve legacy values when tail closes are null."""
+    rows = _parse_close_rows(
+        ctx.get_equity_bars_daily(code=code, latest_n=required).rows
+    )
+    if len(rows) < required:
+        rows = _parse_close_rows(ctx.get_equity_bars_daily(code=code).rows)
+    return rows
+
+
 # --- return_1d --------------------------------------------------------------
 
 def _return_1d(ctx) -> FeatureOutput:
     code = ctx.get_input("code")
-    res = ctx.get_equity_bars_daily(code=code)
-    rows = _parse_close_rows(res.rows)
+    rows = _recent_close_rows(ctx, code=code, required=2)
     if len(rows) < 2:
         return FeatureOutput(
             value=None,
@@ -109,8 +118,7 @@ def _momentum_n(ctx) -> FeatureOutput:
         return FeatureOutput(
             value=None, metadata={"code": code, "reason": "n must be >= 1"},
         )
-    res = ctx.get_equity_bars_daily(code=code)
-    rows = _parse_close_rows(res.rows)
+    rows = _recent_close_rows(ctx, code=code, required=n + 1)
     if len(rows) < n + 1:
         return FeatureOutput(
             value=None,
@@ -127,7 +135,11 @@ def _momentum_n(ctx) -> FeatureOutput:
     if base_close == 0:
         return FeatureOutput(
             value=None,
-            metadata={"code": code, "rows_seen": len(rows), "reason": "zero base close"},
+            metadata={
+                "code": code,
+                "rows_seen": len(rows),
+                "reason": "zero base close",
+            },
         )
     m = (last_close - base_close) / base_close
     return FeatureOutput(
@@ -178,8 +190,7 @@ def _volatility_n(ctx) -> FeatureOutput:
             value=None,
             metadata={"code": code, "reason": "n must be >= 2 for stdev"},
         )
-    res = ctx.get_equity_bars_daily(code=code)
-    rows = _parse_close_rows(res.rows)
+    rows = _recent_close_rows(ctx, code=code, required=n + 1)
     if len(rows) < n + 1:
         return FeatureOutput(
             value=None,

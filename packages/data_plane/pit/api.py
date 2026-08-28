@@ -28,6 +28,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from datetime import date, timedelta
 from typing import Any, Mapping
 
 from data_contracts.source_capability import (
@@ -40,6 +41,7 @@ from ingestion.jquants.normalize import (
     normalize_listed_info,
     normalize_market_calendar,
 )
+from storage.schema import CATALOG_CODE_SQL
 
 from .errors import InvalidDataset
 from .models import PIT_API_VERSION, PitResult
@@ -59,14 +61,7 @@ __all__ = [
 # Contract keys are compact canonical JSON when complete and a non-JSON
 # ``hash:sha256:...`` token when any discriminator is absent.  Code filtering
 # therefore reads the key when possible and falls back to retained payloads.
-_CATALOG_CODE_SQL = """COALESCE(
-    CASE WHEN json_valid(natural_key)
-         THEN CAST(json_extract(natural_key, '$.Code') AS TEXT) END,
-    CASE WHEN json_valid(payload)
-         THEN CAST(json_extract(payload, '$.Code') AS TEXT) END,
-    CASE WHEN json_valid(raw_payload)
-         THEN CAST(json_extract(raw_payload, '$.Code') AS TEXT) END
-)"""
+_CATALOG_CODE_SQL = CATALOG_CODE_SQL
 
 _PAGE_CURSOR_VERSION = 1
 _MAX_PAGE_SIZE = 1_000
@@ -162,6 +157,15 @@ def _event_time_bound(value: Any) -> str:
     return to_iso(parse_dt(str(value)))
 
 
+def _day_start(day: str) -> str:
+    return f"{day}T00:00:00+09:00"
+
+
+def _next_day_start(day: str) -> str:
+    next_day = date.fromisoformat(day) + timedelta(days=1)
+    return _day_start(next_day.isoformat())
+
+
 def _catalog_partition_rows(
     db_path: Any,
     *,
@@ -169,6 +173,8 @@ def _catalog_partition_rows(
     dataset: str,
     clauses: list[str] | None = None,
     params: list[Any] | None = None,
+    order_by: str = "event_time, natural_key",
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """Read one catalog partition through the same mandatory PIT gate."""
     where = ["dataset = ?", *(clauses or [])]
@@ -179,7 +185,8 @@ def _catalog_partition_rows(
         table="jquants_records",
         extra_where=" AND ".join(where),
         params=bound,
-        order_by="event_time, natural_key",
+        order_by=order_by,
+        limit=limit,
     )
 
 
@@ -265,8 +272,51 @@ def _catalog_market_calendar(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     return out
 
 
+def _latest_master_snapshot_date(
+    db_path: Any,
+    *,
+    as_of: str,
+    official_start: str,
+) -> str | None:
+    """Newest globally visible master snapshot across typed and catalog stores.
+
+    The marker lookup deliberately runs before an optional code filter.  A
+    code absent from the newest full snapshot is absent from the universe; an
+    older per-code row must not resurrect it after delisting.
+    """
+    typed_marker = run_query(
+        db_path,
+        as_of=as_of,
+        table="jquants_listed_info",
+        extra_where="snapshot_date >= ?",
+        params=[official_start],
+        order_by="snapshot_date DESC, code DESC, source DESC",
+        limit=1,
+    )
+    catalog_marker = _catalog_partition_rows(
+        db_path,
+        as_of=as_of,
+        dataset="equities_master",
+        clauses=["event_time >= ?"],
+        params=[_day_start(official_start)],
+        order_by="event_time DESC, natural_key DESC, source DESC",
+        limit=1,
+    )
+    candidates = [
+        str(row.get("snapshot_date") or "")[:10] for row in typed_marker
+    ]
+    candidates.extend(
+        str(row.get("event_time") or "")[:10] for row in catalog_marker
+    )
+    return max((day for day in candidates if day), default=None)
+
+
 def get_equity_master(
-    as_of: Any = _NOT_GIVEN, code: str | None = None, *, db_path: Any = None
+    as_of: Any = _NOT_GIVEN,
+    code: str | None = None,
+    *,
+    latest_snapshot: bool = False,
+    db_path: Any = None,
 ) -> PitResult:
     """Point-in-time listed-equity master snapshots (``jquants_listed_info``).
 
@@ -281,16 +331,51 @@ def get_equity_master(
     ``as_of`` used for ``available_at <= as_of`` is not rewritten.
 
     ``code`` optionally restricts to a single issue (e.g. ``"8697"``).
+    ``latest_snapshot=True`` first finds the newest globally PIT-visible full
+    snapshot, then returns rows from only that date.  The global marker is
+    selected before applying ``code`` so an issue absent after delisting does
+    not fall back to its older snapshot.
     """
     as_of_iso = normalize_as_of(as_of)
+    if not isinstance(latest_snapshot, bool):
+        raise ValueError("latest_snapshot must be a bool")
     contract = source_capability_contract_for("equities_master")
     # Floor snapshot/query dates; keep original as_of for the available_at gate.
     official_start = apply_official_query_clamp(
         min(as_of_iso[:10], contract.earliest_official_availability),
         contract,
     )
+    selected_snapshot = None
+    if latest_snapshot:
+        selected_snapshot = _latest_master_snapshot_date(
+            db_path,
+            as_of=as_of_iso,
+            official_start=official_start,
+        )
+        if selected_snapshot is None:
+            return _result(
+                [],
+                as_of=as_of_iso,
+                table="jquants_listed_info",
+                source="jquants",
+                extra_metadata={
+                    "latest_snapshot": True,
+                    "snapshot_date": None,
+                },
+            )
+
     extra_where = "snapshot_date >= ?"
     params: list[Any] = [official_start]
+    catalog_clauses: list[str] = ["event_time >= ?"]
+    catalog_params: list[Any] = [_day_start(official_start)]
+    if selected_snapshot is not None:
+        extra_where = "snapshot_date = ?"
+        params = [selected_snapshot]
+        catalog_clauses = ["event_time >= ?", "event_time < ?"]
+        catalog_params = [
+            _day_start(selected_snapshot),
+            _next_day_start(selected_snapshot),
+        ]
     if code is not None:
         extra_where += " AND code = ?"
         params.append(code)
@@ -302,8 +387,6 @@ def get_equity_master(
         params=params,
         order_by="code, snapshot_date",
     )
-    catalog_clauses: list[str] = ["substr(event_time, 1, 10) >= ?"]
-    catalog_params: list[Any] = [official_start]
     if code is not None:
         catalog_clauses.append(f"{_CATALOG_CODE_SQL} = ?")
         catalog_params.append(code)
@@ -321,12 +404,29 @@ def get_equity_master(
     rows = [
         row
         for row in rows
-        if str(row.get("snapshot_date") or "")[:10] >= official_start
+        if (
+            str(row.get("snapshot_date") or "")[:10] == selected_snapshot
+            if selected_snapshot is not None
+            else str(row.get("snapshot_date") or "")[:10] >= official_start
+        )
     ]
     rows.sort(
         key=lambda row: (row.get("code") or "", row.get("snapshot_date") or "")
     )
-    return _result(rows, as_of=as_of_iso, table="jquants_listed_info", source="jquants")
+    return _result(
+        rows,
+        as_of=as_of_iso,
+        table="jquants_listed_info",
+        source="jquants",
+        extra_metadata=(
+            {
+                "latest_snapshot": True,
+                "snapshot_date": selected_snapshot,
+            }
+            if latest_snapshot
+            else None
+        ),
+    )
 
 
 def get_equity_bars_daily(
@@ -336,6 +436,7 @@ def get_equity_bars_daily(
     to_event: Any = None,
     *,
     codes: tuple[str, ...] | list[str] | set[str] | None = None,
+    latest_n: int | None = None,
     db_path: Any = None,
 ) -> PitResult:
     """Point-in-time daily OHLCV bars (``jquants_daily_bars``).
@@ -345,11 +446,18 @@ def get_equity_bars_daily(
     (``YYYY-MM-DD``; flexible inputs like ``"2025/04/01"`` or a full datetime
     are accepted and reduced to the date). ``code`` optionally restricts to a
     single issue; ``codes`` accepts multiple issues for efficient batched
-    reads. They are mutually exclusive. Ordered by ``code, date``.
+    reads. They are mutually exclusive. ``latest_n`` is a bounded single-code
+    read: it must be a positive integer and requires ``code``. The merged
+    typed/catalog result is still returned in ascending date order.
     """
     as_of_iso = normalize_as_of(as_of)
     if code is not None and codes is not None:
         raise ValueError("code and codes are mutually exclusive")
+    if latest_n is not None:
+        if isinstance(latest_n, bool) or not isinstance(latest_n, int) or latest_n < 1:
+            raise ValueError("latest_n must be a positive integer")
+        if not isinstance(code, str) or not code.strip() or codes is not None:
+            raise ValueError("latest_n requires one non-empty code")
     requested_codes: list[str] | None
     if code is not None:
         requested_codes = [code]
@@ -378,7 +486,11 @@ def get_equity_bars_daily(
         table="jquants_daily_bars",
         extra_where=" AND ".join(clauses) if clauses else None,
         params=params,
-        order_by="code, date",
+        order_by=(
+            "date DESC, code DESC, source DESC" if latest_n is not None
+            else "code, date"
+        ),
+        limit=latest_n,
     )
     catalog_clauses: list[str] = []
     catalog_params: list[Any] = []
@@ -401,13 +513,28 @@ def get_equity_bars_daily(
         dataset="equities_bars_daily",
         clauses=catalog_clauses,
         params=catalog_params,
+        order_by=(
+            "event_time DESC, natural_key DESC, source DESC"
+            if latest_n is not None
+            else "event_time, natural_key"
+        ),
     )
     rows = _latest_rows(
         [*rows, *_catalog_daily_bars(catalog)],
         key_fields=("source", "code", "date"),
     )
     rows.sort(key=lambda row: (row.get("code") or "", row.get("date") or ""))
-    return _result(rows, as_of=as_of_iso, table="jquants_daily_bars", source="jquants")
+    if latest_n is not None:
+        rows = rows[-latest_n:]
+    return _result(
+        rows,
+        as_of=as_of_iso,
+        table="jquants_daily_bars",
+        source="jquants",
+        extra_metadata=(
+            {"latest_n": latest_n} if latest_n is not None else None
+        ),
+    )
 
 
 def get_market_calendar(
@@ -460,7 +587,12 @@ def get_market_calendar(
         key_fields=("source", "date"),
     )
     rows.sort(key=lambda row: row.get("date") or "")
-    return _result(rows, as_of=as_of_iso, table="jquants_market_calendar", source="jquants")
+    return _result(
+        rows,
+        as_of=as_of_iso,
+        table="jquants_market_calendar",
+        source="jquants",
+    )
 
 
 def get_jquants_records(

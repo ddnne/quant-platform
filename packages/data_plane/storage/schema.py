@@ -14,6 +14,19 @@ Future R2/D1 layout (documented, not implemented):
 
 from __future__ import annotations
 
+# Shared verbatim with the generic PIT code filter.  Keeping the expression in
+# one module ensures SQLite can match the API predicate to its expression
+# index instead of scanning and decoding every catalog row.
+CATALOG_CODE_SQL = """COALESCE(
+    CASE WHEN json_valid(natural_key)
+         THEN CAST(json_extract(natural_key, '$.Code') AS TEXT) END,
+    CASE WHEN json_valid(payload)
+         THEN CAST(json_extract(payload, '$.Code') AS TEXT) END,
+    CASE WHEN json_valid(raw_payload)
+         THEN CAST(json_extract(raw_payload, '$.Code') AS TEXT) END
+)"""
+
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS jquants_listed_info (
     source          TEXT    NOT NULL,
@@ -253,6 +266,16 @@ CREATE INDEX IF NOT EXISTS ix_bars_available_at
     ON jquants_daily_bars (code, available_at);
 CREATE INDEX IF NOT EXISTS ix_records_dataset_avail
     ON jquants_records (dataset, available_at);
+CREATE INDEX IF NOT EXISTS ix_bars_code_date_pit
+    ON jquants_daily_bars
+       (code, date DESC, source DESC, available_at);
+CREATE INDEX IF NOT EXISTS ix_records_dataset_event_pit
+    ON jquants_records
+       (dataset, event_time DESC, natural_key DESC, source DESC, available_at);
+CREATE INDEX IF NOT EXISTS ix_records_dataset_code_event_pit
+    ON jquants_records
+       (dataset, __CATALOG_CODE_SQL__, event_time DESC, natural_key DESC,
+        source DESC, available_at);
 CREATE INDEX IF NOT EXISTS ix_jsda_available_at
     ON jsda_bond_trades (trade_date, available_at);
 CREATE INDEX IF NOT EXISTS ix_jsda_otc_reference_available_at
@@ -260,7 +283,7 @@ CREATE INDEX IF NOT EXISTS ix_jsda_otc_reference_available_at
        (quote_effective_date, available_at, security_code);
 CREATE INDEX IF NOT EXISTS ix_jsda_repo_available_at
     ON jsda_repo_rates (as_of_date, available_at);
-"""
+""".replace("__CATALOG_CODE_SQL__", CATALOG_CODE_SQL)
 
 # Natural keys for documentation / future dedup tooling.
 NATURAL_KEYS: dict[str, list[str]] = {
