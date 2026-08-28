@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "description": "W90 — multi-logic lite multi-period mass-eval on Cloudflare Workers",
+  "dependencies": {
+    "@cloudflare/containers": "0.3.7"
+  },
   "scripts": {
     "deploy": "wrangler deploy --config=wrangler.toml --env=production",
     "dev": "wrangler dev --config=wrangler.toml --env=\"\"",
