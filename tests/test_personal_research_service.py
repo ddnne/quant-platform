@@ -20,6 +20,7 @@ from research.personal_service import (
     default_personal_specs,
 )
 from storage.sqlite_store import SqliteStore
+from strategies.spec import iter_feature_refs
 
 
 def _dates(start: date, end: date) -> list[str]:
@@ -186,6 +187,9 @@ def _request(
                 hold_days=3,
                 momentum_n=3,
                 top_k=2,
+                momentum_feature_id=(
+                    "retrospective_split_adjusted_momentum_n"
+                ),
                 strategy_id="personal_test_momentum",
             ),
         ),
@@ -262,6 +266,16 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
     assert report["candidates"][0]["holdout"] is not None
     assert report["candidates"][0]["holdout"]["selection_use"] is False
     assert report["data_quality"]["market_bar_coverage"]["status"] == "PASS"
+    assert report["price_basis"] == {
+        "id": "PERSONAL_RETROSPECTIVE_ADJUSTED",
+        "source": "vendor_adjusted_ohlcv",
+        "time_semantics": "retrospective_not_point_in_time",
+        "position_units": "synthetic_split_adjusted_units",
+        "supported_actions": "vendor_splits_and_reverse_splits",
+        "unexplained_action_policy": "fold_local_exposure_fail_closed",
+        "lifecycle": "DRAFT_only",
+        "live_trading_eligible": False,
+    }
     assert report["live_orders_enabled"] is False
     assert report["automatic_promotion"] is False
     assert report["model_calls"] == 0
@@ -288,6 +302,11 @@ def test_zero_passes_is_completed_not_an_error(
 def test_default_candidates_are_long_only_where_applicable() -> None:
     specs = default_personal_specs()
     assert len(specs) == 4
+    assert all(
+        "retrospective_split_adjusted_momentum_n"
+        in {ref.id for ref in iter_feature_refs(spec)}
+        for spec in specs
+    )
     assert specs[2].rule.allow_short is False
     assert specs[3].rule.allow_short is False
 
@@ -411,10 +430,16 @@ def test_in_window_adjustment_factor_change_is_no_analysis(
     assert "1304" in report["data_quality"]["corporate_actions"][
         "affected_codes"
     ]
-    assert candidate["validation"]["runs"][0]["corporate_action_trade_check"] == {
-        "status": "FAIL",
-        "affected_traded_codes": ["1304"],
-    }
+    event_check = next(
+        run["corporate_action_trade_check"]
+        for run in candidate["validation"]["runs"]
+        if run["corporate_action_trade_check"]["status"] == "FAIL"
+    )
+    assert event_check["status"] == "FAIL"
+    assert event_check["affected_traded_codes"] == ["1304"]
+    assert event_check["reason"] == (
+        "fold_local_exposure_to_unexplained_adjusted_price_event"
+    )
 
 
 def test_constant_back_adjustment_factor_is_not_a_false_split_boundary(

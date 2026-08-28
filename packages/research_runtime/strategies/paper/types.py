@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core import BacktestResult
-from price_basis import RAW, require_supported_price_basis
+from price_basis import (
+    PERSONAL_RETROSPECTIVE_ADJUSTED,
+    RAW,
+    require_supported_price_basis,
+)
 
 
 PAPER_RESULT_SCHEMA_VERSION = "paper-result/v2"
@@ -110,9 +114,18 @@ class PaperRunConfig:
                 bool(self.leverage_financing_enabled),
             )
 
-        object.__setattr__(self, "lifecycle", Lifecycle.parse(self.lifecycle))
+        lifecycle = Lifecycle.parse(self.lifecycle)
+        object.__setattr__(self, "lifecycle", lifecycle)
+        resolved_price_basis = require_supported_price_basis(self.price_basis)
+        if (
+            resolved_price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
+            and lifecycle is not Lifecycle.DRAFT
+        ):
+            raise ValueError(
+                "PERSONAL_RETROSPECTIVE_ADJUSTED is restricted to local DRAFT runs"
+            )
         object.__setattr__(
-            self, "price_basis", require_supported_price_basis(self.price_basis)
+            self, "price_basis", resolved_price_basis
         )
         if self.universe is not None:
             if getattr(self.universe, "membership_by_date", None) is not None:

@@ -206,3 +206,171 @@ def _latest_fins_eps_bps(
                 or disc_date
             )
     return eps, bps, {"fins_rows": n, "disc_date": disc_date}
+
+
+def _latest_fins_per_share_observation(
+    rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Select the exact BPS/EPS observation and its own split-safety anchor.
+
+    The legacy parser intentionally remains untouched.  This stricter helper
+    binds the chosen per-share value to the row that supplied it, preferring
+    BPS as the established value-feature contract does.  Statement period
+    end is preferred; disclosure date is the explicit fallback.
+    """
+    latest_bps: dict[str, Any] | None = None
+    latest_eps: dict[str, Any] | None = None
+    parsed_rows = 0
+    for row in rows or []:
+        payload = _row_payload(row)
+        if not payload:
+            continue
+        parsed_rows += 1
+        bps = _as_float_or_none(
+            payload.get("BPS")
+            if payload.get("BPS") is not None
+            else payload.get("bps")
+        )
+        eps = _as_float_or_none(
+            payload.get("EPS")
+            if payload.get("EPS") is not None
+            else payload.get("eps")
+        )
+        period_end = next(
+            (
+                str(payload.get(key))[:10]
+                for key in (
+                    "CurrentPeriodEndDate",
+                    "CurPerEn",
+                    "CurrentFiscalYearEndDate",
+                    "CurFYEn",
+                    "FiscalYearEndDate",
+                    "PeriodEndDate",
+                    "period_end",
+                )
+                if payload.get(key)
+            ),
+            None,
+        )
+        disclosure_date = next(
+            (
+                str(payload.get(key))[:10]
+                for key in (
+                    "DisclosedDate",
+                    "DiscDate",
+                    "disclosed_date",
+                    "disc_date",
+                )
+                if payload.get(key)
+            ),
+            None,
+        )
+        anchor = period_end or disclosure_date
+        common = {
+            "statement_period_end": period_end,
+            "disclosure_date": disclosure_date,
+            "split_safety_anchor": anchor,
+            "split_safety_anchor_source": (
+                "statement_period_end" if period_end else "disclosure_date"
+            ),
+            "fins_rows": parsed_rows,
+        }
+        if bps is not None:
+            latest_bps = {**common, "mode": "bps_over_price", "bps": bps}
+        if eps is not None:
+            latest_eps = {**common, "mode": "eps_over_price", "eps": eps}
+    selected = latest_bps or latest_eps
+    if selected is None:
+        return None
+    return {**selected, "fins_rows": parsed_rows}
+
+
+def _retrospective_split_safety(
+    rows: list[dict[str, Any]],
+    *,
+    anchor: str,
+    factor_threshold: float = 0.01,
+) -> tuple[bool, dict[str, Any]]:
+    """Check per-share comparability from statement anchor through decision.
+
+    ``AdjustmentVolume / Volume`` is invariant to a later adjustment that is
+    applied uniformly to the whole inspected interval, so comparing its
+    within-window ratios does not depend on a future adjustment constant.
+    Missing adjusted-close evidence fails closed. AdjustmentVolume is only
+    corroborating evidence: when absent, the AdjustmentClose / raw Close
+    ratio remains the factor detector. Zero-volume sessions carry no volume
+    ratio and are skipped for that corroborating leg.
+    """
+    observations: list[tuple[str, float, float | None, float]] = []
+    for row in rows:
+        day = str(row.get("date") or "")[:10]
+        if not day:
+            continue
+        raw_close = _as_float_or_none(row.get("close"))
+        adjusted_close = _as_float_or_none(row.get("adjustment_close"))
+        volume = _as_float_or_none(row.get("volume"))
+        adjusted_volume = _as_float_or_none(row.get("adjustment_volume"))
+        if raw_close is None or adjusted_close is None or adjusted_close <= 0.0:
+            return False, {
+                "reason": "missing_adjusted_price_evidence",
+                "event_date": day,
+            }
+        ratio: float | None = None
+        if volume is not None and volume != 0.0:
+            if adjusted_volume is not None:
+                ratio = adjusted_volume / volume
+                if ratio <= 0.0:
+                    ratio = None
+        if raw_close == 0.0:
+            return False, {
+                "reason": "invalid_raw_close_for_adjustment_ratio",
+                "event_date": day,
+            }
+        price_ratio = adjusted_close / raw_close
+        observations.append((day, adjusted_close, ratio, price_ratio))
+
+    baseline_candidates = [item for item in observations if item[0] <= anchor]
+    if not baseline_candidates:
+        return False, {
+            "reason": "missing_pre_anchor_factor_baseline",
+            "anchor": anchor,
+            "rows_seen": len(observations),
+        }
+    baseline = baseline_candidates[-1]
+    volume_baseline = next(
+        (item for item in reversed(baseline_candidates) if item[2] is not None),
+        None,
+    )
+    base_volume_ratio = volume_baseline[2] if volume_baseline is not None else None
+    base_price_ratio = baseline[3]
+    volume_factor_change_dates: list[str] = []
+    if base_volume_ratio is not None:
+        for day, _close, ratio, _price_ratio in observations:
+            if day <= anchor:
+                continue
+            if ratio is None:
+                continue
+            if abs(ratio / base_volume_ratio - 1.0) > factor_threshold:
+                volume_factor_change_dates.append(day)
+    price_factor_change_dates: list[str] = []
+    if base_price_ratio is not None:
+        for day, _close, _volume_ratio, price_ratio in observations:
+            if day <= anchor:
+                continue
+            if abs(price_ratio / base_price_ratio - 1.0) > factor_threshold:
+                price_factor_change_dates.append(day)
+    factor_change_dates = sorted(
+        set(volume_factor_change_dates) | set(price_factor_change_dates)
+    )
+    safe = not factor_change_dates
+    return safe, {
+        "reason": "split_safe" if safe else "per_share_split_blackout",
+        "anchor": anchor,
+        "rows_seen": len(observations),
+        "factor_change_dates": sorted(set(factor_change_dates)),
+        "price_factor_change_dates": sorted(set(price_factor_change_dates)),
+        "volume_factor_change_dates": sorted(
+            set(volume_factor_change_dates)
+        ),
+        "factor_threshold": factor_threshold,
+    }

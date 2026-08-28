@@ -16,7 +16,12 @@ from typing import Any, Mapping
 import features
 import pit
 from pit.query import resolve_db_path
-from price_basis import RAW, PriceBasis, require_supported_price_basis
+from price_basis import (
+    PERSONAL_RETROSPECTIVE_ADJUSTED,
+    RAW,
+    PriceBasis,
+    require_supported_price_basis,
+)
 
 from .costs import (
     CostModel,
@@ -31,7 +36,7 @@ from .strategy_protocol import Bar, BarContext, OrderIntent, Position
 from .universe import ResolvedDailyUniverse, load_master, resolve_injected_universe
 
 # Result metadata. 0.6.3: fixed candidates are PIT-gated on every decision day.
-CORE_ENGINE_VERSION = "0.6.3"
+CORE_ENGINE_VERSION = "0.7.0"
 
 # J-Quants HolidayDivision: "1" == trading day (exchange open).
 _TRADING_HOLIDAY_DIVISION = "1"
@@ -74,25 +79,71 @@ def _make_feature_accessor(as_of: str, db_path: Any):
     return compute_feature
 
 
-def _bar_from_row(row: dict[str, Any]) -> Bar:
+def _required_adjusted_close(row: Mapping[str, Any]) -> float:
+    """Return one vendor adjusted close without silently mixing price units."""
+    value = row.get("adjustment_close")
+    if value is None:
+        raise ValueError(
+            "PERSONAL_RETROSPECTIVE_ADJUSTED requires adjustment_close for "
+            f"every consumed bar; missing for {row.get('code')} {row.get('date')}"
+        )
+    try:
+        price = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "PERSONAL_RETROSPECTIVE_ADJUSTED received a non-numeric "
+            f"adjustment_close for {row.get('code')} {row.get('date')}"
+        ) from exc
+    if price <= 0.0:
+        raise ValueError(
+            "PERSONAL_RETROSPECTIVE_ADJUSTED requires a positive "
+            f"adjustment_close for {row.get('code')} {row.get('date')}"
+        )
+    return price
+
+
+def _bar_from_row(row: dict[str, Any], *, price_basis: PriceBasis) -> Bar:
     """Map a PIT daily-bar row to the narrow :class:`Bar` the strategy sees."""
+    close = row.get("close")
+    open_price = row.get("open")
+    high = row.get("high")
+    low = row.get("low")
+    volume = row.get("volume")
+    if price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED:
+        # Deliberately replace the strategy-visible close.  Keeping RAW here
+        # while fills and marks use adjusted units would make target weights
+        # internally inconsistent.
+        close = _required_adjusted_close(row)
+        # Never present raw OHLCV beside an adjusted close as though the units
+        # matched. Non-close adjusted fields are optional because this engine
+        # does not use them for fills or marks; absence stays explicit None.
+        open_price = row.get("adjustment_open")
+        high = row.get("adjustment_high")
+        low = row.get("adjustment_low")
+        volume = row.get("adjustment_volume")
     return Bar(
         code=row.get("code") or "",
         date=row.get("date") or "",
-        open=row.get("open"),
-        high=row.get("high"),
-        low=row.get("low"),
-        close=row.get("close"),
-        volume=row.get("volume"),
+        open=open_price,
+        high=high,
+        low=low,
+        close=close,
+        volume=volume,
         adjustment_close=row.get("adjustment_close"),
     )
 
 
 def _bar_price(bar: Bar, *, price_basis: PriceBasis) -> float | None:
-    """RAW close only. ``adjustment_close`` is inspectable, never implicit (not PIT-safe)."""
-    if price_basis != RAW:  # validated at entry; defensive against misuse
-        raise ValueError(f"unsupported runtime price basis: {price_basis!r}")
-    return bar.close
+    """Return a price in the explicitly selected unit system."""
+    if price_basis == RAW:
+        return bar.close
+    if price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED:
+        if bar.adjustment_close is None:
+            raise ValueError(
+                "PERSONAL_RETROSPECTIVE_ADJUSTED cannot fall back to RAW close"
+            )
+        return float(bar.adjustment_close)
+    raise ValueError(f"unsupported runtime price basis: {price_basis!r}")
 
 
 def _shift_date(date_str: str, days: int) -> str:
@@ -128,7 +179,9 @@ def _load_snapshot(
         code = row.get("code")
         if code not in snapshot:
             continue
-        snapshot[code]["bars"].append(_bar_from_row(row))
+        snapshot[code]["bars"].append(
+            _bar_from_row(row, price_basis=price_basis)
+        )
     for entry in snapshot.values():
         bars = entry["bars"]
         entry["close"] = (
@@ -442,8 +495,9 @@ def run_backtest(
 
     Each trading day *D*: read PIT at the mode's decision ``as_of``, call
     ``strategy.on_bar(ctx)``, fill per execution mode. Valuation marks are
-    independent of ``lookback_days``. ``price_basis`` is RAW; ``PIT_ADJUSTED``
-    fails closed.
+    independent of ``lookback_days``. ``RAW`` remains the default;
+    ``PERSONAL_RETROSPECTIVE_ADJUSTED`` uses vendor-restated split-adjusted
+    closes for local DRAFT research only, while ``PIT_ADJUSTED`` fails closed.
 
     ``universe`` is None (PIT master per decision day) or a candidate
     fixed allowlist supplied as an
@@ -720,8 +774,36 @@ def run_backtest(
         ),
         "lookback_days": lookback_days,
         "signal_lookback_days": lookback_days,
-        "valuation_mark_policy": "last_pit_safe_exact_session_bar",
+        "valuation_mark_policy": (
+            "last_retrospective_adjusted_exact_session_bar"
+            if resolved_price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
+            else "last_pit_safe_exact_session_bar"
+        ),
         "price_basis": resolved_price_basis,
+        "price_basis_provenance": (
+            {
+                "source": "vendor_adjustment_close",
+                "adjusted_fields_consumed": [
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                ],
+                "required_adjusted_fields": ["close"],
+                "optional_adjusted_fields_missing_policy": "expose_null",
+                "adjustment_scope": "vendor_supported_splits_and_reverse_splits",
+                "time_semantics": "retrospective_not_point_in_time",
+                "position_units": "synthetic_split_adjusted_units",
+                "lifecycle": "DRAFT_only",
+                "live_trading_eligible": False,
+            }
+            if resolved_price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
+            else {
+                "source": "vendor_raw_close",
+                "time_semantics": "point_in_time_observed",
+            }
+        ),
         "starting_capital": starting_capital,
         "strategy_id": strategy_id,
         "strategy_params": strategy_params,

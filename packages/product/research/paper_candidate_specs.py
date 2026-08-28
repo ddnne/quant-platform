@@ -28,6 +28,7 @@ def build_multi_day_hold_strategy_spec(
     top_k: int = DEFAULT_TOP_K,
     min_score: float = 0.0,
     momentum_version: str = DEFAULT_MOMENTUM_FEATURE_VERSION,
+    momentum_feature_id: str = "momentum_n",
     momentum_n: int | None = None,
     strategy_id: str | None = None,
     rationale: str = "",
@@ -42,7 +43,7 @@ def build_multi_day_hold_strategy_spec(
         version=STRATEGY_SPEC_VERSION,
         rule=TopKRule(
             feature=FeatureRef(
-                id="momentum_n",
+                id=str(momentum_feature_id),
                 version=str(momentum_version),
                 params={"n": n_mom},
             ),
@@ -65,6 +66,7 @@ def build_cross_section_hold_strategy_spec(
     allow_short: bool = True,
     signal_sign: int = 1,
     momentum_version: str = DEFAULT_MOMENTUM_FEATURE_VERSION,
+    momentum_feature_id: str = "momentum_n",
     strategy_id: str | None = None,
     rationale: str = "",
 ) -> StrategySpec:
@@ -80,7 +82,7 @@ def build_cross_section_hold_strategy_spec(
         version=STRATEGY_SPEC_VERSION,
         rule=CrossSectionRankRule(
             feature=FeatureRef(
-                id="momentum_n",
+                id=str(momentum_feature_id),
                 version=str(momentum_version),
                 params={"n": n_mom},
             ),
@@ -108,6 +110,8 @@ def build_fundamentals_hold_strategy_spec(
     signal_sign: int = 1,
     momentum_version: str = DEFAULT_MOMENTUM_FEATURE_VERSION,
     value_version: str = DEFAULT_FUND_VALUE_FEATURE_VERSION,
+    momentum_feature_id: str = "momentum_n",
+    value_feature_id: str = "fundamental_value_score",
     strategy_id: str | None = None,
     rationale: str = "",
 ) -> StrategySpec:
@@ -123,12 +127,12 @@ def build_fundamentals_hold_strategy_spec(
         version=STRATEGY_SPEC_VERSION,
         rule=ValueMomentumAgreeRule(
             value_feature=FeatureRef(
-                id="fundamental_value_score",
+                id=str(value_feature_id),
                 version=str(value_version),
                 params={},
             ),
             momentum_feature=FeatureRef(
-                id="momentum_n",
+                id=str(momentum_feature_id),
                 version=str(momentum_version),
                 params={"n": n_mom},
             ),

@@ -31,7 +31,7 @@ from .types import Lifecycle, PaperRunConfig, PaperRunResult
 # 0.6.0 — Phase 5 paper runner baseline
 # 0.6.1 — W85 optional short financing via PaperRunConfig
 # 0.7.0 — W86 daily repo auto-load + leverage financing (mid + repo default)
-PAPER_RUNNER_VERSION = "0.7.0"
+PAPER_RUNNER_VERSION = "0.8.0"
 
 
 def fingerprint_db(db_path: str | Path) -> str:
@@ -67,6 +67,20 @@ def _feature_versions(strategy: Any) -> dict[str, str]:
         str(feature_id): str(features.get(str(feature_id)).version)
         for feature_id in sorted(set(ids))
     }
+
+
+def _require_feature_price_basis(
+    feature_versions: dict[str, str], *, price_basis: str
+) -> None:
+    """Prevent a DRAFT strategy from silently mixing incompatible prices."""
+    for feature_id, version in sorted(feature_versions.items()):
+        definition = features.get(feature_id, version=version)
+        declared = definition.price_basis
+        if declared is not None and declared != price_basis:
+            raise ValueError(
+                f"feature {feature_id!r}@{version!r} declares price basis "
+                f"{declared!r}, incompatible with paper run basis {price_basis!r}"
+            )
 
 
 def _resolve_repo_rates(
@@ -250,6 +264,7 @@ def _reproducibility(
         "resolved_universe_digest": core_md.get("resolved_universe_digest"),
         "lookback_days": core_md["lookback_days"],
         "price_basis": core_md["price_basis"],
+        "price_basis_provenance": core_md.get("price_basis_provenance"),
         "starting_capital": core_md["starting_capital"],
         "strategy_id": core_md["strategy_id"],
         "params": dict(core_md["strategy_params"]),
@@ -337,6 +352,9 @@ def run_paper(
         )
     configured_path = Path(config.db_path or "data/structured/ingestion.sqlite")
     feature_versions = _feature_versions(strategy)
+    _require_feature_price_basis(
+        feature_versions, price_basis=config.price_basis
+    )
     feature_hashes = feature_definition_hashes(feature_versions)
     strategy_hash = strategy_definition_hash(strategy)
     commit = git_commit()

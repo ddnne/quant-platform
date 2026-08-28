@@ -27,7 +27,7 @@ from . import registry as _registry
 from .dataset_guard import master_pit_history_start, require_feature_dataset
 from .types import FeatureDefinition, FeatureOutput
 
-FEATURES_RUNTIME_VERSION = "0.6.0"
+FEATURES_RUNTIME_VERSION = "0.7.0"
 
 
 class AsOfRequired(ValueError):

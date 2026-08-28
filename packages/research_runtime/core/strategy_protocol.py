@@ -27,7 +27,12 @@ class Bar:
     """One PIT-visible daily OHLCV bar handed to a strategy.
 
     All fields are values the engine already read via PIT for the decision
-    ``as_of``; the strategy cannot reach behind them.
+    ``as_of``; the strategy cannot reach behind them. In a
+    ``PERSONAL_RETROSPECTIVE_ADJUSTED`` DRAFT run, ``close`` is explicitly
+    replaced by vendor ``AdjustmentClose`` so signals and execution share one
+    price unit. Other OHLCV fields use their vendor adjusted counterparts and
+    remain ``None`` when those optional adjusted fields are absent; raw values
+    are never presented as though they shared adjusted units.
     """
 
     code: str
@@ -105,8 +110,10 @@ class BarContext:
         cash: Cash balance before this decision's fills.
         equity: Total equity (cash + positions carried at the last PIT-safe
             exact-session mark when the current session has no bar).
-        prices: Last PIT-visible RAW close inside the signal lookback window
-            (``None`` if a code has no visible bar in that window).
+        prices: Last visible close in the run's explicit price basis inside
+            the signal lookback window (``None`` if a code has no visible bar
+            in that window). Personal retrospective runs expose vendor
+            split-adjusted synthetic units and are never PIT/live claims.
         bars: Signal-lookback PIT-visible daily bars per universe code, oldest
             first. Valuation marks are maintained independently.
         master: Latest-known-as-of master snapshot per universe code.

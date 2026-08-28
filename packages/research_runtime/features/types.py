@@ -9,11 +9,11 @@ reproducible (``as_of``, ``feature_id``, ``feature_version``,
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from collections.abc import Sequence
-from typing import Any, Callable, Literal, Mapping
+from typing import Any, Literal
 
-from price_basis import PriceBasis
+from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED, PriceBasis
 
 # Lifecycle / role vocabularies. ``Literal`` keeps the values statically
 # checkable and lets the registry refuse unknown roles at construction time.
@@ -121,10 +121,15 @@ class FeatureDefinition:
                 f"invalid feature status {self.status!r}; "
                 f"choose one of {sorted(statuses)}"
             )
-        if self.price_basis not in {None, "RAW", "PIT_ADJUSTED"}:
+        if self.price_basis not in {
+            None,
+            "RAW",
+            PERSONAL_RETROSPECTIVE_ADJUSTED,
+            "PIT_ADJUSTED",
+        }:
             raise ValueError(
                 f"invalid price_basis {self.price_basis!r}; choose RAW, "
-                "PIT_ADJUSTED, or None"
+                f"{PERSONAL_RETROSPECTIVE_ADJUSTED}, PIT_ADJUSTED, or None"
             )
         raw_dependencies = self.dataset_dependencies
         if isinstance(raw_dependencies, (str, bytes)) or not isinstance(

@@ -6,16 +6,19 @@ any PIT read. Dataset tuples are COMPLETE 21 only. No READY / Mass / GO.
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Any
 
 from .complete21_min_parsers import (
     _as_float_or_none,
     _latest_fins_eps_bps,
+    _latest_fins_per_share_observation,
     _latest_short_ratio_row,
     _parse_close_rows,
     _parse_futures_volume_rows,
     _parse_margin_interest_rows,
     _parse_volume_rows,
+    _retrospective_split_safety,
 )
 from .dataset_guard import require_feature_datasets
 from .types import FeatureOutput
@@ -605,3 +608,93 @@ def _fundamental_value_score(ctx) -> FeatureOutput:
         "datasets": list(_FUND_VALUE_DATASETS),
     }
     return FeatureOutput(value=value, metadata=meta)
+
+
+def _retrospective_split_safe_fundamental_value_score(ctx) -> FeatureOutput:
+    """Raw per-share value score with an explicit split comparability blackout."""
+    require_feature_datasets(
+        _FUND_VALUE_DATASETS,
+        context="feature retrospective_split_safe_fundamental_value_score",
+    )
+    code = ctx.get_input("code")
+    latest = ctx.get_equity_bars_daily(code=code, latest_n=1)
+    latest_rows = list(latest.rows) if latest is not None and latest.rows else []
+    if not latest_rows:
+        return FeatureOutput(
+            value=None, metadata={"code": code, "reason": "no PIT close"}
+        )
+    latest_row = latest_rows[-1]
+    last_date = str(latest_row.get("date") or "")[:10]
+    last_close = _as_float_or_none(latest_row.get("close"))
+    if not last_date or last_close is None or last_close == 0.0:
+        return FeatureOutput(
+            value=None,
+            metadata={"code": code, "reason": "raw close missing or zero"},
+        )
+
+    fins_res = ctx.get_jquants_records(dataset="fins_summary", code=code)
+    fins_rows = list(fins_res.rows) if fins_res is not None and fins_res.rows else []
+    observation = _latest_fins_per_share_observation(fins_rows)
+    if observation is None:
+        return FeatureOutput(
+            value=None,
+            metadata={"code": code, "reason": "no BPS or EPS", "last_date": last_date},
+        )
+    anchor = observation.get("split_safety_anchor")
+    if not anchor:
+        return FeatureOutput(
+            value=None,
+            metadata={
+                **observation,
+                "code": code,
+                "last_date": last_date,
+                "reason": "per_share_metric_has_no_statement_or_disclosure_anchor",
+            },
+        )
+    try:
+        safety_start = (
+            date.fromisoformat(str(anchor)) - timedelta(days=31)
+        ).isoformat()
+    except ValueError:
+        return FeatureOutput(
+            value=None,
+            metadata={
+                **observation,
+                "code": code,
+                "last_date": last_date,
+                "reason": "invalid_split_safety_anchor",
+            },
+        )
+    safety_res = ctx.get_equity_bars_daily(
+        code=code,
+        from_event=safety_start,
+        to_event=last_date,
+    )
+    safety_rows = (
+        list(safety_res.rows)
+        if safety_res is not None and safety_res.rows
+        else []
+    )
+    safe, safety = _retrospective_split_safety(
+        safety_rows, anchor=str(anchor)
+    )
+    common = {
+        **observation,
+        **safety,
+        "code": code,
+        "last_date": last_date,
+        "raw_close": last_close,
+        "datasets": list(_FUND_VALUE_DATASETS),
+        "price_source": "raw_close_with_retrospective_split_blackout",
+        "time_semantics": "retrospective_not_point_in_time",
+        "lifecycle": "DRAFT_only",
+        "live_trading_eligible": False,
+    }
+    if not safe:
+        return FeatureOutput(value=None, metadata=common)
+    value, score_meta = fundamental_value_score_from_parts(
+        close=last_close,
+        bps=observation.get("bps"),
+        eps=observation.get("eps"),
+    )
+    return FeatureOutput(value=value, metadata={**common, **score_meta})
