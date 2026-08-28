@@ -74,7 +74,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("INGESTION_RUNTIME", "local"),
     )
     p.add_argument("--data-dir", default="data")
-    p.add_argument("--db", default=None, help="SQLite path (default <data-dir>/structured/ingestion.sqlite)")
+    p.add_argument(
+        "--db",
+        default=None,
+        help=(
+            "SQLite path (default <data-dir>/structured/ingestion.sqlite; "
+            "personal DRAFT uses personal-ingestion.sqlite)"
+        ),
+    )
     p.add_argument("--code", default=None, help="J-Quants code filter")
     p.add_argument("--from-date", dest="from_date", default=None)
     p.add_argument("--to-date", dest="to_date", default=None)
@@ -88,6 +95,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--mode", choices=["incremental", "backfill"], default="incremental",
         help="J-Quants catalog fetch mode (default incremental)",
+    )
+    p.add_argument(
+        "--personal-draft",
+        action="store_true",
+        help=(
+            "local-only J-Quants catalog ingestion for personal DRAFT research; "
+            "persists raw manifests and PIT facts without receipts, Coverage, "
+            "READY, or any completeness claim"
+        ),
     )
     p.add_argument(
         "--no-jquants-proxy", dest="no_jquants_proxy", action="store_true",
@@ -180,10 +196,28 @@ def _parse_datasets(raw) -> list[str]:
     return out
 
 def main(argv=None) -> int:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if args.personal_draft:
+        if args.runtime != "local":
+            parser.error("--personal-draft requires --runtime local")
+        if args.source != "jquants":
+            parser.error("--personal-draft requires --source jquants")
+        if not args.dataset:
+            parser.error("--personal-draft requires at least one --dataset")
 
     data_base = Path(args.data_dir)
-    db_path = Path(args.db) if args.db else data_base / "structured" / "ingestion.sqlite"
+    governed_default = data_base / "structured" / "ingestion.sqlite"
+    personal_default = data_base / "structured" / "personal-ingestion.sqlite"
+    db_path = Path(args.db) if args.db else (
+        personal_default if args.personal_draft else governed_default
+    )
+    if args.personal_draft and db_path.resolve() == governed_default.resolve():
+        parser.error(
+            "--personal-draft refuses the governed ingestion.sqlite; "
+            "use a dedicated personal database"
+        )
     runtime = args.runtime
     today = now_jst()
 
@@ -193,6 +227,12 @@ def main(argv=None) -> int:
             "(Pattern B: fetch on local, CF reads storage only)."
         )
         return 2
+
+    datasets = _parse_datasets(args.dataset)
+    if args.personal_draft and not datasets:
+        parser.error(
+            "--personal-draft requires at least one non-empty --dataset"
+        )
 
     http = make_http_client(runtime, user_agent=_UA)
     # J-Quants may route through the Cloudflare secret-proxy Worker (key held
@@ -220,7 +260,6 @@ def main(argv=None) -> int:
     else:
         print("[env] JQUANTS_API_KEY absent — J-Quants will be skipped.")
 
-    datasets = _parse_datasets(args.dataset)
     if datasets:
         print(f"[jquants] catalog mode={args.mode} datasets={','.join(datasets)}")
 
@@ -233,6 +272,7 @@ def main(argv=None) -> int:
                 code=args.code, date_from=args.from_date, date_to=args.to_date,
                 datasets=datasets or None, mode=args.mode,
                 max_workers=args.workers, chunk_days=args.chunk_days,
+                personal_draft=args.personal_draft,
             )
             all_reports.extend(reps)
             for r in reps:

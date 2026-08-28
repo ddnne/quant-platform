@@ -107,6 +107,8 @@ def _run_local(args: argparse.Namespace) -> int:
     ]
     for d in ds:
         cmd.extend(["--dataset", d])
+    if args.personal_draft:
+        cmd.append("--personal-draft")
 
     meta = {
         "cmd": cmd,
@@ -114,8 +116,13 @@ def _run_local(args: argparse.Namespace) -> int:
         "runtime": "local",
         "mode": "execute" if (args.execute and not args.dry_run) else "dry-run",
         "note": (
-            "Does not claim COMPLETE; run refresh_coverage_ledger after. "
-            "Default is dry-run; pass --execute to run ingestion."
+            (
+                "Personal DRAFT only; never issue or refresh governed "
+                "Coverage/READY. "
+                if args.personal_draft
+                else "Does not claim COMPLETE; run refresh_coverage_ledger after. "
+            )
+            + "Default is dry-run; pass --execute to run ingestion."
         ),
     }
     (LOG_ROOT / f"hist_{stamp}_meta.json").write_text(
@@ -130,17 +137,23 @@ def _run_local(args: argparse.Namespace) -> int:
         fh.flush()
         proc = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT)
     print(f"log={log} exit={proc.returncode}")
-    print(
-        "Next: python scripts/refresh_coverage_ledger.py && "
-        "python scripts/backfill_status_report.py && "
-        "python scripts/report_raw_throughput.py"
-    )
+    if args.personal_draft:
+        print(
+            "Personal DRAFT complete: no Coverage COMPLETE, receipt, or READY "
+            "was issued. Validate observed rows before research."
+        )
+    else:
+        print(
+            "Next: python scripts/refresh_coverage_ledger.py && "
+            "python scripts/backfill_status_report.py && "
+            "python scripts/report_raw_throughput.py"
+        )
     return int(proc.returncode)
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--db", type=Path, default=ROOT / "data/structured/ingestion.sqlite")
+    ap.add_argument("--db", type=Path, default=None)
     ap.add_argument("--dataset", action="append", default=[], help="dataset id (repeatable)")
     ap.add_argument("--from-date", required=True)
     ap.add_argument("--to-date", required=True)
@@ -162,6 +175,14 @@ def main(argv: list[str] | None = None) -> int:
         "--execute",
         action="store_true",
         help="Actually run ingestion / CF posts (default: dry-run)",
+    )
+    ap.add_argument(
+        "--personal-draft",
+        action="store_true",
+        help=(
+            "local-only unsigned personal history; defaults to the dedicated "
+            "personal-ingestion.sqlite database"
+        ),
     )
     ap.add_argument(
         "--dry-run",
@@ -188,6 +209,21 @@ def main(argv: list[str] | None = None) -> int:
         help="Fins separate rate pool (do not share with general; default 495)",
     )
     args = ap.parse_args(argv)
+
+    if args.personal_draft:
+        if args.runtime != "local":
+            ap.error("--personal-draft requires --runtime local")
+        if args.source != "jquants":
+            ap.error("--personal-draft requires --source jquants")
+        if not args.dataset:
+            ap.error("--personal-draft requires at least one --dataset")
+    if args.db is None:
+        filename = (
+            "personal-ingestion.sqlite"
+            if args.personal_draft
+            else "ingestion.sqlite"
+        )
+        args.db = ROOT / "data" / "structured" / filename
 
     # Default dry-run: --execute required for side effects.
     if not args.execute:
