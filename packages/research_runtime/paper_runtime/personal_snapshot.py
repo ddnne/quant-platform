@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import quote
 
-from .snapshot import data_snapshot_id
+from .snapshot_identity import data_snapshot_id
 
 
 PERSONAL_SNAPSHOT_FORMAT = "personal-paper-snapshot/v1"

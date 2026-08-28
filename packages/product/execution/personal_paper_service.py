@@ -13,7 +13,7 @@ from datetime import date
 from pathlib import Path
 
 from core.universe import RawFixedUniverseError, ResolvedDailyUniverse
-from paper_runtime import data_snapshot_id
+from paper_runtime.snapshot_identity import data_snapshot_id
 from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult, run_paper
 from strategies.spec import (
     FeatureRef,

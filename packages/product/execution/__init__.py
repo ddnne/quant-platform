@@ -5,28 +5,43 @@ dedicated execution authority is not provisioned, so its public boundary is
 PENDING and has no path, store, verifier, or transport injection surface.
 """
 
-from .paper_service import (
-    CONTROLLED_AUTHORITY_UNPROVISIONED,
-    ControlledPilotExecutionService,
-    ControlledPilotPending,
-    OfflineFixturePaperService,
-    PaperExecutionRejected,
-    PaperExecutionService,
-)
-from .controlled_artifacts import (
-    CONTROLLED_ARTIFACT_AUTHORITY_UNPROVISIONED,
-    ControlledArtifactAuthorityPending,
-    ControlledArtifactPublicKeyRegistry,
-    ControlledArtifactVerificationError,
-    VerifiedControlledExecutionArtifacts,
-    load_verified_controlled_execution_artifacts,
-)
-from .trader_authority import (
-    TraderAuthorizationBinding,
-    TraderAuthorizationPublicKeyRegistry,
-    VerifiedTraderAuthorization,
-    verify_exact_trader_authorization,
-)
+from __future__ import annotations
+
+from importlib import import_module
+
+
+_EXPORT_MODULES = {
+    "CONTROLLED_AUTHORITY_UNPROVISIONED": ".paper_service",
+    "ControlledPilotExecutionService": ".paper_service",
+    "ControlledPilotPending": ".paper_service",
+    "OfflineFixturePaperService": ".paper_service",
+    "PaperExecutionRejected": ".paper_service",
+    "PaperExecutionService": ".paper_service",
+    "CONTROLLED_ARTIFACT_AUTHORITY_UNPROVISIONED": ".controlled_artifacts",
+    "ControlledArtifactAuthorityPending": ".controlled_artifacts",
+    "ControlledArtifactPublicKeyRegistry": ".controlled_artifacts",
+    "ControlledArtifactVerificationError": ".controlled_artifacts",
+    "VerifiedControlledExecutionArtifacts": ".controlled_artifacts",
+    "load_verified_controlled_execution_artifacts": ".controlled_artifacts",
+    "TraderAuthorizationBinding": ".trader_authority",
+    "TraderAuthorizationPublicKeyRegistry": ".trader_authority",
+    "VerifiedTraderAuthorization": ".trader_authority",
+    "verify_exact_trader_authorization": ".trader_authority",
+}
+
+
+def __getattr__(name: str):
+    """Preserve public imports without loading controlled authorities eagerly."""
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(name)
+    value = getattr(import_module(module_name, __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
 
 __all__ = [
     "CONTROLLED_AUTHORITY_UNPROVISIONED",
