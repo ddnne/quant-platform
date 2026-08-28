@@ -22,7 +22,7 @@ from ingestion.personal_history import (
     assert_personal_history_database,
     build_personal_history_plan,
 )
-from pit.api import get_equity_master
+from pit.api import get_equity_bars_daily, get_equity_master
 from scripts.hydrate_personal_history import (
     DEFAULT_RPM,
     _effective_rpm,
@@ -170,6 +170,12 @@ def _rows(store: SqliteStore, dataset: str) -> list[dict]:
     )
 
 
+def _typed_bars(store: SqliteStore) -> list[dict]:
+    return store.fetch_where(
+        "jquants_daily_bars", "source='jquants'", ()
+    )
+
+
 def test_hydrator_pit_timing_compression_compaction_and_draft_boundary(tmp_path):
     db = tmp_path / "personal-history.sqlite"
     store = SqliteStore(db)
@@ -215,23 +221,24 @@ def test_hydrator_pit_timing_compression_compaction_and_draft_boundary(tmp_path)
     assert {row["code"] for row in at_open.rows} == {"1001", "1002"}
     assert {row["code"] for row in at_close.rows} == {"1001", "1002"}
 
-    bars = _rows(store, "equities_bars_daily")
+    assert _rows(store, "equities_bars_daily") == []
+    assert store._conn.execute(
+        "SELECT COUNT(*) FROM jquants_records_revisions "
+        "WHERE dataset='equities_bars_daily'"
+    ).fetchone()[0] == 0
+    bars = _typed_bars(store)
     assert bars
     assert all(row["raw_payload"] is None for row in bars)
     for row in bars:
-        payload = json.loads(row["payload"])
-        assert set(payload) <= {
-            "Code",
-            "Date",
-            "Close",
-            "AdjustmentClose",
-            "Volume",
-            "AdjustmentVolume",
-            "TurnoverValue",
-            "AdjustmentFactor",
-        }
-        assert "Open" not in payload
-        assert "CompanyName" not in payload
+        assert row["open"] is None
+        assert row["high"] is None
+        assert row["low"] is None
+        assert row["close"] is not None
+    pit_bars = get_equity_bars_daily(
+        as_of="2025-01-08T15:30:00+09:00", db_path=db
+    )
+    assert len(pit_bars.rows) == len(bars)
+    assert all(row["raw_payload"] is None for row in pit_bars.rows)
     assert all(row["raw_payload"] is None for row in _rows(store, "fins_summary"))
     missing_time = next(
         row
@@ -252,6 +259,7 @@ def test_hydrator_pit_timing_compression_compaction_and_draft_boundary(tmp_path)
     assert len(evidence[0]["sha256"]) == 64
     assert segment["completeness_claim"] == "NONE"
     assert segment["observed_ratio"] == 1.0
+    assert str(segment["facts_digest"]).startswith("sha256:")
 
     for table in (
         "collection_receipts",
@@ -304,6 +312,9 @@ def test_resume_is_idempotent_and_refetches_only_failed_segment(tmp_path):
         ) else 0
         assert client.calls[key] == count + expected_increment
     row_count_after = store.count("jquants_records")
+    typed_count_after = store.count("jquants_daily_bars")
+    assert typed_count_after > 0
+    assert _rows(store, "equities_bars_daily") == []
 
     calls_before_noop = Counter(client.calls)
     noop = hydrator.hydrate()
@@ -311,7 +322,118 @@ def test_resume_is_idempotent_and_refetches_only_failed_segment(tmp_path):
     assert noop.skipped_segments == sum(noop.segment_counts.values())
     assert client.calls == calls_before_noop
     assert store.count("jquants_records") == row_count_after
-    assert row_count_after >= row_count_before
+    assert store.count("jquants_daily_bars") == typed_count_after
+    assert row_count_after + typed_count_after >= row_count_before
+    store.close()
+
+
+def test_typed_bar_materialization_is_atomic_and_idempotent(tmp_path):
+    store = SqliteStore(tmp_path / "materialize.sqlite")
+    hydrator = PersonalHistoryHydrator(
+        client=_HistoryClient(), store=store, plan=_plan()
+    )
+    rows = _compact_bars(
+        [
+            {
+                "Code": "1001",
+                "Date": "2025-01-06",
+                "Close": 101,
+                "AdjustmentClose": 102,
+                "Volume": 1_000,
+                "AdjustmentVolume": 900,
+                "TurnoverValue": 100_000,
+            }
+        ],
+        trading_day="2025-01-06",
+        prime_union=frozenset({"1001"}),
+        ingested_at="2025-01-06T16:00:00+09:00",
+    )
+    store.upsert("jquants_records", rows)
+    store._conn.execute(
+        "INSERT INTO personal_history_segments ("
+        "dataset,segment_id,query_start,query_end,query_params,state,"
+        "pit_policy,rows_fetched,rows_written) "
+        "VALUES ('equities_bars_daily','bars:2025-01-06',"
+        "'2025-01-06','2025-01-06','{}','OBSERVED',?,1,1)",
+        ("canonical_session_close/v1",),
+    )
+    store._conn.execute(
+        "CREATE TRIGGER reject_typed_bar BEFORE INSERT ON jquants_daily_bars "
+        "BEGIN SELECT RAISE(ABORT, 'injected typed failure'); END"
+    )
+    store._conn.commit()
+
+    with pytest.raises(PersonalHistoryError, match="injected typed failure"):
+        hydrator._materialize_typed_bars()
+    assert len(_rows(store, "equities_bars_daily")) == 1
+    assert _typed_bars(store) == []
+
+    store._conn.execute("DROP TRIGGER reject_typed_bar")
+    store._conn.commit()
+    assert hydrator._materialize_typed_bars() == 1
+    assert _rows(store, "equities_bars_daily") == []
+    bars = _typed_bars(store)
+    assert len(bars) == 1
+    assert bars[0]["close"] == 101.0
+    assert bars[0]["adjustment_close"] == 102.0
+    assert bars[0]["raw_payload"] is None
+    assert hydrator._materialize_typed_bars() == 0
+    assert _typed_bars(store) == bars
+
+    store._conn.execute(
+        "INSERT INTO jquants_daily_bars ("
+        "source,code,date,event_time,available_at,ingested_at,close,raw_payload) "
+        "VALUES ('jquants','9999','2025-01-07','2025-01-07T15:00:00+09:00',"
+        "'2025-01-07T15:00:00+09:00','2025-01-07T16:00:00+09:00',99,NULL)"
+    )
+    store._conn.commit()
+    with pytest.raises(PersonalHistoryError, match="completed checkpoints"):
+        hydrator._validate_draft_boundary()
+    store._conn.execute(
+        "DELETE FROM jquants_daily_bars WHERE code='9999'"
+    )
+    store._conn.execute(
+        "INSERT INTO jquants_daily_bars_revisions "
+        "SELECT * FROM jquants_daily_bars WHERE code='1001'"
+    )
+    store._conn.commit()
+    with pytest.raises(PersonalHistoryError, match="revisions are forbidden"):
+        hydrator._validate_draft_boundary()
+    store.close()
+
+
+def test_typed_bar_materialization_rejects_partial_generic_mixture(tmp_path):
+    store = SqliteStore(tmp_path / "partial-mixture.sqlite")
+    hydrator = PersonalHistoryHydrator(
+        client=_HistoryClient(), store=store, plan=_plan()
+    )
+    rows = _compact_bars(
+        [
+            {"Code": "1001", "Date": "2025-01-06", "Close": 101},
+            {"Code": "1002", "Date": "2025-01-06", "Close": 102},
+        ],
+        trading_day="2025-01-06",
+        prime_union=frozenset({"1001", "1002"}),
+        ingested_at="2025-01-06T16:00:00+09:00",
+    )
+    store.upsert("jquants_records", rows)
+    store._conn.execute(
+        "INSERT INTO personal_history_segments ("
+        "dataset,segment_id,query_start,query_end,query_params,state,"
+        "pit_policy,rows_fetched,rows_written) "
+        "VALUES ('equities_bars_daily','bars:2025-01-06',"
+        "'2025-01-06','2025-01-06','{}','OBSERVED',?,2,2)",
+        ("canonical_session_close/v1",),
+    )
+    store._conn.commit()
+    assert hydrator._materialize_typed_bars() == 2
+    assert len(_typed_bars(store)) == 2
+
+    store.upsert("jquants_records", rows[:1])
+    with pytest.raises(PersonalHistoryError, match="generic bar count"):
+        hydrator._materialize_typed_bars()
+    assert len(_rows(store, "equities_bars_daily")) == 1
+    assert len(_typed_bars(store)) == 2
     store.close()
 
 

@@ -391,22 +391,50 @@ def _observed_dataset_evidence(
     period_start: str,
     period_end: str,
 ) -> list[dict[str, Any]]:
-    columns = _table_columns(connection, "jquants_records")
-    required_columns = {"source", "dataset", "event_time", "payload"}
-    if not required_columns <= columns:
-        raise PersonalSnapshotError(
-            "personal snapshot requires canonical jquants_records observations"
+    generic_columns = _table_columns(connection, "jquants_records")
+    required_generic = {"source", "dataset", "event_time", "payload"}
+    by_dataset: dict[str, dict[str, Any]] = {}
+    if required_generic <= generic_columns:
+        placeholders = ",".join("?" for _ in required_datasets)
+        rows = connection.execute(
+            "SELECT dataset,COUNT(*) AS row_count,"
+            "MIN(substr(event_time,1,10)) AS min_event_date,"
+            "MAX(substr(event_time,1,10)) AS max_event_date "
+            "FROM jquants_records WHERE source='jquants' "
+            f"AND dataset IN ({placeholders}) GROUP BY dataset ORDER BY dataset",
+            tuple(required_datasets),
+        ).fetchall()
+        by_dataset.update(
+            (str(row["dataset"]), dict(row)) for row in rows
         )
-    placeholders = ",".join("?" for _ in required_datasets)
-    rows = connection.execute(
-        "SELECT dataset,COUNT(*) AS row_count,"
-        "MIN(substr(event_time,1,10)) AS min_event_date,"
-        "MAX(substr(event_time,1,10)) AS max_event_date "
-        "FROM jquants_records WHERE source='jquants' "
-        f"AND dataset IN ({placeholders}) GROUP BY dataset ORDER BY dataset",
-        tuple(required_datasets),
-    ).fetchall()
-    by_dataset = {str(row["dataset"]): row for row in rows}
+
+    # The personal hydrator promotes its largest/query-hot partition into the
+    # existing indexed typed table at completion. Prefer that representation,
+    # while retaining generic observations for older fixtures and snapshots.
+    if "equities_bars_daily" in required_datasets:
+        typed_columns = _table_columns(connection, "jquants_daily_bars")
+        required_typed = {
+            "source",
+            "code",
+            "date",
+            "event_time",
+            "available_at",
+        }
+        if required_typed <= typed_columns:
+            typed = connection.execute(
+                "SELECT 'equities_bars_daily' AS dataset,"
+                "COUNT(*) AS row_count,MIN(date) AS min_event_date,"
+                "MAX(date) AS max_event_date FROM jquants_daily_bars "
+                "WHERE source='jquants'"
+            ).fetchone()
+            if typed is not None and int(typed["row_count"] or 0) > 0:
+                generic = by_dataset.get("equities_bars_daily")
+                if generic is not None and int(generic["row_count"] or 0) > 0:
+                    raise PersonalSnapshotError(
+                        "personal snapshot cannot mix generic and typed daily bars"
+                    )
+                by_dataset["equities_bars_daily"] = dict(typed)
+
     evidence: list[dict[str, Any]] = []
     for dataset_id in required_datasets:
         row = by_dataset.get(dataset_id)

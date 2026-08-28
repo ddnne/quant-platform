@@ -233,6 +233,92 @@ def test_materialize_captures_committed_wal_and_publishes_unsigned_read_only_art
         writer.close()
 
 
+def test_materialize_accepts_typed_personal_bars_with_generic_calendar(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "typed.sqlite"
+    writer = _open_wal_source(source)
+    try:
+        writer.executescript(
+            """
+            CREATE TABLE jquants_daily_bars (
+                source TEXT NOT NULL,
+                code TEXT NOT NULL,
+                date TEXT NOT NULL,
+                event_time TEXT NOT NULL,
+                available_at TEXT NOT NULL,
+                ingested_at TEXT NOT NULL,
+                close REAL,
+                raw_payload TEXT,
+                PRIMARY KEY (source,code,date)
+            );
+            INSERT INTO jquants_daily_bars VALUES
+                ('jquants','1301','2024-01-02','2024-01-02T15:00:00+09:00',
+                 '2024-01-02T15:00:00+09:00','2024-01-02T16:00:00+09:00',
+                 100.0,NULL),
+                ('jquants','1301','2024-12-30','2024-12-30T15:30:00+09:00',
+                 '2024-12-30T15:30:00+09:00','2024-12-30T16:00:00+09:00',
+                 110.0,NULL);
+            DELETE FROM jquants_records
+            WHERE dataset='equities_bars_daily';
+            """
+        )
+        writer.commit()
+        snapshot = _materialize(source, tmp_path / "snapshots")
+    finally:
+        writer.close()
+
+    manifest = json.loads(snapshot.manifest_path.read_text(encoding="utf-8"))
+    bars_evidence = next(
+        item
+        for item in manifest["observed_datasets"]
+        if item["dataset_id"] == "equities_bars_daily"
+    )
+    assert bars_evidence == {
+        "dataset_id": "equities_bars_daily",
+        "evidence_status": "OBSERVED",
+        "row_count": 2,
+        "min_event_date": "2024-01-02",
+        "max_event_date": "2024-12-30",
+    }
+    assert pit.get_jquants_records(
+        as_of="2025-01-01", dataset="equities_bars_daily", db_path=snapshot.db_path
+    ).rows == []
+    bars = pit.get_equity_bars_daily(
+        as_of="2025-01-01", db_path=snapshot.db_path
+    ).rows
+    assert [(row["date"], row["close"]) for row in bars] == [
+        ("2024-01-02", 100.0),
+        ("2024-12-30", 110.0),
+    ]
+
+
+def test_materialize_rejects_mixed_generic_and_typed_bars(tmp_path: Path) -> None:
+    source = tmp_path / "mixed.sqlite"
+    writer = _open_wal_source(source)
+    try:
+        writer.executescript(
+            """
+            CREATE TABLE jquants_daily_bars (
+                source TEXT NOT NULL,
+                code TEXT NOT NULL,
+                date TEXT NOT NULL,
+                event_time TEXT NOT NULL,
+                available_at TEXT NOT NULL,
+                PRIMARY KEY (source,code,date)
+            );
+            INSERT INTO jquants_daily_bars VALUES
+                ('jquants','1301','2024-01-02','2024-01-02T15:00:00+09:00',
+                 '2024-01-02T15:00:00+09:00');
+            """
+        )
+        writer.commit()
+        with pytest.raises(PersonalSnapshotError, match="mix generic and typed"):
+            _materialize(source, tmp_path / "snapshots")
+    finally:
+        writer.close()
+
+
 def test_materialize_is_idempotent_for_same_database_and_canonical_scope(
     tmp_path: Path,
 ) -> None:
