@@ -7,9 +7,11 @@ import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 
+import pit
 import pit.api as pit_api_module
 import pytest
 
+from core import run_backtest
 from core.engine import _make_feature_accessor
 from data_contracts.identity import natural_key
 from execution.personal_paper_service import PersonalPaperExecutionService
@@ -18,6 +20,7 @@ from paper_runtime.personal_prepared_frame import (
     _feature_cache_key_document,
     _personal_prepared_frame_scope,
 )
+from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
 from research.paper_candidate_specs import (
     build_factor_rank_strategy_spec,
     build_multi_day_hold_strategy_spec,
@@ -47,7 +50,12 @@ from research.personal_universe import (
     personal_universe_selector,
 )
 from storage.sqlite_store import SqliteStore
-from strategies.spec import FactorLeg, FeatureRef, iter_feature_refs
+from strategies.spec import (
+    FactorLeg,
+    FeatureRef,
+    interpret_strategy_spec,
+    iter_feature_refs,
+)
 
 
 def _dates(start: date, end: date) -> list[str]:
@@ -415,6 +423,74 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
     assert not cache_path.exists()
 
 
+def test_prepared_first_pass_uses_exact_session_bar_windows(
+    personal_db: tuple[Path, str, str],
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source, start, end = personal_db
+    universe, period = _prepared_frame_case(source, start, end)
+    spec = _prepared_frame_spec("price")
+    snapshot_id = data_snapshot_id(source)
+    real_get_bars = pit.get_equity_bars_daily
+    engine_reads: list[tuple[str, str, int]] = []
+
+    def tracked_get_bars(*args, **kwargs):
+        result = real_get_bars(*args, **kwargs)
+        codes = tuple(kwargs.get("codes") or ())
+        if len(codes) == 4:
+            engine_reads.append(
+                (
+                    str(kwargs.get("from_event")),
+                    str(kwargs.get("to_event")),
+                    len(result.rows),
+                )
+            )
+        return result
+
+    monkeypatch.setattr(pit, "get_equity_bars_daily", tracked_get_bars)
+    common = {
+        "db_path": source,
+        "snapshot_id": snapshot_id,
+        "universe": universe,
+        "period": period,
+        "cost_bps": 10.0,
+        "lookback_days": 536,
+        "max_drawdown": 1.0,
+    }
+    uncached = _run_one(
+        PersonalPaperExecutionService(),
+        spec,
+        output_root=tmp_path / "bar-shape-uncached",
+        **common,
+    )[3]
+    uncached_reads = tuple(engine_reads)
+    engine_reads.clear()
+
+    with _personal_prepared_frame_scope(
+        db_path=source,
+        snapshot_id=snapshot_id,
+    ) as frame:
+        prepared = _run_one(
+            PersonalPaperExecutionService(),
+            spec,
+            output_root=tmp_path / "bar-shape-prepared",
+            **common,
+        )[3]
+        prepared_reads = tuple(engine_reads)
+        stats = frame.stats()
+
+    assert prepared == uncached
+    assert uncached_reads
+    assert prepared_reads
+    assert any(from_event != to_event for from_event, to_event, _ in uncached_reads)
+    assert all(from_event == to_event for from_event, to_event, _ in prepared_reads)
+    assert sum(rows for _, _, rows in prepared_reads) * 5 < sum(
+        rows for _, _, rows in uncached_reads
+    )
+    assert int(stats["price_window_writes"]) == len(prepared_reads)
+
+
 def test_prepared_frame_preserves_missing_reason_and_halves_pit_queries(
     personal_db: tuple[Path, str, str],
     tmp_path: Path,
@@ -608,6 +684,86 @@ def test_prepared_frame_preserves_late_revision_fallback_and_departed_holding(
         for trade in baseline.trades
     )
     assert baseline.equity_curve[-1]["positions_value"] > 0.0
+
+
+def test_compact_price_path_excludes_custom_and_same_day_strategies(
+    personal_db: tuple[Path, str, str],
+) -> None:
+    source, start, end = personal_db
+    universe, period = _prepared_frame_case(source, start, end)
+    snapshot_id = data_snapshot_id(source)
+
+    class InspectBars:
+        strategy_id = "inspect_full_bars"
+        params: dict = {}
+
+        def __init__(self) -> None:
+            self.observed: list[tuple[int, ...]] = []
+
+        def on_bar(self, ctx):
+            self.observed.append(
+                tuple(len(ctx.bars[code]) for code in sorted(ctx.universe))
+            )
+            return []
+
+    baseline_strategy = InspectBars()
+    baseline = run_backtest(
+        baseline_strategy,
+        period[0],
+        period[1],
+        db_path=source,
+        execution_mode="next_close",
+        universe=universe,
+        lookback_days=14,
+    )
+    prepared_strategy = InspectBars()
+    with _personal_prepared_frame_scope(
+        db_path=source,
+        snapshot_id=snapshot_id,
+    ) as frame:
+        prepared = run_backtest(
+            prepared_strategy,
+            period[0],
+            period[1],
+            db_path=source,
+            execution_mode="next_close",
+            universe=universe,
+            lookback_days=14,
+        )
+        custom_stats = frame.stats()
+    assert prepared == baseline
+    assert prepared_strategy.observed == baseline_strategy.observed
+    assert int(custom_stats["price_window_requests"]) == 0
+    assert max(max(counts) for counts in prepared_strategy.observed) > 1
+
+    spec = _prepared_frame_spec("price")
+    same_day_baseline = run_backtest(
+        interpret_strategy_spec(spec),
+        period[0],
+        period[1],
+        db_path=source,
+        execution_mode="same_day_close",
+        universe=universe,
+        lookback_days=14,
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+    )
+    with _personal_prepared_frame_scope(
+        db_path=source,
+        snapshot_id=snapshot_id,
+    ) as frame:
+        same_day_prepared = run_backtest(
+            interpret_strategy_spec(spec),
+            period[0],
+            period[1],
+            db_path=source,
+            execution_mode="same_day_close",
+            universe=universe,
+            lookback_days=14,
+            price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+        )
+        same_day_stats = frame.stats()
+    assert same_day_prepared == same_day_baseline
+    assert int(same_day_stats["price_window_requests"]) == 0
 
 
 def _install_managed_sync_evidence(source: Path, *, failing: str | None = None) -> None:

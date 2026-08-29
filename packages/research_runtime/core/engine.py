@@ -48,6 +48,22 @@ CORE_ENGINE_VERSION = "0.7.0"
 # J-Quants HolidayDivision: "1" == trading day (exchange open).
 _TRADING_HOLIDAY_DIVISION = "1"
 
+_PREPARED_BAR_FIELDS = (
+    "source",
+    "code",
+    "date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "adjustment_open",
+    "adjustment_high",
+    "adjustment_low",
+    "adjustment_close",
+    "adjustment_volume",
+)
+
 
 def describe_strategy(strategy: Any) -> tuple[str, dict[str, Any]]:
     """``strategy_id`` / ``params`` for metadata; class name / {} if omitted."""
@@ -227,23 +243,14 @@ def _load_snapshot(
     if not codes:
         return snapshot
     from_date = _shift_date(to_date, -lookback_days)
-    if _active_personal_prepared_frame(db_path) is None:
-        rows = pit.get_equity_bars_daily(
-            as_of=as_of,
-            from_event=from_date,
-            to_event=to_date,
-            codes=tuple(sorted(codes)),
-            db_path=db_path,
-        ).rows
-    else:
-        rows = _prepared_bar_rows(
-            as_of=as_of,
-            codes=codes,
-            from_event=from_date,
-            to_event=to_date,
-            db_path=db_path,
-        )
-    for row in rows:
+    result = pit.get_equity_bars_daily(
+        as_of=as_of,
+        from_event=from_date,
+        to_event=to_date,
+        codes=tuple(sorted(codes)),
+        db_path=db_path,
+    )
+    for row in result.rows:
         code = row.get("code")
         if code not in snapshot:
             continue
@@ -291,7 +298,14 @@ def _prepared_bar_rows(
         codes=ordered_codes,
         db_path=db_path,
     )
-    rows = tuple(dict(row) for row in result.rows)
+    rows = tuple(
+        {
+            field: row.get(field)
+            for field in _PREPARED_BAR_FIELDS
+            if field in row
+        }
+        for row in result.rows
+    )
     if frame is not None:
         frame.store_price_rows(
             as_of=as_of,
@@ -301,6 +315,70 @@ def _prepared_bar_rows(
             rows=rows,
         )
     return rows
+
+
+def _load_prepared_strategy_snapshot(
+    as_of: str,
+    codes: set[str],
+    to_date: str,
+    lookback_days: int,
+    *,
+    db_path: Any,
+    price_basis: PriceBasis,
+) -> dict[str, dict[str, Any]]:
+    """Compact snapshot for a StrategySpec that never consumes ``ctx.bars``.
+
+    Exact-session bars cover fills, marks, and almost every decision price.
+    Only codes missing an exact-session bar pay for the original historical
+    fallback needed to preserve ``last close within lookback`` behavior.
+    """
+
+    snapshot: dict[str, dict[str, Any]] = {
+        code: {"close": None, "bars": []} for code in codes
+    }
+    if not codes:
+        return snapshot
+
+    exact_rows = _prepared_bar_rows(
+        as_of=as_of,
+        codes=codes,
+        from_event=to_date,
+        to_event=to_date,
+        db_path=db_path,
+    )
+    exact_codes: set[str] = set()
+    for row in exact_rows:
+        code = str(row.get("code") or "")
+        if code not in snapshot:
+            continue
+        exact_codes.add(code)
+        snapshot[code]["bars"].append(
+            _bar_from_row(row, price_basis=price_basis)
+        )
+
+    missing = codes - exact_codes
+    if missing:
+        from_date = _shift_date(to_date, -lookback_days)
+        for row in _prepared_bar_rows(
+            as_of=as_of,
+            codes=missing,
+            from_event=from_date,
+            to_event=to_date,
+            db_path=db_path,
+        ):
+            code = str(row.get("code") or "")
+            if code not in snapshot:
+                continue
+            snapshot[code]["bars"].append(
+                _bar_from_row(row, price_basis=price_basis)
+            )
+
+    for entry in snapshot.values():
+        bars = entry["bars"]
+        entry["close"] = (
+            _bar_price(bars[-1], price_basis=price_basis) if bars else None
+        )
+    return snapshot
 
 
 def _session_prices(
@@ -660,6 +738,11 @@ def run_backtest(
     marks: dict[str, tuple[float, str]] = {}
     # next_close only: orders decided on day D fill on day D+1.
     pending: dict[str, Any] | None = None
+    prepared_strategy_frame = bool(
+        mode.fill_offset == 1
+        and _active_personal_prepared_frame(resolved_db_path) is not None
+        and getattr(strategy, "personal_prepared_frame_eligible", False) is True
+    )
 
     for d in days:
         decision_as_of = mode.decision_as_of(d)
@@ -681,7 +764,12 @@ def run_backtest(
         )
         held = set(shares) | set(universe_d)
 
-        snap_close = _load_snapshot(
+        snapshot_loader = (
+            _load_prepared_strategy_snapshot
+            if prepared_strategy_frame
+            else _load_snapshot
+        )
+        snap_close = snapshot_loader(
             close_as_of(d),
             held,
             d,
