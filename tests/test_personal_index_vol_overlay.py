@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from datetime import date, timedelta
+from typing import Any
 
 import pytest
 
@@ -14,6 +15,7 @@ from research.personal_index_vol_overlay import (
     IndexVolOverlayObservation,
     ONE_WAY_COST_RATE,
     OVERLAY_CANDIDATES,
+    PreparedIndexVolOverlayPanelManifest,
     evaluate_index_vol_overlays,
 )
 
@@ -60,9 +62,32 @@ def _by_id(report: dict, candidate_id: str) -> dict:
     )
 
 
+def _manifest(
+    rows: list[IndexVolOverlayObservation],
+) -> PreparedIndexVolOverlayPanelManifest:
+    def digest(character: str) -> str:
+        return "sha256:" + character * 64
+
+    return PreparedIndexVolOverlayPanelManifest(
+        strategy_spec_digest=digest("1"),
+        cohort_digest=digest("2"),
+        snapshot_digest=digest("3"),
+        base_report_digest=digest("4"),
+        trading_calendar_digest=digest("5"),
+        prepared_panel_digest=digest("6"),
+        session_date_start=rows[0].date,
+        session_date_end=rows[-1].date,
+        session_count=len(rows),
+    )
+
+
+def _evaluate(rows: list[IndexVolOverlayObservation], **kwargs: Any) -> dict:
+    return evaluate_index_vol_overlays(rows, manifest=_manifest(rows), **kwargs)
+
+
 def test_scope_is_frozen_to_one_sleeve_four_index_vol_candidates() -> None:
     rows, dates = _panel()
-    report = evaluate_index_vol_overlays(
+    report = _evaluate(
         rows,
         signal_start=dates[130],
         signal_end=dates[130],
@@ -85,11 +110,57 @@ def test_scope_is_frozen_to_one_sleeve_four_index_vol_candidates() -> None:
     assert report["topix_proxy"]["etf_fill_claim"] is False
 
 
+def test_prepared_panel_provenance_and_draft_lifecycle_are_required() -> None:
+    rows, dates = _panel()
+    manifest = _manifest(rows)
+    report = evaluate_index_vol_overlays(
+        rows,
+        manifest=manifest,
+        signal_start=dates[130],
+        signal_end=dates[130],
+    )
+
+    provenance = report["prepared_panel_provenance"]
+    assert provenance["strategy_spec_digest"] == manifest.strategy_spec_digest
+    assert provenance["cohort_digest"] == manifest.cohort_digest
+    assert provenance["snapshot_digest"] == manifest.snapshot_digest
+    assert provenance["base_report_digest"] == manifest.base_report_digest
+    assert provenance["trading_calendar_digest"] == manifest.trading_calendar_digest
+    assert provenance["complete_consecutive_trading_session_rows"] is True
+    assert provenance["all_rows_available_by_rebalance_close"] is True
+    assert provenance["availability_semantics"] == (
+        "ALL_FIELDS_AVAILABLE_BY_D_PLUS_1_CLOSE"
+    )
+    assert provenance["return_semantics"] == (
+        "NET_AFTER_STOCK_EXECUTION_COSTS_AND_SHORT_FINANCING"
+    )
+    assert report["lifecycle"] == {
+        "stage": "DRAFT_DIAGNOSTIC",
+        "role": "DIAGNOSTIC_RESEARCH_ONLY",
+        "paper_execution": False,
+        "automatic_promotion": False,
+    }
+    assert report["cost_model"]["reported_cost_turnover_fill_scope"] == (
+        "OVERLAY_INCREMENTAL_ONLY"
+    )
+    assert report["cost_model"]["not_total_strategy_cost_metrics"] is True
+
+    with pytest.raises(ValueError, match="session_count mismatch"):
+        evaluate_index_vol_overlays(
+            rows,
+            manifest=replace(manifest, session_count=len(rows) - 1),
+            signal_start=dates[130],
+            signal_end=dates[130],
+        )
+    with pytest.raises(ValueError, match="net of stock costs and financing"):
+        replace(manifest, return_semantics="GROSS_BEFORE_COSTS")
+
+
 def test_ratio_scale_beta_cap_and_d_dplus1_dplus2_timing() -> None:
     rows, dates = _panel(beta=4.0)
     # A sub-one term ratio must not lever the sleeve above 1.0.
     rows[130] = replace(rows[130], n225_front_atm_iv=10.0)
-    report = evaluate_index_vol_overlays(
+    report = _evaluate(
         rows,
         signal_start=dates[130],
         signal_end=dates[130],
@@ -123,7 +194,7 @@ def test_ratio_scale_beta_cap_and_d_dplus1_dplus2_timing() -> None:
 
 def test_ten_basis_point_turnover_and_terminal_close_are_in_performance() -> None:
     rows, dates = _panel(beta=4.0)
-    report = evaluate_index_vol_overlays(
+    report = _evaluate(
         rows,
         signal_start=dates[130],
         signal_end=dates[130],
@@ -140,22 +211,71 @@ def test_ten_basis_point_turnover_and_terminal_close_are_in_performance() -> Non
         1_000_000.0 * ONE_WAY_COST_RATE * 2.25
     )
     assert path["terminal_close"] is True
-    assert path["terminal_turnover_one_way"] == pytest.approx(2.25)
-    assert path["terminal_close_cost_amount"] > 0.0
+    assert path["target_sleeve_notional"] > 0.0
+    assert path["target_topix_proxy_notional"] < 0.0
+    assert path["terminal_turnover_one_way_amount"] == pytest.approx(
+        abs(path["post_return_sleeve_notional"])
+        + abs(path["post_return_topix_proxy_notional"])
+    )
+    assert path["terminal_close_cost_amount"] == pytest.approx(
+        ONE_WAY_COST_RATE * path["terminal_turnover_one_way_amount"]
+    )
     assert performance["cost_amount"] == pytest.approx(
         path["rebalance_cost_amount"] + path["terminal_close_cost_amount"]
     )
     assert performance["fill_count"] == 4
     assert performance["schema_version"] == "personal-performance/v1"
+    assert performance["cost_turnover_fill_scope"] == "OVERLAY_INCREMENTAL_ONLY"
+    assert performance["total_strategy_cost_turnover_fill_comparable"] is False
+    terminal_trades = [
+        trade for trade in result["trades"] if "terminal_close" in trade["side"]
+    ]
+    assert terminal_trades[0]["notional"] < 0.0
+    assert terminal_trades[1]["notional"] > 0.0
     # One return observation deliberately preserves undefined dispersion ratios.
     assert performance["annualized_sharpe"] is None
     assert performance["annualized_volatility"] is None
     json.dumps(report, allow_nan=False)
 
 
+def test_signed_notional_drift_drives_next_turnover_and_terminal_close() -> None:
+    rows, dates = _panel(beta=1.25)
+    report = _evaluate(
+        rows,
+        signal_start=dates[130],
+        signal_end=dates[131],
+    )
+    result = _by_id(report, "n225_basevol_10_over_60_defensive_v1")
+    first, second = result["daily_path"]
+
+    assert second["pre_rebalance_sleeve_notional"] == pytest.approx(
+        first["post_return_sleeve_notional"]
+    )
+    assert second["pre_rebalance_topix_proxy_notional"] == pytest.approx(
+        first["post_return_topix_proxy_notional"]
+    )
+    assert second["sleeve_trade_notional"] == pytest.approx(
+        second["target_sleeve_notional"]
+        - second["pre_rebalance_sleeve_notional"]
+    )
+    assert second["topix_proxy_trade_notional"] == pytest.approx(
+        second["target_topix_proxy_notional"]
+        - second["pre_rebalance_topix_proxy_notional"]
+    )
+    assert second["sleeve_turnover_one_way_amount"] > 0.0
+    assert second["topix_proxy_turnover_one_way_amount"] > 0.0
+    assert second["terminal_turnover_one_way_amount"] == pytest.approx(
+        abs(second["post_return_sleeve_notional"])
+        + abs(second["post_return_topix_proxy_notional"])
+    )
+    assert second["terminal_close_cost_amount"] == pytest.approx(
+        ONE_WAY_COST_RATE * second["terminal_turnover_one_way_amount"]
+    )
+
+
 def test_future_mutation_cannot_change_signal_or_beta() -> None:
     rows, dates = _panel(beta=1.25)
-    original = evaluate_index_vol_overlays(
+    original = _evaluate(
         rows,
         signal_start=dates[130],
         signal_end=dates[130],
@@ -173,7 +293,7 @@ def test_future_mutation_cannot_change_signal_or_beta() -> None:
         base_sleeve_return=-0.40,
         n225_next_downside_wing_iv=999.0,
     )
-    changed = evaluate_index_vol_overlays(
+    changed = _evaluate(
         mutated,
         signal_start=dates[130],
         signal_end=dates[130],
@@ -202,7 +322,7 @@ def test_future_mutation_cannot_change_signal_or_beta() -> None:
 def test_missing_required_observation_is_not_evaluated_and_never_filled() -> None:
     rows, dates = _panel()
     rows[130] = replace(rows[130], n225_front_downside_wing_iv=None)
-    report = evaluate_index_vol_overlays(
+    report = _evaluate(
         rows,
         signal_start=dates[130],
         signal_end=dates[130],
@@ -224,7 +344,7 @@ def test_missing_required_observation_is_not_evaluated_and_never_filled() -> Non
 
 def test_beta_requires_63_returns_and_uses_at_most_126() -> None:
     rows, dates = _panel()
-    too_early = evaluate_index_vol_overlays(
+    too_early = _evaluate(
         rows,
         signal_start=dates[62],
         signal_end=dates[62],
@@ -232,10 +352,13 @@ def test_beta_requires_63_returns_and_uses_at_most_126() -> None:
     observed = _by_id(too_early, "n225_observed_front_over_next_atm_v1")
     assert observed["status"] == "NOT_EVALUATED"
     assert observed["missing_required_rows"] == [
-        {"date": dates[62], "reason": "beta_min_63_returns_unavailable"}
+        {
+            "date": dates[62],
+            "reason": "beta_min_63_pairs_unavailable_in_last_126_source_sessions",
+        }
     ]
 
-    enough = evaluate_index_vol_overlays(
+    enough = _evaluate(
         rows,
         signal_start=dates[63],
         signal_end=dates[63],
@@ -245,7 +368,7 @@ def test_beta_requires_63_returns_and_uses_at_most_126() -> None:
     )["daily_path"][0]
     assert observed_day["beta_observations"] == 63
 
-    long_window = evaluate_index_vol_overlays(
+    long_window = _evaluate(
         rows,
         signal_start=dates[130],
         signal_end=dates[130],
@@ -255,9 +378,68 @@ def test_beta_requires_63_returns_and_uses_at_most_126() -> None:
     )["daily_path"][0]["beta_observations"] == 126
 
 
+def test_beta_is_bounded_to_126_source_sessions_and_requires_fresh_pair() -> None:
+    rows, dates = _panel(count=200)
+    bounded = list(rows)
+    # At signal index 180, source return sessions 55..180 are the exact last
+    # 126.  Removing 64 leaves only 62, while older valid history must not be
+    # pulled into the estimate.
+    for index in range(55, 119):
+        bounded[index] = replace(bounded[index], base_sleeve_return=None)
+    report = _evaluate(
+        bounded,
+        signal_start=dates[180],
+        signal_end=dates[180],
+    )
+    observed = _by_id(report, "n225_observed_front_over_next_atm_v1")
+    assert observed["status"] == "NOT_EVALUATED"
+    assert observed["missing_required_rows"] == [
+        {
+            "date": dates[180],
+            "reason": "beta_min_63_pairs_unavailable_in_last_126_source_sessions",
+        }
+    ]
+
+    stale = list(rows)
+    stale[180] = replace(stale[180], base_sleeve_return=None)
+    stale_report = _evaluate(
+        stale,
+        signal_start=dates[180],
+        signal_end=dates[180],
+    )
+    stale_observed = _by_id(
+        stale_report, "n225_observed_front_over_next_atm_v1"
+    )
+    assert stale_observed["missing_required_rows"] == [
+        {"date": dates[180], "reason": "beta_current_signal_day_pair_unavailable"}
+    ]
+
+
+def test_base_g1_h0_control_is_diagnostic_and_outside_exact_four() -> None:
+    rows, dates = _panel()
+    report = _evaluate(
+        rows,
+        signal_start=dates[130],
+        signal_end=dates[130],
+    )
+    control = report["diagnostic_control"]
+
+    assert len(report["candidates"]) == 4
+    assert report["candidate_policy"]["declared_count"] == 4
+    assert report["candidate_policy"]["diagnostic_control_in_declared_count"] is False
+    assert control["control_id"] == "base_g1_h0_control_v1"
+    assert control["role"] == "DIAGNOSTIC_CONTROL_NOT_RANKED"
+    assert control["daily_path"][0]["gross_scale"] == 1.0
+    assert control["daily_path"][0]["topix_hedge_weight"] == 0.0
+    assert control["control_id"] not in report["candidate_policy"]["candidate_order"]
+    assert control["performance"]["cost_turnover_fill_scope"] == (
+        "OVERLAY_INCREMENTAL_ONLY"
+    )
+
+
 def test_svi_equivalents_are_diagnostic_only_and_cannot_change_results() -> None:
     rows, dates = _panel()
-    original = evaluate_index_vol_overlays(
+    original = _evaluate(
         rows,
         signal_start=dates[130],
         signal_end=dates[130],
@@ -268,7 +450,7 @@ def test_svi_equivalents_are_diagnostic_only_and_cannot_change_results() -> None
         svi_equivalent_atm_term_ratio=-999.0,
         svi_equivalent_downside_smile_term_ratio=999.0,
     )
-    changed = evaluate_index_vol_overlays(
+    changed = _evaluate(
         changed_rows,
         signal_start=dates[130],
         signal_end=dates[130],
@@ -284,7 +466,7 @@ def test_svi_equivalents_are_diagnostic_only_and_cannot_change_results() -> None
     )
     assert diagnostics["used_in_signals"] is False
     assert diagnostics["used_in_performance"] is False
-    assert diagnostics["rows"][0]["svi_equivalent_atm_term_ratio"] == -999.0
+    assert diagnostics["rows"][0]["svi_equivalent_atm_term_ratio"] is None
     assert diagnostics["rows"][0][
         "svi_equivalent_downside_smile_term_ratio"
     ] == 999.0
@@ -293,7 +475,7 @@ def test_svi_equivalents_are_diagnostic_only_and_cannot_change_results() -> None
 def test_missing_pnl_proxy_row_fails_all_candidates_without_partial_path() -> None:
     rows, dates = _panel()
     rows[132] = replace(rows[132], topix_cash_close=None)
-    report = evaluate_index_vol_overlays(
+    report = _evaluate(
         rows,
         signal_start=dates[130],
         signal_end=dates[130],

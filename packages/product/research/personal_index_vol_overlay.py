@@ -24,13 +24,20 @@ from research.personal_metrics import summarize_performance
 
 
 PERSONAL_INDEX_VOL_OVERLAY_SCHEMA: Final = "personal-index-vol-overlay/v1"
+PREPARED_PANEL_MANIFEST_SCHEMA: Final = "prepared-index-vol-overlay-panel/v1"
 BASE_SLEEVE_ID: Final = "personal_sector_balanced_four_factor_v1_ls"
 BASE_UNIVERSE_ID: Final = "topix_all"
+BASE_COHORT_ID: Final = "sector-relative-ls-v1"
 TOPIX_PROXY_DATASET: Final = "indices_bars_daily_topix"
 ONE_WAY_COST_RATE: Final = 0.001  # 10 bp on sleeve and proxy turnover.
 BETA_LOOKBACK_RETURNS: Final = 126
 BETA_MIN_RETURNS: Final = 63
 MAX_ABS_TOPIX_HEDGE: Final = 1.5
+BASE_RETURN_SEMANTICS: Final = (
+    "NET_AFTER_STOCK_EXECUTION_COSTS_AND_SHORT_FINANCING"
+)
+PANEL_AVAILABILITY_SEMANTICS: Final = "ALL_FIELDS_AVAILABLE_BY_D_PLUS_1_CLOSE"
+LIFECYCLE_STAGE: Final = "DRAFT_DIAGNOSTIC"
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +65,87 @@ class IndexVolOverlayObservation:
     # Same relative-smile definition as the observed candidate:
     # (front downside wing/front ATM)/(next downside wing/next ATM).
     svi_equivalent_downside_smile_term_ratio: float | None = None
+
+
+def _canonical_sha256(value: Any) -> bool:
+    if not isinstance(value, str) or not value.startswith("sha256:"):
+        return False
+    payload = value[7:]
+    return len(payload) == 64 and all(
+        character in "0123456789abcdef" for character in payload
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedIndexVolOverlayPanelManifest:
+    """Typed provenance contract produced before overlay evaluation."""
+
+    strategy_spec_digest: str
+    cohort_digest: str
+    snapshot_digest: str
+    base_report_digest: str
+    trading_calendar_digest: str
+    prepared_panel_digest: str
+    session_date_start: str
+    session_date_end: str
+    session_count: int
+    base_strategy_id: str = BASE_SLEEVE_ID
+    base_universe_id: str = BASE_UNIVERSE_ID
+    base_cohort_id: str = BASE_COHORT_ID
+    return_semantics: str = BASE_RETURN_SEMANTICS
+    complete_consecutive_trading_session_rows: bool = True
+    all_rows_available_by_rebalance_close: bool = True
+    availability_semantics: str = PANEL_AVAILABILITY_SEMANTICS
+    lifecycle: str = LIFECYCLE_STAGE
+
+    def __post_init__(self) -> None:
+        if self.base_strategy_id != BASE_SLEEVE_ID:
+            raise ValueError("prepared panel must bind the exact frozen base strategy")
+        if self.base_universe_id != BASE_UNIVERSE_ID:
+            raise ValueError("prepared panel must bind the exact topix_all universe")
+        if self.base_cohort_id != BASE_COHORT_ID:
+            raise ValueError(
+                "prepared panel must bind the exact short-financing cohort"
+            )
+        if self.return_semantics != BASE_RETURN_SEMANTICS:
+            raise ValueError(
+                "base sleeve returns must be net of stock costs and financing"
+            )
+        if self.complete_consecutive_trading_session_rows is not True:
+            raise ValueError("prepared panel must attest consecutive trading sessions")
+        if self.all_rows_available_by_rebalance_close is not True:
+            raise ValueError("prepared panel rows must be available by rebalance close")
+        if self.availability_semantics != PANEL_AVAILABILITY_SEMANTICS:
+            raise ValueError("prepared panel availability wall is invalid")
+        if self.lifecycle != LIFECYCLE_STAGE:
+            raise ValueError("prepared panel must remain DRAFT_DIAGNOSTIC")
+        for name in (
+            "strategy_spec_digest",
+            "cohort_digest",
+            "snapshot_digest",
+            "base_report_digest",
+            "trading_calendar_digest",
+            "prepared_panel_digest",
+        ):
+            if not _canonical_sha256(getattr(self, name)):
+                raise ValueError(f"{name} must be a canonical sha256 digest")
+        try:
+            start = date.fromisoformat(self.session_date_start).isoformat()
+            end = date.fromisoformat(self.session_date_end).isoformat()
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "manifest session dates must be canonical ISO dates"
+            ) from exc
+        if start != self.session_date_start or end != self.session_date_end:
+            raise ValueError("manifest session dates must be canonical ISO dates")
+        if end < start:
+            raise ValueError("manifest session_date_end precedes session_date_start")
+        if (
+            not isinstance(self.session_count, int)
+            or isinstance(self.session_count, bool)
+            or self.session_count < 3
+        ):
+            raise ValueError("manifest session_count must be at least three")
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +245,20 @@ def _validate_observations(
         previous = row.date
 
 
+def _validate_manifest(
+    manifest: PreparedIndexVolOverlayPanelManifest,
+    observations: Sequence[IndexVolOverlayObservation],
+) -> None:
+    if not isinstance(manifest, PreparedIndexVolOverlayPanelManifest):
+        raise TypeError("manifest must be PreparedIndexVolOverlayPanelManifest")
+    if manifest.session_count != len(observations):
+        raise ValueError("prepared panel manifest session_count mismatch")
+    if manifest.session_date_start != observations[0].date:
+        raise ValueError("prepared panel manifest session_date_start mismatch")
+    if manifest.session_date_end != observations[-1].date:
+        raise ValueError("prepared panel manifest session_date_end mismatch")
+
+
 def _ratio(numerator: Any, denominator: Any) -> float | None:
     left = _positive(numerator)
     right = _positive(denominator)
@@ -234,17 +336,25 @@ def _topix_return(
 def _estimate_beta(
     rows: Sequence[IndexVolOverlayObservation],
     signal_index: int,
-) -> tuple[float, int, str] | None:
+) -> tuple[tuple[float, int, str] | None, str | None]:
+    if signal_index < 1:
+        return None, "beta_current_signal_day_pair_unavailable"
+    current_sleeve_return = _finite(rows[signal_index].base_sleeve_return)
+    current_proxy_return = _topix_return(rows, signal_index - 1, signal_index)
+    if current_sleeve_return is None or current_proxy_return is None:
+        return None, "beta_current_signal_day_pair_unavailable"
     paired: list[tuple[str, float, float]] = []
-    for index in range(1, signal_index + 1):
+    first_source_return = max(1, signal_index - BETA_LOOKBACK_RETURNS + 1)
+    for index in range(first_source_return, signal_index + 1):
         sleeve_return = _finite(rows[index].base_sleeve_return)
         proxy_return = _topix_return(rows, index - 1, index)
         if sleeve_return is None or proxy_return is None:
             continue
         paired.append((rows[index].date, sleeve_return, proxy_return))
-    paired = paired[-BETA_LOOKBACK_RETURNS:]
     if len(paired) < BETA_MIN_RETURNS:
-        return None
+        return None, "beta_min_63_pairs_unavailable_in_last_126_source_sessions"
+    if paired[-1][0] != rows[signal_index].date:
+        return None, "beta_current_signal_day_pair_unavailable"
     sleeve_values = [item[1] for item in paired]
     proxy_values = [item[2] for item in paired]
     sleeve_mean = mean(sleeve_values)
@@ -255,9 +365,11 @@ def _estimate_beta(
     )
     variance = sum((proxy - proxy_mean) ** 2 for proxy in proxy_values)
     if variance <= 1.0e-18:
-        return None
+        return None, "beta_proxy_variance_unavailable"
     beta = _finite(covariance / variance)
-    return None if beta is None else (beta, len(paired), paired[-1][0])
+    if beta is None:
+        return None, "beta_non_finite"
+    return (beta, len(paired), paired[-1][0]), None
 
 
 def _missing(date_value: str, reason: str) -> dict[str, str]:
@@ -282,9 +394,11 @@ def _plans_for_candidate(
                 _missing(signal_row.date, feature_error or "feature_value_unavailable")
             )
             continue
-        beta = _estimate_beta(rows, signal_index)
+        beta, beta_error = _estimate_beta(rows, signal_index)
         if beta is None:
-            missing.append(_missing(signal_row.date, "beta_min_63_returns_unavailable"))
+            missing.append(
+                _missing(signal_row.date, beta_error or "beta_estimate_unavailable")
+            )
             continue
         pnl_index = signal_index + 2
         sleeve_return = _finite(rows[pnl_index].base_sleeve_return)
@@ -326,19 +440,17 @@ def _trade(
     signal_date: str,
     fill_date: str,
     pnl_date: str,
-    turnover_weight: float,
-    equity: float,
+    signed_notional: float,
 ) -> dict[str, Any] | None:
-    if turnover_weight == 0.0:
+    if signed_notional == 0.0:
         return None
-    notional = abs(turnover_weight) * equity
     return {
         "side": side,
         "signal_date": signal_date,
         "fill_date": fill_date,
         "pnl_date": pnl_date,
-        "notional": notional,
-        "cost": notional * ONE_WAY_COST_RATE,
+        "notional": signed_notional,
+        "cost": abs(signed_notional) * ONE_WAY_COST_RATE,
     }
 
 
@@ -348,71 +460,81 @@ def _evaluate_plans(
     starting_capital: float,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     equity = starting_capital
-    previous_gross_scale = 0.0
-    previous_hedge_weight = 0.0
+    carried_sleeve_notional = 0.0
+    carried_proxy_notional = 0.0
     curve: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
     for plan_index, plan in enumerate(plans):
         gross_scale = float(plan["gross_scale"])
         hedge_weight = float(plan["topix_hedge_weight"])
-        sleeve_turnover = abs(gross_scale - previous_gross_scale)
-        proxy_turnover = abs(hedge_weight - previous_hedge_weight)
         opening_equity = equity
+        target_sleeve_notional = gross_scale * opening_equity
+        target_proxy_notional = hedge_weight * opening_equity
+        sleeve_trade_notional = target_sleeve_notional - carried_sleeve_notional
+        proxy_trade_notional = target_proxy_notional - carried_proxy_notional
+        sleeve_turnover_amount = abs(sleeve_trade_notional)
+        proxy_turnover_amount = abs(proxy_trade_notional)
         for trade in (
             _trade(
                 side="sleeve_rebalance",
                 signal_date=str(plan["signal_date"]),
                 fill_date=str(plan["rebalance_date"]),
                 pnl_date=str(plan["pnl_date"]),
-                turnover_weight=sleeve_turnover,
-                equity=opening_equity,
+                signed_notional=sleeve_trade_notional,
             ),
             _trade(
                 side="topix_cash_proxy_rebalance",
                 signal_date=str(plan["signal_date"]),
                 fill_date=str(plan["rebalance_date"]),
                 pnl_date=str(plan["pnl_date"]),
-                turnover_weight=proxy_turnover,
-                equity=opening_equity,
+                signed_notional=proxy_trade_notional,
             ),
         ):
             if trade is not None:
                 trades.append(trade)
-        opening_cost = opening_equity * ONE_WAY_COST_RATE * (
-            sleeve_turnover + proxy_turnover
+        opening_cost = ONE_WAY_COST_RATE * (
+            sleeve_turnover_amount + proxy_turnover_amount
         )
-        gross_return = (
-            gross_scale * float(plan["base_sleeve_return"])
-            + hedge_weight * float(plan["topix_cash_return"])
+        sleeve_return = float(plan["base_sleeve_return"])
+        proxy_return = float(plan["topix_cash_return"])
+        gross_pnl = (
+            target_sleeve_notional * sleeve_return
+            + target_proxy_notional * proxy_return
         )
-        equity = opening_equity * (1.0 + gross_return) - opening_cost
-        terminal_turnover = 0.0
+        gross_return = gross_pnl / opening_equity
+        equity = opening_equity + gross_pnl - opening_cost
+        post_return_sleeve_notional = target_sleeve_notional * (
+            1.0 + sleeve_return
+        )
+        post_return_proxy_notional = target_proxy_notional * (1.0 + proxy_return)
+        terminal_turnover_amount = 0.0
         terminal_cost = 0.0
         terminal_close = plan_index == len(plans) - 1
         if terminal_close:
-            terminal_turnover = abs(gross_scale) + abs(hedge_weight)
-            pre_close_equity = equity
+            sleeve_close_notional = -post_return_sleeve_notional
+            proxy_close_notional = -post_return_proxy_notional
+            terminal_turnover_amount = abs(sleeve_close_notional) + abs(
+                proxy_close_notional
+            )
             for trade in (
                 _trade(
                     side="sleeve_terminal_close",
                     signal_date=str(plan["signal_date"]),
                     fill_date=str(plan["pnl_date"]),
                     pnl_date=str(plan["pnl_date"]),
-                    turnover_weight=abs(gross_scale),
-                    equity=pre_close_equity,
+                    signed_notional=sleeve_close_notional,
                 ),
                 _trade(
                     side="topix_cash_proxy_terminal_close",
                     signal_date=str(plan["signal_date"]),
                     fill_date=str(plan["pnl_date"]),
                     pnl_date=str(plan["pnl_date"]),
-                    turnover_weight=abs(hedge_weight),
-                    equity=pre_close_equity,
+                    signed_notional=proxy_close_notional,
                 ),
             ):
                 if trade is not None:
                     trades.append(trade)
-            terminal_cost = pre_close_equity * ONE_WAY_COST_RATE * terminal_turnover
+            terminal_cost = ONE_WAY_COST_RATE * terminal_turnover_amount
             equity -= terminal_cost
         if not math.isfinite(equity) or equity <= 0.0:
             raise ValueError("overlay path produced non-positive or non-finite equity")
@@ -421,23 +543,49 @@ def _evaluate_plans(
             {
                 **plan,
                 "gross_return": gross_return,
-                "sleeve_turnover_one_way": sleeve_turnover,
-                "topix_proxy_turnover_one_way": proxy_turnover,
+                "pre_rebalance_sleeve_notional": carried_sleeve_notional,
+                "pre_rebalance_topix_proxy_notional": carried_proxy_notional,
+                "target_sleeve_notional": target_sleeve_notional,
+                "target_topix_proxy_notional": target_proxy_notional,
+                "sleeve_trade_notional": sleeve_trade_notional,
+                "topix_proxy_trade_notional": proxy_trade_notional,
+                "sleeve_turnover_one_way_amount": sleeve_turnover_amount,
+                "topix_proxy_turnover_one_way_amount": proxy_turnover_amount,
+                "sleeve_turnover_one_way": (
+                    sleeve_turnover_amount / opening_equity
+                ),
+                "topix_proxy_turnover_one_way": (
+                    proxy_turnover_amount / opening_equity
+                ),
                 "rebalance_cost_amount": opening_cost,
+                "post_return_sleeve_notional": post_return_sleeve_notional,
+                "post_return_topix_proxy_notional": post_return_proxy_notional,
                 "terminal_close": terminal_close,
-                "terminal_turnover_one_way": terminal_turnover,
+                "terminal_turnover_one_way_amount": terminal_turnover_amount,
+                "terminal_turnover_one_way": (
+                    0.0
+                    if not terminal_close
+                    else terminal_turnover_amount / (equity + terminal_cost)
+                ),
                 "terminal_close_cost_amount": terminal_cost,
                 "net_return": net_return,
                 "date": plan["pnl_date"],
                 "equity": equity,
             }
         )
-        previous_gross_scale = gross_scale
-        previous_hedge_weight = hedge_weight
+        carried_sleeve_notional = post_return_sleeve_notional
+        carried_proxy_notional = post_return_proxy_notional
     performance = summarize_performance(
         equity_curve=curve,
         trades=trades,
         starting_capital=starting_capital,
+    )
+    performance.update(
+        {
+            "cost_turnover_fill_scope": "OVERLAY_INCREMENTAL_ONLY",
+            "base_sleeve_return_semantics": BASE_RETURN_SEMANTICS,
+            "total_strategy_cost_turnover_fill_comparable": False,
+        }
     )
     return curve, trades, performance
 
@@ -486,9 +634,79 @@ def _candidate_result(
     }
 
 
+def _diagnostic_control_result(
+    rows: Sequence[IndexVolOverlayObservation],
+    signal_indices: Sequence[int],
+    *,
+    starting_capital: float,
+) -> dict[str, Any]:
+    """Evaluate the frozen base sleeve without adding a fifth candidate."""
+
+    plans: list[dict[str, Any]] = []
+    missing: list[dict[str, str]] = []
+    for signal_index in signal_indices:
+        signal_row = rows[signal_index]
+        if signal_index + 2 >= len(rows):
+            missing.append(_missing(signal_row.date, "d_plus_2_session_unavailable"))
+            continue
+        pnl_index = signal_index + 2
+        sleeve_return = _finite(rows[pnl_index].base_sleeve_return)
+        if sleeve_return is None:
+            missing.append(_missing(rows[pnl_index].date, "base_sleeve_return_missing"))
+            continue
+        plans.append(
+            {
+                "signal_date": signal_row.date,
+                "rebalance_date": rows[signal_index + 1].date,
+                "pnl_date": rows[pnl_index].date,
+                "feature_ratio_x": 1.0,
+                "gross_scale": 1.0,
+                "estimated_beta": None,
+                "beta_observations": None,
+                "beta_window_last_return_date": None,
+                "topix_hedge_weight": 0.0,
+                "base_sleeve_return": sleeve_return,
+                "topix_cash_return": 0.0,
+            }
+        )
+    declaration = {
+        "control_id": "base_g1_h0_control_v1",
+        "role": "DIAGNOSTIC_CONTROL_NOT_RANKED",
+        "mechanics": "frozen base sleeve with g=1 and h=0",
+    }
+    if missing or not plans:
+        return {
+            **declaration,
+            "status": "NOT_EVALUATED",
+            "reason": (
+                "missing_required_row_no_forward_fill"
+                if missing
+                else "no_signal_sessions_in_requested_range"
+            ),
+            "missing_required_rows": missing,
+            "daily_path": [],
+            "trades": [],
+            "performance": None,
+        }
+    curve, trades, performance = _evaluate_plans(
+        plans,
+        starting_capital=starting_capital,
+    )
+    return {
+        **declaration,
+        "status": "EVALUATED",
+        "reason": None,
+        "missing_required_rows": [],
+        "daily_path": curve,
+        "trades": trades,
+        "performance": performance,
+    }
+
+
 def evaluate_index_vol_overlays(
     observations: Sequence[IndexVolOverlayObservation],
     *,
+    manifest: PreparedIndexVolOverlayPanelManifest,
     signal_start: str,
     signal_end: str | None = None,
     starting_capital: float = 1_000_000.0,
@@ -496,6 +714,7 @@ def evaluate_index_vol_overlays(
     """Evaluate exactly four predeclared overlays without selecting a winner."""
 
     _validate_observations(observations)
+    _validate_manifest(manifest, observations)
     try:
         start = date.fromisoformat(signal_start).isoformat()
         end = (
@@ -528,13 +747,18 @@ def evaluate_index_vol_overlays(
         )
         for candidate in OVERLAY_CANDIDATES
     ]
+    diagnostic_control = _diagnostic_control_result(
+        observations,
+        signal_indices,
+        starting_capital=capital,
+    )
     diagnostics = [
         {
             "date": observations[index].date,
-            "svi_equivalent_atm_term_ratio": _finite(
+            "svi_equivalent_atm_term_ratio": _positive(
                 observations[index].svi_equivalent_atm_term_ratio
             ),
-            "svi_equivalent_downside_smile_term_ratio": _finite(
+            "svi_equivalent_downside_smile_term_ratio": _positive(
                 observations[index].svi_equivalent_downside_smile_term_ratio
             ),
         }
@@ -544,12 +768,23 @@ def evaluate_index_vol_overlays(
     return {
         "schema_version": PERSONAL_INDEX_VOL_OVERLAY_SCHEMA,
         "status": "EVALUATED" if evaluated_count == len(results) else "NOT_EVALUATED",
+        "lifecycle": {
+            "stage": LIFECYCLE_STAGE,
+            "role": "DIAGNOSTIC_RESEARCH_ONLY",
+            "paper_execution": False,
+            "automatic_promotion": False,
+        },
+        "prepared_panel_provenance": {
+            "schema_version": PREPARED_PANEL_MANIFEST_SCHEMA,
+            **asdict(manifest),
+        },
         "base_sleeve": {
             "strategy_id": BASE_SLEEVE_ID,
             "universe_id": BASE_UNIVERSE_ID,
             "selection_timing": "PREDECLARED_BEFORE_OVERLAY_RESULTS",
             "single_stock_option_iv": "EXCLUDED_FROM_INPUT_SURFACE",
             "stock_price_realized_volatility": "ALLOWED_IN_FROZEN_BASE_SLEEVE",
+            "return_semantics": BASE_RETURN_SEMANTICS,
         },
         "timing": {
             "signal": "D_CLOSE",
@@ -560,6 +795,8 @@ def evaluate_index_vol_overlays(
         "cost_model": {
             "one_way_basis_points": 10.0,
             "applies_to": ["base_sleeve_turnover", "topix_proxy_turnover"],
+            "reported_cost_turnover_fill_scope": "OVERLAY_INCREMENTAL_ONLY",
+            "not_total_strategy_cost_metrics": True,
         },
         "topix_proxy": {
             "dataset": TOPIX_PROXY_DATASET,
@@ -572,8 +809,9 @@ def evaluate_index_vol_overlays(
             ),
         },
         "beta_policy": {
-            "lookback_returns": BETA_LOOKBACK_RETURNS,
-            "minimum_returns": BETA_MIN_RETURNS,
+            "lookback_source_sessions": BETA_LOOKBACK_RETURNS,
+            "minimum_paired_returns": BETA_MIN_RETURNS,
+            "current_signal_day_pair_required": True,
             "hedge_formula": "h=clip(-g*beta,-1.5,1.5)",
         },
         "candidate_policy": {
@@ -581,8 +819,10 @@ def evaluate_index_vol_overlays(
             "evaluated_count": evaluated_count,
             "post_result_selection": "NOT_PERFORMED",
             "ranking": None,
+            "diagnostic_control_in_declared_count": False,
             "candidate_order": [item.candidate_id for item in OVERLAY_CANDIDATES],
         },
+        "diagnostic_control": diagnostic_control,
         "svi_equivalent_diagnostics": {
             "role": "DIAGNOSTIC_ONLY_NOT_RANKED",
             "downside_smile_term_ratio_formula": (
@@ -598,6 +838,8 @@ def evaluate_index_vol_overlays(
 
 
 __all__ = [
+    "BASE_COHORT_ID",
+    "BASE_RETURN_SEMANTICS",
     "BASE_SLEEVE_ID",
     "BASE_UNIVERSE_ID",
     "BETA_LOOKBACK_RETURNS",
@@ -606,7 +848,10 @@ __all__ = [
     "MAX_ABS_TOPIX_HEDGE",
     "ONE_WAY_COST_RATE",
     "OVERLAY_CANDIDATES",
+    "PANEL_AVAILABILITY_SEMANTICS",
     "PERSONAL_INDEX_VOL_OVERLAY_SCHEMA",
+    "PREPARED_PANEL_MANIFEST_SCHEMA",
+    "PreparedIndexVolOverlayPanelManifest",
     "TOPIX_PROXY_DATASET",
     "evaluate_index_vol_overlays",
 ]
