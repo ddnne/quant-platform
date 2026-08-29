@@ -13,7 +13,7 @@ catalog survives only under `artifacts/replay/legacy_strategy_catalog/`.
 ## What it does
 
 1. Accepts `POST /v1/mass-eval` with `{ seed, logics[], periods[], job_id }`.
-2. Runs **pure-TS** lite multi-period metrics per logic (no Python container):
+2. Runs **pure-TS** lite multi-period metrics per Mass logic:
    - `multi_day_hold` — sticky momentum hold + amortized cost
    - `cross_section_relative` — rank L-S sticky hold
    - other families — lite fallback via multi_day_hold knobs (full rate/mf factor legs **not-yet-implemented** on CF)
@@ -28,6 +28,46 @@ research/mass_eval/job={id}/ranking.json
 research/mass_eval/job={id}/panels_meta.json
 research/mass_eval/job={id}/logic={logic_id}/result.json   # when n_logics ≤ 50
 ```
+
+The separate personal route runs the repository's existing deterministic
+`qp-research` engine inside one Cloudflare Container. It does not change or
+arm the Mass capability.
+
+## Personal cloud exact-four
+
+`POST /v1/personal-research` accepts one immutable SQLite snapshot already in
+R2 and always executes the four built-in DRAFT candidates. The input is closed:
+
+```json
+{
+  "job_id": "exact-four-20260829",
+  "snapshot_key": "research/personal/snapshots/sha256=<64-lowercase-hex>.sqlite",
+  "snapshot_sha256": "<64-lowercase-hex>",
+  "period_start": "2022-04-19",
+  "period_end": "2026-08-27"
+}
+```
+
+The Container independently downloads and hashes the snapshot, runs SQLite
+`quick_check`, then calls `scripts/qp-research`. Results are immutable:
+
+```
+research/personal/jobs/job={id}/result.tar.gz
+research/personal/jobs/job={id}/manifest.json
+```
+
+The generated `snapshots/*.sqlite` copy is excluded from `result.tar.gz`; the
+small snapshot manifest remains. Reusing a completed `job_id` is idempotent
+only when every input is identical.
+
+Cost and safety bounds are structural: `standard-2`, `max_instances=1`, one
+active job, a 4 GiB snapshot ceiling, 90-minute subprocess timeout and a
+130-minute outer Container activity window. The process exits immediately
+after its terminal manifest, so an ordinary short run scales back to zero
+without waiting for the outer window. There is no Cron, Queue, model call,
+public Internet, promotion or live order. The Container can reach only the two
+personal R2 prefixes via a Worker-side streaming adapter, and R2 verifies the
+streamed result checksum before accepting it.
 
 ## Modes
 
@@ -62,11 +102,17 @@ is present in this Worker. R2 writes are create-if-absent (duplicate job_id → 
 cd platform/workers/research-mass-eval
 npm install
 
-# optional auth gate
+# required auth gate; do not put the value in shell history
 # printf '%s' "$MASS_EVAL_TOKEN" | npx wrangler secret put MASS_EVAL_TOKEN
 
 npx wrangler deploy
 ```
+
+A Docker-compatible engine is needed for local deploy. Workers Builds can
+build the Dockerfile remotely on the production branch. This Container lane is
+path-scoped and uses `npx wrangler deploy --env production`, because
+`versions upload` cannot update a Container image. The repository-wide
+required check still gates the merge that starts that production build.
 
 Workers.dev URL shape:
 
@@ -110,6 +156,24 @@ curl -sS -X POST \
       }
     ]
   }" | jq '{ok, job_id, n_logics, n_survivors, r2_keys, ranking}'
+
+# personal exact-four (after uploading the content-addressed snapshot)
+PERSONAL_JOB_ID="exact-four-$(date -u +%Y%m%dT%H%M%SZ)"
+curl -sS -X POST \
+  "https://quant-platform-research-mass-eval.<subdomain>.workers.dev/v1/personal-research" \
+  -H 'content-type: application/json' \
+  -H "X-Mass-Eval-Token: ${MASS_EVAL_TOKEN:?required}" \
+  -d "{
+    \"job_id\": \"${PERSONAL_JOB_ID}\",
+    \"snapshot_key\": \"research/personal/snapshots/sha256=${SNAPSHOT_SHA256}.sqlite\",
+    \"snapshot_sha256\": \"${SNAPSHOT_SHA256}\",
+    \"period_start\": \"2022-04-19\",
+    \"period_end\": \"2026-08-27\"
+  }" | jq .
+
+curl -sS \
+  "https://quant-platform-research-mass-eval.<subdomain>.workers.dev/v1/personal-research/jobs/${PERSONAL_JOB_ID}" \
+  -H "X-Mass-Eval-Token: ${MASS_EVAL_TOKEN:?required}" | jq .
 ```
 
 ## Verify R2

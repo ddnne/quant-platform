@@ -1,4 +1,4 @@
-"""Command-line entry point for bounded, local personal paper research."""
+"""Command-line entry point for bounded personal DRAFT research."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def _parser() -> argparse.ArgumentParser:
         prog="qp-research",
         description=(
             "Run deterministic DRAFT-only research against an immutable copy "
-            "of one local SQLite database."
+            "of one SQLite snapshot."
         ),
     )
     parser.add_argument("--db", required=True, type=Path)

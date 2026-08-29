@@ -15,7 +15,7 @@
 
 ### 1. Public surface
 
-The **only** public product surface is GitHub OAuth **read-only** Ops MCP
+The interactive product surface is GitHub OAuth **read-only** Ops MCP
 (`quant-platform-ops-read-mcp`). Remote callers get the existing 17 read tools.
 Ops MCP must not grow SQL, D1/R2 handles, secret-read, shell, arbitrary URL
 fetch, ingest/delete/publish, feature approve, or broker tools.
@@ -35,7 +35,6 @@ ingest API.
 |---|---|---|---|---|
 | ingestion-premium | `quant-platform-ingestion-premium` | `false` | `false` | cron / internal |
 | ingestion-jsda | `quant-platform-ingestion-jsda` | `false` | `false` | cron / internal |
-| research-mass-eval | `quant-platform-research-mass-eval` | `false` | `false` | internal / admin |
 | research-ai-gateway | `quant-platform-research-ai-gateway` | `false` | `false` | service binding only |
 
 `research-ai-gateway` still deploys with `workers_dev=false` and no custom route
@@ -47,6 +46,7 @@ on wrangler 4.125.0.
 |---|---|---|
 | quant-ops-mcp | GitHub OAuth callback host (above) | keep read-only |
 | ingestion-secrets | local runners reach the token-gated host; no custom zone | **HUMAN** Cloudflare Access / mTLS / Tunnel before flipping `workers_dev` off. Closing it now would silently break the secrets proxy. |
+| research-mass-eval | one-person, token-gated personal DRAFT Container; no custom zone | exact-four only; one instance; Mass/READY/GO remain closed |
 
 Do not treat a `*.workers.dev` hostname as network privacy. Inbound auth is the
 fence where a host exists. Do not treat the Worker itself as auth.

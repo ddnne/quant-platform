@@ -84,8 +84,8 @@ asdf rebuild.
 - Validates the pinned finding ledger and reports OPEN operational P0 rows.
   This merge check is not the production finding-ledger release gate.
 - Uses pinned `uv 0.11.26` and `uv sync --frozen --extra dev` with the tracked lockfile.
-- `pytest tests/`, catalog freeze, Evaluation IR schema/codec.
-- Seven active workers run in parallel: `package-lock.json` required, `npm ci`, `npm test`, `npm run typecheck`, generated types `--check`, and Wrangler dry-runs for base, production, and isolated staging.
+- the complete `pytest tests/` suite using two file-scoped workers, catalog freeze, Evaluation IR schema/codec.
+- Eight active workers run in parallel: `package-lock.json` required, `npm ci`, `npm test`, `npm run typecheck`, generated types `--check`, and Wrangler dry-runs for base, production, and isolated staging.
 - [`active_worker_bindings.json`](../../specs/cloudflare/active_worker_bindings.json) freezes D1, R2, Queue/DLQ, Durable Object, Service Binding, Cron, vars, and secret names. Values of secrets are never read or stored.
 - Wrangler `[secrets].required` declarations are part of generated Env exactness for base and production. Staging declares no production secrets.
 - Wrangler, TypeScript, and Cloudflare Worker types are exact-version policy across all active workers.
@@ -162,15 +162,23 @@ Active Deployment.
 | Version upload (optional, not promote) | `npx wrangler versions upload` | preview / non-production; or production-branch CI that must **not** go live |
 | Explicit promote | `npx wrangler deploy` **or** dashboard promote of a specific version | operator, after the native check is green **and** an explicit decision to ship |
 
-**Do not** set any production-branch **deploy command** to `npx wrangler deploy`
-for the six ordinary product Workers. That would auto-promote on green CI. The
-seventh active Worker, `receipt-evidence-authority`, is deployed only through
-its reviewed PENDING/ACTIVE activation procedure and is not an automatic lane.
+**Do not** set a production-branch **deploy command** to `npx wrangler deploy`
+for the five non-Container product Workers. That would auto-promote on green
+CI. The seventh active Worker, `receipt-evidence-authority`, is deployed only
+through its reviewed PENDING/ACTIVE activation procedure and is not an
+automatic lane.
 
 Use `npx wrangler versions upload` as the production-branch deploy command (and
-the non-production command) on product lanes. Disconnecting Git does not replace
-this policy — the deploy command is the switch
+the non-production command) on non-Container product lanes. Disconnecting Git
+does not replace this policy — the deploy command is the switch
 ([disable automatic deployments](https://developers.cloudflare.com/workers/ci-cd/builds/#disconnecting-builds)).
+
+`research-mass-eval` is the narrow exception: Cloudflare documents that
+`versions upload` does not update Container images. Its path-scoped production
+lane therefore uses `npx wrangler deploy --env production` after the same
+required repo-root check. `max_instances=1`, DRAFT-only execution and all
+Mass/READY/GO freezes remain in the deployed configuration
+([Container Builds behavior](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#how-workers-builds-works)).
 
 Local **mandatory** CI is the same script: [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh).
 [`scripts/verify_all.sh`](../../scripts/verify_all.sh) is a fast local helper only.
@@ -219,7 +227,7 @@ research execution, and not an ingest API.
 |---|---|---|---|---|
 | quant-ops-mcp | `quant-platform-ops-read-mcp` | `workers_dev=true` (OAuth callback host) | `true` | remote public, OAuth required, read-only |
 | research-ai-gateway | `quant-platform-research-ai-gateway` | `preview_urls` only | `false` | service binding only; not a public research API |
-| research-mass-eval | `quant-platform-research-mass-eval` | `preview_urls` only | `false` | internal/admin; no public research execution |
+| research-mass-eval | `quant-platform-research-mass-eval` | no version preview | `true` | bearer-token personal DRAFT Container; Mass remains NO-GO |
 | ingestion-premium | `quant-platform-ingestion-premium` | `preview_urls` only | `false` | cron/internal |
 | ingestion-jsda | `quant-platform-ingestion-jsda` | `preview_urls` only | `false` | cron/internal |
 | ingestion-secrets | `quant-platform-ingestion-secrets` | `workers_dev=true` (token-gated proxy host) | `true` | narrow authenticated proxy |

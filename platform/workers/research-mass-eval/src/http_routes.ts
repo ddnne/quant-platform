@@ -14,6 +14,11 @@ import {
 } from "./http";
 import { parseRequest } from "./parse_request";
 import { runProposeThesis } from "./propose_thesis";
+import {
+  parsePersonalResearchRequest,
+  personalResearchJobIdFromPath,
+  type PersonalResearchRequest,
+} from "./personal_research_contract";
 import type { Env, MassEvalJobResult, MassEvalRequest } from "./types";
 
 export type MassEvalFetchHandlers = {
@@ -22,6 +27,11 @@ export type MassEvalFetchHandlers = {
     env: Env,
     req: MassEvalRequest,
   ) => Promise<Record<string, unknown>>;
+  submitPersonalResearch?: (
+    env: Env,
+    request: PersonalResearchRequest,
+  ) => Promise<Response>;
+  personalResearchStatus?: (env: Env, jobId: string) => Promise<Response>;
 };
 
 /** HTTP path dispatch. Orchestration stays in index.ts; R2 put stays in http.ts. */
@@ -31,6 +41,49 @@ export async function dispatchMassEvalFetch(
   handlers: MassEvalFetchHandlers,
 ): Promise<Response> {
   const url = new URL(request.url);
+
+  if (url.pathname === "/v1/personal-research") {
+    if (request.method !== "POST") {
+      return json({ error: "POST required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    if (!env.STRUCTURED_BUCKET || !env.PERSONAL_RESEARCH_CONTAINER) {
+      return json({ error: "personal research bindings unavailable" }, 503);
+    }
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = parsePersonalResearchRequest(body);
+    if (!parsed.ok) return json({ error: parsed.error }, 400);
+    if (!handlers.submitPersonalResearch) {
+      return json({ error: "personal research handler unavailable" }, 503);
+    }
+    return handlers.submitPersonalResearch(env, parsed.value);
+  }
+
+  if (url.pathname.startsWith("/v1/personal-research/jobs/")) {
+    if (request.method !== "GET") {
+      return json({ error: "GET required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    const jobId = personalResearchJobIdFromPath(url.pathname);
+    if (!jobId) return json({ error: "job_id is invalid" }, 400);
+    if (
+      !env.STRUCTURED_BUCKET ||
+      !env.PERSONAL_RESEARCH_CONTAINER ||
+      !handlers.personalResearchStatus
+    ) {
+      return json({ error: "personal research handler unavailable" }, 503);
+    }
+    return handlers.personalResearchStatus(env, jobId);
+  }
 
   if (url.pathname === "/health" || url.pathname === "/") {
     if (request.method !== "GET") {

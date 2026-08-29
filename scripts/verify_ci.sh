@@ -172,8 +172,11 @@ fi
 echo "==> Cloudflare canonical D1 migration manifest"
 "$py" scripts/cloudflare_d1_migration_manifest.py
 
-echo "==> python pytest"
-"$py" -m pytest tests/
+echo "==> python pytest (2 workers, file-scoped scheduling)"
+# Workers Builds has a bounded build window. Keep complete test coverage while
+# using the two build CPUs; file-scoped scheduling avoids splitting tests from
+# the same module across processes.
+"$py" -m pytest -n 2 --dist=loadfile tests/
 
 echo "==> Evaluation IR schema + golden (jsonschema + codec roundtrip)"
 golden="$ROOT/specs/evaluation_ir/golden.jsonl"

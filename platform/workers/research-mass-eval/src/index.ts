@@ -19,6 +19,14 @@ import {
 import { dispatchMassEvalFetch } from "./http_routes";
 import { encodeEvaluationIR } from "./evaluation_ir";
 import { isPathBroken } from "./path_broken";
+import {
+  PersonalResearchContainer,
+  personalResearchStatus,
+  submitPersonalResearch,
+} from "./personal_research_container";
+
+export { ContainerProxy } from "./personal_research_container";
+export { PersonalResearchContainer };
 
 const RESEARCH_PREFIX = "research/mass_eval";
 
@@ -311,6 +319,11 @@ async function runDailyPath(
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    return dispatchMassEvalFetch(request, env, { runMassEval, runDailyPath });
+    return dispatchMassEvalFetch(request, env, {
+      runMassEval,
+      runDailyPath,
+      submitPersonalResearch,
+      personalResearchStatus,
+    });
   },
 };
