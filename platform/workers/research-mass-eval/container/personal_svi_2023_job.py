@@ -26,7 +26,7 @@ from research.personal_metrics import summarize_performance
 R2_ORIGIN = "http://research.r2"
 COHORT_ID = "personal-svi-term-2023-v1"
 STRATEGY_ID = "svi-atm-term-ratio-momentum-switch"
-RUNNER_VERSION = "personal-svi-cloud-runner/v3"
+RUNNER_VERSION = "personal-svi-cloud-runner/v4"
 FEATURE_FIELD = "svi_atm_short_over_next_minus_one"
 PANEL_KEY = (
     "research/mass_eval/panels_cache/527c1065afe14601/panels/y2023_full.json"
@@ -676,11 +676,69 @@ def _held_books_by_signal(
     return held_by_signal
 
 
+def _stock_interval_trace(
+    bars: Mapping[str, Mapping[str, float]],
+    dates: Sequence[str],
+    features: Mapping[str, float | None],
+    evaluation_dates: Sequence[str],
+) -> list[dict[str, Any]]:
+    allowed_evaluation = set(map(str, evaluation_dates))
+    held_by_signal = _held_books_by_signal(bars, dates, features)
+    trace: list[dict[str, Any]] = []
+    for index in range(2, len(dates)):
+        previous_day = dates[index - 1]
+        current_day = dates[index]
+        if current_day not in allowed_evaluation:
+            continue
+        signal_day = dates[index - 2]
+        target_book = held_by_signal.get(signal_day, {})
+        missing_target_codes = sorted(
+            code
+            for code in target_book
+            if bars[code].get(previous_day) is None
+            or bars[code].get(current_day) is None
+        )
+        stock_gross = (
+            0.0
+            if missing_target_codes
+            else sum(
+                weight
+                * (bars[code][current_day] / bars[code][previous_day] - 1.0)
+                for code, weight in target_book.items()
+            )
+        )
+        trace.append(
+            {
+                "date": current_day,
+                "previous_day": previous_day,
+                "signal_date": signal_day,
+                "target_book": target_book,
+                "active_target": bool(target_book),
+                "interval_status": (
+                    "INCOMPLETE_TARGET_BOOK"
+                    if missing_target_codes
+                    else "COMPLETE"
+                ),
+                "missing_target_codes": missing_target_codes,
+                "stock_gross_return": stock_gross,
+            }
+        )
+    eligible_evaluation = allowed_evaluation.intersection(dates[2:])
+    if len(trace) != len(eligible_evaluation):
+        raise RuntimeError("evaluation calendar is not represented by the stock trace")
+    return trace
+
+
 def evaluate_fixed_strategy(
     panel: Mapping[str, Any],
     feature_rows: Sequence[Mapping[str, Any]],
     evaluation_dates: Sequence[str],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any],
+    list[dict[str, Any]],
+]:
     bars = _normalize_bars(panel)
     dates = sorted({day for values in bars.values() for day in values})
     features = {
@@ -689,21 +747,40 @@ def evaluate_fixed_strategy(
         else None
         for row in feature_rows
     }
-    allowed_evaluation = set(map(str, evaluation_dates))
-    held_by_signal = _held_books_by_signal(bars, dates, features)
+    trace = _stock_interval_trace(bars, dates, features, evaluation_dates)
 
     equity = 1.0
     applied: dict[str, float] = {}
     curve: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
     active_sessions = 0
-    for index in range(2, len(dates)):
-        previous_day = dates[index - 1]
-        current_day = dates[index]
-        if current_day not in allowed_evaluation:
+    incomplete_active_intervals: list[str] = []
+    missing_target_codes: set[str] = set()
+    missing_target_leg_observations = 0
+    for interval in trace:
+        current_day = str(interval["date"])
+        previous_day = str(interval["previous_day"])
+        signal_day = str(interval["signal_date"])
+        target = dict(interval["target_book"])
+        missing = list(interval["missing_target_codes"])
+        if missing:
+            incomplete_active_intervals.append(current_day)
+            missing_target_codes.update(map(str, missing))
+            missing_target_leg_observations += len(missing)
+            curve.append(
+                {
+                    "date": current_day,
+                    "signal_date": signal_day,
+                    "interval_status": "INCOMPLETE_TARGET_BOOK",
+                    "missing_target_codes": missing,
+                    "gross_return": 0.0,
+                    "cost_return": 0.0,
+                    "net_return": 0.0,
+                    "turnover_one_way": 0.0,
+                    "equity": equity,
+                }
+            )
             continue
-        signal_day = dates[index - 2]
-        target = held_by_signal.get(signal_day, {})
         all_codes = sorted(set(applied) | set(target))
         turnover = 0.0
         equity_before = equity
@@ -726,24 +803,18 @@ def evaluate_fixed_strategy(
                     "cost": notional * ONE_WAY_COST,
                 }
             )
-        gross = 0.0
-        invested = False
-        for code, weight in target.items():
-            before = bars.get(code, {}).get(previous_day)
-            after = bars.get(code, {}).get(current_day)
-            if before is None or after is None or before <= 0:
-                continue
-            gross += weight * (after / before - 1.0)
-            invested = True
+        gross = float(interval["stock_gross_return"])
         cost = turnover * ONE_WAY_COST
         net = gross - cost
         equity *= 1.0 + net
-        if invested:
+        if target:
             active_sessions += 1
         curve.append(
             {
                 "date": current_day,
                 "signal_date": signal_day,
+                "interval_status": "COMPLETE",
+                "missing_target_codes": [],
                 "gross_return": gross,
                 "cost_return": cost,
                 "net_return": net,
@@ -755,7 +826,12 @@ def evaluate_fixed_strategy(
 
     # Close the screening book at the final observed close so reported cost is
     # a full round trip rather than an uncharged open terminal position.
-    if curve and applied:
+    terminal_liquidation_costed = bool(
+        curve
+        and applied
+        and trace[-1]["interval_status"] == "COMPLETE"
+    )
+    if terminal_liquidation_costed:
         final_day = str(curve[-1]["date"])
         liquidation = sum(abs(weight) for weight in applied.values())
         liquidation_cost = liquidation * ONE_WAY_COST
@@ -783,15 +859,47 @@ def evaluate_fixed_strategy(
                 }
             )
 
-    performance = summarize_performance(
-        equity_curve=curve,
-        trades=trades,
-        starting_capital=1.0,
+    primary_status = (
+        "INCOMPLETE"
+        if incomplete_active_intervals
+        else "EVALUATED"
+        if active_sessions > 0
+        else "NOT_EVALUATED"
+    )
+    performance = (
+        summarize_performance(
+            equity_curve=curve,
+            trades=trades,
+            starting_capital=1.0,
+        )
+        if primary_status == "EVALUATED"
+        else None
+    )
+    performance_unavailable_reason = (
+        "incomplete_active_target_intervals"
+        if primary_status == "INCOMPLETE"
+        else "no_active_stock_book_sessions"
+        if primary_status == "NOT_EVALUATED"
+        else None
     )
     diagnostics = {
+        "status": primary_status,
+        "performance_status": (
+            "UNAVAILABLE" if performance is None else "AVAILABLE"
+        ),
+        "performance_unavailable_reason": performance_unavailable_reason,
         "panel_sessions": len(dates),
         "evaluation_sessions": len(curve),
+        "calendar_sessions_dropped": len(trace) - len(curve),
+        "active_target_sessions": sum(
+            bool(interval["active_target"]) for interval in trace
+        ),
         "active_sessions": active_sessions,
+        "incomplete_active_interval_count": len(incomplete_active_intervals),
+        "incomplete_active_intervals": incomplete_active_intervals,
+        "missing_target_leg_observations": missing_target_leg_observations,
+        "missing_target_codes_sample": sorted(missing_target_codes)[:20],
+        "terminal_liquidation_costed": terminal_liquidation_costed,
         "feature_sessions": sum(features.get(day) is not None for day in dates),
         "fit_success_sessions": sum(
             row.get("fit_success") is True for row in feature_rows
@@ -800,64 +908,45 @@ def evaluate_fixed_strategy(
             row.get("fit_success") is not True for row in feature_rows
         ),
     }
-    return curve, trades, {"performance": performance, **diagnostics}
+    return curve, trades, {"performance": performance, **diagnostics}, trace
 
 
 def evaluate_topix_beta_hedged_comparison(
     panel: Mapping[str, Any],
     feature_rows: Sequence[Mapping[str, Any]],
-    evaluation_dates: Sequence[str],
-    unhedged_curve: Sequence[Mapping[str, Any]],
+    stock_interval_trace: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Add a non-executable TOPIX-index hedge comparison to the fixed result."""
 
     bars = _normalize_bars(panel)
     topix = _normalize_topix_proxy(panel)
-    dates = sorted({day for values in bars.values() for day in values})
-    features = {
-        str(row.get("date") or ""): _number(row.get(FEATURE_FIELD))
-        if row.get("fit_success") is True
-        else None
-        for row in feature_rows
-    }
-    held_by_signal = _held_books_by_signal(bars, dates, features)
-
-    allowed_evaluation = set(map(str, evaluation_dates))
-    date_index = {day: index for index, day in enumerate(dates)}
     plans: list[dict[str, Any]] = []
-    primary_gross_by_day: dict[str, float] = {}
     active_sessions = 0
     incomplete_active_intervals: list[str] = []
     beta_available_sessions = 0
     beta_unavailable_sessions = 0
     hedge_capped_sessions = 0
 
-    for source_row in unhedged_curve:
-        current_day = str(source_row.get("date") or "")
-        signal_day = str(source_row.get("signal_date") or "")
-        index = date_index.get(current_day)
-        if (
-            current_day not in allowed_evaluation
-            or index is None
-            or index < 1
-            or signal_day not in held_by_signal
-        ):
-            raise RuntimeError("unhedged path is not aligned to the fixed panel")
-        primary_gross = _number(source_row.get("gross_return"))
-        if primary_gross is None:
-            raise RuntimeError("unhedged path gross return is unavailable")
-        primary_gross_by_day[current_day] = primary_gross
-        previous_day = dates[index - 1]
-        target_book = held_by_signal[signal_day]
+    for stock_interval in stock_interval_trace:
+        current_day = str(stock_interval.get("date") or "")
+        previous_day = str(stock_interval.get("previous_day") or "")
+        signal_day = str(stock_interval.get("signal_date") or "")
+        target_raw = stock_interval.get("target_book")
+        missing_raw = stock_interval.get("missing_target_codes")
+        if not isinstance(target_raw, Mapping) or not isinstance(missing_raw, list):
+            raise RuntimeError("stock interval trace is invalid")
+        target_book = {str(code): float(weight) for code, weight in target_raw.items()}
+        missing_target_codes = sorted(map(str, missing_raw))
+        expected_interval_status = (
+            "INCOMPLETE_TARGET_BOOK"
+            if missing_target_codes
+            else "COMPLETE"
+        )
+        if stock_interval.get("interval_status") != expected_interval_status:
+            raise RuntimeError("stock interval trace completeness mismatch")
         active = bool(target_book)
         if active:
             active_sessions += 1
-        missing_target_codes = [
-            code
-            for code in target_book
-            if bars[code].get(previous_day) is None
-            or bars[code].get(current_day) is None
-        ]
         topix_before = topix.get(previous_day)
         topix_after = topix.get(current_day)
         if topix_before is None or topix_after is None or topix_before <= 0:
@@ -910,6 +999,7 @@ def evaluate_topix_beta_hedged_comparison(
                 "assumed_proxy_fill_date": previous_day,
                 "target_book": target_book,
                 "missing_target_codes": missing_target_codes,
+                "stock_gross_return": float(stock_interval["stock_gross_return"]),
                 "topix_proxy_return": topix_return,
                 "estimated_stock_book_beta": book_beta,
                 "target_topix_proxy_hedge_weight": target_hedge,
@@ -1019,17 +1109,7 @@ def evaluate_topix_beta_hedged_comparison(
                 proxy_notional_amount += proxy_interval_notional
                 proxy_cost_amount += proxy_interval_notional * ONE_WAY_COST
 
-            stock_gross = sum(
-                weight
-                * (
-                    bars[code][current_day] / bars[code][previous_day]
-                    - 1.0
-                )
-                for code, weight in target_book.items()
-            )
-            source_gross = primary_gross_by_day[current_day]
-            if abs(source_gross - stock_gross) > 1e-12:
-                raise RuntimeError("comparison stock return diverged from primary path")
+            stock_gross = float(plan["stock_gross_return"])
             hedge_gross = target_hedge * float(plan["topix_proxy_return"])
             stock_cost = stock_turnover * ONE_WAY_COST
             hedge_cost = hedge_turnover * ONE_WAY_COST
@@ -1240,9 +1320,9 @@ def evaluate_topix_beta_hedged_comparison(
             "topix_hedged_gross_residual_annualized_volatility": residual_volatility,
         },
         "hedge_tracking": {
-            "source_path_sessions": len(unhedged_curve),
+            "source_path_sessions": len(stock_interval_trace),
             "comparison_calendar_sessions": len(path),
-            "calendar_sessions_dropped": len(unhedged_curve) - len(path),
+            "calendar_sessions_dropped": len(stock_interval_trace) - len(path),
             "return_path_sessions": (
                 len(path) if not incomplete_active_intervals else 0
             ),
@@ -1343,7 +1423,7 @@ def execute_svi_job(
             opener=input_opener,
         )
         evaluation_dates = manifest["sessions"]["evaluation_dates"]
-        curve, trades, evaluation = evaluate_fixed_strategy(
+        curve, trades, evaluation, stock_interval_trace = evaluate_fixed_strategy(
             panel,
             feature_rows,
             evaluation_dates,
@@ -1351,18 +1431,18 @@ def execute_svi_job(
         topix_beta_hedged_comparison = evaluate_topix_beta_hedged_comparison(
             panel,
             feature_rows,
-            evaluation_dates,
-            curve,
+            stock_interval_trace,
         )
         feature_bytes = b"".join(
             _canonical_bytes(row) + b"\n" for row in feature_rows
         )
         feature_digest = uploader(spec, spec.feature_key, feature_bytes)
         report = {
-            "schema_version": "personal-svi-2023-report/v3",
+            "schema_version": "personal-svi-2023-report/v4",
             "job_id": spec.job_id,
             "cohort_id": COHORT_ID,
             "strategy_id": STRATEGY_ID,
+            "runner_version": RUNNER_VERSION,
             "input_manifest_key": spec.input_manifest_key,
             "input_manifest_digest": spec.input_manifest_digest,
             "feature_key": spec.feature_key,
@@ -1403,7 +1483,9 @@ def execute_svi_job(
                 "first_return_timing": "close_d_plus_1_to_close_d_plus_2",
                 "hold_sessions": HOLD_SESSIONS,
                 "one_way_cost": ONE_WAY_COST,
-                "terminal_liquidation_costed": True,
+                "terminal_liquidation_costed": evaluation[
+                    "terminal_liquidation_costed"
+                ],
                 "short_borrow_and_financing": "not_modelled_screening_limitation",
                 "market_neutrality": (
                     "dollar_balanced_rank_long_short_not_beta_neutral"
@@ -1427,11 +1509,7 @@ def execute_svi_job(
             "topix_beta_hedged_comparison": topix_beta_hedged_comparison,
             "daily_path": curve,
             "fills": trades,
-            "candidate_status": (
-                "EVALUATED"
-                if evaluation["active_sessions"] > 0
-                else "NOT_EVALUATED"
-            ),
+            "candidate_status": evaluation["status"],
             "draft_only": True,
             "screening_only": True,
             "ready": False,
@@ -1449,6 +1527,7 @@ def execute_svi_job(
             "job_id": spec.job_id,
             "cohort_id": COHORT_ID,
             "strategy_id": STRATEGY_ID,
+            "runner_version": RUNNER_VERSION,
             "request_digest": spec.request_digest,
             "input_manifest_key": spec.input_manifest_key,
             "input_manifest_digest": spec.input_manifest_digest,
@@ -1473,6 +1552,7 @@ def execute_svi_job(
             "job_id": spec.job_id,
             "cohort_id": COHORT_ID,
             "strategy_id": STRATEGY_ID,
+            "runner_version": RUNNER_VERSION,
             "request_digest": spec.request_digest,
             "input_manifest_key": spec.input_manifest_key,
             "input_manifest_digest": spec.input_manifest_digest,

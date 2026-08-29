@@ -110,6 +110,10 @@ Headline comparison metrics are available only when every active interval has al
 stock legs and a beta estimate. Partial or incomplete coverage preserves the
 calendar as audit rows without publishing a comparison performance summary.
 Hypothetical TOPIX adjustments and costs are reported outside stock fill counts.
+Runner v4 applies the same complete-book trace to the primary and comparison:
+an active interval missing any intended stock leg is retained as a zero-change
+audit row, while the whole primary result becomes `INCOMPLETE` with no headline
+performance. Earlier v143 output remains history and is not reused as v144 proof.
 Branch counts expose when the bounded sample observes only contango and cannot test inversion.
 
 ## Modes

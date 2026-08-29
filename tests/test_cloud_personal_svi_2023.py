@@ -37,7 +37,7 @@ def _svi_spec(job_id: str, input_digest: str):
         "manifest_key": f"{prefix}/manifest.json",
         "report_key": f"{prefix}/report.json",
         "request_digest": "sha256:" + "0" * 64,
-        "runner_version": "personal-svi-cloud-runner/v3",
+        "runner_version": "personal-svi-cloud-runner/v4",
         "strategy_id": "svi-atm-term-ratio-momentum-switch",
     }
     provisional = svi_job.PersonalSvi2023JobSpec(**body)
@@ -198,7 +198,7 @@ def test_fixed_strategy_has_one_session_signal_lag_ten_session_hold_and_cost() -
         for day in dates
     ]
 
-    curve, trades, diagnostics = svi_job.evaluate_fixed_strategy(
+    curve, trades, diagnostics, _trace = svi_job.evaluate_fixed_strategy(
         panel,
         features,
         dates,
@@ -223,11 +223,11 @@ def test_topix_beta_overlay_is_no_lookahead_capped_and_fail_closed() -> None:
         {"date": day, "fit_success": True, svi_job.FEATURE_FIELD: -0.05}
         for day in dates
     ]
-    unhedged, _trades, _diagnostics = svi_job.evaluate_fixed_strategy(
+    unhedged, _trades, _diagnostics, trace = svi_job.evaluate_fixed_strategy(
         panel, features, dates
     )
     comparison = svi_job.evaluate_topix_beta_hedged_comparison(
-        panel, features, dates, unhedged
+        panel, features, trace
     )
     assert comparison["status"] == "PARTIAL"
     assert comparison["performance"] is None
@@ -261,15 +261,25 @@ def test_topix_beta_overlay_is_no_lookahead_capped_and_fail_closed() -> None:
     unavailable["bars"].pop("__NKY_PROXY__")
     with pytest.raises(RuntimeError, match="TOPIX index proxy series is unavailable"):
         svi_job.evaluate_topix_beta_hedged_comparison(
-            unavailable, features, dates, unhedged
+            unavailable, features, trace
         )
 
     incomplete = json.loads(json.dumps(panel))
     incomplete["bars"]["A"] = [pair for pair in incomplete["bars"]["A"] if pair[0] != dates[75]]
+    incomplete_curve, _trades, incomplete_primary, incomplete_trace = (
+        svi_job.evaluate_fixed_strategy(incomplete, features, dates)
+    )
     incomplete_comparison = svi_job.evaluate_topix_beta_hedged_comparison(
-        incomplete, features, dates, unhedged
+        incomplete, features, incomplete_trace
     )
     tracking = incomplete_comparison["hedge_tracking"]
+    assert incomplete_primary["status"] == "INCOMPLETE"
+    assert incomplete_primary["performance"] is None
+    assert incomplete_primary["performance_status"] == "UNAVAILABLE"
+    assert incomplete_primary["calendar_sessions_dropped"] == 0
+    assert incomplete_primary["incomplete_active_intervals"] == tracking[
+        "incomplete_active_intervals"
+    ]
     assert incomplete_comparison["status"] == "INCOMPLETE"
     assert incomplete_comparison["performance"] is None
     assert tracking["incomplete_active_interval_count"] > 0
@@ -279,6 +289,17 @@ def test_topix_beta_overlay_is_no_lookahead_capped_and_fail_closed() -> None:
     incomplete_row = next(
         row for row in incomplete_comparison["daily_path"] if row["date"] == dates[75]
     )
+    primary_row_index = next(
+        index for index, row in enumerate(incomplete_curve) if row["date"] == dates[75]
+    )
+    primary_row = incomplete_curve[primary_row_index]
+    prior_equity = incomplete_curve[primary_row_index - 1]["equity"]
+    assert primary_row["interval_status"] == "INCOMPLETE_TARGET_BOOK"
+    assert primary_row["gross_return"] == 0.0
+    assert primary_row["net_return"] == 0.0
+    assert primary_row["cost_return"] == 0.0
+    assert primary_row["turnover_one_way"] == 0.0
+    assert primary_row["equity"] == prior_equity
     assert incomplete_row["interval_status"] == "INCOMPLETE_TARGET_BOOK"
     assert incomplete_row["equity"] is None
 
@@ -290,11 +311,11 @@ def test_topix_beta_overlay_requires_full_coverage_and_separates_proxy_costs() -
         for day in dates
     ]
     evaluation_dates = dates[70:]
-    unhedged, _trades, _diagnostics = svi_job.evaluate_fixed_strategy(
+    _unhedged, _trades, _diagnostics, trace = svi_job.evaluate_fixed_strategy(
         panel, features, evaluation_dates
     )
     comparison = svi_job.evaluate_topix_beta_hedged_comparison(
-        panel, features, evaluation_dates, unhedged
+        panel, features, trace
     )
 
     assert comparison["status"] == "EVALUATED"
@@ -411,7 +432,7 @@ def test_execute_svi_job_creates_feature_report_then_terminal_manifest() -> None
         "schema_version": "personal-svi-2023-input/v2",
         "job_id": "svi-execute",
         "cohort_id": "personal-svi-term-2023-v1",
-        "runner_version": "personal-svi-cloud-runner/v3",
+        "runner_version": "personal-svi-cloud-runner/v4",
         "authority": {
             "draft_only": True,
             "screening_only": True,
@@ -491,6 +512,7 @@ def test_execute_svi_job_creates_feature_report_then_terminal_manifest() -> None
     )
 
     assert terminal["status"] == "COMPLETED"
+    assert terminal["runner_version"] == "personal-svi-cloud-runner/v4"
     assert [key for key, _data, _digest in uploads] == [
         spec.feature_key,
         spec.report_key,
@@ -503,7 +525,11 @@ def test_execute_svi_job_creates_feature_report_then_terminal_manifest() -> None
     assert report["execution"]["signal_lag_sessions"] == 1
     assert report["execution"]["hold_sessions"] == 10
     assert report["execution"]["one_way_cost"] == 0.001
-    assert report["schema_version"] == "personal-svi-2023-report/v3"
+    assert report["schema_version"] == "personal-svi-2023-report/v4"
+    assert report["runner_version"] == "personal-svi-cloud-runner/v4"
+    assert report["candidate_status"] == report["evaluation"]["status"]
+    assert report["candidate_status"] == "NOT_EVALUATED"
+    assert report["evaluation"]["performance"] is None
     comparison = report["topix_beta_hedged_comparison"]
     assert comparison["status"] == "NOT_EVALUATED"
     assert comparison["performance"] is None
