@@ -156,8 +156,13 @@ def test_runner_timeout_is_failed_and_workspace_is_removed(
     )
 
     assert manifest["status"] == "FAILED"
-    assert "90-minute limit" in manifest["error"]
+    assert "0.05-second limit" in manifest["error"]
     assert not tuple(work.iterdir())
+
+
+def test_default_timeout_keeps_room_for_durable_terminal_evidence() -> None:
+    assert service.DEFAULT_TIMEOUT_SECONDS == 115 * 60
+    assert service.DEFAULT_TIMEOUT_SECONDS < service.MAX_JOB_LIFETIME_SECONDS
 
 
 def test_success_archive_excludes_generated_sqlite_and_manifest_is_closed(
