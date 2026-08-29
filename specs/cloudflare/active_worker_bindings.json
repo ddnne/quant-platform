@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:bd40e0647a4da84315c0a948ab84ee5c9d264ce0d66ff739a766a3b9d89c518a",
+  "manifest_digest": "sha256:d65f25cff1f54d1916da84608b86b98233f2e8ef3de10baf0c3ce3f48d4f10d4",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -2863,7 +2863,7 @@
             "image": "./Dockerfile",
             "image_build_context": "../../..",
             "instance_type": "standard-2",
-            "max_instances": 1,
+            "max_instances": 2,
             "rollout_active_grace_period": 11400
           }
         ],
@@ -2937,7 +2937,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v144.3-exit2-contract",
+          "MASS_EVAL_VERSION": "research-mass-eval/v144.4-container-rollover",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -2963,7 +2963,7 @@
             "image": "./Dockerfile",
             "image_build_context": "../../..",
             "instance_type": "standard-2",
-            "max_instances": 1,
+            "max_instances": 2,
             "rollout_active_grace_period": 11400
           }
         ],
@@ -3037,7 +3037,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v144.3-exit2-contract",
+          "MASS_EVAL_VERSION": "research-mass-eval/v144.4-container-rollover",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3063,7 +3063,7 @@
             "image": "./Dockerfile",
             "image_build_context": "../../..",
             "instance_type": "standard-2",
-            "max_instances": 1,
+            "max_instances": 2,
             "rollout_active_grace_period": 11400
           }
         ],
@@ -3135,7 +3135,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v144.3-exit2-contract",
+          "MASS_EVAL_VERSION": "research-mass-eval/v144.4-container-rollover",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",

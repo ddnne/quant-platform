@@ -46,7 +46,7 @@ on wrangler 4.125.0.
 |---|---|---|
 | quant-ops-mcp | GitHub OAuth callback host (above) | keep read-only |
 | ingestion-secrets | local runners reach the token-gated host; no custom zone | **HUMAN** Cloudflare Access / mTLS / Tunnel before flipping `workers_dev` off. Closing it now would silently break the secrets proxy. |
-| research-mass-eval | one-person, token-gated personal DRAFT Container; no custom zone | exact-four only; one instance; Mass/READY/GO remain closed |
+| research-mass-eval | one-person, token-gated personal DRAFT Container; no custom zone | exact-four only; at most two instances during runner rollover; one job per named Container; Mass/READY/GO remain closed |
 
 Do not treat a `*.workers.dev` hostname as network privacy. Inbound auth is the
 fence where a host exists. Do not treat the Worker itself as auth.

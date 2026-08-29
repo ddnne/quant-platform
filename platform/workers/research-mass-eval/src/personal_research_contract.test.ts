@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  PERSONAL_RESEARCH_CONTAINER_NAME,
   PERSONAL_RESEARCH_RUNNER_VERSION,
   parsePersonalResearchRequest,
   personalResearchCohortDigest,
@@ -25,6 +26,11 @@ const VALID_GZIP = {
 };
 
 describe("personal research request contract", () => {
+  it("pins the runner-bound Container identity", () => {
+    expect(PERSONAL_RESEARCH_CONTAINER_NAME).toBe("personal-research-v7");
+    expect(PERSONAL_RESEARCH_RUNNER_VERSION).toBe("personal-cloud-runner/v7");
+  });
+
   it("accepts one content-addressed bounded exact-four request", async () => {
     const parsed = parsePersonalResearchRequest(VALID);
     expect(parsed).toEqual({ ok: true, value: VALID });

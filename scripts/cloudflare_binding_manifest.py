@@ -1209,7 +1209,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             "image": "./Dockerfile",
             "image_build_context": "../../..",
             "instance_type": "standard-2",
-            "max_instances": 1,
+            "max_instances": 2,
             "rollout_active_grace_period": 11400,
         }
     ]

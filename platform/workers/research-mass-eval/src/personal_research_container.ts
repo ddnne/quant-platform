@@ -1,7 +1,6 @@
 import { Container, ContainerProxy } from "@cloudflare/containers";
 
 import {
-  PERSONAL_RESEARCH_CONTAINER_NAME,
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
   PERSONAL_RESEARCH_RUNNER_VERSION,
   type PersonalResearchRequest,
@@ -12,6 +11,10 @@ import {
   personalResearchUniverseRuleDigest,
 } from "./personal_research_contract";
 import { personalResearchR2Outbound } from "./personal_research_r2";
+import {
+  personalResearchContainer,
+  verifiedPersonalResearchContainer,
+} from "./personal_research_runner";
 import type { Env } from "./types";
 
 export { ContainerProxy };
@@ -63,15 +66,6 @@ async function storedManifest(
   }
 }
 
-function container(env: Env) {
-  if (!env.PERSONAL_RESEARCH_CONTAINER) {
-    throw new Error("PERSONAL_RESEARCH_CONTAINER not bound");
-  }
-  return env.PERSONAL_RESEARCH_CONTAINER.getByName(
-    PERSONAL_RESEARCH_CONTAINER_NAME,
-  );
-}
-
 export async function submitPersonalResearch(
   env: Env,
   request: PersonalResearchRequest,
@@ -119,7 +113,8 @@ export async function submitPersonalResearch(
     );
   }
   try {
-    return await container(env).fetch(
+    const target = await verifiedPersonalResearchContainer(env);
+    return await target.fetch(
       new Request("http://container/v1/run", {
         method: "POST",
         headers: { "content-type": "application/json; charset=utf-8" },
@@ -167,7 +162,7 @@ export async function personalResearchStatus(
     });
   }
   try {
-    return await container(env).fetch(
+    return await personalResearchContainer(env).fetch(
       new Request(`http://container/v1/jobs/${encodeURIComponent(jobId)}`),
     );
   } catch (error) {

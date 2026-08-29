@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { dispatchMassEvalFetch } from "./http_routes";
 import {
+  PERSONAL_RESEARCH_CONTAINER_NAME,
+  PERSONAL_RESEARCH_RUNNER_VERSION,
+} from "./personal_research_contract";
+import {
   buildPersonalSviInputManifest,
   submitPersonalSvi2023,
 } from "./personal_svi_2023";
@@ -18,6 +22,30 @@ import {
 } from "./personal_svi_2023_contract";
 import { personalSviR2Outbound } from "./personal_svi_r2";
 import type { Env } from "./types";
+
+function runnerReadyResponse(): Response {
+  const body = JSON.stringify({
+    ok: true,
+    service: PERSONAL_RESEARCH_RUNNER_VERSION,
+  });
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-length": String(new TextEncoder().encode(body).byteLength),
+      "content-type": "application/json; charset=utf-8",
+    },
+  });
+}
+
+function admittedContainer() {
+  const destroy = vi.fn(async () => undefined);
+  const fetch = vi.fn(async (request: Request) =>
+    new URL(request.url).pathname === "/ready"
+      ? runnerReadyResponse()
+      : new Response('{"accepted":true}', { status: 202 }),
+  );
+  return { destroy, fetch };
+}
 
 function days(count = 32): string[] {
   const out: string[] = [];
@@ -257,13 +285,11 @@ describe("fixed personal SVI 2023 admission", () => {
   it("persists and serves the 193-session identity-bound TOPIX calendar", async () => {
     const fixedDates = days(193);
     const mem = new AdmissionR2(fixedDates);
-    const containerFetch = vi.fn(
-      async () => new Response('{"accepted":true}', { status: 202 }),
-    );
+    const container = admittedContainer();
     const env = {
       STRUCTURED_BUCKET: mem.asBucket(),
       PERSONAL_RESEARCH_CONTAINER: {
-        getByName: vi.fn(() => ({ fetch: containerFetch })),
+        getByName: vi.fn(() => container),
       },
     } as unknown as Env;
 
@@ -280,7 +306,7 @@ describe("fixed personal SVI 2023 admission", () => {
     expect(stored!.bytes.byteLength).toBeLessThanOrEqual(
       PERSONAL_SVI_2023_MAX_INPUT_MANIFEST_BYTES,
     );
-    const forwarded = containerFetch.mock.calls[0]?.[0] as Request;
+    const forwarded = container.fetch.mock.calls[1]?.[0] as Request;
     const dispatched = (await forwarded.json()) as {
       input_manifest_digest: string;
     };
@@ -309,13 +335,11 @@ describe("fixed personal SVI 2023 admission", () => {
 
   it("rejects an oversized serialized input manifest before write or dispatch", async () => {
     const mem = new AdmissionR2(calendarDays(220), undefined, 8);
-    const containerFetch = vi.fn(
-      async () => new Response('{"accepted":true}', { status: 202 }),
-    );
+    const container = admittedContainer();
     const env = {
       STRUCTURED_BUCKET: mem.asBucket(),
       PERSONAL_RESEARCH_CONTAINER: {
-        getByName: vi.fn(() => ({ fetch: containerFetch })),
+        getByName: vi.fn(() => container),
       },
     } as unknown as Env;
 
@@ -332,19 +356,18 @@ describe("fixed personal SVI 2023 admission", () => {
     expect(
       mem.puts.has(personalSviInputManifestKey("svi-oversized-manifest")),
     ).toBe(false);
-    expect(containerFetch).not.toHaveBeenCalled();
+    expect(container.fetch).not.toHaveBeenCalled();
   });
 
   it("writes the create-only input manifest before dispatching the existing Container", async () => {
     const fixedDates = days();
     const mem = new AdmissionR2(fixedDates);
-    const containerFetch = vi.fn(
-      async () => new Response('{"accepted":true}', { status: 202 }),
-    );
+    const container = admittedContainer();
+    const containerByName = vi.fn(() => container);
     const env = {
       STRUCTURED_BUCKET: mem.asBucket(),
       PERSONAL_RESEARCH_CONTAINER: {
-        getByName: vi.fn(() => ({ fetch: containerFetch })),
+        getByName: containerByName,
       },
     } as unknown as Env;
     const response = await submitPersonalSvi2023(env, {
@@ -353,10 +376,19 @@ describe("fixed personal SVI 2023 admission", () => {
     });
 
     expect(response.status).toBe(202);
+    expect(containerByName).toHaveBeenCalledOnce();
+    expect(containerByName).toHaveBeenCalledWith(
+      PERSONAL_RESEARCH_CONTAINER_NAME,
+    );
     const inputKey =
       "research/personal/svi-2023/job=svi-container-bound/input-manifest.json";
     expect(mem.puts.has(inputKey)).toBe(true);
-    const forwarded = containerFetch.mock.calls[0]?.[0] as Request;
+    expect(container.fetch).toHaveBeenCalledTimes(2);
+    expect(new URL(container.fetch.mock.calls[0]?.[0].url).pathname).toBe(
+      "/ready",
+    );
+    expect(container.destroy).not.toHaveBeenCalled();
+    const forwarded = container.fetch.mock.calls[1]?.[0] as Request;
     expect(await forwarded.json()).toMatchObject({
       cohort_id: PERSONAL_SVI_2023_COHORT_ID,
       input_manifest_key: inputKey,
