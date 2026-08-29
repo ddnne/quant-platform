@@ -307,6 +307,16 @@ def attach_nky_proxy(
             if idx_pairs:
                 bars_json["__NKY_PROXY__"] = idx_pairs
                 nky_meta = {
+                    "index_proxy": {
+                        "dataset": "indices_bars_daily_topix",
+                        "label": "TOPIX",
+                        "role": "nky_vol_proxy_compare_only",
+                        "note": (
+                            "TOPIX closes staged as __NKY_PROXY__ for beta and "
+                            "realized-vol comparisons only. Nikkei 225 option "
+                            "volatility remains the canonical volatility signal."
+                        ),
+                    },
                     "nky_vol_series": {
                         "rv_short_by_date": nky.get("rv_short_by_date") or {},
                         "rv_long_by_date": nky.get("rv_long_by_date") or {},
