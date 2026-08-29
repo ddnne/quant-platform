@@ -36,10 +36,13 @@ arm the Mass capability.
 ## Personal cloud exact-four
 
 `POST /v1/personal-research` accepts one immutable SQLite snapshot already in
-R2 and always executes the four built-in DRAFT candidates. The input is closed:
+R2 and executes one closed four-candidate DRAFT cohort. The allowed cohort ids
+are `price-relative-v1`, `fundamental-relative-v1`, and `diverse-core-v1`.
+The input is closed:
 
 ```json
 {
+  "cohort_id": "diverse-core-v1",
   "job_id": "exact-four-20260829",
   "snapshot_key": "research/personal/snapshots/sha256=<64-lowercase-hex>.sqlite",
   "snapshot_sha256": "<64-lowercase-hex>",
@@ -62,7 +65,11 @@ only when every input is identical.
 
 Cost and safety bounds are structural: `standard-2`, `max_instances=1`, one
 active job, a 4 GiB snapshot ceiling, 165-minute subprocess timeout and a
-180-minute outer Container activity window. The subprocess limit
+180-minute outer Container activity window. A single request is limited to
+2,200 calendar days. The cohort registry records the 2008/2016 data floors,
+but a full-history study must use a future segmented or precomputed panel path;
+this route does not claim to execute 18 years in one Container run. The
+subprocess limit
 leaves fifteen minutes for verified R2 input/output and the durable terminal
 manifest. The process exits immediately
 after its terminal manifest, so an ordinary short run scales back to zero
@@ -168,6 +175,7 @@ curl -sS -X POST \
   -H 'content-type: application/json' \
   -H "X-Mass-Eval-Token: ${MASS_EVAL_TOKEN:?required}" \
   -d "{
+    \"cohort_id\": \"diverse-core-v1\",
     \"job_id\": \"${PERSONAL_JOB_ID}\",
     \"snapshot_key\": \"research/personal/snapshots/sha256=${SNAPSHOT_SHA256}.sqlite\",
     \"snapshot_sha256\": \"${SNAPSHOT_SHA256}\",

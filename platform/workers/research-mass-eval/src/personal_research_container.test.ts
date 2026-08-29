@@ -34,6 +34,7 @@ import type { Env } from "./types";
 
 const SHA = "a".repeat(64);
 const REQUEST: PersonalResearchRequest = {
+  cohort_id: "diverse-core-v1",
   job_id: "exact-four-container",
   snapshot_key: `research/personal/snapshots/sha256=${SHA}.sqlite`,
   snapshot_sha256: SHA,
@@ -102,5 +103,14 @@ describe("personal research Container admission", () => {
     const response = await submitPersonalResearch(env, REQUEST);
     expect(response.status).toBe(202);
     expect(containerFetch).toHaveBeenCalledTimes(1);
+    const forwarded = containerFetch.mock.calls[0]?.[0];
+    expect(forwarded).toBeInstanceOf(Request);
+    const body = await (forwarded as Request).json();
+    expect(body).toMatchObject({
+      cohort_digest:
+        "sha256:e9aee4f8e2f4fe4bf058c2d9e349c7fe893e386ddbafeb3ecb2a9bab56b973dd",
+      cohort_id: "diverse-core-v1",
+      runner_version: "personal-cloud-runner/v2",
+    });
   });
 });

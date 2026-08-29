@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 
-RUNNER_VERSION = "personal-cloud-runner/v1"
+RUNNER_VERSION = "personal-cloud-runner/v2"
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60
@@ -38,6 +38,13 @@ _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SNAPSHOT_RE = re.compile(
     r"^research/personal/snapshots/sha256=([0-9a-f]{64})\.sqlite$"
+)
+PERSONAL_EXECUTABLE_COHORT_IDS = frozenset(
+    {
+        "price-relative-v1",
+        "fundamental-relative-v1",
+        "diverse-core-v1",
+    }
 )
 
 
@@ -89,6 +96,8 @@ def _parse_day(value: Any, label: str) -> date:
 
 @dataclass(frozen=True, slots=True)
 class JobSpec:
+    cohort_id: str
+    cohort_digest: str
     job_id: str
     snapshot_key: str
     snapshot_sha256: str
@@ -104,6 +113,8 @@ class JobSpec:
         if not isinstance(document, dict):
             raise JobInputError("job must be a JSON object")
         fields = {
+            "cohort_id",
+            "cohort_digest",
             "job_id",
             "manifest_key",
             "period_end",
@@ -123,6 +134,10 @@ class JobSpec:
         return spec
 
     def validate(self) -> None:
+        if self.cohort_id not in PERSONAL_EXECUTABLE_COHORT_IDS:
+            raise JobInputError("cohort_id is not executable by personal research")
+        if _DIGEST_RE.fullmatch(self.cohort_digest) is None:
+            raise JobInputError("cohort_digest is invalid")
         if _JOB_ID_RE.fullmatch(self.job_id) is None:
             raise JobInputError("job_id is invalid")
         if _SHA_RE.fullmatch(self.snapshot_sha256) is None:
@@ -152,6 +167,8 @@ class JobSpec:
 
     def derived_request_digest(self) -> str:
         body = {
+            "cohort_digest": self.cohort_digest,
+            "cohort_id": self.cohort_id,
             "job_id": self.job_id,
             "period_end": self.period_end,
             "period_start": self.period_start,
@@ -301,6 +318,8 @@ def _manifest_base(spec: JobSpec, *, started_at: str, finished_at: str) -> dict[
     return {
         "version": RUNNER_VERSION,
         "job_id": spec.job_id,
+        "cohort_id": spec.cohort_id,
+        "cohort_digest": spec.cohort_digest,
         "request_digest": spec.request_digest,
         "snapshot": {
             "key": spec.snapshot_key,
@@ -349,6 +368,8 @@ def execute_job(
                 spec.period_end,
                 "--output",
                 str(output),
+                "--cohort",
+                spec.cohort_id,
             ]
             try:
                 process = subprocess.run(
@@ -386,6 +407,8 @@ def execute_job(
                 raise RuntimeError("qp-research result document is not an object")
             if (
                 summary.get("candidate_count") != 4
+                or summary.get("cohort_id") != spec.cohort_id
+                or summary.get("cohort_digest") != spec.cohort_digest
                 or summary.get("model_calls") != 0
                 or summary.get("live_orders_enabled") is not False
                 or summary.get("automatic_promotion") is not False
@@ -394,6 +417,8 @@ def execute_job(
             stable_summary = {
                 key: summary.get(key)
                 for key in (
+                    "cohort_id",
+                    "cohort_digest",
                     "report_id",
                     "snapshot_id",
                     "logical_data_snapshot_id",
@@ -427,6 +452,7 @@ def execute_job(
                 "result_bytes": result_bytes,
                 "archived_file_count": archived_files,
                 "report_id": summary.get("report_id"),
+                "cohort_digest": summary.get("cohort_digest"),
                 "snapshot_id": summary.get("snapshot_id"),
                 "candidate_count": 4,
                 "evaluated_count": summary.get("evaluated_count"),
@@ -488,6 +514,8 @@ class JobManager:
                 raise JobBusyError(f"job {self._active_job_id} is already active")
             record = {
                 "job_id": spec.job_id,
+                "cohort_id": spec.cohort_id,
+                "cohort_digest": spec.cohort_digest,
                 "request_digest": spec.request_digest,
                 "status": "QUEUED",
                 "submitted_at": _now(),
@@ -544,6 +572,8 @@ class JobManager:
         except Exception as error:  # upload or service failure after job execution
             result = {
                 "job_id": spec.job_id,
+                "cohort_id": spec.cohort_id,
+                "cohort_digest": spec.cohort_digest,
                 "request_digest": spec.request_digest,
                 "status": "FAILED",
                 "error": _safe_detail(error),

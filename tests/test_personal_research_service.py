@@ -13,12 +13,16 @@ from data_contracts.identity import natural_key
 from research.paper_candidate_specs import build_multi_day_hold_strategy_spec
 from research.personal_service import (
     PERSONAL_DECISION_POLICY,
+    PersonalResearchInputError,
     PersonalResearchPolicy,
     PersonalResearchRequest,
     PersonalResearchService,
     _calendar_lookback_days,
+    _periods,
+    _validated_specs,
     default_personal_specs,
 )
+from research.universe_contract import ResolvedUniverseMembership
 from storage.sqlite_store import SqliteStore
 from strategies.spec import iter_feature_refs
 
@@ -312,6 +316,118 @@ def test_default_candidates_are_long_only_where_applicable() -> None:
     )
     assert specs[2].rule.allow_short is False
     assert specs[3].rule.allow_short is False
+
+
+def test_closed_cohort_selection_and_explicit_specs_are_mutually_exclusive() -> None:
+    specs, cohort = _validated_specs(
+        None,
+        _policy(),
+        "diverse-core-v1",
+    )
+    assert cohort is not None
+    assert cohort.cohort_id == "diverse-core-v1"
+    assert len(specs) == 4
+
+    with pytest.raises(PersonalResearchInputError, match="mutually exclusive"):
+        _validated_specs((specs[0],), _policy(), "diverse-core-v1")
+    with pytest.raises(PersonalResearchInputError, match="must be one of"):
+        _validated_specs(None, _policy(), "sector-relative-ls-v1")
+
+
+def test_selected_cohort_id_and_digest_are_bound_to_report(
+    personal_db: tuple[Path, str, str], tmp_path: Path
+) -> None:
+    source, start, end = personal_db
+    result = PersonalResearchService(policy=_policy()).run(
+        PersonalResearchRequest(
+            source_db=source,
+            period_start=start,
+            period_end=end,
+            output_root=tmp_path / "cohort-report",
+            cohort_id="diverse-core-v1",
+        )
+    )
+    report = json.loads(result.report_json_path.read_text(encoding="utf-8"))
+
+    assert result.cohort_id == "diverse-core-v1"
+    assert result.cohort_digest == report["strategy_cohort"]["cohort_digest"]
+    assert report["strategy_cohort"]["registry_version"] == (
+        "personal-factor-cohorts/v1"
+    )
+    assert report["summary"]["candidate_count"] == 4
+    assert report["summary"]["analysis_status"] == "NO_ANALYSIS"
+    assert report["period"] == {
+        "start": start,
+        "data_start": start,
+        "evaluation_start": None,
+        "end": end,
+        "warmup_sessions": 253,
+    }
+    assert all(
+        candidate["reasons"] == ["insufficient_post_warmup_sessions"]
+        for candidate in report["candidates"]
+    )
+    assert all(
+        closure["plan_digest"].startswith("sha256:")
+        for closure in report["dependency_closures"]
+    )
+    assert "Cohort: `diverse-core-v1`" in result.report_markdown_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_cohort_history_floor_is_enforced_before_materialization(
+    personal_db: tuple[Path, str, str], tmp_path: Path
+) -> None:
+    source, _start, end = personal_db
+
+    with pytest.raises(PersonalResearchInputError, match="history floor 2008-07-07"):
+        PersonalResearchService(policy=_policy()).run(
+            PersonalResearchRequest(
+                source_db=source,
+                period_start="2008-07-06",
+                period_end=end,
+                output_root=tmp_path / "must-not-materialize",
+                cohort_id="price-relative-v1",
+            )
+        )
+    assert not (tmp_path / "must-not-materialize").exists()
+
+
+def test_cohort_warmup_sessions_are_excluded_from_analysis_periods() -> None:
+    days = _dates(date(2024, 1, 1), date(2024, 4, 30))
+    universe = ResolvedUniverseMembership(
+        period_start=days[0],
+        period_end=days[-1],
+        decision_memberships=tuple((day, ("1301",)) for day in days),
+    )
+    policy = _policy(
+        validation_folds=1,
+        min_fold_sessions=10,
+        holdout_months=1,
+        min_holdout_sessions=10,
+        min_positive_folds=1,
+    )
+
+    periods = _periods(
+        universe,
+        end=date.fromisoformat(days[-1]),
+        policy=policy,
+        warmup_sessions=5,
+    )
+
+    assert periods is not None
+    validation, _holdout = periods
+    assert validation[0][0] == days[5]
+    assert (
+        _periods(
+            universe,
+            end=date.fromisoformat(days[-1]),
+            policy=policy,
+            warmup_sessions=len(days),
+        )
+        is None
+    )
 
 
 def test_large_trading_lookback_is_expanded_to_calendar_days() -> None:

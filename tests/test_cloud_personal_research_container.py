@@ -8,6 +8,7 @@ import sys
 import tarfile
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -44,8 +45,15 @@ def _sqlite(path: Path) -> str:
     return _digest(path)
 
 
+COHORT_DIGEST = (
+    "sha256:e9aee4f8e2f4fe4bf058c2d9e349c7fe893e386ddbafeb3ecb2a9bab56b973dd"
+)
+
+
 def _job(sha: str, job_id: str = "exact-four-test"):
     body = {
+        "cohort_digest": COHORT_DIGEST,
+        "cohort_id": "diverse-core-v1",
         "job_id": job_id,
         "period_end": "2026-08-27",
         "period_start": "2022-04-19",
@@ -166,6 +174,13 @@ def test_default_timeout_keeps_room_for_durable_terminal_evidence() -> None:
     assert service.DEFAULT_TIMEOUT_SECONDS < service.MAX_JOB_LIFETIME_SECONDS
 
 
+def test_job_spec_rejects_a_non_personal_cohort() -> None:
+    spec = replace(_job("a" * 64), cohort_id="sector-relative-ls-v1")
+
+    with pytest.raises(service.JobInputError, match="cohort_id"):
+        spec.validate()
+
+
 def test_success_archive_excludes_generated_sqlite_and_manifest_is_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -185,6 +200,8 @@ out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])
 (out / 'snapshots' / 'generated.sqlite').write_bytes(b'large-copy')
 (out / 'snapshots' / 'generated.manifest.json').write_text('{\"snapshot\":true}')
 print(json.dumps({
+  'cohort_id': sys.argv[sys.argv.index('--cohort') + 1],
+  'cohort_digest': 'sha256:e9aee4f8e2f4fe4bf058c2d9e349c7fe893e386ddbafeb3ecb2a9bab56b973dd',
   'report_id': 'sha256:' + '1' * 64,
   'snapshot_id': 'sha256:' + '2' * 64,
   'candidate_count': 4,
@@ -217,6 +234,8 @@ print(json.dumps({
 
     assert manifest["status"] == "COMPLETED"
     assert manifest["candidate_count"] == 4
+    assert manifest["cohort_id"] == "diverse-core-v1"
+    assert manifest["cohort_digest"] == COHORT_DIGEST
     assert manifest["model_calls"] == 0
     assert manifest["go"] is False
     assert manifest["automatic_promotion"] is False

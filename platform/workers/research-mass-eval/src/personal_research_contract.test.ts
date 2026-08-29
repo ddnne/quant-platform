@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   PERSONAL_RESEARCH_RUNNER_VERSION,
   parsePersonalResearchRequest,
+  personalResearchCohortDigest,
   personalResearchJobIdFromPath,
   personalResearchRequestDigest,
 } from "./personal_research_contract";
 
 const SHA = "a".repeat(64);
 const VALID = {
+  cohort_id: "diverse-core-v1" as const,
   job_id: "exact-four-20260829",
   snapshot_key: `research/personal/snapshots/sha256=${SHA}.sqlite`,
   snapshot_sha256: SHA,
@@ -23,6 +25,8 @@ describe("personal research request contract", () => {
     if (!parsed.ok) throw new Error(parsed.error);
     const digest = await personalResearchRequestDigest(parsed.value);
     const canonical = JSON.stringify({
+      cohort_digest: personalResearchCohortDigest(VALID.cohort_id),
+      cohort_id: VALID.cohort_id,
       job_id: VALID.job_id,
       period_end: VALID.period_end,
       period_start: VALID.period_start,
@@ -41,6 +45,12 @@ describe("personal research request contract", () => {
 
   it("rejects field, digest, and date-range drift", () => {
     expect(parsePersonalResearchRequest({ ...VALID, extra: true }).ok).toBe(false);
+    expect(
+      parsePersonalResearchRequest({
+        ...VALID,
+        cohort_id: "sector-relative-ls-v1",
+      }).ok,
+    ).toBe(false);
     expect(
       parsePersonalResearchRequest({
         ...VALID,

@@ -40,6 +40,13 @@ from research.dependency_closure import (
     PlanDependencyClosure,
     build_strategy_dependency_closure,
 )
+from research.factor_cohorts import (
+    COHORT_REGISTRY_VERSION,
+    PERSONAL_EXECUTABLE_COHORT_IDS,
+    ResearchCohort,
+    get_research_cohort,
+    personal_specs_for_cohort,
+)
 from research.paper_candidate_specs import (
     build_cross_section_hold_strategy_spec,
     build_fundamentals_hold_strategy_spec,
@@ -52,7 +59,7 @@ from research.universe_contract import (
 )
 
 
-PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v3"
+PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v4"
 PERSONAL_DECISION_POLICY = "personal_drawdown_cost_stress/v3"
 PERSONAL_DATA_PROFILE = "personal-japan-equities-paper/v2"
 PERSONAL_BAR_COVERAGE_EVIDENCE = "observed-pit-market-breadth/v1"
@@ -131,6 +138,7 @@ class PersonalResearchRequest:
     output_root: Path
     period_start: str | None = None
     specs: tuple[StrategySpec, ...] | None = None
+    cohort_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +151,8 @@ class PersonalResearchRun:
     evaluated_count: int
     hold_count: int
     unexpected_errors: int
+    cohort_id: str | None = None
+    cohort_digest: str | None = None
 
     @property
     def exit_code(self) -> int:
@@ -260,9 +270,28 @@ def _calendar_lookback_days(required_trading_days: int) -> int:
 
 
 def _validated_specs(
-    raw: Sequence[StrategySpec] | None, policy: PersonalResearchPolicy
-) -> tuple[StrategySpec, ...]:
-    specs = tuple(default_personal_specs() if raw is None else raw)
+    raw: Sequence[StrategySpec] | None,
+    policy: PersonalResearchPolicy,
+    cohort_id: str | None = None,
+) -> tuple[tuple[StrategySpec, ...], ResearchCohort | None]:
+    if raw is not None and cohort_id is not None:
+        raise PersonalResearchInputError(
+            "cohort_id and explicit StrategySpec candidates are mutually exclusive"
+        )
+    cohort: ResearchCohort | None = None
+    if cohort_id is not None:
+        if type(cohort_id) is not str or cohort_id not in PERSONAL_EXECUTABLE_COHORT_IDS:
+            raise PersonalResearchInputError(
+                "cohort_id must be one of "
+                f"{list(PERSONAL_EXECUTABLE_COHORT_IDS)}"
+            )
+        cohort = get_research_cohort(cohort_id)
+        try:
+            specs = tuple(personal_specs_for_cohort(cohort_id))
+        except ValueError as exc:  # defensive if registry eligibility drifts
+            raise PersonalResearchInputError(str(exc)) from exc
+    else:
+        specs = tuple(default_personal_specs() if raw is None else raw)
     if not specs:
         raise PersonalResearchInputError("at least one StrategySpec is required")
     if len(specs) > policy.max_candidates:
@@ -291,7 +320,7 @@ def _validated_specs(
                     f"PIT-adjusted price feature: {ref.id!r}@{ref.version!r} "
                     f"declares {definition.price_basis!r}"
                 )
-    return specs
+    return specs, cohort
 
 
 def _closures(
@@ -300,6 +329,7 @@ def _closures(
     start: str,
     end: str,
     policy: PersonalResearchPolicy,
+    cohort_ref: dict[str, str] | None = None,
 ) -> tuple[PlanDependencyClosure, ...]:
     closures: list[PlanDependencyClosure] = []
     for spec in specs:
@@ -311,6 +341,8 @@ def _closures(
             "period_end": end,
             "policy": policy.to_dict(),
         }
+        if cohort_ref is not None:
+            plan_body["strategy_cohort"] = cohort_ref
         closures.append(
             build_strategy_dependency_closure(
                 plan_id=f"personal:{spec.strategy_id}:{spec_hash[7:19]}",
@@ -333,8 +365,13 @@ def _periods(
     *,
     end: date,
     policy: PersonalResearchPolicy,
+    warmup_sessions: int = 0,
 ) -> tuple[tuple[tuple[str, str], ...], tuple[str, str]] | None:
-    sessions = tuple(day for day, _codes in universe.decision_memberships)
+    if type(warmup_sessions) is not int or warmup_sessions < 0:
+        raise ValueError("warmup_sessions must be a non-negative integer")
+    sessions = tuple(
+        day for day, _codes in universe.decision_memberships[warmup_sessions:]
+    )
     boundary = _subtract_months(end, policy.holdout_months).isoformat()
     validation = tuple(day for day in sessions if day < boundary)
     holdout = tuple(day for day in sessions if day >= boundary)
@@ -1136,7 +1173,9 @@ def _markdown(report: dict[str, Any]) -> str:
         "",
         f"- Report: `{report['report_id']}`",
         f"- Snapshot: `{report['snapshot']['snapshot_id']}`",
-        f"- Period: {report['period']['start']} to {report['period']['end']}",
+        f"- Data period: {report['period']['data_start']} to {report['period']['end']}",
+        f"- Evaluation start: {report['period']['evaluation_start'] or 'none'}",
+        f"- Warmup sessions: {report['period']['warmup_sessions']}",
         f"- Analysis: {report['summary']['analysis_status']}",
         f"- Candidates: {report['summary']['candidate_count']}",
         f"- Evaluated: {report['summary']['evaluated_count']}",
@@ -1149,6 +1188,9 @@ def _markdown(report: dict[str, Any]) -> str:
         "## Decisions",
         "",
     ]
+    cohort = report.get("strategy_cohort")
+    if isinstance(cohort, dict):
+        lines.insert(6, f"- Cohort: `{cohort['cohort_id']}`")
     for candidate in report["candidates"]:
         reasons = ", ".join(candidate["reasons"]) or "none"
         lines.append(
@@ -1186,12 +1228,34 @@ class PersonalResearchService:
         )
         if start_day >= end_day:
             raise PersonalResearchInputError("period_start must precede period_end")
-        specs = _validated_specs(request.specs, self.policy)
+        specs, cohort = _validated_specs(
+            request.specs,
+            self.policy,
+            request.cohort_id,
+        )
+        cohort_ref: dict[str, str] | None = None
+        if cohort is not None:
+            history_start = _parse_day(
+                cohort.history_data_start,
+                "cohort history_data_start",
+            )
+            if start_day < history_start:
+                raise PersonalResearchInputError(
+                    f"period_start precedes {cohort.cohort_id} history floor "
+                    f"{history_start.isoformat()}"
+                )
+            cohort_document = cohort.to_dict()
+            cohort_ref = {
+                "registry_version": COHORT_REGISTRY_VERSION,
+                "cohort_id": cohort.cohort_id,
+                "cohort_digest": str(cohort_document["cohort_digest"]),
+            }
         closures = _closures(
             specs,
             start=start_day.isoformat(),
             end=end_day.isoformat(),
             policy=self.policy,
+            cohort_ref=cohort_ref,
         )
         output_root = Path(request.output_root).expanduser().resolve()
         output_root.mkdir(parents=True, exist_ok=True)
@@ -1254,7 +1318,17 @@ class PersonalResearchService:
                 )
             ),
         )
-        periods = _periods(universe, end=end_day, policy=self.policy)
+        warmup_sessions = 0 if cohort is None else cohort.warmup_sessions
+        evaluation_memberships = universe.decision_memberships[warmup_sessions:]
+        evaluation_start = (
+            evaluation_memberships[0][0] if evaluation_memberships else None
+        )
+        periods = _periods(
+            universe,
+            end=end_day,
+            policy=self.policy,
+            warmup_sessions=warmup_sessions,
+        )
         candidates: list[dict[str, Any]] = []
         unexpected_errors = 0
         if (
@@ -1272,7 +1346,11 @@ class PersonalResearchService:
                     else (
                         "prime_fins_breadth_below_threshold"
                         if universe_breadth["status"] != "PASS"
-                        else "insufficient_validation_or_holdout_sessions"
+                        else (
+                            "insufficient_post_warmup_sessions"
+                            if evaluation_start is None
+                            else "insufficient_validation_or_holdout_sessions"
+                        )
                     )
                 )
             )
@@ -1347,7 +1425,10 @@ class PersonalResearchService:
             "profile_id": PERSONAL_DATA_PROFILE,
             "period": {
                 "start": start_day.isoformat(),
+                "data_start": start_day.isoformat(),
+                "evaluation_start": evaluation_start,
                 "end": end_day.isoformat(),
+                "warmup_sessions": warmup_sessions,
             },
             "policy": self.policy.to_dict(),
             "snapshot": {
@@ -1391,6 +1472,8 @@ class PersonalResearchService:
             "model_calls": 0,
             "estimated_ai_cost_usd": 0.0,
         }
+        if cohort_ref is not None:
+            body["strategy_cohort"] = cohort_ref
         report_id = _digest(body)
         report = {**body, "report_id": report_id}
         json_path = _write_artifact(
@@ -1411,6 +1494,10 @@ class PersonalResearchService:
             evaluated_count=evaluated_count,
             hold_count=hold_count,
             unexpected_errors=unexpected_errors,
+            cohort_id=(None if cohort_ref is None else cohort_ref["cohort_id"]),
+            cohort_digest=(
+                None if cohort_ref is None else cohort_ref["cohort_digest"]
+            ),
         )
 
 
@@ -1422,5 +1509,6 @@ __all__ = [
     "PersonalResearchRequest",
     "PersonalResearchRun",
     "PersonalResearchService",
+    "PERSONAL_EXECUTABLE_COHORT_IDS",
     "default_personal_specs",
 ]

@@ -5,6 +5,7 @@ import type { Env } from "./types";
 
 const SHA = "a".repeat(64);
 const BODY = {
+  cohort_id: "diverse-core-v1",
   job_id: "exact-four-route",
   snapshot_key: `research/personal/snapshots/sha256=${SHA}.sqlite`,
   snapshot_sha256: SHA,

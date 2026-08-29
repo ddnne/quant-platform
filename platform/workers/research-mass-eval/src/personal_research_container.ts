@@ -5,6 +5,7 @@ import {
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
   PERSONAL_RESEARCH_RUNNER_VERSION,
   type PersonalResearchRequest,
+  personalResearchCohortDigest,
   personalResearchManifestKey,
   personalResearchRequestDigest,
   personalResearchResultKey,
@@ -123,6 +124,7 @@ export async function submitPersonalResearch(
         headers: { "content-type": "application/json; charset=utf-8" },
         body: JSON.stringify({
           ...request,
+          cohort_digest: personalResearchCohortDigest(request.cohort_id),
           request_digest: requestDigest,
           result_key: personalResearchResultKey(request.job_id),
           manifest_key: personalResearchManifestKey(request.job_id),
