@@ -47,6 +47,11 @@ from research.factor_cohorts import (
     get_research_cohort,
     personal_specs_for_cohort,
 )
+from research.personal_metrics import (
+    performance_delta,
+    summarize_performance,
+    summarize_validation_performance,
+)
 from research.paper_candidate_specs import (
     build_cross_section_hold_strategy_spec,
     build_fundamentals_hold_strategy_spec,
@@ -59,7 +64,7 @@ from research.universe_contract import (
 )
 
 
-PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v4"
+PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v5"
 PERSONAL_DECISION_POLICY = "personal_drawdown_cost_stress/v3"
 PERSONAL_DATA_PROFILE = "personal-japan-equities-paper/v2"
 PERSONAL_BAR_COVERAGE_EVIDENCE = "observed-pit-market-breadth/v1"
@@ -700,6 +705,49 @@ def _portable_paper_document(result: PaperRunResult) -> dict[str, Any]:
     return document
 
 
+def _strategy_context(spec: StrategySpec) -> dict[str, Any]:
+    """Portable mechanics plus the declared return thesis for comparison."""
+
+    rule = spec.rule.to_dict()
+    rule_type = str(rule.get("type") or "unknown")
+    rebalance = (
+        "daily"
+        if spec.rebalance == "daily"
+        else f"every {spec.hold_days} sessions"
+    )
+    if rule_type == "factor_rank":
+        leg_labels: list[str] = []
+        for leg in rule.get("legs", []):
+            feature = leg.get("feature", {})
+            params = feature.get("params", {})
+            label = str(params.get("mode") or feature.get("id") or "feature")
+            weight = float(leg.get("weight", 0.0))
+            direction = str(leg.get("direction") or "")
+            leg_labels.append(f"{label} {weight:.0%} {direction}")
+        exposure = (
+            f"long top {float(rule['long_frac']):.0%} / "
+            f"short bottom {float(rule['short_frac']):.0%}"
+            if rule.get("allow_short")
+            else f"long top {float(rule['long_frac']):.0%}"
+        )
+        summary = (
+            f"{rebalance}; percentile rank within {rule['group']}; "
+            f"{exposure}; " + ", ".join(leg_labels)
+        )
+    else:
+        exposure = "long/short" if rule.get("allow_short") else "long-only"
+        summary = f"{rebalance}; {rule_type}; {exposure}"
+    return {
+        "thesis": spec.rationale,
+        "mechanics_summary": summary,
+        "mechanics": {
+            "rule": rule,
+            "rebalance": spec.rebalance,
+            "hold_days": spec.hold_days,
+        },
+    }
+
+
 def _universe_corporate_action_check(
     db_path: Path,
     *,
@@ -962,7 +1010,7 @@ def _paper_evidence(
     config: PaperRunConfig,
     output_root: Path,
     max_drawdown: float,
-) -> tuple[dict[str, Any], list[float]]:
+) -> tuple[dict[str, Any], list[float], list[str]]:
     paper_path = _write_artifact(
         output_root, "paper", "json", _canonical_bytes(_portable_paper_document(result))
     )
@@ -973,6 +1021,11 @@ def _paper_evidence(
     returns = _daily_returns(result, config.starting_capital)
     sharpe = sharpe_ratio(returns, periods_per_year=252.0).get("sharpe")
     metrics = result.metrics
+    performance = summarize_performance(
+        equity_curve=result.equity_curve,
+        trades=result.trades,
+        starting_capital=config.starting_capital,
+    )
     return (
         {
             "run_id": result.run_id,
@@ -987,10 +1040,12 @@ def _paper_evidence(
             "max_drawdown": abs(float(metrics.get("max_drawdown", 0.0))),
             "fills": int(metrics.get("num_trades", len(result.trades))),
             "risk_status": risk["status"],
+            "performance": performance,
             "paper_artifact": paper_path,
             "risk_artifact": risk_path,
         },
         returns,
+        [str(row.get("date") or "") for row in result.equity_curve],
     )
 
 
@@ -1006,7 +1061,7 @@ def _run_one(
     lookback_days: int,
     output_root: Path,
     max_drawdown: float,
-) -> tuple[dict[str, Any], list[float]]:
+) -> tuple[dict[str, Any], list[float], list[str]]:
     period_universe = ResolvedUniverseMembership(
         period_start=period[0],
         period_end=period[1],
@@ -1057,8 +1112,9 @@ def _candidate_evaluation(
 ) -> dict[str, Any]:
     validation_runs: list[dict[str, Any]] = []
     pooled_returns: list[float] = []
+    pooled_dates: list[str] = []
     for period in fold_periods:
-        evidence, returns = _run_one(
+        evidence, returns, dates = _run_one(
             executor,
             spec,
             db_path=snapshot.db_path,
@@ -1072,12 +1128,18 @@ def _candidate_evaluation(
         )
         validation_runs.append(evidence)
         pooled_returns.extend(returns)
+        pooled_dates.extend(dates)
 
     pooled = sharpe_ratio(pooled_returns, periods_per_year=252.0).get("sharpe")
     positive = sum(
         run["total_return_post_cost"] > 0.0 for run in validation_runs
     )
     fills = sum(int(run["fills"]) for run in validation_runs)
+    validation_performance = summarize_validation_performance(
+        validation_runs,
+        pooled_returns,
+        stitched_dates=pooled_dates,
+    )
     validation_checks = {
         "positive_folds": positive >= policy.min_positive_folds,
         "pooled_annualized_sharpe": pooled is not None
@@ -1094,6 +1156,7 @@ def _candidate_evaluation(
         "strategy_spec_version": spec.version,
         "strategy_spec_digest": strategy_spec_digest(spec),
         "dependency_closure_digest": closure.closure_digest,
+        "strategy": _strategy_context(spec),
         "decision": "REJECT",
         "reasons": [name for name, passed in validation_checks.items() if not passed],
         "validation": {
@@ -1102,16 +1165,21 @@ def _candidate_evaluation(
             "total_fills": fills,
             "pooled_annualized_sharpe": None if pooled is None else float(pooled),
             "sharpe_periods_per_year": 252,
+            "performance": validation_performance,
             "checks": validation_checks,
         },
         "stress": None,
         "holdout": None,
         "decision_basis": "validation_and_cost_stress",
+        "performance_comparison": {
+            "stress_vs_validation": None,
+            "holdout_vs_validation": None,
+        },
     }
     if not all(validation_checks.values()):
         return candidate
 
-    stress, _ = _run_one(
+    stress, _, _ = _run_one(
         executor,
         spec,
         db_path=snapshot.db_path,
@@ -1131,13 +1199,17 @@ def _candidate_evaluation(
         "risk_agent": stress["risk_status"] == "pass",
     }
     candidate["stress"] = {**stress, "checks": stress_checks}
+    candidate["performance_comparison"]["stress_vs_validation"] = performance_delta(
+        validation_performance["stitched_performance"],
+        stress.get("performance"),
+    )
     if not all(stress_checks.values()):
         candidate["reasons"] = [
             f"stress:{name}" for name, passed in stress_checks.items() if not passed
         ]
         return candidate
 
-    holdout, _ = _run_one(
+    holdout, _, _ = _run_one(
         executor,
         spec,
         db_path=snapshot.db_path,
@@ -1162,9 +1234,90 @@ def _candidate_evaluation(
         "selection_use": False,
         "purpose": "exploratory_recent_period",
     }
+    candidate["performance_comparison"]["holdout_vs_validation"] = performance_delta(
+        validation_performance["stitched_performance"],
+        holdout.get("performance"),
+    )
     candidate["decision"] = "HOLD"
     candidate["reasons"] = ["human_review_required"]
     return candidate
+
+
+def _comparison_document(candidates: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for candidate in candidates:
+        validation = candidate.get("validation")
+        stability = (
+            validation.get("performance")
+            if isinstance(validation, dict)
+            and isinstance(validation.get("performance"), dict)
+            else None
+        )
+        stitched = (
+            stability.get("stitched_performance")
+            if isinstance(stability, dict)
+            else None
+        )
+        stress = candidate.get("stress")
+        holdout = candidate.get("holdout")
+        rows.append(
+            {
+                "strategy_id": candidate["strategy_id"],
+                "decision": candidate["decision"],
+                "thesis": candidate.get("strategy", {}).get("thesis", ""),
+                "mechanics_summary": candidate.get("strategy", {}).get(
+                    "mechanics_summary", ""
+                ),
+                "validation": stitched,
+                "fold_stability": stability,
+                "stress": (
+                    stress.get("performance")
+                    if isinstance(stress, dict)
+                    else None
+                ),
+                "holdout": (
+                    holdout.get("performance")
+                    if isinstance(holdout, dict)
+                    else None
+                ),
+                "deltas": candidate.get("performance_comparison"),
+            }
+        )
+    return {
+        "schema_version": "personal-performance-comparison/v1",
+        "metric_basis": {
+            "return_frequency": "daily_close_to_close_including_first_session",
+            "annualization_sessions": 252,
+            "return_basis": "post_cost_equity",
+            "drawdown_basis": "post_cost_equity_including_starting_capital",
+            "drawdown_duration": "peak_to_trough_sessions",
+            "drawdown_recovery": "trough_to_first_prior_peak_recovery_sessions",
+            "turnover_basis": "one_way_absolute_fill_notional_over_starting_capital",
+            "var_cvar_basis": "positive_loss_magnitude_from_daily_returns",
+            "stress_holdout_delta": "observed_minus_validation_stitched",
+        },
+        "rows": rows,
+    }
+
+
+def _md_text(value: Any) -> str:
+    return " ".join(str(value or "not declared").split()).replace("|", "\\|")
+
+
+def _md_ratio(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    return f"{number * 100:.2f}%" if number == number else "—"
+
+
+def _md_number(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    return f"{number:.3f}" if number == number else "—"
 
 
 def _markdown(report: dict[str, Any]) -> str:
@@ -1202,6 +1355,68 @@ def _markdown(report: dict[str, Any]) -> str:
             "HOLD means only that the DRAFT evidence is worth human review. ",
             "It is selected by validation plus cost stress; the recent holdout is ",
             "exploratory and reusable. HOLD does not authorize promotion or trading.",
+            "",
+            "## Comparable performance",
+            "",
+            (
+                "Validation is the chronologically stitched fold path. Stress and "
+                "holdout deltas are observed minus validation."
+            ),
+            "",
+            (
+                "| Strategy | Thesis / return source | Mechanics | Decision | "
+                "Net return | CAGR | Volatility | Sharpe | Sortino | Max DD | "
+                "Calmar | Positive days | Positive months | Daily CVaR 95 | "
+                "Turnover / year | Cost drag | Stress Sharpe delta | "
+                "Holdout Sharpe delta |"
+            ),
+            (
+                "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+                "---:|---:|---:|---:|---:|---:|"
+            ),
+        ]
+    )
+    for row in report["comparison"]["rows"]:
+        validation = row.get("validation") or {}
+        deltas = row.get("deltas") or {}
+        stress_delta = deltas.get("stress_vs_validation") or {}
+        holdout_delta = deltas.get("holdout_vs_validation") or {}
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    f"`{row['strategy_id']}`",
+                    _md_text(row.get("thesis")),
+                    _md_text(row.get("mechanics_summary")),
+                    str(row["decision"]),
+                    _md_ratio(validation.get("total_return_net")),
+                    _md_ratio(validation.get("cagr")),
+                    _md_ratio(validation.get("annualized_volatility")),
+                    _md_number(validation.get("annualized_sharpe")),
+                    _md_number(validation.get("annualized_sortino")),
+                    _md_ratio(validation.get("max_drawdown")),
+                    _md_number(validation.get("calmar_ratio")),
+                    _md_ratio(validation.get("positive_day_rate")),
+                    _md_ratio(validation.get("positive_month_rate")),
+                    _md_ratio(
+                        validation.get("daily_conditional_value_at_risk_95")
+                    ),
+                    _md_number(
+                        validation.get("turnover_one_way_annualized_ratio")
+                    ),
+                    _md_ratio(validation.get("cost_return")),
+                    _md_number(stress_delta.get("annualized_sharpe")),
+                    _md_number(holdout_delta.get("annualized_sharpe")),
+                )
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "All ratios are based on post-cost daily equity. VaR/CVaR are shown ",
+            "as positive loss magnitudes. Unrecovered drawdowns use `null` for ",
+            "recovery sessions in the JSON report.",
             "",
         ]
     )
@@ -1361,12 +1576,17 @@ class PersonalResearchService:
                         "strategy_spec_version": spec.version,
                         "strategy_spec_digest": strategy_spec_digest(spec),
                         "dependency_closure_digest": closure.closure_digest,
+                        "strategy": _strategy_context(spec),
                         "decision": "SKIPPED",
                         "reasons": [reason],
                         "validation": None,
                         "stress": None,
                         "holdout": None,
                         "decision_basis": "validation_and_cost_stress",
+                        "performance_comparison": {
+                            "stress_vs_validation": None,
+                            "holdout_vs_validation": None,
+                        },
                     }
                 )
         else:
@@ -1396,12 +1616,17 @@ class PersonalResearchService:
                             "strategy_spec_version": spec.version,
                             "strategy_spec_digest": strategy_spec_digest(spec),
                             "dependency_closure_digest": closure.closure_digest,
+                            "strategy": _strategy_context(spec),
                             "decision": "SKIPPED",
                             "reasons": [f"unexpected:{type(exc).__name__}"],
                             "validation": None,
                             "stress": None,
                             "holdout": None,
                             "decision_basis": "validation_and_cost_stress",
+                            "performance_comparison": {
+                                "stress_vs_validation": None,
+                                "holdout_vs_validation": None,
+                            },
                             "error": {
                                 "type": type(exc).__name__,
                                 "detail": detail or "no detail",
@@ -1460,6 +1685,7 @@ class PersonalResearchService:
                 "live_trading_eligible": False,
             },
             "candidates": candidates,
+            "comparison": _comparison_document(candidates),
             "summary": {
                 "analysis_status": analysis_status,
                 "candidate_count": len(candidates),

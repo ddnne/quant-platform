@@ -13,6 +13,7 @@ from data_contracts.identity import natural_key
 from research.paper_candidate_specs import build_multi_day_hold_strategy_spec
 from research.personal_service import (
     PERSONAL_DECISION_POLICY,
+    PERSONAL_RESEARCH_REPORT_VERSION,
     PersonalResearchInputError,
     PersonalResearchPolicy,
     PersonalResearchRequest,
@@ -257,6 +258,7 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
     assert first.report_json_path == second.report_json_path
     assert first.snapshot == second.snapshot
     report = json.loads(first.report_json_path.read_text(encoding="utf-8"))
+    assert report["version"] == PERSONAL_RESEARCH_REPORT_VERSION
     assert report["decision_policy"] == PERSONAL_DECISION_POLICY
     assert report["summary"] == {
         "analysis_status": "COMPLETED",
@@ -269,6 +271,24 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
     assert report["candidates"][0]["stress"] is not None
     assert report["candidates"][0]["holdout"] is not None
     assert report["candidates"][0]["holdout"]["selection_use"] is False
+    candidate = report["candidates"][0]
+    assert candidate["strategy"]["thesis"]
+    assert candidate["strategy"]["mechanics_summary"]
+    assert candidate["validation"]["performance"]["schema_version"] == (
+        "personal-fold-stability/v1"
+    )
+    assert candidate["validation"]["performance"]["stitched_performance"][
+        "schema_version"
+    ] == "personal-performance/v1"
+    assert report["comparison"]["schema_version"] == (
+        "personal-performance-comparison/v1"
+    )
+    assert report["comparison"]["rows"][0]["strategy_id"] == (
+        candidate["strategy_id"]
+    )
+    markdown = first.report_markdown_path.read_text(encoding="utf-8")
+    assert "## Comparable performance" in markdown
+    assert "Thesis / return source" in markdown
     assert report["data_quality"]["market_bar_coverage"]["status"] == "PASS"
     assert report["price_basis"] == {
         "id": "PERSONAL_RETROSPECTIVE_ADJUSTED",
@@ -640,7 +660,8 @@ def test_recent_holdout_metrics_are_exploratory_not_a_selection_gate(
             if recent
             else [0.005, 0.015] * 10
         )
-        return evidence, returns
+        dates = [f"2024-01-{index + 1:02d}" for index in range(len(returns))]
+        return evidence, returns, dates
 
     monkeypatch.setattr(module, "_run_one", fake_run_one)
     result = PersonalResearchService(policy=_policy()).run(
