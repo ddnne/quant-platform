@@ -37,7 +37,7 @@ def _svi_spec(job_id: str, input_digest: str):
         "manifest_key": f"{prefix}/manifest.json",
         "report_key": f"{prefix}/report.json",
         "request_digest": "sha256:" + "0" * 64,
-        "runner_version": "personal-svi-cloud-runner/v2",
+        "runner_version": "personal-svi-cloud-runner/v3",
         "strategy_id": "svi-atm-term-ratio-momentum-switch",
     }
     provisional = svi_job.PersonalSvi2023JobSpec(**body)
@@ -158,6 +158,27 @@ def _panel_dates(count: int = 25) -> list[str]:
     return [(start + timedelta(days=index)).isoformat() for index in range(count)]
 
 
+def _beta_panel(count: int = 90) -> tuple[dict[str, Any], list[str]]:
+    dates = [
+        (date(2023, 1, 4) + timedelta(days=index)).isoformat()
+        for index in range(count)
+    ]
+    prices = {"TOPIX": 2_000.0, "A": 100.0, "B": 100.0, "C": 100.0, "D": 100.0}
+    series = {code: [[dates[0], value]] for code, value in prices.items()}
+    models = {"A": (0.002, 6.0), "B": (0.0015, 5.0), "C": (-0.0015, -5.0), "D": (-0.002, -6.0)}
+    for index, day in enumerate(dates[1:], start=1):
+        topix_return = ((index % 7) - 3) * 0.0005
+        prices["TOPIX"] *= 1.0 + topix_return
+        series["TOPIX"].append([day, prices["TOPIX"]])
+        for code, (drift, beta) in models.items():
+            prices[code] *= 1.0 + drift + beta * topix_return
+            series[code].append([day, prices[code]])
+    return {
+        "index_proxy": {"dataset": "indices_bars_daily_topix", "label": "TOPIX"},
+        "bars": {**{code: series[code] for code in models}, "__NKY_PROXY__": series["TOPIX"]},
+    }, dates
+
+
 def test_fixed_strategy_has_one_session_signal_lag_ten_session_hold_and_cost() -> None:
     dates = _panel_dates()
     panel = {
@@ -194,6 +215,57 @@ def test_fixed_strategy_has_one_session_signal_lag_ten_session_hold_and_cost() -
     assert first_fill["pnl_date"] == dates[12]
     assert diagnostics["active_sessions"] > 0
     assert diagnostics["performance"]["annualized_sharpe"] is not None
+
+
+def test_topix_beta_overlay_is_no_lookahead_capped_and_fail_closed() -> None:
+    panel, dates = _beta_panel()
+    features = [
+        {"date": day, "fit_success": True, svi_job.FEATURE_FIELD: -0.05}
+        for day in dates
+    ]
+    unhedged, trades, _diagnostics = svi_job.evaluate_fixed_strategy(
+        panel, features, dates
+    )
+    comparison = svi_job.evaluate_topix_beta_hedged_comparison(
+        panel, features, dates, unhedged, trades
+    )
+    estimated = next(
+        row for row in comparison["daily_path"] if row["beta_status"] == "ESTIMATED"
+    )
+    current_index = dates.index(estimated["date"])
+    assert estimated["signal_date"] == dates[current_index - 2]
+    assert estimated["assumed_proxy_fill_date"] == dates[current_index - 1]
+    assert estimated["beta_window_last_return_date"] <= estimated["signal_date"]
+    assert abs(estimated["target_topix_proxy_hedge_weight"]) == 1.5
+    assert comparison["signal_branch_coverage"]["contango_sessions"] == len(dates)
+    assert comparison["signal_branch_coverage"]["front_inversion_sessions"] == 0
+
+    stock = {day: value for day, value in panel["bars"]["A"]}
+    topix = {day: value for day, value in panel["bars"]["__NKY_PROXY__"]}
+    signal_day = dates[70]
+    before = svi_job._estimate_beta_through(stock, topix, signal_day)
+    mutated = {day: (value * 50 if day > signal_day else value) for day, value in stock.items()}
+    mutated_topix = {day: (value / 50 if day > signal_day else value) for day, value in topix.items()}
+    after = svi_job._estimate_beta_through(mutated, mutated_topix, signal_day)
+    assert before == after
+    assert before is not None and before[1] == 70
+
+    unavailable = json.loads(json.dumps(panel))
+    unavailable["bars"].pop("__NKY_PROXY__")
+    with pytest.raises(RuntimeError, match="TOPIX index proxy series is unavailable"):
+        svi_job.evaluate_topix_beta_hedged_comparison(
+            unavailable, features, dates, unhedged, trades
+        )
+
+    incomplete = json.loads(json.dumps(panel))
+    incomplete["bars"]["A"] = [pair for pair in incomplete["bars"]["A"] if pair[0] != dates[75]]
+    skipped = svi_job.evaluate_topix_beta_hedged_comparison(
+        incomplete, features, dates, unhedged, trades
+    )
+    skipped_rows = skipped["hedge_tracking"]["skipped_incomplete_target_intervals"]
+    assert skipped["hedge_tracking"]["skipped_incomplete_target_interval_count"] > 0
+    assert dates[75] in skipped_rows
+    assert all(row["date"] != dates[75] for row in skipped["daily_path"])
 
 
 def _svi_chain(day: str, *, dte: int, cm: str, params: SVIParameters):
@@ -254,17 +326,25 @@ def test_execute_svi_job_creates_feature_report_then_terminal_manifest() -> None
     option_digest = "sha256:" + hashlib.sha256(option_bytes).hexdigest()
     dates = _panel_dates()
     panel = {
+        "index_proxy": {
+            "dataset": "indices_bars_daily_topix",
+            "label": "TOPIX",
+        },
         "bars": {
             code: [[observed, 100 + index + offset] for index, observed in enumerate(dates)]
             for offset, code in enumerate(("A", "B", "C", "D"))
         }
     }
+    proxy_dates = _panel_dates(90)
+    panel["bars"]["__NKY_PROXY__"] = [
+        [observed, 2_000 + index] for index, observed in enumerate(proxy_dates)
+    ]
     panel_bytes = _canonical(panel)
     manifest = {
         "schema_version": "personal-svi-2023-input/v2",
         "job_id": "svi-execute",
         "cohort_id": "personal-svi-term-2023-v1",
-        "runner_version": "personal-svi-cloud-runner/v2",
+        "runner_version": "personal-svi-cloud-runner/v3",
         "authority": {
             "draft_only": True,
             "screening_only": True,
@@ -356,6 +436,15 @@ def test_execute_svi_job_creates_feature_report_then_terminal_manifest() -> None
     assert report["execution"]["signal_lag_sessions"] == 1
     assert report["execution"]["hold_sessions"] == 10
     assert report["execution"]["one_way_cost"] == 0.001
+    assert report["schema_version"] == "personal-svi-2023-report/v3"
+    assert (
+        report["topix_beta_hedged_comparison"]["performance"]["schema_version"]
+        == "personal-performance/v1"
+    )
+    instrument = report["topix_beta_hedged_comparison"]["instrument"]
+    assert instrument["dataset"] == "indices_bars_daily_topix"
+    assert instrument["etf_approximation"] == "1306_TOPIX_ETF_only"
+    assert instrument["execution_claim"] is False
     assert report["draft_only"] is True
     assert report["screening_only"] is True
     assert report["go"] is False

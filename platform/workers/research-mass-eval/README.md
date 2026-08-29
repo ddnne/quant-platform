@@ -103,6 +103,10 @@ it must not be read as a production GO result. Neither route uses single-stock
 option volatility. Both use Nikkei 225 index-option evidence with a static
 2019-selected liquid 100-name equity panel; it is not the PIT TOPIX universe
 used by the factor Container and is labelled separately in every report.
+The SVI report keeps its unhedged result and adds a TOPIX-index proxy comparison:
+126-return beta (minimum 63) through signal close, capped at 1.5x.
+The `__NKY_PROXY__` alias must identify `indices_bars_daily_topix`; 1306 is only an approximation, never an ETF fill claim.
+Branch counts expose when the bounded sample observes only contango and cannot test inversion.
 
 ## Modes
 

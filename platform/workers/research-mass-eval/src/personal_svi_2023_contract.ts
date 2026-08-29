@@ -4,7 +4,7 @@ export const PERSONAL_SVI_2023_COHORT_ID = "personal-svi-term-2023-v1" as const;
 export const PERSONAL_SVI_2023_STRATEGY_ID =
   "svi-atm-term-ratio-momentum-switch" as const;
 export const PERSONAL_SVI_2023_RUNNER_VERSION =
-  "personal-svi-cloud-runner/v2" as const;
+  "personal-svi-cloud-runner/v3" as const;
 export const PERSONAL_SVI_2023_PANEL_KEY =
   "research/mass_eval/panels_cache/527c1065afe14601/panels/y2023_full.json" as const;
 export const PERSONAL_SVI_2023_OPTIONS_ROOT =

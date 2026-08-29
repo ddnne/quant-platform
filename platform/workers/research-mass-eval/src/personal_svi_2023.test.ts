@@ -228,7 +228,7 @@ describe("fixed personal SVI 2023 admission", () => {
     expect(await forwarded.json()).toMatchObject({
       cohort_id: PERSONAL_SVI_2023_COHORT_ID,
       input_manifest_key: inputKey,
-      runner_version: "personal-svi-cloud-runner/v2",
+      runner_version: "personal-svi-cloud-runner/v3",
       strategy_id: "svi-atm-term-ratio-momentum-switch",
     });
   });
