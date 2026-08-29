@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:aa9a2d12c3e75e9c1fcd5de45b0dc23fe1af4109262fc7391f5e7c9bb8c6fca4",
+  "manifest_digest": "sha256:9d30b47df88bd120f10ee2b0e67e669a17e24a96dcfd559542367ddf057e055d",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -2937,7 +2937,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v143-personal-topix-svi",
+          "MASS_EVAL_VERSION": "research-mass-eval/v144-index-vol-beta-ls",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3037,7 +3037,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v143-personal-topix-svi",
+          "MASS_EVAL_VERSION": "research-mass-eval/v144-index-vol-beta-ls",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3135,7 +3135,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v143-personal-topix-svi",
+          "MASS_EVAL_VERSION": "research-mass-eval/v144-index-vol-beta-ls",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
