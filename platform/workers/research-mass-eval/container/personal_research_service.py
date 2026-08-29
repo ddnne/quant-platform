@@ -26,7 +26,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 RUNNER_VERSION = "personal-cloud-runner/v1"
 R2_ORIGIN = "http://research.r2"
-DEFAULT_TIMEOUT_SECONDS = 90 * 60
+DEFAULT_TIMEOUT_SECONDS = 115 * 60
 MAX_JOB_LIFETIME_SECONDS = 130 * 60
 MAX_PERIOD_DAYS = 2200
 MAX_REQUEST_BYTES = 16 * 1024
@@ -362,8 +362,12 @@ def execute_job(
                     check=False,
                 )
             except subprocess.TimeoutExpired as exc:
+                if timeout_seconds % 60 == 0:
+                    limit = f"{int(timeout_seconds / 60)}-minute"
+                else:
+                    limit = f"{timeout_seconds:g}-second"
                 raise RuntimeError(
-                    "qp-research exceeded the 90-minute limit"
+                    f"qp-research exceeded the {limit} limit"
                 ) from exc
             if process.returncode != 0:
                 detail = " ".join(process.stderr.split())[-500:]
