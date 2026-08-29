@@ -272,7 +272,10 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
         "time_semantics": "retrospective_not_point_in_time",
         "position_units": "synthetic_split_adjusted_units",
         "supported_actions": "vendor_splits_and_reverse_splits",
-        "unexplained_action_policy": "fold_local_exposure_fail_closed",
+        "unexplained_action_policy": (
+            "extreme_adjusted_moves_advisory; missing_adjusted_"
+            "evidence_fail_closed"
+        ),
         "lifecycle": "DRAFT_only",
         "live_trading_eligible": False,
     }
@@ -393,7 +396,7 @@ def test_partial_financials_cannot_silently_shrink_the_universe(
     ]
 
 
-def test_in_window_adjustment_factor_change_is_no_analysis(
+def test_factor_change_is_handled_and_extreme_move_is_advisory(
     personal_db: tuple[Path, str, str], tmp_path: Path
 ) -> None:
     source, start, end = personal_db
@@ -424,22 +427,44 @@ def test_in_window_adjustment_factor_change_is_no_analysis(
     assert result.exit_code == 0
     report = json.loads(result.report_json_path.read_text(encoding="utf-8"))
     candidate = report["candidates"][0]
-    assert candidate["decision"] == "REJECT"
-    assert candidate["reasons"] == ["corporate_action_trades"]
+    assert "corporate_action_trades" not in candidate["reasons"]
     assert report["data_quality"]["corporate_actions"]["status"] == "WARN"
     assert "1304" in report["data_quality"]["corporate_actions"][
         "affected_codes"
     ]
-    event_check = next(
-        run["corporate_action_trade_check"]
-        for run in candidate["validation"]["runs"]
-        if run["corporate_action_trade_check"]["status"] == "FAIL"
+    corporate_actions = report["data_quality"]["corporate_actions"]
+    assert "1304" in corporate_actions["suspicious_jump_codes"]
+    assert corporate_actions["extreme_price_move_events"]
+
+
+def test_large_adjusted_market_move_is_not_a_corporate_action_rejection(
+    personal_db: tuple[Path, str, str], tmp_path: Path
+) -> None:
+    source, start, end = personal_db
+    connection = sqlite3.connect(source)
+    try:
+        connection.execute(
+            "UPDATE jquants_daily_bars SET open=open*1.4,high=high*1.4,"
+            "low=low*1.4,close=close*1.4,adjustment_close=adjustment_close*1.4 "
+            "WHERE code='1304' AND date='2024-03-11'"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = PersonalResearchService(policy=_policy()).run(
+        _request(source, start, end, tmp_path / "large-market-move")
     )
-    assert event_check["status"] == "FAIL"
-    assert event_check["affected_traded_codes"] == ["1304"]
-    assert event_check["reason"] == (
-        "fold_local_exposure_to_unexplained_adjusted_price_event"
-    )
+
+    assert result.exit_code == 0
+    report = json.loads(result.report_json_path.read_text(encoding="utf-8"))
+    corporate_actions = report["data_quality"]["corporate_actions"]
+    candidate = report["candidates"][0]
+    assert corporate_actions["status"] == "WARN"
+    assert corporate_actions["affected_codes"] == []
+    assert "1304" in corporate_actions["suspicious_jump_codes"]
+    assert corporate_actions["extreme_price_move_events"]
+    assert "corporate_action_trades" not in candidate["reasons"]
 
 
 def test_constant_back_adjustment_factor_is_not_a_false_split_boundary(
@@ -493,7 +518,6 @@ def test_recent_holdout_metrics_are_exploratory_not_a_selection_gate(
             "max_drawdown": 0.1,
             "fills": 100,
             "risk_status": "pass",
-            "corporate_action_trade_check": {"status": "PASS"},
         }
         returns = (
             [-0.015, -0.005] * 10

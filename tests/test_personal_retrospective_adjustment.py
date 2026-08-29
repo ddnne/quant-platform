@@ -17,7 +17,6 @@ from features.complete21_min_parsers import (
     _retrospective_split_safety,
 )
 from price_basis import PIT_ADJUSTED
-from research.personal_service import _unexplained_event_exposure
 from storage.sqlite_store import SqliteStore
 from strategies.paper import Lifecycle, PaperRunConfig, run_paper
 
@@ -282,97 +281,3 @@ def test_value_anchor_belongs_to_the_selected_bps_row() -> None:
     assert selected["mode"] == "bps_over_price"
     assert selected["bps"] == 80.0
     assert selected["split_safety_anchor"] == "2024-12-31"
-
-
-def test_temporal_event_gate_ignores_future_and_does_not_ban_code_forever() -> None:
-    trades = [
-        {
-            "code": "1332",
-            "decision_date": "2025-04-01",
-            "fill_date": "2025-04-02",
-            "shares": 10.0,
-        }
-    ]
-    future = _unexplained_event_exposure(
-        trades,
-        ({"code": "1332", "date": "2025-06-01"},),
-        period_start="2025-04-01",
-        period_end="2025-04-30",
-        lookback_days=10,
-    )
-    assert future["status"] == "PASS"
-    assert future["events_considered"] == 0
-
-    old = _unexplained_event_exposure(
-        [
-            {
-                "code": "1332",
-                "decision_date": "2025-04-20",
-                "fill_date": "2025-04-21",
-                "shares": 10.0,
-            }
-        ],
-        ({"code": "1332", "date": "2025-04-01"},),
-        period_start="2025-04-01",
-        period_end="2025-04-30",
-        lookback_days=10,
-    )
-    assert old["status"] == "PASS"
-
-
-def test_temporal_event_gate_fails_held_exposure_but_not_event_day_new_fill() -> None:
-    event = ({"code": "1332", "date": "2025-04-10"},)
-    held = _unexplained_event_exposure(
-        [
-            {
-                "code": "1332",
-                "decision_date": "2025-04-01",
-                "fill_date": "2025-04-02",
-                "shares": 10.0,
-            }
-        ],
-        event,
-        period_start="2025-04-01",
-        period_end="2025-04-30",
-        lookback_days=10,
-    )
-    assert held["status"] == "FAIL"
-    assert held["affected_events"][0]["held_across_event"] is True
-
-    new_fill = _unexplained_event_exposure(
-        [
-            {
-                "code": "1332",
-                "decision_date": "2025-04-09",
-                "fill_date": "2025-04-10",
-                "shares": 10.0,
-            }
-        ],
-        event,
-        period_start="2025-04-01",
-        period_end="2025-04-30",
-        lookback_days=10,
-    )
-    assert new_fill["status"] == "PASS"
-
-    round_trip_before_event = _unexplained_event_exposure(
-        [
-            {
-                "code": "1332",
-                "decision_date": "2025-04-01",
-                "fill_date": "2025-04-02",
-                "shares": 10.0,
-            },
-            {
-                "code": "1332",
-                "decision_date": "2025-04-07",
-                "fill_date": "2025-04-08",
-                "shares": -10.0,
-            },
-        ],
-        event,
-        period_start="2025-04-01",
-        period_end="2025-04-30",
-        lookback_days=10,
-    )
-    assert round_trip_before_event["status"] == "PASS"
