@@ -16,7 +16,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-OPTIONS_225_VOL_SERIES_VERSION: str = "research-options-225-vol-series/v1.2"
+OPTIONS_225_VOL_SERIES_VERSION: str = "research-options-225-vol-series/v1.3"
 OPTIONS_225_VOL_SERIES_WAVE: str = "W95 / w0818e"
 
 DATASET_ID: str = "derivatives_bars_daily_options_225"
@@ -42,6 +42,9 @@ EM_SETTLE: str = "002"
 
 SKEW_CONVENTION: str = "put_iv(~0.95*UnderPx) - atm_mid_iv"
 CM_TERM_CONVENTION: str = "near_cm_atm_iv - next_cm_atm_iv"
+CM_TERM_RATIO_CONVENTION: str = (
+    "near_cm_atm_iv / next_cm_atm_iv - 1; zero means equal ATM IV"
+)
 BASEVOL_DELTA_CONVENTION: str = "BaseVol[t] - BaseVol[t-1]"
 
 
@@ -654,6 +657,53 @@ def build_daily_term_series(
     return out
 
 
+def build_daily_term_ratio_series(
+    term_rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Zero-centred near/next CM ATM-IV ratio on observed IV dates only.
+
+    The value is ``near_atm_iv / next_atm_iv - 1``: zero means the two
+    observed maturities have equal ATM IV, positive means the near contract is
+    richer, and negative means it is cheaper.  Dates before the documented IV
+    field pin are excluded.  Missing/non-positive IV legs are omitted rather
+    than filled, interpolated, or divided through.
+    """
+    out: list[dict[str, Any]] = []
+    for row in sorted(term_rows, key=lambda r: str(r.get("date") or "")[:10]):
+        date = _as_date(row.get("date"))
+        if date is None or date < IV_FIELDS_AVAILABLE_FROM:
+            continue
+        near_iv = _as_float(row.get("near_atm_iv"))
+        next_iv = _as_float(row.get("next_atm_iv"))
+        if (
+            near_iv is None
+            or next_iv is None
+            or near_iv <= 0.0
+            or next_iv <= 0.0
+        ):
+            continue
+        out.append(
+            {
+                "date": date,
+                "cm_term_ratio": (near_iv / next_iv) - 1.0,
+                "near_atm_iv": near_iv,
+                "next_atm_iv": next_iv,
+                "near_cm": row.get("near_cm"),
+                "next_cm": row.get("next_cm"),
+                "near_dte": row.get("near_dte"),
+                "next_dte": row.get("next_dte"),
+                "convention": CM_TERM_RATIO_CONVENTION,
+                "zero_centered": True,
+                "iv_fields_available_from": IV_FIELDS_AVAILABLE_FROM,
+                "invent_strike": False,
+                "gap_policy": GAP_POLICY,
+                "ffill_applied": False,
+                "interpolation_applied": False,
+            }
+        )
+    return out
+
+
 def build_daily_basevol_delta_series(
     base: Sequence[Mapping[str, Any]] | None = None,
     rows: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]] | None = None,
@@ -792,22 +842,28 @@ def summarize_vol_series(
 def build_series_bundle_from_rows(
     rows: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Convenience: BaseVol + ATM + spread + skew + CM-term + ΔBaseVol + stats."""
+    """Convenience: BaseVol + ATM + spread + skew + CM terms + ΔBaseVol."""
     materialised = list(rows)
     base = build_daily_basevol_series(materialised)
     atm = build_daily_atm_iv_series(materialised)
     spread = build_spread_series(base, atm)
     skew = build_daily_skew_series(materialised)
     term = build_daily_term_series(materialised)
+    term_ratio = build_daily_term_ratio_series(term)
     delta = build_daily_basevol_delta_series(base=base)
     stats = summarize_vol_series(base, atm, spread)
     stats["n_skew_days"] = len(skew)
     stats["n_cm_term_days"] = len(term)
+    stats["n_cm_term_ratio_days"] = len(term_ratio)
     stats["n_basevol_delta_days"] = len(delta)
     if skew:
         stats["skew_mean"] = statistics.mean(float(r["skew"]) for r in skew)
     if term:
         stats["cm_term_mean"] = statistics.mean(float(r["cm_term"]) for r in term)
+    if term_ratio:
+        stats["cm_term_ratio_mean"] = statistics.mean(
+            float(r["cm_term_ratio"]) for r in term_ratio
+        )
     if delta:
         stats["basevol_delta_mean"] = statistics.mean(
             float(r["basevol_delta"]) for r in delta
@@ -818,6 +874,7 @@ def build_series_bundle_from_rows(
         "spread_series": spread,
         "skew_series": skew,
         "cm_term_series": term,
+        "cm_term_ratio_series": term_ratio,
         "basevol_delta_series": delta,
         "stats": stats,
         "version": OPTIONS_225_VOL_SERIES_VERSION,
@@ -930,15 +987,18 @@ def build_opt225_regime_bundle(
     *,
     skew_rows: Sequence[Mapping[str, Any]] | None = None,
     term_rows: Sequence[Mapping[str, Any]] | None = None,
+    term_ratio_rows: Sequence[Mapping[str, Any]] | None = None,
     basevol_delta_rows: Sequence[Mapping[str, Any]] | None = None,
     short_n: int = DEFAULT_OPT225_SHORT_N,
     long_n: int = DEFAULT_OPT225_LONG_N,
 ) -> dict[str, Any]:
-    """BaseVol / ATM / spread / skew / CM-term / ΔBaseVol regime maps."""
+    """BaseVol / ATM / spread / skew / CM terms / ΔBaseVol regime maps."""
     if spread_rows is None:
         spread_rows = build_spread_series(base_rows, atm_rows)
     if basevol_delta_rows is None:
         basevol_delta_rows = build_daily_basevol_delta_series(base=base_rows)
+    if term_ratio_rows is None and term_rows is not None:
+        term_ratio_rows = build_daily_term_ratio_series(term_rows)
     base_lvl = series_rows_to_level_map(base_rows, "base_vol")
     atm_lvl = series_rows_to_level_map(atm_rows, "atm_iv")
     spread_lvl = series_rows_to_level_map(spread_rows, "spread")
@@ -948,6 +1008,14 @@ def build_opt225_regime_bundle(
     term_lvl = (
         series_rows_to_level_map(term_rows, "cm_term") if term_rows is not None else {}
     )
+    term_ratio_lvl = (
+        series_rows_to_level_map(term_ratio_rows, "cm_term_ratio")
+        if term_ratio_rows is not None
+        else {}
+    )
+    term_ratio_lvl = {
+        d: v for d, v in term_ratio_lvl.items() if d >= IV_FIELDS_AVAILABLE_FROM
+    }
     delta_lvl = series_rows_to_level_map(basevol_delta_rows, "basevol_delta")
     spread_chg: dict[str, float] = {}
     sp_dates = sorted(spread_lvl)
@@ -986,6 +1054,7 @@ def build_opt225_regime_bundle(
         "spread_convention": SPREAD_CONVENTION,
         "skew_convention": SKEW_CONVENTION,
         "cm_term_convention": CM_TERM_CONVENTION,
+        "cm_term_ratio_convention": CM_TERM_RATIO_CONVENTION,
         "basevol_delta_convention": BASEVOL_DELTA_CONVENTION,
         "units": "percent_vol_points",
         "dataset": DATASET_ID,
@@ -1014,6 +1083,19 @@ def build_opt225_regime_bundle(
             long_n=long_n,
             source="options_225_cm_term_near_minus_next",
             series_kind="cm_term",
+        )
+    if term_ratio_lvl:
+        bundle["cm_term_ratio"] = level_series_to_regime_maps(
+            term_ratio_lvl,
+            short_n=short_n,
+            long_n=long_n,
+            source="options_225_cm_term_near_over_next_minus_one",
+            units="dimensionless_zero_centered",
+            series_kind="cm_term_ratio",
+        )
+        bundle["cm_term_ratio"]["convention"] = CM_TERM_RATIO_CONVENTION
+        bundle["cm_term_ratio"]["iv_fields_available_from"] = (
+            IV_FIELDS_AVAILABLE_FROM
         )
     if delta_lvl:
         bundle["basevol_delta"] = level_series_to_regime_maps(
@@ -1074,9 +1156,15 @@ def load_opt225_series_cache(
     )
     skew_p = d / "skew_series.ndjson"
     term_p = d / "cm_term_series.ndjson"
+    term_ratio_p = d / "cm_term_ratio_series.ndjson"
     delta_p = d / "basevol_delta_series.ndjson"
     skew = load_ndjson_series(skew_p) if skew_p.is_file() else None
     term = load_ndjson_series(term_p) if term_p.is_file() else None
+    term_ratio = (
+        build_daily_term_ratio_series(load_ndjson_series(term_ratio_p))
+        if term_ratio_p.is_file()
+        else (build_daily_term_ratio_series(term) if term is not None else None)
+    )
     delta = (
         load_ndjson_series(delta_p)
         if delta_p.is_file()
@@ -1095,6 +1183,7 @@ def load_opt225_series_cache(
         "spread_series": spread,
         "skew_series": skew,
         "cm_term_series": term,
+        "cm_term_ratio_series": term_ratio,
         "basevol_delta_series": delta,
         "meta": meta,
         "log_dir": str(d),
@@ -1119,6 +1208,7 @@ __all__ = [
     "build_spread_series",
     "build_daily_skew_series",
     "build_daily_term_series",
+    "build_daily_term_ratio_series",
     "build_daily_basevol_delta_series",
     "calendar_gap_dates",
     "pearson_corr",
@@ -1130,6 +1220,7 @@ __all__ = [
     "SPREAD_CONVENTION",
     "SKEW_CONVENTION",
     "CM_TERM_CONVENTION",
+    "CM_TERM_RATIO_CONVENTION",
     "BASEVOL_DELTA_CONVENTION",
     "DEFAULT_ATM_MIN_DTE_DAYS",
     "level_series_to_regime_maps",

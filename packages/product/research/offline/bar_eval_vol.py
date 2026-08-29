@@ -31,6 +31,7 @@ from features.class_signals import (
     SIGNAL_ID_OPT225_BASEVOL_TERM_LEVELS,
     SIGNAL_ID_OPT225_BASEVOL_TERM_RATIO,
     SIGNAL_ID_OPT225_CM_TERM_ABS,
+    SIGNAL_ID_OPT225_CM_TERM_RATIO,
     SIGNAL_ID_OPT225_SKEW_ABS,
     SIGNAL_ID_OPT225_SPREAD_ABS,
     SIGNAL_ID_OPT225_SPREAD_CHANGE,
@@ -48,6 +49,7 @@ from features.class_signals import (
 from research.cost_models import DEFAULT_ONE_WAY_COST
 from research.eval_loaders import momentum_series
 from research.offline.bar_eval_common import MIN_ACTIVATION_RATE_MULTIDAY, _freeze
+from research.options_225_vol_series import IV_FIELDS_AVAILABLE_FROM
 
 
 def _evaluate_nky_vol_xs_core(
@@ -283,6 +285,7 @@ _OPT225_SIGNAL_IDS: dict[str, str] = {
     "opt225_iv_base_spread_change": SIGNAL_ID_OPT225_SPREAD_CHANGE,
     "opt225_skew_abs_level": SIGNAL_ID_OPT225_SKEW_ABS,
     "opt225_cm_term_abs_level": SIGNAL_ID_OPT225_CM_TERM_ABS,
+    "opt225_cm_term_ratio": SIGNAL_ID_OPT225_CM_TERM_RATIO,
     "opt225_basevol_delta_abs": SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS,
 }
 
@@ -320,8 +323,16 @@ def evaluate_opt225_vol_on_bars(
         or series.get("rv_short_by_date")
         or {}
     )
+    if sk == "cm_term_ratio":
+        abs_by = {
+            str(d)[:10]: v
+            for d, v in abs_by.items()
+            if str(d)[:10] >= IV_FIELDS_AVAILABLE_FROM
+        }
     transform = "abs_level"
-    if "term_ratio" in m:
+    if m == "opt225_cm_term_ratio":
+        transform = "abs_level"
+    elif "term_ratio" in m:
         transform = "term_ratio"
     elif "term_levels" in m:
         transform = "term_levels"
@@ -334,6 +345,7 @@ def evaluate_opt225_vol_on_bars(
         "spread_change": "opt225_iv_base_spread",
         "skew": "opt225_skew_95put",
         "cm_term": "opt225_cm_term_near_next",
+        "cm_term_ratio": "opt225_cm_term_near_over_next_minus_one",
         "basevol_delta": "opt225_basevol_delta",
     }.get(sk, "opt225_basevol_level")
 

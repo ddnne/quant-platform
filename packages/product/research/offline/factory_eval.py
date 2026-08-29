@@ -368,11 +368,13 @@ def _eval_on_panel(
         sk = str(p.get("series_kind") or "basevol")
         _hi = {
             "basevol": 24.0, "atm_iv": 25.0, "spread": 1.0, "spread_change": 0.5,
-            "skew": 3.0, "cm_term": 2.0, "basevol_delta": 1.0,
+            "skew": 3.0, "cm_term": 2.0, "cm_term_ratio": 0.10,
+            "basevol_delta": 1.0,
         }.get(sk, 24.0)
         _lo = {
             "basevol": 12.0, "atm_iv": 12.0, "spread": -0.5, "spread_change": -0.5,
-            "skew": 0.5, "cm_term": -1.0, "basevol_delta": -1.0,
+            "skew": 0.5, "cm_term": -1.0, "cm_term_ratio": -0.10,
+            "basevol_delta": -1.0,
         }.get(sk, 12.0)
         out = evaluate_opt225_vol_on_bars(
             bars,

@@ -57,6 +57,7 @@ export interface Opt225RegimeBundle {
   spread_change?: NkyVolSeries | null;
   skew?: NkyVolSeries | null;
   cm_term?: NkyVolSeries | null;
+  cm_term_ratio?: NkyVolSeries | null;
   basevol_delta?: NkyVolSeries | null;
 }
 
@@ -115,6 +116,7 @@ export interface PeriodPanel {
   iv_base_spread?: Record<string, number> | null;
   skew_series?: Record<string, number> | null;
   cm_term_series?: Record<string, number> | null;
+  cm_term_ratio_series?: Record<string, number> | null;
   basevol_delta_series?: Record<string, number> | null;
   repo_rate_regime?: RepoRateRegime | null;
   repo_rate_by_date?: Record<string, number> | null;

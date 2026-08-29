@@ -45,6 +45,7 @@ from .class_signals import (
     SIGNAL_ID_OPT225_BASEVOL_TERM_LEVELS,
     SIGNAL_ID_OPT225_BASEVOL_TERM_RATIO,
     SIGNAL_ID_OPT225_CM_TERM_ABS,
+    SIGNAL_ID_OPT225_CM_TERM_RATIO,
     SIGNAL_ID_OPT225_SKEW_ABS,
     SIGNAL_ID_OPT225_SPREAD_ABS,
     SIGNAL_ID_OPT225_SPREAD_CHANGE,
@@ -201,6 +202,11 @@ def class_signal_definitions(
             SIGNAL_ID_OPT225_CM_TERM_ABS,
             CLASS_OPTIONS_VOL_REGIME,
             role="opt225_cm_term_abs_level",
+        ),
+        _entry(
+            SIGNAL_ID_OPT225_CM_TERM_RATIO,
+            CLASS_OPTIONS_VOL_REGIME,
+            role="opt225_cm_term_ratio",
         ),
         _entry(
             SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS,

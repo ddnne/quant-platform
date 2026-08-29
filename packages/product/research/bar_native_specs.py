@@ -1,6 +1,6 @@
 """CF bar-native logic specs.
 
-SoT for the 30 CF-evaluable bar-native logics (period-net). Factory templates
+SoT for the CF-evaluable bar-native logics (period-net). Factory templates
 consume this module for the overlapping ids (six factory-only ids stay offline).
 ``cf_mass_eval_job`` / ``cf_daily_path_job`` load this instead of the factory.
 """
@@ -427,6 +427,22 @@ BAR_NATIVE_SPECS: dict[str, dict[str, Any]] = {
         thesis="Calendar-month IV term (near ATM − next ATM): steep/inverted term structure is a risk regime for CS books",
         signal_definition="CS rank mom L-S × abs(near_atm_iv − next_atm_iv); both CMs min_dte>=6; listed ATM strikes only",
         position_rule="sticky fixed_horizon balanced L/S after abs CM-term transform",
+        datasets_used=_BARS_OPT,
+        structural_keys=("mode", "series_kind"),
+    ),
+    "opt225_cm_term_ratio": _spec(
+        "opt225_cm_term_ratio",
+        family_id=_FAMILY_OPT,
+        params=_opt(
+            "opt225_cm_term_ratio",
+            "cm_term_ratio",
+            "abs_level",
+            high_threshold=0.10,
+            low_threshold=-0.10,
+        ),
+        thesis="Candidate hypothesis: relative near/next ATM-IV richness is a risk regime for CS books",
+        signal_definition="zero-centred ratio=(near_atm_iv/next_atm_iv)-1; fixed symmetric research gates +0.10/-0.10 (not empirically calibrated); non-positive IV legs and pre-2016-07-19 observations omitted; no fill/interpolation",
+        position_rule="sticky fixed_horizon balanced L/S after zero-centred CM-term-ratio level transform",
         datasets_used=_BARS_OPT,
         structural_keys=("mode", "series_kind"),
     ),

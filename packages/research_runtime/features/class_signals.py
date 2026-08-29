@@ -61,6 +61,7 @@ SIGNAL_ID_OPT225_SPREAD_ABS: str = "c21_opt225_iv_base_spread_abs_xs"
 SIGNAL_ID_OPT225_SPREAD_CHANGE: str = "c21_opt225_iv_base_spread_change_xs"
 SIGNAL_ID_OPT225_SKEW_ABS: str = "c21_opt225_skew_abs_level_xs"
 SIGNAL_ID_OPT225_CM_TERM_ABS: str = "c21_opt225_cm_term_abs_level_xs"
+SIGNAL_ID_OPT225_CM_TERM_RATIO: str = "c21_opt225_cm_term_ratio_xs"
 SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS: str = "c21_opt225_basevol_delta_abs_xs"
 
 MOMENTUM_FEATURE_ID: str = "momentum_n"
@@ -79,6 +80,7 @@ OPT225_ATM_IV_FEATURE_ID: str = "opt225_atm_iv_level"
 OPT225_SPREAD_FEATURE_ID: str = "opt225_iv_base_spread"
 OPT225_SKEW_FEATURE_ID: str = "opt225_skew_95put"
 OPT225_CM_TERM_FEATURE_ID: str = "opt225_cm_term_near_next"
+OPT225_CM_TERM_RATIO_FEATURE_ID: str = "opt225_cm_term_near_over_next_minus_one"
 OPT225_BASEVOL_DELTA_FEATURE_ID: str = "opt225_basevol_delta"
 
 # Curve spread = observed long tenor − short tenor (no invent).
@@ -189,6 +191,10 @@ DEFAULT_OPT225_SKEW_HIGH_THRESHOLD: float = 3.0
 DEFAULT_OPT225_SKEW_LOW_THRESHOLD: float = 0.5
 DEFAULT_OPT225_CM_TERM_HIGH_THRESHOLD: float = 2.0
 DEFAULT_OPT225_CM_TERM_LOW_THRESHOLD: float = -1.0
+# Symmetric research gate around equal near/next ATM IV.  These are fixed
+# hypothesis parameters (not claimed as empirically calibrated evidence).
+DEFAULT_OPT225_CM_TERM_RATIO_HIGH_THRESHOLD: float = 0.10
+DEFAULT_OPT225_CM_TERM_RATIO_LOW_THRESHOLD: float = -0.10
 DEFAULT_OPT225_BASEVOL_DELTA_HIGH_THRESHOLD: float = 1.0
 DEFAULT_OPT225_BASEVOL_DELTA_LOW_THRESHOLD: float = -1.0
 DEFAULT_OPT225_VOL_EXPAND_RATIO: float = 1.20
@@ -251,6 +257,7 @@ from .class_signals_vol import (
     compute_opt225_basevol_term_levels_signal,
     compute_opt225_basevol_term_ratio_signal,
     compute_opt225_cm_term_abs_level_signal,
+    compute_opt225_cm_term_ratio_signal,
     compute_opt225_iv_base_spread_abs_signal,
     compute_opt225_iv_base_spread_change_signal,
     compute_opt225_skew_abs_level_signal,
@@ -338,6 +345,7 @@ __all__ = [
     "OPT225_SPREAD_FEATURE_ID",
     "OPT225_SKEW_FEATURE_ID",
     "OPT225_CM_TERM_FEATURE_ID",
+    "OPT225_CM_TERM_RATIO_FEATURE_ID",
     "OPT225_BASEVOL_DELTA_FEATURE_ID",
     "OPT225_SPREAD_CONVENTION",
     "DEFAULT_OPT225_VOL_HIGH_THRESHOLD",
@@ -348,6 +356,8 @@ __all__ = [
     "DEFAULT_OPT225_SKEW_LOW_THRESHOLD",
     "DEFAULT_OPT225_CM_TERM_HIGH_THRESHOLD",
     "DEFAULT_OPT225_CM_TERM_LOW_THRESHOLD",
+    "DEFAULT_OPT225_CM_TERM_RATIO_HIGH_THRESHOLD",
+    "DEFAULT_OPT225_CM_TERM_RATIO_LOW_THRESHOLD",
     "DEFAULT_OPT225_BASEVOL_DELTA_HIGH_THRESHOLD",
     "DEFAULT_OPT225_BASEVOL_DELTA_LOW_THRESHOLD",
     "DEFAULT_OPT225_VOL_EXPAND_RATIO",
@@ -379,6 +389,7 @@ __all__ = [
     "SIGNAL_ID_OPT225_SPREAD_CHANGE",
     "SIGNAL_ID_OPT225_SKEW_ABS",
     "SIGNAL_ID_OPT225_CM_TERM_ABS",
+    "SIGNAL_ID_OPT225_CM_TERM_RATIO",
     "SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS",
     "SIGNAL_ID_RATE_CURVE_XS",
     "SIGNAL_ID_RATE_LEVEL_XS",
@@ -413,6 +424,7 @@ __all__ = [
     "compute_opt225_iv_base_spread_change_signal",
     "compute_opt225_skew_abs_level_signal",
     "compute_opt225_cm_term_abs_level_signal",
+    "compute_opt225_cm_term_ratio_signal",
     "compute_opt225_basevol_delta_abs_signal",
     "compute_rate_curve_xs_signal",
     "compute_rate_level_xs_signal",

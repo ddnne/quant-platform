@@ -1,4 +1,4 @@
-"""Factory logic-template catalog. BAR_NATIVE_SPECS SoT for 30; six factory-only."""
+"""Factory logic-template catalog. BAR_NATIVE_SPECS SoT plus six factory-only."""
 
 from __future__ import annotations
 
@@ -125,6 +125,7 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "opt225_basevol_delta_abs",
             "opt225_skew_abs_level",
             "opt225_cm_term_abs_level",
+            "opt225_cm_term_ratio",
             "opt225_atm_iv_abs_level",
             "opt225_atm_iv_term_levels",
             "opt225_atm_iv_term_ratio",
@@ -255,6 +256,7 @@ _LOGIC_TEMPLATE_ORDER: tuple[str, ...] = (
     "opt225_iv_base_spread_change",
     "opt225_skew_abs_level",
     "opt225_cm_term_abs_level",
+    "opt225_cm_term_ratio",
     "opt225_basevol_delta_abs",
 )
 

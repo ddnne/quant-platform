@@ -234,6 +234,7 @@ export async function loadR2Panels(
         iv_base_spread?: PeriodPanel["iv_base_spread"];
         skew_series?: PeriodPanel["skew_series"];
         cm_term_series?: PeriodPanel["cm_term_series"];
+        cm_term_ratio_series?: PeriodPanel["cm_term_ratio_series"];
         basevol_delta_series?: PeriodPanel["basevol_delta_series"];
         repo_rate_regime?: PeriodPanel["repo_rate_regime"];
         repo_rate_by_date?: PeriodPanel["repo_rate_by_date"];
@@ -284,6 +285,12 @@ export async function loadR2Panels(
         raw.cm_term_series ||
         (opt225 && opt225.cm_term && opt225.cm_term.rv_abs_by_date) ||
         null;
+      const cmTermRatioSeries =
+        raw.cm_term_ratio_series ||
+        (opt225 &&
+          opt225.cm_term_ratio &&
+          opt225.cm_term_ratio.rv_abs_by_date) ||
+        null;
       const basevolDeltaSeries =
         raw.basevol_delta_series ||
         (opt225 && opt225.basevol_delta && opt225.basevol_delta.rv_abs_by_date) ||
@@ -311,6 +318,7 @@ export async function loadR2Panels(
         iv_base_spread: ivBaseSpread,
         skew_series: skewSeries,
         cm_term_series: cmTermSeries,
+        cm_term_ratio_series: cmTermRatioSeries,
         basevol_delta_series: basevolDeltaSeries,
         repo_rate_regime: repoRegime,
         repo_rate_by_date: repoByDate,

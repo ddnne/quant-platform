@@ -8,6 +8,7 @@ from research.options_225_vol_series import (
     ATM_IV_ROLE,
     BASEVOL_ROLE,
     CM_TERM_CONVENTION,
+    CM_TERM_RATIO_CONVENTION,
     DATASET_ID,
     GAP_POLICY,
     IV_FIELDS_AVAILABLE_FROM,
@@ -18,6 +19,8 @@ from research.options_225_vol_series import (
     build_daily_basevol_series,
     build_daily_skew_series,
     build_daily_term_series,
+    build_daily_term_ratio_series,
+    build_opt225_regime_bundle,
     build_series_bundle_from_rows,
     build_spread_series,
     calendar_gap_dates,
@@ -150,7 +153,7 @@ def _mini_chain_day(
 
 
 def test_vol_series_contract_semantics():
-    assert OPTIONS_225_VOL_SERIES_VERSION == "research-options-225-vol-series/v1.2"
+    assert OPTIONS_225_VOL_SERIES_VERSION == "research-options-225-vol-series/v1.3"
     assert DATASET_ID == "derivatives_bars_daily_options_225"
     assert GAP_POLICY == "disclose_only_no_ffill_no_invent"
     assert IV_FIELDS_AVAILABLE_FROM == "2016-07-19"
@@ -549,6 +552,146 @@ def test_cm_term_near_minus_next():
     assert row["convention"] == CM_TERM_CONVENTION
     assert row["invent_strike"] is False
     assert row["ffill_applied"] is False
+
+
+def test_cm_term_ratio_is_zero_centred_near_over_next_and_wired_to_bundle():
+    rows = _chain_with_skew_strikes(
+        "2024-01-10",
+        atm_put_iv=21.0,
+        atm_call_iv=19.0,  # near ATM mid = 20
+        next_atm_iv=18.0,
+    )
+    bundle = build_series_bundle_from_rows(rows)
+    ratio_rows = bundle["cm_term_ratio_series"]
+    assert len(ratio_rows) == 1
+    row = ratio_rows[0]
+    assert row["cm_term_ratio"] == pytest.approx((20.0 / 18.0) - 1.0)
+    assert row["convention"] == CM_TERM_RATIO_CONVENTION
+    assert row["zero_centered"] is True
+    assert row["ffill_applied"] is False
+    assert row["interpolation_applied"] is False
+    assert bundle["stats"]["n_cm_term_ratio_days"] == 1
+
+    regime = build_opt225_regime_bundle(
+        bundle["base_vol_series"],
+        bundle["atm_iv_series"],
+        bundle["spread_series"],
+        term_rows=bundle["cm_term_series"],
+        short_n=2,
+        long_n=3,
+    )
+    assert regime["cm_term_ratio"]["series_kind"] == "cm_term_ratio"
+    assert regime["cm_term_ratio"]["units"] == "dimensionless_zero_centered"
+    assert regime["cm_term_ratio"]["level_by_date"]["2024-01-10"] == pytest.approx(
+        (20.0 / 18.0) - 1.0
+    )
+
+
+def test_cm_term_ratio_omits_nonpositive_denominator_and_pre_iv_pin():
+    term_rows = [
+        {
+            "date": "2016-07-18",
+            "near_atm_iv": 20.0,
+            "next_atm_iv": 18.0,
+        },
+        {
+            "date": IV_FIELDS_AVAILABLE_FROM,
+            "near_atm_iv": 20.0,
+            "next_atm_iv": 0.0,
+        },
+        {
+            "date": "2016-07-20",
+            "near_atm_iv": 20.0,
+            "next_atm_iv": -1.0,
+        },
+        {
+            "date": "2016-07-21",
+            "near_atm_iv": 0.0,
+            "next_atm_iv": 18.0,
+        },
+        {
+            "date": "2016-07-22",
+            "near_atm_iv": -1.0,
+            "next_atm_iv": 18.0,
+        },
+        {
+            "date": "2016-07-25",
+            "near_atm_iv": 18.0,
+            "next_atm_iv": 18.0,
+        },
+    ]
+    ratio = build_daily_term_ratio_series(term_rows)
+    assert [r["date"] for r in ratio] == ["2016-07-25"]
+    assert ratio[0]["cm_term_ratio"] == pytest.approx(0.0)
+    assert all(r["date"] >= IV_FIELDS_AVAILABLE_FROM for r in ratio)
+
+
+def test_cm_term_ratio_bar_native_spec_and_evaluator_wiring():
+    from features.class_signals import SIGNAL_ID_OPT225_CM_TERM_RATIO
+    from research.bar_native_specs import BAR_NATIVE_SPECS
+    from research.offline.bar_eval_vol import evaluate_opt225_vol_on_bars
+
+    spec = BAR_NATIVE_SPECS["opt225_cm_term_ratio"]
+    assert spec["params"]["series_kind"] == "cm_term_ratio"
+    assert spec["params"]["transform"] == "abs_level"
+    assert spec["params"]["high_threshold"] == pytest.approx(0.10)
+    assert spec["params"]["low_threshold"] == pytest.approx(-0.10)
+
+    bars = {
+        "A": [
+            ("2016-07-19", 100.0),
+            ("2016-07-20", 110.0),
+            ("2016-07-21", 121.0),
+        ],
+        "B": [
+            ("2016-07-19", 100.0),
+            ("2016-07-20", 90.0),
+            ("2016-07-21", 81.0),
+        ],
+    }
+    series = {
+        "cm_term_ratio": {
+            "rv_abs_by_date": {
+                "2016-07-18": 0.50,
+                "2016-07-20": 0.20,
+            }
+        }
+    }
+    result = evaluate_opt225_vol_on_bars(
+        bars,
+        series,
+        mode="opt225_cm_term_ratio",
+        series_kind="cm_term_ratio",
+        momentum_n=1,
+        hold_days=1,
+        long_frac=0.5,
+        short_frac=0.5,
+        high_threshold=0.10,
+        low_threshold=-0.10,
+    )
+    assert result["signal_id"] == SIGNAL_ID_OPT225_CM_TERM_RATIO
+    assert result["mode"] == "opt225_cm_term_ratio"
+    assert result["n_active_positions"] > 0
+
+    pre_pin_only = {
+        "cm_term_ratio": {"rv_abs_by_date": {"2016-07-18": 0.50}}
+    }
+    pre_result = evaluate_opt225_vol_on_bars(
+        {
+            "A": [("2016-07-15", 100.0), ("2016-07-18", 110.0), ("2016-07-19", 121.0)],
+            "B": [("2016-07-15", 100.0), ("2016-07-18", 90.0), ("2016-07-19", 81.0)],
+        },
+        pre_pin_only,
+        mode="opt225_cm_term_ratio",
+        series_kind="cm_term_ratio",
+        momentum_n=1,
+        hold_days=1,
+        long_frac=0.5,
+        short_frac=0.5,
+        high_threshold=0.10,
+        low_threshold=-0.10,
+    )
+    assert pre_result["n_active_positions"] == 0
 
 
 def test_cm_term_omits_when_next_cm_missing():
