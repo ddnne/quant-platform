@@ -7,6 +7,7 @@ import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 
+import paper_runtime.personal_prepared_frame as prepared_frame_module
 import pit
 import pit.api as pit_api_module
 import pytest
@@ -366,6 +367,76 @@ def test_prepared_frame_temp_sqlite_is_removed_after_exception(
     assert not cache_path.exists()
 
 
+def test_prepared_frame_rejects_saturated_and_oversized_entries_before_json(
+    personal_db: tuple[Path, str, str],
+    monkeypatch,
+) -> None:
+    source, _start, _end = personal_db
+
+    def forbidden_json(_value):
+        raise AssertionError("saturated or oversized entry reached JSON encoding")
+
+    def forbidden_compress(_value, **_kwargs):
+        raise AssertionError("saturated or oversized entry reached compression")
+
+    with _personal_prepared_frame_scope(
+        db_path=source,
+        snapshot_id=data_snapshot_id(source),
+    ) as frame:
+        monkeypatch.setattr(prepared_frame_module, "_canonical_json", forbidden_json)
+        monkeypatch.setattr(
+            prepared_frame_module.zlib,
+            "compress",
+            forbidden_compress,
+        )
+        frame._stats["cache_saturated"] = 1
+        frame.store_feature(
+            as_of="2024-01-05T15:30:00+09:00",
+            feature_id="example",
+            feature_version="1.0.0",
+            definition_digest="sha256:" + "1" * 64,
+            inputs={"code": "1301"},
+            value=1.0,
+            metadata={},
+        )
+        frame.store_price_rows(
+            as_of="2024-01-05T15:30:00+09:00",
+            from_event="2024-01-05",
+            to_event="2024-01-05",
+            codes=("1301",),
+            rows=({"code": "1301", "date": "2024-01-05"},),
+        )
+
+        frame._stats["cache_saturated"] = 0
+        monkeypatch.setattr(
+            prepared_frame_module,
+            "PERSONAL_PREPARED_FRAME_MAX_ENTRY_BYTES",
+            64,
+        )
+        frame.store_feature(
+            as_of="2024-01-05T15:30:00+09:00",
+            feature_id="example",
+            feature_version="1.0.0",
+            definition_digest="sha256:" + "1" * 64,
+            inputs={"code": "1301"},
+            value="x" * 256,
+            metadata={},
+        )
+        frame.store_price_rows(
+            as_of="2024-01-05T15:30:00+09:00",
+            from_event="2024-01-05",
+            to_event="2024-01-05",
+            codes=("1301",),
+            rows=({"code": "1301", "payload": "x" * 256},),
+        )
+        stats = frame.stats()
+
+    assert int(stats["feature_writes"]) == 0
+    assert int(stats["price_window_writes"]) == 0
+    assert int(stats["feature_uncacheable"]) == 1
+    assert int(stats["price_window_uncacheable"]) == 1
+
+
 @pytest.mark.parametrize("case", ("price", "fundamental", "long_short"))
 def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
     personal_db: tuple[Path, str, str],
@@ -423,7 +494,7 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
     assert not cache_path.exists()
 
 
-def test_prepared_first_pass_uses_exact_session_bar_windows(
+def test_prepared_first_pass_stores_only_exact_session_bar_rows(
     personal_db: tuple[Path, str, str],
     tmp_path: Path,
     monkeypatch,
@@ -484,9 +555,14 @@ def test_prepared_first_pass_uses_exact_session_bar_windows(
     assert uncached_reads
     assert prepared_reads
     assert any(from_event != to_event for from_event, to_event, _ in uncached_reads)
-    assert all(from_event == to_event for from_event, to_event, _ in prepared_reads)
-    assert sum(rows for _, _, rows in prepared_reads) * 5 < sum(
+    assert any(from_event == to_event for from_event, to_event, _ in prepared_reads)
+    # Full lookbacks are read only for fail-closed adjustment validation. They
+    # are represented by empty markers; the cache persists exact-session rows.
+    assert int(stats["price_rows_written"]) * 5 < sum(
         rows for _, _, rows in uncached_reads
+    )
+    assert int(stats["price_rows_written"]) == 4 * len(
+        universe.decision_memberships
     )
     assert int(stats["price_window_writes"]) == len(prepared_reads)
 
@@ -684,6 +760,74 @@ def test_prepared_frame_preserves_late_revision_fallback_and_departed_holding(
         for trade in baseline.trades
     )
     assert baseline.equity_curve[-1]["positions_value"] > 0.0
+
+
+@pytest.mark.parametrize("bad_adjustment_close", (None, -1.0))
+def test_compact_path_matches_historical_adjustment_failure(
+    personal_db: tuple[Path, str, str],
+    tmp_path: Path,
+    bad_adjustment_close: float | None,
+) -> None:
+    source, start, end = personal_db
+    universe, _period = _prepared_frame_case(source, start, end)
+    sessions = tuple(day for day, _codes in universe.decision_memberships)
+    bad_day = sessions[2]
+    run_days = sessions[8:14]
+    connection = sqlite3.connect(source)
+    try:
+        connection.execute(
+            "UPDATE jquants_daily_bars SET adjustment_close=? "
+            "WHERE code=? AND date=?",
+            (bad_adjustment_close, "1301", bad_day),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    bounded_universe = PersonalResolvedUniverseMembership(
+        period_start=run_days[0],
+        period_end=run_days[-1],
+        decision_memberships=tuple(
+            (day, codes)
+            for day, codes in universe.decision_memberships
+            if day in run_days
+        ),
+        rule_id=universe.rule_id,
+        rule_version=universe.rule_version,
+        rule_digest=universe.rule_digest,
+    )
+    snapshot_id = data_snapshot_id(source)
+    common = {
+        "db_path": source,
+        "snapshot_id": snapshot_id,
+        "universe": bounded_universe,
+        "period": (run_days[0], run_days[-1]),
+        "cost_bps": 10.0,
+        "lookback_days": 536,
+        "max_drawdown": 1.0,
+    }
+    spec = _prepared_frame_spec("fundamental")
+    with pytest.raises(ValueError) as uncached_error:
+        _run_one(
+            PersonalPaperExecutionService(),
+            spec,
+            output_root=tmp_path / "invalid-adjustment-uncached",
+            **common,
+        )
+    with _personal_prepared_frame_scope(
+        db_path=source,
+        snapshot_id=snapshot_id,
+    ):
+        with pytest.raises(ValueError) as prepared_error:
+            _run_one(
+                PersonalPaperExecutionService(),
+                spec,
+                output_root=tmp_path / "invalid-adjustment-prepared",
+                **common,
+            )
+
+    assert str(prepared_error.value) == str(uncached_error.value)
+    assert bad_day in str(prepared_error.value)
 
 
 def test_compact_price_path_excludes_custom_and_same_day_strategies(

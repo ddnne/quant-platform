@@ -63,6 +63,7 @@ _PREPARED_BAR_FIELDS = (
     "adjustment_close",
     "adjustment_volume",
 )
+_ADJUSTMENT_VALIDATION_PURPOSE = "retrospective-adjustment-validation"
 
 
 def describe_strategy(strategy: Any) -> tuple[str, dict[str, Any]]:
@@ -339,6 +340,15 @@ def _load_prepared_strategy_snapshot(
     if not codes:
         return snapshot
 
+    if price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED:
+        _validate_prepared_adjustment_window(
+            as_of=as_of,
+            codes=codes,
+            from_event=_shift_date(to_date, -lookback_days),
+            to_event=to_date,
+            db_path=db_path,
+        )
+
     exact_rows = _prepared_bar_rows(
         as_of=as_of,
         codes=codes,
@@ -379,6 +389,52 @@ def _load_prepared_strategy_snapshot(
             _bar_price(bars[-1], price_basis=price_basis) if bars else None
         )
     return snapshot
+
+
+def _validate_prepared_adjustment_window(
+    *,
+    as_of: str,
+    codes: set[str],
+    from_event: str,
+    to_event: str,
+    db_path: Any,
+) -> None:
+    """Retain the original lookback-wide adjusted-close fail-closed check."""
+
+    ordered_codes = tuple(sorted(codes))
+    frame = _active_personal_prepared_frame(db_path)
+    if frame is not None:
+        prepared = frame.load_price_rows(
+            as_of=as_of,
+            from_event=from_event,
+            to_event=to_event,
+            codes=ordered_codes,
+            purpose=_ADJUSTMENT_VALIDATION_PURPOSE,
+        )
+        if not _is_cache_miss(prepared):
+            if not isinstance(prepared, PreparedPriceRows) or prepared.rows:
+                raise RuntimeError("invalid prepared adjustment validation marker")
+            return
+
+    result = pit.get_equity_bars_daily(
+        as_of=as_of,
+        from_event=from_event,
+        to_event=to_event,
+        codes=ordered_codes,
+        db_path=db_path,
+    )
+    for row in result.rows:
+        _required_adjusted_close(row)
+
+    if frame is not None:
+        frame.store_price_rows(
+            as_of=as_of,
+            from_event=from_event,
+            to_event=to_event,
+            codes=ordered_codes,
+            rows=(),
+            purpose=_ADJUSTMENT_VALIDATION_PURPOSE,
+        )
 
 
 def _session_prices(

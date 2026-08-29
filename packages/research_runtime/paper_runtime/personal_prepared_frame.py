@@ -31,6 +31,7 @@ PERSONAL_PREPARED_FRAME_SCHEMA = "personal-prepared-feature-frame/v1"
 PERSONAL_PREPARED_FEATURE_KEY_SCHEMA = "personal-prepared-feature-key/v1"
 PERSONAL_PREPARED_PRICE_KEY_SCHEMA = "personal-prepared-price-window-key/v1"
 PERSONAL_PREPARED_FRAME_MAX_BYTES = 1024 * 1024 * 1024
+PERSONAL_PREPARED_FRAME_MAX_ENTRY_BYTES = 8 * 1024 * 1024
 PERSONAL_PREPARED_FRAME_MAX_FEATURE_CELLS = 2_000_000
 PERSONAL_PREPARED_FRAME_MAX_PRICE_WINDOWS = 10_000
 _COMMIT_INTERVAL = 2_048
@@ -129,6 +130,44 @@ def _canonical_json(value: Mapping[str, Any]) -> str:
     )
 
 
+def _within_uncompressed_bound(value: Any, *, limit: int) -> bool:
+    """Reject obviously oversized values before tagged JSON makes a copy."""
+
+    remaining = limit
+    pending = [value]
+    seen_containers: set[int] = set()
+    while pending:
+        item = pending.pop()
+        if item is None:
+            remaining -= 4
+        elif isinstance(item, bool):
+            remaining -= 5
+        elif isinstance(item, (int, float)):
+            remaining -= 32
+        elif isinstance(item, str):
+            # Four bytes per code point is a conservative UTF-8 bound and
+            # avoids allocating a second giant byte string during preflight.
+            remaining -= 4 * len(item) + 2
+        elif isinstance(item, Mapping):
+            if id(item) in seen_containers:
+                return False
+            seen_containers.add(id(item))
+            remaining -= 64 + 16 * len(item)
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            if id(item) in seen_containers:
+                return False
+            seen_containers.add(id(item))
+            remaining -= 48 + 8 * len(item)
+            pending.extend(item)
+        else:
+            return False
+        if remaining < 0:
+            return False
+    return True
+
+
 def _feature_cache_key_document(
     *,
     snapshot_id: str,
@@ -210,6 +249,7 @@ class PersonalPreparedFrame:
             "price_window_hits": 0,
             "price_window_misses": 0,
             "price_window_writes": 0,
+            "price_rows_written": 0,
             "price_window_uncacheable": 0,
             "cache_saturated": 0,
         }
@@ -318,6 +358,20 @@ class PersonalPreparedFrame:
     ) -> None:
         if self._closed:
             raise RuntimeError("personal prepared frame is closed")
+        if (
+            self._stats["cache_saturated"]
+            or self._stats["feature_writes"]
+            >= PERSONAL_PREPARED_FRAME_MAX_FEATURE_CELLS
+        ):
+            self._stats["cache_saturated"] = 1
+            return
+        if not _within_uncompressed_bound(
+            {"value": value, "metadata": metadata},
+            limit=PERSONAL_PREPARED_FRAME_MAX_ENTRY_BYTES,
+        ):
+            self._stats["feature_uncacheable"] += 1
+            return
+        document = {"value": value, "metadata": dict(metadata)}
         digest, encoded_key = self._key(
             as_of=as_of,
             feature_id=feature_id,
@@ -326,22 +380,16 @@ class PersonalPreparedFrame:
             inputs=inputs,
         )
         try:
-            payload = _canonical_json(
-                {"value": value, "metadata": dict(metadata)}
-            ).encode("utf-8")
+            payload = _canonical_json(document).encode("utf-8")
         except (TypeError, ValueError):
             # A future exotic FeatureOutput must retain its exact live value;
             # skipping the cache is safer than lossy coercion.
             self._stats["feature_uncacheable"] += 1
             return
-        compressed = zlib.compress(payload, level=1)
-        if (
-            self._stats["cache_saturated"]
-            or self._stats["feature_writes"]
-            >= PERSONAL_PREPARED_FRAME_MAX_FEATURE_CELLS
-        ):
-            self._stats["cache_saturated"] = 1
+        if len(payload) > PERSONAL_PREPARED_FRAME_MAX_ENTRY_BYTES:
+            self._stats["feature_uncacheable"] += 1
             return
+        compressed = zlib.compress(payload, level=1)
         self._insert_cache_row(
             table="feature_cells",
             digest=digest,
@@ -357,6 +405,7 @@ class PersonalPreparedFrame:
         from_event: str,
         to_event: str,
         codes: tuple[str, ...],
+        purpose: str,
     ) -> tuple[str, str]:
         document = {
             "schema_version": PERSONAL_PREPARED_PRICE_KEY_SCHEMA,
@@ -365,6 +414,7 @@ class PersonalPreparedFrame:
             "from_event": str(from_event),
             "to_event": str(to_event),
             "codes": list(codes),
+            "purpose": str(purpose),
         }
         encoded = _canonical_json(document)
         digest = "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -377,6 +427,7 @@ class PersonalPreparedFrame:
         from_event: str,
         to_event: str,
         codes: tuple[str, ...],
+        purpose: str = "rows",
     ) -> PreparedPriceRows | object:
         if self._closed:
             raise RuntimeError("personal prepared frame is closed")
@@ -386,6 +437,7 @@ class PersonalPreparedFrame:
             from_event=from_event,
             to_event=to_event,
             codes=codes,
+            purpose=purpose,
         )
         row = self._connection.execute(
             "SELECT key_json,payload FROM price_windows WHERE key_digest=?",
@@ -421,21 +473,10 @@ class PersonalPreparedFrame:
         to_event: str,
         codes: tuple[str, ...],
         rows: tuple[dict[str, Any], ...],
+        purpose: str = "rows",
     ) -> None:
         if self._closed:
             raise RuntimeError("personal prepared frame is closed")
-        digest, encoded_key = self._price_key(
-            as_of=as_of,
-            from_event=from_event,
-            to_event=to_event,
-            codes=codes,
-        )
-        try:
-            payload = _canonical_json({"rows": list(rows)})
-        except (TypeError, ValueError):
-            self._stats["price_window_uncacheable"] += 1
-            return
-        compressed = zlib.compress(payload.encode("utf-8"), level=1)
         if (
             self._stats["cache_saturated"]
             or self._stats["price_window_writes"]
@@ -443,6 +484,31 @@ class PersonalPreparedFrame:
         ):
             self._stats["cache_saturated"] = 1
             return
+        if not _within_uncompressed_bound(
+            {"rows": rows},
+            limit=PERSONAL_PREPARED_FRAME_MAX_ENTRY_BYTES,
+        ):
+            self._stats["price_window_uncacheable"] += 1
+            return
+        document = {"rows": list(rows)}
+        digest, encoded_key = self._price_key(
+            as_of=as_of,
+            from_event=from_event,
+            to_event=to_event,
+            codes=codes,
+            purpose=purpose,
+        )
+        try:
+            payload = _canonical_json(document)
+        except (TypeError, ValueError):
+            self._stats["price_window_uncacheable"] += 1
+            return
+        encoded_payload = payload.encode("utf-8")
+        if len(encoded_payload) > PERSONAL_PREPARED_FRAME_MAX_ENTRY_BYTES:
+            self._stats["price_window_uncacheable"] += 1
+            return
+        compressed = zlib.compress(encoded_payload, level=1)
+        writes_before = self._stats["price_window_writes"]
         self._insert_cache_row(
             table="price_windows",
             digest=digest,
@@ -450,6 +516,8 @@ class PersonalPreparedFrame:
             compressed=compressed,
             stat="price_window_writes",
         )
+        if self._stats["price_window_writes"] > writes_before:
+            self._stats["price_rows_written"] += len(rows)
 
     def _insert_cache_row(
         self,
