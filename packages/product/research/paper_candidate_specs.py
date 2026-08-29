@@ -3,9 +3,12 @@ from __future__ import annotations
 
 from strategies.spec import (
     CrossSectionRankRule,
+    FactorLeg,
+    FactorRankRule,
     FeatureRef,
     REBALANCE_FIXED_HORIZON,
     STRATEGY_SPEC_VERSION,
+    STRATEGY_SPEC_VERSION_V4,
     StrategySpec,
     ThresholdRule,
     TopKRule,
@@ -20,6 +23,47 @@ DEFAULT_CS_LONG_FRAC: float = 0.3
 DEFAULT_CS_SHORT_FRAC: float = 0.3
 DEFAULT_CS_MOMENTUM_N: int = 5  # hold=10 pin
 DEFAULT_FUND_MOMENTUM_N: int = 10
+
+
+def build_factor_rank_strategy_spec(
+    *,
+    strategy_id: str,
+    legs: tuple[FactorLeg, ...],
+    hold_days: int = 10,
+    group: str = "sector33",
+    long_frac: float = 0.2,
+    short_frac: float = 0.2,
+    allow_short: bool = False,
+    min_eligible_ratio: float = 0.8,
+    min_eligible_count: int = 20,
+    min_group_count: int = 5,
+    rationale: str = "",
+) -> StrategySpec:
+    """Build one closed multi-ratio rank candidate (StrategySpec v4).
+
+    The builder intentionally accepts already-closed :class:`FactorLeg`
+    values instead of an expression string.  Industry/scale normalization and
+    coverage floors therefore remain part of the immutable spec digest.
+    """
+    h = max(1, int(hold_days))
+    return StrategySpec(
+        strategy_id=str(strategy_id),
+        version=STRATEGY_SPEC_VERSION_V4,
+        rule=FactorRankRule(
+            legs=tuple(legs),
+            normalization="percentile",
+            group=str(group),
+            long_frac=float(long_frac),
+            short_frac=float(short_frac),
+            allow_short=bool(allow_short),
+            min_eligible_ratio=float(min_eligible_ratio),
+            min_eligible_count=int(min_eligible_count),
+            min_group_count=int(min_group_count),
+        ),
+        rationale=rationale or "Closed multi-ratio percentile rank. DRAFT only.",
+        rebalance=REBALANCE_FIXED_HORIZON if h > 1 else "daily",
+        hold_days=h if h > 1 else None,
+    )
 
 
 def build_multi_day_hold_strategy_spec(

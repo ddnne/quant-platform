@@ -23,6 +23,7 @@ def test_v2_short_field_names_produce_ohlcv():
         "Code": "8697", "Date": "2025-04-01",
         "O": 100, "H": 110, "L": 90, "C": 105, "Vo": 1000, "Va": 105000,
         "AdjO": 100, "AdjH": 110, "AdjL": 90, "AdjC": 105, "AdjVo": 1000,
+        "MktCap": 123456789,
     }]
     out = normalize_daily_bars(rows, ingested_at=ING)
     assert len(out) == 1
@@ -32,6 +33,7 @@ def test_v2_short_field_names_produce_ohlcv():
     assert r["volume"] == 1000.0 and r["turnover_value"] == 105000.0
     assert r["adjustment_open"] == 100.0 and r["adjustment_close"] == 105.0
     assert r["adjustment_volume"] == 1000.0
+    assert r["market_cap"] == 123456789.0
 
 
 def test_v1_long_names_still_work():

@@ -120,6 +120,12 @@ def normalize_daily_bars(
                 "close": _pick_num(r, "Close", "C"),
                 "volume": _pick_num(r, "Volume", "Vo"),
                 "turnover_value": _pick_num(r, "TurnoverValue", "Va"),
+                # Vendor point-in-time daily market capitalization.  Keep it
+                # as an optional level; relative-size strategies normalize it
+                # within the PIT sector/market cross-section.
+                "market_cap": _pick_num(
+                    r, "MarketCapitalization", "MarketCap", "MktCap"
+                ),
                 # All-day adjusted series only. V2 also publishes session-split
                 # fields (MAdj* morning / AAdj* afternoon) — those are *not*
                 # aliases of Adj* and must not backfill when Adj* is null.

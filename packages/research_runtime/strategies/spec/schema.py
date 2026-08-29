@@ -15,6 +15,9 @@ Version history
 * W86 / w0816u — optional ``signal_sign`` (+1 original / −1 inverted) on
   ``cross_section_rank`` and ``value_momentum_agree`` for reproducibility of
   research sign-selection. Default +1; omitted from to_dict when +1.
+* ``strategy-spec/v4`` — adds ``factor_rank``: a bounded, closed multi-factor
+  rank rule with exact feature pins, percentile normalization, and explicit
+  market/sector/scale coverage floors. v2/v3 payloads remain unchanged.
 """
 
 from __future__ import annotations
@@ -28,9 +31,11 @@ from typing import Any, Mapping
 
 
 STRATEGY_SPEC_VERSION = "strategy-spec/v3"
+STRATEGY_SPEC_VERSION_V3 = STRATEGY_SPEC_VERSION
+STRATEGY_SPEC_VERSION_V4 = "strategy-spec/v4"
 STRATEGY_SPEC_VERSION_V2 = "strategy-spec/v2"
 SUPPORTED_STRATEGY_SPEC_VERSIONS = frozenset(
-    {STRATEGY_SPEC_VERSION, STRATEGY_SPEC_VERSION_V2}
+    {STRATEGY_SPEC_VERSION_V4, STRATEGY_SPEC_VERSION_V3, STRATEGY_SPEC_VERSION_V2}
 )
 
 REBALANCE_DAILY = "daily"
@@ -346,18 +351,161 @@ class ValueMomentumAgreeRule:
         return out
 
 
-Rule = ThresholdRule | TopKRule | CrossSectionRankRule | ValueMomentumAgreeRule
+@dataclass(frozen=True)
+class FactorLeg:
+    """One exact, governed input to a :class:`FactorRankRule` composite."""
+
+    feature: FeatureRef
+    weight: float = 1.0
+    direction: str = "high_good"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.feature, FeatureRef):
+            raise StrategySpecError("factor_rank leg.feature must be a FeatureRef")
+        if isinstance(self.weight, bool):
+            raise StrategySpecError("factor_rank leg.weight must be numeric")
+        weight = _finite_float(self.weight, "factor_rank leg.weight")
+        if weight <= 0.0:
+            raise StrategySpecError("factor_rank leg.weight must be > 0")
+        object.__setattr__(self, "weight", weight)
+        direction = str(self.direction or "").strip().lower()
+        if direction not in {"high_good", "low_good"}:
+            raise StrategySpecError(
+                "factor_rank leg.direction must be high_good|low_good"
+            )
+        object.__setattr__(self, "direction", direction)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "FactorLeg":
+        if not isinstance(payload, Mapping):
+            raise StrategySpecError("factor_rank legs must be objects")
+        _strict_keys(payload, {"feature", "weight", "direction"}, "factor_rank leg")
+        missing = {"feature", "weight", "direction"} - set(payload)
+        if missing:
+            raise StrategySpecError(
+                f"factor_rank leg missing field(s): {sorted(missing)}"
+            )
+        return cls(
+            feature=FeatureRef.from_dict(payload["feature"]),
+            weight=payload["weight"],
+            direction=payload["direction"],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "feature": self.feature.to_dict(),
+            "weight": self.weight,
+            "direction": self.direction,
+        }
+
+
+@dataclass(frozen=True)
+class FactorRankRule:
+    """Bounded multi-factor percentile rank, optionally within PIT groups.
+
+    This deliberately exposes no arbitrary expression language. Each input is
+    one exact approved feature and the only normalization in v1 is percentile.
+    A code missing any leg (or required PIT master group) is ineligible.
+    """
+
+    legs: tuple[FactorLeg, ...]
+    normalization: str = "percentile"
+    group: str = "market"
+    long_frac: float = 0.2
+    short_frac: float = 0.2
+    allow_short: bool = True
+    min_eligible_ratio: float = 0.8
+    min_eligible_count: int = 20
+    min_group_count: int = 5
+    type: str = field(default="factor_rank", init=False)
+
+    def __post_init__(self) -> None:
+        try:
+            legs = tuple(self.legs)
+        except TypeError as exc:
+            raise StrategySpecError("factor_rank.legs must be an array") from exc
+        if not 1 <= len(legs) <= 5:
+            raise StrategySpecError("factor_rank.legs must contain 1..5 legs")
+        if not all(isinstance(leg, FactorLeg) for leg in legs):
+            raise StrategySpecError("factor_rank.legs must contain FactorLeg values")
+        object.__setattr__(self, "legs", legs)
+
+        normalization = str(self.normalization or "").strip().lower()
+        if normalization != "percentile":
+            raise StrategySpecError(
+                "factor_rank.normalization must be percentile"
+            )
+        object.__setattr__(self, "normalization", normalization)
+
+        group = str(self.group or "").strip().lower()
+        if group not in {"market", "sector33", "scale"}:
+            raise StrategySpecError(
+                "factor_rank.group must be market|sector33|scale"
+            )
+        object.__setattr__(self, "group", group)
+        if isinstance(self.long_frac, bool) or isinstance(self.short_frac, bool):
+            raise StrategySpecError("factor_rank fractions must be numeric")
+        object.__setattr__(
+            self, "long_frac", _frac(self.long_frac, "factor_rank.long_frac")
+        )
+        object.__setattr__(
+            self, "short_frac", _frac(self.short_frac, "factor_rank.short_frac")
+        )
+        if not isinstance(self.allow_short, bool):
+            raise StrategySpecError("factor_rank.allow_short must be a boolean")
+        if isinstance(self.min_eligible_ratio, bool):
+            raise StrategySpecError("factor_rank.min_eligible_ratio must be numeric")
+        object.__setattr__(
+            self,
+            "min_eligible_ratio",
+            _frac(self.min_eligible_ratio, "factor_rank.min_eligible_ratio"),
+        )
+        for name in ("min_eligible_count", "min_group_count"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise StrategySpecError(f"factor_rank.{name} must be an integer")
+            if value < 1:
+                raise StrategySpecError(f"factor_rank.{name} must be >= 1")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": self.type,
+            "legs": [leg.to_dict() for leg in self.legs],
+            "normalization": self.normalization,
+            "group": self.group,
+            "long_frac": self.long_frac,
+            "short_frac": self.short_frac,
+            "allow_short": self.allow_short,
+            "min_eligible_ratio": self.min_eligible_ratio,
+            "min_eligible_count": self.min_eligible_count,
+            "min_group_count": self.min_group_count,
+        }
+
+
+Rule = (
+    ThresholdRule
+    | TopKRule
+    | CrossSectionRankRule
+    | ValueMomentumAgreeRule
+    | FactorRankRule
+)
 _V2_RULE_TYPES = frozenset({"threshold", "top_k"})
 _V3_RULE_TYPES = frozenset(
     {"threshold", "top_k", "cross_section_rank", "value_momentum_agree"}
 )
+_V4_RULE_TYPES = frozenset({*_V3_RULE_TYPES, "factor_rank"})
 
 
 def _parse_rule(payload: Any, *, version: str) -> Rule:
     if not isinstance(payload, Mapping):
         raise StrategySpecError("rule must be an object")
     rule_type = payload.get("type")
-    allowed = _V2_RULE_TYPES if version == STRATEGY_SPEC_VERSION_V2 else _V3_RULE_TYPES
+    if version == STRATEGY_SPEC_VERSION_V2:
+        allowed = _V2_RULE_TYPES
+    elif version == STRATEGY_SPEC_VERSION_V3:
+        allowed = _V3_RULE_TYPES
+    else:
+        allowed = _V4_RULE_TYPES
     if rule_type == "threshold":
         _strict_keys(
             payload,
@@ -443,6 +591,56 @@ def _parse_rule(payload: Any, *, version: str) -> Rule:
             allow_short=payload.get("allow_short", True),
             signal_sign=payload.get("signal_sign", 1),
         )
+    if rule_type == "factor_rank":
+        if rule_type not in allowed:
+            raise StrategySpecError(
+                f"rule type {rule_type!r} requires strategy-spec/v4"
+            )
+        _strict_keys(
+            payload,
+            {
+                "type",
+                "legs",
+                "normalization",
+                "group",
+                "long_frac",
+                "short_frac",
+                "allow_short",
+                "min_eligible_ratio",
+                "min_eligible_count",
+                "min_group_count",
+            },
+            "factor_rank rule",
+        )
+        required = {
+            "legs",
+            "normalization",
+            "group",
+            "long_frac",
+            "short_frac",
+            "allow_short",
+            "min_eligible_ratio",
+            "min_eligible_count",
+            "min_group_count",
+        } - set(payload)
+        if required:
+            raise StrategySpecError(
+                f"factor_rank rule missing field(s): {sorted(required)}"
+            )
+        legs_payload = payload["legs"]
+        if not isinstance(legs_payload, (list, tuple)):
+            raise StrategySpecError("factor_rank.legs must be an array")
+        return FactorRankRule(
+            legs=tuple(FactorLeg.from_dict(leg) for leg in legs_payload),
+            normalization=payload["normalization"],
+            group=payload["group"],
+            long_frac=payload["long_frac"],
+            short_frac=payload["short_frac"],
+            allow_short=payload["allow_short"],
+            min_eligible_ratio=payload["min_eligible_ratio"],
+            min_eligible_count=payload["min_eligible_count"],
+            min_group_count=payload["min_group_count"],
+        )
     raise StrategySpecError(
         f"unknown rule type {rule_type!r}; allowed: {sorted(allowed)}"
     )
@@ -501,9 +699,22 @@ class StrategySpec:
                 raise StrategySpecError("hold_days must be >= 1")
         if not isinstance(
             self.rule,
-            (ThresholdRule, TopKRule, CrossSectionRankRule, ValueMomentumAgreeRule),
+            (
+                ThresholdRule,
+                TopKRule,
+                CrossSectionRankRule,
+                ValueMomentumAgreeRule,
+                FactorRankRule,
+            ),
         ):
             raise StrategySpecError("rule must be a whitelisted StrategySpec rule")
+        if (
+            isinstance(self.rule, FactorRankRule)
+            and self.version != STRATEGY_SPEC_VERSION_V4
+        ):
+            raise StrategySpecError(
+                f"rule type {self.rule.type!r} requires strategy-spec/v4"
+            )
         if self.version == STRATEGY_SPEC_VERSION_V2 and not isinstance(
             self.rule, (ThresholdRule, TopKRule)
         ):
@@ -567,6 +778,8 @@ def iter_feature_refs(spec: StrategySpec) -> tuple[FeatureRef, ...]:
     rule = spec.rule
     if isinstance(rule, ValueMomentumAgreeRule):
         return (rule.value_feature, rule.momentum_feature)
+    if isinstance(rule, FactorRankRule):
+        return tuple(leg.feature for leg in rule.legs)
     return (rule.feature,)
 
 
@@ -586,10 +799,14 @@ def strategy_spec_digest(spec: StrategySpec) -> str:
 
 __all__ = [
     "CrossSectionRankRule",
+    "FactorLeg",
+    "FactorRankRule",
     "FeatureRef",
     "REBALANCE_DAILY",
     "REBALANCE_FIXED_HORIZON",
     "STRATEGY_SPEC_VERSION",
+    "STRATEGY_SPEC_VERSION_V3",
+    "STRATEGY_SPEC_VERSION_V4",
     "STRATEGY_SPEC_VERSION_V2",
     "SUPPORTED_STRATEGY_SPEC_VERSIONS",
     "StrategySpec",

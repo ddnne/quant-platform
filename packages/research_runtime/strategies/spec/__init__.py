@@ -8,10 +8,14 @@ from .interpreter import (
 )
 from .schema import (
     CrossSectionRankRule,
+    FactorLeg,
+    FactorRankRule,
     FeatureRef,
     REBALANCE_DAILY,
     REBALANCE_FIXED_HORIZON,
     STRATEGY_SPEC_VERSION,
+    STRATEGY_SPEC_VERSION_V3,
+    STRATEGY_SPEC_VERSION_V4,
     STRATEGY_SPEC_VERSION_V2,
     SUPPORTED_STRATEGY_SPEC_VERSIONS,
     StrategySpec,
@@ -25,10 +29,14 @@ from .schema import (
 
 __all__ = [
     "CrossSectionRankRule",
+    "FactorLeg",
+    "FactorRankRule",
     "FeatureRef",
     "REBALANCE_DAILY",
     "REBALANCE_FIXED_HORIZON",
     "STRATEGY_SPEC_VERSION",
+    "STRATEGY_SPEC_VERSION_V3",
+    "STRATEGY_SPEC_VERSION_V4",
     "STRATEGY_SPEC_VERSION_V2",
     "SUPPORTED_STRATEGY_SPEC_VERSIONS",
     "StrategySpec",

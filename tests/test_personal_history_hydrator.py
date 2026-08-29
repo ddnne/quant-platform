@@ -19,6 +19,7 @@ from ingestion.personal_history import (
     PersonalHistoryHydrator,
     _compact_bars,
     _compact_calendar,
+    _compact_master,
     assert_personal_history_database,
     build_personal_history_plan,
 )
@@ -83,7 +84,14 @@ class _HistoryClient:
     def _master(day: str) -> list[dict]:
         prime = ["1001", "1002"] if day < "2025-01-07" else ["1001", "1002", "1003"]
         return [
-            {"Code": code, "Date": day, "Mkt": "0111"}
+            {
+                "Code": code,
+                "Date": day,
+                "Mkt": "0111",
+                "S17": "1",
+                "S33": "0050" if code != "1003" else "1050",
+                "ScaleCat": "TOPIX Core30" if code == "1001" else "TOPIX Small 1",
+            }
             for code in prime
         ] + [{"Code": "9001", "Date": day, "Mkt": "0112"}]
 
@@ -121,6 +129,7 @@ class _HistoryClient:
                     "Volume": 1_000 * ordinal,
                     "AdjustmentVolume": 1_000 * ordinal,
                     "TurnoverValue": 1_000_000 * ordinal,
+                    "MktCap": 10_000_000 * ordinal,
                     "Open": 90,
                     "CompanyName": "must-not-be-kept",
                 }
@@ -168,6 +177,38 @@ def _rows(store: SqliteStore, dataset: str) -> list[dict]:
     return store.fetch_where(
         "jquants_records", "source='jquants' AND dataset=?", (dataset,)
     )
+
+
+def test_compact_master_keeps_dated_factor_classifications() -> None:
+    base = {
+        "Code": "1001",
+        "Date": "2025-01-06",
+        "Mkt": "0111",
+        "S17": "1",
+        "S33": "0050",
+        "ScaleCat": "TOPIX Core30",
+    }
+    first, first_digest = _compact_master(
+        [base],
+        snapshot_day="2025-01-06",
+        ingested_at="2025-01-06T08:01:00+09:00",
+    )
+    payload = json.loads(first[0]["payload"])
+    assert payload == {
+        "Code": "1001",
+        "Date": "2025-01-06",
+        "MarketCode": "0111",
+        "ScaleCategory": "TOPIX Core30",
+        "Sector17Code": "1",
+        "Sector33Code": "0050",
+    }
+
+    _, changed_digest = _compact_master(
+        [{**base, "S33": "1050"}],
+        snapshot_day="2025-01-06",
+        ingested_at="2025-01-06T08:01:00+09:00",
+    )
+    assert changed_digest != first_digest
 
 
 def _typed_bars(store: SqliteStore) -> list[dict]:
@@ -220,6 +261,10 @@ def test_hydrator_pit_timing_compression_compaction_and_draft_boundary(tmp_path)
     assert before.rows == []
     assert {row["code"] for row in at_open.rows} == {"1001", "1002"}
     assert {row["code"] for row in at_close.rows} == {"1001", "1002"}
+    by_code = {row["code"]: row for row in at_close.rows}
+    assert by_code["1001"]["sector_33_code"] == "0050"
+    assert by_code["1001"]["sector_17_code"] == "1"
+    assert by_code["1001"]["scale_category"] == "TOPIX Core30"
 
     assert _rows(store, "equities_bars_daily") == []
     assert store._conn.execute(
@@ -234,6 +279,7 @@ def test_hydrator_pit_timing_compression_compaction_and_draft_boundary(tmp_path)
         assert row["high"] is None
         assert row["low"] is None
         assert row["close"] is not None
+        assert row["market_cap"] is not None
     pit_bars = get_equity_bars_daily(
         as_of="2025-01-08T15:30:00+09:00", db_path=db
     )
@@ -324,6 +370,23 @@ def test_resume_is_idempotent_and_refetches_only_failed_segment(tmp_path):
     assert store.count("jquants_records") == row_count_after
     assert store.count("jquants_daily_bars") == typed_count_after
     assert row_count_after + typed_count_after >= row_count_before
+    store.close()
+
+
+def test_older_compact_format_cannot_resume_without_refetch(tmp_path) -> None:
+    store = SqliteStore(tmp_path / "old-format.sqlite")
+    PersonalHistoryHydrator(client=_HistoryClient(), store=store, plan=_plan())
+    store._conn.execute(
+        "UPDATE personal_history_manifest SET format='personal-draft-history/v1' "
+        "WHERE singleton=1"
+    )
+    store._conn.commit()
+
+    with pytest.raises(PersonalHistoryError, match="older compact format"):
+        PersonalHistoryHydrator(
+            client=_HistoryClient(), store=store, plan=_plan()
+        )
+
     store.close()
 
 
