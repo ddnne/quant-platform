@@ -3,7 +3,7 @@
 This registry is intentionally a handful of four-candidate batches, not a
 strategy catalog.  Each batch has one dependency-specific history floor so a
 price-only idea can use the 2008 history without being truncated to the 2016
-IV floor.  The personal service still uses its PIT ``Prime with financials``
+IV floor.  The personal service uses its selected PIT ``TOPIX with financials``
 universe, so the executable floor is the first financial-summary date rather
 than the two-month-earlier raw price floor.  All entries are DRAFT research;
 none promotes or trades.
@@ -286,7 +286,7 @@ _COHORTS: dict[str, ResearchCohort] = {
         strategy_specs=_price_relative_specs(),
         description=(
             "Price, realized-volatility, and turnover ratios over the longest "
-            "history supported by the PIT Prime-with-financials universe."
+            "history supported by the selected PIT TOPIX-with-financials universe."
         ),
     ),
     "fundamental-relative-v1": ResearchCohort(

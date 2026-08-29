@@ -15,7 +15,7 @@ import itertools
 import json
 import os
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -52,21 +52,24 @@ from research.personal_metrics import (
     summarize_performance,
     summarize_validation_performance,
 )
+from research.personal_universe import (
+    DEFAULT_PERSONAL_UNIVERSE_ID,
+    PERSONAL_UNIVERSE_IDS,
+    PersonalResolvedUniverseMembership,
+    PersonalUniverseError,
+    PersonalUniverseSelector,
+    personal_universe_selector,
+    resolve_personal_universe_with_evidence,
+)
 from research.paper_candidate_specs import (
     build_cross_section_hold_strategy_spec,
     build_fundamentals_hold_strategy_spec,
     build_multi_day_hold_strategy_spec,
 )
 from research.stats_metrics import sharpe_ratio
-from research.universe_contract import (
-    ResolvedUniverseMembership,
-    resolve_tse_prime_with_fins_evidence,
-)
-
-
-PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v5"
+PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v6"
 PERSONAL_DECISION_POLICY = "personal_drawdown_cost_stress/v3"
-PERSONAL_DATA_PROFILE = "personal-japan-equities-paper/v2"
+PERSONAL_DATA_PROFILE = "personal-japan-equities-paper/v3"
 PERSONAL_BAR_COVERAGE_EVIDENCE = "observed-pit-market-breadth/v1"
 
 
@@ -91,7 +94,7 @@ class PersonalResearchPolicy:
     max_candidates: int = 12
     max_parallel: int = 1
     min_observed_bar_coverage: float = 0.995
-    min_prime_fins_breadth: float = 0.95
+    min_universe_fins_breadth: float = 0.95
 
     def __post_init__(self) -> None:
         if self.validation_folds < 1:
@@ -110,8 +113,8 @@ class PersonalResearchPolicy:
             raise ValueError("personal research is intentionally serial")
         if not 0.0 < self.min_observed_bar_coverage <= 1.0:
             raise ValueError("min_observed_bar_coverage must be in (0, 1]")
-        if not 0.0 < self.min_prime_fins_breadth <= 1.0:
-            raise ValueError("min_prime_fins_breadth must be in (0, 1]")
+        if not 0.0 < self.min_universe_fins_breadth <= 1.0:
+            raise ValueError("min_universe_fins_breadth must be in (0, 1]")
         if self.base_cost_bps < 0 or self.stress_cost_bps < self.base_cost_bps:
             raise ValueError("stress cost must be no lower than base cost")
 
@@ -131,7 +134,7 @@ class PersonalResearchPolicy:
             "max_candidates": self.max_candidates,
             "max_parallel": self.max_parallel,
             "min_observed_bar_coverage": self.min_observed_bar_coverage,
-            "min_prime_fins_breadth": self.min_prime_fins_breadth,
+            "min_universe_fins_breadth": self.min_universe_fins_breadth,
             "automatic_promotion": False,
         }
 
@@ -144,6 +147,7 @@ class PersonalResearchRequest:
     period_start: str | None = None
     specs: tuple[StrategySpec, ...] | None = None
     cohort_id: str | None = None
+    universe_id: str = DEFAULT_PERSONAL_UNIVERSE_ID
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +162,8 @@ class PersonalResearchRun:
     unexpected_errors: int
     cohort_id: str | None = None
     cohort_digest: str | None = None
+    universe_id: str = DEFAULT_PERSONAL_UNIVERSE_ID
+    universe_rule_digest: str | None = None
 
     @property
     def exit_code(self) -> int:
@@ -198,12 +204,6 @@ def default_personal_specs() -> tuple[StrategySpec, ...]:
     )
 
 
-_UNIVERSE = ContractDependency(
-    kind="universe",
-    dependency_id="tse_prime_with_fins",
-    version="tse-prime-with-fins/v1",
-    dataset_dependencies=("equities_master", "fins_summary"),
-)
 _EVALUATION = ContractDependency(
     kind="evaluation",
     dependency_id="personal_walk_forward",
@@ -334,8 +334,15 @@ def _closures(
     start: str,
     end: str,
     policy: PersonalResearchPolicy,
+    universe_selector: PersonalUniverseSelector,
     cohort_ref: dict[str, str] | None = None,
 ) -> tuple[PlanDependencyClosure, ...]:
+    universe_dependency = ContractDependency(
+        kind="universe",
+        dependency_id=universe_selector.rule_id,
+        version=universe_selector.rule_version,
+        dataset_dependencies=("equities_master", "fins_summary"),
+    )
     closures: list[PlanDependencyClosure] = []
     for spec in specs:
         spec_hash = strategy_spec_digest(spec)
@@ -345,6 +352,7 @@ def _closures(
             "period_start": start,
             "period_end": end,
             "policy": policy.to_dict(),
+            "universe": universe_selector.to_dict(),
         }
         if cohort_ref is not None:
             plan_body["strategy_cohort"] = cohort_ref
@@ -353,7 +361,7 @@ def _closures(
                 plan_id=f"personal:{spec.strategy_id}:{spec_hash[7:19]}",
                 plan_digest=_digest(plan_body),
                 spec=spec,
-                universe_dependencies=(_UNIVERSE,),
+                universe_dependencies=(universe_dependency,),
                 evaluation_dependency=_EVALUATION,
                 risk_dependency=_RISK,
                 cost_dependency=_COST,
@@ -366,7 +374,7 @@ def _closures(
 
 
 def _periods(
-    universe: ResolvedUniverseMembership,
+    universe: PersonalResolvedUniverseMembership,
     *,
     end: date,
     policy: PersonalResearchPolicy,
@@ -416,7 +424,7 @@ def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
 
 def _observed_market_bar_coverage(
     db_path: Path,
-    universe: ResolvedUniverseMembership,
+    universe: PersonalResolvedUniverseMembership,
     *,
     minimum_ratio: float,
 ) -> dict[str, Any]:
@@ -705,6 +713,79 @@ def _portable_paper_document(result: PaperRunResult) -> dict[str, Any]:
     return document
 
 
+_FACTOR_ECONOMICS: dict[str, tuple[str, str, str]] = {
+    "return_ratio": (
+        "sector-relative medium-term price continuation",
+        "leadership diffuses gradually and sector-internal trends persist",
+        "crowded momentum unwinds or leadership reverses abruptly",
+    ),
+    "short_long_momentum": (
+        "acceleration of recent returns relative to the medium horizon",
+        "new information creates a persistent acceleration in leadership",
+        "prices oscillate and the short horizon repeatedly whipsaws",
+    ),
+    "realized_vol_ratio": (
+        "the defensive premium associated with contracting relative volatility",
+        "stable low-risk names retain leadership as volatility normalizes",
+        "crisis rebounds reward the highest-risk names or volatility jumps suddenly",
+    ),
+    "turnover_ratio": (
+        "price continuation confirmed by expanding trading participation",
+        "turnover broadens behind a durable price move",
+        "one-off events or mechanical flows create volume without continuation",
+    ),
+    "market_cap": (
+        "the within-sector small-company size premium",
+        "market breadth is healthy and smaller firms can re-rate without a liquidity shock",
+        "returns concentrate in mega-caps or illiquidity and trading costs dominate",
+    ),
+    "book_to_price": (
+        "sector-relative value re-rating from a low price-to-book valuation",
+        "valuation dispersion mean-reverts and balance-sheet assets remain informative",
+        "cheap firms are value traps or intangible-heavy sectors make book value misleading",
+    ),
+    "earnings_to_price": (
+        "sector-relative earnings-yield re-rating",
+        "reported earnings are sustainable and valuation dispersion narrows",
+        "cyclical peak earnings or accounting transients make the yield look artificially cheap",
+    ),
+    "roe": (
+        "persistent profitability and capital-allocation quality",
+        "high returns on equity persist without excessive leverage",
+        "ROE is leverage-driven or profitability mean-reverts sharply",
+    ),
+    "asset_turnover": (
+        "operating efficiency relative to sector peers",
+        "efficient asset use translates into durable margins and cash generation",
+        "asset-light accounting differences or a capex transition break comparability",
+    ),
+    "sales_growth": (
+        "persistent sector-relative revenue growth",
+        "revenue growth carries through to future earnings rather than being fully priced",
+        "growth mean-reverts, is acquisition-driven, or valuation compression dominates",
+    ),
+    "net_margin": (
+        "durable operating profitability",
+        "pricing power and cost discipline persist",
+        "margins are at a cyclical peak or competition forces normalization",
+    ),
+    "equity_ratio": (
+        "balance-sheet resilience and lower financial distress risk",
+        "funding conditions tighten or resilient firms compound steadily",
+        "leverage is rewarded in a rapid risk-on rebound",
+    ),
+    "assets_growth": (
+        "the conservative-investment premium from avoiding aggressive asset expansion",
+        "disciplined investment outperforms empire building",
+        "a productive capex cycle rewards rapid asset growth",
+    ),
+}
+
+
+def _joined_unique(values: Sequence[str]) -> str:
+    return "; ".join(dict.fromkeys(value for value in values if value))
+
+
 def _strategy_context(spec: StrategySpec) -> dict[str, Any]:
     """Portable mechanics plus the declared return thesis for comparison."""
 
@@ -715,6 +796,9 @@ def _strategy_context(spec: StrategySpec) -> dict[str, Any]:
         if spec.rebalance == "daily"
         else f"every {spec.hold_days} sessions"
     )
+    return_sources: list[str] = []
+    works_when: list[str] = []
+    fails_when: list[str] = []
     if rule_type == "factor_rank":
         leg_labels: list[str] = []
         for leg in rule.get("legs", []):
@@ -724,6 +808,11 @@ def _strategy_context(spec: StrategySpec) -> dict[str, Any]:
             weight = float(leg.get("weight", 0.0))
             direction = str(leg.get("direction") or "")
             leg_labels.append(f"{label} {weight:.0%} {direction}")
+            economics = _FACTOR_ECONOMICS.get(label)
+            if economics is not None:
+                return_sources.append(economics[0])
+                works_when.append(economics[1])
+                fails_when.append(economics[2])
         exposure = (
             f"long top {float(rule['long_frac']):.0%} / "
             f"short bottom {float(rule['short_frac']):.0%}"
@@ -737,8 +826,14 @@ def _strategy_context(spec: StrategySpec) -> dict[str, Any]:
     else:
         exposure = "long/short" if rule.get("allow_short") else "long-only"
         summary = f"{rebalance}; {rule_type}; {exposure}"
+        return_sources.append(spec.rationale)
+        works_when.append("the declared signal remains predictive after execution costs")
+        fails_when.append("the signal decays, reverses, or is overwhelmed by trading costs")
     return {
         "thesis": spec.rationale,
+        "return_source": _joined_unique(return_sources) or spec.rationale,
+        "works_when": _joined_unique(works_when),
+        "fails_when": _joined_unique(fails_when),
         "mechanics_summary": summary,
         "mechanics": {
             "rule": rule,
@@ -748,10 +843,27 @@ def _strategy_context(spec: StrategySpec) -> dict[str, Any]:
     }
 
 
+def _candidate_evidence_assessment(candidate: Mapping[str, Any]) -> str:
+    decision = str(candidate.get("decision") or "UNKNOWN")
+    reasons = [str(value) for value in candidate.get("reasons", [])]
+    validation = candidate.get("validation")
+    if not isinstance(validation, Mapping):
+        detail = ", ".join(reasons) or "evaluation evidence unavailable"
+        return f"NOT EVALUATED: {detail}. No promotion or trading authority."
+    if decision == "HOLD":
+        return (
+            "HOLD: validation and fixed cost-stress gates passed; the recent "
+            "holdout is descriptive only. Human review remains required and this "
+            "does not authorize promotion or trading."
+        )
+    failed = ", ".join(reasons) or "one or more fixed gates failed"
+    return f"REJECT: {failed}. The observed evidence does not support promotion."
+
+
 def _universe_corporate_action_check(
     db_path: Path,
     *,
-    universe: ResolvedUniverseMembership,
+    universe: PersonalResolvedUniverseMembership,
     lookback_days: int,
 ) -> dict[str, Any]:
     """Classify handled split boundaries and advisory adjusted-price moves.
@@ -1055,14 +1167,14 @@ def _run_one(
     *,
     db_path: Path,
     snapshot_id: str,
-    universe: ResolvedUniverseMembership,
+    universe: PersonalResolvedUniverseMembership,
     period: tuple[str, str],
     cost_bps: float,
     lookback_days: int,
     output_root: Path,
     max_drawdown: float,
 ) -> tuple[dict[str, Any], list[float], list[str]]:
-    period_universe = ResolvedUniverseMembership(
+    period_universe = PersonalResolvedUniverseMembership(
         period_start=period[0],
         period_end=period[1],
         decision_memberships=tuple(
@@ -1070,6 +1182,9 @@ def _run_one(
             for day, codes in universe.decision_memberships
             if period[0] <= day <= period[1]
         ),
+        rule_id=universe.rule_id,
+        rule_version=universe.rule_version,
+        rule_digest=universe.rule_digest,
     )
     config = PaperRunConfig(
         start=period[0],
@@ -1104,7 +1219,7 @@ def _candidate_evaluation(
     closure: PlanDependencyClosure,
     *,
     snapshot: PersonalSnapshot,
-    universe: ResolvedUniverseMembership,
+    universe: PersonalResolvedUniverseMembership,
     fold_periods: tuple[tuple[str, str], ...],
     holdout_period: tuple[str, str],
     output_root: Path,
@@ -1265,6 +1380,16 @@ def _comparison_document(candidates: Sequence[dict[str, Any]]) -> dict[str, Any]
                 "strategy_id": candidate["strategy_id"],
                 "decision": candidate["decision"],
                 "thesis": candidate.get("strategy", {}).get("thesis", ""),
+                "return_source": candidate.get("strategy", {}).get(
+                    "return_source", ""
+                ),
+                "works_when": candidate.get("strategy", {}).get(
+                    "works_when", ""
+                ),
+                "fails_when": candidate.get("strategy", {}).get(
+                    "fails_when", ""
+                ),
+                "evidence_assessment": _candidate_evidence_assessment(candidate),
                 "mechanics_summary": candidate.get("strategy", {}).get(
                     "mechanics_summary", ""
                 ),
@@ -1284,7 +1409,7 @@ def _comparison_document(candidates: Sequence[dict[str, Any]]) -> dict[str, Any]
             }
         )
     return {
-        "schema_version": "personal-performance-comparison/v1",
+        "schema_version": "personal-performance-comparison/v2",
         "metric_basis": {
             "return_frequency": "daily_close_to_close_including_first_session",
             "annualization_sessions": 252,
@@ -1326,6 +1451,7 @@ def _markdown(report: dict[str, Any]) -> str:
         "",
         f"- Report: `{report['report_id']}`",
         f"- Snapshot: `{report['snapshot']['snapshot_id']}`",
+        f"- Universe: `{report['universe']['rule_id']}`",
         f"- Data period: {report['period']['data_start']} to {report['period']['end']}",
         f"- Evaluation start: {report['period']['evaluation_start'] or 'none'}",
         f"- Warmup sessions: {report['period']['warmup_sessions']}",
@@ -1364,15 +1490,16 @@ def _markdown(report: dict[str, Any]) -> str:
             ),
             "",
             (
-                "| Strategy | Thesis / return source | Mechanics | Decision | "
+                "| Strategy | Thesis | Return source | Works when | Fails when | "
+                "Evidence | Mechanics | Decision | "
                 "Net return | CAGR | Volatility | Sharpe | Sortino | Max DD | "
                 "Calmar | Positive days | Positive months | Daily CVaR 95 | "
                 "Turnover / year | Cost drag | Stress Sharpe delta | "
                 "Holdout Sharpe delta |"
             ),
             (
-                "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
-                "---:|---:|---:|---:|---:|---:|"
+                "|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|"
+                "---:|---:|---:|---:|---:|---:|---:|---:|---:|"
             ),
         ]
     )
@@ -1387,6 +1514,10 @@ def _markdown(report: dict[str, Any]) -> str:
                 (
                     f"`{row['strategy_id']}`",
                     _md_text(row.get("thesis")),
+                    _md_text(row.get("return_source")),
+                    _md_text(row.get("works_when")),
+                    _md_text(row.get("fails_when")),
+                    _md_text(row.get("evidence_assessment")),
                     _md_text(row.get("mechanics_summary")),
                     str(row["decision"]),
                     _md_ratio(validation.get("total_return_net")),
@@ -1443,6 +1574,10 @@ class PersonalResearchService:
         )
         if start_day >= end_day:
             raise PersonalResearchInputError("period_start must precede period_end")
+        try:
+            universe_selector = personal_universe_selector(request.universe_id)
+        except PersonalUniverseError as exc:
+            raise PersonalResearchInputError(str(exc)) from exc
         specs, cohort = _validated_specs(
             request.specs,
             self.policy,
@@ -1470,6 +1605,7 @@ class PersonalResearchService:
             start=start_day.isoformat(),
             end=end_day.isoformat(),
             policy=self.policy,
+            universe_selector=universe_selector,
             cohort_ref=cohort_ref,
         )
         output_root = Path(request.output_root).expanduser().resolve()
@@ -1500,18 +1636,22 @@ class PersonalResearchService:
             snapshot_manifest,
             required_datasets=required,
         )
-        universe, universe_breadth = resolve_tse_prime_with_fins_evidence(
-            snapshot.db_path,
-            period_start=start_day.isoformat(),
-            period_end=end_day.isoformat(),
-        )
+        try:
+            universe, universe_breadth = resolve_personal_universe_with_evidence(
+                snapshot.db_path,
+                period_start=start_day.isoformat(),
+                period_end=end_day.isoformat(),
+                universe_id=universe_selector.selector_id,
+            )
+        except PersonalUniverseError as exc:
+            raise PersonalResearchInputError(str(exc)) from exc
         universe_breadth = {
             **universe_breadth,
-            "minimum_ratio": self.policy.min_prime_fins_breadth,
+            "minimum_ratio": self.policy.min_universe_fins_breadth,
             "status": (
                 "PASS"
                 if universe_breadth["minimum_daily_ratio"]
-                >= self.policy.min_prime_fins_breadth
+                >= self.policy.min_universe_fins_breadth
                 else "FAIL"
             ),
         }
@@ -1559,7 +1699,7 @@ class PersonalResearchService:
                     "source_sync_evidence_unusable"
                     if source_sync["status"] != "PASS"
                     else (
-                        "prime_fins_breadth_below_threshold"
+                        "universe_fins_breadth_below_threshold"
                         if universe_breadth["status"] != "PASS"
                         else (
                             "insufficient_post_warmup_sessions"
@@ -1656,6 +1796,12 @@ class PersonalResearchService:
                 "warmup_sessions": warmup_sessions,
             },
             "policy": self.policy.to_dict(),
+            "universe": {
+                **universe_selector.to_dict(),
+                "resolved_membership_digest": (
+                    universe.resolved_membership_digest
+                ),
+            },
             "snapshot": {
                 "snapshot_id": snapshot.snapshot_id,
                 "logical_data_snapshot_id": snapshot.logical_data_snapshot_id,
@@ -1724,10 +1870,13 @@ class PersonalResearchService:
             cohort_digest=(
                 None if cohort_ref is None else cohort_ref["cohort_digest"]
             ),
+            universe_id=universe_selector.selector_id,
+            universe_rule_digest=universe_selector.rule_digest,
         )
 
 
 __all__ = [
+    "DEFAULT_PERSONAL_UNIVERSE_ID",
     "PERSONAL_DECISION_POLICY",
     "PERSONAL_RESEARCH_REPORT_VERSION",
     "PersonalResearchInputError",
@@ -1736,5 +1885,6 @@ __all__ = [
     "PersonalResearchRun",
     "PersonalResearchService",
     "PERSONAL_EXECUTABLE_COHORT_IDS",
+    "PERSONAL_UNIVERSE_IDS",
     "default_personal_specs",
 ]

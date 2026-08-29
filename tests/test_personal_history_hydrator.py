@@ -15,6 +15,9 @@ import pytest
 
 from ingestion.personal_history import (
     MASTER_AVAILABILITY_POLICY,
+    PERSONAL_HISTORY_SCOPE_DIGEST,
+    PERSONAL_HISTORY_SCOPE_ID,
+    PERSONAL_HISTORY_SCOPE_VERSION,
     PersonalHistoryError,
     PersonalHistoryHydrator,
     _compact_bars,
@@ -82,18 +85,20 @@ class _HistoryClient:
 
     @staticmethod
     def _master(day: str) -> list[dict]:
-        prime = ["1001", "1002"] if day < "2025-01-07" else ["1001", "1002", "1003"]
+        topix = ["1001", "1002"] if day < "2025-01-07" else ["1001", "1002", "1003"]
         return [
             {
                 "Code": code,
                 "Date": day,
-                "Mkt": "0111",
+                "Mkt": {"1001": "0111", "1002": "0112", "1003": "0113"}[code],
                 "S17": "1",
                 "S33": "0050" if code != "1003" else "1050",
                 "ScaleCat": "TOPIX Core30" if code == "1001" else "TOPIX Small 1",
             }
-            for code in prime
-        ] + [{"Code": "9001", "Date": day, "Mkt": "0112"}]
+            for code in topix
+        ] + [
+            {"Code": "9001", "Date": day, "Mkt": "0112", "ScaleCat": "-"}
+        ]
 
     @staticmethod
     def _fins(code: str) -> list[dict]:
@@ -199,6 +204,7 @@ def test_compact_master_keeps_dated_factor_classifications() -> None:
         "Date": "2025-01-06",
         "MarketCode": "0111",
         "ScaleCategory": "TOPIX Core30",
+        "SourceScaleCategory": "TOPIX Core30",
         "Sector17Code": "1",
         "Sector33Code": "0050",
     }
@@ -209,6 +215,39 @@ def test_compact_master_keeps_dated_factor_classifications() -> None:
         ingested_at="2025-01-06T08:01:00+09:00",
     )
     assert changed_digest != first_digest
+
+
+@pytest.mark.parametrize(
+    ("snapshot_day", "market_code"),
+    (("2021-04-01", "0101"), ("2022-04-04", "0112")),
+)
+def test_compact_master_keeps_topix_members_outside_prime_market_code(
+    snapshot_day: str, market_code: str
+) -> None:
+    rows, _digest = _compact_master(
+        [
+            {
+                "Code": "1002",
+                "Date": snapshot_day,
+                "Mkt": market_code,
+                "ScaleCat": "TOPIX Small 1",
+            },
+            {
+                "Code": "9001",
+                "Date": snapshot_day,
+                "Mkt": "0112",
+                "ScaleCat": "-",
+            },
+        ],
+        snapshot_day=snapshot_day,
+        ingested_at=f"{snapshot_day}T08:01:00+09:00",
+    )
+
+    assert len(rows) == 1
+    payload = json.loads(rows[0]["payload"])
+    assert payload["Code"] == "1002"
+    assert payload["MarketCode"] == market_code
+    assert payload["ScaleCategory"] == "TOPIX Small 1"
 
 
 def _typed_bars(store: SqliteStore) -> list[dict]:
@@ -233,6 +272,9 @@ def test_hydrator_pit_timing_compression_compaction_and_draft_boundary(tmp_path)
     assert manifest["status"] == "COMPLETE_DRAFT"
     assert manifest["master_availability_policy"] == MASTER_AVAILABILITY_POLICY
     assert manifest["master_revision_pit"] == 0
+    assert manifest["history_scope_id"] == PERSONAL_HISTORY_SCOPE_ID
+    assert manifest["history_scope_version"] == PERSONAL_HISTORY_SCOPE_VERSION
+    assert manifest["history_scope_digest"] == PERSONAL_HISTORY_SCOPE_DIGEST
 
     calendar = _rows(store, "markets_calendar")
     assert calendar
@@ -408,7 +450,7 @@ def test_typed_bar_materialization_is_atomic_and_idempotent(tmp_path):
             }
         ],
         trading_day="2025-01-06",
-        prime_union=frozenset({"1001"}),
+        scope_union=frozenset({"1001"}),
         ingested_at="2025-01-06T16:00:00+09:00",
     )
     store.upsert("jquants_records", rows)
@@ -476,7 +518,7 @@ def test_typed_bar_materialization_rejects_partial_generic_mixture(tmp_path):
             {"Code": "1002", "Date": "2025-01-06", "Close": 102},
         ],
         trading_day="2025-01-06",
-        prime_union=frozenset({"1001", "1002"}),
+        scope_union=frozenset({"1001", "1002"}),
         ingested_at="2025-01-06T16:00:00+09:00",
     )
     store.upsert("jquants_records", rows)
@@ -532,7 +574,7 @@ def test_null_close_is_dropped_and_breadth_guard_decides() -> None:
     normalized = _compact_bars(
         rows,
         trading_day="2025-01-06",
-        prime_union=codes,
+        scope_union=codes,
         ingested_at="2025-02-01T12:00:00+09:00",
     )
     assert len(normalized) == 199

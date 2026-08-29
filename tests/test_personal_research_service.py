@@ -23,7 +23,7 @@ from research.personal_service import (
     _validated_specs,
     default_personal_specs,
 )
-from research.universe_contract import ResolvedUniverseMembership
+from research.personal_universe import PersonalResolvedUniverseMembership
 from storage.sqlite_store import SqliteStore
 from strategies.spec import iter_feature_refs
 
@@ -88,7 +88,10 @@ def personal_db(tmp_path: Path) -> tuple[Path, str, str]:
                 "ingested_at": "2023-12-29T09:00:00+09:00",
                 "company_name": f"Fixture {code}",
                 "sector_17_code": "1",
-                "market_code": "0111",
+                "market_code": "0112" if code == "1304" else "0111",
+                "scale_category": (
+                    "TOPIX Core30" if code == "1301" else "TOPIX Large70"
+                ),
             }
             for code in codes
         ],
@@ -110,7 +113,10 @@ def personal_db(tmp_path: Path) -> tuple[Path, str, str]:
             "Code": code,
             "Date": "2023-12-29",
             "CompanyName": f"Fixture {code}",
-            "MarketCode": "0111",
+            "MarketCode": "0112" if code == "1304" else "0111",
+            "ScaleCategory": (
+                "TOPIX Core30" if code == "1301" else "TOPIX Large70"
+            ),
         }
         generic.append(
             _generic(
@@ -274,6 +280,9 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
     candidate = report["candidates"][0]
     assert candidate["strategy"]["thesis"]
     assert candidate["strategy"]["mechanics_summary"]
+    assert candidate["strategy"]["return_source"]
+    assert candidate["strategy"]["works_when"]
+    assert candidate["strategy"]["fails_when"]
     assert candidate["validation"]["performance"]["schema_version"] == (
         "personal-fold-stability/v1"
     )
@@ -281,14 +290,28 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
         "schema_version"
     ] == "personal-performance/v1"
     assert report["comparison"]["schema_version"] == (
-        "personal-performance-comparison/v1"
+        "personal-performance-comparison/v2"
     )
+    comparison_row = report["comparison"]["rows"][0]
+    assert comparison_row["return_source"]
+    assert comparison_row["works_when"]
+    assert comparison_row["fails_when"]
+    assert comparison_row["evidence_assessment"]
     assert report["comparison"]["rows"][0]["strategy_id"] == (
         candidate["strategy_id"]
     )
+    assert first.universe_id == "topix_all"
+    assert report["universe"]["rule_id"] == "topix_all_with_fins"
+    assert report["universe"]["controlled_live_eligibility"] == "FORBIDDEN"
+    assert report["dependency_closures"][0]["universe_dependencies"][0][
+        "id"
+    ] == "topix_all_with_fins"
     markdown = first.report_markdown_path.read_text(encoding="utf-8")
     assert "## Comparable performance" in markdown
-    assert "Thesis / return source" in markdown
+    assert "Return source" in markdown
+    assert "Works when" in markdown
+    assert "Fails when" in markdown
+    assert "Evidence" in markdown
     assert report["data_quality"]["market_bar_coverage"]["status"] == "PASS"
     assert report["price_basis"] == {
         "id": "PERSONAL_RETROSPECTIVE_ADJUSTED",
@@ -416,10 +439,15 @@ def test_cohort_history_floor_is_enforced_before_materialization(
 
 def test_cohort_warmup_sessions_are_excluded_from_analysis_periods() -> None:
     days = _dates(date(2024, 1, 1), date(2024, 4, 30))
-    universe = ResolvedUniverseMembership(
+    universe = PersonalResolvedUniverseMembership(
         period_start=days[0],
         period_end=days[-1],
         decision_memberships=tuple((day, ("1301",)) for day in days),
+        rule_id="topix_all_with_fins",
+        rule_version="personal-topix-scale-with-fins/v1",
+        rule_digest=(
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        ),
     )
     policy = _policy(
         validation_folds=1,
@@ -528,7 +556,7 @@ def test_partial_financials_cannot_silently_shrink_the_universe(
     assert breadth["status"] == "FAIL"
     assert breadth["minimum_daily_ratio"] == 0.75
     assert report["candidates"][0]["reasons"] == [
-        "prime_fins_breadth_below_threshold"
+        "universe_fins_breadth_below_threshold"
     ]
 
 

@@ -25,6 +25,12 @@ from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import quote
 
 from data_contracts.identity import canonical_json
+from data_contracts.personal_universe import (
+    PERSONAL_HISTORY_SCOPE_DIGEST,
+    PERSONAL_HISTORY_SCOPE_ID,
+    PERSONAL_HISTORY_SCOPE_VERSION,
+    canonical_topix_scale_category,
+)
 
 from .common.timeutil import JST, now_iso
 from .jquants import normalize as JN
@@ -37,7 +43,7 @@ PERSONAL_HISTORY_DATASETS: tuple[str, ...] = (
     "fins_summary",
     "equities_bars_daily",
 )
-PERSONAL_HISTORY_FORMAT = "personal-draft-history/v2"
+PERSONAL_HISTORY_FORMAT = "personal-draft-history/v3"
 PERSONAL_RESEARCH_STATE = "PERSONAL_DRAFT"
 PERSONAL_COMPLETENESS_CLAIM = "NONE"
 PERSONAL_CONTROLLED_ELIGIBILITY = "FORBIDDEN"
@@ -49,14 +55,13 @@ FINS_AVAILABILITY_POLICY = (
 BARS_AVAILABILITY_POLICY = "canonical_session_close/v1"
 DEFAULT_LOOKBACK_SESSIONS = 10
 DEFAULT_CALENDAR_WINDOW_DAYS = 180
-DEFAULT_PRIME_CODE_ESTIMATE = 1_800
+DEFAULT_TOPIX_CODE_ESTIMATE = 2_200
 DEFAULT_MIN_OBSERVED_BAR_RATIO = 0.995
 DEFAULT_MAX_DATABASE_BYTES = 5 * 1024**3
 DEFAULT_MINIMUM_FREE_BYTES = 8 * 1024**3
 DEFAULT_WAL_CHECKPOINT_SEGMENTS = 25
 _TERMINAL_STATES = frozenset({"OBSERVED", "OBSERVED_EMPTY"})
 _RETRYABLE_STATES = frozenset({"RUNNING", "FAILED"})
-_PRIME_MARKET_CODE = "0111"
 
 
 class PersonalHistoryError(RuntimeError):
@@ -80,6 +85,9 @@ class PersonalHistoryPlan:
     controlled_live_eligibility: str = PERSONAL_CONTROLLED_ELIGIBILITY
     master_availability_policy: str = MASTER_AVAILABILITY_POLICY
     master_revision_pit: bool = False
+    history_scope_id: str = PERSONAL_HISTORY_SCOPE_ID
+    history_scope_version: str = PERSONAL_HISTORY_SCOPE_VERSION
+    history_scope_digest: str = PERSONAL_HISTORY_SCOPE_DIGEST
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -100,6 +108,9 @@ class PersonalHistorySummary:
     controlled_live_eligibility: str = PERSONAL_CONTROLLED_ELIGIBILITY
     master_availability_policy: str = MASTER_AVAILABILITY_POLICY
     master_revision_pit: bool = False
+    history_scope_id: str = PERSONAL_HISTORY_SCOPE_ID
+    history_scope_version: str = PERSONAL_HISTORY_SCOPE_VERSION
+    history_scope_digest: str = PERSONAL_HISTORY_SCOPE_DIGEST
     status: str = "COMPLETE_DRAFT"
 
     def to_dict(self) -> dict[str, Any]:
@@ -190,13 +201,13 @@ def build_personal_history_plan(
     # calendar windows + daily master + daily fins + daily bars. Pagination is
     # intentionally not guessed, so this is labelled a lower bound.
     requests = calendar_segments + estimated_sessions * 2 + all_days
-    bar_rows = estimated_sessions * DEFAULT_PRIME_CODE_ESTIMATE
+    bar_rows = estimated_sessions * DEFAULT_TOPIX_CODE_ESTIMATE
     # Compressed master snapshots and fins are small relative to bars.  420
     # bytes/row includes SQLite indexes and is intentionally conservative.
-    estimated_rows = bar_rows + DEFAULT_PRIME_CODE_ESTIMATE * 24 + all_days * 100
+    estimated_rows = bar_rows + DEFAULT_TOPIX_CODE_ESTIMATE * 24 + all_days * 100
     # Compact JSON still pays for two indexes, SQLite pages, revisions headroom,
     # and a later immutable research snapshot.  1.6 KiB/row deliberately puts
-    # a five-year Prime window in the realistic ~3-4.5 GiB planning range.
+    # a five-year TOPIX window in a deliberately conservative planning range.
     estimated_bytes = estimated_rows * 1_600
     return PersonalHistoryPlan(
         period_start=start.isoformat(),
@@ -348,9 +359,13 @@ def _compact_master(
         market = str(
             _pick(source, "MarketCode", "MktCode", "Mkt") or ""
         ).strip()
+        raw_scale = str(
+            _pick(source, "ScaleCategory", "ScaleCat") or ""
+        ).strip()
+        scale_category = canonical_topix_scale_category(raw_scale)
         if not code:
             raise PersonalHistoryError("equities_master row has no Code")
-        if market != _PRIME_MARKET_CODE:
+        if scale_category is None:
             continue
         if code in members:
             raise PersonalHistoryError(
@@ -359,7 +374,7 @@ def _compact_master(
         members[code] = {
             "Code": code,
             "Date": snapshot_day,
-            "MarketCode": _PRIME_MARKET_CODE,
+            "MarketCode": market,
             # Keep the small, PIT-observed classification surface needed for
             # within-industry and size-bucket relative factors.  These values
             # must travel with each dated master snapshot; backfilling a
@@ -371,13 +386,12 @@ def _compact_master(
             "Sector33Code": str(
                 _pick(source, "Sector33Code", "Sec33Code", "S33") or ""
             ).strip(),
-            "ScaleCategory": str(
-                _pick(source, "ScaleCategory", "ScaleCat") or ""
-            ).strip(),
+            "ScaleCategory": scale_category,
+            "SourceScaleCategory": raw_scale,
         }
     if not members:
         raise PersonalHistoryError(
-            f"equities_master snapshot {snapshot_day} has no Prime members"
+            f"equities_master snapshot {snapshot_day} has no TOPIX scale members"
         )
     compact = [members[code] for code in sorted(members)]
     # A classification change is also a new PIT master state.  Hashing only
@@ -478,7 +492,7 @@ def _compact_bars(
     rows: Sequence[Mapping[str, Any]],
     *,
     trading_day: str,
-    prime_union: frozenset[str],
+    scope_union: frozenset[str],
     ingested_at: str,
     minimum_ratio: float = DEFAULT_MIN_OBSERVED_BAR_RATIO,
 ) -> list[dict]:
@@ -492,7 +506,7 @@ def _compact_bars(
                 f"for query {trading_day}"
             )
         code = str(_pick(source, "Code") or "").strip()
-        if not code or code not in prime_union:
+        if not code or code not in scope_union:
             continue
         if code in seen:
             raise PersonalHistoryError(
@@ -512,13 +526,13 @@ def _compact_bars(
         compact.append(item)
     if not compact:
         raise PersonalHistoryError(
-            f"equities_bars_daily {trading_day} has no rows in observed Prime union"
+            f"equities_bars_daily {trading_day} has no rows in observed TOPIX union"
         )
-    ratio = len(compact) / len(prime_union)
+    ratio = len(compact) / len(scope_union)
     if ratio < minimum_ratio:
         raise PersonalHistoryError(
             f"equities_bars_daily {trading_day} observed ratio {ratio:.6f} "
-            f"is below {minimum_ratio:.6f} ({len(compact)}/{len(prime_union)})"
+            f"is below {minimum_ratio:.6f} ({len(compact)}/{len(scope_union)})"
         )
     normalized = JN.normalize_generic(
         compact,
@@ -628,6 +642,9 @@ class PersonalHistoryHydrator:
                 format TEXT NOT NULL,
                 plan_digest TEXT NOT NULL,
                 plan_json TEXT NOT NULL,
+                history_scope_id TEXT NOT NULL,
+                history_scope_version TEXT NOT NULL,
+                history_scope_digest TEXT NOT NULL,
                 status TEXT NOT NULL,
                 research_state TEXT NOT NULL DEFAULT 'PERSONAL_DRAFT',
                 completeness_claim TEXT NOT NULL DEFAULT 'NONE',
@@ -641,6 +658,7 @@ class PersonalHistoryHydrator:
                 CHECK (completeness_claim = 'NONE'),
                 CHECK (controlled_live_eligibility = 'FORBIDDEN'),
                 CHECK (master_revision_pit = 0),
+                CHECK (history_scope_id = 'topix_all'),
                 CHECK (status IN ('BUILDING','VALIDATING','COMPLETE_DRAFT'))
             )
             """
@@ -708,9 +726,10 @@ class PersonalHistoryHydrator:
             """
             INSERT INTO personal_history_manifest (
                 singleton,format,plan_digest,plan_json,status,
+                history_scope_id,history_scope_version,history_scope_digest,
                 master_availability_policy,fins_availability_policy,
                 updated_at,last_error
-            ) VALUES (1,?,?,?,'BUILDING',?,?,?,NULL)
+            ) VALUES (1,?,?,?,'BUILDING',?,?,?,?,?,?,NULL)
             ON CONFLICT(singleton) DO UPDATE SET
                 status='BUILDING',updated_at=excluded.updated_at,last_error=NULL
             """,
@@ -718,6 +737,9 @@ class PersonalHistoryHydrator:
                 PERSONAL_HISTORY_FORMAT,
                 plan_digest,
                 plan_json,
+                PERSONAL_HISTORY_SCOPE_ID,
+                PERSONAL_HISTORY_SCOPE_VERSION,
+                PERSONAL_HISTORY_SCOPE_DIGEST,
                 MASTER_AVAILABILITY_POLICY,
                 FINS_AVAILABILITY_POLICY,
                 now_iso(),
@@ -1051,7 +1073,7 @@ class PersonalHistoryHydrator:
             )
             previous_digest = outcome.membership_digest
 
-    def _prime_union(self) -> frozenset[str]:
+    def _topix_union(self) -> frozenset[str]:
         rows = self._connection.execute(
             "SELECT payload FROM jquants_records WHERE source='jquants' "
             "AND dataset='equities_master'"
@@ -1065,17 +1087,17 @@ class PersonalHistoryHydrator:
                     "stored equities_master payload is invalid"
                 ) from exc
             code = str(_pick(payload, "Code") or "").strip()
-            market = str(
-                _pick(payload, "MarketCode", "MktCode", "Mkt") or ""
-            ).strip()
-            if code and market == _PRIME_MARKET_CODE:
+            category = canonical_topix_scale_category(
+                _pick(payload, "ScaleCategory", "ScaleCat")
+            )
+            if code and category is not None:
                 codes.add(code)
         if not codes:
-            raise PersonalHistoryError("compressed master has no Prime code union")
+            raise PersonalHistoryError("compressed master has no TOPIX code union")
         return frozenset(codes)
 
-    def _hydrate_fins(self, prime_union: frozenset[str]) -> None:
-        for code in sorted(prime_union):
+    def _hydrate_fins(self, scope_union: frozenset[str]) -> None:
+        for code in sorted(scope_union):
             self._run_segment(
                 dataset="fins_summary",
                 segment_id=f"fins:{code}",
@@ -1108,10 +1130,10 @@ class PersonalHistoryHydrator:
                 ) from exc
             day = str(row["event_time"])[:10]
             code = str(_pick(payload, "Code") or "").strip()
-            market = str(
-                _pick(payload, "MarketCode", "MktCode", "Mkt") or ""
-            ).strip()
-            if code and market == _PRIME_MARKET_CODE:
+            category = canonical_topix_scale_category(
+                _pick(payload, "ScaleCategory", "ScaleCat")
+            )
+            if code and category is not None:
                 by_day.setdefault(day, set()).add(code)
         if not by_day:
             raise PersonalHistoryError("compressed master membership is empty")
@@ -1153,7 +1175,7 @@ class PersonalHistoryHydrator:
             membership = codes
         if membership is None:
             raise PersonalHistoryError(
-                f"no compressed Prime master snapshot is visible for {day}"
+                f"no compressed TOPIX master snapshot is visible for {day}"
             )
         return membership
 
@@ -1165,7 +1187,7 @@ class PersonalHistoryHydrator:
         for day in trading:
             if day < bar_start or day > self.plan.period_end:
                 continue
-            prime = self._membership_for_day(snapshots, day)
+            topix = self._membership_for_day(snapshots, day)
             close = (
                 f"{day}T15:00:00+09:00"
                 if day < "2024-11-05"
@@ -1173,12 +1195,12 @@ class PersonalHistoryHydrator:
             )
             expected = frozenset(
                 code
-                for code in prime
+                for code in topix
                 if first_fins.get(code, "9999") <= close
             )
             if not expected:
                 raise PersonalHistoryError(
-                    f"Prime intersect PIT-visible fins is empty for {day}"
+                    f"TOPIX intersect PIT-visible fins is empty for {day}"
                 )
             self._run_segment(
                 dataset="equities_bars_daily",
@@ -1190,7 +1212,7 @@ class PersonalHistoryHydrator:
                 transform=lambda rows, stamp, day=day, expected=expected: _compact_bars(
                     rows,
                     trading_day=day,
-                    prime_union=expected,
+                    scope_union=expected,
                     ingested_at=stamp,
                 ),
                 membership_digest=_canonical_digest(sorted(expected)),
@@ -1555,8 +1577,8 @@ class PersonalHistoryHydrator:
             self._hydrate_master(master_days)
             self._checkpoint_wal()
             self._guard_capacity(phase="after master stage")
-            prime_union = self._prime_union()
-            self._hydrate_fins(prime_union)
+            scope_union = self._topix_union()
+            self._hydrate_fins(scope_union)
             self._checkpoint_wal()
             self._guard_capacity(phase="after fins stage")
             self._hydrate_bars(bar_start=bar_start, trading=trading)
@@ -1597,6 +1619,9 @@ __all__ = [
     "PERSONAL_COMPLETENESS_CLAIM",
     "PERSONAL_HISTORY_DATASETS",
     "PERSONAL_HISTORY_FORMAT",
+    "PERSONAL_HISTORY_SCOPE_DIGEST",
+    "PERSONAL_HISTORY_SCOPE_ID",
+    "PERSONAL_HISTORY_SCOPE_VERSION",
     "PERSONAL_RESEARCH_STATE",
     "PersonalHistoryError",
     "PersonalHistoryHydrator",

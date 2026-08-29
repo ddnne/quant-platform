@@ -13,7 +13,9 @@ from execution.personal_paper_service import PersonalPaperExecutionRejected
 from paper_runtime.personal_snapshot import PersonalSnapshotError
 from research.dependency_closure import PlanDependencyClosureError
 from research.personal_service import (
+    DEFAULT_PERSONAL_UNIVERSE_ID,
     PERSONAL_EXECUTABLE_COHORT_IDS,
+    PERSONAL_UNIVERSE_IDS,
     PersonalResearchInputError,
     PersonalResearchRequest,
     PersonalResearchService,
@@ -33,6 +35,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--db", required=True, type=Path)
     parser.add_argument("--end", required=True, help="inclusive ISO date")
     parser.add_argument("--start", help="inclusive ISO date; defaults to five years")
+    parser.add_argument(
+        "--universe",
+        choices=PERSONAL_UNIVERSE_IDS,
+        default=DEFAULT_PERSONAL_UNIVERSE_ID,
+        help=(
+            "closed PIT TOPIX selector (default: topix_all, each intersected "
+            "with PIT-visible financials)"
+        ),
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -84,6 +95,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_root=args.output,
                 specs=specs,
                 cohort_id=args.cohort,
+                universe_id=args.universe,
             )
         )
     except (
@@ -118,6 +130,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "unexpected_errors": result.unexpected_errors,
                 "cohort_id": result.cohort_id,
                 "cohort_digest": result.cohort_digest,
+                "universe_id": result.universe_id,
+                "universe_rule_digest": result.universe_rule_digest,
                 "live_orders_enabled": False,
                 "automatic_promotion": False,
                 "model_calls": 0,
