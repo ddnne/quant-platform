@@ -4,6 +4,7 @@ import { dispatchMassEvalFetch } from "./http_routes";
 import {
   PERSONAL_VOL_COHORT_ID,
   PERSONAL_VOL_EXCLUDED_LOOKAHEAD_WINDOWS,
+  PERSONAL_VOL_INCOMPLETE_INTERVAL_SAMPLE_LIMIT,
   PERSONAL_VOL_PANELS_PREFIX,
   PERSONAL_VOL_PERIODS,
   PERSONAL_VOL_STRATEGIES,
@@ -221,6 +222,76 @@ describe("ratio-only series routing", () => {
 
     // Average(+10% long contribution, +10% short contribution), less cost.
     expect(path.points[0].net_return).toBeCloseTo(0.1 - 0.0002);
+  });
+
+  it("flattens a whole interval without cost when any intended leg is missing", () => {
+    const dates = datesFrom("2024-03-01", 4);
+    const scoped = panel("complete-leg-test", dates[0]);
+    scoped.period_start = dates[2];
+    scoped.period_end = dates[3];
+    scoped.bars = {
+      A: dates.map((date, index) => [date, 100 + index]),
+      B: [[dates[0], 100], [dates[1], 100], [dates[3], 90]],
+      C: dates.map((date, index) => [date, 100 - index]),
+    };
+
+    const path = personalVolDailyPath(
+      {
+        A: { [dates[0]]: 1, [dates[1]]: 1 },
+        B: { [dates[0]]: -1 },
+        C: { [dates[1]]: -1 },
+      },
+      scoped,
+    );
+
+    expect(path.points[0]).toMatchObject({
+      net_return: 0,
+      gross_return: 0,
+      cost_return: 0,
+      turnover_one_way: 0,
+      invalid_equity_observations: 1,
+    });
+    expect(path.points[1].net_return).not.toBe(0);
+    expect(path.active_sessions).toBe(1);
+    expect(path.incomplete_intervals).toBe(1);
+    expect(path.invalid_equity_observations).toBe(1);
+    expect(path.incomplete_interval_samples).toEqual([
+      {
+        signal_date: dates[0],
+        return_start_date: dates[1],
+        return_end_date: dates[2],
+        missing_leg_count: 1,
+      },
+    ]);
+    expect(path.incomplete_interval_samples_omitted).toBe(0);
+  });
+
+  it("bounds incomplete interval date samples while retaining exact counts", () => {
+    const count = PERSONAL_VOL_INCOMPLETE_INTERVAL_SAMPLE_LIMIT + 3;
+    const dates = datesFrom("2024-04-01", count + 2);
+    const scoped = panel("bounded-diagnostics-test", dates[0]);
+    scoped.period_start = dates[2];
+    scoped.period_end = dates.at(-1)!;
+    scoped.bars = {
+      A: dates.map((date) => [date, 100]),
+      B: [],
+    };
+    const positions = Object.fromEntries(
+      dates.slice(0, -2).map((date) => [date, 1]),
+    );
+
+    const path = personalVolDailyPath(
+      { A: positions, B: positions },
+      scoped,
+    );
+
+    expect(path.incomplete_intervals).toBe(count);
+    expect(path.invalid_equity_observations).toBe(count);
+    expect(path.incomplete_interval_samples).toHaveLength(
+      PERSONAL_VOL_INCOMPLETE_INTERVAL_SAMPLE_LIMIT,
+    );
+    expect(path.incomplete_interval_samples_omitted).toBe(3);
+    expect(path.points.every((point) => point.cost_return === 0)).toBe(true);
   });
 
 });

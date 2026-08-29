@@ -20,6 +20,7 @@ export const PERSONAL_VOL_PANELS_PREFIX =
 export const PERSONAL_VOL_ONE_WAY_COST = 0.001;
 export const PERSONAL_VOL_HOLD_SESSIONS = 10;
 export const PERSONAL_VOL_IV_AVAILABLE_FROM = "2016-07-19";
+export const PERSONAL_VOL_INCOMPLETE_INTERVAL_SAMPLE_LIMIT = 20;
 
 export const PERSONAL_VOL_UNIVERSE_PROVENANCE = {
   scope_id: "legacy-liq-large-adv100-2019-v1",
@@ -310,6 +311,15 @@ export function personalVolDailyPath(
   active_sessions: number;
   short_sessions: number;
   occupancy: number | null;
+  incomplete_intervals: number;
+  invalid_equity_observations: number;
+  incomplete_interval_samples: Array<{
+    signal_date: string;
+    return_start_date: string;
+    return_end_date: string;
+    missing_leg_count: number;
+  }>;
+  incomplete_interval_samples_omitted: number;
 } {
   const dates = unionDates(panel.bars);
   const closes = closeByCode(panel.bars);
@@ -317,6 +327,14 @@ export function personalVolDailyPath(
   let equity = 1;
   let activeSessions = 0;
   let shortSessions = 0;
+  let incompleteIntervals = 0;
+  let invalidEquityObservations = 0;
+  const incompleteIntervalSamples: Array<{
+    signal_date: string;
+    return_start_date: string;
+    return_end_date: string;
+    missing_leg_count: number;
+  }> = [];
   const amortizedRoundTripCost =
     (2 * PERSONAL_VOL_ONE_WAY_COST) / PERSONAL_VOL_HOLD_SESSIONS;
   // A signal observed at close d cannot be filled at that same close.  It is
@@ -332,20 +350,48 @@ export function personalVolDailyPath(
     if (current > panel.period_end) break;
     const contributions: number[] = [];
     let hasShort = false;
+    let intendedLegs = 0;
+    let missingLegs = 0;
     for (const [code, positions] of Object.entries(held)) {
       const position = positions[signalDate];
-      if (!position) continue;
+      if (position === undefined || position === 0) continue;
+      intendedLegs += 1;
       const before = closes[code]?.[previous];
       const after = closes[code]?.[current];
-      if (!Number.isFinite(before) || !Number.isFinite(after) || before === 0) continue;
-      contributions.push(position * (after / before - 1));
+      const legReturn =
+        Number.isFinite(position) &&
+        Number.isFinite(before) &&
+        Number(before) > 0 &&
+        Number.isFinite(after) &&
+        Number(after) > 0
+          ? position * (Number(after) / Number(before) - 1)
+          : Number.NaN;
+      if (!Number.isFinite(legReturn)) {
+        missingLegs += 1;
+        continue;
+      }
+      contributions.push(legReturn);
       if (position < 0) hasShort = true;
     }
     let grossReturn = 0;
     let costReturn = 0;
     let turnoverOneWay = 0;
     let netReturn = 0;
-    if (contributions.length) {
+    if (intendedLegs > 0 && missingLegs > 0) {
+      incompleteIntervals += 1;
+      invalidEquityObservations += missingLegs;
+      if (
+        incompleteIntervalSamples.length <
+        PERSONAL_VOL_INCOMPLETE_INTERVAL_SAMPLE_LIMIT
+      ) {
+        incompleteIntervalSamples.push({
+          signal_date: signalDate,
+          return_start_date: previous,
+          return_end_date: current,
+          missing_leg_count: missingLegs,
+        });
+      }
+    } else if (contributions.length === intendedLegs && intendedLegs > 0) {
       grossReturn =
         contributions.reduce((total, value) => total + value, 0) /
         contributions.length;
@@ -361,6 +407,7 @@ export function personalVolDailyPath(
       gross_return: grossReturn,
       cost_return: costReturn,
       turnover_one_way: turnoverOneWay,
+      invalid_equity_observations: missingLegs,
       net_return: netReturn,
       equity,
     });
@@ -370,6 +417,11 @@ export function personalVolDailyPath(
     active_sessions: activeSessions,
     short_sessions: shortSessions,
     occupancy: points.length ? activeSessions / points.length : null,
+    incomplete_intervals: incompleteIntervals,
+    invalid_equity_observations: invalidEquityObservations,
+    incomplete_interval_samples: incompleteIntervalSamples,
+    incomplete_interval_samples_omitted:
+      incompleteIntervals - incompleteIntervalSamples.length,
   };
 }
 
@@ -422,13 +474,25 @@ export function evaluatePersonalVolWindow(
     };
   }
   const path = personalVolDailyPath(native.held, panel);
+  const status =
+    path.incomplete_intervals > 0
+      ? "incomplete"
+      : path.active_sessions > 0
+        ? "ok"
+        : "no_active_positions";
+  const reason =
+    status === "ok"
+      ? null
+      : status === "incomplete"
+        ? "one_or_more_active_intervals_missing_complete_equity_legs"
+        : "ratio_never_crossed_fixed_thresholds";
   return {
     period_id: panel.period_id,
     year: panel.year,
     period_start: panel.period_start,
     period_end: panel.period_end,
-    status: path.active_sessions > 0 ? "ok" : "no_active_positions",
-    reason: path.active_sessions > 0 ? null : "ratio_never_crossed_fixed_thresholds",
+    status,
+    reason,
     ratio_kind: selected.kind,
     ratio_observations: selected.n_observations,
     eval_path: `personal_draft:${native.path}`,
@@ -437,6 +501,13 @@ export function evaluatePersonalVolWindow(
     active_sessions: path.active_sessions,
     short_sessions: path.short_sessions,
     occupancy: path.occupancy,
+    complete_leg_policy: "flat_entire_interval_without_cost",
+    incomplete_intervals: path.incomplete_intervals,
+    missing_leg_count: path.invalid_equity_observations,
+    invalid_equity_observations: path.invalid_equity_observations,
+    incomplete_interval_samples: path.incomplete_interval_samples,
+    incomplete_interval_samples_omitted:
+      path.incomplete_interval_samples_omitted,
     daily_path: path.points,
     metrics: personalVolPerformance(path.points, true),
   };
@@ -536,11 +607,38 @@ export async function runPersonalVolResearch(
     const successfulWindows = strategy.windows.filter(
       (window) => window.status === "ok",
     ).length;
+    const incompleteWindows = strategy.windows.filter(
+      (window) => window.status === "incomplete",
+    ).length;
+    const incompleteIntervals = strategy.windows.reduce(
+      (total, window) =>
+        total +
+        (typeof window.incomplete_intervals === "number"
+          ? window.incomplete_intervals
+          : 0),
+      0,
+    );
+    const missingLegCount = strategy.windows.reduce(
+      (total, window) =>
+        total +
+        (typeof window.missing_leg_count === "number"
+          ? window.missing_leg_count
+          : 0),
+      0,
+    );
     return {
       strategy_id: strategy.strategy_id,
       requested_windows: strategy.windows.length,
       successful_windows: successfulWindows,
-      candidate_status: successfulWindows > 0 ? "evaluated" : "not_evaluated",
+      incomplete_windows: incompleteWindows,
+      incomplete_intervals: incompleteIntervals,
+      missing_leg_count: missingLegCount,
+      candidate_status:
+        incompleteWindows > 0
+          ? "not_evaluated_incomplete_equity_legs"
+          : successfulWindows > 0
+            ? "evaluated"
+            : "not_evaluated",
     };
   });
   const exactFourEvaluationComplete =
@@ -563,6 +661,7 @@ export async function runPersonalVolResearch(
       cost_method: "two_one_way_costs_amortized_over_fixed_hold",
       signal_lag_sessions: 1,
       execution_timing: "signal_close_d_fill_close_d_plus_1",
+      incomplete_equity_leg_policy: "flat_entire_interval_without_cost",
       short_financing: "not_modelled",
       short_financing_limitation: "screening_only",
       market_neutrality: "dollar_balanced_rank_long_short_not_beta_neutral",
