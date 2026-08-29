@@ -118,8 +118,49 @@ def test_sparse_and_extreme_slices_fail_closed_without_features():
 
     daily = build_daily_options_225_smile_features(sparse + extreme)
     assert [row["date"] for row in daily] == ["2024-01-10", "2024-01-11"]
-    assert all(row["fit_reason"] == "no_valid_maturity" for row in daily)
+    assert all(row["fit_reason"] == "insufficient_unique_strikes" for row in daily)
     assert all(row["fit_success"] is False for row in daily)
+
+
+def test_observed_ratios_survive_rejected_svi_shape() -> None:
+    arbitrage_shape = SVIParameters(
+        a=0.001, b=0.1, rho=-0.9, m=0.0, sigma=0.02
+    )
+    slices = build_options_225_smile_slices(
+        _chain_from_svi(parameters=arbitrage_shape)
+    )
+
+    assert len(slices) == 1
+    assert slices[0]["fit_success"] is False
+    assert (
+        slices[0]["fit_reason"]
+        == "spot_proxy_butterfly_shape_violation"
+    )
+    assert slices[0]["observed_feature_success"] is True
+    assert slices[0]["observed_rr_over_atm"] is not None
+    assert slices[0]["observed_bf_over_atm"] is not None
+    assert "svi_rr_over_atm" not in slices[0]
+
+
+def test_failed_front_is_not_replaced_by_a_later_valid_maturity() -> None:
+    front = _chain_from_svi(
+        dte_days=30,
+        cm="2024-02",
+        ks=(-0.15, -0.08, 0.0, 0.08, 0.15),
+    )
+    next_rows = _chain_from_svi(dte_days=65, cm="2024-03")
+    later = _chain_from_svi(dte_days=120, cm="2024-05")
+
+    daily = build_daily_options_225_smile_features(front + next_rows + later)
+
+    assert len(daily) == 1
+    assert daily[0]["cm"] == "2024-02"
+    assert daily[0]["fit_success"] is False
+    assert daily[0]["fit_reason"] == "insufficient_unique_strikes"
+    assert daily[0]["next_cm"] == "2024-03"
+    assert daily[0]["fit_scope"] == "chronological_front_eligible_maturity"
+    assert daily[0]["svi_atm_short_over_next_minus_one"] is None
+    assert daily[0]["observed_atm_short_over_next_minus_one"] is not None
 
 
 def test_exact_but_butterfly_arbitrage_surface_is_rejected():
@@ -131,7 +172,7 @@ def test_exact_but_butterfly_arbitrage_surface_is_rejected():
     fit = fit_raw_svi(ks, ivs, maturity)
 
     assert fit.success is False
-    assert fit.reason == "butterfly_arbitrage"
+    assert fit.reason == "spot_proxy_butterfly_shape_violation"
     assert fit.parameters is None
     assert fit.rmse_iv_decimal == pytest.approx(0.0, abs=1e-12)
     assert fit.min_sampled_butterfly_g is not None

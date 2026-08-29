@@ -3,7 +3,7 @@
 The module is intentionally dependency free and research only.  It fits each
 observed ``date x contract-month x expiry`` slice independently, never fills a
 missing strike or date, and emits no model-derived features when the fit fails
-its numerical or static-arbitrage checks.
+its numerical or disclosed spot-proxy shape checks.
 
 J-Quants option IVs are percentages.  They are converted to decimals before
 fitting total variance with the raw SVI parameterisation
@@ -181,7 +181,12 @@ def svi_second_derivative(k: float, parameters: SVIParameters) -> float:
 
 
 def svi_butterfly_g(k: float, parameters: SVIParameters) -> float:
-    """Gatheral-Jacquier density diagnostic; non-negative means no butterfly."""
+    """Gatheral-Jacquier shape diagnostic on the disclosed moneyness proxy.
+
+    The true no-butterfly result requires forward log-moneyness.  This module
+    currently uses ``UnderPx`` and therefore reports a screening diagnostic,
+    not a formal static-arbitrage certificate.
+    """
     w = svi_total_variance(k, parameters)
     if not math.isfinite(w) or w <= 0.0:
         return float("-inf")
@@ -430,7 +435,7 @@ def fit_raw_svi(
     elif min_w <= cfg.min_total_variance:
         reason, success = "non_positive_sampled_total_variance", False
     elif min_g < -cfg.butterfly_tolerance:
-        reason, success = "butterfly_arbitrage", False
+        reason, success = "spot_proxy_butterfly_shape_violation", False
     elif rmse > cfg.max_fit_rmse_iv_decimal:
         reason, success = "fit_rmse_exceeded", False
     elif max_error > cfg.max_fit_error_iv_decimal:
@@ -757,6 +762,10 @@ def build_options_225_smile_slices(
             common = {
                 "under_px": under_px,
                 **counts,
+                # Listed-strike observations are independent evidence.  A
+                # rejected SVI shape must not erase an otherwise observed
+                # ATM/wing ratio.
+                **_observed_features(observations, cfg),
                 "iv_input_unit": "percent",
                 "iv_fit_unit": "decimal",
                 "k_definition": "ln(strike/under_px)",
@@ -820,7 +829,6 @@ def build_options_225_smile_slices(
             result["fit_success"] = fit.success
             result["fit_reason"] = fit.reason
             if fit.success and fit.parameters is not None:
-                result.update(_observed_features(observations, cfg))
                 result.update(_svi_features(fit.parameters, maturity, cfg))
             output.append(result)
     return output
@@ -849,12 +857,13 @@ def build_daily_options_225_smile_features(
     *,
     config: SmileFitConfig | None = None,
 ) -> list[dict[str, Any]]:
-    """Select the two shortest valid slices and emit one fail-closed daily row.
+    """Select the actual front/next eligible slices and emit one daily row.
 
-    The front slice supplies the direct and SVI smile features.  If a next
-    valid expiry exists, positive quantities use ``short / next - 1`` and
-    signed RR/BF quantities use ``short - next``.  Failed maturities are never
-    substituted into either leg.
+    An expiry outside the configured DTE band is not eligible.  Within that
+    band the chronological front and next expiries are fixed before fit
+    quality is inspected.  A failed front or next fit is never replaced by a
+    later expiry.  Direct listed-strike RR/BF remain available independently;
+    SVI term features require both fixed legs to pass.
     """
     cfg = config or SmileFitConfig()
     slices = build_options_225_smile_slices(rows, config=cfg)
@@ -872,14 +881,21 @@ def build_daily_options_225_smile_features(
                 str(row.get("cm") or ""),
             ),
         )
-        valid = [row for row in all_slices if row.get("fit_success") is True]
-        if not valid:
+        eligible = [
+            row
+            for row in all_slices
+            if row.get("dte_days") is not None
+            and cfg.min_dte_days <= int(row["dte_days"]) <= cfg.max_dte_days
+        ]
+        valid = [row for row in eligible if row.get("fit_success") is True]
+        if not eligible:
             output.append(
                 {
                     "date": date,
                     "fit_success": False,
-                    "fit_reason": "no_valid_maturity",
+                    "fit_reason": "no_eligible_maturity",
                     "n_maturity_slices": len(all_slices),
+                    "n_eligible_maturity_slices": 0,
                     "n_valid_maturity_slices": 0,
                     "failed_slice_reasons": [
                         str(row.get("fit_reason") or "unknown") for row in all_slices
@@ -893,13 +909,14 @@ def build_daily_options_225_smile_features(
             )
             continue
 
-        front = dict(valid[0])
+        front = dict(eligible[0])
         front.update(
             {
-                "fit_scope": "shortest_valid_maturity",
+                "fit_scope": "chronological_front_eligible_maturity",
                 "n_maturity_slices": len(all_slices),
+                "n_eligible_maturity_slices": len(eligible),
                 "n_valid_maturity_slices": len(valid),
-                "n_failed_maturity_slices": len(all_slices) - len(valid),
+                "n_failed_maturity_slices": len(eligible) - len(valid),
                 "next_cm": None,
                 "next_expiry": None,
                 "next_dte_days": None,
@@ -913,45 +930,65 @@ def build_daily_options_225_smile_features(
                 "observed_bf_over_atm_short_minus_next": None,
             }
         )
-        if len(valid) >= 2:
-            nxt = valid[1]
+        if len(eligible) >= 2:
+            nxt = eligible[1]
             front.update(
                 {
                     "next_cm": nxt.get("cm"),
                     "next_expiry": nxt.get("expiry"),
                     "next_dte_days": nxt.get("dte_days"),
-                    "svi_atm_short_over_next_minus_one": _ratio_minus_one(
-                        front.get("svi_atm_iv_decimal"),
-                        nxt.get("svi_atm_iv_decimal"),
-                    ),
-                    "svi_curvature_short_over_next_minus_one": _ratio_minus_one(
-                        front.get("svi_atm_normalized_curvature"),
-                        nxt.get("svi_atm_normalized_curvature"),
-                    ),
-                    "svi_left_right_slope_ratio_short_over_next_minus_one": _ratio_minus_one(
-                        math.exp(float(front["svi_log_left_right_slope_ratio"])),
-                        math.exp(float(nxt["svi_log_left_right_slope_ratio"])),
-                    ),
-                    "svi_rr_over_atm_short_minus_next": _difference(
-                        front.get("svi_rr_over_atm"), nxt.get("svi_rr_over_atm")
-                    ),
-                    "svi_bf_over_atm_short_minus_next": _difference(
-                        front.get("svi_bf_over_atm"), nxt.get("svi_bf_over_atm")
-                    ),
-                    "observed_atm_short_over_next_minus_one": _ratio_minus_one(
-                        front.get("observed_atm_iv_decimal"),
-                        nxt.get("observed_atm_iv_decimal"),
-                    ),
-                    "observed_rr_over_atm_short_minus_next": _difference(
-                        front.get("observed_rr_over_atm"),
-                        nxt.get("observed_rr_over_atm"),
-                    ),
-                    "observed_bf_over_atm_short_minus_next": _difference(
-                        front.get("observed_bf_over_atm"),
-                        nxt.get("observed_bf_over_atm"),
-                    ),
                 }
             )
+            if (
+                front.get("fit_success") is True
+                and nxt.get("fit_success") is True
+            ):
+                front.update(
+                    {
+                        "svi_atm_short_over_next_minus_one": _ratio_minus_one(
+                            front.get("svi_atm_iv_decimal"),
+                            nxt.get("svi_atm_iv_decimal"),
+                        ),
+                        "svi_curvature_short_over_next_minus_one": _ratio_minus_one(
+                            front.get("svi_atm_normalized_curvature"),
+                            nxt.get("svi_atm_normalized_curvature"),
+                        ),
+                        "svi_left_right_slope_ratio_short_over_next_minus_one": _ratio_minus_one(
+                            math.exp(
+                                float(front["svi_log_left_right_slope_ratio"])
+                            ),
+                            math.exp(float(nxt["svi_log_left_right_slope_ratio"])),
+                        ),
+                        "svi_rr_over_atm_short_minus_next": _difference(
+                            front.get("svi_rr_over_atm"),
+                            nxt.get("svi_rr_over_atm"),
+                        ),
+                        "svi_bf_over_atm_short_minus_next": _difference(
+                            front.get("svi_bf_over_atm"),
+                            nxt.get("svi_bf_over_atm"),
+                        ),
+                    }
+                )
+            if (
+                front.get("observed_feature_success") is True
+                and nxt.get("observed_feature_success") is True
+            ):
+                front.update(
+                    {
+                        "observed_atm_short_over_next_minus_one": _ratio_minus_one(
+                            front.get("observed_atm_iv_decimal"),
+                            nxt.get("observed_atm_iv_decimal"),
+                        ),
+                        "observed_rr_over_atm_short_minus_next": _difference(
+                            front.get("observed_rr_over_atm"),
+                            nxt.get("observed_rr_over_atm"),
+                        ),
+                        "observed_bf_over_atm_short_minus_next": _difference(
+                            front.get("observed_bf_over_atm"),
+                            nxt.get("observed_bf_over_atm"),
+                        ),
+                    }
+                )
         output.append(front)
     return output
 
