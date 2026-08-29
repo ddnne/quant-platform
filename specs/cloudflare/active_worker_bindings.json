@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:4016b4cd9ceab10c1fc55bb91b8e72109baeca2ab5106f3409117f3aff898c3e",
+  "manifest_digest": "sha256:f2b5c9cc7c1de15229b6409a47c4490254ec69b38add1582492edf3f042e6df5",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -2862,7 +2862,7 @@
             "class_name": "PersonalResearchContainer",
             "image": "./Dockerfile",
             "image_build_context": "../../..",
-            "instance_type": "standard-2",
+            "instance_type": "standard-4",
             "max_instances": 1
           }
         ],
@@ -2961,7 +2961,7 @@
             "class_name": "PersonalResearchContainer",
             "image": "./Dockerfile",
             "image_build_context": "../../..",
-            "instance_type": "standard-2",
+            "instance_type": "standard-4",
             "max_instances": 1
           }
         ],
@@ -3060,7 +3060,7 @@
             "class_name": "PersonalResearchContainer",
             "image": "./Dockerfile",
             "image_build_context": "../../..",
-            "instance_type": "standard-2",
+            "instance_type": "standard-4",
             "max_instances": 1
           }
         ],

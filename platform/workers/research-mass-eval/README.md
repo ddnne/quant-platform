@@ -60,7 +60,7 @@ The generated `snapshots/*.sqlite` copy is excluded from `result.tar.gz`; the
 small snapshot manifest remains. Reusing a completed `job_id` is idempotent
 only when every input is identical.
 
-Cost and safety bounds are structural: `standard-2`, `max_instances=1`, one
+Cost and safety bounds are structural: `standard-4`, `max_instances=1`, one
 active job, a 4 GiB snapshot ceiling, 90-minute subprocess timeout and a
 130-minute outer Container activity window. The process exits immediately
 after its terminal manifest, so an ordinary short run scales back to zero
