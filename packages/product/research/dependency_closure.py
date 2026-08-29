@@ -452,7 +452,15 @@ def build_strategy_dependency_closure(
                     int(value)
                     for key, value in effective_params.items()
                     if key
-                    in {"n", "lookback", "lookback_days", "window", "window_days"}
+                    in {
+                        "n",
+                        "short_n",
+                        "long_n",
+                        "lookback",
+                        "lookback_days",
+                        "window",
+                        "window_days",
+                    }
                     and isinstance(value, int)
                     and not isinstance(value, bool)
                     and value > 0

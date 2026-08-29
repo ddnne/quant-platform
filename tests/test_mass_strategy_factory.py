@@ -77,6 +77,7 @@ _OPT225_IDS = (
     "opt225_iv_base_spread_change",
     "opt225_skew_abs_level",
     "opt225_cm_term_abs_level",
+    "opt225_cm_term_ratio",
     "opt225_basevol_delta_abs",
 )
 _UNIQUE_NOT_GENERATED = (
@@ -623,6 +624,7 @@ def test_opt225_signal_helpers_pure():
         compute_opt225_basevol_abs_level_signal,
         compute_opt225_basevol_delta_abs_signal,
         compute_opt225_cm_term_abs_level_signal,
+        compute_opt225_cm_term_ratio_signal,
         compute_opt225_iv_base_spread_abs_signal,
         compute_opt225_skew_abs_level_signal,
         compute_opt225_vol_signal,
@@ -652,6 +654,14 @@ def test_opt225_signal_helpers_pure():
     assert skew_lo["value"] == 1.0
     term_hi = compute_opt225_cm_term_abs_level_signal(cs_sign=1.0, vol_level=3.0)
     assert term_hi["value"] == -1.0
+    term_ratio_hi = compute_opt225_cm_term_ratio_signal(
+        cs_sign=1.0, vol_level=0.20
+    )
+    assert term_ratio_hi["value"] == -1.0
+    term_ratio_equal = compute_opt225_cm_term_ratio_signal(
+        cs_sign=1.0, vol_level=0.0
+    )
+    assert term_ratio_equal["value"] is None
     dlt_hi = compute_opt225_basevol_delta_abs_signal(cs_sign=1.0, vol_level=2.0)
     assert dlt_hi["value"] == -1.0
     dlt_lo = compute_opt225_basevol_delta_abs_signal(cs_sign=1.0, vol_level=-2.0)

@@ -609,6 +609,14 @@ MIGRATIONS: tuple[Migration, ...] = (
             ON receipt_product_materializations(dataset,segment_id,run_id);
         """,
     ),
+    Migration(
+        14,
+        "personal_daily_market_cap",
+        """
+        ALTER TABLE jquants_daily_bars ADD COLUMN market_cap REAL;
+        ALTER TABLE jquants_daily_bars_revisions ADD COLUMN market_cap REAL;
+        """,
+    ),
 )
 
 

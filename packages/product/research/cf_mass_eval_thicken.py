@@ -329,6 +329,7 @@ def attach_opt225_regime() -> dict[str, Any]:
                 "spread_change",
                 "skew",
                 "cm_term",
+                "cm_term_ratio",
                 "basevol_delta",
             ):
                 ser = dict(opt225.get(kind) or {})
@@ -355,6 +356,9 @@ def attach_opt225_regime() -> dict[str, Any]:
             cm_term_series = dict(
                 (compact.get("cm_term") or {}).get("rv_abs_by_date") or {}
             )
+            cm_term_ratio_series = dict(
+                (compact.get("cm_term_ratio") or {}).get("rv_abs_by_date") or {}
+            )
             basevol_delta_series = dict(
                 (compact.get("basevol_delta") or {}).get("rv_abs_by_date") or {}
             )
@@ -365,6 +369,7 @@ def attach_opt225_regime() -> dict[str, Any]:
                 "iv_base_spread": iv_base_spread,
                 "skew_series": skew_series,
                 "cm_term_series": cm_term_series,
+                "cm_term_ratio_series": cm_term_ratio_series,
                 "basevol_delta_series": basevol_delta_series,
             }
     except Exception as exc:  # pragma: no cover - best-effort

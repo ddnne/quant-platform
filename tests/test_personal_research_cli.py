@@ -29,6 +29,7 @@ def test_cli_prints_machine_readable_artifact_summary(
         def run(self, request):
             assert request.source_db == database
             assert request.period_end == "2026-08-27"
+            assert request.cohort_id == "diverse-core-v1"
             return SimpleNamespace(
                 report_id="sha256:" + "1" * 64,
                 report_json_path=report_json,
@@ -41,18 +42,31 @@ def test_cli_prints_machine_readable_artifact_summary(
                 evaluated_count=4,
                 hold_count=0,
                 unexpected_errors=0,
+                cohort_id="diverse-core-v1",
+                cohort_digest="sha256:" + "4" * 64,
                 exit_code=0,
             )
 
     monkeypatch.setattr(personal_cli, "PersonalResearchService", FakeService)
     code = personal_cli.main(
-        ["--db", str(database), "--end", "2026-08-27", "--output", str(tmp_path)]
+        [
+            "--db",
+            str(database),
+            "--end",
+            "2026-08-27",
+            "--output",
+            str(tmp_path),
+            "--cohort",
+            "diverse-core-v1",
+        ]
     )
     payload = json.loads(capsys.readouterr().out)
     assert code == 0
     assert payload["candidate_count"] == 4
     assert payload["evaluated_count"] == 4
     assert payload["hold_count"] == 0
+    assert payload["cohort_id"] == "diverse-core-v1"
+    assert payload["cohort_digest"] == "sha256:" + "4" * 64
     assert payload["live_orders_enabled"] is False
     assert payload["automatic_promotion"] is False
     assert payload["model_calls"] == 0

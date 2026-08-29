@@ -19,6 +19,8 @@ from .class_signals import (
     DEFAULT_OPT225_BASEVOL_DELTA_LOW_THRESHOLD,
     DEFAULT_OPT225_CM_TERM_HIGH_THRESHOLD,
     DEFAULT_OPT225_CM_TERM_LOW_THRESHOLD,
+    DEFAULT_OPT225_CM_TERM_RATIO_HIGH_THRESHOLD,
+    DEFAULT_OPT225_CM_TERM_RATIO_LOW_THRESHOLD,
     DEFAULT_OPT225_SKEW_HIGH_THRESHOLD,
     DEFAULT_OPT225_SKEW_LOW_THRESHOLD,
     DEFAULT_OPT225_SPREAD_HIGH_THRESHOLD,
@@ -36,6 +38,7 @@ from .class_signals import (
     OPT225_BASEVOL_DELTA_FEATURE_ID,
     OPT225_BASEVOL_FEATURE_ID,
     OPT225_CM_TERM_FEATURE_ID,
+    OPT225_CM_TERM_RATIO_FEATURE_ID,
     OPT225_SKEW_FEATURE_ID,
     OPT225_SPREAD_FEATURE_ID,
     OPTIONS_VOL_REGIME_DATASETS,
@@ -50,6 +53,7 @@ from .class_signals import (
     SIGNAL_ID_OPT225_BASEVOL_TERM_LEVELS,
     SIGNAL_ID_OPT225_BASEVOL_TERM_RATIO,
     SIGNAL_ID_OPT225_CM_TERM_ABS,
+    SIGNAL_ID_OPT225_CM_TERM_RATIO,
     SIGNAL_ID_OPT225_SKEW_ABS,
     SIGNAL_ID_OPT225_SPREAD_ABS,
     SIGNAL_ID_OPT225_SPREAD_CHANGE,
@@ -621,6 +625,23 @@ def compute_opt225_cm_term_abs_level_signal(**kwargs: Any) -> dict[str, Any]:
         ),
         low_threshold=kwargs.pop(
             "low_threshold", DEFAULT_OPT225_CM_TERM_LOW_THRESHOLD
+        ),
+        **kwargs,
+    )
+
+
+def compute_opt225_cm_term_ratio_signal(**kwargs: Any) -> dict[str, Any]:
+    """Zero-centred ``near_atm_iv / next_atm_iv - 1`` level × CS."""
+    return compute_opt225_vol_signal(
+        mode="abs_level",
+        signal_id=SIGNAL_ID_OPT225_CM_TERM_RATIO,
+        feature_id=OPT225_CM_TERM_RATIO_FEATURE_ID,
+        series_kind="cm_term_ratio",
+        high_threshold=kwargs.pop(
+            "high_threshold", DEFAULT_OPT225_CM_TERM_RATIO_HIGH_THRESHOLD
+        ),
+        low_threshold=kwargs.pop(
+            "low_threshold", DEFAULT_OPT225_CM_TERM_RATIO_LOW_THRESHOLD
         ),
         **kwargs,
     )

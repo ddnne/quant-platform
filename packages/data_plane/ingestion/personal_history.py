@@ -37,7 +37,7 @@ PERSONAL_HISTORY_DATASETS: tuple[str, ...] = (
     "fins_summary",
     "equities_bars_daily",
 )
-PERSONAL_HISTORY_FORMAT = "personal-draft-history/v1"
+PERSONAL_HISTORY_FORMAT = "personal-draft-history/v2"
 PERSONAL_RESEARCH_STATE = "PERSONAL_DRAFT"
 PERSONAL_COMPLETENESS_CLAIM = "NONE"
 PERSONAL_CONTROLLED_ELIGIBILITY = "FORBIDDEN"
@@ -360,13 +360,35 @@ def _compact_master(
             "Code": code,
             "Date": snapshot_day,
             "MarketCode": _PRIME_MARKET_CODE,
+            # Keep the small, PIT-observed classification surface needed for
+            # within-industry and size-bucket relative factors.  These values
+            # must travel with each dated master snapshot; backfilling a
+            # current classification into historical sessions would create a
+            # subtle look-ahead path.
+            "Sector17Code": str(
+                _pick(source, "Sector17Code", "Sec17Code", "S17") or ""
+            ).strip(),
+            "Sector33Code": str(
+                _pick(source, "Sector33Code", "Sec33Code", "S33") or ""
+            ).strip(),
+            "ScaleCategory": str(
+                _pick(source, "ScaleCategory", "ScaleCat") or ""
+            ).strip(),
         }
     if not members:
         raise PersonalHistoryError(
             f"equities_master snapshot {snapshot_day} has no Prime members"
         )
     compact = [members[code] for code in sorted(members)]
-    digest = _canonical_digest([row["Code"] for row in compact])
+    # A classification change is also a new PIT master state.  Hashing only
+    # membership would silently compress it away and make historical
+    # sector/scale-neutral factors use stale classifications.
+    digest = _canonical_digest(
+        [
+            {key: value for key, value in row.items() if key != "Date"}
+            for row in compact
+        ]
+    )
     normalized = JN.normalize_generic(
         compact,
         dataset="equities_master",
@@ -447,6 +469,7 @@ _BAR_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Volume", ("Volume", "Vo")),
     ("AdjustmentVolume", ("AdjustmentVolume", "AdjVolume", "AdjVo")),
     ("TurnoverValue", ("TurnoverValue", "Va")),
+    ("MarketCapitalization", ("MarketCapitalization", "MarketCap", "MktCap")),
     ("AdjustmentFactor", ("AdjustmentFactor", "AdjFactor", "AdjF")),
 )
 
@@ -666,13 +689,21 @@ class PersonalHistoryHydrator:
             plan_json.encode("utf-8")
         ).hexdigest()
         existing = self._connection.execute(
-            "SELECT plan_digest FROM personal_history_manifest WHERE singleton=1"
+            "SELECT format,plan_digest FROM personal_history_manifest "
+            "WHERE singleton=1"
         ).fetchone()
-        if existing is not None and str(existing["plan_digest"]) != plan_digest:
-            raise PersonalHistoryError(
-                "personal history database is bound to a different plan; "
-                "use a new dedicated SQLite file"
-            )
+        if existing is not None:
+            if str(existing["format"]) != PERSONAL_HISTORY_FORMAT:
+                raise PersonalHistoryError(
+                    "personal history database uses an older compact format; "
+                    "build a new dedicated SQLite file so PIT classifications "
+                    "and market cap are fetched again"
+                )
+            if str(existing["plan_digest"]) != plan_digest:
+                raise PersonalHistoryError(
+                    "personal history database is bound to a different plan; "
+                    "use a new dedicated SQLite file"
+                )
         self._connection.execute(
             """
             INSERT INTO personal_history_manifest (
@@ -1282,7 +1313,7 @@ class PersonalHistoryHydrator:
                     source,code,date,event_time,available_at,ingested_at,
                     open,high,low,close,volume,turnover_value,
                     adjustment_open,adjustment_high,adjustment_low,
-                    adjustment_close,adjustment_volume,raw_payload
+                    adjustment_close,adjustment_volume,raw_payload,market_cap
                 )
                 SELECT
                     source,
@@ -1296,7 +1327,8 @@ class PersonalHistoryHydrator:
                     NULL,NULL,NULL,
                     CAST(json_extract(payload,'$.AdjustmentClose') AS REAL),
                     CAST(json_extract(payload,'$.AdjustmentVolume') AS REAL),
-                    NULL
+                    NULL,
+                    CAST(json_extract(payload,'$.MarketCapitalization') AS REAL)
                 FROM jquants_records
                 WHERE source='jquants' AND dataset='equities_bars_daily'
                 ON CONFLICT(source,code,date) DO UPDATE SET
@@ -1314,7 +1346,8 @@ class PersonalHistoryHydrator:
                     adjustment_low=excluded.adjustment_low,
                     adjustment_close=excluded.adjustment_close,
                     adjustment_volume=excluded.adjustment_volume,
-                    raw_payload=NULL
+                    raw_payload=NULL,
+                    market_cap=excluded.market_cap
                 """
             )
             mismatched = int(
@@ -1361,6 +1394,11 @@ class PersonalHistoryHydrator:
                               ) AS REAL
                           )
                           AND bars.raw_payload IS NULL
+                          AND bars.market_cap IS CAST(
+                              json_extract(
+                                  records.payload,'$.MarketCapitalization'
+                              ) AS REAL
+                          )
                       )
                     """
                 ).fetchone()[0]

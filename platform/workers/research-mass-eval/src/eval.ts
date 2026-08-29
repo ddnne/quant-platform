@@ -11,6 +11,39 @@ import type {
 
 export { evaluateLogicAcrossPeriods, rankSurvivors } from "./eval_orchestrate";
 
+const OPT225_IV_FIELDS_AVAILABLE_FROM = "2016-07-19";
+
+function observationsOnOrAfter(
+  values: Record<string, number> | undefined,
+  start: string,
+): Record<string, number> | undefined {
+  if (!values) return undefined;
+  return Object.fromEntries(
+    Object.entries(values).filter(([day]) => day.slice(0, 10) >= start),
+  );
+}
+
+function opt225IvPinnedSeries(series: NkyVolSeries): NkyVolSeries {
+  return {
+    rv_abs_by_date: observationsOnOrAfter(
+      series.rv_abs_by_date,
+      OPT225_IV_FIELDS_AVAILABLE_FROM,
+    ),
+    rv_short_by_date: observationsOnOrAfter(
+      series.rv_short_by_date,
+      OPT225_IV_FIELDS_AVAILABLE_FROM,
+    ),
+    rv_long_by_date: observationsOnOrAfter(
+      series.rv_long_by_date,
+      OPT225_IV_FIELDS_AVAILABLE_FROM,
+    ),
+    rv_ratio_by_date: observationsOnOrAfter(
+      series.rv_ratio_by_date,
+      OPT225_IV_FIELDS_AVAILABLE_FROM,
+    ),
+  };
+}
+
 function signFromNumeric(v: number | null | undefined): number | null {
   if (v === null || v === undefined || !Number.isFinite(v)) return null;
   if (v > 0) return 1;
@@ -1120,6 +1153,11 @@ export function evalLogicOnPanel(
           series = bundle.spread;
         else if (mode.includes("skew") || seriesKind === "skew")
           series = bundle.skew;
+        else if (
+          mode.includes("cm_term_ratio") ||
+          seriesKind === "cm_term_ratio"
+        )
+          series = bundle.cm_term_ratio;
         else if (mode.includes("cm_term") || seriesKind === "cm_term")
           series = bundle.cm_term;
         else if (
@@ -1135,8 +1173,10 @@ export function evalLogicOnPanel(
         const absMap =
           seriesKind === "skew" || mode.includes("skew")
             ? panel.skew_series
-            : seriesKind === "cm_term" || mode.includes("cm_term")
-              ? panel.cm_term_series
+            : seriesKind === "cm_term_ratio" || mode.includes("cm_term_ratio")
+              ? panel.cm_term_ratio_series
+              : seriesKind === "cm_term" || mode.includes("cm_term")
+                ? panel.cm_term_series
               : seriesKind === "basevol_delta" || mode.includes("basevol_delta")
                 ? panel.basevol_delta_series
                 : mode.includes("spread")
@@ -1152,11 +1192,18 @@ export function evalLogicOnPanel(
           };
         }
       }
+      const isCmTermRatio =
+        mode.includes("cm_term_ratio") || seriesKind === "cm_term_ratio";
+      if (series && isCmTermRatio) {
+        series = opt225IvPinnedSeries(series as NkyVolSeries);
+      }
       const defaultHigh =
         seriesKind === "skew" || mode.includes("skew")
           ? 3.0
-          : seriesKind === "cm_term" || mode.includes("cm_term")
-            ? 2.0
+          : seriesKind === "cm_term_ratio" || mode.includes("cm_term_ratio")
+            ? 0.10
+            : seriesKind === "cm_term" || mode.includes("cm_term")
+              ? 2.0
             : seriesKind === "basevol_delta" || mode.includes("basevol_delta")
               ? 1.0
               : mode.includes("spread")
@@ -1165,8 +1212,10 @@ export function evalLogicOnPanel(
       const defaultLow =
         seriesKind === "skew" || mode.includes("skew")
           ? 0.5
-          : seriesKind === "cm_term" || mode.includes("cm_term")
-            ? -1.0
+          : seriesKind === "cm_term_ratio" || mode.includes("cm_term_ratio")
+            ? -0.10
+            : seriesKind === "cm_term" || mode.includes("cm_term")
+              ? -1.0
             : seriesKind === "basevol_delta" || mode.includes("basevol_delta")
               ? -1.0
               : mode.includes("spread")
@@ -1175,7 +1224,9 @@ export function evalLogicOnPanel(
       out = evalNkyVolRegime(
         panel.bars,
         (series as PeriodPanel["nky_vol_series"]) || null,
-        mode.includes("term_ratio")
+        isCmTermRatio
+          ? "nky_vol_abs_level"
+          : mode.includes("term_ratio")
           ? "nky_vol_term_ratio"
           : mode.includes("term_levels")
             ? "nky_vol_term_levels"
@@ -1461,10 +1512,17 @@ export function barNativeHeldBook(
   if (lid.startsWith("opt225_") || fam === "options_vol_regime") {
     const mode = strParam(params, "mode", lid);
     const sk = strParam(params, "series_kind", "");
+    const isCmTermRatio =
+      mode.includes("cm_term_ratio") || sk === "cm_term_ratio";
     const bundle = panel.opt225_regime || null;
     let absMap: Record<string, number> | null = null;
     if (mode.includes("skew") || sk === "skew") {
       absMap = panel.skew_series || bundle?.skew?.rv_abs_by_date || null;
+    } else if (mode.includes("cm_term_ratio") || sk === "cm_term_ratio") {
+      absMap =
+        panel.cm_term_ratio_series ||
+        bundle?.cm_term_ratio?.rv_abs_by_date ||
+        null;
     } else if (mode.includes("cm_term") || sk === "cm_term") {
       absMap = panel.cm_term_series || bundle?.cm_term?.rv_abs_by_date || null;
     } else if (mode.includes("spread") || sk === "spread" || sk === "spread_change") {
@@ -1475,6 +1533,12 @@ export function barNativeHeldBook(
       absMap = panel.basevol_delta_series || bundle?.basevol_delta?.rv_abs_by_date || null;
     } else {
       absMap = panel.base_vol_series || bundle?.basevol?.rv_abs_by_date || null;
+    }
+    if (isCmTermRatio && absMap) {
+      absMap = observationsOnOrAfter(
+        absMap,
+        OPT225_IV_FIELDS_AVAILABLE_FROM,
+      ) || {};
     }
     const wantChange = mode.includes("change") || sk === "spread_change";
     if (wantChange && absMap) {
@@ -1487,9 +1551,13 @@ export function barNativeHeldBook(
     }
     const nkyLike: NkyVolSeries | null = absMap
       ? { rv_abs_by_date: absMap, rv_short_by_date: absMap, rv_long_by_date: absMap }
-      : panel.nky_vol_series || null;
+      : isCmTermRatio
+        ? null
+        : panel.nky_vol_series || null;
     const hiDefault = wantChange
       ? 0.5
+      : isCmTermRatio
+        ? 0.10
       : mode.includes("skew") || sk === "skew"
         ? 3
         : mode.includes("spread") || sk === "spread"
@@ -1497,6 +1565,8 @@ export function barNativeHeldBook(
           : 24;
     const loDefault = wantChange
       ? -0.5
+      : isCmTermRatio
+        ? -0.10
       : mode.includes("skew") || sk === "skew"
         ? 0.5
         : mode.includes("spread") || sk === "spread"
@@ -1505,7 +1575,9 @@ export function barNativeHeldBook(
     const inner = barNativeHeldBook(
       {
         ...logic,
-        logic_id: mode.includes("term_ratio")
+        logic_id: isCmTermRatio
+          ? "nky_vol_abs_level"
+          : mode.includes("term_ratio")
           ? "nky_vol_term_ratio"
           : mode.includes("term_levels")
             ? "nky_vol_term_levels"
@@ -1513,6 +1585,13 @@ export function barNativeHeldBook(
         family_id: "index_vol_regime",
         params: {
           ...params,
+          mode: isCmTermRatio
+            ? "nky_vol_abs_level"
+            : mode.includes("term_ratio")
+              ? "nky_vol_term_ratio"
+              : mode.includes("term_levels")
+                ? "nky_vol_term_levels"
+                : "nky_vol_abs_level",
           high_threshold: numParam(params, "high_threshold", hiDefault),
           low_threshold: numParam(params, "low_threshold", loDefault),
         },
@@ -1520,7 +1599,11 @@ export function barNativeHeldBook(
       { ...panel, nky_vol_series: nkyLike },
     );
     if (!inner) return { held: {}, path: "opt225_unmapped", fallback: "path_broken" };
-    return { held: inner.held, path: `opt225:${mode}` };
+    return {
+      held: inner.held,
+      path: `opt225:${mode}`,
+      ...(inner.fallback ? { fallback: inner.fallback } : {}),
+    };
   }
 
   if (lid.startsWith("flow_margin_") || fam === "flow_demand") {
@@ -1803,4 +1886,3 @@ function mdhHeldLocal(bars: BarsByCode, holdDays: number, polarity: number): Hel
   }
   return stickyToHeld(bars, entriesByCode, holdDays, "fixed_horizon");
 }
-

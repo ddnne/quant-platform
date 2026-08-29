@@ -417,6 +417,7 @@ def validate_strategy_at_gen(
             "opt225_iv_base_spread_change",
             "opt225_skew_abs_level",
             "opt225_cm_term_abs_level",
+            "opt225_cm_term_ratio",
             "opt225_basevol_delta_abs",
         }:
             return False, REJECT_INVALID_PARAMS
@@ -427,6 +428,7 @@ def validate_strategy_at_gen(
             "spread_change",
             "skew",
             "cm_term",
+            "cm_term_ratio",
             "basevol_delta",
         }:
             return False, REJECT_INVALID_PARAMS

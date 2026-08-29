@@ -13,6 +13,7 @@ from execution.personal_paper_service import PersonalPaperExecutionRejected
 from paper_runtime.personal_snapshot import PersonalSnapshotError
 from research.dependency_closure import PlanDependencyClosureError
 from research.personal_service import (
+    PERSONAL_EXECUTABLE_COHORT_IDS,
     PersonalResearchInputError,
     PersonalResearchRequest,
     PersonalResearchService,
@@ -38,7 +39,13 @@ def _parser() -> argparse.ArgumentParser:
         default=Path("artifacts/personal-research"),
         help="artifact directory (default: artifacts/personal-research)",
     )
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
+        "--cohort",
+        choices=PERSONAL_EXECUTABLE_COHORT_IDS,
+        help="closed four-candidate factor cohort",
+    )
+    selection.add_argument(
         "--spec",
         action="append",
         type=Path,
@@ -76,6 +83,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 period_end=args.end,
                 output_root=args.output,
                 specs=specs,
+                cohort_id=args.cohort,
             )
         )
     except (
@@ -108,6 +116,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "evaluated_count": result.evaluated_count,
                 "hold_count": result.hold_count,
                 "unexpected_errors": result.unexpected_errors,
+                "cohort_id": result.cohort_id,
+                "cohort_digest": result.cohort_digest,
                 "live_orders_enabled": False,
                 "automatic_promotion": False,
                 "model_calls": 0,
