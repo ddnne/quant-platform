@@ -58,4 +58,15 @@ describe("personal vol comprehensive performance", () => {
     expect(metrics.calmar).toBeNull();
     expect(metrics.net_total_return).not.toBeNull();
   });
+
+  it("propagates invalid equity observations into window and year metrics", () => {
+    const daily = points([0, 0.01, 0]);
+    daily[0].invalid_equity_observations = 2;
+    daily[2].invalid_equity_observations = 1;
+
+    const metrics = personalVolPerformance(daily, true);
+
+    expect(metrics.invalid_equity_observations).toBe(3);
+    expect(metrics.year_metrics[0]?.invalid_equity_observations).toBe(3);
+  });
 });

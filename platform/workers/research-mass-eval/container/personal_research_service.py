@@ -34,7 +34,7 @@ from personal_svi_2023_job import (
     execute_svi_job,
 )
 
-RUNNER_VERSION = "personal-cloud-runner/v3"
+RUNNER_VERSION = "personal-cloud-runner/v5"
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60
@@ -55,6 +55,7 @@ PERSONAL_EXECUTABLE_COHORT_IDS = frozenset(
         "fundamental-relative-v1",
         "diverse-core-v1",
         "compact-market-diverse-v1",
+        "sector-relative-ls-v1",
     }
 )
 PERSONAL_EXECUTABLE_UNIVERSE_IDS = frozenset(
@@ -374,6 +375,7 @@ def _manifest_base(spec: JobSpec, *, started_at: str, finished_at: str) -> dict[
         "exact_four": True,
         "draft_only": True,
         "go": False,
+        "ready_snapshot_declared": False,
         "automatic_promotion": False,
         "live_orders_enabled": False,
         "model_calls": 0,
@@ -458,6 +460,8 @@ def execute_job(
                 or summary.get("universe_rule_digest")
                 != spec.universe_rule_digest
                 or summary.get("model_calls") != 0
+                or summary.get("go") is not False
+                or summary.get("ready_snapshot_declared") is not False
                 or summary.get("live_orders_enabled") is not False
                 or summary.get("automatic_promotion") is not False
             ):
@@ -478,6 +482,8 @@ def execute_job(
                     "unexpected_errors",
                     "model_calls",
                     "estimated_ai_cost_usd",
+                    "go",
+                    "ready_snapshot_declared",
                     "live_orders_enabled",
                     "automatic_promotion",
                 )

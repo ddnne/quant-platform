@@ -51,6 +51,12 @@ export interface NkyVolSeries {
 }
 
 export interface Opt225RegimeBundle {
+  dataset?: string;
+  version?: string;
+  source?: {
+    dataset?: string;
+    version?: string;
+  } | null;
   basevol?: NkyVolSeries | null;
   atm_iv?: NkyVolSeries | null;
   spread?: NkyVolSeries | null;
@@ -59,6 +65,13 @@ export interface Opt225RegimeBundle {
   cm_term?: NkyVolSeries | null;
   cm_term_ratio?: NkyVolSeries | null;
   basevol_delta?: NkyVolSeries | null;
+}
+
+export interface IndexProxyIdentity {
+  dataset?: string;
+  label?: string;
+  role?: string;
+  note?: string;
 }
 
 export interface RepoRateRegime {
@@ -109,6 +122,7 @@ export interface PeriodPanel {
   status: "ok" | "data_missing";
   bars: BarsByCode;
   source: string;
+  index_proxy?: IndexProxyIdentity | null;
   nky_vol_series?: NkyVolSeries | null;
   opt225_regime?: Opt225RegimeBundle | null;
   base_vol_series?: Record<string, number> | null;

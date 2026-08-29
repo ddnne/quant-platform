@@ -10,6 +10,7 @@ import type {
   Env,
   LogicSpec,
   NkyVolSeries,
+  Opt225RegimeBundle,
   PeriodPanel,
   PeriodSpec,
 } from "./types";
@@ -20,6 +21,33 @@ export const PERSONAL_VOL_PANELS_PREFIX =
 export const PERSONAL_VOL_ONE_WAY_COST = 0.001;
 export const PERSONAL_VOL_HOLD_SESSIONS = 10;
 export const PERSONAL_VOL_IV_AVAILABLE_FROM = "2016-07-19";
+export const PERSONAL_VOL_INCOMPLETE_INTERVAL_SAMPLE_LIMIT = 20;
+export const PERSONAL_VOL_RATIO_COVERAGE_SAMPLE_LIMIT = 20;
+export const PERSONAL_VOL_TOPIX_PROXY_IDENTITY = {
+  dataset: "indices_bars_daily_topix",
+  label: "TOPIX",
+  role: "nky_vol_proxy_compare_only",
+} as const;
+export const PERSONAL_VOL_SOURCE_IDENTITY = {
+  dataset: "derivatives_bars_daily_options_225",
+  version: "research-options-225-vol-series/v1.3",
+} as const;
+export const PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS = [
+  "research-options-225-vol-series/v1.2",
+  PERSONAL_VOL_SOURCE_IDENTITY.version,
+] as const;
+
+function isSupportedPersonalVolSource(
+  source: Opt225RegimeBundle["source"],
+): source is { dataset: string; version: string } {
+  return (
+    source?.dataset === PERSONAL_VOL_SOURCE_IDENTITY.dataset &&
+    typeof source.version === "string" &&
+    PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS.some(
+      (version) => version === source.version,
+    )
+  );
+}
 
 export const PERSONAL_VOL_UNIVERSE_PROVENANCE = {
   scope_id: "legacy-liq-large-adv100-2019-v1",
@@ -182,13 +210,29 @@ export function parsePersonalVolResearchRequest(
   };
 }
 
-function unionDates(bars: BarsByCode): string[] {
-  const dates = new Set<string>();
-  for (const [code, pairs] of Object.entries(bars)) {
-    if (code.startsWith("__")) continue;
-    for (const [date] of pairs) dates.add(date.slice(0, 10));
+function canonicalTradingDates(panel: PeriodPanel): string[] | null {
+  if (
+    panel.index_proxy?.dataset !== PERSONAL_VOL_TOPIX_PROXY_IDENTITY.dataset ||
+    panel.index_proxy?.label !== PERSONAL_VOL_TOPIX_PROXY_IDENTITY.label ||
+    panel.index_proxy?.role !== PERSONAL_VOL_TOPIX_PROXY_IDENTITY.role
+  ) {
+    return null;
   }
-  return [...dates].sort();
+  const pairs = panel.bars.__NKY_PROXY__;
+  if (!Array.isArray(pairs) || pairs.length === 0) return null;
+  return [
+    ...new Set(
+      pairs
+        .filter(([, close]) => Number.isFinite(close) && close > 0)
+        .map(([date]) => date.slice(0, 10)),
+    ),
+  ].sort();
+}
+
+function requiredTradingDates(panel: PeriodPanel): string[] {
+  return (canonicalTradingDates(panel) || []).filter(
+    (date) => date >= panel.period_start && date <= panel.period_end,
+  );
 }
 
 function closeByCode(bars: BarsByCode): Record<string, Record<string, number>> {
@@ -210,27 +254,56 @@ export function ratioSeriesForStrategy(
   kind: "rolling_short_long" | "near_next_zero_centered";
   series: NkyVolSeries | null;
   n_observations: number;
+  required_session_count: number;
+  covered_session_count: number;
+  missing_session_count: number;
+  missing_session_sample: string[];
+  missing_session_sample_omitted: number;
 } {
   const bundle = panel.opt225_regime;
-  const panelDates = new Set(unionDates(panel.bars));
+  const requiredDates = requiredTradingDates(panel);
+  const requiredDateSet = new Set(requiredDates);
+  const withCoverage = (
+    kind: "rolling_short_long" | "near_next_zero_centered",
+    series: NkyVolSeries | null,
+    coveredDates: string[],
+  ) => {
+    const coveredDateSet = new Set(coveredDates);
+    const missingDates = requiredDates.filter((date) => !coveredDateSet.has(date));
+    return {
+      kind,
+      series,
+      n_observations: coveredDateSet.size,
+      required_session_count: requiredDates.length,
+      covered_session_count: coveredDateSet.size,
+      missing_session_count: missingDates.length,
+      missing_session_sample: missingDates.slice(
+        0,
+        PERSONAL_VOL_RATIO_COVERAGE_SAMPLE_LIMIT,
+      ),
+      missing_session_sample_omitted: Math.max(
+        0,
+        missingDates.length - PERSONAL_VOL_RATIO_COVERAGE_SAMPLE_LIMIT,
+      ),
+    };
+  };
   if (strategyId === "near_next_cm_atm_iv_ratio") {
-    const level =
-      panel.cm_term_ratio_series || bundle?.cm_term_ratio?.rv_abs_by_date || null;
+    const level = bundle?.cm_term_ratio?.rv_abs_by_date || null;
     const pinned = level
       ? Object.fromEntries(
           Object.entries(level).filter(
             ([date, value]) =>
               date.slice(0, 10) >= PERSONAL_VOL_IV_AVAILABLE_FROM &&
-              panelDates.has(date.slice(0, 10)) &&
+              requiredDateSet.has(date.slice(0, 10)) &&
               Number.isFinite(value),
           ),
         )
       : null;
-    return {
-      kind: "near_next_zero_centered",
-      series: pinned ? { rv_abs_by_date: pinned } : null,
-      n_observations: pinned ? Object.keys(pinned).length : 0,
-    };
+    return withCoverage(
+      "near_next_zero_centered",
+      pinned ? { rv_abs_by_date: pinned } : null,
+      pinned ? Object.keys(pinned) : [],
+    );
   }
   const source =
     strategyId === "basevol_short_long_ratio"
@@ -241,11 +314,10 @@ export function ratioSeriesForStrategy(
   const short = source?.rv_short_by_date;
   const long = source?.rv_long_by_date;
   if (!short || !long) {
-    return { kind: "rolling_short_long", series: null, n_observations: 0 };
+    return withCoverage("rolling_short_long", null, []);
   }
-  const ratioDates = Object.keys(short).filter(
+  const ratioDates = requiredDates.filter(
     (date) =>
-      panelDates.has(date.slice(0, 10)) &&
       Number.isFinite(short[date]) &&
       Number.isFinite(long[date]) &&
       long[date] > 1e-12,
@@ -256,14 +328,14 @@ export function ratioSeriesForStrategy(
   const longInPanel = Object.fromEntries(
     ratioDates.map((date) => [date, long[date]]),
   );
-  return {
-    kind: "rolling_short_long",
-    series: {
+  return withCoverage(
+    "rolling_short_long",
+    {
       rv_short_by_date: shortInPanel,
       rv_long_by_date: longInPanel,
     },
-    n_observations: ratioDates.length,
-  };
+    ratioDates,
+  );
 }
 
 function logicForStrategy(
@@ -302,6 +374,20 @@ function logicForStrategy(
   };
 }
 
+function ratioCoverageEvidence(
+  selected: ReturnType<typeof ratioSeriesForStrategy>,
+): Record<string, unknown> {
+  return {
+    ratio_observations: selected.n_observations,
+    ratio_required_sessions: selected.required_session_count,
+    ratio_covered_sessions: selected.covered_session_count,
+    ratio_missing_sessions: selected.missing_session_count,
+    ratio_missing_session_sample: selected.missing_session_sample,
+    ratio_missing_session_sample_omitted:
+      selected.missing_session_sample_omitted,
+  };
+}
+
 export function personalVolDailyPath(
   held: Record<string, Record<string, number>>,
   panel: PeriodPanel,
@@ -310,13 +396,30 @@ export function personalVolDailyPath(
   active_sessions: number;
   short_sessions: number;
   occupancy: number | null;
+  incomplete_intervals: number;
+  invalid_equity_observations: number;
+  incomplete_interval_samples: Array<{
+    signal_date: string;
+    return_start_date: string;
+    return_end_date: string;
+    missing_leg_count: number;
+  }>;
+  incomplete_interval_samples_omitted: number;
 } {
-  const dates = unionDates(panel.bars);
+  const dates = canonicalTradingDates(panel) || [];
   const closes = closeByCode(panel.bars);
   const points: PersonalVolDailyPoint[] = [];
   let equity = 1;
   let activeSessions = 0;
   let shortSessions = 0;
+  let incompleteIntervals = 0;
+  let invalidEquityObservations = 0;
+  const incompleteIntervalSamples: Array<{
+    signal_date: string;
+    return_start_date: string;
+    return_end_date: string;
+    missing_leg_count: number;
+  }> = [];
   const amortizedRoundTripCost =
     (2 * PERSONAL_VOL_ONE_WAY_COST) / PERSONAL_VOL_HOLD_SESSIONS;
   // A signal observed at close d cannot be filled at that same close.  It is
@@ -332,20 +435,48 @@ export function personalVolDailyPath(
     if (current > panel.period_end) break;
     const contributions: number[] = [];
     let hasShort = false;
+    let intendedLegs = 0;
+    let missingLegs = 0;
     for (const [code, positions] of Object.entries(held)) {
       const position = positions[signalDate];
-      if (!position) continue;
+      if (position === undefined || position === 0) continue;
+      intendedLegs += 1;
       const before = closes[code]?.[previous];
       const after = closes[code]?.[current];
-      if (!Number.isFinite(before) || !Number.isFinite(after) || before === 0) continue;
-      contributions.push(position * (after / before - 1));
+      const legReturn =
+        Number.isFinite(position) &&
+        Number.isFinite(before) &&
+        Number(before) > 0 &&
+        Number.isFinite(after) &&
+        Number(after) > 0
+          ? position * (Number(after) / Number(before) - 1)
+          : Number.NaN;
+      if (!Number.isFinite(legReturn)) {
+        missingLegs += 1;
+        continue;
+      }
+      contributions.push(legReturn);
       if (position < 0) hasShort = true;
     }
     let grossReturn = 0;
     let costReturn = 0;
     let turnoverOneWay = 0;
     let netReturn = 0;
-    if (contributions.length) {
+    if (intendedLegs > 0 && missingLegs > 0) {
+      incompleteIntervals += 1;
+      invalidEquityObservations += missingLegs;
+      if (
+        incompleteIntervalSamples.length <
+        PERSONAL_VOL_INCOMPLETE_INTERVAL_SAMPLE_LIMIT
+      ) {
+        incompleteIntervalSamples.push({
+          signal_date: signalDate,
+          return_start_date: previous,
+          return_end_date: current,
+          missing_leg_count: missingLegs,
+        });
+      }
+    } else if (contributions.length === intendedLegs && intendedLegs > 0) {
       grossReturn =
         contributions.reduce((total, value) => total + value, 0) /
         contributions.length;
@@ -361,6 +492,7 @@ export function personalVolDailyPath(
       gross_return: grossReturn,
       cost_return: costReturn,
       turnover_one_way: turnoverOneWay,
+      invalid_equity_observations: missingLegs,
       net_return: netReturn,
       equity,
     });
@@ -370,6 +502,11 @@ export function personalVolDailyPath(
     active_sessions: activeSessions,
     short_sessions: shortSessions,
     occupancy: points.length ? activeSessions / points.length : null,
+    incomplete_intervals: incompleteIntervals,
+    invalid_equity_observations: invalidEquityObservations,
+    incomplete_interval_samples: incompleteIntervalSamples,
+    incomplete_interval_samples_omitted:
+      incompleteIntervals - incompleteIntervalSamples.length,
   };
 }
 
@@ -378,26 +515,93 @@ export function evaluatePersonalVolWindow(
   panel: PeriodPanel,
 ): Record<string, unknown> {
   if (panel.status !== "ok" || !Object.keys(panel.bars).length) {
+    const diagnosticMetrics = personalVolPerformance([], true);
     return {
       period_id: panel.period_id,
       year: panel.year,
       status: "data_missing",
       reason: "panel_missing_or_empty",
       daily_path: [],
-      metrics: personalVolPerformance([], true),
+      performance_status: "UNAVAILABLE",
+      performance_unavailable_reason: "panel_missing_or_empty",
+      metrics: null,
+      diagnostic_metrics: diagnosticMetrics,
+    };
+  }
+  const canonicalDates = canonicalTradingDates(panel);
+  const requiredDates = requiredTradingDates(panel);
+  if (!canonicalDates || requiredDates.length === 0) {
+    const diagnosticMetrics = personalVolPerformance([], true);
+    return {
+      period_id: panel.period_id,
+      year: panel.year,
+      status: "incomplete",
+      reason: "topix_trading_axis_missing_or_invalid",
+      expected_index_proxy: PERSONAL_VOL_TOPIX_PROXY_IDENTITY,
+      observed_index_proxy: panel.index_proxy ?? null,
+      canonical_trading_sessions: canonicalDates?.length ?? 0,
+      required_trading_sessions: requiredDates.length,
+      daily_path: [],
+      performance_status: "UNAVAILABLE",
+      performance_unavailable_reason: "topix_trading_axis_missing_or_invalid",
+      metrics: null,
+      diagnostic_metrics: diagnosticMetrics,
+    };
+  }
+  const source = panel.opt225_regime?.source;
+  if (!isSupportedPersonalVolSource(source)) {
+    const diagnosticMetrics = personalVolPerformance([], true);
+    return {
+      period_id: panel.period_id,
+      year: panel.year,
+      status: "incomplete",
+      reason: "opt225_source_identity_missing_or_mismatch",
+      expected_source: {
+        dataset: PERSONAL_VOL_SOURCE_IDENTITY.dataset,
+        supported_versions: PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS,
+      },
+      observed_source: source ?? null,
+      daily_path: [],
+      performance_status: "UNAVAILABLE",
+      performance_unavailable_reason:
+        "opt225_source_identity_missing_or_mismatch",
+      metrics: null,
+      diagnostic_metrics: diagnosticMetrics,
     };
   }
   const selected = ratioSeriesForStrategy(definition.strategy_id, panel);
   if (!selected.series || selected.n_observations === 0) {
+    const diagnosticMetrics = personalVolPerformance([], true);
     return {
       period_id: panel.period_id,
       year: panel.year,
       status: "data_missing",
       reason: "required_ratio_series_missing",
+      volatility_source: source,
       ratio_kind: selected.kind,
-      ratio_observations: selected.n_observations,
+      ...ratioCoverageEvidence(selected),
       daily_path: [],
-      metrics: personalVolPerformance([], true),
+      performance_status: "UNAVAILABLE",
+      performance_unavailable_reason: "required_ratio_series_missing",
+      metrics: null,
+      diagnostic_metrics: diagnosticMetrics,
+    };
+  }
+  if (selected.missing_session_count > 0) {
+    const diagnosticMetrics = personalVolPerformance([], true);
+    return {
+      period_id: panel.period_id,
+      year: panel.year,
+      status: "incomplete",
+      reason: "required_ratio_coverage_incomplete",
+      volatility_source: source,
+      ratio_kind: selected.kind,
+      ...ratioCoverageEvidence(selected),
+      daily_path: [],
+      performance_status: "UNAVAILABLE",
+      performance_unavailable_reason: "required_ratio_coverage_incomplete",
+      metrics: null,
+      diagnostic_metrics: diagnosticMetrics,
     };
   }
   const logic = logicForStrategy(definition.strategy_id);
@@ -410,35 +614,68 @@ export function evaluatePersonalVolWindow(
         };
   const native = barNativeHeldBook(logic, evaluationPanel);
   if (!native || native.fallback) {
+    const unavailableReason =
+      native?.fallback || "closed_bar_native_interpreter_unavailable";
+    const diagnosticMetrics = personalVolPerformance([], true);
     return {
       period_id: panel.period_id,
       year: panel.year,
       status: "incomplete",
-      reason: native?.fallback || "closed_bar_native_interpreter_unavailable",
+      reason: unavailableReason,
+      volatility_source: source,
       ratio_kind: selected.kind,
-      ratio_observations: selected.n_observations,
+      ...ratioCoverageEvidence(selected),
       daily_path: [],
-      metrics: personalVolPerformance([], true),
+      performance_status: "UNAVAILABLE",
+      performance_unavailable_reason: unavailableReason,
+      metrics: null,
+      diagnostic_metrics: diagnosticMetrics,
     };
   }
   const path = personalVolDailyPath(native.held, panel);
+  const status =
+    path.incomplete_intervals > 0
+      ? "incomplete"
+      : path.active_sessions > 0
+        ? "ok"
+        : "no_active_positions";
+  const reason =
+    status === "ok"
+      ? null
+      : status === "incomplete"
+        ? "one_or_more_active_intervals_missing_complete_equity_legs"
+        : "ratio_never_crossed_fixed_thresholds";
+  const diagnosticMetrics = personalVolPerformance(path.points, true);
   return {
     period_id: panel.period_id,
     year: panel.year,
     period_start: panel.period_start,
     period_end: panel.period_end,
-    status: path.active_sessions > 0 ? "ok" : "no_active_positions",
-    reason: path.active_sessions > 0 ? null : "ratio_never_crossed_fixed_thresholds",
+    status,
+    reason,
+    volatility_source: source,
     ratio_kind: selected.kind,
-    ratio_observations: selected.n_observations,
+    ...ratioCoverageEvidence(selected),
+    canonical_trading_sessions: canonicalDates.length,
+    required_trading_sessions: requiredDates.length,
     eval_path: `personal_draft:${native.path}`,
     signal_lag_sessions: 1,
     execution_timing: "signal_close_d_fill_close_d_plus_1",
     active_sessions: path.active_sessions,
     short_sessions: path.short_sessions,
     occupancy: path.occupancy,
+    complete_leg_policy: "flat_entire_interval_without_cost",
+    incomplete_intervals: path.incomplete_intervals,
+    missing_leg_count: path.invalid_equity_observations,
+    invalid_equity_observations: path.invalid_equity_observations,
+    incomplete_interval_samples: path.incomplete_interval_samples,
+    incomplete_interval_samples_omitted:
+      path.incomplete_interval_samples_omitted,
     daily_path: path.points,
-    metrics: personalVolPerformance(path.points, true),
+    performance_status: status === "ok" ? "AVAILABLE" : "UNAVAILABLE",
+    performance_unavailable_reason: reason,
+    metrics: status === "ok" ? diagnosticMetrics : null,
+    ...(status === "ok" ? {} : { diagnostic_metrics: diagnosticMetrics }),
   };
 }
 
@@ -448,6 +685,10 @@ export async function runPersonalVolResearch(
 ): Promise<Record<string, unknown>> {
   const panelNotes: string[] = [];
   const fixedPrefixNotes: string[] = [];
+  const observedVolatilitySources = new Map<
+    string,
+    { dataset: string; version: string }
+  >();
   const windowsByStrategy = new Map<
     PersonalVolStrategyId,
     Record<string, unknown>[]
@@ -462,6 +703,7 @@ export async function runPersonalVolResearch(
       env.STRUCTURED_BUCKET,
       [period],
       PERSONAL_VOL_PANELS_PREFIX,
+      true,
     );
     panelNotes.push(...loaded.notes);
     const expectedKey = `${PERSONAL_VOL_PANELS_PREFIX}/${period.period_id}.json`;
@@ -482,6 +724,20 @@ export async function runPersonalVolResearch(
             source: "fixed_personal_vol_panel_missing",
           };
         })();
+    const observedSource =
+      "opt225_regime" in panel ? panel.opt225_regime?.source : undefined;
+    if (
+      typeof observedSource?.dataset === "string" &&
+      typeof observedSource.version === "string"
+    ) {
+      observedVolatilitySources.set(
+        `${observedSource.dataset}\n${observedSource.version}`,
+        {
+          dataset: observedSource.dataset,
+          version: observedSource.version,
+        },
+      );
+    }
     for (const definition of PERSONAL_VOL_STRATEGIES) {
       windowsByStrategy
         .get(definition.strategy_id)!
@@ -495,6 +751,11 @@ export async function runPersonalVolResearch(
         ? (window.daily_path as PersonalVolDailyPoint[])
         : [],
     );
+    const unavailablePeriodIds = windows
+      .filter((window) => window.status !== "ok")
+      .map((window) => String(window.period_id));
+    const stitchedMetrics = personalVolPerformance(stitchedPoints, false);
+    const stitchedAvailable = unavailablePeriodIds.length === 0;
     return {
       ...definition,
       windows,
@@ -502,7 +763,13 @@ export async function runPersonalVolResearch(
         label: "three fixed post-selection windows stitched for descriptive comparison",
         warning:
           "The gaps between windows are omitted. CAGR is intentionally null and this stitch is not a continuous backtest.",
-        metrics: personalVolPerformance(stitchedPoints, false),
+        performance_status: stitchedAvailable ? "AVAILABLE" : "UNAVAILABLE",
+        performance_unavailable_reason: stitchedAvailable
+          ? null
+          : "one_or_more_windows_not_ok",
+        unavailable_period_ids: unavailablePeriodIds,
+        metrics: stitchedAvailable ? stitchedMetrics : null,
+        ...(stitchedAvailable ? {} : { diagnostic_metrics: stitchedMetrics }),
       },
     };
   });
@@ -515,7 +782,11 @@ export async function runPersonalVolResearch(
       ),
     ),
   );
-  const commonWindowSet = new Set(commonSuccessfulWindows);
+  const allRequiredWindowsComparable =
+    commonSuccessfulWindows.length === PERSONAL_VOL_PERIODS.length;
+  const commonWindowSet = new Set(
+    allRequiredWindowsComparable ? commonSuccessfulWindows : [],
+  );
   const strategies = strategiesBeforeCommonWindow.map((strategy) => {
     const commonPoints = strategy.windows.flatMap((window) =>
       commonWindowSet.has(String(window.period_id)) &&
@@ -526,9 +797,17 @@ export async function runPersonalVolResearch(
     return {
       ...strategy,
       common_window_comparison: {
-        period_ids: commonSuccessfulWindows,
-        comparable: commonSuccessfulWindows.length > 0,
-        metrics: personalVolPerformance(commonPoints, false),
+        period_ids: allRequiredWindowsComparable ? commonSuccessfulWindows : [],
+        comparable: allRequiredWindowsComparable,
+        performance_status: allRequiredWindowsComparable
+          ? "AVAILABLE"
+          : "UNAVAILABLE",
+        performance_unavailable_reason: allRequiredWindowsComparable
+          ? null
+          : "all_required_windows_must_be_ok",
+        metrics: allRequiredWindowsComparable
+          ? personalVolPerformance(commonPoints, false)
+          : null,
       },
     };
   });
@@ -536,15 +815,43 @@ export async function runPersonalVolResearch(
     const successfulWindows = strategy.windows.filter(
       (window) => window.status === "ok",
     ).length;
+    const incompleteWindows = strategy.windows.filter(
+      (window) => window.status === "incomplete",
+    ).length;
+    const nonOkWindows = strategy.windows.filter(
+      (window) => window.status !== "ok",
+    ).length;
+    const incompleteIntervals = strategy.windows.reduce(
+      (total, window) =>
+        total +
+        (typeof window.incomplete_intervals === "number"
+          ? window.incomplete_intervals
+          : 0),
+      0,
+    );
+    const missingLegCount = strategy.windows.reduce(
+      (total, window) =>
+        total +
+        (typeof window.missing_leg_count === "number"
+          ? window.missing_leg_count
+          : 0),
+      0,
+    );
     return {
       strategy_id: strategy.strategy_id,
       requested_windows: strategy.windows.length,
       successful_windows: successfulWindows,
-      candidate_status: successfulWindows > 0 ? "evaluated" : "not_evaluated",
+      incomplete_windows: incompleteWindows,
+      non_ok_windows: nonOkWindows,
+      incomplete_intervals: incompleteIntervals,
+      missing_leg_count: missingLegCount,
+      candidate_status:
+        successfulWindows === PERSONAL_VOL_PERIODS.length && nonOkWindows === 0
+          ? "evaluated"
+          : "not_evaluated",
     };
   });
-  const exactFourEvaluationComplete =
-    commonSuccessfulWindows.length === PERSONAL_VOL_PERIODS.length;
+  const exactFourEvaluationComplete = allRequiredWindowsComparable;
   const report = {
     schema_version: "personal-vol-ratio-report/v2",
     worker_version: env.MASS_EVAL_VERSION,
@@ -554,8 +861,7 @@ export async function runPersonalVolResearch(
     execution_contract: {
       exact_four: true,
       exact_four_evaluation_complete: exactFourEvaluationComplete,
-      exact_four_common_window_comparable:
-        commonSuccessfulWindows.length > 0,
+      exact_four_common_window_comparable: allRequiredWindowsComparable,
       common_successful_windows: commonSuccessfulWindows,
       strategy_count: PERSONAL_VOL_STRATEGIES.length,
       hold_sessions: PERSONAL_VOL_HOLD_SESSIONS,
@@ -563,6 +869,7 @@ export async function runPersonalVolResearch(
       cost_method: "two_one_way_costs_amortized_over_fixed_hold",
       signal_lag_sessions: 1,
       execution_timing: "signal_close_d_fill_close_d_plus_1",
+      incomplete_equity_leg_policy: "flat_entire_interval_without_cost",
       short_financing: "not_modelled",
       short_financing_limitation: "screening_only",
       market_neutrality: "dollar_balanced_rank_long_short_not_beta_neutral",
@@ -581,6 +888,12 @@ export async function runPersonalVolResearch(
       iv_fields_available_from: PERSONAL_VOL_IV_AVAILABLE_FROM,
       panel_notes: [...panelNotes, ...fixedPrefixNotes],
       source: "existing immutable R2 panel bundle",
+      volatility_source: {
+        dataset: PERSONAL_VOL_SOURCE_IDENTITY.dataset,
+        current_staging_version: PERSONAL_VOL_SOURCE_IDENTITY.version,
+        supported_versions: PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS,
+        observed: [...observedVolatilitySources.values()],
+      },
       equity_universe: PERSONAL_VOL_UNIVERSE_PROVENANCE,
       excluded_lookahead_windows: PERSONAL_VOL_EXCLUDED_LOOKAHEAD_WINDOWS,
       exclusion_reason:

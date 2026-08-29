@@ -136,6 +136,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "automatic_promotion": False,
                 "model_calls": 0,
                 "estimated_ai_cost_usd": 0.0,
+                "go": False,
+                "ready_snapshot_declared": False,
             },
             ensure_ascii=False,
             sort_keys=True,

@@ -19,6 +19,10 @@ from research.eval_loaders import (
     resolve_margin_path,
 )
 from research.eval_universe import DEFAULT_SQLITE
+from research.options_225_vol_series import (
+    DATASET_ID,
+    OPTIONS_225_VOL_SERIES_VERSION,
+)
 
 
 def _load_markets_calendar_map(
@@ -303,6 +307,16 @@ def attach_nky_proxy(
             if idx_pairs:
                 bars_json["__NKY_PROXY__"] = idx_pairs
                 nky_meta = {
+                    "index_proxy": {
+                        "dataset": "indices_bars_daily_topix",
+                        "label": "TOPIX",
+                        "role": "nky_vol_proxy_compare_only",
+                        "note": (
+                            "TOPIX closes staged as __NKY_PROXY__ for beta and "
+                            "realized-vol comparisons only. Nikkei 225 option "
+                            "volatility remains the canonical volatility signal."
+                        ),
+                    },
                     "nky_vol_series": {
                         "rv_short_by_date": nky.get("rv_short_by_date") or {},
                         "rv_long_by_date": nky.get("rv_long_by_date") or {},
@@ -321,6 +335,16 @@ def attach_opt225_regime() -> dict[str, Any]:
     try:
         opt225 = load_opt225_regime_bundle_for_eval()
         if opt225:
+            source = {
+                "dataset": str(opt225.get("dataset") or ""),
+                "version": str(opt225.get("version") or ""),
+            }
+            expected_source = {
+                "dataset": DATASET_ID,
+                "version": OPTIONS_225_VOL_SERIES_VERSION,
+            }
+            if source != expected_source:
+                raise ValueError("options_225 source identity mismatch")
             compact: dict[str, Any] = {}
             for kind in (
                 "basevol",
@@ -341,6 +365,7 @@ def attach_opt225_regime() -> dict[str, Any]:
                     "rv_long_by_date": ser.get("rv_long_by_date") or {},
                     "rv_ratio_by_date": ser.get("rv_ratio_by_date") or {},
                 }
+            compact["source"] = source
             base_vol_series = dict(
                 (compact.get("basevol") or {}).get("rv_abs_by_date") or {}
             )

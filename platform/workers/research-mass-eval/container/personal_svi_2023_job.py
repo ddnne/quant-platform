@@ -26,7 +26,7 @@ from research.personal_metrics import summarize_performance
 R2_ORIGIN = "http://research.r2"
 COHORT_ID = "personal-svi-term-2023-v1"
 STRATEGY_ID = "svi-atm-term-ratio-momentum-switch"
-RUNNER_VERSION = "personal-svi-cloud-runner/v2"
+RUNNER_VERSION = "personal-svi-cloud-runner/v4"
 FEATURE_FIELD = "svi_atm_short_over_next_minus_one"
 PANEL_KEY = (
     "research/mass_eval/panels_cache/527c1065afe14601/panels/y2023_full.json"
@@ -50,6 +50,11 @@ MOMENTUM_SESSIONS = 5
 ONE_WAY_COST = 0.001
 LONG_FRACTION = 0.30
 SHORT_FRACTION = 0.30
+TOPIX_PROXY_PANEL_CODE = "__NKY_PROXY__"
+TOPIX_PROXY_DATASET = "indices_bars_daily_topix"
+BETA_LOOKBACK_SESSIONS = 126
+BETA_MIN_OBSERVATIONS = 63
+MAX_ABS_TOPIX_HEDGE_WEIGHT = 1.5
 MAX_INPUT_MANIFEST_BYTES = 512 * 1024
 MAX_PANEL_BYTES = 64 * 1024 * 1024
 MAX_OPTIONS_OBJECT_BYTES = 16 * 1024 * 1024
@@ -518,6 +523,116 @@ def _normalize_bars(panel: Mapping[str, Any]) -> dict[str, dict[str, float]]:
     return bars
 
 
+_BetaEstimate = tuple[float, int, str]
+
+
+def _identity_bound_topix_closes(panel: Mapping[str, Any]) -> dict[str, float]:
+    """Open the legacy alias only when the panel proves it contains TOPIX."""
+
+    identity = panel.get("index_proxy")
+    if (
+        not isinstance(identity, Mapping)
+        or identity.get("dataset") != TOPIX_PROXY_DATASET
+        or identity.get("label") != "TOPIX"
+    ):
+        raise RuntimeError("TOPIX index proxy identity is unavailable")
+    raw = panel.get("bars")
+    pairs = raw.get(TOPIX_PROXY_PANEL_CODE) if isinstance(raw, Mapping) else None
+    if not isinstance(pairs, Sequence):
+        raise RuntimeError("TOPIX index proxy series is unavailable")
+    values: dict[str, float] = {}
+    for pair in pairs:
+        if not isinstance(pair, Sequence) or len(pair) < 2:
+            continue
+        day = _valid_iso_day(pair[0])
+        close = _number(pair[1])
+        if day is not None and close is not None and close > 0:
+            values[day] = close
+    if not values:
+        raise RuntimeError("TOPIX index proxy series is unavailable")
+    return values
+
+
+def _normalize_topix_proxy(panel: Mapping[str, Any]) -> dict[str, float]:
+    values = _identity_bound_topix_closes(panel)
+    if len(values) < BETA_MIN_OBSERVATIONS + 1:
+        raise RuntimeError("TOPIX index proxy has insufficient history")
+    return values
+
+
+def _estimate_beta_through(
+    stock: Mapping[str, float],
+    topix: Mapping[str, float],
+    signal_day: str,
+) -> _BetaEstimate | None:
+    """Estimate beta from at most 126 paired returns ending no later than d."""
+
+    common_days = sorted(day for day in stock if day <= signal_day and day in topix)
+    observations: list[tuple[str, float, float]] = []
+    for previous_day, current_day in zip(common_days, common_days[1:]):
+        stock_before = stock[previous_day]
+        topix_before = topix[previous_day]
+        if stock_before <= 0 or topix_before <= 0:
+            continue
+        observations.append(
+            (
+                current_day,
+                stock[current_day] / stock_before - 1.0,
+                topix[current_day] / topix_before - 1.0,
+            )
+        )
+    observations = observations[-BETA_LOOKBACK_SESSIONS:]
+    if len(observations) < BETA_MIN_OBSERVATIONS:
+        return None
+    stock_returns = [row[1] for row in observations]
+    topix_returns = [row[2] for row in observations]
+    stock_mean = sum(stock_returns) / len(stock_returns)
+    topix_mean = sum(topix_returns) / len(topix_returns)
+    covariance_sum = sum(
+        (stock_return - stock_mean) * (topix_return - topix_mean)
+        for stock_return, topix_return in zip(stock_returns, topix_returns)
+    )
+    topix_variance_sum = sum(
+        (topix_return - topix_mean) ** 2 for topix_return in topix_returns
+    )
+    if topix_variance_sum <= 1e-18:
+        return None
+    beta = covariance_sum / topix_variance_sum
+    if not math.isfinite(beta):
+        return None
+    return beta, len(observations), observations[-1][0]
+
+
+def _realized_beta(
+    returns: Sequence[float],
+    topix_returns: Sequence[float],
+) -> float | None:
+    if len(returns) != len(topix_returns) or len(returns) < 2:
+        return None
+    return_mean = sum(returns) / len(returns)
+    topix_mean = sum(topix_returns) / len(topix_returns)
+    covariance_sum = sum(
+        (value - return_mean) * (proxy - topix_mean)
+        for value, proxy in zip(returns, topix_returns)
+    )
+    variance_sum = sum((value - topix_mean) ** 2 for value in topix_returns)
+    if variance_sum <= 1e-18:
+        return None
+    beta = covariance_sum / variance_sum
+    return beta if math.isfinite(beta) else None
+
+
+def _annualized_volatility(returns: Sequence[float]) -> float | None:
+    if len(returns) < 2:
+        return None
+    average = sum(returns) / len(returns)
+    variance = sum((value - average) ** 2 for value in returns) / (
+        len(returns) - 1
+    )
+    volatility = math.sqrt(max(0.0, variance)) * math.sqrt(252.0)
+    return volatility if math.isfinite(volatility) else None
+
+
 def _rank_book(
     bars: Mapping[str, Mapping[str, float]],
     dates: Sequence[str],
@@ -551,20 +666,11 @@ def _rank_book(
     return book
 
 
-def evaluate_fixed_strategy(
-    panel: Mapping[str, Any],
-    feature_rows: Sequence[Mapping[str, Any]],
-    evaluation_dates: Sequence[str],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
-    bars = _normalize_bars(panel)
-    dates = sorted({day for values in bars.values() for day in values})
-    features = {
-        str(row.get("date") or ""): _number(row.get(FEATURE_FIELD))
-        if row.get("fit_success") is True
-        else None
-        for row in feature_rows
-    }
-    allowed_evaluation = set(map(str, evaluation_dates))
+def _held_books_by_signal(
+    bars: Mapping[str, Mapping[str, float]],
+    dates: Sequence[str],
+    features: Mapping[str, float | None],
+) -> dict[str, dict[str, float]]:
     held_by_signal: dict[str, dict[str, float]] = {}
     held: dict[str, float] = {}
     remaining = 0
@@ -574,19 +680,120 @@ def evaluate_fixed_strategy(
             remaining = HOLD_SESSIONS
         held_by_signal[day] = dict(held)
         remaining -= 1
+    return held_by_signal
 
-    equity = 1.0
-    applied: dict[str, float] = {}
-    curve: list[dict[str, Any]] = []
-    trades: list[dict[str, Any]] = []
-    active_sessions = 0
+
+def _stock_interval_trace(
+    bars: Mapping[str, Mapping[str, float]],
+    dates: Sequence[str],
+    features: Mapping[str, float | None],
+    evaluation_dates: Sequence[str],
+) -> list[dict[str, Any]]:
+    allowed_evaluation = set(map(str, evaluation_dates))
+    held_by_signal = _held_books_by_signal(bars, dates, features)
+    trace: list[dict[str, Any]] = []
     for index in range(2, len(dates)):
         previous_day = dates[index - 1]
         current_day = dates[index]
         if current_day not in allowed_evaluation:
             continue
         signal_day = dates[index - 2]
-        target = held_by_signal.get(signal_day, {})
+        target_book = held_by_signal.get(signal_day, {})
+        missing_target_codes = sorted(
+            code
+            for code in target_book
+            if bars[code].get(previous_day) is None
+            or bars[code].get(current_day) is None
+        )
+        stock_gross = (
+            0.0
+            if missing_target_codes
+            else sum(
+                weight
+                * (bars[code][current_day] / bars[code][previous_day] - 1.0)
+                for code, weight in target_book.items()
+            )
+        )
+        trace.append(
+            {
+                "date": current_day,
+                "previous_day": previous_day,
+                "signal_date": signal_day,
+                "target_book": target_book,
+                "active_target": bool(target_book),
+                "interval_status": (
+                    "INCOMPLETE_TARGET_BOOK"
+                    if missing_target_codes
+                    else "COMPLETE"
+                ),
+                "missing_target_codes": missing_target_codes,
+                "stock_gross_return": stock_gross,
+            }
+        )
+    eligible_evaluation = set(map(str, dates[2:]))
+    if (
+        not allowed_evaluation.issubset(eligible_evaluation)
+        or len(trace) != len(allowed_evaluation)
+    ):
+        raise RuntimeError("evaluation calendar is not represented by the stock trace")
+    return trace
+
+
+def evaluate_fixed_strategy(
+    panel: Mapping[str, Any],
+    feature_rows: Sequence[Mapping[str, Any]],
+    evaluation_dates: Sequence[str],
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any],
+    list[dict[str, Any]],
+]:
+    bars = _normalize_bars(panel)
+    topix = _identity_bound_topix_closes(panel)
+    dates = sorted(
+        day for day in topix if EARLIEST_DAY <= day <= LATEST_DAY
+    )
+    features = {
+        str(row.get("date") or ""): _number(row.get(FEATURE_FIELD))
+        if row.get("fit_success") is True
+        else None
+        for row in feature_rows
+    }
+    trace = _stock_interval_trace(bars, dates, features, evaluation_dates)
+
+    equity = 1.0
+    applied: dict[str, float] = {}
+    curve: list[dict[str, Any]] = []
+    trades: list[dict[str, Any]] = []
+    active_sessions = 0
+    incomplete_active_intervals: list[str] = []
+    missing_target_codes: set[str] = set()
+    missing_target_leg_observations = 0
+    for interval in trace:
+        current_day = str(interval["date"])
+        previous_day = str(interval["previous_day"])
+        signal_day = str(interval["signal_date"])
+        target = dict(interval["target_book"])
+        missing = list(interval["missing_target_codes"])
+        if missing:
+            incomplete_active_intervals.append(current_day)
+            missing_target_codes.update(map(str, missing))
+            missing_target_leg_observations += len(missing)
+            curve.append(
+                {
+                    "date": current_day,
+                    "signal_date": signal_day,
+                    "interval_status": "INCOMPLETE_TARGET_BOOK",
+                    "missing_target_codes": missing,
+                    "gross_return": 0.0,
+                    "cost_return": 0.0,
+                    "net_return": 0.0,
+                    "turnover_one_way": 0.0,
+                    "equity": equity,
+                }
+            )
+            continue
         all_codes = sorted(set(applied) | set(target))
         turnover = 0.0
         equity_before = equity
@@ -609,24 +816,18 @@ def evaluate_fixed_strategy(
                     "cost": notional * ONE_WAY_COST,
                 }
             )
-        gross = 0.0
-        invested = False
-        for code, weight in target.items():
-            before = bars.get(code, {}).get(previous_day)
-            after = bars.get(code, {}).get(current_day)
-            if before is None or after is None or before <= 0:
-                continue
-            gross += weight * (after / before - 1.0)
-            invested = True
+        gross = float(interval["stock_gross_return"])
         cost = turnover * ONE_WAY_COST
         net = gross - cost
         equity *= 1.0 + net
-        if invested:
+        if target:
             active_sessions += 1
         curve.append(
             {
                 "date": current_day,
                 "signal_date": signal_day,
+                "interval_status": "COMPLETE",
+                "missing_target_codes": [],
                 "gross_return": gross,
                 "cost_return": cost,
                 "net_return": net,
@@ -638,7 +839,12 @@ def evaluate_fixed_strategy(
 
     # Close the screening book at the final observed close so reported cost is
     # a full round trip rather than an uncharged open terminal position.
-    if curve and applied:
+    terminal_liquidation_costed = bool(
+        curve
+        and applied
+        and trace[-1]["interval_status"] == "COMPLETE"
+    )
+    if terminal_liquidation_costed:
         final_day = str(curve[-1]["date"])
         liquidation = sum(abs(weight) for weight in applied.values())
         liquidation_cost = liquidation * ONE_WAY_COST
@@ -666,15 +872,47 @@ def evaluate_fixed_strategy(
                 }
             )
 
-    performance = summarize_performance(
-        equity_curve=curve,
-        trades=trades,
-        starting_capital=1.0,
+    primary_status = (
+        "INCOMPLETE"
+        if incomplete_active_intervals
+        else "EVALUATED"
+        if active_sessions > 0
+        else "NOT_EVALUATED"
+    )
+    performance = (
+        summarize_performance(
+            equity_curve=curve,
+            trades=trades,
+            starting_capital=1.0,
+        )
+        if primary_status == "EVALUATED"
+        else None
+    )
+    performance_unavailable_reason = (
+        "incomplete_active_target_intervals"
+        if primary_status == "INCOMPLETE"
+        else "no_active_stock_book_sessions"
+        if primary_status == "NOT_EVALUATED"
+        else None
     )
     diagnostics = {
+        "status": primary_status,
+        "performance_status": (
+            "UNAVAILABLE" if performance is None else "AVAILABLE"
+        ),
+        "performance_unavailable_reason": performance_unavailable_reason,
         "panel_sessions": len(dates),
         "evaluation_sessions": len(curve),
+        "calendar_sessions_dropped": len(trace) - len(curve),
+        "active_target_sessions": sum(
+            bool(interval["active_target"]) for interval in trace
+        ),
         "active_sessions": active_sessions,
+        "incomplete_active_interval_count": len(incomplete_active_intervals),
+        "incomplete_active_intervals": incomplete_active_intervals,
+        "missing_target_leg_observations": missing_target_leg_observations,
+        "missing_target_codes_sample": sorted(missing_target_codes)[:20],
+        "terminal_liquidation_costed": terminal_liquidation_costed,
         "feature_sessions": sum(features.get(day) is not None for day in dates),
         "fit_success_sessions": sum(
             row.get("fit_success") is True for row in feature_rows
@@ -683,7 +921,474 @@ def evaluate_fixed_strategy(
             row.get("fit_success") is not True for row in feature_rows
         ),
     }
-    return curve, trades, {"performance": performance, **diagnostics}
+    return curve, trades, {"performance": performance, **diagnostics}, trace
+
+
+def evaluate_topix_beta_hedged_comparison(
+    panel: Mapping[str, Any],
+    feature_rows: Sequence[Mapping[str, Any]],
+    stock_interval_trace: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Add a non-executable TOPIX-index hedge comparison to the fixed result."""
+
+    bars = _normalize_bars(panel)
+    topix = _normalize_topix_proxy(panel)
+    plans: list[dict[str, Any]] = []
+    active_sessions = 0
+    incomplete_active_intervals: list[str] = []
+    beta_available_sessions = 0
+    beta_unavailable_sessions = 0
+    hedge_capped_sessions = 0
+
+    for stock_interval in stock_interval_trace:
+        current_day = str(stock_interval.get("date") or "")
+        previous_day = str(stock_interval.get("previous_day") or "")
+        signal_day = str(stock_interval.get("signal_date") or "")
+        target_raw = stock_interval.get("target_book")
+        missing_raw = stock_interval.get("missing_target_codes")
+        if not isinstance(target_raw, Mapping) or not isinstance(missing_raw, list):
+            raise RuntimeError("stock interval trace is invalid")
+        target_book = {str(code): float(weight) for code, weight in target_raw.items()}
+        missing_target_codes = sorted(map(str, missing_raw))
+        expected_interval_status = (
+            "INCOMPLETE_TARGET_BOOK"
+            if missing_target_codes
+            else "COMPLETE"
+        )
+        if stock_interval.get("interval_status") != expected_interval_status:
+            raise RuntimeError("stock interval trace completeness mismatch")
+        active = bool(target_book)
+        if active:
+            active_sessions += 1
+        topix_before = topix.get(previous_day)
+        topix_after = topix.get(current_day)
+        if topix_before is None or topix_after is None or topix_before <= 0:
+            raise RuntimeError("TOPIX index proxy return is unavailable")
+        topix_return = topix_after / topix_before - 1.0
+        missing_estimates = 0
+        estimates: list[tuple[str, float, _BetaEstimate]] = []
+        for code, weight in target_book.items():
+            estimate = _estimate_beta_through(bars[code], topix, signal_day)
+            if estimate is None:
+                missing_estimates += 1
+            else:
+                estimates.append((code, weight, estimate))
+
+        book_beta: float | None = None
+        residual_beta: float | None = None
+        estimate_end: str | None = None
+        if missing_target_codes:
+            beta_status = "INCOMPLETE_TARGET_BOOK"
+            target_hedge = 0.0
+            incomplete_active_intervals.append(current_day)
+        elif not target_book:
+            beta_status = "NO_ACTIVE_BOOK"
+            target_hedge = 0.0
+        elif missing_estimates:
+            # Do not partially hedge a book whose beta is not fully observed.
+            beta_status = "INSUFFICIENT_HISTORY"
+            target_hedge = 0.0
+            beta_unavailable_sessions += 1
+        else:
+            beta_status = "ESTIMATED"
+            book_beta = sum(weight * estimate[0] for _, weight, estimate in estimates)
+            unclipped_hedge = -book_beta
+            target_hedge = max(
+                -MAX_ABS_TOPIX_HEDGE_WEIGHT,
+                min(MAX_ABS_TOPIX_HEDGE_WEIGHT, unclipped_hedge),
+            )
+            residual_beta = book_beta + target_hedge
+            estimate_end = max(estimate[2] for _, _, estimate in estimates)
+            if estimate_end > signal_day:
+                raise RuntimeError("TOPIX beta estimate crossed the signal wall")
+            beta_available_sessions += 1
+            if target_hedge != unclipped_hedge:
+                hedge_capped_sessions += 1
+
+        plans.append(
+            {
+                "date": current_day,
+                "signal_date": signal_day,
+                "assumed_proxy_fill_date": previous_day,
+                "target_book": target_book,
+                "missing_target_codes": missing_target_codes,
+                "stock_gross_return": float(stock_interval["stock_gross_return"]),
+                "topix_proxy_return": topix_return,
+                "estimated_stock_book_beta": book_beta,
+                "target_topix_proxy_hedge_weight": target_hedge,
+                "residual_beta_after_hedge": residual_beta,
+                "beta_status": beta_status,
+                "beta_window_last_return_date": estimate_end,
+            }
+        )
+
+    beta_coverage_ratio = (
+        None
+        if active_sessions == 0
+        else beta_available_sessions / active_sessions
+    )
+    beta_coverage_complete = (
+        active_sessions > 0
+        and not incomplete_active_intervals
+        and beta_available_sessions == active_sessions
+    )
+    if incomplete_active_intervals:
+        comparison_status = "INCOMPLETE"
+        performance_unavailable_reason = "incomplete_active_target_intervals"
+    elif active_sessions == 0:
+        comparison_status = "NOT_EVALUATED"
+        performance_unavailable_reason = "no_active_stock_book_sessions"
+    elif beta_coverage_complete:
+        comparison_status = "EVALUATED"
+        performance_unavailable_reason = None
+    elif beta_available_sessions:
+        comparison_status = "PARTIAL"
+        performance_unavailable_reason = "beta_did_not_cover_every_active_session"
+    else:
+        comparison_status = "UNAVAILABLE"
+        performance_unavailable_reason = "beta_unavailable_for_all_active_sessions"
+
+    path: list[dict[str, Any]] = []
+    unhedged_gross_returns: list[float] = []
+    hedged_gross_returns: list[float] = []
+    topix_returns: list[float] = []
+    stock_adjustment_count = 0
+    stock_notional_amount = 0.0
+    stock_cost_amount = 0.0
+    proxy_adjustment_count = 0
+    proxy_notional_amount = 0.0
+    proxy_cost_amount = 0.0
+    hedge_applied_sessions = 0
+    terminal_stock_liquidation_cost = 0.0
+    terminal_proxy_liquidation_cost = 0.0
+
+    if incomplete_active_intervals:
+        # A missing active leg makes the cumulative equity unknowable. Preserve
+        # every source date for audit, but do not invent returns across the gap.
+        path = [
+            {
+                **{key: value for key, value in plan.items() if key != "target_book"},
+                "interval_status": (
+                    "INCOMPLETE_TARGET_BOOK"
+                    if plan["missing_target_codes"]
+                    else "NOT_SIMULATED_INCOMPLETE_COMPARISON"
+                ),
+                "stock_book_gross_return": None,
+                "topix_hedge_gross_return": None,
+                "gross_return": None,
+                "stock_cost_return": None,
+                "topix_hedge_cost_return": None,
+                "cost_return": None,
+                "net_return": None,
+                "stock_turnover_one_way": None,
+                "topix_proxy_turnover_one_way": None,
+                "turnover_one_way": None,
+                "stock_adjustment_notional_amount": None,
+                "topix_proxy_adjustment_notional_amount": None,
+                "equity": None,
+            }
+            for plan in plans
+        ]
+    else:
+        equity = 1.0
+        applied_stock: dict[str, float] = {}
+        applied_hedge = 0.0
+        for plan in plans:
+            current_day = str(plan["date"])
+            previous_day = str(plan["assumed_proxy_fill_date"])
+            target_book = dict(plan["target_book"])
+            equity_before = equity
+
+            stock_turnover = 0.0
+            stock_interval_notional = 0.0
+            for code in sorted(set(applied_stock) | set(target_book)):
+                delta = target_book.get(code, 0.0) - applied_stock.get(code, 0.0)
+                if delta == 0.0:
+                    continue
+                turnover_weight = abs(delta)
+                stock_turnover += turnover_weight
+                notional = turnover_weight * equity_before
+                stock_interval_notional += notional
+                stock_adjustment_count += 1
+                stock_notional_amount += notional
+                stock_cost_amount += notional * ONE_WAY_COST
+
+            target_hedge = float(plan["target_topix_proxy_hedge_weight"])
+            hedge_delta = target_hedge - applied_hedge
+            hedge_turnover = abs(hedge_delta)
+            proxy_interval_notional = hedge_turnover * equity_before
+            if hedge_delta != 0.0:
+                proxy_adjustment_count += 1
+                proxy_notional_amount += proxy_interval_notional
+                proxy_cost_amount += proxy_interval_notional * ONE_WAY_COST
+
+            stock_gross = float(plan["stock_gross_return"])
+            hedge_gross = target_hedge * float(plan["topix_proxy_return"])
+            stock_cost = stock_turnover * ONE_WAY_COST
+            hedge_cost = hedge_turnover * ONE_WAY_COST
+            gross = stock_gross + hedge_gross
+            cost = stock_cost + hedge_cost
+            net = gross - cost
+            if 1.0 + net <= 0.0:
+                raise RuntimeError("TOPIX comparison exhausted screening capital")
+            equity *= 1.0 + net
+            unhedged_gross_returns.append(stock_gross)
+            hedged_gross_returns.append(gross)
+            topix_returns.append(float(plan["topix_proxy_return"]))
+            if target_hedge != 0.0:
+                hedge_applied_sessions += 1
+            path.append(
+                {
+                    **{key: value for key, value in plan.items() if key != "target_book"},
+                    "interval_status": "COMPLETE",
+                    "stock_book_gross_return": stock_gross,
+                    "topix_hedge_gross_return": hedge_gross,
+                    "gross_return": gross,
+                    "stock_cost_return": stock_cost,
+                    "topix_hedge_cost_return": hedge_cost,
+                    "cost_return": cost,
+                    "net_return": net,
+                    "stock_turnover_one_way": stock_turnover,
+                    "topix_proxy_turnover_one_way": hedge_turnover,
+                    "turnover_one_way": stock_turnover + hedge_turnover,
+                    "stock_adjustment_notional_amount": stock_interval_notional,
+                    "topix_proxy_adjustment_notional_amount": (
+                        proxy_interval_notional
+                    ),
+                    "equity": equity,
+                }
+            )
+            applied_stock = target_book
+            applied_hedge = target_hedge
+
+        if path and (applied_stock or applied_hedge != 0.0):
+            equity_before_last = (
+                float(path[-2]["equity"]) if len(path) > 1 else 1.0
+            )
+            stock_liquidation = sum(abs(weight) for weight in applied_stock.values())
+            proxy_liquidation = abs(applied_hedge)
+            terminal_stock_liquidation_cost = stock_liquidation * ONE_WAY_COST
+            terminal_proxy_liquidation_cost = proxy_liquidation * ONE_WAY_COST
+            stock_terminal_notional = stock_liquidation * equity_before_last
+            proxy_terminal_notional = proxy_liquidation * equity_before_last
+            stock_adjustment_count += len(applied_stock)
+            stock_notional_amount += stock_terminal_notional
+            stock_cost_amount += stock_terminal_notional * ONE_WAY_COST
+            if applied_hedge != 0.0:
+                proxy_adjustment_count += 1
+                proxy_notional_amount += proxy_terminal_notional
+                proxy_cost_amount += proxy_terminal_notional * ONE_WAY_COST
+            path[-1]["stock_cost_return"] = (
+                float(path[-1]["stock_cost_return"])
+                + terminal_stock_liquidation_cost
+            )
+            path[-1]["topix_hedge_cost_return"] = (
+                float(path[-1]["topix_hedge_cost_return"])
+                + terminal_proxy_liquidation_cost
+            )
+            path[-1]["cost_return"] = (
+                float(path[-1]["cost_return"])
+                + terminal_stock_liquidation_cost
+                + terminal_proxy_liquidation_cost
+            )
+            path[-1]["net_return"] = float(path[-1]["gross_return"]) - float(
+                path[-1]["cost_return"]
+            )
+            path[-1]["stock_turnover_one_way"] = (
+                float(path[-1]["stock_turnover_one_way"]) + stock_liquidation
+            )
+            path[-1]["topix_proxy_turnover_one_way"] = (
+                float(path[-1]["topix_proxy_turnover_one_way"])
+                + proxy_liquidation
+            )
+            path[-1]["turnover_one_way"] = (
+                float(path[-1]["turnover_one_way"])
+                + stock_liquidation
+                + proxy_liquidation
+            )
+            path[-1]["stock_adjustment_notional_amount"] = (
+                float(path[-1]["stock_adjustment_notional_amount"])
+                + stock_terminal_notional
+            )
+            path[-1]["topix_proxy_adjustment_notional_amount"] = (
+                float(path[-1]["topix_proxy_adjustment_notional_amount"])
+                + proxy_terminal_notional
+            )
+            path[-1]["equity"] = equity_before_last * (
+                1.0 + float(path[-1]["net_return"])
+            )
+
+    performance: dict[str, Any] | None = None
+    if comparison_status == "EVALUATED":
+        combined_notional = stock_notional_amount + proxy_notional_amount
+        combined_cost = stock_cost_amount + proxy_cost_amount
+        performance = summarize_performance(
+            equity_curve=path,
+            trades=[
+                {
+                    "side": "buy",
+                    "notional": combined_notional,
+                    "cost": combined_cost,
+                }
+            ]
+            if combined_notional
+            else [],
+            starting_capital=1.0,
+        )
+        # Proxy adjustments affect the hypothetical cost path but are not fills.
+        performance["fill_count"] = stock_adjustment_count
+        performance["fill_count_basis"] = (
+            "comparison_stock_fills_only; TOPIX proxy adjustments excluded"
+        )
+        performance["turnover_one_way_basis"] = (
+            "comparison stock plus hypothetical TOPIX proxy adjustments"
+        )
+
+    stock_accounting = {
+        "adjustment_count": stock_adjustment_count,
+        "notional_amount": stock_notional_amount,
+        "cost_amount": stock_cost_amount,
+    }
+    proxy_accounting = {
+        "adjustment_count": proxy_adjustment_count,
+        "notional_amount": proxy_notional_amount,
+        "cost_amount": proxy_cost_amount,
+    }
+    combined_accounting = {
+        "adjustment_count": (
+            stock_accounting["adjustment_count"]
+            + proxy_accounting["adjustment_count"]
+        ),
+        "notional_amount": (
+            stock_accounting["notional_amount"]
+            + proxy_accounting["notional_amount"]
+        ),
+        "cost_amount": (
+            stock_accounting["cost_amount"] + proxy_accounting["cost_amount"]
+        ),
+    }
+    comparison_metrics_available = comparison_status == "EVALUATED"
+    unhedged_volatility = (
+        _annualized_volatility(unhedged_gross_returns)
+        if comparison_metrics_available
+        else None
+    )
+    residual_volatility = (
+        _annualized_volatility(hedged_gross_returns)
+        if comparison_metrics_available
+        else None
+    )
+    observed_features = [
+        value
+        for row in feature_rows
+        if row.get("fit_success") is True
+        and (value := _number(row.get(FEATURE_FIELD))) is not None
+    ]
+    return {
+        "status": comparison_status,
+        "comparison_only": True,
+        "instrument": {
+            "panel_storage_alias": TOPIX_PROXY_PANEL_CODE,
+            "identity": "TOPIX_cash_index_close",
+            "dataset": TOPIX_PROXY_DATASET,
+            "etf_approximation": "1306_TOPIX_ETF_only",
+            "etf_price_or_fill_used": False,
+            "execution_claim": False,
+        },
+        "beta_model": {
+            "estimator": "cov(stock_return,TOPIX_return)/var(TOPIX_return)",
+            "lookback_return_observations": BETA_LOOKBACK_SESSIONS,
+            "minimum_return_observations": BETA_MIN_OBSERVATIONS,
+            "information_wall": "all_returns_end_on_or_before_signal_close_d",
+            "decision_timing": "close_d",
+            "proxy_assumed_fill_timing": "close_d_plus_1",
+            "first_proxy_pnl_interval": "close_d_plus_1_to_close_d_plus_2",
+            "maximum_absolute_hedge_weight": MAX_ABS_TOPIX_HEDGE_WEIGHT,
+            "incomplete_book_policy": (
+                "performance_unavailable_preserve_calendar_no_partial_beta_"
+                "extrapolation"
+            ),
+            "coverage_policy": "every_active_session_must_have_complete_beta",
+        },
+        "performance": performance,
+        "performance_status": (
+            "AVAILABLE" if performance is not None else "UNAVAILABLE"
+        ),
+        "performance_unavailable_reason": performance_unavailable_reason,
+        "beta_and_residual_volatility": {
+            "status": (
+                "AVAILABLE" if comparison_metrics_available else "UNAVAILABLE"
+            ),
+            "realized_unhedged_beta_to_topix": (
+                _realized_beta(unhedged_gross_returns, topix_returns)
+                if comparison_metrics_available
+                else None
+            ),
+            "realized_hedged_beta_to_topix": (
+                _realized_beta(hedged_gross_returns, topix_returns)
+                if comparison_metrics_available
+                else None
+            ),
+            "unhedged_gross_annualized_volatility": unhedged_volatility,
+            "topix_hedged_gross_residual_annualized_volatility": residual_volatility,
+        },
+        "hedge_tracking": {
+            "source_path_sessions": len(stock_interval_trace),
+            "comparison_calendar_sessions": len(path),
+            "calendar_sessions_dropped": len(stock_interval_trace) - len(path),
+            "return_path_sessions": (
+                len(path) if not incomplete_active_intervals else 0
+            ),
+            "active_sessions": active_sessions,
+            "incomplete_active_interval_count": len(incomplete_active_intervals),
+            "incomplete_active_intervals": incomplete_active_intervals,
+            "beta_available_sessions": beta_available_sessions,
+            "beta_unavailable_active_sessions": beta_unavailable_sessions,
+            "beta_coverage_ratio_of_active_sessions": beta_coverage_ratio,
+            "beta_coverage_complete": beta_coverage_complete,
+            "hedge_applied_sessions": hedge_applied_sessions,
+            "hedge_capped_sessions": hedge_capped_sessions,
+            "maximum_absolute_hedge_weight_observed": max(
+                (
+                    abs(float(row["target_topix_proxy_hedge_weight"]))
+                    for row in plans
+                ),
+                default=0.0,
+            ),
+            "terminal_stock_liquidation_costed": (
+                terminal_stock_liquidation_cost > 0.0
+            ),
+            "terminal_proxy_liquidation_costed": (
+                terminal_proxy_liquidation_cost > 0.0
+            ),
+        },
+        "comparison_stock_accounting": stock_accounting,
+        "hypothetical_topix_proxy_accounting": {
+            **proxy_accounting,
+            "execution_claim": False,
+            "included_in_performance_fill_count": False,
+        },
+        "combined_comparison_accounting": combined_accounting,
+        "signal_branch_coverage": {
+            "contango_sessions": sum(value < 0.0 for value in observed_features),
+            "front_inversion_sessions": sum(value > 0.0 for value in observed_features),
+            "single_branch_limitation": not (
+                any(value < 0.0 for value in observed_features)
+                and any(value > 0.0 for value in observed_features)
+            ),
+        },
+        "daily_path": path,
+        "individual_stock_option_volatility_used": False,
+        "volatility_signal_scope": "nikkei_225_index_options",
+        "draft_only": True,
+        "screening_only": True,
+        "ready": False,
+        "mass": False,
+        "promotion": False,
+        "live_orders": False,
+        "go": False,
+        "not_a_pass": True,
+    }
 
 
 def _put_bytes(
@@ -731,20 +1436,26 @@ def execute_svi_job(
             opener=input_opener,
         )
         evaluation_dates = manifest["sessions"]["evaluation_dates"]
-        curve, trades, evaluation = evaluate_fixed_strategy(
+        curve, trades, evaluation, stock_interval_trace = evaluate_fixed_strategy(
             panel,
             feature_rows,
             evaluation_dates,
+        )
+        topix_beta_hedged_comparison = evaluate_topix_beta_hedged_comparison(
+            panel,
+            feature_rows,
+            stock_interval_trace,
         )
         feature_bytes = b"".join(
             _canonical_bytes(row) + b"\n" for row in feature_rows
         )
         feature_digest = uploader(spec, spec.feature_key, feature_bytes)
         report = {
-            "schema_version": "personal-svi-2023-report/v2",
+            "schema_version": "personal-svi-2023-report/v4",
             "job_id": spec.job_id,
             "cohort_id": COHORT_ID,
             "strategy_id": STRATEGY_ID,
+            "runner_version": RUNNER_VERSION,
             "input_manifest_key": spec.input_manifest_key,
             "input_manifest_digest": spec.input_manifest_digest,
             "feature_key": spec.feature_key,
@@ -785,12 +1496,17 @@ def execute_svi_job(
                 "first_return_timing": "close_d_plus_1_to_close_d_plus_2",
                 "hold_sessions": HOLD_SESSIONS,
                 "one_way_cost": ONE_WAY_COST,
-                "terminal_liquidation_costed": True,
+                "terminal_liquidation_costed": evaluation[
+                    "terminal_liquidation_costed"
+                ],
                 "short_borrow_and_financing": "not_modelled_screening_limitation",
                 "market_neutrality": (
                     "dollar_balanced_rank_long_short_not_beta_neutral"
                 ),
-                "index_etf_hedge": "not_applied_in_this_screen",
+                "index_etf_hedge": (
+                    "not_applied_to_primary_result; paired_TOPIX_index_proxy_"
+                    "comparison_is_1306_approximation_only"
+                ),
                 "individual_stock_option_volatility_used": False,
                 "volatility_signal_scope": "nikkei_225_index_options",
                 "momentum_sessions": MOMENTUM_SESSIONS,
@@ -803,13 +1519,10 @@ def execute_svi_job(
                 "evaluation_dates": evaluation_dates,
             },
             "evaluation": evaluation,
+            "topix_beta_hedged_comparison": topix_beta_hedged_comparison,
             "daily_path": curve,
             "fills": trades,
-            "candidate_status": (
-                "EVALUATED"
-                if evaluation["active_sessions"] > 0
-                else "NOT_EVALUATED"
-            ),
+            "candidate_status": evaluation["status"],
             "draft_only": True,
             "screening_only": True,
             "ready": False,
@@ -827,6 +1540,7 @@ def execute_svi_job(
             "job_id": spec.job_id,
             "cohort_id": COHORT_ID,
             "strategy_id": STRATEGY_ID,
+            "runner_version": RUNNER_VERSION,
             "request_digest": spec.request_digest,
             "input_manifest_key": spec.input_manifest_key,
             "input_manifest_digest": spec.input_manifest_digest,
@@ -851,6 +1565,7 @@ def execute_svi_job(
             "job_id": spec.job_id,
             "cohort_id": COHORT_ID,
             "strategy_id": STRATEGY_ID,
+            "runner_version": RUNNER_VERSION,
             "request_digest": spec.request_digest,
             "input_manifest_key": spec.input_manifest_key,
             "input_manifest_digest": spec.input_manifest_digest,
@@ -874,6 +1589,7 @@ __all__ = [
     "SviJobInputError",
     "build_feature_sidecar",
     "evaluate_fixed_strategy",
+    "evaluate_topix_beta_hedged_comparison",
     "execute_svi_job",
     "load_one_options_day",
 ]

@@ -10,6 +10,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -47,6 +48,9 @@ def _sqlite(path: Path) -> str:
 
 COHORT_DIGEST = (
     "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84"
+)
+LONG_SHORT_COHORT_DIGEST = (
+    "sha256:584bbf0052ad1eee6ec31cacdf1298c13c8a59b9eb6928267935fc17e34289be"
 )
 
 
@@ -178,8 +182,24 @@ def test_default_timeout_keeps_room_for_durable_terminal_evidence() -> None:
     assert service.DEFAULT_TIMEOUT_SECONDS < service.MAX_JOB_LIFETIME_SECONDS
 
 
+def _redigest(spec):
+    return replace(spec, request_digest=spec.derived_request_digest())
+
+
+def test_job_spec_accepts_long_short_on_a_broad_universe() -> None:
+    spec = _redigest(
+        replace(
+            _job("a" * 64),
+            cohort_id="sector-relative-ls-v1",
+            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+        )
+    )
+
+    spec.validate()
+
+
 def test_job_spec_rejects_a_non_personal_cohort() -> None:
-    spec = replace(_job("a" * 64), cohort_id="sector-relative-ls-v1")
+    spec = replace(_job("a" * 64), cohort_id="unknown-cohort")
 
     with pytest.raises(service.JobInputError, match="cohort_id"):
         spec.validate()
@@ -194,6 +214,20 @@ def test_job_spec_rejects_an_open_or_prime_only_universe() -> None:
 
 def test_job_spec_rejects_a_compact_universe_with_a_sector_cohort() -> None:
     spec = replace(_job("a" * 64), universe_id="topix_core30")
+
+    with pytest.raises(service.JobInputError, match="profile mismatch"):
+        spec.validate()
+
+
+def test_job_spec_rejects_long_short_on_a_compact_universe() -> None:
+    spec = _redigest(
+        replace(
+            _job("a" * 64),
+            cohort_id="sector-relative-ls-v1",
+            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+            universe_id="topix_core30",
+        )
+    )
 
     with pytest.raises(service.JobInputError, match="profile mismatch"):
         spec.validate()
@@ -229,6 +263,8 @@ print(json.dumps({
   'hold_count': 1,
   'unexpected_errors': 0,
   'model_calls': 0,
+  'go': False,
+  'ready_snapshot_declared': False,
   'live_orders_enabled': False,
   'automatic_promotion': False,
 }))
@@ -262,15 +298,80 @@ print(json.dumps({
     )
     assert manifest["model_calls"] == 0
     assert manifest["go"] is False
+    assert manifest["ready_snapshot_declared"] is False
     assert manifest["automatic_promotion"] is False
     assert [key for key, _, _ in uploads] == [spec.result_key, spec.manifest_key]
     archive_path = tmp_path / "captured.tar.gz"
     archive_path.write_bytes(uploads[0][1])
     with tarfile.open(archive_path, "r:gz") as archive:
         names = archive.getnames()
+        runner_summary_file = archive.extractfile("runner-summary.json")
+        assert runner_summary_file is not None
+        runner_summary = json.load(runner_summary_file)
     assert "reports/report.json" in names
     assert "snapshots/generated.manifest.json" in names
     assert all(not name.endswith(".sqlite") for name in names)
+    assert runner_summary["go"] is False
+    assert runner_summary["ready_snapshot_declared"] is False
+    assert not tuple(work.iterdir())
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    (
+        ("go", True),
+        ("ready_snapshot_declared", True),
+    ),
+)
+def test_runner_summary_must_remain_no_go_and_not_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    invalid_value: object,
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _job(sha)
+    summary = {
+        "cohort_id": spec.cohort_id,
+        "cohort_digest": spec.cohort_digest,
+        "universe_id": spec.universe_id,
+        "universe_rule_digest": spec.universe_rule_digest,
+        "candidate_count": 4,
+        "model_calls": 0,
+        "go": False,
+        "ready_snapshot_declared": False,
+        "live_orders_enabled": False,
+        "automatic_promotion": False,
+    }
+    summary[field] = invalid_value
+    monkeypatch.setattr(
+        service.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(summary) + "\n",
+            stderr="",
+        ),
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    uploads: list[tuple[str, bytes, str]] = []
+
+    def copy_snapshot(_spec, destination):
+        destination.write_bytes(source.read_bytes())
+
+    manifest = service.execute_job(
+        spec,
+        work_root=work,
+        command=(sys.executable, "unused.py"),
+        downloader=copy_snapshot,
+        uploader=_uploader(uploads),
+    )
+
+    assert manifest["status"] == "FAILED"
+    assert "fixed personal policy" in manifest["error"]
+    assert [key for key, _, _ in uploads] == [spec.manifest_key]
     assert not tuple(work.iterdir())
 
 

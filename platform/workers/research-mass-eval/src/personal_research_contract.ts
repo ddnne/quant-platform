@@ -1,6 +1,6 @@
 import { sha256Hex } from "./sha256";
 
-export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v3";
+export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v5";
 export const PERSONAL_RESEARCH_CONTAINER_NAME = "personal-research-singleton";
 export const PERSONAL_RESEARCH_MAX_PERIOD_DAYS = 2200;
 export const PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024;
@@ -9,6 +9,7 @@ export const PERSONAL_RESEARCH_COHORT_IDS = [
   "fundamental-relative-v1",
   "diverse-core-v1",
   "compact-market-diverse-v1",
+  "sector-relative-ls-v1",
 ] as const;
 export const PERSONAL_RESEARCH_UNIVERSE_IDS = [
   "topix_all",
@@ -58,6 +59,8 @@ const PERSONAL_RESEARCH_COHORT_DIGESTS: Record<
     "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84",
   "compact-market-diverse-v1":
     "sha256:e56ab7e48b1e59e583140ab7cf5382c93d40842cf946b6fb3bf06a75fe296682",
+  "sector-relative-ls-v1":
+    "sha256:584bbf0052ad1eee6ec31cacdf1298c13c8a59b9eb6928267935fc17e34289be",
 };
 
 const JOB_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;

@@ -60,23 +60,42 @@ function panelDates(raw: unknown): string[] {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return [];
   }
-  const bars = (raw as Record<string, unknown>).bars;
+  const record = raw as Record<string, unknown>;
+  const identity = record.index_proxy;
+  if (
+    typeof identity !== "object" ||
+    identity === null ||
+    Array.isArray(identity) ||
+    (identity as Record<string, unknown>).dataset !==
+      "indices_bars_daily_topix" ||
+    (identity as Record<string, unknown>).label !== "TOPIX"
+  ) {
+    return [];
+  }
+  const bars = record.bars;
   if (typeof bars !== "object" || bars === null || Array.isArray(bars)) {
     return [];
   }
+  const proxy = (bars as Record<string, unknown>).__NKY_PROXY__;
+  if (!Array.isArray(proxy)) return [];
   const dates = new Set<string>();
-  for (const [code, value] of Object.entries(bars)) {
-    if (code.startsWith("__") || !Array.isArray(value)) continue;
-    for (const pair of value) {
-      if (!Array.isArray(pair) || typeof pair[0] !== "string") continue;
-      const day = pair[0].slice(0, 10);
-      if (
-        /^2023-\d{2}-\d{2}$/.test(day) &&
-        day >= PERSONAL_SVI_2023_EARLIEST_DAY &&
-        day <= PERSONAL_SVI_2023_LATEST_DAY
-      ) {
-        dates.add(day);
-      }
+  for (const pair of proxy) {
+    if (
+      !Array.isArray(pair) ||
+      typeof pair[0] !== "string" ||
+      typeof pair[1] !== "number" ||
+      !Number.isFinite(pair[1]) ||
+      pair[1] <= 0
+    ) {
+      continue;
+    }
+    const day = pair[0].slice(0, 10);
+    if (
+      /^2023-\d{2}-\d{2}$/.test(day) &&
+      day >= PERSONAL_SVI_2023_EARLIEST_DAY &&
+      day <= PERSONAL_SVI_2023_LATEST_DAY
+    ) {
+      dates.add(day);
     }
   }
   return [...dates].sort();

@@ -41,6 +41,17 @@ are `price-relative-v1`, `fundamental-relative-v1`, and `diverse-core-v1`.
 `compact-market-diverse-v1` is the separate market-relative cohort for
 `topix_core30`, `topix_large70`, and `topix100`; the sector-relative cohorts
 reject those compact universes because they cannot sustain 33 industry buckets.
+`sector-relative-ls-v1` is a broad-universe-only exact-four DRAFT cohort. It
+executes Paper and Risk only once per period at the fixed 3% annual baseline.
+The 0% and 10% sensitivity rows deterministically reprice the same observed
+post-fill short-notional trace; they do not rerun the market, rank calculation,
+Paper, or Risk and cannot become executable artifacts. The formula uses 245
+sessions and keeps the existing one-way fill cost separate. These rates are not
+request fields and are modelled sensitivity assumptions, not stock-borrow
+evidence. The current engine treats each post-fill end-of-session short book as
+one close-to-next-session accrual and includes a terminal period-end accrual
+even when the report has no next valued session. That terminal convention is a
+disclosed DRAFT residual risk, not hidden borrow evidence.
 The default research universe is PIT `topix_all`; the same request can select
 `topix_core30`, `topix_large70`, `topix_mid400`, `topix_small1`,
 `topix_small2`, `topix_small`, `topix100`, or `topix500`. Every selector is
@@ -74,7 +85,10 @@ only when every input is identical.
 
 Cost and safety bounds are structural: `standard-2`, `max_instances=1`, one
 active job, a 4 GiB snapshot ceiling, 165-minute subprocess timeout and a
-180-minute outer Container activity window. A single request is limited to
+180-minute outer Container activity window. Exact-four is also capped at 24
+actual backtests (four validation folds, one stress, and one holdout per
+candidate); financing sensitivity does not multiply that execution count. A
+single request is limited to
 2,200 calendar days. The cohort registry records the 2008/2016 data floors,
 but a full-history study must use a future segmented or precomputed panel path;
 this route does not claim to execute 18 years in one Container run. The
@@ -103,6 +117,18 @@ it must not be read as a production GO result. Neither route uses single-stock
 option volatility. Both use Nikkei 225 index-option evidence with a static
 2019-selected liquid 100-name equity panel; it is not the PIT TOPIX universe
 used by the factor Container and is labelled separately in every report.
+The SVI report keeps its unhedged result and adds a TOPIX-index proxy comparison:
+126-return beta (minimum 63) through signal close, capped at 1.5x.
+The `__NKY_PROXY__` alias must identify `indices_bars_daily_topix`; 1306 is only an approximation, never an ETF fill claim.
+Headline comparison metrics are available only when every active interval has all
+stock legs and a beta estimate. Partial or incomplete coverage preserves the
+calendar as audit rows without publishing a comparison performance summary.
+Hypothetical TOPIX adjustments and costs are reported outside stock fill counts.
+Runner v4 applies the same complete-book trace to the primary and comparison:
+an active interval missing any intended stock leg is retained as a zero-change
+audit row, while the whole primary result becomes `INCOMPLETE` with no headline
+performance. Earlier v143 output remains history and is not reused as v144 proof.
+Branch counts expose when the bounded sample observes only contango and cannot test inversion.
 
 ## Modes
 

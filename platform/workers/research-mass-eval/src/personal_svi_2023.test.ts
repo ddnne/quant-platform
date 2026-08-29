@@ -28,18 +28,30 @@ function days(count = 32): string[] {
   return out;
 }
 
-function panel(dates: string[]): Record<string, unknown> {
+function panel(
+  dates: string[],
+  equityMissingDay?: string,
+): Record<string, unknown> {
   return {
     period_id: "y2023_full",
     year: 2023,
     period_start: "2023-01-04",
     period_end: "2023-10-13",
-    bars: Object.fromEntries(
-      ["A", "B", "C", "D"].map((code, codeIndex) => [
-        code,
-        dates.map((date, index) => [date, 100 + codeIndex * 10 + index]),
-      ]),
-    ),
+    index_proxy: {
+      dataset: "indices_bars_daily_topix",
+      label: "TOPIX",
+    },
+    bars: {
+      ...Object.fromEntries(
+        ["A", "B", "C", "D"].map((code, codeIndex) => [
+          code,
+          dates
+            .filter((date) => date !== equityMissingDay)
+            .map((date, index) => [date, 100 + codeIndex * 10 + index]),
+        ]),
+      ),
+      __NKY_PROXY__: dates.map((date, index) => [date, 2_000 + index]),
+    },
   };
 }
 
@@ -55,9 +67,11 @@ class AdmissionR2 {
   readonly dates: string[];
   readonly panelBytes: Uint8Array;
 
-  constructor(dates: string[]) {
+  constructor(dates: string[], equityMissingDay?: string) {
     this.dates = dates;
-    this.panelBytes = new TextEncoder().encode(JSON.stringify(panel(dates)));
+    this.panelBytes = new TextEncoder().encode(
+      JSON.stringify(panel(dates, equityMissingDay)),
+    );
   }
 
   async head(key: string) {
@@ -203,6 +217,25 @@ describe("fixed personal SVI 2023 admission", () => {
     });
   });
 
+  it("uses the identified TOPIX proxy calendar when all equities miss a session", async () => {
+    const fixedDates = days();
+    const missingDay = fixedDates[15];
+    const mem = new AdmissionR2(fixedDates, missingDay);
+
+    const manifest = await buildPersonalSviInputManifest(mem.asBucket(), {
+      job_id: "svi-proxy-calendar",
+      cohort_id: PERSONAL_SVI_2023_COHORT_ID,
+    });
+
+    expect(mem.listedPrefixes).toContain(
+      `${PERSONAL_SVI_2023_OPTIONS_ROOT}/dt=${missingDay}/`,
+    );
+    expect([
+      ...manifest.sessions.warmup_dates,
+      ...manifest.sessions.evaluation_dates,
+    ]).toEqual(fixedDates);
+  });
+
   it("writes the create-only input manifest before dispatching the existing Container", async () => {
     const fixedDates = days();
     const mem = new AdmissionR2(fixedDates);
@@ -228,7 +261,7 @@ describe("fixed personal SVI 2023 admission", () => {
     expect(await forwarded.json()).toMatchObject({
       cohort_id: PERSONAL_SVI_2023_COHORT_ID,
       input_manifest_key: inputKey,
-      runner_version: "personal-svi-cloud-runner/v2",
+      runner_version: "personal-svi-cloud-runner/v4",
       strategy_id: "svi-atm-term-ratio-momentum-switch",
     });
   });

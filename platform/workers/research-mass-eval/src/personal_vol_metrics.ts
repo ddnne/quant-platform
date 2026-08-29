@@ -3,6 +3,7 @@ export type PersonalVolDailyPoint = {
   gross_return?: number;
   cost_return?: number;
   turnover_one_way?: number;
+  invalid_equity_observations?: number;
   net_return: number;
   equity: number;
 };
@@ -64,7 +65,7 @@ export type PersonalVolPerformance = {
     profit_factor: null;
     reason: string;
   };
-  invalid_equity_observations: 0;
+  invalid_equity_observations: number;
   year_metrics: Array<Record<string, unknown>>;
   hit_rate_basis: "strictly_positive_among_nonzero_returns";
   var_convention: "positive_loss_from_empirical_left_tail";
@@ -253,6 +254,13 @@ export function personalVolPerformance(
         : 0),
     0,
   );
+  const invalidEquityObservations = points.reduce((total, point) => {
+    const count = point.invalid_equity_observations;
+    return total +
+      (Number.isFinite(count) && Number(count) > 0
+        ? Math.trunc(Number(count))
+        : 0);
+  }, 0);
   const yearMetrics: Array<Record<string, unknown>> = [];
   if (includeYearMetrics) {
     const byYear = new Map<string, PersonalVolDailyPoint[]>();
@@ -337,7 +345,7 @@ export function personalVolPerformance(
       reason:
         "the bar-native screen records a portfolio path, not immutable execution fills or closed round trips",
     },
-    invalid_equity_observations: 0,
+    invalid_equity_observations: invalidEquityObservations,
     year_metrics: yearMetrics,
     hit_rate_basis: "strictly_positive_among_nonzero_returns",
     var_convention: "positive_loss_from_empirical_left_tail",

@@ -52,7 +52,7 @@ describe("personal research request contract", () => {
     expect(
       parsePersonalResearchRequest({
         ...VALID,
-        cohort_id: "sector-relative-ls-v1",
+        cohort_id: "not-a-closed-cohort" as never,
       }).ok,
     ).toBe(false);
     expect(
@@ -71,6 +71,32 @@ describe("personal research request contract", () => {
       parsePersonalResearchRequest({
         ...VALID,
         universe_id: "prime" as never,
+      }).ok,
+    ).toBe(false);
+    expect(personalResearchCohortDigest("sector-relative-ls-v1")).toBe(
+      "sha256:584bbf0052ad1eee6ec31cacdf1298c13c8a59b9eb6928267935fc17e34289be",
+    );
+  });
+
+  it("admits fixed long-short sensitivity only on broad universes", () => {
+    expect(
+      parsePersonalResearchRequest({
+        ...VALID,
+        cohort_id: "sector-relative-ls-v1",
+      }).ok,
+    ).toBe(true);
+    expect(
+      parsePersonalResearchRequest({
+        ...VALID,
+        cohort_id: "sector-relative-ls-v1",
+        universe_id: "topix_core30",
+      }).ok,
+    ).toBe(false);
+    expect(
+      parsePersonalResearchRequest({
+        ...VALID,
+        cohort_id: "sector-relative-ls-v1",
+        short_financing_rates: [0, 0.03, 0.1],
       }).ok,
     ).toBe(false);
   });
