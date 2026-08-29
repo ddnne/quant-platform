@@ -14,32 +14,32 @@ import type {
   PeriodSpec,
 } from "./types";
 
-export const PERSONAL_VOL_COHORT_ID = "personal-vol-ratio-v1" as const;
+export const PERSONAL_VOL_COHORT_ID = "personal-vol-ratio-v2" as const;
 export const PERSONAL_VOL_PANELS_PREFIX =
   "research/mass_eval/panels_cache/527c1065afe14601/panels" as const;
 export const PERSONAL_VOL_ONE_WAY_COST = 0.001;
 export const PERSONAL_VOL_HOLD_SESSIONS = 10;
 export const PERSONAL_VOL_IV_AVAILABLE_FROM = "2016-07-19";
 
+export const PERSONAL_VOL_UNIVERSE_PROVENANCE = {
+  scope_id: "legacy-liq-large-adv100-2019-v1",
+  selection_rule: "adv_desc_skip_missing_bars_and_fins",
+  selection_reference_start: "2019-01-01",
+  selection_reference_end: "2019-10-21",
+  maximum_codes: 100,
+  membership: "static_fixed_panel_codes",
+  daily_pit_reconstitution: false,
+  topix_scale_bound: false,
+  comparable_to_personal_topix_factor_runs: false,
+} as const;
+
+export const PERSONAL_VOL_EXCLUDED_LOOKAHEAD_WINDOWS = [
+  "y2015_full",
+  "y2017_q4",
+  "y2019_full",
+] as const;
+
 export const PERSONAL_VOL_PERIODS: readonly PeriodSpec[] = [
-  {
-    period_id: "y2015_full",
-    year: 2015,
-    period_start: "2015-01-05",
-    period_end: "2015-10-21",
-  },
-  {
-    period_id: "y2017_q4",
-    year: 2017,
-    period_start: "2017-09-01",
-    period_end: "2017-12-29",
-  },
-  {
-    period_id: "y2019_full",
-    year: 2019,
-    period_start: "2019-01-04",
-    period_end: "2019-10-18",
-  },
   {
     period_id: "y2021_full",
     year: 2021,
@@ -282,6 +282,7 @@ function logicForStrategy(
         short_frac: 0.3,
         high_threshold: 0.1,
         low_threshold: -0.1,
+        neutral_policy: "flat_at_rebalance",
       },
     };
   }
@@ -296,6 +297,7 @@ function logicForStrategy(
       short_frac: 0.3,
       expand_ratio: 1.2,
       compress_ratio: 0.8,
+      neutral_policy: "flat_at_rebalance",
     },
   };
 }
@@ -339,17 +341,29 @@ export function personalVolDailyPath(
       contributions.push(position * (after / before - 1));
       if (position < 0) hasShort = true;
     }
+    let grossReturn = 0;
+    let costReturn = 0;
+    let turnoverOneWay = 0;
     let netReturn = 0;
     if (contributions.length) {
-      netReturn =
+      grossReturn =
         contributions.reduce((total, value) => total + value, 0) /
-          contributions.length -
-        amortizedRoundTripCost;
+        contributions.length;
+      costReturn = amortizedRoundTripCost;
+      turnoverOneWay = 2 / PERSONAL_VOL_HOLD_SESSIONS;
+      netReturn = grossReturn - costReturn;
       activeSessions += 1;
       if (hasShort) shortSessions += 1;
     }
     equity *= 1 + netReturn;
-    points.push({ date: current, net_return: netReturn, equity });
+    points.push({
+      date: current,
+      gross_return: grossReturn,
+      cost_return: costReturn,
+      turnover_one_way: turnoverOneWay,
+      net_return: netReturn,
+      equity,
+    });
   }
   return {
     points,
@@ -474,7 +488,7 @@ export async function runPersonalVolResearch(
         .push(evaluatePersonalVolWindow(definition, panel));
     }
   }
-  const strategies = PERSONAL_VOL_STRATEGIES.map((definition) => {
+  const strategiesBeforeCommonWindow = PERSONAL_VOL_STRATEGIES.map((definition) => {
     const windows = windowsByStrategy.get(definition.strategy_id)!;
     const stitchedPoints = windows.flatMap((window) =>
       Array.isArray(window.daily_path)
@@ -485,10 +499,36 @@ export async function runPersonalVolResearch(
       ...definition,
       windows,
       stitched_non_contiguous: {
-        label: "six fixed historical windows stitched for descriptive comparison",
+        label: "three fixed post-selection windows stitched for descriptive comparison",
         warning:
           "The gaps between windows are omitted. CAGR is intentionally null and this stitch is not a continuous backtest.",
         metrics: personalVolPerformance(stitchedPoints, false),
+      },
+    };
+  });
+  const commonSuccessfulWindows = PERSONAL_VOL_PERIODS.map(
+    (period) => period.period_id,
+  ).filter((periodId) =>
+    strategiesBeforeCommonWindow.every((strategy) =>
+      strategy.windows.some(
+        (window) => window.period_id === periodId && window.status === "ok",
+      ),
+    ),
+  );
+  const commonWindowSet = new Set(commonSuccessfulWindows);
+  const strategies = strategiesBeforeCommonWindow.map((strategy) => {
+    const commonPoints = strategy.windows.flatMap((window) =>
+      commonWindowSet.has(String(window.period_id)) &&
+      Array.isArray(window.daily_path)
+        ? (window.daily_path as PersonalVolDailyPoint[])
+        : [],
+    );
+    return {
+      ...strategy,
+      common_window_comparison: {
+        period_ids: commonSuccessfulWindows,
+        comparable: commonSuccessfulWindows.length > 0,
+        metrics: personalVolPerformance(commonPoints, false),
       },
     };
   });
@@ -503,11 +543,10 @@ export async function runPersonalVolResearch(
       candidate_status: successfulWindows > 0 ? "evaluated" : "not_evaluated",
     };
   });
-  const exactFourEvaluationComplete = executionSummary.every(
-    (row) => row.candidate_status === "evaluated",
-  );
+  const exactFourEvaluationComplete =
+    commonSuccessfulWindows.length === PERSONAL_VOL_PERIODS.length;
   const report = {
-    schema_version: "personal-vol-ratio-report/v1",
+    schema_version: "personal-vol-ratio-report/v2",
     worker_version: env.MASS_EVAL_VERSION,
     job_id: request.job_id,
     cohort_id: request.cohort_id,
@@ -515,6 +554,9 @@ export async function runPersonalVolResearch(
     execution_contract: {
       exact_four: true,
       exact_four_evaluation_complete: exactFourEvaluationComplete,
+      exact_four_common_window_comparable:
+        commonSuccessfulWindows.length > 0,
+      common_successful_windows: commonSuccessfulWindows,
       strategy_count: PERSONAL_VOL_STRATEGIES.length,
       hold_sessions: PERSONAL_VOL_HOLD_SESSIONS,
       one_way_cost: PERSONAL_VOL_ONE_WAY_COST,
@@ -523,6 +565,10 @@ export async function runPersonalVolResearch(
       execution_timing: "signal_close_d_fill_close_d_plus_1",
       short_financing: "not_modelled",
       short_financing_limitation: "screening_only",
+      market_neutrality: "dollar_balanced_rank_long_short_not_beta_neutral",
+      index_etf_hedge: "not_applied_in_this_screen",
+      individual_stock_option_volatility_used: false,
+      volatility_signal_scope: "nikkei_225_index_options",
       live_orders: false,
       automatic_promotion: false,
       go: false,
@@ -535,6 +581,10 @@ export async function runPersonalVolResearch(
       iv_fields_available_from: PERSONAL_VOL_IV_AVAILABLE_FROM,
       panel_notes: [...panelNotes, ...fixedPrefixNotes],
       source: "existing immutable R2 panel bundle",
+      equity_universe: PERSONAL_VOL_UNIVERSE_PROVENANCE,
+      excluded_lookahead_windows: PERSONAL_VOL_EXCLUDED_LOOKAHEAD_WINDOWS,
+      exclusion_reason:
+        "The fixed equity codes were selected with 2019 information, so 2015, 2017, and the in-sample 2019 window are not valid out-of-sample performance evidence.",
     },
     result_authority: {
       draft_only: true,
@@ -555,14 +605,14 @@ export async function runPersonalVolResearch(
   };
   const artifact = await putImmutableJson(
     env.STRUCTURED_BUCKET,
-    "research/personal/vol-ratio/artifacts",
+    "research/personal/vol-ratio-v2/artifacts",
     report,
   );
-  const prefix = `research/personal/vol-ratio/job=${request.job_id}`;
+  const prefix = `research/personal/vol-ratio-v2/job=${request.job_id}`;
   const reportKey = `${prefix}/report.json`;
   const manifestKey = `${prefix}/manifest.json`;
   const manifest = {
-    schema_version: "personal-vol-ratio-manifest/v1",
+    schema_version: "personal-vol-ratio-manifest/v2",
     job_id: request.job_id,
     cohort_id: request.cohort_id,
     report_key: reportKey,

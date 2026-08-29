@@ -41,13 +41,17 @@ describe("personal vol comprehensive performance", () => {
     expect(metrics.historical_var_95_loss).toBeGreaterThan(0);
     expect(metrics.historical_cvar_95_loss).toBeGreaterThan(0);
     expect(metrics.series_contiguity).toBe("contiguous_window");
+    expect(metrics.sessions).toBe(6);
+    expect(metrics.monthly_observations).toBe(1);
+    expect(metrics.year_metrics).toHaveLength(1);
+    expect(metrics.fill_count).toBeNull();
   });
 
   it("never calls a non-contiguous stitch CAGR", () => {
     const metrics = personalVolPerformance(points([0.01, -0.005, 0.02]), false);
 
     expect(metrics.series_contiguity).toBe(
-      "non_contiguous_six_window_stitch",
+      "non_contiguous_window_stitch",
     );
     expect(metrics.cagr_applicable).toBe(false);
     expect(metrics.cagr).toBeNull();

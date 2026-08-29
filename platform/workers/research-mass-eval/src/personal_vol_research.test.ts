@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { dispatchMassEvalFetch } from "./http_routes";
 import {
   PERSONAL_VOL_COHORT_ID,
+  PERSONAL_VOL_EXCLUDED_LOOKAHEAD_WINDOWS,
   PERSONAL_VOL_PANELS_PREFIX,
   PERSONAL_VOL_PERIODS,
   PERSONAL_VOL_STRATEGIES,
@@ -88,7 +89,7 @@ describe("closed personal vol request", () => {
     });
   });
 
-  it("freezes exactly four ratio strategies and six R2 periods", () => {
+  it("freezes exactly four ratio strategies and only post-selection R2 periods", () => {
     expect(PERSONAL_VOL_STRATEGIES).toHaveLength(4);
     expect(new Set(PERSONAL_VOL_STRATEGIES.map((row) => row.strategy_id))).toEqual(
       new Set([
@@ -101,7 +102,16 @@ describe("closed personal vol request", () => {
     expect(PERSONAL_VOL_STRATEGIES.every((row) => row.thesis && row.works_when)).toBe(
       true,
     );
-    expect(PERSONAL_VOL_PERIODS).toHaveLength(6);
+    expect(PERSONAL_VOL_PERIODS.map((period) => period.period_id)).toEqual([
+      "y2021_full",
+      "y2023_full",
+      "y2025_q4",
+    ]);
+    expect(PERSONAL_VOL_EXCLUDED_LOOKAHEAD_WINDOWS).toEqual([
+      "y2015_full",
+      "y2017_q4",
+      "y2019_full",
+    ]);
     expect(PERSONAL_VOL_PANELS_PREFIX).toContain("527c1065afe14601");
   });
 });
@@ -193,6 +203,26 @@ describe("ratio-only series routing", () => {
     expect(path.points[2].net_return).toBe(0);
     expect(path.active_sessions).toBe(2);
   });
+
+  it("averages the evaluator's plus/minus-one rank-sign book", () => {
+    const dates = datesFrom("2024-02-01", 3);
+    const scoped = panel("rank-sign-book-test", dates[0]);
+    scoped.period_start = dates[2];
+    scoped.period_end = dates[2];
+    scoped.bars = {
+      A: [[dates[0], 100], [dates[1], 100], [dates[2], 110]],
+      B: [[dates[0], 100], [dates[1], 100], [dates[2], 90]],
+    };
+
+    const path = personalVolDailyPath(
+      { A: { [dates[0]]: 1 }, B: { [dates[0]]: -1 } },
+      scoped,
+    );
+
+    // Average(+10% long contribution, +10% short contribution), less cost.
+    expect(path.points[0].net_return).toBeCloseTo(0.1 - 0.0002);
+  });
+
 });
 
 const noopMass = async () => {
@@ -344,7 +374,7 @@ describe("personal vol immutable artifact", () => {
       } as Env,
       { job_id: "immutable-vol", cohort_id: PERSONAL_VOL_COHORT_ID },
     );
-    const prefix = "research/personal/vol-ratio/job=immutable-vol";
+    const prefix = "research/personal/vol-ratio-v2/job=immutable-vol";
 
     expect(result.go).toBe(false);
     expect(result.automatic_promotion).toBe(false);
@@ -354,10 +384,20 @@ describe("personal vol immutable artifact", () => {
       usable_as_pilot_readiness: false,
       usable_as_mass_readiness: false,
     });
+    expect(result.data_contract).toMatchObject({
+      equity_universe: {
+        scope_id: "legacy-liq-large-adv100-2019-v1",
+        daily_pit_reconstitution: false,
+        comparable_to_personal_topix_factor_runs: false,
+      },
+      excluded_lookahead_windows: ["y2015_full", "y2017_q4", "y2019_full"],
+    });
     expect((result.strategies as unknown[])).toHaveLength(4);
     expect(result.execution_contract).toMatchObject({
       exact_four: true,
       exact_four_evaluation_complete: true,
+      exact_four_common_window_comparable: true,
+      common_successful_windows: ["y2021_full", "y2023_full", "y2025_q4"],
     });
     expect(mem.order.indexOf(`${prefix}/report.json`)).toBeGreaterThanOrEqual(0);
     expect(mem.order.indexOf(`${prefix}/manifest.json`)).toBeGreaterThan(

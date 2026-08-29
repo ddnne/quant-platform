@@ -1457,6 +1457,8 @@ export function barNativeHeldBook(
       }
     }
     const m = mode.toLowerCase();
+    const neutralFlat =
+      strParam(params, "neutral_policy", "carry") === "flat_at_rebalance";
     function regimeFor(d: string): string | null {
       const dk = d.slice(0, 10);
       if (m.includes("term_ratio")) {
@@ -1492,15 +1494,15 @@ export function barNativeHeldBook(
         const cs = ranks[code] ?? 0;
         const reg = regimeFor(d);
         if (cs === 0) return 0;
-        if (reg === null) return null;
+        if (reg === null) return neutralFlat ? 0 : null;
         if (m.includes("term_ratio")) {
           if (reg === "compressing") return cs;
           if (reg === "expanding") return -cs;
-          return null;
+          return neutralFlat ? 0 : null;
         }
         if (reg === "low") return cs;
         if (reg === "high") return -cs;
-        return null;
+        return neutralFlat ? 0 : null;
       });
     }
     return {
