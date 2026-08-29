@@ -55,7 +55,9 @@ class IndexVolOverlayObservation:
     # SVI equivalents are retained for diagnostics only.  They never enter a
     # signal, candidate ordering, or result selection.
     svi_equivalent_atm_term_ratio: float | None = None
-    svi_equivalent_downside_wing_term_ratio: float | None = None
+    # Same relative-smile definition as the observed candidate:
+    # (front downside wing/front ATM)/(next downside wing/next ATM).
+    svi_equivalent_downside_smile_term_ratio: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,14 +98,21 @@ OVERLAY_CANDIDATES: Final[tuple[OverlayCandidate, ...]] = (
         return_source="Avoid part of short-horizon market drawdowns during inversion.",
     ),
     OverlayCandidate(
-        candidate_id="n225_observed_downside_wing_front_over_next_v1",
-        feature_kind="observed_downside_wing_term_ratio",
+        candidate_id="n225_observed_downside_smile_front_over_next_v1",
+        feature_kind="observed_downside_smile_term_ratio",
         mechanics=(
-            "x=observed front downside-wing IV/next downside-wing IV; "
+            "x=(observed front downside-wing IV/front ATM IV)/"
+            "(observed next downside-wing IV/next ATM IV); "
             "g=clip(1/x,0.5,1.0)"
         ),
-        thesis="Near-term downside-tail demand can warn before ATM volatility does.",
-        return_source="Reduce crash exposure when front downside protection is dear.",
+        thesis=(
+            "Front downside-smile steepening, net of each maturity's ATM level, "
+            "can warn before broad ATM volatility does."
+        ),
+        return_source=(
+            "Reduce crash exposure when near-term downside protection is rich "
+            "relative to its own ATM volatility."
+        ),
     ),
 )
 
@@ -191,16 +200,21 @@ def _feature_value(
         value = _ratio(row.n225_front_atm_iv, row.n225_next_atm_iv)
         return value, None if value is not None else "observed_atm_term_row_missing"
 
-    if candidate.feature_kind == "observed_downside_wing_term_ratio":
-        value = _ratio(
+    if candidate.feature_kind == "observed_downside_smile_term_ratio":
+        front_smile = _ratio(
             row.n225_front_downside_wing_iv,
-            row.n225_next_downside_wing_iv,
+            row.n225_front_atm_iv,
         )
+        next_smile = _ratio(
+            row.n225_next_downside_wing_iv,
+            row.n225_next_atm_iv,
+        )
+        value = _ratio(front_smile, next_smile)
         return (
             value,
             None
             if value is not None
-            else "observed_downside_wing_term_row_missing",
+            else "observed_downside_smile_term_row_missing",
         )
     raise AssertionError(f"unknown frozen candidate feature: {candidate.feature_kind}")
 
@@ -520,8 +534,8 @@ def evaluate_index_vol_overlays(
             "svi_equivalent_atm_term_ratio": _finite(
                 observations[index].svi_equivalent_atm_term_ratio
             ),
-            "svi_equivalent_downside_wing_term_ratio": _finite(
-                observations[index].svi_equivalent_downside_wing_term_ratio
+            "svi_equivalent_downside_smile_term_ratio": _finite(
+                observations[index].svi_equivalent_downside_smile_term_ratio
             ),
         }
         for index in signal_indices
@@ -571,6 +585,10 @@ def evaluate_index_vol_overlays(
         },
         "svi_equivalent_diagnostics": {
             "role": "DIAGNOSTIC_ONLY_NOT_RANKED",
+            "downside_smile_term_ratio_formula": (
+                "(front_downside_wing_iv/front_atm_iv)/"
+                "(next_downside_wing_iv/next_atm_iv)"
+            ),
             "used_in_signals": False,
             "used_in_performance": False,
             "rows": diagnostics,

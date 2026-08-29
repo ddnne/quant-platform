@@ -45,7 +45,7 @@ def _panel(
             n225_front_downside_wing_iv=40.0,
             n225_next_downside_wing_iv=20.0,
             svi_equivalent_atm_term_ratio=1.45,
-            svi_equivalent_downside_wing_term_ratio=1.90,
+            svi_equivalent_downside_smile_term_ratio=1.90,
         )
         for index, day in enumerate(dates)
     ]
@@ -96,7 +96,7 @@ def test_ratio_scale_beta_cap_and_d_dplus1_dplus2_timing() -> None:
     )
     base = _by_id(report, "n225_basevol_10_over_60_defensive_v1")
     atm = _by_id(report, "n225_observed_front_over_next_atm_v1")
-    wing = _by_id(report, "n225_observed_downside_wing_front_over_next_v1")
+    smile = _by_id(report, "n225_observed_downside_smile_front_over_next_v1")
 
     base_day = base["daily_path"][0]
     assert base_day["feature_ratio_x"] == pytest.approx(1.0)
@@ -110,8 +110,11 @@ def test_ratio_scale_beta_cap_and_d_dplus1_dplus2_timing() -> None:
 
     assert atm["daily_path"][0]["feature_ratio_x"] == pytest.approx(0.5)
     assert atm["daily_path"][0]["gross_scale"] == pytest.approx(1.0)
-    assert wing["daily_path"][0]["feature_ratio_x"] == pytest.approx(2.0)
-    assert wing["daily_path"][0]["gross_scale"] == pytest.approx(0.5)
+    # The raw wing term ratio is still 40/20=2.  Normalising each wing by its
+    # ATM maturity level makes the intended smile term ratio (40/10)/(20/20)=4.
+    assert smile["daily_path"][0]["feature_ratio_x"] == pytest.approx(4.0)
+    assert smile["daily_path"][0]["feature_ratio_x"] != pytest.approx(2.0)
+    assert smile["daily_path"][0]["gross_scale"] == pytest.approx(0.5)
     assert all(
         0.5 <= candidate["daily_path"][0]["gross_scale"] <= 1.0
         for candidate in report["candidates"]
@@ -126,17 +129,18 @@ def test_ten_basis_point_turnover_and_terminal_close_are_in_performance() -> Non
         signal_end=dates[130],
         starting_capital=1_000_000.0,
     )
-    result = _by_id(report, "n225_observed_downside_wing_front_over_next_v1")
+    result = _by_id(report, "n225_observed_downside_smile_front_over_next_v1")
     path = result["daily_path"][0]
     performance = result["performance"]
 
-    assert path["sleeve_turnover_one_way"] == pytest.approx(0.5)
+    assert path["feature_ratio_x"] == pytest.approx(4.0 / 3.0)
+    assert path["sleeve_turnover_one_way"] == pytest.approx(0.75)
     assert path["topix_proxy_turnover_one_way"] == pytest.approx(1.5)
     assert path["rebalance_cost_amount"] == pytest.approx(
-        1_000_000.0 * ONE_WAY_COST_RATE * 2.0
+        1_000_000.0 * ONE_WAY_COST_RATE * 2.25
     )
     assert path["terminal_close"] is True
-    assert path["terminal_turnover_one_way"] == pytest.approx(2.0)
+    assert path["terminal_turnover_one_way"] == pytest.approx(2.25)
     assert path["terminal_close_cost_amount"] > 0.0
     assert performance["cost_amount"] == pytest.approx(
         path["rebalance_cost_amount"] + path["terminal_close_cost_amount"]
@@ -197,25 +201,25 @@ def test_future_mutation_cannot_change_signal_or_beta() -> None:
 
 def test_missing_required_observation_is_not_evaluated_and_never_filled() -> None:
     rows, dates = _panel()
-    rows[130] = replace(rows[130], n225_front_atm_iv=None)
+    rows[130] = replace(rows[130], n225_front_downside_wing_iv=None)
     report = evaluate_index_vol_overlays(
         rows,
         signal_start=dates[130],
         signal_end=dates[130],
     )
-    atm = _by_id(report, "n225_observed_front_over_next_atm_v1")
+    smile = _by_id(report, "n225_observed_downside_smile_front_over_next_v1")
 
     assert report["status"] == "NOT_EVALUATED"
-    assert atm["status"] == "NOT_EVALUATED"
-    assert atm["reason"] == "missing_required_row_no_forward_fill"
-    assert atm["missing_required_rows"] == [
-        {"date": dates[130], "reason": "observed_atm_term_row_missing"}
+    assert smile["status"] == "NOT_EVALUATED"
+    assert smile["reason"] == "missing_required_row_no_forward_fill"
+    assert smile["missing_required_rows"] == [
+        {"date": dates[130], "reason": "observed_downside_smile_term_row_missing"}
     ]
-    assert atm["daily_path"] == []
-    assert atm["performance"] is None
-    assert _by_id(report, "n225_observed_downside_wing_front_over_next_v1")[
-        "status"
-    ] == "EVALUATED"
+    assert smile["daily_path"] == []
+    assert smile["performance"] is None
+    assert _by_id(report, "n225_observed_front_over_next_atm_v1")["status"] == (
+        "EVALUATED"
+    )
 
 
 def test_beta_requires_63_returns_and_uses_at_most_126() -> None:
@@ -262,7 +266,7 @@ def test_svi_equivalents_are_diagnostic_only_and_cannot_change_results() -> None
     changed_rows[130] = replace(
         changed_rows[130],
         svi_equivalent_atm_term_ratio=-999.0,
-        svi_equivalent_downside_wing_term_ratio=999.0,
+        svi_equivalent_downside_smile_term_ratio=999.0,
     )
     changed = evaluate_index_vol_overlays(
         changed_rows,
@@ -274,9 +278,16 @@ def test_svi_equivalents_are_diagnostic_only_and_cannot_change_results() -> None
     assert changed["candidate_policy"] == original["candidate_policy"]
     diagnostics = changed["svi_equivalent_diagnostics"]
     assert diagnostics["role"] == "DIAGNOSTIC_ONLY_NOT_RANKED"
+    assert diagnostics["downside_smile_term_ratio_formula"] == (
+        "(front_downside_wing_iv/front_atm_iv)/"
+        "(next_downside_wing_iv/next_atm_iv)"
+    )
     assert diagnostics["used_in_signals"] is False
     assert diagnostics["used_in_performance"] is False
     assert diagnostics["rows"][0]["svi_equivalent_atm_term_ratio"] == -999.0
+    assert diagnostics["rows"][0][
+        "svi_equivalent_downside_smile_term_ratio"
+    ] == 999.0
 
 
 def test_missing_pnl_proxy_row_fails_all_candidates_without_partial_path() -> None:
