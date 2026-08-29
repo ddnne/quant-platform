@@ -25,6 +25,10 @@ import {
   submitPersonalResearch,
 } from "./personal_research_container";
 import { runPersonalVolResearch } from "./personal_vol_research";
+import {
+  personalSvi2023Status,
+  submitPersonalSvi2023,
+} from "./personal_svi_2023";
 
 export { ContainerProxy } from "./personal_research_container";
 export { PersonalResearchContainer };
@@ -326,6 +330,8 @@ export default {
       submitPersonalResearch,
       personalResearchStatus,
       runPersonalVolResearch,
+      submitPersonalSvi2023,
+      personalSvi2023Status,
     });
   },
 };

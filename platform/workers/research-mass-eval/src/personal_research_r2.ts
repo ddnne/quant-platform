@@ -4,6 +4,10 @@ import {
   personalResearchManifestKey,
   personalResearchResultKey,
 } from "./personal_research_contract";
+import {
+  isPersonalSviOutboundRequest,
+  personalSviR2Outbound,
+} from "./personal_svi_r2";
 import { sha256Hex } from "./sha256";
 
 const RESULT_MAX_BYTES = 512 * 1024 * 1024;
@@ -245,6 +249,9 @@ export async function personalResearchR2Outbound(
   const key = url.pathname.startsWith("/") ? url.pathname.slice(1) : url.pathname;
   if (url.hostname !== "research.r2" || url.search || url.hash || key.includes("%")) {
     return responseJson({ error: "R2 request denied" }, 403);
+  }
+  if (isPersonalSviOutboundRequest(request, key)) {
+    return personalSviR2Outbound(request, env, key);
   }
   if ((request.method === "GET" || request.method === "HEAD") &&
       isPersonalResearchSnapshotKey(key)) {

@@ -38,11 +38,20 @@ arm the Mass capability.
 `POST /v1/personal-research` accepts one immutable SQLite snapshot already in
 R2 and executes one closed four-candidate DRAFT cohort. The allowed cohort ids
 are `price-relative-v1`, `fundamental-relative-v1`, and `diverse-core-v1`.
+`compact-market-diverse-v1` is the separate market-relative cohort for
+`topix_core30`, `topix_large70`, and `topix100`; the sector-relative cohorts
+reject those compact universes because they cannot sustain 33 industry buckets.
+The default research universe is PIT `topix_all`; the same request can select
+`topix_core30`, `topix_large70`, `topix_mid400`, `topix_small1`,
+`topix_small2`, `topix_small`, `topix100`, or `topix500`. Every selector is
+intersected with financials visible at that decision time. This personal
+surface is separate from the controlled Prime contract.
 The input is closed:
 
 ```json
 {
   "cohort_id": "diverse-core-v1",
+  "universe_id": "topix_all",
   "job_id": "exact-four-20260829",
   "snapshot_key": "research/personal/snapshots/sha256=<64-lowercase-hex>.sqlite",
   "snapshot_sha256": "<64-lowercase-hex>",
@@ -79,6 +88,21 @@ There is no Cron, Queue, model call,
 public Internet, promotion or live order. The Container can reach only the two
 personal R2 prefixes via a Worker-side streaming adapter, and R2 verifies the
 streamed result checksum before accepting it.
+
+`POST /v1/personal-vol-research` runs four fixed ratio-only volatility screens
+over the 2021, 2023, and 2025 immutable R2 panels. The older 2015, 2017, and
+2019 windows are excluded because the frozen equity codes were selected with
+2019 information. `POST /v1/personal-svi-2023` runs one fixed exploratory
+screen that fits the front and next Nikkei 225 option smiles
+day by day, uses `front SVI ATM IV / next SVI ATM IV - 1`, and conditions an
+equity long-short momentum book on that term ratio. Both routes are token
+gated, write immutable artifacts, and remain DRAFT screening evidence; they
+cannot publish READY, promote a strategy, arm Mass, or place an order. The SVI
+study is a single 2023 window and does not model stock borrow or financing, so
+it must not be read as a production GO result. Neither route uses single-stock
+option volatility. Both use Nikkei 225 index-option evidence with a static
+2019-selected liquid 100-name equity panel; it is not the PIT TOPIX universe
+used by the factor Container and is labelled separately in every report.
 
 ## Modes
 
@@ -176,6 +200,7 @@ curl -sS -X POST \
   -H "X-Mass-Eval-Token: ${MASS_EVAL_TOKEN:?required}" \
   -d "{
     \"cohort_id\": \"diverse-core-v1\",
+    \"universe_id\": \"topix_all\",
     \"job_id\": \"${PERSONAL_JOB_ID}\",
     \"snapshot_key\": \"research/personal/snapshots/sha256=${SNAPSHOT_SHA256}.sqlite\",
     \"snapshot_sha256\": \"${SNAPSHOT_SHA256}\",
