@@ -26,6 +26,24 @@ def test_frozen_manifest_equals_effective_wrangler_surfaces() -> None:
     assert "ci-aggregate" not in frozen["workers"]
 
 
+def test_personal_research_runner_rollover_has_a_two_instance_ceiling() -> None:
+    manifest = manifest_module.build_manifest()
+    for environment in ("base", "production", "staging"):
+        containers = manifest["workers"]["research-mass-eval"][environment][
+            "containers"
+        ]
+        assert len(containers) == 1
+        assert containers[0]["class_name"] == "PersonalResearchContainer"
+        assert containers[0]["max_instances"] == 2
+
+    drifted = copy.deepcopy(manifest)
+    drifted["workers"]["research-mass-eval"]["production"]["containers"][0][
+        "max_instances"
+    ] = 3
+    with pytest.raises(ValueError, match="personal Container drift"):
+        manifest_module.validate_manifest(drifted)
+
+
 def test_receipt_authority_uses_dedicated_evidence_and_premium_owned_migrations() -> None:
     receipt = manifest_module.build_manifest()["workers"][
         "receipt-evidence-authority"

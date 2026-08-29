@@ -1,5 +1,9 @@
 import { putJsonCreateOnly, serializedJsonBytes } from "./http";
 import {
+  personalResearchContainer,
+  verifiedPersonalResearchContainer,
+} from "./personal_research_runner";
+import {
   PERSONAL_SVI_2023_COHORT_ID,
   PERSONAL_SVI_2023_DECISION_CUTOFF,
   PERSONAL_SVI_2023_EARLIEST_DAY,
@@ -267,15 +271,6 @@ async function storedTerminal(
   }
 }
 
-function sviContainer(env: Env) {
-  if (!env.PERSONAL_RESEARCH_CONTAINER) {
-    throw new Error("PERSONAL_RESEARCH_CONTAINER not bound");
-  }
-  return env.PERSONAL_RESEARCH_CONTAINER.getByName(
-    "personal-research-singleton",
-  );
-}
-
 export async function submitPersonalSvi2023(
   env: Env,
   request: PersonalSvi2023Request,
@@ -352,7 +347,8 @@ export async function submitPersonalSvi2023(
   }
   const requestDigest = await personalSviJobRequestDigest(request, inputPut.digest);
   try {
-    return await sviContainer(env).fetch(
+    const target = await verifiedPersonalResearchContainer(env);
+    return await target.fetch(
       new Request("http://container/v1/run-svi-2023", {
         method: "POST",
         headers: { "content-type": "application/json; charset=utf-8" },
@@ -401,7 +397,7 @@ export async function personalSvi2023Status(
     });
   }
   try {
-    return await sviContainer(env).fetch(
+    return await personalResearchContainer(env).fetch(
       new Request(`http://container/v1/jobs/${encodeURIComponent(jobId)}`),
     );
   } catch (error) {

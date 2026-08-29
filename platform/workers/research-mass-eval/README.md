@@ -83,9 +83,10 @@ The generated `snapshots/*.sqlite` copy is excluded from `result.tar.gz`; the
 small snapshot manifest remains. Reusing a completed `job_id` is idempotent
 only when every input is identical.
 
-Cost and safety bounds are structural: `standard-2`, `max_instances=1`, one
-active job, a 4 GiB snapshot ceiling, 165-minute subprocess timeout and a
-180-minute outer Container activity window. Exact-four is also capped at 24
+Cost and safety bounds are structural: `standard-2`, `max_instances=2` only so
+the legacy and runner-bound generations can coexist during rollout, one active
+job per named Container, a 4 GiB snapshot ceiling, 165-minute subprocess
+timeout and a 180-minute outer Container activity window. Exact-four is also capped at 24
 actual backtests (four validation folds, one stress, and one holdout per
 candidate); financing sensitivity does not multiply that execution count. A
 single request is limited to
@@ -97,7 +98,15 @@ leaves fifteen minutes for verified R2 input/output and the durable terminal
 manifest. The process exits immediately
 after its terminal manifest, so an ordinary short run scales back to zero
 without waiting for the outer window. A 190-minute active-rollout grace keeps
-a deployment from replacing the single Container before that watchdog ends.
+a deployment from replacing an accepted legacy or current-generation Container
+before that watchdog ends.
+Before changing the runner-bound name, every accepted job on the prior name must
+have a terminal R2 manifest; do not resubmit the same `job_id` during the
+two-generation migration window. For the v6-to-v7 migration, the known SVI,
+volatility and price paths were verified terminal before rollover. Every new
+POST first requires an exact v7 `/ready` identity. Only a positively identified
+older runner may be destroyed and re-probed once; an unavailable or malformed
+probe fails closed without destroying the instance.
 There is no Cron, Queue, model call,
 public Internet, promotion or live order. The Container can reach only the two
 personal R2 prefixes via a Worker-side streaming adapter, and R2 verifies the

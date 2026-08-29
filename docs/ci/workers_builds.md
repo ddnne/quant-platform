@@ -176,9 +176,16 @@ does not replace this policy — the deploy command is the switch
 `research-mass-eval` is the narrow exception: Cloudflare documents that
 `versions upload` does not update Container images. Its path-scoped production
 lane therefore uses `npx wrangler deploy --env production` after the same
-required repo-root check. `max_instances=1`, DRAFT-only execution and all
+required repo-root check. `max_instances=2` is a hard ceiling that permits only
+legacy/current runner coexistence during rollout; DRAFT-only execution and all
 Mass/READY/GO freezes remain in the deployed configuration
 ([Container Builds behavior](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#how-workers-builds-works)).
+The rollout precondition is operational and fail-closed: before changing the
+runner-bound Container name, confirm every accepted job on the old name has a
+terminal R2 manifest, then prohibit resubmission of the same `job_id` until the
+two-generation window closes. The v6-to-v7 change verified all known SVI,
+volatility and price jobs terminal before the name changed. New submissions
+must pass the exact runner `/ready` identity gate before POST.
 
 Local **mandatory** CI is the same script: [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh).
 [`scripts/verify_all.sh`](../../scripts/verify_all.sh) is a fast local helper only.
