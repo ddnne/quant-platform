@@ -1208,7 +1208,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             "class_name": "PersonalResearchContainer",
             "image": "./Dockerfile",
             "image_build_context": "../../..",
-            "instance_type": "standard-2",
+            "instance_type": "standard-4",
             "max_instances": 1,
         }
     ]
