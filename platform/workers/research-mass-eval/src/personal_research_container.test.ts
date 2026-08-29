@@ -1,7 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 
+const containerRegistry = vi.hoisted(() => ({
+  outboundByHost: undefined as
+    | Record<string, (...args: never[]) => unknown>
+    | undefined,
+}));
+
 vi.mock("@cloudflare/containers", () => ({
-  Container: class {},
+  Container: class {
+    static get outboundByHost() {
+      return containerRegistry.outboundByHost;
+    }
+
+    static set outboundByHost(
+      value: Record<string, (...args: never[]) => unknown>,
+    ) {
+      containerRegistry.outboundByHost = value;
+    }
+  },
   ContainerProxy: class {},
 }));
 
@@ -9,7 +25,11 @@ import {
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
   type PersonalResearchRequest,
 } from "./personal_research_contract";
-import { submitPersonalResearch } from "./personal_research_container";
+import {
+  PersonalResearchContainer,
+  submitPersonalResearch,
+} from "./personal_research_container";
+import { personalResearchR2Outbound } from "./personal_research_r2";
 import type { Env } from "./types";
 
 const SHA = "a".repeat(64);
@@ -49,6 +69,18 @@ function testEnv(snapshotSize: number | null): {
 }
 
 describe("personal research Container admission", () => {
+  it("registers the private R2 handler through the Container base setter", () => {
+    expect(containerRegistry.outboundByHost?.["research.r2"]).toBe(
+      personalResearchR2Outbound,
+    );
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        PersonalResearchContainer,
+        "outboundByHost",
+      ),
+    ).toBe(false);
+  });
+
   it("rejects a missing snapshot before starting the Container", async () => {
     const { env, containerFetch } = testEnv(null);
     const response = await submitPersonalResearch(env, REQUEST);

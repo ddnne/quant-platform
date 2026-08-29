@@ -29,11 +29,15 @@ export class PersonalResearchContainer extends Container<Env> {
   // manifest, so ordinary runs do not remain billable for this full window.
   sleepAfter = "130m";
   enableInternet = false;
-
-  static outboundByHost = {
-    "research.r2": personalResearchR2Outbound,
-  };
 }
+
+// Assignment must go through Container's inherited static setter. A native
+// `static outboundByHost = ...` class field shadows that setter and leaves the
+// ContainerProxy registry empty, so every otherwise-allowed request returns
+// the proxy's fail-closed 520 response.
+PersonalResearchContainer.outboundByHost = {
+  "research.r2": personalResearchR2Outbound,
+};
 
 type StoredManifest = Record<string, unknown> & {
   job_id?: unknown;
