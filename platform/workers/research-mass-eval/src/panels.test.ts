@@ -152,4 +152,26 @@ describe("loadR2Panels missing data", () => {
     expect(notes.some((n) => n.includes("empty_bars"))).toBe(true);
     expect(JSON.stringify({ panels, notes })).not.toMatch(/COMPLETE/);
   });
+
+  it("copies authentic legacy option source fields without relabelling them", async () => {
+    const mem = new MemR2();
+    mem.putJson("research/mass_eval/panels/p0.json", {
+      bars: { A: [["2017-10-02", 100]] },
+      opt225_regime: {
+        dataset: "derivatives_bars_daily_options_225",
+        version: "research-options-225-vol-series/v1.2",
+      },
+    });
+
+    const { panels } = await loadR2Panels(mem.asBucket(), [TINY_PERIODS[0]]);
+
+    expect(panels[0].opt225_regime).toMatchObject({
+      dataset: "derivatives_bars_daily_options_225",
+      version: "research-options-225-vol-series/v1.2",
+      source: {
+        dataset: "derivatives_bars_daily_options_225",
+        version: "research-options-225-vol-series/v1.2",
+      },
+    });
+  });
 });

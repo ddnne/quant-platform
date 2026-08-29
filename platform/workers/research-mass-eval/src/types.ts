@@ -51,6 +51,8 @@ export interface NkyVolSeries {
 }
 
 export interface Opt225RegimeBundle {
+  dataset?: string;
+  version?: string;
   source?: {
     dataset?: string;
     version?: string;

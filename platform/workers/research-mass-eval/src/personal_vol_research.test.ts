@@ -8,6 +8,7 @@ import {
   PERSONAL_VOL_PANELS_PREFIX,
   PERSONAL_VOL_PERIODS,
   PERSONAL_VOL_SOURCE_IDENTITY,
+  PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS,
   PERSONAL_VOL_STRATEGIES,
   evaluatePersonalVolWindow,
   parsePersonalVolResearchRequest,
@@ -179,8 +180,15 @@ describe("ratio-only series routing", () => {
         version: PERSONAL_VOL_SOURCE_IDENTITY.version,
       };
     }
+    const unsupportedVersion = panel();
+    if (unsupportedVersion.opt225_regime) {
+      unsupportedVersion.opt225_regime.source = {
+        dataset: PERSONAL_VOL_SOURCE_IDENTITY.dataset,
+        version: "research-options-225-vol-series/v9.9",
+      };
+    }
 
-    for (const candidate of [missing, mismatched]) {
+    for (const candidate of [missing, mismatched, unsupportedVersion]) {
       const result = evaluatePersonalVolWindow(PERSONAL_VOL_STRATEGIES[0], candidate);
       expect(result).toMatchObject({
         status: "incomplete",
@@ -190,6 +198,22 @@ describe("ratio-only series routing", () => {
         diagnostic_metrics: { schema_version: "personal-performance/v1" },
       });
     }
+  });
+
+  it("accepts the authentic legacy v1.2 source without relabelling it", () => {
+    const legacy = panel();
+    const source = {
+      dataset: PERSONAL_VOL_SOURCE_IDENTITY.dataset,
+      version: PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS[0],
+    };
+    if (legacy.opt225_regime) legacy.opt225_regime.source = source;
+
+    expect(evaluatePersonalVolWindow(PERSONAL_VOL_STRATEGIES[0], legacy)).toMatchObject(
+      {
+        status: "ok",
+        volatility_source: source,
+      },
+    );
   });
 
   it("uses the separate bar-native DRAFT evaluator with fixed hold and cost", () => {
@@ -475,12 +499,18 @@ class MemR2 {
 describe("personal vol immutable artifact", () => {
   it("writes report child before manifest and keeps the result DRAFT-only", async () => {
     const mem = new MemR2();
-    for (const period of PERSONAL_VOL_PERIODS) {
+    for (const [index, period] of PERSONAL_VOL_PERIODS.entries()) {
       const start =
         Number(period.year) < 2016 ? "2015-09-01" : `${period.year}-09-01`;
+      const staged = panel(period.period_id, start);
+      if (index === 0 && staged.opt225_regime) {
+        staged.opt225_regime.dataset = PERSONAL_VOL_SOURCE_IDENTITY.dataset;
+        staged.opt225_regime.version = PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS[0];
+        staged.opt225_regime.source = null;
+      }
       mem.seed(
         `${PERSONAL_VOL_PANELS_PREFIX}/${period.period_id}.json`,
-        panel(period.period_id, start),
+        staged,
       );
     }
     const result = await runPersonalVolResearch(
@@ -503,6 +533,18 @@ describe("personal vol immutable artifact", () => {
       usable_as_mass_readiness: false,
     });
     expect(result.data_contract).toMatchObject({
+      volatility_source: {
+        dataset: PERSONAL_VOL_SOURCE_IDENTITY.dataset,
+        current_staging_version: PERSONAL_VOL_SOURCE_IDENTITY.version,
+        supported_versions: PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS,
+        observed: [
+          {
+            dataset: PERSONAL_VOL_SOURCE_IDENTITY.dataset,
+            version: PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS[0],
+          },
+          PERSONAL_VOL_SOURCE_IDENTITY,
+        ],
+      },
       equity_universe: {
         scope_id: "legacy-liq-large-adv100-2019-v1",
         daily_pit_reconstitution: false,

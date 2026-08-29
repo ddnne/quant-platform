@@ -264,7 +264,20 @@ export async function loadR2Panels(
           raw.nky_vol_series.rv_abs_by_date)
           ? raw.nky_vol_series
           : buildNkyVolFromBars(bars);
-      const opt225 = raw.opt225_regime || null;
+      const rawOpt225 = raw.opt225_regime || null;
+      const opt225 =
+        rawOpt225 &&
+        !rawOpt225.source &&
+        typeof rawOpt225.dataset === "string" &&
+        typeof rawOpt225.version === "string"
+          ? {
+              ...rawOpt225,
+              source: {
+                dataset: rawOpt225.dataset,
+                version: rawOpt225.version,
+              },
+            }
+          : rawOpt225;
       const baseVolSeries =
         raw.base_vol_series ||
         (opt225 && opt225.basevol && opt225.basevol.rv_abs_by_date) ||

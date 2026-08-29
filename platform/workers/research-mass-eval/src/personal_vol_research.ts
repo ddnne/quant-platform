@@ -10,6 +10,7 @@ import type {
   Env,
   LogicSpec,
   NkyVolSeries,
+  Opt225RegimeBundle,
   PeriodPanel,
   PeriodSpec,
 } from "./types";
@@ -25,6 +26,22 @@ export const PERSONAL_VOL_SOURCE_IDENTITY = {
   dataset: "derivatives_bars_daily_options_225",
   version: "research-options-225-vol-series/v1.3",
 } as const;
+export const PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS = [
+  "research-options-225-vol-series/v1.2",
+  PERSONAL_VOL_SOURCE_IDENTITY.version,
+] as const;
+
+function isSupportedPersonalVolSource(
+  source: Opt225RegimeBundle["source"],
+): source is { dataset: string; version: string } {
+  return (
+    source?.dataset === PERSONAL_VOL_SOURCE_IDENTITY.dataset &&
+    typeof source.version === "string" &&
+    PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS.some(
+      (version) => version === source.version,
+    )
+  );
+}
 
 export const PERSONAL_VOL_UNIVERSE_PROVENANCE = {
   scope_id: "legacy-liq-large-adv100-2019-v1",
@@ -448,17 +465,17 @@ export function evaluatePersonalVolWindow(
     };
   }
   const source = panel.opt225_regime?.source;
-  if (
-    source?.dataset !== PERSONAL_VOL_SOURCE_IDENTITY.dataset ||
-    source?.version !== PERSONAL_VOL_SOURCE_IDENTITY.version
-  ) {
+  if (!isSupportedPersonalVolSource(source)) {
     const diagnosticMetrics = personalVolPerformance([], true);
     return {
       period_id: panel.period_id,
       year: panel.year,
       status: "incomplete",
       reason: "opt225_source_identity_missing_or_mismatch",
-      expected_source: PERSONAL_VOL_SOURCE_IDENTITY,
+      expected_source: {
+        dataset: PERSONAL_VOL_SOURCE_IDENTITY.dataset,
+        supported_versions: PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS,
+      },
       observed_source: source ?? null,
       daily_path: [],
       performance_status: "UNAVAILABLE",
@@ -476,6 +493,7 @@ export function evaluatePersonalVolWindow(
       year: panel.year,
       status: "data_missing",
       reason: "required_ratio_series_missing",
+      volatility_source: source,
       ratio_kind: selected.kind,
       ratio_observations: selected.n_observations,
       daily_path: [],
@@ -503,6 +521,7 @@ export function evaluatePersonalVolWindow(
       year: panel.year,
       status: "incomplete",
       reason: unavailableReason,
+      volatility_source: source,
       ratio_kind: selected.kind,
       ratio_observations: selected.n_observations,
       daily_path: [],
@@ -533,6 +552,7 @@ export function evaluatePersonalVolWindow(
     period_end: panel.period_end,
     status,
     reason,
+    volatility_source: source,
     ratio_kind: selected.kind,
     ratio_observations: selected.n_observations,
     eval_path: `personal_draft:${native.path}`,
@@ -562,6 +582,10 @@ export async function runPersonalVolResearch(
 ): Promise<Record<string, unknown>> {
   const panelNotes: string[] = [];
   const fixedPrefixNotes: string[] = [];
+  const observedVolatilitySources = new Map<
+    string,
+    { dataset: string; version: string }
+  >();
   const windowsByStrategy = new Map<
     PersonalVolStrategyId,
     Record<string, unknown>[]
@@ -596,6 +620,20 @@ export async function runPersonalVolResearch(
             source: "fixed_personal_vol_panel_missing",
           };
         })();
+    const observedSource =
+      "opt225_regime" in panel ? panel.opt225_regime?.source : undefined;
+    if (
+      typeof observedSource?.dataset === "string" &&
+      typeof observedSource.version === "string"
+    ) {
+      observedVolatilitySources.set(
+        `${observedSource.dataset}\n${observedSource.version}`,
+        {
+          dataset: observedSource.dataset,
+          version: observedSource.version,
+        },
+      );
+    }
     for (const definition of PERSONAL_VOL_STRATEGIES) {
       windowsByStrategy
         .get(definition.strategy_id)!
@@ -734,7 +772,12 @@ export async function runPersonalVolResearch(
       iv_fields_available_from: PERSONAL_VOL_IV_AVAILABLE_FROM,
       panel_notes: [...panelNotes, ...fixedPrefixNotes],
       source: "existing immutable R2 panel bundle",
-      volatility_source: PERSONAL_VOL_SOURCE_IDENTITY,
+      volatility_source: {
+        dataset: PERSONAL_VOL_SOURCE_IDENTITY.dataset,
+        current_staging_version: PERSONAL_VOL_SOURCE_IDENTITY.version,
+        supported_versions: PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS,
+        observed: [...observedVolatilitySources.values()],
+      },
       equity_universe: PERSONAL_VOL_UNIVERSE_PROVENANCE,
       excluded_lookahead_windows: PERSONAL_VOL_EXCLUDED_LOOKAHEAD_WINDOWS,
       exclusion_reason:
