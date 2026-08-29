@@ -174,4 +174,40 @@ describe("loadR2Panels missing data", () => {
       },
     });
   });
+
+  it("rejects every fixed-key period metadata mismatch in strict mode", async () => {
+    const expected = TINY_PERIODS[0];
+    const mismatches = [
+      { period_id: "wrong" },
+      { year: 2018 },
+      { period_start: "2017-10-02" },
+      { period_end: "2017-12-14" },
+    ];
+
+    for (const mismatch of mismatches) {
+      const mem = new MemR2();
+      mem.putJson(`fixed/${expected.period_id}.json`, {
+        ...expected,
+        ...mismatch,
+        bars: { A: [["2017-10-02", 100]] },
+      });
+
+      const { panels, notes } = await loadR2Panels(
+        mem.asBucket(),
+        [expected],
+        "fixed",
+        true,
+      );
+
+      expect(panels[0]).toMatchObject({
+        period_id: expected.period_id,
+        year: expected.year,
+        period_start: expected.period_start,
+        period_end: expected.period_end,
+        status: "data_missing",
+        source: "r2_panels_metadata_mismatch",
+      });
+      expect(notes).toContain(`metadata_mismatch:fixed/${expected.period_id}.json`);
+    }
+  });
 });

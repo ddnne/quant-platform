@@ -183,6 +183,7 @@ export async function loadR2Panels(
   bucket: R2Bucket,
   periods: PeriodSpec[],
   panelsPrefix?: string,
+  requireExactPeriodMetadata = false,
 ): Promise<{ panels: PeriodPanel[]; notes: string[] }> {
   const panels: PeriodPanel[] = [];
   const notes: string[] = [];
@@ -227,6 +228,7 @@ export async function loadR2Panels(
         period_end?: string;
         bars?: BarsByCode;
         source?: string;
+        index_proxy?: PeriodPanel["index_proxy"];
         nky_vol_series?: PeriodPanel["nky_vol_series"];
         opt225_regime?: PeriodPanel["opt225_regime"];
         base_vol_series?: PeriodPanel["base_vol_series"];
@@ -243,6 +245,25 @@ export async function loadR2Panels(
         fund_regime?: PeriodPanel["fund_regime"];
         adv_by_code?: PeriodPanel["adv_by_code"];
       };
+      if (
+        requireExactPeriodMetadata &&
+        (raw.period_id !== String(p.period_id) ||
+          raw.year !== Number(p.year ?? 0) ||
+          raw.period_start !== (p.period_start || "") ||
+          raw.period_end !== (p.period_end || ""))
+      ) {
+        notes.push(`metadata_mismatch:${keyUsed}`);
+        panels.push({
+          period_id: String(p.period_id),
+          year: Number(p.year ?? 0),
+          period_start: p.period_start || "",
+          period_end: p.period_end || "",
+          status: "data_missing",
+          bars: {},
+          source: "r2_panels_metadata_mismatch",
+        });
+        continue;
+      }
       const bars = normalizeBars(raw.bars || {});
       const nCodes = Object.keys(bars).filter((c) => !c.startsWith("__")).length;
       if (nCodes === 0) {
@@ -324,6 +345,7 @@ export async function loadR2Panels(
         period_end: raw.period_end || p.period_end || "",
         status: "ok",
         bars,
+        index_proxy: raw.index_proxy || null,
         nky_vol_series: nky,
         opt225_regime: opt225,
         base_vol_series: baseVolSeries,

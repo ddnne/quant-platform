@@ -67,6 +67,13 @@ export interface Opt225RegimeBundle {
   basevol_delta?: NkyVolSeries | null;
 }
 
+export interface IndexProxyIdentity {
+  dataset?: string;
+  label?: string;
+  role?: string;
+  note?: string;
+}
+
 export interface RepoRateRegime {
   status?: string;
   rates_by_date?: Record<string, number>;
@@ -115,6 +122,7 @@ export interface PeriodPanel {
   status: "ok" | "data_missing";
   bars: BarsByCode;
   source: string;
+  index_proxy?: IndexProxyIdentity | null;
   nky_vol_series?: NkyVolSeries | null;
   opt225_regime?: Opt225RegimeBundle | null;
   base_vol_series?: Record<string, number> | null;

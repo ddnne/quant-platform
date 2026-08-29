@@ -7,16 +7,18 @@ import {
   PERSONAL_VOL_INCOMPLETE_INTERVAL_SAMPLE_LIMIT,
   PERSONAL_VOL_PANELS_PREFIX,
   PERSONAL_VOL_PERIODS,
+  PERSONAL_VOL_RATIO_COVERAGE_SAMPLE_LIMIT,
   PERSONAL_VOL_SOURCE_IDENTITY,
   PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS,
   PERSONAL_VOL_STRATEGIES,
+  PERSONAL_VOL_TOPIX_PROXY_IDENTITY,
   evaluatePersonalVolWindow,
   parsePersonalVolResearchRequest,
   personalVolDailyPath,
   ratioSeriesForStrategy,
   runPersonalVolResearch,
 } from "./personal_vol_research";
-import type { Env, PeriodPanel } from "./types";
+import type { BarsByCode, Env, PeriodPanel } from "./types";
 
 function datesFrom(start: string, count = 18): string[] {
   const startMs = Date.parse(`${start}T00:00:00Z`);
@@ -38,9 +40,11 @@ function panel(periodId = "y2017_q4", start = "2017-09-01"): PeriodPanel {
     period_end: dates.at(-1)!,
     status: "ok",
     source: "test-r2-panel",
+    index_proxy: PERSONAL_VOL_TOPIX_PROXY_IDENTITY,
     bars: {
       A: dates.map((date, index) => [date, 100 + index]),
       B: dates.map((date, index) => [date, 120 - index]),
+      __NKY_PROXY__: dates.map((date, index) => [date, 1_900 + index]),
     },
     opt225_regime: {
       source: PERSONAL_VOL_SOURCE_IDENTITY,
@@ -67,6 +71,23 @@ function panel(periodId = "y2017_q4", start = "2017-09-01"): PeriodPanel {
     cm_term_series: absolute,
     cm_term_ratio_series: cmRatio,
   };
+}
+
+function replaceStockBars(scoped: PeriodPanel, bars: BarsByCode): void {
+  scoped.bars = {
+    ...bars,
+    __NKY_PROXY__: scoped.bars.__NKY_PROXY__,
+  };
+}
+
+function panelForPeriod(
+  period: (typeof PERSONAL_VOL_PERIODS)[number],
+): PeriodPanel {
+  const staged = panel(period.period_id, `${period.year}-09-01`);
+  staged.year = period.year!;
+  staged.period_start = period.period_start!;
+  staged.period_end = period.period_end!;
+  return staged;
 }
 
 describe("closed personal vol request", () => {
@@ -144,9 +165,8 @@ describe("ratio-only series routing", () => {
     expect(Object.values(selected.series?.rv_abs_by_date || {})).not.toContain(99);
   });
 
-  it("fails the near/next candidate when only an absolute term sidecar exists", () => {
+  it("ignores the legacy top-level near/next alias when the source-bound ratio is absent", () => {
     const missingRatio = panel();
-    missingRatio.cm_term_ratio_series = null;
     if (missingRatio.opt225_regime) {
       missingRatio.opt225_regime.cm_term_ratio = null;
     }
@@ -168,6 +188,66 @@ describe("ratio-only series routing", () => {
       metrics: null,
       diagnostic_metrics: { schema_version: "personal-performance/v1" },
     });
+    expect(missingRatio.cm_term_ratio_series).not.toBeNull();
+  });
+
+  it("withholds the window when one required TOPIX session lacks the ratio", () => {
+    const incomplete = panel();
+    const missingDate = incomplete.bars.__NKY_PROXY__[7][0];
+    delete incomplete.opt225_regime?.basevol?.rv_short_by_date?.[missingDate];
+
+    const result = evaluatePersonalVolWindow(
+      PERSONAL_VOL_STRATEGIES[0],
+      incomplete,
+    );
+
+    expect(result).toMatchObject({
+      status: "incomplete",
+      reason: "required_ratio_coverage_incomplete",
+      ratio_required_sessions: 18,
+      ratio_covered_sessions: 17,
+      ratio_missing_sessions: 1,
+      ratio_missing_session_sample: [missingDate],
+      ratio_missing_session_sample_omitted: 0,
+      performance_status: "UNAVAILABLE",
+      metrics: null,
+    });
+  });
+
+  it("bounds missing-ratio samples while retaining exact coverage counts", () => {
+    const incomplete = panel(
+      "coverage-sample",
+      "2024-01-01",
+    );
+    const extraDates = datesFrom(
+      "2024-01-01",
+      PERSONAL_VOL_RATIO_COVERAGE_SAMPLE_LIMIT + 3,
+    );
+    incomplete.period_end = extraDates.at(-1)!;
+    incomplete.bars.__NKY_PROXY__ = extraDates.map((date, index) => [
+      date,
+      1_900 + index,
+    ]);
+    incomplete.opt225_regime!.basevol = {
+      rv_short_by_date: {},
+      rv_long_by_date: {},
+    };
+
+    const result = evaluatePersonalVolWindow(
+      PERSONAL_VOL_STRATEGIES[0],
+      incomplete,
+    );
+
+    expect(result).toMatchObject({
+      status: "data_missing",
+      ratio_required_sessions: PERSONAL_VOL_RATIO_COVERAGE_SAMPLE_LIMIT + 3,
+      ratio_covered_sessions: 0,
+      ratio_missing_sessions: PERSONAL_VOL_RATIO_COVERAGE_SAMPLE_LIMIT + 3,
+      ratio_missing_session_sample_omitted: 3,
+    });
+    expect(result.ratio_missing_session_sample).toHaveLength(
+      PERSONAL_VOL_RATIO_COVERAGE_SAMPLE_LIMIT,
+    );
   });
 
   it("rejects a missing or mismatched Nikkei 225 volatility source identity", () => {
@@ -196,6 +276,34 @@ describe("ratio-only series routing", () => {
         performance_status: "UNAVAILABLE",
         metrics: null,
         diagnostic_metrics: { schema_version: "personal-performance/v1" },
+      });
+    }
+  });
+
+  it("requires the staged TOPIX identity for the canonical trading axis", () => {
+    const missing = panel();
+    missing.index_proxy = null;
+    const wrongDataset = panel();
+    wrongDataset.index_proxy = {
+      ...PERSONAL_VOL_TOPIX_PROXY_IDENTITY,
+      dataset: "indices_bars_daily_nikkei_225",
+    };
+    const wrongRole = panel();
+    wrongRole.index_proxy = {
+      ...PERSONAL_VOL_TOPIX_PROXY_IDENTITY,
+      role: "tradable_etf_fill",
+    };
+    const missingAlias = panel();
+    delete missingAlias.bars.__NKY_PROXY__;
+
+    for (const candidate of [missing, wrongDataset, wrongRole, missingAlias]) {
+      expect(
+        evaluatePersonalVolWindow(PERSONAL_VOL_STRATEGIES[0], candidate),
+      ).toMatchObject({
+        status: "incomplete",
+        reason: "topix_trading_axis_missing_or_invalid",
+        performance_status: "UNAVAILABLE",
+        metrics: null,
       });
     }
   });
@@ -232,7 +340,7 @@ describe("ratio-only series routing", () => {
     const scoped = panel("lag-test", dates[0]);
     scoped.period_start = dates[2];
     scoped.period_end = dates[4];
-    scoped.bars = {
+    replaceStockBars(scoped, {
       A: [
         [dates[0], 100],
         [dates[1], 100],
@@ -240,7 +348,7 @@ describe("ratio-only series routing", () => {
         [dates[3], 99],
         [dates[4], 99],
       ],
-    };
+    });
     const path = personalVolDailyPath(
       { A: { [dates[0]]: 1, [dates[1]]: -1 } },
       scoped,
@@ -262,10 +370,10 @@ describe("ratio-only series routing", () => {
     const scoped = panel("rank-sign-book-test", dates[0]);
     scoped.period_start = dates[2];
     scoped.period_end = dates[2];
-    scoped.bars = {
+    replaceStockBars(scoped, {
       A: [[dates[0], 100], [dates[1], 100], [dates[2], 110]],
       B: [[dates[0], 100], [dates[1], 100], [dates[2], 90]],
-    };
+    });
 
     const path = personalVolDailyPath(
       { A: { [dates[0]]: 1 }, B: { [dates[0]]: -1 } },
@@ -281,11 +389,11 @@ describe("ratio-only series routing", () => {
     const scoped = panel("complete-leg-test", dates[0]);
     scoped.period_start = dates[2];
     scoped.period_end = dates[3];
-    scoped.bars = {
+    replaceStockBars(scoped, {
       A: dates.map((date, index) => [date, 100 + index]),
       B: [[dates[0], 100], [dates[1], 100], [dates[3], 90]],
       C: dates.map((date, index) => [date, 100 - index]),
-    };
+    });
 
     const path = personalVolDailyPath(
       {
@@ -324,10 +432,14 @@ describe("ratio-only series routing", () => {
     const scoped = panel("bounded-diagnostics-test", dates[0]);
     scoped.period_start = dates[2];
     scoped.period_end = dates.at(-1)!;
-    scoped.bars = {
+    replaceStockBars(scoped, {
       A: dates.map((date) => [date, 100]),
       B: [],
-    };
+    });
+    scoped.bars.__NKY_PROXY__ = dates.map((date, index) => [
+      date,
+      1_900 + index,
+    ]);
     const positions = Object.fromEntries(
       dates.slice(0, -2).map((date) => [date, 1]),
     );
@@ -349,7 +461,11 @@ describe("ratio-only series routing", () => {
   it("withholds headline window metrics when a held leg is incomplete", () => {
     const scoped = panel("incomplete-headline", "2024-05-01");
     const missingDay = scoped.bars.B[12]?.[0];
-    scoped.bars.B = scoped.bars.B.filter(([date]) => date !== missingDay);
+    for (const code of ["A", "B"]) {
+      scoped.bars[code] = scoped.bars[code].filter(
+        ([date]) => date !== missingDay,
+      );
+    }
 
     const result = evaluatePersonalVolWindow(PERSONAL_VOL_STRATEGIES[0], scoped);
 
@@ -363,8 +479,10 @@ describe("ratio-only series routing", () => {
       },
     });
     expect(result.incomplete_intervals).toBeGreaterThan(0);
+    expect(scoped.bars.__NKY_PROXY__.some(([date]) => date === missingDay)).toBe(
+      true,
+    );
   });
-
 });
 
 const noopMass = async () => {
@@ -500,9 +618,7 @@ describe("personal vol immutable artifact", () => {
   it("writes report child before manifest and keeps the result DRAFT-only", async () => {
     const mem = new MemR2();
     for (const [index, period] of PERSONAL_VOL_PERIODS.entries()) {
-      const start =
-        Number(period.year) < 2016 ? "2015-09-01" : `${period.year}-09-01`;
-      const staged = panel(period.period_id, start);
+      const staged = panelForPeriod(period);
       if (index === 0 && staged.opt225_regime) {
         staged.opt225_regime.dataset = PERSONAL_VOL_SOURCE_IDENTITY.dataset;
         staged.opt225_regime.version = PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS[0];
@@ -570,7 +686,7 @@ describe("personal vol immutable artifact", () => {
   it("withholds stitched headline metrics when any source window is not ok", async () => {
     const mem = new MemR2();
     for (const [index, period] of PERSONAL_VOL_PERIODS.entries()) {
-      const staged = panel(period.period_id, `${period.year}-09-01`);
+      const staged = panelForPeriod(period);
       if (index === 0) {
         const missingDay = staged.bars.B[12]?.[0];
         staged.bars.B = staged.bars.B.filter(([date]) => date !== missingDay);
@@ -593,6 +709,118 @@ describe("personal vol immutable artifact", () => {
         unavailable_period_ids: [PERSONAL_VOL_PERIODS[0].period_id],
         metrics: null,
         diagnostic_metrics: { schema_version: "personal-performance/v1" },
+      });
+      expect(strategy.common_window_comparison).toMatchObject({
+        period_ids: [],
+        comparable: false,
+        performance_status: "UNAVAILABLE",
+        performance_unavailable_reason: "all_required_windows_must_be_ok",
+        metrics: null,
+      });
+    }
+    expect(result.execution_contract).toMatchObject({
+      exact_four_evaluation_complete: false,
+      exact_four_common_window_comparable: false,
+    });
+    expect(result.execution_summary).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          candidate_status: "not_evaluated",
+          non_ok_windows: 1,
+        }),
+      ]),
+    );
+  });
+
+  it("keeps every no-active candidate not evaluated and non-comparable", async () => {
+    const mem = new MemR2();
+    for (const period of PERSONAL_VOL_PERIODS) {
+      const staged = panelForPeriod(period);
+      const dates = staged.bars.__NKY_PROXY__.map(([date]) => date);
+      const neutral = Object.fromEntries(dates.map((date) => [date, 1]));
+      for (const source of ["basevol", "atm_iv", "skew"] as const) {
+        staged.opt225_regime![source] = {
+          rv_short_by_date: neutral,
+          rv_long_by_date: neutral,
+        };
+      }
+      staged.opt225_regime!.cm_term_ratio = {
+        rv_abs_by_date: Object.fromEntries(dates.map((date) => [date, 0])),
+      };
+      mem.seed(`${PERSONAL_VOL_PANELS_PREFIX}/${period.period_id}.json`, staged);
+    }
+
+    const result = await runPersonalVolResearch(
+      {
+        STRUCTURED_BUCKET: mem.asBucket(),
+        MASS_EVAL_VERSION: "research-mass-eval/test",
+      } as Env,
+      { job_id: "no-active", cohort_id: PERSONAL_VOL_COHORT_ID },
+    );
+
+    expect(result.execution_contract).toMatchObject({
+      exact_four_evaluation_complete: false,
+      exact_four_common_window_comparable: false,
+      common_successful_windows: [],
+    });
+    expect(result.execution_summary).toEqual(
+      expect.arrayContaining(
+        PERSONAL_VOL_STRATEGIES.map((definition) =>
+          expect.objectContaining({
+            strategy_id: definition.strategy_id,
+            successful_windows: 0,
+            non_ok_windows: 3,
+            candidate_status: "not_evaluated",
+          }),
+        ),
+      ),
+    );
+    for (const strategy of result.strategies as Array<Record<string, unknown>>) {
+      expect(strategy.common_window_comparison).toMatchObject({
+        comparable: false,
+        metrics: null,
+      });
+    }
+  });
+
+  it("rejects a fixed-key panel whose embedded period metadata is mismatched", async () => {
+    const mem = new MemR2();
+    for (const [index, period] of PERSONAL_VOL_PERIODS.entries()) {
+      const staged = panelForPeriod(period);
+      if (index === 0) staged.period_end = "2021-10-14";
+      mem.seed(`${PERSONAL_VOL_PANELS_PREFIX}/${period.period_id}.json`, staged);
+    }
+
+    const result = await runPersonalVolResearch(
+      {
+        STRUCTURED_BUCKET: mem.asBucket(),
+        MASS_EVAL_VERSION: "research-mass-eval/test",
+      } as Env,
+      { job_id: "metadata-mismatch", cohort_id: PERSONAL_VOL_COHORT_ID },
+    );
+
+    expect(result.data_contract).toMatchObject({
+      panel_notes: expect.arrayContaining([
+        `metadata_mismatch:${PERSONAL_VOL_PANELS_PREFIX}/${PERSONAL_VOL_PERIODS[0].period_id}.json`,
+      ]),
+    });
+    expect(result.execution_summary).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          successful_windows: 2,
+          non_ok_windows: 1,
+          candidate_status: "not_evaluated",
+        }),
+      ]),
+    );
+    for (const strategy of result.strategies as Array<{
+      windows: Array<Record<string, unknown>>;
+      common_window_comparison: Record<string, unknown>;
+    }>) {
+      expect(strategy.windows[0]).toMatchObject({ status: "data_missing" });
+      expect(strategy.common_window_comparison).toMatchObject({
+        comparable: false,
+        metrics: null,
       });
     }
   });
