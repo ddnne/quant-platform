@@ -16,6 +16,7 @@ from execution.personal_paper_service import (
     PersonalPaperExecutionService,
 )
 from paper_runtime import data_snapshot_id
+from paper_runtime.personal_prepared_frame import _personal_prepared_frame_scope
 from research.universe_contract import ResolvedUniverseMembership
 from strategies.paper import Lifecycle, PaperRunConfig, run_paper
 from strategies.spec import FeatureRef, interpret_strategy_spec, iter_feature_refs
@@ -180,6 +181,25 @@ def test_personal_service_rejects_initial_snapshot_mismatch(tmp_path):
             "sha256:" + "0" * 64,
             refs,
         )
+
+
+def test_personal_service_rejects_miskeyed_prepared_frame(tmp_path):
+    spec, config, snapshot_id, refs = _case(tmp_path)
+    with _personal_prepared_frame_scope(
+        db_path=config.db_path,
+        snapshot_id="sha256:" + "0" * 64,
+    ):
+        with pytest.raises(
+            PersonalPaperExecutionRejected,
+            match="prepared frame snapshot",
+        ):
+            _execute(
+                PersonalPaperExecutionService(),
+                spec,
+                config,
+                snapshot_id,
+                refs,
+            )
 
 
 def test_personal_service_rejects_snapshot_tamper_after_run(tmp_path, monkeypatch):

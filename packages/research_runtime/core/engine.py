@@ -15,6 +15,13 @@ from typing import Any, Mapping
 
 import features
 import pit
+from paper_runtime.code_fingerprints import feature_definition_hashes
+from paper_runtime.personal_prepared_frame import (
+    PreparedFeatureValue,
+    PreparedPriceRows,
+    _active_personal_prepared_frame,
+    _is_cache_miss,
+)
 from pit.query import resolve_db_path
 from price_basis import (
     PERSONAL_RETROSPECTIVE_ADJUSTED,
@@ -59,22 +66,74 @@ def _params_hash(params: dict[str, Any]) -> str:
 
 def _make_feature_accessor(as_of: str, db_path: Any):
     """Bind the trusted PIT scope used by one decision context."""
+
+    prepared_frame = _active_personal_prepared_frame(db_path)
+
     def compute_feature(
         feature_id: str, *, version: str | None = None, **inputs: Any
     ) -> Any:
         # Pin ``version`` when given so a later registry add cannot change a
         # persisted StrategySpec. Omit version = follow latest (hand-written).
-        definition = (
-            features.get(feature_id, version=version)
-            if version is not None
-            else feature_id
-        )
-        return features.compute(
-            definition,
+        definition = features.get(feature_id, version=version)
+        definition_digest: str | None = None
+        if prepared_frame is not None:
+            try:
+                def _exact_definition_digest() -> str:
+                    metadata_digest = features.feature_definition_digest(definition)
+                    implementation_digest = feature_definition_hashes(
+                        {definition.id: str(definition.version)}
+                    )[definition.id]
+                    payload = (
+                        metadata_digest + "\0" + implementation_digest
+                    ).encode("ascii")
+                    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+                definition_digest = prepared_frame.definition_digest(
+                    definition,
+                    _exact_definition_digest,
+                )
+                prepared = prepared_frame.load_feature(
+                    as_of=as_of,
+                    feature_id=definition.id,
+                    feature_version=str(definition.version),
+                    definition_digest=definition_digest,
+                    inputs=inputs,
+                )
+            except (KeyError, TypeError, ValueError):
+                # A future feature may accept a non-JSON input. The prepared
+                # frame is only an optimization; such a feature must retain
+                # the public live-compute behavior unchanged.
+                definition_digest = None
+            else:
+                if not _is_cache_miss(prepared):
+                    if not isinstance(prepared, PreparedFeatureValue):
+                        raise RuntimeError("invalid personal prepared feature value")
+                    return features.FeatureOutput(
+                        value=prepared.value,
+                        metadata=dict(prepared.metadata),
+                    )
+
+        completed = features.compute(
+            definition if version is not None else feature_id,
             as_of=as_of,
             db_path=db_path,
             **inputs,
         )
+        if prepared_frame is not None and definition_digest is not None:
+            try:
+                prepared_frame.store_feature(
+                    as_of=as_of,
+                    feature_id=definition.id,
+                    feature_version=str(definition.version),
+                    definition_digest=definition_digest,
+                    inputs=inputs,
+                    value=completed.value,
+                    metadata=completed.metadata,
+                )
+            except (TypeError, ValueError):
+                # Key encoding is best effort for the same reason as above.
+                pass
+        return completed
 
     return compute_feature
 
@@ -168,14 +227,23 @@ def _load_snapshot(
     if not codes:
         return snapshot
     from_date = _shift_date(to_date, -lookback_days)
-    result = pit.get_equity_bars_daily(
-        as_of=as_of,
-        from_event=from_date,
-        to_event=to_date,
-        codes=tuple(sorted(codes)),
-        db_path=db_path,
-    )
-    for row in result.rows:
+    if _active_personal_prepared_frame(db_path) is None:
+        rows = pit.get_equity_bars_daily(
+            as_of=as_of,
+            from_event=from_date,
+            to_event=to_date,
+            codes=tuple(sorted(codes)),
+            db_path=db_path,
+        ).rows
+    else:
+        rows = _prepared_bar_rows(
+            as_of=as_of,
+            codes=codes,
+            from_event=from_date,
+            to_event=to_date,
+            db_path=db_path,
+        )
+    for row in rows:
         code = row.get("code")
         if code not in snapshot:
             continue
@@ -188,6 +256,51 @@ def _load_snapshot(
             _bar_price(bars[-1], price_basis=price_basis) if bars else None
         )
     return snapshot
+
+
+def _prepared_bar_rows(
+    *,
+    as_of: str,
+    codes: set[str],
+    from_event: str,
+    to_event: str,
+    db_path: Any,
+) -> tuple[dict[str, Any], ...]:
+    """Read one bounded bar window and reuse it inside the active job frame."""
+
+    ordered_codes = tuple(sorted(codes))
+    if not ordered_codes:
+        return ()
+    frame = _active_personal_prepared_frame(db_path)
+    if frame is not None:
+        prepared = frame.load_price_rows(
+            as_of=as_of,
+            from_event=from_event,
+            to_event=to_event,
+            codes=ordered_codes,
+        )
+        if not _is_cache_miss(prepared):
+            if not isinstance(prepared, PreparedPriceRows):
+                raise RuntimeError("invalid personal prepared price rows")
+            return prepared.rows
+
+    result = pit.get_equity_bars_daily(
+        as_of=as_of,
+        from_event=from_event,
+        to_event=to_event,
+        codes=ordered_codes,
+        db_path=db_path,
+    )
+    rows = tuple(dict(row) for row in result.rows)
+    if frame is not None:
+        frame.store_price_rows(
+            as_of=as_of,
+            from_event=from_event,
+            to_event=to_event,
+            codes=ordered_codes,
+            rows=rows,
+        )
+    return rows
 
 
 def _session_prices(
