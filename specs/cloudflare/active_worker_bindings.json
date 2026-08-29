@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:d1e6e007077718e8277fcc5320207e517b4914288835d1b15f175faa21e6beb4",
+  "manifest_digest": "sha256:bd40e0647a4da84315c0a948ab84ee5c9d264ce0d66ff739a766a3b9d89c518a",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -2937,7 +2937,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v144.2-snapshot-gzip",
+          "MASS_EVAL_VERSION": "research-mass-eval/v144.3-exit2-contract",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3037,7 +3037,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v144.2-snapshot-gzip",
+          "MASS_EVAL_VERSION": "research-mass-eval/v144.3-exit2-contract",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3135,7 +3135,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v144.2-snapshot-gzip",
+          "MASS_EVAL_VERSION": "research-mass-eval/v144.3-exit2-contract",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",

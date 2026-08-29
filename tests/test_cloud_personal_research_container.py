@@ -144,6 +144,36 @@ def _uploader(records: list[tuple[str, bytes, str]]):
     return upload
 
 
+def _runner_summary(
+    spec,
+    *,
+    evaluated_count: int = 4,
+    hold_count: int = 1,
+    unexpected_errors: int = 0,
+) -> dict[str, object]:
+    return {
+        "cohort_id": spec.cohort_id,
+        "cohort_digest": spec.cohort_digest,
+        "universe_id": spec.universe_id,
+        "universe_rule_digest": spec.universe_rule_digest,
+        "report_id": "sha256:" + "1" * 64,
+        "snapshot_id": "sha256:" + "2" * 64,
+        "logical_data_snapshot_id": "sha256:" + "3" * 64,
+        "report_json": "/missing/report.json",
+        "report_markdown": "/missing/report.md",
+        "candidate_count": 4,
+        "evaluated_count": evaluated_count,
+        "hold_count": hold_count,
+        "unexpected_errors": unexpected_errors,
+        "model_calls": 0,
+        "estimated_ai_cost_usd": 0.0,
+        "go": False,
+        "ready_snapshot_declared": False,
+        "live_orders_enabled": False,
+        "automatic_promotion": False,
+    }
+
+
 def test_snapshot_digest_mismatch_is_a_durable_failure(tmp_path: Path) -> None:
     expected = "a" * 64
     spec = _job(expected)
@@ -498,6 +528,7 @@ out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])
 (out / 'reports').mkdir(parents=True)
 (out / 'snapshots').mkdir(parents=True)
 (out / 'reports' / 'report.json').write_text('{\"ok\":true}')
+(out / 'reports' / 'report.md').write_text('# report')
 (out / 'snapshots' / 'generated.sqlite').write_bytes(b'large-copy')
 (out / 'snapshots' / 'generated.manifest.json').write_text('{\"snapshot\":true}')
 print(json.dumps({
@@ -506,12 +537,16 @@ print(json.dumps({
   'universe_id': sys.argv[sys.argv.index('--universe') + 1],
   'universe_rule_digest': 'sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048',
   'report_id': 'sha256:' + '1' * 64,
+  'report_json': str(out / 'reports' / 'report.json'),
+  'report_markdown': str(out / 'reports' / 'report.md'),
   'snapshot_id': 'sha256:' + '2' * 64,
+  'logical_data_snapshot_id': 'sha256:' + '3' * 64,
   'candidate_count': 4,
   'evaluated_count': 4,
-  'hold_count': 1,
+  'hold_count': 0,
   'unexpected_errors': 0,
   'model_calls': 0,
+  'estimated_ai_cost_usd': 0.0,
   'go': False,
   'ready_snapshot_declared': False,
   'live_orders_enabled': False,
@@ -539,6 +574,8 @@ print(json.dumps({
 
     assert manifest["status"] == "COMPLETED"
     assert manifest["candidate_count"] == 4
+    assert manifest["evaluated_count"] == 4
+    assert manifest["hold_count"] == 0
     assert manifest["cohort_id"] == "diverse-core-v1"
     assert manifest["cohort_digest"] == COHORT_DIGEST
     assert manifest["universe_id"] == "topix_all"
@@ -565,14 +602,185 @@ print(json.dumps({
     assert not tuple(work.iterdir())
 
 
+def test_exit_two_with_no_evaluated_candidates_archives_completed_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _job(sha)
+    script = tmp_path / "no_analysis.py"
+    summary = _runner_summary(spec, evaluated_count=0, hold_count=0)
+    script.write_text(
+        "\n".join(
+            (
+                "import json",
+                "import pathlib",
+                "import sys",
+                "out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])",
+                "(out / 'reports').mkdir(parents=True)",
+                "(out / 'reports' / 'no-analysis.json').write_text('{\"status\":\"NO_ANALYSIS\"}')",
+                "(out / 'reports' / 'no-analysis.md').write_text('# no analysis')",
+                f"summary = {summary!r}",
+                "summary['report_json'] = str(out / 'reports' / 'no-analysis.json')",
+                "summary['report_markdown'] = str(out / 'reports' / 'no-analysis.md')",
+                "print(json.dumps(summary, sort_keys=True))",
+                "raise SystemExit(2)",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    uploads: list[tuple[str, bytes, str]] = []
+
+    def copy_snapshot(_spec, destination):
+        destination.write_bytes(source.read_bytes())
+
+    monkeypatch.setenv("QP_REPO_ROOT", str(tmp_path))
+    manifest = service.execute_job(
+        spec,
+        work_root=work,
+        command=(sys.executable, str(script)),
+        downloader=copy_snapshot,
+        uploader=_uploader(uploads),
+    )
+
+    assert manifest["status"] == "COMPLETED"
+    assert manifest["evaluated_count"] == 0
+    assert manifest["hold_count"] == 0
+    assert manifest["unexpected_errors"] == 0
+    assert [key for key, _, _ in uploads] == [spec.result_key, spec.manifest_key]
+    archive_path = tmp_path / "captured-no-analysis.tar.gz"
+    archive_path.write_bytes(uploads[0][1])
+    with tarfile.open(archive_path, "r:gz") as archive:
+        assert "reports/no-analysis.json" in archive.getnames()
+        runner_summary_file = archive.extractfile("runner-summary.json")
+        assert runner_summary_file is not None
+        runner_summary = json.load(runner_summary_file)
+    assert runner_summary["evaluated_count"] == 0
+    assert runner_summary["unexpected_errors"] == 0
+    assert not tuple(work.iterdir())
+
+
+@pytest.mark.parametrize(
+    ("returncode", "summary_changes", "stdout", "error"),
+    (
+        (2, {}, "{\n", "result document is invalid"),
+        (2, {}, "", "emitted no result document"),
+        (0, {"evaluated_count": 0, "hold_count": 0}, None, "contract mismatch"),
+        (0, {"evaluated_count": 1, "hold_count": 0}, None, "fixed personal policy"),
+        (2, {"evaluated_count": 4, "hold_count": 0}, None, "contract mismatch"),
+        (
+            2,
+            {"evaluated_count": 0, "hold_count": 0, "unexpected_errors": 1},
+            None,
+            "fixed personal policy",
+        ),
+        (1, {"evaluated_count": 0, "hold_count": 0}, None, "exited 1"),
+        (3, {"evaluated_count": 0, "hold_count": 0}, None, "exited 3"),
+    ),
+)
+def test_runner_exit_and_summary_contract_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    summary_changes: dict[str, int],
+    stdout: str | None,
+    error: str,
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _job(sha)
+    summary = {**_runner_summary(spec), **summary_changes}
+    monkeypatch.setattr(
+        service.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=returncode,
+            stdout=(json.dumps(summary) + "\n" if stdout is None else stdout),
+            stderr="bounded diagnostic",
+        ),
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    uploads: list[tuple[str, bytes, str]] = []
+
+    def copy_snapshot(_spec, destination):
+        destination.write_bytes(source.read_bytes())
+
+    manifest = service.execute_job(
+        spec,
+        work_root=work,
+        command=(sys.executable, "unused.py"),
+        downloader=copy_snapshot,
+        uploader=_uploader(uploads),
+    )
+
+    assert manifest["status"] == "FAILED"
+    assert error in manifest["error"]
+    assert [key for key, _, _ in uploads] == [spec.manifest_key]
+    assert not tuple(work.iterdir())
+
+
+def test_completed_summary_requires_report_artifacts_inside_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _job(sha)
+
+    def missing_report_artifacts(args, **_kwargs):
+        output = Path(args[args.index("--output") + 1])
+        summary = _runner_summary(
+            spec,
+            evaluated_count=0,
+            hold_count=0,
+        )
+        summary["report_json"] = str(output / "reports" / "missing.json")
+        summary["report_markdown"] = str(output / "reports" / "missing.md")
+        return SimpleNamespace(
+            returncode=2,
+            stdout=json.dumps(summary) + "\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(service.subprocess, "run", missing_report_artifacts)
+    work = tmp_path / "work"
+    work.mkdir()
+    uploads: list[tuple[str, bytes, str]] = []
+
+    def copy_snapshot(_spec, destination):
+        destination.write_bytes(source.read_bytes())
+
+    manifest = service.execute_job(
+        spec,
+        work_root=work,
+        command=(sys.executable, "unused.py"),
+        downloader=copy_snapshot,
+        uploader=_uploader(uploads),
+    )
+
+    assert manifest["status"] == "FAILED"
+    assert "report_json artifact is invalid" in manifest["error"]
+    assert [key for key, _, _ in uploads] == [spec.manifest_key]
+    assert not tuple(work.iterdir())
+
+
 @pytest.mark.parametrize(
     ("field", "invalid_value"),
     (
         ("go", True),
         ("ready_snapshot_declared", True),
+        ("candidate_count", 4.0),
+        ("model_calls", False),
+        ("estimated_ai_cost_usd", False),
+        ("report_id", "not-a-digest"),
+        ("snapshot_id", "not-a-digest"),
+        ("logical_data_snapshot_id", "not-a-digest"),
     ),
 )
-def test_runner_summary_must_remain_no_go_and_not_ready(
+def test_runner_summary_must_remain_within_fixed_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     field: str,
@@ -581,18 +789,7 @@ def test_runner_summary_must_remain_no_go_and_not_ready(
     source = tmp_path / "fixture.sqlite"
     sha = _sqlite(source)
     spec = _job(sha)
-    summary = {
-        "cohort_id": spec.cohort_id,
-        "cohort_digest": spec.cohort_digest,
-        "universe_id": spec.universe_id,
-        "universe_rule_digest": spec.universe_rule_digest,
-        "candidate_count": 4,
-        "model_calls": 0,
-        "go": False,
-        "ready_snapshot_declared": False,
-        "live_orders_enabled": False,
-        "automatic_promotion": False,
-    }
+    summary = _runner_summary(spec)
     summary[field] = invalid_value
     monkeypatch.setattr(
         service.subprocess,
