@@ -11,6 +11,10 @@ export function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+export function serializedJsonBytes(data: unknown): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(data, null, 2));
+}
+
 export async function putJson(
   bucket: R2Bucket,
   key: string,
@@ -61,8 +65,7 @@ export async function putJsonCreateOnly(
   key: string,
   data: unknown,
 ): Promise<CreateOnlyPutResult> {
-  const body = JSON.stringify(data, null, 2);
-  const bytes = new TextEncoder().encode(body);
+  const bytes = serializedJsonBytes(data);
   const digest = `sha256:${await sha256Hex(bytes)}`;
   const existing = await compareExisting(bucket, key, digest);
   if (existing) return existing;

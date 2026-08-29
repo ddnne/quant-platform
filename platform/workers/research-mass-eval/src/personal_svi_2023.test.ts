@@ -7,13 +7,16 @@ import {
 } from "./personal_svi_2023";
 import {
   PERSONAL_SVI_2023_COHORT_ID,
+  PERSONAL_SVI_2023_MAX_INPUT_MANIFEST_BYTES,
   PERSONAL_SVI_2023_MAX_SESSIONS,
   PERSONAL_SVI_2023_OPTIONS_ROOT,
   PERSONAL_SVI_2023_PANEL_KEY,
   PERSONAL_SVI_2023_STRATEGY_ID,
   parsePersonalSvi2023Request,
+  personalSviInputManifestKey,
   personalSviTerminalManifestKey,
 } from "./personal_svi_2023_contract";
+import { personalSviR2Outbound } from "./personal_svi_r2";
 import type { Env } from "./types";
 
 function days(count = 32): string[] {
@@ -27,6 +30,14 @@ function days(count = 32): string[] {
     time += 86_400_000;
   }
   return out;
+}
+
+function calendarDays(count: number): string[] {
+  return Array.from({ length: count }, (_, offset) =>
+    new Date(Date.parse("2023-01-04T00:00:00Z") + offset * 86_400_000)
+      .toISOString()
+      .slice(0, 10),
+  );
 }
 
 function panel(
@@ -67,9 +78,15 @@ class AdmissionR2 {
   readonly puts = new Map<string, Stored>();
   readonly dates: string[];
   readonly panelBytes: Uint8Array;
+  readonly objectsPerDay: number;
 
-  constructor(dates: string[], equityMissingDay?: string) {
+  constructor(
+    dates: string[],
+    equityMissingDay?: string,
+    objectsPerDay = 1,
+  ) {
     this.dates = dates;
+    this.objectsPerDay = objectsPerDay;
     this.panelBytes = new TextEncoder().encode(
       JSON.stringify(panel(dates, equityMissingDay)),
     );
@@ -117,14 +134,14 @@ class AdmissionR2 {
     const date = match?.[1] ?? "";
     if (!this.dates.includes(date)) return { objects: [], delimitedPrefixes: [], truncated: false };
     return {
-      objects: [
-        {
-          key: `${PERSONAL_SVI_2023_OPTIONS_ROOT}/dt=${date}/run-${date}.jsonl`,
+      objects: Array.from({ length: this.objectsPerDay }, (_, index) =>
+        ({
+          key: `${PERSONAL_SVI_2023_OPTIONS_ROOT}/dt=${date}/run-${date}-${index}.jsonl`,
           size: 2048,
-          etag: `etag-${date}`,
+          etag: `etag-${date}-${index}`,
           customMetadata: { sha256: "a".repeat(64) },
-        } as R2Object,
-      ],
+        }) as R2Object,
+      ),
       delimitedPrefixes: [],
       truncated: false,
     };
@@ -237,21 +254,85 @@ describe("fixed personal SVI 2023 admission", () => {
     ]).toEqual(fixedDates);
   });
 
-  it("admits the 193-session identity-bound TOPIX calendar", async () => {
+  it("persists and serves the 193-session identity-bound TOPIX calendar", async () => {
     const fixedDates = days(193);
     const mem = new AdmissionR2(fixedDates);
+    const containerFetch = vi.fn(
+      async () => new Response('{"accepted":true}', { status: 202 }),
+    );
+    const env = {
+      STRUCTURED_BUCKET: mem.asBucket(),
+      PERSONAL_RESEARCH_CONTAINER: {
+        getByName: vi.fn(() => ({ fetch: containerFetch })),
+      },
+    } as unknown as Env;
 
-    const manifest = await buildPersonalSviInputManifest(mem.asBucket(), {
+    const response = await submitPersonalSvi2023(env, {
       job_id: "svi-full-proxy-calendar",
       cohort_id: PERSONAL_SVI_2023_COHORT_ID,
     });
 
+    expect(response.status).toBe(202);
     expect(PERSONAL_SVI_2023_MAX_SESSIONS).toBe(220);
+    const inputKey = personalSviInputManifestKey("svi-full-proxy-calendar");
+    const stored = mem.puts.get(inputKey);
+    expect(stored).toBeDefined();
+    expect(stored!.bytes.byteLength).toBeLessThanOrEqual(
+      PERSONAL_SVI_2023_MAX_INPUT_MANIFEST_BYTES,
+    );
+    const forwarded = containerFetch.mock.calls[0]?.[0] as Request;
+    const dispatched = (await forwarded.json()) as {
+      input_manifest_digest: string;
+    };
+    const served = await personalSviR2Outbound(
+      new Request(`http://research.r2/${inputKey}`, {
+        headers: {
+          "x-svi-job-id": "svi-full-proxy-calendar",
+          "x-svi-input-manifest-key": inputKey,
+          "x-svi-input-manifest-digest": dispatched.input_manifest_digest,
+        },
+      }),
+      { STRUCTURED_BUCKET: mem.asBucket() },
+      inputKey,
+    );
+    expect(served.status).toBe(200);
+    const manifest = (await served.json()) as {
+      options: { days: unknown[] };
+      sessions: { warmup_dates: string[]; evaluation_dates: string[] };
+    };
     expect(manifest.options.days).toHaveLength(193);
     expect([
       ...manifest.sessions.warmup_dates,
       ...manifest.sessions.evaluation_dates,
     ]).toEqual(fixedDates);
+  });
+
+  it("rejects an oversized serialized input manifest before write or dispatch", async () => {
+    const mem = new AdmissionR2(calendarDays(220), undefined, 8);
+    const containerFetch = vi.fn(
+      async () => new Response('{"accepted":true}', { status: 202 }),
+    );
+    const env = {
+      STRUCTURED_BUCKET: mem.asBucket(),
+      PERSONAL_RESEARCH_CONTAINER: {
+        getByName: vi.fn(() => ({ fetch: containerFetch })),
+      },
+    } as unknown as Env;
+
+    const response = await submitPersonalSvi2023(env, {
+      job_id: "svi-oversized-manifest",
+      cohort_id: PERSONAL_SVI_2023_COHORT_ID,
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: "personal_svi_input_manifest_byte_bound_exceeded",
+      go: false,
+    });
+    expect(
+      mem.puts.has(personalSviInputManifestKey("svi-oversized-manifest")),
+    ).toBe(false);
+    expect(containerFetch).not.toHaveBeenCalled();
   });
 
   it("writes the create-only input manifest before dispatching the existing Container", async () => {
