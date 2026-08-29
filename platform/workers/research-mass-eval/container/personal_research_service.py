@@ -35,7 +35,7 @@ from personal_svi_2023_job import (
     execute_svi_job,
 )
 
-RUNNER_VERSION = "personal-cloud-runner/v6"
+RUNNER_VERSION = "personal-cloud-runner/v7"
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60
@@ -395,6 +395,22 @@ def build_result_archive(output_root: Path, destination: Path) -> tuple[int, int
     return len(files), result_size
 
 
+def _require_output_artifact(
+    summary: Mapping[str, Any], field: str, output_root: Path
+) -> Path:
+    value = summary.get(field)
+    if not isinstance(value, str):
+        raise RuntimeError(f"qp-research {field} artifact is invalid")
+    try:
+        resolved = Path(value).resolve(strict=True)
+        resolved.relative_to(output_root.resolve(strict=True))
+    except (OSError, RuntimeError, ValueError) as error:
+        raise RuntimeError(f"qp-research {field} artifact is invalid") from error
+    if not resolved.is_file():
+        raise RuntimeError(f"qp-research {field} artifact is invalid")
+    return resolved
+
+
 def _put(
     key: str,
     data: bytes | Path,
@@ -516,7 +532,7 @@ def execute_job(
                 raise RuntimeError(
                     f"qp-research exceeded the {limit} limit"
                 ) from exc
-            if process.returncode != 0:
+            if process.returncode not in {0, 2}:
                 detail = " ".join(process.stderr.split())[-500:]
                 raise RuntimeError(
                     f"qp-research exited {process.returncode}: "
@@ -531,20 +547,56 @@ def execute_job(
                 raise RuntimeError("qp-research result document is invalid") from exc
             if not isinstance(summary, dict):
                 raise RuntimeError("qp-research result document is not an object")
+            evaluated_count = summary.get("evaluated_count")
+            hold_count = summary.get("hold_count")
+            unexpected_errors = summary.get("unexpected_errors")
+            candidate_count = summary.get("candidate_count")
+            model_calls = summary.get("model_calls")
+            estimated_ai_cost_usd = summary.get("estimated_ai_cost_usd")
+            # The closed CLI either skips all four candidates at preflight or
+            # evaluates all four. Per-candidate failures increment
+            # unexpected_errors and exit 1, which this boundary rejects.
             if (
-                summary.get("candidate_count") != 4
+                type(candidate_count) is not int
+                or candidate_count != 4
+                or type(evaluated_count) is not int
+                or evaluated_count not in {0, 4}
+                or type(hold_count) is not int
+                or not 0 <= hold_count <= evaluated_count
+                or type(unexpected_errors) is not int
+                or unexpected_errors != 0
+                or type(model_calls) is not int
+                or model_calls != 0
+                or type(estimated_ai_cost_usd) not in {int, float}
+                or estimated_ai_cost_usd != 0
+                or any(
+                    not isinstance(summary.get(field), str)
+                    or _DIGEST_RE.fullmatch(summary[field]) is None
+                    for field in (
+                        "report_id",
+                        "snapshot_id",
+                        "logical_data_snapshot_id",
+                    )
+                )
                 or summary.get("cohort_id") != spec.cohort_id
                 or summary.get("cohort_digest") != spec.cohort_digest
                 or summary.get("universe_id") != spec.universe_id
                 or summary.get("universe_rule_digest")
                 != spec.universe_rule_digest
-                or summary.get("model_calls") != 0
                 or summary.get("go") is not False
                 or summary.get("ready_snapshot_declared") is not False
                 or summary.get("live_orders_enabled") is not False
                 or summary.get("automatic_promotion") is not False
             ):
                 raise RuntimeError("qp-research violated the fixed personal policy")
+            expected_exit_code = 0 if evaluated_count == 4 else 2
+            if process.returncode != expected_exit_code:
+                raise RuntimeError(
+                    "qp-research exit/result contract mismatch: "
+                    f"exit={process.returncode}, evaluated_count={evaluated_count}"
+                )
+            _require_output_artifact(summary, "report_json", output)
+            _require_output_artifact(summary, "report_markdown", output)
             stable_summary = {
                 key: summary.get(key)
                 for key in (
