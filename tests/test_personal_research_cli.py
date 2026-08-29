@@ -30,6 +30,7 @@ def test_cli_prints_machine_readable_artifact_summary(
             assert request.source_db == database
             assert request.period_end == "2026-08-27"
             assert request.cohort_id == "diverse-core-v1"
+            assert request.universe_id == "topix_all"
             return SimpleNamespace(
                 report_id="sha256:" + "1" * 64,
                 report_json_path=report_json,
@@ -44,6 +45,8 @@ def test_cli_prints_machine_readable_artifact_summary(
                 unexpected_errors=0,
                 cohort_id="diverse-core-v1",
                 cohort_digest="sha256:" + "4" * 64,
+                universe_id="topix_all",
+                universe_rule_digest="sha256:" + "5" * 64,
                 exit_code=0,
             )
 
@@ -67,6 +70,8 @@ def test_cli_prints_machine_readable_artifact_summary(
     assert payload["hold_count"] == 0
     assert payload["cohort_id"] == "diverse-core-v1"
     assert payload["cohort_digest"] == "sha256:" + "4" * 64
+    assert payload["universe_id"] == "topix_all"
+    assert payload["universe_rule_digest"] == "sha256:" + "5" * 64
     assert payload["live_orders_enabled"] is False
     assert payload["automatic_promotion"] is False
     assert payload["model_calls"] == 0

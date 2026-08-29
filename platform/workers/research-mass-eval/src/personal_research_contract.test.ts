@@ -6,6 +6,7 @@ import {
   personalResearchCohortDigest,
   personalResearchJobIdFromPath,
   personalResearchRequestDigest,
+  personalResearchUniverseRuleDigest,
 } from "./personal_research_contract";
 
 const SHA = "a".repeat(64);
@@ -16,6 +17,7 @@ const VALID = {
   snapshot_sha256: SHA,
   period_start: "2022-04-19",
   period_end: "2026-08-27",
+  universe_id: "topix_all" as const,
 };
 
 describe("personal research request contract", () => {
@@ -33,6 +35,8 @@ describe("personal research request contract", () => {
       runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       snapshot_key: VALID.snapshot_key,
       snapshot_sha256: VALID.snapshot_sha256,
+      universe_id: VALID.universe_id,
+      universe_rule_digest: personalResearchUniverseRuleDigest(VALID.universe_id),
     });
     const expected = await crypto.subtle.digest(
       "SHA-256",
@@ -61,6 +65,32 @@ describe("personal research request contract", () => {
       parsePersonalResearchRequest({
         ...VALID,
         period_start: "2010-01-01",
+      }).ok,
+    ).toBe(false);
+    expect(
+      parsePersonalResearchRequest({
+        ...VALID,
+        universe_id: "prime" as never,
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("pairs compact universes only with the compact market cohort", () => {
+    expect(
+      parsePersonalResearchRequest({
+        ...VALID,
+        cohort_id: "compact-market-diverse-v1",
+        universe_id: "topix_core30",
+      }).ok,
+    ).toBe(true);
+    expect(
+      parsePersonalResearchRequest({ ...VALID, universe_id: "topix_large70" })
+        .ok,
+    ).toBe(false);
+    expect(
+      parsePersonalResearchRequest({
+        ...VALID,
+        cohort_id: "compact-market-diverse-v1",
       }).ok,
     ).toBe(false);
   });

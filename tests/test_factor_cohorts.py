@@ -6,11 +6,13 @@ import pytest
 
 from research.bar_native_specs import BAR_NATIVE_SPECS
 from research.factor_cohorts import (
+    COMPACT_MARKET_COHORT_ID,
     DEFAULT_FACTOR_COHORT_ID,
     PERSONAL_EXECUTABLE_COHORT_IDS,
     RESEARCH_COHORTS,
     get_research_cohort,
     personal_specs_for_cohort,
+    validate_personal_cohort_universe,
 )
 from research.dependency_closure import ContractDependency, build_strategy_dependency_closure
 from strategies.spec import (
@@ -25,11 +27,13 @@ def test_cohorts_are_small_closed_exact_four_batches() -> None:
         "price-relative-v1",
         "fundamental-relative-v1",
         "diverse-core-v1",
+        "compact-market-diverse-v1",
     )
     assert set(RESEARCH_COHORTS) == {
         "price-relative-v1",
         "fundamental-relative-v1",
         "diverse-core-v1",
+        "compact-market-diverse-v1",
         "sector-relative-ls-v1",
         "vol-surface-relative-v1",
     }
@@ -54,6 +58,27 @@ def test_personal_factor_specs_are_v4_sector_relative_and_exactly_pinned() -> No
         assert spec.rule.allow_short is False
         assert spec.rule.min_eligible_count == 100
         assert all(ref.version == "1.0.0" for ref in iter_feature_refs(spec))
+
+
+def test_compact_universes_use_a_distinct_market_relative_cohort() -> None:
+    specs = personal_specs_for_cohort(
+        COMPACT_MARKET_COHORT_ID, universe_id="topix_core30"
+    )
+
+    assert len(specs) == 4
+    assert all(
+        isinstance(spec.rule, FactorRankRule)
+        and spec.rule.group == "market"
+        and spec.rule.min_eligible_count == 20
+        and spec.strategy_id.startswith("personal_compact_market_")
+        for spec in specs
+    )
+    with pytest.raises(ValueError, match="compact-market-diverse-v1"):
+        validate_personal_cohort_universe("diverse-core-v1", "topix_core30")
+    with pytest.raises(ValueError, match="requires one of"):
+        validate_personal_cohort_universe(
+            COMPACT_MARKET_COHORT_ID, "topix_all"
+        )
 
 
 def test_history_floor_is_dependency_specific_not_globally_truncated() -> None:

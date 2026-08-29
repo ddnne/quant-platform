@@ -40,6 +40,7 @@ const REQUEST: PersonalResearchRequest = {
   snapshot_sha256: SHA,
   period_start: "2022-04-19",
   period_end: "2026-08-27",
+  universe_id: "topix500",
 };
 
 function snapshot(size: number): R2Object {
@@ -108,9 +109,12 @@ describe("personal research Container admission", () => {
     const body = await (forwarded as Request).json();
     expect(body).toMatchObject({
       cohort_digest:
-        "sha256:e9aee4f8e2f4fe4bf058c2d9e349c7fe893e386ddbafeb3ecb2a9bab56b973dd",
+        "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84",
       cohort_id: "diverse-core-v1",
-      runner_version: "personal-cloud-runner/v2",
+      runner_version: "personal-cloud-runner/v3",
+      universe_id: "topix500",
+      universe_rule_digest:
+        "sha256:5034530267f4a358a80d9426fcfedfb1162b9f71c1024b54b4b39fe3547d53c6",
     });
   });
 });

@@ -19,6 +19,15 @@ import {
   personalResearchJobIdFromPath,
   type PersonalResearchRequest,
 } from "./personal_research_contract";
+import {
+  parsePersonalVolResearchRequest,
+  type PersonalVolResearchRequest,
+} from "./personal_vol_research";
+import {
+  parsePersonalSvi2023Request,
+  personalSviJobIdFromPath,
+  type PersonalSvi2023Request,
+} from "./personal_svi_2023_contract";
 import type { Env, MassEvalJobResult, MassEvalRequest } from "./types";
 
 export type MassEvalFetchHandlers = {
@@ -32,6 +41,15 @@ export type MassEvalFetchHandlers = {
     request: PersonalResearchRequest,
   ) => Promise<Response>;
   personalResearchStatus?: (env: Env, jobId: string) => Promise<Response>;
+  runPersonalVolResearch?: (
+    env: Env,
+    request: PersonalVolResearchRequest,
+  ) => Promise<Record<string, unknown>>;
+  submitPersonalSvi2023?: (
+    env: Env,
+    request: PersonalSvi2023Request,
+  ) => Promise<Response>;
+  personalSvi2023Status?: (env: Env, jobId: string) => Promise<Response>;
 };
 
 /** HTTP path dispatch. Orchestration stays in index.ts; R2 put stays in http.ts. */
@@ -41,6 +59,100 @@ export async function dispatchMassEvalFetch(
   handlers: MassEvalFetchHandlers,
 ): Promise<Response> {
   const url = new URL(request.url);
+
+  if (url.pathname === "/v1/personal-svi-2023") {
+    if (request.method !== "POST") {
+      return json({ error: "POST required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    if (
+      !env.STRUCTURED_BUCKET ||
+      !env.PERSONAL_RESEARCH_CONTAINER ||
+      !handlers.submitPersonalSvi2023
+    ) {
+      return json({ error: "personal SVI research unavailable" }, 503);
+    }
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = parsePersonalSvi2023Request(body);
+    if (!parsed.ok) return json({ error: parsed.error }, 400);
+    return handlers.submitPersonalSvi2023(env, parsed.value);
+  }
+
+  if (url.pathname.startsWith("/v1/personal-svi-2023/jobs/")) {
+    if (request.method !== "GET") {
+      return json({ error: "GET required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    const jobId = personalSviJobIdFromPath(url.pathname);
+    if (!jobId) return json({ error: "job_id is invalid" }, 400);
+    if (
+      !env.STRUCTURED_BUCKET ||
+      !env.PERSONAL_RESEARCH_CONTAINER ||
+      !handlers.personalSvi2023Status
+    ) {
+      return json({ error: "personal SVI status unavailable" }, 503);
+    }
+    return handlers.personalSvi2023Status(env, jobId);
+  }
+
+  if (url.pathname === "/v1/personal-vol-research") {
+    if (request.method !== "POST") {
+      return json({ error: "POST required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    if (!env.STRUCTURED_BUCKET || !handlers.runPersonalVolResearch) {
+      return json({ error: "personal vol research unavailable" }, 503);
+    }
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = parsePersonalVolResearchRequest(body);
+    if (!parsed.ok) return json({ error: parsed.error }, 400);
+    try {
+      const result = await handlers.runPersonalVolResearch(env, parsed.value);
+      return json({ ok: true, ...result });
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code === "artifact_conflict") {
+        return json(
+          {
+            ok: false,
+            error: "artifact_conflict",
+            job_id: parsed.value.job_id,
+            go: false,
+            not_a_pass: true,
+          },
+          409,
+        );
+      }
+      const detail =
+        error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      return json(
+        {
+          ok: false,
+          error: "personal_vol_research_failed",
+          detail,
+          go: false,
+          not_a_pass: true,
+        },
+        500,
+      );
+    }
+  }
 
   if (url.pathname === "/v1/personal-research") {
     if (request.method !== "POST") {

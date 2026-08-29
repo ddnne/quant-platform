@@ -64,7 +64,7 @@ service = "quant-platform-research-ai-gateway"
 entrypoint = "GatewayService"
 
 [vars]
-MASS_EVAL_VERSION = "research-mass-eval/v142-63-failclosed"
+MASS_EVAL_VERSION = "research-mass-eval/v143-personal-topix-svi"
 MASS_EVAL_WAVE = "research-mass-eval"
 # Freezes — do not flip operational gates from this worker.
 MASS_RESEARCH = "NO-GO"
@@ -112,7 +112,7 @@ service = "quant-platform-research-ai-gateway"
 entrypoint = "GatewayService"
 
 [env.production.vars]
-MASS_EVAL_VERSION = "research-mass-eval/v142-63-failclosed"
+MASS_EVAL_VERSION = "research-mass-eval/v143-personal-topix-svi"
 MASS_EVAL_WAVE = "research-mass-eval"
 MASS_RESEARCH = "NO-GO"
 PHASE7 = "OFF"

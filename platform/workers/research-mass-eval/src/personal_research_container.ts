@@ -9,6 +9,7 @@ import {
   personalResearchManifestKey,
   personalResearchRequestDigest,
   personalResearchResultKey,
+  personalResearchUniverseRuleDigest,
 } from "./personal_research_contract";
 import { personalResearchR2Outbound } from "./personal_research_r2";
 import type { Env } from "./types";
@@ -129,6 +130,9 @@ export async function submitPersonalResearch(
           result_key: personalResearchResultKey(request.job_id),
           manifest_key: personalResearchManifestKey(request.job_id),
           runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
+          universe_rule_digest: personalResearchUniverseRuleDigest(
+            request.universe_id,
+          ),
         }),
       }),
     );

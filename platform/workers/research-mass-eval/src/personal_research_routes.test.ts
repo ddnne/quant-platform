@@ -11,6 +11,7 @@ const BODY = {
   snapshot_sha256: SHA,
   period_start: "2022-04-19",
   period_end: "2026-08-27",
+  universe_id: "topix_all",
 };
 
 function env(): Env {

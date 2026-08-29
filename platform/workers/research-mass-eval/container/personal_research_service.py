@@ -11,6 +11,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -23,8 +24,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+_CONTAINER_MODULE_DIR = str(Path(__file__).resolve().parent)
+if _CONTAINER_MODULE_DIR not in sys.path:
+    sys.path.insert(0, _CONTAINER_MODULE_DIR)
 
-RUNNER_VERSION = "personal-cloud-runner/v2"
+from personal_svi_2023_job import (
+    PersonalSvi2023JobSpec,
+    SviJobInputError,
+    execute_svi_job,
+)
+
+RUNNER_VERSION = "personal-cloud-runner/v3"
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60
@@ -44,7 +54,24 @@ PERSONAL_EXECUTABLE_COHORT_IDS = frozenset(
         "price-relative-v1",
         "fundamental-relative-v1",
         "diverse-core-v1",
+        "compact-market-diverse-v1",
     }
+)
+PERSONAL_EXECUTABLE_UNIVERSE_IDS = frozenset(
+    {
+        "topix_all",
+        "topix_core30",
+        "topix_large70",
+        "topix_mid400",
+        "topix_small1",
+        "topix_small2",
+        "topix_small",
+        "topix100",
+        "topix500",
+    }
+)
+COMPACT_MARKET_UNIVERSE_IDS = frozenset(
+    {"topix_core30", "topix_large70", "topix100"}
 )
 
 
@@ -98,6 +125,8 @@ def _parse_day(value: Any, label: str) -> date:
 class JobSpec:
     cohort_id: str
     cohort_digest: str
+    universe_id: str
+    universe_rule_digest: str
     job_id: str
     snapshot_key: str
     snapshot_sha256: str
@@ -124,6 +153,8 @@ class JobSpec:
             "runner_version",
             "snapshot_key",
             "snapshot_sha256",
+            "universe_id",
+            "universe_rule_digest",
         }
         if set(document) != fields or not all(
             isinstance(document[field], str) for field in fields
@@ -138,6 +169,14 @@ class JobSpec:
             raise JobInputError("cohort_id is not executable by personal research")
         if _DIGEST_RE.fullmatch(self.cohort_digest) is None:
             raise JobInputError("cohort_digest is invalid")
+        if self.universe_id not in PERSONAL_EXECUTABLE_UNIVERSE_IDS:
+            raise JobInputError("universe_id is not executable by personal research")
+        compact_universe = self.universe_id in COMPACT_MARKET_UNIVERSE_IDS
+        compact_cohort = self.cohort_id == "compact-market-diverse-v1"
+        if compact_universe != compact_cohort:
+            raise JobInputError("cohort_id and universe_id profile mismatch")
+        if _DIGEST_RE.fullmatch(self.universe_rule_digest) is None:
+            raise JobInputError("universe_rule_digest is invalid")
         if _JOB_ID_RE.fullmatch(self.job_id) is None:
             raise JobInputError("job_id is invalid")
         if _SHA_RE.fullmatch(self.snapshot_sha256) is None:
@@ -175,6 +214,8 @@ class JobSpec:
             "runner_version": self.runner_version,
             "snapshot_key": self.snapshot_key,
             "snapshot_sha256": self.snapshot_sha256,
+            "universe_id": self.universe_id,
+            "universe_rule_digest": self.universe_rule_digest,
         }
         return "sha256:" + hashlib.sha256(_canonical_bytes(body)).hexdigest()
 
@@ -320,6 +361,8 @@ def _manifest_base(spec: JobSpec, *, started_at: str, finished_at: str) -> dict[
         "job_id": spec.job_id,
         "cohort_id": spec.cohort_id,
         "cohort_digest": spec.cohort_digest,
+        "universe_id": spec.universe_id,
+        "universe_rule_digest": spec.universe_rule_digest,
         "request_digest": spec.request_digest,
         "snapshot": {
             "key": spec.snapshot_key,
@@ -370,6 +413,8 @@ def execute_job(
                 str(output),
                 "--cohort",
                 spec.cohort_id,
+                "--universe",
+                spec.universe_id,
             ]
             try:
                 process = subprocess.run(
@@ -409,6 +454,9 @@ def execute_job(
                 summary.get("candidate_count") != 4
                 or summary.get("cohort_id") != spec.cohort_id
                 or summary.get("cohort_digest") != spec.cohort_digest
+                or summary.get("universe_id") != spec.universe_id
+                or summary.get("universe_rule_digest")
+                != spec.universe_rule_digest
                 or summary.get("model_calls") != 0
                 or summary.get("live_orders_enabled") is not False
                 or summary.get("automatic_promotion") is not False
@@ -419,6 +467,8 @@ def execute_job(
                 for key in (
                     "cohort_id",
                     "cohort_digest",
+                    "universe_id",
+                    "universe_rule_digest",
                     "report_id",
                     "snapshot_id",
                     "logical_data_snapshot_id",
@@ -453,6 +503,7 @@ def execute_job(
                 "archived_file_count": archived_files,
                 "report_id": summary.get("report_id"),
                 "cohort_digest": summary.get("cohort_digest"),
+                "universe_rule_digest": summary.get("universe_rule_digest"),
                 "snapshot_id": summary.get("snapshot_id"),
                 "candidate_count": 4,
                 "evaluated_count": summary.get("evaluated_count"),
@@ -478,7 +529,8 @@ def execute_job(
         shutil.rmtree(job_root, ignore_errors=True)
 
 
-Runner = Callable[[JobSpec], dict[str, Any]]
+JobSpecLike = JobSpec | PersonalSvi2023JobSpec
+Runner = Callable[[JobSpecLike], dict[str, Any]]
 TerminalCallback = Callable[[], None]
 
 
@@ -501,7 +553,7 @@ class JobManager:
         self._accepting = True
         self._watchdog: threading.Timer | None = None
 
-    def submit(self, spec: JobSpec) -> dict[str, Any]:
+    def submit(self, spec: JobSpecLike) -> dict[str, Any]:
         with self._lock:
             if not self._accepting:
                 raise JobBusyError("container is shutting down")
@@ -523,6 +575,8 @@ class JobManager:
                 "automatic_promotion": False,
                 "live_orders_enabled": False,
             }
+            if isinstance(spec, JobSpec):
+                record["universe_id"] = spec.universe_id
             self._jobs[spec.job_id] = record
             self._active_job_id = spec.job_id
             watchdog = threading.Timer(
@@ -561,7 +615,7 @@ class JobManager:
         if self._on_terminal is not None:
             self._on_terminal()
 
-    def _execute(self, spec: JobSpec) -> None:
+    def _execute(self, spec: JobSpecLike) -> None:
         with self._lock:
             if self._active_job_id != spec.job_id or not self._accepting:
                 return
@@ -579,6 +633,8 @@ class JobManager:
                 "error": _safe_detail(error),
                 "go": False,
             }
+            if isinstance(spec, JobSpec):
+                result["universe_id"] = spec.universe_id
         with self._lock:
             notify = self._accepting
             if notify:
@@ -598,7 +654,9 @@ class JobManager:
             return None if record is None else dict(record)
 
 
-def default_runner(spec: JobSpec) -> dict[str, Any]:
+def default_runner(spec: JobSpecLike) -> dict[str, Any]:
+    if isinstance(spec, PersonalSvi2023JobSpec):
+        return execute_svi_job(spec)
     work_root = Path(os.environ.get("QP_JOB_ROOT", "/tmp/personal-research"))
     work_root.mkdir(parents=True, exist_ok=True)
     command = tuple(
@@ -643,7 +701,7 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
         self._json({"ok": record.get("status") == "COMPLETED", "job": record}, HTTPStatus.OK)
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        if self.path != "/v1/run":
+        if self.path not in {"/v1/run", "/v1/run-svi-2023"}:
             self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
             return
         raw_length = self.headers.get("content-length", "")
@@ -652,9 +710,13 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             return
         try:
             document = json.loads(self.rfile.read(int(raw_length)))
-            spec = JobSpec.from_document(document)
+            spec = (
+                PersonalSvi2023JobSpec.from_document(document)
+                if self.path == "/v1/run-svi-2023"
+                else JobSpec.from_document(document)
+            )
             record = self.manager.submit(spec)
-        except (json.JSONDecodeError, JobInputError) as error:
+        except (json.JSONDecodeError, JobInputError, SviJobInputError) as error:
             self._json({"error": "invalid_job", "detail": str(error)}, HTTPStatus.BAD_REQUEST)
             return
         except JobConflictError as error:

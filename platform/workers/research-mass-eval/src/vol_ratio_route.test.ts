@@ -85,4 +85,35 @@ describe("options calendar-maturity ratio routing", () => {
 
     expect(result?.held).toEqual({ A: {}, B: {} });
   });
+
+  it("can flatten a neutral regime at the next fixed rebalance", () => {
+    const dates = Array.from({ length: 12 }, (_, index) =>
+      new Date(Date.UTC(2025, 0, 6 + index)).toISOString().slice(0, 10),
+    );
+    const fixture = panel(0.2);
+    fixture.period_start = dates[0];
+    fixture.period_end = dates.at(-1)!;
+    fixture.bars = {
+      A: dates.map((day, index) => [day, 100 + index]),
+      B: dates.map((day, index) => [day, 112 - index]),
+    };
+    fixture.cm_term_ratio_series = Object.fromEntries(
+      dates.map((day, index) => [day, index < 6 ? 0.2 : 0.0]),
+    );
+    const result = barNativeHeldBook(
+      {
+        ...LOGIC,
+        params: {
+          ...LOGIC.params,
+          hold_days: 3,
+          neutral_policy: "flat_at_rebalance",
+        },
+      },
+      fixture,
+    );
+
+    expect(result?.held.A[dates[5]]).toBe(-1);
+    expect(result?.held.A[dates[6]]).toBeUndefined();
+    expect(result?.held.B[dates[6]]).toBeUndefined();
+  });
 });
