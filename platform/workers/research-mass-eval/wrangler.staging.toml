@@ -24,7 +24,7 @@ tag = "personal-research-container-v1"
 new_sqlite_classes = ["PersonalResearchContainer"]
 
 [vars]
-MASS_EVAL_VERSION = "research-mass-eval/v144-index-vol-beta-ls"
+MASS_EVAL_VERSION = "research-mass-eval/v144.1-index-vol-beta-ls"
 MASS_EVAL_WAVE = "research-mass-eval"
 MASS_RESEARCH = "NO-GO"
 PHASE7 = "OFF"
