@@ -48,6 +48,9 @@ def _sqlite(path: Path) -> str:
 COHORT_DIGEST = (
     "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84"
 )
+LONG_SHORT_COHORT_DIGEST = (
+    "sha256:584bbf0052ad1eee6ec31cacdf1298c13c8a59b9eb6928267935fc17e34289be"
+)
 
 
 def _job(sha: str, job_id: str = "exact-four-test"):
@@ -178,8 +181,24 @@ def test_default_timeout_keeps_room_for_durable_terminal_evidence() -> None:
     assert service.DEFAULT_TIMEOUT_SECONDS < service.MAX_JOB_LIFETIME_SECONDS
 
 
+def _redigest(spec):
+    return replace(spec, request_digest=spec.derived_request_digest())
+
+
+def test_job_spec_accepts_long_short_on_a_broad_universe() -> None:
+    spec = _redigest(
+        replace(
+            _job("a" * 64),
+            cohort_id="sector-relative-ls-v1",
+            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+        )
+    )
+
+    spec.validate()
+
+
 def test_job_spec_rejects_a_non_personal_cohort() -> None:
-    spec = replace(_job("a" * 64), cohort_id="sector-relative-ls-v1")
+    spec = replace(_job("a" * 64), cohort_id="unknown-cohort")
 
     with pytest.raises(service.JobInputError, match="cohort_id"):
         spec.validate()
@@ -194,6 +213,20 @@ def test_job_spec_rejects_an_open_or_prime_only_universe() -> None:
 
 def test_job_spec_rejects_a_compact_universe_with_a_sector_cohort() -> None:
     spec = replace(_job("a" * 64), universe_id="topix_core30")
+
+    with pytest.raises(service.JobInputError, match="profile mismatch"):
+        spec.validate()
+
+
+def test_job_spec_rejects_long_short_on_a_compact_universe() -> None:
+    spec = _redigest(
+        replace(
+            _job("a" * 64),
+            cohort_id="sector-relative-ls-v1",
+            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+            universe_id="topix_core30",
+        )
+    )
 
     with pytest.raises(service.JobInputError, match="profile mismatch"):
         spec.validate()

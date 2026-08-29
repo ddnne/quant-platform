@@ -25,12 +25,14 @@ from research.paper_candidate_specs import build_factor_rank_strategy_spec
 COHORT_REGISTRY_VERSION = "personal-factor-cohorts/v2"
 DEFAULT_FACTOR_COHORT_ID = "diverse-core-v1"
 COMPACT_MARKET_COHORT_ID = "compact-market-diverse-v1"
+PERSONAL_SHORT_FINANCING_COHORT_ID = "sector-relative-ls-v1"
 LEG_VERSION = "1.0.0"
 PERSONAL_EXECUTABLE_COHORT_IDS = (
     "price-relative-v1",
     "fundamental-relative-v1",
     DEFAULT_FACTOR_COHORT_ID,
     COMPACT_MARKET_COHORT_ID,
+    PERSONAL_SHORT_FINANCING_COHORT_ID,
 )
 COMPACT_MARKET_UNIVERSE_IDS = frozenset(
     {"topix_core30", "topix_large70", "topix100"}
@@ -388,8 +390,8 @@ _COHORTS: dict[str, ResearchCohort] = {
             "for Core30, Large70, or TOPIX100."
         ),
     ),
-    "sector-relative-ls-v1": ResearchCohort(
-        cohort_id="sector-relative-ls-v1",
+    PERSONAL_SHORT_FINANCING_COHORT_ID: ResearchCohort(
+        cohort_id=PERSONAL_SHORT_FINANCING_COHORT_ID,
         backend="strategy_spec",
         history_data_start="2008-07-07",
         warmup_sessions=253,
@@ -402,8 +404,9 @@ _COHORTS: dict[str, ResearchCohort] = {
         strategy_specs=_diverse_core_specs(allow_short=True),
         short_financing_required=True,
         description=(
-            "Balanced within-sector long-short variants; blocked until borrow/"
-            "financing cost evidence is enabled."
+            "Balanced within-sector long-short variants for personal DRAFT "
+            "research under fixed modelled short-financing sensitivity; the "
+            "assumptions are not borrow evidence."
         ),
     ),
     "vol-surface-relative-v1": ResearchCohort(
@@ -465,7 +468,10 @@ def personal_specs_for_cohort(
         raise ValueError(
             f"cohort {cohort_id!r} uses {cohort.backend}, not personal StrategySpec"
         )
-    if cohort.short_financing_required:
+    if (
+        cohort.short_financing_required
+        and cohort_id != PERSONAL_SHORT_FINANCING_COHORT_ID
+    ):
         raise ValueError(
             f"cohort {cohort_id!r} requires an explicit short-financing policy"
         )
@@ -485,6 +491,7 @@ __all__ = [
     "COMPACT_MARKET_UNIVERSE_IDS",
     "DEFAULT_FACTOR_COHORT_ID",
     "PERSONAL_EXECUTABLE_COHORT_IDS",
+    "PERSONAL_SHORT_FINANCING_COHORT_ID",
     "RESEARCH_COHORTS",
     "SECTOR_RELATIVE_UNIVERSE_IDS",
     "ResearchCohort",

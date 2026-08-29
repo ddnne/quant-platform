@@ -41,6 +41,11 @@ are `price-relative-v1`, `fundamental-relative-v1`, and `diverse-core-v1`.
 `compact-market-diverse-v1` is the separate market-relative cohort for
 `topix_core30`, `topix_large70`, and `topix100`; the sector-relative cohorts
 reject those compact universes because they cannot sustain 33 industry buckets.
+`sector-relative-ls-v1` is a broad-universe-only exact-four DRAFT cohort. It
+charges the actual post-fill short market value at fixed annual 0%, 3%, and
+10% assumptions over 252 sessions, uses 3% as the displayed decision baseline,
+and keeps the existing one-way fill cost separate. These rates are not request
+fields and are modelled sensitivity assumptions, not stock-borrow evidence.
 The default research universe is PIT `topix_all`; the same request can select
 `topix_core30`, `topix_large70`, `topix_mid400`, `topix_small1`,
 `topix_small2`, `topix_small`, `topix100`, or `topix500`. Every selector is

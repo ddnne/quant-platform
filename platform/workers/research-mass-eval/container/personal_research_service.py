@@ -34,7 +34,7 @@ from personal_svi_2023_job import (
     execute_svi_job,
 )
 
-RUNNER_VERSION = "personal-cloud-runner/v3"
+RUNNER_VERSION = "personal-cloud-runner/v4"
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60
@@ -55,6 +55,7 @@ PERSONAL_EXECUTABLE_COHORT_IDS = frozenset(
         "fundamental-relative-v1",
         "diverse-core-v1",
         "compact-market-diverse-v1",
+        "sector-relative-ls-v1",
     }
 )
 PERSONAL_EXECUTABLE_UNIVERSE_IDS = frozenset(

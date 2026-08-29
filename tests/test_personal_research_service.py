@@ -10,22 +10,34 @@ from pathlib import Path
 import pytest
 
 from data_contracts.identity import natural_key
-from research.paper_candidate_specs import build_multi_day_hold_strategy_spec
+from execution.personal_paper_service import PersonalPaperExecutionService
+from paper_runtime.snapshot_identity import data_snapshot_id
+from research.paper_candidate_specs import (
+    build_factor_rank_strategy_spec,
+    build_multi_day_hold_strategy_spec,
+)
 from research.personal_service import (
     PERSONAL_DECISION_POLICY,
     PERSONAL_RESEARCH_REPORT_VERSION,
+    PERSONAL_SHORT_FINANCING_ANNUAL_RATES,
+    PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE,
     PersonalResearchInputError,
     PersonalResearchPolicy,
     PersonalResearchRequest,
     PersonalResearchService,
     _calendar_lookback_days,
     _periods,
+    _run_one,
+    _short_financing_sensitivity_document,
     _validated_specs,
     default_personal_specs,
 )
-from research.personal_universe import PersonalResolvedUniverseMembership
+from research.personal_universe import (
+    PersonalResolvedUniverseMembership,
+    personal_universe_selector,
+)
 from storage.sqlite_store import SqliteStore
-from strategies.spec import iter_feature_refs
+from strategies.spec import FactorLeg, FeatureRef, iter_feature_refs
 
 
 def _dates(start: date, end: date) -> list[str]:
@@ -328,6 +340,8 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
     }
     assert report["live_orders_enabled"] is False
     assert report["automatic_promotion"] is False
+    assert report["go"] is False
+    assert report["ready_snapshot_declared"] is False
     assert report["model_calls"] == 0
     assert report["estimated_ai_cost_usd"] == 0.0
 
@@ -373,8 +387,125 @@ def test_closed_cohort_selection_and_explicit_specs_are_mutually_exclusive() -> 
 
     with pytest.raises(PersonalResearchInputError, match="mutually exclusive"):
         _validated_specs((specs[0],), _policy(), "diverse-core-v1")
-    with pytest.raises(PersonalResearchInputError, match="must be one of"):
-        _validated_specs(None, _policy(), "sector-relative-ls-v1")
+    long_short, long_short_cohort = _validated_specs(
+        None,
+        _policy(),
+        "sector-relative-ls-v1",
+        "topix_all",
+    )
+    assert long_short_cohort is not None
+    assert long_short_cohort.short_financing_required is True
+    assert len(long_short) == 4
+    assert all(spec.rule.allow_short for spec in long_short)
+    with pytest.raises(PersonalResearchInputError, match="closed.*cohort"):
+        _validated_specs((long_short[0],), _policy())
+    with pytest.raises(PersonalResearchInputError, match="compact-market"):
+        _validated_specs(
+            None,
+            _policy(),
+            "sector-relative-ls-v1",
+            "topix_core30",
+        )
+
+
+def test_fixed_short_financing_monotonically_lowers_return(
+    personal_db: tuple[Path, str, str], tmp_path: Path
+) -> None:
+    source, start, end = personal_db
+    selector = personal_universe_selector("topix_all")
+    sessions = tuple(
+        day
+        for day in _dates(date.fromisoformat(start), date.fromisoformat(end))
+        if date.fromisoformat(day).weekday() < 5
+    )
+    universe = PersonalResolvedUniverseMembership(
+        period_start=start,
+        period_end=end,
+        decision_memberships=tuple(
+            (day, ("1301", "1302", "1303", "1304")) for day in sessions
+        ),
+        rule_id=selector.rule_id,
+        rule_version=selector.rule_version,
+        rule_digest=selector.rule_digest,
+    )
+    spec = build_factor_rank_strategy_spec(
+        strategy_id="personal_test_fixed_short_financing",
+        legs=(
+            FactorLeg(
+                feature=FeatureRef(
+                    id="retrospective_price_ratio",
+                    version="1.0.0",
+                    params={
+                        "mode": "return_ratio",
+                        "short_n": 2,
+                        "long_n": 3,
+                    },
+                ),
+                weight=1.0,
+                direction="high_good",
+            ),
+        ),
+        hold_days=1,
+        group="market",
+        long_frac=0.25,
+        short_frac=0.25,
+        allow_short=True,
+        min_eligible_ratio=1.0,
+        min_eligible_count=4,
+        min_group_count=2,
+        rationale="Deterministic fixture long-short financing sensitivity.",
+    )
+    returns: list[float] = []
+    financing_costs: list[float] = []
+    runs_by_rate: dict[float, list[dict]] = {}
+    daily_by_rate: dict[float, list[float]] = {}
+    dates_by_rate: dict[float, list[str]] = {}
+    for rate in PERSONAL_SHORT_FINANCING_ANNUAL_RATES:
+        evidence, daily, dates_used = _run_one(
+            PersonalPaperExecutionService(),
+            spec,
+            db_path=source,
+            snapshot_id=data_snapshot_id(source),
+            universe=universe,
+            period=(start, end),
+            cost_bps=10.0,
+            lookback_days=3,
+            output_root=tmp_path / "short-financing",
+            max_drawdown=1.0,
+            short_financing_annual_rate=rate,
+        )
+        returns.append(evidence["total_return_post_cost"])
+        financing = evidence["short_financing"]
+        assert financing["modelled_assumption"] is True
+        assert financing["borrow_evidence"] is False
+        assert financing["gap_sessions"] == 0
+        assert evidence["cost_bps"] == 10.0
+        financing_costs.append(financing["cost_amount"])
+        runs_by_rate[rate] = [evidence]
+        daily_by_rate[rate] = daily
+        dates_by_rate[rate] = dates_used
+
+    assert PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE == 0.03
+    assert returns[0] > returns[1] > returns[2]
+    assert financing_costs[0] == 0.0
+    assert financing_costs[0] < financing_costs[1] < financing_costs[2]
+    sensitivity = _short_financing_sensitivity_document(
+        runs_by_rate,
+        daily_by_rate,
+        dates_by_rate,
+    )
+    assert sensitivity["caller_tunable"] is False
+    assert sensitivity["higher_rate_net_return_nonincreasing"] is True
+    assert [result["annual_rate"] for result in sensitivity["results"]] == [
+        0.0,
+        0.03,
+        0.10,
+    ]
+    assert all(
+        result["performance"]["stitched_performance"]["schema_version"]
+        == "personal-performance/v1"
+        for result in sensitivity["results"]
+    )
 
 
 def test_selected_cohort_id_and_digest_are_bound_to_report(

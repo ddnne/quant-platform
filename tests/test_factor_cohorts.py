@@ -28,6 +28,7 @@ def test_cohorts_are_small_closed_exact_four_batches() -> None:
         "fundamental-relative-v1",
         "diverse-core-v1",
         "compact-market-diverse-v1",
+        "sector-relative-ls-v1",
     )
     assert set(RESEARCH_COHORTS) == {
         "price-relative-v1",
@@ -124,15 +125,26 @@ def test_price_ratio_long_window_is_bound_into_dependency_closure() -> None:
     ).required_lookback_trading_days == 252
 
 
-def test_long_short_and_vol_batches_cannot_enter_long_only_personal_service() -> None:
-    with pytest.raises(ValueError, match="short-financing"):
-        personal_specs_for_cohort("sector-relative-ls-v1")
+def test_long_short_is_broad_sector_relative_and_compact_stays_rejected() -> None:
+    specs = personal_specs_for_cohort(
+        "sector-relative-ls-v1", universe_id="topix_all"
+    )
+    assert len(specs) == 4
+    assert all(
+        isinstance(spec.rule, FactorRankRule)
+        and spec.rule.allow_short
+        and spec.rule.group == "sector33"
+        for spec in specs
+    )
+    with pytest.raises(ValueError, match="compact-market-diverse-v1"):
+        personal_specs_for_cohort(
+            "sector-relative-ls-v1", universe_id="topix_core30"
+        )
+
+
+def test_bar_native_vol_batch_cannot_enter_strategy_spec_service() -> None:
     with pytest.raises(ValueError, match="bar_native"):
         personal_specs_for_cohort("vol-surface-relative-v1")
-    assert all(
-        isinstance(spec.rule, FactorRankRule) and spec.rule.allow_short
-        for spec in get_research_cohort("sector-relative-ls-v1").strategy_specs
-    )
 
 
 def test_vol_surface_cohort_reuses_only_live_bar_native_logic() -> None:
