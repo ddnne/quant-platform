@@ -21,6 +21,10 @@ export const PERSONAL_VOL_ONE_WAY_COST = 0.001;
 export const PERSONAL_VOL_HOLD_SESSIONS = 10;
 export const PERSONAL_VOL_IV_AVAILABLE_FROM = "2016-07-19";
 export const PERSONAL_VOL_INCOMPLETE_INTERVAL_SAMPLE_LIMIT = 20;
+export const PERSONAL_VOL_SOURCE_IDENTITY = {
+  dataset: "derivatives_bars_daily_options_225",
+  version: "research-options-225-vol-series/v1.3",
+} as const;
 
 export const PERSONAL_VOL_UNIVERSE_PROVENANCE = {
   scope_id: "legacy-liq-large-adv100-2019-v1",
@@ -430,17 +434,43 @@ export function evaluatePersonalVolWindow(
   panel: PeriodPanel,
 ): Record<string, unknown> {
   if (panel.status !== "ok" || !Object.keys(panel.bars).length) {
+    const diagnosticMetrics = personalVolPerformance([], true);
     return {
       period_id: panel.period_id,
       year: panel.year,
       status: "data_missing",
       reason: "panel_missing_or_empty",
       daily_path: [],
-      metrics: personalVolPerformance([], true),
+      performance_status: "UNAVAILABLE",
+      performance_unavailable_reason: "panel_missing_or_empty",
+      metrics: null,
+      diagnostic_metrics: diagnosticMetrics,
+    };
+  }
+  const source = panel.opt225_regime?.source;
+  if (
+    source?.dataset !== PERSONAL_VOL_SOURCE_IDENTITY.dataset ||
+    source?.version !== PERSONAL_VOL_SOURCE_IDENTITY.version
+  ) {
+    const diagnosticMetrics = personalVolPerformance([], true);
+    return {
+      period_id: panel.period_id,
+      year: panel.year,
+      status: "incomplete",
+      reason: "opt225_source_identity_missing_or_mismatch",
+      expected_source: PERSONAL_VOL_SOURCE_IDENTITY,
+      observed_source: source ?? null,
+      daily_path: [],
+      performance_status: "UNAVAILABLE",
+      performance_unavailable_reason:
+        "opt225_source_identity_missing_or_mismatch",
+      metrics: null,
+      diagnostic_metrics: diagnosticMetrics,
     };
   }
   const selected = ratioSeriesForStrategy(definition.strategy_id, panel);
   if (!selected.series || selected.n_observations === 0) {
+    const diagnosticMetrics = personalVolPerformance([], true);
     return {
       period_id: panel.period_id,
       year: panel.year,
@@ -449,7 +479,10 @@ export function evaluatePersonalVolWindow(
       ratio_kind: selected.kind,
       ratio_observations: selected.n_observations,
       daily_path: [],
-      metrics: personalVolPerformance([], true),
+      performance_status: "UNAVAILABLE",
+      performance_unavailable_reason: "required_ratio_series_missing",
+      metrics: null,
+      diagnostic_metrics: diagnosticMetrics,
     };
   }
   const logic = logicForStrategy(definition.strategy_id);
@@ -462,15 +495,21 @@ export function evaluatePersonalVolWindow(
         };
   const native = barNativeHeldBook(logic, evaluationPanel);
   if (!native || native.fallback) {
+    const unavailableReason =
+      native?.fallback || "closed_bar_native_interpreter_unavailable";
+    const diagnosticMetrics = personalVolPerformance([], true);
     return {
       period_id: panel.period_id,
       year: panel.year,
       status: "incomplete",
-      reason: native?.fallback || "closed_bar_native_interpreter_unavailable",
+      reason: unavailableReason,
       ratio_kind: selected.kind,
       ratio_observations: selected.n_observations,
       daily_path: [],
-      metrics: personalVolPerformance([], true),
+      performance_status: "UNAVAILABLE",
+      performance_unavailable_reason: unavailableReason,
+      metrics: null,
+      diagnostic_metrics: diagnosticMetrics,
     };
   }
   const path = personalVolDailyPath(native.held, panel);
@@ -486,6 +525,7 @@ export function evaluatePersonalVolWindow(
       : status === "incomplete"
         ? "one_or_more_active_intervals_missing_complete_equity_legs"
         : "ratio_never_crossed_fixed_thresholds";
+  const diagnosticMetrics = personalVolPerformance(path.points, true);
   return {
     period_id: panel.period_id,
     year: panel.year,
@@ -509,7 +549,10 @@ export function evaluatePersonalVolWindow(
     incomplete_interval_samples_omitted:
       path.incomplete_interval_samples_omitted,
     daily_path: path.points,
-    metrics: personalVolPerformance(path.points, true),
+    performance_status: status === "ok" ? "AVAILABLE" : "UNAVAILABLE",
+    performance_unavailable_reason: reason,
+    metrics: status === "ok" ? diagnosticMetrics : null,
+    ...(status === "ok" ? {} : { diagnostic_metrics: diagnosticMetrics }),
   };
 }
 
@@ -566,6 +609,11 @@ export async function runPersonalVolResearch(
         ? (window.daily_path as PersonalVolDailyPoint[])
         : [],
     );
+    const unavailablePeriodIds = windows
+      .filter((window) => window.status !== "ok")
+      .map((window) => String(window.period_id));
+    const stitchedMetrics = personalVolPerformance(stitchedPoints, false);
+    const stitchedAvailable = unavailablePeriodIds.length === 0;
     return {
       ...definition,
       windows,
@@ -573,7 +621,13 @@ export async function runPersonalVolResearch(
         label: "three fixed post-selection windows stitched for descriptive comparison",
         warning:
           "The gaps between windows are omitted. CAGR is intentionally null and this stitch is not a continuous backtest.",
-        metrics: personalVolPerformance(stitchedPoints, false),
+        performance_status: stitchedAvailable ? "AVAILABLE" : "UNAVAILABLE",
+        performance_unavailable_reason: stitchedAvailable
+          ? null
+          : "one_or_more_windows_not_ok",
+        unavailable_period_ids: unavailablePeriodIds,
+        metrics: stitchedAvailable ? stitchedMetrics : null,
+        ...(stitchedAvailable ? {} : { diagnostic_metrics: stitchedMetrics }),
       },
     };
   });
@@ -680,6 +734,7 @@ export async function runPersonalVolResearch(
       iv_fields_available_from: PERSONAL_VOL_IV_AVAILABLE_FROM,
       panel_notes: [...panelNotes, ...fixedPrefixNotes],
       source: "existing immutable R2 panel bundle",
+      volatility_source: PERSONAL_VOL_SOURCE_IDENTITY,
       equity_universe: PERSONAL_VOL_UNIVERSE_PROVENANCE,
       excluded_lookahead_windows: PERSONAL_VOL_EXCLUDED_LOOKAHEAD_WINDOWS,
       exclusion_reason:

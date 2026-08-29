@@ -7,6 +7,7 @@ import {
   PERSONAL_VOL_INCOMPLETE_INTERVAL_SAMPLE_LIMIT,
   PERSONAL_VOL_PANELS_PREFIX,
   PERSONAL_VOL_PERIODS,
+  PERSONAL_VOL_SOURCE_IDENTITY,
   PERSONAL_VOL_STRATEGIES,
   evaluatePersonalVolWindow,
   parsePersonalVolResearchRequest,
@@ -41,6 +42,7 @@ function panel(periodId = "y2017_q4", start = "2017-09-01"): PeriodPanel {
       B: dates.map((date, index) => [date, 120 - index]),
     },
     opt225_regime: {
+      source: PERSONAL_VOL_SOURCE_IDENTITY,
       basevol: {
         rv_abs_by_date: absolute,
         rv_short_by_date: short,
@@ -161,7 +163,33 @@ describe("ratio-only series routing", () => {
       status: "data_missing",
       reason: "required_ratio_series_missing",
       ratio_observations: 0,
+      performance_status: "UNAVAILABLE",
+      metrics: null,
+      diagnostic_metrics: { schema_version: "personal-performance/v1" },
     });
+  });
+
+  it("rejects a missing or mismatched Nikkei 225 volatility source identity", () => {
+    const missing = panel();
+    if (missing.opt225_regime) missing.opt225_regime.source = null;
+    const mismatched = panel();
+    if (mismatched.opt225_regime) {
+      mismatched.opt225_regime.source = {
+        dataset: "derivatives_bars_daily_single_stock_options",
+        version: PERSONAL_VOL_SOURCE_IDENTITY.version,
+      };
+    }
+
+    for (const candidate of [missing, mismatched]) {
+      const result = evaluatePersonalVolWindow(PERSONAL_VOL_STRATEGIES[0], candidate);
+      expect(result).toMatchObject({
+        status: "incomplete",
+        reason: "opt225_source_identity_missing_or_mismatch",
+        performance_status: "UNAVAILABLE",
+        metrics: null,
+        diagnostic_metrics: { schema_version: "personal-performance/v1" },
+      });
+    }
   });
 
   it("uses the separate bar-native DRAFT evaluator with fixed hold and cost", () => {
@@ -292,6 +320,25 @@ describe("ratio-only series routing", () => {
     );
     expect(path.incomplete_interval_samples_omitted).toBe(3);
     expect(path.points.every((point) => point.cost_return === 0)).toBe(true);
+  });
+
+  it("withholds headline window metrics when a held leg is incomplete", () => {
+    const scoped = panel("incomplete-headline", "2024-05-01");
+    const missingDay = scoped.bars.B[12]?.[0];
+    scoped.bars.B = scoped.bars.B.filter(([date]) => date !== missingDay);
+
+    const result = evaluatePersonalVolWindow(PERSONAL_VOL_STRATEGIES[0], scoped);
+
+    expect(result).toMatchObject({
+      status: "incomplete",
+      performance_status: "UNAVAILABLE",
+      metrics: null,
+      diagnostic_metrics: {
+        schema_version: "personal-performance/v1",
+        invalid_equity_observations: expect.any(Number),
+      },
+    });
+    expect(result.incomplete_intervals).toBeGreaterThan(0);
   });
 
 });
@@ -476,5 +523,35 @@ describe("personal vol immutable artifact", () => {
     );
     expect(await mem.get(`${prefix}/report.json`)).not.toBeNull();
     expect(await mem.get(`${prefix}/manifest.json`)).not.toBeNull();
+  });
+
+  it("withholds stitched headline metrics when any source window is not ok", async () => {
+    const mem = new MemR2();
+    for (const [index, period] of PERSONAL_VOL_PERIODS.entries()) {
+      const staged = panel(period.period_id, `${period.year}-09-01`);
+      if (index === 0) {
+        const missingDay = staged.bars.B[12]?.[0];
+        staged.bars.B = staged.bars.B.filter(([date]) => date !== missingDay);
+      }
+      mem.seed(`${PERSONAL_VOL_PANELS_PREFIX}/${period.period_id}.json`, staged);
+    }
+
+    const result = await runPersonalVolResearch(
+      {
+        STRUCTURED_BUCKET: mem.asBucket(),
+        MASS_EVAL_VERSION: "research-mass-eval/test",
+      } as Env,
+      { job_id: "incomplete-stitch", cohort_id: PERSONAL_VOL_COHORT_ID },
+    );
+
+    for (const strategy of result.strategies as Array<Record<string, unknown>>) {
+      expect(strategy.stitched_non_contiguous).toMatchObject({
+        performance_status: "UNAVAILABLE",
+        performance_unavailable_reason: "one_or_more_windows_not_ok",
+        unavailable_period_ids: [PERSONAL_VOL_PERIODS[0].period_id],
+        metrics: null,
+        diagnostic_metrics: { schema_version: "personal-performance/v1" },
+      });
+    }
   });
 });

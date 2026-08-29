@@ -19,6 +19,10 @@ from research.eval_loaders import (
     resolve_margin_path,
 )
 from research.eval_universe import DEFAULT_SQLITE
+from research.options_225_vol_series import (
+    DATASET_ID,
+    OPTIONS_225_VOL_SERIES_VERSION,
+)
 
 
 def _load_markets_calendar_map(
@@ -321,6 +325,16 @@ def attach_opt225_regime() -> dict[str, Any]:
     try:
         opt225 = load_opt225_regime_bundle_for_eval()
         if opt225:
+            source = {
+                "dataset": str(opt225.get("dataset") or ""),
+                "version": str(opt225.get("version") or ""),
+            }
+            expected_source = {
+                "dataset": DATASET_ID,
+                "version": OPTIONS_225_VOL_SERIES_VERSION,
+            }
+            if source != expected_source:
+                raise ValueError("options_225 source identity mismatch")
             compact: dict[str, Any] = {}
             for kind in (
                 "basevol",
@@ -341,6 +355,7 @@ def attach_opt225_regime() -> dict[str, Any]:
                     "rv_long_by_date": ser.get("rv_long_by_date") or {},
                     "rv_ratio_by_date": ser.get("rv_ratio_by_date") or {},
                 }
+            compact["source"] = source
             base_vol_series = dict(
                 (compact.get("basevol") or {}).get("rv_abs_by_date") or {}
             )
