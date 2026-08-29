@@ -27,7 +27,7 @@ export class PersonalResearchContainer extends Container<Env> {
   pingEndpoint = "localhost/ready";
   // Hard outer guard. The service exits itself immediately after its terminal
   // manifest, so ordinary runs do not remain billable for this full window.
-  sleepAfter = "130m";
+  sleepAfter = "180m";
   enableInternet = false;
 }
 

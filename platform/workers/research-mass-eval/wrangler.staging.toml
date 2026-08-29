@@ -13,7 +13,7 @@ image = "./Dockerfile"
 image_build_context = "../../.."
 max_instances = 1
 instance_type = "standard-2"
-rollout_active_grace_period = 8400
+rollout_active_grace_period = 11400
 
 [[durable_objects.bindings]]
 name = "PERSONAL_RESEARCH_CONTAINER"

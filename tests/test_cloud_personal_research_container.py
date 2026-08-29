@@ -161,7 +161,8 @@ def test_runner_timeout_is_failed_and_workspace_is_removed(
 
 
 def test_default_timeout_keeps_room_for_durable_terminal_evidence() -> None:
-    assert service.DEFAULT_TIMEOUT_SECONDS == 115 * 60
+    assert service.DEFAULT_TIMEOUT_SECONDS == 165 * 60
+    assert service.MAX_JOB_LIFETIME_SECONDS == 180 * 60
     assert service.DEFAULT_TIMEOUT_SECONDS < service.MAX_JOB_LIFETIME_SECONDS
 
 
