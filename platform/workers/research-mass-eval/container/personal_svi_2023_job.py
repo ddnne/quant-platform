@@ -659,6 +659,23 @@ def _rank_book(
     return book
 
 
+def _held_books_by_signal(
+    bars: Mapping[str, Mapping[str, float]],
+    dates: Sequence[str],
+    features: Mapping[str, float | None],
+) -> dict[str, dict[str, float]]:
+    held_by_signal: dict[str, dict[str, float]] = {}
+    held: dict[str, float] = {}
+    remaining = 0
+    for index, day in enumerate(dates):
+        if remaining <= 0:
+            held = _rank_book(bars, dates, index, features.get(day))
+            remaining = HOLD_SESSIONS
+        held_by_signal[day] = dict(held)
+        remaining -= 1
+    return held_by_signal
+
+
 def evaluate_fixed_strategy(
     panel: Mapping[str, Any],
     feature_rows: Sequence[Mapping[str, Any]],
@@ -673,15 +690,7 @@ def evaluate_fixed_strategy(
         for row in feature_rows
     }
     allowed_evaluation = set(map(str, evaluation_dates))
-    held_by_signal: dict[str, dict[str, float]] = {}
-    held: dict[str, float] = {}
-    remaining = 0
-    for index, day in enumerate(dates):
-        if remaining <= 0:
-            held = _rank_book(bars, dates, index, features.get(day))
-            remaining = HOLD_SESSIONS
-        held_by_signal[day] = dict(held)
-        remaining -= 1
+    held_by_signal = _held_books_by_signal(bars, dates, features)
 
     equity = 1.0
     applied: dict[str, float] = {}
@@ -799,7 +808,6 @@ def evaluate_topix_beta_hedged_comparison(
     feature_rows: Sequence[Mapping[str, Any]],
     evaluation_dates: Sequence[str],
     unhedged_curve: Sequence[Mapping[str, Any]],
-    unhedged_trades: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Add a non-executable TOPIX-index hedge comparison to the fixed result."""
 
@@ -812,29 +820,16 @@ def evaluate_topix_beta_hedged_comparison(
         else None
         for row in feature_rows
     }
-    held_by_signal: dict[str, dict[str, float]] = {}
-    held: dict[str, float] = {}
-    remaining = 0
-    for index, day in enumerate(dates):
-        if remaining <= 0:
-            held = _rank_book(bars, dates, index, features.get(day))
-            remaining = HOLD_SESSIONS
-        held_by_signal[day] = dict(held)
-        remaining -= 1
+    held_by_signal = _held_books_by_signal(bars, dates, features)
 
     allowed_evaluation = set(map(str, evaluation_dates))
     date_index = {day: index for index, day in enumerate(dates)}
-    equity = 1.0
-    applied_hedge = 0.0
-    path: list[dict[str, Any]] = []
-    proxy_adjustments: list[dict[str, Any]] = []
-    unhedged_gross_returns: list[float] = []
-    hedged_gross_returns: list[float] = []
-    topix_returns: list[float] = []
-    skipped_incomplete_intervals: list[str] = []
+    plans: list[dict[str, Any]] = []
+    primary_gross_by_day: dict[str, float] = {}
+    active_sessions = 0
+    incomplete_active_intervals: list[str] = []
     beta_available_sessions = 0
     beta_unavailable_sessions = 0
-    hedge_applied_sessions = 0
     hedge_capped_sessions = 0
 
     for source_row in unhedged_curve:
@@ -848,17 +843,21 @@ def evaluate_topix_beta_hedged_comparison(
             or signal_day not in held_by_signal
         ):
             raise RuntimeError("unhedged path is not aligned to the fixed panel")
+        primary_gross = _number(source_row.get("gross_return"))
+        if primary_gross is None:
+            raise RuntimeError("unhedged path gross return is unavailable")
+        primary_gross_by_day[current_day] = primary_gross
         previous_day = dates[index - 1]
         target_book = held_by_signal[signal_day]
+        active = bool(target_book)
+        if active:
+            active_sessions += 1
         missing_target_codes = [
             code
             for code in target_book
             if bars[code].get(previous_day) is None
             or bars[code].get(current_day) is None
         ]
-        if missing_target_codes:
-            skipped_incomplete_intervals.append(current_day)
-            continue
         topix_before = topix.get(previous_day)
         topix_after = topix.get(current_day)
         if topix_before is None or topix_after is None or topix_before <= 0:
@@ -876,7 +875,11 @@ def evaluate_topix_beta_hedged_comparison(
         book_beta: float | None = None
         residual_beta: float | None = None
         estimate_end: str | None = None
-        if not target_book:
+        if missing_target_codes:
+            beta_status = "INCOMPLETE_TARGET_BOOK"
+            target_hedge = 0.0
+            incomplete_active_intervals.append(current_day)
+        elif not target_book:
             beta_status = "NO_ACTIVE_BOOK"
             target_hedge = 0.0
         elif missing_estimates:
@@ -900,103 +903,288 @@ def evaluate_topix_beta_hedged_comparison(
             if target_hedge != unclipped_hedge:
                 hedge_capped_sessions += 1
 
-        if target_hedge != 0.0:
-            hedge_applied_sessions += 1
-        equity_before = equity
-        hedge_delta = target_hedge - applied_hedge
-        hedge_turnover = abs(hedge_delta)
-        if hedge_delta != 0.0:
-            notional = hedge_turnover * equity_before
-            proxy_adjustments.append(
-                {
-                    "date": previous_day,
-                    "signal_date": signal_day,
-                    "code": "__TOPIX_INDEX_PROXY__",
-                    "assumed_proxy_fill_date": previous_day,
-                    "assumed_proxy_pnl_date": current_day,
-                    "side": "buy" if hedge_delta > 0 else "sell",
-                    "notional": notional,
-                    "cost": notional * ONE_WAY_COST,
-                    "kind": "non_executable_topix_index_proxy_adjustment",
-                    "execution_claim": False,
-                }
-            )
-
-        stock_gross = float(source_row.get("gross_return") or 0.0)
-        stock_cost = float(source_row.get("cost_return") or 0.0)
-        hedge_gross = target_hedge * topix_return
-        hedge_cost = hedge_turnover * ONE_WAY_COST
-        gross = stock_gross + hedge_gross
-        cost = stock_cost + hedge_cost
-        net = gross - cost
-        if 1.0 + net <= 0.0:
-            raise RuntimeError("TOPIX comparison exhausted screening capital")
-        equity *= 1.0 + net
-        unhedged_gross_returns.append(stock_gross)
-        hedged_gross_returns.append(gross)
-        topix_returns.append(topix_return)
-        path.append(
+        plans.append(
             {
                 "date": current_day,
                 "signal_date": signal_day,
                 "assumed_proxy_fill_date": previous_day,
-                "stock_book_gross_return": stock_gross,
+                "target_book": target_book,
+                "missing_target_codes": missing_target_codes,
                 "topix_proxy_return": topix_return,
-                "topix_hedge_gross_return": hedge_gross,
-                "gross_return": gross,
-                "topix_hedge_cost_return": hedge_cost,
-                "cost_return": cost,
-                "net_return": net,
                 "estimated_stock_book_beta": book_beta,
                 "target_topix_proxy_hedge_weight": target_hedge,
                 "residual_beta_after_hedge": residual_beta,
                 "beta_status": beta_status,
                 "beta_window_last_return_date": estimate_end,
-                "equity": equity,
-            }
-        )
-        applied_hedge = target_hedge
-
-    terminal_liquidation_cost = 0.0
-    if path and applied_hedge != 0.0:
-        final_day = str(path[-1]["date"])
-        equity_before_last = float(path[-2]["equity"]) if len(path) > 1 else 1.0
-        terminal_liquidation_cost = abs(applied_hedge) * ONE_WAY_COST
-        path[-1]["topix_hedge_cost_return"] = (
-            float(path[-1]["topix_hedge_cost_return"])
-            + terminal_liquidation_cost
-        )
-        path[-1]["cost_return"] = (
-            float(path[-1]["cost_return"]) + terminal_liquidation_cost
-        )
-        path[-1]["net_return"] = float(path[-1]["gross_return"]) - float(
-            path[-1]["cost_return"]
-        )
-        path[-1]["equity"] = equity_before_last * (
-            1.0 + float(path[-1]["net_return"])
-        )
-        notional = abs(applied_hedge) * equity_before_last
-        proxy_adjustments.append(
-            {
-                "date": final_day,
-                "assumed_proxy_fill_date": final_day,
-                "signal_date": None,
-                "code": "__TOPIX_INDEX_PROXY__",
-                "side": "sell" if applied_hedge > 0 else "buy",
-                "notional": notional,
-                    "cost": notional * ONE_WAY_COST,
-                    "kind": "non_executable_topix_index_proxy_liquidation",
-                    "execution_claim": False,
             }
         )
 
-    performance = summarize_performance(
-        equity_curve=path,
-        trades=[*unhedged_trades, *proxy_adjustments],
-        starting_capital=1.0,
+    beta_coverage_ratio = (
+        None
+        if active_sessions == 0
+        else beta_available_sessions / active_sessions
     )
-    unhedged_volatility = _annualized_volatility(unhedged_gross_returns)
-    residual_volatility = _annualized_volatility(hedged_gross_returns)
+    beta_coverage_complete = (
+        active_sessions > 0
+        and not incomplete_active_intervals
+        and beta_available_sessions == active_sessions
+    )
+    if incomplete_active_intervals:
+        comparison_status = "INCOMPLETE"
+        performance_unavailable_reason = "incomplete_active_target_intervals"
+    elif active_sessions == 0:
+        comparison_status = "NOT_EVALUATED"
+        performance_unavailable_reason = "no_active_stock_book_sessions"
+    elif beta_coverage_complete:
+        comparison_status = "EVALUATED"
+        performance_unavailable_reason = None
+    elif beta_available_sessions:
+        comparison_status = "PARTIAL"
+        performance_unavailable_reason = "beta_did_not_cover_every_active_session"
+    else:
+        comparison_status = "UNAVAILABLE"
+        performance_unavailable_reason = "beta_unavailable_for_all_active_sessions"
+
+    path: list[dict[str, Any]] = []
+    unhedged_gross_returns: list[float] = []
+    hedged_gross_returns: list[float] = []
+    topix_returns: list[float] = []
+    stock_adjustment_count = 0
+    stock_notional_amount = 0.0
+    stock_cost_amount = 0.0
+    proxy_adjustment_count = 0
+    proxy_notional_amount = 0.0
+    proxy_cost_amount = 0.0
+    hedge_applied_sessions = 0
+    terminal_stock_liquidation_cost = 0.0
+    terminal_proxy_liquidation_cost = 0.0
+
+    if incomplete_active_intervals:
+        # A missing active leg makes the cumulative equity unknowable. Preserve
+        # every source date for audit, but do not invent returns across the gap.
+        path = [
+            {
+                **{key: value for key, value in plan.items() if key != "target_book"},
+                "interval_status": (
+                    "INCOMPLETE_TARGET_BOOK"
+                    if plan["missing_target_codes"]
+                    else "NOT_SIMULATED_INCOMPLETE_COMPARISON"
+                ),
+                "stock_book_gross_return": None,
+                "topix_hedge_gross_return": None,
+                "gross_return": None,
+                "stock_cost_return": None,
+                "topix_hedge_cost_return": None,
+                "cost_return": None,
+                "net_return": None,
+                "stock_turnover_one_way": None,
+                "topix_proxy_turnover_one_way": None,
+                "turnover_one_way": None,
+                "stock_adjustment_notional_amount": None,
+                "topix_proxy_adjustment_notional_amount": None,
+                "equity": None,
+            }
+            for plan in plans
+        ]
+    else:
+        equity = 1.0
+        applied_stock: dict[str, float] = {}
+        applied_hedge = 0.0
+        for plan in plans:
+            current_day = str(plan["date"])
+            previous_day = str(plan["assumed_proxy_fill_date"])
+            target_book = dict(plan["target_book"])
+            equity_before = equity
+
+            stock_turnover = 0.0
+            stock_interval_notional = 0.0
+            for code in sorted(set(applied_stock) | set(target_book)):
+                delta = target_book.get(code, 0.0) - applied_stock.get(code, 0.0)
+                if delta == 0.0:
+                    continue
+                turnover_weight = abs(delta)
+                stock_turnover += turnover_weight
+                notional = turnover_weight * equity_before
+                stock_interval_notional += notional
+                stock_adjustment_count += 1
+                stock_notional_amount += notional
+                stock_cost_amount += notional * ONE_WAY_COST
+
+            target_hedge = float(plan["target_topix_proxy_hedge_weight"])
+            hedge_delta = target_hedge - applied_hedge
+            hedge_turnover = abs(hedge_delta)
+            proxy_interval_notional = hedge_turnover * equity_before
+            if hedge_delta != 0.0:
+                proxy_adjustment_count += 1
+                proxy_notional_amount += proxy_interval_notional
+                proxy_cost_amount += proxy_interval_notional * ONE_WAY_COST
+
+            stock_gross = sum(
+                weight
+                * (
+                    bars[code][current_day] / bars[code][previous_day]
+                    - 1.0
+                )
+                for code, weight in target_book.items()
+            )
+            source_gross = primary_gross_by_day[current_day]
+            if abs(source_gross - stock_gross) > 1e-12:
+                raise RuntimeError("comparison stock return diverged from primary path")
+            hedge_gross = target_hedge * float(plan["topix_proxy_return"])
+            stock_cost = stock_turnover * ONE_WAY_COST
+            hedge_cost = hedge_turnover * ONE_WAY_COST
+            gross = stock_gross + hedge_gross
+            cost = stock_cost + hedge_cost
+            net = gross - cost
+            if 1.0 + net <= 0.0:
+                raise RuntimeError("TOPIX comparison exhausted screening capital")
+            equity *= 1.0 + net
+            unhedged_gross_returns.append(stock_gross)
+            hedged_gross_returns.append(gross)
+            topix_returns.append(float(plan["topix_proxy_return"]))
+            if target_hedge != 0.0:
+                hedge_applied_sessions += 1
+            path.append(
+                {
+                    **{key: value for key, value in plan.items() if key != "target_book"},
+                    "interval_status": "COMPLETE",
+                    "stock_book_gross_return": stock_gross,
+                    "topix_hedge_gross_return": hedge_gross,
+                    "gross_return": gross,
+                    "stock_cost_return": stock_cost,
+                    "topix_hedge_cost_return": hedge_cost,
+                    "cost_return": cost,
+                    "net_return": net,
+                    "stock_turnover_one_way": stock_turnover,
+                    "topix_proxy_turnover_one_way": hedge_turnover,
+                    "turnover_one_way": stock_turnover + hedge_turnover,
+                    "stock_adjustment_notional_amount": stock_interval_notional,
+                    "topix_proxy_adjustment_notional_amount": (
+                        proxy_interval_notional
+                    ),
+                    "equity": equity,
+                }
+            )
+            applied_stock = target_book
+            applied_hedge = target_hedge
+
+        if path and (applied_stock or applied_hedge != 0.0):
+            equity_before_last = (
+                float(path[-2]["equity"]) if len(path) > 1 else 1.0
+            )
+            stock_liquidation = sum(abs(weight) for weight in applied_stock.values())
+            proxy_liquidation = abs(applied_hedge)
+            terminal_stock_liquidation_cost = stock_liquidation * ONE_WAY_COST
+            terminal_proxy_liquidation_cost = proxy_liquidation * ONE_WAY_COST
+            stock_terminal_notional = stock_liquidation * equity_before_last
+            proxy_terminal_notional = proxy_liquidation * equity_before_last
+            stock_adjustment_count += len(applied_stock)
+            stock_notional_amount += stock_terminal_notional
+            stock_cost_amount += stock_terminal_notional * ONE_WAY_COST
+            if applied_hedge != 0.0:
+                proxy_adjustment_count += 1
+                proxy_notional_amount += proxy_terminal_notional
+                proxy_cost_amount += proxy_terminal_notional * ONE_WAY_COST
+            path[-1]["stock_cost_return"] = (
+                float(path[-1]["stock_cost_return"])
+                + terminal_stock_liquidation_cost
+            )
+            path[-1]["topix_hedge_cost_return"] = (
+                float(path[-1]["topix_hedge_cost_return"])
+                + terminal_proxy_liquidation_cost
+            )
+            path[-1]["cost_return"] = (
+                float(path[-1]["cost_return"])
+                + terminal_stock_liquidation_cost
+                + terminal_proxy_liquidation_cost
+            )
+            path[-1]["net_return"] = float(path[-1]["gross_return"]) - float(
+                path[-1]["cost_return"]
+            )
+            path[-1]["stock_turnover_one_way"] = (
+                float(path[-1]["stock_turnover_one_way"]) + stock_liquidation
+            )
+            path[-1]["topix_proxy_turnover_one_way"] = (
+                float(path[-1]["topix_proxy_turnover_one_way"])
+                + proxy_liquidation
+            )
+            path[-1]["turnover_one_way"] = (
+                float(path[-1]["turnover_one_way"])
+                + stock_liquidation
+                + proxy_liquidation
+            )
+            path[-1]["stock_adjustment_notional_amount"] = (
+                float(path[-1]["stock_adjustment_notional_amount"])
+                + stock_terminal_notional
+            )
+            path[-1]["topix_proxy_adjustment_notional_amount"] = (
+                float(path[-1]["topix_proxy_adjustment_notional_amount"])
+                + proxy_terminal_notional
+            )
+            path[-1]["equity"] = equity_before_last * (
+                1.0 + float(path[-1]["net_return"])
+            )
+
+    performance: dict[str, Any] | None = None
+    if comparison_status == "EVALUATED":
+        combined_notional = stock_notional_amount + proxy_notional_amount
+        combined_cost = stock_cost_amount + proxy_cost_amount
+        performance = summarize_performance(
+            equity_curve=path,
+            trades=[
+                {
+                    "side": "buy",
+                    "notional": combined_notional,
+                    "cost": combined_cost,
+                }
+            ]
+            if combined_notional
+            else [],
+            starting_capital=1.0,
+        )
+        # Proxy adjustments affect the hypothetical cost path but are not fills.
+        performance["fill_count"] = stock_adjustment_count
+        performance["fill_count_basis"] = (
+            "comparison_stock_fills_only; TOPIX proxy adjustments excluded"
+        )
+        performance["turnover_one_way_basis"] = (
+            "comparison stock plus hypothetical TOPIX proxy adjustments"
+        )
+
+    stock_accounting = {
+        "adjustment_count": stock_adjustment_count,
+        "notional_amount": stock_notional_amount,
+        "cost_amount": stock_cost_amount,
+    }
+    proxy_accounting = {
+        "adjustment_count": proxy_adjustment_count,
+        "notional_amount": proxy_notional_amount,
+        "cost_amount": proxy_cost_amount,
+    }
+    combined_accounting = {
+        "adjustment_count": (
+            stock_accounting["adjustment_count"]
+            + proxy_accounting["adjustment_count"]
+        ),
+        "notional_amount": (
+            stock_accounting["notional_amount"]
+            + proxy_accounting["notional_amount"]
+        ),
+        "cost_amount": (
+            stock_accounting["cost_amount"] + proxy_accounting["cost_amount"]
+        ),
+    }
+    comparison_metrics_available = comparison_status == "EVALUATED"
+    unhedged_volatility = (
+        _annualized_volatility(unhedged_gross_returns)
+        if comparison_metrics_available
+        else None
+    )
+    residual_volatility = (
+        _annualized_volatility(hedged_gross_returns)
+        if comparison_metrics_available
+        else None
+    )
     observed_features = [
         value
         for row in feature_rows
@@ -1004,7 +1192,7 @@ def evaluate_topix_beta_hedged_comparison(
         and (value := _number(row.get(FEATURE_FIELD))) is not None
     ]
     return {
-        "status": "EVALUATED" if beta_available_sessions else "NOT_EVALUATED",
+        "status": comparison_status,
         "comparison_only": True,
         "instrument": {
             "panel_storage_alias": TOPIX_PROXY_PANEL_CODE,
@@ -1023,34 +1211,71 @@ def evaluate_topix_beta_hedged_comparison(
             "proxy_assumed_fill_timing": "close_d_plus_1",
             "first_proxy_pnl_interval": "close_d_plus_1_to_close_d_plus_2",
             "maximum_absolute_hedge_weight": MAX_ABS_TOPIX_HEDGE_WEIGHT,
-            "incomplete_book_policy": "zero_hedge_no_partial_beta_extrapolation",
+            "incomplete_book_policy": (
+                "performance_unavailable_preserve_calendar_no_partial_beta_"
+                "extrapolation"
+            ),
+            "coverage_policy": "every_active_session_must_have_complete_beta",
         },
         "performance": performance,
+        "performance_status": (
+            "AVAILABLE" if performance is not None else "UNAVAILABLE"
+        ),
+        "performance_unavailable_reason": performance_unavailable_reason,
         "beta_and_residual_volatility": {
-            "realized_unhedged_beta_to_topix": _realized_beta(
-                unhedged_gross_returns, topix_returns
+            "status": (
+                "AVAILABLE" if comparison_metrics_available else "UNAVAILABLE"
             ),
-            "realized_hedged_beta_to_topix": _realized_beta(
-                hedged_gross_returns, topix_returns
+            "realized_unhedged_beta_to_topix": (
+                _realized_beta(unhedged_gross_returns, topix_returns)
+                if comparison_metrics_available
+                else None
+            ),
+            "realized_hedged_beta_to_topix": (
+                _realized_beta(hedged_gross_returns, topix_returns)
+                if comparison_metrics_available
+                else None
             ),
             "unhedged_gross_annualized_volatility": unhedged_volatility,
             "topix_hedged_gross_residual_annualized_volatility": residual_volatility,
         },
         "hedge_tracking": {
             "source_path_sessions": len(unhedged_curve),
-            "evaluated_path_sessions": len(path),
-            "skipped_incomplete_target_interval_count": len(skipped_incomplete_intervals),
-            "skipped_incomplete_target_intervals": skipped_incomplete_intervals,
+            "comparison_calendar_sessions": len(path),
+            "calendar_sessions_dropped": len(unhedged_curve) - len(path),
+            "return_path_sessions": (
+                len(path) if not incomplete_active_intervals else 0
+            ),
+            "active_sessions": active_sessions,
+            "incomplete_active_interval_count": len(incomplete_active_intervals),
+            "incomplete_active_intervals": incomplete_active_intervals,
             "beta_available_sessions": beta_available_sessions,
             "beta_unavailable_active_sessions": beta_unavailable_sessions,
+            "beta_coverage_ratio_of_active_sessions": beta_coverage_ratio,
+            "beta_coverage_complete": beta_coverage_complete,
             "hedge_applied_sessions": hedge_applied_sessions,
             "hedge_capped_sessions": hedge_capped_sessions,
             "maximum_absolute_hedge_weight_observed": max(
-                (abs(float(row["target_topix_proxy_hedge_weight"])) for row in path),
+                (
+                    abs(float(row["target_topix_proxy_hedge_weight"]))
+                    for row in plans
+                ),
                 default=0.0,
             ),
-            "terminal_liquidation_costed": terminal_liquidation_cost > 0.0,
+            "terminal_stock_liquidation_costed": (
+                terminal_stock_liquidation_cost > 0.0
+            ),
+            "terminal_proxy_liquidation_costed": (
+                terminal_proxy_liquidation_cost > 0.0
+            ),
         },
+        "comparison_stock_accounting": stock_accounting,
+        "hypothetical_topix_proxy_accounting": {
+            **proxy_accounting,
+            "execution_claim": False,
+            "included_in_performance_fill_count": False,
+        },
+        "combined_comparison_accounting": combined_accounting,
         "signal_branch_coverage": {
             "contango_sessions": sum(value < 0.0 for value in observed_features),
             "front_inversion_sessions": sum(value > 0.0 for value in observed_features),
@@ -1060,7 +1285,6 @@ def evaluate_topix_beta_hedged_comparison(
             ),
         },
         "daily_path": path,
-        "proxy_adjustments": proxy_adjustments,
         "individual_stock_option_volatility_used": False,
         "volatility_signal_scope": "nikkei_225_index_options",
         "draft_only": True,
@@ -1129,7 +1353,6 @@ def execute_svi_job(
             feature_rows,
             evaluation_dates,
             curve,
-            trades,
         )
         feature_bytes = b"".join(
             _canonical_bytes(row) + b"\n" for row in feature_rows

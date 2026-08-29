@@ -106,6 +106,10 @@ used by the factor Container and is labelled separately in every report.
 The SVI report keeps its unhedged result and adds a TOPIX-index proxy comparison:
 126-return beta (minimum 63) through signal close, capped at 1.5x.
 The `__NKY_PROXY__` alias must identify `indices_bars_daily_topix`; 1306 is only an approximation, never an ETF fill claim.
+Headline comparison metrics are available only when every active interval has all
+stock legs and a beta estimate. Partial or incomplete coverage preserves the
+calendar as audit rows without publishing a comparison performance summary.
+Hypothetical TOPIX adjustments and costs are reported outside stock fill counts.
 Branch counts expose when the bounded sample observes only contango and cannot test inversion.
 
 ## Modes

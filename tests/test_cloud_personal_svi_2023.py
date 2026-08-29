@@ -223,12 +223,16 @@ def test_topix_beta_overlay_is_no_lookahead_capped_and_fail_closed() -> None:
         {"date": day, "fit_success": True, svi_job.FEATURE_FIELD: -0.05}
         for day in dates
     ]
-    unhedged, trades, _diagnostics = svi_job.evaluate_fixed_strategy(
+    unhedged, _trades, _diagnostics = svi_job.evaluate_fixed_strategy(
         panel, features, dates
     )
     comparison = svi_job.evaluate_topix_beta_hedged_comparison(
-        panel, features, dates, unhedged, trades
+        panel, features, dates, unhedged
     )
+    assert comparison["status"] == "PARTIAL"
+    assert comparison["performance"] is None
+    assert comparison["performance_status"] == "UNAVAILABLE"
+    assert comparison["hedge_tracking"]["calendar_sessions_dropped"] == 0
     estimated = next(
         row for row in comparison["daily_path"] if row["beta_status"] == "ESTIMATED"
     )
@@ -245,7 +249,10 @@ def test_topix_beta_overlay_is_no_lookahead_capped_and_fail_closed() -> None:
     signal_day = dates[70]
     before = svi_job._estimate_beta_through(stock, topix, signal_day)
     mutated = {day: (value * 50 if day > signal_day else value) for day, value in stock.items()}
-    mutated_topix = {day: (value / 50 if day > signal_day else value) for day, value in topix.items()}
+    mutated_topix = {
+        day: (value / 50 if day > signal_day else value)
+        for day, value in topix.items()
+    }
     after = svi_job._estimate_beta_through(mutated, mutated_topix, signal_day)
     assert before == after
     assert before is not None and before[1] == 70
@@ -254,18 +261,78 @@ def test_topix_beta_overlay_is_no_lookahead_capped_and_fail_closed() -> None:
     unavailable["bars"].pop("__NKY_PROXY__")
     with pytest.raises(RuntimeError, match="TOPIX index proxy series is unavailable"):
         svi_job.evaluate_topix_beta_hedged_comparison(
-            unavailable, features, dates, unhedged, trades
+            unavailable, features, dates, unhedged
         )
 
     incomplete = json.loads(json.dumps(panel))
     incomplete["bars"]["A"] = [pair for pair in incomplete["bars"]["A"] if pair[0] != dates[75]]
-    skipped = svi_job.evaluate_topix_beta_hedged_comparison(
-        incomplete, features, dates, unhedged, trades
+    incomplete_comparison = svi_job.evaluate_topix_beta_hedged_comparison(
+        incomplete, features, dates, unhedged
     )
-    skipped_rows = skipped["hedge_tracking"]["skipped_incomplete_target_intervals"]
-    assert skipped["hedge_tracking"]["skipped_incomplete_target_interval_count"] > 0
-    assert dates[75] in skipped_rows
-    assert all(row["date"] != dates[75] for row in skipped["daily_path"])
+    tracking = incomplete_comparison["hedge_tracking"]
+    assert incomplete_comparison["status"] == "INCOMPLETE"
+    assert incomplete_comparison["performance"] is None
+    assert tracking["incomplete_active_interval_count"] > 0
+    assert dates[75] in tracking["incomplete_active_intervals"]
+    assert tracking["calendar_sessions_dropped"] == 0
+    assert len(incomplete_comparison["daily_path"]) == len(unhedged)
+    incomplete_row = next(
+        row for row in incomplete_comparison["daily_path"] if row["date"] == dates[75]
+    )
+    assert incomplete_row["interval_status"] == "INCOMPLETE_TARGET_BOOK"
+    assert incomplete_row["equity"] is None
+
+
+def test_topix_beta_overlay_requires_full_coverage_and_separates_proxy_costs() -> None:
+    panel, dates = _beta_panel()
+    features = [
+        {"date": day, "fit_success": True, svi_job.FEATURE_FIELD: -0.05}
+        for day in dates
+    ]
+    evaluation_dates = dates[70:]
+    unhedged, _trades, _diagnostics = svi_job.evaluate_fixed_strategy(
+        panel, features, evaluation_dates
+    )
+    comparison = svi_job.evaluate_topix_beta_hedged_comparison(
+        panel, features, evaluation_dates, unhedged
+    )
+
+    assert comparison["status"] == "EVALUATED"
+    assert comparison["performance_status"] == "AVAILABLE"
+    assert comparison["performance"]["schema_version"] == "personal-performance/v1"
+    tracking = comparison["hedge_tracking"]
+    assert tracking["beta_coverage_complete"] is True
+    assert tracking["beta_coverage_ratio_of_active_sessions"] == 1.0
+    stock = comparison["comparison_stock_accounting"]
+    proxy = comparison["hypothetical_topix_proxy_accounting"]
+    combined = comparison["combined_comparison_accounting"]
+    assert proxy["adjustment_count"] > 0
+    assert proxy["included_in_performance_fill_count"] is False
+    assert comparison["performance"]["fill_count"] == stock["adjustment_count"]
+    assert combined["adjustment_count"] == (
+        stock["adjustment_count"] + proxy["adjustment_count"]
+    )
+    assert combined["cost_amount"] == pytest.approx(
+        stock["cost_amount"] + proxy["cost_amount"]
+    )
+    assert comparison["performance"]["cost_amount"] == pytest.approx(
+        combined["cost_amount"]
+    )
+    equity_before = 1.0
+    for row in comparison["daily_path"]:
+        assert row["stock_adjustment_notional_amount"] == pytest.approx(
+            row["stock_turnover_one_way"] * equity_before
+        )
+        assert row["topix_proxy_adjustment_notional_amount"] == pytest.approx(
+            row["topix_proxy_turnover_one_way"] * equity_before
+        )
+        assert row["stock_cost_return"] == pytest.approx(
+            row["stock_turnover_one_way"] * svi_job.ONE_WAY_COST
+        )
+        assert row["topix_hedge_cost_return"] == pytest.approx(
+            row["topix_proxy_turnover_one_way"] * svi_job.ONE_WAY_COST
+        )
+        equity_before = row["equity"]
 
 
 def _svi_chain(day: str, *, dte: int, cm: str, params: SVIParameters):
@@ -437,10 +504,10 @@ def test_execute_svi_job_creates_feature_report_then_terminal_manifest() -> None
     assert report["execution"]["hold_sessions"] == 10
     assert report["execution"]["one_way_cost"] == 0.001
     assert report["schema_version"] == "personal-svi-2023-report/v3"
-    assert (
-        report["topix_beta_hedged_comparison"]["performance"]["schema_version"]
-        == "personal-performance/v1"
-    )
+    comparison = report["topix_beta_hedged_comparison"]
+    assert comparison["status"] == "NOT_EVALUATED"
+    assert comparison["performance"] is None
+    assert comparison["performance_status"] == "UNAVAILABLE"
     instrument = report["topix_beta_hedged_comparison"]["instrument"]
     assert instrument["dataset"] == "indices_bars_daily_topix"
     assert instrument["etf_approximation"] == "1306_TOPIX_ETF_only"
