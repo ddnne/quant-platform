@@ -17,6 +17,7 @@ import tempfile
 import threading
 import urllib.error
 import urllib.request
+import zlib
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from http import HTTPStatus
@@ -34,7 +35,7 @@ from personal_svi_2023_job import (
     execute_svi_job,
 )
 
-RUNNER_VERSION = "personal-cloud-runner/v5"
+RUNNER_VERSION = "personal-cloud-runner/v6"
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60
@@ -47,7 +48,7 @@ _JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SNAPSHOT_RE = re.compile(
-    r"^research/personal/snapshots/sha256=([0-9a-f]{64})\.sqlite$"
+    r"^research/personal/snapshots/sha256=([0-9a-f]{64})\.sqlite(?:\.gz)?$"
 )
 PERSONAL_EXECUTABLE_COHORT_IDS = frozenset(
     {
@@ -221,11 +222,17 @@ class JobSpec:
         return "sha256:" + hashlib.sha256(_canonical_bytes(body)).hexdigest()
 
 
-def download_snapshot(spec: JobSpec, destination: Path) -> None:
+def _download_snapshot_transport(spec: JobSpec, destination: Path) -> str:
     request = urllib.request.Request(
         f"{R2_ORIGIN}/{spec.snapshot_key}",
         method="GET",
-        headers={"accept": "application/vnd.sqlite3"},
+        headers={
+            "accept": (
+                "application/gzip"
+                if spec.snapshot_key.endswith(".sqlite.gz")
+                else "application/vnd.sqlite3"
+            )
+        },
     )
     digest = hashlib.sha256()
     with urllib.request.urlopen(request, timeout=120) as response:
@@ -239,22 +246,94 @@ def download_snapshot(spec: JobSpec, destination: Path) -> None:
             raise RuntimeError("snapshot content length is missing or out of bounds")
         expected_length = int(raw_length)
         received = 0
-        with destination.open("xb") as handle:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                received += len(chunk)
-                if received > expected_length or received > MAX_SNAPSHOT_BYTES:
-                    raise RuntimeError("snapshot exceeded its declared size bound")
-                digest.update(chunk)
-                handle.write(chunk)
+        created = False
+        try:
+            with destination.open("xb") as handle:
+                created = True
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    received += len(chunk)
+                    if received > expected_length or received > MAX_SNAPSHOT_BYTES:
+                        raise RuntimeError("snapshot exceeded its declared size bound")
+                    digest.update(chunk)
+                    handle.write(chunk)
+        except BaseException:
+            if created:
+                destination.unlink(missing_ok=True)
+            raise
         if received != expected_length:
             destination.unlink(missing_ok=True)
             raise RuntimeError("snapshot content length mismatch")
-    if digest.hexdigest() != spec.snapshot_sha256:
-        destination.unlink(missing_ok=True)
-        raise RuntimeError("snapshot sha256 mismatch")
+    return digest.hexdigest()
+
+
+def _expand_gzip_snapshot(
+    transport: Path,
+    destination: Path,
+    *,
+    expected_sha256: str,
+) -> None:
+    digest = hashlib.sha256()
+    expanded = 0
+    created = False
+    try:
+        try:
+            with gzip.open(transport, "rb") as compressed:
+                with destination.open("xb") as raw:
+                    created = True
+                    while True:
+                        chunk = compressed.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        expanded += len(chunk)
+                        if expanded > MAX_SNAPSHOT_BYTES:
+                            raise RuntimeError(
+                                "expanded snapshot exceeds the fixed size bound"
+                            )
+                        digest.update(chunk)
+                        raw.write(chunk)
+        except (EOFError, gzip.BadGzipFile, zlib.error) as error:
+            raise RuntimeError("snapshot gzip stream is invalid") from error
+        if expanded < 1:
+            raise RuntimeError("expanded snapshot is empty")
+        if digest.hexdigest() != expected_sha256:
+            raise RuntimeError("snapshot sha256 mismatch")
+    except BaseException:
+        if created:
+            destination.unlink(missing_ok=True)
+        raise
+
+
+def download_snapshot(spec: JobSpec, destination: Path) -> None:
+    compressed = destination.with_name(f"{destination.name}.transport.gz")
+    if destination.exists() or compressed.exists():
+        raise RuntimeError("snapshot destination already exists")
+    complete = False
+    compressed_owned = False
+    destination_owned = False
+    try:
+        if spec.snapshot_key.endswith(".sqlite.gz"):
+            _download_snapshot_transport(spec, compressed)
+            compressed_owned = True
+            _expand_gzip_snapshot(
+                compressed,
+                destination,
+                expected_sha256=spec.snapshot_sha256,
+            )
+            destination_owned = True
+        else:
+            digest = _download_snapshot_transport(spec, destination)
+            destination_owned = True
+            if digest != spec.snapshot_sha256:
+                raise RuntimeError("snapshot sha256 mismatch")
+        complete = True
+    finally:
+        if compressed_owned:
+            compressed.unlink(missing_ok=True)
+        if not complete and destination_owned:
+            destination.unlink(missing_ok=True)
 
 
 def verify_sqlite(path: Path) -> None:

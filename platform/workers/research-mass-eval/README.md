@@ -218,7 +218,22 @@ curl -sS -X POST \
     ]
   }" | jq '{ok, job_id, n_logics, n_survivors, r2_keys, ranking}'
 
-# personal exact-four (after uploading the content-addressed snapshot)
+# personal exact-four snapshot upload. The key digest is always calculated from
+# the expanded raw SQLite file; gzip is only the bounded R2 transport.
+SNAPSHOT_RAW="/absolute/path/to/personal-snapshot.sqlite"
+SNAPSHOT_GZIP="${SNAPSHOT_RAW}.gz"
+SNAPSHOT_SHA256="$(shasum -a 256 "${SNAPSHOT_RAW}" | awk '{print $1}')"
+gzip -n -6 -c "${SNAPSHOT_RAW}" > "${SNAPSHOT_GZIP}"
+
+cd platform/workers/research-mass-eval
+npx wrangler r2 object put \
+  "quant-structured/research/personal/snapshots/sha256=${SNAPSHOT_SHA256}.sqlite.gz" \
+  --remote \
+  --file="${SNAPSHOT_GZIP}" \
+  --content-type application/gzip
+# Deliberately do not set --content-encoding: the Container must receive the
+# compressed bytes and performs the bounded, digest-verified expansion itself.
+
 PERSONAL_JOB_ID="exact-four-$(date -u +%Y%m%dT%H%M%SZ)"
 curl -sS -X POST \
   "https://quant-platform-research-mass-eval.<subdomain>.workers.dev/v1/personal-research" \
@@ -228,7 +243,7 @@ curl -sS -X POST \
     \"cohort_id\": \"diverse-core-v1\",
     \"universe_id\": \"topix_all\",
     \"job_id\": \"${PERSONAL_JOB_ID}\",
-    \"snapshot_key\": \"research/personal/snapshots/sha256=${SNAPSHOT_SHA256}.sqlite\",
+    \"snapshot_key\": \"research/personal/snapshots/sha256=${SNAPSHOT_SHA256}.sqlite.gz\",
     \"snapshot_sha256\": \"${SNAPSHOT_SHA256}\",
     \"period_start\": \"2022-04-19\",
     \"period_end\": \"2026-08-27\"

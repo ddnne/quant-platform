@@ -2,6 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 
 import { personalResearchR2Outbound } from "./personal_research_r2";
 
+vi.stubGlobal(
+  "FixedLengthStream",
+  class extends TransformStream<Uint8Array, Uint8Array> {
+    constructor(_expectedLength: number | bigint) {
+      super();
+    }
+  },
+);
+
 const THREE_BYTE_SHA256 =
   "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81";
 
@@ -16,6 +25,7 @@ function r2Object(
   key: string,
   bytes: Uint8Array,
   customMetadata: Record<string, string> = {},
+  httpMetadata: R2HTTPMetadata = {},
 ): R2ObjectBody {
   return {
     key,
@@ -26,7 +36,7 @@ function r2Object(
     uploaded: new Date(0),
     checksums: {} as R2Checksums,
     customMetadata,
-    httpMetadata: {},
+    httpMetadata,
     range: undefined,
     storageClass: "Standard",
     ssecKeyMd5: undefined,
@@ -41,18 +51,31 @@ function r2Object(
     text: async () => new TextDecoder().decode(bytes),
     json: async () => JSON.parse(new TextDecoder().decode(bytes)),
     blob: async () => new Blob([bytes]),
-    writeHttpMetadata() {},
+    writeHttpMetadata(headers: Headers) {
+      if (httpMetadata.contentEncoding) {
+        headers.set("content-encoding", httpMetadata.contentEncoding);
+      }
+      if (httpMetadata.contentType) {
+        headers.set("content-type", httpMetadata.contentType);
+      }
+    },
   } as unknown as R2ObjectBody;
 }
 
 describe("personal Container R2 capability", () => {
-  it("streams the one content-addressed snapshot and denies arbitrary reads", async () => {
+  it.each([
+    [".sqlite", "application/vnd.sqlite3"],
+    [".sqlite.gz", "application/gzip"],
+  ])("streams a content-addressed%s snapshot", async (suffix, contentType) => {
     const sha = "a".repeat(64);
-    const key = `research/personal/snapshots/sha256=${sha}.sqlite`;
-    const object = r2Object(key, new Uint8Array([1, 2, 3]));
+    const key = `research/personal/snapshots/sha256=${sha}${suffix}`;
+    const object = r2Object(key, new Uint8Array([1, 2, 3]), {}, {
+      contentEncoding: "gzip",
+      contentType: "application/octet-stream",
+    });
     const bucket = {
       get: vi.fn(async (got: string) => (got === key ? object : null)),
-      head: vi.fn(),
+      head: vi.fn(async (got: string) => (got === key ? object : null)),
       put: vi.fn(),
     } as unknown as R2Bucket;
     const allowed = await personalResearchR2Outbound(
@@ -63,12 +86,23 @@ describe("personal Container R2 capability", () => {
     expect(new Uint8Array(await allowed.arrayBuffer())).toEqual(
       new Uint8Array([1, 2, 3]),
     );
+    expect(allowed.headers.get("content-type")).toBe(contentType);
+    expect(allowed.headers.get("content-encoding")).toBeNull();
+    expect(allowed.headers.get("content-length")).toBe("3");
+    const head = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, { method: "HEAD" }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-type")).toBe(contentType);
+    expect(head.headers.get("content-length")).toBe("3");
     const denied = await personalResearchR2Outbound(
       new Request("http://research.r2/other/private.sqlite"),
       { STRUCTURED_BUCKET: bucket },
     );
     expect(denied.status).toBe(403);
     expect(bucket.get).toHaveBeenCalledTimes(1);
+    expect(bucket.head).toHaveBeenCalledTimes(1);
   });
 
   it("passes result bodies to R2 as streams and freezes the output key", async () => {
