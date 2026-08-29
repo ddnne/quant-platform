@@ -1210,7 +1210,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             "image_build_context": "../../..",
             "instance_type": "standard-2",
             "max_instances": 1,
-            "rollout_active_grace_period": 8400,
+            "rollout_active_grace_period": 11400,
         }
     ]
     personal_binding = [
