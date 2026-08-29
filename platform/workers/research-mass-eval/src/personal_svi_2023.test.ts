@@ -7,6 +7,7 @@ import {
 } from "./personal_svi_2023";
 import {
   PERSONAL_SVI_2023_COHORT_ID,
+  PERSONAL_SVI_2023_MAX_SESSIONS,
   PERSONAL_SVI_2023_OPTIONS_ROOT,
   PERSONAL_SVI_2023_PANEL_KEY,
   PERSONAL_SVI_2023_STRATEGY_ID,
@@ -230,6 +231,23 @@ describe("fixed personal SVI 2023 admission", () => {
     expect(mem.listedPrefixes).toContain(
       `${PERSONAL_SVI_2023_OPTIONS_ROOT}/dt=${missingDay}/`,
     );
+    expect([
+      ...manifest.sessions.warmup_dates,
+      ...manifest.sessions.evaluation_dates,
+    ]).toEqual(fixedDates);
+  });
+
+  it("admits the 193-session identity-bound TOPIX calendar", async () => {
+    const fixedDates = days(193);
+    const mem = new AdmissionR2(fixedDates);
+
+    const manifest = await buildPersonalSviInputManifest(mem.asBucket(), {
+      job_id: "svi-full-proxy-calendar",
+      cohort_id: PERSONAL_SVI_2023_COHORT_ID,
+    });
+
+    expect(PERSONAL_SVI_2023_MAX_SESSIONS).toBe(220);
+    expect(manifest.options.days).toHaveLength(193);
     expect([
       ...manifest.sessions.warmup_dates,
       ...manifest.sessions.evaluation_dates,
