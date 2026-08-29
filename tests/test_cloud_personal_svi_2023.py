@@ -182,11 +182,18 @@ def _beta_panel(count: int = 90) -> tuple[dict[str, Any], list[str]]:
 def test_fixed_strategy_has_one_session_signal_lag_ten_session_hold_and_cost() -> None:
     dates = _panel_dates()
     panel = {
+        "index_proxy": {
+            "dataset": "indices_bars_daily_topix",
+            "label": "TOPIX",
+        },
         "bars": {
             "A": [[day, 100 + index * 3] for index, day in enumerate(dates)],
             "B": [[day, 100 + index * 2] for index, day in enumerate(dates)],
             "C": [[day, 100 + index] for index, day in enumerate(dates)],
             "D": [[day, 100 - index * 0.5] for index, day in enumerate(dates)],
+            "__NKY_PROXY__": [
+                [day, 2_000 + index] for index, day in enumerate(dates)
+            ],
         }
     }
     features = [
@@ -201,7 +208,7 @@ def test_fixed_strategy_has_one_session_signal_lag_ten_session_hold_and_cost() -
     curve, trades, diagnostics, _trace = svi_job.evaluate_fixed_strategy(
         panel,
         features,
-        dates,
+        dates[2:],
     )
     by_day = {row["date"]: row for row in curve}
 
@@ -224,7 +231,7 @@ def test_topix_beta_overlay_is_no_lookahead_capped_and_fail_closed() -> None:
         for day in dates
     ]
     unhedged, _trades, _diagnostics, trace = svi_job.evaluate_fixed_strategy(
-        panel, features, dates
+        panel, features, dates[2:]
     )
     comparison = svi_job.evaluate_topix_beta_hedged_comparison(
         panel, features, trace
@@ -267,7 +274,7 @@ def test_topix_beta_overlay_is_no_lookahead_capped_and_fail_closed() -> None:
     incomplete = json.loads(json.dumps(panel))
     incomplete["bars"]["A"] = [pair for pair in incomplete["bars"]["A"] if pair[0] != dates[75]]
     incomplete_curve, _trades, incomplete_primary, incomplete_trace = (
-        svi_job.evaluate_fixed_strategy(incomplete, features, dates)
+        svi_job.evaluate_fixed_strategy(incomplete, features, dates[2:])
     )
     incomplete_comparison = svi_job.evaluate_topix_beta_hedged_comparison(
         incomplete, features, incomplete_trace
@@ -356,6 +363,46 @@ def test_topix_beta_overlay_requires_full_coverage_and_separates_proxy_costs() -
         equity_before = row["equity"]
 
 
+def test_fixed_strategy_preserves_proxy_calendar_when_all_equities_miss_session() -> None:
+    panel, dates = _beta_panel()
+    features = [
+        {"date": day, "fit_success": True, svi_job.FEATURE_FIELD: -0.05}
+        for day in dates
+    ]
+    missing_day = dates[75]
+    for code in [code for code in panel["bars"] if not code.startswith("__")]:
+        panel["bars"][code] = [
+            pair for pair in panel["bars"][code] if pair[0] != missing_day
+        ]
+
+    curve, _trades, primary, trace = svi_job.evaluate_fixed_strategy(
+        panel, features, dates[2:]
+    )
+    comparison = svi_job.evaluate_topix_beta_hedged_comparison(
+        panel, features, trace
+    )
+
+    assert len(curve) == len(dates) - 2
+    assert primary["status"] == "INCOMPLETE"
+    assert primary["performance"] is None
+    assert primary["performance_status"] == "UNAVAILABLE"
+    assert primary["calendar_sessions_dropped"] == 0
+    missing_primary = next(row for row in curve if row["date"] == missing_day)
+    assert missing_primary["interval_status"] == "INCOMPLETE_TARGET_BOOK"
+    assert missing_primary["net_return"] == 0.0
+
+    assert comparison["status"] == "INCOMPLETE"
+    assert comparison["performance"] is None
+    assert comparison["performance_status"] == "UNAVAILABLE"
+    assert comparison["hedge_tracking"]["calendar_sessions_dropped"] == 0
+    assert len(comparison["daily_path"]) == len(dates) - 2
+    missing_comparison = next(
+        row for row in comparison["daily_path"] if row["date"] == missing_day
+    )
+    assert missing_comparison["interval_status"] == "INCOMPLETE_TARGET_BOOK"
+    assert missing_comparison["net_return"] is None
+
+
 def _svi_chain(day: str, *, dte: int, cm: str, params: SVIParameters):
     under = 40_000.0
     expiry = (date.fromisoformat(day) + timedelta(days=dte)).isoformat()
@@ -412,7 +459,7 @@ def test_execute_svi_job_creates_feature_report_then_terminal_manifest() -> None
     )
     option_bytes = b"".join(_canonical(row) + b"\n" for row in option_rows)
     option_digest = "sha256:" + hashlib.sha256(option_bytes).hexdigest()
-    dates = _panel_dates()
+    dates = _panel_dates(170)
     panel = {
         "index_proxy": {
             "dataset": "indices_bars_daily_topix",
@@ -423,7 +470,7 @@ def test_execute_svi_job_creates_feature_report_then_terminal_manifest() -> None
             for offset, code in enumerate(("A", "B", "C", "D"))
         }
     }
-    proxy_dates = _panel_dates(90)
+    proxy_dates = dates
     panel["bars"]["__NKY_PROXY__"] = [
         [observed, 2_000 + index] for index, observed in enumerate(proxy_dates)
     ]

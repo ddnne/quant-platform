@@ -526,7 +526,7 @@ def _normalize_bars(panel: Mapping[str, Any]) -> dict[str, dict[str, float]]:
 _BetaEstimate = tuple[float, int, str]
 
 
-def _normalize_topix_proxy(panel: Mapping[str, Any]) -> dict[str, float]:
+def _identity_bound_topix_closes(panel: Mapping[str, Any]) -> dict[str, float]:
     """Open the legacy alias only when the panel proves it contains TOPIX."""
 
     identity = panel.get("index_proxy")
@@ -548,6 +548,13 @@ def _normalize_topix_proxy(panel: Mapping[str, Any]) -> dict[str, float]:
         close = _number(pair[1])
         if day is not None and close is not None and close > 0:
             values[day] = close
+    if not values:
+        raise RuntimeError("TOPIX index proxy series is unavailable")
+    return values
+
+
+def _normalize_topix_proxy(panel: Mapping[str, Any]) -> dict[str, float]:
+    values = _identity_bound_topix_closes(panel)
     if len(values) < BETA_MIN_OBSERVATIONS + 1:
         raise RuntimeError("TOPIX index proxy has insufficient history")
     return values
@@ -723,8 +730,11 @@ def _stock_interval_trace(
                 "stock_gross_return": stock_gross,
             }
         )
-    eligible_evaluation = allowed_evaluation.intersection(dates[2:])
-    if len(trace) != len(eligible_evaluation):
+    eligible_evaluation = set(map(str, dates[2:]))
+    if (
+        not allowed_evaluation.issubset(eligible_evaluation)
+        or len(trace) != len(allowed_evaluation)
+    ):
         raise RuntimeError("evaluation calendar is not represented by the stock trace")
     return trace
 
@@ -740,7 +750,10 @@ def evaluate_fixed_strategy(
     list[dict[str, Any]],
 ]:
     bars = _normalize_bars(panel)
-    dates = sorted({day for values in bars.values() for day in values})
+    topix = _identity_bound_topix_closes(panel)
+    dates = sorted(
+        day for day in topix if EARLIEST_DAY <= day <= LATEST_DAY
+    )
     features = {
         str(row.get("date") or ""): _number(row.get(FEATURE_FIELD))
         if row.get("fit_success") is True
