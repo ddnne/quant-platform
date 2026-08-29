@@ -1,6 +1,6 @@
 import { sha256Hex } from "./sha256";
 
-export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v5";
+export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v6";
 export const PERSONAL_RESEARCH_CONTAINER_NAME = "personal-research-singleton";
 export const PERSONAL_RESEARCH_MAX_PERIOD_DAYS = 2200;
 export const PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024;
@@ -66,7 +66,7 @@ const PERSONAL_RESEARCH_COHORT_DIGESTS: Record<
 const JOB_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const SNAPSHOT_KEY_RE =
-  /^research\/personal\/snapshots\/sha256=([0-9a-f]{64})\.sqlite$/;
+  /^research\/personal\/snapshots\/sha256=([0-9a-f]{64})\.sqlite(?:\.gz)?$/;
 
 export type PersonalResearchRequest = {
   cohort_id: PersonalResearchCohortId;

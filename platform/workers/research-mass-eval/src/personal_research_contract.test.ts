@@ -19,6 +19,10 @@ const VALID = {
   period_end: "2026-08-27",
   universe_id: "topix_all" as const,
 };
+const VALID_GZIP = {
+  ...VALID,
+  snapshot_key: `research/personal/snapshots/sha256=${SHA}.sqlite.gz`,
+};
 
 describe("personal research request contract", () => {
   it("accepts one content-addressed bounded exact-four request", async () => {
@@ -45,6 +49,13 @@ describe("personal research request contract", () => {
     expect(digest).toBe(
       `sha256:${Array.from(new Uint8Array(expected), (v) => v.toString(16).padStart(2, "0")).join("")}`,
     );
+  });
+
+  it("accepts gzip transport while keeping raw SQLite digest identity", () => {
+    expect(parsePersonalResearchRequest(VALID_GZIP)).toEqual({
+      ok: true,
+      value: VALID_GZIP,
+    });
   });
 
   it("rejects field, digest, and date-range drift", () => {

@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:c0e9c3a47a9f0d1da7f1de9c844da812d7c93fc6decb35f09ee331ec0059d56b",
+  "manifest_digest": "sha256:d1e6e007077718e8277fcc5320207e517b4914288835d1b15f175faa21e6beb4",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -2937,7 +2937,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v144.1-index-vol-beta-ls",
+          "MASS_EVAL_VERSION": "research-mass-eval/v144.2-snapshot-gzip",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3037,7 +3037,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v144.1-index-vol-beta-ls",
+          "MASS_EVAL_VERSION": "research-mass-eval/v144.2-snapshot-gzip",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3135,7 +3135,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v144.1-index-vol-beta-ls",
+          "MASS_EVAL_VERSION": "research-mass-eval/v144.2-snapshot-gzip",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",

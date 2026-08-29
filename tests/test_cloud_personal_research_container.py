@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import importlib.util
+import io
 import json
 import sqlite3
 import sys
@@ -54,7 +56,12 @@ LONG_SHORT_COHORT_DIGEST = (
 )
 
 
-def _job(sha: str, job_id: str = "exact-four-test"):
+def _job(
+    sha: str,
+    job_id: str = "exact-four-test",
+    *,
+    compressed: bool = False,
+):
     body = {
         "cohort_digest": COHORT_DIGEST,
         "cohort_id": "diverse-core-v1",
@@ -62,7 +69,10 @@ def _job(sha: str, job_id: str = "exact-four-test"):
         "period_end": "2026-08-27",
         "period_start": "2022-04-19",
         "runner_version": service.RUNNER_VERSION,
-        "snapshot_key": f"research/personal/snapshots/sha256={sha}.sqlite",
+        "snapshot_key": (
+            f"research/personal/snapshots/sha256={sha}.sqlite"
+            + (".gz" if compressed else "")
+        ),
         "snapshot_sha256": sha,
         "universe_id": "topix_all",
         "universe_rule_digest": (
@@ -85,6 +95,44 @@ def _job(sha: str, job_id: str = "exact-four-test"):
             "manifest_key": f"research/personal/jobs/job={job_id}/manifest.json",
         }
     )
+
+
+class _SnapshotResponse(io.BytesIO):
+    status = 200
+
+    def __init__(
+        self,
+        payload: bytes,
+        declared_length: int | None = None,
+        *,
+        include_length: bool = True,
+    ) -> None:
+        super().__init__(payload)
+        self.headers = (
+            {
+                "content-length": str(
+                    len(payload) if declared_length is None else declared_length
+                )
+            }
+            if include_length
+            else {}
+        )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
+        return False
+
+
+def _snapshot_transport(destination: Path) -> Path:
+    return destination.with_name(f"{destination.name}.transport.gz")
+
+
+def _assert_snapshot_files_absent(destination: Path) -> None:
+    assert not destination.exists()
+    assert not _snapshot_transport(destination).exists()
 
 
 def _uploader(records: list[tuple[str, bytes, str]]):
@@ -144,6 +192,207 @@ def test_snapshot_download_rejects_an_oversized_content_length(
         service.download_snapshot(spec, tmp_path / "oversized.sqlite")
 
     assert not (tmp_path / "oversized.sqlite").exists()
+
+
+def test_gzip_snapshot_download_expands_to_raw_digest_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = b"SQLite format 3\x00" + b"bounded-personal-snapshot" * 100
+    packed = gzip.compress(raw, compresslevel=6, mtime=0)
+    sha = hashlib.sha256(raw).hexdigest()
+    spec = _job(sha, compressed=True)
+    requests = []
+
+    def open_snapshot(request, **_kwargs):
+        requests.append(request)
+        return _SnapshotResponse(packed)
+
+    monkeypatch.setattr(service.urllib.request, "urlopen", open_snapshot)
+    destination = tmp_path / "source.sqlite"
+
+    service.download_snapshot(spec, destination)
+
+    assert destination.read_bytes() == raw
+    assert not _snapshot_transport(destination).exists()
+    assert requests[0].full_url.endswith(f"sha256={sha}.sqlite.gz")
+    assert requests[0].get_header("Accept") == "application/gzip"
+
+
+def test_raw_snapshot_download_remains_compatible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = b"SQLite format 3\x00" + b"raw-transport"
+    sha = hashlib.sha256(raw).hexdigest()
+    spec = _job(sha)
+    monkeypatch.setattr(
+        service.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _SnapshotResponse(raw),
+    )
+    destination = tmp_path / "source.sqlite"
+
+    service.download_snapshot(spec, destination)
+
+    assert destination.read_bytes() == raw
+    assert not _snapshot_transport(destination).exists()
+
+
+def test_gzip_snapshot_download_requires_exact_transport_length(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = b"SQLite format 3\x00" + b"x" * 128
+    packed = gzip.compress(raw, mtime=0)
+    spec = _job(hashlib.sha256(raw).hexdigest(), compressed=True)
+    monkeypatch.setattr(
+        service.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _SnapshotResponse(
+            packed,
+            declared_length=len(packed) + 1,
+        ),
+    )
+
+    destination = tmp_path / "source.sqlite"
+    with pytest.raises(RuntimeError, match="content length mismatch"):
+        service.download_snapshot(spec, destination)
+
+    _assert_snapshot_files_absent(destination)
+
+
+@pytest.mark.parametrize(
+    ("response", "error"),
+    (
+        (_SnapshotResponse(b"gzip", include_length=False), "content length"),
+        (_SnapshotResponse(b"gzip", declared_length=3), "declared size bound"),
+    ),
+)
+def test_gzip_snapshot_download_rejects_missing_or_short_transport_length(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    response: _SnapshotResponse,
+    error: str,
+) -> None:
+    spec = _job("a" * 64, compressed=True)
+    monkeypatch.setattr(
+        service.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: response,
+    )
+
+    destination = tmp_path / "source.sqlite"
+    with pytest.raises(RuntimeError, match=error):
+        service.download_snapshot(spec, destination)
+
+    _assert_snapshot_files_absent(destination)
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    (
+        b"not-a-gzip-stream",
+        gzip.compress(b"SQLite format 3\x00" + b"truncated", mtime=0)[:-4],
+    ),
+)
+def test_gzip_snapshot_download_rejects_corrupt_stream_and_removes_both_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    corrupt: bytes,
+) -> None:
+    spec = _job("a" * 64, compressed=True)
+    monkeypatch.setattr(
+        service.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _SnapshotResponse(corrupt),
+    )
+
+    destination = tmp_path / "source.sqlite"
+    with pytest.raises(RuntimeError, match="gzip stream is invalid"):
+        service.download_snapshot(spec, destination)
+
+    _assert_snapshot_files_absent(destination)
+
+
+@pytest.mark.parametrize(("expanded_size", "fails"), ((1024, False), (1025, True)))
+def test_gzip_snapshot_download_enforces_exact_raw_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    expanded_size: int,
+    fails: bool,
+) -> None:
+    raw = b"z" * expanded_size
+    packed = gzip.compress(raw, mtime=0)
+    spec = _job(hashlib.sha256(raw).hexdigest(), compressed=True)
+    monkeypatch.setattr(service, "MAX_SNAPSHOT_BYTES", 1024)
+    monkeypatch.setattr(
+        service.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _SnapshotResponse(packed),
+    )
+
+    destination = tmp_path / "source.sqlite"
+    if fails:
+        with pytest.raises(RuntimeError, match="expanded snapshot exceeds"):
+            service.download_snapshot(spec, destination)
+        _assert_snapshot_files_absent(destination)
+    else:
+        service.download_snapshot(spec, destination)
+        assert destination.read_bytes() == raw
+        assert not _snapshot_transport(destination).exists()
+
+
+def test_gzip_snapshot_download_rejects_raw_sha_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = b"SQLite format 3\x00" + b"different"
+    packed = gzip.compress(raw, mtime=0)
+    spec = _job("a" * 64, compressed=True)
+    monkeypatch.setattr(
+        service.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _SnapshotResponse(packed),
+    )
+
+    destination = tmp_path / "source.sqlite"
+    with pytest.raises(RuntimeError, match="snapshot sha256 mismatch"):
+        service.download_snapshot(spec, destination)
+
+    _assert_snapshot_files_absent(destination)
+
+
+def test_gzip_snapshot_download_rejects_empty_raw_and_cleans_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    packed = gzip.compress(b"", mtime=0)
+    spec = _job(hashlib.sha256(b"").hexdigest(), compressed=True)
+    monkeypatch.setattr(
+        service.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _SnapshotResponse(packed),
+    )
+
+    destination = tmp_path / "source.sqlite"
+    with pytest.raises(RuntimeError, match="expanded snapshot is empty"):
+        service.download_snapshot(spec, destination)
+
+    _assert_snapshot_files_absent(destination)
+
+
+@pytest.mark.parametrize(
+    "preexisting_name", ("source.sqlite", "source.sqlite.transport.gz")
+)
+def test_snapshot_download_never_removes_preexisting_files(
+    tmp_path: Path,
+    preexisting_name: str,
+) -> None:
+    protected = tmp_path / preexisting_name
+    protected.write_bytes(b"owned-by-caller")
+    destination = tmp_path / "source.sqlite"
+    spec = _job("a" * 64, compressed=True)
+
+    with pytest.raises(RuntimeError, match="destination already exists"):
+        service.download_snapshot(spec, destination)
+
+    assert protected.read_bytes() == b"owned-by-caller"
 
 
 def test_runner_timeout_is_failed_and_workspace_is_removed(

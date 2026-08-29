@@ -36,7 +36,7 @@ const SHA = "a".repeat(64);
 const REQUEST: PersonalResearchRequest = {
   cohort_id: "diverse-core-v1",
   job_id: "exact-four-container",
-  snapshot_key: `research/personal/snapshots/sha256=${SHA}.sqlite`,
+  snapshot_key: `research/personal/snapshots/sha256=${SHA}.sqlite.gz`,
   snapshot_sha256: SHA,
   period_start: "2022-04-19",
   period_end: "2026-08-27",
@@ -100,7 +100,7 @@ describe("personal research Container admission", () => {
   });
 
   it("starts one bounded Container for an admitted snapshot", async () => {
-    const { env, containerFetch } = testEnv(2 * 1024 * 1024 * 1024);
+    const { env, containerFetch } = testEnv(205 * 1024 * 1024);
     const response = await submitPersonalResearch(env, REQUEST);
     expect(response.status).toBe(202);
     expect(containerFetch).toHaveBeenCalledTimes(1);
@@ -111,7 +111,9 @@ describe("personal research Container admission", () => {
       cohort_digest:
         "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84",
       cohort_id: "diverse-core-v1",
-      runner_version: "personal-cloud-runner/v5",
+      runner_version: "personal-cloud-runner/v6",
+      snapshot_key: REQUEST.snapshot_key,
+      snapshot_sha256: SHA,
       universe_id: "topix500",
       universe_rule_digest:
         "sha256:5034530267f4a358a80d9426fcfedfb1162b9f71c1024b54b4b39fe3547d53c6",

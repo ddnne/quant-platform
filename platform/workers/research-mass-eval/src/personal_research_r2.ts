@@ -225,6 +225,9 @@ async function getSnapshot(
       status: 200,
       headers: {
         "content-length": String(object.size),
+        "content-type": key.endsWith(".sqlite.gz")
+          ? "application/gzip"
+          : "application/vnd.sqlite3",
         etag: object.httpEtag,
       },
     });
@@ -234,10 +237,16 @@ async function getSnapshot(
   const headers = new Headers({
     "content-length": String(object.size),
     etag: object.httpEtag,
-    "content-type": "application/vnd.sqlite3",
   });
   object.writeHttpMetadata(headers);
-  return new Response(object.body, { status: 200, headers });
+  headers.delete("content-encoding");
+  headers.set("content-length", String(object.size));
+  headers.set(
+    "content-type",
+    key.endsWith(".sqlite.gz") ? "application/gzip" : "application/vnd.sqlite3",
+  );
+  const body = object.body.pipeThrough(new FixedLengthStream(object.size));
+  return new Response(body, { status: 200, headers });
 }
 
 /** Narrow R2 capability exposed only to the private Container virtual host. */
