@@ -2,6 +2,7 @@ import {
   PERSONAL_SVI_2023_COHORT_ID,
   PERSONAL_SVI_2023_DECISION_CUTOFF,
   PERSONAL_SVI_2023_EQUITY_UNIVERSE,
+  PERSONAL_SVI_2023_MAX_INPUT_MANIFEST_BYTES,
   PERSONAL_SVI_2023_MAX_OBJECT_BYTES,
   PERSONAL_SVI_2023_MAX_PANEL_BYTES,
   PERSONAL_SVI_2023_PANEL_KEY,
@@ -18,7 +19,6 @@ import {
 } from "./personal_svi_2023_contract";
 import { sha256Hex } from "./sha256";
 
-const INPUT_MANIFEST_MAX_BYTES = 512 * 1024;
 const FEATURE_MAX_BYTES = 8 * 1024 * 1024;
 const REPORT_MAX_BYTES = 2 * 1024 * 1024;
 const TERMINAL_MAX_BYTES = 64 * 1024;
@@ -171,7 +171,11 @@ async function readInputManifest(
   expected: SviIdentity,
 ): Promise<{ manifest: PersonalSviInputManifest; bytes: Uint8Array } | null> {
   const object = await env.STRUCTURED_BUCKET.get(expected.inputKey);
-  if (!object || object.size < 1 || object.size > INPUT_MANIFEST_MAX_BYTES) {
+  if (
+    !object ||
+    object.size < 1 ||
+    object.size > PERSONAL_SVI_2023_MAX_INPUT_MANIFEST_BYTES
+  ) {
     return null;
   }
   const bytes = new Uint8Array(await object.arrayBuffer());

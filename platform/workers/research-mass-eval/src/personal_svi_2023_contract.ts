@@ -12,10 +12,14 @@ export const PERSONAL_SVI_2023_OPTIONS_ROOT =
 export const PERSONAL_SVI_2023_EARLIEST_DAY = "2023-01-04" as const;
 export const PERSONAL_SVI_2023_LATEST_DAY = "2023-10-13" as const;
 export const PERSONAL_SVI_2023_WARMUP_SESSIONS = 10;
-export const PERSONAL_SVI_2023_MAX_SESSIONS = 180;
+// The identity-bound TOPIX calendar has 193 sessions in the fixed window.
+// Keep a small closed allowance for calendar corrections without making the
+// route caller-selectable or unbounded.
+export const PERSONAL_SVI_2023_MAX_SESSIONS = 220;
 export const PERSONAL_SVI_2023_MAX_OBJECTS_PER_DAY = 8;
 export const PERSONAL_SVI_2023_MAX_OBJECT_BYTES = 16 * 1024 * 1024;
 export const PERSONAL_SVI_2023_MAX_INPUT_BYTES = 2 * 1024 * 1024 * 1024;
+export const PERSONAL_SVI_2023_MAX_INPUT_MANIFEST_BYTES = 512 * 1024;
 export const PERSONAL_SVI_2023_MAX_PANEL_BYTES = 64 * 1024 * 1024;
 export const PERSONAL_SVI_2023_DECISION_CUTOFF =
   "15:00:00+09:00" as const;

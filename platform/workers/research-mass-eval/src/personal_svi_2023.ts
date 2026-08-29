@@ -1,4 +1,4 @@
-import { putJsonCreateOnly } from "./http";
+import { putJsonCreateOnly, serializedJsonBytes } from "./http";
 import {
   PERSONAL_SVI_2023_COHORT_ID,
   PERSONAL_SVI_2023_DECISION_CUTOFF,
@@ -6,6 +6,7 @@ import {
   PERSONAL_SVI_2023_EQUITY_UNIVERSE,
   PERSONAL_SVI_2023_LATEST_DAY,
   PERSONAL_SVI_2023_MAX_INPUT_BYTES,
+  PERSONAL_SVI_2023_MAX_INPUT_MANIFEST_BYTES,
   PERSONAL_SVI_2023_MAX_OBJECT_BYTES,
   PERSONAL_SVI_2023_MAX_OBJECTS_PER_DAY,
   PERSONAL_SVI_2023_MAX_PANEL_BYTES,
@@ -307,6 +308,20 @@ export async function submitPersonalSvi2023(
     const code = (error as { code?: string }).code ?? "personal_svi_admission_failed";
     return responseJson(
       { ok: false, error: code, job_id: request.job_id, go: false },
+      409,
+    );
+  }
+  if (
+    serializedJsonBytes(input).byteLength >
+    PERSONAL_SVI_2023_MAX_INPUT_MANIFEST_BYTES
+  ) {
+    return responseJson(
+      {
+        ok: false,
+        error: "personal_svi_input_manifest_byte_bound_exceeded",
+        job_id: request.job_id,
+        go: false,
+      },
       409,
     );
   }
