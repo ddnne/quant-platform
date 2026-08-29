@@ -52,8 +52,8 @@ from research.universe_contract import (
 )
 
 
-PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v2"
-PERSONAL_DECISION_POLICY = "personal_drawdown_cost_stress/v2"
+PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v3"
+PERSONAL_DECISION_POLICY = "personal_drawdown_cost_stress/v3"
 PERSONAL_DATA_PROFILE = "personal-japan-equities-paper/v2"
 PERSONAL_BAR_COVERAGE_EVIDENCE = "observed-pit-market-breadth/v1"
 
@@ -669,13 +669,14 @@ def _universe_corporate_action_check(
     universe: ResolvedUniverseMembership,
     lookback_days: int,
 ) -> dict[str, Any]:
-    """Classify handled split boundaries and unexplained adjusted-price jumps.
+    """Classify handled split boundaries and advisory adjusted-price moves.
 
     Vendor factor boundaries are expected under the explicitly retrospective
-    DRAFT basis and therefore are evidence, not automatic rejection. Only an
-    adjusted-close discontinuity that remains after vendor split adjustment
-    is an unexplained temporal event. Candidate exposure is checked later,
-    separately for each fold, so a future event cannot reject an earlier fold.
+    DRAFT basis and therefore are evidence, not automatic rejection. A large
+    move that remains in adjusted prices is not proof of a corporate action:
+    it can be a genuine market move. Preserve it as a review warning without
+    rejecting a candidate. Missing adjusted evidence remains fail-closed in
+    the adjusted-price execution path.
     """
 
     expected_codes = {
@@ -692,7 +693,7 @@ def _universe_corporate_action_check(
             "affected_codes": [],
             "suspicious_jump_codes": [],
             "supported_factor_events": [],
-            "unexplained_events": [],
+            "extreme_price_move_events": [],
         }
     start = (
         date.fromisoformat(universe.period_start) - timedelta(days=lookback_days)
@@ -780,7 +781,7 @@ def _universe_corporate_action_check(
                 "affected_codes": [],
                 "suspicious_jump_codes": [],
                 "supported_factor_events": [],
-                "unexplained_events": [],
+                "extreme_price_move_events": [],
             }
         params: list[str] = []
         for _ in selects:
@@ -794,7 +795,7 @@ def _universe_corporate_action_check(
             params,
         )
         supported_events: list[dict[str, Any]] = []
-        unexplained_events: list[dict[str, Any]] = []
+        extreme_price_move_events: list[dict[str, Any]] = []
         observed_codes: set[str] = set()
         missing_adjusted_codes: set[str] = set()
         adjusted_observations = 0
@@ -864,12 +865,13 @@ def _universe_corporate_action_check(
                     )
                 adjusted_return = adjusted / prior_adjusted - 1.0
                 if abs(adjusted_return) > 0.35:
-                    unexplained_events.append(
+                    extreme_price_move_events.append(
                         {
                             "code": code,
                             "date": _day,
                             "previous_date": prior_day,
                             "adjusted_close_return": adjusted_return,
+                            "classification": "advisory_market_or_data_move",
                         }
                     )
             previous[code] = (_day, adjusted, price_ratio, volume_ratio)
@@ -877,8 +879,12 @@ def _universe_corporate_action_check(
         connection.close()
     missing_codes = sorted(expected_codes - observed_codes)
     supported_codes = sorted({event["code"] for event in supported_events})
-    unexplained_codes = sorted({event["code"] for event in unexplained_events})
-    warned = bool(unexplained_events or missing_codes or missing_adjusted_codes)
+    extreme_move_codes = sorted(
+        {event["code"] for event in extreme_price_move_events}
+    )
+    warned = bool(
+        extreme_price_move_events or missing_codes or missing_adjusted_codes
+    )
     adjustment_ratio = (
         adjusted_observations / observations if observations else 0.0
     )
@@ -886,7 +892,7 @@ def _universe_corporate_action_check(
         "status": "WARN" if warned else "PASS",
         "price_basis": PERSONAL_RETROSPECTIVE_ADJUSTED,
         "reason": (
-            "unexplained_adjusted_price_event_or_missing_evidence"
+            "extreme_adjusted_price_move_or_missing_evidence"
             if warned
             else "supported_factor_events_handled_by_retrospective_basis"
         ),
@@ -895,90 +901,21 @@ def _universe_corporate_action_check(
         "period_end": end,
         "adjustment_observation_ratio": adjustment_ratio,
         "affected_codes": supported_codes,
-        "suspicious_jump_codes": unexplained_codes,
-        "risk_codes": unexplained_codes,
+        "suspicious_jump_codes": extreme_move_codes,
+        "risk_codes": [],
         "supported_factor_events": supported_events,
-        "unexplained_events": unexplained_events,
+        "extreme_price_move_events": extreme_price_move_events,
         "missing_codes": missing_codes,
         "missing_adjusted_codes": sorted(missing_adjusted_codes),
         "adjusted_jump_threshold": 0.35,
         "adjustment_factor_change_threshold": 0.01,
         "handling": (
-            "supported_factor_events_are_handled; reject_only_fold_local_"
-            "exposure_to_unexplained_adjusted_price_events"
+            "supported_factor_events_are_handled; extreme_adjusted_price_"
+            "moves_are_review_advisories_not_corporate_action_proof"
         ),
         "future_event_policy": "never_reject_an_earlier_fold",
         "unfilled_rank_bias_possible": True,
         "source_complete_claim": False,
-    }
-
-
-def _unexplained_event_exposure(
-    trades: Sequence[dict[str, Any]],
-    events: Sequence[dict[str, Any]],
-    *,
-    period_start: str,
-    period_end: str,
-    lookback_days: int,
-) -> dict[str, Any]:
-    """Evaluate temporal exposure without making a code-level lifetime ban."""
-    event_window_start = (
-        date.fromisoformat(period_start) - timedelta(days=lookback_days)
-    ).isoformat()
-    fold_events = tuple(
-        event
-        for event in events
-        if event_window_start <= str(event.get("date") or "") <= period_end
-    )
-    affected_codes: set[str] = set()
-    affected_events: list[dict[str, Any]] = []
-    for event in fold_events:
-        code = str(event.get("code") or "").strip()
-        event_date = str(event.get("date") or "")[:10]
-        code_trades = [
-            trade
-            for trade in trades
-            if str(trade.get("code") or "").strip() == code
-        ]
-        event_in_execution_period = period_start <= event_date <= period_end
-        held_before = sum(
-            float(trade.get("shares") or 0.0)
-            for trade in code_trades
-            if str(trade.get("fill_date") or "")[:10] < event_date
-        ) if event_in_execution_period else 0.0
-        event_signal_window_end = (
-            date.fromisoformat(event_date) + timedelta(days=lookback_days)
-        ).isoformat()
-        traded_with_event_in_signal_window = any(
-            event_date
-            <= str(trade.get("decision_date") or "")[:10]
-            <= event_signal_window_end
-            for trade in code_trades
-        )
-        if abs(held_before) > 1e-12 or traded_with_event_in_signal_window:
-            affected_codes.add(code)
-            affected_events.append(
-                {
-                    "code": code,
-                    "date": event_date,
-                    "held_across_event": abs(held_before) > 1e-12,
-                    "traded_with_event_in_signal_window": (
-                        traded_with_event_in_signal_window
-                    ),
-                }
-            )
-    affected_trades = sorted(affected_codes)
-    return {
-        "status": "FAIL" if affected_trades else "PASS",
-        "affected_traded_codes": affected_trades,
-        "reason": (
-            "fold_local_exposure_to_unexplained_adjusted_price_event"
-            if affected_trades
-            else "no_fold_local_exposure_to_unexplained_adjusted_price_event"
-        ),
-        "events_considered": len(fold_events),
-        "affected_events": affected_events,
-        "event_window_start": event_window_start,
     }
 
 
@@ -988,7 +925,6 @@ def _paper_evidence(
     config: PaperRunConfig,
     output_root: Path,
     max_drawdown: float,
-    unexplained_corporate_action_events: tuple[dict[str, Any], ...],
 ) -> tuple[dict[str, Any], list[float]]:
     paper_path = _write_artifact(
         output_root, "paper", "json", _canonical_bytes(_portable_paper_document(result))
@@ -1000,13 +936,6 @@ def _paper_evidence(
     returns = _daily_returns(result, config.starting_capital)
     sharpe = sharpe_ratio(returns, periods_per_year=252.0).get("sharpe")
     metrics = result.metrics
-    event_exposure = _unexplained_event_exposure(
-        result.trades,
-        unexplained_corporate_action_events,
-        period_start=config.start,
-        period_end=config.end,
-        lookback_days=config.lookback_days,
-    )
     return (
         {
             "run_id": result.run_id,
@@ -1021,7 +950,6 @@ def _paper_evidence(
             "max_drawdown": abs(float(metrics.get("max_drawdown", 0.0))),
             "fills": int(metrics.get("num_trades", len(result.trades))),
             "risk_status": risk["status"],
-            "corporate_action_trade_check": event_exposure,
             "paper_artifact": paper_path,
             "risk_artifact": risk_path,
         },
@@ -1041,7 +969,6 @@ def _run_one(
     lookback_days: int,
     output_root: Path,
     max_drawdown: float,
-    unexplained_corporate_action_events: tuple[dict[str, Any], ...],
 ) -> tuple[dict[str, Any], list[float]]:
     period_universe = ResolvedUniverseMembership(
         period_start=period[0],
@@ -1076,9 +1003,6 @@ def _run_one(
         config=config,
         output_root=output_root,
         max_drawdown=max_drawdown,
-        unexplained_corporate_action_events=(
-            unexplained_corporate_action_events
-        ),
     )
 
 
@@ -1093,7 +1017,6 @@ def _candidate_evaluation(
     holdout_period: tuple[str, str],
     output_root: Path,
     policy: PersonalResearchPolicy,
-    unexplained_corporate_action_events: tuple[dict[str, Any], ...],
 ) -> dict[str, Any]:
     validation_runs: list[dict[str, Any]] = []
     pooled_returns: list[float] = []
@@ -1109,9 +1032,6 @@ def _candidate_evaluation(
             lookback_days=closure.required_lookback_trading_days,
             output_root=output_root,
             max_drawdown=policy.max_drawdown,
-            unexplained_corporate_action_events=(
-                unexplained_corporate_action_events
-            ),
         )
         validation_runs.append(evidence)
         pooled_returns.extend(returns)
@@ -1131,10 +1051,6 @@ def _candidate_evaluation(
         ),
         "fills": fills >= policy.min_fills,
         "risk_agent": all(run["risk_status"] == "pass" for run in validation_runs),
-        "corporate_action_trades": all(
-            run["corporate_action_trade_check"]["status"] == "PASS"
-            for run in validation_runs
-        ),
     }
     candidate: dict[str, Any] = {
         "strategy_id": spec.strategy_id,
@@ -1169,9 +1085,6 @@ def _candidate_evaluation(
         lookback_days=closure.required_lookback_trading_days,
         output_root=output_root,
         max_drawdown=policy.max_drawdown,
-        unexplained_corporate_action_events=(
-            unexplained_corporate_action_events
-        ),
     )
     stress_checks = {
         "positive_return": stress["total_return_post_cost"] > 0.0,
@@ -1179,8 +1092,6 @@ def _candidate_evaluation(
         and stress["annualized_sharpe"] >= 0.0,
         "drawdown": stress["max_drawdown"] <= policy.max_drawdown,
         "risk_agent": stress["risk_status"] == "pass",
-        "corporate_action_trades": stress["corporate_action_trade_check"]["status"]
-        == "PASS",
     }
     candidate["stress"] = {**stress, "checks": stress_checks}
     if not all(stress_checks.values()):
@@ -1200,9 +1111,6 @@ def _candidate_evaluation(
         lookback_days=closure.required_lookback_trading_days,
         output_root=output_root,
         max_drawdown=policy.max_drawdown,
-        unexplained_corporate_action_events=(
-            unexplained_corporate_action_events
-        ),
     )
     holdout_checks = {
         "positive_return": holdout["total_return_post_cost"] > 0.0,
@@ -1210,8 +1118,6 @@ def _candidate_evaluation(
         and holdout["annualized_sharpe"] >= 0.0,
         "drawdown": holdout["max_drawdown"] <= policy.max_drawdown,
         "risk_agent": holdout["risk_status"] == "pass",
-        "corporate_action_trades": holdout["corporate_action_trade_check"]["status"]
-        == "PASS",
     }
     candidate["holdout"] = {
         **holdout,
@@ -1401,9 +1307,6 @@ class PersonalResearchService:
                             holdout_period=holdout_period,
                             output_root=output_root,
                             policy=self.policy,
-                            unexplained_corporate_action_events=tuple(
-                                corporate_actions.get("unexplained_events", ())
-                            ),
                         )
                     )
                 except Exception as exc:  # preserve a report; CLI still exits 1
@@ -1468,7 +1371,10 @@ class PersonalResearchService:
                 "time_semantics": "retrospective_not_point_in_time",
                 "position_units": "synthetic_split_adjusted_units",
                 "supported_actions": "vendor_splits_and_reverse_splits",
-                "unexplained_action_policy": "fold_local_exposure_fail_closed",
+                "unexplained_action_policy": (
+                    "extreme_adjusted_moves_advisory; missing_adjusted_"
+                    "evidence_fail_closed"
+                ),
                 "lifecycle": "DRAFT_only",
                 "live_trading_eligible": False,
             },
