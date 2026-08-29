@@ -13,6 +13,7 @@ import calendar
 import hashlib
 import itertools
 import json
+import math
 import os
 import sqlite3
 from collections.abc import Mapping, Sequence
@@ -68,14 +69,18 @@ from research.paper_candidate_specs import (
     build_multi_day_hold_strategy_spec,
 )
 from research.stats_metrics import sharpe_ratio
-PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v7"
+
+PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v8"
 PERSONAL_DECISION_POLICY = "personal_drawdown_cost_stress/v3"
 PERSONAL_DATA_PROFILE = "personal-japan-equities-paper/v3"
 PERSONAL_BAR_COVERAGE_EVIDENCE = "observed-pit-market-breadth/v1"
 PERSONAL_SHORT_FINANCING_SCHEMA = "personal-short-financing-sensitivity/v1"
+PERSONAL_SHORT_FINANCING_FORMULA_VERSION = "fixed-baseline-position-short-financing/v1"
+PERSONAL_SHORT_FINANCING_TRACE_SCHEMA = "personal-short-notional-trace/v1"
 PERSONAL_SHORT_FINANCING_ANNUAL_RATES = (0.0, 0.03, 0.10)
 PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE = 0.03
-PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR = 252
+PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR = 245
+PERSONAL_EXACT_FOUR_MAX_BACKTESTS = 24
 
 
 class PersonalResearchInputError(ValueError):
@@ -235,15 +240,24 @@ _SHORT_COST = ContractDependency(
 def _short_financing_policy_document() -> dict[str, Any]:
     return {
         "schema_version": PERSONAL_SHORT_FINANCING_SCHEMA,
+        "formula_version": PERSONAL_SHORT_FINANCING_FORMULA_VERSION,
         "annual_rates": list(PERSONAL_SHORT_FINANCING_ANNUAL_RATES),
         "baseline_annual_rate": PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE,
         "sessions_per_year": PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR,
         "rate_source": "fixed_modelled_assumption",
         "borrow_evidence": False,
         "caller_tunable": False,
-        "formula": "daily_cost = actual_short_notional * annual_rate / 252",
+        "formula": "daily_cost = actual_short_notional * annual_rate / 245",
         "notional_basis": "actual_post_fill_end_of_session_short_market_value",
         "execution_timing": "next_close_one_session_lag_no_lookahead",
+        "sensitivity_method": (
+            "fixed_3pct_baseline_position_trace_cash_counterfactual"
+        ),
+        "sensitivity_execution": "derived_non_executable",
+        "accrual_convention": "post_fill_close_to_next_evaluation_session",
+        "terminal_accrual_residual_risk": (
+            "current_engine_includes_one_period_end_accrual_without_a_next_valuation"
+        ),
         "transaction_cost": "one_way_fill_cost_charged_separately",
         "leverage_financing_enabled": False,
         "lifecycle": "DRAFT",
@@ -701,16 +715,144 @@ def _source_sync_evidence(
         connection.close()
 
 
-def _daily_returns(result: PaperRunResult, starting_capital: float) -> list[float]:
+def _daily_returns_from_equity_curve(
+    equity_curve: Sequence[Mapping[str, Any]], starting_capital: float
+) -> list[float]:
     previous = float(starting_capital)
     values: list[float] = []
-    for row in result.equity_curve:
+    for row in equity_curve:
         current = float(row["equity"])
-        if previous <= 0.0:
+        if previous <= 0.0 or current <= 0.0:
             raise RuntimeError("paper equity became non-positive")
         values.append(current / previous - 1.0)
         previous = current
     return values
+
+
+def _daily_returns(result: PaperRunResult, starting_capital: float) -> list[float]:
+    return _daily_returns_from_equity_curve(result.equity_curve, starting_capital)
+
+
+def _short_financing_trace(
+    result: PaperRunResult,
+) -> tuple[list[dict[str, Any]], str]:
+    """Canonical post-fill notional trace from the observed 3% run."""
+
+    rows = sorted(
+        (
+            {
+                "date": str(trade.get("fill_date") or ""),
+                "short_notional": float(trade.get("short_notional") or 0.0),
+            }
+            for trade in result.trades
+            if trade.get("side") == "short_financing"
+        ),
+        key=lambda row: row["date"],
+    )
+    if len(rows) != len({row["date"] for row in rows}) or any(
+        not row["date"] or row["short_notional"] <= 0.0 for row in rows
+    ):
+        raise RuntimeError("invalid observed short-financing trace")
+    expected_costs = {
+        row["date"]: row["short_notional"]
+        * PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE
+        / PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR
+        for row in rows
+    }
+    if any(
+        not math.isclose(
+            float(trade.get("cost") or 0.0),
+            expected_costs[str(trade.get("fill_date") or "")],
+            rel_tol=1e-10,
+            abs_tol=1e-8,
+        )
+        for trade in result.trades
+        if trade.get("side") == "short_financing"
+    ):
+        raise RuntimeError("observed 3% financing does not use the fixed divisor")
+    trace = {
+        "schema_version": PERSONAL_SHORT_FINANCING_TRACE_SCHEMA,
+        "formula_version": PERSONAL_SHORT_FINANCING_FORMULA_VERSION,
+        "baseline_run_id": result.run_id,
+        "sessions_per_year": PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR,
+        "rows": rows,
+    }
+    return rows, _digest(trace)
+
+
+def _fixed_position_short_financing_evidence(
+    result: PaperRunResult,
+    *,
+    period: tuple[str, str],
+    starting_capital: float,
+    annual_rate: float,
+) -> tuple[dict[str, Any], list[float], list[str]]:
+    """Reprice financing on one observed 3% position path without re-execution."""
+
+    rate = float(annual_rate)
+    if rate not in PERSONAL_SHORT_FINANCING_ANNUAL_RATES:
+        raise ValueError("short financing rate is outside the fixed sensitivity")
+    trace_rows, trace_digest = _short_financing_trace(result)
+    short_by_date = {row["date"]: row["short_notional"] for row in trace_rows}
+    cumulative_delta = 0.0
+    adjusted_curve: list[dict[str, Any]] = []
+    for source_row in result.equity_curve:
+        row = dict(source_row)
+        day = str(row.get("date") or "")
+        if day in short_by_date:
+            cumulative_delta += (
+                short_by_date[day]
+                * (rate - PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE)
+                / PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR
+            )
+        row["equity"] = float(row["equity"]) - cumulative_delta
+        adjusted_curve.append(row)
+    if set(short_by_date) - {str(row.get("date") or "") for row in adjusted_curve}:
+        raise RuntimeError(
+            "short financing trace contains a date outside the equity path"
+        )
+
+    adjusted_trades = [dict(trade) for trade in result.trades]
+    for trade in adjusted_trades:
+        if trade.get("side") == "short_financing":
+            trade["cost"] = (
+                float(trade["short_notional"])
+                * rate
+                / PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR
+            )
+    returns = _daily_returns_from_equity_curve(adjusted_curve, starting_capital)
+    performance = summarize_performance(
+        equity_curve=adjusted_curve,
+        trades=adjusted_trades,
+        starting_capital=starting_capital,
+    )
+    dates = [str(row.get("date") or "") for row in adjusted_curve]
+    body: dict[str, Any] = {
+        "schema_version": PERSONAL_SHORT_FINANCING_SCHEMA,
+        "formula_version": PERSONAL_SHORT_FINANCING_FORMULA_VERSION,
+        "baseline_run_id": result.run_id,
+        "trace_digest": trace_digest,
+        "annual_rate": rate,
+        "sessions_per_year": PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR,
+        "position_trace": "fixed_to_observed_3pct_baseline",
+        "execution": "derived_non_executable",
+        "lifecycle": "DRAFT",
+        "derived_artifacts_emitted": False,
+        "period": {"start": period[0], "end": period[1]},
+        "fills": performance["fill_count"],
+        "short_financing_cost_amount": sum(
+            row["short_notional"] * rate
+            / PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR
+            for row in trace_rows
+        ),
+        "charged_sessions": len(trace_rows),
+        "performance": performance,
+    }
+    return (
+        {**body, "evidence_digest": _digest(body)},
+        returns,
+        dates,
+    )
 
 
 def _risk_document(result: PaperRunResult, limit: float) -> dict[str, Any]:
@@ -1191,6 +1333,11 @@ def _paper_evidence(
     returns = _daily_returns(result, config.starting_capital)
     sharpe = sharpe_ratio(returns, periods_per_year=252.0).get("sharpe")
     metrics = result.metrics
+    short_trace_digest = (
+        None
+        if short_financing_annual_rate is None
+        else _short_financing_trace(result)[1]
+    )
     performance = summarize_performance(
         equity_curve=result.equity_curve,
         trades=result.trades,
@@ -1216,7 +1363,11 @@ def _paper_evidence(
                 if short_financing_annual_rate is None
                 else {
                     "schema_version": PERSONAL_SHORT_FINANCING_SCHEMA,
+                    "formula_version": PERSONAL_SHORT_FINANCING_FORMULA_VERSION,
                     "annual_rate": short_financing_annual_rate,
+                    "sessions_per_year": (
+                        PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR
+                    ),
                     "baseline": short_financing_annual_rate
                     == PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE,
                     "modelled_assumption": True,
@@ -1230,6 +1381,7 @@ def _paper_evidence(
                     "gap_sessions": int(
                         metrics.get("n_short_financing_gaps", 0)
                     ),
+                    "trace_digest": short_trace_digest,
                     "notional_basis": (
                         "actual_post_fill_end_of_session_short_market_value"
                     ),
@@ -1256,13 +1408,13 @@ def _run_one(
     output_root: Path,
     max_drawdown: float,
     short_financing_annual_rate: float | None = None,
-) -> tuple[dict[str, Any], list[float], list[str]]:
+) -> tuple[dict[str, Any], list[float], list[str], PaperRunResult]:
     if (
         short_financing_annual_rate is not None
         and short_financing_annual_rate
-        not in PERSONAL_SHORT_FINANCING_ANNUAL_RATES
+        != PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE
     ):
-        raise ValueError("short financing rate is outside the fixed sensitivity")
+        raise ValueError("only the fixed 3% baseline may execute a paper run")
     period_universe = PersonalResolvedUniverseMembership(
         period_start=period[0],
         period_end=period[1],
@@ -1302,13 +1454,14 @@ def _run_one(
         expected_snapshot_id=snapshot_id,
         approved_feature_refs=iter_feature_refs(spec),
     )
-    return _paper_evidence(
+    evidence, returns, dates = _paper_evidence(
         result,
         config=config,
         output_root=output_root,
         max_drawdown=max_drawdown,
         short_financing_annual_rate=short_financing_annual_rate,
     )
+    return evidence, returns, dates, result
 
 
 def _short_financing_sensitivity_document(
@@ -1330,12 +1483,17 @@ def _short_financing_sensitivity_document(
                 "baseline": rate
                 == PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE,
                 "short_financing_cost_amount": sum(
-                    float(
-                        (run.get("short_financing") or {}).get("cost_amount")
-                        or 0.0
-                    )
+                    float(run.get("short_financing_cost_amount") or 0.0)
                     for run in runs
                 ),
+                "fold_evidence": [
+                    {
+                        key: value
+                        for key, value in run.items()
+                        if key != "performance"
+                    }
+                    for run in runs
+                ],
                 "performance": performance,
             }
         )
@@ -1343,13 +1501,14 @@ def _short_financing_sensitivity_document(
         float(result["performance"]["stitched_performance"]["total_return_net"])
         for result in results
     ]
-    return {
+    document = {
         **_short_financing_policy_document(),
         "results": results,
         "higher_rate_net_return_nonincreasing": all(
             left >= right for left, right in itertools.pairwise(net_returns)
         ),
     }
+    return {**document, "evidence_digest": _digest(document)}
 
 
 def _candidate_evaluation(
@@ -1378,35 +1537,37 @@ def _candidate_evaluation(
         rate: [] for rate in PERSONAL_SHORT_FINANCING_ANNUAL_RATES
     }
     for period in fold_periods:
-        rates: tuple[float | None, ...] = (
-            PERSONAL_SHORT_FINANCING_ANNUAL_RATES
+        baseline_rate = (
+            PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE
             if short_financing_required
-            else (None,)
+            else None
         )
-        evidence = None
-        returns: list[float] = []
-        dates: list[str] = []
-        for rate in rates:
-            rate_evidence, rate_returns, rate_dates = _run_one(
-                executor,
-                spec,
-                db_path=snapshot.db_path,
-                snapshot_id=snapshot.logical_data_snapshot_id,
-                universe=universe,
-                period=period,
-                cost_bps=policy.base_cost_bps,
-                lookback_days=closure.required_lookback_trading_days,
-                output_root=output_root,
-                max_drawdown=policy.max_drawdown,
-                short_financing_annual_rate=rate,
-            )
-            if rate is not None:
-                sensitivity_runs[rate].append(rate_evidence)
-                sensitivity_returns[rate].extend(rate_returns)
-                sensitivity_dates[rate].extend(rate_dates)
-            if rate is None or rate == PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE:
-                evidence, returns, dates = rate_evidence, rate_returns, rate_dates
-        assert evidence is not None
+        evidence, returns, dates, paper_result = _run_one(
+            executor,
+            spec,
+            db_path=snapshot.db_path,
+            snapshot_id=snapshot.logical_data_snapshot_id,
+            universe=universe,
+            period=period,
+            cost_bps=policy.base_cost_bps,
+            lookback_days=closure.required_lookback_trading_days,
+            output_root=output_root,
+            max_drawdown=policy.max_drawdown,
+            short_financing_annual_rate=baseline_rate,
+        )
+        if short_financing_required:
+            for rate in PERSONAL_SHORT_FINANCING_ANNUAL_RATES:
+                derived, derived_returns, derived_dates = (
+                    _fixed_position_short_financing_evidence(
+                        paper_result,
+                        period=period,
+                        starting_capital=1_000_000.0,
+                        annual_rate=rate,
+                    )
+                )
+                sensitivity_runs[rate].append(derived)
+                sensitivity_returns[rate].extend(derived_returns)
+                sensitivity_dates[rate].extend(derived_dates)
         validation_runs.append(evidence)
         pooled_returns.extend(returns)
         pooled_dates.extend(dates)
@@ -1421,6 +1582,15 @@ def _candidate_evaluation(
         pooled_returns,
         stitched_dates=pooled_dates,
     )
+    short_financing_sensitivity = (
+        _short_financing_sensitivity_document(
+            sensitivity_runs,
+            sensitivity_returns,
+            sensitivity_dates,
+        )
+        if short_financing_required
+        else None
+    )
     validation_checks = {
         "positive_folds": positive >= policy.min_positive_folds,
         "pooled_annualized_sharpe": pooled is not None
@@ -1432,6 +1602,12 @@ def _candidate_evaluation(
         "fills": fills >= policy.min_fills,
         "risk_agent": all(run["risk_status"] == "pass" for run in validation_runs),
     }
+    if short_financing_sensitivity is not None:
+        validation_checks["short_financing_rate_monotonicity"] = bool(
+            short_financing_sensitivity[
+                "higher_rate_net_return_nonincreasing"
+            ]
+        )
     candidate: dict[str, Any] = {
         "strategy_id": spec.strategy_id,
         "strategy_spec_version": spec.version,
@@ -1439,7 +1615,15 @@ def _candidate_evaluation(
         "dependency_closure_digest": closure.closure_digest,
         "strategy": _strategy_context(spec),
         "decision": "REJECT",
-        "reasons": [name for name, passed in validation_checks.items() if not passed],
+        "reasons": [
+            (
+                f"analysis_failure:{name}"
+                if name == "short_financing_rate_monotonicity"
+                else name
+            )
+            for name, passed in validation_checks.items()
+            if not passed
+        ],
         "validation": {
             "runs": validation_runs,
             "positive_folds": positive,
@@ -1457,18 +1641,12 @@ def _candidate_evaluation(
             "holdout_vs_validation": None,
         },
     }
-    if short_financing_required:
-        candidate["short_financing_sensitivity"] = (
-            _short_financing_sensitivity_document(
-                sensitivity_runs,
-                sensitivity_returns,
-                sensitivity_dates,
-            )
-        )
+    if short_financing_sensitivity is not None:
+        candidate["short_financing_sensitivity"] = short_financing_sensitivity
     if not all(validation_checks.values()):
         return candidate
 
-    stress, _, _ = _run_one(
+    stress, _, _, _ = _run_one(
         executor,
         spec,
         db_path=snapshot.db_path,
@@ -1503,7 +1681,7 @@ def _candidate_evaluation(
         ]
         return candidate
 
-    holdout, _, _ = _run_one(
+    holdout, _, _, _ = _run_one(
         executor,
         spec,
         db_path=snapshot.db_path,
@@ -1635,6 +1813,11 @@ def _md_number(value: Any) -> str:
 def _md_short_financing(value: Any) -> str:
     if not isinstance(value, Mapping):
         return "not applicable"
+    monotonicity = (
+        "PASS"
+        if value.get("higher_rate_net_return_nonincreasing") is True
+        else "FAIL (validation REJECT)"
+    )
     parts: list[str] = []
     for result in value.get("results", []):
         if not isinstance(result, Mapping):
@@ -1653,7 +1836,8 @@ def _md_short_financing(value: Any) -> str:
             f"{rate}{suffix}: net {_md_ratio(stitched.get('total_return_net'))}, "
             f"Sharpe {_md_number(stitched.get('annualized_sharpe'))}"
         )
-    return "; ".join(parts) or "not evaluated"
+    results = "; ".join(parts) or "not evaluated"
+    return f"fixed 3% trace, monotonicity {monotonicity}; {results}"
 
 
 def _markdown(report: dict[str, Any]) -> str:
@@ -1768,6 +1952,20 @@ def _markdown(report: dict[str, Any]) -> str:
             "",
         ]
     )
+    short_policy = report.get("short_financing_policy")
+    if isinstance(short_policy, Mapping):
+        lines.extend(
+            [
+                "",
+                (
+                    "Financing note: only 3% executes Paper/Risk; 0% and 10% "
+                    "are non-executable DRAFT repricings of its fixed trace. "
+                    "The 245-session close-to-next-session convention includes "
+                    "one terminal accrual without a next valuation (residual risk)."
+                ),
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -1812,6 +2010,13 @@ class PersonalResearchService:
                 "personal modelled short financing is closed to the "
                 f"{PERSONAL_SHORT_FINANCING_COHORT_ID!r} cohort"
             )
+        if cohort is not None:
+            planned_maximum = len(specs) * (self.policy.validation_folds + 2)
+            if planned_maximum > PERSONAL_EXACT_FOUR_MAX_BACKTESTS:
+                raise PersonalResearchInputError(
+                    "closed exact-four cohort exceeds the fixed "
+                    f"{PERSONAL_EXACT_FOUR_MAX_BACKTESTS}-backtest budget"
+                )
         cohort_ref: dict[str, str] | None = None
         if cohort is not None:
             history_start = _parse_day(
@@ -2114,11 +2319,15 @@ class PersonalResearchService:
 __all__ = [
     "DEFAULT_PERSONAL_UNIVERSE_ID",
     "PERSONAL_DECISION_POLICY",
+    "PERSONAL_EXACT_FOUR_MAX_BACKTESTS",
     "PERSONAL_EXECUTABLE_COHORT_IDS",
     "PERSONAL_RESEARCH_REPORT_VERSION",
     "PERSONAL_SHORT_FINANCING_ANNUAL_RATES",
     "PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE",
+    "PERSONAL_SHORT_FINANCING_FORMULA_VERSION",
     "PERSONAL_SHORT_FINANCING_SCHEMA",
+    "PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR",
+    "PERSONAL_SHORT_FINANCING_TRACE_SCHEMA",
     "PERSONAL_UNIVERSE_IDS",
     "PersonalResearchInputError",
     "PersonalResearchPolicy",

@@ -18,14 +18,18 @@ from research.paper_candidate_specs import (
 )
 from research.personal_service import (
     PERSONAL_DECISION_POLICY,
+    PERSONAL_EXACT_FOUR_MAX_BACKTESTS,
     PERSONAL_RESEARCH_REPORT_VERSION,
     PERSONAL_SHORT_FINANCING_ANNUAL_RATES,
     PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE,
+    PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR,
     PersonalResearchInputError,
     PersonalResearchPolicy,
     PersonalResearchRequest,
     PersonalResearchService,
     _calendar_lookback_days,
+    _fixed_position_short_financing_evidence,
+    _md_short_financing,
     _periods,
     _run_one,
     _short_financing_sensitivity_document,
@@ -455,40 +459,88 @@ def test_fixed_short_financing_monotonically_lowers_return(
         min_group_count=2,
         rationale="Deterministic fixture long-short financing sensitivity.",
     )
-    returns: list[float] = []
-    financing_costs: list[float] = []
+    output_root = tmp_path / "short-financing"
+    evidence, _daily, _dates_used, paper_result = _run_one(
+        PersonalPaperExecutionService(),
+        spec,
+        db_path=source,
+        snapshot_id=data_snapshot_id(source),
+        universe=universe,
+        period=(start, end),
+        cost_bps=10.0,
+        lookback_days=3,
+        output_root=output_root,
+        max_drawdown=1.0,
+        short_financing_annual_rate=(
+            PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE
+        ),
+    )
+    financing = evidence["short_financing"]
+    assert financing["formula_version"]
+    assert financing["modelled_assumption"] is True
+    assert financing["borrow_evidence"] is False
+    assert financing["gap_sessions"] == 0
+    assert evidence["cost_bps"] == 10.0
+    assert PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR == 245
+    financing_trades = [
+        trade
+        for trade in paper_result.trades
+        if trade.get("side") == "short_financing"
+    ]
+    assert financing_trades
+    assert financing_trades[0]["cost"] == pytest.approx(
+        financing_trades[0]["short_notional"]
+        * PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE
+        / 245
+    )
+
     runs_by_rate: dict[float, list[dict]] = {}
     daily_by_rate: dict[float, list[float]] = {}
     dates_by_rate: dict[float, list[str]] = {}
     for rate in PERSONAL_SHORT_FINANCING_ANNUAL_RATES:
-        evidence, daily, dates_used = _run_one(
-            PersonalPaperExecutionService(),
-            spec,
-            db_path=source,
-            snapshot_id=data_snapshot_id(source),
-            universe=universe,
+        derived, daily, dates_used = _fixed_position_short_financing_evidence(
+            paper_result,
             period=(start, end),
-            cost_bps=10.0,
-            lookback_days=3,
-            output_root=tmp_path / "short-financing",
-            max_drawdown=1.0,
-            short_financing_annual_rate=rate,
+            starting_capital=1_000_000.0,
+            annual_rate=rate,
         )
-        returns.append(evidence["total_return_post_cost"])
-        financing = evidence["short_financing"]
-        assert financing["modelled_assumption"] is True
-        assert financing["borrow_evidence"] is False
-        assert financing["gap_sessions"] == 0
-        assert evidence["cost_bps"] == 10.0
-        financing_costs.append(financing["cost_amount"])
-        runs_by_rate[rate] = [evidence]
+        assert derived["formula_version"]
+        assert derived["sessions_per_year"] == 245
+        assert derived["baseline_run_id"] == paper_result.run_id
+        assert derived["position_trace"] == "fixed_to_observed_3pct_baseline"
+        assert derived["execution"] == "derived_non_executable"
+        assert derived["lifecycle"] == "DRAFT"
+        assert derived["derived_artifacts_emitted"] is False
+        assert derived["short_financing_cost_amount"] == pytest.approx(
+            sum(float(trade["short_notional"]) for trade in financing_trades)
+            * rate
+            / 245
+        )
+        if rate == PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE:
+            assert derived["performance"] == evidence["performance"]
+        runs_by_rate[rate] = [derived]
         daily_by_rate[rate] = daily
         dates_by_rate[rate] = dates_used
 
     assert PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE == 0.03
+    trace_digests = {
+        runs_by_rate[rate][0]["trace_digest"]
+        for rate in PERSONAL_SHORT_FINANCING_ANNUAL_RATES
+    }
+    assert trace_digests == {financing["trace_digest"]}
+    returns = [
+        runs_by_rate[rate][0]["performance"]["total_return_net"]
+        for rate in PERSONAL_SHORT_FINANCING_ANNUAL_RATES
+    ]
+    financing_costs = [
+        runs_by_rate[rate][0]["short_financing_cost_amount"]
+        for rate in PERSONAL_SHORT_FINANCING_ANNUAL_RATES
+    ]
     assert returns[0] > returns[1] > returns[2]
     assert financing_costs[0] == 0.0
     assert financing_costs[0] < financing_costs[1] < financing_costs[2]
+    assert len(tuple((output_root / "paper").glob("*.json"))) == 1
+    assert len(tuple((output_root / "risk").glob("*.json"))) == 1
     sensitivity = _short_financing_sensitivity_document(
         runs_by_rate,
         daily_by_rate,
@@ -506,6 +558,40 @@ def test_fixed_short_financing_monotonically_lowers_return(
         == "personal-performance/v1"
         for result in sensitivity["results"]
     )
+    assert all(
+        result["performance"]["stitched_performance"]["fill_count"] > 0
+        for result in sensitivity["results"]
+    )
+
+
+def test_exact_four_backtest_budget_is_hard_capped_at_twenty_four(
+    personal_db: tuple[Path, str, str], tmp_path: Path
+) -> None:
+    source, start, end = personal_db
+    assert PersonalResearchPolicy().validation_folds == 4
+    assert 4 * (PersonalResearchPolicy().validation_folds + 2) == 24
+    assert PERSONAL_EXACT_FOUR_MAX_BACKTESTS == 24
+    request = PersonalResearchRequest(
+        source_db=source,
+        period_start=start,
+        period_end=end,
+        output_root=tmp_path / "too-many-backtests",
+        cohort_id="diverse-core-v1",
+    )
+
+    with pytest.raises(PersonalResearchInputError, match="24-backtest budget"):
+        PersonalResearchService(policy=_policy(validation_folds=5)).run(request)
+
+
+def test_short_financing_markdown_exposes_monotonicity_failure() -> None:
+    text = _md_short_financing(
+        {
+            "higher_rate_net_return_nonincreasing": False,
+            "results": [],
+        }
+    )
+
+    assert "monotonicity FAIL (validation REJECT)" in text
 
 
 def test_selected_cohort_id_and_digest_are_bound_to_report(
@@ -820,7 +906,7 @@ def test_recent_holdout_metrics_are_exploratory_not_a_selection_gate(
             else [0.005, 0.015] * 10
         )
         dates = [f"2024-01-{index + 1:02d}" for index in range(len(returns))]
-        return evidence, returns, dates
+        return evidence, returns, dates, None
 
     monkeypatch.setattr(module, "_run_one", fake_run_one)
     result = PersonalResearchService(policy=_policy()).run(
