@@ -24,6 +24,7 @@ import {
   personalResearchStatus,
   submitPersonalResearch,
 } from "./personal_research_container";
+import { runPersonalVolResearch } from "./personal_vol_research";
 
 export { ContainerProxy } from "./personal_research_container";
 export { PersonalResearchContainer };
@@ -324,6 +325,7 @@ export default {
       runDailyPath,
       submitPersonalResearch,
       personalResearchStatus,
+      runPersonalVolResearch,
     });
   },
 };
