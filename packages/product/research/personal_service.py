@@ -278,6 +278,7 @@ def _validated_specs(
     raw: Sequence[StrategySpec] | None,
     policy: PersonalResearchPolicy,
     cohort_id: str | None = None,
+    universe_id: str | None = None,
 ) -> tuple[tuple[StrategySpec, ...], ResearchCohort | None]:
     if raw is not None and cohort_id is not None:
         raise PersonalResearchInputError(
@@ -292,7 +293,9 @@ def _validated_specs(
             )
         cohort = get_research_cohort(cohort_id)
         try:
-            specs = tuple(personal_specs_for_cohort(cohort_id))
+            specs = tuple(
+                personal_specs_for_cohort(cohort_id, universe_id=universe_id)
+            )
         except ValueError as exc:  # defensive if registry eligibility drifts
             raise PersonalResearchInputError(str(exc)) from exc
     else:
@@ -1582,6 +1585,7 @@ class PersonalResearchService:
             request.specs,
             self.policy,
             request.cohort_id,
+            universe_selector.selector_id,
         )
         cohort_ref: dict[str, str] | None = None
         if cohort is not None:

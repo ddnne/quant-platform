@@ -395,7 +395,7 @@ def test_selected_cohort_id_and_digest_are_bound_to_report(
     assert result.cohort_id == "diverse-core-v1"
     assert result.cohort_digest == report["strategy_cohort"]["cohort_digest"]
     assert report["strategy_cohort"]["registry_version"] == (
-        "personal-factor-cohorts/v1"
+        "personal-factor-cohorts/v2"
     )
     assert report["summary"]["candidate_count"] == 4
     assert report["summary"]["analysis_status"] == "NO_ANALYSIS"

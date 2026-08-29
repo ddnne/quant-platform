@@ -22,13 +22,28 @@ from strategies.spec import FactorLeg, FeatureRef, StrategySpec
 from research.paper_candidate_specs import build_factor_rank_strategy_spec
 
 
-COHORT_REGISTRY_VERSION = "personal-factor-cohorts/v1"
+COHORT_REGISTRY_VERSION = "personal-factor-cohorts/v2"
 DEFAULT_FACTOR_COHORT_ID = "diverse-core-v1"
+COMPACT_MARKET_COHORT_ID = "compact-market-diverse-v1"
 LEG_VERSION = "1.0.0"
 PERSONAL_EXECUTABLE_COHORT_IDS = (
     "price-relative-v1",
     "fundamental-relative-v1",
     DEFAULT_FACTOR_COHORT_ID,
+    COMPACT_MARKET_COHORT_ID,
+)
+COMPACT_MARKET_UNIVERSE_IDS = frozenset(
+    {"topix_core30", "topix_large70", "topix100"}
+)
+SECTOR_RELATIVE_UNIVERSE_IDS = frozenset(
+    {
+        "topix_all",
+        "topix_mid400",
+        "topix_small1",
+        "topix_small2",
+        "topix_small",
+        "topix500",
+    }
 )
 
 
@@ -68,6 +83,8 @@ def _spec(
     *legs: FactorLeg,
     allow_short: bool = False,
     group: str = "sector33",
+    min_eligible_count: int = 100,
+    min_group_count: int = 5,
     rationale: str,
 ) -> StrategySpec:
     return build_factor_rank_strategy_spec(
@@ -79,8 +96,8 @@ def _spec(
         short_frac=0.2,
         allow_short=allow_short,
         min_eligible_ratio=0.8,
-        min_eligible_count=100,
-        min_group_count=5,
+        min_eligible_count=min_eligible_count,
+        min_group_count=min_group_count,
         rationale=rationale,
     )
 
@@ -227,6 +244,43 @@ def _diverse_core_specs(*, allow_short: bool = False) -> tuple[StrategySpec, ...
     )
 
 
+def _compact_market_specs() -> tuple[StrategySpec, ...]:
+    """Market-relative variants for universes too small for 33 sectors."""
+
+    broad = _diverse_core_specs()
+    specs: list[StrategySpec] = []
+    for source in broad:
+        assert source.rule.type == "factor_rank"
+        rule = source.rule
+        specs.append(
+            StrategySpec(
+                strategy_id=source.strategy_id.replace(
+                    "personal_sector_", "personal_compact_market_"
+                ),
+                version=source.version,
+                rule=type(rule)(
+                    legs=rule.legs,
+                    normalization=rule.normalization,
+                    group="market",
+                    long_frac=rule.long_frac,
+                    short_frac=rule.short_frac,
+                    allow_short=rule.allow_short,
+                    min_eligible_ratio=rule.min_eligible_ratio,
+                    min_eligible_count=20,
+                    min_group_count=5,
+                ),
+                rationale=(
+                    source.rationale
+                    + " Market-relative because Core30/Large70/TOPIX100 are too "
+                    "small for stable sector33 buckets."
+                ),
+                rebalance=source.rebalance,
+                hold_days=source.hold_days,
+            )
+        )
+    return tuple(specs)
+
+
 @dataclass(frozen=True, slots=True)
 class ResearchCohort:
     cohort_id: str
@@ -317,6 +371,23 @@ _COHORTS: dict[str, ResearchCohort] = {
         strategy_specs=_diverse_core_specs(),
         description="One candidate each for momentum-risk, value, size, and balance.",
     ),
+    COMPACT_MARKET_COHORT_ID: ResearchCohort(
+        cohort_id=COMPACT_MARKET_COHORT_ID,
+        backend="strategy_spec",
+        history_data_start="2008-07-07",
+        warmup_sessions=253,
+        dataset_dependencies=(
+            "equities_master",
+            "equities_bars_daily",
+            "fins_summary",
+            "markets_calendar",
+        ),
+        strategy_specs=_compact_market_specs(),
+        description=(
+            "Market-relative momentum-risk, value, size, and balanced factors "
+            "for Core30, Large70, or TOPIX100."
+        ),
+    ),
     "sector-relative-ls-v1": ResearchCohort(
         cohort_id="sector-relative-ls-v1",
         backend="strategy_spec",
@@ -369,7 +440,26 @@ def get_research_cohort(cohort_id: str) -> ResearchCohort:
         ) from exc
 
 
-def personal_specs_for_cohort(cohort_id: str) -> tuple[StrategySpec, ...]:
+def validate_personal_cohort_universe(cohort_id: str, universe_id: str) -> None:
+    if cohort_id == COMPACT_MARKET_COHORT_ID:
+        if universe_id not in COMPACT_MARKET_UNIVERSE_IDS:
+            raise ValueError(
+                f"cohort {cohort_id!r} requires one of "
+                f"{sorted(COMPACT_MARKET_UNIVERSE_IDS)}"
+            )
+        return
+    if cohort_id in PERSONAL_EXECUTABLE_COHORT_IDS:
+        if universe_id not in SECTOR_RELATIVE_UNIVERSE_IDS:
+            raise ValueError(
+                f"sector-relative cohort {cohort_id!r} requires one of "
+                f"{sorted(SECTOR_RELATIVE_UNIVERSE_IDS)}; use "
+                f"{COMPACT_MARKET_COHORT_ID!r} for compact universes"
+            )
+
+
+def personal_specs_for_cohort(
+    cohort_id: str, *, universe_id: str | None = None
+) -> tuple[StrategySpec, ...]:
     cohort = get_research_cohort(cohort_id)
     if cohort.backend != "strategy_spec":
         raise ValueError(
@@ -384,15 +474,21 @@ def personal_specs_for_cohort(cohort_id: str) -> tuple[StrategySpec, ...]:
             f"cohort {cohort_id!r} is not executable by personal StrategySpec "
             f"research; available={list(PERSONAL_EXECUTABLE_COHORT_IDS)}"
         )
+    if universe_id is not None:
+        validate_personal_cohort_universe(cohort_id, universe_id)
     return cohort.strategy_specs
 
 
 __all__ = [
     "COHORT_REGISTRY_VERSION",
+    "COMPACT_MARKET_COHORT_ID",
+    "COMPACT_MARKET_UNIVERSE_IDS",
     "DEFAULT_FACTOR_COHORT_ID",
     "PERSONAL_EXECUTABLE_COHORT_IDS",
     "RESEARCH_COHORTS",
+    "SECTOR_RELATIVE_UNIVERSE_IDS",
     "ResearchCohort",
     "get_research_cohort",
     "personal_specs_for_cohort",
+    "validate_personal_cohort_universe",
 ]

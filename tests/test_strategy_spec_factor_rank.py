@@ -17,6 +17,10 @@ from strategies.spec import (
     interpret_strategy_spec,
 )
 from strategies.spec.interpreter import _cross_section_rank_signs, _percentile_values
+from research.factor_cohorts import (
+    COMPACT_MARKET_COHORT_ID,
+    personal_specs_for_cohort,
+)
 
 
 def _leg(feature_id: str, *, weight: float = 1.0, direction: str = "high_good"):
@@ -114,6 +118,25 @@ def test_factor_rank_v4_exact_round_trip_and_v3_default_is_stable():
         "rationale": "unchanged",
     }
     assert StrategySpec.from_dict(v3).to_dict() == v3
+
+
+def test_core30_market_cohort_can_form_a_non_flat_book() -> None:
+    spec = personal_specs_for_cohort(
+        COMPACT_MARKET_COHORT_ID, universe_id="topix_core30"
+    )[0]
+    codes = tuple(f"{index:04d}0" for index in range(1, 31))
+    groups = {code: (f"S{index % 10}", "TOPIX Core30") for index, code in enumerate(codes)}
+    values = {
+        ref.id: {code: float(index + 1) for index, code in enumerate(codes)}
+        for ref in (leg.feature for leg in spec.rule.legs)
+    }
+
+    strategy = interpret_strategy_spec(spec)
+    intents = strategy.on_bar(_Context(values, groups))
+
+    assert strategy.last_diagnostics["status"] == "passed"
+    assert strategy.last_diagnostics["eligible_count"] == 30
+    assert any(intent.target_weight > 0 for intent in intents)
 
 
 @pytest.mark.parametrize(

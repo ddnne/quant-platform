@@ -23,8 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-
-RUNNER_VERSION = "personal-cloud-runner/v2"
+RUNNER_VERSION = "personal-cloud-runner/v3"
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60
@@ -44,7 +43,24 @@ PERSONAL_EXECUTABLE_COHORT_IDS = frozenset(
         "price-relative-v1",
         "fundamental-relative-v1",
         "diverse-core-v1",
+        "compact-market-diverse-v1",
     }
+)
+PERSONAL_EXECUTABLE_UNIVERSE_IDS = frozenset(
+    {
+        "topix_all",
+        "topix_core30",
+        "topix_large70",
+        "topix_mid400",
+        "topix_small1",
+        "topix_small2",
+        "topix_small",
+        "topix100",
+        "topix500",
+    }
+)
+COMPACT_MARKET_UNIVERSE_IDS = frozenset(
+    {"topix_core30", "topix_large70", "topix100"}
 )
 
 
@@ -98,6 +114,8 @@ def _parse_day(value: Any, label: str) -> date:
 class JobSpec:
     cohort_id: str
     cohort_digest: str
+    universe_id: str
+    universe_rule_digest: str
     job_id: str
     snapshot_key: str
     snapshot_sha256: str
@@ -124,6 +142,8 @@ class JobSpec:
             "runner_version",
             "snapshot_key",
             "snapshot_sha256",
+            "universe_id",
+            "universe_rule_digest",
         }
         if set(document) != fields or not all(
             isinstance(document[field], str) for field in fields
@@ -138,6 +158,14 @@ class JobSpec:
             raise JobInputError("cohort_id is not executable by personal research")
         if _DIGEST_RE.fullmatch(self.cohort_digest) is None:
             raise JobInputError("cohort_digest is invalid")
+        if self.universe_id not in PERSONAL_EXECUTABLE_UNIVERSE_IDS:
+            raise JobInputError("universe_id is not executable by personal research")
+        compact_universe = self.universe_id in COMPACT_MARKET_UNIVERSE_IDS
+        compact_cohort = self.cohort_id == "compact-market-diverse-v1"
+        if compact_universe != compact_cohort:
+            raise JobInputError("cohort_id and universe_id profile mismatch")
+        if _DIGEST_RE.fullmatch(self.universe_rule_digest) is None:
+            raise JobInputError("universe_rule_digest is invalid")
         if _JOB_ID_RE.fullmatch(self.job_id) is None:
             raise JobInputError("job_id is invalid")
         if _SHA_RE.fullmatch(self.snapshot_sha256) is None:
@@ -175,6 +203,8 @@ class JobSpec:
             "runner_version": self.runner_version,
             "snapshot_key": self.snapshot_key,
             "snapshot_sha256": self.snapshot_sha256,
+            "universe_id": self.universe_id,
+            "universe_rule_digest": self.universe_rule_digest,
         }
         return "sha256:" + hashlib.sha256(_canonical_bytes(body)).hexdigest()
 
@@ -320,6 +350,8 @@ def _manifest_base(spec: JobSpec, *, started_at: str, finished_at: str) -> dict[
         "job_id": spec.job_id,
         "cohort_id": spec.cohort_id,
         "cohort_digest": spec.cohort_digest,
+        "universe_id": spec.universe_id,
+        "universe_rule_digest": spec.universe_rule_digest,
         "request_digest": spec.request_digest,
         "snapshot": {
             "key": spec.snapshot_key,
@@ -370,6 +402,8 @@ def execute_job(
                 str(output),
                 "--cohort",
                 spec.cohort_id,
+                "--universe",
+                spec.universe_id,
             ]
             try:
                 process = subprocess.run(
@@ -409,6 +443,9 @@ def execute_job(
                 summary.get("candidate_count") != 4
                 or summary.get("cohort_id") != spec.cohort_id
                 or summary.get("cohort_digest") != spec.cohort_digest
+                or summary.get("universe_id") != spec.universe_id
+                or summary.get("universe_rule_digest")
+                != spec.universe_rule_digest
                 or summary.get("model_calls") != 0
                 or summary.get("live_orders_enabled") is not False
                 or summary.get("automatic_promotion") is not False
@@ -419,6 +456,8 @@ def execute_job(
                 for key in (
                     "cohort_id",
                     "cohort_digest",
+                    "universe_id",
+                    "universe_rule_digest",
                     "report_id",
                     "snapshot_id",
                     "logical_data_snapshot_id",
@@ -453,6 +492,7 @@ def execute_job(
                 "archived_file_count": archived_files,
                 "report_id": summary.get("report_id"),
                 "cohort_digest": summary.get("cohort_digest"),
+                "universe_rule_digest": summary.get("universe_rule_digest"),
                 "snapshot_id": summary.get("snapshot_id"),
                 "candidate_count": 4,
                 "evaluated_count": summary.get("evaluated_count"),
@@ -523,6 +563,7 @@ class JobManager:
                 "automatic_promotion": False,
                 "live_orders_enabled": False,
             }
+            record["universe_id"] = spec.universe_id
             self._jobs[spec.job_id] = record
             self._active_job_id = spec.job_id
             watchdog = threading.Timer(
@@ -579,6 +620,7 @@ class JobManager:
                 "error": _safe_detail(error),
                 "go": False,
             }
+            result["universe_id"] = spec.universe_id
         with self._lock:
             notify = self._accepting
             if notify:

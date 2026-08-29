@@ -1,6 +1,6 @@
 import { sha256Hex } from "./sha256";
 
-export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v2";
+export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v3";
 export const PERSONAL_RESEARCH_CONTAINER_NAME = "personal-research-singleton";
 export const PERSONAL_RESEARCH_MAX_PERIOD_DAYS = 2200;
 export const PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024;
@@ -8,21 +8,56 @@ export const PERSONAL_RESEARCH_COHORT_IDS = [
   "price-relative-v1",
   "fundamental-relative-v1",
   "diverse-core-v1",
+  "compact-market-diverse-v1",
 ] as const;
+export const PERSONAL_RESEARCH_UNIVERSE_IDS = [
+  "topix_all",
+  "topix_core30",
+  "topix_large70",
+  "topix_mid400",
+  "topix_small1",
+  "topix_small2",
+  "topix_small",
+  "topix100",
+  "topix500",
+] as const;
+const COMPACT_MARKET_UNIVERSE_IDS = new Set([
+  "topix_core30",
+  "topix_large70",
+  "topix100",
+]);
+const PERSONAL_RESEARCH_UNIVERSE_RULE_DIGESTS: Record<
+  PersonalResearchUniverseId,
+  `sha256:${string}`
+> = {
+  topix_all: "sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048",
+  topix_core30: "sha256:f4f7436b5b9a296fa8606d677fbe2d199f1afd8d84dac186d607897b2480d3be",
+  topix_large70: "sha256:984d9d9df1782b8dcd26f8c513e390e11adba08a5663601c67d247806088265b",
+  topix_mid400: "sha256:802cbe1aa7f66ed7cc41606c6dd42985505cb5dec821c595e718f6defdaa8ca2",
+  topix_small1: "sha256:a07600e0a63afe73c995f1c2e8f32c2bacb104699c88e91c88033ab1f75dbf01",
+  topix_small2: "sha256:3a4f3dd47f65ad223ff6fbe18c9057afd75c725a0e592d9f683b8fdd9d98316e",
+  topix_small: "sha256:b22d4420028a4cc4b3920f873c6e90194aef6961e04c46e239f83c13a876a71e",
+  topix100: "sha256:5bfd1940e9b5dbf0eae44b4ca6ae357e8fada7eedb259ed4683e17a7bcda2b3b",
+  topix500: "sha256:5034530267f4a358a80d9426fcfedfb1162b9f71c1024b54b4b39fe3547d53c6",
+};
 
 export type PersonalResearchCohortId =
   (typeof PERSONAL_RESEARCH_COHORT_IDS)[number];
+export type PersonalResearchUniverseId =
+  (typeof PERSONAL_RESEARCH_UNIVERSE_IDS)[number];
 
 const PERSONAL_RESEARCH_COHORT_DIGESTS: Record<
   PersonalResearchCohortId,
   `sha256:${string}`
 > = {
   "price-relative-v1":
-    "sha256:a27fe678ad289433e0a91bfa51e5d2d0d0e70e84724379b56e611d67634b4572",
+    "sha256:013cf72dec3f9fe93b68132f8861eaa0555f08d418d9b00d80b8eb635e61c439",
   "fundamental-relative-v1":
-    "sha256:a45ca1cf26b65dba6fdc9e648d04853afee1872f5b424f96d008c2aae6973073",
+    "sha256:c15acc9bbc44e2e5650f63a30be05351f7658145d393c995f20e102d1eff3001",
   "diverse-core-v1":
-    "sha256:e9aee4f8e2f4fe4bf058c2d9e349c7fe893e386ddbafeb3ecb2a9bab56b973dd",
+    "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84",
+  "compact-market-diverse-v1":
+    "sha256:e56ab7e48b1e59e583140ab7cf5382c93d40842cf946b6fb3bf06a75fe296682",
 };
 
 const JOB_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -32,6 +67,7 @@ const SNAPSHOT_KEY_RE =
 
 export type PersonalResearchRequest = {
   cohort_id: PersonalResearchCohortId;
+  universe_id: PersonalResearchUniverseId;
   job_id: string;
   snapshot_key: string;
   snapshot_sha256: string;
@@ -70,6 +106,7 @@ export function parsePersonalResearchRequest(
     "period_start",
     "snapshot_key",
     "snapshot_sha256",
+    "universe_id",
   ];
   const keys = Object.keys(raw).sort();
   if (JSON.stringify(keys) !== JSON.stringify(expected)) {
@@ -86,10 +123,29 @@ export function parsePersonalResearchRequest(
       error: "cohort_id is not executable by personal cloud research",
     };
   }
-
   const jobId = typeof raw.job_id === "string" ? raw.job_id : "";
   if (!JOB_ID_RE.test(jobId)) {
     return { ok: false, error: "job_id is invalid" };
+  }
+  const universeId = raw.universe_id;
+  if (
+    typeof universeId !== "string" ||
+    !PERSONAL_RESEARCH_UNIVERSE_IDS.some((value) => value === universeId)
+  ) {
+    return {
+      ok: false,
+      error: "universe_id is not executable by personal cloud research",
+    };
+  }
+  const compactUniverse = COMPACT_MARKET_UNIVERSE_IDS.has(universeId);
+  const compactCohort = cohortId === "compact-market-diverse-v1";
+  if (compactUniverse !== compactCohort) {
+    return {
+      ok: false,
+      error: compactUniverse
+        ? "compact TOPIX universes require compact-market-diverse-v1"
+        : "compact-market-diverse-v1 requires Core30, Large70, or TOPIX100",
+    };
   }
   const sha =
     typeof raw.snapshot_sha256 === "string" ? raw.snapshot_sha256 : "";
@@ -121,6 +177,7 @@ export function parsePersonalResearchRequest(
     ok: true,
     value: {
       cohort_id: cohortId as PersonalResearchCohortId,
+      universe_id: universeId as PersonalResearchUniverseId,
       job_id: jobId,
       snapshot_key: snapshotKey,
       snapshot_sha256: sha,
@@ -152,8 +209,16 @@ export async function personalResearchRequestDigest(
     runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
     snapshot_key: request.snapshot_key,
     snapshot_sha256: request.snapshot_sha256,
+    universe_id: request.universe_id,
+    universe_rule_digest: personalResearchUniverseRuleDigest(request.universe_id),
   });
   return `sha256:${await sha256Hex(new TextEncoder().encode(canonical))}`;
+}
+
+export function personalResearchUniverseRuleDigest(
+  universeId: PersonalResearchUniverseId,
+): `sha256:${string}` {
+  return PERSONAL_RESEARCH_UNIVERSE_RULE_DIGESTS[universeId];
 }
 
 export function personalResearchCohortDigest(

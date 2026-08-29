@@ -46,7 +46,7 @@ def _sqlite(path: Path) -> str:
 
 
 COHORT_DIGEST = (
-    "sha256:e9aee4f8e2f4fe4bf058c2d9e349c7fe893e386ddbafeb3ecb2a9bab56b973dd"
+    "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84"
 )
 
 
@@ -60,6 +60,10 @@ def _job(sha: str, job_id: str = "exact-four-test"):
         "runner_version": service.RUNNER_VERSION,
         "snapshot_key": f"research/personal/snapshots/sha256={sha}.sqlite",
         "snapshot_sha256": sha,
+        "universe_id": "topix_all",
+        "universe_rule_digest": (
+            "sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048"
+        ),
     }
     request_digest = "sha256:" + hashlib.sha256(
         json.dumps(
@@ -181,6 +185,20 @@ def test_job_spec_rejects_a_non_personal_cohort() -> None:
         spec.validate()
 
 
+def test_job_spec_rejects_an_open_or_prime_only_universe() -> None:
+    spec = replace(_job("a" * 64), universe_id="prime")
+
+    with pytest.raises(service.JobInputError, match="universe_id"):
+        spec.validate()
+
+
+def test_job_spec_rejects_a_compact_universe_with_a_sector_cohort() -> None:
+    spec = replace(_job("a" * 64), universe_id="topix_core30")
+
+    with pytest.raises(service.JobInputError, match="profile mismatch"):
+        spec.validate()
+
+
 def test_success_archive_excludes_generated_sqlite_and_manifest_is_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -201,7 +219,9 @@ out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])
 (out / 'snapshots' / 'generated.manifest.json').write_text('{\"snapshot\":true}')
 print(json.dumps({
   'cohort_id': sys.argv[sys.argv.index('--cohort') + 1],
-  'cohort_digest': 'sha256:e9aee4f8e2f4fe4bf058c2d9e349c7fe893e386ddbafeb3ecb2a9bab56b973dd',
+  'cohort_digest': 'sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84',
+  'universe_id': sys.argv[sys.argv.index('--universe') + 1],
+  'universe_rule_digest': 'sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048',
   'report_id': 'sha256:' + '1' * 64,
   'snapshot_id': 'sha256:' + '2' * 64,
   'candidate_count': 4,
@@ -236,6 +256,10 @@ print(json.dumps({
     assert manifest["candidate_count"] == 4
     assert manifest["cohort_id"] == "diverse-core-v1"
     assert manifest["cohort_digest"] == COHORT_DIGEST
+    assert manifest["universe_id"] == "topix_all"
+    assert manifest["universe_rule_digest"] == (
+        "sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048"
+    )
     assert manifest["model_calls"] == 0
     assert manifest["go"] is False
     assert manifest["automatic_promotion"] is False
