@@ -60,11 +60,13 @@ The generated `snapshots/*.sqlite` copy is excluded from `result.tar.gz`; the
 small snapshot manifest remains. Reusing a completed `job_id` is idempotent
 only when every input is identical.
 
-Cost and safety bounds are structural: `standard-4`, `max_instances=1`, one
+Cost and safety bounds are structural: `standard-2`, `max_instances=1`, one
 active job, a 4 GiB snapshot ceiling, 90-minute subprocess timeout and a
 130-minute outer Container activity window. The process exits immediately
 after its terminal manifest, so an ordinary short run scales back to zero
-without waiting for the outer window. There is no Cron, Queue, model call,
+without waiting for the outer window. A 140-minute active-rollout grace keeps
+a deployment from replacing the single Container before that watchdog ends.
+There is no Cron, Queue, model call,
 public Internet, promotion or live order. The Container can reach only the two
 personal R2 prefixes via a Worker-side streaming adapter, and R2 verifies the
 streamed result checksum before accepting it.

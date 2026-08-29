@@ -1208,8 +1208,9 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             "class_name": "PersonalResearchContainer",
             "image": "./Dockerfile",
             "image_build_context": "../../..",
-            "instance_type": "standard-4",
+            "instance_type": "standard-2",
             "max_instances": 1,
+            "rollout_active_grace_period": 8400,
         }
     ]
     personal_binding = [
