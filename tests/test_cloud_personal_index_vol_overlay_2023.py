@@ -759,14 +759,7 @@ def test_am_family_wrong_schema_or_digest_shuts_down_fail_closed(
     assert manager.status(spec.job_id)["status"] == "FAILED"
 
 
-@pytest.mark.parametrize("smile", (False, True))
-def test_am_family_failed_upload_then_terminal_get_404_retries(
-    monkeypatch, smile: bool
-) -> None:
-    spec = _am_family_spec(
-        job_id="am-smile-missing" if smile else "am-overlay-missing",
-        smile=smile,
-    )
+def _am_family_put_then_get_404(monkeypatch, spec, *, put_error):
     fake = _ProductionOverlayR2(spec)
 
     def urlopen(request, timeout=None):
@@ -775,12 +768,63 @@ def test_am_family_failed_upload_then_terminal_get_404_retries(
         method = request.get_method()
         if method == "PUT":
             fake.puts += 1
+            raise put_error(url)
+        if method == "GET":
+            fake.gets += 1
             raise urllib.error.HTTPError(
-                url, 503, "unavailable", Message(), io.BytesIO(b"")
+                url, 404, "not found", Message(), io.BytesIO(b"")
             )
-        return fake.urlopen(request)
+        raise AssertionError(method)
 
     monkeypatch.setattr(service.urllib.request, "urlopen", urlopen)
+    return fake
+
+
+@pytest.mark.parametrize("smile", (False, True))
+@pytest.mark.parametrize("status", (400, 403))
+def test_am_family_deterministic_put_then_get_404_shuts_down_fail_closed(
+    monkeypatch, smile: bool, status: int
+) -> None:
+    spec = _am_family_spec(
+        job_id=f"am-{'smile' if smile else 'overlay'}-put-{status}",
+        smile=smile,
+    )
+    fake = _am_family_put_then_get_404(
+        monkeypatch,
+        spec,
+        put_error=lambda url: urllib.error.HTTPError(
+            url, status, "denied", Message(), io.BytesIO(b"")
+        ),
+    )
+    terminal = threading.Event()
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05, 0.05),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert terminal.wait(1)
+    assert fake.puts == 1
+    assert manager._shutdown_notified is True
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+
+
+@pytest.mark.parametrize("smile", (False, True))
+def test_am_family_failed_upload_then_terminal_get_404_retries(
+    monkeypatch, smile: bool
+) -> None:
+    spec = _am_family_spec(
+        job_id="am-smile-missing" if smile else "am-overlay-missing",
+        smile=smile,
+    )
+    fake = _am_family_put_then_get_404(
+        monkeypatch,
+        spec,
+        put_error=lambda url: urllib.error.HTTPError(
+            url, 503, "unavailable", Message(), io.BytesIO(b"")
+        ),
+    )
     terminal = threading.Event()
     manager = service.JobManager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
@@ -794,3 +838,35 @@ def test_am_family_failed_upload_then_terminal_get_404_retries(
     assert fake.gets >= 1
     assert manager._shutdown_notified is False
     assert manager.status(spec.job_id)["status"] == "FAILED"
+    if manager._retry_timer is not None:
+        manager._retry_timer.cancel()
+
+
+@pytest.mark.parametrize("smile", (False, True))
+def test_am_family_transport_error_then_terminal_get_404_retries(
+    monkeypatch, smile: bool
+) -> None:
+    spec = _am_family_spec(
+        job_id="am-smile-transport" if smile else "am-overlay-transport",
+        smile=smile,
+    )
+    fake = _am_family_put_then_get_404(
+        monkeypatch,
+        spec,
+        put_error=lambda url: urllib.error.URLError("connection reset"),
+    )
+    terminal = threading.Event()
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05, 0.05),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert not terminal.wait(0.2)
+    assert fake.puts >= 2
+    assert fake.gets >= 1
+    assert manager._shutdown_notified is False
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+    if manager._retry_timer is not None:
+        manager._retry_timer.cancel()

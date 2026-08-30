@@ -1859,7 +1859,7 @@ def test_production_mismatched_terminal_shuts_down_fail_closed(monkeypatch) -> N
     assert manager.status(spec.job_id)["status"] == "FAILED"
 
 
-def test_failed_upload_then_terminal_get_404_retries(monkeypatch) -> None:
+def _put_then_get_404(monkeypatch, *, put_error):
     class _MissingAfterPut:
         def __init__(self) -> None:
             self.puts = 0
@@ -1871,9 +1871,7 @@ def test_failed_upload_then_terminal_get_404_retries(monkeypatch) -> None:
             method = request.get_method()
             if method == "PUT":
                 self.puts += 1
-                raise urllib.error.HTTPError(
-                    url, 503, "unavailable", Message(), io.BytesIO(b"")
-                )
+                raise put_error(url)
             if method == "GET":
                 self.gets += 1
                 raise urllib.error.HTTPError(
@@ -1883,6 +1881,41 @@ def test_failed_upload_then_terminal_get_404_retries(monkeypatch) -> None:
 
     fake = _MissingAfterPut()
     monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
+    return fake
+
+
+@pytest.mark.parametrize("status", (400, 403))
+def test_deterministic_put_then_terminal_get_404_shuts_down_fail_closed(
+    monkeypatch, status: int
+) -> None:
+    fake = _put_then_get_404(
+        monkeypatch,
+        put_error=lambda url: urllib.error.HTTPError(
+            url, status, "denied", Message(), io.BytesIO(b"")
+        ),
+    )
+    terminal = threading.Event()
+    spec = _job("a" * 64, f"denied-put-{status}")
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05, 0.05),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert terminal.wait(1)
+    assert fake.puts == 1
+    assert manager._shutdown_notified is True
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+
+
+def test_failed_upload_then_terminal_get_404_retries(monkeypatch) -> None:
+    fake = _put_then_get_404(
+        monkeypatch,
+        put_error=lambda url: urllib.error.HTTPError(
+            url, 503, "unavailable", Message(), io.BytesIO(b"")
+        ),
+    )
     terminal = threading.Event()
     manager = service.JobManager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
@@ -1896,3 +1929,56 @@ def test_failed_upload_then_terminal_get_404_retries(monkeypatch) -> None:
     assert fake.gets >= 1
     assert manager._shutdown_notified is False
     assert manager.status("missing-after-put")["status"] == "FAILED"
+    if manager._retry_timer is not None:
+        manager._retry_timer.cancel()
+
+
+def test_transport_error_then_terminal_get_404_retries(monkeypatch) -> None:
+    fake = _put_then_get_404(
+        monkeypatch,
+        put_error=lambda url: urllib.error.URLError("connection reset"),
+    )
+    terminal = threading.Event()
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05, 0.05),
+        max_job_seconds=30,
+    )
+    manager.submit(_job("a" * 64, "transport-after-put"))
+    assert not terminal.wait(0.2)
+    assert fake.puts >= 2
+    assert fake.gets >= 1
+    assert manager._shutdown_notified is False
+    assert manager.status("transport-after-put")["status"] == "FAILED"
+    if manager._retry_timer is not None:
+        manager._retry_timer.cancel()
+
+
+def test_child_put_keeps_http_error_for_deterministic_rejection(
+    monkeypatch,
+) -> None:
+    spec = _job("a" * 64, "child-put-403")
+
+    def urlopen(request, timeout=None):
+        del timeout
+        raise urllib.error.HTTPError(
+            request.full_url, 403, "denied", Message(), io.BytesIO(b"")
+        )
+
+    monkeypatch.setattr(service.urllib.request, "urlopen", urlopen)
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        service._put(
+            spec.result_key,
+            b"{}",
+            spec=spec,
+            content_digest="sha256:" + "a" * 64,
+        )
+    assert caught.value.code == 403
+    with pytest.raises(service.TerminalReadDenied, match="terminal PUT denied HTTP 403"):
+        service._put(
+            spec.manifest_key,
+            b"{}",
+            spec=spec,
+            content_digest="sha256:" + "a" * 64,
+        )

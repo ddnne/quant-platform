@@ -727,6 +727,9 @@ def _validated_base_sleeve_reference(
     }
 
 
+_TERMINAL_PUT_DENIED_STATUSES = frozenset({400, 401, 403, 404, 405, 413, 422})
+
+
 def _put(
     key: str,
     data: bytes | Path,
@@ -758,16 +761,33 @@ def _put(
         headers=headers,
     )
     try:
-        with urllib.request.urlopen(request, timeout=300) as response:
-            if response.status not in {HTTPStatus.OK, HTTPStatus.CREATED}:
-                raise RuntimeError(f"R2 upload returned {response.status}")
+        try:
+            with urllib.request.urlopen(request, timeout=300) as response:
+                status = int(response.status)
+        except urllib.error.HTTPError as error:
+            status = int(error.code)
+            if (
+                key == spec.manifest_key
+                and status in _TERMINAL_PUT_DENIED_STATUSES
+            ):
+                raise TerminalReadDenied(
+                    f"terminal PUT denied HTTP {status}"
+                ) from error
+            raise
+        if status not in {HTTPStatus.OK, HTTPStatus.CREATED}:
+            if (
+                key == spec.manifest_key
+                and status in _TERMINAL_PUT_DENIED_STATUSES
+            ):
+                raise TerminalReadDenied(f"terminal PUT denied HTTP {status}")
+            raise RuntimeError(f"R2 upload returned {status}")
     finally:
         if isinstance(data, Path):
             payload.close()
 
 
 class TerminalReadDenied(RuntimeError):
-    """The Worker refused this terminal GET as identity mismatch or forbidden."""
+    """The Worker refused this terminal as identity mismatch or forbidden."""
 
 
 def _job_kind(spec: Any) -> str:
