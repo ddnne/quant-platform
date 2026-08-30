@@ -9,6 +9,7 @@ import pytest
 
 from research.options_225_smile_features import (
     OPTIONS_225_SMILE_FEATURE_VERSION,
+    OPTIONS_225_SMILE_SOURCE_DATASET_ID,
     SVIParameters,
     SmileFitConfig,
     build_daily_options_225_smile_features,
@@ -108,7 +109,9 @@ def test_sparse_and_extreme_slices_fail_closed_without_features():
     for row in extreme:
         row["IV"] = 900.0
 
-    slices = build_options_225_smile_slices(sparse + extreme)
+    slices = build_options_225_smile_slices(
+        sparse + extreme, dataset_id=OPTIONS_225_SMILE_SOURCE_DATASET_ID
+    )
     assert len(slices) == 2
     assert {row["fit_reason"] for row in slices} == {"insufficient_unique_strikes"}
     assert all(row["fit_success"] is False for row in slices)
@@ -116,7 +119,9 @@ def test_sparse_and_extreme_slices_fail_closed_without_features():
     assert all(row["ffill_applied"] is False for row in slices)
     assert all(row["interpolation_applied"] is False for row in slices)
 
-    daily = build_daily_options_225_smile_features(sparse + extreme)
+    daily = build_daily_options_225_smile_features(
+        sparse + extreme, dataset_id=OPTIONS_225_SMILE_SOURCE_DATASET_ID
+    )
     assert [row["date"] for row in daily] == ["2024-01-10", "2024-01-11"]
     assert all(row["fit_reason"] == "insufficient_unique_strikes" for row in daily)
     assert all(row["fit_success"] is False for row in daily)
@@ -127,7 +132,8 @@ def test_observed_ratios_survive_rejected_svi_shape() -> None:
         a=0.001, b=0.1, rho=-0.9, m=0.0, sigma=0.02
     )
     slices = build_options_225_smile_slices(
-        _chain_from_svi(parameters=arbitrage_shape)
+        _chain_from_svi(parameters=arbitrage_shape),
+        dataset_id=OPTIONS_225_SMILE_SOURCE_DATASET_ID,
     )
 
     assert len(slices) == 1
@@ -151,7 +157,10 @@ def test_failed_front_is_not_replaced_by_a_later_valid_maturity() -> None:
     next_rows = _chain_from_svi(dte_days=65, cm="2024-03")
     later = _chain_from_svi(dte_days=120, cm="2024-05")
 
-    daily = build_daily_options_225_smile_features(front + next_rows + later)
+    daily = build_daily_options_225_smile_features(
+        front + next_rows + later,
+        dataset_id=OPTIONS_225_SMILE_SOURCE_DATASET_ID,
+    )
 
     assert len(daily) == 1
     assert daily[0]["cm"] == "2024-02"
@@ -180,8 +189,13 @@ def test_exact_but_butterfly_arbitrage_surface_is_rejected():
 
 
 def test_normalized_smile_features_are_invariant_to_uniform_iv_scaling():
-    base = build_daily_options_225_smile_features(_chain_from_svi())
-    scaled = build_daily_options_225_smile_features(_chain_from_svi(iv_scale=1.6))
+    base = build_daily_options_225_smile_features(
+        _chain_from_svi(), dataset_id=OPTIONS_225_SMILE_SOURCE_DATASET_ID
+    )
+    scaled = build_daily_options_225_smile_features(
+        _chain_from_svi(iv_scale=1.6),
+        dataset_id=OPTIONS_225_SMILE_SOURCE_DATASET_ID,
+    )
     assert len(base) == len(scaled) == 1
     assert base[0]["fit_success"] is scaled[0]["fit_success"] is True
 
@@ -243,14 +257,18 @@ def test_real_shaped_two_maturity_fixture_emits_observed_and_term_ratios():
     bad["EmMrgnTrgDiv"] = "001"
     rows.append(bad)
 
-    slices = build_options_225_smile_slices(rows)
+    slices = build_options_225_smile_slices(
+        rows, dataset_id=OPTIONS_225_SMILE_SOURCE_DATASET_ID
+    )
     assert len(slices) == 2
     assert all(row["fit_success"] is True for row in slices)
     assert all(row["settlement_preference"] == "002" for row in slices)
     assert all(row["observed_feature_success"] is True for row in slices)
     assert all(row["n_paired_pc_strikes"] == len(real_grid) for row in slices)
 
-    daily = build_daily_options_225_smile_features(rows)
+    daily = build_daily_options_225_smile_features(
+        rows, dataset_id=OPTIONS_225_SMILE_SOURCE_DATASET_ID
+    )
     assert len(daily) == 1
     result = daily[0]
     assert result["version"] == OPTIONS_225_SMILE_FEATURE_VERSION
@@ -278,3 +296,14 @@ def test_config_rejects_unbounded_or_underspecified_surfaces():
         SmileFitConfig(min_unique_strikes=4)
     with pytest.raises(ValueError, match="target log-moneyness"):
         SmileFitConfig(target_abs_log_moneyness=0.4)
+
+
+def test_smile_builders_require_explicit_nikkei_225_dataset_provenance():
+    with pytest.raises(TypeError, match="dataset_id"):
+        build_options_225_smile_slices([])  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="dataset_id"):
+        build_daily_options_225_smile_features([])  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match=OPTIONS_225_SMILE_SOURCE_DATASET_ID):
+        build_options_225_smile_slices(
+            [], dataset_id="derivatives_bars_daily_single_stock_options"
+        )

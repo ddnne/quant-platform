@@ -23,6 +23,7 @@ from datetime import date as _date
 from typing import Any, Iterable, Mapping, Sequence
 
 from research.options_225_vol_series import (
+    DATASET_ID,
     EM_SETTLE,
     GAP_POLICY,
     IV_FIELDS_AVAILABLE_FROM,
@@ -32,6 +33,8 @@ from research.options_225_vol_series import (
 )
 
 OPTIONS_225_SMILE_FEATURE_VERSION = "research-options-225-smile-features/v1"
+OPTIONS_225_SMILE_SURFACE_SCOPE = "nikkei_225_index_options_only"
+OPTIONS_225_SMILE_SOURCE_DATASET_ID = DATASET_ID
 SVI_PARAMETERISATION = (
     "w(k)=a+b*(rho*(k-m)+sqrt((k-m)^2+sigma^2)); "
     "k=ln(strike/under_px); T=calendar_days/365"
@@ -509,6 +512,8 @@ def _empty_slice(
         "n_input_rows": n_input_rows,
         "settlement_preference": settlement_preference,
         "version": OPTIONS_225_SMILE_FEATURE_VERSION,
+        "surface_scope": OPTIONS_225_SMILE_SURFACE_SCOPE,
+        "source_dataset_id": DATASET_ID,
         "parameterisation": SVI_PARAMETERISATION,
         "gap_policy": GAP_POLICY,
         "ffill_applied": False,
@@ -694,9 +699,12 @@ def _svi_features(
 def build_options_225_smile_slices(
     rows: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]],
     *,
+    dataset_id: str,
     config: SmileFitConfig | None = None,
 ) -> list[dict[str, Any]]:
     """Build diagnostic rows for every observed date/CM/expiry slice."""
+    if dataset_id != DATASET_ID:
+        raise ValueError(f"dataset_id must be {DATASET_ID}")
     cfg = config or SmileFitConfig()
     by_date: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for raw in rows:
@@ -762,6 +770,16 @@ def build_options_225_smile_slices(
             common = {
                 "under_px": under_px,
                 **counts,
+                "fit_log_moneyness_min": (
+                    min(float(o["log_moneyness"]) for o in observations)
+                    if observations
+                    else None
+                ),
+                "fit_log_moneyness_max": (
+                    max(float(o["log_moneyness"]) for o in observations)
+                    if observations
+                    else None
+                ),
                 # Listed-strike observations are independent evidence.  A
                 # rejected SVI shape must not erase an otherwise observed
                 # ATM/wing ratio.
@@ -855,6 +873,7 @@ def _difference(left: Any, right: Any) -> float | None:
 def build_daily_options_225_smile_features(
     rows: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]],
     *,
+    dataset_id: str,
     config: SmileFitConfig | None = None,
 ) -> list[dict[str, Any]]:
     """Select the actual front/next eligible slices and emit one daily row.
@@ -866,7 +885,9 @@ def build_daily_options_225_smile_features(
     SVI term features require both fixed legs to pass.
     """
     cfg = config or SmileFitConfig()
-    slices = build_options_225_smile_slices(rows, config=cfg)
+    slices = build_options_225_smile_slices(
+        rows, dataset_id=dataset_id, config=cfg
+    )
     by_date: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in slices:
         by_date[str(row["date"])].append(row)
@@ -901,6 +922,8 @@ def build_daily_options_225_smile_features(
                         str(row.get("fit_reason") or "unknown") for row in all_slices
                     ],
                     "version": OPTIONS_225_SMILE_FEATURE_VERSION,
+                    "surface_scope": OPTIONS_225_SMILE_SURFACE_SCOPE,
+                    "source_dataset_id": DATASET_ID,
                     "gap_policy": GAP_POLICY,
                     "ffill_applied": False,
                     "interpolation_applied": False,
@@ -995,6 +1018,8 @@ def build_daily_options_225_smile_features(
 
 __all__ = [
     "OPTIONS_225_SMILE_FEATURE_VERSION",
+    "OPTIONS_225_SMILE_SURFACE_SCOPE",
+    "OPTIONS_225_SMILE_SOURCE_DATASET_ID",
     "SVI_PARAMETERISATION",
     "OBSERVED_SMILE_CONVENTION",
     "SmileFitConfig",
