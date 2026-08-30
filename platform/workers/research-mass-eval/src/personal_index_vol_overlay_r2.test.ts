@@ -21,6 +21,7 @@ import {
   personalIndexOverlayFamilyRunnerVersion,
   personalIndexOverlayFamilyTerminalManifestKey,
   personalIndexOverlayFamilyTerminalSchema,
+  personalIndexVolOverlay2023RequestDigest,
   personalIndexSmileTransport2023AmPmInputManifestKey,
   personalIndexSmileTransport2023ArtifactKey,
   personalIndexSmileTransport2023InputManifestKey,
@@ -32,6 +33,7 @@ import {
   personalIndexVolOverlay2023TerminalManifestKey,
   type PersonalIndexSmileTransport2023InputManifest,
   type PersonalIndexVolOverlay2023AmPmInputManifest,
+  type PersonalIndexVolOverlay2023CohortId,
   type PersonalIndexVolOverlay2023InputManifest,
 } from "./personal_index_vol_overlay_2023_contract";
 import { personalIndexVolOverlayR2Outbound } from "./personal_index_vol_overlay_r2";
@@ -89,6 +91,47 @@ class MemoryR2 {
   }
 
   asBucket(): R2Bucket { return this as unknown as R2Bucket; }
+}
+
+async function familyRequestDigest(
+  jobId: string,
+  cohortId: PersonalIndexVolOverlay2023CohortId,
+  inputDigest: string,
+  baseJobId = "base-r2",
+  sviJobId = "svi-r2",
+) {
+  return personalIndexVolOverlay2023RequestDigest(
+    {
+      job_id: jobId,
+      cohort_id: cohortId,
+      base_job_id: baseJobId,
+      svi_job_id: sviJobId,
+    },
+    inputDigest,
+  );
+}
+
+async function putFamilyOutbound(
+  env: { STRUCTURED_BUCKET: R2Bucket },
+  key: string,
+  headers: Record<string, string>,
+  document: Record<string, unknown>,
+) {
+  const bytes = new TextEncoder().encode(JSON.stringify(document));
+  const digest = `sha256:${await sha256Hex(bytes)}`;
+  const response = await personalResearchR2Outbound(
+    new Request(`http://research.r2/${key}`, {
+      method: "PUT",
+      headers: {
+        ...headers,
+        "content-length": String(bytes.byteLength),
+        "x-content-sha256": digest,
+      },
+      body: bytes,
+    }),
+    env,
+  );
+  return { response, bytes, digest };
 }
 
 async function fixture() {
@@ -214,7 +257,11 @@ describe("index-vol overlay exact-reference R2 capability", () => {
       status: "COMPLETED",
       ...authority(fixed),
       runner_version: PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
-      request_digest: `sha256:${"e".repeat(64)}`,
+      request_digest: await familyRequestDigest(
+        fixed.jobId,
+        PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+        fixed.inputDigest,
+      ),
       prepared_panel_key: personalIndexVolOverlay2023ArtifactKey("prepared-panel", panelDigest),
       prepared_panel_sha256: panelDigest,
       report_key: personalIndexVolOverlay2023ArtifactKey("report", reportDigest),
@@ -588,17 +635,13 @@ async function smileAmPmFixture() {
 }
 
 describe("AM overlay/smile generic terminal verify-and-shutdown path", () => {
-  it.each([
-    ["overlay", PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID, amPmFixture] as const,
-    ["smile", PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID, smileAmPmFixture] as const,
-  ])("PUT-conflicts then GET-verifies the %s AM family", async (_label, cohortId, fixture) => {
-    const fixed = await fixture();
-    const requestDigest = `sha256:${"e".repeat(64)}`;
-    const runner = personalIndexOverlayFamilyRunnerVersion(cohortId);
-    const schema = personalIndexOverlayFamilyTerminalSchema(cohortId);
-    const key = personalIndexOverlayFamilyTerminalManifestKey(fixed.jobId, cohortId);
-    const terminal = {
-      schema_version: schema,
+  function failedTerminal(
+    fixed: { jobId: string; inputDigest: string },
+    cohortId: PersonalIndexVolOverlay2023CohortId,
+    requestDigest: string,
+  ) {
+    return {
+      schema_version: personalIndexOverlayFamilyTerminalSchema(cohortId),
       job_id: fixed.jobId,
       cohort_id: cohortId,
       base_job_id: "base-r2",
@@ -614,25 +657,23 @@ describe("AM overlay/smile generic terminal verify-and-shutdown path", () => {
       not_a_pass: true,
       single_stock_option_iv_used: false,
       status: "FAILED",
-      runner_version: runner,
+      runner_version: personalIndexOverlayFamilyRunnerVersion(cohortId),
       request_digest: requestDigest,
     };
-    const bytes = new TextEncoder().encode(JSON.stringify(terminal));
-    const digest = `sha256:${await sha256Hex(bytes)}`;
+  }
+
+  it.each([
+    ["overlay", PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID, amPmFixture] as const,
+    ["smile", PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID, smileAmPmFixture] as const,
+  ])("PUT-conflicts then GET-verifies the %s AM family", async (_label, cohortId, fixture) => {
+    const fixed = await fixture();
+    const requestDigest = await familyRequestDigest(fixed.jobId, cohortId, fixed.inputDigest);
+    const runner = personalIndexOverlayFamilyRunnerVersion(cohortId);
+    const key = personalIndexOverlayFamilyTerminalManifestKey(fixed.jobId, cohortId);
+    const terminal = failedTerminal(fixed, cohortId, requestDigest);
     const env = { STRUCTURED_BUCKET: fixed.mem.asBucket() };
-    const created = await personalResearchR2Outbound(
-      new Request(`http://research.r2/${key}`, {
-        method: "PUT",
-        headers: {
-          ...fixed.headers,
-          "content-length": String(bytes.byteLength),
-          "x-content-sha256": digest,
-        },
-        body: bytes,
-      }),
-      env,
-    );
-    expect(created.status).toBe(201);
+    const created = await putFamilyOutbound(env, key, fixed.headers, terminal);
+    expect(created.response.status).toBe(201);
     const personal = {
       "x-personal-job-id": fixed.jobId,
       "x-personal-request-digest": requestDigest,
@@ -640,19 +681,11 @@ describe("AM overlay/smile generic terminal verify-and-shutdown path", () => {
       "x-personal-job-kind": "overlay",
       "x-personal-cohort-id": cohortId,
     };
-    const republish = await personalResearchR2Outbound(
-      new Request(`http://research.r2/${key}`, {
-        method: "PUT",
-        headers: {
-          ...personal,
-          "content-length": String(bytes.byteLength),
-          "x-content-sha256": digest,
-        },
-        body: bytes,
-      }),
-      env,
-    );
-    expect(republish.status).toBe(200);
+    const republish = await putFamilyOutbound(env, key, fixed.headers, terminal);
+    expect(republish.response.status).toBe(200);
+    const personalPut = await putFamilyOutbound(env, key, personal, terminal);
+    expect(personalPut.response.status).toBe(403);
+    expect(fixed.mem.writes.filter((written) => written === key)).toEqual([key]);
     const verified = await personalResearchR2Outbound(
       new Request(`http://research.r2/${key}`, { method: "GET", headers: personal }),
       env,
@@ -714,39 +747,48 @@ describe("AM overlay/smile generic terminal verify-and-shutdown path", () => {
       single_stock_option_iv_used: false,
       status: "FAILED",
     };
-    const bytes = new TextEncoder().encode(JSON.stringify(poisoned));
-    const digest = `sha256:${await sha256Hex(bytes)}`;
-    const familyPut = await personalResearchR2Outbound(
-      new Request(`http://research.r2/${key}`, {
-        method: "PUT",
-        headers: {
-          ...fixed.headers,
-          "content-length": String(bytes.byteLength),
-          "x-content-sha256": digest,
-        },
-        body: bytes,
-      }),
-      env,
-    );
-    expect(familyPut.status).toBe(400);
+    const familyPut = await putFamilyOutbound(env, key, fixed.headers, poisoned);
+    expect(familyPut.response.status).toBe(400);
     expect(fixed.mem.values.has(key)).toBe(false);
-    const genericPut = await personalResearchR2Outbound(
-      new Request(`http://research.r2/${key}`, {
-        method: "PUT",
-        headers: {
-          "content-length": String(bytes.byteLength),
-          "x-content-sha256": digest,
-          "x-personal-job-id": fixed.jobId,
-          "x-personal-request-digest": `sha256:${"e".repeat(64)}`,
-          "x-personal-runner-version": personalIndexOverlayFamilyRunnerVersion(cohortId),
-          "x-personal-job-kind": "overlay",
-          "x-personal-cohort-id": cohortId,
-        },
-        body: bytes,
-      }),
+    const genericPut = await putFamilyOutbound(
       env,
+      key,
+      {
+        "x-personal-job-id": fixed.jobId,
+        "x-personal-request-digest": `sha256:${"e".repeat(64)}`,
+        "x-personal-runner-version": personalIndexOverlayFamilyRunnerVersion(cohortId),
+        "x-personal-job-kind": "overlay",
+        "x-personal-cohort-id": cohortId,
+      },
+      poisoned,
     );
-    expect(genericPut.status).toBe(400);
+    expect(genericPut.response.status).toBe(403);
+    expect(fixed.mem.values.has(key)).toBe(false);
+  });
+
+  it("rejects a request-digest mismatch and COMPLETED terminals without children", async () => {
+    const fixed = await amPmFixture();
+    const cohortId = PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID;
+    const requestDigest = await familyRequestDigest(fixed.jobId, cohortId, fixed.inputDigest);
+    const key = personalIndexOverlayFamilyTerminalManifestKey(fixed.jobId, cohortId);
+    const env = { STRUCTURED_BUCKET: fixed.mem.asBucket() };
+    const mismatched = failedTerminal(fixed, cohortId, `sha256:${"e".repeat(64)}`);
+    const mismatchPut = await putFamilyOutbound(env, key, fixed.headers, mismatched);
+    expect(mismatchPut.response.status).toBe(400);
+    expect(fixed.mem.values.has(key)).toBe(false);
+    const completed = {
+      ...failedTerminal(fixed, cohortId, requestDigest),
+      status: "COMPLETED",
+      prepared_panel_key: personalIndexVolOverlay2023AmPmArtifactKey(
+        "prepared-panel",
+        `sha256:${"a".repeat(64)}`,
+      ),
+      prepared_panel_sha256: `sha256:${"a".repeat(64)}`,
+      report_key: personalIndexVolOverlay2023AmPmArtifactKey("report", `sha256:${"b".repeat(64)}`),
+      report_sha256: `sha256:${"b".repeat(64)}`,
+    };
+    const missingChildren = await putFamilyOutbound(env, key, fixed.headers, completed);
+    expect(missingChildren.response.status).toBe(409);
     expect(fixed.mem.values.has(key)).toBe(false);
   });
 
@@ -754,48 +796,12 @@ describe("AM overlay/smile generic terminal verify-and-shutdown path", () => {
     const fixed = await amPmFixture();
     const cohortId = PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID;
     const runner = personalIndexOverlayFamilyRunnerVersion(cohortId);
-    const requestDigest = `sha256:${"e".repeat(64)}`;
+    const requestDigest = await familyRequestDigest(fixed.jobId, cohortId, fixed.inputDigest);
     const key = personalIndexOverlayFamilyTerminalManifestKey(fixed.jobId, cohortId);
-    const terminal = {
-      schema_version: personalIndexOverlayFamilyTerminalSchema(cohortId),
-      job_id: fixed.jobId,
-      cohort_id: cohortId,
-      base_job_id: "base-r2",
-      svi_job_id: "svi-r2",
-      input_manifest_digest: fixed.inputDigest,
-      draft_only: true,
-      screening_only: true,
-      ready: false,
-      mass: false,
-      promotion: false,
-      live_orders: false,
-      go: false,
-      not_a_pass: true,
-      single_stock_option_iv_used: false,
-      status: "FAILED",
-      runner_version: runner,
-      request_digest: requestDigest,
-    };
-    const bytes = new TextEncoder().encode(JSON.stringify(terminal));
-    const digest = `sha256:${await sha256Hex(bytes)}`;
+    const terminal = failedTerminal(fixed, cohortId, requestDigest);
     const env = { STRUCTURED_BUCKET: fixed.mem.asBucket() };
-    const created = await personalResearchR2Outbound(
-      new Request(`http://research.r2/${key}`, {
-        method: "PUT",
-        headers: {
-          "content-length": String(bytes.byteLength),
-          "x-content-sha256": digest,
-          "x-personal-job-id": fixed.jobId,
-          "x-personal-request-digest": requestDigest,
-          "x-personal-runner-version": runner,
-          "x-personal-job-kind": "overlay",
-          "x-personal-cohort-id": cohortId,
-        },
-        body: bytes,
-      }),
-      env,
-    );
-    expect(created.status).toBe(201);
+    const created = await putFamilyOutbound(env, key, fixed.headers, terminal);
+    expect(created.response.status).toBe(201);
     const verified = await personalResearchR2Outbound(
       new Request(`http://research.r2/${key}`, {
         method: "GET",

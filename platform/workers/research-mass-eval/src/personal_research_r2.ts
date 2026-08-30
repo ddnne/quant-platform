@@ -31,7 +31,6 @@ import {
   isPersonalIndexVolOverlayOutboundRequest,
   personalIndexVolOverlayR2Outbound,
 } from "./personal_index_vol_overlay_r2";
-import { putBytesCreateOnly } from "./http";
 import { sha256Hex } from "./sha256";
 
 const RESULT_MAX_BYTES = 512 * 1024 * 1024;
@@ -669,62 +668,6 @@ async function getTerminalManifest(
   });
 }
 
-async function putOverlayFamilyTerminal(
-  request: Request,
-  env: R2Env,
-  key: string,
-): Promise<Response> {
-  const identity = closedTerminalIdentity(request, key);
-  if (identity instanceof Response) return identity;
-  if (identity.parsedKey.kind !== "overlay") {
-    return responseJson({ error: "terminal identity denied" }, 403);
-  }
-  const contentDigest = request.headers.get("x-content-sha256") ?? "";
-  const length = contentLength(request, MANIFEST_MAX_BYTES);
-  if (length === null || !DIGEST_RE.test(contentDigest)) {
-    return responseJson({ error: "invalid manifest length" }, 400);
-  }
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength !== length) {
-    return responseJson({ error: "manifest length mismatch" }, 400);
-  }
-  const actualDigest = `sha256:${await sha256Hex(bytes)}`;
-  if (actualDigest !== contentDigest) {
-    return responseJson({ error: "manifest digest mismatch" }, 400);
-  }
-  let manifest: Record<string, unknown>;
-  try {
-    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error("not object");
-    }
-    manifest = parsed as Record<string, unknown>;
-  } catch {
-    return responseJson({ error: "manifest must be JSON object" }, 400);
-  }
-  if (!terminalBodyMatchesGetContract(identity, manifest)) {
-    return responseJson({ error: "terminal identity mismatch" }, 400);
-  }
-  const stored = await putBytesCreateOnly(env.STRUCTURED_BUCKET, key, bytes, {
-    digest: contentDigest,
-    contentType: "application/json; charset=utf-8",
-    customMetadata: {
-      plane: "personal_research_terminal",
-      job_id: identity.jobId,
-      request_digest: identity.requestDigest,
-      runner_version: identity.runnerVersion,
-      sha256: contentDigest,
-      immutable: "true",
-    },
-  });
-  return stored.conflict
-    ? responseJson({ error: "immutable manifest conflict" }, 409)
-    : responseJson(
-        { ok: true, created: stored.created, key },
-        stored.created ? 201 : 200,
-      );
-}
-
 /** Narrow R2 capability exposed only to the private Container virtual host. */
 export async function personalResearchR2Outbound(
   request: Request,
@@ -740,13 +683,6 @@ export async function personalResearchR2Outbound(
     parseTerminalManifestKey(key)
   ) {
     return getTerminalManifest(request, env, key);
-  }
-  if (
-    request.method === "PUT" &&
-    parseTerminalManifestKey(key)?.kind === "overlay" &&
-    request.headers.has("x-personal-job-id")
-  ) {
-    return putOverlayFamilyTerminal(request, env, key);
   }
   if (isPersonalIndexVolOverlayOutboundRequest(request, key)) {
     return personalIndexVolOverlayR2Outbound(request, env, key);

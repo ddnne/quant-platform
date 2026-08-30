@@ -33,6 +33,7 @@ import {
   personalIndexSmileTransport2023InputManifestKey,
   personalIndexVolOverlay2023AmPmInputManifestKey,
   personalIndexVolOverlay2023InputManifestKey,
+  personalIndexVolOverlay2023RequestDigest,
   type ImmutableInputReference,
   type PersonalIndexOverlayFamilyInputManifest,
   type PersonalIndexSmileTransport2023AmPmInputManifest,
@@ -567,8 +568,16 @@ async function putOutput(
         personalIndexOverlayFamilyRunnerVersion(expected.cohortId) ||
       document.schema_version !==
         personalIndexOverlayFamilyTerminalSchema(expected.cohortId) ||
-      typeof document.request_digest !== "string" ||
-      !isPersonalIndexVolOverlay2023Digest(document.request_digest)
+      document.request_digest !==
+        (await personalIndexVolOverlay2023RequestDigest(
+          {
+            job_id: expected.jobId,
+            cohort_id: expected.cohortId,
+            base_job_id: input.manifest.base.job_id,
+            svi_job_id: input.manifest.svi.job_id,
+          },
+          expected.inputDigest,
+        ))
     ) {
       return json({ error: "overlay output contract mismatch" }, 400);
     }

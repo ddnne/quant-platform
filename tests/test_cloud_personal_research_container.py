@@ -1563,7 +1563,7 @@ def test_terminal_upload_retries_then_shuts_down() -> None:
     def uploader(key, data, *, spec, content_digest, extra_headers=None):
         del key, data, spec, content_digest, extra_headers
         attempts["n"] += 1
-        if attempts["n"] == 1:
+        if attempts["n"] < 3:
             raise RuntimeError("R2 upload returned 503")
 
     manager = service.JobManager(
@@ -1573,9 +1573,121 @@ def test_terminal_upload_retries_then_shuts_down() -> None:
         retry_schedule=(0.01, 0.01),
         max_job_seconds=30,
     )
-    manager.submit(_job("a" * 64, "retry-terminal"))
-    assert terminal.wait(1)
-    assert attempts["n"] >= 2
+    try:
+        manager.submit(_job("a" * 64, "retry-terminal"))
+        assert terminal.wait(1)
+        assert attempts["n"] == 3
+        assert manager._retry_timer is None
+        assert manager._pending_terminal is None
+        assert manager._shutdown_notified is True
+    finally:
+        if manager._retry_timer is not None:
+            manager._retry_timer.cancel()
+
+
+def test_terminal_publication_retries_below_cap_without_shutdown() -> None:
+    attempts = {"n": 0}
+    terminal = threading.Event()
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del key, data, spec, content_digest, extra_headers
+        attempts["n"] += 1
+        raise RuntimeError("R2 upload returned 429")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        retry_schedule=(0.01,),
+        max_job_seconds=30,
+    )
+    try:
+        manager.submit(_job("a" * 64, "retry-below-cap"))
+        deadline = time.monotonic() + 0.2
+        while attempts["n"] < 3 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert 2 <= attempts["n"] < manager._MAX_TERMINAL_PUT_ATTEMPTS
+        assert not terminal.is_set()
+        assert manager._shutdown_notified is False
+        assert manager._retry_timer is not None
+        assert manager._pending_terminal is not None
+    finally:
+        if manager._retry_timer is not None:
+            manager._retry_timer.cancel()
+        manager._pending_terminal = None
+        manager._shutdown_notified = True
+
+
+def test_terminal_publication_retry_exhaustion_shuts_down(capsys) -> None:
+    attempts = {"n": 0}
+    terminal = threading.Event()
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del key, data, spec, content_digest, extra_headers
+        attempts["n"] += 1
+        raise RuntimeError("R2 upload returned 503")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        retry_schedule=(0.001,),
+        max_job_seconds=30,
+    )
+    try:
+        manager.submit(_job("a" * 64, "retry-exhausted"))
+        assert terminal.wait(1)
+        assert attempts["n"] == manager._MAX_TERMINAL_PUT_ATTEMPTS
+        assert manager._retry_timer is None
+        assert manager._pending_terminal is None
+        assert manager._shutdown_notified is True
+        events = [
+            json.loads(line)
+            for line in capsys.readouterr().out.splitlines()
+            if line.startswith("{")
+        ]
+        exhausted = [
+            event
+            for event in events
+            if event.get("event") == "terminal_publication_retry_exhausted"
+        ]
+        assert len(exhausted) == 1
+        assert exhausted[0]["job_id"] == "retry-exhausted"
+        assert exhausted[0]["attempts"] == manager._MAX_TERMINAL_PUT_ATTEMPTS
+        assert exhausted[0]["go"] is False
+    finally:
+        if manager._retry_timer is not None:
+            manager._retry_timer.cancel()
+
+
+def test_terminal_publication_succeeds_on_later_retry_below_cap() -> None:
+    attempts = {"n": 0}
+    terminal = threading.Event()
+    limit = service.JobManager._MAX_TERMINAL_PUT_ATTEMPTS
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del key, data, spec, content_digest, extra_headers
+        attempts["n"] += 1
+        if attempts["n"] < limit:
+            raise RuntimeError("R2 upload returned 503")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        retry_schedule=(0.001,),
+        max_job_seconds=30,
+    )
+    try:
+        manager.submit(_job("a" * 64, "retry-last-ok"))
+        assert terminal.wait(1)
+        assert attempts["n"] == limit
+        assert manager._retry_timer is None
+        assert manager._pending_terminal is None
+        assert manager._shutdown_notified is True
+    finally:
+        if manager._retry_timer is not None:
+            manager._retry_timer.cancel()
 
 
 def test_unavailable_terminal_upload_does_not_shutdown() -> None:
@@ -1592,11 +1704,17 @@ def test_unavailable_terminal_upload_does_not_shutdown() -> None:
         retry_schedule=(0.05, 0.05),
         max_job_seconds=30,
     )
-    manager.submit(_job("a" * 64, "no-shutdown"))
-    assert not terminal.wait(0.2)
-    assert manager.status("no-shutdown")["status"] == "FAILED"
-    with pytest.raises(service.JobBusyError):
-        manager.submit(_job("b" * 64, "other"))
+    try:
+        manager.submit(_job("a" * 64, "no-shutdown"))
+        assert not terminal.wait(0.2)
+        assert manager.status("no-shutdown")["status"] == "FAILED"
+        with pytest.raises(service.JobBusyError):
+            manager.submit(_job("b" * 64, "other"))
+    finally:
+        if manager._retry_timer is not None:
+            manager._retry_timer.cancel()
+        manager._pending_terminal = None
+        manager._shutdown_notified = True
 
 
 def test_matching_existing_terminal_is_accepted() -> None:
@@ -1982,3 +2100,45 @@ def test_child_put_keeps_http_error_for_deterministic_rejection(
             spec=spec,
             content_digest="sha256:" + "a" * 64,
         )
+
+
+def _overlay_spec(job_id: str = "overlay-headers"):
+    prefix = f"research/personal/index-vol-overlay-2023/job={job_id}"
+    body = {
+        "base_job_id": "base-r2",
+        "cohort_id": "personal-index-vol-overlay-2023-v1",
+        "input_manifest_digest": "sha256:" + "b" * 64,
+        "input_manifest_key": f"{prefix}/input-manifest.json",
+        "job_id": job_id,
+        "manifest_key": f"{prefix}/manifest.json",
+        "request_digest": "sha256:" + "0" * 64,
+        "runner_version": "personal-index-vol-overlay-cloud-runner/v1",
+        "svi_job_id": "svi-r2",
+    }
+    provisional = service.PersonalIndexVolOverlay2023JobSpec(**body)
+    return service.PersonalIndexVolOverlay2023JobSpec.from_document(
+        {**body, "request_digest": provisional.derived_request_digest()}
+    )
+
+
+def test_overlay_terminal_put_uses_family_identity_headers(monkeypatch) -> None:
+    spec = _overlay_spec()
+    seen: dict[str, str] = {}
+
+    def urlopen(request, timeout=None):
+        del timeout
+        seen.update({name.lower(): value for name, value in request.header_items()})
+        return _UrlResponse(201, b'{"ok":true,"created":true}')
+
+    monkeypatch.setattr(service.urllib.request, "urlopen", urlopen)
+    service._put(
+        spec.manifest_key,
+        b"{}",
+        spec=spec,
+        content_digest="sha256:" + "a" * 64,
+    )
+    assert seen["x-overlay-job-id"] == spec.job_id
+    assert seen["x-overlay-input-manifest-key"] == spec.input_manifest_key
+    assert seen["x-overlay-input-manifest-digest"] == spec.input_manifest_digest
+    assert seen["x-personal-job-id"] == spec.job_id
+    assert seen["x-personal-request-digest"] == spec.request_digest

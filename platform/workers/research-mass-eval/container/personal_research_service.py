@@ -752,6 +752,8 @@ def _put(
         ),
         "x-content-sha256": content_digest,
     }
+    if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
+        headers.update(spec.headers())
     if extra_headers:
         headers.update(extra_headers)
     request = urllib.request.Request(
@@ -1470,6 +1472,7 @@ TerminalCallback = Callable[[], None]
 
 class JobManager:
     _RETRY_SCHEDULE = (0.05, 0.2, 0.5, 1.0, 2.0, 5.0)
+    _MAX_TERMINAL_PUT_ATTEMPTS = 12
 
     def __init__(
         self,
@@ -1656,6 +1659,21 @@ class JobManager:
             flush=True,
         )
 
+    def _record_terminal_retry_exhausted(self, spec: JobSpecLike, attempts: int) -> None:
+        print(
+            json.dumps(
+                {
+                    "event": "terminal_publication_retry_exhausted",
+                    "job_id": spec.job_id,
+                    "attempts": attempts,
+                    "at": _now(),
+                    "go": False,
+                },
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+
     def _publish_verified_terminal(
         self, spec: JobSpecLike, manifest: Mapping[str, Any]
     ) -> str:
@@ -1727,17 +1745,36 @@ class JobManager:
             self._notify_shutdown()
 
     def _schedule_terminal_retry(self) -> None:
+        exhausted_spec: JobSpecLike | None = None
+        attempts = 0
+        pending_retry: threading.Timer | None = None
         with self._lock:
             if self._shutdown_notified:
                 return
-            delay = self._retry_schedule[
-                min(self._retry_index, len(self._retry_schedule) - 1)
-            ]
+            pending = self._pending_terminal
             self._retry_index += 1
-            timer = threading.Timer(delay, self._attempt_terminal_publication)
-            timer.daemon = True
-            self._retry_timer = timer
-            timer.start()
+            if (
+                pending is None
+                or self._retry_index >= self._MAX_TERMINAL_PUT_ATTEMPTS
+            ):
+                exhausted_spec = None if pending is None else pending[0]
+                attempts = self._retry_index
+                pending_retry = self._retry_timer
+                self._retry_timer = None
+            else:
+                delay = self._retry_schedule[
+                    min(self._retry_index - 1, len(self._retry_schedule) - 1)
+                ]
+                timer = threading.Timer(delay, self._attempt_terminal_publication)
+                timer.daemon = True
+                self._retry_timer = timer
+                timer.start()
+                return
+        if pending_retry is not None:
+            pending_retry.cancel()
+        if exhausted_spec is not None:
+            self._record_terminal_retry_exhausted(exhausted_spec, attempts)
+        self._notify_shutdown()
 
     def _write_timeout_terminal(self, spec: JobSpecLike) -> None:
         self._begin_terminal_publication(spec, self._timeout_terminal(spec))
