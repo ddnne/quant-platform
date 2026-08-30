@@ -70,6 +70,11 @@ _SINGLE_THREAD_NUMERIC_ENV = {
 _JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_STRATEGY_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_ERROR_TYPE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+MAX_DIAGNOSTIC_REPORT_BYTES = 8 * 1024 * 1024
+MAX_CANDIDATE_DIAGNOSTICS = 4
+MAX_ERROR_DETAIL_CHARS = 160
 _SNAPSHOT_RE = re.compile(
     r"^research/personal/snapshots/sha256=([0-9a-f]{64})\.sqlite(?:\.gz)?$"
 )
@@ -568,6 +573,113 @@ def _safe_detail(error: BaseException) -> str:
     return " ".join(f"{type(error).__name__}: {error}".split())[:500]
 
 
+def _stdout_summary(stdout: str) -> tuple[dict[str, Any] | None, str]:
+    lines = [line for line in stdout.splitlines() if line.strip()]
+    if not lines:
+        return None, "no_summary"
+    try:
+        parsed = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        return None, "invalid_summary"
+    if not isinstance(parsed, dict):
+        return None, "invalid_summary"
+    return parsed, "ok"
+
+
+def _process_crash_message(process: subprocess.CompletedProcess[str]) -> str:
+    detail = " ".join((process.stderr or "").split())[-400:]
+    return (
+        f"qp-research exited {process.returncode}: {detail or 'no diagnostic'}"
+    )
+
+
+def _sanitize_error_detail(value: Any) -> str:
+    if not isinstance(value, str):
+        return "no detail"
+    tokens = [
+        token
+        for token in value.split()
+        if "/" not in token and "\\" not in token
+    ]
+    cleaned = " ".join(tokens)[:MAX_ERROR_DETAIL_CHARS]
+    return cleaned or "no detail"
+
+
+def _candidate_error_rows(report: Mapping[str, Any]) -> list[dict[str, str]]:
+    candidates = report.get("candidates")
+    if not isinstance(candidates, list):
+        return []
+    rows: list[dict[str, str]] = []
+    for item in candidates:
+        if not isinstance(item, Mapping):
+            continue
+        error = item.get("error")
+        if not isinstance(error, Mapping):
+            continue
+        strategy_id = item.get("strategy_id")
+        error_type = error.get("type")
+        if (
+            not isinstance(strategy_id, str)
+            or _STRATEGY_ID_RE.fullmatch(strategy_id) is None
+            or not isinstance(error_type, str)
+            or _ERROR_TYPE_RE.fullmatch(error_type) is None
+        ):
+            continue
+        rows.append(
+            {
+                "strategy_id": strategy_id,
+                "type": error_type,
+                "detail": _sanitize_error_detail(error.get("detail")),
+            }
+        )
+        if len(rows) >= MAX_CANDIDATE_DIAGNOSTICS:
+            break
+    return rows
+
+
+def _load_candidate_error_rows(
+    summary: Mapping[str, Any], output_root: Path
+) -> list[dict[str, str]]:
+    try:
+        report_path = _require_output_artifact(summary, "report_json", output_root)
+        if report_path.stat().st_size > MAX_DIAGNOSTIC_REPORT_BYTES:
+            return []
+        parsed = json.loads(report_path.read_bytes())
+    except (OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    return _candidate_error_rows(parsed)
+
+
+def _candidate_failure_message(
+    summary: Mapping[str, Any],
+    output_root: Path,
+) -> str:
+    unexpected = summary.get("unexpected_errors")
+    count = unexpected if type(unexpected) is int and unexpected >= 0 else None
+    count_text = "unknown" if count is None else str(count)
+    rows = _load_candidate_error_rows(summary, output_root)
+    if not rows:
+        return (
+            f"qp-research candidate failures: unexpected_errors={count_text}; "
+            "no candidate diagnostic"
+        )
+    first = rows[0]
+    type_counts: dict[str, int] = {}
+    for row in rows:
+        type_counts[row["type"]] = type_counts.get(row["type"], 0) + 1
+    root_type, root_count = max(
+        type_counts.items(),
+        key=lambda item: (item[1], item[0]),
+    )
+    return (
+        f"qp-research candidate failures: unexpected_errors={count_text}; "
+        f"first={first['strategy_id']} {first['type']}: {first['detail']}; "
+        f"repeated={root_type}x{root_count}"
+    )
+
+
 def _manifest_base(spec: JobSpec, *, started_at: str, finished_at: str) -> dict[str, Any]:
     return {
         "version": RUNNER_VERSION,
@@ -690,21 +802,17 @@ def execute_job(
                 raise RuntimeError(
                     f"qp-research exceeded the {limit} limit"
                 ) from exc
-            if process.returncode not in {0, 2}:
-                detail = " ".join(process.stderr.split())[-500:]
-                raise RuntimeError(
-                    f"qp-research exited {process.returncode}: "
-                    f"{detail or 'no diagnostic'}"
-                )
-            lines = [line for line in process.stdout.splitlines() if line.strip()]
-            if not lines:
-                raise RuntimeError("qp-research emitted no result document")
-            try:
-                summary = json.loads(lines[-1])
-            except json.JSONDecodeError as exc:
-                raise RuntimeError("qp-research result document is invalid") from exc
-            if not isinstance(summary, dict):
-                raise RuntimeError("qp-research result document is not an object")
+            summary, summary_status = _stdout_summary(process.stdout or "")
+            if summary is None:
+                if process.returncode not in {0, 2}:
+                    raise RuntimeError(_process_crash_message(process))
+                if summary_status == "no_summary":
+                    raise RuntimeError("qp-research emitted no result document")
+                raise RuntimeError("qp-research result document is invalid")
+            if process.returncode not in {0, 1, 2}:
+                raise RuntimeError(_process_crash_message(process))
+            if process.returncode == 1:
+                raise RuntimeError(_candidate_failure_message(summary, output))
             evaluated_count = summary.get("evaluated_count")
             hold_count = summary.get("hold_count")
             unexpected_errors = summary.get("unexpected_errors")

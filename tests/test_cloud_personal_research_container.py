@@ -975,7 +975,8 @@ def test_exit_two_with_no_evaluated_candidates_archives_completed_result(
             None,
             "fixed personal policy",
         ),
-        (1, {"evaluated_count": 0, "hold_count": 0}, None, "exited 1"),
+        (1, {"evaluated_count": 0, "hold_count": 0}, "", "exited 1"),
+        (1, {"evaluated_count": 0, "hold_count": 0}, "{\n", "exited 1"),
         (3, {"evaluated_count": 0, "hold_count": 0}, None, "exited 3"),
     ),
 )
@@ -1018,6 +1019,106 @@ def test_runner_exit_and_summary_contract_fail_closed(
     assert manifest["status"] == "FAILED"
     assert error in manifest["error"]
     assert [key for key, _, _ in uploads] == [spec.manifest_key]
+    assert not tuple(work.iterdir())
+
+
+def test_exit1_empty_stderr_preserves_candidate_diagnostic_from_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _job(sha)
+    detail = "candidate process exited nonzero (1)"
+
+    def failing_candidates(args, **_kwargs):
+        output = Path(args[args.index("--output") + 1])
+        reports = output / "reports"
+        reports.mkdir()
+        report = {
+            "candidates": [
+                {
+                    "strategy_id": "personal_momentum_topk_hold10",
+                    "decision": "SKIPPED",
+                    "error": {
+                        "type": "RuntimeError",
+                        "detail": detail,
+                    },
+                },
+                {
+                    "strategy_id": "personal_momentum_topk_hold5",
+                    "decision": "SKIPPED",
+                    "error": {
+                        "type": "RuntimeError",
+                        "detail": detail,
+                    },
+                },
+                {
+                    "strategy_id": "personal_reversal_topk_hold5",
+                    "decision": "SKIPPED",
+                    "error": {
+                        "type": "RuntimeError",
+                        "detail": "/secret/path/db.sqlite " + detail,
+                    },
+                },
+                {
+                    "strategy_id": "personal_value_topk_hold10",
+                    "decision": "SKIPPED",
+                    "error": {
+                        "type": "RuntimeError",
+                        "detail": detail,
+                    },
+                },
+            ],
+            "summary": {"unexpected_errors": 4, "evaluated_count": 0},
+        }
+        report_json = reports / "report.json"
+        report_md = reports / "report.md"
+        report_json.write_text(json.dumps(report), encoding="utf-8")
+        report_md.write_text("# failed candidates\n", encoding="utf-8")
+        summary = _runner_summary(
+            spec,
+            evaluated_count=0,
+            hold_count=0,
+            unexpected_errors=4,
+        )
+        summary["report_json"] = str(report_json)
+        summary["report_markdown"] = str(report_md)
+        return SimpleNamespace(
+            returncode=1,
+            stdout=json.dumps(summary) + "\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(service, "_run_research_process", failing_candidates)
+    work = tmp_path / "work"
+    work.mkdir()
+    uploads: list[tuple[str, bytes, str]] = []
+
+    def copy_snapshot(_spec, destination):
+        destination.write_bytes(source.read_bytes())
+
+    manifest = service.execute_job(
+        spec,
+        work_root=work,
+        command=(sys.executable, "unused.py"),
+        downloader=copy_snapshot,
+        uploader=_uploader(uploads),
+    )
+
+    assert manifest["status"] == "FAILED"
+    assert "go" in manifest and manifest["go"] is False
+    assert manifest.get("automatic_promotion") is False
+    error = manifest["error"]
+    assert "no diagnostic" not in error
+    assert "candidate failures" in error
+    assert "unexpected_errors=4" in error
+    assert "personal_momentum_topk_hold10" in error
+    assert "RuntimeError" in error
+    assert "exited nonzero (1)" in error
+    assert "repeated=RuntimeErrorx4" in error
+    assert "/secret/path" not in error
+    assert [key for key, _, _ in uploads] == [spec.manifest_key]
+    assert spec.result_key not in {key for key, _, _ in uploads}
     assert not tuple(work.iterdir())
 
 
