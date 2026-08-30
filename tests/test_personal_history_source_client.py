@@ -814,20 +814,105 @@ def test_post_fail_closes_malformed_retry_after(
     client.close()
 
 
-def test_post_does_not_retry_non_429(tmp_path: Path) -> None:
-    calls = {"n": 0}
+@pytest.mark.parametrize("status", [400, 500, 501])
+def test_post_does_not_retry_non_transient_status(
+    tmp_path: Path, status: int
+) -> None:
+    errors: list[urllib.error.HTTPError] = []
     slept: list[float] = []
 
     class Opener:
         def urlopen(self, request, timeout=120):
-            calls["n"] += 1
-            raise _http_error(request.full_url, 502, retry_after="60")
+            error = _http_error(
+                request.full_url,
+                status,
+                retry_after="60",
+                body=b'{"error":"not_retryable"}',
+            )
+            errors.append(error)
+            raise error
+
+    client = _post_client(tmp_path, Opener(), _sleep=slept.append)
+    with pytest.raises(
+        PersonalHistoryError, match=f"history.source returned HTTP {status}"
+    ):
+        client._post({"continuation_token": "keep"})
+    assert len(errors) == 1
+    assert errors[0].fp is None or errors[0].fp.closed
+    assert slept == []
+    client.close()
+
+
+@pytest.mark.parametrize("status", [502, 503, 504])
+def test_post_retries_transient_gateway_status_with_same_request_bytes(
+    tmp_path: Path, status: int
+) -> None:
+    calls: list[bytes] = []
+    errors: list[urllib.error.HTTPError] = []
+    slept: list[float] = []
+    payload = {
+        "dataset_id": "markets_calendar",
+        "acquisition_nonce": "b" * 64,
+        "continuation_token": "cursor-keep",
+    }
+
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            calls.append(bytes(request.data))
+            if len(calls) == 1:
+                error = _http_error(
+                    request.full_url,
+                    status,
+                    retry_after="60",
+                    body=b'{"error":"temporary_gateway_failure"}',
+                )
+                errors.append(error)
+                raise error
+            raw = json.dumps({"data": []}, separators=(",", ":")).encode()
+            return _Response(raw, _page_headers("EXHAUSTED", "NONE", "NONE"))
+
+    client = _post_client(tmp_path, Opener(), _sleep=slept.append)
+    raw, _headers, response_status = client._post(payload)
+    assert response_status == 200
+    assert json.loads(raw) == {"data": []}
+    assert slept == [1]
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    decoded = json.loads(calls[0])
+    assert decoded["continuation_token"] == "cursor-keep"
+    assert decoded["acquisition_nonce"] == "b" * 64
+    assert errors[0].fp is None or errors[0].fp.closed
+    client.close()
+
+
+def test_post_exhausts_bounded_transient_gateway_retries(tmp_path: Path) -> None:
+    calls: list[bytes] = []
+    errors: list[urllib.error.HTTPError] = []
+    slept: list[float] = []
+
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            calls.append(bytes(request.data))
+            error = _http_error(
+                request.full_url,
+                502,
+                body=b'{"error":"temporary_gateway_failure"}',
+            )
+            errors.append(error)
+            raise error
 
     client = _post_client(tmp_path, Opener(), _sleep=slept.append)
     with pytest.raises(PersonalHistoryError, match="history.source returned HTTP 502"):
-        client._post({"continuation_token": "keep"})
-    assert calls["n"] == 1
-    assert slept == []
+        client._post(
+            {
+                "acquisition_nonce": "c" * 64,
+                "continuation_token": "cursor-keep",
+            }
+        )
+    assert len(calls) == 4
+    assert calls == [calls[0]] * 4
+    assert slept == [1, 2, 4]
+    assert all(error.fp is None or error.fp.closed for error in errors)
     client.close()
 
 

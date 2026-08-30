@@ -121,6 +121,19 @@ function parseNaturalKey(value: unknown): Record<string, unknown> | null {
   return isObject(value) ? value : null;
 }
 
+function parseStructuredRecordPayload(
+  value: unknown,
+): Record<string, unknown> | null {
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return isObject(value) ? value : null;
+}
+
 function isIsoDay(value: unknown): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
@@ -168,14 +181,18 @@ function parseCalendarRow(
     fail("option_sidecar_calendar_row_invalid");
   }
   const naturalKey = parseNaturalKey(parsed.natural_key);
-  const payload = parsed.payload;
-  if (!naturalKey || !isObject(payload)) fail("option_sidecar_calendar_row_invalid");
+  const payload = parseStructuredRecordPayload(parsed.payload);
+  if (!naturalKey || !payload) fail("option_sidecar_calendar_row_invalid");
   const keys = Object.keys(naturalKey).sort();
+  const payloadKeys = Object.keys(payload).sort();
   const date = payload.Date;
-  const holiday = payload.HolidayDivision;
+  const holiday = payload.HolDiv;
   if (
     keys.length !== 1 ||
     keys[0] !== "Date" ||
+    payloadKeys.length !== 2 ||
+    payloadKeys[0] !== "Date" ||
+    payloadKeys[1] !== "HolDiv" ||
     !isIsoDay(date) ||
     naturalKey.Date !== date ||
     typeof holiday !== "string" ||

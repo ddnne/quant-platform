@@ -42,6 +42,8 @@ HISTORY_SOURCE_FIXED_HEADERS = MappingProxyType(
 )
 _MAX_PAGES_PER_MONTH = 8192
 _MAX_POST_ATTEMPTS = 4
+_TRANSIENT_POST_STATUSES = frozenset({502, 503, 504})
+_TRANSIENT_RETRY_DELAYS_S = (1, 2, 4)
 _RETRY_AFTER_MIN_S = 1
 _RETRY_AFTER_MAX_S = 120
 _RETRY_AFTER_SECONDS_RE = __import__("re").compile(r"^[0-9]+$")
@@ -797,16 +799,26 @@ class PersonalHistorySourceClient:
                     _bounded_retry_after_seconds(error.headers) if code == 429 else None
                 )
                 _close_http_error(error)
-                if code != 429:
+                if attempt + 1 >= attempts:
                     raise PersonalHistoryError(
                         f"history.source returned HTTP {code}"
                     ) from error
-                if retry_after is None or attempt + 1 >= attempts:
+                if code == 429:
+                    if retry_after is None:
+                        raise PersonalHistoryError(
+                            "history.source returned HTTP 429"
+                        ) from error
+                    delay = retry_after
+                elif code in _TRANSIENT_POST_STATUSES:
+                    delay = _TRANSIENT_RETRY_DELAYS_S[
+                        min(attempt, len(_TRANSIENT_RETRY_DELAYS_S) - 1)
+                    ]
+                else:
                     raise PersonalHistoryError(
-                        "history.source returned HTTP 429"
+                        f"history.source returned HTTP {code}"
                     ) from error
-                self._sleep(retry_after)
-        raise PersonalHistoryError("history.source returned HTTP 429")
+                self._sleep(delay)
+        raise PersonalHistoryError("history.source retry attempts are invalid")
 
     def _refresh_progress(self) -> None:
         pages, size = self.spool.usage()
