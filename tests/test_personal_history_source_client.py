@@ -570,3 +570,143 @@ def test_spool_page_bound_fails_with_exact_counts(
             "markets_calendar", **{"from": "2024-03-01", "to": "2024-04-02"}
         )
     client.close()
+
+
+def _two_page_opener():
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            token = json.loads(request.data.decode()).get("continuation_token")
+            if token is None:
+                raw = json.dumps(
+                    {"data": [{"Code": "1001", "Date": "2024-03-01"}]},
+                    separators=(",", ":"),
+                ).encode()
+                return _Response(raw, _page_headers("CONTINUATION", "cursor-2", "2024-03-01"))
+            raw = json.dumps(
+                {"data": [{"Code": "1002", "Date": "2024-03-02"}]},
+                separators=(",", ":"),
+            ).encode()
+            return _Response(raw, _page_headers("EXHAUSTED", "NONE", "2024-03-02"))
+
+    return Opener()
+
+
+def _two_page_client(tmp_path: Path):
+    client = client_mod.PersonalHistorySourceClient(
+        environment="production",
+        period_end="2024-03-31",
+        spool_path=tmp_path / "spool.sqlite",
+        opener=_two_page_opener(),
+    )
+    fetched = client.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
+    assert len(fetched.pages) == 2
+    return client
+
+
+def test_verified_complete_month_accepts_untouched_pages(tmp_path: Path) -> None:
+    client = _two_page_client(tmp_path)
+    pages = client.spool.verified_complete_month("equities_bars_daily", "2024-03")
+    assert pages is not None and len(pages) == 2
+    fetched = client.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
+    assert client.fetch_calls == 2
+    assert len(fetched.pages) == 2
+    client.close()
+
+
+def test_deleted_page_is_cleared_and_refetched(tmp_path: Path) -> None:
+    client = _two_page_client(tmp_path)
+    client.spool._conn.execute(
+        "DELETE FROM source_pages WHERE dataset=? AND month=? AND page_ordinal=1",
+        ("equities_bars_daily", "2024-03"),
+    )
+    client.spool._conn.execute(
+        "DELETE FROM source_rows WHERE dataset=? AND month=? AND page_ordinal=1",
+        ("equities_bars_daily", "2024-03"),
+    )
+    client.spool._conn.commit()
+    assert client.spool.has_month("equities_bars_daily", "2024-03") is False
+    fetched = client.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
+    assert client.fetch_calls == 4
+    assert len(fetched.pages) == 2
+    client.close()
+
+
+def test_broken_pagination_and_dangling_cursor_are_rejected(tmp_path: Path) -> None:
+    client = _two_page_client(tmp_path)
+    client.spool._conn.execute(
+        "UPDATE source_pages SET pagination_in='wrong' "
+        "WHERE dataset=? AND month=? AND page_ordinal=1",
+        ("equities_bars_daily", "2024-03"),
+    )
+    client.spool._conn.commit()
+    assert client.spool.verified_complete_month("equities_bars_daily", "2024-03") is None
+    client.close()
+
+    client = _two_page_client(tmp_path)
+    client.spool._conn.execute(
+        "UPDATE source_pages SET pagination_out='cursor-3' "
+        "WHERE dataset=? AND month=? AND page_ordinal=1",
+        ("equities_bars_daily", "2024-03"),
+    )
+    client.spool._conn.commit()
+    assert client.spool.has_month("equities_bars_daily", "2024-03") is False
+    client.close()
+
+
+def test_forged_completion_digest_and_mutated_page_are_rejected(tmp_path: Path) -> None:
+    client = _two_page_client(tmp_path)
+    client.spool._conn.execute(
+        "UPDATE month_state SET completion_digest=? WHERE dataset=? AND month=?",
+        ("sha256:" + "f" * 64, "equities_bars_daily", "2024-03"),
+    )
+    client.spool._conn.commit()
+    assert client.spool.has_month("equities_bars_daily", "2024-03") is False
+    client.close()
+
+    client = _two_page_client(tmp_path)
+    client.spool._conn.execute(
+        "UPDATE source_pages SET body_digest=? "
+        "WHERE dataset=? AND month=? AND page_ordinal=0",
+        ("sha256:" + "a" * 64, "equities_bars_daily", "2024-03"),
+    )
+    client.spool._conn.commit()
+    assert client.spool.verified_complete_month("equities_bars_daily", "2024-03") is None
+    client.close()
+
+    client = _two_page_client(tmp_path)
+    client.spool._conn.execute(
+        "UPDATE source_pages SET row_count=99 "
+        "WHERE dataset=? AND month=? AND page_ordinal=0",
+        ("equities_bars_daily", "2024-03"),
+    )
+    client.spool._conn.commit()
+    assert client.spool.has_month("equities_bars_daily", "2024-03") is False
+    client.close()
+
+
+def test_duplicate_and_gapped_ordinals_are_rejected(tmp_path: Path) -> None:
+    client = _two_page_client(tmp_path)
+    client.spool._conn.execute(
+        "UPDATE source_pages SET page_ordinal=2 "
+        "WHERE dataset=? AND month=? AND page_ordinal=1",
+        ("equities_bars_daily", "2024-03"),
+    )
+    client.spool._conn.commit()
+    assert client.spool.verified_complete_month("equities_bars_daily", "2024-03") is None
+    client.close()
+
+    client = _two_page_client(tmp_path)
+    state = client.spool._conn.execute(
+        "SELECT * FROM month_state WHERE dataset=? AND month=?",
+        ("equities_bars_daily", "2024-03"),
+    ).fetchone()
+    pages = client.spool._conn.execute(
+        "SELECT * FROM source_pages WHERE dataset=? AND month=? ORDER BY page_ordinal",
+        ("equities_bars_daily", "2024-03"),
+    ).fetchall()
+    duplicated = [pages[0], pages[0]]
+    with pytest.raises(PersonalHistoryError, match="contiguous"):
+        client.spool._assert_verified_complete(
+            state, duplicated, "equities_bars_daily", "2024-03"
+        )
+    client.close()

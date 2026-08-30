@@ -696,17 +696,82 @@ def _put(
             payload.close()
 
 
-def _get_json(key: str) -> dict[str, Any] | None:
-    request = urllib.request.Request(f"{R2_ORIGIN}/{key}", method="GET")
+class TerminalReadDenied(RuntimeError):
+    """The Worker refused this terminal GET as identity mismatch or forbidden."""
+
+
+def _job_kind(spec: Any) -> str:
+    if isinstance(spec, SnapshotJobSpec):
+        return "snapshot"
+    if isinstance(spec, PersonalSvi2023JobSpec):
+        return "svi"
+    if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
+        return "overlay"
+    return "research"
+
+
+def _terminal_get_headers(spec: Any) -> dict[str, str]:
+    headers = {
+        "x-personal-job-id": spec.job_id,
+        "x-personal-request-digest": spec.request_digest,
+        "x-personal-runner-version": spec.runner_version,
+        "x-personal-job-kind": _job_kind(spec),
+    }
+    if isinstance(spec, JobSpec):
+        headers["x-personal-cohort-id"] = spec.cohort_id
+        headers["x-personal-universe-id"] = spec.universe_id
+    elif isinstance(spec, (PersonalSvi2023JobSpec, PersonalIndexVolOverlay2023JobSpec)):
+        headers["x-personal-cohort-id"] = spec.cohort_id
+    return headers
+
+
+def _terminal_body_matches_spec(spec: Any, document: Mapping[str, Any]) -> bool:
+    if (
+        document.get("job_id") != spec.job_id
+        or document.get("request_digest") != spec.request_digest
+        or document.get("runner_version") != spec.runner_version
+        or document.get("status") not in {"COMPLETED", "FAILED"}
+    ):
+        return False
+    if isinstance(spec, JobSpec) and (
+        document.get("cohort_id") != spec.cohort_id
+        or document.get("universe_id") != spec.universe_id
+    ):
+        return False
+    if isinstance(spec, (PersonalSvi2023JobSpec, PersonalIndexVolOverlay2023JobSpec)):
+        if document.get("cohort_id") != spec.cohort_id:
+            return False
+    return True
+
+
+def _get_json(spec: Any) -> dict[str, Any] | None:
+    request = urllib.request.Request(
+        f"{R2_ORIGIN}/{spec.manifest_key}",
+        method="GET",
+        headers=_terminal_get_headers(spec),
+    )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            if response.status != HTTPStatus.OK:
-                return None
-            parsed = json.loads(response.read().decode("utf-8"))
-    except (OSError, urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+            status = int(response.status)
+            raw = response.read()
+    except urllib.error.HTTPError as error:
+        if error.code in {400, 403, 404}:
+            raise TerminalReadDenied(f"terminal GET denied HTTP {error.code}") from error
         return None
-    if not isinstance(parsed, dict):
+    except (OSError, urllib.error.URLError, TimeoutError):
         return None
+    if status in {400, 403, 404}:
+        raise TerminalReadDenied(f"terminal GET denied HTTP {status}")
+    if status != HTTPStatus.OK:
+        return None
+    if len(raw) > 64 * 1024:
+        raise TerminalReadDenied("terminal exceeds the manifest bound")
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise TerminalReadDenied("terminal is not JSON") from error
+    if not isinstance(parsed, dict) or not _terminal_body_matches_spec(spec, parsed):
+        raise TerminalReadDenied("terminal identity mismatch")
     return parsed
 
 
@@ -824,6 +889,7 @@ def _candidate_failure_message(
 def _manifest_base(spec: JobSpec, *, started_at: str, finished_at: str) -> dict[str, Any]:
     return {
         "version": RUNNER_VERSION,
+        "runner_version": RUNNER_VERSION,
         "job_id": spec.job_id,
         "cohort_id": spec.cohort_id,
         "cohort_digest": spec.cohort_digest,
@@ -1430,9 +1496,11 @@ class JobManager:
         if reader is not None:
             try:
                 return reader(spec)
+            except TerminalReadDenied:
+                raise
             except Exception:
                 return None
-        return _get_json(spec.manifest_key)
+        return _get_json(spec)
 
     def _matching_terminal(self, spec: JobSpecLike, existing: Any) -> bool:
         return (
@@ -1464,8 +1532,13 @@ class JobManager:
                 content_digest=digest,
             )
             return "ok"
+        except TerminalReadDenied:
+            return "conflict"
         except Exception as error:
-            existing = self._read_terminal(spec)
+            try:
+                existing = self._read_terminal(spec)
+            except TerminalReadDenied:
+                return "conflict"
             if self._matching_terminal(spec, existing):
                 return "ok"
             if self._conflicting_terminal(spec, existing):

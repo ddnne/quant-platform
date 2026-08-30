@@ -386,15 +386,25 @@ def _validated_selection(
     if declared_source != source_row_count:
         raise PersonalHistoryError("selection source row count does not match pages")
     completion = str(selection.get("completion_digest") or "")
-    if completion and not completion.startswith("sha256:"):
-        raise PersonalHistoryError("selection completion digest is missing")
+    expected_completion = _canonical_digest(
+        {
+            "scanned_page_digests": [f"sha256:{digest}" for digest in scanned],
+            "source_row_count": source_row_count,
+            "page_count": len(scanned),
+            "status": "COMPLETE",
+        }
+    )
+    if not completion or _page_digest_hex(completion) != _page_digest_hex(
+        expected_completion
+    ):
+        raise PersonalHistoryError("selection completion digest does not match pages")
     return {
         "query": dict(query),
         "selected_row_count": selected_count,
         "selected_digest": selected_digest,
         "source_row_count": source_row_count,
         "scanned_page_digests": list(scanned),
-        "completion_digest": completion or None,
+        "completion_digest": expected_completion,
         "contributing_page_digests": list(contributing),
     }
 

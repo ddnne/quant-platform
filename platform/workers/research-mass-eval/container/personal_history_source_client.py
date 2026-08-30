@@ -162,26 +162,35 @@ class _Fetch:
 def month_completion_digest(pages: Sequence[SourcePage]) -> str:
     return _canonical_digest(
         {
-            "page_digests": [page.body_digest for page in pages],
             "page_count": len(pages),
             "status": "COMPLETE",
+            "pages": [
+                {
+                    "ordinal": index,
+                    "body_digest": page.body_digest,
+                    "row_count": page.row_count,
+                    "request_path": page.request_path,
+                    "request_params": dict(page.request_params),
+                    "pagination_in": page.pagination_in,
+                    "pagination_out": page.pagination_out,
+                    "response_status": page.response_status,
+                }
+                for index, page in enumerate(pages)
+            ],
         }
     )
 
 
 def selection_completion_digest(
     *,
-    dataset: str,
-    months: Sequence[str],
     scanned_page_digests: Sequence[str],
-    month_completion_digests: Sequence[str],
+    source_row_count: int,
 ) -> str:
     return _canonical_digest(
         {
-            "dataset": dataset,
-            "months": list(months),
             "scanned_page_digests": list(scanned_page_digests),
-            "month_completion_digests": list(month_completion_digests),
+            "source_row_count": source_row_count,
+            "page_count": len(scanned_page_digests),
             "status": "COMPLETE",
         }
     )
@@ -274,22 +283,137 @@ class AcquisitionSpool:
             )
 
     def month_complete(self, dataset: str, month: str) -> bool:
-        row = self._conn.execute(
-            "SELECT status FROM month_state WHERE dataset=? AND month=?",
-            (dataset, month),
-        ).fetchone()
-        return row is not None and str(row["status"]) == "COMPLETE"
+        return self.verified_complete_month(dataset, month) is not None
 
     def has_month(self, dataset: str, month: str) -> bool:
-        return self.month_complete(dataset, month)
+        return self.verified_complete_month(dataset, month) is not None
 
     def month_completion_digest(self, dataset: str, month: str) -> str | None:
-        row = self._conn.execute(
-            "SELECT completion_digest FROM month_state "
-            "WHERE dataset=? AND month=? AND status='COMPLETE'",
+        pages = self.verified_complete_month(dataset, month)
+        return None if pages is None else month_completion_digest(pages)
+
+    def verified_complete_month(
+        self, dataset: str, month: str
+    ) -> tuple[SourcePage, ...] | None:
+        state = self._conn.execute(
+            "SELECT * FROM month_state WHERE dataset=? AND month=?",
             (dataset, month),
         ).fetchone()
-        return None if row is None else str(row["completion_digest"] or "") or None
+        if state is None or str(state["status"]) != "COMPLETE":
+            return None
+        pages = self._conn.execute(
+            """
+            SELECT page_ordinal, body_digest, row_count, request_path,
+                   request_params_json, response_status, pagination_in,
+                   pagination_out, evidence_state, slice_date
+            FROM source_pages
+            WHERE dataset=? AND month=?
+            ORDER BY page_ordinal
+            """,
+            (dataset, month),
+        ).fetchall()
+        try:
+            self._assert_verified_complete(state, pages, dataset, month)
+        except PersonalHistoryError:
+            self.clear_month(dataset, month)
+            return None
+        return tuple(self._page_from_row(page) for page in pages)
+
+    def _assert_verified_complete(
+        self,
+        state: sqlite3.Row,
+        pages: Sequence[sqlite3.Row],
+        dataset: str,
+        month: str,
+    ) -> None:
+        count = len(pages)
+        declared = int(state["page_count"])
+        if count < 1 or declared != count:
+            raise PersonalHistoryError(
+                f"{dataset} {month} COMPLETE page count does not match stored pages"
+            )
+        ordinals = [int(page["page_ordinal"]) for page in pages]
+        if ordinals != list(range(count)):
+            raise PersonalHistoryError(
+                f"{dataset} {month} page ordinals are not contiguous"
+            )
+        duplicate = self._conn.execute(
+            """
+            SELECT 1 FROM source_pages
+            WHERE dataset=? AND month=?
+            GROUP BY page_ordinal HAVING COUNT(*) > 1
+            LIMIT 1
+            """,
+            (dataset, month),
+        ).fetchone()
+        if duplicate is not None:
+            raise PersonalHistoryError(f"{dataset} {month} has duplicate page ordinals")
+        if pages[0]["pagination_in"] is not None:
+            raise PersonalHistoryError(
+                f"{dataset} {month} first page pagination_in must be empty"
+            )
+        for index in range(1, count):
+            if pages[index]["pagination_in"] != pages[index - 1]["pagination_out"]:
+                raise PersonalHistoryError(
+                    f"{dataset} {month} pagination chain is broken"
+                )
+        if pages[-1]["pagination_out"] is not None:
+            raise PersonalHistoryError(
+                f"{dataset} {month} final page is not exhausted"
+            )
+        try:
+            identity = json.loads(str(state["identity_json"] or ""))
+        except json.JSONDecodeError as error:
+            raise PersonalHistoryError(
+                f"{dataset} {month} acquisition identity is invalid"
+            ) from error
+        if (
+            not isinstance(identity, dict)
+            or identity.get("dataset_id") != dataset
+            or identity.get("segment_id") != month
+        ):
+            raise PersonalHistoryError(
+                f"{dataset} {month} acquisition identity does not match"
+            )
+        paths = {str(page["request_path"]) for page in pages}
+        if len(paths) != 1 or not next(iter(paths)):
+            raise PersonalHistoryError(
+                f"{dataset} {month} request path identity drifted"
+            )
+        reconstructed: list[SourcePage] = []
+        for page in pages:
+            ordinal = int(page["page_ordinal"])
+            stored_count = int(page["row_count"])
+            rows = self._conn.execute(
+                """
+                SELECT row_index, row_json FROM source_rows
+                WHERE dataset=? AND month=? AND page_ordinal=?
+                ORDER BY row_index
+                """,
+                (dataset, month, ordinal),
+            ).fetchall()
+            if [int(row["row_index"]) for row in rows] != list(range(stored_count)):
+                raise PersonalHistoryError(
+                    f"{dataset} {month} page {ordinal} rows do not match descriptor"
+                )
+            if len(rows) != stored_count:
+                raise PersonalHistoryError(
+                    f"{dataset} {month} page {ordinal} row count does not match"
+                )
+            for row in rows:
+                try:
+                    json.loads(str(row["row_json"]))
+                except json.JSONDecodeError as error:
+                    raise PersonalHistoryError(
+                        f"{dataset} {month} page {ordinal} row is not JSON"
+                    ) from error
+            reconstructed.append(self._page_from_row(page))
+        actual = month_completion_digest(reconstructed)
+        stored_digest = str(state["completion_digest"] or "")
+        if stored_digest != actual:
+            raise PersonalHistoryError(
+                f"{dataset} {month} completion digest does not match stored pages"
+            )
 
     def clear_month(self, dataset: str, month: str) -> None:
         self._conn.execute("BEGIN")
@@ -429,40 +553,20 @@ class AcquisitionSpool:
         )
 
     def pages_for_month(self, dataset: str, month: str) -> tuple[SourcePage, ...]:
-        rows = self._conn.execute(
-            """
-            SELECT body_digest, row_count, request_path, request_params_json,
-                   response_status, pagination_in, pagination_out,
-                   evidence_state, slice_date
-            FROM source_pages
-            JOIN month_state USING (dataset, month)
-            WHERE dataset=? AND month=? AND month_state.status='COMPLETE'
-            ORDER BY page_ordinal
-            """,
-            (dataset, month),
-        ).fetchall()
-        return tuple(self._page_from_row(row) for row in rows)
+        return self.verified_complete_month(dataset, month) or ()
 
     def pages_for_months(
         self, dataset: str, months: Sequence[str]
     ) -> tuple[SourcePage, ...]:
-        if not months:
-            return ()
-        placeholders = ",".join("?" for _ in months)
-        rows = self._conn.execute(
-            f"""
-            SELECT body_digest, row_count, request_path, request_params_json,
-                   response_status, pagination_in, pagination_out,
-                   evidence_state, slice_date
-            FROM source_pages
-            JOIN month_state USING (dataset, month)
-            WHERE dataset=? AND month IN ({placeholders})
-              AND month_state.status='COMPLETE'
-            ORDER BY month, page_ordinal
-            """,
-            (dataset, *months),
-        ).fetchall()
-        return tuple(self._page_from_row(row) for row in rows)
+        collected: list[SourcePage] = []
+        for month in months:
+            verified = self.verified_complete_month(dataset, month)
+            if verified is None:
+                raise PersonalHistoryError(
+                    f"{dataset} {month} is not a verified COMPLETE month"
+                )
+            collected.extend(verified)
+        return tuple(collected)
 
     def pages_for_slice(self, dataset: str, slice_date: str) -> tuple[SourcePage, ...]:
         rows = self._conn.execute(
@@ -665,10 +769,9 @@ class PersonalHistorySourceClient:
         }
 
     def _ensure_month(self, dataset: str, month: str) -> None:
-        if self.spool.month_complete(dataset, month):
+        if self.spool.verified_complete_month(dataset, month) is not None:
             return
-        # Partial FETCHING months are not selection evidence. Clear and refetch
-        # from page 1 rather than resuming a broken continuation.
+        # Partial, forged, or truncated months are not selection evidence.
         self.spool.clear_month(dataset, month)
         route = self._route(dataset)
         continuation: str | None = None
@@ -791,14 +894,6 @@ class PersonalHistorySourceClient:
                 f"{dataset} has no COMPLETE scanned source pages for the query"
             )
         scanned = tuple(page.body_digest for page in pages)
-        month_digests = []
-        for month in months:
-            digest = self.spool.month_completion_digest(dataset, month)
-            if not digest:
-                raise PersonalHistoryError(
-                    f"{dataset} {month} completion digest is missing"
-                )
-            month_digests.append(digest)
         selection = SelectionEvidence(
             query=MappingProxyType(dict(query)),
             selected_row_count=len(selected),
@@ -806,10 +901,8 @@ class PersonalHistorySourceClient:
             source_row_count=source_row_count,
             scanned_page_digests=scanned,
             completion_digest=selection_completion_digest(
-                dataset=dataset,
-                months=months,
                 scanned_page_digests=scanned,
-                month_completion_digests=month_digests,
+                source_row_count=source_row_count,
             ),
             contributing_page_digests=contributing,
         )

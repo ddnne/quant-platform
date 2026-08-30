@@ -334,4 +334,109 @@ describe("personal Container R2 capability", () => {
     expect(response.status).toBe(201);
     expect(bucket.put).toHaveBeenCalledOnce();
   });
+
+  it("GETs an exact terminal manifest with closed identity headers", async () => {
+    const jobId = "term-get-one";
+    const key = `research/personal/jobs/job=${jobId}/manifest.json`;
+    const requestDigest = `sha256:${"b".repeat(64)}`;
+    const manifest = {
+      job_id: jobId,
+      request_digest: requestDigest,
+      runner_version: "personal-cloud-runner/v13",
+      status: "FAILED",
+      cohort_id: "diverse-core-v1",
+      universe_id: "topix_all",
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(manifest));
+    const object = r2Object(key, bytes);
+    const bucket = {
+      get: vi.fn(async () => object),
+      head: vi.fn(),
+      put: vi.fn(),
+    } as unknown as R2Bucket;
+    const response = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "GET",
+        headers: {
+          "x-personal-job-id": jobId,
+          "x-personal-request-digest": requestDigest,
+          "x-personal-runner-version": "personal-cloud-runner/v13",
+          "x-personal-job-kind": "research",
+          "x-personal-cohort-id": "diverse-core-v1",
+          "x-personal-universe-id": "topix_all",
+        },
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(manifest);
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
+
+  it("rejects extra identity headers, mismatched terminals, and non-terminal keys", async () => {
+    const jobId = "term-deny";
+    const key = `research/personal/jobs/job=${jobId}/manifest.json`;
+    const requestDigest = `sha256:${"b".repeat(64)}`;
+    const manifest = {
+      job_id: jobId,
+      request_digest: requestDigest,
+      runner_version: "personal-cloud-runner/v13",
+      status: "FAILED",
+      cohort_id: "diverse-core-v1",
+      universe_id: "topix_all",
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(manifest));
+    const bucket = {
+      get: vi.fn(async () => r2Object(key, bytes)),
+      put: vi.fn(),
+    } as unknown as R2Bucket;
+    const extra = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "GET",
+        headers: {
+          "x-personal-job-id": jobId,
+          "x-personal-request-digest": requestDigest,
+          "x-personal-runner-version": "personal-cloud-runner/v13",
+          "x-personal-job-kind": "research",
+          "x-personal-cohort-id": "diverse-core-v1",
+          "x-personal-universe-id": "topix_all",
+          "x-personal-extra": "nope",
+        },
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(extra.status).toBe(403);
+    const mismatch = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "GET",
+        headers: {
+          "x-personal-job-id": jobId,
+          "x-personal-request-digest": `sha256:${"c".repeat(64)}`,
+          "x-personal-runner-version": "personal-cloud-runner/v13",
+          "x-personal-job-kind": "research",
+          "x-personal-cohort-id": "diverse-core-v1",
+          "x-personal-universe-id": "topix_all",
+        },
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(mismatch.status).toBe(403);
+    const resultKey = `research/personal/jobs/job=${jobId}/result.tar.gz`;
+    const forbidden = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${resultKey}`, {
+        method: "GET",
+        headers: {
+          "x-personal-job-id": jobId,
+          "x-personal-request-digest": requestDigest,
+          "x-personal-runner-version": "personal-cloud-runner/v13",
+          "x-personal-job-kind": "research",
+          "x-personal-cohort-id": "diverse-core-v1",
+          "x-personal-universe-id": "topix_all",
+        },
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(forbidden.status).toBe(403);
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
 });

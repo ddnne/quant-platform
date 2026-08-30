@@ -10,7 +10,10 @@ import sys
 import tarfile
 import threading
 import time
+import urllib.error
+import urllib.parse
 from dataclasses import replace
+from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1598,3 +1601,130 @@ def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
     with pytest.raises(service.JobBusyError, match="shutting down"):
         manager.submit(_job("b" * 64, "second-job"))
     release.set()
+
+
+class _UrlResponse(io.BytesIO):
+    def __init__(self, status: int, body: bytes):
+        super().__init__(body)
+        self.status = status
+        self.headers = {"content-type": "application/json; charset=utf-8"}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+class _ProductionR2:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.puts = 0
+        self.gets = 0
+
+    def urlopen(self, request, timeout=None):
+        del timeout
+        url = request.full_url
+        key = urllib.parse.urlparse(url).path.lstrip("/")
+        method = request.get_method()
+        headers = {name.lower(): value for name, value in request.header_items()}
+        if method == "PUT":
+            self.puts += 1
+            if key in self.objects:
+                raise urllib.error.HTTPError(
+                    url, 409, "conflict", Message(), io.BytesIO(b"")
+                )
+            payload = request.data
+            if not isinstance(payload, (bytes, bytearray)):
+                payload = payload.read()
+            self.objects[key] = bytes(payload)
+            return _UrlResponse(201, b'{"ok":true,"created":true}')
+        if method == "GET":
+            self.gets += 1
+            raw = self.objects.get(key)
+            if raw is None or not key.endswith("/manifest.json"):
+                raise urllib.error.HTTPError(
+                    url, 403, "denied", Message(), io.BytesIO(b"")
+                )
+            parsed = json.loads(raw)
+            required = {
+                "x-personal-job-id",
+                "x-personal-request-digest",
+                "x-personal-runner-version",
+                "x-personal-job-kind",
+                "x-personal-cohort-id",
+                "x-personal-universe-id",
+            }
+            personal = {name for name in headers if name.startswith("x-personal-")}
+            if personal != required:
+                raise urllib.error.HTTPError(
+                    url, 403, "denied", Message(), io.BytesIO(b"")
+                )
+            if (
+                headers.get("x-personal-job-id") != parsed.get("job_id")
+                or headers.get("x-personal-request-digest")
+                != parsed.get("request_digest")
+                or headers.get("x-personal-runner-version")
+                != parsed.get("runner_version")
+                or headers.get("x-personal-job-kind") != "research"
+                or headers.get("x-personal-cohort-id") != parsed.get("cohort_id")
+                or headers.get("x-personal-universe-id") != parsed.get("universe_id")
+            ):
+                raise urllib.error.HTTPError(
+                    url, 403, "denied", Message(), io.BytesIO(b"")
+                )
+            return _UrlResponse(200, raw)
+        raise AssertionError(method)
+
+
+def test_production_conflict_reads_matching_terminal_without_injected_reader(
+    monkeypatch,
+) -> None:
+    fake = _ProductionR2()
+    spec = _job("a" * 64, "prod-conflict")
+    existing = {
+        **service._manifest_base(
+            spec, started_at=service._now(), finished_at=service._now()
+        ),
+        "status": "FAILED",
+        "error": "absolute Container lifetime exceeded (0.05s)",
+    }
+    fake.objects[spec.manifest_key] = service._canonical_bytes(existing)
+    monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
+    terminal = threading.Event()
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.01,),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert terminal.wait(1)
+    assert fake.puts >= 1
+    assert fake.gets >= 1
+    assert manager._shutdown_notified is True
+
+
+def test_production_mismatched_terminal_does_not_shutdown(monkeypatch) -> None:
+    fake = _ProductionR2()
+    spec = _job("a" * 64, "prod-mismatch")
+    existing = {
+        **service._manifest_base(
+            spec, started_at=service._now(), finished_at=service._now()
+        ),
+        "status": "FAILED",
+        "error": "other",
+        "request_digest": "sha256:" + "c" * 64,
+    }
+    fake.objects[spec.manifest_key] = service._canonical_bytes(existing)
+    monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
+    terminal = threading.Event()
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05,),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert not terminal.wait(0.2)
+    assert manager._shutdown_notified is False

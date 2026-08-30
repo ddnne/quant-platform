@@ -1,14 +1,28 @@
 import {
+  PERSONAL_RESEARCH_RUNNER_VERSION,
   isPersonalResearchJobId,
   isPersonalResearchSnapshotKey,
   personalResearchManifestKey,
   personalResearchResultKey,
+  type PersonalContainerKind,
 } from "./personal_research_contract";
 import {
   isPersonalSnapshotManifestKey,
   personalSnapshotManifestKey,
   personalSnapshotObjectKey,
 } from "./personal_snapshot_contract";
+import {
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+  personalIndexOverlayFamilyTerminalManifestKey,
+  personalIndexOverlayFamilyRunnerVersion,
+  type PersonalIndexVolOverlay2023CohortId,
+} from "./personal_index_vol_overlay_2023_contract";
+import {
+  PERSONAL_SVI_2023_COHORT_ID,
+  PERSONAL_SVI_2023_RUNNER_VERSION,
+  personalSviTerminalManifestKey,
+} from "./personal_svi_2023_contract";
 import {
   isPersonalSviOutboundRequest,
   personalSviR2Outbound,
@@ -452,6 +466,170 @@ async function putSnapshotManifest(
     : responseJson({ error: "immutable snapshot manifest conflict" }, 409);
 }
 
+function parseTerminalManifestKey(
+  key: string,
+): { kind: PersonalContainerKind; jobId: string } | null {
+  const patterns: Array<[PersonalContainerKind, RegExp]> = [
+    ["research", /^research\/personal\/jobs\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
+    ["snapshot", /^research\/personal\/snapshot-builds\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
+    ["svi", /^research\/personal\/svi-2023\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
+    ["overlay", /^research\/personal\/(?:index-vol-overlay-2023|index-smile-transport-2023)\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
+  ];
+  for (const [kind, pattern] of patterns) {
+    const match = pattern.exec(key);
+    if (match) return { kind, jobId: match[1]! };
+  }
+  return null;
+}
+
+function expectedTerminalManifestKey(
+  kind: PersonalContainerKind,
+  jobId: string,
+  cohortId: string,
+): string | null {
+  if (!isPersonalResearchJobId(jobId)) return null;
+  if (kind === "research") return personalResearchManifestKey(jobId);
+  if (kind === "snapshot") return personalSnapshotManifestKey(jobId);
+  if (kind === "svi") return personalSviTerminalManifestKey(jobId);
+  if (
+    cohortId === PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID ||
+    cohortId === PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID
+  ) {
+    return personalIndexOverlayFamilyTerminalManifestKey(
+      jobId,
+      cohortId as PersonalIndexVolOverlay2023CohortId,
+    );
+  }
+  return null;
+}
+
+function requiredTerminalHeaders(kind: PersonalContainerKind): string[] {
+  const common = [
+    "x-personal-job-id",
+    "x-personal-request-digest",
+    "x-personal-runner-version",
+    "x-personal-job-kind",
+  ];
+  if (kind === "research") {
+    return [...common, "x-personal-cohort-id", "x-personal-universe-id"];
+  }
+  if (kind === "snapshot") return common;
+  return [...common, "x-personal-cohort-id"];
+}
+
+function expectedRunnerVersion(
+  kind: PersonalContainerKind,
+  cohortId: string,
+): string | null {
+  if (kind === "research" || kind === "snapshot") {
+    return PERSONAL_RESEARCH_RUNNER_VERSION;
+  }
+  if (kind === "svi") return PERSONAL_SVI_2023_RUNNER_VERSION;
+  if (
+    cohortId === PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID ||
+    cohortId === PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID
+  ) {
+    return personalIndexOverlayFamilyRunnerVersion(
+      cohortId as PersonalIndexVolOverlay2023CohortId,
+    );
+  }
+  return null;
+}
+
+async function getTerminalManifest(
+  request: Request,
+  env: R2Env,
+  key: string,
+): Promise<Response> {
+  const parsedKey = parseTerminalManifestKey(key);
+  if (!parsedKey) return responseJson({ error: "terminal key denied" }, 403);
+  const personalHeaders: string[] = [];
+  for (const [name] of request.headers) {
+    const lower = name.toLowerCase();
+    if (lower.startsWith("x-personal-")) personalHeaders.push(lower);
+  }
+  const required = requiredTerminalHeaders(parsedKey.kind);
+  if (
+    personalHeaders.length !== required.length ||
+    required.some((name) => !personalHeaders.includes(name))
+  ) {
+    return responseJson({ error: "terminal identity headers denied" }, 403);
+  }
+  const jobId = request.headers.get("x-personal-job-id") ?? "";
+  const requestDigest = request.headers.get("x-personal-request-digest") ?? "";
+  const runnerVersion = request.headers.get("x-personal-runner-version") ?? "";
+  const kind = request.headers.get("x-personal-job-kind") ?? "";
+  const cohortId = request.headers.get("x-personal-cohort-id") ?? "";
+  const universeId = request.headers.get("x-personal-universe-id") ?? "";
+  const expectedKey = expectedTerminalManifestKey(parsedKey.kind, jobId, cohortId);
+  const expectedRunner = expectedRunnerVersion(parsedKey.kind, cohortId);
+  if (
+    kind !== parsedKey.kind ||
+    jobId !== parsedKey.jobId ||
+    expectedKey !== key ||
+    !DIGEST_RE.test(requestDigest) ||
+    expectedRunner === null ||
+    runnerVersion !== expectedRunner
+  ) {
+    return responseJson({ error: "terminal identity denied" }, 403);
+  }
+  if (parsedKey.kind === "svi" && cohortId !== PERSONAL_SVI_2023_COHORT_ID) {
+    return responseJson({ error: "terminal identity denied" }, 403);
+  }
+  const object = await env.STRUCTURED_BUCKET.get(key);
+  if (!object) return responseJson({ error: "terminal not found" }, 404);
+  if (object.size < 1 || object.size > MANIFEST_MAX_BYTES) {
+    return responseJson({ error: "terminal size denied" }, 403);
+  }
+  const stored = new Uint8Array(await object.arrayBuffer());
+  if (stored.byteLength !== object.size) {
+    return responseJson({ error: "terminal length mismatch" }, 403);
+  }
+  let manifest: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(stored));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("not object");
+    }
+    manifest = parsed as Record<string, unknown>;
+  } catch {
+    return responseJson({ error: "terminal is not JSON" }, 403);
+  }
+  if (
+    manifest.job_id !== jobId ||
+    manifest.request_digest !== requestDigest ||
+    manifest.runner_version !== runnerVersion ||
+    (manifest.status !== "COMPLETED" && manifest.status !== "FAILED")
+  ) {
+    return responseJson({ error: "terminal identity mismatch" }, 403);
+  }
+  if (
+    parsedKey.kind === "research" &&
+    (manifest.cohort_id !== cohortId || manifest.universe_id !== universeId)
+  ) {
+    return responseJson({ error: "terminal identity mismatch" }, 403);
+  }
+  if (
+    (parsedKey.kind === "svi" || parsedKey.kind === "overlay") &&
+    manifest.cohort_id !== cohortId
+  ) {
+    return responseJson({ error: "terminal identity mismatch" }, 403);
+  }
+  if (request.method === "HEAD") {
+    return new Response(null, {
+      status: 200,
+      headers: { "content-length": String(object.size) },
+    });
+  }
+  return new Response(stored, {
+    status: 200,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": String(stored.byteLength),
+    },
+  });
+}
+
 /** Narrow R2 capability exposed only to the private Container virtual host. */
 export async function personalResearchR2Outbound(
   request: Request,
@@ -461,6 +639,12 @@ export async function personalResearchR2Outbound(
   const key = url.pathname.startsWith("/") ? url.pathname.slice(1) : url.pathname;
   if (url.hostname !== "research.r2" || url.search || url.hash || key.includes("%")) {
     return responseJson({ error: "R2 request denied" }, 403);
+  }
+  if (
+    (request.method === "GET" || request.method === "HEAD") &&
+    parseTerminalManifestKey(key)
+  ) {
+    return getTerminalManifest(request, env, key);
   }
   if (isPersonalIndexVolOverlayOutboundRequest(request, key)) {
     return personalIndexVolOverlayR2Outbound(request, env, key);
