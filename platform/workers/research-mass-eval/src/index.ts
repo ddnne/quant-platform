@@ -29,6 +29,10 @@ import {
   personalSvi2023Status,
   submitPersonalSvi2023,
 } from "./personal_svi_2023";
+import {
+  personalIndexVolOverlay2023Status,
+  submitPersonalIndexVolOverlay2023,
+} from "./personal_index_vol_overlay_2023";
 
 export { ContainerProxy } from "./personal_research_container";
 export { PersonalResearchContainer };
@@ -332,6 +336,8 @@ export default {
       runPersonalVolResearch,
       submitPersonalSvi2023,
       personalSvi2023Status,
+      submitPersonalIndexVolOverlay2023,
+      personalIndexVolOverlay2023Status,
     });
   },
 };

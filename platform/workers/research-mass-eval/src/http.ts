@@ -32,6 +32,12 @@ export type CreateOnlyPutResult = {
   status?: 409;
 };
 
+export type CreateOnlyBytesOptions = {
+  digest: string;
+  contentType: string;
+  customMetadata?: Record<string, string>;
+};
+
 async function compareExisting(
   bucket: R2Bucket,
   key: string,
@@ -67,14 +73,35 @@ export async function putJsonCreateOnly(
 ): Promise<CreateOnlyPutResult> {
   const bytes = serializedJsonBytes(data);
   const digest = `sha256:${await sha256Hex(bytes)}`;
-  const existing = await compareExisting(bucket, key, digest);
-  if (existing) return existing;
-  const put = await bucket.put(key, bytes, {
-    httpMetadata: { contentType: "application/json; charset=utf-8" },
+  return putBytesCreateOnly(bucket, key, bytes, {
+    digest,
+    contentType: "application/json; charset=utf-8",
     customMetadata: {
       plane: "research_mass_eval",
       wave: "research-mass-eval",
+    },
+  });
+}
+
+/** Exact-byte create-only write shared by immutable Container output planes. */
+export async function putBytesCreateOnly(
+  bucket: R2Bucket,
+  key: string,
+  bytes: Uint8Array,
+  options: CreateOnlyBytesOptions,
+): Promise<CreateOnlyPutResult> {
+  const digest = `sha256:${await sha256Hex(bytes)}`;
+  if (digest !== options.digest) {
+    return { key, bytes: 0, created: false, digest, conflict: true, status: 409 };
+  }
+  const existing = await compareExisting(bucket, key, digest);
+  if (existing) return existing;
+  const put = await bucket.put(key, bytes, {
+    httpMetadata: { contentType: options.contentType },
+    customMetadata: {
+      ...options.customMetadata,
       sha256: digest,
+      immutable: "true",
     },
     onlyIf: { etagDoesNotMatch: "*" },
   });

@@ -28,6 +28,11 @@ import {
   personalSviJobIdFromPath,
   type PersonalSvi2023Request,
 } from "./personal_svi_2023_contract";
+import {
+  parsePersonalIndexVolOverlay2023Request,
+  personalIndexVolOverlay2023JobIdFromPath,
+  type PersonalIndexVolOverlay2023Request,
+} from "./personal_index_vol_overlay_2023_contract";
 import type { Env, MassEvalJobResult, MassEvalRequest } from "./types";
 
 export type MassEvalFetchHandlers = {
@@ -50,6 +55,14 @@ export type MassEvalFetchHandlers = {
     request: PersonalSvi2023Request,
   ) => Promise<Response>;
   personalSvi2023Status?: (env: Env, jobId: string) => Promise<Response>;
+  submitPersonalIndexVolOverlay2023?: (
+    env: Env,
+    request: PersonalIndexVolOverlay2023Request,
+  ) => Promise<Response>;
+  personalIndexVolOverlay2023Status?: (
+    env: Env,
+    jobId: string,
+  ) => Promise<Response>;
 };
 
 /** HTTP path dispatch. Orchestration stays in index.ts; R2 put stays in http.ts. */
@@ -59,6 +72,50 @@ export async function dispatchMassEvalFetch(
   handlers: MassEvalFetchHandlers,
 ): Promise<Response> {
   const url = new URL(request.url);
+
+  if (url.pathname === "/v1/personal-index-vol-overlay-2023") {
+    if (request.method !== "POST") {
+      return json({ error: "POST required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    if (
+      !env.STRUCTURED_BUCKET ||
+      !env.PERSONAL_RESEARCH_CONTAINER ||
+      !handlers.submitPersonalIndexVolOverlay2023
+    ) {
+      return json({ error: "personal index-vol overlay unavailable" }, 503);
+    }
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = parsePersonalIndexVolOverlay2023Request(body);
+    if (!parsed.ok) return json({ error: parsed.error }, 400);
+    return handlers.submitPersonalIndexVolOverlay2023(env, parsed.value);
+  }
+
+  if (url.pathname.startsWith("/v1/personal-index-vol-overlay-2023/jobs/")) {
+    if (request.method !== "GET") {
+      return json({ error: "GET required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    const jobId = personalIndexVolOverlay2023JobIdFromPath(url.pathname);
+    if (!jobId) return json({ error: "job_id is invalid" }, 400);
+    if (
+      !env.STRUCTURED_BUCKET ||
+      !env.PERSONAL_RESEARCH_CONTAINER ||
+      !handlers.personalIndexVolOverlay2023Status
+    ) {
+      return json({ error: "personal index-vol overlay status unavailable" }, 503);
+    }
+    return handlers.personalIndexVolOverlay2023Status(env, jobId);
+  }
 
   if (url.pathname === "/v1/personal-svi-2023") {
     if (request.method !== "POST") {

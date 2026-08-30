@@ -34,6 +34,11 @@ from personal_svi_2023_job import (
     SviJobInputError,
     execute_svi_job,
 )
+from personal_index_vol_overlay_2023_job import (
+    OverlayJobInputError,
+    PersonalIndexVolOverlay2023JobSpec,
+    execute_overlay_job,
+)
 from research.personal_base_sleeve import (
     BASE_COHORT_ID,
     BASE_SLEEVE_ID,
@@ -45,7 +50,7 @@ from research.personal_base_sleeve import (
     validate_personal_base_sleeve_artifact,
 )
 
-RUNNER_VERSION = "personal-cloud-runner/v8"
+RUNNER_VERSION = "personal-cloud-runner/v9"
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60
@@ -784,7 +789,9 @@ def execute_job(
         shutil.rmtree(job_root, ignore_errors=True)
 
 
-JobSpecLike = JobSpec | PersonalSvi2023JobSpec
+JobSpecLike = (
+    JobSpec | PersonalSvi2023JobSpec | PersonalIndexVolOverlay2023JobSpec
+)
 Runner = Callable[[JobSpecLike], dict[str, Any]]
 TerminalCallback = Callable[[], None]
 
@@ -910,6 +917,8 @@ class JobManager:
 
 
 def default_runner(spec: JobSpecLike) -> dict[str, Any]:
+    if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
+        return execute_overlay_job(spec)
     if isinstance(spec, PersonalSvi2023JobSpec):
         return execute_svi_job(spec)
     work_root = Path(os.environ.get("QP_JOB_ROOT", "/tmp/personal-research"))
@@ -956,7 +965,11 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
         self._json({"ok": record.get("status") == "COMPLETED", "job": record}, HTTPStatus.OK)
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        if self.path not in {"/v1/run", "/v1/run-svi-2023"}:
+        if self.path not in {
+            "/v1/run",
+            "/v1/run-svi-2023",
+            "/v1/run-index-vol-overlay-2023",
+        }:
             self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
             return
         raw_length = self.headers.get("content-length", "")
@@ -965,13 +978,19 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             return
         try:
             document = json.loads(self.rfile.read(int(raw_length)))
-            spec = (
-                PersonalSvi2023JobSpec.from_document(document)
-                if self.path == "/v1/run-svi-2023"
-                else JobSpec.from_document(document)
-            )
+            if self.path == "/v1/run-svi-2023":
+                spec = PersonalSvi2023JobSpec.from_document(document)
+            elif self.path == "/v1/run-index-vol-overlay-2023":
+                spec = PersonalIndexVolOverlay2023JobSpec.from_document(document)
+            else:
+                spec = JobSpec.from_document(document)
             record = self.manager.submit(spec)
-        except (json.JSONDecodeError, JobInputError, SviJobInputError) as error:
+        except (
+            json.JSONDecodeError,
+            JobInputError,
+            SviJobInputError,
+            OverlayJobInputError,
+        ) as error:
             self._json({"error": "invalid_job", "detail": str(error)}, HTTPStatus.BAD_REQUEST)
             return
         except JobConflictError as error:
