@@ -634,6 +634,8 @@ export async function fetchGovernedPage(
     const rate = await env.PROXY_RATE_LIMITER.limit({ key: "jquants-acquisition-rpc-v2" });
     if (!rate.success) {
       const response = await errorResponse("rate_limited", 429, environment, "FAILED", resolved, session);
+      // Internal limiter only. Provider 429 is mapped to 502 without Retry-After.
+      response.headers.set("retry-after", "60");
       audit(resolved, session?.acquisitionId ?? null, "FAILED", response.status);
       return response;
     }

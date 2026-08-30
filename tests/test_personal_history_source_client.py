@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from email.message import EmailMessage
 import hashlib
 import importlib.util
 import io
 import json
 from pathlib import Path
 import sys
+import urllib.error
 import urllib.request
 
 import pytest
@@ -709,4 +711,152 @@ def test_duplicate_and_gapped_ordinals_are_rejected(tmp_path: Path) -> None:
         client.spool._assert_verified_complete(
             state, duplicated, "equities_bars_daily", "2024-03"
         )
+    client.close()
+
+
+def _http_error(
+    url: str,
+    code: int,
+    *,
+    retry_after: str | None = None,
+    body: bytes = b"",
+) -> urllib.error.HTTPError:
+    headers = EmailMessage()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    return urllib.error.HTTPError(url, code, "error", headers, io.BytesIO(body))
+
+
+def _post_client(tmp_path: Path, opener: object, **kwargs):
+    return client_mod.PersonalHistorySourceClient(
+        environment="production",
+        period_end="2024-03-31",
+        spool_path=tmp_path / "spool.sqlite",
+        opener=opener,
+        _sleep=kwargs.get("_sleep", lambda _delay: None),
+        _max_attempts=kwargs.get("_max_attempts"),
+    )
+
+
+def test_post_retries_429_then_succeeds_with_same_request_bytes(tmp_path: Path) -> None:
+    calls: list[bytes] = []
+    slept: list[float] = []
+    payload = {
+        "dataset_id": "markets_calendar",
+        "acquisition_nonce": "a" * 64,
+        "continuation_token": "cursor-keep",
+    }
+
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            calls.append(bytes(request.data))
+            if len(calls) == 1:
+                raise _http_error(
+                    request.full_url,
+                    429,
+                    retry_after="60",
+                    body=b'{"error":"rate_limited"}',
+                )
+            raw = json.dumps({"data": []}, separators=(",", ":")).encode()
+            return _Response(raw, _page_headers("EXHAUSTED", "NONE", "NONE"))
+
+    client = _post_client(tmp_path, Opener(), _sleep=slept.append)
+    raw, headers, status = client._post(payload)
+    assert status == 200
+    assert headers["x-quant-acquisition-pagination-state"] == "EXHAUSTED"
+    assert json.loads(raw) == {"data": []}
+    assert slept == [60]
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    decoded = json.loads(calls[0])
+    assert decoded["continuation_token"] == "cursor-keep"
+    assert decoded["acquisition_nonce"] == "a" * 64
+    client.close()
+
+
+def test_post_exhausts_bounded_429_retries(tmp_path: Path) -> None:
+    calls = {"n": 0}
+    slept: list[float] = []
+
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            calls["n"] += 1
+            raise _http_error(request.full_url, 429, retry_after="12")
+
+    client = _post_client(tmp_path, Opener(), _sleep=slept.append)
+    with pytest.raises(PersonalHistoryError, match="history.source returned HTTP 429"):
+        client._post({"continuation_token": "keep"})
+    assert calls["n"] == 4
+    assert slept == [12, 12, 12]
+    client.close()
+
+
+@pytest.mark.parametrize(
+    "retry_after",
+    [None, "", "abc", "0", "121", "60.5", "+60", "60 ", "Wed, 21 Oct 2015 07:28:00 GMT"],
+)
+def test_post_fail_closes_malformed_retry_after(
+    tmp_path: Path, retry_after: str | None
+) -> None:
+    calls = {"n": 0}
+    slept: list[float] = []
+
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            calls["n"] += 1
+            raise _http_error(request.full_url, 429, retry_after=retry_after)
+
+    client = _post_client(tmp_path, Opener(), _sleep=slept.append)
+    with pytest.raises(PersonalHistoryError, match="history.source returned HTTP 429"):
+        client._post({"continuation_token": "keep"})
+    assert calls["n"] == 1
+    assert slept == []
+    client.close()
+
+
+def test_post_does_not_retry_non_429(tmp_path: Path) -> None:
+    calls = {"n": 0}
+    slept: list[float] = []
+
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            calls["n"] += 1
+            raise _http_error(request.full_url, 502, retry_after="60")
+
+    client = _post_client(tmp_path, Opener(), _sleep=slept.append)
+    with pytest.raises(PersonalHistoryError, match="history.source returned HTTP 502"):
+        client._post({"continuation_token": "keep"})
+    assert calls["n"] == 1
+    assert slept == []
+    client.close()
+
+
+def test_429_retry_does_not_change_fetch_call_evidence(tmp_path: Path) -> None:
+    calls = {"n": 0}
+    slept: list[float] = []
+
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise _http_error(request.full_url, 429, retry_after="1")
+            month = json.loads(request.data.decode())["segment_id"]
+            raw = json.dumps(
+                {"data": _calendar_month(month)}, separators=(",", ":")
+            ).encode()
+            return _Response(raw, _page_headers("EXHAUSTED", "NONE", "NONE"))
+
+    client = _post_client(tmp_path, Opener(), _sleep=slept.append)
+    fetched = client.fetch_dataset_evidenced(
+        "markets_calendar", **{"from": "2024-03-10", "to": "2024-03-12"}
+    )
+    assert slept == [1]
+    assert calls["n"] == 2
+    assert client.fetch_calls == 1
+    assert len(fetched.pages) == 1
+    assert [row["Date"] for row in fetched.rows] == [
+        "2024-03-10",
+        "2024-03-11",
+        "2024-03-12",
+    ]
     client.close()
