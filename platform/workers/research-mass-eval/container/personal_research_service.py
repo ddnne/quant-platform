@@ -46,6 +46,11 @@ from personal_index_vol_overlay_2023_job import (
     SMILE_TRANSPORT_MANIFEST_SCHEMA,
     execute_overlay_job,
 )
+from personal_vol_am_pm_panel_job import (
+    PersonalVolAmPmPanelJobSpec,
+    VolPanelJobInputError,
+    execute_vol_am_pm_panel_job,
+)
 from ingestion.personal_history import (
     PERSONAL_COMPLETENESS_CLAIM,
     PERSONAL_CONTROLLED_ELIGIBILITY,
@@ -752,7 +757,10 @@ def _put(
         ),
         "x-content-sha256": content_digest,
     }
-    if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
+    if isinstance(
+        spec,
+        (PersonalIndexVolOverlay2023JobSpec, PersonalVolAmPmPanelJobSpec),
+    ):
         headers.update(spec.headers())
     if extra_headers:
         headers.update(extra_headers)
@@ -799,6 +807,8 @@ def _job_kind(spec: Any) -> str:
         return "svi"
     if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
         return "overlay"
+    if isinstance(spec, PersonalVolAmPmPanelJobSpec):
+        return "vol-panel"
     return "research"
 
 
@@ -812,7 +822,14 @@ def _terminal_get_headers(spec: Any) -> dict[str, str]:
     if isinstance(spec, JobSpec):
         headers["x-personal-cohort-id"] = spec.cohort_id
         headers["x-personal-universe-id"] = spec.universe_id
-    elif isinstance(spec, (PersonalSvi2023JobSpec, PersonalIndexVolOverlay2023JobSpec)):
+    elif isinstance(
+        spec,
+        (
+            PersonalSvi2023JobSpec,
+            PersonalIndexVolOverlay2023JobSpec,
+            PersonalVolAmPmPanelJobSpec,
+        ),
+    ):
         headers["x-personal-cohort-id"] = spec.cohort_id
     return headers
 
@@ -831,6 +848,9 @@ def _terminal_body_matches_spec(spec: Any, document: Mapping[str, Any]) -> bool:
     ):
         return False
     if isinstance(spec, PersonalSvi2023JobSpec):
+        if document.get("cohort_id") != spec.cohort_id:
+            return False
+    if isinstance(spec, PersonalVolAmPmPanelJobSpec):
         if document.get("cohort_id") != spec.cohort_id:
             return False
     if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
@@ -1465,6 +1485,7 @@ JobSpecLike = (
     | SnapshotJobSpec
     | PersonalSvi2023JobSpec
     | PersonalIndexVolOverlay2023JobSpec
+    | PersonalVolAmPmPanelJobSpec
 )
 Runner = Callable[[JobSpecLike], dict[str, Any]]
 TerminalCallback = Callable[[], None]
@@ -1578,6 +1599,28 @@ class JobManager:
                 "job_id": spec.job_id,
                 "cohort_id": spec.cohort_id,
                 "strategy_id": spec.strategy_id,
+                "runner_version": spec.runner_version,
+                "request_digest": spec.request_digest,
+                "input_manifest_key": spec.input_manifest_key,
+                "input_manifest_digest": spec.input_manifest_digest,
+                "error": error,
+                "draft_only": True,
+                "screening_only": True,
+                "ready": False,
+                "mass": False,
+                "promotion": False,
+                "live_orders": False,
+                "go": False,
+                "not_a_pass": True,
+            }
+        if isinstance(spec, PersonalVolAmPmPanelJobSpec):
+            return {
+                "schema_version": "personal-vol-ratio-am-pm-panel-writer-manifest/v1",
+                "status": "FAILED",
+                "kind": "vol-panel",
+                "producer_id": spec.producer_id,
+                "job_id": spec.job_id,
+                "cohort_id": spec.cohort_id,
                 "runner_version": spec.runner_version,
                 "request_digest": spec.request_digest,
                 "input_manifest_key": spec.input_manifest_key,
@@ -1850,6 +1893,8 @@ def default_runner(spec: JobSpecLike) -> dict[str, Any]:
         return execute_overlay_job(spec)
     if isinstance(spec, PersonalSvi2023JobSpec):
         return execute_svi_job(spec)
+    if isinstance(spec, PersonalVolAmPmPanelJobSpec):
+        return execute_vol_am_pm_panel_job(spec)
     work_root = Path(os.environ.get("QP_JOB_ROOT", "/tmp/personal-research"))
     work_root.mkdir(parents=True, exist_ok=True)
     command = tuple(
@@ -1899,6 +1944,7 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             "/v1/run-svi-2023",
             "/v1/run-index-vol-overlay-2023",
             "/v1/build-snapshot",
+            "/v1/build-personal-vol-am-pm-panel",
         }:
             self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
             return
@@ -1914,6 +1960,8 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
                 spec = PersonalIndexVolOverlay2023JobSpec.from_document(document)
             elif self.path == "/v1/build-snapshot":
                 spec = SnapshotJobSpec.from_document(document)
+            elif self.path == "/v1/build-personal-vol-am-pm-panel":
+                spec = PersonalVolAmPmPanelJobSpec.from_document(document)
             else:
                 spec = JobSpec.from_document(document)
             record = self.manager.submit(spec)
@@ -1922,6 +1970,7 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             JobInputError,
             SviJobInputError,
             OverlayJobInputError,
+            VolPanelJobInputError,
         ) as error:
             self._json({"error": "invalid_job", "detail": str(error)}, HTTPStatus.BAD_REQUEST)
             return

@@ -7,7 +7,12 @@ export const PERSONAL_RESEARCH_MAX_PERIOD_DAYS = 2200;
 export const PERSONAL_RESEARCH_MAX_CONCURRENT_JOBS = 8;
 export const PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024;
 export const PERSONAL_SNAPSHOT_MAX_DATABASE_BYTES = 3_758_096_384;
-export type PersonalContainerKind = "research" | "svi" | "overlay" | "snapshot";
+export type PersonalContainerKind =
+  | "research"
+  | "svi"
+  | "overlay"
+  | "snapshot"
+  | "vol-panel";
 export const PERSONAL_RESEARCH_LEGACY_COHORT_IDS = [
   "price-relative-v1",
   "fundamental-relative-v1",

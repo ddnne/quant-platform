@@ -373,6 +373,42 @@ describe("personal Container R2 capability", () => {
     expect(bucket.put).not.toHaveBeenCalled();
   });
 
+  it("GETs a vol-panel terminal with the closed job-kind headers", async () => {
+    const jobId = "vol-panel-term";
+    const key = `research/personal/vol-ratio-am-pm-v1/panel-builds/job=${jobId}/manifest.json`;
+    const requestDigest = `sha256:${"b".repeat(64)}`;
+    const manifest = {
+      job_id: jobId,
+      request_digest: requestDigest,
+      runner_version: "personal-cloud-runner/v13",
+      status: "FAILED",
+      cohort_id: "personal-vol-ratio-am-pm-v1",
+      kind: "vol-panel",
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(manifest));
+    const object = r2Object(key, bytes);
+    const bucket = {
+      get: vi.fn(async () => object),
+      head: vi.fn(),
+      put: vi.fn(),
+    } as unknown as R2Bucket;
+    const response = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "GET",
+        headers: {
+          "x-personal-job-id": jobId,
+          "x-personal-request-digest": requestDigest,
+          "x-personal-runner-version": "personal-cloud-runner/v13",
+          "x-personal-job-kind": "vol-panel",
+          "x-personal-cohort-id": "personal-vol-ratio-am-pm-v1",
+        },
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(manifest);
+  });
+
   it("rejects extra identity headers, mismatched terminals, and non-terminal keys", async () => {
     const jobId = "term-deny";
     const key = `research/personal/jobs/job=${jobId}/manifest.json`;

@@ -10,10 +10,11 @@ import {
   personalResearchManifestKey,
 } from "./personal_research_contract";
 import { personalSnapshotManifestKey } from "./personal_snapshot_contract";
+import { personalVolAmPmPanelBuildTerminalKey } from "./personal_vol_am_pm_panel_writer_contract";
 import { sha256Hex } from "./sha256";
 import type { Env } from "./types";
 
-export type PersonalJobKind = "research" | "snapshot" | "svi" | "overlay";
+export type PersonalJobKind = "research" | "snapshot" | "svi" | "overlay" | "vol-panel";
 
 export const PERSONAL_JOB_TTL_MS = 180 * 60 * 1000;
 const STATE_MAX_BYTES = 8 * 1024;
@@ -50,6 +51,9 @@ export function personalJobStateKey(kind: PersonalJobKind, jobId: string): strin
   if (kind === "overlay") {
     return `research/personal/index-vol-overlay-2023/job=${jobId}/state.json`;
   }
+  if (kind === "vol-panel") {
+    return `research/personal/vol-ratio-am-pm-v1/panel-builds/job=${jobId}/state.json`;
+  }
   return `research/personal/jobs/job=${jobId}/state.json`;
 }
 
@@ -60,6 +64,9 @@ export function personalJobTerminalKey(kind: PersonalJobKind, jobId: string): st
   }
   if (kind === "overlay") {
     return `research/personal/index-vol-overlay-2023/job=${jobId}/manifest.json`;
+  }
+  if (kind === "vol-panel") {
+    return personalVolAmPmPanelBuildTerminalKey(jobId);
   }
   return personalResearchManifestKey(jobId);
 }
@@ -221,6 +228,22 @@ export function timeoutFailedTerminal(
       live_orders: false,
       not_a_pass: true,
       single_stock_option_iv_used: false,
+    };
+  }
+  if (document.kind === "vol-panel") {
+    return {
+      ...base,
+      schema_version: "personal-vol-ratio-am-pm-panel-writer-manifest/v1",
+      kind: "vol-panel",
+      producer_id: "personal-vol-ratio-am-pm-panel-writer/v1",
+      cohort_id: "personal-vol-ratio-am-pm-v1",
+      draft_only: true,
+      screening_only: true,
+      ready: false,
+      mass: false,
+      promotion: false,
+      live_orders: false,
+      not_a_pass: true,
     };
   }
   return base;

@@ -10,7 +10,9 @@ import {
   PERSONAL_VOL_AM_PM_MANIFEST_SCHEMA,
   PERSONAL_VOL_AM_PM_REPORT_SCHEMA,
   evaluatePersonalVolAmPmWindow,
+  loadPersonalVolAmPmPanelsFromBuildJob,
   parsePersonalVolAmPmResearchRequest,
+  personalVolAmPmCommonValidMask,
   personalVolAmPmCommonValidity,
   personalVolAmPmContractDigest,
   personalVolAmPmDailyPath,
@@ -42,7 +44,18 @@ import {
   parsePersonalVolResearchRequest,
   runPersonalVolResearch,
 } from "./personal_vol_research";
+import {
+  PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
+  PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA,
+  PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
+  personalVolAmPmCommonValidDigest,
+  personalVolAmPmPanelBuildTerminalKey,
+  personalVolAmPmPanelObjectKey,
+} from "./personal_vol_am_pm_panel_writer_contract";
+import { sha256Hex } from "./sha256";
 import type { Env, PeriodPanel } from "./types";
+
+const PANEL_BUILD_JOB_ID = "panel-build-1";
 
 function datesFrom(start: string, count = 18): string[] {
   const startMs = Date.parse(`${start}T00:00:00Z`);
@@ -133,9 +146,13 @@ function legacyClosePanel(start = "2023-09-01"): PeriodPanel {
 async function panelForPeriod(
   period: (typeof PERSONAL_VOL_PERIODS)[number],
 ): Promise<PersonalVolAmPmPanel> {
-  const staged = await amPmPanel(period.period_id, `${period.year}-09-01`);
+  const periodStart = period.period_start!;
+  const lookback = new Date(Date.parse(`${periodStart}T00:00:00Z`) - 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  const staged = await amPmPanel(period.period_id, lookback);
   staged.year = period.year!;
-  staged.period_start = period.period_start!;
+  staged.period_start = periodStart;
   staged.period_end = period.period_end!;
   return staged;
 }
@@ -190,21 +207,69 @@ class MemR2 {
   }
 }
 
+async function seedPanelBuild(
+  mem: MemR2,
+  jobId: string,
+  panels: PersonalVolAmPmPanel[],
+  mutateTerminal?: (terminal: Record<string, unknown>) => void,
+): Promise<void> {
+  const periods: Record<string, unknown> = {};
+  for (const panel of panels) {
+    const bytes = new TextEncoder().encode(JSON.stringify(panel));
+    const digest = `sha256:${await sha256Hex(bytes)}`;
+    const key = personalVolAmPmPanelObjectKey(digest);
+    mem.seed(key, panel);
+    const maskDigest = await personalVolAmPmCommonValidDigest(
+      personalVolAmPmCommonValidMask(panel),
+    );
+    periods[panel.period_id] = {
+      panel_key: key,
+      panel_sha256: digest,
+      common_valid_sha256: maskDigest,
+    };
+  }
+  const terminal: Record<string, unknown> = {
+    schema_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA,
+    status: "COMPLETED",
+    producer_id: PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
+    job_id: jobId,
+    cohort_id: PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
+    periods,
+  };
+  mutateTerminal?.(terminal);
+  mem.seed(personalVolAmPmPanelBuildTerminalKey(jobId), terminal);
+}
+
 describe("AM/PM request identity", () => {
-  it("accepts only job_id and the AM/PM cohort", () => {
-    expect(parsePersonalVolAmPmResearchRequest({ job_id: "am-pm-1" })).toEqual({
-      ok: true,
-      value: { job_id: "am-pm-1", cohort_id: PERSONAL_VOL_AM_PM_COHORT_ID },
+  it("accepts only job_id, the AM/PM cohort, and panel_build_job_id", () => {
+    expect(parsePersonalVolAmPmResearchRequest({ job_id: "am-pm-1" })).toMatchObject({
+      ok: false,
+      error: "panel_build_job_id is invalid",
     });
     expect(
       parsePersonalVolAmPmResearchRequest({
         job_id: "am-pm-1",
+        panel_build_job_id: PANEL_BUILD_JOB_ID,
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        job_id: "am-pm-1",
+        cohort_id: PERSONAL_VOL_AM_PM_COHORT_ID,
+        panel_build_job_id: PANEL_BUILD_JOB_ID,
+      },
+    });
+    expect(
+      parsePersonalVolAmPmResearchRequest({
+        job_id: "am-pm-1",
+        panel_build_job_id: PANEL_BUILD_JOB_ID,
         cohort_id: PERSONAL_VOL_COHORT_ID,
       }),
     ).toMatchObject({ ok: false });
     expect(
       parsePersonalVolAmPmResearchRequest({
         job_id: "am-pm-1",
+        panel_build_job_id: PANEL_BUILD_JOB_ID,
         threshold: 0,
       }),
     ).toMatchObject({ ok: false, error: expect.stringContaining("unknown") });
@@ -752,7 +817,10 @@ describe("POST /v1/personal-vol-am-pm-research", () => {
           "content-type": "application/json",
           "x-mass-eval-token": "secret",
         },
-        body: JSON.stringify({ job_id: "closed-am-pm" }),
+        body: JSON.stringify({
+          job_id: "closed-am-pm",
+          panel_build_job_id: PANEL_BUILD_JOB_ID,
+        }),
       }),
       {
         MASS_EVAL_TOKEN: "secret",
@@ -775,6 +843,7 @@ describe("POST /v1/personal-vol-am-pm-research", () => {
     expect(received).toEqual({
       job_id: "closed-am-pm",
       cohort_id: PERSONAL_VOL_AM_PM_COHORT_ID,
+      panel_build_job_id: PANEL_BUILD_JOB_ID,
     });
   });
 });
@@ -782,18 +851,21 @@ describe("POST /v1/personal-vol-am-pm-research", () => {
 describe("AM/PM immutable artifact", () => {
   it("writes distinct keys and remains DRAFT-only", async () => {
     const mem = new MemR2();
-    for (const period of PERSONAL_VOL_PERIODS) {
-      mem.seed(
-        `${PERSONAL_VOL_AM_PM_PANELS_PREFIX}/${period.period_id}.json`,
-        await panelForPeriod(period),
-      );
-    }
+    await seedPanelBuild(
+      mem,
+      PANEL_BUILD_JOB_ID,
+      await Promise.all(PERSONAL_VOL_PERIODS.map((period) => panelForPeriod(period))),
+    );
     const result = await runPersonalVolAmPmResearch(
       {
         STRUCTURED_BUCKET: mem.asBucket(),
         MASS_EVAL_VERSION: "research-mass-eval/test",
       } as Env,
-      { job_id: "immutable-am-pm", cohort_id: PERSONAL_VOL_AM_PM_COHORT_ID },
+      {
+        job_id: "immutable-am-pm",
+        cohort_id: PERSONAL_VOL_AM_PM_COHORT_ID,
+        panel_build_job_id: PANEL_BUILD_JOB_ID,
+      },
     );
     const prefix = `${PERSONAL_VOL_AM_PM_JOB_ROOT}/job=immutable-am-pm`;
     expect(result.schema_version).toBe(PERSONAL_VOL_AM_PM_REPORT_SCHEMA);
@@ -836,25 +908,83 @@ describe("AM/PM immutable artifact", () => {
         bars: { A: [["2023-09-01", 100]] },
       });
     }
+    await expect(
+      runPersonalVolAmPmResearch(
+        {
+          STRUCTURED_BUCKET: mem.asBucket(),
+          MASS_EVAL_VERSION: "research-mass-eval/test",
+        } as Env,
+        {
+          job_id: "missing-producer",
+          cohort_id: PERSONAL_VOL_AM_PM_COHORT_ID,
+          panel_build_job_id: PANEL_BUILD_JOB_ID,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "panel_build_terminal_missing" });
+  });
+
+  it("resolves exact children from panel_build_job_id and rejects mask tamper", async () => {
+    const mem = new MemR2();
+    const panels = await Promise.all(
+      PERSONAL_VOL_PERIODS.map((period) => panelForPeriod(period)),
+    );
+    await seedPanelBuild(mem, PANEL_BUILD_JOB_ID, panels);
+    const loaded = await loadPersonalVolAmPmPanelsFromBuildJob(
+      mem.asBucket(),
+      PANEL_BUILD_JOB_ID,
+    );
+    expect(loaded.panels.map((panel) => panel.period_id)).toEqual(
+      PERSONAL_VOL_PERIODS.map((period) => period.period_id),
+    );
+    expect(loaded.comparisonNotEvaluated).toBe(false);
+
+    const first = PERSONAL_VOL_PERIODS[0]!;
+    const tampered = loaded.commonValid.get(first.period_id)!;
+    tampered[1] = { ...tampered[1]!, common_valid: !tampered[1]!.common_valid };
+    const terminal = (await mem.get(
+      personalVolAmPmPanelBuildTerminalKey(PANEL_BUILD_JOB_ID),
+    )) as { json: () => Promise<Record<string, unknown>> };
+    const document = await terminal.json();
+    const periods = document.periods as Record<string, { common_valid_sha256: string }>;
+    periods[first.period_id]!.common_valid_sha256 = `sha256:${"ab".repeat(32)}`;
+    mem.seed(personalVolAmPmPanelBuildTerminalKey(PANEL_BUILD_JOB_ID), document);
+    await expect(
+      loadPersonalVolAmPmPanelsFromBuildJob(mem.asBucket(), PANEL_BUILD_JOB_ID),
+    ).rejects.toMatchObject({ code: "common_valid_mask_tamper_rejected" });
+  });
+
+  it("marks every exact-four candidate and the control unevaluated on a shared hole", async () => {
+    const mem = new MemR2();
+    const panels = await Promise.all(
+      PERSONAL_VOL_PERIODS.map((period) => panelForPeriod(period)),
+    );
+    const hole = panels[0]!;
+    hole.bars.A[2] = { ...hole.bars.A[2]!, AAdjC: null };
+    await seedPanelBuild(mem, PANEL_BUILD_JOB_ID, panels);
     const result = await runPersonalVolAmPmResearch(
       {
         STRUCTURED_BUCKET: mem.asBucket(),
         MASS_EVAL_VERSION: "research-mass-eval/test",
       } as Env,
-      { job_id: "missing-producer", cohort_id: PERSONAL_VOL_AM_PM_COHORT_ID },
+      {
+        job_id: "shared-mask",
+        cohort_id: PERSONAL_VOL_AM_PM_COHORT_ID,
+        panel_build_job_id: PANEL_BUILD_JOB_ID,
+      },
     );
     expect(result.execution_contract).toMatchObject({
       exact_four_evaluation_complete: false,
     });
-    expect(result.data_contract).toMatchObject({
-      producer_dependency: PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY,
-      panel_notes: expect.arrayContaining([
-        expect.stringMatching(/^missing:research\/personal\/vol-ratio-am-pm-v1\/panels\//),
-      ]),
-    });
     expect(result.execution_summary).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ candidate_status: "not_evaluated" }),
+        expect.objectContaining({
+          strategy_id: PERSONAL_VOL_STRATEGIES[0]!.strategy_id,
+          candidate_status: "not_evaluated",
+        }),
+        expect.objectContaining({
+          control_id: PERSONAL_VOL_AM_PM_CONTROL.control_id,
+          candidate_status: "not_evaluated",
+        }),
       ]),
     );
   });

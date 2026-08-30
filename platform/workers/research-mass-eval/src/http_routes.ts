@@ -51,6 +51,12 @@ import {
   personalIndexVolOverlay2023JobIdFromPath,
   type PersonalIndexVolOverlay2023Request,
 } from "./personal_index_vol_overlay_2023_contract";
+import {
+  PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_REQUEST_BYTES,
+  parsePersonalVolAmPmPanelBuildRequest,
+  personalVolAmPmPanelBuildJobIdFromPath,
+  type PersonalVolAmPmPanelBuildRequest,
+} from "./personal_vol_am_pm_panel_writer_contract";
 import type { Env, MassEvalJobResult, MassEvalRequest } from "./types";
 
 export type MassEvalFetchHandlers = {
@@ -90,6 +96,11 @@ export type MassEvalFetchHandlers = {
     request: PersonalSnapshotBuildRequest,
   ) => Promise<Response>;
   personalSnapshotBuildStatus?: (env: Env, jobId: string) => Promise<Response>;
+  submitPersonalVolAmPmPanelBuild?: (
+    env: Env,
+    request: PersonalVolAmPmPanelBuildRequest,
+  ) => Promise<Response>;
+  personalVolAmPmPanelBuildStatus?: (env: Env, jobId: string) => Promise<Response>;
   submitPersonalResearchJobs?: (
     env: Env,
     requests: PersonalResearchRequest[],
@@ -188,6 +199,45 @@ export async function dispatchMassEvalFetch(
     return handlers.personalSvi2023Status(env, jobId);
   }
 
+  if (url.pathname === "/v1/personal-vol-am-pm-panel-build") {
+    if (request.method !== "POST") {
+      return json({ error: "POST required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    if (
+      !env.STRUCTURED_BUCKET ||
+      !env.PERSONAL_RESEARCH_CONTAINER ||
+      !handlers.submitPersonalVolAmPmPanelBuild
+    ) {
+      return json({ error: "personal vol AM/PM panel build unavailable" }, 503);
+    }
+    const bounded = await readBoundedJson(
+      request,
+      PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_REQUEST_BYTES,
+    );
+    if (!bounded.ok) return json({ error: bounded.error }, bounded.status);
+    const parsed = parsePersonalVolAmPmPanelBuildRequest(bounded.value);
+    if (!parsed.ok) return json({ error: parsed.error }, 400);
+    return handlers.submitPersonalVolAmPmPanelBuild(env, parsed.value);
+  }
+
+  if (url.pathname.startsWith("/v1/personal-vol-am-pm-panel-build/jobs/")) {
+    if (request.method !== "GET") {
+      return json({ error: "GET required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    const jobId = personalVolAmPmPanelBuildJobIdFromPath(url.pathname);
+    if (!jobId) return json({ error: "job_id is invalid" }, 400);
+    if (!env.STRUCTURED_BUCKET || !handlers.personalVolAmPmPanelBuildStatus) {
+      return json({ error: "personal vol AM/PM panel status unavailable" }, 503);
+    }
+    return handlers.personalVolAmPmPanelBuildStatus(env, jobId);
+  }
+
   if (url.pathname === "/v1/personal-vol-am-pm-research") {
     if (request.method !== "POST") {
       return json({ error: "POST required" }, 405);
@@ -214,11 +264,11 @@ export async function dispatchMassEvalFetch(
       return json({ ok: true, ...result });
     } catch (error) {
       const code = (error as { code?: string }).code;
-      if (code === "artifact_conflict") {
+      if (typeof code === "string" && code.length > 0) {
         return json(
           {
             ok: false,
-            error: "artifact_conflict",
+            error: code,
             job_id: amPmParsed.value.job_id,
             go: false,
             not_a_pass: true,

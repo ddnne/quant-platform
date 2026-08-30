@@ -15,7 +15,6 @@ import {
 import {
   barMaps,
   equityCodes,
-  loadPersonalVolAmPmPanels,
   PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
   PERSONAL_VOL_AM_PM_PANELS_PREFIX,
   PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY,
@@ -25,6 +24,17 @@ import {
   personalVolAmPmSessionCalendarDigestMatches,
   type PersonalVolAmPmPanel,
 } from "./personal_vol_am_pm_panel";
+import {
+  PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
+  PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA,
+  PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
+  personalVolAmPmCommonValidDigest,
+  personalVolAmPmPanelBuildTerminalKey,
+  personalVolAmPmPanelObjectKey,
+  type PersonalVolAmPmCommonValidReasonCode,
+  type PersonalVolAmPmCommonValidRow,
+} from "./personal_vol_am_pm_panel_writer_contract";
+import { isPersonalResearchJobId } from "./personal_research_contract";
 import {
   personalVolPerformance,
   type PersonalVolDailyPoint,
@@ -88,6 +98,7 @@ export const PERSONAL_VOL_AM_PM_CONTRACT = {
 export type PersonalVolAmPmResearchRequest = {
   job_id: string;
   cohort_id: typeof PERSONAL_VOL_AM_PM_COHORT_ID;
+  panel_build_job_id: string;
 };
 
 type HeldBook = Record<string, Record<string, number>>;
@@ -123,7 +134,7 @@ export function parsePersonalVolAmPmResearchRequest(
   | { ok: true; value: PersonalVolAmPmResearchRequest }
   | { ok: false; error: string } {
   if (!isObject(body)) return { ok: false, error: "body must be a JSON object" };
-  const allowed = new Set(["job_id", "cohort_id"]);
+  const allowed = new Set(["job_id", "cohort_id", "panel_build_job_id"]);
   const unknown = Object.keys(body).filter((key) => !allowed.has(key));
   if (unknown.length) {
     return { ok: false, error: `unknown fields: ${unknown.sort().join(",")}` };
@@ -137,6 +148,11 @@ export function parsePersonalVolAmPmResearchRequest(
   ) {
     return { ok: false, error: "job_id is invalid" };
   }
+  const panelBuildJobId =
+    typeof body.panel_build_job_id === "string" ? body.panel_build_job_id : "";
+  if (!isPersonalResearchJobId(panelBuildJobId)) {
+    return { ok: false, error: "panel_build_job_id is invalid" };
+  }
   const cohort = body.cohort_id ?? PERSONAL_VOL_AM_PM_COHORT_ID;
   if (cohort !== PERSONAL_VOL_AM_PM_COHORT_ID) {
     return {
@@ -146,7 +162,11 @@ export function parsePersonalVolAmPmResearchRequest(
   }
   return {
     ok: true,
-    value: { job_id: jobId, cohort_id: PERSONAL_VOL_AM_PM_COHORT_ID },
+    value: {
+      job_id: jobId,
+      cohort_id: PERSONAL_VOL_AM_PM_COHORT_ID,
+      panel_build_job_id: panelBuildJobId,
+    },
   };
 }
 
@@ -277,6 +297,188 @@ export function personalVolAmPmCommonValidity(
       execution_reasons: executionUnique,
     };
   });
+}
+
+const BOUNDED_REASON_ORDER: PersonalVolAmPmCommonValidReasonCode[] = [
+  "predecessor_session_missing",
+  "d_minus_1_basevol_missing",
+  "d_minus_1_atm_iv_missing",
+  "d_minus_1_skew_missing",
+  "d_minus_1_cm_term_ratio_missing",
+  "equity_universe_empty",
+  "missing_MAdjC",
+  "missing_AAdjC",
+  "missing_next_AAdjC",
+  "next_session_missing",
+];
+
+export function personalVolAmPmCommonValidMask(
+  panel: PersonalVolAmPmPanel,
+): PersonalVolAmPmCommonValidRow[] {
+  const dates = panel.session_calendar.dates;
+  const codes = equityCodes(panel);
+  const { morning, afternoon } = barMaps(panel);
+  return dates.map((date, index) => {
+    const predecessor = predecessorOf(dates, date);
+    const next = index + 1 < dates.length ? dates[index + 1] : null;
+    const reasons: PersonalVolAmPmCommonValidReasonCode[] = [];
+    const predecessorAvailable = predecessor !== null;
+    if (!predecessorAvailable) reasons.push("predecessor_session_missing");
+    const volReasons = predecessor
+      ? fourSignalReasons(panel.opt225_regime, predecessor)
+      : [];
+    const basevol = predecessorAvailable && !volReasons.includes("d_minus_1_basevol_missing");
+    const atm = predecessorAvailable && !volReasons.includes("d_minus_1_atm_iv_missing");
+    const skew = predecessorAvailable && !volReasons.includes("d_minus_1_skew_missing");
+    const cm =
+      predecessorAvailable && !volReasons.includes("d_minus_1_cm_term_ratio_missing");
+    if (predecessorAvailable && !basevol) reasons.push("d_minus_1_basevol_missing");
+    if (predecessorAvailable && !atm) reasons.push("d_minus_1_atm_iv_missing");
+    if (predecessorAvailable && !skew) reasons.push("d_minus_1_skew_missing");
+    if (predecessorAvailable && !cm) reasons.push("d_minus_1_cm_term_ratio_missing");
+    if (!codes.length) reasons.push("equity_universe_empty");
+    const dM =
+      codes.length > 0 &&
+      codes.every((code) => finitePositive(morning[code]?.[date]));
+    const dA =
+      codes.length > 0 &&
+      codes.every((code) => finitePositive(afternoon[code]?.[date]));
+    const nextA =
+      codes.length > 0 &&
+      next !== null &&
+      codes.every((code) => finitePositive(afternoon[code]?.[next]));
+    if (!dM) reasons.push("missing_MAdjC");
+    if (!dA) reasons.push("missing_AAdjC");
+    if (next === null) reasons.push("next_session_missing");
+    else if (!nextA) reasons.push("missing_next_AAdjC");
+    const unique = BOUNDED_REASON_ORDER.filter((code) => reasons.includes(code));
+    const commonValid =
+      predecessorAvailable && basevol && atm && skew && cm && dM && dA && nextA;
+    return {
+      common_valid: commonValid,
+      d_a_fill_valid: dA,
+      d_m_decision_valid: dM,
+      d_minus_1_atm_iv: atm,
+      d_minus_1_basevol: basevol,
+      d_minus_1_cm_term_ratio: cm,
+      d_minus_1_skew: skew,
+      date,
+      next_a_valuation_valid: nextA,
+      predecessor,
+      predecessor_available: predecessorAvailable,
+      reasons: unique,
+    };
+  });
+}
+
+function failClosed(code: string): never {
+  throw Object.assign(new Error(code), { code });
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function loadPanelFromBuildChild(
+  bucket: R2Bucket,
+  key: string,
+  digest: string,
+): Promise<PersonalVolAmPmPanel> {
+  if (key !== personalVolAmPmPanelObjectKey(digest)) {
+    failClosed("panel_build_child_key_mismatch");
+  }
+  const object = await bucket.get(key);
+  if (!object) failClosed("panel_build_child_missing");
+  const bytes = new Uint8Array(await object.arrayBuffer());
+  const actual = `sha256:${await sha256Hex(bytes)}`;
+  if (actual !== digest) failClosed("panel_build_child_digest_mismatch");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    failClosed("panel_build_child_invalid_json");
+  }
+  const panel = parsePersonalVolAmPmPanel(parsed);
+  if (!panel.ok) failClosed(panel.legacy ? "legacy_period_panel_rejected" : panel.error);
+  if (!(await personalVolAmPmSessionCalendarDigestMatches(panel.value.session_calendar))) {
+    failClosed("session_calendar_digest_mismatch");
+  }
+  return panel.value;
+}
+
+export async function loadPersonalVolAmPmPanelsFromBuildJob(
+  bucket: R2Bucket,
+  panelBuildJobId: string,
+): Promise<{
+  panels: PersonalVolAmPmPanel[];
+  notes: string[];
+  commonValid: Map<string, PersonalVolAmPmCommonValidRow[]>;
+  comparisonNotEvaluated: boolean;
+}> {
+  const terminalObject = await bucket.get(
+    personalVolAmPmPanelBuildTerminalKey(panelBuildJobId),
+  );
+  if (!terminalObject || terminalObject.size > 64 * 1024) {
+    failClosed("panel_build_terminal_missing");
+  }
+  let terminal: unknown;
+  try {
+    terminal = await terminalObject.json();
+  } catch {
+    failClosed("panel_build_terminal_invalid_json");
+  }
+  if (
+    !isObjectRecord(terminal) ||
+    terminal.status !== "COMPLETED" ||
+    terminal.schema_version !== PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA ||
+    terminal.producer_id !== PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID ||
+    terminal.cohort_id !== PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID ||
+    terminal.job_id !== panelBuildJobId ||
+    !isObjectRecord(terminal.periods)
+  ) {
+    failClosed("panel_build_terminal_identity_mismatch");
+  }
+  const panels: PersonalVolAmPmPanel[] = [];
+  const notes: string[] = [];
+  const commonValid = new Map<string, PersonalVolAmPmCommonValidRow[]>();
+  let comparisonNotEvaluated = false;
+  for (const period of PERSONAL_VOL_PERIODS) {
+    const row = terminal.periods[period.period_id];
+    if (!isObjectRecord(row)) failClosed("panel_build_period_child_missing");
+    const panelDigest = String(row.panel_sha256 ?? "");
+    const maskDigest = String(row.common_valid_sha256 ?? "");
+    const panel = await loadPanelFromBuildChild(
+      bucket,
+      String(row.panel_key ?? ""),
+      panelDigest,
+    );
+    if (
+      panel.period_id !== period.period_id ||
+      panel.year !== Number(period.year ?? 0) ||
+      panel.period_start !== (period.period_start || "") ||
+      panel.period_end !== (period.period_end || "")
+    ) {
+      failClosed("panel_build_period_metadata_mismatch");
+    }
+    const recomputed = personalVolAmPmCommonValidMask(panel);
+    const recomputedDigest = await personalVolAmPmCommonValidDigest(recomputed);
+    if (recomputedDigest !== maskDigest) {
+      failClosed("common_valid_mask_tamper_rejected");
+    }
+    const required = recomputed.filter((item) => {
+      if (item.date < panel.period_start || item.date > panel.period_end) return false;
+      return item.date !== panel.session_calendar.dates.at(-1);
+    });
+    if (required.some((item) => !item.common_valid)) {
+      comparisonNotEvaluated = true;
+    }
+    panels.push(panel);
+    commonValid.set(period.period_id, recomputed);
+    notes.push(
+      `loaded:${personalVolAmPmPanelObjectKey(panelDigest)}:codes=${equityCodes(panel).length}`,
+    );
+  }
+  return { panels, notes, commonValid, comparisonNotEvaluated };
 }
 
 export function personalVolAmPmRebalanceDates(dates: string[]): string[] {
@@ -809,7 +1011,11 @@ export async function runPersonalVolAmPmResearch(
   request: PersonalVolAmPmResearchRequest,
 ): Promise<Record<string, unknown>> {
   const digest = await personalVolAmPmContractDigest();
-  const panelNotes: string[] = [];
+  const loaded = await loadPersonalVolAmPmPanelsFromBuildJob(
+    env.STRUCTURED_BUCKET,
+    request.panel_build_job_id,
+  );
+  const panelNotes: string[] = [...loaded.notes];
   const observedVolatilitySources = new Map<
     string,
     { dataset: string; version: string }
@@ -818,11 +1024,11 @@ export async function runPersonalVolAmPmResearch(
     PERSONAL_VOL_STRATEGIES.map((row) => [row.strategy_id, []]),
   );
   const controlWindows: Record<string, unknown>[] = [];
+  const sharedNotEvaluated = loaded.comparisonNotEvaluated;
 
   for (const period of PERSONAL_VOL_PERIODS) {
-    const loaded = await loadPersonalVolAmPmPanels(env.STRUCTURED_BUCKET, [period]);
-    panelNotes.push(...loaded.notes);
-    const panel = loaded.panels[0];
+    const panel = loaded.panels.find((row) => row.period_id === period.period_id);
+    if (!panel) failClosed("panel_build_period_child_missing");
     const observedSource = panel.opt225_regime?.source;
     if (
       typeof observedSource?.dataset === "string" &&
@@ -873,6 +1079,7 @@ export async function runPersonalVolAmPmResearch(
     ...stitchWindows(controlWindows, commonSuccessfulWindows),
   };
   const allRequiredWindowsComparable =
+    !sharedNotEvaluated &&
     commonSuccessfulWindows.length === PERSONAL_VOL_PERIODS.length;
   const exactFourEvaluationComplete = allRequiredWindowsComparable;
   const report = {
@@ -880,6 +1087,7 @@ export async function runPersonalVolAmPmResearch(
     worker_version: env.MASS_EVAL_VERSION,
     job_id: request.job_id,
     cohort_id: request.cohort_id,
+    panel_build_job_id: request.panel_build_job_id,
     research_mode: "personal_draft_screening",
     am_pm_contract: PERSONAL_VOL_AM_PM_CONTRACT,
     am_pm_contract_digest: digest,
@@ -920,11 +1128,14 @@ export async function runPersonalVolAmPmResearch(
         control_id: PERSONAL_VOL_AM_PM_CONTROL.control_id,
         windows: controlWindows,
       },
-    ]),
+    ]).map((row) =>
+      sharedNotEvaluated ? { ...row, candidate_status: "not_evaluated" } : row,
+    ),
     data_contract: {
       panels_prefix: PERSONAL_VOL_AM_PM_PANELS_PREFIX,
       panel_schema: PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
       producer_dependency: PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY,
+      panel_build_job_id: request.panel_build_job_id,
       periods: PERSONAL_VOL_PERIODS,
       period_count: PERSONAL_VOL_PERIODS.length,
       iv_fields_available_from: PERSONAL_VOL_IV_AVAILABLE_FROM,

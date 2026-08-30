@@ -31,6 +31,15 @@ import {
   isPersonalIndexVolOverlayOutboundRequest,
   personalIndexVolOverlayR2Outbound,
 } from "./personal_index_vol_overlay_r2";
+import {
+  PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
+  PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
+  personalVolAmPmPanelBuildTerminalKey,
+} from "./personal_vol_am_pm_panel_writer_contract";
+import {
+  isPersonalVolAmPmPanelOutboundRequest,
+  personalVolAmPmPanelR2Outbound,
+} from "./personal_vol_am_pm_panel_r2";
 import { sha256Hex } from "./sha256";
 
 const RESULT_MAX_BYTES = 512 * 1024 * 1024;
@@ -474,6 +483,7 @@ function parseTerminalManifestKey(
     ["snapshot", /^research\/personal\/snapshot-builds\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
     ["svi", /^research\/personal\/svi-2023\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
     ["overlay", /^research\/personal\/(?:index-vol-overlay-2023|index-smile-transport-2023)(?:-am-pm)?\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
+    ["vol-panel", /^research\/personal\/vol-ratio-am-pm-v1\/panel-builds\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
   ];
   for (const [kind, pattern] of patterns) {
     const match = pattern.exec(key);
@@ -491,6 +501,7 @@ function expectedTerminalManifestKey(
   if (kind === "research") return personalResearchManifestKey(jobId);
   if (kind === "snapshot") return personalSnapshotManifestKey(jobId);
   if (kind === "svi") return personalSviTerminalManifestKey(jobId);
+  if (kind === "vol-panel") return personalVolAmPmPanelBuildTerminalKey(jobId);
   if (isPersonalIndexOverlayFamilyCohort(cohortId)) {
     return personalIndexOverlayFamilyTerminalManifestKey(
       jobId,
@@ -522,6 +533,7 @@ function expectedRunnerVersion(
     return PERSONAL_RESEARCH_RUNNER_VERSION;
   }
   if (kind === "svi") return PERSONAL_SVI_2023_RUNNER_VERSION;
+  if (kind === "vol-panel") return PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION;
   if (isPersonalIndexOverlayFamilyCohort(cohortId)) {
     return personalIndexOverlayFamilyRunnerVersion(cohortId);
   }
@@ -577,6 +589,12 @@ function closedTerminalIdentity(
   if (parsedKey.kind === "svi" && cohortId !== PERSONAL_SVI_2023_COHORT_ID) {
     return responseJson({ error: "terminal identity denied" }, 403);
   }
+  if (
+    parsedKey.kind === "vol-panel" &&
+    cohortId !== PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID
+  ) {
+    return responseJson({ error: "terminal identity denied" }, 403);
+  }
   return {
     parsedKey,
     jobId,
@@ -608,7 +626,9 @@ function terminalBodyMatchesGetContract(
     return false;
   }
   if (
-    (identity.parsedKey.kind === "svi" || identity.parsedKey.kind === "overlay") &&
+    (identity.parsedKey.kind === "svi" ||
+      identity.parsedKey.kind === "overlay" ||
+      identity.parsedKey.kind === "vol-panel") &&
     manifest.cohort_id !== identity.cohortId
   ) {
     return false;
@@ -689,6 +709,9 @@ export async function personalResearchR2Outbound(
   }
   if (isPersonalSviOutboundRequest(request, key)) {
     return personalSviR2Outbound(request, env, key);
+  }
+  if (isPersonalVolAmPmPanelOutboundRequest(request, key)) {
+    return personalVolAmPmPanelR2Outbound(request, env, key);
   }
   if ((request.method === "GET" || request.method === "HEAD") &&
       isPersonalResearchSnapshotKey(key)) {

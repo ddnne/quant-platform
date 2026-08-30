@@ -34,6 +34,10 @@ import {
 import { runPersonalVolResearch } from "./personal_vol_research";
 import { runPersonalVolAmPmResearch } from "./personal_vol_am_pm";
 import {
+  personalVolAmPmPanelBuildStatus,
+  submitPersonalVolAmPmPanelBuild,
+} from "./personal_vol_am_pm_panel_writer";
+import {
   personalSvi2023Status,
   submitPersonalSvi2023,
 } from "./personal_svi_2023";
@@ -350,6 +354,8 @@ export default {
       personalIndexVolOverlay2023Status,
       submitPersonalSnapshotBuild,
       personalSnapshotBuildStatus,
+      submitPersonalVolAmPmPanelBuild,
+      personalVolAmPmPanelBuildStatus,
       submitPersonalResearchJobs: async (
         env: Env,
         requests: PersonalResearchRequest[],

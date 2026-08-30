@@ -10,6 +10,7 @@ import {
 import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
 import { PERSONAL_SVI_2023_RUNNER_VERSION } from "./personal_svi_2023_contract";
 import { PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION } from "./personal_index_vol_overlay_2023_contract";
+import { PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION } from "./personal_vol_am_pm_panel_writer_contract";
 import type { Env } from "./types";
 
 const DIGEST_A = `sha256:${"a".repeat(64)}`;
@@ -138,6 +139,15 @@ describe("durable personal job state", () => {
         deploymentId: "deploy-1",
       }).runner_version,
     ).toBe(PERSONAL_RESEARCH_RUNNER_VERSION);
+    expect(
+      submittedStateDocument({
+        jobId: "vol-panel-one",
+        requestDigest: DIGEST_A,
+        kind: "vol-panel",
+        deploymentId: "deploy-1",
+        runnerVersion: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
+      }).runner_version,
+    ).toBe("personal-cloud-runner/v13");
   });
 
   it("conflicts when the same job id carries a different request digest", async () => {
@@ -189,6 +199,38 @@ describe("durable personal job state", () => {
     expect(getByName).not.toHaveBeenCalled();
     const terminal = await mem.get(personalJobTerminalKey("snapshot", "job-expired"));
     expect(terminal).not.toBeNull();
+  });
+
+  it("finalizes an expired vol-panel marker to the panel-writer FAILED schema", async () => {
+    const mem = new MemoryR2();
+    const env = mem.asEnv();
+    env.PERSONAL_RESEARCH_CONTAINER = {
+      getByName: vi.fn(),
+    } as unknown as Env["PERSONAL_RESEARCH_CONTAINER"];
+    mem.seed(personalJobStateKey("vol-panel", "job-expired-panel"), {
+      job_id: "job-expired-panel",
+      request_digest: DIGEST_A,
+      kind: "vol-panel",
+      status: "SUBMITTED",
+      submitted_at: "2026-08-30T00:00:00.000Z",
+      expires_at: "2026-08-30T00:01:00.000Z",
+      runner_version: "personal-cloud-runner/v13",
+      deployment_id: "deploy-1",
+    });
+    const response = await durablePersonalJobStatus(
+      env,
+      "vol-panel",
+      "job-expired-panel",
+      new Date("2026-08-30T03:01:00.000Z"),
+    );
+    expect(await response.json()).toMatchObject({
+      job: {
+        status: "FAILED",
+        schema_version: "personal-vol-ratio-am-pm-panel-writer-manifest/v1",
+        producer_id: "personal-vol-ratio-am-pm-panel-writer/v1",
+        kind: "vol-panel",
+      },
+    });
   });
 
   it("does not overwrite an existing terminal when expiry races with completion", async () => {
