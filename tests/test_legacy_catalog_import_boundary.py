@@ -13,6 +13,7 @@ def test_normal_research_and_scheduler_imports_do_not_load_legacy_catalog() -> N
         repo / "packages" / "data_plane",
         repo / "packages" / "research_runtime",
         repo / "packages" / "product",
+        repo / "platform" / "workers" / "research-mass-eval" / "container",
     ]
     code = r'''
 import importlib
@@ -43,6 +44,8 @@ for name in (
     "research.phase7_pilot",
     "research.scheduler",
     "agents.mass_research",
+    "personal_vol_am_pm_panel_job",
+    "personal_research_service",
 ):
     importlib.import_module(name)
 

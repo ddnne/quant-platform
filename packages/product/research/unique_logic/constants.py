@@ -9,22 +9,18 @@ from __future__ import annotations
 
 from typing import Sequence
 
+# Compatibility re-export. Catalog-free importers use research.fins_summary_keys.
+from research.fins_summary_keys import (
+    FINS_SUMMARY_EQ_KEY,
+    FINS_SUMMARY_EQAR_KEY,
+    FINS_SUMMARY_OFFICIAL_KEYS,
+    FINS_SUMMARY_TA_KEY,
+)
 from research.unique_logic.catalog import (
     combo_thesis_ids_by_kind,
     economic_theme_ids,
     unique_family_ids_from_yaml,
 )
-
-# Official JQuants fins/summary v2 payload keys. Do not invent aliases
-# (NCTA is a sparse non-consolidated field, not Total Assets).
-FINS_SUMMARY_TA_KEY: str = "TA"
-FINS_SUMMARY_EQAR_KEY: str = "EqAR"
-FINS_SUMMARY_EQ_KEY: str = "Eq"
-FINS_SUMMARY_OFFICIAL_KEYS: dict[str, str] = {
-    "ta": FINS_SUMMARY_TA_KEY,
-    "eq_ar": FINS_SUMMARY_EQAR_KEY,
-    "eq": FINS_SUMMARY_EQ_KEY,
-}
 
 # Must match Worker COMBO_EVENT_GATES plus Python-only gates. Unknown → skip.
 COMBO_EVENT_GATES: frozenset[str] = frozenset(

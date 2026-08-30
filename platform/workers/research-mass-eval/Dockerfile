@@ -19,7 +19,9 @@ COPY platform/workers/research-mass-eval/container ./platform/workers/research-m
 
 RUN uv sync --frozen --no-dev && \
     chmod 0555 /app/scripts/qp-research \
-      /app/platform/workers/research-mass-eval/container/personal_research_service.py
+      /app/platform/workers/research-mass-eval/container/personal_research_service.py && \
+    PYTHONPATH=/app/platform/workers/research-mass-eval/container \
+      python -c "import personal_research_service"
 
 EXPOSE 8080
 CMD ["python", "platform/workers/research-mass-eval/container/personal_research_service.py"]

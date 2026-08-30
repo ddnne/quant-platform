@@ -20,7 +20,7 @@ from research.eval_universe import (
     UNIVERSE_MIN_FINS_TA,
     rank_eval_codes,
 )
-from research.unique_logic.constants import FINS_SUMMARY_EQAR_KEY, FINS_SUMMARY_TA_KEY
+from research.fins_summary_keys import FINS_SUMMARY_EQAR_KEY, FINS_SUMMARY_TA_KEY
 
 R2_ORIGIN = "http://research.r2"
 PRODUCER_ID = "personal-vol-ratio-am-pm-panel-writer/v1"
