@@ -7,17 +7,49 @@ audit, ``requireNaturalKeysV2Ready``) is executed in
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
 import subprocess
 
-from data_contracts.identity import available_at_for, natural_key
+from data_contracts.identity import available_at_for, canonical_json, natural_key
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "platform/workers/ingestion-premium"
 CONTRACT = ROOT / "packages/data_plane/data_contracts/jquants_premium_core.json"
+_CANONICAL_VECTORS_PATH = (
+    ROOT / "specs" / "authorities" / "jquants_acquisition_canonical_vectors.json"
+)
+
+
+def test_canonical_json_matches_shared_ecmascript_number_vectors() -> None:
+    document = json.loads(_CANONICAL_VECTORS_PATH.read_text(encoding="utf-8"))
+    assert document["number_rendering"] == "ECMASCRIPT_JSON_STRINGIFY"
+    number_vectors = [
+        row
+        for row in document["vectors"]
+        if row.get("family") == "ecmascript-json-number"
+    ]
+    assert [row["id"] for row in number_vectors] == [
+        "js-number-ordinary-fractions",
+        "js-number-zero",
+        "js-number-exponent-thresholds",
+        "js-number-binary64-integers",
+        "js-number-array-object",
+    ]
+    for vector in number_vectors:
+        rendered = canonical_json(vector["value"])
+        assert rendered == vector["canonical_json"]
+        digest = "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+        assert digest == vector["sha256_digest"]
+
+    # JSON documents cannot preserve IEEE -0; construct it directly.
+    assert canonical_json(-0.0) == "0"
+    assert canonical_json({"x": -0.0}) == '{"x":0}'
+    assert canonical_json(2**53 + 1) == "9007199254740992"
+    assert canonical_json([0.45, 0.11, -0.45, 0.045]) == "[0.45,0.11,-0.45,0.045]"
 
 
 def test_python_and_worker_share_canonical_identity_and_availability_semantics():

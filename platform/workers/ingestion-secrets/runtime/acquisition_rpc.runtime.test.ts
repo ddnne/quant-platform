@@ -39,13 +39,16 @@ type RegistryRow = {
   source_capability: Record<string, unknown>;
 };
 
+type AcquisitionQueryValue = {
+  schema_version: string;
+  path: string;
+  ordered_query: readonly (readonly [string, string])[];
+};
+
 type CanonicalVector = {
   id: string;
-  value: {
-    schema_version: string;
-    path: string;
-    ordered_query: readonly (readonly [string, string])[];
-  };
+  family: "acquisition-query" | "ecmascript-json-number";
+  value: unknown;
   canonical_json: string;
   sha256_digest: string;
 };
@@ -54,11 +57,29 @@ function canonicalVector(id: string): CanonicalVector {
   expect(canonicalVectorsDocument).toMatchObject({
     schema_version: "jquants-acquisition-canonical-vectors/v1",
     canonicalization: "RFC8259_UTF8_SORTED_KEYS_NO_WHITESPACE",
+    number_rendering: "ECMASCRIPT_JSON_STRINGIFY",
   });
   const vectors = canonicalVectorsDocument.vectors as unknown as readonly CanonicalVector[];
   const matches = vectors.filter((item) => item.id === id);
   expect(matches).toHaveLength(1);
   return matches[0]!;
+}
+
+/** Node JSON.stringify number rendering with sorted object keys. Test oracle only. */
+function ecmaCanonicalJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => ecmaCanonicalJson(item === undefined ? null : item)).join(",")}]`;
+  }
+  if (typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).filter((key) => object[key] !== undefined).sort().map(
+      (key) => `${JSON.stringify(key)}:${ecmaCanonicalJson(object[key])}`,
+    ).join(",")}}`;
+  }
+  throw new TypeError(`not an interoperable JSON value: ${typeof value}`);
 }
 
 function registryRow(datasetId: string): RegistryRow {
@@ -264,8 +285,25 @@ describe("governed J-Quants WorkerEntrypoint RPC", () => {
     ];
     for (const id of expectedIds) {
       const vector = canonicalVector(id);
+      expect(vector.family).toBe("acquisition-query");
       expect(canonicalJson(vector.value)).toBe(vector.canonical_json);
       expect(await canonicalDigest(vector.value)).toBe(vector.sha256_digest);
+    }
+  });
+
+  it("matches the shared ECMAScript JSON number vectors", async () => {
+    const expectedIds = [
+      "js-number-ordinary-fractions",
+      "js-number-zero",
+      "js-number-exponent-thresholds",
+      "js-number-binary64-integers",
+      "js-number-array-object",
+    ];
+    for (const id of expectedIds) {
+      const vector = canonicalVector(id);
+      expect(vector.family).toBe("ecmascript-json-number");
+      expect(ecmaCanonicalJson(vector.value)).toBe(vector.canonical_json);
+      expect(await sha256Digest(vector.canonical_json)).toBe(vector.sha256_digest);
     }
   });
 
@@ -274,7 +312,7 @@ describe("governed J-Quants WorkerEntrypoint RPC", () => {
     "unicode-astral-pagination-key",
   ])("keeps %s pagination RAW_PAGE and replays its UTF-8 cursor", async (vectorId) => {
     const vector = canonicalVector(vectorId);
-    const cursor = vector.value.ordered_query.at(-1)![1];
+    const cursor = (vector.value as AcquisitionQueryValue).ordered_query.at(-1)![1];
     const firstBody = bytes(JSON.stringify({ data: [], pagination_key: cursor }));
     const secondBody = bytes('{"data":[],"pagination_key":null}');
     const fetchMock = installFetch(async () =>
