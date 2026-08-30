@@ -1424,13 +1424,6 @@ def _common_validity_for_date(
         )
     if signal_index + 2 >= len(observations):
         reasons.append("d_plus_2_session_unavailable")
-    else:
-        sleeve_return = _finite(observations[signal_index + 2].base_sleeve_return)
-        proxy_return = _topix_return(observations, signal_index + 1, signal_index + 2)
-        if sleeve_return is None:
-            reasons.append("base_sleeve_return_missing")
-        if proxy_return is None:
-            reasons.append("topix_cash_return_missing")
     beta, beta_error = _estimate_beta(observations, signal_index)
     if beta is None:
         reasons.append(beta_error or "beta_estimate_unavailable")
@@ -1447,6 +1440,38 @@ def _common_validity_for_date(
         "common_valid": not ordered,
         "reasons": ordered,
         "predecessor": predecessor,
+    }
+
+
+def _signal_outcome_issues(
+    observations: Sequence[IndexVolOverlayObservation],
+    signal_index: int,
+) -> list[str]:
+    if signal_index + 2 >= len(observations):
+        return ["d_plus_2_session_unavailable"]
+    issues: list[str] = []
+    if _finite(observations[signal_index + 2].base_sleeve_return) is None:
+        issues.append("base_sleeve_return_missing")
+    if _topix_return(observations, signal_index + 1, signal_index + 2) is None:
+        issues.append("topix_cash_return_missing")
+    return issues
+
+
+def _not_evaluated_smile_control(
+    *,
+    reason: str,
+    missing: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "control_id": "base_g1_h0_control_v1",
+        "role": "COMMON_VALID_CALENDAR_NAV_WRAPPER_CONTROL_WITH_10BP_COSTS",
+        "ranking_role": "DIAGNOSTIC_CONTROL_NOT_RANKED",
+        "status": "NOT_EVALUATED",
+        "reason": reason,
+        "missing_required_rows": list(missing),
+        "daily_path": [],
+        "trades": [],
+        "performance": None,
     }
 
 
@@ -1698,6 +1723,7 @@ def evaluate_index_smile_transport_overlays(
                 signal_index=signal_index,
             )
         )
+    validity_by_date = {row["date"]: row for row in validity_rows}
     valid_dates = [row["date"] for row in validity_rows if row["common_valid"]]
     valid_months = _calendar_months(valid_dates)
     gate_passed = (
@@ -1719,10 +1745,28 @@ def evaluate_index_smile_transport_overlays(
         ],
         "common_invalid_policy": "flatten_g0_h0_at_d_plus_1_close_prior",
     }
+    outcome_missing: list[dict[str, Any]] = []
+    for signal_index in signal_indices:
+        day = observations[signal_index].date
+        if not validity_by_date[day]["common_valid"]:
+            continue
+        outcome_issues = _signal_outcome_issues(observations, signal_index)
+        if outcome_issues:
+            outcome_missing.append({"date": day, "reasons": outcome_issues})
+    outcome_complete = not outcome_missing
+    outcome_completeness = {
+        "passed": outcome_complete,
+        "policy": "signal_valid_dates_require_realized_d_plus_2_returns",
+        "missing": outcome_missing,
+        "reason": (
+            None
+            if outcome_complete
+            else "signal_valid_d_plus_2_outcome_missing"
+        ),
+    }
     observed_core_digest = core_digest or smile_transport_core_digest()
     if not _canonical_sha256(observed_core_digest):
         raise ValueError("core_digest must be a canonical sha256 digest")
-    validity_by_date = {row["date"]: row for row in validity_rows}
     if not gate_passed:
         results = [
             _not_evaluated_transport_result(
@@ -1732,17 +1776,23 @@ def evaluate_index_smile_transport_overlays(
             )
             for candidate in SMILE_TRANSPORT_CANDIDATES
         ]
-        diagnostic_control = {
-            "control_id": "base_g1_h0_control_v1",
-            "role": "NAV_WRAPPER_CONTROL_WITH_10BP_ENTRY_EXIT",
-            "ranking_role": "DIAGNOSTIC_CONTROL_NOT_RANKED",
-            "status": "NOT_EVALUATED",
-            "reason": "common_validity_gate_failed",
-            "missing_required_rows": gate["excluded"],
-            "daily_path": [],
-            "trades": [],
-            "performance": None,
-        }
+        diagnostic_control = _not_evaluated_smile_control(
+            reason="common_validity_gate_failed",
+            missing=gate["excluded"],
+        )
+    elif not outcome_complete:
+        results = [
+            _not_evaluated_transport_result(
+                candidate,
+                reason="signal_valid_d_plus_2_outcome_missing",
+                missing=outcome_missing,
+            )
+            for candidate in SMILE_TRANSPORT_CANDIDATES
+        ]
+        diagnostic_control = _not_evaluated_smile_control(
+            reason="signal_valid_d_plus_2_outcome_missing",
+            missing=outcome_missing,
+        )
     else:
         results = []
         for candidate in SMILE_TRANSPORT_CANDIDATES:
@@ -1896,6 +1946,7 @@ def evaluate_index_smile_transport_overlays(
             "adaptive_model_switch": False,
         },
         "common_validity_gate": gate,
+        "outcome_completeness": outcome_completeness,
         "diagnostic_control": diagnostic_control,
         "candidates": results,
         "under_px_policy": {

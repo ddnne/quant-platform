@@ -369,6 +369,88 @@ def test_future_mutation_cannot_change_prior_signals_or_beta() -> None:
         assert after["net_return"] != pytest.approx(before["net_return"])
 
 
+def test_future_d_plus_2_none_leaves_signal_valid_and_fails_the_run_closed() -> None:
+    rows, features, dates, chosen = _gated_panel(
+        valid_months=("2023-03", "2023-04", "2023-05", "2023-06"),
+        per_month=10,
+    )
+    original = _evaluate(rows, features, signal_start=dates[BETA_MIN_RETURNS])
+    signal = next(
+        day
+        for day in sorted(chosen)
+        if dates[dates.index(day) + 2] not in chosen
+    )
+    assert original["status"] == "EVALUATED"
+    assert signal in original["common_validity_gate"]["common_valid_dates"]
+    original_day = next(
+        row
+        for row in _by_id(original, SMILE_TRANSPORT_CANDIDATE_IDS[0])["daily_path"]
+        if row["signal_date"] == signal
+    )
+    assert original_day["flatten_applied"] is False
+    assert original_day["gross_scale"] > 0.0
+
+    leaked = list(rows)
+    signal_index = dates.index(signal)
+    leaked[signal_index + 2] = replace(
+        leaked[signal_index + 2],
+        base_sleeve_return=None,
+    )
+    closed = _evaluate(leaked, features, signal_start=dates[BETA_MIN_RETURNS])
+    assert signal in closed["common_validity_gate"]["common_valid_dates"]
+    assert closed["common_validity_gate"]["passed"] is True
+    assert closed["outcome_completeness"]["passed"] is False
+    assert closed["outcome_completeness"]["reason"] == (
+        "signal_valid_d_plus_2_outcome_missing"
+    )
+    assert closed["status"] == "NOT_EVALUATED"
+    assert closed["diagnostic_control"]["status"] == "NOT_EVALUATED"
+    assert closed["diagnostic_control"]["daily_path"] == []
+    for candidate in closed["candidates"]:
+        assert candidate["status"] == "NOT_EVALUATED"
+        assert candidate["performance"] is None
+        assert candidate["daily_path"] == []
+        assert candidate["reason"] == "signal_valid_d_plus_2_outcome_missing"
+
+
+def test_missing_outcome_on_flat_date_does_not_invalidate_the_run() -> None:
+    rows, features, dates, chosen = _gated_panel(
+        valid_months=("2023-03", "2023-04", "2023-05", "2023-06"),
+        per_month=10,
+    )
+    ordered = sorted(chosen)
+    hole = next(
+        day
+        for day in ordered
+        if dates[dates.index(day) + 2] not in chosen
+    )
+    chosen.remove(hole)
+    extra = [
+        day
+        for day in dates[BETA_MIN_RETURNS : len(dates) - 2]
+        if day.startswith("2023-07") and day not in chosen
+    ][0]
+    chosen.add(extra)
+    features = _features(dates, successful=chosen, q_value=1.0, mismatch=0.10)
+    hole_index = dates.index(hole)
+    rows[hole_index + 2] = replace(
+        rows[hole_index + 2],
+        base_sleeve_return=None,
+    )
+    report = _evaluate(rows, features, signal_start=dates[BETA_MIN_RETURNS])
+    assert hole not in report["common_validity_gate"]["common_valid_dates"]
+    assert report["common_validity_gate"]["passed"] is True
+    assert report["outcome_completeness"]["passed"] is True
+    assert report["status"] == "EVALUATED"
+    hole_path = next(
+        row
+        for row in _by_id(report, SMILE_TRANSPORT_CANDIDATE_IDS[0])["daily_path"]
+        if row["signal_date"] == hole
+    )
+    assert hole_path["flatten_applied"] is True
+    assert hole_path["gross_scale"] == 0.0
+
+
 def test_d_to_d_plus_1_fill_to_d_plus_2_first_pnl_wall() -> None:
     rows, features, dates, chosen = _gated_panel(
         valid_months=("2023-03", "2023-04", "2023-05", "2023-06"),
