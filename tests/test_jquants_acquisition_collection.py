@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date, timedelta
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
 from data_contracts import coverage_contract_for
+from data_contracts.identity import canonical_json
 from storage.coverage_ledger import plan_required_segments
 from tests import jquants_acquisition_test_support as support
 from tests.receipt_test_support import open_test_receipt_service
@@ -22,14 +24,32 @@ _CANONICAL_VECTORS_PATH = (
     / "jquants_acquisition_canonical_vectors.json"
 )
 
+_ACQUISITION_QUERY_VECTOR_IDS = (
+    "ascii-pagination-key",
+    "unicode-bmp-pagination-key",
+    "unicode-astral-pagination-key",
+)
+_JS_NUMBER_VECTOR_IDS = (
+    "js-number-ordinary-fractions",
+    "js-number-zero",
+    "js-number-exponent-thresholds",
+    "js-number-binary64-integers",
+    "js-number-array-object",
+)
+
 
 def _canonical_vectors() -> dict[str, dict]:
     document = json.loads(_CANONICAL_VECTORS_PATH.read_text(encoding="utf-8"))
     assert document["schema_version"] == "jquants-acquisition-canonical-vectors/v1"
     assert document["canonicalization"] == "RFC8259_UTF8_SORTED_KEYS_NO_WHITESPACE"
+    assert document["number_rendering"] == "ECMASCRIPT_JSON_STRINGIFY"
     vectors = {row["id"]: row for row in document["vectors"]}
     assert len(vectors) == len(document["vectors"])
     return vectors
+
+
+def _sha256_digest(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _required(dataset: str, target_end: str = "2026-07-31"):
@@ -366,17 +386,21 @@ def test_jquants_canonical_vectors_match_worker_utf8_bytes() -> None:
     from storage.receipt_crypto import canonical_evidence_digest
 
     vectors = _canonical_vectors()
-    assert set(vectors) == {
-        "ascii-pagination-key",
-        "unicode-bmp-pagination-key",
-        "unicode-astral-pagination-key",
-    }
-    for vector in vectors.values():
+    assert set(vectors) == set(_ACQUISITION_QUERY_VECTOR_IDS + _JS_NUMBER_VECTOR_IDS)
+    for vector_id in _ACQUISITION_QUERY_VECTOR_IDS:
+        vector = vectors[vector_id]
+        assert vector["family"] == "acquisition-query"
         assert (
             acquisition._canonical_acquisition_bytes(vector["value"]).decode("utf-8")
             == vector["canonical_json"]
         )
         assert acquisition._digest(vector["value"]) == vector["sha256_digest"]
+    for vector_id in _JS_NUMBER_VECTOR_IDS:
+        vector = vectors[vector_id]
+        assert vector["family"] == "ecmascript-json-number"
+        rendered = canonical_json(vector["value"])
+        assert rendered == vector["canonical_json"]
+        assert _sha256_digest(rendered) == vector["sha256_digest"]
 
     ascii_value = vectors["ascii-pagination-key"]["value"]
     assert acquisition._digest(ascii_value) == canonical_evidence_digest(ascii_value)

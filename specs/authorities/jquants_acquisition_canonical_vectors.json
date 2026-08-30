@@ -1,9 +1,11 @@
 {
   "schema_version": "jquants-acquisition-canonical-vectors/v1",
   "canonicalization": "RFC8259_UTF8_SORTED_KEYS_NO_WHITESPACE",
+  "number_rendering": "ECMASCRIPT_JSON_STRINGIFY",
   "vectors": [
     {
       "id": "ascii-pagination-key",
+      "family": "acquisition-query",
       "value": {
         "schema_version": "jquants-acquisition-query/v2",
         "path": "/v2/indices/bars/daily/topix",
@@ -18,6 +20,7 @@
     },
     {
       "id": "unicode-bmp-pagination-key",
+      "family": "acquisition-query",
       "value": {
         "schema_version": "jquants-acquisition-query/v2",
         "path": "/v2/indices/bars/daily/topix",
@@ -32,6 +35,7 @@
     },
     {
       "id": "unicode-astral-pagination-key",
+      "family": "acquisition-query",
       "value": {
         "schema_version": "jquants-acquisition-query/v2",
         "path": "/v2/indices/bars/daily/topix",
@@ -43,6 +47,64 @@
       },
       "canonical_json": "{\"ordered_query\":[[\"from\",\"2024-02-01\"],[\"to\",\"2024-02-29\"],[\"pagination_key\",\"cursor-😀-é\"]],\"path\":\"/v2/indices/bars/daily/topix\",\"schema_version\":\"jquants-acquisition-query/v2\"}",
       "sha256_digest": "sha256:ce5a981ca2d552389a34377537b01696c5587cae88a5b7649c3a42ed6b889eea"
+    },
+    {
+      "id": "js-number-ordinary-fractions",
+      "family": "ecmascript-json-number",
+      "value": {
+        "neg": -0.45,
+        "x": 0.45,
+        "y": 0.11,
+        "z": 0.045
+      },
+      "canonical_json": "{\"neg\":-0.45,\"x\":0.45,\"y\":0.11,\"z\":0.045}",
+      "sha256_digest": "sha256:6dd2a426789bd4c25a66246096614015f8906f23fd1bae50c6d92fdc73da0acd"
+    },
+    {
+      "id": "js-number-zero",
+      "family": "ecmascript-json-number",
+      "value": {
+        "x": 0,
+        "y": 0
+      },
+      "canonical_json": "{\"x\":0,\"y\":0}",
+      "sha256_digest": "sha256:cc978be5ab093d2b7fb688557d3772db2cf0fcebcd4262ff5954e634d0e2fbbd"
+    },
+    {
+      "id": "js-number-exponent-thresholds",
+      "family": "ecmascript-json-number",
+      "value": {
+        "hi": 1e21,
+        "hi_below": 1e20,
+        "lo": 1e-6,
+        "lo_below": 1e-7
+      },
+      "canonical_json": "{\"hi\":1e+21,\"hi_below\":100000000000000000000,\"lo\":0.000001,\"lo_below\":1e-7}",
+      "sha256_digest": "sha256:cf8604be8dd7ebc90da200ab8e8943a46dc7112f198e986c028e86ea8c46a904"
+    },
+    {
+      "id": "js-number-binary64-integers",
+      "family": "ecmascript-json-number",
+      "value": {
+        "coerced": 9007199254740993,
+        "max_safe": 9007199254740992
+      },
+      "canonical_json": "{\"coerced\":9007199254740992,\"max_safe\":9007199254740992}",
+      "sha256_digest": "sha256:b0826ee1d7b096cd414e8f7d617f9459abdb8ec6d3ec67988e6dc0921da8e4c3"
+    },
+    {
+      "id": "js-number-array-object",
+      "family": "ecmascript-json-number",
+      "value": {
+        "xs": [0.45, 0.11, -0.45, 0.045],
+        "z": {
+          "a": 1e-6,
+          "b": 1e21,
+          "c": 0
+        }
+      },
+      "canonical_json": "{\"xs\":[0.45,0.11,-0.45,0.045],\"z\":{\"a\":0.000001,\"b\":1e+21,\"c\":0}}",
+      "sha256_digest": "sha256:aa528689bf21e9c014b9797fba8c159839e610f4f653db7b8eae000d278d25d8"
     }
   ]
 }

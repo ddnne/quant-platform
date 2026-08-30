@@ -151,6 +151,25 @@ def test_close_time_15_30_on_and_after_2024_11_05():
 
 # --------------------------------------------------------------------------- generic
 
+def test_generic_payload_keeps_fractional_json_numbers():
+    rows = [{
+        "Code": "8697",
+        "Date": "2025-04-01",
+        "Close": 0.45,
+        "Ratio": 0.11,
+    }]
+    out = normalize_generic(rows, dataset="equities_bars_daily", ingested_at=ING)
+    payload = out[0]["payload"]
+    assert payload == (
+        '{"Close":0.45,"Code":"8697","Date":"2025-04-01","Ratio":0.11}'
+    )
+    decoded = json.loads(payload)
+    assert decoded["Close"] == 0.45
+    assert decoded["Ratio"] == 0.11
+    assert decoded["Close"] != 4.5
+    assert decoded["Ratio"] != 1.1
+
+
 def test_generic_natural_key_from_catalog_identity_fields():
     rows = [{"Code": "8697", "Date": "2025-04-01", "Close": 100}]
     out = normalize_generic(rows, dataset="equities_bars_daily", ingested_at=ING)

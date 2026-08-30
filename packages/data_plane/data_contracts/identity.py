@@ -3,6 +3,13 @@
 The TypeScript mirror imports the same JSON contract.  ``canonical_json`` is
 defined to match JavaScript JSON number rendering and UTF-16 object-key order,
 which makes the SHA-256 fallback byte-identical in Python and Workers.
+
+Finite numbers follow ECMAScript ``JSON.stringify`` (ordinary fractions,
+negatives, ``-0``, the ``1e-6`` / ``1e21`` exponent thresholds, and integers
+coerced through binary64).  Python-generated canonical bytes, payload strings,
+and digests from before the fractional-number fix are not trustworthy when they
+contain affected fractions such as ``0.45`` / ``0.11``; this module does not
+rewrite stored rows.
 """
 
 from __future__ import annotations
@@ -37,7 +44,9 @@ def _js_number(value: int | float) -> str:
     """Render a Python JSON number like ECMAScript ``JSON.stringify``.
 
     J-Quants JSON uses interoperable finite numbers.  Coercing integers through
-    binary64 intentionally matches JavaScript's single ``number`` type.
+    binary64 intentionally matches JavaScript's single ``number`` type.  Stripping
+    leading zeros from the digit string must also move the decimal point;
+    otherwise ``0.45`` is emitted as ``4.5``.
     """
     number = float(value)
     if not math.isfinite(number):
@@ -51,9 +60,11 @@ def _js_number(value: int | float) -> str:
         exponent = int(exp_text)
     else:
         mantissa, exponent = raw, 0
-    integer, dot, fraction = mantissa.partition(".")
-    digits = (integer + fraction).lstrip("0") or "0"
-    decimal_pos = len(integer) + exponent
+    integer, _dot, fraction = mantissa.partition(".")
+    digits = integer + fraction
+    leading_zeros = len(digits) - len(digits.lstrip("0"))
+    digits = digits.lstrip("0") or "0"
+    decimal_pos = len(integer) + exponent - leading_zeros
     magnitude = abs(number)
     if 1e-6 <= magnitude < 1e21:
         if decimal_pos <= 0:
