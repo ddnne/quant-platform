@@ -10,7 +10,10 @@ import {
   writeSubmittedState,
 } from "./personal_job_state";
 import { verifiedPersonalResearchContainer } from "./personal_research_runner";
-import { personalSnapshotManifestKey } from "./personal_snapshot_contract";
+import {
+  PERSONAL_SNAPSHOT_FORMAT,
+  personalSnapshotManifestKey,
+} from "./personal_snapshot_contract";
 import {
   PERSONAL_VOL_AM_PM_EVALUATION_PERIODS,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
@@ -110,7 +113,7 @@ function snapshotObjectRef(
     object.size < 1 ||
     !isDigest(rawSha256) ||
     !isDigest(gzipSha256) ||
-    object.customMetadata?.format !== "personal-draft-history/v4" ||
+    object.customMetadata?.format !== PERSONAL_SNAPSHOT_FORMAT ||
     object.customMetadata?.raw_sha256 !== rawSha256 ||
     object.customMetadata?.sha256 !== gzipSha256
   ) {
@@ -159,7 +162,7 @@ async function lockSnapshot(
   if (
     parsed.status !== "COMPLETED" ||
     parsed.job_id !== jobId ||
-    parsed.format !== "personal-draft-history/v4" ||
+    parsed.format !== PERSONAL_SNAPSHOT_FORMAT ||
     !isPersonalSnapshotSourceRunnerVersion(sourceRunner) ||
     parsed.period_start !== expected.period_start ||
     parsed.period_end !== expected.period_end ||
@@ -193,7 +196,7 @@ async function lockSnapshot(
     period_start: expected.period_start,
     period_end: expected.period_end,
     lookback_sessions: lookback,
-    format: "personal-draft-history/v4",
+    format: PERSONAL_SNAPSHOT_FORMAT,
     runner_version: sourceRunner,
     manifest,
     snapshot,

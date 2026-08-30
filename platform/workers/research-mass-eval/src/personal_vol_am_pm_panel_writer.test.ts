@@ -5,7 +5,10 @@ import {
   PERSONAL_RESEARCH_RUNNER_VERSION,
   personalJobContainerName,
 } from "./personal_research_contract";
-import { personalSnapshotManifestKey } from "./personal_snapshot_contract";
+import {
+  PERSONAL_SNAPSHOT_FORMAT,
+  personalSnapshotManifestKey,
+} from "./personal_snapshot_contract";
 import { PERSONAL_VOL_PERIODS } from "./personal_vol_research";
 import { PERSONAL_JOB_TTL_MS } from "./personal_job_state";
 import {
@@ -198,7 +201,7 @@ async function seedSnapshot(
     new Uint8Array([1, 2, 3]),
     `snap-${jobId}`,
     {
-      format: "personal-draft-history/v4",
+      format: PERSONAL_SNAPSHOT_FORMAT,
       raw_sha256: raw,
       sha256: gzip,
     },
@@ -206,7 +209,7 @@ async function seedSnapshot(
   mem.seed(personalSnapshotManifestKey(jobId), {
     status: "COMPLETED",
     job_id: jobId,
-    format: "personal-draft-history/v4",
+    format: PERSONAL_SNAPSHOT_FORMAT,
     runner_version: runnerVersion,
     period_start: periodStart,
     period_end: periodEnd,
@@ -326,7 +329,7 @@ describe("closed personal vol AM/PM panel-build request", () => {
     ).toMatchObject({ ok: false, error: expect.stringContaining("unknown") });
   });
 
-  it("locks v4 snapshots and sidecar child top-level identity from GET", async () => {
+  it("locks v5 snapshots and sidecar child top-level identity from GET", async () => {
     const mem = new MemoryR2();
     await seedClosedInputs(mem);
     const got: string[] = [];
@@ -405,7 +408,7 @@ describe("closed personal vol AM/PM panel-build request", () => {
     mem.seed(personalSnapshotManifestKey(REQUEST.selection_snapshot_job_id), {
       status: "COMPLETED",
       job_id: REQUEST.selection_snapshot_job_id,
-      format: "personal-draft-history/v4",
+      format: PERSONAL_SNAPSHOT_FORMAT,
       runner_version: "personal-cloud-runner/v13",
       period_start: PERSONAL_VOL_AM_PM_SELECTION_PERIOD.period_start,
       period_end: PERSONAL_VOL_AM_PM_SELECTION_PERIOD.period_end,
@@ -433,7 +436,7 @@ describe("closed personal vol AM/PM panel-build request", () => {
     mem.seed(personalSnapshotManifestKey(REQUEST.selection_snapshot_job_id), {
       status: "COMPLETED",
       job_id: REQUEST.selection_snapshot_job_id,
-      format: "personal-draft-history/v4",
+      format: PERSONAL_SNAPSHOT_FORMAT,
       runner_version: runnerVersion,
       period_start: PERSONAL_VOL_AM_PM_SELECTION_PERIOD.period_start,
       period_end: PERSONAL_VOL_AM_PM_SELECTION_PERIOD.period_end,

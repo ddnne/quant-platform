@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Mapping, Sequence
 
+from ingestion.personal_history import PERSONAL_HISTORY_FORMAT
 from research.eval_universe import (
     EVAL_UNIVERSE_POOL,
     UNIVERSE_MIN_BAR_DAYS,
@@ -366,15 +367,15 @@ def _open_sqlite(path: Path) -> sqlite3.Connection:
     return connection
 
 
-def _require_v4_manifest(connection: sqlite3.Connection) -> None:
+def _require_snapshot_format(connection: sqlite3.Connection) -> None:
     try:
         row = connection.execute(
             "SELECT format FROM personal_history_manifest WHERE singleton=1"
         ).fetchone()
     except sqlite3.Error as exc:
-        raise RuntimeError("v4 snapshot manifest is missing") from exc
-    if row is None or str(row["format"]) != "personal-draft-history/v4":
-        raise RuntimeError("snapshot is not personal-draft-history/v4")
+        raise RuntimeError(f"{PERSONAL_HISTORY_FORMAT} snapshot manifest is missing") from exc
+    if row is None or str(row["format"]) != PERSONAL_HISTORY_FORMAT:
+        raise RuntimeError(f"snapshot is not {PERSONAL_HISTORY_FORMAT}")
 
 
 def _calendar_from_snapshot(
@@ -776,10 +777,12 @@ def _common_valid_rows(
 def _require_snapshot_source_lock(lock: Any) -> None:
     if not isinstance(lock, dict):
         raise RuntimeError("snapshot lock is invalid")
-    if lock.get("format") != "personal-draft-history/v4":
-        raise RuntimeError("snapshot is not personal-draft-history/v4")
+    if lock.get("format") != PERSONAL_HISTORY_FORMAT:
+        raise RuntimeError(f"snapshot is not {PERSONAL_HISTORY_FORMAT}")
     if lock.get("runner_version") not in SNAPSHOT_SOURCE_RUNNER_VERSIONS:
-        raise RuntimeError("snapshot source runner is outside the closed v4 allowlist")
+        raise RuntimeError(
+            "snapshot source runner is outside the closed source-runner allowlist"
+        )
 
 
 def load_input_manifest(
@@ -827,7 +830,7 @@ def with_locked_snapshot(
     key = str(snapshot["key"])
     match = _SNAPSHOT_RE.fullmatch(key)
     if match is None:
-        raise RuntimeError("snapshot key is not a v4 gzip object")
+        raise RuntimeError("snapshot key is not a personal snapshot gzip object")
     gzip_path = work / f"{lock['period_id']}.sqlite.gz"
     raw_path = work / f"{lock['period_id']}.sqlite"
     try:
@@ -845,7 +848,7 @@ def with_locked_snapshot(
         gzip_path.unlink(missing_ok=True)
         connection = _open_sqlite(raw_path)
         try:
-            _require_v4_manifest(connection)
+            _require_snapshot_format(connection)
             return extract(connection)
         finally:
             connection.close()

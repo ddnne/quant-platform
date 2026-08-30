@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from ingestion.personal_history import PERSONAL_HISTORY_FORMAT
 from test_cloud_personal_research_container import service
 import personal_vol_am_pm_panel_job as job
 
@@ -53,7 +54,8 @@ def _sqlite_bytes(*, codes: list[str], dates: list[str], typed: bool = True) -> 
         "CREATE TABLE personal_history_manifest (singleton INTEGER PRIMARY KEY, format TEXT)"
     )
     connection.execute(
-        "INSERT INTO personal_history_manifest VALUES (1, 'personal-draft-history/v4')"
+        "INSERT INTO personal_history_manifest VALUES (1, ?)",
+        (PERSONAL_HISTORY_FORMAT,),
     )
     if typed:
         connection.execute(
@@ -190,7 +192,7 @@ def _snapshot_lock(job_id: str, period_id: str, start: str, end: str, gzip_bytes
         "period_start": start,
         "period_end": end,
         "lookback_sessions": 0 if period_id == "y2019_selection" else 61,
-        "format": "personal-draft-history/v4",
+        "format": PERSONAL_HISTORY_FORMAT,
         "runner_version": job.RUNNER_VERSION,
         "manifest": {
             "key": f"research/personal/snapshot-builds/job={job_id}/manifest.json",
@@ -326,7 +328,7 @@ def test_snapshot_source_runner_allowlist_is_closed() -> None:
         input_bytes = _canonical(manifest)
         spec = _spec(manifest, _digest(input_bytes))
         store[spec.input_manifest_key] = input_bytes
-        with pytest.raises(RuntimeError, match="closed v4 allowlist"):
+        with pytest.raises(RuntimeError, match="closed source-runner allowlist"):
             job.load_input_manifest(spec, opener=opener)
 
 
@@ -338,6 +340,23 @@ def test_vol_panel_job_fields_are_closed() -> None:
                 "job_id": "x",
             }
         )
+
+
+def test_vol_panel_rejects_older_snapshot_format(tmp_path: Path) -> None:
+    connection = sqlite3.connect(tmp_path / "old-format.sqlite")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        "CREATE TABLE personal_history_manifest (singleton INTEGER PRIMARY KEY, format TEXT)"
+    )
+    connection.execute(
+        "INSERT INTO personal_history_manifest VALUES (1, 'personal-draft-history/v4')"
+    )
+    connection.commit()
+    with pytest.raises(RuntimeError, match=PERSONAL_HISTORY_FORMAT):
+        job._require_snapshot_format(connection)
+    with pytest.raises(RuntimeError, match=PERSONAL_HISTORY_FORMAT):
+        job._require_snapshot_source_lock({"format": "personal-draft-history/v4"})
+    connection.close()
 
 
 def test_sidecar_extract_is_structural_n225_only() -> None:
