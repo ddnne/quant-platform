@@ -19,10 +19,19 @@ import json
 import math
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 from statistics import mean, median
-from typing import Any, Final, Sequence
+from typing import Any, Final, Mapping, Sequence
 
 from research.factor_cohorts import get_research_cohort
+from research.options_225_smile_features import OPTIONS_225_SMILE_SURFACE_SCOPE
+from research import options_225_smile_transport as _smile_transport_core
+from research.options_225_smile_transport import (
+    OPTIONS_225_SMILE_TRANSPORT_VERSION,
+    STICKY_MONEYNESS,
+    STICKY_STRIKE,
+)
+from research.options_225_vol_series import DATASET_ID
 from research.personal_metrics import summarize_performance
 from strategies.spec import strategy_spec_digest
 
@@ -48,6 +57,24 @@ PANEL_OBSERVATION_DIGEST_SCHEMA: Final = "index-vol-overlay-observations/v1"
 TRADING_CALENDAR_DIGEST_SCHEMA: Final = "ordered-trading-session-dates/v1"
 CONSERVATIVE_EXECUTION_CUTOFF_JST: Final = "15:00:00+09:00"
 LIFECYCLE_STAGE: Final = "DRAFT_DIAGNOSTIC"
+PERSONAL_INDEX_SMILE_TRANSPORT_SCHEMA: Final = (
+    "personal-index-smile-transport/v1"
+)
+PREPARED_SMILE_TRANSPORT_PANEL_MANIFEST_SCHEMA: Final = (
+    "prepared-index-smile-transport-panel/v1"
+)
+SMILE_TRANSPORT_PANEL_DIGEST_SCHEMA: Final = (
+    "index-smile-transport-observations/v1"
+)
+SMILE_TRANSPORT_CORE_MODULE: Final = (
+    "packages/product/research/options_225_smile_transport.py"
+)
+POTENTIAL_MINIMUM_MISMATCH_SCALE: Final = 0.10
+COMMON_VALID_MIN_SIGNAL_DAYS: Final = 40
+COMMON_VALID_MIN_CALENDAR_MONTHS: Final = 4
+FEATURE_AVAILABLE_NO_EARLIER_THAN_JST: Final = "23:59:59+09:00"
+DOWN_SIDE_SMILE_FAMILY: Final = "downside_smile_term_surprise"
+POTENTIAL_MINIMUM_FAMILY: Final = "potential_minimum_transport"
 
 
 _BASE_COHORT_DEFINITION = get_research_cohort(BASE_COHORT_ID)
@@ -299,6 +326,96 @@ OVERLAY_CANDIDATES: Final[tuple[OverlayCandidate, ...]] = (
         ),
     ),
 )
+
+
+SMILE_TRANSPORT_CANDIDATES: Final[tuple[OverlayCandidate, ...]] = (
+    OverlayCandidate(
+        candidate_id="n225_sticky_strike_downside_smile_term_surprise_v1",
+        feature_kind="sticky_strike_downside_smile_term_surprise",
+        mechanics=(
+            "q=actual_downside_smile_term_ratio/predicted_downside_smile_term_ratio-1; "
+            "g=clip(1/(1+q),0.5,1.0)"
+        ),
+        thesis=(
+            "Sticky-strike downside smile term surprise versus the prior exact "
+            "expiry surface is a near-term caution signal."
+        ),
+        return_source=(
+            "Reduce the frozen sleeve when the front/next downside smile term "
+            "is richer than the sticky-strike prediction."
+        ),
+    ),
+    OverlayCandidate(
+        candidate_id="n225_sticky_moneyness_downside_smile_term_surprise_v1",
+        feature_kind="sticky_moneyness_downside_smile_term_surprise",
+        mechanics=(
+            "q=actual_downside_smile_term_ratio/predicted_downside_smile_term_ratio-1; "
+            "g=clip(1/(1+q),0.5,1.0)"
+        ),
+        thesis=(
+            "Sticky-moneyness downside smile term surprise versus the prior exact "
+            "expiry surface is a separate, non-switched caution signal."
+        ),
+        return_source=(
+            "Reduce the frozen sleeve when the front/next downside smile term "
+            "is richer than the sticky-moneyness prediction."
+        ),
+    ),
+    OverlayCandidate(
+        candidate_id="n225_sticky_strike_potential_minimum_transport_v1",
+        feature_kind="sticky_strike_potential_minimum_transport",
+        mechanics=(
+            "M=(abs(e_front)+abs(e_next))/2+abs(e_next-e_front); "
+            "g=clip(1/(1+M/0.10),0.5,1.0)"
+        ),
+        thesis=(
+            "A metaphor-only sticky-strike mismatch of the raw-SVI total-variance "
+            "minimum location is a caution scale, not a causal claim."
+        ),
+        return_source=(
+            "Reduce the frozen sleeve when the sticky-strike potential-minimum "
+            "transport mismatch is large."
+        ),
+    ),
+    OverlayCandidate(
+        candidate_id="n225_sticky_moneyness_potential_minimum_transport_v1",
+        feature_kind="sticky_moneyness_potential_minimum_transport",
+        mechanics=(
+            "M=(abs(e_front)+abs(e_next))/2+abs(e_next-e_front); "
+            "g=clip(1/(1+M/0.10),0.5,1.0)"
+        ),
+        thesis=(
+            "A metaphor-only sticky-moneyness mismatch of the raw-SVI "
+            "total-variance minimum location is a caution scale, not a causal claim."
+        ),
+        return_source=(
+            "Reduce the frozen sleeve when the sticky-moneyness potential-minimum "
+            "transport mismatch is large."
+        ),
+    ),
+)
+
+SMILE_TRANSPORT_CANDIDATE_IDS: Final[tuple[str, ...]] = tuple(
+    item.candidate_id for item in SMILE_TRANSPORT_CANDIDATES
+)
+_SMILE_TRANSPORT_IDENTITY: Final[dict[str, tuple[str, str]]] = {
+    "n225_sticky_strike_downside_smile_term_surprise_v1": (
+        STICKY_STRIKE,
+        DOWN_SIDE_SMILE_FAMILY,
+    ),
+    "n225_sticky_moneyness_downside_smile_term_surprise_v1": (
+        STICKY_MONEYNESS,
+        DOWN_SIDE_SMILE_FAMILY,
+    ),
+    "n225_sticky_strike_potential_minimum_transport_v1": (
+        STICKY_STRIKE,
+        POTENTIAL_MINIMUM_FAMILY,
+    ),
+    "n225_sticky_moneyness_potential_minimum_transport_v1": (
+        STICKY_MONEYNESS,
+        POTENTIAL_MINIMUM_FAMILY,
+    ),
+}
 
 
 def _finite(value: Any) -> float | None:
@@ -1046,6 +1163,609 @@ def evaluate_index_vol_overlays(
     }
 
 
+def smile_transport_core_digest() -> str:
+    """Content-address the reviewed transport core actually imported."""
+
+    path = Path(_smile_transport_core.__file__ or "")
+    if not path.is_file():
+        raise RuntimeError("smile-transport core module path is unavailable")
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def downside_smile_term_gross_scale(q_value: float) -> float | None:
+    """Map downside term surprise ``q`` onto the frozen overlay sleeve scale."""
+
+    q_number = _finite(q_value)
+    if q_number is None:
+        return None
+    denominator = 1.0 + q_number
+    if denominator <= 0.0:
+        return None
+    return _clip(1.0 / denominator, 0.5, 1.0)
+
+
+def potential_minimum_gross_scale(mismatch_severity: float) -> float | None:
+    """Map nonnegative potential-minimum mismatch ``M`` onto the sleeve scale."""
+
+    severity = _finite(mismatch_severity)
+    if severity is None or severity < 0.0:
+        return None
+    return _clip(
+        1.0 / (1.0 + severity / POTENTIAL_MINIMUM_MISMATCH_SCALE),
+        0.5,
+        1.0,
+    )
+
+
+def _smile_transport_availability_timestamp(
+    row: IndexVolOverlayObservation,
+) -> datetime:
+    available_at = _availability_timestamp(row)
+    floor = datetime.fromisoformat(f"{row.date}T{FEATURE_AVAILABLE_NO_EARLIER_THAN_JST}")
+    if available_at < floor:
+        raise ValueError(
+            "smile-transport feature must not be available earlier than "
+            "D 23:59:59 JST"
+        )
+    return available_at
+
+
+def _validate_smile_transport_observations(
+    observations: Sequence[IndexVolOverlayObservation],
+) -> None:
+    _validate_observations(observations)
+    for row in observations:
+        _smile_transport_availability_timestamp(row)
+
+
+def _physical_potential_declaration(candidate: OverlayCandidate) -> dict[str, Any]:
+    potential = candidate.feature_kind.endswith(POTENTIAL_MINIMUM_FAMILY)
+    return {
+        "metaphor_only": True,
+        "causal_claim": False,
+        "applies_to_physical_potential_language": potential,
+    }
+
+
+def _transport_gross_scale(
+    candidate: OverlayCandidate,
+    row: Mapping[str, Any] | None,
+) -> tuple[float | None, float | None, str | None]:
+    if row is None:
+        return None, None, "transport_feature_row_missing"
+    if row.get("candidate_success") is not True:
+        return None, None, str(row.get("candidate_reason") or "candidate_unsuccessful")
+    raw = _finite(row.get("candidate_value"))
+    if raw is None:
+        return None, None, "candidate_value_unavailable"
+    if candidate.feature_kind.endswith(DOWN_SIDE_SMILE_FAMILY):
+        scale = downside_smile_term_gross_scale(raw)
+        if scale is None:
+            return None, raw, "downside_q_not_mappable_to_g"
+        return scale, raw, None
+    if candidate.feature_kind.endswith(POTENTIAL_MINIMUM_FAMILY):
+        scale = potential_minimum_gross_scale(raw)
+        if scale is None:
+            return None, raw, "potential_minimum_mismatch_not_mappable_to_g"
+        return scale, raw, None
+    raise AssertionError(f"unknown frozen transport feature: {candidate.feature_kind}")
+
+
+def _reject_single_stock_transport_row(row: Mapping[str, Any]) -> None:
+    if row.get("single_stock_iv_used") is True:
+        raise ValueError("single-stock option IV is forbidden")
+    surface = row.get("surface_scope")
+    if surface is not None and surface != OPTIONS_225_SMILE_SURFACE_SCOPE:
+        raise ValueError("single-stock option IV is forbidden")
+    source = row.get("source_dataset_id")
+    if source is not None and source != DATASET_ID:
+        raise ValueError("single-stock option IV is forbidden")
+
+
+def _group_transport_features(
+    rows: Sequence[Mapping[str, Any]],
+    session_dates: Sequence[str],
+) -> dict[str, list[Mapping[str, Any]]]:
+    allowed = set(session_dates)
+    grouped: dict[str, list[Mapping[str, Any]]] = {day: [] for day in session_dates}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise TypeError("transport feature rows must be mappings")
+        _reject_single_stock_transport_row(row)
+        day = str(row.get("date") or "")
+        if day not in allowed:
+            raise ValueError("transport feature date is outside the bound panel")
+        grouped[day].append(row)
+    return grouped
+
+
+def _candidate_row_issues(
+    candidate: OverlayCandidate,
+    row: Mapping[str, Any] | None,
+    *,
+    predecessor: str | None,
+) -> list[str]:
+    if row is None:
+        return [f"{candidate.candidate_id}:missing"]
+    issues: list[str] = []
+    expected_model, expected_family = _SMILE_TRANSPORT_IDENTITY[candidate.candidate_id]
+    derived_id = f"n225_{row.get('transport_model')}_{row.get('signal_family')}_v1"
+    if str(row.get("candidate_id") or "") != candidate.candidate_id:
+        issues.append(f"{candidate.candidate_id}:identity_mismatch")
+    if derived_id != candidate.candidate_id:
+        issues.append(f"{candidate.candidate_id}:model_family_mismatch")
+    if row.get("transport_model") != expected_model:
+        issues.append(f"{candidate.candidate_id}:sticky_model_mismatch")
+    if row.get("signal_family") != expected_family:
+        issues.append(f"{candidate.candidate_id}:signal_family_mismatch")
+    if row.get("ffill_applied") is True:
+        issues.append(f"{candidate.candidate_id}:ffill_applied")
+    if row.get("expiry_rank_substitution_applied") is True:
+        issues.append(f"{candidate.candidate_id}:expiry_rank_substitution")
+    if row.get("extrapolation_applied") is True:
+        issues.append(f"{candidate.candidate_id}:extrapolation_applied")
+    if not row.get("front_expiry") or not row.get("next_expiry"):
+        issues.append(f"{candidate.candidate_id}:exact_expiry_pair_missing")
+    previous = str(row.get("previous_observation_date") or "")
+    if predecessor is None:
+        issues.append(f"{candidate.candidate_id}:official_predecessor_unavailable")
+    elif previous != predecessor:
+        issues.append(
+            f"{candidate.candidate_id}:previous_observation_not_official_predecessor"
+        )
+    scale, _raw, scale_error = _transport_gross_scale(candidate, row)
+    if scale is None:
+        issues.append(
+            f"{candidate.candidate_id}:{scale_error or 'gross_scale_unavailable'}"
+        )
+    return issues
+
+
+def _common_validity_for_date(
+    *,
+    day: str,
+    predecessor: str | None,
+    day_rows: Sequence[Mapping[str, Any]],
+    observations: Sequence[IndexVolOverlayObservation],
+    signal_index: int,
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    ids = [str(row.get("candidate_id") or "") for row in day_rows]
+    unique_ids = set(ids)
+    expected = set(SMILE_TRANSPORT_CANDIDATE_IDS)
+    if len(ids) != len(unique_ids):
+        reasons.append("candidate_ids_not_unique")
+    if unique_ids != expected:
+        reasons.append("candidate_identity_not_exact_four")
+    by_id = {
+        str(row.get("candidate_id") or ""): row
+        for row in day_rows
+        if str(row.get("candidate_id") or "")
+    }
+    for candidate in SMILE_TRANSPORT_CANDIDATES:
+        reasons.extend(
+            _candidate_row_issues(
+                candidate,
+                by_id.get(candidate.candidate_id),
+                predecessor=predecessor,
+            )
+        )
+    if signal_index + 2 >= len(observations):
+        reasons.append("d_plus_2_session_unavailable")
+    else:
+        sleeve_return = _finite(observations[signal_index + 2].base_sleeve_return)
+        proxy_return = _topix_return(observations, signal_index + 1, signal_index + 2)
+        if sleeve_return is None:
+            reasons.append("base_sleeve_return_missing")
+        if proxy_return is None:
+            reasons.append("topix_cash_return_missing")
+    beta, beta_error = _estimate_beta(observations, signal_index)
+    if beta is None:
+        reasons.append(beta_error or "beta_estimate_unavailable")
+    # Preserve first-seen order while dropping exact duplicates from stacked checks.
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for reason in reasons:
+        if reason in seen:
+            continue
+        seen.add(reason)
+        ordered.append(reason)
+    return {
+        "date": day,
+        "common_valid": not ordered,
+        "reasons": ordered,
+        "predecessor": predecessor,
+    }
+
+
+def _calendar_months(dates: Sequence[str]) -> tuple[str, ...]:
+    months: list[str] = []
+    seen: set[str] = set()
+    for day in dates:
+        month = day[:7]
+        if month not in seen:
+            seen.add(month)
+            months.append(month)
+    return tuple(months)
+
+
+def _flatten_plan(
+    rows: Sequence[IndexVolOverlayObservation],
+    signal_index: int,
+) -> dict[str, Any]:
+    pnl_index = signal_index + 2
+    sleeve_return = _finite(rows[pnl_index].base_sleeve_return)
+    proxy_return = _topix_return(rows, signal_index + 1, pnl_index)
+    return {
+        "signal_date": rows[signal_index].date,
+        "rebalance_date": rows[signal_index + 1].date,
+        "pnl_date": rows[pnl_index].date,
+        "feature_ratio_x": None,
+        "gross_scale": 0.0,
+        "estimated_beta": None,
+        "beta_observations": None,
+        "beta_window_last_return_date": None,
+        "topix_hedge_weight": 0.0,
+        "base_sleeve_return": 0.0 if sleeve_return is None else sleeve_return,
+        "topix_cash_return": 0.0 if proxy_return is None else proxy_return,
+        "flatten_applied": True,
+        "common_valid": False,
+    }
+
+
+def _valid_transport_plan(
+    candidate: OverlayCandidate,
+    rows: Sequence[IndexVolOverlayObservation],
+    signal_index: int,
+    feature_row: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    gross_scale, raw_value, error = _transport_gross_scale(candidate, feature_row)
+    if gross_scale is None:
+        return None
+    beta, beta_error = _estimate_beta(rows, signal_index)
+    if beta is None:
+        return None
+    pnl_index = signal_index + 2
+    sleeve_return = _finite(rows[pnl_index].base_sleeve_return)
+    proxy_return = _topix_return(rows, signal_index + 1, pnl_index)
+    if sleeve_return is None or proxy_return is None:
+        return None
+    estimated_beta, beta_observations, beta_last_date = beta
+    hedge_weight = _clip(
+        -gross_scale * estimated_beta,
+        -MAX_ABS_TOPIX_HEDGE,
+        MAX_ABS_TOPIX_HEDGE,
+    )
+    return {
+        "signal_date": rows[signal_index].date,
+        "rebalance_date": rows[signal_index + 1].date,
+        "pnl_date": rows[pnl_index].date,
+        "feature_ratio_x": raw_value,
+        "gross_scale": gross_scale,
+        "estimated_beta": estimated_beta,
+        "beta_observations": beta_observations,
+        "beta_window_last_return_date": beta_last_date,
+        "topix_hedge_weight": hedge_weight,
+        "base_sleeve_return": sleeve_return,
+        "topix_cash_return": proxy_return,
+        "flatten_applied": False,
+        "common_valid": True,
+        "feature_error": error,
+    }
+
+
+def _not_evaluated_transport_result(
+    candidate: OverlayCandidate,
+    *,
+    reason: str,
+    missing: Sequence[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        **asdict(candidate),
+        "physical_potential": _physical_potential_declaration(candidate),
+        "status": "NOT_EVALUATED",
+        "reason": reason,
+        "missing_required_rows": list(missing or []),
+        "daily_path": [],
+        "trades": [],
+        "performance": None,
+    }
+
+
+def canonical_smile_transport_panel_digest(
+    observations: Sequence[IndexVolOverlayObservation],
+    transport_features: Sequence[Mapping[str, Any]],
+    common_validity: Sequence[Mapping[str, Any]],
+) -> str:
+    """Hash market rows, the four daily transport rows, and gate flags."""
+
+    return _canonical_digest(
+        {
+            "schema_version": SMILE_TRANSPORT_PANEL_DIGEST_SCHEMA,
+            "market_rows": [
+                {
+                    "date": row.date,
+                    "available_at": row.available_at,
+                    "base_sleeve_return": row.base_sleeve_return,
+                    "topix_cash_close": row.topix_cash_close,
+                }
+                for row in observations
+            ],
+            "transport_rows": [dict(row) for row in transport_features],
+            "common_validity": [dict(row) for row in common_validity],
+        }
+    )
+
+
+def evaluate_index_smile_transport_overlays(
+    observations: Sequence[IndexVolOverlayObservation],
+    transport_features: Sequence[Mapping[str, Any]],
+    *,
+    manifest: PreparedIndexVolOverlayPanelManifest,
+    authoritative_session_dates: Sequence[str],
+    signal_start: str,
+    signal_end: str | None = None,
+    starting_capital: float = 1_000_000.0,
+    core_digest: str | None = None,
+) -> dict[str, Any]:
+    """Evaluate the frozen four smile-transport overlays without selecting."""
+
+    _validate_smile_transport_observations(observations)
+    _validate_manifest(manifest, observations, authoritative_session_dates)
+    try:
+        start = date.fromisoformat(signal_start).isoformat()
+        end = (
+            date.fromisoformat(signal_end).isoformat()
+            if signal_end
+            else observations[-3].date
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("signal_start/signal_end must be canonical ISO dates") from exc
+    if start != signal_start or (signal_end is not None and end != signal_end):
+        raise ValueError("signal_start/signal_end must be canonical ISO dates")
+    if end < start:
+        raise ValueError("signal_end must be on or after signal_start")
+    capital = _positive(starting_capital)
+    if capital is None:
+        raise ValueError("starting_capital must be positive and finite")
+    if len(SMILE_TRANSPORT_CANDIDATES) != 4:
+        raise RuntimeError("smile-transport candidate set must remain exact-four")
+    if len(set(SMILE_TRANSPORT_CANDIDATE_IDS)) != 4:
+        raise RuntimeError("smile-transport candidate ids must be unique")
+    signal_indices = [
+        index
+        for index, row in enumerate(observations)
+        if row.date >= start and row.date <= end
+    ]
+    if not signal_indices:
+        raise ValueError("requested signal range has no observations")
+    grouped = _group_transport_features(
+        transport_features,
+        tuple(row.date for row in observations),
+    )
+    validity_rows: list[dict[str, Any]] = []
+    for signal_index in signal_indices:
+        day = observations[signal_index].date
+        predecessor = (
+            observations[signal_index - 1].date if signal_index > 0 else None
+        )
+        validity_rows.append(
+            _common_validity_for_date(
+                day=day,
+                predecessor=predecessor,
+                day_rows=grouped.get(day, []),
+                observations=observations,
+                signal_index=signal_index,
+            )
+        )
+    valid_dates = [row["date"] for row in validity_rows if row["common_valid"]]
+    valid_months = _calendar_months(valid_dates)
+    gate_passed = (
+        len(valid_dates) >= COMMON_VALID_MIN_SIGNAL_DAYS
+        and len(valid_months) >= COMMON_VALID_MIN_CALENDAR_MONTHS
+    )
+    gate = {
+        "passed": gate_passed,
+        "required_signal_days": COMMON_VALID_MIN_SIGNAL_DAYS,
+        "required_distinct_calendar_months": COMMON_VALID_MIN_CALENDAR_MONTHS,
+        "common_valid_signal_days": len(valid_dates),
+        "common_valid_calendar_months": len(valid_months),
+        "common_valid_month_ids": list(valid_months),
+        "common_valid_dates": valid_dates,
+        "excluded": [
+            {"date": row["date"], "reasons": row["reasons"]}
+            for row in validity_rows
+            if not row["common_valid"]
+        ],
+        "common_invalid_policy": "flatten_g0_h0_at_d_plus_1_close_prior",
+    }
+    observed_core_digest = core_digest or smile_transport_core_digest()
+    if not _canonical_sha256(observed_core_digest):
+        raise ValueError("core_digest must be a canonical sha256 digest")
+    validity_by_date = {row["date"]: row for row in validity_rows}
+    if not gate_passed:
+        results = [
+            _not_evaluated_transport_result(
+                candidate,
+                reason="common_validity_gate_failed",
+                missing=gate["excluded"],
+            )
+            for candidate in SMILE_TRANSPORT_CANDIDATES
+        ]
+        diagnostic_control = {
+            "control_id": "base_g1_h0_control_v1",
+            "role": "NAV_WRAPPER_CONTROL_WITH_10BP_ENTRY_EXIT",
+            "ranking_role": "DIAGNOSTIC_CONTROL_NOT_RANKED",
+            "status": "NOT_EVALUATED",
+            "reason": "common_validity_gate_failed",
+            "missing_required_rows": gate["excluded"],
+            "daily_path": [],
+            "trades": [],
+            "performance": None,
+        }
+    else:
+        results = []
+        for candidate in SMILE_TRANSPORT_CANDIDATES:
+            plans: list[dict[str, Any]] = []
+            for signal_index in signal_indices:
+                day = observations[signal_index].date
+                if validity_by_date[day]["common_valid"]:
+                    by_id = {
+                        str(row.get("candidate_id") or ""): row
+                        for row in grouped[day]
+                    }
+                    plan = _valid_transport_plan(
+                        candidate,
+                        observations,
+                        signal_index,
+                        by_id[candidate.candidate_id],
+                    )
+                    if plan is None:
+                        raise RuntimeError(
+                            "common-valid date lost a required transport plan"
+                        )
+                    plans.append(plan)
+                else:
+                    plans.append(_flatten_plan(observations, signal_index))
+            curve, trades, performance = _evaluate_plans(
+                plans,
+                starting_capital=capital,
+            )
+            results.append(
+                {
+                    **asdict(candidate),
+                    "physical_potential": _physical_potential_declaration(
+                        candidate
+                    ),
+                    "status": "EVALUATED",
+                    "reason": None,
+                    "missing_required_rows": [],
+                    "daily_path": curve,
+                    "trades": trades,
+                    "performance": performance,
+                }
+            )
+        diagnostic_control = _diagnostic_control_result(
+            observations,
+            signal_indices,
+            starting_capital=capital,
+        )
+    evaluated_count = sum(result["status"] == "EVALUATED" for result in results)
+    return {
+        "schema_version": PERSONAL_INDEX_SMILE_TRANSPORT_SCHEMA,
+        "status": "EVALUATED" if evaluated_count == len(results) else "NOT_EVALUATED",
+        "lifecycle": {
+            "stage": LIFECYCLE_STAGE,
+            "role": "DIAGNOSTIC_RESEARCH_ONLY",
+            "paper_execution": False,
+            "automatic_promotion": False,
+        },
+        "prepared_panel_provenance": {
+            "schema_version": PREPARED_SMILE_TRANSPORT_PANEL_MANIFEST_SCHEMA,
+            **asdict(manifest),
+            "transport_feature_digest": canonical_smile_transport_panel_digest(
+                observations,
+                transport_features,
+                validity_rows,
+            ),
+            "core_version": OPTIONS_225_SMILE_TRANSPORT_VERSION,
+            "core_digest": observed_core_digest,
+            "core_module": SMILE_TRANSPORT_CORE_MODULE,
+        },
+        "base_sleeve": {
+            "strategy_id": BASE_SLEEVE_ID,
+            "universe_id": BASE_UNIVERSE_ID,
+            "selection_timing": "PREDECLARED_BEFORE_OVERLAY_RESULTS",
+            "single_stock_option_iv": "EXCLUDED_FROM_INPUT_SURFACE",
+            "stock_price_realized_volatility": "ALLOWED_IN_FROZEN_BASE_SLEEVE",
+            "return_semantics": BASE_RETURN_SEMANTICS,
+            "nav_semantics": BASE_NAV_SEMANTICS,
+            "source_slice_wrapper_cost_semantics": (
+                SOURCE_SLICE_WRAPPER_COST_SEMANTICS
+            ),
+        },
+        "timing": {
+            "signal": "D_CLOSE",
+            "feature_available_no_earlier_than": "D_23_59_59_JST",
+            "rebalance": "D_PLUS_1_CLOSE",
+            "first_pnl": "D_PLUS_1_CLOSE_TO_D_PLUS_2_CLOSE",
+            "terminal_close": True,
+            "authoritative_calendar_alignment": "EXACT_ORDERED_DATE_MATCH",
+            "official_predecessor_rule": (
+                "D_MINUS_1_IS_IMMEDIATELY_PRECEDING_OFFICIAL_SESSION"
+            ),
+            "prepared_row_availability": (
+                "NO_EARLIER_THAN_D_23_59_59_JST_AND_STRICTLY_BEFORE_"
+                "D_PLUS_1_CONSERVATIVE_15_00_JST_CUTOFF"
+            ),
+            "conservative_execution_cutoff_jst": CONSERVATIVE_EXECUTION_CUTOFF_JST,
+            "no_forward_fill": True,
+            "no_expiry_rank_substitution": True,
+            "no_extrapolation": True,
+            "no_mutable_current_db": True,
+        },
+        "cost_model": {
+            "one_way_basis_points": 10.0,
+            "applies_to": ["base_sleeve_turnover", "topix_proxy_turnover"],
+            "reported_cost_turnover_fill_scope": "OVERLAY_INCREMENTAL_ONLY",
+            "not_total_strategy_cost_metrics": True,
+            "base_nav_source_slice_excludes_wrapper_entry_liquidation": True,
+        },
+        "topix_proxy": {
+            "dataset": TOPIX_PROXY_DATASET,
+            "label": "TOPIX cash index close-to-close return",
+            "role": "NON_EXECUTABLE_HEDGE_APPROXIMATION",
+            "etf_fill_claim": False,
+            "warning": (
+                "This is not an ETF fill or tradable execution claim; later cloud "
+                "work must bind an explicit executable proxy before paper execution."
+            ),
+        },
+        "beta_policy": {
+            "lookback_source_sessions": BETA_LOOKBACK_RETURNS,
+            "minimum_paired_returns": BETA_MIN_RETURNS,
+            "current_signal_day_pair_required": True,
+            "hedge_formula": "h=clip(-g*beta,-1.5,1.5)",
+        },
+        "exposure_formulas": {
+            "downside_q": (
+                "actual_downside_smile_term_ratio/"
+                "predicted_downside_smile_term_ratio-1"
+            ),
+            "downside_g": "clip(1/(1+q),0.5,1.0)",
+            "potential_minimum_M": (
+                "(abs(e_front)+abs(e_next))/2+abs(e_next-e_front)"
+            ),
+            "potential_minimum_g": "clip(1/(1+M/0.10),0.5,1.0)",
+            "hedge_h": "clip(-g*beta_D,-1.5,1.5)",
+        },
+        "physical_potential": {
+            "metaphor_only": True,
+            "causal_claim": False,
+        },
+        "candidate_policy": {
+            "declared_count": len(SMILE_TRANSPORT_CANDIDATES),
+            "evaluated_count": evaluated_count,
+            "post_result_selection": "NOT_PERFORMED",
+            "selection": "NOT_PERFORMED",
+            "ranking": None,
+            "diagnostic_control_in_declared_count": False,
+            "candidate_order": list(SMILE_TRANSPORT_CANDIDATE_IDS),
+            "sticky_models": [STICKY_STRIKE, STICKY_MONEYNESS],
+            "adaptive_model_switch": False,
+        },
+        "common_validity_gate": gate,
+        "diagnostic_control": diagnostic_control,
+        "candidates": results,
+        "under_px_policy": {
+            "role": "DISCLOSED_COORDINATE_PROXY",
+            "trusted_forward": False,
+            "forward_relative_fields": "null_with_reason",
+            "forward_relative_reason": "trusted_forward_unavailable",
+        },
+    }
+
+
 __all__ = [
     "BASE_COHORT_ID",
     "BASE_NAV_SEMANTICS",
@@ -1060,13 +1780,24 @@ __all__ = [
     "MAX_ABS_TOPIX_HEDGE",
     "ONE_WAY_COST_RATE",
     "OVERLAY_CANDIDATES",
+    "PERSONAL_INDEX_SMILE_TRANSPORT_SCHEMA",
     "PERSONAL_INDEX_VOL_OVERLAY_SCHEMA",
+    "POTENTIAL_MINIMUM_MISMATCH_SCALE",
     "PREPARED_PANEL_MANIFEST_SCHEMA",
+    "PREPARED_SMILE_TRANSPORT_PANEL_MANIFEST_SCHEMA",
     "PreparedIndexVolOverlayPanelManifest",
+    "SMILE_TRANSPORT_CANDIDATES",
+    "SMILE_TRANSPORT_CANDIDATE_IDS",
+    "SMILE_TRANSPORT_CORE_MODULE",
     "SOURCE_SLICE_WRAPPER_COST_SEMANTICS",
     "TOPIX_PROXY_DATASET",
     "build_prepared_panel_manifest",
     "canonical_prepared_panel_digest",
+    "canonical_smile_transport_panel_digest",
     "canonical_trading_calendar_digest",
+    "downside_smile_term_gross_scale",
+    "evaluate_index_smile_transport_overlays",
     "evaluate_index_vol_overlays",
+    "potential_minimum_gross_scale",
+    "smile_transport_core_digest",
 ]
