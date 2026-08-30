@@ -4,41 +4,56 @@ These helpers reconstruct a field-time signal view for
 ``am_signal_pm_close``. They compose canonical ``equities_bars_daily`` reads
 and never consult tip-only ``equities_bars_daily_am``.
 
-The D synthetic row is a mask of the official-close daily record. That is
-not a claim that the full daily bar was published at 11:30 JST.
+The D AM row is an allowlisted synthetic session row, not a canonical PIT
+publication at 11:30 JST. Source-close evidence stays in result metadata.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import hashlib
+import json
+from dataclasses import dataclass, field
+from typing import Any, Mapping
 
 from ingestion.common.timeutil import parse_date_str
 from ingestion.jquants.normalize import CLOSE_CHANGE_DATE
 
-from .api import _result, get_equity_bars_daily
-from .models import PitResult
+from .api import get_equity_bars_daily
+from .models import PIT_API_VERSION
 from .query import _NOT_GIVEN, normalize_as_of
 
 _MORNING_CLOSE_SUFFIX = "T11:30:00+09:00"
+INFORMATION_CUTOFF = "11:30:00+09:00"
+OPERATIONAL_USABLE_BY = "12:30:00+09:00"
+AM_SIGNAL_SESSION_VIEW = "personal_retrospective_am_signal"
+PM_FILL_SESSION_VIEW = "personal_retrospective_pm_fill"
 
-_D_SIGNAL_STRIP_FIELDS = (
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-    "adjustment_open",
-    "adjustment_high",
-    "adjustment_low",
-    "turnover_value",
-    "market_cap",
-    "afternoon_adjustment_close",
-    "afternoon_turnover_value",
-    "afternoon_adjustment_volume",
-    "raw_payload",
-)
-
+_D_AM_IDENTITY_FIELDS = ("source", "code", "date")
+_D_AM_VALUE_FIELDS = ("adjustment_close", "adjustment_volume")
+_D_AM_TURNOVER_FIELD = "morning_turnover_value"
+_ROW_TIMESTAMP_FIELDS = ("event_time", "available_at", "ingested_at")
 _D_FILL_KEEP_FIELDS = ("source", "code", "date")
+
+
+@dataclass(frozen=True)
+class PersonalRetrospectiveSessionResult:
+    """Allowlisted session-view rows plus reconstruction metadata.
+
+    This is not a canonical :class:`~pit.models.PitResult`. Feature readers
+    only need ``.rows`` and ``.metadata``.
+    """
+
+    rows: list[dict[str, Any]]
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __iter__(self):
+        return iter(self.rows)
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def __bool__(self) -> bool:
+        return bool(self.rows)
 
 
 def _official_close_as_of(day: str) -> str:
@@ -61,36 +76,109 @@ def _require_latest_n(
         raise ValueError("latest_n requires one non-empty code")
 
 
-def _mask_d_am_signal_row(
-    row: dict[str, Any], *, include_morning_turnover_history: bool
+def _canonical_digest(body: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        dict(body),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def am_session_view_contract(
+    *, include_morning_turnover_history: bool = False
 ) -> dict[str, Any]:
-    """Expose only D morning fields to a signal caller."""
-    out = {key: value for key, value in row.items() if key not in _D_SIGNAL_STRIP_FIELDS}
+    """Stable AM session-view contract used in feature provenance."""
+
+    d_row_fields = list(_D_AM_IDENTITY_FIELDS) + list(_D_AM_VALUE_FIELDS)
+    if include_morning_turnover_history:
+        d_row_fields.append(_D_AM_TURNOVER_FIELD)
+    return {
+        "session_view": AM_SIGNAL_SESSION_VIEW,
+        "information_cutoff": INFORMATION_CUTOFF,
+        "operational_usable_by": OPERATIONAL_USABLE_BY,
+        "non_price_pit_cutoff": INFORMATION_CUTOFF,
+        "historical_source": "equities_bars_daily",
+        "d_row_fields": d_row_fields,
+        "publication_claim": False,
+        "field_time_reconstruction": True,
+        "include_morning_turnover_history": bool(include_morning_turnover_history),
+        "last_return_interval": "prior PM/full -> D morning",
+    }
+
+
+def am_session_view_digest(*, include_morning_turnover_history: bool = False) -> str:
+    return _canonical_digest(
+        am_session_view_contract(
+            include_morning_turnover_history=include_morning_turnover_history
+        )
+    )
+
+
+def _synthetic_d_am_signal_row(
+    row: Mapping[str, Any], *, include_morning_turnover_history: bool
+) -> dict[str, Any]:
+    """Expose only allowlisted D morning fields to a signal caller."""
+
+    out = {field: row.get(field) for field in _D_AM_IDENTITY_FIELDS}
     out["adjustment_close"] = row.get("morning_adjustment_close")
     out["adjustment_volume"] = row.get("morning_adjustment_volume")
     if include_morning_turnover_history:
         out["morning_turnover_value"] = row.get("morning_turnover_value")
-        out.pop("turnover_value", None)
-    else:
-        out.pop("morning_turnover_value", None)
-        out.pop("turnover_value", None)
     return out
 
 
-def _consistent_morning_turnover_row(row: dict[str, Any]) -> dict[str, Any]:
+def _d_row_reconstruction_timestamps(row: Mapping[str, Any]) -> dict[str, Any]:
+    evidence = {
+        "code": row.get("code"),
+        "date": row.get("date"),
+        "source": row.get("source"),
+    }
+    for field in _ROW_TIMESTAMP_FIELDS:
+        evidence[f"source_{field}"] = row.get(field)
+    return evidence
+
+
+def _consistent_morning_turnover_row(row: Mapping[str, Any]) -> dict[str, Any]:
     """Offer morning turnover without mixing in full-day ``Va``."""
+
     out = dict(row)
     out.pop("turnover_value", None)
     return out
 
 
-def _mask_d_pm_fill_row(row: dict[str, Any]) -> dict[str, Any]:
+def _mask_d_pm_fill_row(row: Mapping[str, Any]) -> dict[str, Any]:
     """Return only the D PM adjusted price on the fill-price path."""
+
     aadjc = row.get("afternoon_adjustment_close")
     out = {field: row.get(field) for field in _D_FILL_KEEP_FIELDS}
     out["adjustment_close"] = aadjc
     out["afternoon_adjustment_close"] = aadjc
     return out
+
+
+def _session_result(
+    rows: list[dict[str, Any]],
+    *,
+    as_of: str,
+    extra_metadata: Mapping[str, Any],
+) -> PersonalRetrospectiveSessionResult:
+    md: dict[str, Any] = {
+        "as_of": as_of,
+        "table": "jquants_daily_bars",
+        "count": len(rows),
+        "source": "jquants",
+        "pit_api_version": PIT_API_VERSION,
+        "information_cutoff": INFORMATION_CUTOFF,
+        "operational_usable_by": OPERATIONAL_USABLE_BY,
+        "publication_claim": False,
+        "field_time_reconstruction": True,
+        "historical_source": "equities_bars_daily",
+    }
+    md.update(dict(extra_metadata))
+    return PersonalRetrospectiveSessionResult(rows=rows, metadata=md)
 
 
 def get_personal_retrospective_am_signal_equity_bars_daily(
@@ -103,15 +191,15 @@ def get_personal_retrospective_am_signal_equity_bars_daily(
     latest_n: int | None = None,
     db_path: Any = None,
     include_morning_turnover_history: bool = False,
-) -> PitResult:
+) -> PersonalRetrospectiveSessionResult:
     """Prior PIT-visible full daily rows at 11:30 plus a D morning-only row.
 
-    Prior rows are read at the decision ``as_of`` (D 11:30 JST). The exact D
-    row is read no later than official D close from ``equities_bars_daily``,
-    then field-masked so the signal caller cannot see D full close / AdjC /
-    afternoon fields / MktCap. ``include_morning_turnover_history`` later
-    offers morning turnover consistently; it is off by default so core tests
-    do not mix D ``MVa`` with prior full-day ``Va``.
+    Prior rows are read at the decision ``as_of`` (D 11:30 JST). When
+    ``latest_n`` is set, that bound is applied to the prior query so the
+    adapter never decodes a full 2008-present history. The exact D row is
+    read no later than official D close from ``equities_bars_daily``, then
+    rebuilt as an allowlisted synthetic session row. Source publication
+    timestamps stay in retrospective reconstruction metadata.
     """
     as_of_iso = normalize_as_of(as_of)
     if not as_of_iso.endswith(_MORNING_CLOSE_SUFFIX):
@@ -126,14 +214,17 @@ def get_personal_retrospective_am_signal_equity_bars_daily(
     if to_event is not None and _as_day(to_event) < decision_date:
         include_d = False
 
-    prior = get_equity_bars_daily(
-        as_of=as_of_iso,
-        code=code,
-        from_event=from_event,
-        to_event=to_event,
-        codes=codes,
-        db_path=db_path,
-    )
+    prior_kwargs: dict[str, Any] = {
+        "as_of": as_of_iso,
+        "code": code,
+        "from_event": from_event,
+        "to_event": to_event,
+        "codes": codes,
+        "db_path": db_path,
+    }
+    if latest_n is not None:
+        prior_kwargs["latest_n"] = latest_n
+    prior = get_equity_bars_daily(**prior_kwargs)
     prior_rows = [
         row for row in prior.rows if str(row.get("date") or "") < decision_date
     ]
@@ -141,45 +232,49 @@ def get_personal_retrospective_am_signal_equity_bars_daily(
         prior_rows = [_consistent_morning_turnover_row(row) for row in prior_rows]
 
     d_rows: list[dict[str, Any]] = []
+    reconstruction_timestamps: list[dict[str, Any]] = []
+    d_source_read_as_of = _official_close_as_of(decision_date)
     if include_d:
         d_result = get_equity_bars_daily(
-            as_of=_official_close_as_of(decision_date),
+            as_of=d_source_read_as_of,
             code=code,
             from_event=decision_date,
             to_event=decision_date,
             codes=codes,
             db_path=db_path,
         )
-        d_rows = [
-            _mask_d_am_signal_row(
-                row,
-                include_morning_turnover_history=include_morning_turnover_history,
+        for row in d_result.rows:
+            if str(row.get("date") or "") != decision_date:
+                continue
+            reconstruction_timestamps.append(_d_row_reconstruction_timestamps(row))
+            d_rows.append(
+                _synthetic_d_am_signal_row(
+                    row,
+                    include_morning_turnover_history=include_morning_turnover_history,
+                )
             )
-            for row in d_result.rows
-            if str(row.get("date") or "") == decision_date
-        ]
 
     rows = [*prior_rows, *d_rows]
     rows.sort(key=lambda row: (row.get("code") or "", row.get("date") or ""))
     if latest_n is not None:
         rows = rows[-latest_n:]
+
+    contract = am_session_view_contract(
+        include_morning_turnover_history=include_morning_turnover_history
+    )
     extra: dict[str, Any] = {
-        "session_view": "personal_retrospective_am_signal",
-        "field_time_reconstruction": True,
-        "publication_claim": False,
-        "historical_source": "equities_bars_daily",
-        "d_row_source": "equities_bars_daily_masked_at_official_close",
-        "include_morning_turnover_history": bool(include_morning_turnover_history),
+        **contract,
+        "session_view_digest": _canonical_digest(contract),
+        "d_row_source": "equities_bars_daily_synthetic_allowlist_at_official_close",
+        "retrospective_reconstruction": {
+            "d_row_source_dataset": "equities_bars_daily",
+            "d_row_source_read_as_of": d_source_read_as_of if include_d else None,
+            "d_row_source_publication_timestamps": reconstruction_timestamps,
+        },
     }
     if latest_n is not None:
         extra["latest_n"] = latest_n
-    return _result(
-        rows,
-        as_of=as_of_iso,
-        table="jquants_daily_bars",
-        source="jquants",
-        extra_metadata=extra,
-    )
+    return _session_result(rows, as_of=as_of_iso, extra_metadata=extra)
 
 
 def get_personal_retrospective_pm_fill_equity_bars_daily(
@@ -189,7 +284,7 @@ def get_personal_retrospective_pm_fill_equity_bars_daily(
     code: str | None = None,
     codes: tuple[str, ...] | list[str] | set[str] | None = None,
     db_path: Any = None,
-) -> PitResult:
+) -> PersonalRetrospectiveSessionResult:
     """D PM adjusted close (AAdjC) only; no fallback to full close/AdjC."""
     day = _as_day(session_date)
     official = _official_close_as_of(day)
@@ -213,16 +308,15 @@ def get_personal_retrospective_pm_fill_equity_bars_daily(
         if str(row.get("date") or "") == day
     ]
     rows.sort(key=lambda row: (row.get("code") or "", row.get("date") or ""))
-    return _result(
+    return _session_result(
         rows,
         as_of=as_of_iso,
-        table="jquants_daily_bars",
-        source="jquants",
         extra_metadata={
-            "session_view": "personal_retrospective_pm_fill",
-            "field_time_reconstruction": True,
-            "publication_claim": False,
-            "historical_source": "equities_bars_daily",
+            "session_view": PM_FILL_SESSION_VIEW,
             "fill_price_field": "afternoon_adjustment_close",
+            "retrospective_reconstruction": {
+                "d_row_source_dataset": "equities_bars_daily",
+                "d_row_source_read_as_of": as_of_iso,
+            },
         },
     )

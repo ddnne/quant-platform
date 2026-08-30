@@ -49,6 +49,7 @@ from .execution import (
     close_as_of,
     get_mode,
     morning_close_as_of,
+    operational_usable_by_as_of,
 )
 from .metrics import compute_metrics, max_drawdown
 from .result import BacktestResult
@@ -100,6 +101,7 @@ __all__ = [
     "get_mode",
     "close_as_of",
     "morning_close_as_of",
+    "operational_usable_by_as_of",
     # costs / financing
     "CostModel",
     "ShortFinancingModel",

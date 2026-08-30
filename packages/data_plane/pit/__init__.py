@@ -33,6 +33,9 @@ from .api import (
     get_market_calendar,
 )
 from .personal_retrospective_session import (
+    PersonalRetrospectiveSessionResult,
+    am_session_view_contract,
+    am_session_view_digest,
     get_personal_retrospective_am_signal_equity_bars_daily,
     get_personal_retrospective_pm_fill_equity_bars_daily,
 )
@@ -57,6 +60,9 @@ __all__ = [
     "get_jsda_repo_rates",
     "get_personal_retrospective_am_signal_equity_bars_daily",
     "get_personal_retrospective_pm_fill_equity_bars_daily",
+    "PersonalRetrospectiveSessionResult",
+    "am_session_view_contract",
+    "am_session_view_digest",
     # result / version
     "PitResult",
     "PIT_API_VERSION",

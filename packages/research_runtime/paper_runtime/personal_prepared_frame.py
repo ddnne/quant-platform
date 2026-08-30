@@ -178,10 +178,11 @@ def _feature_cache_key_document(
     feature_version: str,
     definition_digest: str,
     params: Mapping[str, Any],
+    session_view_digest: str | None = None,
 ) -> dict[str, Any]:
     """Return the complete auditable identity of one prepared feature cell."""
 
-    return {
+    document = {
         "schema_version": PERSONAL_PREPARED_FEATURE_KEY_SCHEMA,
         "snapshot_id": _require_snapshot_id(snapshot_id),
         "as_of": str(as_of),
@@ -192,6 +193,9 @@ def _feature_cache_key_document(
         "feature_definition_digest": str(definition_digest),
         "params": dict(params),
     }
+    if session_view_digest is not None:
+        document["session_view_digest"] = str(session_view_digest)
+    return document
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,6 +287,7 @@ class PersonalPreparedFrame:
         feature_version: str,
         definition_digest: str,
         inputs: Mapping[str, Any],
+        session_view_digest: str | None = None,
     ) -> tuple[str, str]:
         code_present = "code" in inputs
         code = inputs.get("code")
@@ -296,6 +301,7 @@ class PersonalPreparedFrame:
             feature_version=feature_version,
             definition_digest=definition_digest,
             params=params,
+            session_view_digest=session_view_digest,
         )
         encoded = _canonical_json(document)
         digest = "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -309,6 +315,7 @@ class PersonalPreparedFrame:
         feature_version: str,
         definition_digest: str,
         inputs: Mapping[str, Any],
+        session_view_digest: str | None = None,
     ) -> PreparedFeatureValue | object:
         if self._closed:
             raise RuntimeError("personal prepared frame is closed")
@@ -319,6 +326,7 @@ class PersonalPreparedFrame:
             feature_version=feature_version,
             definition_digest=definition_digest,
             inputs=inputs,
+            session_view_digest=session_view_digest,
         )
         row = self._connection.execute(
             "SELECT key_json,payload FROM feature_cells WHERE key_digest=?",
@@ -355,6 +363,7 @@ class PersonalPreparedFrame:
         inputs: Mapping[str, Any],
         value: Any,
         metadata: Mapping[str, Any],
+        session_view_digest: str | None = None,
     ) -> None:
         if self._closed:
             raise RuntimeError("personal prepared frame is closed")
@@ -378,6 +387,7 @@ class PersonalPreparedFrame:
             feature_version=feature_version,
             definition_digest=definition_digest,
             inputs=inputs,
+            session_view_digest=session_view_digest,
         )
         try:
             payload = _canonical_json(document).encode("utf-8")

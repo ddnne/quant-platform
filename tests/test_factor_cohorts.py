@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -42,6 +43,7 @@ from strategies.spec import (
     FactorRankRule,
     STRATEGY_SPEC_VERSION_V4,
     iter_feature_refs,
+    strategy_spec_digest,
 )
 
 
@@ -200,7 +202,15 @@ def test_am_pm_cohorts_are_exact_four_and_bind_the_same_canonical_contract() -> 
         legacy = get_research_cohort(legacy_id)
         am_cohort = get_research_cohort(am_id)
         assert len(am_cohort.strategy_specs) == 4
-        assert am_cohort.strategy_specs == legacy.strategy_specs
+        assert am_cohort.strategy_specs != legacy.strategy_specs
+        assert {ref.id for spec in legacy.strategy_specs for ref in iter_feature_refs(spec)} <= {
+            "retrospective_price_ratio",
+            "pit_fundamental_ratio",
+        }
+        assert {ref.id for spec in am_cohort.strategy_specs for ref in iter_feature_refs(spec)} <= {
+            "am_session_price_ratio",
+            "am_session_fundamental_ratio",
+        }
         assert am_cohort.dataset_dependencies == legacy.dataset_dependencies
         assert am_cohort.short_financing_required == legacy.short_financing_required
         assert am_cohort.warmup_sessions == legacy.warmup_sessions
@@ -213,6 +223,8 @@ def test_am_pm_cohorts_are_exact_four_and_bind_the_same_canonical_contract() -> 
         assert canonical["label"] == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
         assert canonical["contract_digest"].startswith("sha256:")
         assert canonical["execution_mode"] == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+        assert canonical["information_cutoff"] == "11:30:00+09:00"
+        assert canonical["operational_usable_by"] == "12:30:00+09:00"
         assert canonical["non_price_information_cutoff"] == "11:30:00+09:00"
         assert canonical["am_observation_acquisition_deadline"] == "12:30:00+09:00"
         assert canonical["am_observation_deadline_is_non_price_cutoff"] is False
@@ -289,3 +301,83 @@ def test_am_pm_factor_closure_depends_on_full_daily_bars_not_tip_am() -> None:
     )
     assert "equities_bars_daily" in closure.required_datasets
     assert "equities_bars_daily_am" not in closure.required_datasets
+
+
+def test_am_strategy_ids_are_distinct_and_ls_base_is_stable() -> None:
+    bodies: dict[tuple[str, str], dict] = {}
+    for cohort in RESEARCH_COHORTS.values():
+        for spec in cohort.strategy_specs:
+            key = (spec.strategy_id, spec.version)
+            body = spec.to_dict()
+            previous = bodies.get(key)
+            if previous is not None:
+                assert previous == body
+            bodies[key] = body
+
+    legacy_keys = {
+        (spec.strategy_id, spec.version)
+        for cohort_id in LEGACY_PERSONAL_EXECUTABLE_COHORT_IDS
+        for spec in get_research_cohort(cohort_id).strategy_specs
+    }
+    am_keys = {
+        (spec.strategy_id, spec.version)
+        for cohort_id in AM_PM_PERSONAL_EXECUTABLE_COHORT_IDS
+        for spec in get_research_cohort(cohort_id).strategy_specs
+    }
+    assert legacy_keys
+    assert am_keys
+    assert legacy_keys.isdisjoint(am_keys)
+    assert all(strategy_id.endswith("_am_pm") for strategy_id, _version in am_keys)
+    assert all(
+        not strategy_id.endswith("_am_pm_ls") for strategy_id, _version in am_keys
+    )
+
+    ls = personal_specs_for_cohort(
+        PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID, universe_id="topix_all"
+    )
+    balanced = next(
+        spec
+        for spec in ls
+        if spec.strategy_id.endswith("balanced_four_factor_v1_ls_am_pm")
+    )
+    assert balanced.strategy_id == "personal_sector_balanced_four_factor_v1_ls_am_pm"
+    assert balanced.version == STRATEGY_SPEC_VERSION_V4
+    legacy_balanced = next(
+        spec
+        for spec in get_research_cohort("sector-relative-ls-v1").strategy_specs
+        if spec.strategy_id == "personal_sector_balanced_four_factor_v1_ls"
+    )
+    assert strategy_spec_digest(balanced) != strategy_spec_digest(legacy_balanced)
+    assert {ref.id for ref in iter_feature_refs(balanced)} <= {
+        "am_session_price_ratio",
+        "am_session_fundamental_ratio",
+    }
+
+
+def test_am_pm_cohort_digests_are_recomputed_from_corrected_specs() -> None:
+    for cohort_id in AM_PM_PERSONAL_EXECUTABLE_COHORT_IDS:
+        document = get_research_cohort(cohort_id).to_dict()
+        body = {key: value for key, value in document.items() if key != "cohort_digest"}
+        encoded = json.dumps(
+            body, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("utf-8")
+        live = "sha256:" + hashlib.sha256(encoded).hexdigest()
+        assert document["cohort_digest"] == live
+        assert all(
+            spec["strategy_id"].endswith("_am_pm")
+            for spec in document["strategy_specs"]
+        )
+        assert all(
+            not spec["strategy_id"].endswith("_am_pm_ls")
+            for spec in document["strategy_specs"]
+        )
+        feature_ids = {
+            leg["feature"]["id"]
+            for spec in document["strategy_specs"]
+            for leg in spec["rule"]["legs"]
+        }
+        assert feature_ids
+        assert feature_ids <= {
+            "am_session_price_ratio",
+            "am_session_fundamental_ratio",
+        }

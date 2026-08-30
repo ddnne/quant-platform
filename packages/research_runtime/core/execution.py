@@ -54,6 +54,15 @@ def morning_close_as_of(date: str) -> str:
     return f"{date}T11:30:00+09:00"
 
 
+def operational_usable_by_as_of(date: str) -> str:
+    """Operational acquisition deadline for *D* (12:30 JST).
+
+    This is not a PIT information cutoff. Non-price facts remain gated at
+    :func:`morning_close_as_of` (11:30 JST).
+    """
+    return f"{date}T12:30:00+09:00"
+
+
 _DECISION_CLOCKS = {
     "session_close": close_as_of,
     "session_open": open_as_of,
@@ -113,7 +122,8 @@ AM_SIGNAL_PM_CLOSE = ExecutionMode(
     fill_offset=0,
     decision_clock="morning_close",
     as_of_rule=(
-        "decision at morning close 11:30 JST (non-price cutoff); "
+        "information_cutoff D 11:30 JST (non-price PIT); "
+        "operational_usable_by D 12:30 JST does not extend the non-price cutoff; "
         "D signal sees prior PIT-visible full daily rows plus a D synthetic "
         "morning-only row (adjustment_close=MAdjC); orders fill the same "
         "session at D afternoon adjustment close (AAdjC); DRAFT personal "

@@ -101,6 +101,8 @@ def _am_signal_pm_close_execution_contract_body() -> dict[str, Any]:
         "version": AM_SIGNAL_PM_CLOSE_CONTRACT_VERSION,
         "label": AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
         "execution_mode": AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
+        "information_cutoff": "11:30:00+09:00",
+        "operational_usable_by": "12:30:00+09:00",
         "non_price_information_cutoff": "11:30:00+09:00",
         "am_observation_acquisition_deadline": "12:30:00+09:00",
         "am_observation_deadline_is_non_price_cutoff": False,
@@ -566,6 +568,71 @@ _AM_PM_DESCRIPTION_SUFFIX = (
 )
 
 
+_AM_SESSION_FEATURE_IDS = {
+    "retrospective_price_ratio": "am_session_price_ratio",
+    "pit_fundamental_ratio": "am_session_fundamental_ratio",
+}
+_AM_PM_STRATEGY_ID_SUFFIX = "_am_pm"
+
+
+def _am_pm_strategy_id(strategy_id: str) -> str:
+    """Append ``_am_pm`` after the full legacy id, including a trailing ``_ls``."""
+
+    text = str(strategy_id)
+    if text.endswith(_AM_PM_STRATEGY_ID_SUFFIX):
+        return text
+    return f"{text}{_AM_PM_STRATEGY_ID_SUFFIX}"
+
+
+def _am_session_feature_ref(ref: FeatureRef) -> FeatureRef:
+    try:
+        feature_id = _AM_SESSION_FEATURE_IDS[ref.id]
+    except KeyError as exc:
+        raise ValueError(
+            f"AM/PM cohort cannot map feature id {ref.id!r} to an AM session identity"
+        ) from exc
+    return FeatureRef(
+        id=feature_id,
+        version=ref.version,
+        params=dict(ref.params),
+    )
+
+
+def _am_session_specs(specs: tuple[StrategySpec, ...]) -> tuple[StrategySpec, ...]:
+    remapped: list[StrategySpec] = []
+    for spec in specs:
+        rule = spec.rule
+        legs = tuple(
+            FactorLeg(
+                feature=_am_session_feature_ref(leg.feature),
+                weight=leg.weight,
+                direction=leg.direction,
+            )
+            for leg in rule.legs
+        )
+        remapped.append(
+            StrategySpec(
+                strategy_id=_am_pm_strategy_id(spec.strategy_id),
+                version=spec.version,
+                rule=type(rule)(
+                    legs=legs,
+                    normalization=rule.normalization,
+                    group=rule.group,
+                    long_frac=rule.long_frac,
+                    short_frac=rule.short_frac,
+                    allow_short=rule.allow_short,
+                    min_eligible_ratio=rule.min_eligible_ratio,
+                    min_eligible_count=rule.min_eligible_count,
+                    min_group_count=rule.min_group_count,
+                ),
+                rationale=spec.rationale,
+                rebalance=spec.rebalance,
+                hold_days=spec.hold_days,
+            )
+        )
+    return tuple(remapped)
+
+
 def _am_pm_factor_cohort(
     cohort_id: str,
     source: ResearchCohort,
@@ -576,7 +643,7 @@ def _am_pm_factor_cohort(
         history_data_start=source.history_data_start,
         warmup_sessions=source.warmup_sessions,
         dataset_dependencies=source.dataset_dependencies,
-        strategy_specs=source.strategy_specs,
+        strategy_specs=_am_session_specs(source.strategy_specs),
         short_financing_required=source.short_financing_required,
         description=source.description + _AM_PM_DESCRIPTION_SUFFIX,
         document_version=AM_PM_COHORT_DOCUMENT_VERSION,

@@ -293,3 +293,91 @@ def test_am_mode_rejects_non_personal_price_basis(tmp_path):
             execution_mode="am_signal_pm_close",
             price_basis=PIT_ADJUSTED,
         )
+
+
+class AlwaysLong:
+    strategy_id = "always_long"
+    params: dict = {}
+
+    def __init__(self) -> None:
+        self.ctxs: list[BarContext] = []
+
+    def on_bar(self, ctx: BarContext) -> list[OrderIntent]:
+        self.ctxs.append(ctx)
+        return [OrderIntent(code=CODE, target_weight=1.0)]
+
+
+def test_held_missing_madjc_skips_on_bar_and_rebalance(tmp_path):
+    db = _seed(
+        tmp_path,
+        madjc_by_day={D0: 100.0, D2: 120.0, D3: 120.0},
+        aadjc_by_day={D0: 100.0, D1: 110.0, D2: 120.0, D3: 120.0},
+        adjc=999.0,
+    )
+    rec = AlwaysLong()
+    res = _run(db, rec)
+    assert [ctx.date for ctx in rec.ctxs] == [D0, D2, D3]
+    assert all(trade["decision_date"] != D1 for trade in res.trades)
+    quality = res.metadata["data_quality"]
+    assert quality["comparable"] is False
+    assert quality["selection_eligible"] is False
+    skipped = quality["held_missing_morning_adjustment_close"]
+    assert skipped[0]["date"] == D1
+    assert skipped[0]["codes"] == [CODE]
+    assert skipped[0]["reason"] == "held_missing_morning_adjustment_close"
+    assert D1 in res.metrics["skipped_decision_dates"]
+    assert res.metrics["comparable"] is False
+    assert any(row["date"] == D1 for row in res.equity_curve)
+
+
+def test_held_missing_aadjc_is_incomplete_non_comparable_valuation(tmp_path):
+    db = _seed(
+        tmp_path,
+        madjc=100.0,
+        aadjc_by_day={D0: 100.0, D2: 110.0, D3: 110.0},
+        adjc=999.0,
+    )
+    rec = BuyOnce(day=D0, weight=1.0)
+    res = _run(db, rec)
+    assert rec.ctxs
+    assert D1 in {ctx.date for ctx in rec.ctxs}
+    assert any(row["date"] == D1 for row in res.equity_curve)
+    day1 = next(row for row in res.equity_curve if row["date"] == D1)
+    assert CODE in day1["stale_mark_codes"]
+    assert res.metrics["comparable"] is False
+    assert res.metrics["selection_eligible"] is False
+    assert res.metrics["comparison_eligible"] is False
+    assert res.metrics["incomplete_valuation"] is True
+    assert D1 in res.metrics["incomplete_valuation_dates"]
+    assert CODE in res.metrics["incomplete_valuation_codes"]
+    assert res.metadata["data_quality"]["comparable"] is False
+    assert all(trade["price"] != 999.0 for trade in res.trades)
+
+
+def test_complete_am_run_is_comparable(tmp_path):
+    db = _seed(tmp_path, madjc=100.0, aadjc=100.0)
+    res = _run(db, BuyOnce())
+    assert res.metrics["comparable"] is True
+    assert res.metrics["selection_eligible"] is True
+    assert res.metrics["comparison_eligible"] is True
+    assert res.metrics["incomplete_valuation"] is False
+    assert res.metadata["information_cutoff"] == "11:30:00+09:00"
+    assert res.metadata["operational_usable_by"] == "12:30:00+09:00"
+    assert res.metadata["session_view_digest"].startswith("sha256:")
+
+
+def test_unheld_missing_m_and_a_stay_no_fill_without_adjc(tmp_path):
+    db = _seed(
+        tmp_path,
+        madjc_by_day={D1: 100.0, D2: 100.0, D3: 100.0},
+        aadjc_by_day={D1: 110.0, D2: 110.0, D3: 110.0},
+        adjc=999.0,
+    )
+    rec = AlwaysLong()
+    res = _run(db, rec)
+    assert rec.ctxs[0].date == D0
+    assert rec.ctxs[0].prices[CODE] is None
+    assert all(trade["fill_date"] != D0 for trade in res.trades)
+    assert all(trade["price"] != 999.0 for trade in res.trades)
+    assert res.trades[0]["fill_date"] == D1
+    assert res.trades[0]["price"] == 110.0

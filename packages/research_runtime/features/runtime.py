@@ -24,6 +24,7 @@ import pit
 from pit.query import resolve_db_path
 
 from . import registry as _registry
+from .am_session_features import AM_SESSION_FEATURE_IDS
 from .dataset_guard import master_pit_history_start, require_feature_dataset
 from .types import FeatureDefinition, FeatureOutput
 
@@ -53,6 +54,9 @@ class _DailyBarsReaderCapability:
     as_of: str
     db_path: str
     reader: _BoundDailyBarsReader
+    session_view: str | None = None
+    session_view_digest: str | None = None
+    include_morning_turnover_history: bool = False
 
 
 def bind_personal_retrospective_am_session_daily_bars(
@@ -62,28 +66,45 @@ def bind_personal_retrospective_am_session_daily_bars(
 
     Ordinary ``compute`` callers cannot inject this reader, a later ``as_of``,
     or a different database scope. Other feature resources stay ordinary PIT
-    reads at the bound 11:30 instant.
+    reads at the bound 11:30 instant. Morning turnover history is enabled only
+    on this trusted capability so AM turnover never mixes D ``MVa`` with prior
+    full-day ``Va``.
     """
     from pit.personal_retrospective_session import (
+        AM_SIGNAL_SESSION_VIEW,
+        am_session_view_digest,
         get_personal_retrospective_am_signal_equity_bars_daily,
     )
 
     as_of_iso = _require_as_of(as_of)
     resolved_db = resolve_db_path(db_path)
+    session_digest = am_session_view_digest(include_morning_turnover_history=True)
 
     def reader(**kwargs: Any):
-        reserved = sorted(_RUNTIME_SCOPE_FIELDS.intersection(kwargs))
+        reserved = sorted(
+            (_RUNTIME_SCOPE_FIELDS | {"include_morning_turnover_history"}).intersection(
+                kwargs
+            )
+        )
         if reserved:
             raise TypeError(
                 f"AM session daily-bar reader owns runtime-scoped argument(s): "
                 f"{reserved}"
             )
         return get_personal_retrospective_am_signal_equity_bars_daily(
-            as_of=as_of_iso, db_path=resolved_db, **kwargs
+            as_of=as_of_iso,
+            db_path=resolved_db,
+            include_morning_turnover_history=True,
+            **kwargs,
         )
 
     return _DailyBarsReaderCapability(
-        as_of=as_of_iso, db_path=str(resolved_db), reader=reader
+        as_of=as_of_iso,
+        db_path=str(resolved_db),
+        reader=reader,
+        session_view=AM_SIGNAL_SESSION_VIEW,
+        session_view_digest=session_digest,
+        include_morning_turnover_history=True,
     )
 
 
@@ -246,6 +267,13 @@ def _compute(
             raise ValueError(
                 "bound daily-bar capability db_path does not match compute db_path"
             )
+    if feature.id in AM_SESSION_FEATURE_IDS:
+        session_view = getattr(daily_bars_capability, "session_view", None)
+        if daily_bars_capability is None or session_view != "personal_retrospective_am_signal":
+            raise ValueError(
+                f"AM session feature {feature.id!r} requires bound personal "
+                "retrospective AM daily-bar capability"
+            )
 
     def _read_pit(resource: str, kwargs: Mapping[str, Any]):
         if resource == "equity_bars_daily" and daily_bars_capability is not None:
@@ -284,6 +312,11 @@ def _compute(
     })
     if feature.price_basis is not None:
         md["price_basis"] = feature.price_basis
+    if daily_bars_capability is not None and daily_bars_capability.session_view:
+        md["session_view"] = daily_bars_capability.session_view
+        md["session_view_digest"] = daily_bars_capability.session_view_digest
+        md["information_cutoff"] = "11:30:00+09:00"
+        md["operational_usable_by"] = "12:30:00+09:00"
     return FeatureOutput(value=out.value, metadata=md)
 
 

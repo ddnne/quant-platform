@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pit
+import pit.personal_retrospective_session as session_mod
 import pytest
 from core.execution import close_as_of, morning_close_as_of
 from data_contracts.identity import natural_key
@@ -226,3 +227,106 @@ def test_adapter_does_not_read_tip_only_am_dataset(tmp_path, monkeypatch):
         db_path=db,
     )
     assert result.rows[-1]["adjustment_close"] == 50.0
+
+
+_D_AM_FORBIDDEN_FIELDS = frozenset(
+    {
+        "event_time",
+        "available_at",
+        "ingested_at",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "adjustment_open",
+        "adjustment_high",
+        "adjustment_low",
+        "turnover_value",
+        "market_cap",
+        "afternoon_adjustment_close",
+        "afternoon_turnover_value",
+        "afternoon_adjustment_volume",
+        "morning_adjustment_close",
+        "raw_payload",
+        "payload",
+    }
+)
+_ROW_TIMESTAMP_FIELDS = ("event_time", "available_at", "ingested_at")
+
+
+def test_am_d_row_is_allowlisted_and_does_not_leak_later_timestamps(tmp_path):
+    db = _am_db(tmp_path)
+    as_of = morning_close_as_of(D2)
+    result = pit.get_personal_retrospective_am_signal_equity_bars_daily(
+        as_of=as_of,
+        code=CODE,
+        from_event=D0,
+        to_event=D2,
+        db_path=db,
+    )
+    assert not isinstance(result, pit.PitResult)
+    assert hasattr(result, "rows") and hasattr(result, "metadata")
+    d_row = result.rows[-1]
+    assert d_row["date"] == D2
+    assert set(d_row) <= {
+        "source",
+        "code",
+        "date",
+        "adjustment_close",
+        "adjustment_volume",
+        "morning_turnover_value",
+    }
+    assert "morning_turnover_value" not in d_row
+    for field in _D_AM_FORBIDDEN_FIELDS:
+        assert field not in d_row
+    for row in result.rows:
+        for field in _ROW_TIMESTAMP_FIELDS:
+            if field in row:
+                assert str(row[field]) <= as_of
+    reconstruction = result.metadata["retrospective_reconstruction"]
+    assert reconstruction["d_row_source_dataset"] == "equities_bars_daily"
+    assert reconstruction["d_row_source_read_as_of"].startswith(D2)
+    assert reconstruction["d_row_source_publication_timestamps"]
+    source_available = reconstruction["d_row_source_publication_timestamps"][0][
+        "source_available_at"
+    ]
+    assert source_available > as_of
+    assert result.metadata["information_cutoff"] == "11:30:00+09:00"
+    assert result.metadata["operational_usable_by"] == "12:30:00+09:00"
+    assert result.metadata["session_view_digest"].startswith("sha256:")
+
+
+def test_am_latest_n_bounds_the_prior_query(tmp_path, monkeypatch):
+    db = _am_db(tmp_path)
+    calls: list[dict] = []
+    real = session_mod.get_equity_bars_daily
+
+    def spy(*args, **kwargs):
+        calls.append(dict(kwargs))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(session_mod, "get_equity_bars_daily", spy)
+    result = pit.get_personal_retrospective_am_signal_equity_bars_daily(
+        as_of=morning_close_as_of(D3),
+        code=CODE,
+        latest_n=2,
+        db_path=db,
+    )
+    assert [row["date"] for row in result.rows] == [D2, D3]
+    prior_calls = [
+        call
+        for call in calls
+        if str(call.get("as_of") or "").endswith("T11:30:00+09:00")
+    ]
+    d_calls = [
+        call
+        for call in calls
+        if str(call.get("as_of") or "").endswith("T15:30:00+09:00")
+    ]
+    assert prior_calls
+    assert all(call.get("latest_n") == 2 for call in prior_calls)
+    assert d_calls
+    assert all(call.get("latest_n") is None for call in d_calls)
+    assert all(call.get("from_event") == D3 for call in d_calls)
+    assert all(call.get("to_event") == D3 for call in d_calls)

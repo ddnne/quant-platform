@@ -27,6 +27,11 @@ from paper_runtime.personal_prepared_frame import (
     _active_personal_prepared_frame,
     _is_cache_miss,
 )
+from pit.personal_retrospective_session import (
+    INFORMATION_CUTOFF,
+    OPERATIONAL_USABLE_BY,
+    am_session_view_digest,
+)
 from pit.query import resolve_db_path
 from price_basis import (
     PERSONAL_RETROSPECTIVE_ADJUSTED,
@@ -94,13 +99,8 @@ def _make_feature_accessor(
 ):
     """Bind the trusted PIT scope used by one decision context."""
 
-    # AM session bars are field-time reconstructions; the prepared-frame cache
-    # key is not session-specific, so the optimization stays off for AM.
-    prepared_frame = (
-        None
-        if daily_bars_capability is not None
-        else _active_personal_prepared_frame(db_path)
-    )
+    prepared_frame = _active_personal_prepared_frame(db_path)
+    session_view_digest = getattr(daily_bars_capability, "session_view_digest", None)
 
     def compute_feature(
         feature_id: str, *, version: str | None = None, **inputs: Any
@@ -131,6 +131,7 @@ def _make_feature_accessor(
                     feature_version=str(definition.version),
                     definition_digest=definition_digest,
                     inputs=inputs,
+                    session_view_digest=session_view_digest,
                 )
             except (KeyError, TypeError, ValueError):
                 # A future feature may accept a non-JSON input. The prepared
@@ -173,6 +174,7 @@ def _make_feature_accessor(
                     inputs=inputs,
                     value=completed.value,
                     metadata=completed.metadata,
+                    session_view_digest=session_view_digest,
                 )
             except (TypeError, ValueError):
                 # Key encoding is best effort for the same reason as above.
@@ -945,6 +947,8 @@ def run_backtest(
         and _active_personal_prepared_frame(resolved_db_path) is not None
         and getattr(strategy, "personal_prepared_frame_eligible", False) is True
     )
+    am_skipped_decisions: list[dict[str, Any]] = []
+    am_incomplete_valuations: list[dict[str, Any]] = []
 
     for d in days:
         decision_as_of = mode.decision_as_of(d)
@@ -967,6 +971,7 @@ def run_backtest(
         held = set(shares) | set(universe_d)
 
         daily_bars_capability = None
+        skip_am_decision = False
         if am_pm_mode:
             snap_dec = _load_am_signal_snapshot(
                 decision_as_of,
@@ -984,6 +989,23 @@ def run_backtest(
             morning_prices = _session_prices(
                 snap_dec, d, price_basis=resolved_price_basis
             )
+            held_positions = sorted(
+                code for code, qty in shares.items() if qty
+            )
+            held_missing_m = [
+                code
+                for code in held_positions
+                if morning_prices.get(code) is None
+            ]
+            if held_missing_m:
+                skip_am_decision = True
+                am_skipped_decisions.append(
+                    {
+                        "date": d,
+                        "reason": "held_missing_morning_adjustment_close",
+                        "codes": held_missing_m,
+                    }
+                )
             decision_marks = dict(marks)
             _update_marks(decision_marks, morning_prices, d)
             decision_equity = _mark_equity(shares, decision_marks, cash)
@@ -1070,35 +1092,38 @@ def run_backtest(
                     price_basis=resolved_price_basis,
                 )
                 decision_equity = _mark_equity(shares, marks, cash)
-        prices_d = {c: snap_dec[c]["close"] for c in universe_d}
-        bars_d = {c: tuple(snap_dec[c]["bars"]) for c in universe_d}
-        positions = {
-            c: Position(code=c, shares=qty) for c, qty in shares.items() if qty
-        }
-        ctx = BarContext(
-            as_of=decision_as_of,
-            date=d,
-            universe=universe_d,
-            positions=positions,
-            cash=cash,
-            equity=decision_equity,
-            prices=prices_d,
-            bars=bars_d,
-            master=master_d,
-        )
-        # Private PIT-scoped closure; BarContext stays facts + ctx.feature(...).
-        object.__setattr__(
-            ctx,
-            "_feature_accessor",
-            _make_feature_accessor(
-                decision_as_of,
-                resolved_db_path,
-                daily_bars_capability=daily_bars_capability,
-            ),
-        )
+        if skip_am_decision:
+            targets = {}
+        else:
+            prices_d = {c: snap_dec[c]["close"] for c in universe_d}
+            bars_d = {c: tuple(snap_dec[c]["bars"]) for c in universe_d}
+            positions = {
+                c: Position(code=c, shares=qty) for c, qty in shares.items() if qty
+            }
+            ctx = BarContext(
+                as_of=decision_as_of,
+                date=d,
+                universe=universe_d,
+                positions=positions,
+                cash=cash,
+                equity=decision_equity,
+                prices=prices_d,
+                bars=bars_d,
+                master=master_d,
+            )
+            # Private PIT-scoped closure; BarContext stays facts + ctx.feature(...).
+            object.__setattr__(
+                ctx,
+                "_feature_accessor",
+                _make_feature_accessor(
+                    decision_as_of,
+                    resolved_db_path,
+                    daily_bars_capability=daily_bars_capability,
+                ),
+            )
 
-        intents = strategy.on_bar(ctx)
-        targets = _resolve_targets(intents, decision_equity, prices_d)
+            intents = strategy.on_bar(ctx)
+            targets = _resolve_targets(intents, decision_equity, prices_d)
 
         if mode.fill_offset == 1:
             # Non-empty targets replace any carried leftover.
@@ -1129,6 +1154,21 @@ def run_backtest(
             )
             n_short_financing_gaps += s_gap
             n_leverage_financing_gaps += l_gap
+            if am_pm_mode:
+                held_after = sorted(
+                    code for code, qty in shares.items() if qty
+                )
+                held_missing_a = [
+                    code for code in held_after if fill_closes.get(code) is None
+                ]
+                if held_missing_a:
+                    am_incomplete_valuations.append(
+                        {
+                            "date": d,
+                            "reason": "held_missing_afternoon_adjustment_close",
+                            "codes": held_missing_a,
+                        }
+                    )
             equity_curve.append(
                 _equity_point(
                     date=d, shares=shares, marks=marks, cash=cash
@@ -1269,6 +1309,49 @@ def run_backtest(
             "causal_morning_prices_pm_fill_may_drift"
         )
         metadata["price_basis_provenance"] = provenance
+        session_digest = am_session_view_digest(
+            include_morning_turnover_history=True
+        )
+        comparable = not am_skipped_decisions and not am_incomplete_valuations
+        skipped_dates = [event["date"] for event in am_skipped_decisions]
+        incomplete_dates = [event["date"] for event in am_incomplete_valuations]
+        incomplete_codes = sorted(
+            {
+                code
+                for event in am_incomplete_valuations
+                for code in event.get("codes") or ()
+            }
+        )
+        data_quality = {
+            "comparable": comparable,
+            "selection_eligible": comparable,
+            "comparison_eligible": comparable,
+            "incomplete_valuation": bool(am_incomplete_valuations),
+            "skipped_decision_count": len(am_skipped_decisions),
+            "incomplete_valuation_count": len(am_incomplete_valuations),
+            "skipped_decision_dates": skipped_dates,
+            "incomplete_valuation_dates": incomplete_dates,
+            "incomplete_valuation_codes": incomplete_codes,
+            "held_missing_morning_adjustment_close": am_skipped_decisions,
+            "held_missing_afternoon_adjustment_close": am_incomplete_valuations,
+        }
+        metadata["information_cutoff"] = INFORMATION_CUTOFF
+        metadata["operational_usable_by"] = OPERATIONAL_USABLE_BY
+        metadata["session_view_digest"] = session_digest
+        metadata["data_quality"] = data_quality
+        metadata["comparable"] = comparable
+        metadata["selection_eligible"] = comparable
+        metrics["comparable"] = comparable
+        metrics["selection_eligible"] = comparable
+        metrics["comparison_eligible"] = comparable
+        metrics["incomplete_valuation"] = bool(am_incomplete_valuations)
+        metrics["skipped_decision_count"] = len(am_skipped_decisions)
+        metrics["incomplete_valuation_count"] = len(am_incomplete_valuations)
+        metrics["skipped_decision_dates"] = skipped_dates
+        metrics["incomplete_valuation_dates"] = incomplete_dates
+        metrics["incomplete_valuation_codes"] = incomplete_codes
+        if not comparable:
+            metrics["data_quality_gate"] = "hard_fail_not_selection_eligible"
 
     return BacktestResult(
         equity_curve=equity_curve,
