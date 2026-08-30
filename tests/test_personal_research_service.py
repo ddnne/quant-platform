@@ -7,6 +7,7 @@ import json
 import multiprocessing
 import multiprocessing.synchronize
 import sqlite3
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -1556,6 +1557,90 @@ def test_candidate_process_fanout_uses_four_workers_restores_order_and_bounds_fa
     }
 
 
+@pytest.mark.parametrize(("task_multiplier", "max_workers"), ((1, 2), (2, 4)))
+def test_candidate_process_fanout_runs_bounded_waves_without_reordering(
+    tmp_path: Path,
+    task_multiplier: int,
+    max_workers: int,
+) -> None:
+    base_tasks, base_specs, _closures = _candidate_test_wave(tmp_path)
+    tasks = tuple(
+        replace(task, ordinal=ordinal)
+        for ordinal, task in enumerate(base_tasks * task_multiplier)
+    )
+    active: set[int] = set()
+    peak_active = 0
+    started: list[int] = []
+    joined: list[int] = []
+    closed: list[int] = []
+
+    class FakeProcess:
+        def __init__(self, *, target, args, name, daemon):
+            self.target = target
+            self.args = args
+            self.ordinal = args[0].ordinal
+            self.exitcode = None
+            self.alive = False
+
+        def start(self):
+            nonlocal peak_active
+            self.alive = True
+            active.add(self.ordinal)
+            started.append(self.ordinal)
+            peak_active = max(peak_active, len(active))
+            assert len(active) <= max_workers
+
+        def join(self, _timeout=None):
+            if self.exitcode is None:
+                self.target(*self.args)
+                self.exitcode = 0
+                self.alive = False
+                active.remove(self.ordinal)
+                joined.append(self.ordinal)
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            active.discard(self.ordinal)
+            self.alive = False
+            self.exitcode = -15
+
+        def kill(self):
+            active.discard(self.ordinal)
+            self.alive = False
+            self.exitcode = -9
+
+        def close(self):
+            assert not self.alive
+            closed.append(self.ordinal)
+
+    class FakeContext:
+        def Process(self, **kwargs):
+            return FakeProcess(**kwargs)
+
+    candidates, unexpected_errors = _evaluate_candidates_concurrently(
+        tasks,
+        max_workers=max_workers,
+        process_context=FakeContext(),
+        candidate_worker=_spawn_candidate_document,
+    )
+
+    assert unexpected_errors == 0
+    assert peak_active == max_workers
+    assert started == list(range(len(tasks)))
+    assert joined == list(range(len(tasks)))
+    assert closed == list(range(len(tasks)))
+    expected_strategy_ids = [
+        spec.strategy_id
+        for _wave in range(task_multiplier)
+        for spec in base_specs
+    ]
+    assert [candidate["strategy_id"] for candidate in candidates] == (
+        expected_strategy_ids
+    )
+
+
 def test_candidate_process_start_failure_reaps_every_started_child(
     tmp_path: Path,
 ) -> None:
@@ -1575,6 +1660,8 @@ def test_candidate_process_start_failure_reaps_every_started_child(
 
         def start(self):
             if self.ordinal == 2:
+                self.alive = True
+                started.append(self.ordinal)
                 raise FileNotFoundError(2, "spawn unavailable")
             self.alive = True
             started.append(self.ordinal)
@@ -1611,9 +1698,16 @@ def test_candidate_process_start_failure_reaps_every_started_child(
             candidate_worker=_spawn_candidate_document,
         )
 
-    assert started == [0, 1]
-    assert terminated == [0, 1]
-    assert joined == [(0, 5.0), (1, 5.0), (0, None), (1, None)]
+    assert started == [0, 1, 2]
+    assert terminated == [0, 1, 2]
+    assert joined == [
+        (0, 5.0),
+        (1, 5.0),
+        (2, 5.0),
+        (0, None),
+        (1, None),
+        (2, None),
+    ]
     assert closed == [0, 1, 2, 3]
     assert not list(tmp_path.glob(".candidate-process-results-*"))
 

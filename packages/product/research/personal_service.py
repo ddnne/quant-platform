@@ -2140,31 +2140,39 @@ def _process_is_alive(process: Any) -> bool:
 def _shutdown_candidate_processes(
     processes: Sequence[Any],
     *,
-    started_processes: Sequence[Any],
+    attempted_processes: Sequence[Any],
     terminate_live: bool,
 ) -> None:
     """Reap and close every process; force survivors only on abnormal unwind."""
 
     if terminate_live:
-        for process in started_processes:
+        for process in attempted_processes:
             if _process_is_alive(process):
                 process.terminate()
-        for process in started_processes:
-            process.join(_CANDIDATE_PROCESS_STOP_GRACE_SECONDS)
-        for process in started_processes:
+        for process in attempted_processes:
+            try:
+                process.join(_CANDIDATE_PROCESS_STOP_GRACE_SECONDS)
+            except (AssertionError, ValueError):
+                # A truly unstarted Process has no child to join. An attempted
+                # start can still leave a live child, which is checked below.
+                continue
+        for process in attempted_processes:
             if _process_is_alive(process):
                 process.kill()
-        for process in started_processes:
-            process.join()
-    for process in started_processes:
-        if _process_is_alive(process):
-            raise RuntimeError("candidate process could not be reaped")
+        for process in attempted_processes:
+            try:
+                process.join()
+            except (AssertionError, ValueError):
+                continue
+    unreaped = any(_process_is_alive(process) for process in attempted_processes)
     for process in processes:
         try:
             process.close()
         except ValueError:
             # A Process constructed but never started has no resources to close.
             continue
+    if unreaped:
+        raise RuntimeError("candidate process could not be reaped")
 
 
 def _evaluate_candidates_concurrently(
@@ -2178,10 +2186,8 @@ def _evaluate_candidates_concurrently(
 
     if not tasks or not 1 <= max_workers <= 4 or max_workers > len(tasks):
         raise ValueError("candidate process fan-out is outside its closed bound")
-    if len(tasks) != max_workers or [task.ordinal for task in tasks] != list(
-        range(len(tasks))
-    ):
-        raise ValueError("candidate process tasks must be one contiguous bounded wave")
+    if [task.ordinal for task in tasks] != list(range(len(tasks))):
+        raise ValueError("candidate process tasks must be globally contiguous")
     output_roots = {task.output_root.resolve() for task in tasks}
     if len(output_roots) != 1:
         raise ValueError("candidate process tasks must share one output root")
@@ -2200,43 +2206,51 @@ def _evaluate_candidates_concurrently(
         dir=output_root,
     ) as temporary_directory:
         result_root = Path(temporary_directory)
-        rows: list[tuple[_CandidateProcessTask, Path, Any]] = []
-        started_processes: list[Any] = []
-        try:
-            for task in tasks:
-                result_path = result_root / f"candidate-{task.ordinal}.json"
-                process = context.Process(
-                    target=_candidate_process_to_file,
-                    args=(task, result_path, worker),
-                    name=f"qp-candidate-{task.ordinal}",
-                    daemon=False,
+        completed_rows: list[tuple[_CandidateProcessTask, Path, int | None]] = []
+        for wave_start in range(0, len(tasks), max_workers):
+            wave = tasks[wave_start : wave_start + max_workers]
+            rows: list[tuple[_CandidateProcessTask, Path, Any]] = []
+            attempted_processes: list[Any] = []
+            try:
+                for task in wave:
+                    result_path = result_root / f"candidate-{task.ordinal}.json"
+                    process = context.Process(
+                        target=_candidate_process_to_file,
+                        args=(task, result_path, worker),
+                        name=f"qp-candidate-{task.ordinal}",
+                        daemon=False,
+                    )
+                    rows.append((task, result_path, process))
+                # Every child in this bounded wave starts before its first
+                # join. A Process is tracked before start(), because a failed
+                # start may already have made its child live.
+                for _task, _result_path, process in rows:
+                    attempted_processes.append(process)
+                    process.start()
+                for _task, _result_path, process in rows:
+                    process.join()
+                exitcodes = [process.exitcode for _task, _path, process in rows]
+            except BaseException:
+                _shutdown_candidate_processes(
+                    [process for _task, _path, process in rows],
+                    attempted_processes=attempted_processes,
+                    terminate_live=True,
                 )
-                rows.append((task, result_path, process))
-            # All children are started before the first join, so the exact-four
-            # wave is concurrent even though fan-in waits in ordinal order.
-            for _task, _result_path, process in rows:
-                process.start()
-                started_processes.append(process)
-            for _task, _result_path, process in rows:
-                process.join()
-            exitcodes = [process.exitcode for _task, _path, process in rows]
-        except BaseException:
-            _shutdown_candidate_processes(
-                [process for _task, _path, process in rows],
-                started_processes=started_processes,
-                terminate_live=True,
-            )
-            raise
-        else:
-            _shutdown_candidate_processes(
-                [process for _task, _path, process in rows],
-                started_processes=started_processes,
-                terminate_live=False,
+                raise
+            else:
+                _shutdown_candidate_processes(
+                    [process for _task, _path, process in rows],
+                    attempted_processes=attempted_processes,
+                    terminate_live=False,
+                )
+            completed_rows.extend(
+                (task, result_path, exitcode)
+                for (task, result_path, _process), exitcode in zip(
+                    rows, exitcodes, strict=True
+                )
             )
 
-        for (task, result_path, _process), exitcode in zip(
-            rows, exitcodes, strict=True
-        ):
+        for task, result_path, exitcode in completed_rows:
             try:
                 if exitcode != 0:
                     raise RuntimeError(
