@@ -1,9 +1,24 @@
+import { sha256Hex } from "./sha256";
 import type { Opt225RegimeBundle, PeriodSpec } from "./types";
 
 export const PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION =
   "personal-vol-ratio-am-pm-panel/v1" as const;
 export const PERSONAL_VOL_AM_PM_PANELS_PREFIX =
   "research/personal/vol-ratio-am-pm-v1/panels" as const;
+export const PERSONAL_VOL_AM_PM_SESSION_DATES_DIGEST_SCHEMA =
+  "ordered-trading-session-dates/v1" as const;
+
+export const PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY = {
+  dataset: "markets_calendar",
+  source: "jquants_premium_core",
+  upstream_locator: "/v2/markets/calendar",
+  policy_version: "source-capability/v3",
+  holiday_division: "1",
+  holiday_division_meaning: "trading_session",
+  dates_digest_schema: PERSONAL_VOL_AM_PM_SESSION_DATES_DIGEST_SCHEMA,
+  role: "canonical_jquants_trading_session_calendar",
+  predecessor_rule: "previous_element_of_pinned_ordered_dates",
+} as const;
 
 export const PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT = {
   non_price_cutoff_jst: "11:30:00+09:00",
@@ -21,9 +36,6 @@ export const PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT = {
   no_signal_date_option_values: true,
 } as const;
 
-export const PERSONAL_VOL_AM_PM_SESSION_CALENDAR_ROLE =
-  "diagnostic_session_calendar_only" as const;
-
 export const PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY = {
   required: true,
   producer_id: "personal-vol-ratio-am-pm-panel-writer/v1",
@@ -36,8 +48,14 @@ export const PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY = {
     reason:
       "PeriodPanel carries one close per code and cannot host MAdjC/AAdjC or the D-1 option as-of contract",
   },
-  required_equity_fields: ["MAdjC", "AAdjC"],
+  required_session_calendar: PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY,
+  required_equity_fields: {
+    MAdjC: "preserve_when_finite_even_if_AAdjC_missing",
+    AAdjC: "preserve_when_finite_even_if_MAdjC_missing",
+    AdjC: "never_used_as_fallback",
+  },
   required_option_observations: "native_session_including_predecessor",
+  predecessor_rule: PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY.predecessor_rule,
   source_preservation:
     "packages/data_plane/ingestion/personal_history.py MorningAdjustmentClose/AfternoonAdjustmentClose",
   forbidden: [
@@ -47,6 +65,8 @@ export const PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY = {
     "legacy_PeriodPanel_reinterpretation",
     "single_stock_iv",
     "cash_index_executable_fill",
+    "hold_clock_compressed_to_fillable_dates",
+    "morning_signal_gated_on_AAdjC",
   ],
 } as const;
 
@@ -65,16 +85,15 @@ const CASH_INDEX_FILL_ALIASES = new Set([
 
 export type AmPmEquityBar = {
   date: string;
-  MAdjC: number;
-  AAdjC: number;
+  MAdjC: number | null;
+  AAdjC: number | null;
 };
 
-export type PersonalVolAmPmSessionCalendar = {
-  dataset: string;
-  label: string;
-  role: typeof PERSONAL_VOL_AM_PM_SESSION_CALENDAR_ROLE;
-  dates: string[];
-};
+export type PersonalVolAmPmSessionCalendar =
+  typeof PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY & {
+    dates: string[];
+    dates_digest: string;
+  };
 
 export type PersonalVolAmPmTradableHedge = {
   etf_code: string;
@@ -148,21 +167,23 @@ export function isLegacyPersonalVolPanel(raw: unknown): boolean {
   );
 }
 
+function finitePositivePrice(value: unknown): number | null {
+  const price = Number(value);
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
 function parseAmPmBar(point: unknown): AmPmEquityBar | "legacy" | null {
   if (looksLikeCloseTuple(point)) return "legacy";
   if (!isObject(point)) return null;
-  const date = String(point.date ?? point.Date ?? "").slice(0, 10);
-  const morning = Number(point.MAdjC ?? point.MorningAdjustmentClose);
-  const afternoon = Number(point.AAdjC ?? point.AfternoonAdjustmentClose);
+  const date = typeof point.date === "string" ? point.date : String(point.Date ?? "");
   if (!isIsoDate(date)) return null;
-  if (
-    !Number.isFinite(morning) ||
-    morning <= 0 ||
-    !Number.isFinite(afternoon) ||
-    afternoon <= 0
-  ) {
-    return null;
-  }
+  const morning = finitePositivePrice(
+    point.MAdjC ?? point.MorningAdjustmentClose,
+  );
+  const afternoon = finitePositivePrice(
+    point.AAdjC ?? point.AfternoonAdjustmentClose,
+  );
+  if (morning === null && afternoon === null) return null;
   return { date, MAdjC: morning, AAdjC: afternoon };
 }
 
@@ -185,35 +206,64 @@ function parseAmPmBars(
   return { bars, legacy: false };
 }
 
+const SESSION_CALENDAR_KEYS = new Set([
+  ...Object.keys(PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY),
+  "dates",
+  "dates_digest",
+]);
+
+export function personalVolAmPmSessionDatesPayload(dates: string[]): string {
+  return `{"ordered_session_dates":${JSON.stringify(dates)},"schema_version":"${PERSONAL_VOL_AM_PM_SESSION_DATES_DIGEST_SCHEMA}"}`;
+}
+
+export async function personalVolAmPmSessionDatesDigest(
+  dates: string[],
+): Promise<`sha256:${string}`> {
+  return `sha256:${await sha256Hex(
+    new TextEncoder().encode(personalVolAmPmSessionDatesPayload(dates)),
+  )}`;
+}
+
+function strictlyIncreasingIsoDates(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const dates: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string" || !isIsoDate(item)) return null;
+    if (dates.length && item <= dates[dates.length - 1]) return null;
+    dates.push(item);
+  }
+  return dates;
+}
+
 function parseSessionCalendar(
   raw: unknown,
 ): PersonalVolAmPmSessionCalendar | null {
   if (!isObject(raw)) return null;
-  const dataset = typeof raw.dataset === "string" ? raw.dataset : "";
-  const label = typeof raw.label === "string" ? raw.label : "";
-  const role = raw.role;
-  if (
-    !dataset ||
-    !label ||
-    role !== PERSONAL_VOL_AM_PM_SESSION_CALENDAR_ROLE
-  ) {
+  if (Object.keys(raw).some((key) => !SESSION_CALENDAR_KEYS.has(key))) {
     return null;
   }
-  if (
-    /tradable|fill|executable/i.test(dataset) ||
-    /tradable|fill|executable/i.test(label)
-  ) {
-    return null;
+  const identity = PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY;
+  for (const key of Object.keys(identity) as Array<keyof typeof identity>) {
+    if (raw[key] !== identity[key]) return null;
   }
-  if (!Array.isArray(raw.dates)) return null;
-  const dates = [
-    ...new Set(
-      raw.dates
-        .map((date) => String(date).slice(0, 10))
-        .filter((date) => isIsoDate(date)),
-    ),
-  ].sort();
-  return { dataset, label, role, dates };
+  const dates = strictlyIncreasingIsoDates(raw.dates);
+  const digest = typeof raw.dates_digest === "string" ? raw.dates_digest : "";
+  if (!dates || !/^sha256:[0-9a-f]{64}$/.test(digest)) return null;
+  return {
+    ...identity,
+    dates,
+    dates_digest: digest,
+  };
+}
+
+export async function personalVolAmPmSessionCalendarDigestMatches(
+  calendar: PersonalVolAmPmSessionCalendar,
+): Promise<boolean> {
+  if (!calendar.dates.length) return false;
+  return (
+    calendar.dates_digest ===
+    (await personalVolAmPmSessionDatesDigest(calendar.dates))
+  );
 }
 
 function parseTradableHedge(
@@ -337,8 +387,12 @@ export function barMaps(panel: PersonalVolAmPmPanel): {
     morning[code] = {};
     afternoon[code] = {};
     for (const point of panel.bars[code] || []) {
-      morning[code][point.date] = point.MAdjC;
-      afternoon[code][point.date] = point.AAdjC;
+      if (typeof point.MAdjC === "number" && Number.isFinite(point.MAdjC) && point.MAdjC > 0) {
+        morning[code][point.date] = point.MAdjC;
+      }
+      if (typeof point.AAdjC === "number" && Number.isFinite(point.AAdjC) && point.AAdjC > 0) {
+        afternoon[code][point.date] = point.AAdjC;
+      }
     }
   }
   return { morning, afternoon };
@@ -358,10 +412,9 @@ function placeholderPanel(
     source,
     temporal_contract: PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT,
     session_calendar: {
-      dataset: "indices_bars_daily_topix",
-      label: "TOPIX",
-      role: PERSONAL_VOL_AM_PM_SESSION_CALENDAR_ROLE,
+      ...PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY,
       dates: [],
+      dates_digest: "",
     },
     bars: {},
     opt225_regime: null,
@@ -406,6 +459,13 @@ export async function loadPersonalVolAmPmPanels(
             : `am_pm_panel_${parsed.error}`,
         ),
       );
+      continue;
+    }
+    if (
+      !(await personalVolAmPmSessionCalendarDigestMatches(parsed.value.session_calendar))
+    ) {
+      notes.push(`session_calendar_digest_mismatch:${key}`);
+      panels.push(placeholderPanel(period, "am_pm_panel_session_calendar_digest_mismatch"));
       continue;
     }
     if (

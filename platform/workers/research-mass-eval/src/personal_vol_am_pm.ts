@@ -19,8 +19,10 @@ import {
   PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
   PERSONAL_VOL_AM_PM_PANELS_PREFIX,
   PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY,
+  PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY,
   PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT,
   parsePersonalVolAmPmPanel,
+  personalVolAmPmSessionCalendarDigestMatches,
   type PersonalVolAmPmPanel,
 } from "./personal_vol_am_pm_panel";
 import {
@@ -54,7 +56,7 @@ export const PERSONAL_VOL_AM_PM_CONTROL = {
   thesis:
     "Always keep the balanced 30/30 MAdjC momentum rank on the same common-valid calendar, hold, and cost as the four index-vol ratio candidates.",
   mechanics:
-    "Ignore the option-ratio switch. Flatten with the four candidates when any required D-1 vol signal or required M/A equity fact is missing.",
+    "Ignore the option-ratio switch. Flatten at canonical rebalance when any required D-1 vol signal or D MAdjC is missing. Missing AAdjC does not change the morning signal or hold clock.",
   return_source:
     "Relative equity momentum filled at D AAdjC, not an option premium trade and not a cash-index fill.",
 } as const;
@@ -67,6 +69,10 @@ export const PERSONAL_VOL_AM_PM_CONTRACT = {
   panels_prefix: PERSONAL_VOL_AM_PM_PANELS_PREFIX,
   artifact_plane: PERSONAL_VOL_AM_PM_ARTIFACT_PLANE,
   job_root: PERSONAL_VOL_AM_PM_JOB_ROOT,
+  session_calendar: PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY,
+  hold_clock: "canonical_trading_session",
+  morning_signal_ignores_AAdjC: true,
+  producer_requirement: PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY,
   ...PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT,
   hold_sessions: PERSONAL_VOL_HOLD_SESSIONS,
   one_way_cost: PERSONAL_VOL_ONE_WAY_COST,
@@ -89,8 +95,10 @@ type HeldBook = Record<string, Record<string, number>>;
 export type PersonalVolAmPmValidityRow = {
   date: string;
   predecessor: string | null;
-  common_valid: boolean;
-  reasons: string[];
+  morning_signal_valid: boolean;
+  morning_reasons: string[];
+  execution_valid: boolean;
+  execution_reasons: string[];
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -208,9 +216,16 @@ function fourSignalReasons(
   return reasons;
 }
 
-function equityFactReasons(
+function uniqueReasons(reasons: string[]): string[] {
+  const unique: string[] = [];
+  for (const reason of reasons) {
+    if (!unique.includes(reason)) unique.push(reason);
+  }
+  return unique;
+}
+
+function morningEquityReasons(
   morning: Record<string, Record<string, number>>,
-  afternoon: Record<string, Record<string, number>>,
   codes: string[],
   date: string,
 ): string[] {
@@ -219,6 +234,17 @@ function equityFactReasons(
     if (!finitePositive(morning[code]?.[date])) {
       reasons.push(`missing_MAdjC:${code}:${date}`);
     }
+  }
+  return reasons;
+}
+
+function afternoonEquityReasons(
+  afternoon: Record<string, Record<string, number>>,
+  codes: string[],
+  date: string,
+): string[] {
+  const reasons: string[] = [];
+  for (const code of codes) {
     if (!finitePositive(afternoon[code]?.[date])) {
       reasons.push(`missing_AAdjC:${code}:${date}`);
     }
@@ -234,22 +260,27 @@ export function personalVolAmPmCommonValidity(
   const { morning, afternoon } = barMaps(panel);
   return dates.map((date) => {
     const predecessor = predecessorOf(dates, date);
-    const reasons: string[] = [];
-    if (!predecessor) reasons.push("predecessor_session_missing");
-    else reasons.push(...fourSignalReasons(panel.opt225_regime, predecessor));
-    if (!codes.length) reasons.push("equity_universe_empty");
-    reasons.push(...equityFactReasons(morning, afternoon, codes, date));
-    const unique: string[] = [];
-    for (const reason of reasons) {
-      if (!unique.includes(reason)) unique.push(reason);
-    }
+    const morningReasons: string[] = [];
+    if (!predecessor) morningReasons.push("predecessor_session_missing");
+    else morningReasons.push(...fourSignalReasons(panel.opt225_regime, predecessor));
+    if (!codes.length) morningReasons.push("equity_universe_empty");
+    morningReasons.push(...morningEquityReasons(morning, codes, date));
+    const executionReasons = afternoonEquityReasons(afternoon, codes, date);
+    const morningUnique = uniqueReasons(morningReasons);
+    const executionUnique = uniqueReasons(executionReasons);
     return {
       date,
       predecessor,
-      common_valid: unique.length === 0,
-      reasons: unique,
+      morning_signal_valid: morningUnique.length === 0,
+      morning_reasons: morningUnique,
+      execution_valid: executionUnique.length === 0,
+      execution_reasons: executionUnique,
     };
   });
+}
+
+export function personalVolAmPmRebalanceDates(dates: string[]): string[] {
+  return dates.filter((_, index) => index % PERSONAL_VOL_HOLD_SESSIONS === 0);
 }
 
 function momentumAt(
@@ -354,7 +385,7 @@ export function personalVolAmPmEntrySigns(
   if (index < 0) return empty;
   const validity = personalVolAmPmCommonValidity(panel);
   const row = validity[index];
-  if (!row?.common_valid) return empty;
+  if (!row?.morning_signal_valid) return empty;
   const { morning } = barMaps(panel);
   const scores: Record<string, number | null> = {};
   for (const code of equityCodes(panel)) {
@@ -376,20 +407,18 @@ export function personalVolAmPmEntrySigns(
   return out;
 }
 
-function heldBookFor(
+export function personalVolAmPmHeldBook(
   panel: PersonalVolAmPmPanel,
   strategyId: PersonalVolStrategyId | "control",
 ): HeldBook {
   const dates = panel.session_calendar.dates;
-  const validity = personalVolAmPmCommonValidity(panel);
-  const validDates = dates.filter((_, index) => validity[index]?.common_valid);
   const codes = equityCodes(panel);
   const held: HeldBook = {};
   for (const code of codes) held[code] = {};
-  if (!validDates.length) return held;
+  if (!dates.length) return held;
   const entriesByCode: Record<string, number[]> = {};
   for (const code of codes) entriesByCode[code] = [];
-  for (const date of validDates) {
+  for (const date of dates) {
     const signs = personalVolAmPmEntrySigns(panel, strategyId, date);
     for (const code of codes) {
       entriesByCode[code].push(signs[code] ?? 0);
@@ -400,10 +429,10 @@ function heldBookFor(
       entriesByCode[code],
       PERSONAL_VOL_HOLD_SESSIONS,
     );
-    for (let index = 0; index < validDates.length; index += 1) {
+    for (let index = 0; index < dates.length; index += 1) {
       const position = sticky[index];
       if (position !== null && position !== 0) {
-        held[code][validDates[index]] = position;
+        held[code][dates[index]] = position;
       }
     }
   }
@@ -431,8 +460,6 @@ export function personalVolAmPmDailyPath(
   incomplete_interval_samples_omitted: number;
 } {
   const dates = panel.session_calendar.dates;
-  const validity = personalVolAmPmCommonValidity(panel);
-  const validityByDate = new Map(validity.map((row) => [row.date, row]));
   const { afternoon } = barMaps(panel);
   const codes = equityCodes(panel);
   const points: PersonalVolDailyPoint[] = [];
@@ -456,15 +483,17 @@ export function personalVolAmPmDailyPath(
     const current = dates[index];
     if (current < panel.period_start) continue;
     if (current > panel.period_end) break;
-    const signalValid = validityByDate.get(signalDate)?.common_valid === true;
+    const fillMissing = codes.filter(
+      (code) => !finitePositive(afternoon[code]?.[signalDate]),
+    ).length;
+    const markMissing = codes.filter(
+      (code) => !finitePositive(afternoon[code]?.[current]),
+    ).length;
+    const missingLegs = fillMissing + markMissing;
     const contributions: number[] = [];
     let hasShort = false;
     let intendedLegs = 0;
-    let missingLegs = 0;
-    if (signalValid) {
-      missingLegs = codes.filter(
-        (code) => !finitePositive(afternoon[code]?.[current]),
-      ).length;
+    if (missingLegs === 0) {
       for (const code of codes) {
         const position = held[code]?.[signalDate];
         if (position === undefined || position === 0) continue;
@@ -488,7 +517,7 @@ export function personalVolAmPmDailyPath(
     let turnoverOneWay = 0;
     let netReturn = 0;
     let sessionFills = 0;
-    if (signalValid && missingLegs > 0) {
+    if (missingLegs > 0) {
       incompleteIntervals += 1;
       invalidEquityObservations += missingLegs;
       if (
@@ -503,7 +532,7 @@ export function personalVolAmPmDailyPath(
           missing_leg_count: missingLegs,
         });
       }
-    } else if (signalValid && contributions.length === intendedLegs && intendedLegs > 0) {
+    } else if (contributions.length === intendedLegs && intendedLegs > 0) {
       grossReturn =
         contributions.reduce((total, value) => total + value, 0) /
         contributions.length;
@@ -569,10 +598,10 @@ function ratioKind(
   return "rolling_short_long";
 }
 
-export function evaluatePersonalVolAmPmWindow(
+export async function evaluatePersonalVolAmPmWindow(
   definition: (typeof PERSONAL_VOL_STRATEGIES)[number] | typeof PERSONAL_VOL_AM_PM_CONTROL,
   panel: PersonalVolAmPmPanel,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const parsed = parsePersonalVolAmPmPanel(panel);
   if (!parsed.ok) {
     return unavailableWindow(
@@ -587,6 +616,9 @@ export function evaluatePersonalVolAmPmWindow(
   }
   if (!panel.session_calendar.dates.length) {
     return unavailableWindow(panel, "session_calendar_missing_or_invalid");
+  }
+  if (!(await personalVolAmPmSessionCalendarDigestMatches(panel.session_calendar))) {
+    return unavailableWindow(panel, "session_calendar_digest_mismatch");
   }
   const source = panel.opt225_regime?.source;
   if (!isSupportedPersonalVolSource(source)) {
@@ -604,14 +636,14 @@ export function evaluatePersonalVolAmPmWindow(
   const requiredDates = validity.filter(
     (row) => row.date >= panel.period_start && row.date <= panel.period_end,
   );
-  const held = heldBookFor(panel, strategyId);
+  const held = personalVolAmPmHeldBook(panel, strategyId);
   const path = personalVolAmPmDailyPath(held, panel);
   const status =
     path.incomplete_intervals > 0
       ? "incomplete"
       : path.active_sessions > 0
         ? "ok"
-        : requiredDates.every((row) => !row.common_valid)
+        : requiredDates.every((row) => !row.morning_signal_valid)
           ? "incomplete"
           : "no_active_positions";
   const reason =
@@ -620,7 +652,7 @@ export function evaluatePersonalVolAmPmWindow(
       : status === "incomplete"
         ? path.incomplete_intervals > 0
           ? "one_or_more_active_intervals_missing_complete_equity_legs"
-          : "common_validity_empty"
+          : "morning_signal_validity_empty"
         : "ratio_never_crossed_fixed_thresholds";
   const diagnosticMetrics = personalVolPerformance(path.points, true);
   return {
@@ -634,7 +666,14 @@ export function evaluatePersonalVolAmPmWindow(
     ratio_kind: ratioKind(strategyId),
     canonical_trading_sessions: panel.session_calendar.dates.length,
     required_trading_sessions: requiredDates.length,
-    common_valid_sessions: requiredDates.filter((row) => row.common_valid).length,
+    morning_signal_valid_sessions: requiredDates.filter(
+      (row) => row.morning_signal_valid,
+    ).length,
+    execution_valid_sessions: requiredDates.filter((row) => row.execution_valid).length,
+    session_calendar: {
+      ...PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY,
+      dates_digest: panel.session_calendar.dates_digest,
+    },
     common_validity: requiredDates,
     eval_path: `personal_draft:am_pm:${strategyId}`,
     option_signal_lag_sessions: 1,
@@ -800,9 +839,11 @@ export async function runPersonalVolAmPmResearch(
     for (const definition of PERSONAL_VOL_STRATEGIES) {
       windowsByStrategy
         .get(definition.strategy_id)!
-        .push(evaluatePersonalVolAmPmWindow(definition, panel));
+        .push(await evaluatePersonalVolAmPmWindow(definition, panel));
     }
-    controlWindows.push(evaluatePersonalVolAmPmWindow(PERSONAL_VOL_AM_PM_CONTROL, panel));
+    controlWindows.push(
+      await evaluatePersonalVolAmPmWindow(PERSONAL_VOL_AM_PM_CONTROL, panel),
+    );
   }
 
   const commonSuccessfulWindows = PERSONAL_VOL_PERIODS.map(

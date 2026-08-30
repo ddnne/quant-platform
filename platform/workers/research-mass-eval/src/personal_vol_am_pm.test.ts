@@ -15,17 +15,20 @@ import {
   personalVolAmPmContractDigest,
   personalVolAmPmDailyPath,
   personalVolAmPmEntrySigns,
+  personalVolAmPmHeldBook,
+  personalVolAmPmRebalanceDates,
   runPersonalVolAmPmResearch,
 } from "./personal_vol_am_pm";
 import {
   PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
   PERSONAL_VOL_AM_PM_PANELS_PREFIX,
   PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY,
-  PERSONAL_VOL_AM_PM_SESSION_CALENDAR_ROLE,
+  PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY,
   PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT,
   isLegacyPersonalVolPanel,
   loadPersonalVolAmPmPanels,
   parsePersonalVolAmPmPanel,
+  personalVolAmPmSessionDatesDigest,
   type PersonalVolAmPmPanel,
 } from "./personal_vol_am_pm_panel";
 import {
@@ -52,7 +55,10 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function amPmPanel(periodId = "y2023_full", start = "2023-09-01"): PersonalVolAmPmPanel {
+async function amPmPanel(
+  periodId = "y2023_full",
+  start = "2023-09-01",
+): Promise<PersonalVolAmPmPanel> {
   const dates = datesFrom(start);
   const short = Object.fromEntries(dates.map((date) => [date, 2]));
   const long = Object.fromEntries(dates.map((date) => [date, 1]));
@@ -68,10 +74,9 @@ function amPmPanel(periodId = "y2023_full", start = "2023-09-01"): PersonalVolAm
     source: "test-am-pm-panel",
     temporal_contract: PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT,
     session_calendar: {
-      dataset: "indices_bars_daily_topix",
-      label: "TOPIX",
-      role: PERSONAL_VOL_AM_PM_SESSION_CALENDAR_ROLE,
+      ...PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY,
       dates,
+      dates_digest: await personalVolAmPmSessionDatesDigest(dates),
     },
     bars: {
       A: dates.map((date, index) => ({
@@ -125,10 +130,10 @@ function legacyClosePanel(start = "2023-09-01"): PeriodPanel {
   };
 }
 
-function panelForPeriod(
+async function panelForPeriod(
   period: (typeof PERSONAL_VOL_PERIODS)[number],
-): PersonalVolAmPmPanel {
-  const staged = amPmPanel(period.period_id, `${period.year}-09-01`);
+): Promise<PersonalVolAmPmPanel> {
+  const staged = await amPmPanel(period.period_id, `${period.year}-09-01`);
   staged.year = period.year!;
   staged.period_start = period.period_start!;
   staged.period_end = period.period_end!;
@@ -227,16 +232,23 @@ describe("AM/PM request identity", () => {
     expect(digest).toContain(await personalVolAmPmContractDigest());
     expect(PERSONAL_VOL_AM_PM_CONTRACT.no_adjc_fallback).toBe(true);
     expect(PERSONAL_VOL_AM_PM_CONTRACT.cash_index_executable_fill).toBe(false);
+    expect(PERSONAL_VOL_AM_PM_CONTRACT.session_calendar).toEqual(
+      PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY,
+    );
+    expect(PERSONAL_VOL_AM_PM_CONTRACT.morning_signal_ignores_AAdjC).toBe(true);
     expect(PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY.producer_id).toBe(
       "personal-vol-ratio-am-pm-panel-writer/v1",
+    );
+    expect(PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY.required_session_calendar).toEqual(
+      PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY,
     );
   });
 });
 
 describe("AM/PM panel schema", () => {
-  it("rejects a legacy PeriodPanel even when dates match", () => {
+  it("rejects a legacy PeriodPanel even when dates match", async () => {
     const legacy = legacyClosePanel();
-    const am = amPmPanel();
+    const am = await amPmPanel();
     expect(legacy.period_start).toBe(am.period_start);
     expect(legacy.period_end).toBe(am.period_end);
     expect(isLegacyPersonalVolPanel(legacy)).toBe(true);
@@ -247,9 +259,9 @@ describe("AM/PM panel schema", () => {
     });
   });
 
-  it("does not treat AdjC or close tuples as M/A", () => {
+  it("does not treat AdjC or close tuples as M/A", async () => {
     const withAdjC = {
-      ...amPmPanel(),
+      ...(await amPmPanel()),
       bars: {
         A: [{ date: "2023-09-01", AdjC: 100, close: 100 }],
       },
@@ -260,13 +272,28 @@ describe("AM/PM panel schema", () => {
     expect(parsed.value.bars.A).toBeUndefined();
   });
 
-  it("rejects a cash-index executable fill claim", () => {
+  it("preserves a finite MAdjC when AAdjC is missing", async () => {
+    const parsed = parsePersonalVolAmPmPanel({
+      ...(await amPmPanel()),
+      bars: {
+        A: [{ date: "2023-09-01", MAdjC: 101, AAdjC: null }],
+      },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.bars.A).toEqual([
+      { date: "2023-09-01", MAdjC: 101, AAdjC: null },
+    ]);
+  });
+
+  it("rejects a cash-index executable fill claim", async () => {
+    const fixture = await amPmPanel();
     const claimed = {
-      ...amPmPanel(),
+      ...fixture,
       tradable_hedge: {
         etf_code: "TOPIX",
         dataset: "indices_bars_daily_topix",
-        bars: amPmPanel().bars.A,
+        bars: fixture.bars.A,
       },
     };
     expect(parsePersonalVolAmPmPanel(claimed)).toMatchObject({
@@ -306,11 +333,74 @@ describe("AM/PM panel schema", () => {
     );
     expect(panels[0].source).toBe("legacy_period_panel_rejected");
   });
+
+  it("rejects an arbitrary or unsorted session calendar", async () => {
+    const fixture = await amPmPanel();
+    const topix = parsePersonalVolAmPmPanel({
+      ...fixture,
+      session_calendar: {
+        dataset: "indices_bars_daily_topix",
+        label: "TOPIX",
+        role: "diagnostic_session_calendar_only",
+        dates: fixture.session_calendar.dates,
+      },
+    });
+    expect(topix).toMatchObject({
+      ok: false,
+      error: "session_calendar_missing_or_invalid",
+    });
+
+    const unsorted = parsePersonalVolAmPmPanel({
+      ...fixture,
+      session_calendar: {
+        ...PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY,
+        dates: [...fixture.session_calendar.dates].reverse(),
+        dates_digest: fixture.session_calendar.dates_digest,
+      },
+    });
+    expect(unsorted).toMatchObject({
+      ok: false,
+      error: "session_calendar_missing_or_invalid",
+    });
+
+    const duplicate = parsePersonalVolAmPmPanel({
+      ...fixture,
+      session_calendar: {
+        ...PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY,
+        dates: [
+          fixture.session_calendar.dates[0],
+          fixture.session_calendar.dates[0],
+        ],
+        dates_digest: fixture.session_calendar.dates_digest,
+      },
+    });
+    expect(duplicate).toMatchObject({
+      ok: false,
+      error: "session_calendar_missing_or_invalid",
+    });
+  });
+
+  it("rejects a dates_digest that does not match the pinned ordered calendar", async () => {
+    const fixture = await amPmPanel();
+    const wrong = {
+      ...fixture,
+      session_calendar: {
+        ...fixture.session_calendar,
+        dates_digest: `sha256:${"ab".repeat(32)}`,
+      },
+    };
+    expect(
+      await evaluatePersonalVolAmPmWindow(PERSONAL_VOL_STRATEGIES[0], wrong),
+    ).toMatchObject({
+      status: "incomplete",
+      reason: "session_calendar_digest_mismatch",
+    });
+  });
 });
 
 describe("AM/PM causal contract", () => {
-  it("shifts the option signal to D-1 and uses D MAdjC for the rank", () => {
-    const panel = amPmPanel();
+  it("shifts the option signal to D-1 and uses D MAdjC for the rank", async () => {
+    const panel = await amPmPanel();
     const dates = panel.session_calendar.dates;
     const signalDate = dates[8];
     const signs = personalVolAmPmEntrySigns(
@@ -322,8 +412,8 @@ describe("AM/PM causal contract", () => {
     expect(signs.B).toBe(1);
   });
 
-  it("is invariant to D option values, D full close, and D AAdjC", () => {
-    const panel = amPmPanel();
+  it("is invariant to D option values, D full close, and D AAdjC", async () => {
+    const panel = await amPmPanel();
     const dates = panel.session_calendar.dates;
     const signalDate = dates[8];
     const baseline = personalVolAmPmEntrySigns(
@@ -358,8 +448,8 @@ describe("AM/PM causal contract", () => {
     ).toEqual(baseline);
   });
 
-  it("changes the D signal when D-1 vol or D MAdjC changes", () => {
-    const panel = amPmPanel();
+  it("changes the D signal when D-1 vol or D MAdjC changes", async () => {
+    const panel = await amPmPanel();
     const dates = panel.session_calendar.dates;
     const signalDate = dates[8];
     const predecessor = dates[7];
@@ -385,8 +475,8 @@ describe("AM/PM causal contract", () => {
     ).not.toEqual(baseline);
   });
 
-  it("changes fill and PnL only when AAdjC changes", () => {
-    const panel = amPmPanel();
+  it("changes fill and PnL only when AAdjC changes", async () => {
+    const panel = await amPmPanel();
     const dates = panel.session_calendar.dates;
     const signalDate = dates[8];
     const pnlDate = dates[9];
@@ -411,8 +501,8 @@ describe("AM/PM causal contract", () => {
     expect(mutatedPoint.net_return).not.toBeCloseTo(baselinePoint.net_return);
   });
 
-  it("fails closed on missing M/A or D-1 vol without AdjC fallback or ffill", () => {
-    const panel = amPmPanel();
+  it("fails closed on missing M/A or D-1 vol without AdjC fallback or ffill", async () => {
+    const panel = await amPmPanel();
     const dates = panel.session_calendar.dates;
     const signalDate = dates[8];
     const predecessor = dates[7];
@@ -430,7 +520,7 @@ describe("AM/PM causal contract", () => {
     ).toEqual({ A: 0, B: 0 });
     expect(
       personalVolAmPmCommonValidity(missingMorning).find((row) => row.date === signalDate)
-        ?.common_valid,
+        ?.morning_signal_valid,
     ).toBe(false);
 
     const missingAfternoon = clone(panel);
@@ -438,14 +528,18 @@ describe("AM/PM causal contract", () => {
       Number.NaN as unknown as number;
     expect(
       personalVolAmPmCommonValidity(missingAfternoon).find((row) => row.date === signalDate)
-        ?.common_valid,
+        ?.morning_signal_valid,
+    ).toBe(true);
+    expect(
+      personalVolAmPmCommonValidity(missingAfternoon).find((row) => row.date === signalDate)
+        ?.execution_valid,
     ).toBe(false);
 
     const missingVol = clone(panel);
     delete missingVol.opt225_regime!.basevol!.rv_short_by_date![predecessor];
     expect(
       personalVolAmPmCommonValidity(missingVol).find((row) => row.date === signalDate)
-        ?.common_valid,
+        ?.morning_signal_valid,
     ).toBe(false);
     for (const definition of PERSONAL_VOL_STRATEGIES) {
       expect(
@@ -458,8 +552,58 @@ describe("AM/PM causal contract", () => {
     });
   });
 
-  it("records the first PnL after the D PM fill using AAdjC only", () => {
-    const panel = amPmPanel();
+  it("keeps D-morning signs and later rebalance dates unchanged when D AAdjC is removed", async () => {
+    const panel = await amPmPanel();
+    const dates = panel.session_calendar.dates;
+    const signalDate = dates[8];
+    const pnlDate = dates[9];
+    const strategy = "basevol_short_long_ratio" as const;
+    const baselineSigns = personalVolAmPmEntrySigns(panel, strategy, signalDate);
+    const baselineHeld = personalVolAmPmHeldBook(panel, strategy);
+    const baselineRebalance = personalVolAmPmRebalanceDates(dates);
+    const baselineWindow = await evaluatePersonalVolAmPmWindow(
+      PERSONAL_VOL_STRATEGIES[0],
+      panel,
+    );
+
+    const removed = clone(panel);
+    const bar = removed.bars.A.find((row) => row.date === signalDate)!;
+    bar.AAdjC = null;
+    expect(bar.MAdjC).toBe(panel.bars.A.find((row) => row.date === signalDate)!.MAdjC);
+
+    expect(personalVolAmPmEntrySigns(removed, strategy, signalDate)).toEqual(
+      baselineSigns,
+    );
+    expect(personalVolAmPmHeldBook(removed, strategy)).toEqual(baselineHeld);
+    expect(personalVolAmPmRebalanceDates(removed.session_calendar.dates)).toEqual(
+      baselineRebalance,
+    );
+    const laterDates = dates.filter((date) => date > signalDate);
+    for (const date of laterDates) {
+      expect(personalVolAmPmEntrySigns(removed, strategy, date)).toEqual(
+        personalVolAmPmEntrySigns(panel, strategy, date),
+      );
+    }
+    const removedWindow = await evaluatePersonalVolAmPmWindow(
+      PERSONAL_VOL_STRATEGIES[0],
+      removed,
+    );
+    expect(removedWindow.status).toBe("incomplete");
+    expect(removedWindow.performance_status).toBe("UNAVAILABLE");
+    expect(baselineWindow.status).toBe("ok");
+    const removedValidity = personalVolAmPmCommonValidity(removed).find(
+      (row) => row.date === signalDate,
+    )!;
+    expect(removedValidity.morning_signal_valid).toBe(true);
+    expect(removedValidity.execution_valid).toBe(false);
+    const removedPoint = (
+      removedWindow.daily_path as Array<{ date: string; net_return: number }>
+    ).find((point) => point.date === pnlDate);
+    expect(removedPoint?.net_return).toBe(0);
+  });
+
+  it("records the first PnL after the D PM fill using AAdjC only", async () => {
+    const panel = await amPmPanel();
     const dates = panel.session_calendar.dates;
     const signalDate = dates[8];
     const pnlDate = dates[9];
@@ -482,17 +626,26 @@ describe("AM/PM causal contract", () => {
     expect(path.fill_count).toBe(1);
   });
 
-  it("keeps all four candidates and the control on one calendar and cost rule", () => {
-    const panel = amPmPanel();
+  it("keeps all four candidates and the control on one calendar and cost rule", async () => {
+    const panel = await amPmPanel();
     const windows = [
-      ...PERSONAL_VOL_STRATEGIES.map((definition) =>
-        evaluatePersonalVolAmPmWindow(definition, panel),
-      ),
-      evaluatePersonalVolAmPmWindow(PERSONAL_VOL_AM_PM_CONTROL, panel),
+      ...(await Promise.all(
+        PERSONAL_VOL_STRATEGIES.map((definition) =>
+          evaluatePersonalVolAmPmWindow(definition, panel),
+        ),
+      )),
+      await evaluatePersonalVolAmPmWindow(PERSONAL_VOL_AM_PM_CONTROL, panel),
     ];
     const calendars = windows.map((window) =>
-      (window.common_validity as Array<{ date: string; common_valid: boolean }>).map(
-        (row) => `${row.date}:${row.common_valid}`,
+      (
+        window.common_validity as Array<{
+          date: string;
+          morning_signal_valid: boolean;
+          execution_valid: boolean;
+        }>
+      ).map(
+        (row) =>
+          `${row.date}:${row.morning_signal_valid}:${row.execution_valid}`,
       ),
     );
     for (const calendar of calendars.slice(1)) {
@@ -521,26 +674,29 @@ describe("AM/PM causal contract", () => {
     }
   });
 
-  it("does not use single-stock IV and does not claim a cash-index fill", () => {
-    const singleStock = clone(amPmPanel());
+  it("does not use single-stock IV and does not claim a cash-index fill", async () => {
+    const singleStock = clone(await amPmPanel());
     singleStock.opt225_regime!.source = {
       dataset: "derivatives_bars_daily_single_stock_options",
       version: PERSONAL_VOL_SOURCE_IDENTITY.version,
     };
     expect(
-      evaluatePersonalVolAmPmWindow(PERSONAL_VOL_STRATEGIES[0], singleStock),
+      await evaluatePersonalVolAmPmWindow(PERSONAL_VOL_STRATEGIES[0], singleStock),
     ).toMatchObject({
       status: "incomplete",
       reason: "opt225_source_identity_missing_or_mismatch",
     });
-    const ok = evaluatePersonalVolAmPmWindow(PERSONAL_VOL_STRATEGIES[0], amPmPanel());
+    const ok = await evaluatePersonalVolAmPmWindow(
+      PERSONAL_VOL_STRATEGIES[0],
+      await amPmPanel(),
+    );
     expect(ok.individual_stock_option_volatility_used).toBe(false);
     expect(ok.cash_index_executable_fill).toBe(false);
   });
 
-  it("rejects a legacy panel at evaluation time", () => {
+  it("rejects a legacy panel at evaluation time", async () => {
     expect(
-      evaluatePersonalVolAmPmWindow(
+      await evaluatePersonalVolAmPmWindow(
         PERSONAL_VOL_STRATEGIES[0],
         legacyClosePanel() as unknown as PersonalVolAmPmPanel,
       ),
@@ -629,7 +785,7 @@ describe("AM/PM immutable artifact", () => {
     for (const period of PERSONAL_VOL_PERIODS) {
       mem.seed(
         `${PERSONAL_VOL_AM_PM_PANELS_PREFIX}/${period.period_id}.json`,
-        panelForPeriod(period),
+        await panelForPeriod(period),
       );
     }
     const result = await runPersonalVolAmPmResearch(
