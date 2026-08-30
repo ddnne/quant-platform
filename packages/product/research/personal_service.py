@@ -32,6 +32,7 @@ from paper_runtime.personal_snapshot import (
     materialize_personal_snapshot,
     verify_personal_snapshot,
 )
+from paper_runtime.personal_prepared_frame import _personal_prepared_frame_scope
 from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
 from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult
 from strategies.spec import StrategySpec, iter_feature_refs, strategy_spec_digest
@@ -2166,48 +2167,52 @@ class PersonalResearchService:
         else:
             fold_periods, holdout_period = periods
             executor = PersonalPaperExecutionService()
-            for spec, closure in zip(specs, closures, strict=True):
-                try:
-                    candidates.append(
-                        _candidate_evaluation(
-                            executor,
-                            spec,
-                            closure,
-                            snapshot=snapshot,
-                            universe=universe,
-                            fold_periods=fold_periods,
-                            holdout_period=holdout_period,
-                            output_root=output_root,
-                            policy=self.policy,
-                            short_financing_required=short_financing_required,
+            with _personal_prepared_frame_scope(
+                db_path=snapshot.db_path,
+                snapshot_id=snapshot.logical_data_snapshot_id,
+            ):
+                for spec, closure in zip(specs, closures, strict=True):
+                    try:
+                        candidates.append(
+                            _candidate_evaluation(
+                                executor,
+                                spec,
+                                closure,
+                                snapshot=snapshot,
+                                universe=universe,
+                                fold_periods=fold_periods,
+                                holdout_period=holdout_period,
+                                output_root=output_root,
+                                policy=self.policy,
+                                short_financing_required=short_financing_required,
+                            )
                         )
-                    )
-                except Exception as exc:  # preserve a report; CLI still exits 1
-                    unexpected_errors += 1
-                    detail = " ".join(str(exc).split())[:400]
-                    candidates.append(
-                        {
-                            "strategy_id": spec.strategy_id,
-                            "strategy_spec_version": spec.version,
-                            "strategy_spec_digest": strategy_spec_digest(spec),
-                            "dependency_closure_digest": closure.closure_digest,
-                            "strategy": _strategy_context(spec),
-                            "decision": "SKIPPED",
-                            "reasons": [f"unexpected:{type(exc).__name__}"],
-                            "validation": None,
-                            "stress": None,
-                            "holdout": None,
-                            "decision_basis": "validation_and_cost_stress",
-                            "performance_comparison": {
-                                "stress_vs_validation": None,
-                                "holdout_vs_validation": None,
-                            },
-                            "error": {
-                                "type": type(exc).__name__,
-                                "detail": detail or "no detail",
-                            },
-                        }
-                    )
+                    except Exception as exc:  # preserve report; CLI still exits 1
+                        unexpected_errors += 1
+                        detail = " ".join(str(exc).split())[:400]
+                        candidates.append(
+                            {
+                                "strategy_id": spec.strategy_id,
+                                "strategy_spec_version": spec.version,
+                                "strategy_spec_digest": strategy_spec_digest(spec),
+                                "dependency_closure_digest": closure.closure_digest,
+                                "strategy": _strategy_context(spec),
+                                "decision": "SKIPPED",
+                                "reasons": [f"unexpected:{type(exc).__name__}"],
+                                "validation": None,
+                                "stress": None,
+                                "holdout": None,
+                                "decision_basis": "validation_and_cost_stress",
+                                "performance_comparison": {
+                                    "stress_vs_validation": None,
+                                    "holdout_vs_validation": None,
+                                },
+                                "error": {
+                                    "type": type(exc).__name__,
+                                    "detail": detail or "no detail",
+                                },
+                            }
+                        )
         verify_personal_snapshot(snapshot)
         evaluated_count = sum(
             candidate["decision"] in {"HOLD", "REJECT"}

@@ -7,11 +7,21 @@ import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 
+import paper_runtime.personal_prepared_frame as prepared_frame_module
+import pit
+import pit.api as pit_api_module
 import pytest
 
+from core import run_backtest
+from core.engine import _make_feature_accessor
 from data_contracts.identity import natural_key
 from execution.personal_paper_service import PersonalPaperExecutionService
 from paper_runtime.snapshot_identity import data_snapshot_id
+from paper_runtime.personal_prepared_frame import (
+    _feature_cache_key_document,
+    _personal_prepared_frame_scope,
+)
+from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
 from research.paper_candidate_specs import (
     build_factor_rank_strategy_spec,
     build_multi_day_hold_strategy_spec,
@@ -41,7 +51,12 @@ from research.personal_universe import (
     personal_universe_selector,
 )
 from storage.sqlite_store import SqliteStore
-from strategies.spec import FactorLeg, FeatureRef, iter_feature_refs
+from strategies.spec import (
+    FactorLeg,
+    FeatureRef,
+    interpret_strategy_spec,
+    iter_feature_refs,
+)
 
 
 def _dates(start: date, end: date) -> list[str]:
@@ -104,6 +119,7 @@ def personal_db(tmp_path: Path) -> tuple[Path, str, str]:
                 "ingested_at": "2023-12-29T09:00:00+09:00",
                 "company_name": f"Fixture {code}",
                 "sector_17_code": "1",
+                "sector_33_code": "10" if code in {"1301", "1302"} else "20",
                 "market_code": "0112" if code == "1304" else "0111",
                 "scale_category": (
                     "TOPIX Core30" if code == "1301" else "TOPIX Large70"
@@ -133,6 +149,7 @@ def personal_db(tmp_path: Path) -> tuple[Path, str, str]:
             "ScaleCategory": (
                 "TOPIX Core30" if code == "1301" else "TOPIX Large70"
             ),
+            "Sector33Code": "10" if code in {"1301", "1302"} else "20",
         }
         generic.append(
             _generic(
@@ -148,6 +165,14 @@ def personal_db(tmp_path: Path) -> tuple[Path, str, str]:
             "DiscNo": str(code_index + 1),
             "EPS": 8.0 + code_index,
             "BPS": 80.0 + 10.0 * code_index,
+            "ROE": 0.08 + code_index * 0.01,
+            "Sales": 1_000.0 + code_index * 100.0,
+            "NP": 80.0 + code_index * 10.0,
+            "TA": 2_000.0 + code_index * 100.0,
+            "Eq": 1_000.0 + code_index * 50.0,
+            "CurPerType": "FY",
+            "CurPerEn": "2023-12-31",
+            "DocType": "FYFinancialStatements_Consolidated_JP",
         }
         generic.append(
             _generic(
@@ -221,6 +246,668 @@ def _request(
             ),
         ),
     )
+
+
+def _prepared_frame_spec(case: str):
+    price = FactorLeg(
+        feature=FeatureRef(
+            id="retrospective_price_ratio",
+            version="1.0.0",
+            params={"mode": "return_ratio", "short_n": 2, "long_n": 3},
+        ),
+        weight=1.0,
+        direction="high_good",
+    )
+    fundamental = FactorLeg(
+        feature=FeatureRef(
+            id="pit_fundamental_ratio",
+            version="1.0.0",
+            params={"mode": "roe"},
+        ),
+        weight=1.0,
+        direction="high_good",
+    )
+    legs = {
+        "price": (price,),
+        "fundamental": (fundamental,),
+        "long_short": (price, fundamental),
+    }[case]
+    return build_factor_rank_strategy_spec(
+        strategy_id=f"personal_prepared_frame_{case}",
+        legs=legs,
+        hold_days=1,
+        group="sector33",
+        long_frac=0.25,
+        short_frac=0.25,
+        allow_short=case == "long_short",
+        min_eligible_ratio=1.0,
+        min_eligible_count=4,
+        min_group_count=2,
+        rationale=f"Prepared-frame {case} behavioral parity fixture.",
+    )
+
+
+def _prepared_frame_case(
+    source: Path, start: str, end: str
+) -> tuple[PersonalResolvedUniverseMembership, tuple[str, str]]:
+    selector = personal_universe_selector("topix_all")
+    sessions = tuple(
+        day
+        for day in _dates(date.fromisoformat(start), date.fromisoformat(end))
+        if date.fromisoformat(day).weekday() < 5
+    )[:30]
+    universe = PersonalResolvedUniverseMembership(
+        period_start=sessions[0],
+        period_end=sessions[-1],
+        decision_memberships=tuple(
+            (day, ("1301", "1302", "1303", "1304")) for day in sessions
+        ),
+        rule_id=selector.rule_id,
+        rule_version=selector.rule_version,
+        rule_digest=selector.rule_digest,
+    )
+    return universe, (sessions[0], sessions[-1])
+
+
+def test_prepared_feature_key_binds_exact_snapshot_scope_and_definition() -> None:
+    document = _feature_cache_key_document(
+        snapshot_id="sha256:" + "1" * 64,
+        as_of="2024-01-05T15:30:00+09:00",
+        code="1301",
+        feature_id="retrospective_price_ratio",
+        feature_version="1.0.0",
+        definition_digest="sha256:" + "2" * 64,
+        params={"mode": "return_ratio", "short_n": 20, "long_n": 252},
+    )
+
+    assert document == {
+        "schema_version": "personal-prepared-feature-key/v1",
+        "snapshot_id": "sha256:" + "1" * 64,
+        "as_of": "2024-01-05T15:30:00+09:00",
+        "code_present": True,
+        "code": "1301",
+        "feature_id": "retrospective_price_ratio",
+        "feature_version": "1.0.0",
+        "feature_definition_digest": "sha256:" + "2" * 64,
+        "params": {"mode": "return_ratio", "short_n": 20, "long_n": 252},
+    }
+    assert document != _feature_cache_key_document(
+        snapshot_id="sha256:" + "1" * 64,
+        as_of="2024-01-05T15:30:00+09:00",
+        code=1301,
+        feature_id="retrospective_price_ratio",
+        feature_version="1.0.0",
+        definition_digest="sha256:" + "2" * 64,
+        params={"mode": "return_ratio", "short_n": 20, "long_n": 252},
+    )
+    for changed in (
+        {**document, "snapshot_id": "sha256:" + "3" * 64},
+        {**document, "as_of": "2024-01-08T15:30:00+09:00"},
+        {**document, "feature_version": "1.0.1"},
+        {**document, "feature_definition_digest": "sha256:" + "4" * 64},
+        {**document, "params": {**document["params"], "long_n": 120}},
+    ):
+        assert changed != document
+
+
+def test_prepared_frame_temp_sqlite_is_removed_after_exception(
+    personal_db: tuple[Path, str, str],
+) -> None:
+    source, _start, _end = personal_db
+    cache_path: Path | None = None
+    with pytest.raises(RuntimeError, match="test abort"):
+        with _personal_prepared_frame_scope(
+            db_path=source,
+            snapshot_id=data_snapshot_id(source),
+        ) as frame:
+            cache_path = frame.cache_path
+            assert cache_path.is_file()
+            raise RuntimeError("test abort")
+    assert cache_path is not None
+    assert not cache_path.exists()
+
+
+def test_prepared_frame_rejects_saturated_and_oversized_entries_before_json(
+    personal_db: tuple[Path, str, str],
+    monkeypatch,
+) -> None:
+    source, _start, _end = personal_db
+
+    def forbidden_json(_value):
+        raise AssertionError("saturated or oversized entry reached JSON encoding")
+
+    def forbidden_compress(_value, **_kwargs):
+        raise AssertionError("saturated or oversized entry reached compression")
+
+    with _personal_prepared_frame_scope(
+        db_path=source,
+        snapshot_id=data_snapshot_id(source),
+    ) as frame:
+        monkeypatch.setattr(prepared_frame_module, "_canonical_json", forbidden_json)
+        monkeypatch.setattr(
+            prepared_frame_module.zlib,
+            "compress",
+            forbidden_compress,
+        )
+        frame._stats["cache_saturated"] = 1
+        frame.store_feature(
+            as_of="2024-01-05T15:30:00+09:00",
+            feature_id="example",
+            feature_version="1.0.0",
+            definition_digest="sha256:" + "1" * 64,
+            inputs={"code": "1301"},
+            value=1.0,
+            metadata={},
+        )
+        frame.store_price_rows(
+            as_of="2024-01-05T15:30:00+09:00",
+            from_event="2024-01-05",
+            to_event="2024-01-05",
+            codes=("1301",),
+            rows=({"code": "1301", "date": "2024-01-05"},),
+        )
+
+        frame._stats["cache_saturated"] = 0
+        monkeypatch.setattr(
+            prepared_frame_module,
+            "PERSONAL_PREPARED_FRAME_MAX_ENTRY_BYTES",
+            64,
+        )
+        frame.store_feature(
+            as_of="2024-01-05T15:30:00+09:00",
+            feature_id="example",
+            feature_version="1.0.0",
+            definition_digest="sha256:" + "1" * 64,
+            inputs={"code": "1301"},
+            value="x" * 256,
+            metadata={},
+        )
+        frame.store_price_rows(
+            as_of="2024-01-05T15:30:00+09:00",
+            from_event="2024-01-05",
+            to_event="2024-01-05",
+            codes=("1301",),
+            rows=({"code": "1301", "payload": "x" * 256},),
+        )
+        stats = frame.stats()
+
+    assert int(stats["feature_writes"]) == 0
+    assert int(stats["price_window_writes"]) == 0
+    assert int(stats["feature_uncacheable"]) == 1
+    assert int(stats["price_window_uncacheable"]) == 1
+
+
+@pytest.mark.parametrize("case", ("price", "fundamental", "long_short"))
+def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
+    personal_db: tuple[Path, str, str],
+    tmp_path: Path,
+    case: str,
+) -> None:
+    source, start, end = personal_db
+    universe, period = _prepared_frame_case(source, start, end)
+    spec = _prepared_frame_spec(case)
+    snapshot_id = data_snapshot_id(source)
+    common = {
+        "db_path": source,
+        "snapshot_id": snapshot_id,
+        "universe": universe,
+        "period": period,
+        "cost_bps": 10.0,
+        "lookback_days": 3,
+        "max_drawdown": 1.0,
+        "short_financing_annual_rate": (
+            PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE
+            if case == "long_short"
+            else None
+        ),
+    }
+    baseline = _run_one(
+        PersonalPaperExecutionService(),
+        spec,
+        output_root=tmp_path / f"{case}-uncached",
+        **common,
+    )[3]
+
+    with _personal_prepared_frame_scope(
+        db_path=source,
+        snapshot_id=snapshot_id,
+    ) as frame:
+        cache_path = frame.cache_path
+        first = _run_one(
+            PersonalPaperExecutionService(),
+            spec,
+            output_root=tmp_path / f"{case}-cached",
+            **common,
+        )[3]
+        replay = _run_one(
+            PersonalPaperExecutionService(),
+            spec,
+            output_root=tmp_path / f"{case}-replay",
+            **common,
+        )[3]
+        stats = frame.stats()
+
+    assert first == baseline
+    assert replay == baseline
+    assert int(stats["feature_hits"]) > 0
+    assert int(stats["price_window_hits"]) > 0
+    assert not cache_path.exists()
+
+
+def test_prepared_first_pass_stores_only_exact_session_bar_rows(
+    personal_db: tuple[Path, str, str],
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source, start, end = personal_db
+    universe, period = _prepared_frame_case(source, start, end)
+    spec = _prepared_frame_spec("price")
+    snapshot_id = data_snapshot_id(source)
+    real_get_bars = pit.get_equity_bars_daily
+    engine_reads: list[tuple[str, str, int]] = []
+
+    def tracked_get_bars(*args, **kwargs):
+        result = real_get_bars(*args, **kwargs)
+        codes = tuple(kwargs.get("codes") or ())
+        if len(codes) == 4:
+            engine_reads.append(
+                (
+                    str(kwargs.get("from_event")),
+                    str(kwargs.get("to_event")),
+                    len(result.rows),
+                )
+            )
+        return result
+
+    monkeypatch.setattr(pit, "get_equity_bars_daily", tracked_get_bars)
+    common = {
+        "db_path": source,
+        "snapshot_id": snapshot_id,
+        "universe": universe,
+        "period": period,
+        "cost_bps": 10.0,
+        "lookback_days": 536,
+        "max_drawdown": 1.0,
+    }
+    uncached = _run_one(
+        PersonalPaperExecutionService(),
+        spec,
+        output_root=tmp_path / "bar-shape-uncached",
+        **common,
+    )[3]
+    uncached_reads = tuple(engine_reads)
+    engine_reads.clear()
+
+    with _personal_prepared_frame_scope(
+        db_path=source,
+        snapshot_id=snapshot_id,
+    ) as frame:
+        prepared = _run_one(
+            PersonalPaperExecutionService(),
+            spec,
+            output_root=tmp_path / "bar-shape-prepared",
+            **common,
+        )[3]
+        prepared_reads = tuple(engine_reads)
+        stats = frame.stats()
+
+    assert prepared == uncached
+    assert uncached_reads
+    assert prepared_reads
+    assert any(from_event != to_event for from_event, to_event, _ in uncached_reads)
+    assert any(from_event == to_event for from_event, to_event, _ in prepared_reads)
+    # Full lookbacks are read only for fail-closed adjustment validation. They
+    # are represented by empty markers; the cache persists exact-session rows.
+    assert int(stats["price_rows_written"]) * 5 < sum(
+        rows for _, _, rows in uncached_reads
+    )
+    assert int(stats["price_rows_written"]) == 4 * len(
+        universe.decision_memberships
+    )
+    assert int(stats["price_window_writes"]) == len(prepared_reads)
+
+
+def test_prepared_frame_preserves_missing_reason_and_halves_pit_queries(
+    personal_db: tuple[Path, str, str],
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source, start, end = personal_db
+    universe, period = _prepared_frame_case(source, start, end)
+    spec = _prepared_frame_spec("price")
+    snapshot_id = data_snapshot_id(source)
+    real_run_query = pit_api_module.run_query
+    query_count = 0
+
+    def counted_run_query(*args, **kwargs):
+        nonlocal query_count
+        query_count += 1
+        return real_run_query(*args, **kwargs)
+
+    monkeypatch.setattr(pit_api_module, "run_query", counted_run_query)
+    with _personal_prepared_frame_scope(
+        db_path=source,
+        snapshot_id=snapshot_id,
+    ) as frame:
+        feature = _make_feature_accessor(
+            f"{period[1]}T15:30:00+09:00",
+            source,
+        )
+        missing_first = feature(
+            "pit_fundamental_ratio",
+            version="1.0.0",
+            code="1301",
+            mode="sales_growth",
+        )
+        missing_first.metadata["datasets"].append("caller-mutation")
+        missing_replay = feature(
+            "pit_fundamental_ratio",
+            version="1.0.0",
+            code="1301",
+            mode="sales_growth",
+        )
+        assert missing_first.value is None
+        assert missing_replay.value is None
+        assert "caller-mutation" not in missing_replay.metadata["datasets"]
+        assert missing_replay.metadata["reason"] == "no prior comparable statement"
+
+        before_first = query_count
+        _run_one(
+            PersonalPaperExecutionService(),
+            spec,
+            db_path=source,
+            snapshot_id=snapshot_id,
+            universe=universe,
+            period=period,
+            cost_bps=10.0,
+            lookback_days=3,
+            output_root=tmp_path / "query-count-first",
+            max_drawdown=1.0,
+        )
+        first_queries = query_count - before_first
+        before_replay = query_count
+        _run_one(
+            PersonalPaperExecutionService(),
+            spec,
+            db_path=source,
+            snapshot_id=snapshot_id,
+            universe=universe,
+            period=period,
+            cost_bps=10.0,
+            lookback_days=3,
+            output_root=tmp_path / "query-count-replay",
+            max_drawdown=1.0,
+        )
+        replay_queries = query_count - before_replay
+        stats = frame.stats()
+
+    assert replay_queries * 2 < first_queries
+    assert int(stats["source_feature_computations_avoided"]) > 0
+    assert int(stats["source_price_queries_avoided"]) > 0
+
+
+def test_prepared_frame_preserves_late_revision_fallback_and_departed_holding(
+    personal_db: tuple[Path, str, str],
+    tmp_path: Path,
+) -> None:
+    source, start, end = personal_db
+    universe, period = _prepared_frame_case(source, start, end)
+    sessions = tuple(day for day, _codes in universe.decision_memberships)
+    connection = sqlite3.connect(source)
+    connection.row_factory = sqlite3.Row
+    try:
+        # Current-session absence must retain the same prior-bar fallback.
+        connection.execute(
+            "DELETE FROM jquants_daily_bars WHERE code=? AND date=?",
+            ("1301", sessions[10]),
+        )
+        # A D bar disclosed only on D+1 is not visible at D's close.
+        late_available = f"{sessions[12]}T15:00:00+09:00"
+        connection.execute(
+            "UPDATE jquants_daily_bars SET available_at=?,ingested_at=? "
+            "WHERE code=? AND date=?",
+            (late_available, late_available, "1302", sessions[11]),
+        )
+        # Preserve the old D-visible version and add a later-visible revision.
+        original = connection.execute(
+            "SELECT * FROM jquants_daily_bars WHERE code=? AND date=?",
+            ("1303", sessions[5]),
+        ).fetchone()
+        assert original is not None
+        revised = dict(original)
+        revised_available = f"{sessions[13]}T15:00:00+09:00"
+        revised["available_at"] = revised_available
+        revised["ingested_at"] = revised_available
+        for field in ("open", "high", "low", "close", "adjustment_close"):
+            revised[field] = float(revised[field]) * 1.25
+        columns = tuple(revised)
+        connection.execute(
+            "INSERT INTO jquants_daily_bars_revisions ("
+            + ",".join(columns)
+            + ") VALUES ("
+            + ",".join("?" for _ in columns)
+            + ")",
+            tuple(revised[column] for column in columns),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    departed_universe = PersonalResolvedUniverseMembership(
+        period_start=period[0],
+        period_end=period[1],
+        decision_memberships=tuple(
+            (
+                day,
+                codes if day <= sessions[15] else tuple(c for c in codes if c != "1304"),
+            )
+            for day, codes in universe.decision_memberships
+        ),
+        rule_id=universe.rule_id,
+        rule_version=universe.rule_version,
+        rule_digest=universe.rule_digest,
+    )
+    snapshot_id = data_snapshot_id(source)
+    spec = build_multi_day_hold_strategy_spec(
+        strategy_id="personal_prepared_frame_departed_holding",
+        hold_days=1,
+        top_k=1,
+        min_score=-1.0,
+        momentum_n=3,
+        momentum_feature_id="retrospective_split_adjusted_momentum_n",
+        sticky=False,
+    )
+    common = {
+        "db_path": source,
+        "snapshot_id": snapshot_id,
+        "universe": departed_universe,
+        "period": period,
+        "cost_bps": 10.0,
+        "lookback_days": 3,
+        "max_drawdown": 1.0,
+        "short_financing_annual_rate": None,
+    }
+    baseline = _run_one(
+        PersonalPaperExecutionService(),
+        spec,
+        output_root=tmp_path / "adversarial-uncached",
+        **common,
+    )[3]
+    with _personal_prepared_frame_scope(
+        db_path=source,
+        snapshot_id=snapshot_id,
+    ) as frame:
+        prepared = _run_one(
+            PersonalPaperExecutionService(),
+            spec,
+            output_root=tmp_path / "adversarial-cached",
+            **common,
+        )[3]
+        replay = _run_one(
+            PersonalPaperExecutionService(),
+            spec,
+            output_root=tmp_path / "adversarial-replay",
+            **common,
+        )[3]
+        stats = frame.stats()
+
+    assert prepared == baseline
+    assert replay == baseline
+    assert int(stats["price_window_writes"]) > 0
+    assert int(stats["price_window_hits"]) > 0
+    assert any(
+        trade["code"] == "1304" and trade["side"] == "buy"
+        for trade in baseline.trades
+    )
+    assert baseline.equity_curve[-1]["positions_value"] > 0.0
+
+
+@pytest.mark.parametrize("bad_adjustment_close", (None, -1.0))
+def test_compact_path_matches_historical_adjustment_failure(
+    personal_db: tuple[Path, str, str],
+    tmp_path: Path,
+    bad_adjustment_close: float | None,
+) -> None:
+    source, start, end = personal_db
+    universe, _period = _prepared_frame_case(source, start, end)
+    sessions = tuple(day for day, _codes in universe.decision_memberships)
+    bad_day = sessions[2]
+    run_days = sessions[8:14]
+    connection = sqlite3.connect(source)
+    try:
+        connection.execute(
+            "UPDATE jquants_daily_bars SET adjustment_close=? "
+            "WHERE code=? AND date=?",
+            (bad_adjustment_close, "1301", bad_day),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    bounded_universe = PersonalResolvedUniverseMembership(
+        period_start=run_days[0],
+        period_end=run_days[-1],
+        decision_memberships=tuple(
+            (day, codes)
+            for day, codes in universe.decision_memberships
+            if day in run_days
+        ),
+        rule_id=universe.rule_id,
+        rule_version=universe.rule_version,
+        rule_digest=universe.rule_digest,
+    )
+    snapshot_id = data_snapshot_id(source)
+    common = {
+        "db_path": source,
+        "snapshot_id": snapshot_id,
+        "universe": bounded_universe,
+        "period": (run_days[0], run_days[-1]),
+        "cost_bps": 10.0,
+        "lookback_days": 536,
+        "max_drawdown": 1.0,
+    }
+    spec = _prepared_frame_spec("fundamental")
+    with pytest.raises(ValueError) as uncached_error:
+        _run_one(
+            PersonalPaperExecutionService(),
+            spec,
+            output_root=tmp_path / "invalid-adjustment-uncached",
+            **common,
+        )
+    with _personal_prepared_frame_scope(
+        db_path=source,
+        snapshot_id=snapshot_id,
+    ):
+        with pytest.raises(ValueError) as prepared_error:
+            _run_one(
+                PersonalPaperExecutionService(),
+                spec,
+                output_root=tmp_path / "invalid-adjustment-prepared",
+                **common,
+            )
+
+    assert str(prepared_error.value) == str(uncached_error.value)
+    assert bad_day in str(prepared_error.value)
+
+
+def test_compact_price_path_excludes_custom_and_same_day_strategies(
+    personal_db: tuple[Path, str, str],
+) -> None:
+    source, start, end = personal_db
+    universe, period = _prepared_frame_case(source, start, end)
+    snapshot_id = data_snapshot_id(source)
+
+    class InspectBars:
+        strategy_id = "inspect_full_bars"
+        params: dict = {}
+
+        def __init__(self) -> None:
+            self.observed: list[tuple[int, ...]] = []
+
+        def on_bar(self, ctx):
+            self.observed.append(
+                tuple(len(ctx.bars[code]) for code in sorted(ctx.universe))
+            )
+            return []
+
+    baseline_strategy = InspectBars()
+    baseline = run_backtest(
+        baseline_strategy,
+        period[0],
+        period[1],
+        db_path=source,
+        execution_mode="next_close",
+        universe=universe,
+        lookback_days=14,
+    )
+    prepared_strategy = InspectBars()
+    with _personal_prepared_frame_scope(
+        db_path=source,
+        snapshot_id=snapshot_id,
+    ) as frame:
+        prepared = run_backtest(
+            prepared_strategy,
+            period[0],
+            period[1],
+            db_path=source,
+            execution_mode="next_close",
+            universe=universe,
+            lookback_days=14,
+        )
+        custom_stats = frame.stats()
+    assert prepared == baseline
+    assert prepared_strategy.observed == baseline_strategy.observed
+    assert int(custom_stats["price_window_requests"]) == 0
+    assert max(max(counts) for counts in prepared_strategy.observed) > 1
+
+    spec = _prepared_frame_spec("price")
+    same_day_baseline = run_backtest(
+        interpret_strategy_spec(spec),
+        period[0],
+        period[1],
+        db_path=source,
+        execution_mode="same_day_close",
+        universe=universe,
+        lookback_days=14,
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+    )
+    with _personal_prepared_frame_scope(
+        db_path=source,
+        snapshot_id=snapshot_id,
+    ) as frame:
+        same_day_prepared = run_backtest(
+            interpret_strategy_spec(spec),
+            period[0],
+            period[1],
+            db_path=source,
+            execution_mode="same_day_close",
+            universe=universe,
+            lookback_days=14,
+            price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+        )
+        same_day_stats = frame.stats()
+    assert same_day_prepared == same_day_baseline
+    assert int(same_day_stats["price_window_requests"]) == 0
 
 
 def _install_managed_sync_evidence(source: Path, *, failing: str | None = None) -> None:
