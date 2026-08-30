@@ -11,6 +11,7 @@ import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
 import { PERSONAL_SVI_2023_RUNNER_VERSION } from "./personal_svi_2023_contract";
 import { PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION } from "./personal_index_vol_overlay_2023_contract";
 import { PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION } from "./personal_vol_am_pm_panel_writer_contract";
+import { PERSONAL_OPTION_SIDECAR_RUNNER_VERSION } from "./personal_option_sidecar_producer_contract";
 import type { Env } from "./types";
 
 const DIGEST_A = `sha256:${"a".repeat(64)}`;
@@ -148,6 +149,15 @@ describe("durable personal job state", () => {
         runnerVersion: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
       }).runner_version,
     ).toBe("personal-cloud-runner/v13");
+    expect(
+      submittedStateDocument({
+        jobId: "sidecar-one",
+        requestDigest: DIGEST_A,
+        kind: "option-sidecar",
+        deploymentId: "deploy-1",
+        runnerVersion: PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
+      }).runner_version,
+    ).toBe("personal-cloud-runner/v13");
   });
 
   it("conflicts when the same job id carries a different request digest", async () => {
@@ -229,6 +239,38 @@ describe("durable personal job state", () => {
         schema_version: "personal-vol-ratio-am-pm-panel-writer-manifest/v1",
         producer_id: "personal-vol-ratio-am-pm-panel-writer/v1",
         kind: "vol-panel",
+      },
+    });
+  });
+
+  it("finalizes an expired option-sidecar marker to the producer FAILED schema", async () => {
+    const mem = new MemoryR2();
+    const env = mem.asEnv();
+    env.PERSONAL_RESEARCH_CONTAINER = {
+      getByName: vi.fn(),
+    } as unknown as Env["PERSONAL_RESEARCH_CONTAINER"];
+    mem.seed(personalJobStateKey("option-sidecar", "job-expired-sidecar"), {
+      job_id: "job-expired-sidecar",
+      request_digest: DIGEST_A,
+      kind: "option-sidecar",
+      status: "SUBMITTED",
+      submitted_at: "2026-08-30T00:00:00.000Z",
+      expires_at: "2026-08-30T00:01:00.000Z",
+      runner_version: "personal-cloud-runner/v13",
+      deployment_id: "deploy-1",
+    });
+    const response = await durablePersonalJobStatus(
+      env,
+      "option-sidecar",
+      "job-expired-sidecar",
+      new Date("2026-08-30T03:01:00.000Z"),
+    );
+    expect(await response.json()).toMatchObject({
+      job: {
+        status: "FAILED",
+        schema_version: "personal-n225-option-sidecar-manifest/v1",
+        producer_id: "personal-n225-option-sidecar-producer/v1",
+        kind: "option-sidecar",
       },
     });
   });

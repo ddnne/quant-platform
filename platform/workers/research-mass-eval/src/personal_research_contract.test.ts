@@ -47,6 +47,12 @@ describe("personal research request contract", () => {
     expect(await personalJobContainerName("vol-panel", VALID.job_id)).not.toBe(
       await personalJobContainerName("svi", VALID.job_id),
     );
+    expect(await personalJobContainerName("option-sidecar", VALID.job_id)).toMatch(
+      /^personal-v13-option-sidecar-[0-9a-f]{24}$/,
+    );
+    expect(await personalJobContainerName("option-sidecar", VALID.job_id)).not.toBe(
+      await personalJobContainerName("vol-panel", VALID.job_id),
+    );
   });
 
   it("accepts one content-addressed bounded exact-four request", async () => {

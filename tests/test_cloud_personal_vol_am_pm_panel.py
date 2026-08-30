@@ -224,14 +224,15 @@ def _input_manifest(store: dict[str, bytes], dates: list[str]) -> dict[str, Any]
         )
         store[lock["snapshot"]["key"]] = compressed
         periods[period["period_id"]] = lock
-        key = f"research/mass_eval/panels_cache/527c1065afe14601/panels/{period['period_id']}.json"
+        digest = _digest(sidecar_bytes)
+        key = f"research/personal/option-sidecar/objects/{digest}.json"
         store[key] = sidecar_bytes
         sidecars[period["period_id"]] = {
             "period_id": period["period_id"],
             "source_key": key,
             "etag": "side",
             "size": len(sidecar_bytes),
-            "sha256": _digest(sidecar_bytes),
+            "sha256": digest,
         }
     return {
         "schema_version": job.INPUT_SCHEMA,
@@ -243,6 +244,15 @@ def _input_manifest(store: dict[str, bytes], dates: list[str]) -> dict[str, Any]
         "required_lookback_sessions": 61,
         "selection": selection,
         "periods": periods,
+        "sidecar_producer": {
+            "job_id": "sidecar-one",
+            "terminal": {
+                "key": "research/personal/option-sidecar/job=sidecar-one/manifest.json",
+                "etag": "term",
+                "size": 8,
+                "sha256": _digest(b"term"),
+            },
+        },
         "option_sidecars": sidecars,
     }
 

@@ -4,7 +4,7 @@ interface __BaseEnv_Env {
 	STRUCTURED_BUCKET: R2Bucket;
 	CF_VERSION_METADATA: WorkerVersionMetadata;
 	ENVIRONMENT: "production";
-	MASS_EVAL_VERSION: "research-mass-eval/v149-am-pm-panels";
+	MASS_EVAL_VERSION: "research-mass-eval/v150-option-sidecar";
 	MASS_EVAL_WAVE: "research-mass-eval";
 	MASS_RESEARCH: "NO-GO";
 	PHASE7: "OFF";
@@ -26,7 +26,7 @@ declare namespace Cloudflare {
 		STRUCTURED_BUCKET: R2Bucket;
 		CF_VERSION_METADATA: WorkerVersionMetadata;
 		ENVIRONMENT: "production";
-		MASS_EVAL_VERSION: "research-mass-eval/v149-am-pm-panels";
+		MASS_EVAL_VERSION: "research-mass-eval/v150-option-sidecar";
 		MASS_EVAL_WAVE: "research-mass-eval";
 		MASS_RESEARCH: "NO-GO";
 		PHASE7: "OFF";

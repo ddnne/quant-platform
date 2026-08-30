@@ -1,27 +1,27 @@
 import { putBytesCreateOnly } from "./http";
 import {
-  PERSONAL_VOL_AM_PM_EVALUATION_PERIODS,
-  PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
-  PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_INPUT_BYTES,
-  PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES,
-  PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES,
-  PERSONAL_VOL_AM_PM_PANEL_BUILD_TERMINAL_MAX_BYTES,
-  PERSONAL_VOL_AM_PM_PANEL_WRITER_INPUT_SCHEMA,
-  PERSONAL_VOL_AM_PM_PANEL_WRITER_KIND,
-  PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA,
-  PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
-  PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
-  isPersonalVolAmPmPanelDigest,
-  personalVolAmPmPanelBuildInputKey,
-  personalVolAmPmPanelBuildTerminalKey,
-  personalVolAmPmPanelObjectKey,
-  type PersonalVolAmPmPanelWriterInputManifest,
-} from "./personal_vol_am_pm_panel_writer_contract";
-import { PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION } from "./personal_vol_am_pm_panel";
-import {
-  isPersonalResearchJobId,
-  isPersonalResearchSnapshotKey,
-} from "./personal_research_contract";
+  PERSONAL_OPTION_SIDECAR_COHORT_ID,
+  PERSONAL_OPTION_SIDECAR_INPUT_SCHEMA,
+  PERSONAL_OPTION_SIDECAR_KIND,
+  PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA,
+  PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_OBJECT_BYTES,
+  PERSONAL_OPTION_SIDECAR_MAX_INPUT_BYTES,
+  PERSONAL_OPTION_SIDECAR_MAX_OBJECT_BYTES,
+  PERSONAL_OPTION_SIDECAR_MAX_OUTPUT_BYTES,
+  PERSONAL_OPTION_SIDECAR_PERIODS,
+  PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
+  PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
+  PERSONAL_OPTION_SIDECAR_TERMINAL_MAX_BYTES,
+  calendarDayFromKey,
+  isPersonalOptionSidecarDigest,
+  optionsDayFromKey,
+  personalOptionSidecarInputKey,
+  personalOptionSidecarObjectKey,
+  personalOptionSidecarTerminalKey,
+  type PersonalOptionSidecarInputManifest,
+  type StructuredObjectRef,
+} from "./personal_option_sidecar_producer_contract";
+import { isPersonalResearchJobId } from "./personal_research_contract";
 import { sha256Hex } from "./sha256";
 
 type R2Env = { STRUCTURED_BUCKET: R2Bucket };
@@ -43,13 +43,14 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function identity(request: Request): Identity | null {
-  const jobId = request.headers.get("x-vol-panel-job-id") ?? "";
-  const inputKey = request.headers.get("x-vol-panel-input-manifest-key") ?? "";
-  const inputDigest = request.headers.get("x-vol-panel-input-manifest-digest") ?? "";
+  const jobId = request.headers.get("x-option-sidecar-job-id") ?? "";
+  const inputKey = request.headers.get("x-option-sidecar-input-manifest-key") ?? "";
+  const inputDigest =
+    request.headers.get("x-option-sidecar-input-manifest-digest") ?? "";
   if (
     !isPersonalResearchJobId(jobId) ||
-    inputKey !== personalVolAmPmPanelBuildInputKey(jobId) ||
-    !isPersonalVolAmPmPanelDigest(inputDigest)
+    inputKey !== personalOptionSidecarInputKey(jobId) ||
+    !isPersonalOptionSidecarDigest(inputDigest)
   ) {
     return null;
   }
@@ -94,16 +95,22 @@ function headMatches(object: R2Object, digest: string, size?: number): boolean {
 }
 
 function listedRef(
-  manifest: PersonalVolAmPmPanelWriterInputManifest,
+  manifest: PersonalOptionSidecarInputManifest,
   key: string,
-): { etag: string; size: number } | null {
-  if (key.startsWith("research/mass_eval/panels_cache/")) return null;
-  if (key === manifest.selection.snapshot.key) return manifest.selection.snapshot;
-  for (const period of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS) {
+): StructuredObjectRef | null {
+  const optionsDay = optionsDayFromKey(key);
+  const calendarDay = calendarDayFromKey(key);
+  for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
     const locked = manifest.periods[period.period_id];
-    const sidecar = manifest.option_sidecars[period.period_id];
-    if (key === locked.snapshot.key) return locked.snapshot;
-    if (key === sidecar.source_key) return { etag: sidecar.etag, size: sidecar.size };
+    const days = optionsDay
+      ? locked.options
+      : calendarDay
+        ? locked.calendar
+        : [];
+    const day = optionsDay ?? calendarDay;
+    const entry = days.find((candidate) => candidate.date === day);
+    const found = entry?.objects.find((object) => object.key === key);
+    if (found) return found;
   }
   return null;
 }
@@ -111,31 +118,27 @@ function listedRef(
 function inputShape(
   parsed: unknown,
   expected: Identity,
-): parsed is PersonalVolAmPmPanelWriterInputManifest {
+): parsed is PersonalOptionSidecarInputManifest {
   return (
     isObject(parsed) &&
-    parsed.schema_version === PERSONAL_VOL_AM_PM_PANEL_WRITER_INPUT_SCHEMA &&
-    parsed.producer_id === PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID &&
+    parsed.schema_version === PERSONAL_OPTION_SIDECAR_INPUT_SCHEMA &&
+    parsed.producer_id === PERSONAL_OPTION_SIDECAR_PRODUCER_ID &&
     parsed.job_id === expected.jobId &&
-    parsed.cohort_id === PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID &&
-    parsed.runner_version === PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION &&
-    parsed.panel_schema === PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION &&
-    isObject(parsed.selection) &&
-    isObject(parsed.periods) &&
-    isObject(parsed.sidecar_producer) &&
-    isObject(parsed.option_sidecars)
+    parsed.cohort_id === PERSONAL_OPTION_SIDECAR_COHORT_ID &&
+    parsed.runner_version === PERSONAL_OPTION_SIDECAR_RUNNER_VERSION &&
+    isObject(parsed.periods)
   );
 }
 
 async function readInput(
   env: R2Env,
   expected: Identity,
-): Promise<{ manifest: PersonalVolAmPmPanelWriterInputManifest; bytes: Uint8Array } | null> {
+): Promise<{ manifest: PersonalOptionSidecarInputManifest; bytes: Uint8Array } | null> {
   const object = await env.STRUCTURED_BUCKET.get(expected.inputKey);
   if (
     !object ||
     object.size < 1 ||
-    object.size > PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_INPUT_BYTES
+    object.size > PERSONAL_OPTION_SIDECAR_MAX_INPUT_BYTES
   ) {
     return null;
   }
@@ -157,7 +160,7 @@ async function getInput(
   expected: Identity,
 ): Promise<Response> {
   const loaded = await readInput(env, expected);
-  if (!loaded) return json({ error: "vol panel input manifest denied" }, 403);
+  if (!loaded) return json({ error: "option sidecar input manifest denied" }, 403);
   if (key === expected.inputKey) {
     return new Response(loaded.bytes, {
       status: 200,
@@ -169,19 +172,21 @@ async function getInput(
     });
   }
   const reference = listedRef(loaded.manifest, key);
-  if (!reference) return json({ error: "vol panel input key not listed" }, 403);
-  const maximum = isPersonalResearchSnapshotKey(key)
-    ? 4 * 1024 * 1024 * 1024
-    : PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES;
+  if (!reference) return json({ error: "option sidecar input key not listed" }, 403);
+  const maximum = calendarDayFromKey(key)
+    ? PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_OBJECT_BYTES
+    : PERSONAL_OPTION_SIDECAR_MAX_OBJECT_BYTES;
   const object =
     request.method === "HEAD"
       ? await env.STRUCTURED_BUCKET.head(key)
       : await env.STRUCTURED_BUCKET.get(key);
-  if (!object) return json({ error: "vol panel input missing" }, 404);
+  if (!object) return json({ error: "option sidecar input missing" }, 404);
   if (object.etag !== reference.etag || object.size !== reference.size) {
-    return json({ error: "vol panel input changed after admission" }, 409);
+    return json({ error: "option sidecar input changed after admission" }, 409);
   }
-  if (object.size > maximum) return json({ error: "vol panel input size denied" }, 403);
+  if (object.size > maximum) {
+    return json({ error: "option sidecar input size denied" }, 403);
+  }
   if (request.method === "HEAD") {
     return new Response(null, {
       status: 200,
@@ -194,6 +199,7 @@ async function getInput(
   const headers = new Headers({
     "content-length": String(object.size),
     etag: object.httpEtag,
+    "x-listed-sha256": reference.sha256,
   });
   object.writeHttpMetadata(headers);
   return new Response((object as R2ObjectBody).body, { status: 200, headers });
@@ -204,15 +210,15 @@ function outputKind(
   jobId: string,
   digest: string,
 ): "object" | "manifest" | null {
-  if (key === personalVolAmPmPanelBuildTerminalKey(jobId)) return "manifest";
-  if (key === personalVolAmPmPanelObjectKey(digest)) return "object";
+  if (key === personalOptionSidecarTerminalKey(jobId)) return "manifest";
+  if (key === personalOptionSidecarObjectKey(digest)) return "object";
   return null;
 }
 
 function authority(document: Record<string, unknown>): boolean {
   return (
-    document.producer_id === PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID &&
-    document.cohort_id === PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID &&
+    document.producer_id === PERSONAL_OPTION_SIDECAR_PRODUCER_ID &&
+    document.cohort_id === PERSONAL_OPTION_SIDECAR_COHORT_ID &&
     document.go === false
   );
 }
@@ -221,28 +227,26 @@ async function completedChildrenMatch(
   env: R2Env,
   parsed: Record<string, unknown>,
 ): Promise<boolean> {
-  if (!isObject(parsed.periods) || !isObject(parsed.membership)) return false;
-  const codes = parsed.membership.codes;
-  if (!Array.isArray(codes) || codes.length < 1) return false;
-  for (const period of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS) {
-    const row = parsed.periods[period.period_id];
+  if (!isObject(parsed.sidecars)) return false;
+  for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+    const row = parsed.sidecars[period.period_id];
     if (!isObject(row)) return false;
-    const panelDigest = row.panel_sha256;
-    const panelSize = row.panel_size;
+    const digest = row.sha256;
+    const size = row.size;
     if (
-      typeof panelDigest !== "string" ||
-      !isPersonalVolAmPmPanelDigest(panelDigest) ||
-      typeof panelSize !== "number" ||
-      !Number.isInteger(panelSize) ||
-      panelSize < 1 ||
-      row.panel_key !== personalVolAmPmPanelObjectKey(panelDigest)
+      typeof digest !== "string" ||
+      !isPersonalOptionSidecarDigest(digest) ||
+      typeof size !== "number" ||
+      !Number.isInteger(size) ||
+      size < 1 ||
+      row.key !== personalOptionSidecarObjectKey(digest)
     ) {
       return false;
     }
     const head = await env.STRUCTURED_BUCKET.head(
-      personalVolAmPmPanelObjectKey(panelDigest),
+      personalOptionSidecarObjectKey(digest),
     );
-    if (!head || !headMatches(head, panelDigest, panelSize)) return false;
+    if (!head || !headMatches(head, digest, size)) return false;
   }
   return true;
 }
@@ -254,88 +258,88 @@ async function putOutput(
   expected: Identity,
 ): Promise<Response> {
   const digest = request.headers.get("x-content-sha256") ?? "";
-  if (!isPersonalVolAmPmPanelDigest(digest)) {
-    return json({ error: "vol panel output digest denied" }, 403);
+  if (!isPersonalOptionSidecarDigest(digest)) {
+    return json({ error: "option sidecar output digest denied" }, 403);
   }
   const kind = outputKind(key, expected.jobId, digest);
-  if (!kind) return json({ error: "vol panel output key denied" }, 403);
+  if (!kind) return json({ error: "option sidecar output key denied" }, 403);
   const maximum =
     kind === "manifest"
-      ? PERSONAL_VOL_AM_PM_PANEL_BUILD_TERMINAL_MAX_BYTES
-      : PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES;
+      ? PERSONAL_OPTION_SIDECAR_TERMINAL_MAX_BYTES
+      : PERSONAL_OPTION_SIDECAR_MAX_OUTPUT_BYTES;
   const length = contentLength(request, maximum);
   if (length === null || request.body === null) {
-    return json({ error: "vol panel output length denied" }, 400);
+    return json({ error: "option sidecar output length denied" }, 400);
   }
   const input = await readInput(env, expected);
-  if (!input) return json({ error: "vol panel input manifest denied" }, 403);
-  const terminalKey = personalVolAmPmPanelBuildTerminalKey(expected.jobId);
-  if (kind !== "manifest") {
-    if (await env.STRUCTURED_BUCKET.head(terminalKey)) {
-      return json({ error: "vol panel child after terminal" }, 409);
-    }
+  if (!input) return json({ error: "option sidecar input manifest denied" }, 403);
+  const terminalKey = personalOptionSidecarTerminalKey(expected.jobId);
+  if (kind !== "manifest" && (await env.STRUCTURED_BUCKET.head(terminalKey))) {
+    return json({ error: "option sidecar child after terminal" }, 409);
   }
   if (kind === "manifest") {
     const bytes = new Uint8Array(await request.arrayBuffer());
     if (bytes.byteLength !== length || `sha256:${await sha256Hex(bytes)}` !== digest) {
-      return json({ error: "vol panel output bytes mismatch" }, 400);
+      return json({ error: "option sidecar output bytes mismatch" }, 400);
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(new TextDecoder().decode(bytes));
     } catch {
-      return json({ error: "vol panel output must be JSON" }, 400);
+      return json({ error: "option sidecar output must be JSON" }, 400);
     }
-    if (!isObject(parsed)) return json({ error: "vol panel output must be JSON" }, 400);
+    if (!isObject(parsed)) {
+      return json({ error: "option sidecar output must be JSON" }, 400);
+    }
     if (
-      parsed.schema_version !== PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA ||
+      parsed.schema_version !== PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA ||
       parsed.job_id !== expected.jobId ||
       parsed.input_manifest_digest !== expected.inputDigest ||
-      parsed.kind !== PERSONAL_VOL_AM_PM_PANEL_WRITER_KIND ||
-      parsed.runner_version !== PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION ||
+      parsed.kind !== PERSONAL_OPTION_SIDECAR_KIND ||
+      parsed.runner_version !== PERSONAL_OPTION_SIDECAR_RUNNER_VERSION ||
       !authority(parsed) ||
       (parsed.status !== "COMPLETED" && parsed.status !== "FAILED")
     ) {
-      return json({ error: "vol panel manifest contract mismatch" }, 400);
+      return json({ error: "option sidecar manifest contract mismatch" }, 400);
     }
     if (
       parsed.status === "COMPLETED" &&
       !(await completedChildrenMatch(env, parsed))
     ) {
-      return json({ error: "vol panel manifest children mismatch" }, 409);
+      return json({ error: "option sidecar manifest children mismatch" }, 409);
     }
     const existing = await env.STRUCTURED_BUCKET.head(key);
     if (existing) {
       return headMatches(existing, digest, length)
         ? json({ ok: true, created: false, key })
-        : json({ error: "immutable vol panel output conflict" }, 409);
+        : json({ error: "immutable option sidecar output conflict" }, 409);
     }
     const stored = await putBytesCreateOnly(env.STRUCTURED_BUCKET, key, bytes, {
       digest,
       contentType: "application/json; charset=utf-8",
       customMetadata: {
-        plane: "personal_vol_am_pm_panel_writer",
+        plane: "personal_option_sidecar_producer",
         kind,
         job_id: expected.jobId,
         input_manifest_digest: expected.inputDigest,
       },
     });
     return stored.conflict
-      ? json({ error: "immutable vol panel output conflict" }, 409)
+      ? json({ error: "immutable option sidecar output conflict" }, 409)
       : json({ ok: true, created: stored.created, key }, stored.created ? 201 : 200);
   }
   const existing = await env.STRUCTURED_BUCKET.head(key);
   if (existing) {
     return headMatches(existing, digest, length)
       ? json({ ok: true, created: false, key })
-      : json({ error: "immutable vol panel output conflict" }, 409);
+      : json({ error: "immutable option sidecar output conflict" }, 409);
   }
   let put: R2Object | null;
   try {
     put = await env.STRUCTURED_BUCKET.put(key, request.body, {
       httpMetadata: { contentType: "application/json; charset=utf-8" },
       customMetadata: {
-        plane: "personal_vol_am_pm_panel_writer",
+        plane: "personal_option_sidecar_producer",
         kind,
         job_id: expected.jobId,
         input_manifest_digest: expected.inputDigest,
@@ -346,46 +350,42 @@ async function putOutput(
       onlyIf: { etagDoesNotMatch: "*" },
     });
   } catch {
-    return json({ error: "vol panel output checksum rejected" }, 400);
+    return json({ error: "option sidecar output checksum rejected" }, 400);
   }
   if (put !== null) {
-    // Cheap diagnostic only: do not delete the shared content-addressed
-    // object. A FAILED terminal racing this PUT can leave an unreferenced
-    // orphan; consumers read only COMPLETED terminal child refs.
     if (await env.STRUCTURED_BUCKET.head(terminalKey)) {
-      return json({ error: "vol panel child after terminal" }, 409);
+      return json({ error: "option sidecar child after terminal" }, 409);
     }
     return json({ ok: true, created: true, key }, 201);
   }
   const raced = await env.STRUCTURED_BUCKET.head(key);
   return raced && headMatches(raced, digest, length)
     ? json({ ok: true, created: false, key })
-    : json({ error: "immutable vol panel output conflict" }, 409);
+    : json({ error: "immutable option sidecar output conflict" }, 409);
 }
 
-export function isPersonalVolAmPmPanelOutboundRequest(
+export function isPersonalOptionSidecarOutboundRequest(
   request: Request,
   key: string,
 ): boolean {
   return (
-    request.headers.has("x-vol-panel-job-id") ||
-    key.startsWith("research/personal/vol-ratio-am-pm-v1/panel-builds/") ||
-    key.startsWith("research/personal/vol-ratio-am-pm-v1/objects/")
+    request.headers.has("x-option-sidecar-job-id") ||
+    key.startsWith("research/personal/option-sidecar/")
   );
 }
 
-export async function personalVolAmPmPanelR2Outbound(
+export async function personalOptionSidecarR2Outbound(
   request: Request,
   env: R2Env,
   key: string,
 ): Promise<Response> {
   const expected = identity(request);
-  if (!expected) return json({ error: "vol panel R2 identity denied" }, 403);
+  if (!expected) return json({ error: "option sidecar R2 identity denied" }, 403);
   if (request.method === "GET" || request.method === "HEAD") {
     return getInput(request, env, key, expected);
   }
   if (request.method === "PUT") {
     return putOutput(request, env, key, expected);
   }
-  return json({ error: "vol panel R2 method denied" }, 403);
+  return json({ error: "option sidecar R2 method denied" }, 403);
 }

@@ -38,6 +38,10 @@ import {
   submitPersonalVolAmPmPanelBuild,
 } from "./personal_vol_am_pm_panel_writer";
 import {
+  personalOptionSidecarProduceStatus,
+  submitPersonalOptionSidecarProduce,
+} from "./personal_option_sidecar_producer";
+import {
   personalSvi2023Status,
   submitPersonalSvi2023,
 } from "./personal_svi_2023";
@@ -356,6 +360,8 @@ export default {
       personalSnapshotBuildStatus,
       submitPersonalVolAmPmPanelBuild,
       personalVolAmPmPanelBuildStatus,
+      submitPersonalOptionSidecarProduce,
+      personalOptionSidecarProduceStatus,
       submitPersonalResearchJobs: async (
         env: Env,
         requests: PersonalResearchRequest[],

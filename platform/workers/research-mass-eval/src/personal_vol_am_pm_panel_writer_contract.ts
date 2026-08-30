@@ -62,6 +62,8 @@ export type PersonalVolAmPmPanelBuildRequest = {
   job_id: string;
   selection_snapshot_job_id: string;
   period_snapshot_job_ids: Record<PersonalVolAmPmEvaluationPeriodId, string>;
+  sidecar_producer_job_id: string;
+  sidecar_producer_terminal_digest?: string;
 };
 
 export type ImmutableObjectRef = {
@@ -105,6 +107,10 @@ export type PersonalVolAmPmPanelWriterInputManifest = {
   required_lookback_sessions: typeof PERSONAL_VOL_AM_PM_REQUIRED_LOOKBACK_SESSIONS;
   selection: SnapshotInputLock;
   periods: Record<PersonalVolAmPmEvaluationPeriodId, SnapshotInputLock>;
+  sidecar_producer: {
+    job_id: string;
+    terminal: ImmutableObjectRef;
+  };
   option_sidecars: Record<PersonalVolAmPmEvaluationPeriodId, OptionSidecarLock>;
 };
 
@@ -205,6 +211,8 @@ export function parsePersonalVolAmPmPanelBuildRequest(
     "job_id",
     "selection_snapshot_job_id",
     "period_snapshot_job_ids",
+    "sidecar_producer_job_id",
+    "sidecar_producer_terminal_digest",
   ]);
   const unknown = Object.keys(body).filter((key) => !allowed.has(key));
   if (unknown.length) {
@@ -253,12 +261,42 @@ export function parsePersonalVolAmPmPanelBuildRequest(
     seen.add(value);
     period_snapshot_job_ids[period.period_id] = value;
   }
+  const sidecarJobId =
+    typeof body.sidecar_producer_job_id === "string"
+      ? body.sidecar_producer_job_id
+      : "";
+  if (!isPersonalResearchJobId(sidecarJobId)) {
+    return { ok: false, error: "sidecar_producer_job_id is invalid" };
+  }
+  if (seen.has(sidecarJobId)) {
+    return {
+      ok: false,
+      error: "sidecar producer job id must be a distinct immutable identity",
+    };
+  }
+  let sidecar_producer_terminal_digest: string | undefined;
+  if (body.sidecar_producer_terminal_digest !== undefined) {
+    if (
+      typeof body.sidecar_producer_terminal_digest !== "string" ||
+      !DIGEST_RE.test(body.sidecar_producer_terminal_digest)
+    ) {
+      return {
+        ok: false,
+        error: "sidecar_producer_terminal_digest is invalid",
+      };
+    }
+    sidecar_producer_terminal_digest = body.sidecar_producer_terminal_digest;
+  }
   return {
     ok: true,
     value: {
       job_id: jobId,
       selection_snapshot_job_id: selectionId,
       period_snapshot_job_ids,
+      sidecar_producer_job_id: sidecarJobId,
+      ...(sidecar_producer_terminal_digest
+        ? { sidecar_producer_terminal_digest }
+        : {}),
     },
   };
 }
@@ -323,7 +361,9 @@ export function inputManifestMatchesRequest(
     parsed.cohort_id !== PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID ||
     parsed.runner_version !== PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION ||
     parsed.panel_schema !== PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION ||
-    parsed.selection.job_id !== request.selection_snapshot_job_id
+    parsed.selection.job_id !== request.selection_snapshot_job_id ||
+    !isObject(parsed.sidecar_producer) ||
+    parsed.sidecar_producer.job_id !== request.sidecar_producer_job_id
   ) {
     return false;
   }
@@ -354,5 +394,12 @@ export async function personalVolAmPmPanelBuildRequestDigest(
     producer_id: PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
     runner_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
     selection_snapshot_job_id: request.selection_snapshot_job_id,
+    sidecar_producer_job_id: request.sidecar_producer_job_id,
+    ...(request.sidecar_producer_terminal_digest
+      ? {
+          sidecar_producer_terminal_digest:
+            request.sidecar_producer_terminal_digest,
+        }
+      : {}),
   });
 }

@@ -12,7 +12,8 @@ export type PersonalContainerKind =
   | "svi"
   | "overlay"
   | "snapshot"
-  | "vol-panel";
+  | "vol-panel"
+  | "option-sidecar";
 export const PERSONAL_RESEARCH_LEGACY_COHORT_IDS = [
   "price-relative-v1",
   "fundamental-relative-v1",

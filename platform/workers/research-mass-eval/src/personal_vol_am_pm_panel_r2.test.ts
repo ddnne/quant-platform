@@ -15,6 +15,7 @@ import {
   personalVolAmPmPanelObjectKey,
   type PersonalVolAmPmPanelWriterInputManifest,
 } from "./personal_vol_am_pm_panel_writer_contract";
+import { personalOptionSidecarObjectKey } from "./personal_option_sidecar_producer_contract";
 import { personalVolAmPmPanelR2Outbound } from "./personal_vol_am_pm_panel_r2";
 import { sha256Hex } from "./sha256";
 
@@ -126,11 +127,12 @@ class MemoryR2 {
 }
 
 const JOB_ID = "vol-panel-r2";
-const sidecarKey = "research/mass_eval/panels_cache/527c1065afe14601/panels/y2021_full.json";
 
 function digestDigit(digit: string): `sha256:${string}` {
   return `sha256:${digit.repeat(64)}`;
 }
+
+const sidecarKey = personalOptionSidecarObjectKey(digestDigit("9"));
 
 function snapshotLock(jobId: string, digit: string, periodId: string, start: string, end: string) {
   const snapshotKey = `research/personal/snapshots/sha256=${digit.repeat(64)}.sqlite.gz`;
@@ -172,6 +174,15 @@ async function fixture() {
       y2023_full: snapshotLock("snap-2023", "4", "y2023_full", "2023-01-04", "2023-10-13"),
       y2025_q4: snapshotLock("snap-2025", "5", "y2025_q4", "2025-09-01", "2025-12-29"),
     },
+    sidecar_producer: {
+      job_id: "sidecar-one",
+      terminal: {
+        key: "research/personal/option-sidecar/job=sidecar-one/manifest.json",
+        etag: "term-1",
+        size: 8,
+        sha256: digestDigit("8"),
+      },
+    },
     option_sidecars: {
       y2021_full: {
         period_id: "y2021_full",
@@ -182,17 +193,17 @@ async function fixture() {
       },
       y2023_full: {
         period_id: "y2023_full",
-        source_key: sidecarKey.replace("y2021_full", "y2023_full"),
+        source_key: personalOptionSidecarObjectKey(digestDigit("a")),
         etag: "side-2",
         size: 4,
-        sha256: digestDigit("9"),
+        sha256: digestDigit("a"),
       },
       y2025_q4: {
         period_id: "y2025_q4",
-        source_key: sidecarKey.replace("y2021_full", "y2025_q4"),
+        source_key: personalOptionSidecarObjectKey(digestDigit("b")),
         etag: "side-3",
         size: 4,
-        sha256: digestDigit("9"),
+        sha256: digestDigit("b"),
       },
     },
   };

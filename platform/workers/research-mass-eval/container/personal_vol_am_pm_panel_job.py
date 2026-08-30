@@ -230,19 +230,21 @@ def _request_digest_from_manifest(spec: PersonalVolAmPmPanelJobSpec, manifest: M
         row["period_id"]: periods[row["period_id"]]["job_id"]
         for row in EVALUATION_PERIODS
     }
-    return _sha256(
-        _canonical_bytes(
-            {
-                "input_manifest_digest": spec.input_manifest_digest,
-                "input_manifest_key": spec.input_manifest_key,
-                "job_id": spec.job_id,
-                "period_snapshot_job_ids": period_ids,
-                "producer_id": PRODUCER_ID,
-                "runner_version": RUNNER_VERSION,
-                "selection_snapshot_job_id": selection["job_id"],
-            }
-        )
+    producer = manifest.get("sidecar_producer")
+    producer_job_id = (
+        producer.get("job_id") if isinstance(producer, Mapping) else None
     )
+    payload: dict[str, Any] = {
+        "input_manifest_digest": spec.input_manifest_digest,
+        "input_manifest_key": spec.input_manifest_key,
+        "job_id": spec.job_id,
+        "period_snapshot_job_ids": period_ids,
+        "producer_id": PRODUCER_ID,
+        "runner_version": RUNNER_VERSION,
+        "selection_snapshot_job_id": selection["job_id"],
+        "sidecar_producer_job_id": producer_job_id,
+    }
+    return _sha256(_canonical_bytes(payload))
 
 
 def _open_input(spec: PersonalVolAmPmPanelJobSpec, key: str, *, timeout: float = 120):
@@ -752,6 +754,8 @@ def load_input_manifest(
         or not isinstance(parsed.get("selection"), dict)
         or not isinstance(parsed.get("periods"), dict)
         or not isinstance(parsed.get("option_sidecars"), dict)
+        or not isinstance(parsed.get("sidecar_producer"), dict)
+        or not parsed["sidecar_producer"].get("job_id")
     ):
         raise RuntimeError("input manifest identity mismatch")
     if spec.request_digest != _request_digest_from_manifest(spec, parsed):

@@ -10,11 +10,22 @@ import {
   personalResearchManifestKey,
 } from "./personal_research_contract";
 import { personalSnapshotManifestKey } from "./personal_snapshot_contract";
+import {
+  PERSONAL_OPTION_SIDECAR_KIND,
+  PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
+  personalOptionSidecarTerminalKey,
+} from "./personal_option_sidecar_producer_contract";
 import { personalVolAmPmPanelBuildTerminalKey } from "./personal_vol_am_pm_panel_writer_contract";
 import { sha256Hex } from "./sha256";
 import type { Env } from "./types";
 
-export type PersonalJobKind = "research" | "snapshot" | "svi" | "overlay" | "vol-panel";
+export type PersonalJobKind =
+  | "research"
+  | "snapshot"
+  | "svi"
+  | "overlay"
+  | "vol-panel"
+  | "option-sidecar";
 
 export const PERSONAL_JOB_TTL_MS = 180 * 60 * 1000;
 const STATE_MAX_BYTES = 8 * 1024;
@@ -54,6 +65,9 @@ export function personalJobStateKey(kind: PersonalJobKind, jobId: string): strin
   if (kind === "vol-panel") {
     return `research/personal/vol-ratio-am-pm-v1/panel-builds/job=${jobId}/state.json`;
   }
+  if (kind === PERSONAL_OPTION_SIDECAR_KIND) {
+    return `research/personal/option-sidecar/job=${jobId}/state.json`;
+  }
   return `research/personal/jobs/job=${jobId}/state.json`;
 }
 
@@ -67,6 +81,9 @@ export function personalJobTerminalKey(kind: PersonalJobKind, jobId: string): st
   }
   if (kind === "vol-panel") {
     return personalVolAmPmPanelBuildTerminalKey(jobId);
+  }
+  if (kind === PERSONAL_OPTION_SIDECAR_KIND) {
+    return personalOptionSidecarTerminalKey(jobId);
   }
   return personalResearchManifestKey(jobId);
 }
@@ -239,6 +256,23 @@ export function timeoutFailedTerminal(
       kind: "vol-panel",
       producer_id: "personal-vol-ratio-am-pm-panel-writer/v1",
       cohort_id: "personal-vol-ratio-am-pm-v1",
+      draft_only: true,
+      screening_only: true,
+      ready: false,
+      mass: false,
+      promotion: false,
+      live_orders: false,
+      not_a_pass: true,
+    };
+  }
+  if (document.kind === PERSONAL_OPTION_SIDECAR_KIND) {
+    return {
+      ...base,
+      schema_version: "personal-n225-option-sidecar-manifest/v1",
+      kind: PERSONAL_OPTION_SIDECAR_KIND,
+      producer_id: "personal-n225-option-sidecar-producer/v1",
+      cohort_id: "personal-n225-option-sidecar/v1",
+      runner_version: document.runner_version || PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
       draft_only: true,
       screening_only: true,
       ready: false,

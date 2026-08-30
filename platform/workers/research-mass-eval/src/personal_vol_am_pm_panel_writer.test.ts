@@ -19,7 +19,6 @@ import {
   PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
   PERSONAL_VOL_AM_PM_SELECTION_PERIOD,
   parsePersonalVolAmPmPanelBuildRequest,
-  personalVolAmPmLegacyOptionPanelKey,
   personalVolAmPmPanelBuildInputKey,
   personalVolAmPmPanelBuildTerminalKey,
   type PersonalVolAmPmPanelBuildRequest,
@@ -28,6 +27,15 @@ import {
   buildPersonalVolAmPmPanelInputManifest,
   submitPersonalVolAmPmPanelBuild,
 } from "./personal_vol_am_pm_panel_writer";
+import {
+  PERSONAL_OPTION_SIDECAR_COHORT_ID,
+  PERSONAL_OPTION_SIDECAR_KIND,
+  PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA,
+  PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
+  PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
+  personalOptionSidecarObjectKey,
+  personalOptionSidecarTerminalKey,
+} from "./personal_option_sidecar_producer_contract";
 import { sha256Hex } from "./sha256";
 import type { Env } from "./types";
 
@@ -196,6 +204,7 @@ async function seedSnapshot(
 const REQUEST: PersonalVolAmPmPanelBuildRequest = {
   job_id: "vol-panel-one",
   selection_snapshot_job_id: "snap-2019",
+  sidecar_producer_job_id: "sidecar-one",
   period_snapshot_job_ids: {
     y2021_full: "snap-2021",
     y2023_full: "snap-2023",
@@ -215,6 +224,8 @@ async function seedClosedInputs(mem: MemoryR2, sidecar: Record<string, unknown> 
   const digits = ["3", "4", "5"] as const;
   const sidecarBytes = new TextEncoder().encode(JSON.stringify(sidecar));
   const sidecarDigest = `sha256:${await sha256Hex(sidecarBytes)}`;
+  const sidecarKey = personalOptionSidecarObjectKey(sidecarDigest);
+  const sidecars: Record<string, unknown> = {};
   for (const [index, period] of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS.entries()) {
     await seedSnapshot(
       mem,
@@ -224,13 +235,27 @@ async function seedClosedInputs(mem: MemoryR2, sidecar: Record<string, unknown> 
       digits[index]!,
       61,
     );
-    mem.seed(
-      personalVolAmPmLegacyOptionPanelKey(period.period_id),
-      sidecarBytes,
-      `etag-${period.period_id}`,
-      { sha256: sidecarDigest },
-    );
+    mem.seed(sidecarKey, sidecarBytes, `etag-${period.period_id}`, {
+      sha256: sidecarDigest,
+    });
+    sidecars[period.period_id] = {
+      period_id: period.period_id,
+      key: sidecarKey,
+      sha256: sidecarDigest,
+      size: sidecarBytes.byteLength,
+    };
   }
+  const terminal = {
+    schema_version: PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA,
+    status: "COMPLETED",
+    kind: PERSONAL_OPTION_SIDECAR_KIND,
+    producer_id: PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
+    cohort_id: PERSONAL_OPTION_SIDECAR_COHORT_ID,
+    job_id: REQUEST.sidecar_producer_job_id,
+    runner_version: PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
+    sidecars,
+  };
+  mem.seed(personalOptionSidecarTerminalKey(REQUEST.sidecar_producer_job_id), terminal);
 }
 
 const noMass = async () => {
@@ -246,6 +271,19 @@ describe("closed personal vol AM/PM panel-build request", () => {
     expect(
       parsePersonalVolAmPmPanelBuildRequest({ ...REQUEST, panel_key: "x" }),
     ).toMatchObject({ ok: false, error: expect.stringContaining("unknown") });
+    expect(
+      parsePersonalVolAmPmPanelBuildRequest({
+        ...REQUEST,
+        sidecar_key: "research/mass_eval/panels_cache/x.json",
+      }),
+    ).toMatchObject({ ok: false, error: expect.stringContaining("unknown") });
+    expect(
+      parsePersonalVolAmPmPanelBuildRequest({
+        job_id: REQUEST.job_id,
+        selection_snapshot_job_id: REQUEST.selection_snapshot_job_id,
+        period_snapshot_job_ids: REQUEST.period_snapshot_job_ids,
+      }),
+    ).toMatchObject({ ok: false, error: "sidecar_producer_job_id is invalid" });
     expect(
       parsePersonalVolAmPmPanelBuildRequest({
         ...REQUEST,
@@ -272,13 +310,16 @@ describe("closed personal vol AM/PM panel-build request", () => {
     expect(input.runner_version).toBe("personal-cloud-runner/v13");
     expect(input.required_lookback_sessions).toBe(61);
     expect(input.selection.snapshot.raw_sha256).toBe(digestDigit("1"));
-    expect(got.some((key) => key.includes("/panels/"))).toBe(false);
+    expect(got.some((key) => key.includes("panels_cache"))).toBe(false);
+    expect(got.some((key) => key.includes("/option-sidecar/job=sidecar-one/manifest.json"))).toBe(
+      true,
+    );
     for (const period of PERSONAL_VOL_PERIODS) {
       expect(input.periods[period.period_id].lookback_sessions).toBeGreaterThanOrEqual(61);
-      expect(input.option_sidecars[period.period_id].source_key).toBe(
-        personalVolAmPmLegacyOptionPanelKey(period.period_id),
+      expect(input.option_sidecars[period.period_id].source_key).toMatch(
+        /^research\/personal\/option-sidecar\/objects\/sha256:[0-9a-f]{64}\.json$/,
       );
-      expect(input.option_sidecars[period.period_id].etag).toBe(`etag-${period.period_id}`);
+      expect(input.sidecar_producer.job_id).toBe(REQUEST.sidecar_producer_job_id);
     }
   });
 
@@ -356,7 +397,7 @@ describe("closed personal vol AM/PM panel-build request", () => {
     ) as { option_sidecars: Record<string, { etag: string }> };
     const originalEtag = locked.option_sidecars.y2021_full.etag;
     mem.seed(
-      personalVolAmPmLegacyOptionPanelKey("y2021_full"),
+      locked.option_sidecars.y2021_full.source_key,
       new Uint8Array([9, 9, 9]),
       "mutated-etag",
       { sha256: digestDigit("f") },
