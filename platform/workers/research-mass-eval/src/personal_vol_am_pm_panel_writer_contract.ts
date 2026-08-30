@@ -63,7 +63,6 @@ export type PersonalVolAmPmPanelBuildRequest = {
   selection_snapshot_job_id: string;
   period_snapshot_job_ids: Record<PersonalVolAmPmEvaluationPeriodId, string>;
   sidecar_producer_job_id: string;
-  sidecar_producer_terminal_digest?: string;
 };
 
 export type ImmutableObjectRef = {
@@ -91,10 +90,20 @@ export type SnapshotInputLock = {
 
 export type OptionSidecarLock = {
   period_id: string;
+  year: number;
+  period_start: string;
+  period_end: string;
+  schema_version: string;
   source_key: string;
   etag: string;
   size: number;
   sha256: string;
+  source: {
+    dataset: string;
+    version: string;
+    raw_input_digest: string;
+    calendar_digest: string;
+  };
 };
 
 export type PersonalVolAmPmPanelWriterInputManifest = {
@@ -212,7 +221,6 @@ export function parsePersonalVolAmPmPanelBuildRequest(
     "selection_snapshot_job_id",
     "period_snapshot_job_ids",
     "sidecar_producer_job_id",
-    "sidecar_producer_terminal_digest",
   ]);
   const unknown = Object.keys(body).filter((key) => !allowed.has(key));
   if (unknown.length) {
@@ -274,19 +282,6 @@ export function parsePersonalVolAmPmPanelBuildRequest(
       error: "sidecar producer job id must be a distinct immutable identity",
     };
   }
-  let sidecar_producer_terminal_digest: string | undefined;
-  if (body.sidecar_producer_terminal_digest !== undefined) {
-    if (
-      typeof body.sidecar_producer_terminal_digest !== "string" ||
-      !DIGEST_RE.test(body.sidecar_producer_terminal_digest)
-    ) {
-      return {
-        ok: false,
-        error: "sidecar_producer_terminal_digest is invalid",
-      };
-    }
-    sidecar_producer_terminal_digest = body.sidecar_producer_terminal_digest;
-  }
   return {
     ok: true,
     value: {
@@ -294,9 +289,6 @@ export function parsePersonalVolAmPmPanelBuildRequest(
       selection_snapshot_job_id: selectionId,
       period_snapshot_job_ids,
       sidecar_producer_job_id: sidecarJobId,
-      ...(sidecar_producer_terminal_digest
-        ? { sidecar_producer_terminal_digest }
-        : {}),
     },
   };
 }
@@ -395,11 +387,5 @@ export async function personalVolAmPmPanelBuildRequestDigest(
     runner_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
     selection_snapshot_job_id: request.selection_snapshot_job_id,
     sidecar_producer_job_id: request.sidecar_producer_job_id,
-    ...(request.sidecar_producer_terminal_digest
-      ? {
-          sidecar_producer_terminal_digest:
-            request.sidecar_producer_terminal_digest,
-        }
-      : {}),
   });
 }

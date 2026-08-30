@@ -5,20 +5,39 @@ import {
   PERSONAL_RESEARCH_RUNNER_VERSION,
   personalJobContainerName,
 } from "./personal_research_contract";
+import { serializedJsonBytes } from "./http";
 import {
   PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT,
   PERSONAL_OPTION_SIDECAR_COHORT_ID,
   PERSONAL_OPTION_SIDECAR_DATASET,
   PERSONAL_OPTION_SIDECAR_KIND,
+  PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_BYTES,
+  PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_OBJECTS,
+  PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_ROWS,
+  PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_BYTES,
+  PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_DATES,
+  PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_OBJECTS,
+  PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_ROWS,
+  PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_BYTES,
+  PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_OBJECTS,
+  PERSONAL_OPTION_SIDECAR_MAX_INPUT_BYTES,
+  PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_BYTES,
+  PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_OBJECTS,
+  PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_ROWS,
   PERSONAL_OPTION_SIDECAR_OPTIONS_ROOT,
   PERSONAL_OPTION_SIDECAR_PERIODS,
   PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
+  PERSONAL_OPTION_SIDECAR_RECORDS_SCHEMA,
   addIsoDays,
+  calendarRootPrefix,
+  isoDaysInclusive,
+  monthStartDay,
   parsePersonalOptionSidecarProduceRequest,
   personalOptionSidecarInputKey,
   personalOptionSidecarTerminalKey,
   samplePinnedDates,
   splitFrozenSessions,
+  type StructuredObjectRef,
 } from "./personal_option_sidecar_producer_contract";
 import {
   buildPersonalOptionSidecarInputManifest,
@@ -139,23 +158,43 @@ function admittedContainer() {
   return { destroy, fetch };
 }
 
-async function structuredObject(
+function structuredRecord(args: {
+  dataset: string;
+  date: string;
+  payload: Record<string, unknown>;
+  naturalKey: Record<string, string>;
+  ingestedAt?: string;
+}) {
+  return {
+    source: "jquants",
+    dataset: args.dataset,
+    natural_key: JSON.stringify(args.naturalKey),
+    event_time: `${args.date}T00:00:00+09:00`,
+    available_at: `${args.date}T00:00:00+09:00`,
+    ingested_at: args.ingestedAt ?? `${args.date}T15:00:00+09:00`,
+    payload: args.payload,
+  };
+}
+
+async function jsonlObject(
   dataset: string,
   date: string,
-  payload: unknown,
+  records: unknown[],
   runId = "run-1",
 ) {
-  const bytes = new TextEncoder().encode(`${JSON.stringify(payload)}\n`);
+  const bytes = new TextEncoder().encode(
+    `${records.map((row) => JSON.stringify(row)).join("\n")}\n`,
+  );
   return {
     bytes,
     meta: {
       sha256: await sha256Hex(bytes),
-      count: "1",
+      count: String(records.length),
       bytes: String(bytes.byteLength),
       dataset,
       run_id: runId,
       date,
-      schema: "jquants-structured-jsonl/v1",
+      schema: PERSONAL_OPTION_SIDECAR_RECORDS_SCHEMA,
     },
   };
 }
@@ -163,7 +202,7 @@ async function structuredObject(
 async function seedPeriod(
   mem: MemoryR2,
   period: (typeof PERSONAL_OPTION_SIDECAR_PERIODS)[number],
-  options?: { omitOptionsDay?: string; badShaDay?: string },
+  options?: { omitOptionsDay?: string; badShaDay?: string; extraOptionsDay?: string },
 ) {
   const warmup = samplePinnedDates(
     period.raw_start,
@@ -178,22 +217,39 @@ async function seedPeriod(
   const trading = new Set([...warmup, ...evaluation]);
   const split = splitFrozenSessions(period, [...trading]);
   expect(split.ok).toBe(true);
-  for (const day of isoWindow(period.raw_start, period.period_end)) {
-    const calendar = await structuredObject("markets_calendar", day, {
-      Date: day,
-      HolidayDivision: trading.has(day) ? "1" : "0",
-    });
+  const byMonth = new Map<string, string[]>();
+  for (const day of isoDaysInclusive(period.raw_start, period.period_end)) {
+    const month = monthStartDay(day);
+    const rows = byMonth.get(month) ?? [];
+    rows.push(day);
+    byMonth.set(month, rows);
+  }
+  for (const [month, days] of byMonth) {
+    const records = days.map((day) =>
+      structuredRecord({
+        dataset: "markets_calendar",
+        date: day,
+        naturalKey: { Date: day },
+        payload: { Date: day, HolidayDivision: trading.has(day) ? "1" : "0" },
+      }),
+    );
+    const calendar = await jsonlObject("markets_calendar", month, records, `cal-${month}`);
     mem.seed(
-      `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=${day}/${day}.jsonl`,
+      `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=${month}/${month}.jsonl`,
       calendar.bytes,
-      `cal-${day}`,
+      `cal-${month}`,
       calendar.meta,
     );
-    if (!trading.has(day) || day === options?.omitOptionsDay) continue;
-    const option = await structuredObject(PERSONAL_OPTION_SIDECAR_DATASET, day, {
-      Date: day,
-      Code: "130060018",
+  }
+  for (const day of [...warmup, ...evaluation]) {
+    if (day === options?.omitOptionsDay) continue;
+    const record = structuredRecord({
+      dataset: PERSONAL_OPTION_SIDECAR_DATASET,
+      date: day,
+      naturalKey: { Date: day, Code: "130060018" },
+      payload: { Date: day, Code: "130060018" },
     });
+    const option = await jsonlObject(PERSONAL_OPTION_SIDECAR_DATASET, day, [record]);
     const meta =
       day === options?.badShaDay
         ? { ...option.meta, sha256: "not-a-digest" }
@@ -204,13 +260,27 @@ async function seedPeriod(
       `opt-${day}`,
       meta,
     );
+    if (day !== options?.extraOptionsDay) continue;
+    const extraRecord = structuredRecord({
+      dataset: PERSONAL_OPTION_SIDECAR_DATASET,
+      date: day,
+      naturalKey: { Date: day, Code: "130060019" },
+      payload: { Date: day, Code: "130060019" },
+      ingestedAt: `${day}T16:00:00+09:00`,
+    });
+    const extra = await jsonlObject(
+      PERSONAL_OPTION_SIDECAR_DATASET,
+      day,
+      [extraRecord],
+      "run-2",
+    );
+    mem.seed(
+      `${PERSONAL_OPTION_SIDECAR_OPTIONS_ROOT}/dt=${day}/run-2.jsonl`,
+      extra.bytes,
+      `opt-${day}-2`,
+      extra.meta,
+    );
   }
-}
-
-function isoWindow(start: string, end: string): string[] {
-  const out: string[] = [];
-  for (let day = start; day <= end; day = addIsoDays(day, 1)) out.push(day);
-  return out;
 }
 
 const REQUEST = { job_id: "sidecar-one" };
@@ -239,7 +309,7 @@ describe("frozen option sidecar calendar closure", () => {
 });
 
 describe("closed option sidecar produce request", () => {
-  it("accepts only job_id", () => {
+  it("accepts only job_id and rejects unknown fields", () => {
     expect(parsePersonalOptionSidecarProduceRequest(REQUEST)).toEqual({
       ok: true,
       value: REQUEST,
@@ -248,6 +318,12 @@ describe("closed option sidecar produce request", () => {
       parsePersonalOptionSidecarProduceRequest({
         job_id: "sidecar-one",
         period_id: "y2021_full",
+      }),
+    ).toMatchObject({ ok: false, error: expect.stringContaining("unknown") });
+    expect(
+      parsePersonalOptionSidecarProduceRequest({
+        job_id: "sidecar-one",
+        sidecar_producer_terminal_digest: `sha256:${"a".repeat(64)}`,
       }),
     ).toMatchObject({ ok: false, error: expect.stringContaining("unknown") });
   });
@@ -262,7 +338,13 @@ describe("option sidecar admission", () => {
       period.period_end,
       period.evaluation_sessions,
     );
-    await seedPeriod(mem, period, { omitOptionsDay: evaluation[0] });
+    for (const row of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      await seedPeriod(
+        mem,
+        row,
+        row.period_id === period.period_id ? { omitOptionsDay: evaluation[0] } : undefined,
+      );
+    }
     await expect(
       buildPersonalOptionSidecarInputManifest(mem.asBucket(), REQUEST),
     ).rejects.toMatchObject({ code: "option_sidecar_source_missing" });
@@ -276,10 +358,160 @@ describe("option sidecar admission", () => {
       period.period_end,
       period.evaluation_sessions,
     );
-    await seedPeriod(mem, period, { badShaDay: evaluation[0] });
+    for (const row of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      await seedPeriod(
+        mem,
+        row,
+        row.period_id === period.period_id ? { badShaDay: evaluation[0] } : undefined,
+      );
+    }
     await expect(
       buildPersonalOptionSidecarInputManifest(mem.asBucket(), REQUEST),
     ).rejects.toMatchObject({ code: "option_sidecar_source_sha256_missing" });
+  });
+
+  it("locks monthly calendar range objects covering 2+ days without day×calendar refs", async () => {
+    const mem = new MemoryR2();
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      await seedPeriod(mem, period);
+    }
+    const input = await buildPersonalOptionSidecarInputManifest(mem.asBucket(), REQUEST);
+    expect(mem.listed.some((prefix) => prefix === calendarRootPrefix())).toBe(true);
+    expect(
+      mem.listed.some((prefix) =>
+        prefix.startsWith(`${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=`),
+      ),
+    ).toBe(false);
+    const first = input.periods.y2021_full;
+    expect(first.calendar.length).toBeGreaterThan(1);
+    expect(first.calendar.every((object) => object.schema === PERSONAL_OPTION_SIDECAR_RECORDS_SCHEMA)).toBe(
+      true,
+    );
+    const october = first.calendar.find((object) => object.date === "2020-10-01");
+    expect(october?.count).toBeGreaterThan(1);
+    expect(first.options.every((day) => Array.isArray(day.objects))).toBe(true);
+    expect("date" in (first.calendar[0] as StructuredObjectRef)).toBe(true);
+    expect(serializedJsonBytes(input).byteLength).toBeLessThanOrEqual(
+      PERSONAL_OPTION_SIDECAR_MAX_INPUT_BYTES,
+    );
+  });
+
+  it("keeps 2 options objects on one day inside the 2MiB input bound", async () => {
+    const mem = new MemoryR2();
+    const doubled = PERSONAL_OPTION_SIDECAR_PERIODS[2]!.period_start;
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      await seedPeriod(
+        mem,
+        period,
+        period.period_id === "y2025_q4" ? { extraOptionsDay: doubled } : undefined,
+      );
+    }
+    const input = await buildPersonalOptionSidecarInputManifest(mem.asBucket(), REQUEST);
+    const day = input.periods.y2025_q4.options.find((row) => row.date === doubled);
+    expect(day?.objects).toHaveLength(2);
+    expect(serializedJsonBytes(input).byteLength).toBeLessThanOrEqual(
+      PERSONAL_OPTION_SIDECAR_MAX_INPUT_BYTES,
+    );
+  });
+
+  it("admits the live staging inventory under the total caps", () => {
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_BYTES).toBe(3_419_223_324);
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_ROWS).toBe(3_031_214);
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_OBJECTS).toBe(651);
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_DATES).toBe(650);
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_OBJECTS).toBe(33);
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_ROWS).toBe(960);
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_BYTES).toBe(318_720);
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_BYTES).toBeLessThanOrEqual(
+      PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_BYTES,
+    );
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_ROWS).toBeLessThanOrEqual(
+      PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_ROWS,
+    );
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_OBJECTS).toBeLessThanOrEqual(
+      PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_OBJECTS,
+    );
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_OBJECTS).toBeLessThanOrEqual(
+      PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_OBJECTS,
+    );
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_BYTES).toBeLessThanOrEqual(
+      PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_BYTES,
+    );
+    const canonical = PERSONAL_OPTION_SIDECAR_PERIODS.flatMap((period) =>
+      isoDaysInclusive(period.raw_start, period.period_end),
+    );
+    expect(canonical).toHaveLength(PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_ROWS);
+  });
+
+  it("fits a live-shaped compact input fixture in 2MiB with two objects on one day", () => {
+    const digest = `sha256:${"a".repeat(64)}`;
+    const optionRef = (date: string, run: string): StructuredObjectRef => ({
+      key: `${PERSONAL_OPTION_SIDECAR_OPTIONS_ROOT}/dt=${date}/${run}.jsonl`,
+      etag: `etag-${date}-${run}`,
+      size: 5_250_000,
+      sha256: digest,
+      dataset: PERSONAL_OPTION_SIDECAR_DATASET,
+      run_id: run,
+      date,
+      schema: PERSONAL_OPTION_SIDECAR_RECORDS_SCHEMA,
+      count: 4_656,
+      bytes: 5_250_000,
+    });
+    const periods = Object.fromEntries(
+      PERSONAL_OPTION_SIDECAR_PERIODS.map((period) => {
+        const sessions = [
+          ...samplePinnedDates(
+            period.raw_start,
+            addIsoDays(period.period_start, -1),
+            period.warmup_sessions,
+          ),
+          ...samplePinnedDates(
+            period.period_start,
+            period.period_end,
+            period.evaluation_sessions,
+          ),
+        ];
+        return [
+          period.period_id,
+          {
+            ...period,
+            warmup_dates: sessions.slice(0, period.warmup_sessions),
+            evaluation_dates: sessions.slice(period.warmup_sessions),
+            calendar_digest: digest,
+            raw_input_digest: digest,
+            calendar: isoDaysInclusive(period.raw_start, period.period_end)
+              .filter((day) => day.endsWith("-01"))
+              .map((day) => ({
+                key: `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=${day}/${day}.jsonl`,
+                etag: `cal-${day}`,
+                size: 10_000,
+                sha256: digest,
+                dataset: "markets_calendar",
+                run_id: "cal",
+                date: day,
+                schema: PERSONAL_OPTION_SIDECAR_RECORDS_SCHEMA,
+                count: 31,
+                bytes: 10_000,
+              })),
+            options: sessions.map((day, index) => ({
+              date: day,
+              objects:
+                index === 0
+                  ? [optionRef(day, "run-1"), optionRef(day, "run-2")]
+                  : [optionRef(day, "run-1")],
+            })),
+          },
+        ];
+      }),
+    );
+    const bytes = serializedJsonBytes({
+      schema_version: "personal-n225-option-sidecar-input/v1",
+      producer_id: PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
+      job_id: "sidecar-live-shape",
+      cohort_id: PERSONAL_OPTION_SIDECAR_COHORT_ID,
+      periods,
+    });
+    expect(bytes.byteLength).toBeLessThanOrEqual(PERSONAL_OPTION_SIDECAR_MAX_INPUT_BYTES);
   });
 
   it("locks the three frozen periods and dispatches the existing v13 Container", async () => {

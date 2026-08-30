@@ -148,18 +148,27 @@ def _gzip(raw: bytes) -> bytes:
     return gzip.compress(raw)
 
 
-def _sidecar() -> dict[str, Any]:
+def _sidecar(period: dict[str, Any] | None = None) -> dict[str, Any]:
+    period = period or job.EVALUATION_PERIODS[0]
     dates = [f"2021-01-{index:02d}" for index in range(4, 20)]
     series = {day: 2.0 for day in dates}
     long = {day: 1.0 for day in dates}
     rolling = {"rv_short_by_date": series, "rv_long_by_date": long, "rv_abs_by_date": series}
+    digest = _digest(period["period_id"].encode())
     return {
+        "schema_version": "personal-n225-option-sidecar/v1",
+        "period_id": period["period_id"],
+        "year": period["year"],
+        "period_start": period["period_start"],
+        "period_end": period["period_end"],
         "bars": {"A": [[day, 10] for day in dates]},
         "calendar": {"dates": dates},
         "opt225_regime": {
             "source": {
                 "dataset": job.OPTION_DATASET,
                 "version": job.SUPPORTED_OPTION_VERSIONS[-1],
+                "raw_input_digest": digest,
+                "calendar_digest": digest,
             },
             "basevol": rolling,
             "atm_iv": rolling,
@@ -209,8 +218,6 @@ def _input_manifest(store: dict[str, bytes], dates: list[str]) -> dict[str, Any]
     store[selection["snapshot"]["key"]] = selection_gzip
     periods = {}
     sidecars = {}
-    sidecar = _sidecar()
-    sidecar_bytes = json.dumps(sidecar).encode()
     for period in job.EVALUATION_PERIODS:
         raw = _sqlite_bytes(codes=["13010", "72030"], dates=dates)
         compressed = _gzip(raw)
@@ -224,15 +231,23 @@ def _input_manifest(store: dict[str, bytes], dates: list[str]) -> dict[str, Any]
         )
         store[lock["snapshot"]["key"]] = compressed
         periods[period["period_id"]] = lock
+        sidecar = _sidecar(period)
+        sidecar_bytes = json.dumps(sidecar).encode()
         digest = _digest(sidecar_bytes)
         key = f"research/personal/option-sidecar/objects/{digest}.json"
         store[key] = sidecar_bytes
+        source = sidecar["opt225_regime"]["source"]
         sidecars[period["period_id"]] = {
             "period_id": period["period_id"],
+            "year": period["year"],
+            "period_start": period["period_start"],
+            "period_end": period["period_end"],
+            "schema_version": sidecar["schema_version"],
             "source_key": key,
             "etag": "side",
             "size": len(sidecar_bytes),
             "sha256": digest,
+            "source": source,
         }
     return {
         "schema_version": job.INPUT_SCHEMA,
@@ -300,6 +315,19 @@ def test_sidecar_extract_is_structural_n225_only() -> None:
     mapped["opt225_regime"]["by_code"] = {"13010": {"2021-01-04": 1.0}}
     with pytest.raises(RuntimeError, match="must be rebuilt"):
         job._extract_opt225_regime(mapped)
+    y2021 = job.EVALUATION_PERIODS[0]
+    y2023 = job.EVALUATION_PERIODS[1]
+    child = _sidecar(y2023)
+    lock = {
+        "period_id": y2021["period_id"],
+        "year": y2021["year"],
+        "period_start": y2021["period_start"],
+        "period_end": y2021["period_end"],
+        "schema_version": child["schema_version"],
+        "source": child["opt225_regime"]["source"],
+    }
+    with pytest.raises(RuntimeError, match="child identity mismatch"):
+        job.assert_sidecar_child_matches_lock(child, lock, y2021)
 
 
 def test_sidecar_extract_accepts_thicken_canonical_shape(

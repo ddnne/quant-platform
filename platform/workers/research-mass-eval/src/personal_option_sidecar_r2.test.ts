@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  PERSONAL_OPTION_SIDECAR_AUTHORITY,
   PERSONAL_OPTION_SIDECAR_COHORT_ID,
   PERSONAL_OPTION_SIDECAR_INPUT_SCHEMA,
   PERSONAL_OPTION_SIDECAR_KIND,
@@ -10,6 +11,7 @@ import {
   PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
   personalOptionSidecarInputKey,
   personalOptionSidecarObjectKey,
+  personalOptionSidecarRequestDigest,
   personalOptionSidecarTerminalKey,
   type PersonalOptionSidecarInputManifest,
 } from "./personal_option_sidecar_producer_contract";
@@ -117,6 +119,24 @@ function emptyPeriod(
   };
 }
 
+async function identityFields(fixed: Awaited<ReturnType<typeof fixture>>) {
+  return {
+    schema_version: PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA,
+    kind: PERSONAL_OPTION_SIDECAR_KIND,
+    job_id: JOB_ID,
+    runner_version: PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
+    input_manifest_digest: fixed.inputDigest,
+    input_manifest_key: personalOptionSidecarInputKey(JOB_ID),
+    request_digest: await personalOptionSidecarRequestDigest(
+      { job_id: JOB_ID },
+      fixed.inputDigest,
+    ),
+    producer_id: PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
+    cohort_id: PERSONAL_OPTION_SIDECAR_COHORT_ID,
+    ...PERSONAL_OPTION_SIDECAR_AUTHORITY,
+  };
+}
+
 async function fixture() {
   const input = {
     schema_version: PERSONAL_OPTION_SIDECAR_INPUT_SCHEMA,
@@ -190,15 +210,8 @@ describe("option sidecar R2 capability", () => {
   it("rejects a child write after the terminal and requires children first", async () => {
     const fixed = await fixture();
     const timeout = {
-      schema_version: PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA,
+      ...(await identityFields(fixed)),
       status: "FAILED",
-      kind: PERSONAL_OPTION_SIDECAR_KIND,
-      job_id: JOB_ID,
-      runner_version: PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
-      input_manifest_digest: fixed.inputDigest,
-      producer_id: PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
-      cohort_id: PERSONAL_OPTION_SIDECAR_COHORT_ID,
-      go: false,
       error: "timeout",
     };
     expect(
@@ -230,18 +243,24 @@ describe("option sidecar R2 capability", () => {
       ]),
     );
     const terminal = {
-      schema_version: PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA,
+      ...(await identityFields(fixed)),
       status: "COMPLETED",
-      kind: PERSONAL_OPTION_SIDECAR_KIND,
-      job_id: JOB_ID,
-      runner_version: PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
-      input_manifest_digest: fixed.inputDigest,
-      producer_id: PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
-      cohort_id: PERSONAL_OPTION_SIDECAR_COHORT_ID,
-      go: false,
       sidecars,
     };
     const created = await put(fixed, personalOptionSidecarTerminalKey(JOB_ID), terminal);
     expect(created.response.status).toBe(409);
+  });
+
+  it("rejects a forged terminal whose request digest does not match the locked input", async () => {
+    const fixed = await fixture();
+    const forged = {
+      ...(await identityFields(fixed)),
+      status: "FAILED",
+      request_digest: `sha256:${"e".repeat(64)}`,
+      error: "forged",
+    };
+    expect(
+      (await put(fixed, personalOptionSidecarTerminalKey(JOB_ID), forged)).response.status,
+    ).toBe(400);
   });
 });

@@ -1,5 +1,6 @@
 import { putBytesCreateOnly } from "./http";
 import {
+  PERSONAL_OPTION_SIDECAR_AUTHORITY,
   PERSONAL_OPTION_SIDECAR_COHORT_ID,
   PERSONAL_OPTION_SIDECAR_INPUT_SCHEMA,
   PERSONAL_OPTION_SIDECAR_KIND,
@@ -17,6 +18,7 @@ import {
   optionsDayFromKey,
   personalOptionSidecarInputKey,
   personalOptionSidecarObjectKey,
+  personalOptionSidecarRequestDigest,
   personalOptionSidecarTerminalKey,
   type PersonalOptionSidecarInputManifest,
   type StructuredObjectRef,
@@ -99,16 +101,12 @@ function listedRef(
   key: string,
 ): StructuredObjectRef | null {
   const optionsDay = optionsDayFromKey(key);
-  const calendarDay = calendarDayFromKey(key);
   for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
     const locked = manifest.periods[period.period_id];
-    const days = optionsDay
-      ? locked.options
-      : calendarDay
-        ? locked.calendar
-        : [];
-    const day = optionsDay ?? calendarDay;
-    const entry = days.find((candidate) => candidate.date === day);
+    const calendar = locked.calendar.find((object) => object.key === key);
+    if (calendar) return calendar;
+    if (!optionsDay) continue;
+    const entry = locked.options.find((candidate) => candidate.date === optionsDay);
     const found = entry?.objects.find((object) => object.key === key);
     if (found) return found;
   }
@@ -219,26 +217,45 @@ function authority(document: Record<string, unknown>): boolean {
   return (
     document.producer_id === PERSONAL_OPTION_SIDECAR_PRODUCER_ID &&
     document.cohort_id === PERSONAL_OPTION_SIDECAR_COHORT_ID &&
-    document.go === false
+    document.draft_only === PERSONAL_OPTION_SIDECAR_AUTHORITY.draft_only &&
+    document.screening_only === PERSONAL_OPTION_SIDECAR_AUTHORITY.screening_only &&
+    document.ready === PERSONAL_OPTION_SIDECAR_AUTHORITY.ready &&
+    document.mass === PERSONAL_OPTION_SIDECAR_AUTHORITY.mass &&
+    document.promotion === PERSONAL_OPTION_SIDECAR_AUTHORITY.promotion &&
+    document.live_orders === PERSONAL_OPTION_SIDECAR_AUTHORITY.live_orders &&
+    document.go === PERSONAL_OPTION_SIDECAR_AUTHORITY.go &&
+    document.not_a_pass === PERSONAL_OPTION_SIDECAR_AUTHORITY.not_a_pass
   );
 }
 
 async function completedChildrenMatch(
   env: R2Env,
   parsed: Record<string, unknown>,
+  manifest: PersonalOptionSidecarInputManifest,
 ): Promise<boolean> {
   if (!isObject(parsed.sidecars)) return false;
+  const ids = Object.keys(parsed.sidecars).sort();
+  const expected = PERSONAL_OPTION_SIDECAR_PERIODS.map((period) => period.period_id).sort();
+  if (JSON.stringify(ids) !== JSON.stringify(expected)) return false;
   for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
     const row = parsed.sidecars[period.period_id];
-    if (!isObject(row)) return false;
+    const locked = manifest.periods[period.period_id];
+    if (!isObject(row) || !locked) return false;
     const digest = row.sha256;
     const size = row.size;
     if (
+      row.period_id !== period.period_id ||
+      row.year !== period.year ||
+      row.period_start !== period.period_start ||
+      row.period_end !== period.period_end ||
+      row.raw_input_digest !== locked.raw_input_digest ||
+      row.calendar_digest !== locked.calendar_digest ||
       typeof digest !== "string" ||
       !isPersonalOptionSidecarDigest(digest) ||
       typeof size !== "number" ||
       !Number.isInteger(size) ||
       size < 1 ||
+      size > PERSONAL_OPTION_SIDECAR_MAX_OUTPUT_BYTES ||
       row.key !== personalOptionSidecarObjectKey(digest)
     ) {
       return false;
@@ -291,11 +308,19 @@ async function putOutput(
     if (!isObject(parsed)) {
       return json({ error: "option sidecar output must be JSON" }, 400);
     }
+    const requestDigest = await personalOptionSidecarRequestDigest(
+      { job_id: expected.jobId },
+      expected.inputDigest,
+    );
     if (
       parsed.schema_version !== PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA ||
       parsed.job_id !== expected.jobId ||
       parsed.input_manifest_digest !== expected.inputDigest ||
+      parsed.input_manifest_key !== expected.inputKey ||
+      parsed.request_digest !== requestDigest ||
       parsed.kind !== PERSONAL_OPTION_SIDECAR_KIND ||
+      parsed.producer_id !== PERSONAL_OPTION_SIDECAR_PRODUCER_ID ||
+      parsed.cohort_id !== PERSONAL_OPTION_SIDECAR_COHORT_ID ||
       parsed.runner_version !== PERSONAL_OPTION_SIDECAR_RUNNER_VERSION ||
       !authority(parsed) ||
       (parsed.status !== "COMPLETED" && parsed.status !== "FAILED")
@@ -304,7 +329,7 @@ async function putOutput(
     }
     if (
       parsed.status === "COMPLETED" &&
-      !(await completedChildrenMatch(env, parsed))
+      !(await completedChildrenMatch(env, parsed, input.manifest))
     ) {
       return json({ error: "option sidecar manifest children mismatch" }, 409);
     }

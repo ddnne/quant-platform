@@ -5,17 +5,29 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import statistics
 import urllib.request
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, BinaryIO, Callable, Mapping, Sequence
 
 from research.options_225_vol_series import (
+    ATM_IV_ROLE,
     DATASET_ID,
     OPTIONS_225_VOL_SERIES_VERSION,
+    OPTIONS_225_VOL_SERIES_WAVE,
+    build_daily_atm_iv_series,
+    build_daily_basevol_delta_series,
+    build_daily_basevol_series,
+    build_daily_skew_series,
+    build_daily_term_ratio_series,
+    build_daily_term_series,
     build_opt225_regime_bundle,
     build_series_bundle_from_rows,
+    build_spread_series,
+    summarize_vol_series,
 )
+from research.freezes import MASS_RESEARCH, OPERATIONAL_GO, PHASE7, READY_DECLARED
 
 R2_ORIGIN = "http://research.r2"
 PRODUCER_ID = "personal-n225-option-sidecar-producer/v1"
@@ -27,11 +39,22 @@ OBJECT_SCHEMA = "personal-n225-option-sidecar/v1"
 DATASET = DATASET_ID
 SOURCE_VERSION = OPTIONS_225_VOL_SERIES_VERSION
 KIND = "option-sidecar"
+RECORDS_SCHEMA = "jquants_records/v1"
 NATURAL_KEY = ["Date", "Code"]
 DUPLICATE_RESOLUTION = {
     "compare": ["ingested_at", "object_key", "line_index"],
     "natural_key": NATURAL_KEY,
     "winner": "lexicographic_max",
+}
+AUTHORITY = {
+    "draft_only": True,
+    "screening_only": True,
+    "ready": False,
+    "mass": False,
+    "promotion": False,
+    "live_orders": False,
+    "go": False,
+    "not_a_pass": True,
 }
 PERIODS = (
     {
@@ -243,32 +266,23 @@ def _safe_detail(error: BaseException) -> str:
     return " ".join(f"{type(error).__name__}: {error}".split())[:800]
 
 
-def _payload(line: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    value = line.get("payload")
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError:
-            return None
+def _mapping(value: Any) -> Mapping[str, Any] | None:
     if isinstance(value, Mapping):
         return value
-    return line if isinstance(line, Mapping) else None
-
-
-def _natural_key(line: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    value = line.get("natural_key")
     if isinstance(value, str):
         try:
-            value = json.loads(value)
+            parsed = json.loads(value)
         except json.JSONDecodeError:
             return None
-    return value if isinstance(value, Mapping) else None
+        return parsed if isinstance(parsed, Mapping) else None
+    return None
 
 
 def _valid_iso_day(value: Any) -> str | None:
-    day = str(value or "")[:10]
+    if not isinstance(value, str) or len(value) != 10:
+        return None
     try:
-        return date.fromisoformat(day).isoformat()
+        return date.fromisoformat(value).isoformat()
     except ValueError:
         return None
 
@@ -283,30 +297,62 @@ def _valid_iso_instant(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo is not None else None
 
 
-def _line_identity(line: Mapping[str, Any], day: str) -> tuple[str, str] | None:
-    dataset = str(line.get("dataset") or "")
+def _line_identity(line: Mapping[str, Any], day: str) -> tuple[str, str]:
+    dataset = line.get("dataset")
     if dataset in INDIVIDUAL_STOCK_DATASETS:
-        return None
-    if dataset and dataset != DATASET:
-        return None
-    payload = _payload(line)
-    if payload is None:
-        return None
-    natural_key = _natural_key(line) or {}
-    payload_day = _valid_iso_day(payload.get("Date") or payload.get("date"))
-    payload_code = str(payload.get("Code") or payload.get("code") or "")
-    key_day = _valid_iso_day(natural_key.get("Date") or natural_key.get("date"))
-    key_code = str(natural_key.get("Code") or natural_key.get("code") or "")
-    if payload_day != day or not payload_code:
-        return None
-    if key_day and key_day != day:
-        return None
-    if key_code and key_code != payload_code:
-        return None
+        raise RuntimeError("individual stock options rows are forbidden")
+    if dataset != DATASET:
+        raise RuntimeError("options row dataset mismatch")
+    payload = _mapping(line.get("payload"))
+    natural_key = _mapping(line.get("natural_key"))
+    if payload is None or natural_key is None:
+        raise RuntimeError("options row payload or natural_key is invalid")
+    if set(natural_key) != {"Date", "Code"}:
+        raise RuntimeError("options natural key must be exact Date+Code")
+    payload_day = _valid_iso_day(payload.get("Date"))
+    payload_code = payload.get("Code")
+    if (
+        payload_day != day
+        or not isinstance(payload_code, str)
+        or not payload_code
+        or natural_key.get("Date") != day
+        or natural_key.get("Code") != payload_code
+    ):
+        raise RuntimeError("options natural key does not match payload Date+Code")
     event_at = _valid_iso_instant(line.get("event_time"))
-    if event_at is not None and event_at.date().isoformat() != day:
-        return None
+    ingested_at = _valid_iso_instant(line.get("ingested_at"))
+    if event_at is None or event_at.date().isoformat() != day:
+        raise RuntimeError("options row event_time is invalid")
+    if ingested_at is None:
+        raise RuntimeError("options row ingested_at is invalid")
     return day, payload_code
+
+
+def _require_options_ref(reference: Mapping[str, Any], day: str) -> tuple[str, int, str]:
+    key = reference.get("key")
+    size = reference.get("size")
+    bytes_ = reference.get("bytes")
+    count = reference.get("count")
+    sha = reference.get("sha256")
+    if (
+        not isinstance(key, str)
+        or f"/dt={day}/" not in key
+        or not isinstance(size, int)
+        or not isinstance(bytes_, int)
+        or size != bytes_
+        or not 0 < size <= MAX_OPTIONS_OBJECT_BYTES
+        or not isinstance(count, int)
+        or count < 1
+        or reference.get("schema") != RECORDS_SCHEMA
+        or reference.get("dataset") != DATASET
+        or reference.get("date") != day
+        or not isinstance(reference.get("run_id"), str)
+        or not reference["run_id"]
+        or not isinstance(sha, str)
+        or _DIGEST_RE.fullmatch(sha) is None
+    ):
+        raise RuntimeError("options object reference mismatch")
+    return key, size, sha
 
 
 def load_one_options_day(
@@ -321,21 +367,13 @@ def load_one_options_day(
         raise RuntimeError("options day manifest entry is invalid")
     selected: dict[tuple[str, str], tuple[tuple[str, str, int], Mapping[str, Any]]] = {}
     parsed_rows = 0
-    rejected_rows = 0
-    for object_index, reference in enumerate(objects):
+    for reference in objects:
         if not isinstance(reference, dict):
             raise RuntimeError("options object reference is invalid")
-        key = str(reference.get("key") or "")
-        expected_size = reference.get("size")
-        expected_sha = reference.get("sha256")
-        if (
-            not isinstance(expected_size, int)
-            or not 0 < expected_size <= MAX_OPTIONS_OBJECT_BYTES
-            or f"/dt={day}/" not in key
-        ):
-            raise RuntimeError("options object bound mismatch")
+        key, expected_size, expected_sha = _require_options_ref(reference, day)
         digest = hashlib.sha256()
         received = 0
+        nonblank = 0
         with opener(spec, key) as response:
             declared = response.headers.get("content-length", "")
             if not declared.isdigit() or int(declared) != expected_size:
@@ -347,37 +385,32 @@ def load_one_options_day(
                 digest.update(raw_line)
                 if not raw_line.strip():
                     continue
+                nonblank += 1
                 try:
                     parsed = json.loads(raw_line)
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    rejected_rows += 1
-                    continue
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError("options object contains malformed JSON") from exc
                 if not isinstance(parsed, dict):
-                    rejected_rows += 1
-                    continue
+                    raise RuntimeError("options object line must be a JSON object")
                 identity = _line_identity(parsed, day)
-                payload = _payload(parsed)
-                if identity is None or payload is None:
-                    rejected_rows += 1
-                    continue
+                payload = _mapping(parsed.get("payload"))
+                if payload is None:
+                    raise RuntimeError("options row payload is invalid")
                 parsed_rows += 1
-                rank = (
-                    str(parsed.get("ingested_at") or ""),
-                    key,
-                    line_index + object_index * 10_000_000,
-                )
+                rank = (str(parsed["ingested_at"]), key, line_index)
                 current = selected.get(identity)
                 if current is None or rank > current[0]:
                     selected[identity] = (rank, payload)
         if received != expected_size:
             raise RuntimeError("options object content length mismatch")
-        actual_sha = "sha256:" + digest.hexdigest()
-        if isinstance(expected_sha, str) and expected_sha and actual_sha != expected_sha:
+        if nonblank != reference["count"]:
+            raise RuntimeError("options object count mismatch")
+        if "sha256:" + digest.hexdigest() != expected_sha:
             raise RuntimeError("options object sha256 mismatch")
     rows = [selected[key][1] for key in sorted(selected)]
     return rows, {
         "source_rows": parsed_rows,
-        "rejected_rows": rejected_rows,
+        "rejected_rows": 0,
         "deduplicated_rows": parsed_rows - len(rows),
         "natural_keys": len(rows),
     }
@@ -424,6 +457,66 @@ def _contains_individual_stock(value: Any) -> bool:
     return False
 
 
+def daily_outputs_from_rows(
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    return {
+        "base_vol_series": build_daily_basevol_series(rows),
+        "atm_iv_series": build_daily_atm_iv_series(rows),
+        "skew_series": build_daily_skew_series(rows),
+        "cm_term_series": build_daily_term_series(rows),
+    }
+
+
+def assemble_series_bundle(
+    daily: Mapping[str, Sequence[Mapping[str, Any]]],
+) -> dict[str, Any]:
+    base = list(daily["base_vol_series"])
+    atm = list(daily["atm_iv_series"])
+    skew = list(daily["skew_series"])
+    term = list(daily["cm_term_series"])
+    spread = build_spread_series(base, atm)
+    term_ratio = build_daily_term_ratio_series(term)
+    delta = build_daily_basevol_delta_series(base=base)
+    stats = summarize_vol_series(base, atm, spread)
+    stats["n_skew_days"] = len(skew)
+    stats["n_cm_term_days"] = len(term)
+    stats["n_cm_term_ratio_days"] = len(term_ratio)
+    stats["n_basevol_delta_days"] = len(delta)
+    if skew:
+        stats["skew_mean"] = statistics.mean(float(r["skew"]) for r in skew)
+    if term:
+        stats["cm_term_mean"] = statistics.mean(float(r["cm_term"]) for r in term)
+    if term_ratio:
+        stats["cm_term_ratio_mean"] = statistics.mean(
+            float(r["cm_term_ratio"]) for r in term_ratio
+        )
+    if delta:
+        stats["basevol_delta_mean"] = statistics.mean(
+            float(r["basevol_delta"]) for r in delta
+        )
+    return {
+        "base_vol_series": base,
+        "atm_iv_series": atm,
+        "spread_series": spread,
+        "skew_series": skew,
+        "cm_term_series": term,
+        "cm_term_ratio_series": term_ratio,
+        "basevol_delta_series": delta,
+        "stats": stats,
+        "version": OPTIONS_225_VOL_SERIES_VERSION,
+        "wave": OPTIONS_225_VOL_SERIES_WAVE,
+        "dataset": DATASET_ID,
+        "mass_research": MASS_RESEARCH,
+        "phase7": PHASE7,
+        "ready_declared": READY_DECLARED,
+        "operational_go": OPERATIONAL_GO,
+        "ffill_applied": False,
+        "canonical_level": "base_vol",
+        "atm_iv_role": ATM_IV_ROLE,
+    }
+
+
 def build_period_sidecar(
     spec: PersonalOptionSidecarJobSpec,
     period: Mapping[str, Any],
@@ -431,11 +524,19 @@ def build_period_sidecar(
     *,
     opener: Callable,
 ) -> dict[str, Any]:
-    rows: list[Mapping[str, Any]] = []
+    daily: dict[str, list[dict[str, Any]]] = {
+        "base_vol_series": [],
+        "atm_iv_series": [],
+        "skew_series": [],
+        "cm_term_series": [],
+    }
     for day_entry in locked["options"]:
         day_rows, _audit = load_one_options_day(spec, day_entry, opener=opener)
-        rows.extend(day_rows)
-    bundle = build_series_bundle_from_rows(rows)
+        outputs = daily_outputs_from_rows(day_rows)
+        del day_rows
+        for field, rows in outputs.items():
+            daily[field].extend(rows)
+    bundle = assemble_series_bundle(daily)
     regime = build_opt225_regime_bundle(
         bundle["base_vol_series"],
         bundle["atm_iv_series"],
@@ -464,16 +565,7 @@ def build_period_sidecar(
 
 
 def _authority() -> dict[str, Any]:
-    return {
-        "draft_only": True,
-        "screening_only": True,
-        "ready": False,
-        "mass": False,
-        "promotion": False,
-        "live_orders": False,
-        "go": False,
-        "not_a_pass": True,
-    }
+    return dict(AUTHORITY)
 
 
 def execute_option_sidecar_job(
@@ -491,6 +583,8 @@ def execute_option_sidecar_job(
             if (
                 not isinstance(locked, dict)
                 or locked.get("period_id") != period_id
+                or locked.get("year") != period["year"]
+                or locked.get("raw_start") != period["raw_start"]
                 or locked.get("warmup_sessions") != period["warmup_sessions"]
                 or locked.get("evaluation_sessions") != period["evaluation_sessions"]
                 or locked.get("period_start") != period["period_start"]
@@ -504,6 +598,9 @@ def execute_option_sidecar_job(
                 raise RuntimeError("option sidecar digest mismatch")
             sidecars[period_id] = {
                 "period_id": period_id,
+                "year": period["year"],
+                "period_start": period["period_start"],
+                "period_end": period["period_end"],
                 "key": _object_key(digest),
                 "sha256": digest,
                 "size": len(sidecar_bytes),

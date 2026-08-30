@@ -587,6 +587,40 @@ def _contains_individual_stock_maps(value: Any) -> bool:
     return False
 
 
+def _digest_value(value: Any) -> bool:
+    return isinstance(value, str) and _DIGEST_RE.fullmatch(value) is not None
+
+
+def assert_sidecar_child_matches_lock(raw: Any, lock: Mapping[str, Any], period: Mapping[str, Any]) -> None:
+    if not isinstance(raw, dict):
+        raise RuntimeError(OPTION_REBUILD_ERROR)
+    source = None
+    regime = raw.get("opt225_regime")
+    if isinstance(regime, dict) and isinstance(regime.get("source"), dict):
+        source = regime["source"]
+    if (
+        raw.get("schema_version") != lock.get("schema_version")
+        or raw.get("period_id") != period["period_id"]
+        or raw.get("year") != period["year"]
+        or raw.get("period_start") != period["period_start"]
+        or raw.get("period_end") != period["period_end"]
+        or lock.get("period_id") != period["period_id"]
+        or lock.get("year") != period["year"]
+        or lock.get("period_start") != period["period_start"]
+        or lock.get("period_end") != period["period_end"]
+        or not isinstance(source, dict)
+        or source.get("dataset") != OPTION_DATASET
+        or source.get("version") not in SUPPORTED_OPTION_VERSIONS
+        or source.get("dataset") != (lock.get("source") or {}).get("dataset")
+        or source.get("version") != (lock.get("source") or {}).get("version")
+        or source.get("raw_input_digest") != (lock.get("source") or {}).get("raw_input_digest")
+        or source.get("calendar_digest") != (lock.get("source") or {}).get("calendar_digest")
+        or not _digest_value(source.get("raw_input_digest"))
+        or not _digest_value(source.get("calendar_digest"))
+    ):
+        raise RuntimeError("option sidecar child identity mismatch")
+
+
 def _extract_opt225_regime(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict) or "opt225_regime" not in raw:
         raise RuntimeError(OPTION_REBUILD_ERROR)
@@ -825,10 +859,17 @@ def execute_vol_am_pm_panel_job(
                 _canonical_bytes({"codes": membership, "schema_version": MEMBERSHIP_SCHEMA})
             )
             period_out: dict[str, Any] = {}
+            seen_sidecars: set[str] = set()
             for period in EVALUATION_PERIODS:
                 period_id = period["period_id"]
                 lock = manifest["periods"][period_id]
                 sidecar_lock = manifest["option_sidecars"][period_id]
+                child_key = str(sidecar_lock.get("source_key") or "")
+                child_digest = str(sidecar_lock.get("sha256") or "")
+                if child_key in seen_sidecars or child_digest in seen_sidecars:
+                    raise RuntimeError("option sidecar child reused across periods")
+                seen_sidecars.add(child_key)
+                seen_sidecars.add(child_digest)
 
                 def _period_extract(connection: sqlite3.Connection, locked=lock) -> tuple:
                     dates, calendar_meta = _calendar_from_snapshot(connection)
@@ -846,6 +887,7 @@ def execute_vol_am_pm_panel_job(
                 sidecar_json = json.loads(sidecar_bytes)
                 if not isinstance(sidecar_json, dict):
                     raise RuntimeError(OPTION_REBUILD_ERROR)
+                assert_sidecar_child_matches_lock(sidecar_json, sidecar_lock, period)
                 opt225 = _extract_opt225_regime(sidecar_json)
                 panel = {
                     "schema_version": PANEL_SCHEMA,

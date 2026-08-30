@@ -31,6 +31,7 @@ export const PERSONAL_OPTION_SIDECAR_DATASET =
 export const PERSONAL_OPTION_SIDECAR_SOURCE_VERSION =
   PERSONAL_VOL_SOURCE_IDENTITY.version;
 export const PERSONAL_OPTION_SIDECAR_WARMUP_SESSIONS = 61;
+export const PERSONAL_OPTION_SIDECAR_RECORDS_SCHEMA = "jquants_records/v1" as const;
 export const PERSONAL_OPTION_SIDECAR_MAX_REQUEST_BYTES = 8 * 1024;
 export const PERSONAL_OPTION_SIDECAR_MAX_OBJECTS_PER_DAY = 8;
 export const PERSONAL_OPTION_SIDECAR_MAX_OBJECT_BYTES = 16 * 1024 * 1024;
@@ -40,10 +41,38 @@ export const PERSONAL_OPTION_SIDECAR_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 export const PERSONAL_OPTION_SIDECAR_TERMINAL_MAX_BYTES = 64 * 1024;
 export const PERSONAL_OPTION_SIDECAR_TIMEOUT_GRACE_MS = 30 * 60 * 1000;
 
+// Live staging inventory for the exact three frozen periods (design-cap source).
+export const PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_OBJECTS = 651;
+export const PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_DATES = 650;
+export const PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_ROWS = 3_031_214;
+export const PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_BYTES = 3_419_223_324;
+export const PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_OBJECTS = 33;
+export const PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_ROWS = 960;
+export const PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_BYTES = 318_720;
+
+// 5 GiB / 4M rows sit above 3.419 GB / 3.031M live and below a 12 GB all-rows OOM.
+export const PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_OBJECTS = 1024;
+export const PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_ROWS = 4_000_000;
+export const PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_BYTES = 5 * 1024 * 1024 * 1024;
+export const PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_OBJECTS = 512;
+export const PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_BYTES = 4 * 1024 * 1024;
+export const PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_PERIOD_OBJECTS = 64;
+
 export const PERSONAL_OPTION_SIDECAR_DUPLICATE_RESOLUTION = {
   natural_key: ["Date", "Code"],
   compare: ["ingested_at", "object_key", "line_index"],
   winner: "lexicographic_max",
+} as const;
+
+export const PERSONAL_OPTION_SIDECAR_AUTHORITY = {
+  draft_only: true,
+  screening_only: true,
+  ready: false,
+  mass: false,
+  promotion: false,
+  live_orders: false,
+  go: false,
+  not_a_pass: true,
 } as const;
 
 export const PERSONAL_OPTION_SIDECAR_PERIODS = [
@@ -116,7 +145,7 @@ export type OptionSidecarPeriodLock = {
   evaluation_dates: string[];
   calendar_digest: string;
   raw_input_digest: string;
-  calendar: StructuredDayLock[];
+  calendar: StructuredObjectRef[];
   options: StructuredDayLock[];
 };
 
@@ -221,6 +250,17 @@ export function calendarDayPrefix(day: string): string {
     throw new Error("calendar day is invalid");
   }
   return `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=${day}/`;
+}
+
+export function calendarRootPrefix(): string {
+  return `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/`;
+}
+
+export function monthStartDay(day: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    throw new Error("calendar day is invalid");
+  }
+  return `${day.slice(0, 7)}-01`;
 }
 
 export function addIsoDays(day: string, delta: number): string {

@@ -15,7 +15,6 @@ import {
   PERSONAL_VOL_AM_PM_EVALUATION_PERIODS,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_INPUT_BYTES,
-  PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_SNAPSHOT_MANIFEST_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_TERMINAL_MAX_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_TIMEOUT_GRACE_MS,
@@ -30,18 +29,20 @@ import {
   personalVolAmPmPanelBuildRequestDigest,
   personalVolAmPmPanelBuildTerminalKey,
   type ImmutableObjectRef,
-  type OptionSidecarLock,
-  type PersonalVolAmPmEvaluationPeriodId,
   type PersonalVolAmPmPanelBuildRequest,
   type PersonalVolAmPmPanelWriterInputManifest,
   type SnapshotInputLock,
 } from "./personal_vol_am_pm_panel_writer_contract";
 import {
   PERSONAL_OPTION_SIDECAR_COHORT_ID,
+  PERSONAL_OPTION_SIDECAR_DATASET,
   PERSONAL_OPTION_SIDECAR_KIND,
   PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA,
+  PERSONAL_OPTION_SIDECAR_MAX_OUTPUT_BYTES,
+  PERSONAL_OPTION_SIDECAR_OBJECT_SCHEMA,
   PERSONAL_OPTION_SIDECAR_PERIODS,
   PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
+  PERSONAL_OPTION_SIDECAR_SOURCE_VERSION,
   PERSONAL_OPTION_SIDECAR_TERMINAL_MAX_BYTES,
   isPersonalOptionSidecarDigest,
   personalOptionSidecarObjectKey,
@@ -73,16 +74,6 @@ function fail(code: string): never {
 
 function isDigest(value: unknown): value is `sha256:${string}` {
   return typeof value === "string" && DIGEST_RE.test(value);
-}
-
-function hexSha256(bytes: ArrayBuffer): `sha256:${string}` {
-  return `sha256:${[...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-}
-
-function headDigest(object: R2Object): string | null {
-  if (isDigest(object.customMetadata?.sha256)) return object.customMetadata.sha256;
-  const checksum = object.checksums?.sha256;
-  return checksum ? hexSha256(checksum) : null;
 }
 
 async function boundedManifest(
@@ -211,7 +202,6 @@ async function lockSnapshot(
 async function lockGovernedSidecars(
   bucket: R2Bucket,
   producerJobId: string,
-  expectedDigest?: string,
 ): Promise<{
   producer: PersonalVolAmPmPanelWriterInputManifest["sidecar_producer"];
   option_sidecars: PersonalVolAmPmPanelWriterInputManifest["option_sidecars"];
@@ -222,9 +212,6 @@ async function lockGovernedSidecars(
     terminalKey,
     PERSONAL_OPTION_SIDECAR_TERMINAL_MAX_BYTES,
   );
-  if (expectedDigest && loaded.digest !== expectedDigest) {
-    fail("vol_am_pm_panel_sidecar_terminal_digest_mismatch");
-  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(new TextDecoder().decode(loaded.bytes));
@@ -245,11 +232,15 @@ async function lockGovernedSidecars(
   }
   const option_sidecars =
     {} as PersonalVolAmPmPanelWriterInputManifest["option_sidecars"];
+  const seen = new Set<string>();
   for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
     const row = parsed.sidecars[period.period_id];
     if (
       !isObject(row) ||
       row.period_id !== period.period_id ||
+      row.year !== period.year ||
+      row.period_start !== period.period_start ||
+      row.period_end !== period.period_end ||
       typeof row.key !== "string" ||
       typeof row.sha256 !== "string" ||
       !isPersonalOptionSidecarDigest(row.sha256) ||
@@ -257,23 +248,66 @@ async function lockGovernedSidecars(
       typeof row.size !== "number" ||
       !Number.isInteger(row.size) ||
       row.size < 1 ||
-      row.size > PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES
+      row.size > PERSONAL_OPTION_SIDECAR_MAX_OUTPUT_BYTES ||
+      typeof row.raw_input_digest !== "string" ||
+      !isDigest(row.raw_input_digest) ||
+      typeof row.calendar_digest !== "string" ||
+      !isDigest(row.calendar_digest)
     ) {
       fail("vol_am_pm_panel_sidecar_ref_invalid");
     }
-    const head = await bucket.head(row.key);
-    if (!head) fail("vol_am_pm_panel_source_missing");
-    if (head.size !== row.size) fail("vol_am_pm_panel_source_size_denied");
-    const digest = headDigest(head);
-    if (!digest || digest !== row.sha256) {
-      fail("vol_am_pm_panel_option_sidecar_checksum_missing");
+    if (seen.has(row.key) || seen.has(row.sha256)) {
+      fail("vol_am_pm_panel_sidecar_child_reused");
+    }
+    seen.add(row.key);
+    seen.add(row.sha256);
+    const child = await boundedManifest(
+      bucket,
+      row.key,
+      PERSONAL_OPTION_SIDECAR_MAX_OUTPUT_BYTES,
+    );
+    if (child.object.size !== row.size || child.digest !== row.sha256) {
+      fail("vol_am_pm_panel_sidecar_child_mismatch");
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(new TextDecoder().decode(child.bytes));
+    } catch {
+      fail("vol_am_pm_panel_sidecar_child_invalid_json");
+    }
+    if (!isObject(body) || !isObject(body.opt225_regime) || !isObject(body.opt225_regime.source)) {
+      fail("vol_am_pm_panel_sidecar_child_identity_mismatch");
+    }
+    const source = body.opt225_regime.source;
+    if (
+      body.schema_version !== PERSONAL_OPTION_SIDECAR_OBJECT_SCHEMA ||
+      body.period_id !== period.period_id ||
+      body.year !== period.year ||
+      body.period_start !== period.period_start ||
+      body.period_end !== period.period_end ||
+      source.dataset !== PERSONAL_OPTION_SIDECAR_DATASET ||
+      source.version !== PERSONAL_OPTION_SIDECAR_SOURCE_VERSION ||
+      source.raw_input_digest !== row.raw_input_digest ||
+      source.calendar_digest !== row.calendar_digest
+    ) {
+      fail("vol_am_pm_panel_sidecar_child_period_mismatch");
     }
     option_sidecars[period.period_id] = {
       period_id: period.period_id,
+      year: period.year,
+      period_start: period.period_start,
+      period_end: period.period_end,
+      schema_version: PERSONAL_OPTION_SIDECAR_OBJECT_SCHEMA,
       source_key: row.key,
-      etag: head.etag,
-      size: head.size,
+      etag: child.object.etag,
+      size: child.object.size,
       sha256: row.sha256,
+      source: {
+        dataset: PERSONAL_OPTION_SIDECAR_DATASET,
+        version: PERSONAL_OPTION_SIDECAR_SOURCE_VERSION,
+        raw_input_digest: row.raw_input_digest,
+        calendar_digest: row.calendar_digest,
+      },
     };
   }
   return {
@@ -325,7 +359,6 @@ export async function buildPersonalVolAmPmPanelInputManifest(
   const governed = await lockGovernedSidecars(
     bucket,
     request.sidecar_producer_job_id,
-    request.sidecar_producer_terminal_digest,
   );
   return {
     schema_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_INPUT_SCHEMA,
