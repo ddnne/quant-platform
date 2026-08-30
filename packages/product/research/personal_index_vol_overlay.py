@@ -2075,7 +2075,9 @@ def am_pm_proxy_mapping() -> dict[str, Any]:
         },
         "cash_index": {
             "topix_dataset": TOPIX_PROXY_DATASET,
-            "role": "DIAGNOSTIC_BETA_CONTEXT_ONLY",
+            "role": "NON_EXECUTABLE_SIGNAL_AND_DIAGNOSTIC_SOURCE",
+            "feeds_beta_or_rv_normalization": True,
+            "never_fills": True,
             "executable_fill_claim": False,
         },
     }
@@ -2090,50 +2092,207 @@ def am_pm_proxy_mapping_digest() -> str:
     )
 
 
-def _am_pm_repo_bindings() -> tuple[str | None, str | None]:
+AM_PM_BASE_PRODUCER_UNAVAILABLE: Final = "am_pm_base_producer_unavailable"
+AM_PM_SIGNAL_EVIDENCE_DIGEST_SCHEMA: Final = (
+    "index-vol-overlay-am-pm-signal-evidence/v1"
+)
+AM_PM_FILL_OUTCOME_EVIDENCE_DIGEST_SCHEMA: Final = (
+    "index-vol-overlay-am-pm-fill-outcome-evidence/v1"
+)
+_AM_PM_PM_CLOSE_TIME = time(hour=15, minute=0, second=0, tzinfo=_JST)
+
+
+class AmPmBaseProducerUnavailable(ValueError):
+    """The AM/PM base sleeve producer is not integrated in this checkout."""
+
+    def __init__(self) -> None:
+        super().__init__(AM_PM_BASE_PRODUCER_UNAVAILABLE)
+
+
+def am_pm_fixture_base_definition(
+    *,
+    strategy_spec_digest: str,
+    cohort_digest: str,
+) -> dict[str, str]:
+    return {
+        "strategy_id": AM_PM_BASE_SLEEVE_ID,
+        "cohort_id": AM_PM_BASE_COHORT_ID,
+        "schema_version": AM_PM_BASE_SLEEVE_SCHEMA,
+        "strategy_spec_digest": strategy_spec_digest,
+        "cohort_digest": cohort_digest,
+    }
+
+
+def _am_pm_repo_bindings() -> tuple[str, str] | None:
     try:
         cohort = get_research_cohort(AM_PM_BASE_COHORT_ID)
     except KeyError:
-        return None, None
+        return None
     spec = next(
         (
             item
             for item in cohort.strategy_specs
-            if item.strategy_id in {AM_PM_BASE_SLEEVE_ID, BASE_SLEEVE_ID}
+            if item.strategy_id == AM_PM_BASE_SLEEVE_ID
         ),
         None,
     )
-    spec_digest = strategy_spec_digest(spec) if spec is not None else None
-    return spec_digest, str(cohort.to_dict()["cohort_digest"])
+    if spec is None:
+        return None
+    return strategy_spec_digest(spec), str(cohort.to_dict()["cohort_digest"])
+
+
+def am_pm_base_producer_unavailable_reason() -> str | None:
+    bindings = _am_pm_repo_bindings()
+    return None if bindings is not None else AM_PM_BASE_PRODUCER_UNAVAILABLE
+
+
+def resolve_am_pm_base_digests(
+    *,
+    fixture_definition: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
+    """Return the AM/PM spec/cohort digests or fail closed.
+
+    The repo producer is required in production.  Tests may pass a fixture
+    that binds the same AM identities without using the next-close digest.
+    """
+
+    repo = _am_pm_repo_bindings()
+    if repo is not None:
+        return repo
+    if fixture_definition is None:
+        raise AmPmBaseProducerUnavailable()
+    spec = str(fixture_definition.get("strategy_spec_digest") or "")
+    cohort = str(fixture_definition.get("cohort_digest") or "")
+    if (
+        fixture_definition.get("strategy_id") != AM_PM_BASE_SLEEVE_ID
+        or fixture_definition.get("cohort_id") != AM_PM_BASE_COHORT_ID
+        or fixture_definition.get("schema_version") != AM_PM_BASE_SLEEVE_SCHEMA
+        or spec == EXPECTED_BASE_STRATEGY_SPEC_DIGEST
+        or cohort == EXPECTED_BASE_COHORT_DIGEST
+        or not _canonical_sha256(spec)
+        or not _canonical_sha256(cohort)
+    ):
+        raise AmPmBaseProducerUnavailable()
+    return spec, cohort
+
+
+def _am_pm_parse_timestamp(value: str, *, label: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be canonical ISO: {value!r}") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{label} must include a UTC offset")
+    if parsed.microsecond != 0 or parsed.isoformat(timespec="seconds") != value:
+        raise ValueError(f"{label} must use canonical whole seconds")
+    return parsed
+
+
+@dataclass(frozen=True, slots=True)
+class AmPmSignalEvidence:
+    """Morning decision evidence.  PM fields are forbidden here."""
+
+    date: str
+    signal_available_at: str
+    information_cutoff_jst: str = AM_PM_NON_PRICE_CUTOFF_JST
+    base_sleeve_am_nav: float | None = None
+    topix_etf_13060_madjc: float | None = None
+    topix_cash_close: float | None = None
+    n225_cash_close: float | None = None
+    n225_base_vol: float | None = None
+    n225_atm_iv: float | None = None
+    topix_realized_vol_20: float | None = None
+    n225_front_atm_iv: float | None = None
+    n225_next_atm_iv: float | None = None
+    n225_front_downside_wing_iv: float | None = None
+    n225_next_downside_wing_iv: float | None = None
+    svi_equivalent_atm_term_ratio: float | None = None
+    svi_equivalent_downside_smile_term_ratio: float | None = None
+
+    def __post_init__(self) -> None:
+        try:
+            session = date.fromisoformat(self.date)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("signal evidence date must be canonical ISO") from exc
+        if session.isoformat() != self.date:
+            raise ValueError("signal evidence date must be canonical ISO")
+        available = _am_pm_parse_timestamp(
+            self.signal_available_at, label="signal_available_at"
+        )
+        usable_by = datetime.combine(session, _AM_PM_EQUITY_USABLE_BY_TIME)
+        if available.date() != session or available > usable_by:
+            raise ValueError(
+                "signal evidence must be available on D and no later than 12:30 JST"
+            )
+        if self.information_cutoff_jst != AM_PM_NON_PRICE_CUTOFF_JST:
+            raise ValueError("signal information cutoff must remain D 11:30 JST")
+
+
+@dataclass(frozen=True, slots=True)
+class AmPmFillOutcomeEvidence:
+    """Afternoon fill/mark evidence.  Morning timestamps are forbidden."""
+
+    date: str
+    fill_available_at: str
+    outcome_available_at: str
+    base_sleeve_pm_nav: float | None = None
+    topix_etf_13060_aadjc: float | None = None
+
+    def __post_init__(self) -> None:
+        try:
+            session = date.fromisoformat(self.date)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("fill outcome date must be canonical ISO") from exc
+        if session.isoformat() != self.date:
+            raise ValueError("fill outcome date must be canonical ISO")
+        pm_open = datetime.combine(session, _AM_PM_PM_CLOSE_TIME)
+        for label in ("fill_available_at", "outcome_available_at"):
+            available = _am_pm_parse_timestamp(getattr(self, label), label=label)
+            if available.date() != session or available < pm_open:
+                raise ValueError(
+                    "PM outcome evidence must be timestamped at D PM close, "
+                    "not a morning timestamp"
+                )
 
 
 @dataclass(frozen=True, slots=True)
 class IndexVolOverlayAmPmObservation:
-    """One official session of causal AM/PM overlay evidence.
-
-    Signal/sizing/beta may use ``base_sleeve_am_nav`` and ETF ``MAdjC``.
-    Fill and first PnL use afternoon ``AAdjC`` / PM NAV and must not enter
-    the D signal.  Option/SVI fields are the observations *on this date* and
-    are consumed only by a later session's signal.
-    """
+    """One official session: morning signal evidence plus optional PM outcome."""
 
     date: str
-    available_at: str
-    base_sleeve_am_nav: float | None
-    base_sleeve_pm_nav: float | None
-    topix_etf_13060_madjc: float | None
-    topix_etf_13060_aadjc: float | None
-    topix_cash_close: float | None
-    n225_cash_close: float | None
-    n225_base_vol: float | None
-    n225_atm_iv: float | None
-    topix_realized_vol_20: float | None
-    n225_front_atm_iv: float | None
-    n225_next_atm_iv: float | None
-    n225_front_downside_wing_iv: float | None
-    n225_next_downside_wing_iv: float | None
-    svi_equivalent_atm_term_ratio: float | None = None
-    svi_equivalent_downside_smile_term_ratio: float | None = None
+    signal: AmPmSignalEvidence
+    fill_outcome: AmPmFillOutcomeEvidence | None = None
+
+    def __post_init__(self) -> None:
+        if self.signal.date != self.date:
+            raise ValueError("signal evidence date must match the session date")
+        if self.fill_outcome is not None and self.fill_outcome.date != self.date:
+            raise ValueError("fill outcome date must match the session date")
+
+
+def canonical_am_pm_signal_evidence_digest(
+    observations: Sequence[IndexVolOverlayAmPmObservation],
+) -> str:
+    return _canonical_digest(
+        {
+            "schema_version": AM_PM_SIGNAL_EVIDENCE_DIGEST_SCHEMA,
+            "rows": [asdict(row.signal) for row in observations],
+        }
+    )
+
+
+def canonical_am_pm_fill_outcome_evidence_digest(
+    observations: Sequence[IndexVolOverlayAmPmObservation],
+) -> str:
+    return _canonical_digest(
+        {
+            "schema_version": AM_PM_FILL_OUTCOME_EVIDENCE_DIGEST_SCHEMA,
+            "rows": [
+                asdict(row.fill_outcome) if row.fill_outcome is not None else None
+                for row in observations
+            ],
+        }
+    )
 
 
 def canonical_prepared_am_pm_panel_digest(
@@ -2142,7 +2301,19 @@ def canonical_prepared_am_pm_panel_digest(
     return _canonical_digest(
         {
             "schema_version": AM_PM_PANEL_OBSERVATION_DIGEST_SCHEMA,
-            "rows": [asdict(row) for row in observations],
+            "signal_evidence_digest": canonical_am_pm_signal_evidence_digest(
+                observations
+            ),
+            "fill_outcome_evidence_digest": (
+                canonical_am_pm_fill_outcome_evidence_digest(observations)
+            ),
+            "sessions": [
+                {
+                    "date": row.date,
+                    "has_fill_outcome": row.fill_outcome is not None,
+                }
+                for row in observations
+            ],
         }
     )
 
@@ -2157,6 +2328,8 @@ class PreparedIndexVolOverlayAmPmPanelManifest:
     base_report_digest: str
     trading_calendar_digest: str
     prepared_panel_digest: str
+    signal_evidence_digest: str
+    fill_outcome_evidence_digest: str
     temporal_contract_digest: str
     proxy_mapping_digest: str
     session_date_start: str
@@ -2206,20 +2379,23 @@ class PreparedIndexVolOverlayAmPmPanelManifest:
             "base_report_digest",
             "trading_calendar_digest",
             "prepared_panel_digest",
+            "signal_evidence_digest",
+            "fill_outcome_evidence_digest",
             "temporal_contract_digest",
             "proxy_mapping_digest",
         ):
             if not _canonical_sha256(getattr(self, name)):
                 raise ValueError(f"{name} must be a canonical sha256 digest")
-        if self.strategy_spec_digest == EXPECTED_BASE_STRATEGY_SPEC_DIGEST:
-            raise ValueError("old next-close strategy_spec_digest is invalid for AM/PM")
-        if self.cohort_digest == EXPECTED_BASE_COHORT_DIGEST:
-            raise ValueError("old sector-relative-ls-v1 cohort_digest is invalid for AM/PM")
-        repo_spec, repo_cohort = _am_pm_repo_bindings()
-        if repo_spec is not None and self.strategy_spec_digest != repo_spec:
-            raise ValueError("strategy_spec_digest does not match AM/PM repo definition")
-        if repo_cohort is not None and self.cohort_digest != repo_cohort:
-            raise ValueError("cohort_digest does not match AM/PM repo definition")
+        if (
+            self.strategy_spec_digest == EXPECTED_BASE_STRATEGY_SPEC_DIGEST
+            or self.cohort_digest == EXPECTED_BASE_COHORT_DIGEST
+        ):
+            raise AmPmBaseProducerUnavailable()
+        repo = _am_pm_repo_bindings()
+        if repo is not None and (
+            self.strategy_spec_digest != repo[0] or self.cohort_digest != repo[1]
+        ):
+            raise AmPmBaseProducerUnavailable()
         if self.temporal_contract_digest != am_pm_temporal_contract_digest():
             raise ValueError("temporal_contract_digest does not match frozen AM/PM contract")
         if self.proxy_mapping_digest != am_pm_proxy_mapping_digest():
@@ -2243,39 +2419,6 @@ class PreparedIndexVolOverlayAmPmPanelManifest:
             raise ValueError("manifest session_count must be at least three")
 
 
-def _am_pm_availability_timestamp(row: IndexVolOverlayAmPmObservation) -> datetime:
-    try:
-        parsed = datetime.fromisoformat(row.available_at)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"observation available_at must be canonical ISO: {row.available_at!r}"
-        ) from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError("observation available_at must include a UTC offset")
-    if (
-        parsed.microsecond != 0
-        or parsed.isoformat(timespec="seconds") != row.available_at
-    ):
-        raise ValueError("observation available_at must use canonical whole seconds")
-    usable_by = datetime.combine(
-        date.fromisoformat(row.date),
-        _AM_PM_EQUITY_USABLE_BY_TIME,
-    )
-    fill_cutoff = datetime.combine(
-        date.fromisoformat(row.date),
-        _AM_PM_FILL_CUTOFF_TIME,
-    )
-    if parsed > usable_by:
-        raise ValueError(
-            "AM/PM signal row must be available no later than D 12:30 JST"
-        )
-    if parsed >= fill_cutoff:
-        raise ValueError(
-            "AM/PM signal row must be available strictly before the D PM fill"
-        )
-    return parsed
-
-
 def _validate_am_pm_observations(
     observations: Sequence[IndexVolOverlayAmPmObservation],
 ) -> None:
@@ -2287,6 +2430,12 @@ def _validate_am_pm_observations(
             raise TypeError(
                 "AM/PM observations must be IndexVolOverlayAmPmObservation values"
             )
+        if not isinstance(row.signal, AmPmSignalEvidence):
+            raise TypeError("session signal evidence is required")
+        if row.fill_outcome is not None and not isinstance(
+            row.fill_outcome, AmPmFillOutcomeEvidence
+        ):
+            raise TypeError("fill outcome evidence is invalid")
         try:
             parsed = date.fromisoformat(row.date)
         except (TypeError, ValueError) as exc:
@@ -2295,7 +2444,6 @@ def _validate_am_pm_observations(
             raise ValueError(f"observation date must be canonical ISO: {row.date!r}")
         if previous is not None and row.date <= previous:
             raise ValueError("observation dates must be unique and strictly increasing")
-        _am_pm_availability_timestamp(row)
         previous = row.date
 
 
@@ -2332,6 +2480,15 @@ def _validate_am_pm_manifest(
         raise ValueError("prepared panel rows are not canonically hashable") from exc
     if manifest.prepared_panel_digest != observed_panel_digest:
         raise ValueError("prepared_panel_digest does not match observation rows")
+    if manifest.signal_evidence_digest != canonical_am_pm_signal_evidence_digest(
+        observations
+    ):
+        raise ValueError("signal_evidence_digest does not match morning evidence")
+    if (
+        manifest.fill_outcome_evidence_digest
+        != canonical_am_pm_fill_outcome_evidence_digest(observations)
+    ):
+        raise ValueError("fill_outcome_evidence_digest does not match PM evidence")
     observed_calendar_digest = canonical_trading_calendar_digest(authoritative)
     if manifest.trading_calendar_digest != observed_calendar_digest:
         raise ValueError("trading_calendar_digest does not match ordered session dates")
@@ -2345,9 +2502,20 @@ def build_prepared_am_pm_panel_manifest(
     base_report_digest: str,
     strategy_spec_digest: str,
     cohort_digest: str,
+    fixture_definition: Mapping[str, str] | None = None,
 ) -> PreparedIndexVolOverlayAmPmPanelManifest:
     """Build the AM/PM manifest; never bind the next-close overlay panel."""
 
+    expected_spec, expected_cohort = resolve_am_pm_base_digests(
+        fixture_definition=fixture_definition
+    )
+    if (
+        strategy_spec_digest != expected_spec
+        or cohort_digest != expected_cohort
+        or strategy_spec_digest == EXPECTED_BASE_STRATEGY_SPEC_DIGEST
+        or cohort_digest == EXPECTED_BASE_COHORT_DIGEST
+    ):
+        raise AmPmBaseProducerUnavailable()
     _validate_am_pm_observations(observations)
     authoritative = _canonical_authoritative_session_dates(
         authoritative_session_dates
@@ -2363,6 +2531,10 @@ def build_prepared_am_pm_panel_manifest(
         base_report_digest=base_report_digest,
         trading_calendar_digest=canonical_trading_calendar_digest(authoritative),
         prepared_panel_digest=canonical_prepared_am_pm_panel_digest(observations),
+        signal_evidence_digest=canonical_am_pm_signal_evidence_digest(observations),
+        fill_outcome_evidence_digest=canonical_am_pm_fill_outcome_evidence_digest(
+            observations
+        ),
         temporal_contract_digest=am_pm_temporal_contract_digest(),
         proxy_mapping_digest=am_pm_proxy_mapping_digest(),
         session_date_start=authoritative[0],
@@ -2388,19 +2560,8 @@ def _am_sleeve_return(
     end_index: int,
 ) -> float | None:
     return _nav_return(
-        rows[start_index].base_sleeve_am_nav,
-        rows[end_index].base_sleeve_am_nav,
-    )
-
-
-def _pm_sleeve_return(
-    rows: Sequence[IndexVolOverlayAmPmObservation],
-    start_index: int,
-    end_index: int,
-) -> float | None:
-    return _nav_return(
-        rows[start_index].base_sleeve_pm_nav,
-        rows[end_index].base_sleeve_pm_nav,
+        rows[start_index].signal.base_sleeve_am_nav,
+        rows[end_index].signal.base_sleeve_am_nav,
     )
 
 
@@ -2410,20 +2571,21 @@ def _etf_am_return(
     end_index: int,
 ) -> float | None:
     return _nav_return(
-        rows[start_index].topix_etf_13060_madjc,
-        rows[end_index].topix_etf_13060_madjc,
+        rows[start_index].signal.topix_etf_13060_madjc,
+        rows[end_index].signal.topix_etf_13060_madjc,
     )
 
 
-def _etf_pm_return(
-    rows: Sequence[IndexVolOverlayAmPmObservation],
-    start_index: int,
-    end_index: int,
-) -> float | None:
-    return _nav_return(
-        rows[start_index].topix_etf_13060_aadjc,
-        rows[end_index].topix_etf_13060_aadjc,
-    )
+def _fill_sleeve_nav(row: IndexVolOverlayAmPmObservation) -> float | None:
+    if row.fill_outcome is None:
+        return None
+    return _positive(row.fill_outcome.base_sleeve_pm_nav)
+
+
+def _fill_etf_a(row: IndexVolOverlayAmPmObservation) -> float | None:
+    if row.fill_outcome is None:
+        return None
+    return _positive(row.fill_outcome.topix_etf_13060_aadjc)
 
 
 def _am_pm_estimate_beta(
@@ -2465,39 +2627,24 @@ def _am_pm_estimate_beta(
     return (beta, len(paired), paired[-1][0]), None
 
 
-def _am_pm_structural_issues(
+def _am_pm_decision_issues(
     rows: Sequence[IndexVolOverlayAmPmObservation],
     signal_index: int,
-    *,
-    require_pnl: bool,
 ) -> list[str]:
     issues: list[str] = []
     if signal_index < 1:
         issues.append("exact_prior_official_session_missing")
         return issues
-    signal = rows[signal_index]
-    prior = rows[signal_index - 1]
+    signal = rows[signal_index].signal
+    prior = rows[signal_index - 1].signal
     if _positive(signal.base_sleeve_am_nav) is None:
         issues.append("d_morning_field_missing")
-    if _positive(signal.base_sleeve_pm_nav) is None:
-        issues.append("d_afternoon_field_missing")
     if _positive(signal.topix_etf_13060_madjc) is None:
         issues.append("d_etf_13060_madjc_missing")
-    if _positive(signal.topix_etf_13060_aadjc) is None:
-        issues.append("d_etf_13060_aadjc_missing")
     if _positive(prior.base_sleeve_am_nav) is None:
         issues.append("prior_session_morning_field_missing")
     if _positive(prior.topix_etf_13060_madjc) is None:
         issues.append("prior_session_etf_13060_madjc_missing")
-    if require_pnl:
-        if signal_index + 1 >= len(rows):
-            issues.append("d_plus_1_session_unavailable")
-        else:
-            nxt = rows[signal_index + 1]
-            if _positive(nxt.base_sleeve_pm_nav) is None:
-                issues.append("d_plus_1_afternoon_field_missing")
-            if _positive(nxt.topix_etf_13060_aadjc) is None:
-                issues.append("d_plus_1_etf_13060_aadjc_missing")
     return issues
 
 
@@ -2523,13 +2670,14 @@ def _am_pm_option_feature_value(
         )
 
         def __init__(self, source: IndexVolOverlayAmPmObservation) -> None:
-            self.n225_base_vol = source.n225_base_vol
-            self.n225_atm_iv = source.n225_atm_iv
-            self.topix_realized_vol_20 = source.topix_realized_vol_20
-            self.n225_front_atm_iv = source.n225_front_atm_iv
-            self.n225_next_atm_iv = source.n225_next_atm_iv
-            self.n225_front_downside_wing_iv = source.n225_front_downside_wing_iv
-            self.n225_next_downside_wing_iv = source.n225_next_downside_wing_iv
+            signal = source.signal
+            self.n225_base_vol = signal.n225_base_vol
+            self.n225_atm_iv = signal.n225_atm_iv
+            self.topix_realized_vol_20 = signal.topix_realized_vol_20
+            self.n225_front_atm_iv = signal.n225_front_atm_iv
+            self.n225_next_atm_iv = signal.n225_next_atm_iv
+            self.n225_front_downside_wing_iv = signal.n225_front_downside_wing_iv
+            self.n225_next_downside_wing_iv = signal.n225_next_downside_wing_iv
 
     viewed = [_OptionView(row) for row in rows]
     return _feature_value(candidate, viewed, option_index)  # type: ignore[arg-type]
@@ -2601,6 +2749,366 @@ def _am_pm_not_evaluated_control(
     }
 
 
+def _am_pm_decision_plan(
+    *,
+    signal_index: int,
+    rows: Sequence[IndexVolOverlayAmPmObservation],
+    feature_ratio_x: float | None,
+    gross_scale: float,
+    estimated_beta: float | None,
+    beta_observations: int | None,
+    beta_window_last_return_date: str | None,
+    topix_hedge_weight: float,
+    flatten_applied: bool,
+    common_valid: bool,
+) -> dict[str, Any]:
+    pnl_index = signal_index + 1 if signal_index + 1 < len(rows) else signal_index
+    return {
+        "signal_index": signal_index,
+        "signal_date": rows[signal_index].date,
+        "rebalance_date": rows[signal_index].date,
+        "pnl_date": rows[pnl_index].date,
+        "feature_ratio_x": feature_ratio_x,
+        "gross_scale": gross_scale,
+        "estimated_beta": estimated_beta,
+        "beta_observations": beta_observations,
+        "beta_window_last_return_date": beta_window_last_return_date,
+        "topix_hedge_weight": topix_hedge_weight,
+        "flatten_applied": flatten_applied,
+        "common_valid": common_valid,
+        "sleeve_sizing_price": rows[signal_index].signal.base_sleeve_am_nav,
+        "etf_13060_sizing_price": rows[signal_index].signal.topix_etf_13060_madjc,
+    }
+
+
+def _am_pm_unit_trade(
+    *,
+    side: str,
+    instrument_code: str | None,
+    signal_date: str,
+    fill_date: str,
+    pnl_date: str,
+    units: float,
+    sizing_price: float | None,
+    fill_price: float,
+) -> dict[str, Any] | None:
+    if units == 0.0:
+        return None
+    notional = units * fill_price
+    return {
+        "side": side,
+        "instrument_code": instrument_code,
+        "signal_date": signal_date,
+        "fill_date": fill_date,
+        "pnl_date": pnl_date,
+        "units": units,
+        "sizing_price": sizing_price,
+        "fill_price": fill_price,
+        "notional": notional,
+        "cost": abs(notional) * ONE_WAY_COST_RATE,
+    }
+
+
+def _evaluate_am_pm_unit_plans(
+    plans: Sequence[dict[str, Any]],
+    rows: Sequence[IndexVolOverlayAmPmObservation],
+    *,
+    starting_capital: float,
+    continuous_nav_wrapper: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+    cash = starting_capital
+    sleeve_units = 0.0
+    etf_units = 0.0
+    last_sleeve_a: float | None = None
+    last_etf_a: float | None = None
+    comparable = True
+    no_fill_intervals: list[dict[str, Any]] = []
+    stale_marks: list[dict[str, Any]] = []
+    curve: list[dict[str, Any]] = []
+    trades: list[dict[str, Any]] = []
+
+    def marked_equity(sleeve_px: float | None, etf_px: float | None) -> float | None:
+        if sleeve_units != 0.0 and sleeve_px is None:
+            return None
+        if etf_units != 0.0 and etf_px is None:
+            return None
+        value = cash
+        if sleeve_units:
+            value += sleeve_units * float(sleeve_px)
+        if etf_units:
+            value += etf_units * float(etf_px)
+        return value
+
+    for plan_index, plan in enumerate(plans):
+        idx = int(plan["signal_index"])
+        row = rows[idx]
+        pnl_index = idx + 1 if idx + 1 < len(rows) else None
+        sleeve_m = float(plan["sleeve_sizing_price"])
+        etf_m = float(plan["etf_13060_sizing_price"])
+        opening = marked_equity(last_sleeve_a, last_etf_a)
+        if opening is None:
+            comparable = False
+            stale_marks.append(
+                {
+                    "date": row.date,
+                    "reason": "morning_equity_stale_missing_prior_a",
+                }
+            )
+            opening = cash
+        if (
+            continuous_nav_wrapper
+            and plan_index > 0
+            and not plan.get("flatten_applied")
+        ):
+            target_sleeve_units = sleeve_units
+            target_etf_units = etf_units
+            target_sleeve_dollar = sleeve_units * sleeve_m
+            target_etf_dollar = etf_units * etf_m
+        else:
+            gross_scale = float(plan["gross_scale"])
+            hedge_weight = float(plan["topix_hedge_weight"])
+            target_sleeve_dollar = gross_scale * opening
+            target_etf_dollar = hedge_weight * opening
+            target_sleeve_units = target_sleeve_dollar / sleeve_m
+            target_etf_units = target_etf_dollar / etf_m
+        sleeve_a = _fill_sleeve_nav(row)
+        etf_a = _fill_etf_a(row)
+        need_etf = target_etf_units != 0.0 or etf_units != 0.0
+        execution_valid = sleeve_a is not None and (
+            (etf_a is not None) if need_etf else True
+        )
+        delta_sleeve = 0.0
+        delta_etf = 0.0
+        sleeve_fill_notional = 0.0
+        etf_fill_notional = 0.0
+        fill_cost = 0.0
+        no_fill = not execution_valid
+        if execution_valid:
+            assert sleeve_a is not None
+            delta_sleeve = target_sleeve_units - sleeve_units
+            delta_etf = target_etf_units - etf_units
+            sleeve_fill_notional = delta_sleeve * sleeve_a
+            etf_fill_notional = delta_etf * (etf_a if etf_a is not None else 0.0)
+            fill_cost = ONE_WAY_COST_RATE * (
+                abs(sleeve_fill_notional) + abs(etf_fill_notional)
+            )
+            cash -= sleeve_fill_notional + etf_fill_notional + fill_cost
+            sleeve_units = target_sleeve_units
+            etf_units = target_etf_units
+            last_sleeve_a = sleeve_a
+            if etf_a is not None:
+                last_etf_a = etf_a
+            for trade in (
+                _am_pm_unit_trade(
+                    side="sleeve_rebalance",
+                    instrument_code=None,
+                    signal_date=str(plan["signal_date"]),
+                    fill_date=str(plan["rebalance_date"]),
+                    pnl_date=str(plan["pnl_date"]),
+                    units=delta_sleeve,
+                    sizing_price=sleeve_m,
+                    fill_price=sleeve_a,
+                ),
+                _am_pm_unit_trade(
+                    side="topix_etf_13060_rebalance",
+                    instrument_code=TOPIX_ETF_CODE,
+                    signal_date=str(plan["signal_date"]),
+                    fill_date=str(plan["rebalance_date"]),
+                    pnl_date=str(plan["pnl_date"]),
+                    units=delta_etf,
+                    sizing_price=etf_m,
+                    fill_price=float(etf_a or 0.0),
+                ),
+            ):
+                if trade is not None:
+                    trades.append(trade)
+        else:
+            no_fill_intervals.append(
+                {
+                    "signal_date": row.date,
+                    "rebalance_date": row.date,
+                    "reason": "d_afternoon_unavailable_no_fill",
+                    "preserved_sleeve_units": sleeve_units,
+                    "preserved_etf_13060_units": etf_units,
+                }
+            )
+            if sleeve_units != 0.0 or etf_units != 0.0:
+                comparable = False
+                stale_marks.append(
+                    {
+                        "date": row.date,
+                        "reason": "execution_invalid_position_unmarked",
+                    }
+                )
+        next_sleeve_a = (
+            _fill_sleeve_nav(rows[pnl_index]) if pnl_index is not None else None
+        )
+        next_etf_a = _fill_etf_a(rows[pnl_index]) if pnl_index is not None else None
+        can_mark = True
+        if sleeve_units != 0.0 and (last_sleeve_a is None or next_sleeve_a is None):
+            can_mark = False
+        if etf_units != 0.0 and (last_etf_a is None or next_etf_a is None):
+            can_mark = False
+        sleeve_pnl = 0.0
+        etf_pnl = 0.0
+        if can_mark:
+            if sleeve_units:
+                sleeve_pnl = sleeve_units * (
+                    float(next_sleeve_a) - float(last_sleeve_a)
+                )
+            if etf_units:
+                etf_pnl = etf_units * (float(next_etf_a) - float(last_etf_a))
+        elif sleeve_units != 0.0 or etf_units != 0.0:
+            comparable = False
+            stale_marks.append(
+                {
+                    "date": (
+                        rows[pnl_index].date if pnl_index is not None else row.date
+                    ),
+                    "reason": "valuation_a_missing_stale",
+                }
+            )
+        gross_pnl = sleeve_pnl + etf_pnl
+        equity_after_fill = marked_equity(last_sleeve_a, last_etf_a)
+        if equity_after_fill is None:
+            equity_after_fill = cash
+        report_equity = equity_after_fill + gross_pnl
+        terminal_close = plan_index == len(plans) - 1
+        terminal_cost = 0.0
+        terminal_turnover = 0.0
+        if terminal_close and can_mark and (sleeve_units or etf_units):
+            close_sleeve = -(sleeve_units * float(next_sleeve_a or 0.0))
+            close_etf = -(etf_units * float(next_etf_a or 0.0))
+            terminal_turnover = abs(close_sleeve) + abs(close_etf)
+            terminal_cost = ONE_WAY_COST_RATE * terminal_turnover
+            for trade in (
+                _am_pm_unit_trade(
+                    side="sleeve_terminal_close",
+                    instrument_code=None,
+                    signal_date=str(plan["signal_date"]),
+                    fill_date=str(plan["pnl_date"]),
+                    pnl_date=str(plan["pnl_date"]),
+                    units=-sleeve_units,
+                    sizing_price=sleeve_m,
+                    fill_price=float(next_sleeve_a or 0.0),
+                ),
+                _am_pm_unit_trade(
+                    side="topix_etf_13060_terminal_close",
+                    instrument_code=TOPIX_ETF_CODE,
+                    signal_date=str(plan["signal_date"]),
+                    fill_date=str(plan["pnl_date"]),
+                    pnl_date=str(plan["pnl_date"]),
+                    units=-etf_units,
+                    sizing_price=etf_m,
+                    fill_price=float(next_etf_a or 0.0),
+                ),
+            ):
+                if trade is not None:
+                    trades.append(trade)
+            report_equity -= terminal_cost
+            cash = report_equity
+            sleeve_units = 0.0
+            etf_units = 0.0
+        if not math.isfinite(report_equity) or report_equity <= 0.0:
+            raise ValueError("overlay path produced non-positive or non-finite equity")
+        net_return = report_equity / opening - 1.0
+        curve.append(
+            {
+                **plan,
+                "target_sleeve_dollar": target_sleeve_dollar,
+                "target_etf_13060_dollar": target_etf_dollar,
+                "target_sleeve_units": target_sleeve_units,
+                "target_etf_13060_units": target_etf_units,
+                "delta_sleeve_units": delta_sleeve,
+                "delta_etf_13060_units": delta_etf,
+                "sleeve_fill_price": sleeve_a,
+                "etf_13060_fill_price": etf_a,
+                "sleeve_fill_notional": sleeve_fill_notional,
+                "etf_13060_fill_notional": etf_fill_notional,
+                "carried_sleeve_units": sleeve_units
+                if not terminal_close
+                else 0.0,
+                "carried_etf_13060_units": etf_units if not terminal_close else 0.0,
+                "sleeve_valuation_price": next_sleeve_a,
+                "etf_13060_valuation_price": next_etf_a,
+                "execution_valid": execution_valid,
+                "no_fill": no_fill,
+                "stale_mark": not can_mark,
+                "rebalance_cost_amount": fill_cost,
+                "terminal_close": terminal_close,
+                "terminal_close_cost_amount": terminal_cost,
+                "terminal_turnover_one_way_amount": terminal_turnover,
+                "gross_pnl": gross_pnl,
+                "gross_return": gross_pnl / opening,
+                "net_return": net_return,
+                "date": plan["pnl_date"],
+                "equity": report_equity,
+                "topix_etf_13060_return": (
+                    None
+                    if last_etf_a in {None, 0.0} or next_etf_a is None
+                    else next_etf_a / last_etf_a - 1.0
+                ),
+            }
+        )
+    performance = summarize_performance(
+        equity_curve=curve,
+        trades=trades,
+        starting_capital=starting_capital,
+    )
+    performance.update(
+        {
+            "cost_turnover_fill_scope": "OVERLAY_INCREMENTAL_ONLY",
+            "base_sleeve_return_semantics": BASE_RETURN_SEMANTICS,
+            "base_nav_semantics": BASE_NAV_SEMANTICS,
+            "source_slice_wrapper_cost_semantics": (
+                SOURCE_SLICE_WRAPPER_COST_SEMANTICS
+            ),
+            "total_strategy_cost_turnover_fill_comparable": False,
+            "comparable": comparable,
+        }
+    )
+    return (
+        curve,
+        trades,
+        performance,
+        {
+            "comparable": comparable,
+            "no_fill_intervals": no_fill_intervals,
+            "stale_marks": stale_marks,
+            "reason": (
+                None
+                if comparable
+                else "valuation_a_missing_non_comparable"
+            ),
+        },
+    )
+
+
+def _am_pm_finish_result(
+    *,
+    payload: dict[str, Any],
+    curve: list[dict[str, Any]],
+    trades: list[dict[str, Any]],
+    performance: dict[str, Any],
+    comparability: Mapping[str, Any],
+) -> dict[str, Any]:
+    comparable = comparability["comparable"] is True
+    return {
+        **payload,
+        "status": "EVALUATED" if comparable else "NOT_EVALUATED",
+        "reason": None if comparable else comparability["reason"],
+        "missing_required_rows": [],
+        "daily_path": curve,
+        "trades": trades,
+        "performance": performance if comparable else None,
+        "execution_audit": {
+            "no_fill_intervals": comparability["no_fill_intervals"],
+            "stale_marks": comparability["stale_marks"],
+            "comparable": comparable,
+        },
+    }
+
+
 def _am_pm_candidate_plans(
     candidate: OverlayCandidate,
     rows: Sequence[IndexVolOverlayAmPmObservation],
@@ -2610,9 +3118,9 @@ def _am_pm_candidate_plans(
     missing: list[dict[str, str]] = []
     for signal_index in signal_indices:
         signal_row = rows[signal_index]
-        structural = _am_pm_structural_issues(rows, signal_index, require_pnl=True)
-        if structural:
-            missing.append(_missing(signal_row.date, structural[0]))
+        decision = _am_pm_decision_issues(rows, signal_index)
+        if decision:
+            missing.append(_missing(signal_row.date, decision[0]))
             continue
         x_value, feature_error = _am_pm_option_feature_value(
             candidate, rows, signal_index
@@ -2628,36 +3136,26 @@ def _am_pm_candidate_plans(
                 _missing(signal_row.date, beta_error or "beta_estimate_unavailable")
             )
             continue
-        pnl_index = signal_index + 1
-        sleeve_return = _pm_sleeve_return(rows, signal_index, pnl_index)
-        proxy_return = _etf_pm_return(rows, signal_index, pnl_index)
-        if sleeve_return is None:
-            missing.append(_missing(rows[pnl_index].date, "base_sleeve_pm_return_missing"))
-            continue
-        if proxy_return is None:
-            missing.append(_missing(rows[pnl_index].date, "topix_etf_13060_pm_return_missing"))
-            continue
-        gross_scale = _clip(1.0 / x_value, 0.5, 1.0)
         estimated_beta, beta_observations, beta_last_date = beta
+        gross_scale = _clip(1.0 / x_value, 0.5, 1.0)
         hedge_weight = _clip(
             -gross_scale * estimated_beta,
             -MAX_ABS_TOPIX_HEDGE,
             MAX_ABS_TOPIX_HEDGE,
         )
         plans.append(
-            {
-                "signal_date": signal_row.date,
-                "rebalance_date": signal_row.date,
-                "pnl_date": rows[pnl_index].date,
-                "feature_ratio_x": x_value,
-                "gross_scale": gross_scale,
-                "estimated_beta": estimated_beta,
-                "beta_observations": beta_observations,
-                "beta_window_last_return_date": beta_last_date,
-                "topix_hedge_weight": hedge_weight,
-                "base_sleeve_return": sleeve_return,
-                "topix_cash_return": proxy_return,
-            }
+            _am_pm_decision_plan(
+                signal_index=signal_index,
+                rows=rows,
+                feature_ratio_x=x_value,
+                gross_scale=gross_scale,
+                estimated_beta=estimated_beta,
+                beta_observations=beta_observations,
+                beta_window_last_return_date=beta_last_date,
+                topix_hedge_weight=hedge_weight,
+                flatten_applied=False,
+                common_valid=True,
+            )
         )
     return plans, missing
 
@@ -2682,19 +3180,18 @@ def _am_pm_overlay_candidate_result(
             reason="no_signal_sessions_in_requested_range",
             missing=[],
         )
-    curve, trades, performance = _evaluate_plans(
+    curve, trades, performance, comparability = _evaluate_am_pm_unit_plans(
         plans,
+        rows,
         starting_capital=starting_capital,
     )
-    return {
-        **asdict(candidate),
-        "status": "EVALUATED",
-        "reason": None,
-        "missing_required_rows": [],
-        "daily_path": curve,
-        "trades": trades,
-        "performance": performance,
-    }
+    return _am_pm_finish_result(
+        payload=asdict(candidate),
+        curve=curve,
+        trades=trades,
+        performance=performance,
+        comparability=comparability,
+    )
 
 
 def _am_pm_overlay_control_result(
@@ -2706,30 +3203,23 @@ def _am_pm_overlay_control_result(
     plans: list[dict[str, Any]] = []
     missing: list[dict[str, str]] = []
     for signal_index in signal_indices:
-        signal_row = rows[signal_index]
-        structural = _am_pm_structural_issues(rows, signal_index, require_pnl=True)
-        if structural:
-            missing.append(_missing(signal_row.date, structural[0]))
-            continue
-        pnl_index = signal_index + 1
-        sleeve_return = _pm_sleeve_return(rows, signal_index, pnl_index)
-        if sleeve_return is None:
-            missing.append(_missing(rows[pnl_index].date, "base_sleeve_pm_return_missing"))
+        decision = _am_pm_decision_issues(rows, signal_index)
+        if decision:
+            missing.append(_missing(rows[signal_index].date, decision[0]))
             continue
         plans.append(
-            {
-                "signal_date": signal_row.date,
-                "rebalance_date": signal_row.date,
-                "pnl_date": rows[pnl_index].date,
-                "feature_ratio_x": 1.0,
-                "gross_scale": 1.0,
-                "estimated_beta": None,
-                "beta_observations": None,
-                "beta_window_last_return_date": None,
-                "topix_hedge_weight": 0.0,
-                "base_sleeve_return": sleeve_return,
-                "topix_cash_return": 0.0,
-            }
+            _am_pm_decision_plan(
+                signal_index=signal_index,
+                rows=rows,
+                feature_ratio_x=1.0,
+                gross_scale=1.0,
+                estimated_beta=None,
+                beta_observations=None,
+                beta_window_last_return_date=None,
+                topix_hedge_weight=0.0,
+                flatten_applied=False,
+                common_valid=True,
+            )
         )
     declaration = {
         "control_id": AM_PM_CONTROL_ID,
@@ -2753,20 +3243,19 @@ def _am_pm_overlay_control_result(
                 missing=missing,
             ),
         }
-    curve, trades, performance = _evaluate_plans(
+    curve, trades, performance, comparability = _evaluate_am_pm_unit_plans(
         plans,
+        rows,
         starting_capital=starting_capital,
         continuous_nav_wrapper=True,
     )
-    return {
-        **declaration,
-        "status": "EVALUATED",
-        "reason": None,
-        "missing_required_rows": [],
-        "daily_path": curve,
-        "trades": trades,
-        "performance": performance,
-    }
+    return _am_pm_finish_result(
+        payload=declaration,
+        curve=curve,
+        trades=trades,
+        performance=performance,
+        comparability=comparability,
+    )
 
 
 def _am_pm_report_framing(
@@ -2847,6 +3336,18 @@ def _am_pm_report_framing(
             "return_basis": "am_to_am_madjc",
             "hedge_instrument": TOPIX_ETF_CODE,
             "hedge_formula": "h=clip(-g*beta,-1.5,1.5)",
+            "cash_topix_never_fills": True,
+        },
+        "sizing": {
+            "method": "target_dollar_over_d_madjc",
+            "fill": "delta_units_at_aadjc",
+            "first_pnl": "d_pm_to_d_plus_1_pm",
+        },
+        "execution_policy": {
+            "missing_d_a": "no_fill_preserve_prior_units",
+            "missing_valuation_a": "stale_trace_non_comparable",
+            "never_retroactive_flatten": True,
+            "never_prefilter_on_a": True,
         },
     }
 
@@ -2874,56 +3375,34 @@ def evaluate_index_vol_overlays_am_pm(
     _start, _end, signal_indices = _am_pm_signal_range(
         observations, signal_start, signal_end
     )
-    structural_missing = [
-        _missing(
-            observations[signal_index].date,
-            _am_pm_structural_issues(
-                observations, signal_index, require_pnl=True
-            )[0],
-        )
-        for signal_index in signal_indices
-        if _am_pm_structural_issues(observations, signal_index, require_pnl=True)
-    ]
-    if structural_missing:
-        results = [
-            _am_pm_not_evaluated_candidate(
-                candidate,
-                reason="missing_required_row_no_forward_fill",
-                missing=structural_missing,
-            )
-            for candidate in OVERLAY_AM_PM_CANDIDATES
-        ]
-        diagnostic_control = _am_pm_not_evaluated_control(
-            reason="missing_required_row_no_forward_fill",
-            missing=structural_missing,
-        )
-    else:
-        results = [
-            _am_pm_overlay_candidate_result(
-                candidate,
-                observations,
-                signal_indices,
-                starting_capital=capital,
-            )
-            for candidate in OVERLAY_AM_PM_CANDIDATES
-        ]
-        diagnostic_control = _am_pm_overlay_control_result(
+    results = [
+        _am_pm_overlay_candidate_result(
+            candidate,
             observations,
             signal_indices,
             starting_capital=capital,
         )
+        for candidate in OVERLAY_AM_PM_CANDIDATES
+    ]
+    diagnostic_control = _am_pm_overlay_control_result(
+        observations,
+        signal_indices,
+        starting_capital=capital,
+    )
     diagnostics = [
         {
             "date": observations[index].date,
             "option_as_of_date": observations[index - 1].date if index else None,
             "svi_equivalent_atm_term_ratio": (
-                _positive(observations[index - 1].svi_equivalent_atm_term_ratio)
+                _positive(observations[index - 1].signal.svi_equivalent_atm_term_ratio)
                 if index
                 else None
             ),
             "svi_equivalent_downside_smile_term_ratio": (
                 _positive(
-                    observations[index - 1].svi_equivalent_downside_smile_term_ratio
+                    observations[
+                        index - 1
+                    ].signal.svi_equivalent_downside_smile_term_ratio
                 )
                 if index
                 else None
@@ -3045,10 +3524,7 @@ def _am_pm_common_validity_for_date(
     signal_index: int,
 ) -> dict[str, Any]:
     reasons: list[str] = []
-    structural = _am_pm_structural_issues(
-        observations, signal_index, require_pnl=False
-    )
-    reasons.extend(structural)
+    reasons.extend(_am_pm_decision_issues(observations, signal_index))
     if pair_end is None or pair_start is None:
         reasons.append("d_minus_2_to_d_minus_1_pair_unavailable")
     ids = [str(row.get("candidate_id") or "") for row in day_rows]
@@ -3069,8 +3545,6 @@ def _am_pm_common_validity_for_date(
                 pair_start=pair_start,
             )
         )
-    if signal_index + 1 >= len(observations):
-        reasons.append("d_plus_1_session_unavailable")
     beta, beta_error = _am_pm_estimate_beta(observations, signal_index)
     if beta is None:
         reasons.append(beta_error or "beta_estimate_unavailable")
@@ -3091,35 +3565,22 @@ def _am_pm_common_validity_for_date(
     }
 
 
-def _am_pm_signal_outcome_issues(
-    observations: Sequence[IndexVolOverlayAmPmObservation],
-    signal_index: int,
-) -> list[str]:
-    return _am_pm_structural_issues(observations, signal_index, require_pnl=True)
-
-
 def _am_pm_flatten_plan(
     rows: Sequence[IndexVolOverlayAmPmObservation],
     signal_index: int,
 ) -> dict[str, Any]:
-    pnl_index = min(signal_index + 1, len(rows) - 1)
-    sleeve_return = _pm_sleeve_return(rows, signal_index, pnl_index)
-    proxy_return = _etf_pm_return(rows, signal_index, pnl_index)
-    return {
-        "signal_date": rows[signal_index].date,
-        "rebalance_date": rows[signal_index].date,
-        "pnl_date": rows[pnl_index].date,
-        "feature_ratio_x": None,
-        "gross_scale": 0.0,
-        "estimated_beta": None,
-        "beta_observations": None,
-        "beta_window_last_return_date": None,
-        "topix_hedge_weight": 0.0,
-        "base_sleeve_return": 0.0 if sleeve_return is None else sleeve_return,
-        "topix_cash_return": 0.0 if proxy_return is None else proxy_return,
-        "flatten_applied": True,
-        "common_valid": False,
-    }
+    return _am_pm_decision_plan(
+        signal_index=signal_index,
+        rows=rows,
+        feature_ratio_x=None,
+        gross_scale=0.0,
+        estimated_beta=None,
+        beta_observations=None,
+        beta_window_last_return_date=None,
+        topix_hedge_weight=0.0,
+        flatten_applied=True,
+        common_valid=False,
+    )
 
 
 def _am_pm_valid_transport_plan(
@@ -3134,56 +3595,44 @@ def _am_pm_valid_transport_plan(
     beta, _beta_error = _am_pm_estimate_beta(rows, signal_index)
     if beta is None:
         return None
-    pnl_index = signal_index + 1
-    sleeve_return = _pm_sleeve_return(rows, signal_index, pnl_index)
-    proxy_return = _etf_pm_return(rows, signal_index, pnl_index)
-    if sleeve_return is None or proxy_return is None:
-        return None
     estimated_beta, beta_observations, beta_last_date = beta
     hedge_weight = _clip(
         -gross_scale * estimated_beta,
         -MAX_ABS_TOPIX_HEDGE,
         MAX_ABS_TOPIX_HEDGE,
     )
-    return {
-        "signal_date": rows[signal_index].date,
-        "rebalance_date": rows[signal_index].date,
-        "pnl_date": rows[pnl_index].date,
-        "feature_ratio_x": raw_value,
-        "gross_scale": gross_scale,
-        "estimated_beta": estimated_beta,
-        "beta_observations": beta_observations,
-        "beta_window_last_return_date": beta_last_date,
-        "topix_hedge_weight": hedge_weight,
-        "base_sleeve_return": sleeve_return,
-        "topix_cash_return": proxy_return,
-        "flatten_applied": False,
-        "common_valid": True,
-        "feature_error": error,
-    }
+    plan = _am_pm_decision_plan(
+        signal_index=signal_index,
+        rows=rows,
+        feature_ratio_x=raw_value,
+        gross_scale=gross_scale,
+        estimated_beta=estimated_beta,
+        beta_observations=beta_observations,
+        beta_window_last_return_date=beta_last_date,
+        topix_hedge_weight=hedge_weight,
+        flatten_applied=False,
+        common_valid=True,
+    )
+    plan["feature_error"] = error
+    return plan
 
 
 def _am_pm_invested_control_plan(
     rows: Sequence[IndexVolOverlayAmPmObservation],
     signal_index: int,
 ) -> dict[str, Any]:
-    pnl_index = signal_index + 1
-    sleeve_return = _pm_sleeve_return(rows, signal_index, pnl_index)
-    return {
-        "signal_date": rows[signal_index].date,
-        "rebalance_date": rows[signal_index].date,
-        "pnl_date": rows[pnl_index].date,
-        "feature_ratio_x": 1.0,
-        "gross_scale": 1.0,
-        "estimated_beta": None,
-        "beta_observations": None,
-        "beta_window_last_return_date": None,
-        "topix_hedge_weight": 0.0,
-        "base_sleeve_return": 0.0 if sleeve_return is None else sleeve_return,
-        "topix_cash_return": 0.0,
-        "flatten_applied": False,
-        "common_valid": True,
-    }
+    return _am_pm_decision_plan(
+        signal_index=signal_index,
+        rows=rows,
+        feature_ratio_x=1.0,
+        gross_scale=1.0,
+        estimated_beta=None,
+        beta_observations=None,
+        beta_window_last_return_date=None,
+        topix_hedge_weight=0.0,
+        flatten_applied=False,
+        common_valid=True,
+    )
 
 
 def canonical_smile_transport_am_pm_panel_digest(
@@ -3194,17 +3643,12 @@ def canonical_smile_transport_am_pm_panel_digest(
     return _canonical_digest(
         {
             "schema_version": AM_PM_SMILE_TRANSPORT_PANEL_DIGEST_SCHEMA,
-            "market_rows": [
-                {
-                    "date": row.date,
-                    "available_at": row.available_at,
-                    "base_sleeve_am_nav": row.base_sleeve_am_nav,
-                    "base_sleeve_pm_nav": row.base_sleeve_pm_nav,
-                    "topix_etf_13060_madjc": row.topix_etf_13060_madjc,
-                    "topix_etf_13060_aadjc": row.topix_etf_13060_aadjc,
-                }
-                for row in observations
-            ],
+            "signal_evidence_digest": canonical_am_pm_signal_evidence_digest(
+                observations
+            ),
+            "fill_outcome_evidence_digest": (
+                canonical_am_pm_fill_outcome_evidence_digest(observations)
+            ),
             "transport_rows": [dict(row) for row in transport_features],
             "common_validity": [dict(row) for row in common_validity],
         }
@@ -3279,25 +3723,10 @@ def evaluate_index_smile_transport_overlays_am_pm(
             for row in validity_rows
             if not row["common_valid"]
         ],
-        "common_invalid_policy": "flatten_g0_h0_at_d_pm",
-        "transport_pair": "d_minus_2_to_d_minus_1",
-    }
-    outcome_missing: list[dict[str, Any]] = []
-    for signal_index in signal_indices:
-        day = observations[signal_index].date
-        if not validity_by_date[day]["common_valid"]:
-            continue
-        outcome_issues = _am_pm_signal_outcome_issues(observations, signal_index)
-        if outcome_issues:
-            outcome_missing.append({"date": day, "reasons": outcome_issues})
-    outcome_complete = not outcome_missing
-    outcome_completeness = {
-        "passed": outcome_complete,
-        "policy": "signal_valid_dates_require_realized_d_plus_1_pm_returns",
-        "missing": outcome_missing,
-        "reason": (
-            None if outcome_complete else "signal_valid_d_plus_1_pm_outcome_missing"
+        "common_invalid_policy": (
+            "flatten_g0_h0_at_decision_then_fill_only_if_d_a_available"
         ),
+        "transport_pair": "d_minus_2_to_d_minus_1",
     }
     observed_core_digest = core_digest or smile_transport_core_digest()
     if not _canonical_sha256(observed_core_digest):
@@ -3318,22 +3747,12 @@ def evaluate_index_smile_transport_overlays_am_pm(
         diagnostic_control["role"] = (
             "COMMON_VALID_CALENDAR_NAV_WRAPPER_CONTROL_WITH_10BP_COSTS"
         )
-    elif not outcome_complete:
-        results = [
-            _am_pm_not_evaluated_candidate(
-                candidate,
-                reason="signal_valid_d_plus_1_pm_outcome_missing",
-                missing=outcome_missing,
-            )
-            for candidate in SMILE_TRANSPORT_AM_PM_CANDIDATES
-        ]
-        diagnostic_control = _am_pm_not_evaluated_control(
-            reason="signal_valid_d_plus_1_pm_outcome_missing",
-            missing=outcome_missing,
-        )
-        diagnostic_control["role"] = (
-            "COMMON_VALID_CALENDAR_NAV_WRAPPER_CONTROL_WITH_10BP_COSTS"
-        )
+        outcome_completeness = {
+            "passed": False,
+            "policy": "missing_a_does_not_prefilter_decision_calendar",
+            "missing": [],
+            "reason": "common_validity_gate_failed",
+        }
     else:
         results = []
         for candidate in SMILE_TRANSPORT_AM_PM_CANDIDATES:
@@ -3362,22 +3781,22 @@ def evaluate_index_smile_transport_overlays_am_pm(
                     plans.append(plan)
                 else:
                     plans.append(_am_pm_flatten_plan(observations, signal_index))
-            curve, trades, performance = _evaluate_plans(
+            curve, trades, performance, comparability = _evaluate_am_pm_unit_plans(
                 plans,
+                observations,
                 starting_capital=capital,
             )
-            results.append(
-                {
+            finished = _am_pm_finish_result(
+                payload={
                     **asdict(candidate),
                     "physical_potential": _physical_potential_declaration(candidate),
-                    "status": "EVALUATED",
-                    "reason": None,
-                    "missing_required_rows": [],
-                    "daily_path": curve,
-                    "trades": trades,
-                    "performance": performance,
-                }
+                },
+                curve=curve,
+                trades=trades,
+                performance=performance,
+                comparability=comparability,
             )
+            results.append(finished)
         control_plans = [
             (
                 _am_pm_invested_control_plan(observations, signal_index)
@@ -3386,28 +3805,36 @@ def evaluate_index_smile_transport_overlays_am_pm(
             )
             for signal_index in signal_indices
         ]
-        curve, trades, performance = _evaluate_plans(
+        curve, trades, performance, comparability = _evaluate_am_pm_unit_plans(
             control_plans,
+            observations,
             starting_capital=capital,
         )
-        diagnostic_control = {
-            "control_id": AM_PM_CONTROL_ID,
-            "role": "COMMON_VALID_CALENDAR_NAV_WRAPPER_CONTROL_WITH_10BP_COSTS",
-            "ranking_role": "DIAGNOSTIC_CONTROL_NOT_RANKED",
-            "mechanics": (
-                "g=1 and h=0 on the common-valid AM/PM decision calendar; "
-                "flatten g=0,h=0 at D PM on common-invalid dates; "
-                "same overlay 10bp turnover costs as the four candidates"
-            ),
-            "source_slice_wrapper_cost_semantics": (
-                SOURCE_SLICE_WRAPPER_COST_SEMANTICS
-            ),
-            "status": "EVALUATED",
-            "reason": None,
-            "missing_required_rows": [],
-            "daily_path": curve,
-            "trades": trades,
-            "performance": performance,
+        diagnostic_control = _am_pm_finish_result(
+            payload={
+                "control_id": AM_PM_CONTROL_ID,
+                "role": "COMMON_VALID_CALENDAR_NAV_WRAPPER_CONTROL_WITH_10BP_COSTS",
+                "ranking_role": "DIAGNOSTIC_CONTROL_NOT_RANKED",
+                "mechanics": (
+                    "g=1 and h=0 on the common-valid AM/PM decision calendar; "
+                    "flatten g=0,h=0 at D morning on common-invalid dates; "
+                    "fill only when D A is present; same overlay 10bp costs"
+                ),
+                "source_slice_wrapper_cost_semantics": (
+                    SOURCE_SLICE_WRAPPER_COST_SEMANTICS
+                ),
+            },
+            curve=curve,
+            trades=trades,
+            performance=performance,
+            comparability=comparability,
+        )
+        outcome_completeness = {
+            "passed": comparability["comparable"] is True,
+            "policy": "missing_a_no_fill_or_stale_non_comparable",
+            "missing": comparability["stale_marks"],
+            "no_fill_intervals": comparability["no_fill_intervals"],
+            "reason": comparability["reason"],
         }
     evaluated_count = sum(result["status"] == "EVALUATED" for result in results)
     report = _am_pm_report_framing(
@@ -3473,10 +3900,14 @@ def evaluate_index_smile_transport_overlays_am_pm(
 
 __all__ = [
     "AM_PM_BASE_COHORT_ID",
+    "AM_PM_BASE_PRODUCER_UNAVAILABLE",
     "AM_PM_BASE_SLEEVE_ID",
     "AM_PM_BASE_SLEEVE_SCHEMA",
     "AM_PM_CONTROL_ID",
     "AM_PM_EXECUTION_MODE",
+    "AmPmBaseProducerUnavailable",
+    "AmPmFillOutcomeEvidence",
+    "AmPmSignalEvidence",
     "BASE_COHORT_ID",
     "BASE_NAV_SEMANTICS",
     "BASE_RETURN_SEMANTICS",
@@ -3512,10 +3943,15 @@ __all__ = [
     "SOURCE_SLICE_WRAPPER_COST_SEMANTICS",
     "TOPIX_ETF_CODE",
     "TOPIX_PROXY_DATASET",
+    "am_pm_base_producer_unavailable_reason",
+    "am_pm_fixture_base_definition",
     "am_pm_proxy_mapping",
     "am_pm_proxy_mapping_digest",
     "am_pm_temporal_contract_digest",
     "build_prepared_am_pm_panel_manifest",
+    "canonical_am_pm_fill_outcome_evidence_digest",
+    "canonical_am_pm_signal_evidence_digest",
+    "resolve_am_pm_base_digests",
     "build_prepared_panel_manifest",
     "canonical_prepared_am_pm_panel_digest",
     "canonical_prepared_panel_digest",

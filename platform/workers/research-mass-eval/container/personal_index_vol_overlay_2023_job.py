@@ -36,9 +36,12 @@ from research.personal_index_vol_overlay import (
     AM_PM_BASE_SLEEVE_ID,
     AM_PM_BASE_SLEEVE_SCHEMA,
     AM_PM_EXECUTION_MODE,
+    AmPmFillOutcomeEvidence,
+    AmPmSignalEvidence,
     BETA_MIN_RETURNS,
     IndexVolOverlayAmPmObservation,
     IndexVolOverlayObservation,
+    am_pm_base_producer_unavailable_reason,
     OVERLAY_AM_PM_CANDIDATE_IDS,
     SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS,
     SMILE_TRANSPORT_CANDIDATE_IDS,
@@ -648,8 +651,6 @@ def validate_am_pm_base_sleeve_artifact(document: Any) -> None:
             raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
         if _number(row.get("am_nav"), positive=True) is None:
             raise RuntimeError("AM/PM base sleeve missing exact morning NAV")
-        if _number(row.get("pm_nav"), positive=True) is None:
-            raise RuntimeError("AM/PM base sleeve missing exact afternoon NAV")
 
 
 def load_am_pm_base_sleeve_from_archive(
@@ -1012,17 +1013,15 @@ def _etf_ma_from_snapshot(
         )
         if not day:
             continue
-        if morning is None or afternoon is None:
-            raise RuntimeError(
-                f"ETF {code} missing exact M/A observations on {day}"
-            )
+        if morning is None:
+            continue
         if day in prices:
             raise RuntimeError(f"ETF {code} date is duplicated")
         prices[day] = (morning, afternoon)
-    missing = [day for day in session_dates if day not in prices]
-    if missing:
+    missing_m = [day for day in session_dates if day not in prices]
+    if missing_m:
         raise RuntimeError(
-            f"ETF {code} missing exact M/A observations on {missing[0]}"
+            f"ETF {code} missing exact MAdjC observations on {missing_m[0]}"
         )
     return {day: prices[day] for day in session_dates}
 
@@ -1057,29 +1056,42 @@ def build_am_pm_observations(
         raw_base_vol = _number(base_vol_percent.get(day), positive=True)
         etf = etf_ma.get(day)
         if etf is None:
-            raise RuntimeError(f"ETF {TOPIX_ETF_CODE} missing exact M/A observations")
+            raise RuntimeError(f"ETF {TOPIX_ETF_CODE} missing exact MAdjC observations")
         source = next(row for row in fixed_window_rows if str(row["date"]) == day)
+        pm_nav = _number(source.get("pm_nav"), positive=True)
+        etf_a = etf[1]
+        fill = None
+        if pm_nav is not None or etf_a is not None:
+            fill = AmPmFillOutcomeEvidence(
+                date=day,
+                fill_available_at=f"{day}T15:00:00+09:00",
+                outcome_available_at=f"{day}T15:00:00+09:00",
+                base_sleeve_pm_nav=pm_nav,
+                topix_etf_13060_aadjc=etf_a,
+            )
         observations.append(
             IndexVolOverlayAmPmObservation(
                 date=day,
-                available_at=f"{day}T12:30:00+09:00",
-                base_sleeve_am_nav=_number(source.get("am_nav"), positive=True),
-                base_sleeve_pm_nav=_number(source.get("pm_nav"), positive=True),
-                topix_etf_13060_madjc=etf[0],
-                topix_etf_13060_aadjc=etf[1],
-                topix_cash_close=topix_closes.get(day),
-                n225_cash_close=(n225_closes or {}).get(day),
-                n225_base_vol=(raw_base_vol / 100.0 if raw_base_vol else None),
-                n225_atm_iv=option["n225_atm_iv"],
-                topix_realized_vol_20=realized.get(day),
-                n225_front_atm_iv=option["front_atm"],
-                n225_next_atm_iv=option["next_atm"],
-                n225_front_downside_wing_iv=option["front_downside"],
-                n225_next_downside_wing_iv=option["next_downside"],
-                svi_equivalent_atm_term_ratio=option["svi_atm_term_ratio"],
-                svi_equivalent_downside_smile_term_ratio=option[
-                    "svi_downside_term_ratio"
-                ],
+                signal=AmPmSignalEvidence(
+                    date=day,
+                    signal_available_at=f"{day}T12:30:00+09:00",
+                    base_sleeve_am_nav=_number(source.get("am_nav"), positive=True),
+                    topix_etf_13060_madjc=etf[0],
+                    topix_cash_close=topix_closes.get(day),
+                    n225_cash_close=(n225_closes or {}).get(day),
+                    n225_base_vol=(raw_base_vol / 100.0 if raw_base_vol else None),
+                    n225_atm_iv=option["n225_atm_iv"],
+                    topix_realized_vol_20=realized.get(day),
+                    n225_front_atm_iv=option["front_atm"],
+                    n225_next_atm_iv=option["next_atm"],
+                    n225_front_downside_wing_iv=option["front_downside"],
+                    n225_next_downside_wing_iv=option["next_downside"],
+                    svi_equivalent_atm_term_ratio=option["svi_atm_term_ratio"],
+                    svi_equivalent_downside_smile_term_ratio=option[
+                        "svi_downside_term_ratio"
+                    ],
+                ),
+                fill_outcome=fill,
             )
         )
     return observations
@@ -1697,6 +1709,31 @@ def execute_smile_transport_job(
     return terminal
 
 
+def _am_pm_producer_unavailable_terminal(
+    spec: PersonalIndexVolOverlay2023JobSpec,
+) -> dict[str, Any] | None:
+    unavailable = am_pm_base_producer_unavailable_reason()
+    if unavailable is None:
+        return None
+    return {
+        "schema_version": (
+            AM_PM_SMILE_TRANSPORT_MANIFEST_SCHEMA
+            if spec.is_am_pm_smile_transport
+            else AM_PM_MANIFEST_SCHEMA
+        ),
+        "status": "FAILED",
+        **_authority(spec),
+        "runner_version": spec.runner_version,
+        "request_digest": spec.request_digest,
+        "error": unavailable,
+        "producer_dependency": {
+            "required_cohort_id": AM_PM_BASE_COHORT_ID,
+            "required_strategy_id": AM_PM_BASE_SLEEVE_ID,
+            "required_schema": AM_PM_BASE_SLEEVE_SCHEMA,
+        },
+    }
+
+
 def _open_am_pm_sources(
     spec: PersonalIndexVolOverlay2023JobSpec,
     *,
@@ -1741,6 +1778,10 @@ def execute_am_pm_overlay_job(
     svi_opener: Callable[[PersonalSvi2023JobSpec, str], Any] | None = None,
     uploader: Callable[[PersonalIndexVolOverlay2023JobSpec, str, bytes], str] = _put_bytes,
 ) -> dict[str, Any]:
+    unavailable = _am_pm_producer_unavailable_terminal(spec)
+    if unavailable is not None:
+        uploader(spec, spec.manifest_key, _canonical_bytes(unavailable))
+        return unavailable
     try:
         opened = _open_am_pm_sources(
             spec, overlay_opener=overlay_opener, svi_opener=svi_opener
@@ -1938,6 +1979,10 @@ def execute_am_pm_smile_transport_job(
     svi_opener: Callable[[PersonalSvi2023JobSpec, str], Any] | None = None,
     uploader: Callable[[PersonalIndexVolOverlay2023JobSpec, str, bytes], str] = _put_bytes,
 ) -> dict[str, Any]:
+    unavailable = _am_pm_producer_unavailable_terminal(spec)
+    if unavailable is not None:
+        uploader(spec, spec.manifest_key, _canonical_bytes(unavailable))
+        return unavailable
     try:
         opened = _open_am_pm_sources(
             spec, overlay_opener=overlay_opener, svi_opener=svi_opener
@@ -2064,12 +2109,10 @@ def execute_am_pm_smile_transport_job(
             "market_observations": [
                 {
                     "date": row.date,
-                    "available_at": row.available_at,
-                    "base_sleeve_am_nav": row.base_sleeve_am_nav,
-                    "base_sleeve_pm_nav": row.base_sleeve_pm_nav,
-                    "topix_etf_13060_madjc": row.topix_etf_13060_madjc,
-                    "topix_etf_13060_aadjc": row.topix_etf_13060_aadjc,
-                    "topix_cash_close": row.topix_cash_close,
+                    "signal": asdict(row.signal),
+                    "fill_outcome": (
+                        asdict(row.fill_outcome) if row.fill_outcome else None
+                    ),
                 }
                 for row in observations
             ],

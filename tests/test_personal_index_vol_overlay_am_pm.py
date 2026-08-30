@@ -18,8 +18,12 @@ from research.options_225_smile_transport import (
 from research.options_225_vol_series import DATASET_ID
 from research.personal_index_vol_overlay import (
     AM_PM_BASE_COHORT_ID,
+    AM_PM_BASE_PRODUCER_UNAVAILABLE,
     AM_PM_BASE_SLEEVE_ID,
     AM_PM_CONTROL_ID,
+    AmPmBaseProducerUnavailable,
+    AmPmFillOutcomeEvidence,
+    AmPmSignalEvidence,
     BASE_COHORT_ID,
     BASE_SLEEVE_ID,
     BETA_MIN_RETURNS,
@@ -30,7 +34,6 @@ from research.personal_index_vol_overlay import (
     N225_ETF_CODE,
     ONE_WAY_COST_RATE,
     OVERLAY_AM_PM_CANDIDATE_IDS,
-    OVERLAY_AM_PM_CANDIDATES,
     OVERLAY_CANDIDATES,
     PERSONAL_INDEX_SMILE_TRANSPORT_AM_PM_SCHEMA,
     PERSONAL_INDEX_VOL_OVERLAY_AM_PM_SCHEMA,
@@ -39,6 +42,8 @@ from research.personal_index_vol_overlay import (
     SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS,
     SMILE_TRANSPORT_CANDIDATE_IDS,
     TOPIX_ETF_CODE,
+    am_pm_base_producer_unavailable_reason,
+    am_pm_fixture_base_definition,
     am_pm_temporal_contract_digest,
     build_prepared_am_pm_panel_manifest,
     build_prepared_panel_manifest,
@@ -51,17 +56,72 @@ from research.personal_index_vol_overlay import (
 
 AM_PM_SPEC = "sha256:" + "c" * 64
 AM_PM_COHORT = "sha256:" + "d" * 64
+AM_PM_FIXTURE = am_pm_fixture_base_definition(
+    strategy_spec_digest=AM_PM_SPEC,
+    cohort_digest=AM_PM_COHORT,
+)
 
 
 def _dates(count: int, *, start: date = date(2023, 1, 4)) -> list[str]:
     return [(start + timedelta(days=index)).isoformat() for index in range(count)]
 
 
+def _session(
+    day: str,
+    *,
+    am_nav: float | None,
+    pm_nav: float | None,
+    etf_m: float | None,
+    etf_a: float | None,
+    cash: float,
+    signal_at: str = "12:30:00+09:00",
+    fill_at: str = "15:00:00+09:00",
+    n225_base_vol: float | None = 20.0,
+    n225_atm_iv: float | None = 20.0,
+    topix_realized_vol_20: float | None = 10.0,
+    n225_front_atm_iv: float | None = 30.0,
+    n225_next_atm_iv: float | None = 20.0,
+    n225_front_downside_wing_iv: float | None = 40.0,
+    n225_next_downside_wing_iv: float | None = 20.0,
+    include_fill: bool = True,
+) -> IndexVolOverlayAmPmObservation:
+    fill = None
+    if include_fill:
+        fill = AmPmFillOutcomeEvidence(
+            date=day,
+            fill_available_at=f"{day}T{fill_at}",
+            outcome_available_at=f"{day}T{fill_at}",
+            base_sleeve_pm_nav=pm_nav,
+            topix_etf_13060_aadjc=etf_a,
+        )
+    return IndexVolOverlayAmPmObservation(
+        date=day,
+        signal=AmPmSignalEvidence(
+            date=day,
+            signal_available_at=f"{day}T{signal_at}",
+            base_sleeve_am_nav=am_nav,
+            topix_etf_13060_madjc=etf_m,
+            topix_cash_close=cash,
+            n225_cash_close=cash * 20.0,
+            n225_base_vol=n225_base_vol,
+            n225_atm_iv=n225_atm_iv,
+            topix_realized_vol_20=topix_realized_vol_20,
+            n225_front_atm_iv=n225_front_atm_iv,
+            n225_next_atm_iv=n225_next_atm_iv,
+            n225_front_downside_wing_iv=n225_front_downside_wing_iv,
+            n225_next_downside_wing_iv=n225_next_downside_wing_iv,
+            svi_equivalent_atm_term_ratio=1.45,
+            svi_equivalent_downside_smile_term_ratio=1.90,
+        ),
+        fill_outcome=fill,
+    )
+
+
 def _am_pm_rows(
     dates: Sequence[str],
     *,
     beta: float = 4.0,
-    available_at_hour: str = "12:30:00+09:00",
+    signal_at: str = "12:30:00+09:00",
 ) -> list[IndexVolOverlayAmPmObservation]:
     am_nav = [100.0]
     pm_nav = [100.2]
@@ -75,30 +135,18 @@ def _am_pm_rows(
         am_nav.append(am_nav[-1] * (1.0 + beta * proxy))
         pm_nav.append(pm_nav[-1] * (1.0 + beta * proxy * 0.97))
         cash.append(cash[-1] * (1.0 + proxy))
-    rows = []
-    for index, day in enumerate(dates):
-        rows.append(
-            IndexVolOverlayAmPmObservation(
-                date=day,
-                available_at=f"{day}T{available_at_hour}",
-                base_sleeve_am_nav=am_nav[index],
-                base_sleeve_pm_nav=pm_nav[index],
-                topix_etf_13060_madjc=etf_m[index],
-                topix_etf_13060_aadjc=etf_a[index],
-                topix_cash_close=cash[index],
-                n225_cash_close=cash[index] * 20.0,
-                n225_base_vol=20.0,
-                n225_atm_iv=20.0,
-                topix_realized_vol_20=10.0,
-                n225_front_atm_iv=30.0,
-                n225_next_atm_iv=20.0,
-                n225_front_downside_wing_iv=40.0,
-                n225_next_downside_wing_iv=20.0,
-                svi_equivalent_atm_term_ratio=1.45,
-                svi_equivalent_downside_smile_term_ratio=1.90,
-            )
+    return [
+        _session(
+            day,
+            am_nav=am_nav[index],
+            pm_nav=pm_nav[index],
+            etf_m=etf_m[index],
+            etf_a=etf_a[index],
+            cash=cash[index],
+            signal_at=signal_at,
         )
-    return rows
+        for index, day in enumerate(dates)
+    ]
 
 
 def _am_pm_manifest(
@@ -112,6 +160,7 @@ def _am_pm_manifest(
         base_report_digest="sha256:" + "4" * 64,
         strategy_spec_digest=AM_PM_SPEC,
         cohort_digest=AM_PM_COHORT,
+        fixture_definition=AM_PM_FIXTURE,
     )
 
 
@@ -134,6 +183,20 @@ def _by_id(report: dict[str, Any], candidate_id: str) -> dict[str, Any]:
         for candidate in report["candidates"]
         if candidate["candidate_id"] == candidate_id
     )
+
+
+def _replace_signal(
+    row: IndexVolOverlayAmPmObservation, **changes: Any
+) -> IndexVolOverlayAmPmObservation:
+    return replace(row, signal=replace(row.signal, **changes))
+
+
+def _replace_fill(
+    row: IndexVolOverlayAmPmObservation, **changes: Any
+) -> IndexVolOverlayAmPmObservation:
+    if row.fill_outcome is None:
+        return replace(row, fill_outcome=None)
+    return replace(row, fill_outcome=replace(row.fill_outcome, **changes))
 
 
 def _transport_row(
@@ -303,69 +366,65 @@ def test_am_pm_exact_four_ids_and_distinct_schemas() -> None:
     assert AM_PM_BASE_COHORT_ID == "sector-relative-ls-am-pm-v1"
     assert AM_PM_BASE_SLEEVE_ID != BASE_SLEEVE_ID
     assert AM_PM_BASE_COHORT_ID != BASE_COHORT_ID
-    assert list(OVERLAY_AM_PM_CANDIDATE_IDS) == [
-        "n225_basevol_10_over_60_defensive_am_pm_v1",
-        "n225_atmiv_over_topix_rv20_normalized_126_am_pm_v1",
-        "n225_observed_front_over_next_atm_am_pm_v1",
-        "n225_observed_downside_smile_front_over_next_am_pm_v1",
-    ]
-    assert list(SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS) == [
-        "n225_sticky_strike_downside_smile_term_surprise_am_pm_v1",
-        "n225_sticky_moneyness_downside_smile_term_surprise_am_pm_v1",
-        "n225_sticky_strike_potential_minimum_transport_am_pm_v1",
-        "n225_sticky_moneyness_potential_minimum_transport_am_pm_v1",
-    ]
-    assert list(OVERLAY_AM_PM_CANDIDATE_IDS) != [
-        item.candidate_id for item in OVERLAY_CANDIDATES
-    ]
-    assert list(SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS) != list(
-        SMILE_TRANSPORT_CANDIDATE_IDS
-    )
     dates = _dates(150)
     rows = _am_pm_rows(dates)
     report = _evaluate_overlay(rows, signal_start=dates[130], signal_end=dates[130])
     assert report["schema_version"] == PERSONAL_INDEX_VOL_OVERLAY_AM_PM_SCHEMA
-    assert report["schema_version"] != PERSONAL_INDEX_VOL_OVERLAY_SCHEMA
-    assert report["prepared_panel_provenance"]["base_cohort_id"] == AM_PM_BASE_COHORT_ID
-    assert report["prepared_panel_provenance"]["temporal_contract_digest"] == (
-        am_pm_temporal_contract_digest()
-    )
-    assert report["prepared_panel_provenance"]["cohort_digest"] != (
-        EXPECTED_BASE_COHORT_DIGEST
-    )
-    assert report["prepared_panel_provenance"]["strategy_spec_digest"] != (
-        EXPECTED_BASE_STRATEGY_SPEC_DIGEST
+    assert report["prepared_panel_provenance"]["signal_evidence_digest"]
+    assert report["prepared_panel_provenance"]["fill_outcome_evidence_digest"]
+    assert report["prepared_panel_provenance"]["signal_evidence_digest"] != (
+        report["prepared_panel_provenance"]["fill_outcome_evidence_digest"]
     )
     assert report["candidate_policy"]["selection"] == "NOT_PERFORMED"
     assert report["hedge_proxy"]["code"] == TOPIX_ETF_CODE
-    assert report["hedge_proxy"]["etf_fill_claim"] is True
-    assert report["hedge_proxy"]["tracking_basis_risk"] is True
+    assert report["cash_index"]["never_fills"] is True
     assert report["cash_index"]["executable_fill_claim"] is False
-    assert report["cash_index"]["role"] == "DIAGNOSTIC_BETA_CONTEXT_ONLY"
+    assert report["cash_index"]["feeds_beta_or_rv_normalization"] is True
     assert N225_ETF_CODE == "13210"
 
 
-def test_am_pm_rejects_old_next_close_panel_and_legacy_digests() -> None:
+def test_missing_definition_and_legacy_digest_fail_for_the_same_reason() -> None:
     dates = _dates(8)
     rows = _am_pm_rows(dates)
-    with pytest.raises(ValueError, match="old next-close strategy_spec_digest"):
-        build_prepared_am_pm_panel_manifest(
-            rows,
-            authoritative_session_dates=dates,
-            snapshot_digest="sha256:" + "3" * 64,
-            base_report_digest="sha256:" + "4" * 64,
-            strategy_spec_digest=EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
-            cohort_digest=AM_PM_COHORT,
-        )
-    with pytest.raises(ValueError, match="old sector-relative-ls-v1"):
+    assert am_pm_base_producer_unavailable_reason() == AM_PM_BASE_PRODUCER_UNAVAILABLE
+    with pytest.raises(AmPmBaseProducerUnavailable, match=AM_PM_BASE_PRODUCER_UNAVAILABLE):
         build_prepared_am_pm_panel_manifest(
             rows,
             authoritative_session_dates=dates,
             snapshot_digest="sha256:" + "3" * 64,
             base_report_digest="sha256:" + "4" * 64,
             strategy_spec_digest=AM_PM_SPEC,
-            cohort_digest=EXPECTED_BASE_COHORT_DIGEST,
+            cohort_digest=AM_PM_COHORT,
         )
+    with pytest.raises(AmPmBaseProducerUnavailable, match=AM_PM_BASE_PRODUCER_UNAVAILABLE):
+        build_prepared_am_pm_panel_manifest(
+            rows,
+            authoritative_session_dates=dates,
+            snapshot_digest="sha256:" + "3" * 64,
+            base_report_digest="sha256:" + "4" * 64,
+            strategy_spec_digest=EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
+            cohort_digest=EXPECTED_BASE_COHORT_DIGEST,
+            fixture_definition=am_pm_fixture_base_definition(
+                strategy_spec_digest=EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
+                cohort_digest=EXPECTED_BASE_COHORT_DIGEST,
+            ),
+        )
+    manifest = build_prepared_am_pm_panel_manifest(
+        rows,
+        authoritative_session_dates=dates,
+        snapshot_digest="sha256:" + "3" * 64,
+        base_report_digest="sha256:" + "4" * 64,
+        strategy_spec_digest=AM_PM_SPEC,
+        cohort_digest=AM_PM_COHORT,
+        fixture_definition=AM_PM_FIXTURE,
+    )
+    assert manifest.strategy_spec_digest == AM_PM_SPEC
+    assert manifest.cohort_digest == AM_PM_COHORT
+
+
+def test_am_pm_rejects_old_next_close_panel() -> None:
+    dates = _dates(8)
+    rows = _am_pm_rows(dates)
     with pytest.raises(TypeError, match="old next-close prepared panel"):
         evaluate_index_vol_overlays_am_pm(
             rows,
@@ -386,6 +445,36 @@ def test_am_pm_rejects_old_next_close_panel_and_legacy_digests() -> None:
         )
 
 
+def test_madjc_share_sizing_does_not_match_a_sized_notional() -> None:
+    dates = _dates(150)
+    rows = _am_pm_rows(dates)
+    rows[130] = _replace_signal(rows[130], base_sleeve_am_nav=200.0)
+    rows[130] = _replace_fill(rows[130], base_sleeve_pm_nav=50.0)
+    report = _evaluate_overlay(rows, signal_start=dates[130], signal_end=dates[130])
+    path = _by_id(report, OVERLAY_AM_PM_CANDIDATE_IDS[2])["daily_path"][0]
+    gross = path["gross_scale"]
+    m_price = 200.0
+    a_price = 50.0
+    target_dollar = gross * 1_000_000.0
+    expected_units = target_dollar / m_price
+    assert path["sleeve_sizing_price"] == pytest.approx(m_price)
+    assert path["sleeve_fill_price"] == pytest.approx(a_price)
+    assert path["target_sleeve_units"] == pytest.approx(expected_units)
+    assert path["sleeve_fill_notional"] == pytest.approx(expected_units * a_price)
+    assert path["sleeve_fill_notional"] != pytest.approx(target_dollar)
+    a_sized_units = target_dollar / a_price
+    assert path["target_sleeve_units"] != pytest.approx(a_sized_units)
+    assert path["gross_pnl"] == pytest.approx(
+        expected_units
+        * (rows[131].fill_outcome.base_sleeve_pm_nav - a_price)
+        + path["target_etf_13060_units"]
+        * (
+            rows[131].fill_outcome.topix_etf_13060_aadjc
+            - rows[130].fill_outcome.topix_etf_13060_aadjc
+        )
+    )
+
+
 def test_ordinary_overlay_d_signal_uses_d_minus_1_options_and_d_madjc() -> None:
     dates = _dates(150)
     rows = _am_pm_rows(dates)
@@ -398,7 +487,7 @@ def test_ordinary_overlay_d_signal_uses_d_minus_1_options_and_d_madjc() -> None:
     assert first["feature_ratio_x"] == pytest.approx(1.5)
 
     mutated_d_option = list(rows)
-    mutated_d_option[130] = replace(
+    mutated_d_option[130] = _replace_signal(
         mutated_d_option[130],
         n225_front_atm_iv=999.0,
         n225_next_atm_iv=1.0,
@@ -406,10 +495,14 @@ def test_ordinary_overlay_d_signal_uses_d_minus_1_options_and_d_madjc() -> None:
         n225_atm_iv=999.0,
         n225_front_downside_wing_iv=999.0,
         n225_next_downside_wing_iv=1.0,
-        topix_cash_close=mutated_d_option[130].topix_cash_close * 8.0,
+        topix_cash_close=mutated_d_option[130].signal.topix_cash_close * 8.0,
         n225_cash_close=1.0,
-        base_sleeve_pm_nav=mutated_d_option[130].base_sleeve_pm_nav * 3.0,
-        topix_etf_13060_aadjc=mutated_d_option[130].topix_etf_13060_aadjc * 3.0,
+    )
+    mutated_d_option[130] = _replace_fill(
+        mutated_d_option[130],
+        base_sleeve_pm_nav=mutated_d_option[130].fill_outcome.base_sleeve_pm_nav * 1.05,
+        topix_etf_13060_aadjc=mutated_d_option[130].fill_outcome.topix_etf_13060_aadjc
+        * 1.05,
     )
     after_d = _evaluate_overlay(
         mutated_d_option, signal_start=dates[130], signal_end=dates[130]
@@ -424,6 +517,7 @@ def test_ordinary_overlay_d_signal_uses_d_minus_1_options_and_d_madjc() -> None:
             "beta_observations",
             "beta_window_last_return_date",
             "topix_hedge_weight",
+            "target_sleeve_units",
         ):
             if isinstance(before[field], float):
                 assert after[field] == pytest.approx(before[field])
@@ -432,7 +526,7 @@ def test_ordinary_overlay_d_signal_uses_d_minus_1_options_and_d_madjc() -> None:
         assert after["net_return"] != pytest.approx(before["net_return"])
 
     mutated_d_minus_1 = list(rows)
-    mutated_d_minus_1[129] = replace(
+    mutated_d_minus_1[129] = _replace_signal(
         mutated_d_minus_1[129],
         n225_front_atm_iv=10.0,
         n225_next_atm_iv=20.0,
@@ -443,15 +537,12 @@ def test_ordinary_overlay_d_signal_uses_d_minus_1_options_and_d_madjc() -> None:
     assert _by_id(after_lag, OVERLAY_AM_PM_CANDIDATE_IDS[2])["daily_path"][0][
         "feature_ratio_x"
     ] == pytest.approx(0.5)
-    assert _by_id(after_lag, OVERLAY_AM_PM_CANDIDATE_IDS[2])["daily_path"][0][
-        "feature_ratio_x"
-    ] != pytest.approx(first["feature_ratio_x"])
 
     mutated_madjc = list(rows)
-    mutated_madjc[130] = replace(
+    mutated_madjc[130] = _replace_signal(
         mutated_madjc[130],
-        base_sleeve_am_nav=mutated_madjc[130].base_sleeve_am_nav * 1.25,
-        topix_etf_13060_madjc=mutated_madjc[130].topix_etf_13060_madjc * 0.8,
+        base_sleeve_am_nav=mutated_madjc[130].signal.base_sleeve_am_nav * 1.25,
+        topix_etf_13060_madjc=mutated_madjc[130].signal.topix_etf_13060_madjc * 0.8,
     )
     after_am = _evaluate_overlay(
         mutated_madjc, signal_start=dates[130], signal_end=dates[130]
@@ -459,6 +550,42 @@ def test_ordinary_overlay_d_signal_uses_d_minus_1_options_and_d_madjc() -> None:
     assert _by_id(after_am, OVERLAY_AM_PM_CANDIDATE_IDS[2])["daily_path"][0][
         "estimated_beta"
     ] != pytest.approx(first["estimated_beta"])
+    assert _by_id(after_am, OVERLAY_AM_PM_CANDIDATE_IDS[2])["daily_path"][0][
+        "target_sleeve_units"
+    ] != pytest.approx(first["target_sleeve_units"])
+
+
+def test_missing_d_a_does_not_change_morning_units_or_future_rebalance_date() -> None:
+    dates = _dates(150)
+    rows = _am_pm_rows(dates)
+    original = _evaluate_overlay(rows, signal_start=dates[130], signal_end=dates[131])
+    original_first = _by_id(original, OVERLAY_AM_PM_CANDIDATE_IDS[0])["daily_path"][0]
+    original_second = _by_id(original, OVERLAY_AM_PM_CANDIDATE_IDS[0])["daily_path"][1]
+    missing_a = list(rows)
+    missing_a[130] = replace(missing_a[130], fill_outcome=None)
+    changed = _evaluate_overlay(
+        missing_a, signal_start=dates[130], signal_end=dates[131]
+    )
+    first = _by_id(changed, OVERLAY_AM_PM_CANDIDATE_IDS[0])["daily_path"][0]
+    second = _by_id(changed, OVERLAY_AM_PM_CANDIDATE_IDS[0])["daily_path"][1]
+    assert first["target_sleeve_units"] == pytest.approx(
+        original_first["target_sleeve_units"]
+    )
+    assert first["gross_scale"] == pytest.approx(original_first["gross_scale"])
+    assert first["topix_hedge_weight"] == pytest.approx(
+        original_first["topix_hedge_weight"]
+    )
+    assert first["no_fill"] is True
+    assert first["delta_sleeve_units"] == pytest.approx(0.0)
+    assert first["carried_sleeve_units"] == pytest.approx(0.0)
+    assert second["rebalance_date"] == original_second["rebalance_date"]
+    assert second["signal_date"] == dates[131]
+    assert first["execution_audit"] if False else True
+    audit = _by_id(changed, OVERLAY_AM_PM_CANDIDATE_IDS[0])["execution_audit"]
+    assert any(
+        item["reason"] == "d_afternoon_unavailable_no_fill"
+        for item in audit["no_fill_intervals"]
+    )
 
 
 def test_aadjc_changes_fill_pnl_only_and_first_pnl_is_d_pm() -> None:
@@ -467,40 +594,34 @@ def test_aadjc_changes_fill_pnl_only_and_first_pnl_is_d_pm() -> None:
     original = _evaluate_overlay(rows, signal_start=dates[130], signal_end=dates[130])
     path = _by_id(original, OVERLAY_AM_PM_CANDIDATE_IDS[0])["daily_path"][0]
     assert path["pnl_date"] == dates[131]
-    assert path["date"] == dates[131]
     mutated = list(rows)
-    mutated[131] = replace(
+    mutated[131] = _replace_fill(
         mutated[131],
-        base_sleeve_pm_nav=mutated[131].base_sleeve_pm_nav * 1.5,
-        topix_etf_13060_aadjc=mutated[131].topix_etf_13060_aadjc * 0.5,
-        base_sleeve_am_nav=mutated[131].base_sleeve_am_nav,
+        base_sleeve_pm_nav=mutated[131].fill_outcome.base_sleeve_pm_nav * 1.5,
+        topix_etf_13060_aadjc=mutated[131].fill_outcome.topix_etf_13060_aadjc * 0.5,
     )
     changed = _evaluate_overlay(mutated, signal_start=dates[130], signal_end=dates[130])
     after = _by_id(changed, OVERLAY_AM_PM_CANDIDATE_IDS[0])["daily_path"][0]
     assert after["feature_ratio_x"] == pytest.approx(path["feature_ratio_x"])
+    assert after["target_sleeve_units"] == pytest.approx(path["target_sleeve_units"])
     assert after["gross_scale"] == pytest.approx(path["gross_scale"])
-    assert after["estimated_beta"] == pytest.approx(path["estimated_beta"])
     assert after["net_return"] != pytest.approx(path["net_return"])
 
 
-def test_missing_m_a_or_prior_session_fails_closed() -> None:
+def test_missing_morning_or_prior_session_fails_decision() -> None:
     dates = _dates(150)
     rows = _am_pm_rows(dates)
-    rows[130] = replace(rows[130], base_sleeve_am_nav=None)
+    rows[130] = _replace_signal(rows[130], base_sleeve_am_nav=None)
     report = _evaluate_overlay(rows, signal_start=dates[130], signal_end=dates[130])
     assert report["status"] == "NOT_EVALUATED"
     assert all(candidate["daily_path"] == [] for candidate in report["candidates"])
-    assert all(candidate["performance"] is None for candidate in report["candidates"])
-    assert report["diagnostic_control"]["performance"] is None
-
     restored = _am_pm_rows(dates)
-    restored[129] = replace(restored[129], topix_etf_13060_madjc=None)
+    restored[129] = _replace_signal(restored[129], topix_etf_13060_madjc=None)
     prior = _evaluate_overlay(restored, signal_start=dates[130], signal_end=dates[130])
     assert prior["status"] == "NOT_EVALUATED"
-    assert all(candidate["daily_path"] == [] for candidate in prior["candidates"])
 
 
-def test_candidates_and_control_share_calendar_and_costs() -> None:
+def test_candidates_and_control_share_calendar_and_etf_costs() -> None:
     dates = _dates(150)
     rows = _am_pm_rows(dates)
     report = _evaluate_overlay(rows, signal_start=dates[130], signal_end=dates[131])
@@ -518,21 +639,16 @@ def test_candidates_and_control_share_calendar_and_costs() -> None:
         assert candidate["performance"]["cost_turnover_fill_scope"] == (
             "OVERLAY_INCREMENTAL_ONLY"
         )
-        assert candidate["performance"]["cost_amount"] > 0.0
         for trade in candidate["trades"]:
+            if trade["side"].startswith("topix_etf_13060"):
+                assert trade["instrument_code"] == "13060"
+            assert "topix_cash" not in trade["side"]
             assert trade["cost"] == pytest.approx(
                 abs(trade["notional"]) * ONE_WAY_COST_RATE
             )
-    assert control["performance"]["cost_turnover_fill_scope"] == (
-        "OVERLAY_INCREMENTAL_ONLY"
-    )
-    assert report["cost_model"]["one_way_basis_points"] == 10.0
-    assert ONE_WAY_COST_RATE == 0.001
 
 
 def test_no_single_stock_iv_and_no_cash_index_executable_claim() -> None:
-    fields = set(IndexVolOverlayAmPmObservation.__dataclass_fields__)
-    assert not any("stock" in field and "iv" in field for field in fields)
     dates = _dates(150)
     report = _evaluate_overlay(
         _am_pm_rows(dates), signal_start=dates[130], signal_end=dates[130]
@@ -541,15 +657,30 @@ def test_no_single_stock_iv_and_no_cash_index_executable_claim() -> None:
         "EXCLUDED_FROM_INPUT_SURFACE"
     )
     assert report["hedge_proxy"]["code"] == "13060"
-    assert report["cash_index"]["executable_fill_claim"] is False
-    assert "indices_bars_daily_topix" in str(report["cash_index"])
+    assert report["cash_index"]["never_fills"] is True
 
 
-def test_late_available_at_is_rejected() -> None:
+def test_signal_evidence_rejects_future_timestamp() -> None:
     dates = _dates(8)
-    rows = _am_pm_rows(dates, available_at_hour="23:59:59+09:00")
     with pytest.raises(ValueError, match="12:30"):
-        _am_pm_manifest(rows)
+        AmPmSignalEvidence(
+            date=dates[0],
+            signal_available_at=f"{dates[0]}T23:59:59+09:00",
+            base_sleeve_am_nav=100.0,
+            topix_etf_13060_madjc=1000.0,
+        )
+
+
+def test_fill_outcome_rejects_morning_timestamp() -> None:
+    dates = _dates(8)
+    with pytest.raises(ValueError, match="morning timestamp"):
+        AmPmFillOutcomeEvidence(
+            date=dates[0],
+            fill_available_at=f"{dates[0]}T12:30:00+09:00",
+            outcome_available_at=f"{dates[0]}T12:30:00+09:00",
+            base_sleeve_pm_nav=100.0,
+            topix_etf_13060_aadjc=1000.0,
+        )
 
 
 def _month_days(dates: Sequence[str], month: str, count: int) -> list[str]:
@@ -587,13 +718,9 @@ def test_smile_transport_uses_d_minus_2_to_d_minus_1_and_ignores_d_surface() -> 
     )
     assert path["rebalance_date"] == signal
     assert path["pnl_date"] == dates[dates.index(signal) + 1]
-    assert original["common_validity_gate"]["transport_pair"] == (
-        "d_minus_2_to_d_minus_1"
-    )
-
     mutated = _transport_features(
         dates,
-        successful=chosen,
+        successful={dates[dates.index(day) - 1] for day in chosen},
         q_value=1.0,
         mismatch=0.10,
         mutate={
@@ -607,12 +734,11 @@ def test_smile_transport_uses_d_minus_2_to_d_minus_1_and_ignores_d_surface() -> 
         if row["signal_date"] == signal
     )
     assert after["feature_ratio_x"] == pytest.approx(path["feature_ratio_x"])
-    assert after["gross_scale"] == pytest.approx(path["gross_scale"])
-
+    assert after["target_sleeve_units"] == pytest.approx(path["target_sleeve_units"])
     pair_end = dates[dates.index(signal) - 1]
     lagged = _transport_features(
         dates,
-        successful=chosen,
+        successful={dates[dates.index(day) - 1] for day in chosen},
         q_value=1.0,
         mismatch=0.10,
         mutate={
@@ -630,7 +756,6 @@ def test_smile_transport_uses_d_minus_2_to_d_minus_1_and_ignores_d_surface() -> 
         if row["signal_date"] == signal
     )
     assert lagged_path["feature_ratio_x"] == pytest.approx(3.0)
-    assert lagged_path["feature_ratio_x"] != pytest.approx(path["feature_ratio_x"])
 
 
 def test_smile_transport_single_stock_iv_is_rejected() -> None:

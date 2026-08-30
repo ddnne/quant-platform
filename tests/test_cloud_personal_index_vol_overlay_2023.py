@@ -506,10 +506,23 @@ def test_am_pm_observations_keep_native_option_dates_and_etf_ma() -> None:
         base_vol_percent={day: 20.0 for day in dates},
         feature_rows=features,
     )
-    assert rows[2].n225_atm_iv == pytest.approx(0.40)
-    assert rows[1].n225_atm_iv == pytest.approx(0.25)
-    assert rows[2].topix_etf_13060_madjc == pytest.approx(1002.0)
-    assert rows[2].available_at == f"{dates[2]}T12:30:00+09:00"
+    assert rows[2].signal.n225_atm_iv == pytest.approx(0.40)
+    assert rows[1].signal.n225_atm_iv == pytest.approx(0.25)
+    assert rows[2].signal.topix_etf_13060_madjc == pytest.approx(1002.0)
+    assert rows[2].signal.signal_available_at == f"{dates[2]}T12:30:00+09:00"
+    assert rows[2].fill_outcome.fill_available_at == f"{dates[2]}T15:00:00+09:00"
+    missing_a = dict(etf)
+    missing_a[dates[2]] = (1002.0, None)
+    optional_a = overlay.build_am_pm_observations(
+        session_dates=dates,
+        base_artifact=base,
+        etf_ma=missing_a,
+        topix_closes=closes,
+        base_vol_percent={day: 20.0 for day in dates},
+        feature_rows=features,
+    )
+    assert optional_a[2].signal.topix_etf_13060_madjc == pytest.approx(1002.0)
+    assert optional_a[2].fill_outcome.topix_etf_13060_aadjc is None
     remapped = overlay.remap_smile_transport_features_for_am_pm(
         [
             {
@@ -524,3 +537,40 @@ def test_am_pm_observations_keep_native_option_dates_and_etf_ma() -> None:
     assert remapped[0]["source_candidate_id"] == (
         "n225_sticky_strike_downside_smile_term_surprise_v1"
     )
+
+
+def test_am_pm_execute_fails_closed_before_panel_when_producer_missing() -> None:
+    job_id = "overlay-am-pm-producer"
+    prefix = f"research/personal/index-vol-overlay-2023-am-pm/job={job_id}"
+    body = {
+        "base_job_id": "base-am-pm",
+        "cohort_id": overlay.AM_PM_COHORT_ID,
+        "input_manifest_digest": "sha256:" + "b" * 64,
+        "input_manifest_key": f"{prefix}/input-manifest.json",
+        "job_id": job_id,
+        "manifest_key": f"{prefix}/manifest.json",
+        "request_digest": "sha256:" + "0" * 64,
+        "runner_version": overlay.AM_PM_RUNNER_VERSION,
+        "svi_job_id": "svi-am-pm",
+    }
+    body["request_digest"] = overlay.PersonalIndexVolOverlay2023JobSpec(
+        **body
+    ).derived_request_digest()
+    spec = overlay.PersonalIndexVolOverlay2023JobSpec.from_document(body)
+    uploaded: list[tuple[str, bytes]] = []
+
+    def uploader(_spec, key, payload):
+        uploaded.append((key, payload))
+        return overlay._sha256(payload)
+
+    terminal = overlay.execute_am_pm_overlay_job(
+        spec,
+        overlay_opener=lambda *_args, **_kwargs: None,
+        uploader=uploader,
+    )
+    assert terminal["status"] == "FAILED"
+    assert terminal["error"] == "am_pm_base_producer_unavailable"
+    assert terminal["producer_dependency"]["required_cohort_id"] == (
+        "sector-relative-ls-am-pm-v1"
+    )
+    assert uploaded[0][0] == spec.manifest_key
