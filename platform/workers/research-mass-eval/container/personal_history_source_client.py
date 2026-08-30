@@ -289,8 +289,12 @@ class AcquisitionSpool:
             """
         )
         self._conn.commit()
+        # Instance-local reuse of already-verified COMPLETE months. Not durable
+        # and not shared with another spool/client/job.
+        self._verified_pages: dict[tuple[str, str], tuple[SourcePage, ...]] = {}
 
     def close(self) -> None:
+        self._verified_pages.clear()
         self._conn.close()
 
     def usage(self) -> tuple[int, int]:
@@ -355,6 +359,19 @@ class AcquisitionSpool:
             self.clear_month(dataset, month)
             return None
         return tuple(self._page_from_row(page) for page in pages)
+
+    def _cached_verified_month(
+        self, dataset: str, month: str
+    ) -> tuple[SourcePage, ...] | None:
+        key = (dataset, month)
+        cached = self._verified_pages.get(key)
+        if cached is not None:
+            return cached
+        pages = self.verified_complete_month(dataset, month)
+        if pages is None:
+            return None
+        self._verified_pages[key] = pages
+        return pages
 
     def _assert_verified_complete(
         self,
@@ -453,6 +470,7 @@ class AcquisitionSpool:
             )
 
     def clear_month(self, dataset: str, month: str) -> None:
+        self._verified_pages.pop((dataset, month), None)
         self._conn.execute("BEGIN")
         try:
             self._conn.execute(
@@ -473,6 +491,7 @@ class AcquisitionSpool:
             raise
 
     def begin_month(self, dataset: str, month: str, identity: Mapping[str, Any]) -> None:
+        self._verified_pages.pop((dataset, month), None)
         self._conn.execute(
             """
             INSERT INTO month_state (
@@ -597,7 +616,7 @@ class AcquisitionSpool:
     ) -> tuple[SourcePage, ...]:
         collected: list[SourcePage] = []
         for month in months:
-            verified = self.verified_complete_month(dataset, month)
+            verified = self._cached_verified_month(dataset, month)
             if verified is None:
                 raise PersonalHistoryError(
                     f"{dataset} {month} is not a verified COMPLETE month"
@@ -834,7 +853,7 @@ class PersonalHistorySourceClient:
         }
 
     def _ensure_month(self, dataset: str, month: str) -> None:
-        if self.spool.verified_complete_month(dataset, month) is not None:
+        if self.spool._cached_verified_month(dataset, month) is not None:
             return
         # Partial, forged, or truncated months are not selection evidence.
         self.spool.clear_month(dataset, month)
@@ -942,10 +961,6 @@ class PersonalHistorySourceClient:
         date_to: str | None = None,
         code: str | None = None,
     ) -> _Fetch:
-        if any(not self.spool.month_complete(dataset, month) for month in months):
-            raise PersonalHistoryError(
-                f"{dataset} selection requires COMPLETE source months"
-            )
         selected, contributing, pages, source_row_count = self.spool.select_rows(
             dataset,
             months,
@@ -998,5 +1013,4 @@ class PersonalHistorySourceClient:
         months = _iter_months(route.earliest, self.period_end)
         for month in months:
             self._ensure_month("fins_summary", month)
-            self._refresh_progress()
         return self._selection("fins_summary", {"code": code}, months, code=code)
