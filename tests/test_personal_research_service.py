@@ -556,15 +556,17 @@ def test_prepared_first_pass_stores_only_exact_session_bar_rows(
     assert prepared_reads
     assert any(from_event != to_event for from_event, to_event, _ in uncached_reads)
     assert any(from_event == to_event for from_event, to_event, _ in prepared_reads)
-    # Full lookbacks are read only for fail-closed adjustment validation. They
-    # are represented by empty markers; the cache persists exact-session rows.
+    # Each successful SQL validity probe stores one empty decision-window
+    # marker; only exact-session price rows are persisted in the cache.
     assert int(stats["price_rows_written"]) * 5 < sum(
         rows for _, _, rows in uncached_reads
     )
     assert int(stats["price_rows_written"]) == 4 * len(
         universe.decision_memberships
     )
-    assert int(stats["price_window_writes"]) == len(prepared_reads)
+    assert int(stats["price_window_writes"]) == (
+        len(prepared_reads) + len(universe.decision_memberships)
+    )
 
 
 def test_prepared_frame_preserves_missing_reason_and_halves_pit_queries(

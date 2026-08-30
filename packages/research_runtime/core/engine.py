@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import datetime, timedelta
 from typing import Any, Mapping
 
@@ -170,7 +171,7 @@ def _required_adjusted_close(row: Mapping[str, Any]) -> float:
             "PERSONAL_RETROSPECTIVE_ADJUSTED received a non-numeric "
             f"adjustment_close for {row.get('code')} {row.get('date')}"
         ) from exc
-    if price <= 0.0:
+    if not math.isfinite(price) or price <= 0.0:
         raise ValueError(
             "PERSONAL_RETROSPECTIVE_ADJUSTED requires a positive "
             f"adjustment_close for {row.get('code')} {row.get('date')}"
@@ -416,15 +417,18 @@ def _validate_prepared_adjustment_window(
                 raise RuntimeError("invalid prepared adjustment validation marker")
             return
 
-    result = pit.get_equity_bars_daily(
+    invalid_row = pit.first_invalid_adjusted_close(
         as_of=as_of,
         from_event=from_event,
         to_event=to_event,
         codes=ordered_codes,
         db_path=db_path,
     )
-    for row in result.rows:
-        _required_adjusted_close(row)
+    if invalid_row is not None:
+        # Keep the public error contract centralized in the exact same helper
+        # used for consumed bars.  The probe only identifies the offending
+        # PIT-visible row; it never manufactures a validation message.
+        _required_adjusted_close(invalid_row)
 
     if frame is not None:
         frame.store_price_rows(
