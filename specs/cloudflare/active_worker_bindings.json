@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:1f4654a504436c54e6e09241062f527dbe7daf7500c26495069ca2df8e178c4d",
+  "manifest_digest": "sha256:5394a19421cd339f283fa812b1cb3e00af3b16ad35a1845a6f7fc5bcb37b7ac7",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -2949,7 +2949,7 @@
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
           "ENVIRONMENT": "production",
-          "MASS_EVAL_VERSION": "research-mass-eval/v148-cloud-snapshot",
+          "MASS_EVAL_VERSION": "research-mass-eval/v149-am-pm-panels",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3055,7 +3055,7 @@
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
           "ENVIRONMENT": "production",
-          "MASS_EVAL_VERSION": "research-mass-eval/v148-cloud-snapshot",
+          "MASS_EVAL_VERSION": "research-mass-eval/v149-am-pm-panels",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3159,7 +3159,7 @@
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
           "ENVIRONMENT": "staging",
-          "MASS_EVAL_VERSION": "research-mass-eval/v148-cloud-snapshot",
+          "MASS_EVAL_VERSION": "research-mass-eval/v149-am-pm-panels",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",

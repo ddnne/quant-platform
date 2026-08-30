@@ -25,7 +25,7 @@ new_sqlite_classes = ["PersonalResearchContainer"]
 
 [vars]
 ENVIRONMENT = "staging"
-MASS_EVAL_VERSION = "research-mass-eval/v148-cloud-snapshot"
+MASS_EVAL_VERSION = "research-mass-eval/v149-am-pm-panels"
 MASS_EVAL_WAVE = "research-mass-eval"
 MASS_RESEARCH = "NO-GO"
 PHASE7 = "OFF"
