@@ -197,7 +197,7 @@ describe("personal research Container admission", () => {
       cohort_digest:
         "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84",
       cohort_id: "diverse-core-v1",
-      runner_version: "personal-cloud-runner/v7",
+      runner_version: "personal-cloud-runner/v8",
       snapshot_key: REQUEST.snapshot_key,
       snapshot_sha256: SHA,
       universe_id: "topix500",

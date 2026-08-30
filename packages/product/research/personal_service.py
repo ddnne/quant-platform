@@ -69,9 +69,21 @@ from research.paper_candidate_specs import (
     build_fundamentals_hold_strategy_spec,
     build_multi_day_hold_strategy_spec,
 )
+from research.personal_base_sleeve import (
+    BASE_COHORT_ID as INDEX_VOL_BASE_COHORT_ID,
+    BASE_SLEEVE_ID as INDEX_VOL_BASE_SLEEVE_ID,
+    BASE_UNIVERSE_ID as INDEX_VOL_BASE_UNIVERSE_ID,
+    PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
+    PERSONAL_BASE_SLEEVE_COST_BPS,
+    PERSONAL_BASE_SLEEVE_RANKING_ROLE,
+    PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
+    PERSONAL_BASE_SLEEVE_ROLE,
+    PERSONAL_BASE_SLEEVE_SHORT_FINANCING_RATE,
+    build_personal_base_sleeve_artifact,
+)
 from research.stats_metrics import sharpe_ratio
 
-PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v8"
+PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v9"
 PERSONAL_DECISION_POLICY = "personal_drawdown_cost_stress/v3"
 PERSONAL_DATA_PROFILE = "personal-japan-equities-paper/v3"
 PERSONAL_BAR_COVERAGE_EVIDENCE = "observed-pit-market-breadth/v1"
@@ -81,7 +93,7 @@ PERSONAL_SHORT_FINANCING_TRACE_SCHEMA = "personal-short-notional-trace/v1"
 PERSONAL_SHORT_FINANCING_ANNUAL_RATES = (0.0, 0.03, 0.10)
 PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE = 0.03
 PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR = 245
-PERSONAL_EXACT_FOUR_MAX_BACKTESTS = 24
+PERSONAL_EXACT_FOUR_MAX_BACKTESTS = 25
 
 
 class PersonalResearchInputError(ValueError):
@@ -175,6 +187,10 @@ class PersonalResearchRun:
     cohort_digest: str | None = None
     universe_id: str = DEFAULT_PERSONAL_UNIVERSE_ID
     universe_rule_digest: str | None = None
+    base_sleeve_artifact_path: Path | None = None
+    base_sleeve_artifact_digest: str | None = None
+    base_sleeve_archive_member: str | None = None
+    non_candidate_source_backtest_count: int = 0
 
     @property
     def exit_code(self) -> int:
@@ -383,6 +399,20 @@ def _validated_specs(
                     f"declares {definition.price_basis!r}"
                 )
     return specs, cohort
+
+
+def _requires_index_vol_base_sleeve(
+    cohort: ResearchCohort | None,
+    *,
+    universe_id: str,
+) -> bool:
+    """Only the frozen TOPIX-all long/short run feeds the later overlay."""
+
+    return bool(
+        cohort is not None
+        and cohort.cohort_id == INDEX_VOL_BASE_COHORT_ID
+        and universe_id == INDEX_VOL_BASE_UNIVERSE_ID
+    )
 
 
 def _closures(
@@ -1465,6 +1495,75 @@ def _run_one(
     return evidence, returns, dates, result
 
 
+def _write_continuous_base_sleeve_artifact(
+    executor: PersonalPaperExecutionService,
+    spec: StrategySpec,
+    closure: PlanDependencyClosure,
+    *,
+    snapshot: PersonalSnapshot,
+    universe: PersonalResolvedUniverseMembership,
+    source_period: tuple[str, str],
+    output_root: Path,
+    cohort_digest: str,
+) -> tuple[dict[str, Any], Path, str]:
+    """Execute one full-period base sleeve outside candidate selection."""
+
+    evidence, _returns, _dates, paper_result = _run_one(
+        executor,
+        spec,
+        db_path=snapshot.db_path,
+        snapshot_id=snapshot.logical_data_snapshot_id,
+        universe=universe,
+        period=source_period,
+        cost_bps=PERSONAL_BASE_SLEEVE_COST_BPS,
+        lookback_days=closure.required_lookback_trading_days,
+        output_root=output_root,
+        max_drawdown=1.0,
+        short_financing_annual_rate=(
+            PERSONAL_BASE_SLEEVE_SHORT_FINANCING_RATE
+        ),
+    )
+    document = build_personal_base_sleeve_artifact(
+        result=paper_result,
+        evidence=evidence,
+        spec=spec,
+        dependency_closure_digest=closure.closure_digest,
+        cohort_digest=cohort_digest,
+        universe_id=INDEX_VOL_BASE_UNIVERSE_ID,
+        universe_rule_digest=universe.rule_digest,
+        resolved_membership_digest=universe.resolved_membership_digest,
+        snapshot_id=snapshot.snapshot_id,
+        logical_data_snapshot_id=snapshot.logical_data_snapshot_id,
+        source_period=source_period,
+        source_session_dates=tuple(
+            day
+            for day, _codes in universe.decision_memberships
+            if source_period[0] <= day <= source_period[1]
+        ),
+    )
+    archive_member = _write_artifact(
+        output_root,
+        "base-sleeve",
+        "json",
+        _canonical_bytes(document),
+    )
+    artifact_path = output_root / archive_member
+    artifact_digest = "sha256:" + artifact_path.stem
+    reference = {
+        "schema_version": PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
+        "artifact_schema_version": PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
+        "archive_member": archive_member,
+        "sha256": artifact_digest,
+        "strategy_id": INDEX_VOL_BASE_SLEEVE_ID,
+        "cohort_id": INDEX_VOL_BASE_COHORT_ID,
+        "universe_id": INDEX_VOL_BASE_UNIVERSE_ID,
+        "role": PERSONAL_BASE_SLEEVE_ROLE,
+        "ranking_role": PERSONAL_BASE_SLEEVE_RANKING_ROLE,
+        "candidate_count_contribution": 0,
+    }
+    return reference, artifact_path, artifact_digest
+
+
 def _short_financing_sensitivity_document(
     runs_by_rate: Mapping[float, Sequence[dict[str, Any]]],
     returns_by_rate: Mapping[float, Sequence[float]],
@@ -2003,6 +2102,10 @@ class PersonalResearchService:
         short_financing_required = bool(
             cohort is not None and cohort.short_financing_required
         )
+        base_sleeve_required = _requires_index_vol_base_sleeve(
+            cohort,
+            universe_id=universe_selector.selector_id,
+        )
         if short_financing_required and (
             cohort is None
             or cohort.cohort_id != PERSONAL_SHORT_FINANCING_COHORT_ID
@@ -2012,7 +2115,9 @@ class PersonalResearchService:
                 f"{PERSONAL_SHORT_FINANCING_COHORT_ID!r} cohort"
             )
         if cohort is not None:
-            planned_maximum = len(specs) * (self.policy.validation_folds + 2)
+            planned_maximum = len(specs) * (self.policy.validation_folds + 2) + int(
+                base_sleeve_required
+            )
             if planned_maximum > PERSONAL_EXACT_FOUR_MAX_BACKTESTS:
                 raise PersonalResearchInputError(
                     "closed exact-four cohort exceeds the fixed "
@@ -2121,6 +2226,9 @@ class PersonalResearchService:
         )
         candidates: list[dict[str, Any]] = []
         unexpected_errors = 0
+        base_sleeve_reference: dict[str, Any] | None = None
+        base_sleeve_artifact_path: Path | None = None
+        base_sleeve_artifact_digest: str | None = None
         if (
             bar_coverage["status"] != "PASS"
             or source_sync["status"] != "PASS"
@@ -2171,6 +2279,33 @@ class PersonalResearchService:
                 db_path=snapshot.db_path,
                 snapshot_id=snapshot.logical_data_snapshot_id,
             ):
+                if base_sleeve_required:
+                    if cohort_ref is None:
+                        raise RuntimeError("base sleeve cohort provenance is absent")
+                    matching = [
+                        (spec, closure)
+                        for spec, closure in zip(specs, closures, strict=True)
+                        if spec.strategy_id == INDEX_VOL_BASE_SLEEVE_ID
+                    ]
+                    if len(matching) != 1:
+                        raise RuntimeError(
+                            "frozen base sleeve is not unique in its exact cohort"
+                        )
+                    base_spec, base_closure = matching[0]
+                    (
+                        base_sleeve_reference,
+                        base_sleeve_artifact_path,
+                        base_sleeve_artifact_digest,
+                    ) = _write_continuous_base_sleeve_artifact(
+                        executor,
+                        base_spec,
+                        base_closure,
+                        snapshot=snapshot,
+                        universe=universe,
+                        source_period=(fold_periods[0][0], holdout_period[1]),
+                        output_root=output_root,
+                        cohort_digest=cohort_ref["cohort_digest"],
+                    )
                 for spec, closure in zip(specs, closures, strict=True):
                     try:
                         candidates.append(
@@ -2272,12 +2407,16 @@ class PersonalResearchService:
             },
             "candidates": candidates,
             "comparison": _comparison_document(candidates),
+            "base_sleeve_artifact": base_sleeve_reference,
             "summary": {
                 "analysis_status": analysis_status,
                 "candidate_count": len(candidates),
                 "evaluated_count": evaluated_count,
                 "hold_count": hold_count,
                 "unexpected_errors": unexpected_errors,
+                "non_candidate_source_backtest_count": int(
+                    base_sleeve_reference is not None
+                ),
             },
             "live_orders_enabled": False,
             "automatic_promotion": False,
@@ -2318,6 +2457,16 @@ class PersonalResearchService:
             ),
             universe_id=universe_selector.selector_id,
             universe_rule_digest=universe_selector.rule_digest,
+            base_sleeve_artifact_path=base_sleeve_artifact_path,
+            base_sleeve_artifact_digest=base_sleeve_artifact_digest,
+            base_sleeve_archive_member=(
+                None
+                if base_sleeve_reference is None
+                else str(base_sleeve_reference["archive_member"])
+            ),
+            non_candidate_source_backtest_count=int(
+                base_sleeve_reference is not None
+            ),
         )
 
 

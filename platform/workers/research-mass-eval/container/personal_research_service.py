@@ -34,8 +34,18 @@ from personal_svi_2023_job import (
     SviJobInputError,
     execute_svi_job,
 )
+from research.personal_base_sleeve import (
+    BASE_COHORT_ID,
+    BASE_SLEEVE_ID,
+    BASE_UNIVERSE_ID,
+    PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
+    PERSONAL_BASE_SLEEVE_RANKING_ROLE,
+    PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
+    PERSONAL_BASE_SLEEVE_ROLE,
+    validate_personal_base_sleeve_artifact,
+)
 
-RUNNER_VERSION = "personal-cloud-runner/v7"
+RUNNER_VERSION = "personal-cloud-runner/v8"
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60
@@ -43,6 +53,7 @@ MAX_PERIOD_DAYS = 2200
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_RESULT_BYTES = 512 * 1024 * 1024
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024
+MAX_BASE_SLEEVE_ARTIFACT_BYTES = 16 * 1024 * 1024
 
 _JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -411,6 +422,96 @@ def _require_output_artifact(
     return resolved
 
 
+def _validated_base_sleeve_reference(
+    summary: Mapping[str, Any],
+    *,
+    spec: JobSpec,
+    output_root: Path,
+) -> dict[str, Any] | None:
+    reference = summary.get("base_sleeve_artifact")
+    source_count = summary.get("non_candidate_source_backtest_count")
+    expected_profile = (
+        spec.cohort_id == BASE_COHORT_ID
+        and spec.universe_id == BASE_UNIVERSE_ID
+    )
+    if type(source_count) is not int or source_count not in {0, 1}:
+        raise RuntimeError("qp-research base sleeve source count is invalid")
+    if reference is None:
+        if source_count != 0:
+            raise RuntimeError("qp-research base sleeve reference is missing")
+        return None
+    if not expected_profile or source_count != 1:
+        raise RuntimeError("qp-research emitted an unexpected base sleeve source")
+    expected_fields = {
+        "archive_member",
+        "artifact_schema_version",
+        "candidate_count_contribution",
+        "cohort_id",
+        "path",
+        "ranking_role",
+        "role",
+        "schema_version",
+        "sha256",
+        "strategy_id",
+        "universe_id",
+    }
+    if not isinstance(reference, dict) or set(reference) != expected_fields:
+        raise RuntimeError("qp-research base sleeve reference is invalid")
+    if (
+        reference.get("schema_version") != PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA
+        or reference.get("artifact_schema_version")
+        != PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA
+        or reference.get("strategy_id") != BASE_SLEEVE_ID
+        or reference.get("cohort_id") != BASE_COHORT_ID
+        or reference.get("universe_id") != BASE_UNIVERSE_ID
+        or reference.get("role") != PERSONAL_BASE_SLEEVE_ROLE
+        or reference.get("ranking_role") != PERSONAL_BASE_SLEEVE_RANKING_ROLE
+        or reference.get("candidate_count_contribution") != 0
+        or not isinstance(reference.get("sha256"), str)
+        or _DIGEST_RE.fullmatch(str(reference["sha256"])) is None
+        or not isinstance(reference.get("archive_member"), str)
+    ):
+        raise RuntimeError("qp-research base sleeve reference is invalid")
+    artifact = _require_output_artifact(reference, "path", output_root)
+    archive_member = artifact.relative_to(output_root.resolve(strict=True)).as_posix()
+    if (
+        archive_member != reference["archive_member"]
+        or not archive_member.startswith("base-sleeve/")
+        or artifact.suffix != ".json"
+        or artifact.stem != str(reference["sha256"])[7:]
+        or artifact.stat().st_size > MAX_BASE_SLEEVE_ARTIFACT_BYTES
+        or "sha256:" + _sha256_file(artifact) != reference["sha256"]
+    ):
+        raise RuntimeError("qp-research base sleeve artifact digest is invalid")
+    try:
+        document = json.loads(artifact.read_bytes())
+        validate_personal_base_sleeve_artifact(document)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise RuntimeError("qp-research base sleeve artifact is invalid") from error
+    if (
+        not isinstance(document, dict)
+        or document.get("cohort", {}).get("cohort_digest") != spec.cohort_digest
+        or document.get("universe", {}).get("universe_rule_digest")
+        != spec.universe_rule_digest
+        or document.get("snapshot", {}).get("logical_data_snapshot_id")
+        != summary.get("logical_data_snapshot_id")
+    ):
+        raise RuntimeError("qp-research base sleeve provenance is invalid")
+    source_run = document.get("source_run")
+    assert isinstance(source_run, dict)
+    for field in ("paper_artifact", "risk_artifact"):
+        _require_output_artifact(
+            {field: str(output_root / str(source_run[field]))},
+            field,
+            output_root,
+        )
+    return {
+        key: value
+        for key, value in reference.items()
+        if key != "path"
+    }
+
+
 def _put(
     key: str,
     data: bytes | Path,
@@ -597,6 +698,11 @@ def execute_job(
                 )
             _require_output_artifact(summary, "report_json", output)
             _require_output_artifact(summary, "report_markdown", output)
+            base_sleeve_reference = _validated_base_sleeve_reference(
+                summary,
+                spec=spec,
+                output_root=output,
+            )
             stable_summary = {
                 key: summary.get(key)
                 for key in (
@@ -619,6 +725,10 @@ def execute_job(
                     "automatic_promotion",
                 )
             }
+            stable_summary["base_sleeve_artifact"] = base_sleeve_reference
+            stable_summary["non_candidate_source_backtest_count"] = int(
+                base_sleeve_reference is not None
+            )
             (output / "runner-summary.json").write_bytes(
                 _canonical_bytes(stable_summary)
             )
@@ -646,6 +756,10 @@ def execute_job(
                 "evaluated_count": summary.get("evaluated_count"),
                 "hold_count": summary.get("hold_count"),
                 "unexpected_errors": summary.get("unexpected_errors"),
+                "base_sleeve_artifact": base_sleeve_reference,
+                "non_candidate_source_backtest_count": int(
+                    base_sleeve_reference is not None
+                ),
             }
         except Exception as error:
             manifest = {
