@@ -17,11 +17,11 @@ import math
 import multiprocessing
 import os
 import sqlite3
-from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 from urllib.parse import quote
 
@@ -85,7 +85,7 @@ from research.personal_base_sleeve import (
 )
 from research.stats_metrics import sharpe_ratio
 
-PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v10"
+PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v11"
 PERSONAL_DECISION_POLICY = "personal_drawdown_cost_stress/v3"
 PERSONAL_DATA_PROFILE = "personal-japan-equities-paper/v3"
 PERSONAL_BAR_COVERAGE_EVIDENCE = "observed-pit-market-breadth/v1"
@@ -96,6 +96,8 @@ PERSONAL_SHORT_FINANCING_ANNUAL_RATES = (0.0, 0.03, 0.10)
 PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE = 0.03
 PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR = 245
 PERSONAL_EXACT_FOUR_MAX_BACKTESTS = 25
+_CANDIDATE_PROCESS_RESULT_SCHEMA = "personal-candidate-process-result/v1"
+_CANDIDATE_PROCESS_STOP_GRACE_SECONDS = 5.0
 
 
 class PersonalResearchInputError(ValueError):
@@ -1940,7 +1942,12 @@ def _unexpected_candidate(
     closure: PlanDependencyClosure,
     error: BaseException,
 ) -> dict[str, Any]:
-    detail = " ".join(str(error).split())[:400]
+    if isinstance(error, _CandidateProcessReportedError):
+        error_type = error.error_type
+        detail = error.detail
+    else:
+        error_type = type(error).__name__
+        detail = " ".join(str(error).split())[:400]
     return {
         "strategy_id": spec.strategy_id,
         "strategy_spec_version": spec.version,
@@ -1948,7 +1955,7 @@ def _unexpected_candidate(
         "dependency_closure_digest": closure.closure_digest,
         "strategy": _strategy_context(spec),
         "decision": "SKIPPED",
-        "reasons": [f"unexpected:{type(error).__name__}"],
+        "reasons": [f"unexpected:{error_type}"],
         "validation": None,
         "stress": None,
         "holdout": None,
@@ -1958,42 +1965,298 @@ def _unexpected_candidate(
             "holdout_vs_validation": None,
         },
         "error": {
-            "type": type(error).__name__,
+            "type": error_type,
             "detail": detail or "no detail",
         },
     }
 
 
-def _candidate_process_pool(max_workers: int) -> ProcessPoolExecutor:
-    return ProcessPoolExecutor(
-        max_workers=max_workers,
-        mp_context=multiprocessing.get_context("spawn"),
+class _CandidateProcessReportedError(RuntimeError):
+    """A bounded child error transported without a semaphore-backed channel."""
+
+    def __init__(self, error_type: str, detail: str) -> None:
+        super().__init__(f"{error_type}: {detail}")
+        self.error_type = error_type
+        self.detail = detail
+
+
+def _candidate_process_identity(task: _CandidateProcessTask) -> dict[str, Any]:
+    spec, closure = _candidate_process_domain(task)
+    return {
+        "ordinal": task.ordinal,
+        "strategy_id": spec.strategy_id,
+        "strategy_spec_version": spec.version,
+        "strategy_spec_digest": strategy_spec_digest(spec),
+        "dependency_closure_digest": closure.closure_digest,
+    }
+
+
+def _validate_candidate_process_candidate(
+    candidate: Any,
+    identity: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        raise RuntimeError("candidate process result must be an object")
+    expected = {
+        "strategy_id": identity["strategy_id"],
+        "strategy_spec_version": identity["strategy_spec_version"],
+        "strategy_spec_digest": identity["strategy_spec_digest"],
+        "dependency_closure_digest": identity["dependency_closure_digest"],
+    }
+    if any(candidate.get(key) != value for key, value in expected.items()):
+        raise RuntimeError("candidate process result identity mismatch")
+    return candidate
+
+
+def _candidate_process_error_document(error: BaseException) -> dict[str, str]:
+    return {
+        "type": type(error).__name__,
+        "detail": " ".join(str(error).split())[:400] or "no detail",
+    }
+
+
+def _write_candidate_process_envelope(
+    result_path: Path,
+    envelope: Mapping[str, Any],
+) -> None:
+    """Publish one result atomically on the result directory's filesystem."""
+
+    temporary_path = result_path.with_name(
+        f".{result_path.name}.{os.getpid()}.tmp"
     )
+    try:
+        with temporary_path.open("xb") as handle:
+            handle.write(_canonical_bytes(envelope))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, result_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _candidate_process_to_file(
+    task: _CandidateProcessTask,
+    result_path: Path,
+    candidate_worker: Any,
+) -> None:
+    """Child entrypoint: evaluate and publish one closed atomic JSON envelope."""
+
+    identity = _candidate_process_identity(task)
+    try:
+        ordinal, candidate = candidate_worker(task)
+        if ordinal != task.ordinal:
+            raise RuntimeError("candidate process ordinal mismatch")
+        candidate = _validate_candidate_process_candidate(candidate, identity)
+    except Exception as error:
+        envelope: dict[str, Any] = {
+            "schema_version": _CANDIDATE_PROCESS_RESULT_SCHEMA,
+            "status": "ERROR",
+            **identity,
+            "error": _candidate_process_error_document(error),
+        }
+    else:
+        envelope = {
+            "schema_version": _CANDIDATE_PROCESS_RESULT_SCHEMA,
+            "status": "SUCCESS",
+            **identity,
+            "candidate": candidate,
+        }
+    _write_candidate_process_envelope(result_path, envelope)
+
+
+def _read_candidate_process_envelope(
+    task: _CandidateProcessTask,
+    result_path: Path,
+) -> dict[str, Any]:
+    try:
+        raw = result_path.read_bytes()
+    except FileNotFoundError as error:
+        raise RuntimeError("candidate process result file is missing") from error
+    try:
+        envelope = json.loads(raw)
+    except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("candidate process result file is malformed") from error
+    if not isinstance(envelope, dict):
+        raise RuntimeError("candidate process result envelope must be an object")
+    try:
+        canonical = _canonical_bytes(envelope)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(
+            "candidate process result envelope is not canonical"
+        ) from error
+    if raw != canonical:
+        raise RuntimeError("candidate process result envelope is not canonical")
+
+    identity = _candidate_process_identity(task)
+    common_fields = {
+        "schema_version",
+        "status",
+        "ordinal",
+        "strategy_id",
+        "strategy_spec_version",
+        "strategy_spec_digest",
+        "dependency_closure_digest",
+    }
+    if envelope.get("schema_version") != _CANDIDATE_PROCESS_RESULT_SCHEMA:
+        raise RuntimeError("candidate process result schema mismatch")
+    if any(envelope.get(key) != value for key, value in identity.items()):
+        raise RuntimeError("candidate process result envelope identity mismatch")
+
+    status = envelope.get("status")
+    if status == "SUCCESS":
+        if set(envelope) != common_fields | {"candidate"}:
+            raise RuntimeError("candidate process success fields are not closed")
+        return _validate_candidate_process_candidate(
+            envelope.get("candidate"), identity
+        )
+    if status == "ERROR":
+        if set(envelope) != common_fields | {"error"}:
+            raise RuntimeError("candidate process error fields are not closed")
+        child_error = envelope.get("error")
+        if (
+            not isinstance(child_error, dict)
+            or set(child_error) != {"type", "detail"}
+            or not isinstance(child_error.get("type"), str)
+            or not child_error["type"]
+            or len(child_error["type"]) > 120
+            or not isinstance(child_error.get("detail"), str)
+            or not child_error["detail"]
+            or len(child_error["detail"]) > 400
+        ):
+            raise RuntimeError("candidate process error document is invalid")
+        raise _CandidateProcessReportedError(
+            child_error["type"], child_error["detail"]
+        )
+    raise RuntimeError("candidate process result status is invalid")
+
+
+def _process_is_alive(process: Any) -> bool:
+    try:
+        return bool(process.is_alive())
+    except (AssertionError, ValueError):
+        return False
+
+
+def _shutdown_candidate_processes(
+    processes: Sequence[Any],
+    *,
+    attempted_processes: Sequence[Any],
+    terminate_live: bool,
+) -> None:
+    """Reap and close every process; force survivors only on abnormal unwind."""
+
+    if terminate_live:
+        for process in attempted_processes:
+            if _process_is_alive(process):
+                process.terminate()
+        for process in attempted_processes:
+            try:
+                process.join(_CANDIDATE_PROCESS_STOP_GRACE_SECONDS)
+            except (AssertionError, ValueError):
+                # A truly unstarted Process has no child to join. An attempted
+                # start can still leave a live child, which is checked below.
+                continue
+        for process in attempted_processes:
+            if _process_is_alive(process):
+                process.kill()
+        for process in attempted_processes:
+            try:
+                process.join()
+            except (AssertionError, ValueError):
+                continue
+    unreaped = any(_process_is_alive(process) for process in attempted_processes)
+    for process in processes:
+        try:
+            process.close()
+        except ValueError:
+            # A Process constructed but never started has no resources to close.
+            continue
+    if unreaped:
+        raise RuntimeError("candidate process could not be reaped")
 
 
 def _evaluate_candidates_concurrently(
     tasks: Sequence[_CandidateProcessTask],
     *,
     max_workers: int,
-    pool_factory: Any | None = None,
+    process_context: Any | None = None,
+    candidate_worker: Any | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Run bounded child processes and restore the governed candidate order."""
+    """Directly spawn bounded children and fan-in through atomic result files."""
 
     if not tasks or not 1 <= max_workers <= 4 or max_workers > len(tasks):
         raise ValueError("candidate process fan-out is outside its closed bound")
-    factory = _candidate_process_pool if pool_factory is None else pool_factory
+    if [task.ordinal for task in tasks] != list(range(len(tasks))):
+        raise ValueError("candidate process tasks must be globally contiguous")
+    output_roots = {task.output_root.resolve() for task in tasks}
+    if len(output_roots) != 1:
+        raise ValueError("candidate process tasks must share one output root")
+    output_root = output_roots.pop()
+    output_root.mkdir(parents=True, exist_ok=True)
+    context = (
+        multiprocessing.get_context("spawn")
+        if process_context is None
+        else process_context
+    )
+    worker = _candidate_process if candidate_worker is None else candidate_worker
     ordered: list[dict[str, Any] | None] = [None] * len(tasks)
     unexpected_errors = 0
-    with factory(max_workers) as pool:
-        futures: dict[Future[tuple[int, dict[str, Any]]], _CandidateProcessTask] = {
-            pool.submit(_candidate_process, task): task for task in tasks
-        }
-        for future in as_completed(futures):
-            task = futures[future]
+    with TemporaryDirectory(
+        prefix=".candidate-process-results-",
+        dir=output_root,
+    ) as temporary_directory:
+        result_root = Path(temporary_directory)
+        completed_rows: list[tuple[_CandidateProcessTask, Path, int | None]] = []
+        for wave_start in range(0, len(tasks), max_workers):
+            wave = tasks[wave_start : wave_start + max_workers]
+            rows: list[tuple[_CandidateProcessTask, Path, Any]] = []
+            attempted_processes: list[Any] = []
             try:
-                ordinal, candidate = future.result()
-                if ordinal != task.ordinal or not isinstance(candidate, dict):
-                    raise RuntimeError("candidate process result identity mismatch")
+                for task in wave:
+                    result_path = result_root / f"candidate-{task.ordinal}.json"
+                    process = context.Process(
+                        target=_candidate_process_to_file,
+                        args=(task, result_path, worker),
+                        name=f"qp-candidate-{task.ordinal}",
+                        daemon=False,
+                    )
+                    rows.append((task, result_path, process))
+                # Every child in this bounded wave starts before its first
+                # join. A Process is tracked before start(), because a failed
+                # start may already have made its child live.
+                for _task, _result_path, process in rows:
+                    attempted_processes.append(process)
+                    process.start()
+                for _task, _result_path, process in rows:
+                    process.join()
+                exitcodes = [process.exitcode for _task, _path, process in rows]
+            except BaseException:
+                _shutdown_candidate_processes(
+                    [process for _task, _path, process in rows],
+                    attempted_processes=attempted_processes,
+                    terminate_live=True,
+                )
+                raise
+            else:
+                _shutdown_candidate_processes(
+                    [process for _task, _path, process in rows],
+                    attempted_processes=attempted_processes,
+                    terminate_live=False,
+                )
+            completed_rows.extend(
+                (task, result_path, exitcode)
+                for (task, result_path, _process), exitcode in zip(
+                    rows, exitcodes, strict=True
+                )
+            )
+
+        for task, result_path, exitcode in completed_rows:
+            try:
+                if exitcode != 0:
+                    raise RuntimeError(
+                        f"candidate process exited nonzero ({exitcode})"
+                    )
+                candidate = _read_candidate_process_envelope(task, result_path)
             except Exception as error:
                 unexpected_errors += 1
                 spec, closure = _candidate_process_domain(task)
@@ -2003,7 +2266,7 @@ def _evaluate_candidates_concurrently(
                     error,
                 )
             else:
-                ordered[ordinal] = candidate
+                ordered[task.ordinal] = candidate
     if any(candidate is None for candidate in ordered):
         raise RuntimeError("candidate process fan-in was incomplete")
     return [candidate for candidate in ordered if candidate is not None], unexpected_errors
@@ -2529,7 +2792,7 @@ class PersonalResearchService:
                 )
                 candidate_execution = {
                     **candidate_execution,
-                    "model": "process_pool",
+                    "model": "direct_spawn_atomic_files",
                     "worker_processes": worker_count,
                 }
             else:

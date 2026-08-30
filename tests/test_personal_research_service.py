@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import multiprocessing
+import multiprocessing.synchronize
 import sqlite3
-from concurrent.futures import Future, ProcessPoolExecutor
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -78,15 +79,19 @@ from strategies.spec import (
 )
 
 
-def _spawn_candidate_identity(
+def _spawn_candidate_document(
     task: _CandidateProcessTask,
-) -> tuple[int, str, str, str]:
+) -> tuple[int, dict[str, object]]:
     spec, closure = _candidate_process_domain(task)
     return (
         task.ordinal,
-        spec.strategy_id,
-        strategy_spec_digest(spec),
-        closure.closure_digest,
+        {
+            "strategy_id": spec.strategy_id,
+            "strategy_spec_version": spec.version,
+            "strategy_spec_digest": strategy_spec_digest(spec),
+            "dependency_closure_digest": closure.closure_digest,
+            "decision": "REJECT",
+        },
     )
 
 
@@ -255,6 +260,40 @@ def _policy(**changes) -> PersonalResearchPolicy:
     }
     values.update(changes)
     return PersonalResearchPolicy(**values)
+
+
+def _candidate_test_wave(
+    output_root: Path,
+) -> tuple[
+    tuple[_CandidateProcessTask, ...],
+    tuple[object, ...],
+    tuple[object, ...],
+]:
+    policy = _policy(max_parallel=4)
+    specs = personal_specs_for_cohort("diverse-core-v1")
+    closures = _closures(
+        specs,
+        start="2022-01-01",
+        end="2026-01-01",
+        policy=policy,
+        universe_selector=personal_universe_selector("topix_all"),
+    )
+    tasks = tuple(
+        _CandidateProcessTask(
+            ordinal=ordinal,
+            strategy_spec_document=_canonical_bytes(spec.to_dict()),
+            dependency_closure_document=_canonical_bytes(closure.to_dict()),
+            snapshot=SimpleNamespace(),
+            universe=SimpleNamespace(),
+            fold_periods=(("2022-01-01", "2022-12-31"),),
+            holdout_period=("2025-01-01", "2026-01-01"),
+            output_root=output_root,
+            policy=policy,
+            short_financing_required=False,
+        )
+        for ordinal, (spec, closure) in enumerate(zip(specs, closures, strict=True))
+    )
+    return tasks, specs, closures
 
 
 def _request(
@@ -1448,51 +1487,66 @@ def test_candidate_process_fanout_uses_four_workers_restores_order_and_bounds_fa
         )
         for ordinal, (spec, closure) in enumerate(zip(specs, closures, strict=True))
     )
-    submitted: list[int] = []
-    selected_workers: list[int] = []
+    started: list[int] = []
+    joined: list[int] = []
+    closed: list[int] = []
 
-    class GuardedFuture(Future):
-        def result(self, timeout=None):
-            assert submitted == [0, 1, 2, 3]
-            return super().result(timeout)
+    def bounded_worker(task: _CandidateProcessTask):
+        if task.ordinal == 2:
+            raise RuntimeError("bounded child failure")
+        return _spawn_candidate_document(task)
 
-    class FakePool:
-        def __enter__(self):
-            return self
+    class FakeProcess:
+        def __init__(self, *, target, args, name, daemon):
+            assert name == f"qp-candidate-{args[0].ordinal}"
+            assert daemon is False
+            self.target = target
+            self.args = args
+            self.ordinal = args[0].ordinal
+            self.exitcode = None
+            self.alive = False
 
-        def __exit__(self, *_args):
-            return False
+        def start(self):
+            self.alive = True
+            started.append(self.ordinal)
 
-        def submit(self, _worker, task):
-            submitted.append(task.ordinal)
-            spec, _closure = _candidate_process_domain(task)
-            future = GuardedFuture()
-            if task.ordinal == 2:
-                future.set_exception(RuntimeError("bounded child failure"))
-            else:
-                future.set_result(
-                    (
-                        task.ordinal,
-                        {
-                            "strategy_id": spec.strategy_id,
-                            "decision": "REJECT",
-                        },
-                    )
-                )
-            return future
+        def join(self, _timeout=None):
+            assert started == [0, 1, 2, 3]
+            if self.exitcode is None:
+                self.target(*self.args)
+                self.exitcode = 0
+                self.alive = False
+                joined.append(self.ordinal)
 
-    def factory(max_workers: int):
-        selected_workers.append(max_workers)
-        return FakePool()
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            self.alive = False
+            self.exitcode = -15
+
+        def kill(self):
+            self.alive = False
+            self.exitcode = -9
+
+        def close(self):
+            assert not self.alive
+            closed.append(self.ordinal)
+
+    class FakeContext:
+        def Process(self, **kwargs):
+            return FakeProcess(**kwargs)
 
     candidates, unexpected_errors = _evaluate_candidates_concurrently(
         tasks,
         max_workers=4,
-        pool_factory=factory,
+        process_context=FakeContext(),
+        candidate_worker=bounded_worker,
     )
 
-    assert selected_workers == [4]
-    assert submitted == [0, 1, 2, 3]
+    assert started == [0, 1, 2, 3]
+    assert joined == [0, 1, 2, 3]
+    assert closed == [0, 1, 2, 3]
     assert [candidate["strategy_id"] for candidate in candidates] == [
         spec.strategy_id for spec in specs
     ]
@@ -1503,8 +1557,311 @@ def test_candidate_process_fanout_uses_four_workers_restores_order_and_bounds_fa
     }
 
 
+@pytest.mark.parametrize(("task_multiplier", "max_workers"), ((1, 2), (2, 4)))
+def test_candidate_process_fanout_runs_bounded_waves_without_reordering(
+    tmp_path: Path,
+    task_multiplier: int,
+    max_workers: int,
+) -> None:
+    base_tasks, base_specs, _closures = _candidate_test_wave(tmp_path)
+    tasks = tuple(
+        replace(task, ordinal=ordinal)
+        for ordinal, task in enumerate(base_tasks * task_multiplier)
+    )
+    active: set[int] = set()
+    peak_active = 0
+    started: list[int] = []
+    joined: list[int] = []
+    closed: list[int] = []
+
+    class FakeProcess:
+        def __init__(self, *, target, args, name, daemon):
+            self.target = target
+            self.args = args
+            self.ordinal = args[0].ordinal
+            self.exitcode = None
+            self.alive = False
+
+        def start(self):
+            nonlocal peak_active
+            self.alive = True
+            active.add(self.ordinal)
+            started.append(self.ordinal)
+            peak_active = max(peak_active, len(active))
+            assert len(active) <= max_workers
+
+        def join(self, _timeout=None):
+            if self.exitcode is None:
+                self.target(*self.args)
+                self.exitcode = 0
+                self.alive = False
+                active.remove(self.ordinal)
+                joined.append(self.ordinal)
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            active.discard(self.ordinal)
+            self.alive = False
+            self.exitcode = -15
+
+        def kill(self):
+            active.discard(self.ordinal)
+            self.alive = False
+            self.exitcode = -9
+
+        def close(self):
+            assert not self.alive
+            closed.append(self.ordinal)
+
+    class FakeContext:
+        def Process(self, **kwargs):
+            return FakeProcess(**kwargs)
+
+    candidates, unexpected_errors = _evaluate_candidates_concurrently(
+        tasks,
+        max_workers=max_workers,
+        process_context=FakeContext(),
+        candidate_worker=_spawn_candidate_document,
+    )
+
+    assert unexpected_errors == 0
+    assert peak_active == max_workers
+    assert started == list(range(len(tasks)))
+    assert joined == list(range(len(tasks)))
+    assert closed == list(range(len(tasks)))
+    expected_strategy_ids = [
+        spec.strategy_id
+        for _wave in range(task_multiplier)
+        for spec in base_specs
+    ]
+    assert [candidate["strategy_id"] for candidate in candidates] == (
+        expected_strategy_ids
+    )
+
+
+def test_candidate_process_start_failure_reaps_every_started_child(
+    tmp_path: Path,
+) -> None:
+    tasks, _specs, _closures = _candidate_test_wave(tmp_path)
+    processes: list[object] = []
+    started: list[int] = []
+    terminated: list[int] = []
+    joined: list[tuple[int, float | None]] = []
+    closed: list[int] = []
+
+    class FakeProcess:
+        def __init__(self, *, target, args, name, daemon):
+            self.ordinal = args[0].ordinal
+            self.exitcode = None
+            self.alive = False
+            processes.append(self)
+
+        def start(self):
+            if self.ordinal == 2:
+                self.alive = True
+                started.append(self.ordinal)
+                raise FileNotFoundError(2, "spawn unavailable")
+            self.alive = True
+            started.append(self.ordinal)
+
+        def join(self, timeout=None):
+            joined.append((self.ordinal, timeout))
+            if self.exitcode is None and not self.alive:
+                self.exitcode = -15
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            terminated.append(self.ordinal)
+            self.alive = False
+            self.exitcode = -15
+
+        def kill(self):
+            raise AssertionError("terminated fake child must not require kill")
+
+        def close(self):
+            assert not self.alive
+            closed.append(self.ordinal)
+
+    class FakeContext:
+        def Process(self, **kwargs):
+            return FakeProcess(**kwargs)
+
+    with pytest.raises(FileNotFoundError, match="spawn unavailable"):
+        _evaluate_candidates_concurrently(
+            tasks,
+            max_workers=4,
+            process_context=FakeContext(),
+            candidate_worker=_spawn_candidate_document,
+        )
+
+    assert started == [0, 1, 2]
+    assert terminated == [0, 1, 2]
+    assert joined == [
+        (0, 5.0),
+        (1, 5.0),
+        (2, 5.0),
+        (0, None),
+        (1, None),
+        (2, None),
+    ]
+    assert closed == [0, 1, 2, 3]
+    assert not list(tmp_path.glob(".candidate-process-results-*"))
+
+
+def test_candidate_process_fan_in_fails_closed_for_nonzero_missing_and_malformed(
+    tmp_path: Path,
+) -> None:
+    tasks, specs, _closures = _candidate_test_wave(tmp_path)
+    started: list[int] = []
+    closed: list[int] = []
+
+    class FakeProcess:
+        def __init__(self, *, target, args, name, daemon):
+            self.target = target
+            self.args = args
+            self.ordinal = args[0].ordinal
+            self.exitcode = None
+            self.alive = False
+
+        def start(self):
+            self.alive = True
+            started.append(self.ordinal)
+
+        def join(self, _timeout=None):
+            assert started == [0, 1, 2, 3]
+            if self.exitcode is not None:
+                return
+            if self.ordinal == 0:
+                self.target(*self.args)
+                self.exitcode = 0
+            elif self.ordinal == 1:
+                self.exitcode = 0
+            elif self.ordinal == 2:
+                self.args[1].write_bytes(b"{malformed")
+                self.exitcode = 0
+            else:
+                self.exitcode = 17
+            self.alive = False
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            self.alive = False
+            self.exitcode = -15
+
+        def kill(self):
+            self.alive = False
+            self.exitcode = -9
+
+        def close(self):
+            assert not self.alive
+            closed.append(self.ordinal)
+
+    class FakeContext:
+        def Process(self, **kwargs):
+            return FakeProcess(**kwargs)
+
+    candidates, unexpected_errors = _evaluate_candidates_concurrently(
+        tasks,
+        max_workers=4,
+        process_context=FakeContext(),
+        candidate_worker=_spawn_candidate_document,
+    )
+
+    assert unexpected_errors == 3
+    assert closed == [0, 1, 2, 3]
+    assert [candidate["strategy_id"] for candidate in candidates] == [
+        spec.strategy_id for spec in specs
+    ]
+    assert candidates[0].get("error") is None
+    assert [candidate["error"]["detail"] for candidate in candidates[1:]] == [
+        "candidate process result file is missing",
+        "candidate process result file is malformed",
+        "candidate process exited nonzero (17)",
+    ]
+    assert not list(tmp_path.glob(".candidate-process-results-*"))
+
+
+def test_candidate_process_fan_in_rejects_candidate_identity_mismatch(
+    tmp_path: Path,
+) -> None:
+    tasks, specs, _closures = _candidate_test_wave(tmp_path)
+
+    def mismatched_worker(task: _CandidateProcessTask):
+        ordinal, candidate = _spawn_candidate_document(task)
+        if ordinal == 1:
+            candidate["strategy_spec_digest"] = "sha256:" + "0" * 64
+        return ordinal, candidate
+
+    class InlineProcess:
+        def __init__(self, *, target, args, name, daemon):
+            self.target = target
+            self.args = args
+            self.ordinal = args[0].ordinal
+            self.exitcode = None
+            self.alive = False
+
+        def start(self):
+            self.alive = True
+
+        def join(self, _timeout=None):
+            if self.exitcode is None:
+                self.target(*self.args)
+                if self.ordinal == 2:
+                    result_path = self.args[1]
+                    envelope = json.loads(result_path.read_bytes())
+                    envelope["ordinal"] = 99
+                    result_path.write_bytes(_canonical_bytes(envelope))
+                self.exitcode = 0
+                self.alive = False
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            self.alive = False
+            self.exitcode = -15
+
+        def kill(self):
+            self.alive = False
+            self.exitcode = -9
+
+        def close(self):
+            assert not self.alive
+
+    class InlineContext:
+        def Process(self, **kwargs):
+            return InlineProcess(**kwargs)
+
+    candidates, unexpected_errors = _evaluate_candidates_concurrently(
+        tasks,
+        max_workers=4,
+        process_context=InlineContext(),
+        candidate_worker=mismatched_worker,
+    )
+
+    assert unexpected_errors == 2
+    assert [candidate["strategy_id"] for candidate in candidates] == [
+        spec.strategy_id for spec in specs
+    ]
+    assert candidates[1]["error"] == {
+        "type": "RuntimeError",
+        "detail": "candidate process result identity mismatch",
+    }
+    assert candidates[2]["error"] == {
+        "type": "RuntimeError",
+        "detail": "candidate process result envelope identity mismatch",
+    }
+
+
 def test_diverse_core_candidate_documents_cross_a_real_spawn_boundary(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     policy = _policy(max_parallel=4)
     selector = personal_universe_selector("topix_all")
@@ -1560,21 +1917,31 @@ def test_diverse_core_candidate_documents_cross_a_real_spawn_boundary(
         for ordinal, (spec, closure) in enumerate(zip(specs, closures, strict=True))
     )
 
-    with ProcessPoolExecutor(
-        max_workers=4,
-        mp_context=multiprocessing.get_context("spawn"),
-    ) as pool:
-        futures = [pool.submit(_spawn_candidate_identity, task) for task in tasks]
-        identities = [future.result(timeout=20) for future in futures]
+    def semlock_unavailable(*_args, **_kwargs):
+        raise FileNotFoundError(2, "No such file or directory")
 
-    assert identities == [
+    monkeypatch.setattr(
+        multiprocessing.synchronize.SemLock,
+        "__init__",
+        semlock_unavailable,
+    )
+    candidates, unexpected_errors = _evaluate_candidates_concurrently(
+        tasks,
+        max_workers=4,
+        candidate_worker=_spawn_candidate_document,
+    )
+
+    assert unexpected_errors == 0
+    assert [
         (
-            ordinal,
-            spec.strategy_id,
-            strategy_spec_digest(spec),
-            closure.closure_digest,
+            candidate["strategy_id"],
+            candidate["strategy_spec_digest"],
+            candidate["dependency_closure_digest"],
         )
-        for ordinal, (spec, closure) in enumerate(zip(specs, closures, strict=True))
+        for candidate in candidates
+    ] == [
+        (spec.strategy_id, strategy_spec_digest(spec), closure.closure_digest)
+        for spec, closure in zip(specs, closures, strict=True)
     ]
 
 
