@@ -157,6 +157,37 @@ function integer(value: string | null): number | null {
   return value === "NONE" || value === null ? null : Number(value);
 }
 
+function productionEnv(
+  limiter: { limit: () => Promise<{ success: boolean }> } = {
+    limit: async () => ({ success: true }),
+  },
+): AcquisitionEnv {
+  return {
+    ENVIRONMENT: "production",
+    JQUANTS_API_KEY: API_KEY,
+    JQUANTS_RPC_CURSOR_HMAC_KEY: HMAC_KEY,
+    PROXY_RATE_LIMITER: limiter as unknown as RateLimit,
+  };
+}
+
+function captureAcquisitionAudit() {
+  const spy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+  return {
+    events(): Record<string, unknown>[] {
+      return spy.mock.calls.flatMap((call) => {
+        const raw = call[0];
+        if (typeof raw !== "string") return [];
+        try {
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          return parsed.event === "jquants_acquisition_rpc" ? [parsed] : [];
+        } catch {
+          return [];
+        }
+      });
+    },
+  };
+}
+
 async function metadata(response: Response): Promise<AcquisitionResponseMetadataV2> {
   const h = response.headers;
   expect(h.get("x-quant-acquisition-schema")).toBe("jquants-acquisition-rpc-response/v2");
@@ -638,7 +669,11 @@ describe("governed J-Quants WorkerEntrypoint RPC", () => {
       },
     }), {
       status: 429,
-      headers: { "content-type": "text/plain", "set-cookie": upstreamSecret },
+      headers: {
+        "content-type": "text/plain",
+        "set-cookie": upstreamSecret,
+        "retry-after": "1",
+      },
     }));
 
     const response = await rpc.fetch_governed_page(
@@ -647,9 +682,9 @@ describe("governed J-Quants WorkerEntrypoint RPC", () => {
     const responseBody = await response.clone().text();
     const meta = await metadata(response);
     expect(cancelCalls).toBe(1);
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(429);
     expect(JSON.parse(responseBody)).toEqual({ error: "upstream_failed" });
-    expect(response.headers.get("Retry-After")).toBeNull();
+    expect(response.headers.get("Retry-After")).toBe("60");
     expect(meta).toMatchObject({
       evidence_state: "FAILED",
       body_kind: "TARGET_ERROR_JSON",
@@ -783,7 +818,7 @@ describe("governed J-Quants WorkerEntrypoint RPC", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
   });
 
-  it("sets Retry-After 60 only for the internal governed rate limiter 429", async () => {
+  it("sets Retry-After 60 for the internal governed rate limiter 429", async () => {
     const fetchMock = installFetch(async () => upstream('{"data":[]}'));
     const request = await requestFor("indices_bars_daily_topix");
     const limited = await fetchGovernedPage(request, {
@@ -815,5 +850,109 @@ describe("governed J-Quants WorkerEntrypoint RPC", () => {
     expect(rejected.status).toBe(400);
     expect(await rejected.json()).toEqual({ error: "request_rejected" });
     expect(rejected.headers.get("Retry-After")).toBeNull();
+  });
+
+  it.each([
+    { label: "missing", extraHeaders: {} },
+    { label: "zero", extraHeaders: { "retry-after": "0" } },
+    { label: "one", extraHeaders: { "retry-after": "1" } },
+    { label: "huge", extraHeaders: { "retry-after": "999999" } },
+    { label: "http-date", extraHeaders: { "retry-after": "Wed, 21 Oct 2015 07:28:00 GMT" } },
+  ])("returns target-owned Retry-After 60 for provider 429 with $label Retry-After", async ({ extraHeaders }) => {
+    const audit = captureAcquisitionAudit();
+    installFetch(async () => upstream(
+      "provider-only-body",
+      429,
+      "text/plain",
+      { "set-cookie": "evil=1", ...extraHeaders },
+    ));
+    const response = await fetchGovernedPage(
+      await requestFor("indices_bars_daily_topix"),
+      productionEnv(),
+      new Date("2026-08-26T00:00:00.000Z"),
+    );
+    const events = audit.events();
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ error: "upstream_failed" });
+    expect(response.headers.get("Retry-After")).toBe("60");
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect((await metadata(response)).upstream_http_status).toBe(429);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      event: "jquants_acquisition_rpc",
+      result: "FAILED",
+      status: 429,
+      upstream_status: 429,
+    });
+    expect(JSON.stringify(events[0])).not.toContain("provider-only-body");
+    expect(JSON.stringify(events[0])).not.toContain("999999");
+    expect(JSON.stringify(events[0])).not.toContain("Wed, 21 Oct 2015");
+  });
+
+  it("maps provider 503 to 502 without Retry-After and logs upstream_status 503", async () => {
+    const audit = captureAcquisitionAudit();
+    installFetch(async () => upstream(
+      "provider-only-body",
+      503,
+      "text/plain",
+      { "retry-after": "1", "set-cookie": "evil=1" },
+    ));
+    const response = await fetchGovernedPage(
+      await requestFor("indices_bars_daily_topix"),
+      productionEnv(),
+      new Date("2026-08-26T00:00:00.000Z"),
+    );
+    const events = audit.events();
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: "upstream_failed" });
+    expect(response.headers.get("Retry-After")).toBeNull();
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect((await metadata(response)).upstream_http_status).toBe(503);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      event: "jquants_acquisition_rpc",
+      result: "FAILED",
+      status: 502,
+      upstream_status: 503,
+    });
+    expect(Object.keys(events[0]!).sort()).toEqual([
+      "acquisition_id",
+      "dataset",
+      "environment",
+      "event",
+      "operation",
+      "redirect_count",
+      "result",
+      "segment_id",
+      "status",
+      "upstream_status",
+      "worker",
+    ]);
+    expect(JSON.stringify(events[0])).not.toContain("provider-only-body");
+    expect(JSON.stringify(events[0])).not.toContain(API_KEY);
+  });
+
+  it("does not claim an upstream_status for the internal governed rate limiter 429", async () => {
+    const audit = captureAcquisitionAudit();
+    const fetchMock = installFetch(async () => upstream('{"data":[]}'));
+    const response = await fetchGovernedPage(
+      await requestFor("indices_bars_daily_topix"),
+      productionEnv({ limit: async () => ({ success: false }) }),
+      new Date("2026-08-26T00:00:00.000Z"),
+    );
+    const events = audit.events();
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ error: "rate_limited" });
+    expect(response.headers.get("Retry-After")).toBe("60");
+    expect((await metadata(response)).upstream_http_status).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      event: "jquants_acquisition_rpc",
+      result: "FAILED",
+      status: 429,
+      upstream_status: null,
+    });
+    expect(Object.prototype.hasOwnProperty.call(events[0], "upstream_status")).toBe(true);
   });
 });

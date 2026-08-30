@@ -570,6 +570,7 @@ function audit(
   acquisitionId: string | null,
   outcome: string,
   status: number,
+  upstreamStatus: number | null = null,
 ): void {
   console.info(JSON.stringify({
     event: "jquants_acquisition_rpc",
@@ -581,6 +582,7 @@ function audit(
     acquisition_id: acquisitionId,
     result: outcome,
     status,
+    upstream_status: Number.isInteger(upstreamStatus) ? upstreamStatus : null,
     redirect_count: 0,
   }));
 }
@@ -634,7 +636,7 @@ export async function fetchGovernedPage(
     const rate = await env.PROXY_RATE_LIMITER.limit({ key: "jquants-acquisition-rpc-v2" });
     if (!rate.success) {
       const response = await errorResponse("rate_limited", 429, environment, "FAILED", resolved, session);
-      // Internal limiter only. Provider 429 is mapped to 502 without Retry-After.
+      // Target-owned Retry-After. Provider headers, including Retry-After, are never copied.
       response.headers.set("retry-after", "60");
       audit(resolved, session?.acquisitionId ?? null, "FAILED", response.status);
       return response;
@@ -690,8 +692,15 @@ export async function fetchGovernedPage(
       // A provider-controlled body stream cannot be allowed to suppress the
       // target-owned, fail-closed error envelope.
     }
-    const response = await errorResponse("upstream_failed", 502, environment, "FAILED", resolved, session, upstreamStatus);
-    audit(resolved, session.acquisitionId, "FAILED", response.status);
+    const mappedStatus = upstreamStatus === 429 ? 429 : 502;
+    const response = await errorResponse(
+      "upstream_failed", mappedStatus, environment, "FAILED", resolved, session, upstreamStatus,
+    );
+    if (upstreamStatus === 429) {
+      // Target-owned delay only. Provider Retry-After and other headers are discarded.
+      response.headers.set("retry-after", "60");
+    }
+    audit(resolved, session.acquisitionId, "FAILED", response.status, upstreamStatus);
     return response;
   }
 
@@ -700,7 +709,7 @@ export async function fetchGovernedPage(
     body = await readBoundedBody(upstream, limits.maximumPageBytes);
   } catch {
     const response = await errorResponse("upstream_unavailable", 502, environment, "FAILED", resolved, session, upstream.status);
-    audit(resolved, session.acquisitionId, "FAILED", response.status);
+    audit(resolved, session.acquisitionId, "FAILED", response.status, upstream.status);
     return response;
   }
   const bodyDigest = await sha256Digest(body);
