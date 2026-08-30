@@ -27,8 +27,8 @@ const VALID_GZIP = {
 
 describe("personal research request contract", () => {
   it("pins the runner-bound Container identity", () => {
-    expect(PERSONAL_RESEARCH_CONTAINER_NAME).toBe("personal-research-v10");
-    expect(PERSONAL_RESEARCH_RUNNER_VERSION).toBe("personal-cloud-runner/v10");
+    expect(PERSONAL_RESEARCH_CONTAINER_NAME).toBe("personal-research-v11");
+    expect(PERSONAL_RESEARCH_RUNNER_VERSION).toBe("personal-cloud-runner/v11");
   });
 
   it("accepts one content-addressed bounded exact-four request", async () => {
