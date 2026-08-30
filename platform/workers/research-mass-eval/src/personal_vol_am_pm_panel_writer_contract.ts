@@ -1,6 +1,7 @@
 import {
   PERSONAL_RESEARCH_RUNNER_VERSION,
   isPersonalResearchJobId,
+  type PersonalSnapshotSourceRunnerVersion,
 } from "./personal_research_contract";
 import {
   PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
@@ -80,7 +81,7 @@ export type SnapshotInputLock = {
   period_end: string;
   lookback_sessions: number;
   format: "personal-draft-history/v4";
-  runner_version: typeof PERSONAL_RESEARCH_RUNNER_VERSION;
+  runner_version: PersonalSnapshotSourceRunnerVersion;
   manifest: ImmutableObjectRef;
   snapshot: ImmutableObjectRef & {
     raw_sha256: string;

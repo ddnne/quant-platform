@@ -1,4 +1,4 @@
-"""Governed N225 vol-ratio AM/PM panel writer on the existing v13 runner."""
+"""Governed N225 vol-ratio AM/PM panel writer on the v14 runner."""
 
 from __future__ import annotations
 
@@ -25,7 +25,13 @@ from research.fins_summary_keys import FINS_SUMMARY_EQAR_KEY, FINS_SUMMARY_TA_KE
 R2_ORIGIN = "http://research.r2"
 PRODUCER_ID = "personal-vol-ratio-am-pm-panel-writer/v1"
 COHORT_ID = "personal-vol-ratio-am-pm-v1"
-RUNNER_VERSION = "personal-cloud-runner/v13"
+RUNNER_VERSION = "personal-cloud-runner/v14"
+SNAPSHOT_SOURCE_RUNNER_VERSIONS = frozenset(
+    {
+        "personal-cloud-runner/v13",
+        "personal-cloud-runner/v14",
+    }
+)
 INPUT_SCHEMA = "personal-vol-ratio-am-pm-panel-writer-input/v1"
 MANIFEST_SCHEMA = "personal-vol-ratio-am-pm-panel-writer-manifest/v1"
 PANEL_SCHEMA = "personal-vol-ratio-am-pm-panel/v1"
@@ -767,6 +773,15 @@ def _common_valid_rows(
     return rows
 
 
+def _require_snapshot_source_lock(lock: Any) -> None:
+    if not isinstance(lock, dict):
+        raise RuntimeError("snapshot lock is invalid")
+    if lock.get("format") != "personal-draft-history/v4":
+        raise RuntimeError("snapshot is not personal-draft-history/v4")
+    if lock.get("runner_version") not in SNAPSHOT_SOURCE_RUNNER_VERSIONS:
+        raise RuntimeError("snapshot source runner is outside the closed v4 allowlist")
+
+
 def load_input_manifest(
     spec: PersonalVolAmPmPanelJobSpec,
     *,
@@ -794,6 +809,9 @@ def load_input_manifest(
         raise RuntimeError("input manifest identity mismatch")
     if spec.request_digest != _request_digest_from_manifest(spec, parsed):
         raise RuntimeError("request digest does not match locked snapshot job ids")
+    _require_snapshot_source_lock(parsed["selection"])
+    for period in EVALUATION_PERIODS:
+        _require_snapshot_source_lock(parsed["periods"].get(period["period_id"]))
     return parsed
 
 
@@ -984,7 +1002,9 @@ def execute_vol_am_pm_panel_job(
 
 __all__ = [
     "PersonalVolAmPmPanelJobSpec",
+    "SNAPSHOT_SOURCE_RUNNER_VERSIONS",
     "VolPanelJobInputError",
     "execute_vol_am_pm_panel_job",
+    "load_input_manifest",
     "with_locked_snapshot",
 ]

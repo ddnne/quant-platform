@@ -514,7 +514,7 @@ describe("option sidecar admission", () => {
     expect(bytes.byteLength).toBeLessThanOrEqual(PERSONAL_OPTION_SIDECAR_MAX_INPUT_BYTES);
   });
 
-  it("locks the three frozen periods and dispatches the existing v13 Container", async () => {
+  it("locks the three frozen periods and dispatches the v14 Container", async () => {
     const mem = new MemoryR2();
     for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
       await seedPeriod(mem, period);
@@ -531,10 +531,12 @@ describe("option sidecar admission", () => {
     );
     expect(mem.values.has(personalOptionSidecarInputKey(REQUEST.job_id))).toBe(true);
     const forwarded = container.fetch.mock.calls[1]![0] as Request;
+    expect(new URL(forwarded.url).pathname).toBe("/v1/produce-option-sidecar");
     expect(await forwarded.json()).toMatchObject({
       cohort_id: PERSONAL_OPTION_SIDECAR_COHORT_ID,
       job_id: REQUEST.job_id,
       producer_id: PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
+      runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       manifest_key: personalOptionSidecarTerminalKey(REQUEST.job_id),
     });
   });

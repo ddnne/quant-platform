@@ -188,6 +188,7 @@ async function seedSnapshot(
   periodEnd: string,
   rawDigit: string,
   lookback: number,
+  runnerVersion: string = PERSONAL_RESEARCH_RUNNER_VERSION,
 ) {
   const raw = digestDigit(rawDigit);
   const gzip = digestDigit(rawDigit === "1" ? "2" : rawDigit);
@@ -206,7 +207,7 @@ async function seedSnapshot(
     status: "COMPLETED",
     job_id: jobId,
     format: "personal-draft-history/v4",
-    runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
+    runner_version: runnerVersion,
     period_start: periodStart,
     period_end: periodEnd,
     lookback_sessions: lookback,
@@ -335,7 +336,8 @@ describe("closed personal vol AM/PM panel-build request", () => {
       return originalGet(key);
     };
     const input = await buildPersonalVolAmPmPanelInputManifest(mem.asBucket(), REQUEST);
-    expect(input.runner_version).toBe("personal-cloud-runner/v13");
+    expect(input.runner_version).toBe("personal-cloud-runner/v14");
+    expect(input.selection.runner_version).toBe(PERSONAL_RESEARCH_RUNNER_VERSION);
     expect(input.required_lookback_sessions).toBe(61);
     expect(input.selection.snapshot.raw_sha256).toBe(digestDigit("1"));
     expect(got.some((key) => key.includes("panels_cache"))).toBe(false);
@@ -397,7 +399,55 @@ describe("closed personal vol AM/PM panel-build request", () => {
     ).rejects.toMatchObject({ code: "vol_am_pm_panel_sidecar_child_reused" });
   });
 
-  it("writes the input manifest before dispatching the existing v13 Container", async () => {
+  it("locks a v13 snapshot source runner into the input manifest", async () => {
+    const mem = new MemoryR2();
+    await seedClosedInputs(mem);
+    mem.seed(personalSnapshotManifestKey(REQUEST.selection_snapshot_job_id), {
+      status: "COMPLETED",
+      job_id: REQUEST.selection_snapshot_job_id,
+      format: "personal-draft-history/v4",
+      runner_version: "personal-cloud-runner/v13",
+      period_start: PERSONAL_VOL_AM_PM_SELECTION_PERIOD.period_start,
+      period_end: PERSONAL_VOL_AM_PM_SELECTION_PERIOD.period_end,
+      lookback_sessions: 0,
+      raw_sha256: digestDigit("1"),
+      gzip_sha256: digestDigit("2"),
+      snapshot_key: `research/personal/snapshots/sha256=${"1".repeat(64)}.sqlite.gz`,
+    });
+    const input = await buildPersonalVolAmPmPanelInputManifest(mem.asBucket(), REQUEST);
+    expect(input.runner_version).toBe(PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION);
+    expect(input.selection.runner_version).toBe("personal-cloud-runner/v13");
+    expect(input.periods.y2021_full.runner_version).toBe(
+      PERSONAL_RESEARCH_RUNNER_VERSION,
+    );
+  });
+
+  it.each([
+    ["v12", "personal-cloud-runner/v12"],
+    ["unknown future", "personal-cloud-runner/v15"],
+    ["prefix", "personal-cloud-runner/v14-extra"],
+    ["arbitrary string", "personal-cloud-runner"],
+  ])("rejects a %s snapshot source runner", async (_label, runnerVersion) => {
+    const mem = new MemoryR2();
+    await seedClosedInputs(mem);
+    mem.seed(personalSnapshotManifestKey(REQUEST.selection_snapshot_job_id), {
+      status: "COMPLETED",
+      job_id: REQUEST.selection_snapshot_job_id,
+      format: "personal-draft-history/v4",
+      runner_version: runnerVersion,
+      period_start: PERSONAL_VOL_AM_PM_SELECTION_PERIOD.period_start,
+      period_end: PERSONAL_VOL_AM_PM_SELECTION_PERIOD.period_end,
+      lookback_sessions: 0,
+      raw_sha256: digestDigit("1"),
+      gzip_sha256: digestDigit("2"),
+      snapshot_key: `research/personal/snapshots/sha256=${"1".repeat(64)}.sqlite.gz`,
+    });
+    await expect(
+      buildPersonalVolAmPmPanelInputManifest(mem.asBucket(), REQUEST),
+    ).rejects.toMatchObject({ code: "vol_am_pm_panel_snapshot_identity_mismatch" });
+  });
+
+  it("writes the input manifest before dispatching the v14 Container", async () => {
     const mem = new MemoryR2();
     await seedClosedInputs(mem);
     const container = admittedContainer();
@@ -414,6 +464,7 @@ describe("closed personal vol AM/PM panel-build request", () => {
     );
     expect(mem.values.has(personalVolAmPmPanelBuildInputKey(REQUEST.job_id))).toBe(true);
     const forwarded = container.fetch.mock.calls[1]![0] as Request;
+    expect(new URL(forwarded.url).pathname).toBe("/v1/build-personal-vol-am-pm-panel");
     expect(await forwarded.json()).toMatchObject({
       cohort_id: PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
       job_id: REQUEST.job_id,

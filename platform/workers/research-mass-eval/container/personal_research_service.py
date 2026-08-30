@@ -92,7 +92,7 @@ from research.personal_base_sleeve import (
     validate_personal_base_sleeve_artifact,
 )
 
-RUNNER_VERSION = "personal-cloud-runner/v13"
+RUNNER_VERSION = "personal-cloud-runner/v14"
 SNAPSHOT_MAX_DATABASE_BYTES = 3_758_096_384
 SNAPSHOT_MINIMUM_FREE_BYTES = 256 * 1024 * 1024
 R2_ORIGIN = "http://research.r2"

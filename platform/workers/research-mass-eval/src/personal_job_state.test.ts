@@ -148,7 +148,7 @@ describe("durable personal job state", () => {
         deploymentId: "deploy-1",
         runnerVersion: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
       }).runner_version,
-    ).toBe("personal-cloud-runner/v13");
+    ).toBe("personal-cloud-runner/v14");
     expect(
       submittedStateDocument({
         jobId: "sidecar-one",
@@ -157,7 +157,7 @@ describe("durable personal job state", () => {
         deploymentId: "deploy-1",
         runnerVersion: PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
       }).runner_version,
-    ).toBe("personal-cloud-runner/v13");
+    ).toBe("personal-cloud-runner/v14");
   });
 
   it("conflicts when the same job id carries a different request digest", async () => {
@@ -191,7 +191,7 @@ describe("durable personal job state", () => {
       status: "SUBMITTED",
       submitted_at: "2026-08-30T00:00:00.000Z",
       expires_at: "2026-08-30T00:01:00.000Z",
-      runner_version: "personal-cloud-runner/v13",
+      runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       deployment_id: "deploy-1",
     });
     const response = await durablePersonalJobStatus(
@@ -224,7 +224,7 @@ describe("durable personal job state", () => {
       status: "SUBMITTED",
       submitted_at: "2026-08-30T00:00:00.000Z",
       expires_at: "2026-08-30T00:01:00.000Z",
-      runner_version: "personal-cloud-runner/v13",
+      runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       deployment_id: "deploy-1",
     });
     const response = await durablePersonalJobStatus(
@@ -256,7 +256,7 @@ describe("durable personal job state", () => {
       status: "SUBMITTED",
       submitted_at: "2026-08-30T00:00:00.000Z",
       expires_at: "2026-08-30T00:01:00.000Z",
-      runner_version: "personal-cloud-runner/v13",
+      runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       deployment_id: "deploy-1",
     });
     const response = await durablePersonalJobStatus(
@@ -285,7 +285,7 @@ describe("durable personal job state", () => {
       status: "SUBMITTED",
       submitted_at: "2026-08-30T00:00:00.000Z",
       expires_at: "2026-08-30T00:01:00.000Z",
-      runner_version: "personal-cloud-runner/v13",
+      runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       deployment_id: "deploy-1",
     });
     mem.seed(personalJobTerminalKey("research", "job-raced"), {

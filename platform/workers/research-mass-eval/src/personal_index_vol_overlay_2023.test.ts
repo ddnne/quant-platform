@@ -311,8 +311,9 @@ describe("fixed personal index-vol overlay admission", () => {
     ["legacy v9", "personal-cloud-runner/v9"],
     ["legacy v10", "personal-cloud-runner/v10"],
     ["legacy v11", "personal-cloud-runner/v11"],
-    ["current v12", "personal-cloud-runner/v12"],
-    ["current v13", "personal-cloud-runner/v13"],
+    ["legacy v12", "personal-cloud-runner/v12"],
+    ["legacy v13", "personal-cloud-runner/v13"],
+    ["current v14", "personal-cloud-runner/v14"],
   ])("accepts the explicitly compatible %s base runner manifest", async (_label, baseVersion) => {
     const fixed = await sources(baseVersion);
     await expect(
@@ -328,11 +329,11 @@ describe("fixed personal index-vol overlay admission", () => {
     ).resolves.toMatchObject({ base: { job_id: fixed.baseJobId } });
   });
 
-  it("requires the current v13 runner and frozen AM digest for AM/PM bases", async () => {
+  it("requires the current v14 runner and frozen AM digest for AM/PM bases", async () => {
     const current = await amPmSources();
     await expect(
       buildPersonalIndexVolOverlay2023InputManifest(current.mem.asBucket(), {
-        job_id: "overlay-am-pm-v13",
+        job_id: "overlay-am-pm-v14",
         cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
         base_job_id: current.baseJobId,
         svi_job_id: current.sviJobId,
@@ -341,10 +342,10 @@ describe("fixed personal index-vol overlay admission", () => {
       cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
       base: { job_id: current.baseJobId },
     });
-    const legacy = await amPmSources("personal-cloud-runner/v12");
+    const legacy = await amPmSources("personal-cloud-runner/v13");
     await expect(
       buildPersonalIndexVolOverlay2023InputManifest(legacy.mem.asBucket(), {
-        job_id: "overlay-am-pm-v12",
+        job_id: "overlay-am-pm-v13",
         cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
         base_job_id: legacy.baseJobId,
         svi_job_id: legacy.sviJobId,
@@ -411,7 +412,7 @@ describe("fixed personal index-vol overlay admission", () => {
   it.each([
     ["missing", null],
     ["stale v8", "personal-cloud-runner/v8"],
-    ["unknown future v14", "personal-cloud-runner/v14"],
+    ["unknown future v15", "personal-cloud-runner/v15"],
   ])("rejects a %s base runner manifest", async (_label, baseVersion) => {
     const fixed = await sources(baseVersion);
     await expect(

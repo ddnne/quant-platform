@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   PERSONAL_RESEARCH_AM_PM_COHORT_IDS,
   PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME,
+  PERSONAL_RESEARCH_RUNNER_SLOT,
   PERSONAL_RESEARCH_RUNNER_VERSION,
   PERSONAL_SNAPSHOT_CONTAINER_NAME,
+  PERSONAL_SNAPSHOT_SOURCE_RUNNER_VERSIONS,
+  isPersonalSnapshotSourceRunnerVersion,
   parsePersonalResearchRequest,
   personalJobContainerName,
   personalResearchCohortDigest,
@@ -31,24 +34,47 @@ const VALID_GZIP = {
 
 describe("personal research request contract", () => {
   it("pins the runner-bound Container identity", async () => {
-    expect(PERSONAL_RESEARCH_RUNNER_VERSION).toBe("personal-cloud-runner/v13");
-    expect(PERSONAL_SNAPSHOT_CONTAINER_NAME).toBe("personal-snapshot-v13");
-    expect(personalSnapshotContainerName()).toBe("personal-snapshot-v13");
+    expect(PERSONAL_RESEARCH_RUNNER_VERSION).toBe("personal-cloud-runner/v14");
+    expect(PERSONAL_RESEARCH_RUNNER_SLOT).toBe("v14");
+    expect(PERSONAL_SNAPSHOT_CONTAINER_NAME).toBe("personal-snapshot-v14");
+    expect(personalSnapshotContainerName()).toBe("personal-snapshot-v14");
     expect(PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME).toBe("personal-research-v12");
+    expect([...PERSONAL_SNAPSHOT_SOURCE_RUNNER_VERSIONS]).toEqual([
+      "personal-cloud-runner/v13",
+      "personal-cloud-runner/v14",
+    ]);
+    expect(isPersonalSnapshotSourceRunnerVersion("personal-cloud-runner/v13")).toBe(
+      true,
+    );
+    expect(isPersonalSnapshotSourceRunnerVersion(PERSONAL_RESEARCH_RUNNER_VERSION)).toBe(
+      true,
+    );
+    expect(isPersonalSnapshotSourceRunnerVersion("personal-cloud-runner/v12")).toBe(
+      false,
+    );
+    expect(isPersonalSnapshotSourceRunnerVersion("personal-cloud-runner/v15")).toBe(
+      false,
+    );
+    expect(
+      isPersonalSnapshotSourceRunnerVersion("personal-cloud-runner/v14-extra"),
+    ).toBe(false);
+    expect(isPersonalSnapshotSourceRunnerVersion("personal-cloud-runner/")).toBe(
+      false,
+    );
     const first = await personalJobContainerName("research", VALID.job_id);
     const second = await personalJobContainerName("research", "other-job");
-    expect(first).toMatch(/^personal-v13-research-[0-9a-f]{24}$/);
+    expect(first).toMatch(/^personal-v14-research-[0-9a-f]{24}$/);
     expect(first).not.toBe(PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME);
     expect(second).not.toBe(first);
     expect(await personalJobContainerName("svi", VALID.job_id)).not.toBe(first);
     expect(await personalJobContainerName("vol-panel", VALID.job_id)).toMatch(
-      /^personal-v13-vol-panel-[0-9a-f]{24}$/,
+      /^personal-v14-vol-panel-[0-9a-f]{24}$/,
     );
     expect(await personalJobContainerName("vol-panel", VALID.job_id)).not.toBe(
       await personalJobContainerName("svi", VALID.job_id),
     );
     expect(await personalJobContainerName("option-sidecar", VALID.job_id)).toMatch(
-      /^personal-v13-option-sidecar-[0-9a-f]{24}$/,
+      /^personal-v14-option-sidecar-[0-9a-f]{24}$/,
     );
     expect(await personalJobContainerName("option-sidecar", VALID.job_id)).not.toBe(
       await personalJobContainerName("vol-panel", VALID.job_id),

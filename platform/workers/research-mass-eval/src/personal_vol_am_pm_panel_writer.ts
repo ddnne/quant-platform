@@ -1,6 +1,6 @@
 import { putJsonCreateOnly, serializedJsonBytes } from "./http";
 import {
-  PERSONAL_RESEARCH_RUNNER_VERSION,
+  isPersonalSnapshotSourceRunnerVersion,
   personalJobContainerName,
 } from "./personal_research_contract";
 import {
@@ -155,11 +155,12 @@ async function lockSnapshot(
   }
   if (!isObject(parsed)) fail("vol_am_pm_panel_snapshot_manifest_invalid");
   const lookback = parsed.lookback_sessions;
+  const sourceRunner = parsed.runner_version;
   if (
     parsed.status !== "COMPLETED" ||
     parsed.job_id !== jobId ||
     parsed.format !== "personal-draft-history/v4" ||
-    parsed.runner_version !== PERSONAL_RESEARCH_RUNNER_VERSION ||
+    !isPersonalSnapshotSourceRunnerVersion(sourceRunner) ||
     parsed.period_start !== expected.period_start ||
     parsed.period_end !== expected.period_end ||
     typeof lookback !== "number" ||
@@ -193,7 +194,7 @@ async function lockSnapshot(
     period_end: expected.period_end,
     lookback_sessions: lookback,
     format: "personal-draft-history/v4",
-    runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
+    runner_version: sourceRunner,
     manifest,
     snapshot,
   };

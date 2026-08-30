@@ -81,6 +81,7 @@ const OVERLAY_COMPATIBLE_BASE_RUNNER_VERSIONS: ReadonlySet<string> = new Set([
   "personal-cloud-runner/v11",
   "personal-cloud-runner/v12",
   "personal-cloud-runner/v13",
+  "personal-cloud-runner/v14",
 ]);
 
 type JsonObject = Record<string, unknown>;

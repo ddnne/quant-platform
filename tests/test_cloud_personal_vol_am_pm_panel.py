@@ -288,6 +288,48 @@ def _spec(manifest: dict[str, Any], input_digest: str) -> job.PersonalVolAmPmPan
     return job.PersonalVolAmPmPanelJobSpec.from_document(body)
 
 
+def test_snapshot_source_runner_allowlist_is_closed() -> None:
+    dates = [f"2019-01-{index:02d}" for index in range(4, 8)]
+    store: dict[str, bytes] = {}
+    manifest = _input_manifest(store, dates)
+    input_bytes = _canonical(manifest)
+    spec = _spec(manifest, _digest(input_bytes))
+    store[spec.input_manifest_key] = input_bytes
+
+    def opener(_spec, key):
+        return _Response(store[key])
+
+    accepted = job.load_input_manifest(spec, opener=opener)
+    assert accepted["selection"]["runner_version"] == job.RUNNER_VERSION
+    assert job.RUNNER_VERSION in job.SNAPSHOT_SOURCE_RUNNER_VERSIONS
+    assert job.SNAPSHOT_SOURCE_RUNNER_VERSIONS == frozenset(
+        {
+            "personal-cloud-runner/v13",
+            "personal-cloud-runner/v14",
+        }
+    )
+
+    manifest["selection"]["runner_version"] = "personal-cloud-runner/v13"
+    input_bytes = _canonical(manifest)
+    spec = _spec(manifest, _digest(input_bytes))
+    store[spec.input_manifest_key] = input_bytes
+    v13 = job.load_input_manifest(spec, opener=opener)
+    assert v13["selection"]["runner_version"] == "personal-cloud-runner/v13"
+
+    for denied in (
+        "personal-cloud-runner/v12",
+        "personal-cloud-runner/v15",
+        "personal-cloud-runner/v14-extra",
+        "personal-cloud-runner",
+    ):
+        manifest["selection"]["runner_version"] = denied
+        input_bytes = _canonical(manifest)
+        spec = _spec(manifest, _digest(input_bytes))
+        store[spec.input_manifest_key] = input_bytes
+        with pytest.raises(RuntimeError, match="closed v4 allowlist"):
+            job.load_input_manifest(spec, opener=opener)
+
+
 def test_vol_panel_job_fields_are_closed() -> None:
     with pytest.raises(job.VolPanelJobInputError):
         job.PersonalVolAmPmPanelJobSpec.from_document(
@@ -406,7 +448,7 @@ def test_execute_writes_children_before_terminal_and_recomputes_common_mask(
 
     terminal = job.execute_vol_am_pm_panel_job(spec, opener=opener, uploader=uploader)
     assert terminal["status"] == "COMPLETED"
-    assert terminal["runner_version"] == "personal-cloud-runner/v13"
+    assert terminal["runner_version"] == "personal-cloud-runner/v14"
     assert puts[-1] == spec.manifest_key
     assert spec.manifest_key not in puts[:-1]
     period = job.EVALUATION_PERIODS[0]["period_id"]
