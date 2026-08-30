@@ -29,6 +29,7 @@ import {
   PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
   personalVolAmPmCommonValidDigest,
+  personalVolAmPmMembershipDigest,
   personalVolAmPmPanelBuildTerminalKey,
   personalVolAmPmPanelObjectKey,
   type PersonalVolAmPmCommonValidReasonCode,
@@ -383,6 +384,7 @@ async function loadPanelFromBuildChild(
   bucket: R2Bucket,
   key: string,
   digest: string,
+  membership: readonly string[],
 ): Promise<PersonalVolAmPmPanel> {
   if (key !== personalVolAmPmPanelObjectKey(digest)) {
     failClosed("panel_build_child_key_mismatch");
@@ -398,7 +400,7 @@ async function loadPanelFromBuildChild(
   } catch {
     failClosed("panel_build_child_invalid_json");
   }
-  const panel = parsePersonalVolAmPmPanel(parsed);
+  const panel = parsePersonalVolAmPmPanel(parsed, membership);
   if (!panel.ok) failClosed(panel.legacy ? "legacy_period_panel_rejected" : panel.error);
   if (!(await personalVolAmPmSessionCalendarDigestMatches(panel.value.session_calendar))) {
     failClosed("session_calendar_digest_mismatch");
@@ -434,9 +436,21 @@ export async function loadPersonalVolAmPmPanelsFromBuildJob(
     terminal.producer_id !== PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID ||
     terminal.cohort_id !== PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID ||
     terminal.job_id !== panelBuildJobId ||
-    !isObjectRecord(terminal.periods)
+    !isObjectRecord(terminal.periods) ||
+    !isObjectRecord(terminal.membership)
   ) {
     failClosed("panel_build_terminal_identity_mismatch");
+  }
+  const membershipCodes = Array.isArray(terminal.membership.codes)
+    ? terminal.membership.codes.filter((code): code is string => typeof code === "string")
+    : [];
+  if (
+    membershipCodes.length !== new Set(membershipCodes).size ||
+    membershipCodes.slice().sort().join("\n") !== membershipCodes.join("\n") ||
+    (await personalVolAmPmMembershipDigest(membershipCodes)) !==
+      String(terminal.membership.digest ?? "")
+  ) {
+    failClosed("panel_build_membership_mismatch");
   }
   const panels: PersonalVolAmPmPanel[] = [];
   const notes: string[] = [];
@@ -451,6 +465,7 @@ export async function loadPersonalVolAmPmPanelsFromBuildJob(
       bucket,
       String(row.panel_key ?? ""),
       panelDigest,
+      membershipCodes,
     );
     if (
       panel.period_id !== period.period_id ||

@@ -4,6 +4,7 @@ import {
   personalJobContainerName,
 } from "./personal_research_contract";
 import {
+  PERSONAL_JOB_TTL_MS,
   durablePersonalJobStatus,
   submittedStateDocument,
   writeSubmittedState,
@@ -12,18 +13,19 @@ import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import { personalSnapshotManifestKey } from "./personal_snapshot_contract";
 import {
   PERSONAL_VOL_AM_PM_EVALUATION_PERIODS,
-  PERSONAL_VOL_AM_PM_OPTION_REBUILD_ERROR,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_INPUT_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_SNAPSHOT_MANIFEST_BYTES,
+  PERSONAL_VOL_AM_PM_PANEL_BUILD_TERMINAL_MAX_BYTES,
+  PERSONAL_VOL_AM_PM_PANEL_TIMEOUT_GRACE_MS,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_INPUT_SCHEMA,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_KIND,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
   PERSONAL_VOL_AM_PM_REQUIRED_LOOKBACK_SESSIONS,
   PERSONAL_VOL_AM_PM_SELECTION_PERIOD,
-  frozenEvaluationPeriod,
+  inputManifestMatchesRequest,
   personalVolAmPmLegacyOptionPanelKey,
   personalVolAmPmPanelBuildInputKey,
   personalVolAmPmPanelBuildRequestDigest,
@@ -35,13 +37,8 @@ import {
   type PersonalVolAmPmPanelWriterInputManifest,
   type SnapshotInputLock,
 } from "./personal_vol_am_pm_panel_writer_contract";
-import {
-  PERSONAL_VOL_SOURCE_IDENTITY,
-  PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS,
-  PERSONAL_VOL_UNIVERSE_PROVENANCE,
-} from "./personal_vol_research";
 import { sha256Hex } from "./sha256";
-import type { Env, NkyVolSeries, Opt225RegimeBundle } from "./types";
+import type { Env } from "./types";
 
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const SNAPSHOT_KEY_RE =
@@ -68,7 +65,17 @@ function isDigest(value: unknown): value is `sha256:${string}` {
   return typeof value === "string" && DIGEST_RE.test(value);
 }
 
-async function boundedObject(
+function hexSha256(bytes: ArrayBuffer): `sha256:${string}` {
+  return `sha256:${[...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function headDigest(object: R2Object): string | null {
+  if (isDigest(object.customMetadata?.sha256)) return object.customMetadata.sha256;
+  const checksum = object.checksums?.sha256;
+  return checksum ? hexSha256(checksum) : null;
+}
+
+async function boundedManifest(
   bucket: R2Bucket,
   key: string,
   maximumBytes: number,
@@ -119,7 +126,6 @@ function snapshotObjectRef(
     sha256: gzipSha256,
     raw_sha256: rawSha256,
     gzip_sha256: gzipSha256,
-    content_sha256: gzipSha256,
   };
 }
 
@@ -135,7 +141,7 @@ async function lockSnapshot(
   },
 ): Promise<SnapshotInputLock> {
   const manifestKey = personalSnapshotManifestKey(jobId);
-  const loaded = await boundedObject(
+  const loaded = await boundedManifest(
     bucket,
     manifestKey,
     PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_SNAPSHOT_MANIFEST_BYTES,
@@ -189,48 +195,7 @@ async function lockSnapshot(
     runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
     manifest,
     snapshot,
-    calendar_start:
-      typeof parsed.calendar_start === "string" ? parsed.calendar_start : null,
   };
-}
-
-function finiteSeries(series: NkyVolSeries | null | undefined): boolean {
-  const maps = [
-    series?.rv_short_by_date,
-    series?.rv_long_by_date,
-    series?.rv_abs_by_date,
-  ];
-  return maps.some(
-    (map) =>
-      isObject(map) &&
-      Object.values(map).some(
-        (value) => typeof value === "number" && Number.isFinite(value),
-      ),
-  );
-}
-
-function supportedOptionSource(
-  source: Opt225RegimeBundle["source"],
-): source is {
-  dataset: typeof PERSONAL_VOL_SOURCE_IDENTITY.dataset;
-  version: (typeof PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS)[number];
-} {
-  return (
-    source?.dataset === PERSONAL_VOL_SOURCE_IDENTITY.dataset &&
-    typeof source.version === "string" &&
-    PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS.some(
-      (version) => version === source.version,
-    )
-  );
-}
-
-function sidecarLooksLikeSingleStockIv(bundle: Opt225RegimeBundle): boolean {
-  const blob = JSON.stringify(bundle).toLowerCase();
-  return (
-    blob.includes("single_stock") ||
-    blob.includes("equity_option_iv") ||
-    blob.includes("individual_stock")
-  );
 }
 
 async function lockOptionSidecar(
@@ -238,50 +203,22 @@ async function lockOptionSidecar(
   periodId: PersonalVolAmPmEvaluationPeriodId,
 ): Promise<OptionSidecarLock> {
   const key = personalVolAmPmLegacyOptionPanelKey(periodId);
-  const loaded = await boundedObject(
-    bucket,
-    key,
-    PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES,
-  );
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(new TextDecoder().decode(loaded.bytes));
-  } catch {
-    fail("vol_am_pm_panel_option_sidecar_invalid_json");
-  }
-  if (!isObject(parsed) || !isObject(parsed.opt225_regime)) {
-    fail(PERSONAL_VOL_AM_PM_OPTION_REBUILD_ERROR);
-  }
-  const bundle = parsed.opt225_regime as Opt225RegimeBundle;
-  const source = supportedOptionSource(bundle.source)
-    ? bundle.source
-    : supportedOptionSource({
-          dataset: bundle.dataset,
-          version: bundle.version,
-        })
-      ? { dataset: bundle.dataset!, version: bundle.version! }
-      : null;
+  const head = await bucket.head(key);
+  if (!head) fail("vol_am_pm_panel_source_missing");
   if (
-    source === null ||
-    sidecarLooksLikeSingleStockIv(bundle) ||
-    !finiteSeries(bundle.basevol) ||
-    !finiteSeries(bundle.atm_iv) ||
-    !finiteSeries(bundle.skew) ||
-    !finiteSeries(bundle.cm_term_ratio)
+    head.size < 1 ||
+    head.size > PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES
   ) {
-    fail(PERSONAL_VOL_AM_PM_OPTION_REBUILD_ERROR);
+    fail("vol_am_pm_panel_source_size_denied");
   }
+  const digest = headDigest(head);
+  if (!digest) fail("vol_am_pm_panel_option_sidecar_checksum_missing");
   return {
     period_id: periodId,
     source_key: key,
-    etag: loaded.object.etag,
-    size: loaded.object.size,
-    sha256: loaded.digest,
-    dataset: PERSONAL_VOL_SOURCE_IDENTITY.dataset,
-    version: source.version as (typeof PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS)[number],
-    use: "opt225_regime_sidecar_only",
-    bars_copied: false,
-    calendar_copied: false,
+    etag: head.etag,
+    size: head.size,
+    sha256: digest,
   };
 }
 
@@ -304,18 +241,17 @@ export async function buildPersonalVolAmPmPanelInputManifest(
   const option_sidecars =
     {} as PersonalVolAmPmPanelWriterInputManifest["option_sidecars"];
   for (const period of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS) {
-    const frozen = frozenEvaluationPeriod(period.period_id);
-    if (!frozen?.period_start || !frozen.period_end) {
-      fail("vol_am_pm_panel_frozen_period_missing");
-    }
+    const start = period.period_start || "";
+    const end = period.period_end || "";
+    if (!start || !end) fail("vol_am_pm_panel_frozen_period_missing");
     periods[period.period_id] = await lockSnapshot(
       bucket,
       request.period_snapshot_job_ids[period.period_id],
       "evaluation_period",
       {
         period_id: period.period_id,
-        period_start: frozen.period_start,
-        period_end: frozen.period_end,
+        period_start: start,
+        period_end: end,
         minimum_lookback: PERSONAL_VOL_AM_PM_REQUIRED_LOOKBACK_SESSIONS,
       },
     );
@@ -332,25 +268,9 @@ export async function buildPersonalVolAmPmPanelInputManifest(
     runner_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
     panel_schema: "personal-vol-ratio-am-pm-panel/v1",
     required_lookback_sessions: PERSONAL_VOL_AM_PM_REQUIRED_LOOKBACK_SESSIONS,
-    equity_universe: PERSONAL_VOL_UNIVERSE_PROVENANCE,
     selection,
     periods,
     option_sidecars,
-    authority: {
-      draft_only: true,
-      screening_only: true,
-      ready: false,
-      mass: false,
-      promotion: false,
-      live_orders: false,
-      go: false,
-      single_stock_option_iv: "FORBIDDEN",
-      cash_index_executable_fill: false,
-      adjc_fallback: false,
-      ffill: false,
-      synthetic_calendar: false,
-      caller_provenance: false,
-    },
   };
 }
 
@@ -368,7 +288,9 @@ async function storedTerminal(
   const object = await env.STRUCTURED_BUCKET.get(
     personalVolAmPmPanelBuildTerminalKey(jobId),
   );
-  if (!object || object.size > 64 * 1024) return null;
+  if (!object || object.size > PERSONAL_VOL_AM_PM_PANEL_BUILD_TERMINAL_MAX_BYTES) {
+    return null;
+  }
   try {
     const parsed = await object.json<unknown>();
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
@@ -390,147 +312,39 @@ function sameClosedIdentity(
   );
 }
 
-async function requestMatchesLockedInput(
+async function loadLockedInput(
   bucket: R2Bucket,
   request: PersonalVolAmPmPanelBuildRequest,
-): Promise<boolean> {
+): Promise<{ manifest: PersonalVolAmPmPanelWriterInputManifest; digest: string } | null> {
   const object = await bucket.get(personalVolAmPmPanelBuildInputKey(request.job_id));
   if (
     !object ||
     object.size < 1 ||
     object.size > PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_INPUT_BYTES
   ) {
-    return false;
+    return null;
   }
+  const bytes = new Uint8Array(await object.arrayBuffer());
   let parsed: unknown;
   try {
-    parsed = await object.json();
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
   } catch {
-    return false;
+    return null;
   }
-  if (!isObject(parsed) || !isObject(parsed.selection) || !isObject(parsed.periods)) {
-    return false;
-  }
-  if (parsed.selection.job_id !== request.selection_snapshot_job_id) return false;
-  for (const period of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS) {
-    const locked = parsed.periods[period.period_id];
-    if (
-      !isObject(locked) ||
-      locked.job_id !== request.period_snapshot_job_ids[period.period_id]
-    ) {
-      return false;
-    }
-  }
-  return true;
+  if (!inputManifestMatchesRequest(parsed, request)) return null;
+  return {
+    manifest: parsed,
+    digest: `sha256:${await sha256Hex(bytes)}`,
+  };
 }
 
-export async function submitPersonalVolAmPmPanelBuild(
+async function dispatchContainer(
   env: Env,
   request: PersonalVolAmPmPanelBuildRequest,
+  inputKey: string,
+  inputDigest: string,
+  requestDigest: string,
 ): Promise<Response> {
-  const terminalBeforeAdmission = await storedTerminal(env, request.job_id);
-  if (terminalBeforeAdmission) {
-    if (
-      !sameClosedIdentity(terminalBeforeAdmission, request) ||
-      !(await requestMatchesLockedInput(env.STRUCTURED_BUCKET, request))
-    ) {
-      return responseJson(
-        { ok: false, error: "job_id_conflict", job_id: request.job_id, go: false },
-        409,
-      );
-    }
-    return responseJson({
-      ok: terminalBeforeAdmission.status === "COMPLETED",
-      idempotent: true,
-      job: terminalBeforeAdmission,
-      draft_only: true,
-      screening_only: true,
-      go: false,
-    });
-  }
-  let input: PersonalVolAmPmPanelWriterInputManifest;
-  try {
-    input = await buildPersonalVolAmPmPanelInputManifest(
-      env.STRUCTURED_BUCKET,
-      request,
-    );
-  } catch (error) {
-    const code =
-      (error as { code?: string }).code ?? "vol_am_pm_panel_admission_failed";
-    const rebuild = code === PERSONAL_VOL_AM_PM_OPTION_REBUILD_ERROR;
-    return responseJson(
-      {
-        ok: false,
-        error: code,
-        detail: rebuild ? PERSONAL_VOL_AM_PM_OPTION_REBUILD_ERROR : undefined,
-        job_id: request.job_id,
-        go: false,
-      },
-      409,
-    );
-  }
-  if (
-    serializedJsonBytes(input).byteLength >
-    PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_INPUT_BYTES
-  ) {
-    return responseJson(
-      {
-        ok: false,
-        error: "vol_am_pm_panel_input_manifest_byte_bound_exceeded",
-        job_id: request.job_id,
-        go: false,
-      },
-      409,
-    );
-  }
-  const inputKey = personalVolAmPmPanelBuildInputKey(request.job_id);
-  const inputPut = await putJsonCreateOnly(env.STRUCTURED_BUCKET, inputKey, input);
-  if (inputPut.conflict) {
-    return responseJson(
-      {
-        ok: false,
-        error: "input_manifest_conflict",
-        job_id: request.job_id,
-        go: false,
-      },
-      409,
-    );
-  }
-  const existing = await storedTerminal(env, request.job_id);
-  if (existing) {
-    if (
-      !sameClosedIdentity(existing, request) ||
-      existing.input_manifest_digest !== inputPut.digest
-    ) {
-      return responseJson(
-        { ok: false, error: "job_id_conflict", job_id: request.job_id, go: false },
-        409,
-      );
-    }
-    return responseJson({
-      ok: existing.status === "COMPLETED",
-      idempotent: true,
-      job: existing,
-      draft_only: true,
-      screening_only: true,
-      go: false,
-    });
-  }
-  const requestDigest = await personalVolAmPmPanelBuildRequestDigest(
-    request,
-    inputPut.digest,
-  );
-  const conflict = await writeSubmittedState(
-    env,
-    submittedStateDocument({
-      jobId: request.job_id,
-      requestDigest,
-      kind: PERSONAL_VOL_AM_PM_PANEL_WRITER_KIND,
-      deploymentId: env.CF_VERSION_METADATA?.id ?? "unknown",
-      runnerVersion: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
-    }),
-  );
-  if (conflict) return conflict;
   try {
     const target = await verifiedPersonalResearchContainer(
       env,
@@ -545,7 +359,7 @@ export async function submitPersonalVolAmPmPanelBuild(
         headers: { "content-type": "application/json; charset=utf-8" },
         body: JSON.stringify({
           cohort_id: PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
-          input_manifest_digest: inputPut.digest,
+          input_manifest_digest: inputDigest,
           input_manifest_key: inputKey,
           job_id: request.job_id,
           manifest_key: personalVolAmPmPanelBuildTerminalKey(request.job_id),
@@ -568,6 +382,126 @@ export async function submitPersonalVolAmPmPanelBuild(
       503,
     );
   }
+}
+
+export async function submitPersonalVolAmPmPanelBuild(
+  env: Env,
+  request: PersonalVolAmPmPanelBuildRequest,
+): Promise<Response> {
+  const terminalBeforeAdmission = await storedTerminal(env, request.job_id);
+  if (terminalBeforeAdmission) {
+    if (
+      !sameClosedIdentity(terminalBeforeAdmission, request) ||
+      !(await loadLockedInput(env.STRUCTURED_BUCKET, request))
+    ) {
+      return responseJson(
+        { ok: false, error: "job_id_conflict", job_id: request.job_id, go: false },
+        409,
+      );
+    }
+    return responseJson({
+      ok: terminalBeforeAdmission.status === "COMPLETED",
+      idempotent: true,
+      job: terminalBeforeAdmission,
+      draft_only: true,
+      screening_only: true,
+      go: false,
+    });
+  }
+  const inputKey = personalVolAmPmPanelBuildInputKey(request.job_id);
+  let inputDigest: string;
+  const existingInput = await loadLockedInput(env.STRUCTURED_BUCKET, request);
+  if (existingInput) {
+    inputDigest = existingInput.digest;
+  } else {
+    let input: PersonalVolAmPmPanelWriterInputManifest;
+    try {
+      input = await buildPersonalVolAmPmPanelInputManifest(
+        env.STRUCTURED_BUCKET,
+        request,
+      );
+    } catch (error) {
+      const code =
+        (error as { code?: string }).code ?? "vol_am_pm_panel_admission_failed";
+      return responseJson(
+        { ok: false, error: code, job_id: request.job_id, go: false },
+        409,
+      );
+    }
+    if (
+      serializedJsonBytes(input).byteLength >
+      PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_INPUT_BYTES
+    ) {
+      return responseJson(
+        {
+          ok: false,
+          error: "vol_am_pm_panel_input_manifest_byte_bound_exceeded",
+          job_id: request.job_id,
+          go: false,
+        },
+        409,
+      );
+    }
+    const inputPut = await putJsonCreateOnly(
+      env.STRUCTURED_BUCKET,
+      inputKey,
+      input,
+    );
+    if (inputPut.conflict) {
+      const raced = await loadLockedInput(env.STRUCTURED_BUCKET, request);
+      if (!raced) {
+        return responseJson(
+          {
+            ok: false,
+            error: "input_manifest_conflict",
+            job_id: request.job_id,
+            go: false,
+          },
+          409,
+        );
+      }
+      inputDigest = raced.digest;
+    } else {
+      inputDigest = inputPut.digest;
+    }
+  }
+  const existing = await storedTerminal(env, request.job_id);
+  if (existing) {
+    if (
+      !sameClosedIdentity(existing, request) ||
+      existing.input_manifest_digest !== inputDigest
+    ) {
+      return responseJson(
+        { ok: false, error: "job_id_conflict", job_id: request.job_id, go: false },
+        409,
+      );
+    }
+    return responseJson({
+      ok: existing.status === "COMPLETED",
+      idempotent: true,
+      job: existing,
+      draft_only: true,
+      screening_only: true,
+      go: false,
+    });
+  }
+  const requestDigest = await personalVolAmPmPanelBuildRequestDigest(
+    request,
+    inputDigest,
+  );
+  const conflict = await writeSubmittedState(
+    env,
+    submittedStateDocument({
+      jobId: request.job_id,
+      requestDigest,
+      kind: PERSONAL_VOL_AM_PM_PANEL_WRITER_KIND,
+      deploymentId: env.CF_VERSION_METADATA?.id ?? "unknown",
+      runnerVersion: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
+      ttlMs: PERSONAL_JOB_TTL_MS + PERSONAL_VOL_AM_PM_PANEL_TIMEOUT_GRACE_MS,
+    }),
+  );
+  if (conflict) return conflict;
+  return dispatchContainer(env, request, inputKey, inputDigest, requestDigest);
 }
 
 export async function personalVolAmPmPanelBuildStatus(

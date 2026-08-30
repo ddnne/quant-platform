@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
 import { PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION } from "./personal_vol_am_pm_panel";
 import {
-  PERSONAL_VOL_AM_PM_COMMON_VALID_SCHEMA,
   PERSONAL_VOL_AM_PM_EVALUATION_PERIODS,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_INPUT_SCHEMA,
@@ -14,21 +13,50 @@ import {
   personalVolAmPmPanelBuildInputKey,
   personalVolAmPmPanelBuildTerminalKey,
   personalVolAmPmPanelObjectKey,
-  personalVolAmPmStablePanelKey,
   type PersonalVolAmPmPanelWriterInputManifest,
 } from "./personal_vol_am_pm_panel_writer_contract";
 import { personalVolAmPmPanelR2Outbound } from "./personal_vol_am_pm_panel_r2";
-import { PERSONAL_VOL_SOURCE_IDENTITY, PERSONAL_VOL_UNIVERSE_PROVENANCE } from "./personal_vol_research";
 import { sha256Hex } from "./sha256";
 
-type Stored = { bytes: Uint8Array; etag: string; customMetadata: Record<string, string> };
+type Stored = {
+  bytes: Uint8Array;
+  etag: string;
+  customMetadata: Record<string, string>;
+  checksums: R2Checksums;
+};
+
+async function toBytes(
+  value: ArrayBuffer | ArrayBufferView | string | ReadableStream<Uint8Array>,
+): Promise<Uint8Array> {
+  if (typeof value === "string") return new TextEncoder().encode(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice();
+  }
+  if (value instanceof ArrayBuffer) return new Uint8Array(value).slice();
+  const reader = value.getReader();
+  const chunks: Uint8Array[] = [];
+  for (;;) {
+    const { done, value: chunk } = await reader.read();
+    if (done) break;
+    if (chunk) chunks.push(chunk);
+  }
+  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
 
 class MemoryR2 {
   readonly values = new Map<string, Stored>();
   readonly writes: string[] = [];
+  parsedBodies = 0;
 
   seed(key: string, bytes: Uint8Array, etag: string, customMetadata: Record<string, string> = {}) {
-    this.values.set(key, { bytes, etag, customMetadata });
+    this.values.set(key, { bytes, etag, customMetadata, checksums: {} as R2Checksums });
   }
 
   object(key: string, stored: Stored): R2ObjectBody {
@@ -38,7 +66,7 @@ class MemoryR2 {
       etag: stored.etag,
       httpEtag: `"${stored.etag}"`,
       uploaded: new Date(0),
-      checksums: {} as R2Checksums,
+      checksums: stored.checksums,
       customMetadata: stored.customMetadata,
       httpMetadata: {},
       storageClass: "Standard",
@@ -49,6 +77,10 @@ class MemoryR2 {
         },
       }),
       arrayBuffer: async () => stored.bytes.slice().buffer,
+      json: async () => {
+        this.parsedBodies += 1;
+        return JSON.parse(new TextDecoder().decode(stored.bytes));
+      },
       writeHttpMetadata() {},
     } as R2ObjectBody;
   }
@@ -62,7 +94,11 @@ class MemoryR2 {
     return this.get(key);
   }
 
-  async put(key: string, value: ArrayBuffer | ArrayBufferView | string, options?: R2PutOptions) {
+  async put(
+    key: string,
+    value: ArrayBuffer | ArrayBufferView | string | ReadableStream,
+    options?: R2PutOptions,
+  ) {
     if (
       options?.onlyIf &&
       "etagDoesNotMatch" in options.onlyIf &&
@@ -70,16 +106,14 @@ class MemoryR2 {
     ) {
       return null;
     }
-    const bytes =
-      typeof value === "string"
-        ? new TextEncoder().encode(value)
-        : ArrayBuffer.isView(value)
-          ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice()
-          : new Uint8Array(value).slice();
-    const stored = {
+    const bytes = await toBytes(value as ArrayBuffer | ArrayBufferView | string | ReadableStream<Uint8Array>);
+    const stored: Stored = {
       bytes,
       etag: `write-${this.writes.length}`,
       customMetadata: options?.customMetadata ?? {},
+      checksums: options?.sha256
+        ? ({ sha256: options.sha256 } as R2Checksums)
+        : ({} as R2Checksums),
     };
     this.writes.push(key);
     this.values.set(key, stored);
@@ -108,7 +142,6 @@ function snapshotLock(jobId: string, digit: string, periodId: string, start: str
     sha256: digestDigit(digit),
     raw_sha256: digestDigit(digit),
     gzip_sha256: digestDigit(digit),
-    content_sha256: digestDigit(digit),
   };
   return {
     job_id: jobId,
@@ -121,7 +154,6 @@ function snapshotLock(jobId: string, digit: string, periodId: string, start: str
     runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
     manifest: { key: manifestKey, etag: `man-${digit}`, size: 8, sha256: digestDigit(digit) },
     snapshot: ref,
-    calendar_start: start,
   };
 }
 
@@ -134,7 +166,6 @@ async function fixture() {
     runner_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
     panel_schema: PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
     required_lookback_sessions: 61,
-    equity_universe: PERSONAL_VOL_UNIVERSE_PROVENANCE,
     selection: snapshotLock("snap-2019", "1", "y2019_selection", "2019-01-01", "2019-10-21"),
     periods: {
       y2021_full: snapshotLock("snap-2021", "3", "y2021_full", "2021-01-04", "2021-10-15"),
@@ -148,11 +179,6 @@ async function fixture() {
         etag: "side-1",
         size: 4,
         sha256: digestDigit("9"),
-        dataset: PERSONAL_VOL_SOURCE_IDENTITY.dataset,
-        version: PERSONAL_VOL_SOURCE_IDENTITY.version,
-        use: "opt225_regime_sidecar_only",
-        bars_copied: false,
-        calendar_copied: false,
       },
       y2023_full: {
         period_id: "y2023_full",
@@ -160,11 +186,6 @@ async function fixture() {
         etag: "side-2",
         size: 4,
         sha256: digestDigit("9"),
-        dataset: PERSONAL_VOL_SOURCE_IDENTITY.dataset,
-        version: PERSONAL_VOL_SOURCE_IDENTITY.version,
-        use: "opt225_regime_sidecar_only",
-        bars_copied: false,
-        calendar_copied: false,
       },
       y2025_q4: {
         period_id: "y2025_q4",
@@ -172,27 +193,7 @@ async function fixture() {
         etag: "side-3",
         size: 4,
         sha256: digestDigit("9"),
-        dataset: PERSONAL_VOL_SOURCE_IDENTITY.dataset,
-        version: PERSONAL_VOL_SOURCE_IDENTITY.version,
-        use: "opt225_regime_sidecar_only",
-        bars_copied: false,
-        calendar_copied: false,
       },
-    },
-    authority: {
-      draft_only: true,
-      screening_only: true,
-      ready: false,
-      mass: false,
-      promotion: false,
-      live_orders: false,
-      go: false,
-      single_stock_option_iv: "FORBIDDEN",
-      cash_index_executable_fill: false,
-      adjc_fallback: false,
-      ffill: false,
-      synthetic_calendar: false,
-      caller_provenance: false,
     },
   };
   const inputBytes = new TextEncoder().encode(JSON.stringify(input));
@@ -208,29 +209,17 @@ async function fixture() {
   return { mem, headers, inputDigest, input };
 }
 
-function authority() {
-  return {
-    producer_id: PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
-    cohort_id: PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
-    draft_only: true,
-    screening_only: true,
-    ready: false,
-    mass: false,
-    promotion: false,
-    live_orders: false,
-    go: false,
-    not_a_pass: true,
-  };
-}
-
 async function put(
   fixed: Awaited<ReturnType<typeof fixture>>,
   key: string,
   document: unknown,
 ) {
-  const bytes = new TextEncoder().encode(
-    typeof document === "string" ? document : JSON.stringify(document),
-  );
+  const bytes =
+    typeof document === "string" || document instanceof Uint8Array
+      ? typeof document === "string"
+        ? new TextEncoder().encode(document)
+        : document
+      : new TextEncoder().encode(JSON.stringify(document));
   const digest = `sha256:${await sha256Hex(bytes)}`;
   const response = await personalVolAmPmPanelR2Outbound(
     new Request(`http://research.r2/${key}`, {
@@ -249,7 +238,7 @@ async function put(
 }
 
 describe("vol AM/PM panel writer R2 capability", () => {
-  it("serves admitted sidecar evidence and rejects unlisted keys", async () => {
+  it("serves admitted sidecar evidence and rejects unlisted snapshot manifests", async () => {
     const fixed = await fixture();
     const allowed = await personalVolAmPmPanelR2Outbound(
       new Request(`http://research.r2/${sidecarKey}`, { headers: fixed.headers }),
@@ -257,6 +246,13 @@ describe("vol AM/PM panel writer R2 capability", () => {
       sidecarKey,
     );
     expect(allowed.status).toBe(200);
+    const snapshotManifest = fixed.input.selection.manifest.key;
+    const deniedManifest = await personalVolAmPmPanelR2Outbound(
+      new Request(`http://research.r2/${snapshotManifest}`, { headers: fixed.headers }),
+      { STRUCTURED_BUCKET: fixed.mem.asBucket() },
+      snapshotManifest,
+    );
+    expect(deniedManifest.status).toBe(403);
     const denied = await personalVolAmPmPanelR2Outbound(
       new Request("http://research.r2/research/mass_eval/panels_cache/secret.json", {
         headers: fixed.headers,
@@ -278,19 +274,8 @@ describe("vol AM/PM panel writer R2 capability", () => {
     expect(response.status).toBe(409);
   });
 
-  it("requires content-addressed children before the terminal and replays matching bodies", async () => {
+  it("streams a content-addressed panel without parsing it and verifies children by HEAD", async () => {
     const fixed = await fixture();
-    const membership = {
-      schema_version: "personal-vol-ratio-am-pm-membership/v1",
-      codes: ["13010"],
-    };
-    const membershipDigest = `sha256:${await sha256Hex(
-      new TextEncoder().encode(JSON.stringify(membership)),
-    )}`;
-    const membershipKey = personalVolAmPmPanelObjectKey(membershipDigest);
-    const membershipOk = await put(fixed, membershipKey, membership);
-    expect(membershipOk.response.status).toBe(201);
-
     const periods: Record<string, unknown> = {};
     for (const period of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS) {
       const panel = {
@@ -307,28 +292,14 @@ describe("vol AM/PM panel writer R2 capability", () => {
         panel,
       );
       expect([201, 200]).toContain(panelPut.response.status);
-      const panelKey = personalVolAmPmPanelObjectKey(panelPut.digest);
-      expect(
-        (await put(fixed, personalVolAmPmStablePanelKey(period.period_id), panel)).response.status,
-      ).toBe(201);
-      const mask = { schema_version: PERSONAL_VOL_AM_PM_COMMON_VALID_SCHEMA, rows: [] };
-      const maskPut = await put(
-        fixed,
-        personalVolAmPmPanelObjectKey(
-          `sha256:${await sha256Hex(new TextEncoder().encode(JSON.stringify(mask)))}`,
-        ),
-        mask,
-      );
-      expect([201, 200]).toContain(maskPut.response.status);
-      const maskKey = personalVolAmPmPanelObjectKey(maskPut.digest);
       periods[period.period_id] = {
-        panel_key: panelKey,
+        panel_key: personalVolAmPmPanelObjectKey(panelPut.digest),
         panel_sha256: panelPut.digest,
-        stable_key: personalVolAmPmStablePanelKey(period.period_id),
-        common_valid_key: maskKey,
-        common_valid_sha256: maskPut.digest,
+        panel_size: panelPut.bytes.byteLength,
+        common_valid_sha256: digestDigit("c"),
       };
     }
+    expect(fixed.mem.parsedBodies).toBe(0);
 
     const terminal = {
       schema_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA,
@@ -337,16 +308,12 @@ describe("vol AM/PM panel writer R2 capability", () => {
       job_id: JOB_ID,
       runner_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
       input_manifest_digest: fixed.inputDigest,
-      membership: { digest: membershipDigest, key: membershipKey },
+      producer_id: PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
+      cohort_id: PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
+      go: false,
+      membership: { codes: ["13010"], digest: digestDigit("a"), count: 1 },
       periods,
-      ...authority(),
     };
-    const tooSoon = await put(
-      fixed,
-      personalVolAmPmPanelBuildTerminalKey(JOB_ID),
-      { ...terminal, membership: { digest: digestDigit("c"), key: personalVolAmPmPanelObjectKey(digestDigit("c")) } },
-    );
-    expect(tooSoon.response.status).toBe(409);
     const created = await put(fixed, personalVolAmPmPanelBuildTerminalKey(JOB_ID), terminal);
     expect(created.response.status).toBe(201);
     expect(fixed.mem.writes.at(-1)).toBe(personalVolAmPmPanelBuildTerminalKey(JOB_ID));
@@ -357,5 +324,65 @@ describe("vol AM/PM panel writer R2 capability", () => {
       error: "different",
     });
     expect(conflict.response.status).toBe(409);
+  });
+
+  it("rejects a child write after a timeout terminal and allows a corrected rebuild without a stable alias", async () => {
+    const fixed = await fixture();
+    const timeout = {
+      schema_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA,
+      status: "FAILED",
+      kind: PERSONAL_VOL_AM_PM_PANEL_WRITER_KIND,
+      job_id: JOB_ID,
+      runner_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
+      input_manifest_digest: fixed.inputDigest,
+      producer_id: PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
+      cohort_id: PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
+      go: false,
+      error: "timeout",
+    };
+    expect(
+      (await put(fixed, personalVolAmPmPanelBuildTerminalKey(JOB_ID), timeout)).response.status,
+    ).toBe(201);
+    const late = {
+      schema_version: PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
+      period_id: "y2021_full",
+    };
+    const lateBytes = new TextEncoder().encode(JSON.stringify(late));
+    const lateDigest = `sha256:${await sha256Hex(lateBytes)}`;
+    const afterTerminal = await put(
+      fixed,
+      personalVolAmPmPanelObjectKey(lateDigest),
+      late,
+    );
+    expect(afterTerminal.response.status).toBe(409);
+
+    const other = await fixture();
+    other.input.job_id = "vol-panel-rebuild";
+    const rebuilt = JSON.parse(JSON.stringify(other.input)) as PersonalVolAmPmPanelWriterInputManifest;
+    rebuilt.job_id = "vol-panel-rebuild";
+    const rebuiltBytes = new TextEncoder().encode(JSON.stringify(rebuilt));
+    const rebuiltDigest = `sha256:${await sha256Hex(rebuiltBytes)}`;
+    other.mem.seed(personalVolAmPmPanelBuildInputKey("vol-panel-rebuild"), rebuiltBytes, "input");
+    const panel = { schema_version: PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION, period_id: "y2021_full", note: "corrected" };
+    const panelBytes = new TextEncoder().encode(JSON.stringify(panel));
+    const panelDigest = `sha256:${await sha256Hex(panelBytes)}`;
+    const headers = {
+      "x-vol-panel-job-id": "vol-panel-rebuild",
+      "x-vol-panel-input-manifest-key": personalVolAmPmPanelBuildInputKey("vol-panel-rebuild"),
+      "x-vol-panel-input-manifest-digest": rebuiltDigest,
+      "content-length": String(panelBytes.byteLength),
+      "x-content-sha256": panelDigest,
+    };
+    const response = await personalVolAmPmPanelR2Outbound(
+      new Request(`http://research.r2/${personalVolAmPmPanelObjectKey(panelDigest)}`, {
+        method: "PUT",
+        headers,
+        body: panelBytes,
+      }),
+      { STRUCTURED_BUCKET: other.mem.asBucket() },
+      personalVolAmPmPanelObjectKey(panelDigest),
+    );
+    expect(response.status).toBe(201);
+    expect(personalVolAmPmPanelObjectKey(panelDigest)).not.toContain("/panels/y2021_full.json");
   });
 });

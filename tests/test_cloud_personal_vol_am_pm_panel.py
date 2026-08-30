@@ -196,9 +196,7 @@ def _snapshot_lock(job_id: str, period_id: str, start: str, end: str, gzip_bytes
             "sha256": gzip_digest,
             "raw_sha256": raw_digest,
             "gzip_sha256": gzip_digest,
-            "content_sha256": gzip_digest,
         },
-        "calendar_start": start,
     }
 
 
@@ -234,11 +232,6 @@ def _input_manifest(store: dict[str, bytes], dates: list[str]) -> dict[str, Any]
             "etag": "side",
             "size": len(sidecar_bytes),
             "sha256": _digest(sidecar_bytes),
-            "dataset": job.OPTION_DATASET,
-            "version": job.SUPPORTED_OPTION_VERSIONS[-1],
-            "use": "opt225_regime_sidecar_only",
-            "bars_copied": False,
-            "calendar_copied": False,
         }
     return {
         "schema_version": job.INPUT_SCHEMA,
@@ -280,13 +273,23 @@ def test_vol_panel_job_fields_are_closed() -> None:
         )
 
 
-def test_sidecar_extract_ignores_legacy_bars_and_calendar() -> None:
-    extracted = job._extract_opt225_regime(_sidecar())
+def test_sidecar_extract_is_structural_n225_only() -> None:
+    sidecar = _sidecar()
+    sidecar["opt225_regime"]["individual_stock_iv_used"] = False
+    extracted = job._extract_opt225_regime(sidecar)
     assert extracted["source"]["dataset"] == job.OPTION_DATASET
     assert "bars" not in extracted
     assert "calendar" not in extracted
     with pytest.raises(RuntimeError, match="must be rebuilt"):
         job._extract_opt225_regime({"bars": {"A": [["2021-01-04", 1]]}})
+    individual = _sidecar()
+    individual["opt225_regime"]["source"]["dataset"] = "equity_option_iv"
+    with pytest.raises(RuntimeError, match="must be rebuilt"):
+        job._extract_opt225_regime(individual)
+    mapped = _sidecar()
+    mapped["opt225_regime"]["by_code"] = {"13010": {"2021-01-04": 1.0}}
+    with pytest.raises(RuntimeError, match="must be rebuilt"):
+        job._extract_opt225_regime(mapped)
 
 
 def test_execute_writes_children_before_terminal_and_recomputes_common_mask(
@@ -325,17 +328,20 @@ def test_execute_writes_children_before_terminal_and_recomputes_common_mask(
     assert panel["session_calendar"]["dataset"] == "markets_calendar"
     assert panel["opt225_regime"]["source"]["dataset"] == job.OPTION_DATASET
     assert set(panel["bars"]["13010"][0]) == {"date", "MAdjC", "AAdjC"}
-    mask = json.loads(store[terminal["periods"][period]["common_valid_key"]])
+    assert "equity_universe" not in panel
+    assert terminal["periods"][period]["panel_key"].endswith(".json")
+    assert "stable_key" not in terminal["periods"][period]
+    assert "common_valid_key" not in terminal["periods"][period]
     recomputed = job._common_valid_rows(
         panel["session_calendar"]["dates"],
-        list(panel["bars"]),
+        panel["codes"],
         panel["bars"],
         panel["opt225_regime"],
     )
     assert _digest(_canonical({"rows": recomputed, "schema_version": job.COMMON_VALID_SCHEMA})) == terminal[
         "periods"
     ][period]["common_valid_sha256"]
-    assert mask["schema_version"] == job.COMMON_VALID_SCHEMA
+    assert terminal["membership"]["codes"] == panel["codes"]
 
 
 def test_missing_typed_ma_columns_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -431,3 +437,132 @@ def test_job_manager_409_then_verified_get(monkeypatch: pytest.MonkeyPatch) -> N
     assert puts >= 1
     assert gets >= 1
     assert body
+
+
+def test_unlinks_each_snapshot_before_the_next_hydrate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(job, "EVAL_UNIVERSE_POOL", ("13010", "72030"))
+    monkeypatch.setattr(job, "UNIVERSE_MIN_BAR_DAYS", 2)
+    dates = [f"2019-01-{index:02d}" for index in range(4, 16)] + [
+        f"2021-01-{index:02d}" for index in range(4, 16)
+    ]
+    store: dict[str, bytes] = {}
+    manifest = _input_manifest(store, dates)
+    input_bytes = _canonical(manifest)
+    spec = _spec(manifest, _digest(input_bytes))
+    store[spec.input_manifest_key] = input_bytes
+    seen: list[tuple[str, list[str]]] = []
+    original = job.with_locked_snapshot
+
+    def wrapped(item, lock, work, *, opener, extract):
+        leftovers = sorted(path.name for path in work.iterdir() if path.is_file())
+        seen.append((str(lock["period_id"]), leftovers))
+        return original(item, lock, work, opener=opener, extract=extract)
+
+    monkeypatch.setattr(job, "with_locked_snapshot", wrapped)
+
+    def opener(_spec, key):
+        return _Response(store[key])
+
+    def uploader(_spec, key, data):
+        store[key] = data
+        return _digest(data)
+
+    terminal = job.execute_vol_am_pm_panel_job(spec, opener=opener, uploader=uploader)
+    assert terminal["status"] == "COMPLETED"
+    assert seen[0][0] == "y2019_selection"
+    for _period_id, leftovers in seen[1:]:
+        assert leftovers == []
+
+
+def test_zero_row_member_stays_in_exact_membership(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(job, "EVAL_UNIVERSE_POOL", ("13010", "72030"))
+    monkeypatch.setattr(job, "UNIVERSE_MIN_BAR_DAYS", 2)
+    dates = [f"2019-01-{index:02d}" for index in range(4, 16)] + [
+        f"2021-01-{index:02d}" for index in range(4, 16)
+    ]
+    store: dict[str, bytes] = {}
+    manifest = _input_manifest(store, dates)
+    for period in job.EVALUATION_PERIODS:
+        raw = _sqlite_bytes(codes=["13010"], dates=dates)
+        compressed = _gzip(raw)
+        lock = _snapshot_lock(
+            f"snap-{period['period_id']}",
+            period["period_id"],
+            period["period_start"],
+            period["period_end"],
+            compressed,
+            raw,
+        )
+        manifest["periods"][period["period_id"]] = lock
+        store[lock["snapshot"]["key"]] = compressed
+    input_bytes = _canonical(manifest)
+    spec = _spec(manifest, _digest(input_bytes))
+    store[spec.input_manifest_key] = input_bytes
+
+    def opener(_spec, key):
+        return _Response(store[key])
+
+    def uploader(_spec, key, data):
+        store[key] = data
+        return _digest(data)
+
+    terminal = job.execute_vol_am_pm_panel_job(spec, opener=opener, uploader=uploader)
+    assert terminal["status"] == "COMPLETED"
+    assert terminal["membership"]["codes"] == ["13010", "72030"]
+    period = job.EVALUATION_PERIODS[0]["period_id"]
+    panel = json.loads(store[terminal["periods"][period]["panel_key"]])
+    assert panel["codes"] == ["13010", "72030"]
+    assert panel["bars"]["13010"]
+    assert panel["bars"]["72030"] == []
+    rows = job._common_valid_rows(
+        panel["session_calendar"]["dates"],
+        panel["codes"],
+        panel["bars"],
+        panel["opt225_regime"],
+    )
+    a_only = job._common_valid_rows(
+        panel["session_calendar"]["dates"],
+        ["13010"],
+        {"13010": panel["bars"]["13010"]},
+        panel["opt225_regime"],
+    )
+    assert _digest(_canonical({"rows": rows, "schema_version": job.COMMON_VALID_SCHEMA})) == terminal[
+        "periods"
+    ][period]["common_valid_sha256"]
+    assert _digest(_canonical({"rows": rows, "schema_version": job.COMMON_VALID_SCHEMA})) != _digest(
+        _canonical({"rows": a_only, "schema_version": job.COMMON_VALID_SCHEMA})
+    )
+    assert all(not row["common_valid"] for row in rows)
+
+
+def test_definitive_terminal_conflict_shuts_the_container_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dates = [f"2019-01-{index:02d}" for index in range(4, 8)]
+    store: dict[str, bytes] = {}
+    manifest = _input_manifest(store, dates)
+    input_bytes = _canonical(manifest)
+    spec = _spec(manifest, _digest(input_bytes))
+    shutdown: list[bool] = []
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del key, data, spec, content_digest, extra_headers
+        raise RuntimeError("R2 upload returned 409")
+
+    def reader(_item):
+        raise service.TerminalReadDenied("immutable terminal conflict")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        terminal_uploader=uploader,
+        terminal_reader=reader,
+        retry_schedule=(30.0, 60.0, 120.0),
+        on_terminal=lambda: shutdown.append(True),
+        max_job_seconds=180 * 60,
+    )
+    manager.submit(spec)
+    deadline = time.monotonic() + 1
+    while not shutdown and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert shutdown == [True]
+    assert manager._retry_timer is None

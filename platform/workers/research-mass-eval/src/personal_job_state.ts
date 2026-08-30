@@ -115,15 +115,17 @@ export function submittedStateDocument(input: {
   now?: Date;
   deploymentId: string;
   runnerVersion?: string;
+  ttlMs?: number;
 }): PersonalJobState {
   const now = input.now ?? new Date();
+  const ttlMs = input.ttlMs ?? PERSONAL_JOB_TTL_MS;
   return {
     job_id: input.jobId,
     request_digest: input.requestDigest,
     kind: input.kind,
     status: "SUBMITTED",
     submitted_at: now.toISOString(),
-    expires_at: new Date(now.getTime() + PERSONAL_JOB_TTL_MS).toISOString(),
+    expires_at: new Date(now.getTime() + ttlMs).toISOString(),
     runner_version: input.runnerVersion ?? PERSONAL_RESEARCH_RUNNER_VERSION,
     deployment_id: input.deploymentId,
   };

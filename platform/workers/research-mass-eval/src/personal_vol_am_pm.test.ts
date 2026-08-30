@@ -27,6 +27,7 @@ import {
   PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY,
   PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY,
   PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT,
+  equityCodes,
   isLegacyPersonalVolPanel,
   loadPersonalVolAmPmPanels,
   parsePersonalVolAmPmPanel,
@@ -49,6 +50,7 @@ import {
   PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
   personalVolAmPmCommonValidDigest,
+  personalVolAmPmMembershipDigest,
   personalVolAmPmPanelBuildTerminalKey,
   personalVolAmPmPanelObjectKey,
 } from "./personal_vol_am_pm_panel_writer_contract";
@@ -91,6 +93,7 @@ async function amPmPanel(
       dates,
       dates_digest: await personalVolAmPmSessionDatesDigest(dates),
     },
+    codes: ["A", "B"],
     bars: {
       A: dates.map((date, index) => ({
         date,
@@ -212,6 +215,7 @@ async function seedPanelBuild(
   jobId: string,
   panels: PersonalVolAmPmPanel[],
   mutateTerminal?: (terminal: Record<string, unknown>) => void,
+  membership = ["A", "B"],
 ): Promise<void> {
   const periods: Record<string, unknown> = {};
   for (const panel of panels) {
@@ -225,6 +229,7 @@ async function seedPanelBuild(
     periods[panel.period_id] = {
       panel_key: key,
       panel_sha256: digest,
+      panel_size: bytes.byteLength,
       common_valid_sha256: maskDigest,
     };
   }
@@ -234,6 +239,11 @@ async function seedPanelBuild(
     producer_id: PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
     job_id: jobId,
     cohort_id: PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
+    membership: {
+      codes: membership,
+      digest: await personalVolAmPmMembershipDigest(membership),
+      count: membership.length,
+    },
     periods,
   };
   mutateTerminal?.(terminal);
@@ -334,7 +344,8 @@ describe("AM/PM panel schema", () => {
     const parsed = parsePersonalVolAmPmPanel(withAdjC);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    expect(parsed.value.bars.A).toBeUndefined();
+    expect(parsed.value.bars.A).toEqual([]);
+    expect(parsed.value.codes).toContain("A");
   });
 
   it("preserves a finite MAdjC when AAdjC is missing", async () => {
@@ -951,6 +962,69 @@ describe("AM/PM immutable artifact", () => {
     await expect(
       loadPersonalVolAmPmPanelsFromBuildJob(mem.asBucket(), PANEL_BUILD_JOB_ID),
     ).rejects.toMatchObject({ code: "common_valid_mask_tamper_rejected" });
+  });
+
+  it("keeps a zero-row frozen member and refuses an A-only common mask", async () => {
+    const fixture = await amPmPanel();
+    const parsed = parsePersonalVolAmPmPanel(
+      { ...fixture, bars: { A: fixture.bars.A } },
+      ["A", "B"],
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.codes).toEqual(["A", "B"]);
+    expect(parsed.value.bars.B).toEqual([]);
+    const fullMask = personalVolAmPmCommonValidMask(parsed.value);
+    const aOnly = parsePersonalVolAmPmPanel({
+      ...fixture,
+      codes: ["A"],
+      bars: { A: fixture.bars.A },
+    });
+    expect(aOnly.ok).toBe(true);
+    if (!aOnly.ok) return;
+    const aMask = personalVolAmPmCommonValidMask(aOnly.value);
+    expect(await personalVolAmPmCommonValidDigest(fullMask)).not.toBe(
+      await personalVolAmPmCommonValidDigest(aMask),
+    );
+    expect(fullMask.every((row) => !row.common_valid)).toBe(true);
+
+    const mem = new MemR2();
+    const panels = await Promise.all(
+      PERSONAL_VOL_PERIODS.map(async (period) => {
+        const panel = await panelForPeriod(period);
+        panel.codes = ["A", "B"];
+        panel.bars = { A: panel.bars.A, B: [] };
+        return panel;
+      }),
+    );
+    await seedPanelBuild(mem, PANEL_BUILD_JOB_ID, panels, undefined, ["A", "B"]);
+    const loaded = await loadPersonalVolAmPmPanelsFromBuildJob(
+      mem.asBucket(),
+      PANEL_BUILD_JOB_ID,
+    );
+    expect(equityCodes(loaded.panels[0]!)).toEqual(["A", "B"]);
+    expect(loaded.comparisonNotEvaluated).toBe(true);
+    await expect(
+      loadPersonalVolAmPmPanelsFromBuildJob(
+        mem.asBucket(),
+        PANEL_BUILD_JOB_ID,
+      ).then(async (again) => {
+        const aOnlyPanels = again.panels.map((panel) => ({
+          ...panel,
+          codes: ["A"],
+          bars: { A: panel.bars.A },
+        }));
+        const aOnlyDigest = await personalVolAmPmCommonValidDigest(
+          personalVolAmPmCommonValidMask(aOnlyPanels[0]!),
+        );
+        expect(aOnlyDigest).not.toBe(
+          await personalVolAmPmCommonValidDigest(
+            personalVolAmPmCommonValidMask(again.panels[0]!),
+          ),
+        );
+        return again;
+      }),
+    ).resolves.toMatchObject({ comparisonNotEvaluated: true });
   });
 
   it("marks every exact-four candidate and the control unevaluated on a shared hole", async () => {

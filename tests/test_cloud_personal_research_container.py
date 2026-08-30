@@ -1773,6 +1773,7 @@ def test_conflicting_terminal_shuts_down_fail_closed() -> None:
     manager.submit(spec)
     assert terminal.wait(1)
     assert manager._shutdown_notified is True
+    assert manager._retry_timer is None
     assert manager.status(spec.job_id)["status"] == "FAILED"
 
 
@@ -1974,6 +1975,7 @@ def test_production_mismatched_terminal_shuts_down_fail_closed(monkeypatch) -> N
     manager.submit(spec)
     assert terminal.wait(1)
     assert manager._shutdown_notified is True
+    assert manager._retry_timer is None
     assert manager.status(spec.job_id)["status"] == "FAILED"
 
 

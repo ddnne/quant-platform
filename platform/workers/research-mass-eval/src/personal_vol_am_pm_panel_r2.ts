@@ -1,11 +1,9 @@
 import { putBytesCreateOnly } from "./http";
 import {
-  PERSONAL_VOL_AM_PM_COMMON_VALID_SCHEMA,
   PERSONAL_VOL_AM_PM_EVALUATION_PERIODS,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_INPUT_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES,
-  PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_MASK_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_TERMINAL_MAX_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_INPUT_SCHEMA,
@@ -17,8 +15,6 @@ import {
   personalVolAmPmPanelBuildInputKey,
   personalVolAmPmPanelBuildTerminalKey,
   personalVolAmPmPanelObjectKey,
-  personalVolAmPmStablePanelKey,
-  type PersonalVolAmPmEvaluationPeriodId,
   type PersonalVolAmPmPanelWriterInputManifest,
 } from "./personal_vol_am_pm_panel_writer_contract";
 import { PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION } from "./personal_vol_am_pm_panel";
@@ -69,49 +65,61 @@ function contentLength(request: Request, maximum: number): number | null {
     : null;
 }
 
-function listedKeys(manifest: PersonalVolAmPmPanelWriterInputManifest): Set<string> {
-  const keys = new Set<string>([
-    manifest.selection.manifest.key,
-    manifest.selection.snapshot.key,
-  ]);
+function digestBytes(digest: string): Uint8Array {
+  const hex = digest.slice("sha256:".length);
+  const bytes = new Uint8Array(32);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+function checksumMatches(object: R2Object, digest: string): boolean {
+  const actual = object.checksums?.sha256;
+  if (!actual) return object.customMetadata?.sha256 === digest;
+  const expected = digestBytes(digest);
+  const actualBytes = new Uint8Array(actual);
+  return (
+    actualBytes.byteLength === expected.byteLength &&
+    actualBytes.every((value, index) => value === expected[index])
+  );
+}
+
+function headMatches(object: R2Object, digest: string, size?: number): boolean {
+  if (object.customMetadata?.sha256 && object.customMetadata.sha256 !== digest) {
+    return false;
+  }
+  if (size !== undefined && object.size !== size) return false;
+  return checksumMatches(object, digest);
+}
+
+function listedRef(
+  manifest: PersonalVolAmPmPanelWriterInputManifest,
+  key: string,
+): { etag: string; size: number } | null {
+  if (key === manifest.selection.snapshot.key) return manifest.selection.snapshot;
   for (const period of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS) {
     const locked = manifest.periods[period.period_id];
     const sidecar = manifest.option_sidecars[period.period_id];
-    keys.add(locked.manifest.key);
-    keys.add(locked.snapshot.key);
-    keys.add(sidecar.source_key);
+    if (key === locked.snapshot.key) return locked.snapshot;
+    if (key === sidecar.source_key) return { etag: sidecar.etag, size: sidecar.size };
   }
-  return keys;
+  return null;
 }
 
 function inputShape(
   parsed: unknown,
   expected: Identity,
 ): parsed is PersonalVolAmPmPanelWriterInputManifest {
-  if (!isObject(parsed) || !isObject(parsed.authority) || !isObject(parsed.selection)) {
-    return false;
-  }
-  const authority = parsed.authority;
   return (
+    isObject(parsed) &&
     parsed.schema_version === PERSONAL_VOL_AM_PM_PANEL_WRITER_INPUT_SCHEMA &&
     parsed.producer_id === PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID &&
     parsed.job_id === expected.jobId &&
     parsed.cohort_id === PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID &&
     parsed.runner_version === PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION &&
     parsed.panel_schema === PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION &&
-    authority.draft_only === true &&
-    authority.screening_only === true &&
-    authority.ready === false &&
-    authority.mass === false &&
-    authority.promotion === false &&
-    authority.live_orders === false &&
-    authority.go === false &&
-    authority.single_stock_option_iv === "FORBIDDEN" &&
-    authority.cash_index_executable_fill === false &&
-    authority.adjc_fallback === false &&
-    authority.ffill === false &&
-    authority.synthetic_calendar === false &&
-    authority.caller_provenance === false &&
+    isObject(parsed.selection) &&
     isObject(parsed.periods) &&
     isObject(parsed.option_sidecars)
   );
@@ -130,8 +138,7 @@ async function readInput(
     return null;
   }
   const bytes = new Uint8Array(await object.arrayBuffer());
-  const digest = `sha256:${await sha256Hex(bytes)}`;
-  if (digest !== expected.inputDigest) return null;
+  if (`sha256:${await sha256Hex(bytes)}` !== expected.inputDigest) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(new TextDecoder().decode(bytes));
@@ -139,28 +146,6 @@ async function readInput(
     return null;
   }
   return inputShape(parsed, expected) ? { manifest: parsed, bytes } : null;
-}
-
-function listedRef(
-  manifest: PersonalVolAmPmPanelWriterInputManifest,
-  key: string,
-): { etag: string; size: number } | null {
-  if (key === manifest.selection.snapshot.key) {
-    return manifest.selection.snapshot;
-  }
-  if (key === manifest.selection.manifest.key) {
-    return manifest.selection.manifest;
-  }
-  for (const period of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS) {
-    const locked = manifest.periods[period.period_id];
-    const sidecar = manifest.option_sidecars[period.period_id];
-    if (key === locked.snapshot.key) return locked.snapshot;
-    if (key === locked.manifest.key) return locked.manifest;
-    if (key === sidecar.source_key) {
-      return { etag: sidecar.etag, size: sidecar.size };
-    }
-  }
-  return null;
 }
 
 async function getInput(
@@ -181,21 +166,21 @@ async function getInput(
       },
     });
   }
-  if (!listedKeys(loaded.manifest).has(key)) {
-    return json({ error: "vol panel input key not listed" }, 403);
-  }
   const reference = listedRef(loaded.manifest, key);
   if (!reference) return json({ error: "vol panel input key not listed" }, 403);
   const maximum = isPersonalResearchSnapshotKey(key)
     ? 4 * 1024 * 1024 * 1024
     : PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES;
+  const object =
+    request.method === "HEAD"
+      ? await env.STRUCTURED_BUCKET.head(key)
+      : await env.STRUCTURED_BUCKET.get(key);
+  if (!object) return json({ error: "vol panel input missing" }, 404);
+  if (object.etag !== reference.etag || object.size !== reference.size) {
+    return json({ error: "vol panel input changed after admission" }, 409);
+  }
+  if (object.size > maximum) return json({ error: "vol panel input size denied" }, 403);
   if (request.method === "HEAD") {
-    const object = await env.STRUCTURED_BUCKET.head(key);
-    if (!object) return json({ error: "vol panel input missing" }, 404);
-    if (object.etag !== reference.etag || object.size !== reference.size) {
-      return json({ error: "vol panel input changed after admission" }, 409);
-    }
-    if (object.size > maximum) return json({ error: "vol panel input size denied" }, 403);
     return new Response(null, {
       status: 200,
       headers: {
@@ -204,30 +189,21 @@ async function getInput(
       },
     });
   }
-  const object = await env.STRUCTURED_BUCKET.get(key);
-  if (!object) return json({ error: "vol panel input missing" }, 404);
-  if (object.etag !== reference.etag || object.size !== reference.size) {
-    return json({ error: "vol panel input changed after admission" }, 409);
-  }
-  if (object.size > maximum) return json({ error: "vol panel input size denied" }, 403);
   const headers = new Headers({
     "content-length": String(object.size),
     etag: object.httpEtag,
   });
   object.writeHttpMetadata(headers);
-  return new Response(object.body, { status: 200, headers });
+  return new Response((object as R2ObjectBody).body, { status: 200, headers });
 }
 
 function outputKind(
   key: string,
   jobId: string,
   digest: string,
-): "object" | "stable-panel" | "manifest" | null {
+): "object" | "manifest" | null {
   if (key === personalVolAmPmPanelBuildTerminalKey(jobId)) return "manifest";
   if (key === personalVolAmPmPanelObjectKey(digest)) return "object";
-  for (const period of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS) {
-    if (key === personalVolAmPmStablePanelKey(period.period_id)) return "stable-panel";
-  }
   return null;
 }
 
@@ -235,30 +211,8 @@ function authority(document: Record<string, unknown>): boolean {
   return (
     document.producer_id === PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID &&
     document.cohort_id === PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID &&
-    document.draft_only === true &&
-    document.screening_only === true &&
-    document.ready === false &&
-    document.mass === false &&
-    document.promotion === false &&
-    document.live_orders === false &&
-    document.go === false &&
-    document.not_a_pass === true
+    document.go === false
   );
-}
-
-async function existingMatches(
-  bucket: R2Bucket,
-  key: string,
-  digest: string,
-  maximum: number,
-): Promise<boolean> {
-  const object = await bucket.get(key);
-  if (!object || object.size > maximum) return false;
-  if (object.customMetadata?.sha256 && object.customMetadata.sha256 !== digest) {
-    return false;
-  }
-  const bytes = new Uint8Array(await object.arrayBuffer());
-  return `sha256:${await sha256Hex(bytes)}` === digest;
 }
 
 async function completedChildrenMatch(
@@ -266,60 +220,27 @@ async function completedChildrenMatch(
   parsed: Record<string, unknown>,
 ): Promise<boolean> {
   if (!isObject(parsed.periods) || !isObject(parsed.membership)) return false;
-  const membershipDigest = parsed.membership.digest;
-  if (
-    typeof membershipDigest !== "string" ||
-    !isPersonalVolAmPmPanelDigest(membershipDigest)
-  ) {
-    return false;
-  }
-  if (
-    !(await existingMatches(
-      env.STRUCTURED_BUCKET,
-      personalVolAmPmPanelObjectKey(membershipDigest),
-      membershipDigest,
-      PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_MASK_BYTES,
-    ))
-  ) {
-    return false;
-  }
+  const codes = parsed.membership.codes;
+  if (!Array.isArray(codes) || codes.length < 1) return false;
   for (const period of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS) {
     const row = parsed.periods[period.period_id];
     if (!isObject(row)) return false;
     const panelDigest = row.panel_sha256;
-    const maskDigest = row.common_valid_sha256;
+    const panelSize = row.panel_size;
     if (
       typeof panelDigest !== "string" ||
-      typeof maskDigest !== "string" ||
       !isPersonalVolAmPmPanelDigest(panelDigest) ||
-      !isPersonalVolAmPmPanelDigest(maskDigest) ||
-      row.panel_key !== personalVolAmPmPanelObjectKey(panelDigest) ||
-      row.common_valid_key !== personalVolAmPmPanelObjectKey(maskDigest) ||
-      row.stable_key !== personalVolAmPmStablePanelKey(period.period_id)
+      typeof panelSize !== "number" ||
+      !Number.isInteger(panelSize) ||
+      panelSize < 1 ||
+      row.panel_key !== personalVolAmPmPanelObjectKey(panelDigest)
     ) {
       return false;
     }
-    const [panelOk, stableOk, maskOk] = await Promise.all([
-      existingMatches(
-        env.STRUCTURED_BUCKET,
-        personalVolAmPmPanelObjectKey(panelDigest),
-        panelDigest,
-        PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES,
-      ),
-      existingMatches(
-        env.STRUCTURED_BUCKET,
-        personalVolAmPmStablePanelKey(period.period_id),
-        panelDigest,
-        PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES,
-      ),
-      existingMatches(
-        env.STRUCTURED_BUCKET,
-        personalVolAmPmPanelObjectKey(maskDigest),
-        maskDigest,
-        PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_MASK_BYTES,
-      ),
-    ]);
-    if (!panelOk || !stableOk || !maskOk) return false;
+    const head = await env.STRUCTURED_BUCKET.head(
+      personalVolAmPmPanelObjectKey(panelDigest),
+    );
+    if (!head || !headMatches(head, panelDigest, panelSize)) return false;
   }
   return true;
 }
@@ -339,23 +260,24 @@ async function putOutput(
   const maximum =
     kind === "manifest"
       ? PERSONAL_VOL_AM_PM_PANEL_BUILD_TERMINAL_MAX_BYTES
-      : kind === "object" && key.includes(digest)
-        ? PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES
-        : PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES;
+      : PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES;
   const length = contentLength(request, maximum);
   if (length === null || request.body === null) {
     return json({ error: "vol panel output length denied" }, 400);
   }
   const input = await readInput(env, expected);
   if (!input) return json({ error: "vol panel input manifest denied" }, 403);
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength !== length || `sha256:${await sha256Hex(bytes)}` !== digest) {
-    return json({ error: "vol panel output bytes mismatch" }, 400);
+  const terminalKey = personalVolAmPmPanelBuildTerminalKey(expected.jobId);
+  if (kind !== "manifest") {
+    if (await env.STRUCTURED_BUCKET.head(terminalKey)) {
+      return json({ error: "vol panel child after terminal" }, 409);
+    }
   }
-  if (kind === "object" && key !== personalVolAmPmPanelObjectKey(digest)) {
-    return json({ error: "vol panel object key digest mismatch" }, 400);
-  }
-  if (kind === "manifest" || kind === "stable-panel" || kind === "object") {
+  if (kind === "manifest") {
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    if (bytes.byteLength !== length || `sha256:${await sha256Hex(bytes)}` !== digest) {
+      return json({ error: "vol panel output bytes mismatch" }, 400);
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(new TextDecoder().decode(bytes));
@@ -363,64 +285,74 @@ async function putOutput(
       return json({ error: "vol panel output must be JSON" }, 400);
     }
     if (!isObject(parsed)) return json({ error: "vol panel output must be JSON" }, 400);
-    if (kind === "manifest") {
-      if (
-        parsed.schema_version !== PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA ||
-        parsed.job_id !== expected.jobId ||
-        parsed.input_manifest_digest !== expected.inputDigest ||
-        parsed.kind !== PERSONAL_VOL_AM_PM_PANEL_WRITER_KIND ||
-        parsed.runner_version !== PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION ||
-        !authority(parsed) ||
-        (parsed.status !== "COMPLETED" && parsed.status !== "FAILED")
-      ) {
-        return json({ error: "vol panel manifest contract mismatch" }, 400);
-      }
-      if (
-        parsed.status === "COMPLETED" &&
-        !(await completedChildrenMatch(env, parsed))
-      ) {
-        return json({ error: "vol panel manifest children mismatch" }, 409);
-      }
+    if (
+      parsed.schema_version !== PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA ||
+      parsed.job_id !== expected.jobId ||
+      parsed.input_manifest_digest !== expected.inputDigest ||
+      parsed.kind !== PERSONAL_VOL_AM_PM_PANEL_WRITER_KIND ||
+      parsed.runner_version !== PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION ||
+      !authority(parsed) ||
+      (parsed.status !== "COMPLETED" && parsed.status !== "FAILED")
+    ) {
+      return json({ error: "vol panel manifest contract mismatch" }, 400);
     }
-    if (kind === "stable-panel") {
-      if (
-        parsed.schema_version !== PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION ||
-        typeof parsed.period_id !== "string"
-      ) {
-        return json({ error: "vol panel stable body denied" }, 400);
-      }
-      const expectedKey = personalVolAmPmStablePanelKey(
-        parsed.period_id as PersonalVolAmPmEvaluationPeriodId,
-      );
-      if (expectedKey !== key) {
-        return json({ error: "vol panel stable key mismatch" }, 400);
-      }
+    if (
+      parsed.status === "COMPLETED" &&
+      !(await completedChildrenMatch(env, parsed))
+    ) {
+      return json({ error: "vol panel manifest children mismatch" }, 409);
     }
-    if (kind === "object" && parsed.schema_version === PERSONAL_VOL_AM_PM_COMMON_VALID_SCHEMA) {
-      if (bytes.byteLength > PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_MASK_BYTES) {
-        return json({ error: "vol panel mask size denied" }, 400);
-      }
+    const existing = await env.STRUCTURED_BUCKET.head(key);
+    if (existing) {
+      return headMatches(existing, digest, length)
+        ? json({ ok: true, created: false, key })
+        : json({ error: "immutable vol panel output conflict" }, 409);
     }
+    const stored = await putBytesCreateOnly(env.STRUCTURED_BUCKET, key, bytes, {
+      digest,
+      contentType: "application/json; charset=utf-8",
+      customMetadata: {
+        plane: "personal_vol_am_pm_panel_writer",
+        kind,
+        job_id: expected.jobId,
+        input_manifest_digest: expected.inputDigest,
+      },
+    });
+    return stored.conflict
+      ? json({ error: "immutable vol panel output conflict" }, 409)
+      : json({ ok: true, created: stored.created, key }, stored.created ? 201 : 200);
   }
-  if (await existingMatches(env.STRUCTURED_BUCKET, key, digest, maximum)) {
-    return json({ ok: true, created: false, key });
+  const existing = await env.STRUCTURED_BUCKET.head(key);
+  if (existing) {
+    return headMatches(existing, digest, length)
+      ? json({ ok: true, created: false, key })
+      : json({ error: "immutable vol panel output conflict" }, 409);
   }
-  if (await env.STRUCTURED_BUCKET.head(key)) {
-    return json({ error: "immutable vol panel output conflict" }, 409);
+  let put: R2Object | null;
+  try {
+    put = await env.STRUCTURED_BUCKET.put(key, request.body, {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+      customMetadata: {
+        plane: "personal_vol_am_pm_panel_writer",
+        kind,
+        job_id: expected.jobId,
+        input_manifest_digest: expected.inputDigest,
+        sha256: digest,
+        immutable: "true",
+      },
+      sha256: digestBytes(digest),
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+  } catch {
+    return json({ error: "vol panel output checksum rejected" }, 400);
   }
-  const stored = await putBytesCreateOnly(env.STRUCTURED_BUCKET, key, bytes, {
-    digest,
-    contentType: "application/json; charset=utf-8",
-    customMetadata: {
-      plane: "personal_vol_am_pm_panel_writer",
-      kind,
-      job_id: expected.jobId,
-      input_manifest_digest: expected.inputDigest,
-    },
-  });
-  return stored.conflict
-    ? json({ error: "immutable vol panel output conflict" }, 409)
-    : json({ ok: true, created: stored.created, key }, stored.created ? 201 : 200);
+  if (put !== null) {
+    return json({ ok: true, created: true, key }, 201);
+  }
+  const raced = await env.STRUCTURED_BUCKET.head(key);
+  return raced && headMatches(raced, digest, length)
+    ? json({ ok: true, created: false, key })
+    : json({ error: "immutable vol panel output conflict" }, 409);
 }
 
 export function isPersonalVolAmPmPanelOutboundRequest(

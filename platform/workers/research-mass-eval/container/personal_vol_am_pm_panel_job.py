@@ -37,6 +37,16 @@ SUPPORTED_OPTION_VERSIONS = (
     "research-options-225-vol-series/v1.2",
     "research-options-225-vol-series/v1.3",
 )
+INDIVIDUAL_STOCK_DATASETS = frozenset(
+    {
+        "derivatives_bars_daily_options_equity",
+        "equity_option_iv",
+        "individual_stock_iv",
+        "single_stock_option",
+    }
+)
+ALLOWED_REGIME_MAPS = frozenset({"source", "basevol", "atm_iv", "skew", "cm_term_ratio"})
+ALLOWED_SERIES_MAPS = frozenset({"rv_short_by_date", "rv_long_by_date", "rv_abs_by_date"})
 REQUIRED_LOOKBACK = 61
 IV_AVAILABLE_FROM = "2016-07-19"
 SELECTION_START = "2019-01-01"
@@ -140,23 +150,6 @@ def _object_key(digest: str) -> str:
     return f"research/personal/vol-ratio-am-pm-v1/objects/{digest}.json"
 
 
-def _stable_panel_key(period_id: str) -> str:
-    return f"research/personal/vol-ratio-am-pm-v1/panels/{period_id}.json"
-
-
-def _authority() -> dict[str, Any]:
-    return {
-        "draft_only": True,
-        "screening_only": True,
-        "ready": False,
-        "mass": False,
-        "promotion": False,
-        "live_orders": False,
-        "go": False,
-        "not_a_pass": True,
-    }
-
-
 @dataclass(frozen=True, slots=True)
 class PersonalVolAmPmPanelJobSpec:
     cohort_id: str
@@ -227,8 +220,6 @@ class PersonalVolAmPmPanelJobSpec:
         }
 
 
-# The Worker request digest includes the closed snapshot job ids. The Container
-# re-derives against the locked input manifest instead of those caller fields.
 def _request_digest_from_manifest(spec: PersonalVolAmPmPanelJobSpec, manifest: Mapping[str, Any]) -> str:
     selection = manifest["selection"]
     periods = manifest["periods"]
@@ -543,8 +534,7 @@ def _bars_for_codes(
     placeholders = ",".join("?" for _ in codes)
     rows = connection.execute(
         f"""
-        SELECT code, date, morning_adjustment_close, afternoon_adjustment_close,
-               adjustment_close
+        SELECT code, date, morning_adjustment_close, afternoon_adjustment_close
         FROM jquants_daily_bars
         WHERE source='jquants' AND code IN ({placeholders})
         ORDER BY code, date
@@ -581,6 +571,12 @@ def _finite_map(raw: Any) -> dict[str, float]:
     return out
 
 
+def _reject_extra_maps(value: Mapping[str, Any], allowed: frozenset[str]) -> None:
+    for key, item in value.items():
+        if isinstance(item, dict) and key not in allowed:
+            raise RuntimeError(OPTION_REBUILD_ERROR)
+
+
 def _extract_opt225_regime(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict) or "opt225_regime" not in raw:
         raise RuntimeError(OPTION_REBUILD_ERROR)
@@ -592,29 +588,33 @@ def _extract_opt225_regime(raw: Any) -> dict[str, Any]:
         source = {"dataset": bundle.get("dataset"), "version": bundle.get("version")}
     dataset = source.get("dataset")
     version = source.get("version")
+    if dataset in INDIVIDUAL_STOCK_DATASETS:
+        raise RuntimeError(OPTION_REBUILD_ERROR)
     if dataset != OPTION_DATASET or version not in SUPPORTED_OPTION_VERSIONS:
         raise RuntimeError(OPTION_REBUILD_ERROR)
-    blob = json.dumps(bundle, ensure_ascii=True).lower()
-    if "single_stock" in blob or "individual_stock" in blob or "equity_option_iv" in blob:
-        raise RuntimeError(OPTION_REBUILD_ERROR)
+    _reject_extra_maps(bundle, ALLOWED_REGIME_MAPS)
+    extracted: dict[str, Any] = {"source": {"dataset": dataset, "version": version}}
     for field in ("basevol", "atm_iv", "skew"):
         series = bundle.get(field)
         if not isinstance(series, dict):
             raise RuntimeError(OPTION_REBUILD_ERROR)
+        _reject_extra_maps(series, ALLOWED_SERIES_MAPS)
         if not _finite_map(series.get("rv_short_by_date")) or not _finite_map(
             series.get("rv_long_by_date")
         ):
             raise RuntimeError(OPTION_REBUILD_ERROR)
+        extracted[field] = {
+            "rv_short_by_date": _finite_map(series.get("rv_short_by_date")),
+            "rv_long_by_date": _finite_map(series.get("rv_long_by_date")),
+        }
     cm = bundle.get("cm_term_ratio")
-    if not isinstance(cm, dict) or not _finite_map(cm.get("rv_abs_by_date")):
+    if not isinstance(cm, dict):
         raise RuntimeError(OPTION_REBUILD_ERROR)
-    return {
-        "source": {"dataset": dataset, "version": version},
-        "basevol": bundle.get("basevol"),
-        "atm_iv": bundle.get("atm_iv"),
-        "skew": bundle.get("skew"),
-        "cm_term_ratio": bundle.get("cm_term_ratio"),
-    }
+    _reject_extra_maps(cm, ALLOWED_SERIES_MAPS)
+    if not _finite_map(cm.get("rv_abs_by_date")):
+        raise RuntimeError(OPTION_REBUILD_ERROR)
+    extracted["cm_term_ratio"] = {"rv_abs_by_date": _finite_map(cm.get("rv_abs_by_date"))}
+    return extracted
 
 
 def _lookup(series: Mapping[str, Any] | None, date_value: str, field: str) -> float | None:
@@ -736,6 +736,12 @@ def load_input_manifest(
         or parsed.get("schema_version") != INPUT_SCHEMA
         or parsed.get("job_id") != spec.job_id
         or parsed.get("producer_id") != PRODUCER_ID
+        or parsed.get("cohort_id") != COHORT_ID
+        or parsed.get("runner_version") != RUNNER_VERSION
+        or parsed.get("panel_schema") != PANEL_SCHEMA
+        or not isinstance(parsed.get("selection"), dict)
+        or not isinstance(parsed.get("periods"), dict)
+        or not isinstance(parsed.get("option_sidecars"), dict)
     ):
         raise RuntimeError("input manifest identity mismatch")
     if spec.request_digest != _request_digest_from_manifest(spec, parsed):
@@ -743,13 +749,14 @@ def load_input_manifest(
     return parsed
 
 
-def _open_locked_snapshot(
+def with_locked_snapshot(
     spec: PersonalVolAmPmPanelJobSpec,
     lock: Mapping[str, Any],
     work: Path,
     *,
     opener: Callable,
-) -> sqlite3.Connection:
+    extract: Callable[[sqlite3.Connection], Any],
+) -> Any:
     snapshot = lock["snapshot"]
     key = str(snapshot["key"])
     match = _SNAPSHOT_RE.fullmatch(key)
@@ -757,21 +764,28 @@ def _open_locked_snapshot(
         raise RuntimeError("snapshot key is not a v4 gzip object")
     gzip_path = work / f"{lock['period_id']}.sqlite.gz"
     raw_path = work / f"{lock['period_id']}.sqlite"
-    gzip_digest = _download_to_path(
-        spec,
-        key,
-        gzip_path,
-        maximum=MAX_SNAPSHOT_BYTES,
-        opener=opener,
-        expected_digest=str(snapshot["gzip_sha256"]),
-    )
-    if gzip_digest != snapshot["content_sha256"]:
-        raise RuntimeError("snapshot content digest mismatch")
-    _expand_gzip(gzip_path, raw_path, str(snapshot["raw_sha256"]))
-    gzip_path.unlink(missing_ok=True)
-    connection = _open_sqlite(raw_path)
-    _require_v4_manifest(connection)
-    return connection
+    try:
+        gzip_digest = _download_to_path(
+            spec,
+            key,
+            gzip_path,
+            maximum=MAX_SNAPSHOT_BYTES,
+            opener=opener,
+            expected_digest=str(snapshot["gzip_sha256"]),
+        )
+        if gzip_digest != snapshot.get("sha256", snapshot["gzip_sha256"]):
+            raise RuntimeError("snapshot content digest mismatch")
+        _expand_gzip(gzip_path, raw_path, str(snapshot["raw_sha256"]))
+        gzip_path.unlink(missing_ok=True)
+        connection = _open_sqlite(raw_path)
+        try:
+            _require_v4_manifest(connection)
+            return extract(connection)
+        finally:
+            connection.close()
+    finally:
+        gzip_path.unlink(missing_ok=True)
+        raw_path.unlink(missing_ok=True)
 
 
 def execute_vol_am_pm_panel_job(
@@ -784,35 +798,33 @@ def execute_vol_am_pm_panel_job(
         manifest = load_input_manifest(spec, opener=opener)
         with tempfile.TemporaryDirectory(prefix=f"vol-panel-{spec.job_id}-") as raw_root:
             work = Path(raw_root)
-            selection_conn = _open_locked_snapshot(
-                spec, manifest["selection"], work, opener=opener
+            membership = sorted(
+                with_locked_snapshot(
+                    spec,
+                    manifest["selection"],
+                    work,
+                    opener=opener,
+                    extract=_select_2019_membership,
+                )
             )
-            try:
-                membership = _select_2019_membership(selection_conn)
-            finally:
-                selection_conn.close()
-            membership_payload = {
-                "codes": membership,
-                "schema_version": MEMBERSHIP_SCHEMA,
-            }
-            membership_bytes = _canonical_bytes(membership_payload)
-            membership_digest = _sha256(membership_bytes)
-            uploader(spec, _object_key(membership_digest), membership_bytes)
-
+            membership_digest = _sha256(
+                _canonical_bytes({"codes": membership, "schema_version": MEMBERSHIP_SCHEMA})
+            )
             period_out: dict[str, Any] = {}
-            upload = uploader
             for period in EVALUATION_PERIODS:
                 period_id = period["period_id"]
                 lock = manifest["periods"][period_id]
                 sidecar_lock = manifest["option_sidecars"][period_id]
-                connection = _open_locked_snapshot(spec, lock, work, opener=opener)
-                try:
+
+                def _period_extract(connection: sqlite3.Connection, locked=lock) -> tuple:
                     dates, calendar_meta = _calendar_from_snapshot(connection)
-                    if lock["lookback_sessions"] < REQUIRED_LOOKBACK:
+                    if locked["lookback_sessions"] < REQUIRED_LOOKBACK:
                         raise RuntimeError("period snapshot lookback is below 61 sessions")
-                    bars = _bars_for_codes(connection, membership, dates)
-                finally:
-                    connection.close()
+                    return dates, calendar_meta, _bars_for_codes(connection, membership, dates)
+
+                dates, calendar_meta, bars = with_locked_snapshot(
+                    spec, lock, work, opener=opener, extract=_period_extract
+                )
                 with opener(spec, sidecar_lock["source_key"]) as response:
                     sidecar_bytes = _read_bounded(response, MAX_LEGACY_PANEL_BYTES)
                 if _sha256(sidecar_bytes) != sidecar_lock["sha256"]:
@@ -820,7 +832,6 @@ def execute_vol_am_pm_panel_job(
                 sidecar_json = json.loads(sidecar_bytes)
                 if not isinstance(sidecar_json, dict):
                     raise RuntimeError(OPTION_REBUILD_ERROR)
-                # Bars/calendar on the legacy object are ignored on purpose.
                 opt225 = _extract_opt225_regime(sidecar_json)
                 panel = {
                     "schema_version": PANEL_SCHEMA,
@@ -829,73 +840,45 @@ def execute_vol_am_pm_panel_job(
                     "period_start": period["period_start"],
                     "period_end": period["period_end"],
                     "status": "ok",
-                    "source": "personal-vol-ratio-am-pm-panel-writer/v1",
+                    "source": PRODUCER_ID,
                     "temporal_contract": TEMPORAL_CONTRACT,
                     "session_calendar": {
                         **SESSION_CALENDAR_IDENTITY,
                         "dates": dates,
                         "dates_digest": calendar_meta["dates_digest"],
                     },
+                    "codes": membership,
                     "bars": bars,
                     "opt225_regime": opt225,
                     "tradable_hedge": None,
-                    "equity_universe": {
-                        "scope_id": "legacy-liq-large-adv100-2019-v1",
-                        "membership_digest": membership_digest,
-                        "codes": membership,
-                        "selection_reranked": False,
-                    },
-                    "calendar_provenance": {
-                        "facts_digest": calendar_meta["facts_digest"],
-                        "checkpoints": calendar_meta["checkpoints"],
-                    },
-                    "option_sidecar": {
-                        "source_key": sidecar_lock["source_key"],
-                        "etag": sidecar_lock["etag"],
-                        "sha256": sidecar_lock["sha256"],
-                        "dataset": sidecar_lock["dataset"],
-                        "version": sidecar_lock["version"],
-                    },
-                    "snapshot": {
-                        "job_id": lock["job_id"],
-                        "raw_sha256": lock["snapshot"]["raw_sha256"],
-                        "gzip_sha256": lock["snapshot"]["gzip_sha256"],
-                        "content_sha256": lock["snapshot"]["content_sha256"],
-                    },
                 }
                 mask_rows = _common_valid_rows(dates, membership, bars, opt225)
-                mask_payload = {
-                    "rows": mask_rows,
-                    "schema_version": COMMON_VALID_SCHEMA,
-                }
                 panel_bytes = _canonical_bytes(panel)
-                mask_bytes = _canonical_bytes(mask_payload)
-                panel_digest = upload(spec, _object_key(_sha256(panel_bytes)), panel_bytes)
+                panel_digest = uploader(spec, _object_key(_sha256(panel_bytes)), panel_bytes)
                 if panel_digest != _sha256(panel_bytes):
                     raise RuntimeError("panel digest mismatch")
-                upload(spec, _stable_panel_key(period_id), panel_bytes)
-                mask_digest = upload(spec, _object_key(_sha256(mask_bytes)), mask_bytes)
+                mask_digest = _sha256(
+                    _canonical_bytes({"rows": mask_rows, "schema_version": COMMON_VALID_SCHEMA})
+                )
                 period_out[period_id] = {
                     "panel_key": _object_key(panel_digest),
                     "panel_sha256": panel_digest,
-                    "stable_key": _stable_panel_key(period_id),
-                    "common_valid_key": _object_key(mask_digest),
+                    "panel_size": len(panel_bytes),
                     "common_valid_sha256": mask_digest,
-                    "common_valid_schema": COMMON_VALID_SCHEMA,
+                    "common_valid_count": sum(1 for row in mask_rows if row["common_valid"]),
+                    "session_count": len(dates),
                     "session_dates_digest": calendar_meta["dates_digest"],
-                    "calendar_facts_digest": calendar_meta["facts_digest"],
-                    "calendar_checkpoints": calendar_meta["checkpoints"],
                     "option_sidecar": {
                         "source_key": sidecar_lock["source_key"],
                         "etag": sidecar_lock["etag"],
                         "sha256": sidecar_lock["sha256"],
-                        "version": sidecar_lock["version"],
+                        "dataset": opt225["source"]["dataset"],
+                        "version": opt225["source"]["version"],
                     },
                     "snapshot": {
                         "job_id": lock["job_id"],
                         "raw_sha256": lock["snapshot"]["raw_sha256"],
                         "gzip_sha256": lock["snapshot"]["gzip_sha256"],
-                        "content_sha256": lock["snapshot"]["content_sha256"],
                     },
                 }
             terminal = {
@@ -910,14 +893,15 @@ def execute_vol_am_pm_panel_job(
                 "input_manifest_key": spec.input_manifest_key,
                 "input_manifest_digest": spec.input_manifest_digest,
                 "membership": {
+                    "codes": membership,
                     "digest": membership_digest,
-                    "key": _object_key(membership_digest),
                     "count": len(membership),
-                    "selection_reranked": False,
                 },
                 "periods": period_out,
-                "common_valid_schema": COMMON_VALID_SCHEMA,
-                **_authority(),
+                "draft_only": True,
+                "screening_only": True,
+                "go": False,
+                "not_a_pass": True,
             }
     except Exception as error:
         terminal = {
@@ -932,7 +916,10 @@ def execute_vol_am_pm_panel_job(
             "input_manifest_key": spec.input_manifest_key,
             "input_manifest_digest": spec.input_manifest_digest,
             "error": _safe_detail(error),
-            **_authority(),
+            "draft_only": True,
+            "screening_only": True,
+            "go": False,
+            "not_a_pass": True,
         }
     terminal_bytes = _canonical_bytes(terminal)
     uploader(spec, spec.manifest_key, terminal_bytes)
@@ -943,4 +930,5 @@ __all__ = [
     "PersonalVolAmPmPanelJobSpec",
     "VolPanelJobInputError",
     "execute_vol_am_pm_panel_job",
+    "with_locked_snapshot",
 ]

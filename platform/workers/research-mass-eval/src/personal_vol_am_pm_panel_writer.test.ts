@@ -10,10 +10,11 @@ import {
   PERSONAL_VOL_PERIODS,
   PERSONAL_VOL_SOURCE_IDENTITY,
 } from "./personal_vol_research";
+import { PERSONAL_JOB_TTL_MS } from "./personal_job_state";
 import {
   PERSONAL_VOL_AM_PM_EVALUATION_PERIODS,
-  PERSONAL_VOL_AM_PM_OPTION_REBUILD_ERROR,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
+  PERSONAL_VOL_AM_PM_PANEL_TIMEOUT_GRACE_MS,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
   PERSONAL_VOL_AM_PM_SELECTION_PERIOD,
@@ -27,6 +28,7 @@ import {
   buildPersonalVolAmPmPanelInputManifest,
   submitPersonalVolAmPmPanelBuild,
 } from "./personal_vol_am_pm_panel_writer";
+import { sha256Hex } from "./sha256";
 import type { Env } from "./types";
 
 function runnerReadyResponse(): Response {
@@ -95,7 +97,8 @@ class MemoryR2 {
   }
 
   async head(key: string) {
-    return this.get(key);
+    const stored = this.values.get(key);
+    return stored ? this.object(key, stored) : null;
   }
 
   async put(
@@ -187,7 +190,6 @@ async function seedSnapshot(
     raw_sha256: raw,
     gzip_sha256: gzip,
     snapshot_key: snapshotKey,
-    calendar_start: periodStart,
   });
 }
 
@@ -211,6 +213,8 @@ async function seedClosedInputs(mem: MemoryR2, sidecar: Record<string, unknown> 
     0,
   );
   const digits = ["3", "4", "5"] as const;
+  const sidecarBytes = new TextEncoder().encode(JSON.stringify(sidecar));
+  const sidecarDigest = `sha256:${await sha256Hex(sidecarBytes)}`;
   for (const [index, period] of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS.entries()) {
     await seedSnapshot(
       mem,
@@ -220,7 +224,12 @@ async function seedClosedInputs(mem: MemoryR2, sidecar: Record<string, unknown> 
       digits[index]!,
       61,
     );
-    mem.seed(personalVolAmPmLegacyOptionPanelKey(period.period_id), sidecar);
+    mem.seed(
+      personalVolAmPmLegacyOptionPanelKey(period.period_id),
+      sidecarBytes,
+      `etag-${period.period_id}`,
+      { sha256: sidecarDigest },
+    );
   }
 }
 
@@ -248,33 +257,29 @@ describe("closed personal vol AM/PM panel-build request", () => {
     ).toMatchObject({ ok: false });
   });
 
-  it("locks v4 snapshots, typed M/A authority, and N225 sidecar-only evidence", async () => {
+  it("locks v4 snapshots and option keys by HEAD metadata without GET", async () => {
     const mem = new MemoryR2();
-    await seedClosedInputs(mem);
+    const sidecar = optionSidecar();
+    (sidecar.opt225_regime as Record<string, unknown>).individual_stock_iv_used = false;
+    await seedClosedInputs(mem, sidecar);
+    const got: string[] = [];
+    const originalGet = mem.get.bind(mem);
+    mem.get = async (key: string) => {
+      got.push(key);
+      return originalGet(key);
+    };
     const input = await buildPersonalVolAmPmPanelInputManifest(mem.asBucket(), REQUEST);
     expect(input.runner_version).toBe("personal-cloud-runner/v13");
     expect(input.required_lookback_sessions).toBe(61);
-    expect(input.authority.single_stock_option_iv).toBe("FORBIDDEN");
-    expect(input.authority.adjc_fallback).toBe(false);
-    expect(input.authority.synthetic_calendar).toBe(false);
     expect(input.selection.snapshot.raw_sha256).toBe(digestDigit("1"));
+    expect(got.some((key) => key.includes("/panels/"))).toBe(false);
     for (const period of PERSONAL_VOL_PERIODS) {
       expect(input.periods[period.period_id].lookback_sessions).toBeGreaterThanOrEqual(61);
-      expect(input.option_sidecars[period.period_id]).toMatchObject({
-        dataset: PERSONAL_VOL_SOURCE_IDENTITY.dataset,
-        use: "opt225_regime_sidecar_only",
-        bars_copied: false,
-        calendar_copied: false,
-      });
+      expect(input.option_sidecars[period.period_id].source_key).toBe(
+        personalVolAmPmLegacyOptionPanelKey(period.period_id),
+      );
+      expect(input.option_sidecars[period.period_id].etag).toBe(`etag-${period.period_id}`);
     }
-  });
-
-  it("fails closed when the sidecar is missing N225 option evidence", async () => {
-    const mem = new MemoryR2();
-    await seedClosedInputs(mem, { bars: { A: [["2021-01-04", 1]] } });
-    await expect(
-      buildPersonalVolAmPmPanelInputManifest(mem.asBucket(), REQUEST),
-    ).rejects.toMatchObject({ code: PERSONAL_VOL_AM_PM_OPTION_REBUILD_ERROR });
   });
 
   it("writes the input manifest before dispatching the existing v13 Container", async () => {
@@ -323,6 +328,47 @@ describe("closed personal vol AM/PM panel-build request", () => {
       selection_snapshot_job_id: "snap-other",
     });
     expect(conflict.status).toBe(409);
+  });
+
+  it("reuses the locked input and redispatches the same snapshot job ids", async () => {
+    const mem = new MemoryR2();
+    await seedClosedInputs(mem);
+    const first = admittedContainer();
+    const env = {
+      STRUCTURED_BUCKET: mem.asBucket(),
+      PERSONAL_RESEARCH_CONTAINER: { getByName: vi.fn(() => first) },
+    } as unknown as Env;
+    expect((await submitPersonalVolAmPmPanelBuild(env, REQUEST)).status).toBe(202);
+    const inputKey = personalVolAmPmPanelBuildInputKey(REQUEST.job_id);
+    const locked = JSON.parse(
+      new TextDecoder().decode(mem.values.get(inputKey)!.bytes),
+    ) as { option_sidecars: Record<string, { etag: string }> };
+    const originalEtag = locked.option_sidecars.y2021_full.etag;
+    mem.seed(
+      personalVolAmPmLegacyOptionPanelKey("y2021_full"),
+      new Uint8Array([9, 9, 9]),
+      "mutated-etag",
+      { sha256: digestDigit("f") },
+    );
+    const second = admittedContainer();
+    env.PERSONAL_RESEARCH_CONTAINER.getByName = vi.fn(() => second);
+    expect((await submitPersonalVolAmPmPanelBuild(env, REQUEST)).status).toBe(202);
+    expect(second.fetch).toHaveBeenCalledTimes(2);
+    expect(mem.writes.filter((key) => key === inputKey)).toHaveLength(1);
+    const reused = JSON.parse(
+      new TextDecoder().decode(mem.values.get(inputKey)!.bytes),
+    ) as { option_sidecars: Record<string, { etag: string }> };
+    expect(reused.option_sidecars.y2021_full.etag).toBe(originalEtag);
+    const state = JSON.parse(
+      new TextDecoder().decode(
+        mem.values.get(
+          `research/personal/vol-ratio-am-pm-v1/panel-builds/job=${REQUEST.job_id}/state.json`,
+        )!.bytes,
+      ),
+    ) as { submitted_at: string; expires_at: string };
+    expect(Date.parse(state.expires_at) - Date.parse(state.submitted_at)).toBe(
+      PERSONAL_JOB_TTL_MS + PERSONAL_VOL_AM_PM_PANEL_TIMEOUT_GRACE_MS,
+    );
   });
 });
 

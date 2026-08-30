@@ -4,18 +4,14 @@ import {
 } from "./personal_research_contract";
 import {
   PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
-  PERSONAL_VOL_AM_PM_PANELS_PREFIX,
   PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY,
 } from "./personal_vol_am_pm_panel";
 import {
   PERSONAL_VOL_PANELS_PREFIX,
   PERSONAL_VOL_PERIODS,
-  PERSONAL_VOL_SOURCE_IDENTITY,
-  PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS,
   PERSONAL_VOL_UNIVERSE_PROVENANCE,
 } from "./personal_vol_research";
 import { sha256Hex } from "./sha256";
-import type { PeriodSpec } from "./types";
 
 export const PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID =
   PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY.producer_id;
@@ -40,8 +36,8 @@ export const PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_SNAPSHOT_MANIFEST_BYTES =
 export const PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES =
   64 * 1024 * 1024;
 export const PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES = 64 * 1024 * 1024;
-export const PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_MASK_BYTES = 2 * 1024 * 1024;
 export const PERSONAL_VOL_AM_PM_PANEL_BUILD_TERMINAL_MAX_BYTES = 64 * 1024;
+export const PERSONAL_VOL_AM_PM_PANEL_TIMEOUT_GRACE_MS = 30 * 60 * 1000;
 export const PERSONAL_VOL_AM_PM_SELECTION_PERIOD = {
   period_id: "y2019_selection",
   year: 2019,
@@ -86,9 +82,7 @@ export type SnapshotInputLock = {
   snapshot: ImmutableObjectRef & {
     raw_sha256: string;
     gzip_sha256: string;
-    content_sha256: string;
   };
-  calendar_start: string | null;
 };
 
 export type OptionSidecarLock = {
@@ -97,11 +91,6 @@ export type OptionSidecarLock = {
   etag: string;
   size: number;
   sha256: string;
-  dataset: typeof PERSONAL_VOL_SOURCE_IDENTITY.dataset;
-  version: (typeof PERSONAL_VOL_SUPPORTED_SOURCE_VERSIONS)[number];
-  use: "opt225_regime_sidecar_only";
-  bars_copied: false;
-  calendar_copied: false;
 };
 
 export type PersonalVolAmPmPanelWriterInputManifest = {
@@ -112,25 +101,9 @@ export type PersonalVolAmPmPanelWriterInputManifest = {
   runner_version: typeof PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION;
   panel_schema: typeof PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION;
   required_lookback_sessions: typeof PERSONAL_VOL_AM_PM_REQUIRED_LOOKBACK_SESSIONS;
-  equity_universe: typeof PERSONAL_VOL_UNIVERSE_PROVENANCE;
   selection: SnapshotInputLock;
   periods: Record<PersonalVolAmPmEvaluationPeriodId, SnapshotInputLock>;
   option_sidecars: Record<PersonalVolAmPmEvaluationPeriodId, OptionSidecarLock>;
-  authority: {
-    draft_only: true;
-    screening_only: true;
-    ready: false;
-    mass: false;
-    promotion: false;
-    live_orders: false;
-    go: false;
-    single_stock_option_iv: "FORBIDDEN";
-    cash_index_executable_fill: false;
-    adjc_fallback: false;
-    ffill: false;
-    synthetic_calendar: false;
-    caller_provenance: false;
-  };
 };
 
 export const PERSONAL_VOL_AM_PM_COMMON_VALID_REASON_CODES = [
@@ -199,9 +172,8 @@ export function personalVolAmPmMembershipPayload(codes: string[]): {
   codes: string[];
   schema_version: typeof PERSONAL_VOL_AM_PM_MEMBERSHIP_DIGEST_SCHEMA;
 } {
-  const unique = [...new Set(codes)].sort();
   return {
-    codes: unique,
+    codes: [...new Set(codes)].sort(),
     schema_version: PERSONAL_VOL_AM_PM_MEMBERSHIP_DIGEST_SCHEMA,
   };
 }
@@ -212,22 +184,13 @@ export async function personalVolAmPmMembershipDigest(
   return canonicalSha256(personalVolAmPmMembershipPayload(codes));
 }
 
-export function personalVolAmPmCommonValidPayload(
-  rows: PersonalVolAmPmCommonValidRow[],
-): {
-  rows: PersonalVolAmPmCommonValidRow[];
-  schema_version: typeof PERSONAL_VOL_AM_PM_COMMON_VALID_SCHEMA;
-} {
-  return {
-    rows,
-    schema_version: PERSONAL_VOL_AM_PM_COMMON_VALID_SCHEMA,
-  };
-}
-
 export async function personalVolAmPmCommonValidDigest(
   rows: PersonalVolAmPmCommonValidRow[],
 ): Promise<`sha256:${string}`> {
-  return canonicalSha256(personalVolAmPmCommonValidPayload(rows));
+  return canonicalSha256({
+    rows,
+    schema_version: PERSONAL_VOL_AM_PM_COMMON_VALID_SCHEMA,
+  });
 }
 
 export function parsePersonalVolAmPmPanelBuildRequest(
@@ -324,13 +287,6 @@ export function personalVolAmPmPanelObjectKey(digest: string): string {
   return `research/personal/vol-ratio-am-pm-v1/objects/${digest}.json`;
 }
 
-export function personalVolAmPmStablePanelKey(periodId: string): string {
-  if (!PERIOD_IDS.includes(periodId)) {
-    throw new Error("period is outside the frozen evaluation set");
-  }
-  return `${PERSONAL_VOL_AM_PM_PANELS_PREFIX}/${periodId}.json`;
-}
-
 export function personalVolAmPmLegacyOptionPanelKey(periodId: string): string {
   if (!PERIOD_IDS.includes(periodId)) {
     throw new Error("period is outside the frozen evaluation set");
@@ -351,10 +307,34 @@ export function isPersonalVolAmPmPanelDigest(value: string): boolean {
   return DIGEST_RE.test(value);
 }
 
-export function frozenEvaluationPeriod(
-  periodId: string,
-): PeriodSpec | null {
-  return PERSONAL_VOL_PERIODS.find((period) => period.period_id === periodId) ?? null;
+export function inputManifestMatchesRequest(
+  parsed: unknown,
+  request: PersonalVolAmPmPanelBuildRequest,
+): parsed is PersonalVolAmPmPanelWriterInputManifest {
+  if (!isObject(parsed) || !isObject(parsed.selection) || !isObject(parsed.periods)) {
+    return false;
+  }
+  if (
+    parsed.schema_version !== PERSONAL_VOL_AM_PM_PANEL_WRITER_INPUT_SCHEMA ||
+    parsed.producer_id !== PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID ||
+    parsed.job_id !== request.job_id ||
+    parsed.cohort_id !== PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID ||
+    parsed.runner_version !== PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION ||
+    parsed.panel_schema !== PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION ||
+    parsed.selection.job_id !== request.selection_snapshot_job_id
+  ) {
+    return false;
+  }
+  for (const period of PERSONAL_VOL_PERIODS) {
+    const locked = parsed.periods[period.period_id];
+    if (
+      !isObject(locked) ||
+      locked.job_id !== request.period_snapshot_job_ids[period.period_id]
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export async function personalVolAmPmPanelBuildRequestDigest(

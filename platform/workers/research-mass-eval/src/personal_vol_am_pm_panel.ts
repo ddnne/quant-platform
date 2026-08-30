@@ -111,6 +111,7 @@ export type PersonalVolAmPmPanel = {
   source: string;
   temporal_contract: typeof PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT;
   session_calendar: PersonalVolAmPmSessionCalendar;
+  codes: string[];
   bars: Record<string, AmPmEquityBar[]>;
   opt225_regime: Opt225RegimeBundle | null;
   tradable_hedge: PersonalVolAmPmTradableHedge | null;
@@ -187,6 +188,17 @@ function parseAmPmBar(point: unknown): AmPmEquityBar | "legacy" | null {
   return { date, MAdjC: morning, AAdjC: afternoon };
 }
 
+function parseMembershipCodes(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const codes: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string" || !item || item.startsWith("__")) return null;
+    codes.push(item);
+  }
+  const unique = [...new Set(codes)].sort();
+  return unique.length === codes.length ? unique : null;
+}
+
 function parseAmPmBars(
   raw: unknown,
 ): { bars: Record<string, AmPmEquityBar[]>; legacy: boolean } {
@@ -201,7 +213,7 @@ function parseAmPmBars(
       if (parsed) points.push(parsed);
     }
     points.sort((left, right) => (left.date < right.date ? -1 : 1));
-    if (points.length) bars[code] = points;
+    bars[code] = points;
   }
   return { bars, legacy: false };
 }
@@ -291,6 +303,7 @@ function parseTradableHedge(
 
 export function parsePersonalVolAmPmPanel(
   raw: unknown,
+  membership?: readonly string[],
 ): { ok: true; value: PersonalVolAmPmPanel } | PersonalVolAmPmPanelParseFailure {
   if (!isObject(raw)) {
     return { ok: false, error: "panel must be a JSON object", legacy: false };
@@ -332,6 +345,24 @@ export function parsePersonalVolAmPmPanel(
       legacy: true,
     };
   }
+  const declared = parseMembershipCodes(membership ?? raw.codes);
+  if ((membership || raw.codes !== undefined) && !declared) {
+    return { ok: false, error: "equity_membership_invalid", legacy: false };
+  }
+  const observed = Object.keys(parsedBars.bars)
+    .filter((code) => !code.startsWith("__"))
+    .sort();
+  const codes = declared ?? observed;
+  if (declared) {
+    const allowed = new Set(declared);
+    for (const code of observed) {
+      if (!allowed.has(code)) {
+        return { ok: false, error: "equity_membership_mismatch", legacy: false };
+      }
+    }
+  }
+  const bars: Record<string, AmPmEquityBar[]> = {};
+  for (const code of codes) bars[code] = parsedBars.bars[code] || [];
   const hedge = parseTradableHedge(raw.tradable_hedge);
   if (hedge === "invalid") {
     return {
@@ -364,7 +395,8 @@ export function parsePersonalVolAmPmPanel(
       source: typeof raw.source === "string" ? raw.source : "am_pm_panel",
       temporal_contract: PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT,
       session_calendar: sessionCalendar,
-      bars: parsedBars.bars,
+      codes,
+      bars,
       opt225_regime: opt225,
       tradable_hedge: hedge,
     },
@@ -372,9 +404,10 @@ export function parsePersonalVolAmPmPanel(
 }
 
 export function equityCodes(panel: PersonalVolAmPmPanel): string[] {
-  return Object.keys(panel.bars)
-    .filter((code) => !code.startsWith("__"))
-    .sort();
+  const source = panel.codes.length
+    ? panel.codes
+    : Object.keys(panel.bars);
+  return [...new Set(source.filter((code) => !code.startsWith("__")))].sort();
 }
 
 export function barMaps(panel: PersonalVolAmPmPanel): {
@@ -416,6 +449,7 @@ function placeholderPanel(
       dates: [],
       dates_digest: "",
     },
+    codes: [],
     bars: {},
     opt225_regime: null,
     tradable_hedge: null,
