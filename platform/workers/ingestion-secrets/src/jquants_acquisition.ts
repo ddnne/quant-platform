@@ -570,6 +570,7 @@ function audit(
   acquisitionId: string | null,
   outcome: string,
   status: number,
+  upstreamStatus: number | null = null,
 ): void {
   console.info(JSON.stringify({
     event: "jquants_acquisition_rpc",
@@ -581,6 +582,7 @@ function audit(
     acquisition_id: acquisitionId,
     result: outcome,
     status,
+    upstream_status: Number.isInteger(upstreamStatus) ? upstreamStatus : null,
     redirect_count: 0,
   }));
 }
@@ -691,7 +693,7 @@ export async function fetchGovernedPage(
       // target-owned, fail-closed error envelope.
     }
     const response = await errorResponse("upstream_failed", 502, environment, "FAILED", resolved, session, upstreamStatus);
-    audit(resolved, session.acquisitionId, "FAILED", response.status);
+    audit(resolved, session.acquisitionId, "FAILED", response.status, upstreamStatus);
     return response;
   }
 
@@ -700,7 +702,7 @@ export async function fetchGovernedPage(
     body = await readBoundedBody(upstream, limits.maximumPageBytes);
   } catch {
     const response = await errorResponse("upstream_unavailable", 502, environment, "FAILED", resolved, session, upstream.status);
-    audit(resolved, session.acquisitionId, "FAILED", response.status);
+    audit(resolved, session.acquisitionId, "FAILED", response.status, upstream.status);
     return response;
   }
   const bodyDigest = await sha256Digest(body);
