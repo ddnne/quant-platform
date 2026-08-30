@@ -67,6 +67,10 @@ import type { Env } from "./types";
 
 const BASE_COHORT_ID = "sector-relative-ls-v1" as const;
 const BASE_UNIVERSE_ID = "topix_all" as const;
+const AM_PM_BASE_STRATEGY_ID =
+  "personal_sector_balanced_four_factor_v1_ls_am_pm" as const;
+const AM_PM_BASE_SLEEVE_SCHEMA = "personal-base-sleeve-source-am-pm/v1" as const;
+const AM_PM_BASE_EXECUTION_MODE = "am_signal_pm_close" as const;
 const BASE_RESULT_MAX_BYTES = 512 * 1024 * 1024;
 const SVI_FEATURE_MAX_BYTES = 8 * 1024 * 1024;
 const SOURCE_MANIFEST_MAX_BYTES = 512 * 1024;
@@ -186,16 +190,20 @@ async function baseInputs(
     manifest.cohort_id === PERSONAL_INDEX_AM_PM_BASE_COHORT_ID &&
     manifest.cohort_digest ===
       personalResearchCohortDigest(PERSONAL_INDEX_AM_PM_BASE_COHORT_ID) &&
-    manifest.execution_mode === "am_signal_pm_close" &&
+    manifest.execution_mode === AM_PM_BASE_EXECUTION_MODE &&
     isObject(sleeve) &&
-    sleeve.artifact_schema_version === "personal-base-sleeve-source-am-pm/v1";
+    sleeve.artifact_schema_version === AM_PM_BASE_SLEEVE_SCHEMA &&
+    sleeve.strategy_id === AM_PM_BASE_STRATEGY_ID &&
+    sleeve.cohort_id === PERSONAL_INDEX_AM_PM_BASE_COHORT_ID &&
+    sleeve.universe_id === BASE_UNIVERSE_ID;
   const legacyEligible =
     family === "legacy" &&
     manifest.cohort_id === BASE_COHORT_ID &&
     manifest.cohort_digest === personalResearchCohortDigest(BASE_COHORT_ID);
   const runnerOk =
     family === "am-pm"
-      ? String(manifest.version ?? "") === PERSONAL_RESEARCH_RUNNER_VERSION
+      ? String(manifest.version ?? "") === PERSONAL_RESEARCH_RUNNER_VERSION &&
+        String(manifest.runner_version ?? "") === PERSONAL_RESEARCH_RUNNER_VERSION
       : OVERLAY_COMPATIBLE_BASE_RUNNER_VERSIONS.has(String(manifest.version ?? ""));
   if (
     manifest.status !== "COMPLETED" ||

@@ -205,8 +205,15 @@ async function amPmSources(
   document.cohort_id = "sector-relative-ls-am-pm-v1";
   document.cohort_digest = personalResearchCohortDigest("sector-relative-ls-am-pm-v1");
   document.execution_mode = "am_signal_pm_close";
+  if (baseVersion !== null) document.runner_version = baseVersion;
   const sleeve = isObject(document.base_sleeve_artifact)
-    ? { ...document.base_sleeve_artifact, artifact_schema_version: "personal-base-sleeve-source-am-pm/v1", cohort_id: "sector-relative-ls-am-pm-v1" }
+    ? {
+      ...document.base_sleeve_artifact,
+      artifact_schema_version: "personal-base-sleeve-source-am-pm/v1",
+      strategy_id: "personal_sector_balanced_four_factor_v1_ls_am_pm",
+      cohort_id: "sector-relative-ls-am-pm-v1",
+      universe_id: "topix_all",
+    }
     : document.base_sleeve_artifact;
   document.base_sleeve_artifact = sleeve;
   fixed.mem.seed(manifestKey, document);
@@ -358,6 +365,47 @@ describe("fixed personal index-vol overlay admission", () => {
         svi_job_id: arbitrary.sviJobId,
       }),
     ).rejects.toThrow("overlay_base_job_not_eligible");
+  });
+
+  it("rejects missing, stale, or mismatched AM base identity before dispatch", async () => {
+    const request = {
+      job_id: "overlay-am-pm-identity",
+      cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+      base_job_id: "base-continuous-2023",
+      svi_job_id: "svi-existing-2023",
+    };
+    async function deny(mutate: (document: Record<string, unknown>) => void) {
+      const fixed = await amPmSources();
+      const manifestKey = personalResearchManifestKey(fixed.baseJobId);
+      const stored = await fixed.mem.get(manifestKey);
+      if (!stored) throw new Error("missing AM base manifest");
+      const document = JSON.parse(new TextDecoder().decode(await stored.arrayBuffer())) as Record<string, unknown>;
+      mutate(document);
+      fixed.mem.seed(manifestKey, document);
+      await expect(
+        buildPersonalIndexVolOverlay2023InputManifest(fixed.mem.asBucket(), request),
+      ).rejects.toThrow("overlay_base_job_not_eligible");
+    }
+    await deny((document) => {
+      delete document.runner_version;
+    });
+    await deny((document) => {
+      document.runner_version = "personal-cloud-runner/v12";
+    });
+    await deny((document) => {
+      document.version = "personal-cloud-runner/v12";
+    });
+    await deny((document) => {
+      const sleeve = document.base_sleeve_artifact as Record<string, unknown>;
+      sleeve.strategy_id = "personal_sector_balanced_four_factor_v1_ls";
+    });
+    await deny((document) => {
+      const sleeve = document.base_sleeve_artifact as Record<string, unknown>;
+      sleeve.universe_id = "topix500";
+    });
+    await deny((document) => {
+      document.execution_mode = "next_close";
+    });
   });
 
   it.each([

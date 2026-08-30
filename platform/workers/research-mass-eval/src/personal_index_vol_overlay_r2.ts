@@ -26,7 +26,9 @@ import {
   isPersonalIndexVolOverlay2023Digest,
   isPersonalIndexVolOverlay2023JobId,
   personalIndexOverlayFamilyArtifactKey,
+  personalIndexOverlayFamilyRunnerVersion,
   personalIndexOverlayFamilyTerminalManifestKey,
+  personalIndexOverlayFamilyTerminalSchema,
   personalIndexSmileTransport2023AmPmInputManifestKey,
   personalIndexSmileTransport2023InputManifestKey,
   personalIndexVolOverlay2023AmPmInputManifestKey,
@@ -559,6 +561,16 @@ async function putOutput(
   if (kind === "manifest") {
     if (document.status !== "COMPLETED" && document.status !== "FAILED") {
       return json({ error: "overlay manifest status denied" }, 400);
+    }
+    if (
+      document.runner_version !==
+        personalIndexOverlayFamilyRunnerVersion(expected.cohortId) ||
+      document.schema_version !==
+        personalIndexOverlayFamilyTerminalSchema(expected.cohortId) ||
+      typeof document.request_digest !== "string" ||
+      !isPersonalIndexVolOverlay2023Digest(document.request_digest)
+    ) {
+      return json({ error: "overlay output contract mismatch" }, 400);
     }
     if (document.status === "COMPLETED" && !(await childrenExist(env, document, expected))) {
       return json({ error: "overlay manifest children mismatch" }, 409);

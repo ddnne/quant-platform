@@ -213,6 +213,8 @@ describe("index-vol overlay exact-reference R2 capability", () => {
       schema_version: "personal-index-vol-overlay-manifest/v1",
       status: "COMPLETED",
       ...authority(fixed),
+      runner_version: PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
+      request_digest: `sha256:${"e".repeat(64)}`,
       prepared_panel_key: personalIndexVolOverlay2023ArtifactKey("prepared-panel", panelDigest),
       prepared_panel_sha256: panelDigest,
       report_key: personalIndexVolOverlay2023ArtifactKey("report", reportDigest),
@@ -650,7 +652,7 @@ describe("AM overlay/smile generic terminal verify-and-shutdown path", () => {
       }),
       env,
     );
-    expect(republish.status).toBeGreaterThanOrEqual(400);
+    expect(republish.status).toBe(200);
     const verified = await personalResearchR2Outbound(
       new Request(`http://research.r2/${key}`, { method: "GET", headers: personal }),
       env,
@@ -687,5 +689,127 @@ describe("AM overlay/smile generic terminal verify-and-shutdown path", () => {
       env,
     );
     expect(wrongKey.status).toBe(403);
+  });
+
+  it("rejects malformed AM identity on create-only PUT without writing a terminal", async () => {
+    const fixed = await amPmFixture();
+    const cohortId = PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID;
+    const key = personalIndexOverlayFamilyTerminalManifestKey(fixed.jobId, cohortId);
+    const env = { STRUCTURED_BUCKET: fixed.mem.asBucket() };
+    const poisoned = {
+      schema_version: personalIndexOverlayFamilyTerminalSchema(cohortId),
+      job_id: fixed.jobId,
+      cohort_id: cohortId,
+      base_job_id: "base-r2",
+      svi_job_id: "svi-r2",
+      input_manifest_digest: fixed.inputDigest,
+      draft_only: true,
+      screening_only: true,
+      ready: false,
+      mass: false,
+      promotion: false,
+      live_orders: false,
+      go: false,
+      not_a_pass: true,
+      single_stock_option_iv_used: false,
+      status: "FAILED",
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(poisoned));
+    const digest = `sha256:${await sha256Hex(bytes)}`;
+    const familyPut = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "PUT",
+        headers: {
+          ...fixed.headers,
+          "content-length": String(bytes.byteLength),
+          "x-content-sha256": digest,
+        },
+        body: bytes,
+      }),
+      env,
+    );
+    expect(familyPut.status).toBe(400);
+    expect(fixed.mem.values.has(key)).toBe(false);
+    const genericPut = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "PUT",
+        headers: {
+          "content-length": String(bytes.byteLength),
+          "x-content-sha256": digest,
+          "x-personal-job-id": fixed.jobId,
+          "x-personal-request-digest": `sha256:${"e".repeat(64)}`,
+          "x-personal-runner-version": personalIndexOverlayFamilyRunnerVersion(cohortId),
+          "x-personal-job-kind": "overlay",
+          "x-personal-cohort-id": cohortId,
+        },
+        body: bytes,
+      }),
+      env,
+    );
+    expect(genericPut.status).toBe(400);
+    expect(fixed.mem.values.has(key)).toBe(false);
+  });
+
+  it("creates a valid AM terminal that GET can verify for shutdown", async () => {
+    const fixed = await amPmFixture();
+    const cohortId = PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID;
+    const runner = personalIndexOverlayFamilyRunnerVersion(cohortId);
+    const requestDigest = `sha256:${"e".repeat(64)}`;
+    const key = personalIndexOverlayFamilyTerminalManifestKey(fixed.jobId, cohortId);
+    const terminal = {
+      schema_version: personalIndexOverlayFamilyTerminalSchema(cohortId),
+      job_id: fixed.jobId,
+      cohort_id: cohortId,
+      base_job_id: "base-r2",
+      svi_job_id: "svi-r2",
+      input_manifest_digest: fixed.inputDigest,
+      draft_only: true,
+      screening_only: true,
+      ready: false,
+      mass: false,
+      promotion: false,
+      live_orders: false,
+      go: false,
+      not_a_pass: true,
+      single_stock_option_iv_used: false,
+      status: "FAILED",
+      runner_version: runner,
+      request_digest: requestDigest,
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(terminal));
+    const digest = `sha256:${await sha256Hex(bytes)}`;
+    const env = { STRUCTURED_BUCKET: fixed.mem.asBucket() };
+    const created = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "PUT",
+        headers: {
+          "content-length": String(bytes.byteLength),
+          "x-content-sha256": digest,
+          "x-personal-job-id": fixed.jobId,
+          "x-personal-request-digest": requestDigest,
+          "x-personal-runner-version": runner,
+          "x-personal-job-kind": "overlay",
+          "x-personal-cohort-id": cohortId,
+        },
+        body: bytes,
+      }),
+      env,
+    );
+    expect(created.status).toBe(201);
+    const verified = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "GET",
+        headers: {
+          "x-personal-job-id": fixed.jobId,
+          "x-personal-request-digest": requestDigest,
+          "x-personal-runner-version": runner,
+          "x-personal-job-kind": "overlay",
+          "x-personal-cohort-id": cohortId,
+        },
+      }),
+      env,
+    );
+    expect(verified.status).toBe(200);
+    expect(await verified.json()).toEqual(terminal);
   });
 });

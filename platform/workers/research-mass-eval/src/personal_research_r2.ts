@@ -31,6 +31,7 @@ import {
   isPersonalIndexVolOverlayOutboundRequest,
   personalIndexVolOverlayR2Outbound,
 } from "./personal_index_vol_overlay_r2";
+import { putBytesCreateOnly } from "./http";
 import { sha256Hex } from "./sha256";
 
 const RESULT_MAX_BYTES = 512 * 1024 * 1024;
@@ -528,11 +529,20 @@ function expectedRunnerVersion(
   return null;
 }
 
-async function getTerminalManifest(
+type ClosedTerminalIdentity = {
+  parsedKey: { kind: PersonalContainerKind; jobId: string };
+  jobId: string;
+  requestDigest: string;
+  runnerVersion: string;
+  kind: string;
+  cohortId: string;
+  universeId: string;
+};
+
+function closedTerminalIdentity(
   request: Request,
-  env: R2Env,
   key: string,
-): Promise<Response> {
+): ClosedTerminalIdentity | Response {
   const parsedKey = parseTerminalManifestKey(key);
   if (!parsedKey) return responseJson({ error: "terminal key denied" }, 403);
   const personalHeaders: string[] = [];
@@ -568,6 +578,60 @@ async function getTerminalManifest(
   if (parsedKey.kind === "svi" && cohortId !== PERSONAL_SVI_2023_COHORT_ID) {
     return responseJson({ error: "terminal identity denied" }, 403);
   }
+  return {
+    parsedKey,
+    jobId,
+    requestDigest,
+    runnerVersion,
+    kind,
+    cohortId,
+    universeId,
+  };
+}
+
+function terminalBodyMatchesGetContract(
+  identity: ClosedTerminalIdentity,
+  manifest: Record<string, unknown>,
+): boolean {
+  if (
+    manifest.job_id !== identity.jobId ||
+    manifest.request_digest !== identity.requestDigest ||
+    manifest.runner_version !== identity.runnerVersion ||
+    (manifest.status !== "COMPLETED" && manifest.status !== "FAILED")
+  ) {
+    return false;
+  }
+  if (
+    identity.parsedKey.kind === "research" &&
+    (manifest.cohort_id !== identity.cohortId ||
+      manifest.universe_id !== identity.universeId)
+  ) {
+    return false;
+  }
+  if (
+    (identity.parsedKey.kind === "svi" || identity.parsedKey.kind === "overlay") &&
+    manifest.cohort_id !== identity.cohortId
+  ) {
+    return false;
+  }
+  if (
+    identity.parsedKey.kind === "overlay" &&
+    isPersonalIndexOverlayFamilyCohort(identity.cohortId) &&
+    manifest.schema_version !==
+      personalIndexOverlayFamilyTerminalSchema(identity.cohortId)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+async function getTerminalManifest(
+  request: Request,
+  env: R2Env,
+  key: string,
+): Promise<Response> {
+  const identity = closedTerminalIdentity(request, key);
+  if (identity instanceof Response) return identity;
   const object = await env.STRUCTURED_BUCKET.get(key);
   if (!object) return responseJson({ error: "terminal not found" }, 404);
   if (object.size < 1 || object.size > MANIFEST_MAX_BYTES) {
@@ -587,31 +651,7 @@ async function getTerminalManifest(
   } catch {
     return responseJson({ error: "terminal is not JSON" }, 403);
   }
-  if (
-    manifest.job_id !== jobId ||
-    manifest.request_digest !== requestDigest ||
-    manifest.runner_version !== runnerVersion ||
-    (manifest.status !== "COMPLETED" && manifest.status !== "FAILED")
-  ) {
-    return responseJson({ error: "terminal identity mismatch" }, 403);
-  }
-  if (
-    parsedKey.kind === "research" &&
-    (manifest.cohort_id !== cohortId || manifest.universe_id !== universeId)
-  ) {
-    return responseJson({ error: "terminal identity mismatch" }, 403);
-  }
-  if (
-    (parsedKey.kind === "svi" || parsedKey.kind === "overlay") &&
-    manifest.cohort_id !== cohortId
-  ) {
-    return responseJson({ error: "terminal identity mismatch" }, 403);
-  }
-  if (
-    parsedKey.kind === "overlay" &&
-    isPersonalIndexOverlayFamilyCohort(cohortId) &&
-    manifest.schema_version !== personalIndexOverlayFamilyTerminalSchema(cohortId)
-  ) {
+  if (!terminalBodyMatchesGetContract(identity, manifest)) {
     return responseJson({ error: "terminal identity mismatch" }, 403);
   }
   if (request.method === "HEAD") {
@@ -629,6 +669,62 @@ async function getTerminalManifest(
   });
 }
 
+async function putOverlayFamilyTerminal(
+  request: Request,
+  env: R2Env,
+  key: string,
+): Promise<Response> {
+  const identity = closedTerminalIdentity(request, key);
+  if (identity instanceof Response) return identity;
+  if (identity.parsedKey.kind !== "overlay") {
+    return responseJson({ error: "terminal identity denied" }, 403);
+  }
+  const contentDigest = request.headers.get("x-content-sha256") ?? "";
+  const length = contentLength(request, MANIFEST_MAX_BYTES);
+  if (length === null || !DIGEST_RE.test(contentDigest)) {
+    return responseJson({ error: "invalid manifest length" }, 400);
+  }
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength !== length) {
+    return responseJson({ error: "manifest length mismatch" }, 400);
+  }
+  const actualDigest = `sha256:${await sha256Hex(bytes)}`;
+  if (actualDigest !== contentDigest) {
+    return responseJson({ error: "manifest digest mismatch" }, 400);
+  }
+  let manifest: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("not object");
+    }
+    manifest = parsed as Record<string, unknown>;
+  } catch {
+    return responseJson({ error: "manifest must be JSON object" }, 400);
+  }
+  if (!terminalBodyMatchesGetContract(identity, manifest)) {
+    return responseJson({ error: "terminal identity mismatch" }, 400);
+  }
+  const stored = await putBytesCreateOnly(env.STRUCTURED_BUCKET, key, bytes, {
+    digest: contentDigest,
+    contentType: "application/json; charset=utf-8",
+    customMetadata: {
+      plane: "personal_research_terminal",
+      job_id: identity.jobId,
+      request_digest: identity.requestDigest,
+      runner_version: identity.runnerVersion,
+      sha256: contentDigest,
+      immutable: "true",
+    },
+  });
+  return stored.conflict
+    ? responseJson({ error: "immutable manifest conflict" }, 409)
+    : responseJson(
+        { ok: true, created: stored.created, key },
+        stored.created ? 201 : 200,
+      );
+}
+
 /** Narrow R2 capability exposed only to the private Container virtual host. */
 export async function personalResearchR2Outbound(
   request: Request,
@@ -644,6 +740,13 @@ export async function personalResearchR2Outbound(
     parseTerminalManifestKey(key)
   ) {
     return getTerminalManifest(request, env, key);
+  }
+  if (
+    request.method === "PUT" &&
+    parseTerminalManifestKey(key)?.kind === "overlay" &&
+    request.headers.has("x-personal-job-id")
+  ) {
+    return putOverlayFamilyTerminal(request, env, key);
   }
   if (isPersonalIndexVolOverlayOutboundRequest(request, key)) {
     return personalIndexVolOverlayR2Outbound(request, env, key);

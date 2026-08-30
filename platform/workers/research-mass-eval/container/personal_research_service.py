@@ -742,12 +742,11 @@ def _put(
         length = len(data)
         payload = data
     headers = {
+        **_terminal_get_headers(spec),
         "content-length": str(length),
         "content-type": (
             "application/gzip" if isinstance(data, Path) else "application/json"
         ),
-        "x-personal-job-id": spec.job_id,
-        "x-personal-request-digest": spec.request_digest,
         "x-content-sha256": content_digest,
     }
     if extra_headers:
@@ -809,8 +808,21 @@ def _terminal_body_matches_spec(spec: Any, document: Mapping[str, Any]) -> bool:
         or document.get("universe_id") != spec.universe_id
     ):
         return False
-    if isinstance(spec, (PersonalSvi2023JobSpec, PersonalIndexVolOverlay2023JobSpec)):
+    if isinstance(spec, PersonalSvi2023JobSpec):
         if document.get("cohort_id") != spec.cohort_id:
+            return False
+    if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
+        if document.get("cohort_id") != spec.cohort_id:
+            return False
+        if spec.is_am_pm_smile_transport:
+            expected_schema = AM_PM_SMILE_TRANSPORT_MANIFEST_SCHEMA
+        elif spec.is_am_pm_overlay:
+            expected_schema = AM_PM_MANIFEST_SCHEMA
+        elif spec.is_smile_transport:
+            expected_schema = SMILE_TRANSPORT_MANIFEST_SCHEMA
+        else:
+            expected_schema = MANIFEST_SCHEMA
+        if document.get("schema_version") != expected_schema:
             return False
     return True
 
@@ -826,12 +838,16 @@ def _get_json(spec: Any) -> dict[str, Any] | None:
             status = int(response.status)
             raw = response.read()
     except urllib.error.HTTPError as error:
-        if error.code in {400, 403, 404}:
+        if error.code == 404:
+            return None
+        if error.code in {400, 403}:
             raise TerminalReadDenied(f"terminal GET denied HTTP {error.code}") from error
         return None
     except (OSError, urllib.error.URLError, TimeoutError):
         return None
-    if status in {400, 403, 404}:
+    if status == 404:
+        return None
+    if status in {400, 403}:
         raise TerminalReadDenied(f"terminal GET denied HTTP {status}")
     if status != HTTPStatus.OK:
         return None
@@ -1600,20 +1616,24 @@ class JobManager:
         return _get_json(spec)
 
     def _matching_terminal(self, spec: JobSpecLike, existing: Any) -> bool:
-        return (
-            isinstance(existing, dict)
-            and existing.get("job_id") == spec.job_id
-            and existing.get("request_digest") == spec.request_digest
-            and existing.get("status") in {"COMPLETED", "FAILED"}
-        )
+        return isinstance(existing, dict) and _terminal_body_matches_spec(spec, existing)
 
     def _conflicting_terminal(self, spec: JobSpecLike, existing: Any) -> bool:
-        return (
-            isinstance(existing, dict)
-            and (
-                existing.get("job_id") != spec.job_id
-                or existing.get("request_digest") != spec.request_digest
-            )
+        return isinstance(existing, dict) and not self._matching_terminal(spec, existing)
+
+    def _record_terminal_conflict(self, spec: JobSpecLike, detail: str) -> None:
+        print(
+            json.dumps(
+                {
+                    "event": "terminal_publication_conflict",
+                    "job_id": spec.job_id,
+                    "detail": detail,
+                    "at": _now(),
+                    "go": False,
+                },
+                separators=(",", ":"),
+            ),
+            flush=True,
         )
 
     def _publish_verified_terminal(
@@ -1678,6 +1698,12 @@ class JobManager:
             self._schedule_terminal_retry()
             return
         if outcome == "ok":
+            self._notify_shutdown()
+            return
+        if outcome == "conflict":
+            self._record_terminal_conflict(
+                spec, "immutable terminal conflict or identity denial"
+            )
             self._notify_shutdown()
 
     def _schedule_terminal_retry(self) -> None:

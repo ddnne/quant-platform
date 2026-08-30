@@ -664,7 +664,7 @@ class _ProductionOverlayR2:
             raw = self.objects.get(key)
             if raw is None:
                 raise urllib.error.HTTPError(
-                    url, 403, "denied", Message(), io.BytesIO(b"")
+                    url, 404, "not found", Message(), io.BytesIO(b"")
                 )
             parsed = json.loads(raw)
             required = {
@@ -730,7 +730,7 @@ def test_am_family_conflict_get_verifies_identity_and_shuts_down(
 
 
 @pytest.mark.parametrize("smile", (False, True))
-def test_am_family_wrong_schema_or_digest_does_not_shutdown(
+def test_am_family_wrong_schema_or_digest_shuts_down_fail_closed(
     monkeypatch, smile: bool
 ) -> None:
     spec = _am_family_spec(
@@ -754,5 +754,43 @@ def test_am_family_wrong_schema_or_digest_does_not_shutdown(
         max_job_seconds=30,
     )
     manager.submit(spec)
+    assert terminal.wait(1)
+    assert manager._shutdown_notified is True
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+
+
+@pytest.mark.parametrize("smile", (False, True))
+def test_am_family_failed_upload_then_terminal_get_404_retries(
+    monkeypatch, smile: bool
+) -> None:
+    spec = _am_family_spec(
+        job_id="am-smile-missing" if smile else "am-overlay-missing",
+        smile=smile,
+    )
+    fake = _ProductionOverlayR2(spec)
+
+    def urlopen(request, timeout=None):
+        del timeout
+        url = request.full_url
+        method = request.get_method()
+        if method == "PUT":
+            fake.puts += 1
+            raise urllib.error.HTTPError(
+                url, 503, "unavailable", Message(), io.BytesIO(b"")
+            )
+        return fake.urlopen(request)
+
+    monkeypatch.setattr(service.urllib.request, "urlopen", urlopen)
+    terminal = threading.Event()
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05, 0.05),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
     assert not terminal.wait(0.2)
+    assert fake.puts >= 2
+    assert fake.gets >= 1
     assert manager._shutdown_notified is False
+    assert manager.status(spec.job_id)["status"] == "FAILED"

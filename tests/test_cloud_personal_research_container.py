@@ -1606,6 +1606,9 @@ def test_matching_existing_terminal_is_accepted() -> None:
     stored[spec.manifest_key] = {
         "job_id": spec.job_id,
         "request_digest": spec.request_digest,
+        "runner_version": spec.runner_version,
+        "cohort_id": spec.cohort_id,
+        "universe_id": spec.universe_id,
         "status": "FAILED",
     }
 
@@ -1624,13 +1627,16 @@ def test_matching_existing_terminal_is_accepted() -> None:
     assert terminal.wait(1)
 
 
-def test_conflicting_terminal_does_not_shutdown() -> None:
+def test_conflicting_terminal_shuts_down_fail_closed() -> None:
     stored: dict[str, dict] = {}
     terminal = threading.Event()
     spec = _job("a" * 64, "conflict-term")
     stored[spec.manifest_key] = {
         "job_id": spec.job_id,
         "request_digest": "sha256:" + "c" * 64,
+        "runner_version": spec.runner_version,
+        "cohort_id": spec.cohort_id,
+        "universe_id": spec.universe_id,
         "status": "FAILED",
     }
 
@@ -1647,7 +1653,9 @@ def test_conflicting_terminal_does_not_shutdown() -> None:
         max_job_seconds=30,
     )
     manager.submit(spec)
-    assert not terminal.wait(0.2)
+    assert terminal.wait(1)
+    assert manager._shutdown_notified is True
+    assert manager.status(spec.job_id)["status"] == "FAILED"
 
 
 def test_watchdog_and_normal_race_keeps_one_terminal() -> None:
@@ -1825,7 +1833,7 @@ def test_production_conflict_reads_matching_terminal_without_injected_reader(
     assert manager._shutdown_notified is True
 
 
-def test_production_mismatched_terminal_does_not_shutdown(monkeypatch) -> None:
+def test_production_mismatched_terminal_shuts_down_fail_closed(monkeypatch) -> None:
     fake = _ProductionR2()
     spec = _job("a" * 64, "prod-mismatch")
     existing = {
@@ -1846,5 +1854,45 @@ def test_production_mismatched_terminal_does_not_shutdown(monkeypatch) -> None:
         max_job_seconds=30,
     )
     manager.submit(spec)
+    assert terminal.wait(1)
+    assert manager._shutdown_notified is True
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+
+
+def test_failed_upload_then_terminal_get_404_retries(monkeypatch) -> None:
+    class _MissingAfterPut:
+        def __init__(self) -> None:
+            self.puts = 0
+            self.gets = 0
+
+        def urlopen(self, request, timeout=None):
+            del timeout
+            url = request.full_url
+            method = request.get_method()
+            if method == "PUT":
+                self.puts += 1
+                raise urllib.error.HTTPError(
+                    url, 503, "unavailable", Message(), io.BytesIO(b"")
+                )
+            if method == "GET":
+                self.gets += 1
+                raise urllib.error.HTTPError(
+                    url, 404, "not found", Message(), io.BytesIO(b"")
+                )
+            raise AssertionError(method)
+
+    fake = _MissingAfterPut()
+    monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
+    terminal = threading.Event()
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05, 0.05),
+        max_job_seconds=30,
+    )
+    manager.submit(_job("a" * 64, "missing-after-put"))
     assert not terminal.wait(0.2)
+    assert fake.puts >= 2
+    assert fake.gets >= 1
     assert manager._shutdown_notified is False
+    assert manager.status("missing-after-put")["status"] == "FAILED"
