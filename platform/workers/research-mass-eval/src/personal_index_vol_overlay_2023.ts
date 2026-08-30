@@ -1,15 +1,25 @@
 import { putJsonCreateOnly, serializedJsonBytes } from "./http";
 import {
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_RUNNER_VERSION,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_SIGNAL_START_POLICY,
+  PERSONAL_INDEX_SMILE_TRANSPORT_CANDIDATE_IDS,
+  PERSONAL_INDEX_SMILE_TRANSPORT_CORE_MODULE,
+  PERSONAL_INDEX_SMILE_TRANSPORT_CORE_VERSION,
   PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
   PERSONAL_INDEX_VOL_OVERLAY_2023_EARLIEST_DAY,
   PERSONAL_INDEX_VOL_OVERLAY_2023_INPUT_MAX_BYTES,
   PERSONAL_INDEX_VOL_OVERLAY_2023_LATEST_DAY,
   PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
   PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY,
-  personalIndexVolOverlay2023InputManifestKey,
+  isPersonalIndexSmileTransport2023Cohort,
+  personalIndexOverlayFamilyInputManifestKey,
+  personalIndexOverlayFamilyRunnerVersion,
+  personalIndexOverlayFamilyTerminalManifestKey,
   personalIndexVolOverlay2023RequestDigest,
-  personalIndexVolOverlay2023TerminalManifestKey,
   type ImmutableInputReference,
+  type PersonalIndexOverlayFamilyInputManifest,
+  type PersonalIndexSmileTransport2023InputManifest,
   type PersonalIndexVolOverlay2023InputManifest,
   type PersonalIndexVolOverlay2023Request,
   type SnapshotInputReference,
@@ -346,15 +356,86 @@ async function sviInputs(
   };
 }
 
+const OVERLAY_AUTHORITY = {
+  draft_only: true,
+  screening_only: true,
+  ready: false,
+  mass: false,
+  promotion: false,
+  live_orders: false,
+  go: false,
+  single_stock_option_iv: "FORBIDDEN",
+} as const;
+
 export async function buildPersonalIndexVolOverlay2023InputManifest(
   bucket: R2Bucket,
   request: PersonalIndexVolOverlay2023Request,
-): Promise<PersonalIndexVolOverlay2023InputManifest> {
+): Promise<PersonalIndexOverlayFamilyInputManifest> {
   const [base, svi] = await Promise.all([
     baseInputs(bucket, request.base_job_id),
     sviInputs(bucket, request.svi_job_id),
   ]);
-  return {
+  if (isPersonalIndexSmileTransport2023Cohort(request.cohort_id)) {
+    const smile: PersonalIndexSmileTransport2023InputManifest = {
+      schema_version: "personal-index-smile-transport-2023-input/v2",
+      job_id: request.job_id,
+      cohort_id: PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+      runner_version: PERSONAL_INDEX_SMILE_TRANSPORT_2023_RUNNER_VERSION,
+      base,
+      svi,
+      fixed_window: {
+        start: PERSONAL_INDEX_VOL_OVERLAY_2023_EARLIEST_DAY,
+        end: PERSONAL_INDEX_VOL_OVERLAY_2023_LATEST_DAY,
+        signal_start_policy: PERSONAL_INDEX_SMILE_TRANSPORT_2023_SIGNAL_START_POLICY,
+        signal_end_policy: "LAST_SESSION_MINUS_TWO",
+      },
+      temporal_contract: {
+        source_decision_cutoff_jst: "15:00:00+09:00",
+        prepared_available_at: "NO_EARLIER_THAN_D_23_59_59_JST",
+        fill_timing: "next_close",
+        first_pnl_interval: "fill_close_to_following_close",
+        no_forward_fill: true,
+        no_expiry_rank_substitution: true,
+        no_extrapolation: true,
+        d_minus_1_rule: "immediately_preceding_official_session",
+      },
+      candidates: {
+        ids: PERSONAL_INDEX_SMILE_TRANSPORT_CANDIDATE_IDS,
+        sticky_models: ["sticky_strike", "sticky_moneyness"],
+        families: ["downside_smile_term_surprise", "potential_minimum_transport"],
+        selection: "NOT_PERFORMED",
+        adaptive_model_switch: false,
+      },
+      formulas: {
+        downside_q:
+          "actual_downside_smile_term_ratio/predicted_downside_smile_term_ratio-1",
+        downside_g: "clip(1/(1+q),0.5,1.0)",
+        potential_minimum_M: "(abs(e_front)+abs(e_next))/2+abs(e_next-e_front)",
+        potential_minimum_g: "clip(1/(1+M/0.10),0.5,1.0)",
+        hedge_h: "clip(-g*beta_D,-1.5,1.5)",
+      },
+      gate: {
+        min_common_valid_signal_days: 40,
+        min_distinct_calendar_months: 4,
+        common_invalid_policy: "flatten_g0_h0_at_d_plus_1_close_prior",
+      },
+      core: {
+        version: PERSONAL_INDEX_SMILE_TRANSPORT_CORE_VERSION,
+        module: PERSONAL_INDEX_SMILE_TRANSPORT_CORE_MODULE,
+      },
+      physical_potential: {
+        metaphor_only: true,
+        causal_claim: false,
+      },
+      svi_features_jsonl: {
+        trusted_for_transport: false,
+        reason: "lacks_exact_expiry_svi_parameters_and_fit_bands",
+      },
+      authority: OVERLAY_AUTHORITY,
+    };
+    return smile;
+  }
+  const overlay: PersonalIndexVolOverlay2023InputManifest = {
     schema_version: "personal-index-vol-overlay-2023-input/v1",
     job_id: request.job_id,
     cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
@@ -374,27 +455,20 @@ export async function buildPersonalIndexVolOverlay2023InputManifest(
       first_pnl_interval: "fill_close_to_following_close",
       no_forward_fill: true,
     },
-    authority: {
-      draft_only: true,
-      screening_only: true,
-      ready: false,
-      mass: false,
-      promotion: false,
-      live_orders: false,
-      go: false,
-      single_stock_option_iv: "FORBIDDEN",
-    },
+    authority: OVERLAY_AUTHORITY,
   };
+  return overlay;
 }
 
 type StoredTerminal = JsonObject & {
   status?: unknown;
 };
 
-async function storedTerminal(env: Env, jobId: string): Promise<StoredTerminal | null> {
-  const object = await env.STRUCTURED_BUCKET.get(
-    personalIndexVolOverlay2023TerminalManifestKey(jobId),
-  );
+async function readTerminal(
+  env: Env,
+  key: string,
+): Promise<StoredTerminal | null> {
+  const object = await env.STRUCTURED_BUCKET.get(key);
   if (!object || object.size > 64 * 1024) return null;
   try {
     const parsed: unknown = await object.json();
@@ -402,6 +476,27 @@ async function storedTerminal(env: Env, jobId: string): Promise<StoredTerminal |
   } catch {
     return null;
   }
+}
+
+async function storedTerminal(
+  env: Env,
+  jobId: string,
+): Promise<StoredTerminal | null> {
+  const overlay = await readTerminal(
+    env,
+    personalIndexOverlayFamilyTerminalManifestKey(
+      jobId,
+      PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+    ),
+  );
+  if (overlay) return overlay;
+  return readTerminal(
+    env,
+    personalIndexOverlayFamilyTerminalManifestKey(
+      jobId,
+      PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+    ),
+  );
 }
 
 function sameRequest(
@@ -437,7 +532,7 @@ export async function submitPersonalIndexVolOverlay2023(
       go: false,
     });
   }
-  let input: PersonalIndexVolOverlay2023InputManifest;
+  let input: PersonalIndexOverlayFamilyInputManifest;
   try {
     input = await buildPersonalIndexVolOverlay2023InputManifest(
       env.STRUCTURED_BUCKET,
@@ -465,7 +560,10 @@ export async function submitPersonalIndexVolOverlay2023(
       409,
     );
   }
-  const inputKey = personalIndexVolOverlay2023InputManifestKey(request.job_id);
+  const inputKey = personalIndexOverlayFamilyInputManifestKey(
+    request.job_id,
+    request.cohort_id,
+  );
   const inputPut = await putJsonCreateOnly(env.STRUCTURED_BUCKET, inputKey, input);
   if (inputPut.conflict) {
     return responseJson(
@@ -506,11 +604,14 @@ export async function submitPersonalIndexVolOverlay2023(
           input_manifest_digest: inputPut.digest,
           input_manifest_key: inputKey,
           job_id: request.job_id,
-          manifest_key: personalIndexVolOverlay2023TerminalManifestKey(
+          manifest_key: personalIndexOverlayFamilyTerminalManifestKey(
             request.job_id,
+            request.cohort_id,
           ),
           request_digest: requestDigest,
-          runner_version: PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
+          runner_version: personalIndexOverlayFamilyRunnerVersion(
+            request.cohort_id,
+          ),
           svi_job_id: request.svi_job_id,
         }),
       }),

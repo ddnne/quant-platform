@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_RUNNER_VERSION,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_SIGNAL_START_POLICY,
+  PERSONAL_INDEX_SMILE_TRANSPORT_CANDIDATE_IDS,
+  PERSONAL_INDEX_SMILE_TRANSPORT_CORE_MODULE,
+  PERSONAL_INDEX_SMILE_TRANSPORT_CORE_VERSION,
   PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
   PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
   PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY,
+  personalIndexSmileTransport2023ArtifactKey,
+  personalIndexSmileTransport2023InputManifestKey,
+  personalIndexSmileTransport2023TerminalManifestKey,
   personalIndexVolOverlay2023ArtifactKey,
   personalIndexVolOverlay2023InputManifestKey,
   personalIndexVolOverlay2023TerminalManifestKey,
+  type PersonalIndexSmileTransport2023InputManifest,
   type PersonalIndexVolOverlay2023InputManifest,
 } from "./personal_index_vol_overlay_2023_contract";
 import { personalIndexVolOverlayR2Outbound } from "./personal_index_vol_overlay_r2";
@@ -201,5 +211,146 @@ describe("index-vol overlay exact-reference R2 capability", () => {
     expect(fixed.mem.writes).toEqual([panel.key, report.key, terminal.key]);
     expect((await put(fixed, "prepared-panel", panelDoc)).response.status).toBe(200);
     expect(fixed.mem.writes).toHaveLength(3);
+  });
+});
+
+async function smileFixture() {
+  const jobId = "smile-r2";
+  const rawKey = "structured/jsonl/derivatives_bars_daily_options_225/dt=2023-01-04/admitted.jsonl";
+  const raw = new TextEncoder().encode("admitted raw");
+  const inputKey = personalIndexSmileTransport2023InputManifestKey(jobId);
+  const digest = (digit: string) => `sha256:${digit.repeat(64)}`;
+  const input: PersonalIndexSmileTransport2023InputManifest = {
+    schema_version: "personal-index-smile-transport-2023-input/v2",
+    job_id: jobId,
+    cohort_id: PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+    runner_version: PERSONAL_INDEX_SMILE_TRANSPORT_2023_RUNNER_VERSION,
+    base: {
+      job_id: "base-r2",
+      result: { key: "research/personal/jobs/job=base-r2/result.tar.gz", etag: "base", size: 1, sha256: digest("1") },
+      snapshot: { key: `research/personal/snapshots/sha256=${"2".repeat(64)}.sqlite`, etag: "snapshot", size: 1, raw_sha256: digest("2") },
+      sleeve_artifact: {
+        archive_member: `base-sleeve/${"3".repeat(64)}.json`,
+        sha256: digest("3"),
+      },
+    },
+    svi: {
+      job_id: "svi-r2",
+      request_digest: digest("4"),
+      input_manifest: { key: "research/personal/svi-2023/job=svi-r2/input-manifest.json", etag: "svi-input", size: 1, sha256: digest("5") },
+      feature: { key: "research/personal/svi-2023/job=svi-r2/features.jsonl", etag: "feature", size: 1, sha256: digest("6") },
+      panel: { key: "research/mass_eval/panels_cache/panel.json", etag: "panel", size: 1, sha256: digest("8") },
+      options: { days: [{ date: "2023-01-04", objects: [{ key: rawKey, etag: "raw", size: raw.byteLength, sha256: digest("9") }] }], object_count: 1, total_bytes: raw.byteLength },
+    },
+    fixed_window: {
+      start: "2023-01-04",
+      end: "2023-10-13",
+      signal_start_policy: PERSONAL_INDEX_SMILE_TRANSPORT_2023_SIGNAL_START_POLICY,
+      signal_end_policy: "LAST_SESSION_MINUS_TWO",
+    },
+    temporal_contract: {
+      source_decision_cutoff_jst: "15:00:00+09:00",
+      prepared_available_at: "NO_EARLIER_THAN_D_23_59_59_JST",
+      fill_timing: "next_close",
+      first_pnl_interval: "fill_close_to_following_close",
+      no_forward_fill: true,
+      no_expiry_rank_substitution: true,
+      no_extrapolation: true,
+      d_minus_1_rule: "immediately_preceding_official_session",
+    },
+    candidates: {
+      ids: PERSONAL_INDEX_SMILE_TRANSPORT_CANDIDATE_IDS,
+      sticky_models: ["sticky_strike", "sticky_moneyness"],
+      families: ["downside_smile_term_surprise", "potential_minimum_transport"],
+      selection: "NOT_PERFORMED",
+      adaptive_model_switch: false,
+    },
+    formulas: {
+      downside_q: "actual_downside_smile_term_ratio/predicted_downside_smile_term_ratio-1",
+      downside_g: "clip(1/(1+q),0.5,1.0)",
+      potential_minimum_M: "(abs(e_front)+abs(e_next))/2+abs(e_next-e_front)",
+      potential_minimum_g: "clip(1/(1+M/0.10),0.5,1.0)",
+      hedge_h: "clip(-g*beta_D,-1.5,1.5)",
+    },
+    gate: {
+      min_common_valid_signal_days: 40,
+      min_distinct_calendar_months: 4,
+      common_invalid_policy: "flatten_g0_h0_at_d_plus_1_close_prior",
+    },
+    core: {
+      version: PERSONAL_INDEX_SMILE_TRANSPORT_CORE_VERSION,
+      module: PERSONAL_INDEX_SMILE_TRANSPORT_CORE_MODULE,
+    },
+    physical_potential: { metaphor_only: true, causal_claim: false },
+    svi_features_jsonl: {
+      trusted_for_transport: false,
+      reason: "lacks_exact_expiry_svi_parameters_and_fit_bands",
+    },
+    authority: { draft_only: true, screening_only: true, ready: false, mass: false, promotion: false, live_orders: false, go: false, single_stock_option_iv: "FORBIDDEN" },
+  };
+  const inputBytes = new TextEncoder().encode(JSON.stringify(input));
+  const inputDigest = `sha256:${await sha256Hex(inputBytes)}`;
+  const mem = new MemoryR2();
+  mem.seed(inputKey, inputBytes, "input");
+  mem.seed(rawKey, raw, "raw");
+  const headers = {
+    "x-overlay-job-id": jobId,
+    "x-overlay-input-manifest-key": inputKey,
+    "x-overlay-input-manifest-digest": inputDigest,
+  };
+  return { jobId, rawKey, raw, inputDigest, headers, mem };
+}
+
+describe("index-smile-transport exact-reference R2 capability", () => {
+  it("rejects v1 overlay schemas on the closed v2 terminal path", async () => {
+    const fixed = await smileFixture();
+    const panelDoc = {
+      schema_version: "personal-index-vol-overlay-prepared-panel/v1",
+      job_id: fixed.jobId,
+      cohort_id: PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+      base_job_id: "base-r2",
+      svi_job_id: "svi-r2",
+      input_manifest_digest: fixed.inputDigest,
+      draft_only: true,
+      screening_only: true,
+      ready: false,
+      mass: false,
+      promotion: false,
+      live_orders: false,
+      go: false,
+      not_a_pass: true,
+      single_stock_option_iv_used: false,
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(panelDoc));
+    const digest = `sha256:${await sha256Hex(bytes)}`;
+    const key = personalIndexSmileTransport2023ArtifactKey("prepared-panel", digest);
+    const denied = await personalIndexVolOverlayR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "PUT",
+        headers: { ...fixed.headers, "content-length": String(bytes.byteLength), "x-content-sha256": digest },
+        body: bytes,
+      }),
+      { STRUCTURED_BUCKET: fixed.mem.asBucket() },
+      key,
+    );
+    expect(denied.status).toBe(400);
+    const acceptedDoc = { ...panelDoc, schema_version: "personal-index-smile-transport-prepared-panel/v2" };
+    const acceptedBytes = new TextEncoder().encode(JSON.stringify(acceptedDoc));
+    const acceptedDigest = `sha256:${await sha256Hex(acceptedBytes)}`;
+    const acceptedKey = personalIndexSmileTransport2023ArtifactKey("prepared-panel", acceptedDigest);
+    const accepted = await personalIndexVolOverlayR2Outbound(
+      new Request(`http://research.r2/${acceptedKey}`, {
+        method: "PUT",
+        headers: { ...fixed.headers, "content-length": String(acceptedBytes.byteLength), "x-content-sha256": acceptedDigest },
+        body: acceptedBytes,
+      }),
+      { STRUCTURED_BUCKET: fixed.mem.asBucket() },
+      acceptedKey,
+    );
+    expect(accepted.status).toBe(201);
+    expect(acceptedKey.startsWith("research/personal/index-smile-transport-2023/")).toBe(true);
+    expect(personalIndexSmileTransport2023TerminalManifestKey(fixed.jobId)).not.toBe(
+      personalIndexVolOverlay2023TerminalManifestKey(fixed.jobId),
+    );
   });
 });

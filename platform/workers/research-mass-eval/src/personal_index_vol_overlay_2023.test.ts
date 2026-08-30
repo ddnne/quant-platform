@@ -6,9 +6,13 @@ import {
   submitPersonalIndexVolOverlay2023,
 } from "./personal_index_vol_overlay_2023";
 import {
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_SIGNAL_START_POLICY,
+  PERSONAL_INDEX_SMILE_TRANSPORT_CANDIDATE_IDS,
   PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
   PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY,
   parsePersonalIndexVolOverlay2023Request,
+  personalIndexSmileTransport2023InputManifestKey,
   personalIndexVolOverlay2023InputManifestKey,
 } from "./personal_index_vol_overlay_2023_contract";
 import {
@@ -194,6 +198,13 @@ describe("fixed personal index-vol overlay admission", () => {
     };
     expect(parsePersonalIndexVolOverlay2023Request(request)).toMatchObject({ ok: true, value: request });
     expect(parsePersonalIndexVolOverlay2023Request({ ...request, threshold: 1 })).toMatchObject({ ok: false });
+    const smile = {
+      ...request,
+      job_id: "smile-one",
+      cohort_id: PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+    };
+    expect(parsePersonalIndexVolOverlay2023Request(smile)).toMatchObject({ ok: true, value: smile });
+    expect(parsePersonalIndexVolOverlay2023Request({ ...smile, extra: true })).toMatchObject({ ok: false });
   });
 
   it("copies the exact nested SVI object inventory without listing prefixes", async () => {
@@ -211,6 +222,43 @@ describe("fixed personal index-vol overlay admission", () => {
     expect(manifest.svi.options.days[0]?.objects[0]?.key).toBe(fixed.optionKey);
     expect(manifest.fixed_window.signal_start_policy).toBe(PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY);
     expect(manifest.authority).toMatchObject({ draft_only: true, ready: false, mass: false, live_orders: false, single_stock_option_iv: "FORBIDDEN" });
+  });
+
+  it("admits the closed smile-transport v2 cohort without changing the overlay v1 schema", async () => {
+    const fixed = await sources();
+    const overlay = await buildPersonalIndexVolOverlay2023InputManifest(
+      fixed.mem.asBucket(),
+      {
+        job_id: "overlay-admitted-v1",
+        cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+        base_job_id: fixed.baseJobId,
+        svi_job_id: fixed.sviJobId,
+      },
+    );
+    const smile = await buildPersonalIndexVolOverlay2023InputManifest(
+      fixed.mem.asBucket(),
+      {
+        job_id: "smile-admitted-v2",
+        cohort_id: PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+        base_job_id: fixed.baseJobId,
+        svi_job_id: fixed.sviJobId,
+      },
+    );
+    expect(overlay.schema_version).toBe("personal-index-vol-overlay-2023-input/v1");
+    expect(overlay.cohort_id).toBe(PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID);
+    expect("candidates" in overlay).toBe(false);
+    expect(smile.schema_version).toBe("personal-index-smile-transport-2023-input/v2");
+    expect(smile.cohort_id).toBe(PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID);
+    expect(smile.fixed_window.signal_start_policy).toBe(PERSONAL_INDEX_SMILE_TRANSPORT_2023_SIGNAL_START_POLICY);
+    if (!("candidates" in smile)) throw new Error("v2 contract missing candidates");
+    expect(smile.candidates.ids).toEqual([...PERSONAL_INDEX_SMILE_TRANSPORT_CANDIDATE_IDS]);
+    expect(smile.candidates.selection).toBe("NOT_PERFORMED");
+    expect(smile.formulas.downside_g).toBe("clip(1/(1+q),0.5,1.0)");
+    expect(smile.formulas.potential_minimum_g).toBe("clip(1/(1+M/0.10),0.5,1.0)");
+    expect(smile.gate.min_common_valid_signal_days).toBe(40);
+    expect(smile.physical_potential).toEqual({ metaphor_only: true, causal_claim: false });
+    expect(smile.svi_features_jsonl.trusted_for_transport).toBe(false);
+    expect(smile.svi.options.days[0]?.objects[0]?.key).toBe(fixed.optionKey);
   });
 
   it.each([
@@ -278,6 +326,38 @@ describe("fixed personal index-vol overlay admission", () => {
     const forwarded = container.fetch.mock.calls[1]?.[0] as Request;
     expect(new URL(forwarded.url).pathname).toBe("/v1/run-index-vol-overlay-2023");
     expect(await forwarded.json()).toMatchObject({ job_id: "overlay-dispatch", base_job_id: fixed.baseJobId, svi_job_id: fixed.sviJobId });
+  });
+
+  it("dispatches the smile-transport cohort onto a separately versioned input key", async () => {
+    const fixed = await sources();
+    const ready = JSON.stringify({ ok: true, service: PERSONAL_RESEARCH_RUNNER_VERSION });
+    const container = {
+      destroy: vi.fn(),
+      fetch: vi.fn(async (request: Request) =>
+        new URL(request.url).pathname === "/ready"
+          ? new Response(ready, { headers: { "content-length": String(ready.length) } })
+          : new Response("accepted", { status: 202 }),
+      ),
+    };
+    const env = {
+      STRUCTURED_BUCKET: fixed.mem.asBucket(),
+      PERSONAL_RESEARCH_CONTAINER: { getByName: vi.fn(() => container) },
+    } as unknown as Env;
+    const response = await submitPersonalIndexVolOverlay2023(env, {
+      job_id: "smile-dispatch",
+      cohort_id: PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+      base_job_id: fixed.baseJobId,
+      svi_job_id: fixed.sviJobId,
+    });
+    expect(response.status).toBe(202);
+    expect(fixed.mem.values.has(personalIndexSmileTransport2023InputManifestKey("smile-dispatch"))).toBe(true);
+    expect(fixed.mem.values.has(personalIndexVolOverlay2023InputManifestKey("smile-dispatch"))).toBe(false);
+    const forwarded = container.fetch.mock.calls[1]?.[0] as Request;
+    expect(await forwarded.json()).toMatchObject({
+      job_id: "smile-dispatch",
+      cohort_id: PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+      runner_version: "personal-index-smile-transport-cloud-runner/v1",
+    });
   });
 });
 

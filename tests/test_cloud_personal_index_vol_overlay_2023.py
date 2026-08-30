@@ -278,3 +278,125 @@ def test_container_job_spec_is_closed_and_uses_existing_job_manager() -> None:
         }
     )
     assert manager.submit(spec)["status"] == "QUEUED"
+
+
+def test_smile_transport_job_spec_is_separately_versioned() -> None:
+    job_id = "smile-manager"
+    prefix = f"research/personal/index-smile-transport-2023/job={job_id}"
+    body = {
+        "base_job_id": "base-manager",
+        "cohort_id": overlay.SMILE_TRANSPORT_COHORT_ID,
+        "input_manifest_digest": "sha256:" + "b" * 64,
+        "input_manifest_key": f"{prefix}/input-manifest.json",
+        "job_id": job_id,
+        "manifest_key": f"{prefix}/manifest.json",
+        "request_digest": "sha256:" + "0" * 64,
+        "runner_version": overlay.SMILE_TRANSPORT_RUNNER_VERSION,
+        "svi_job_id": "svi-manager",
+    }
+    provisional = overlay.PersonalIndexVolOverlay2023JobSpec(**body)
+    body["request_digest"] = provisional.derived_request_digest()
+    spec = overlay.PersonalIndexVolOverlay2023JobSpec.from_document(body)
+    assert spec.is_smile_transport is True
+    assert spec.r2_prefix == "research/personal/index-smile-transport-2023"
+    with pytest.raises(overlay.OverlayJobInputError, match="identity"):
+        overlay.PersonalIndexVolOverlay2023JobSpec.from_document(
+            {**body, "runner_version": overlay.RUNNER_VERSION}
+        )
+    overlay_prefix = f"research/personal/index-vol-overlay-2023/job={job_id}"
+    with pytest.raises(overlay.OverlayJobInputError, match="input manifest key"):
+        overlay.PersonalIndexVolOverlay2023JobSpec.from_document(
+            {
+                **body,
+                "input_manifest_key": f"{overlay_prefix}/input-manifest.json",
+                "manifest_key": f"{overlay_prefix}/manifest.json",
+            }
+        )
+
+
+def test_each_official_raw_day_is_parsed_once_not_once_per_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def load_one(_spec, entry, *, opener):
+        calls.append(str(entry["date"]))
+        return [{"date": entry["date"], "surface_scope": "nikkei_225_index_options_only"}], {
+            "source_rows": 1
+        }
+
+    slices_by_day: list[str] = []
+
+    def build_slices(rows, *, dataset_id):
+        day = str(rows[0]["date"])
+        slices_by_day.append(day)
+        return [
+            {
+                "date": day,
+                "expiry": "2023-03-10",
+                "cm": "2023-03",
+                "dte_days": 30,
+                "maturity_years": 30 / 365.0,
+                "under_px": 40_000.0,
+                "fit_success": True,
+                "fit_reason": "ok",
+                "svi_parameters": {
+                    "a": 0.01,
+                    "b": 0.04,
+                    "rho": -0.2,
+                    "m": 0.0,
+                    "sigma": 0.12,
+                },
+                "fit_log_moneyness_min": -0.2,
+                "fit_log_moneyness_max": 0.2,
+                "surface_scope": "nikkei_225_index_options_only",
+                "source_dataset_id": "derivatives_bars_daily_options_225",
+            }
+        ]
+
+    monkeypatch.setattr(overlay, "load_one_options_day", load_one)
+    monkeypatch.setattr(overlay, "build_options_225_smile_slices", build_slices)
+    spec = overlay.PersonalIndexVolOverlay2023JobSpec(
+        base_job_id="base",
+        cohort_id=overlay.SMILE_TRANSPORT_COHORT_ID,
+        input_manifest_digest="sha256:" + "a" * 64,
+        input_manifest_key="research/personal/index-smile-transport-2023/job=x/input-manifest.json",
+        job_id="x",
+        manifest_key="research/personal/index-smile-transport-2023/job=x/manifest.json",
+        request_digest="sha256:" + "b" * 64,
+        runner_version=overlay.SMILE_TRANSPORT_RUNNER_VERSION,
+        svi_job_id="svi",
+    )
+    days = [
+        {"date": "2023-01-04", "objects": [{"key": "a"}]},
+        {"date": "2023-01-05", "objects": [{"key": "b"}]},
+        {"date": "2023-01-06", "objects": [{"key": "c"}]},
+    ]
+    slices, audit = overlay._parse_official_options_days_once(
+        spec,
+        spec,  # type: ignore[arg-type]
+        {"days": days},
+        opener=lambda _spec, _key: None,
+    )
+    assert calls == ["2023-01-04", "2023-01-05", "2023-01-06"]
+    assert slices_by_day == calls
+    assert len(slices) == 3
+    assert [row["fitted_slices_retained"] for row in audit] == [1, 1, 1]
+
+
+def test_bounded_fitted_slice_rejects_single_stock_and_drops_failed_fits() -> None:
+    failed = {
+        "fit_success": False,
+        "surface_scope": "nikkei_225_index_options_only",
+        "source_dataset_id": "derivatives_bars_daily_options_225",
+    }
+    assert overlay.bounded_fitted_svi_slice(failed) is None
+    with pytest.raises(RuntimeError, match="single-stock"):
+        overlay.bounded_fitted_svi_slice(
+            {
+                "fit_success": True,
+                "surface_scope": "single_stock_options",
+                "source_dataset_id": "derivatives_bars_daily_options_225",
+                "svi_parameters": {"a": 0.01},
+            }
+        )
