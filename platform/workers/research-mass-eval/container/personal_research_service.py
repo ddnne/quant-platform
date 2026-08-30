@@ -78,6 +78,7 @@ MAX_ERROR_DETAIL_CHARS = 160
 _SNAPSHOT_RE = re.compile(
     r"^research/personal/snapshots/sha256=([0-9a-f]{64})\.sqlite(?:\.gz)?$"
 )
+DEFAULT_PERSONAL_COHORT_ID = "diverse-core-am-pm-v1"
 PERSONAL_EXECUTABLE_COHORT_IDS = frozenset(
     {
         "price-relative-v1",
@@ -85,7 +86,15 @@ PERSONAL_EXECUTABLE_COHORT_IDS = frozenset(
         "diverse-core-v1",
         "compact-market-diverse-v1",
         "sector-relative-ls-v1",
+        "price-relative-am-pm-v1",
+        "fundamental-relative-am-pm-v1",
+        "diverse-core-am-pm-v1",
+        "compact-market-diverse-am-pm-v1",
+        "sector-relative-ls-am-pm-v1",
     }
+)
+COMPACT_MARKET_COHORT_IDS = frozenset(
+    {"compact-market-diverse-v1", "compact-market-diverse-am-pm-v1"}
 )
 PERSONAL_EXECUTABLE_UNIVERSE_IDS = frozenset(
     {
@@ -202,7 +211,7 @@ class JobSpec:
         if self.universe_id not in PERSONAL_EXECUTABLE_UNIVERSE_IDS:
             raise JobInputError("universe_id is not executable by personal research")
         compact_universe = self.universe_id in COMPACT_MARKET_UNIVERSE_IDS
-        compact_cohort = self.cohort_id == "compact-market-diverse-v1"
+        compact_cohort = self.cohort_id in COMPACT_MARKET_COHORT_IDS
         if compact_universe != compact_cohort:
             raise JobInputError("cohort_id and universe_id profile mismatch")
         if _DIGEST_RE.fullmatch(self.universe_rule_digest) is None:

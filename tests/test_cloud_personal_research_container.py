@@ -684,6 +684,43 @@ def test_job_spec_rejects_long_short_on_a_compact_universe() -> None:
         spec.validate()
 
 
+def test_python_container_defaults_to_am_diverse_and_allows_am_ids() -> None:
+    assert service.DEFAULT_PERSONAL_COHORT_ID == "diverse-core-am-pm-v1"
+    for cohort_id in (
+        "price-relative-am-pm-v1",
+        "fundamental-relative-am-pm-v1",
+        "diverse-core-am-pm-v1",
+        "compact-market-diverse-am-pm-v1",
+        "sector-relative-ls-am-pm-v1",
+        "diverse-core-v1",
+        "sector-relative-ls-v1",
+        "compact-market-diverse-v1",
+    ):
+        assert cohort_id in service.PERSONAL_EXECUTABLE_COHORT_IDS
+    am = _redigest(
+        replace(_job("a" * 64), cohort_id="diverse-core-am-pm-v1")
+    )
+    am.validate()
+    compact = _redigest(
+        replace(
+            _job("a" * 64),
+            cohort_id="compact-market-diverse-am-pm-v1",
+            universe_id="topix_core30",
+        )
+    )
+    compact.validate()
+    with pytest.raises(service.JobInputError, match="profile mismatch"):
+        replace(_job("a" * 64), universe_id="topix_core30").validate()
+    with pytest.raises(service.JobInputError, match="profile mismatch"):
+        _redigest(
+            replace(
+                _job("a" * 64),
+                cohort_id="sector-relative-ls-am-pm-v1",
+                universe_id="topix_core30",
+            )
+        ).validate()
+
+
 def test_success_archive_excludes_generated_sqlite_and_manifest_is_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
