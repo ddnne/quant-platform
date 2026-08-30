@@ -51,7 +51,7 @@ from research.personal_base_sleeve import (
     validate_personal_base_sleeve_artifact,
 )
 
-RUNNER_VERSION = "personal-cloud-runner/v11"
+RUNNER_VERSION = "personal-cloud-runner/v12"
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60

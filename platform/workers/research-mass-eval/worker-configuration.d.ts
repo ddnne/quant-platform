@@ -3,7 +3,7 @@
 interface __BaseEnv_Env {
 	STRUCTURED_BUCKET: R2Bucket;
 	CF_VERSION_METADATA: WorkerVersionMetadata;
-	MASS_EVAL_VERSION: "research-mass-eval/v146-direct-spawn";
+	MASS_EVAL_VERSION: "research-mass-eval/v147-smile-transport";
 	MASS_EVAL_WAVE: "research-mass-eval";
 	MASS_RESEARCH: "NO-GO";
 	PHASE7: "OFF";
@@ -23,7 +23,7 @@ declare namespace Cloudflare {
 	interface ProductionEnv {
 		STRUCTURED_BUCKET: R2Bucket;
 		CF_VERSION_METADATA: WorkerVersionMetadata;
-		MASS_EVAL_VERSION: "research-mass-eval/v146-direct-spawn";
+		MASS_EVAL_VERSION: "research-mass-eval/v147-smile-transport";
 		MASS_EVAL_WAVE: "research-mass-eval";
 		MASS_RESEARCH: "NO-GO";
 		PHASE7: "OFF";

@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:99a8f9a3802b6e37637808d6e9950286720f6e61e8c9769f82c0321df9b7c6aa",
+  "manifest_digest": "sha256:bf5a94c94e0809f8317143bae6f5c92f9e306f0f9413942d025361252224c1d2",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -2937,7 +2937,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v146-direct-spawn",
+          "MASS_EVAL_VERSION": "research-mass-eval/v147-smile-transport",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3037,7 +3037,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v146-direct-spawn",
+          "MASS_EVAL_VERSION": "research-mass-eval/v147-smile-transport",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3135,7 +3135,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v146-direct-spawn",
+          "MASS_EVAL_VERSION": "research-mass-eval/v147-smile-transport",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",

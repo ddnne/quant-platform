@@ -264,7 +264,8 @@ describe("fixed personal index-vol overlay admission", () => {
   it.each([
     ["legacy v9", "personal-cloud-runner/v9"],
     ["legacy v10", "personal-cloud-runner/v10"],
-    ["current v11", "personal-cloud-runner/v11"],
+    ["legacy v11", "personal-cloud-runner/v11"],
+    ["current v12", "personal-cloud-runner/v12"],
   ])("accepts the explicitly compatible %s base runner manifest", async (_label, baseVersion) => {
     const fixed = await sources(baseVersion);
     await expect(
@@ -283,7 +284,7 @@ describe("fixed personal index-vol overlay admission", () => {
   it.each([
     ["missing", null],
     ["stale v8", "personal-cloud-runner/v8"],
-    ["unknown future v12", "personal-cloud-runner/v12"],
+    ["unknown future v13", "personal-cloud-runner/v13"],
   ])("rejects a %s base runner manifest", async (_label, baseVersion) => {
     const fixed = await sources(baseVersion);
     await expect(
