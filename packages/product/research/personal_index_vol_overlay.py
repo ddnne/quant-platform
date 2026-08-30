@@ -30,6 +30,7 @@ from research.options_225_smile_transport import (
     OPTIONS_225_SMILE_TRANSPORT_VERSION,
     STICKY_MONEYNESS,
     STICKY_STRIKE,
+    TRUSTED_FORWARD_UNAVAILABLE,
 )
 from research.options_225_vol_series import DATASET_ID
 from research.personal_metrics import summarize_performance
@@ -75,6 +76,36 @@ COMMON_VALID_MIN_CALENDAR_MONTHS: Final = 4
 FEATURE_AVAILABLE_NO_EARLIER_THAN_JST: Final = "23:59:59+09:00"
 DOWN_SIDE_SMILE_FAMILY: Final = "downside_smile_term_surprise"
 POTENTIAL_MINIMUM_FAMILY: Final = "potential_minimum_transport"
+SMILE_TRANSPORT_COORDINATE_DEFINITION: Final = "k=ln(strike/UnderPx_proxy)"
+SMILE_TRANSPORT_SIGNAL_CUTOFF: Final = "D_close"
+SMILE_TRANSPORT_EXECUTION_INTENT: Final = "D_plus_1_or_later"
+SMILE_TRANSPORT_RESEARCH_STATUS: Final = "DRAFT_DIAGNOSTIC_ONLY"
+SMILE_TRANSPORT_PAIRING_RULE: Final = (
+    "adjacent_observation_dates_exact_same_expiry"
+)
+_SMILE_TRANSPORT_REQUIRED_FALSE: Final = (
+    "single_stock_iv_used",
+    "ffill_applied",
+    "expiry_rank_substitution_applied",
+    "extrapolation_applied",
+    "trusted_forward_available",
+    "under_px_is_trusted_forward",
+)
+_SMILE_TRANSPORT_REQUIRED_NULL: Final = (
+    "forward_relative_minimum_log_moneyness",
+    "forward_relative_minimum_strike_ratio_minus_one",
+)
+_SMILE_TRANSPORT_REQUIRED_EXACT: Final = {
+    "version": OPTIONS_225_SMILE_TRANSPORT_VERSION,
+    "surface_scope": OPTIONS_225_SMILE_SURFACE_SCOPE,
+    "source_dataset_id": DATASET_ID,
+    "coordinate_definition": SMILE_TRANSPORT_COORDINATE_DEFINITION,
+    "forward_relative_reason": TRUSTED_FORWARD_UNAVAILABLE,
+    "signal_cutoff": SMILE_TRANSPORT_SIGNAL_CUTOFF,
+    "execution_intent": SMILE_TRANSPORT_EXECUTION_INTENT,
+    "research_status": SMILE_TRANSPORT_RESEARCH_STATUS,
+    "pairing_rule": SMILE_TRANSPORT_PAIRING_RULE,
+}
 
 
 _BASE_COHORT_DEFINITION = get_research_cohort(BASE_COHORT_ID)
@@ -1251,14 +1282,22 @@ def _transport_gross_scale(
     raise AssertionError(f"unknown frozen transport feature: {candidate.feature_kind}")
 
 
+def _canonical_iso_date(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = date.fromisoformat(value).isoformat()
+    except ValueError:
+        return None
+    return parsed if parsed == value else None
+
+
 def _reject_single_stock_transport_row(row: Mapping[str, Any]) -> None:
-    if row.get("single_stock_iv_used") is True:
-        raise ValueError("single-stock option IV is forbidden")
-    surface = row.get("surface_scope")
-    if surface is not None and surface != OPTIONS_225_SMILE_SURFACE_SCOPE:
-        raise ValueError("single-stock option IV is forbidden")
-    source = row.get("source_dataset_id")
-    if source is not None and source != DATASET_ID:
+    if (
+        row.get("single_stock_iv_used") is not False
+        or row.get("surface_scope") != OPTIONS_225_SMILE_SURFACE_SCOPE
+        or row.get("source_dataset_id") != DATASET_ID
+    ):
         raise ValueError("single-stock option IV is forbidden")
 
 
@@ -1279,10 +1318,42 @@ def _group_transport_features(
     return grouped
 
 
+def _provenance_issues(row: Mapping[str, Any], *, prefix: str) -> list[str]:
+    issues: list[str] = []
+    for field, expected in _SMILE_TRANSPORT_REQUIRED_EXACT.items():
+        if row.get(field) != expected:
+            issues.append(f"{prefix}:{field}_not_canonical")
+    for field in _SMILE_TRANSPORT_REQUIRED_FALSE:
+        if row.get(field) is not False:
+            issues.append(f"{prefix}:{field}_not_false")
+    for field in _SMILE_TRANSPORT_REQUIRED_NULL:
+        if field in row and row.get(field) is not None:
+            issues.append(f"{prefix}:{field}_not_null")
+        elif field not in row:
+            issues.append(f"{prefix}:{field}_missing")
+    return issues
+
+
+def _expiry_pair_issues(
+    row: Mapping[str, Any],
+    *,
+    signal_date: str,
+    prefix: str,
+) -> list[str]:
+    front = _canonical_iso_date(row.get("front_expiry"))
+    nxt = _canonical_iso_date(row.get("next_expiry"))
+    if front is None or nxt is None:
+        return [f"{prefix}:exact_expiry_pair_missing"]
+    if not (signal_date < front < nxt):
+        return [f"{prefix}:expiry_order_invalid"]
+    return []
+
+
 def _candidate_row_issues(
     candidate: OverlayCandidate,
     row: Mapping[str, Any] | None,
     *,
+    signal_date: str,
     predecessor: str | None,
 ) -> list[str]:
     if row is None:
@@ -1298,14 +1369,14 @@ def _candidate_row_issues(
         issues.append(f"{candidate.candidate_id}:sticky_model_mismatch")
     if row.get("signal_family") != expected_family:
         issues.append(f"{candidate.candidate_id}:signal_family_mismatch")
-    if row.get("ffill_applied") is True:
-        issues.append(f"{candidate.candidate_id}:ffill_applied")
-    if row.get("expiry_rank_substitution_applied") is True:
-        issues.append(f"{candidate.candidate_id}:expiry_rank_substitution")
-    if row.get("extrapolation_applied") is True:
-        issues.append(f"{candidate.candidate_id}:extrapolation_applied")
-    if not row.get("front_expiry") or not row.get("next_expiry"):
-        issues.append(f"{candidate.candidate_id}:exact_expiry_pair_missing")
+    issues.extend(_provenance_issues(row, prefix=candidate.candidate_id))
+    issues.extend(
+        _expiry_pair_issues(
+            row,
+            signal_date=signal_date,
+            prefix=candidate.candidate_id,
+        )
+    )
     previous = str(row.get("previous_observation_date") or "")
     if predecessor is None:
         issues.append(f"{candidate.candidate_id}:official_predecessor_unavailable")
@@ -1347,6 +1418,7 @@ def _common_validity_for_date(
             _candidate_row_issues(
                 candidate,
                 by_id.get(candidate.candidate_id),
+                signal_date=day,
                 predecessor=predecessor,
             )
         )
@@ -1387,6 +1459,74 @@ def _calendar_months(dates: Sequence[str]) -> tuple[str, ...]:
             seen.add(month)
             months.append(month)
     return tuple(months)
+
+
+def _invested_control_plan(
+    rows: Sequence[IndexVolOverlayObservation],
+    signal_index: int,
+) -> dict[str, Any]:
+    pnl_index = signal_index + 2
+    sleeve_return = _finite(rows[pnl_index].base_sleeve_return)
+    return {
+        "signal_date": rows[signal_index].date,
+        "rebalance_date": rows[signal_index + 1].date,
+        "pnl_date": rows[pnl_index].date,
+        "feature_ratio_x": 1.0,
+        "gross_scale": 1.0,
+        "estimated_beta": None,
+        "beta_observations": None,
+        "beta_window_last_return_date": None,
+        "topix_hedge_weight": 0.0,
+        "base_sleeve_return": 0.0 if sleeve_return is None else sleeve_return,
+        "topix_cash_return": 0.0,
+        "flatten_applied": False,
+        "common_valid": True,
+    }
+
+
+def _smile_transport_control_result(
+    rows: Sequence[IndexVolOverlayObservation],
+    signal_indices: Sequence[int],
+    validity_by_date: Mapping[str, Mapping[str, Any]],
+    *,
+    starting_capital: float,
+) -> dict[str, Any]:
+    """Compare g=1,h=0 on the same flatten calendar as the four candidates."""
+
+    plans = [
+        (
+            _invested_control_plan(rows, signal_index)
+            if validity_by_date[rows[signal_index].date]["common_valid"]
+            else _flatten_plan(rows, signal_index)
+        )
+        for signal_index in signal_indices
+    ]
+    declaration = {
+        "control_id": "base_g1_h0_control_v1",
+        "role": "COMMON_VALID_CALENDAR_NAV_WRAPPER_CONTROL_WITH_10BP_COSTS",
+        "ranking_role": "DIAGNOSTIC_CONTROL_NOT_RANKED",
+        "mechanics": (
+            "g=1 and h=0 on the common-valid decision calendar; "
+            "flatten g=0,h=0 at D+1 on common-invalid dates; "
+            "same overlay 10bp turnover costs as the four candidates"
+        ),
+        "source_slice_wrapper_cost_semantics": (
+            SOURCE_SLICE_WRAPPER_COST_SEMANTICS
+        ),
+    }
+    curve, trades, performance = _evaluate_plans(
+        plans,
+        starting_capital=starting_capital,
+    )
+    return {
+        **declaration,
+        "status": "EVALUATED",
+        "reason": None,
+        "missing_required_rows": [],
+        "daily_path": curve,
+        "trades": trades,
+        "performance": performance,
+    }
 
 
 def _flatten_plan(
@@ -1645,9 +1785,10 @@ def evaluate_index_smile_transport_overlays(
                     "performance": performance,
                 }
             )
-        diagnostic_control = _diagnostic_control_result(
+        diagnostic_control = _smile_transport_control_result(
             observations,
             signal_indices,
+            validity_by_date,
             starting_capital=capital,
         )
     evaluated_count = sum(result["status"] == "EVALUATED" for result in results)

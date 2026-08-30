@@ -9,7 +9,12 @@ from typing import Any, Mapping, Sequence
 import pytest
 
 from research.options_225_smile_features import OPTIONS_225_SMILE_SURFACE_SCOPE
-from research.options_225_smile_transport import STICKY_MONEYNESS, STICKY_STRIKE
+from research.options_225_smile_transport import (
+    OPTIONS_225_SMILE_TRANSPORT_VERSION,
+    STICKY_MONEYNESS,
+    STICKY_STRIKE,
+    TRUSTED_FORWARD_UNAVAILABLE,
+)
 from research.options_225_vol_series import DATASET_ID
 from research.personal_index_vol_overlay import (
     BETA_MIN_RETURNS,
@@ -82,9 +87,20 @@ def _row(
         "candidate_value": value,
         "front_expiry": front_expiry if success else None,
         "next_expiry": next_expiry if success else None,
+        "version": OPTIONS_225_SMILE_TRANSPORT_VERSION,
         "surface_scope": OPTIONS_225_SMILE_SURFACE_SCOPE,
         "source_dataset_id": DATASET_ID,
         "single_stock_iv_used": False,
+        "coordinate_definition": "k=ln(strike/UnderPx_proxy)",
+        "under_px_is_trusted_forward": False,
+        "trusted_forward_available": False,
+        "forward_relative_minimum_log_moneyness": None,
+        "forward_relative_minimum_strike_ratio_minus_one": None,
+        "forward_relative_reason": TRUSTED_FORWARD_UNAVAILABLE,
+        "signal_cutoff": "D_close",
+        "execution_intent": "D_plus_1_or_later",
+        "research_status": "DRAFT_DIAGNOSTIC_ONLY",
+        "pairing_rule": "adjacent_observation_dates_exact_same_expiry",
         "ffill_applied": False,
         "expiry_rank_substitution_applied": False,
         "extrapolation_applied": False,
@@ -414,6 +430,20 @@ def test_one_common_invalid_date_flattens_all_four_and_closes_prior() -> None:
         assert path[hole]["sleeve_trade_notional"] == pytest.approx(
             -path[hole]["pre_rebalance_sleeve_notional"]
         )
+    control_path = {
+        row["signal_date"]: row
+        for row in report["diagnostic_control"]["daily_path"]
+    }
+    assert control_path[prior]["flatten_applied"] is False
+    assert control_path[prior]["gross_scale"] == pytest.approx(1.0)
+    assert control_path[prior]["topix_hedge_weight"] == pytest.approx(0.0)
+    assert control_path[hole]["flatten_applied"] is True
+    assert control_path[hole]["gross_scale"] == 0.0
+    assert control_path[hole]["topix_hedge_weight"] == 0.0
+    assert control_path[hole]["target_sleeve_notional"] == pytest.approx(0.0)
+    assert control_path[hole]["sleeve_trade_notional"] == pytest.approx(
+        -control_path[hole]["pre_rebalance_sleeve_notional"]
+    )
 
 
 def test_official_calendar_adjacency_and_no_expiry_substitution() -> None:
@@ -445,6 +475,112 @@ def test_official_calendar_adjacency_and_no_expiry_substitution() -> None:
     substituted = sorted(chosen)[4]
     assert substituted in excluded
     assert any("expiry_rank_substitution" in reason for reason in excluded[substituted])
+
+
+def test_missing_or_wrong_provenance_fails_closed() -> None:
+    rows, features, dates, chosen = _gated_panel(
+        valid_months=("2023-03", "2023-04", "2023-05", "2023-06"),
+        per_month=10,
+    )
+    hole = sorted(chosen)[2]
+
+    missing_identity = [dict(row) for row in features]
+    del missing_identity[0]["surface_scope"]
+    with pytest.raises(ValueError, match="single-stock"):
+        _evaluate(rows, missing_identity, signal_start=dates[BETA_MIN_RETURNS])
+
+    missing_used = [dict(row) for row in features]
+    del missing_used[0]["single_stock_iv_used"]
+    with pytest.raises(ValueError, match="single-stock"):
+        _evaluate(rows, missing_used, signal_start=dates[BETA_MIN_RETURNS])
+
+    missing_dataset = [dict(row) for row in features]
+    del missing_dataset[0]["source_dataset_id"]
+    with pytest.raises(ValueError, match="single-stock"):
+        _evaluate(rows, missing_dataset, signal_start=dates[BETA_MIN_RETURNS])
+
+    def _omit(field: str) -> list[dict[str, Any]]:
+        mutated: list[dict[str, Any]] = []
+        for row in features:
+            copy = dict(row)
+            if copy["date"] == hole:
+                copy.pop(field, None)
+            mutated.append(copy)
+        return mutated
+
+    omitted_ffill = _evaluate(
+        rows,
+        _omit("ffill_applied"),
+        signal_start=dates[BETA_MIN_RETURNS],
+    )
+    omitted_reasons = {
+        row["date"]: row["reasons"]
+        for row in omitted_ffill["common_validity_gate"]["excluded"]
+    }
+    assert hole in omitted_reasons
+    assert any("ffill_applied_not_false" in reason for reason in omitted_reasons[hole])
+    assert omitted_ffill["status"] == "NOT_EVALUATED"
+    assert all(candidate["performance"] is None for candidate in omitted_ffill["candidates"])
+
+    omitted_forward = _evaluate(
+        rows,
+        _omit("trusted_forward_available"),
+        signal_start=dates[BETA_MIN_RETURNS],
+    )
+    forward_reasons = {
+        row["date"]: row["reasons"]
+        for row in omitted_forward["common_validity_gate"]["excluded"]
+    }
+    assert hole in forward_reasons
+    assert any(
+        "trusted_forward_available_not_false" in reason
+        for reason in forward_reasons[hole]
+    )
+
+    wrong_version = _evaluate(
+        rows,
+        _features(
+            dates,
+            successful=chosen,
+            q_value=1.0,
+            mismatch=0.10,
+            mutate={
+                (hole, candidate_id): {"version": "research-options-225-smile-transport/v0"}
+                for candidate_id in SMILE_TRANSPORT_CANDIDATE_IDS
+            },
+        ),
+        signal_start=dates[BETA_MIN_RETURNS],
+    )
+    version_reasons = {
+        row["date"]: row["reasons"]
+        for row in wrong_version["common_validity_gate"]["excluded"]
+    }
+    assert hole in version_reasons
+    assert any("version_not_canonical" in reason for reason in version_reasons[hole])
+
+    inverted = _evaluate(
+        rows,
+        _features(
+            dates,
+            successful=chosen,
+            q_value=1.0,
+            mismatch=0.10,
+            mutate={
+                (hole, candidate_id): {
+                    "front_expiry": "2024-04-12",
+                    "next_expiry": "2024-03-08",
+                }
+                for candidate_id in SMILE_TRANSPORT_CANDIDATE_IDS
+            },
+        ),
+        signal_start=dates[BETA_MIN_RETURNS],
+    )
+    inverted_reasons = {
+        row["date"]: row["reasons"]
+        for row in inverted["common_validity_gate"]["excluded"]
+    }
+    assert hole in inverted_reasons
+    assert any("expiry_order_invalid" in reason for reason in inverted_reasons[hole])
 
 
 def test_single_stock_iv_provenance_is_rejected() -> None:
