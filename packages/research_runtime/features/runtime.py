@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Protocol
 
 import pit
 from pit.query import resolve_db_path
@@ -27,7 +27,7 @@ from . import registry as _registry
 from .dataset_guard import master_pit_history_start, require_feature_dataset
 from .types import FeatureDefinition, FeatureOutput
 
-FEATURES_RUNTIME_VERSION = "0.7.0"
+FEATURES_RUNTIME_VERSION = "0.8.0"
 
 
 class AsOfRequired(ValueError):
@@ -40,6 +40,51 @@ class MissingInput(KeyError):
 
 _NO_DEFAULT = object()
 _RUNTIME_SCOPE_FIELDS = frozenset({"as_of", "db_path"})
+
+
+class _BoundDailyBarsReader(Protocol):
+    def __call__(self, **kwargs: Any) -> Any: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _DailyBarsReaderCapability:
+    """Engine-only: daily-bar reads locked to one as_of and db scope."""
+
+    as_of: str
+    db_path: str
+    reader: _BoundDailyBarsReader
+
+
+def bind_personal_retrospective_am_session_daily_bars(
+    *, as_of: Any, db_path: Any
+) -> _DailyBarsReaderCapability:
+    """Positive capability for engine-created AM signal contexts.
+
+    Ordinary ``compute`` callers cannot inject this reader, a later ``as_of``,
+    or a different database scope. Other feature resources stay ordinary PIT
+    reads at the bound 11:30 instant.
+    """
+    from pit.personal_retrospective_session import (
+        get_personal_retrospective_am_signal_equity_bars_daily,
+    )
+
+    as_of_iso = _require_as_of(as_of)
+    resolved_db = resolve_db_path(db_path)
+
+    def reader(**kwargs: Any):
+        reserved = sorted(_RUNTIME_SCOPE_FIELDS.intersection(kwargs))
+        if reserved:
+            raise TypeError(
+                f"AM session daily-bar reader owns runtime-scoped argument(s): "
+                f"{reserved}"
+            )
+        return get_personal_retrospective_am_signal_equity_bars_daily(
+            as_of=as_of_iso, db_path=resolved_db, **kwargs
+        )
+
+    return _DailyBarsReaderCapability(
+        as_of=as_of_iso, db_path=str(resolved_db), reader=reader
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,45 +221,35 @@ def _validate_inputs(feature: FeatureDefinition, inputs: Mapping[str, Any]) -> N
         )
 
 
-def compute(
+def _compute(
     feature,
     *,
     as_of: Any,
     db_path: Any = None,
+    daily_bars_capability: _DailyBarsReaderCapability | None = None,
     **inputs: Any,
 ) -> FeatureOutput:
-    """Compute one feature at ``as_of`` with PIT-scoped reads.
-
-    Parameters
-    ----------
-    feature : FeatureDefinition | str
-        Either a registered :class:`~features.types.FeatureDefinition` or its
-        registry id (e.g. ``"return_1d"``). When a str, the latest version is
-        used; pin a version by passing the resolved definition.
-    as_of : str
-        **Required.** PIT decision instant. Anything accepted by
-        ``pit.query.normalize_as_of`` (canonical JST ISO).
-    db_path : Any, optional
-        SQLite DB path (resolved via ``pit.query.resolve_db_path``).
-    **inputs :
-        Per-feature inputs. Required kwargs are validated against
-        ``feature.inputs.required_kwargs``.
-
-    Returns
-    -------
-    FeatureOutput
-        The feature value with provenance metadata: ``feature_id``,
-        ``feature_version``, ``as_of``, ``pit_api_version``,
-        ``features_runtime_version``, ``rows_seen``, ``db_path``.
-    """
     if isinstance(feature, str):
         feature = _registry.get(feature)
     as_of_iso = _require_as_of(as_of)
     _validate_inputs(feature, inputs)
 
     resolved_db = resolve_db_path(db_path)
+    if daily_bars_capability is not None:
+        if not isinstance(daily_bars_capability, _DailyBarsReaderCapability):
+            raise TypeError("daily_bars_capability is not a bound engine capability")
+        if daily_bars_capability.as_of != as_of_iso:
+            raise ValueError(
+                "bound daily-bar capability as_of does not match compute as_of"
+            )
+        if daily_bars_capability.db_path != str(resolved_db):
+            raise ValueError(
+                "bound daily-bar capability db_path does not match compute db_path"
+            )
 
     def _read_pit(resource: str, kwargs: Mapping[str, Any]):
+        if resource == "equity_bars_daily" and daily_bars_capability is not None:
+            return daily_bars_capability.reader(**dict(kwargs))
         readers = {
             "equity_bars_daily": pit.get_equity_bars_daily,
             "equity_master": pit.get_equity_master,
@@ -250,6 +285,58 @@ def compute(
     if feature.price_basis is not None:
         md["price_basis"] = feature.price_basis
     return FeatureOutput(value=out.value, metadata=md)
+
+
+def compute(
+    feature,
+    *,
+    as_of: Any,
+    db_path: Any = None,
+    **inputs: Any,
+) -> FeatureOutput:
+    """Compute one feature at ``as_of`` with PIT-scoped reads.
+
+    Parameters
+    ----------
+    feature : FeatureDefinition | str
+        Either a registered :class:`~features.types.FeatureDefinition` or its
+        registry id (e.g. ``"return_1d"``). When a str, the latest version is
+        used; pin a version by passing the resolved definition.
+    as_of : str
+        **Required.** PIT decision instant. Anything accepted by
+        ``pit.query.normalize_as_of`` (canonical JST ISO).
+    db_path : Any, optional
+        SQLite DB path (resolved via ``pit.query.resolve_db_path``).
+    **inputs :
+        Per-feature inputs. Required kwargs are validated against
+        ``feature.inputs.required_kwargs``.
+
+    Returns
+    -------
+    FeatureOutput
+        The feature value with provenance metadata: ``feature_id``,
+        ``feature_version``, ``as_of``, ``pit_api_version``,
+        ``features_runtime_version``, ``rows_seen``, ``db_path``.
+    """
+    return _compute(feature, as_of=as_of, db_path=db_path, **inputs)
+
+
+def compute_with_engine_daily_bars_capability(
+    feature,
+    *,
+    as_of: Any,
+    db_path: Any = None,
+    daily_bars_capability: _DailyBarsReaderCapability,
+    **inputs: Any,
+) -> FeatureOutput:
+    """Engine-only compute: AM session-masked daily bars, ordinary other PIT."""
+    return _compute(
+        feature,
+        as_of=as_of,
+        db_path=db_path,
+        daily_bars_capability=daily_bars_capability,
+        **inputs,
+    )
 
 
 def compute_many(

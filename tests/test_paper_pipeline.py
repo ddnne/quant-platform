@@ -8,7 +8,12 @@ from datetime import date, timedelta
 import features
 import pit
 import pytest
-from core import CORE_ENGINE_VERSION, PIT_ADJUSTED, UnsupportedPriceBasis
+from core import (
+    CORE_ENGINE_VERSION,
+    PERSONAL_RETROSPECTIVE_ADJUSTED,
+    PIT_ADJUSTED,
+    UnsupportedPriceBasis,
+)
 from features.runtime import FEATURES_RUNTIME_VERSION
 from strategies.examples import MomentumFeatureStrategy, Return1dFeatureStrategy
 from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult, run_paper
@@ -208,3 +213,33 @@ def test_feature_strategy_passes_every_decision_as_of_explicitly(
 def test_lifecycle_labels_are_stable_public_values():
     assert Lifecycle.DRAFT.value == "Draft"
     assert Lifecycle.PAPER.value == "Paper"
+
+
+def test_paper_config_admits_am_signal_pm_close_for_personal_draft():
+    config = PaperRunConfig(
+        start="2025-04-01",
+        end="2025-04-04",
+        execution_mode="am_signal_pm_close",
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+        lifecycle=Lifecycle.DRAFT,
+    )
+    assert config.execution_mode == "am_signal_pm_close"
+    assert config.price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
+
+
+def test_paper_config_rejects_am_signal_pm_close_on_raw_basis():
+    with pytest.raises(ValueError, match="PERSONAL_RETROSPECTIVE_ADJUSTED"):
+        PaperRunConfig(
+            start="2025-04-01",
+            end="2025-04-04",
+            execution_mode="am_signal_pm_close",
+        )
+
+
+def test_paper_config_still_rejects_unknown_execution_mode():
+    with pytest.raises(ValueError, match="execution_mode"):
+        PaperRunConfig(
+            start="2025-04-01",
+            end="2025-04-04",
+            execution_mode="next_open",
+        )

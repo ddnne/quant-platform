@@ -23,6 +23,7 @@ from paper_runtime import (
     git_commit,
     strategy_definition_hash,
 )
+from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
 
 from .store import JsonPaperStore
 from .types import Lifecycle, PaperRunConfig, PaperRunResult
@@ -355,6 +356,13 @@ def run_paper(
     _require_feature_price_basis(
         feature_versions, price_basis=config.price_basis
     )
+    if (
+        config.execution_mode == "am_signal_pm_close"
+        and config.price_basis != PERSONAL_RETROSPECTIVE_ADJUSTED
+    ):
+        raise ValueError(
+            "am_signal_pm_close is allowed only with PERSONAL_RETROSPECTIVE_ADJUSTED"
+        )
     feature_hashes = feature_definition_hashes(feature_versions)
     strategy_hash = strategy_definition_hash(strategy)
     commit = git_commit()

@@ -16,6 +16,10 @@ from typing import Any, Mapping
 
 import features
 import pit
+from features.runtime import (
+    bind_personal_retrospective_am_session_daily_bars,
+    compute_with_engine_daily_bars_capability,
+)
 from paper_runtime.code_fingerprints import feature_definition_hashes
 from paper_runtime.personal_prepared_frame import (
     PreparedFeatureValue,
@@ -37,14 +41,14 @@ from .costs import (
     ShortFinancingModel,
     standard_cost,
 )
-from .execution import close_as_of, get_mode
+from .execution import AM_SIGNAL_PM_CLOSE, NEXT_CLOSE, close_as_of, get_mode
 from .metrics import compute_metrics
 from .result import BacktestResult
 from .strategy_protocol import Bar, BarContext, OrderIntent, Position
 from .universe import ResolvedDailyUniverse, load_master, resolve_injected_universe
 
-# Result metadata. 0.6.3: fixed candidates are PIT-gated on every decision day.
-CORE_ENGINE_VERSION = "0.7.0"
+# Result metadata. 0.8.0: am_signal_pm_close personal-retrospective DRAFT path.
+CORE_ENGINE_VERSION = "0.8.0"
 
 # J-Quants HolidayDivision: "1" == trading day (exchange open).
 _TRADING_HOLIDAY_DIVISION = "1"
@@ -82,10 +86,21 @@ def _params_hash(params: dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
-def _make_feature_accessor(as_of: str, db_path: Any):
+def _make_feature_accessor(
+    as_of: str,
+    db_path: Any,
+    *,
+    daily_bars_capability: Any = None,
+):
     """Bind the trusted PIT scope used by one decision context."""
 
-    prepared_frame = _active_personal_prepared_frame(db_path)
+    # AM session bars are field-time reconstructions; the prepared-frame cache
+    # key is not session-specific, so the optimization stays off for AM.
+    prepared_frame = (
+        None
+        if daily_bars_capability is not None
+        else _active_personal_prepared_frame(db_path)
+    )
 
     def compute_feature(
         feature_id: str, *, version: str | None = None, **inputs: Any
@@ -131,12 +146,23 @@ def _make_feature_accessor(as_of: str, db_path: Any):
                         metadata=dict(prepared.metadata),
                     )
 
-        completed = features.compute(
-            definition if version is not None else feature_id,
-            as_of=as_of,
-            db_path=db_path,
-            **inputs,
-        )
+        compute_kw = dict(inputs)
+        target = definition if version is not None else feature_id
+        if daily_bars_capability is not None:
+            completed = compute_with_engine_daily_bars_capability(
+                target,
+                as_of=as_of,
+                db_path=db_path,
+                daily_bars_capability=daily_bars_capability,
+                **compute_kw,
+            )
+        else:
+            completed = features.compute(
+                target,
+                as_of=as_of,
+                db_path=db_path,
+                **compute_kw,
+            )
         if prepared_frame is not None and definition_digest is not None:
             try:
                 prepared_frame.store_feature(
@@ -210,6 +236,19 @@ def _bar_from_row(row: dict[str, Any], *, price_basis: PriceBasis) -> Bar:
     )
 
 
+def _positive_finite_price(value: Any) -> float | None:
+    """Return a usable price, or None without substituting another field."""
+    if value is None:
+        return None
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(price) or price <= 0.0:
+        return None
+    return price
+
+
 def _bar_price(bar: Bar, *, price_basis: PriceBasis) -> float | None:
     """Return a price in the explicitly selected unit system."""
     if price_basis == RAW:
@@ -264,6 +303,73 @@ def _load_snapshot(
         entry["close"] = (
             _bar_price(bars[-1], price_basis=price_basis) if bars else None
         )
+    return snapshot
+
+
+def _load_am_signal_snapshot(
+    as_of: str,
+    codes: set[str],
+    to_date: str,
+    lookback_days: int,
+    *,
+    db_path: Any,
+    price_basis: PriceBasis,
+) -> dict[str, dict[str, Any]]:
+    """AM signal snapshot: D decision prices are exact-session MAdjC only.
+
+    A missing D morning row or non-positive MAdjC leaves that code unpriced.
+    Prior lookback bars stay available for history, but must not become
+    ``prices_d`` and must not abort a multi-name run.
+    """
+    snapshot: dict[str, dict[str, Any]] = {
+        code: {"close": None, "bars": []} for code in codes
+    }
+    if not codes:
+        return snapshot
+    from_date = _shift_date(to_date, -lookback_days)
+    result = pit.get_personal_retrospective_am_signal_equity_bars_daily(
+        as_of=as_of,
+        from_event=from_date,
+        to_event=to_date,
+        codes=tuple(sorted(codes)),
+        db_path=db_path,
+    )
+    for row in result.rows:
+        code = row.get("code")
+        if code not in snapshot:
+            continue
+        day = str(row.get("date") or "")
+        if day == to_date:
+            morning = _positive_finite_price(row.get("adjustment_close"))
+            if morning is None:
+                snapshot[code]["bars"].append(
+                    Bar(
+                        code=str(code),
+                        date=day,
+                        open=None,
+                        high=None,
+                        low=None,
+                        close=None,
+                        volume=None,
+                        adjustment_close=None,
+                    )
+                )
+            else:
+                snapshot[code]["bars"].append(
+                    _bar_from_row(row, price_basis=price_basis)
+                )
+        else:
+            snapshot[code]["bars"].append(
+                _bar_from_row(row, price_basis=price_basis)
+            )
+    for entry in snapshot.values():
+        morning = None
+        for bar in reversed(entry["bars"]):
+            if bar.date != to_date:
+                continue
+            morning = _positive_finite_price(bar.adjustment_close)
+            break
+        entry["close"] = morning
     return snapshot
 
 
@@ -441,6 +547,30 @@ def _validate_prepared_adjustment_window(
         )
 
 
+def _pm_fill_closes(
+    *, session_date: str, codes: set[str], db_path: Any
+) -> dict[str, float]:
+    """D afternoon adjustment close only. Missing AAdjC blocks that code's fill."""
+    if not codes:
+        return {}
+    result = pit.get_personal_retrospective_pm_fill_equity_bars_daily(
+        as_of=close_as_of(session_date),
+        session_date=session_date,
+        codes=tuple(sorted(codes)),
+        db_path=db_path,
+    )
+    prices: dict[str, float] = {}
+    for row in result.rows:
+        code = row.get("code")
+        if not code:
+            continue
+        price = _positive_finite_price(row.get("adjustment_close"))
+        if price is None:
+            continue
+        prices[str(code)] = price
+    return prices
+
+
 def _session_prices(
     snapshot: dict[str, dict[str, Any]], session_date: str, *, price_basis: PriceBasis
 ) -> dict[str, float]:
@@ -450,6 +580,12 @@ def _session_prices(
         for bar in reversed(entry["bars"]):
             if bar.date != session_date:
                 continue
+            if (
+                price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
+                and bar.adjustment_close is None
+            ):
+                # Exact-session row is present but unusable; do not walk back.
+                break
             price = _bar_price(bar, price_basis=price_basis)
             if price is not None and price > 0:
                 prices[code] = price
@@ -760,6 +896,11 @@ def run_backtest(
     """
     mode = get_mode(execution_mode)
     resolved_price_basis = require_supported_price_basis(price_basis)
+    am_pm_mode = mode.name == AM_SIGNAL_PM_CLOSE.name
+    if am_pm_mode and resolved_price_basis != PERSONAL_RETROSPECTIVE_ADJUSTED:
+        raise ValueError(
+            "am_signal_pm_close is allowed only with PERSONAL_RETROSPECTIVE_ADJUSTED"
+        )
     resolved_db_path = resolve_db_path(db_path)
     cost_model = cost_model or standard_cost()
     resolved_candidates = resolve_injected_universe(
@@ -799,7 +940,8 @@ def run_backtest(
     # next_close only: orders decided on day D fill on day D+1.
     pending: dict[str, Any] | None = None
     prepared_strategy_frame = bool(
-        mode.fill_offset == 1
+        mode.name == NEXT_CLOSE.name
+        and not am_pm_mode
         and _active_personal_prepared_frame(resolved_db_path) is not None
         and getattr(strategy, "personal_prepared_frame_eligible", False) is True
     )
@@ -824,85 +966,110 @@ def run_backtest(
         )
         held = set(shares) | set(universe_d)
 
-        snapshot_loader = (
-            _load_prepared_strategy_snapshot
-            if prepared_strategy_frame
-            else _load_snapshot
-        )
-        snap_close = snapshot_loader(
-            close_as_of(d),
-            held,
-            d,
-            lookback_days,
-            db_path=resolved_db_path,
-            price_basis=resolved_price_basis,
-        )
-        fill_closes = _session_prices(
-            snap_close, d, price_basis=resolved_price_basis
-        )
-
-        # next_close: close is in the decision set, so marks may advance before fills.
-        if mode.fill_offset == 1:
-            _update_marks(marks, fill_closes, d)
-
-        if mode.fill_offset == 1 and pending is not None:
-            # A prior-day order cannot fill after its code leaves today's
-            # PIT membership.  Dropped targets are cancelled permanently;
-            # existing holdings remain subject to the stale-mark policy.
-            eligible_targets = {
-                code: target
-                for code, target in pending["targets"].items()
-                if code in master_d
-            }
-            shares, cash, leftover = _apply_fills(
-                eligible_targets,
-                decision_date=pending["decision_date"],
-                fill_date=d,
-                closes=fill_closes,
-                cost_model=cost_model,
-                shares=shares,
-                cash=cash,
-                trades=trades,
-            )
-            pending = (
-                {"targets": leftover, "decision_date": pending["decision_date"]}
-                if leftover
-                else None
-            )
-
-        if mode.fill_offset == 1:
-            snap_dec = snap_close  # next_close decides at close(d)
-            decision_equity = _mark_equity(shares, marks, cash)
-            # next_close: financing on post-fill end-of-day book.
-            cash, s_gap, l_gap = _apply_daily_financing(
-                date=d,
-                shares=shares,
-                marks=marks,
-                closes=fill_closes,
-                cash=cash,
-                short_financing=short_financing,
-                leverage_financing=leverage_financing,
-                financing_events=financing_events,
-                trades=trades,
-            )
-            n_short_financing_gaps += s_gap
-            n_leverage_financing_gaps += l_gap
-            equity_curve.append(
-                _equity_point(
-                    date=d, shares=shares, marks=marks, cash=cash
-                )
-            )
-        else:
-            # same_day_close decides at open(d): d's close is NOT yet visible.
-            snap_dec = _load_snapshot(
-                mode.decision_as_of(d),
+        daily_bars_capability = None
+        if am_pm_mode:
+            snap_dec = _load_am_signal_snapshot(
+                decision_as_of,
                 held,
                 d,
                 lookback_days,
                 db_path=resolved_db_path,
                 price_basis=resolved_price_basis,
             )
-            decision_equity = _mark_equity(shares, marks, cash)
+            fill_closes = _pm_fill_closes(
+                session_date=d,
+                codes=held,
+                db_path=resolved_db_path,
+            )
+            morning_prices = _session_prices(
+                snap_dec, d, price_basis=resolved_price_basis
+            )
+            decision_marks = dict(marks)
+            _update_marks(decision_marks, morning_prices, d)
+            decision_equity = _mark_equity(shares, decision_marks, cash)
+            daily_bars_capability = bind_personal_retrospective_am_session_daily_bars(
+                as_of=decision_as_of, db_path=resolved_db_path
+            )
+        else:
+            snapshot_loader = (
+                _load_prepared_strategy_snapshot
+                if prepared_strategy_frame
+                else _load_snapshot
+            )
+            snap_close = snapshot_loader(
+                close_as_of(d),
+                held,
+                d,
+                lookback_days,
+                db_path=resolved_db_path,
+                price_basis=resolved_price_basis,
+            )
+            fill_closes = _session_prices(
+                snap_close, d, price_basis=resolved_price_basis
+            )
+
+            # next_close: close is in the decision set, so marks may advance before fills.
+            if mode.fill_offset == 1:
+                _update_marks(marks, fill_closes, d)
+
+            if mode.fill_offset == 1 and pending is not None:
+                # A prior-day order cannot fill after its code leaves today's
+                # PIT membership.  Dropped targets are cancelled permanently;
+                # existing holdings remain subject to the stale-mark policy.
+                eligible_targets = {
+                    code: target
+                    for code, target in pending["targets"].items()
+                    if code in master_d
+                }
+                shares, cash, leftover = _apply_fills(
+                    eligible_targets,
+                    decision_date=pending["decision_date"],
+                    fill_date=d,
+                    closes=fill_closes,
+                    cost_model=cost_model,
+                    shares=shares,
+                    cash=cash,
+                    trades=trades,
+                )
+                pending = (
+                    {"targets": leftover, "decision_date": pending["decision_date"]}
+                    if leftover
+                    else None
+                )
+
+            if mode.fill_offset == 1:
+                snap_dec = snap_close  # next_close decides at close(d)
+                decision_equity = _mark_equity(shares, marks, cash)
+                # next_close: financing on post-fill end-of-day book.
+                cash, s_gap, l_gap = _apply_daily_financing(
+                    date=d,
+                    shares=shares,
+                    marks=marks,
+                    closes=fill_closes,
+                    cash=cash,
+                    short_financing=short_financing,
+                    leverage_financing=leverage_financing,
+                    financing_events=financing_events,
+                    trades=trades,
+                )
+                n_short_financing_gaps += s_gap
+                n_leverage_financing_gaps += l_gap
+                equity_curve.append(
+                    _equity_point(
+                        date=d, shares=shares, marks=marks, cash=cash
+                    )
+                )
+            else:
+                # same_day_close decides at open(d): d's close is NOT yet visible.
+                snap_dec = _load_snapshot(
+                    mode.decision_as_of(d),
+                    held,
+                    d,
+                    lookback_days,
+                    db_path=resolved_db_path,
+                    price_basis=resolved_price_basis,
+                )
+                decision_equity = _mark_equity(shares, marks, cash)
         prices_d = {c: snap_dec[c]["close"] for c in universe_d}
         bars_d = {c: tuple(snap_dec[c]["bars"]) for c in universe_d}
         positions = {
@@ -923,7 +1090,11 @@ def run_backtest(
         object.__setattr__(
             ctx,
             "_feature_accessor",
-            _make_feature_accessor(decision_as_of, resolved_db_path),
+            _make_feature_accessor(
+                decision_as_of,
+                resolved_db_path,
+                daily_bars_capability=daily_bars_capability,
+            ),
         )
 
         intents = strategy.on_bar(ctx)
@@ -1072,6 +1243,32 @@ def run_backtest(
         "db_path": str(resolved_db_path),
         "trading_days": len(days),
     }
+    if am_pm_mode:
+        metadata["valuation_mark_policy"] = (
+            "decision_marks_d_morning_adjustment_close;"
+            "pm_valuation_afternoon_adjustment_close_only"
+        )
+        metadata["execution_field_time_semantics"] = (
+            "draft_personal_retrospective_am_mask_of_equities_bars_daily; "
+            "not a claim that the full daily record was published at 11:30"
+        )
+        metadata["weight_sizing_rule"] = (
+            "target_shares_from_d_morning_prices; "
+            "realized_weights_may_drift_by_pm_close"
+        )
+        provenance = dict(metadata["price_basis_provenance"])
+        provenance["signal_fields"] = [
+            "morning_adjustment_close",
+            "morning_adjustment_volume",
+        ]
+        provenance["fill_fields"] = ["afternoon_adjustment_close"]
+        provenance["field_time_semantics"] = (
+            "draft_reconstruction_not_11:30_publication"
+        )
+        provenance["weight_sizing"] = (
+            "causal_morning_prices_pm_fill_may_drift"
+        )
+        metadata["price_basis_provenance"] = provenance
 
     return BacktestResult(
         equity_curve=equity_curve,

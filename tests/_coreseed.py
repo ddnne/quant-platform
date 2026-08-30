@@ -65,6 +65,13 @@ def _bar_rows(
     *,
     available_at_for: dict[str, str] | None = None,
     adjustment_prices: dict[str, dict[str, float]] | None = None,
+    morning_adjustment_prices: dict[str, dict[str, float]] | None = None,
+    afternoon_adjustment_prices: dict[str, dict[str, float]] | None = None,
+    morning_adjustment_volumes: dict[str, dict[str, float]] | None = None,
+    afternoon_adjustment_volumes: dict[str, dict[str, float]] | None = None,
+    morning_turnover_values: dict[str, dict[str, float]] | None = None,
+    turnover_values: dict[str, dict[str, float]] | None = None,
+    market_caps: dict[str, dict[str, float]] | None = None,
 ) -> list[dict]:
     """``prices[code][date] = close``. ``available_at_for[date]`` overrides pub time."""
     rows: list[dict] = []
@@ -93,6 +100,41 @@ def _bar_rows(
                         else None
                     ),
                     "volume": 1000.0,
+                    "turnover_value": (
+                        turnover_values.get(code, {}).get(d)
+                        if turnover_values is not None
+                        else None
+                    ),
+                    "market_cap": (
+                        market_caps.get(code, {}).get(d)
+                        if market_caps is not None
+                        else None
+                    ),
+                    "morning_adjustment_close": (
+                        morning_adjustment_prices.get(code, {}).get(d)
+                        if morning_adjustment_prices is not None
+                        else None
+                    ),
+                    "afternoon_adjustment_close": (
+                        afternoon_adjustment_prices.get(code, {}).get(d)
+                        if afternoon_adjustment_prices is not None
+                        else None
+                    ),
+                    "morning_adjustment_volume": (
+                        morning_adjustment_volumes.get(code, {}).get(d)
+                        if morning_adjustment_volumes is not None
+                        else None
+                    ),
+                    "afternoon_adjustment_volume": (
+                        afternoon_adjustment_volumes.get(code, {}).get(d)
+                        if afternoon_adjustment_volumes is not None
+                        else None
+                    ),
+                    "morning_turnover_value": (
+                        morning_turnover_values.get(code, {}).get(d)
+                        if morning_turnover_values is not None
+                        else None
+                    ),
                 }
             )
     return rows
@@ -114,6 +156,13 @@ def seed_db(
     prices: dict | None = None,
     bar_available_at_for: dict[str, str] | None = None,
     adjustment_prices: dict | None = None,
+    morning_adjustment_prices: dict | None = None,
+    afternoon_adjustment_prices: dict | None = None,
+    morning_adjustment_volumes: dict | None = None,
+    afternoon_adjustment_volumes: dict | None = None,
+    morning_turnover_values: dict | None = None,
+    turnover_values: dict | None = None,
+    market_caps: dict | None = None,
     master_available_at: str | None = None,
 ) -> Path:
     """Create a structured DB with calendar + master + bars; return its path."""
@@ -130,6 +179,13 @@ def seed_db(
             prices,
             available_at_for=bar_available_at_for,
             adjustment_prices=adjustment_prices,
+            morning_adjustment_prices=morning_adjustment_prices,
+            afternoon_adjustment_prices=afternoon_adjustment_prices,
+            morning_adjustment_volumes=morning_adjustment_volumes,
+            afternoon_adjustment_volumes=afternoon_adjustment_volumes,
+            morning_turnover_values=morning_turnover_values,
+            turnover_values=turnover_values,
+            market_caps=market_caps,
         ),
     )
     store.close()

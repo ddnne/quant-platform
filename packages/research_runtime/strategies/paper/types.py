@@ -91,9 +91,14 @@ class PaperRunConfig:
     def __post_init__(self) -> None:
         if not self.start or not self.end or self.start > self.end:
             raise ValueError("paper period requires start <= end")
-        if self.execution_mode not in {"next_close", "same_day_close"}:
+        if self.execution_mode not in {
+            "next_close",
+            "same_day_close",
+            "am_signal_pm_close",
+        }:
             raise ValueError(
-                "execution_mode must be 'next_close' or 'same_day_close'"
+                "execution_mode must be 'next_close', 'same_day_close', "
+                "or 'am_signal_pm_close'"
             )
         if float(self.cost_bps) < 0:
             raise ValueError("cost_bps must be >= 0")
@@ -127,6 +132,13 @@ class PaperRunConfig:
         object.__setattr__(
             self, "price_basis", resolved_price_basis
         )
+        if (
+            self.execution_mode == "am_signal_pm_close"
+            and resolved_price_basis != PERSONAL_RETROSPECTIVE_ADJUSTED
+        ):
+            raise ValueError(
+                "am_signal_pm_close is allowed only with PERSONAL_RETROSPECTIVE_ADJUSTED"
+            )
         if self.universe is not None:
             if getattr(self.universe, "membership_by_date", None) is not None:
                 if not self.universe.membership_by_date:
