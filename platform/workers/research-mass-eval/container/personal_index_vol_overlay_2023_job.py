@@ -37,6 +37,7 @@ from research.personal_index_vol_overlay import (
     AM_PM_BASE_SLEEVE_SCHEMA,
     AM_PM_EXECUTION_MODE,
     AmPmFillOutcomeEvidence,
+    AmPmLaggedFeatureEvidence,
     AmPmSignalEvidence,
     BETA_MIN_RETURNS,
     IndexVolOverlayAmPmObservation,
@@ -1051,7 +1052,7 @@ def build_am_pm_observations(
         )
     realized = _realized_vol_20(session_dates, topix_closes)
     observations: list[IndexVolOverlayAmPmObservation] = []
-    for day in session_dates:
+    for index, day in enumerate(session_dates):
         option = option_feature_values(feature_rows.get(day))
         raw_base_vol = _number(base_vol_percent.get(day), positive=True)
         etf = etf_ma.get(day)
@@ -1069,6 +1070,7 @@ def build_am_pm_observations(
                 base_sleeve_pm_nav=pm_nav,
                 topix_etf_13060_aadjc=etf_a,
             )
+        previous = session_dates[index - 1] if index else None
         observations.append(
             IndexVolOverlayAmPmObservation(
                 date=day,
@@ -1077,6 +1079,14 @@ def build_am_pm_observations(
                     signal_available_at=f"{day}T12:30:00+09:00",
                     base_sleeve_am_nav=_number(source.get("am_nav"), positive=True),
                     topix_etf_13060_madjc=etf[0],
+                ),
+                lagged_features=AmPmLaggedFeatureEvidence(
+                    source_session_date=day,
+                    feature_available_at=f"{day}T15:00:00+09:00",
+                    prior_source_session_date=previous,
+                    prior_feature_available_at=(
+                        f"{previous}T15:00:00+09:00" if previous else None
+                    ),
                     topix_cash_close=topix_closes.get(day),
                     n225_cash_close=(n225_closes or {}).get(day),
                     n225_base_vol=(raw_base_vol / 100.0 if raw_base_vol else None),

@@ -17,11 +17,13 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from statistics import mean, median
-from typing import Any, Final, Mapping, Sequence
+from typing import Any, Final, Iterator, Mapping, Sequence
 
 from research.factor_cohorts import get_research_cohort
 from research.options_225_smile_features import OPTIONS_225_SMILE_SURFACE_SCOPE
@@ -2099,7 +2101,13 @@ AM_PM_SIGNAL_EVIDENCE_DIGEST_SCHEMA: Final = (
 AM_PM_FILL_OUTCOME_EVIDENCE_DIGEST_SCHEMA: Final = (
     "index-vol-overlay-am-pm-fill-outcome-evidence/v1"
 )
+AM_PM_LAGGED_FEATURE_EVIDENCE_DIGEST_SCHEMA: Final = (
+    "index-vol-overlay-am-pm-lagged-feature-evidence/v1"
+)
 _AM_PM_PM_CLOSE_TIME = time(hour=15, minute=0, second=0, tzinfo=_JST)
+_AM_PM_VERIFIED_BINDING: ContextVar[tuple[str, str] | None] = ContextVar(
+    "am_pm_verified_binding", default=None
+)
 
 
 class AmPmBaseProducerUnavailable(ValueError):
@@ -2142,25 +2150,16 @@ def _am_pm_repo_bindings() -> tuple[str, str] | None:
 
 
 def am_pm_base_producer_unavailable_reason() -> str | None:
-    bindings = _am_pm_repo_bindings()
-    return None if bindings is not None else AM_PM_BASE_PRODUCER_UNAVAILABLE
+    try:
+        verified_am_pm_base_digests()
+    except AmPmBaseProducerUnavailable:
+        return AM_PM_BASE_PRODUCER_UNAVAILABLE
+    return None
 
 
-def resolve_am_pm_base_digests(
-    *,
-    fixture_definition: Mapping[str, str] | None = None,
+def _validated_am_pm_fixture_digests(
+    fixture_definition: Mapping[str, str],
 ) -> tuple[str, str]:
-    """Return the AM/PM spec/cohort digests or fail closed.
-
-    The repo producer is required in production.  Tests may pass a fixture
-    that binds the same AM identities without using the next-close digest.
-    """
-
-    repo = _am_pm_repo_bindings()
-    if repo is not None:
-        return repo
-    if fixture_definition is None:
-        raise AmPmBaseProducerUnavailable()
     spec = str(fixture_definition.get("strategy_spec_digest") or "")
     cohort = str(fixture_definition.get("cohort_digest") or "")
     if (
@@ -2174,6 +2173,43 @@ def resolve_am_pm_base_digests(
     ):
         raise AmPmBaseProducerUnavailable()
     return spec, cohort
+
+
+def resolve_am_pm_base_digests(
+    *,
+    fixture_definition: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
+    """Return the AM/PM spec/cohort digests or fail closed."""
+
+    repo = _am_pm_repo_bindings()
+    if repo is not None:
+        return repo
+    installed = _AM_PM_VERIFIED_BINDING.get()
+    if installed is not None:
+        return installed
+    if fixture_definition is None:
+        raise AmPmBaseProducerUnavailable()
+    return _validated_am_pm_fixture_digests(fixture_definition)
+
+
+def verified_am_pm_base_digests() -> tuple[str, str]:
+    """Require a live AM producer/repo binding or a verified test fixture."""
+
+    return resolve_am_pm_base_digests()
+
+
+@contextmanager
+def am_pm_verified_base_binding(
+    fixture_definition: Mapping[str, str],
+) -> Iterator[tuple[str, str]]:
+    """Install a narrow verified AM producer binding for tests."""
+
+    spec, cohort = _validated_am_pm_fixture_digests(fixture_definition)
+    token = _AM_PM_VERIFIED_BINDING.set((spec, cohort))
+    try:
+        yield spec, cohort
+    finally:
+        _AM_PM_VERIFIED_BINDING.reset(token)
 
 
 def _am_pm_parse_timestamp(value: str, *, label: str) -> datetime:
@@ -2190,24 +2226,13 @@ def _am_pm_parse_timestamp(value: str, *, label: str) -> datetime:
 
 @dataclass(frozen=True, slots=True)
 class AmPmSignalEvidence:
-    """Morning decision evidence.  PM fields are forbidden here."""
+    """D-morning decision evidence.  Full-close fields are forbidden here."""
 
     date: str
     signal_available_at: str
     information_cutoff_jst: str = AM_PM_NON_PRICE_CUTOFF_JST
     base_sleeve_am_nav: float | None = None
     topix_etf_13060_madjc: float | None = None
-    topix_cash_close: float | None = None
-    n225_cash_close: float | None = None
-    n225_base_vol: float | None = None
-    n225_atm_iv: float | None = None
-    topix_realized_vol_20: float | None = None
-    n225_front_atm_iv: float | None = None
-    n225_next_atm_iv: float | None = None
-    n225_front_downside_wing_iv: float | None = None
-    n225_next_downside_wing_iv: float | None = None
-    svi_equivalent_atm_term_ratio: float | None = None
-    svi_equivalent_downside_smile_term_ratio: float | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -2229,6 +2254,83 @@ class AmPmSignalEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class AmPmLaggedFeatureEvidence:
+    """Close-sourced option/SVI/cash/RV evidence with honest availability.
+
+    Ordinary overlay D signals consume the D-1 object.  Smile transport
+    consumes the D-2 and D-1 objects via ``prior_source_session_date``.
+    """
+
+    source_session_date: str
+    feature_available_at: str
+    prior_source_session_date: str | None = None
+    prior_feature_available_at: str | None = None
+    topix_cash_close: float | None = None
+    n225_cash_close: float | None = None
+    n225_base_vol: float | None = None
+    n225_atm_iv: float | None = None
+    topix_realized_vol_20: float | None = None
+    n225_front_atm_iv: float | None = None
+    n225_next_atm_iv: float | None = None
+    n225_front_downside_wing_iv: float | None = None
+    n225_next_downside_wing_iv: float | None = None
+    svi_equivalent_atm_term_ratio: float | None = None
+    svi_equivalent_downside_smile_term_ratio: float | None = None
+
+    def __post_init__(self) -> None:
+        try:
+            source = date.fromisoformat(self.source_session_date)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "lagged feature source_session_date must be canonical ISO"
+            ) from exc
+        if source.isoformat() != self.source_session_date:
+            raise ValueError(
+                "lagged feature source_session_date must be canonical ISO"
+            )
+        available = _am_pm_parse_timestamp(
+            self.feature_available_at, label="feature_available_at"
+        )
+        post_close = datetime.combine(source, _AM_PM_PM_CLOSE_TIME)
+        if available.date() != source:
+            raise ValueError(
+                "lagged feature availability must fall on the source session date"
+            )
+        if available < post_close:
+            raise ValueError(
+                "lagged close features cannot be labeled as D-morning 12:30 evidence"
+            )
+        if (self.prior_source_session_date is None) != (
+            self.prior_feature_available_at is None
+        ):
+            raise ValueError("lagged prior source date and availability must be paired")
+        if self.prior_source_session_date is not None:
+            try:
+                prior = date.fromisoformat(self.prior_source_session_date)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "lagged prior_source_session_date must be canonical ISO"
+                ) from exc
+            if prior.isoformat() != self.prior_source_session_date or prior >= source:
+                raise ValueError(
+                    "lagged prior source must be an earlier official session"
+                )
+            prior_available = _am_pm_parse_timestamp(
+                str(self.prior_feature_available_at),
+                label="prior_feature_available_at",
+            )
+            prior_close = datetime.combine(prior, _AM_PM_PM_CLOSE_TIME)
+            if prior_available.date() != prior:
+                raise ValueError(
+                    "lagged prior availability must fall on the prior source session"
+                )
+            if prior_available < prior_close:
+                raise ValueError(
+                    "D-2 close features cannot be labeled as D-morning 12:30 evidence"
+                )
+
+
+@dataclass(frozen=True, slots=True)
 class AmPmFillOutcomeEvidence:
     """Afternoon fill/mark evidence.  Morning timestamps are forbidden."""
 
@@ -2246,26 +2348,46 @@ class AmPmFillOutcomeEvidence:
         if session.isoformat() != self.date:
             raise ValueError("fill outcome date must be canonical ISO")
         pm_open = datetime.combine(session, _AM_PM_PM_CLOSE_TIME)
-        for label in ("fill_available_at", "outcome_available_at"):
-            available = _am_pm_parse_timestamp(getattr(self, label), label=label)
+        fill_at = _am_pm_parse_timestamp(
+            self.fill_available_at, label="fill_available_at"
+        )
+        outcome_at = _am_pm_parse_timestamp(
+            self.outcome_available_at, label="outcome_available_at"
+        )
+        for label, available in (
+            ("fill_available_at", fill_at),
+            ("outcome_available_at", outcome_at),
+        ):
             if available.date() != session or available < pm_open:
                 raise ValueError(
                     "PM outcome evidence must be timestamped at D PM close, "
                     "not a morning timestamp"
                 )
+        if outcome_at < fill_at:
+            raise ValueError(
+                "outcome_available_at must not precede fill_available_at"
+            )
 
 
 @dataclass(frozen=True, slots=True)
 class IndexVolOverlayAmPmObservation:
-    """One official session: morning signal evidence plus optional PM outcome."""
+    """One official session: morning M, lagged close features, optional PM."""
 
     date: str
     signal: AmPmSignalEvidence
+    lagged_features: AmPmLaggedFeatureEvidence | None = None
     fill_outcome: AmPmFillOutcomeEvidence | None = None
 
     def __post_init__(self) -> None:
         if self.signal.date != self.date:
             raise ValueError("signal evidence date must match the session date")
+        if (
+            self.lagged_features is not None
+            and self.lagged_features.source_session_date != self.date
+        ):
+            raise ValueError(
+                "lagged feature source_session_date must match the session date"
+            )
         if self.fill_outcome is not None and self.fill_outcome.date != self.date:
             raise ValueError("fill outcome date must match the session date")
 
@@ -2295,6 +2417,22 @@ def canonical_am_pm_fill_outcome_evidence_digest(
     )
 
 
+def canonical_am_pm_lagged_feature_evidence_digest(
+    observations: Sequence[IndexVolOverlayAmPmObservation],
+) -> str:
+    return _canonical_digest(
+        {
+            "schema_version": AM_PM_LAGGED_FEATURE_EVIDENCE_DIGEST_SCHEMA,
+            "rows": [
+                asdict(row.lagged_features)
+                if row.lagged_features is not None
+                else None
+                for row in observations
+            ],
+        }
+    )
+
+
 def canonical_prepared_am_pm_panel_digest(
     observations: Sequence[IndexVolOverlayAmPmObservation],
 ) -> str:
@@ -2304,12 +2442,16 @@ def canonical_prepared_am_pm_panel_digest(
             "signal_evidence_digest": canonical_am_pm_signal_evidence_digest(
                 observations
             ),
+            "lagged_feature_evidence_digest": (
+                canonical_am_pm_lagged_feature_evidence_digest(observations)
+            ),
             "fill_outcome_evidence_digest": (
                 canonical_am_pm_fill_outcome_evidence_digest(observations)
             ),
             "sessions": [
                 {
                     "date": row.date,
+                    "has_lagged_features": row.lagged_features is not None,
                     "has_fill_outcome": row.fill_outcome is not None,
                 }
                 for row in observations
@@ -2329,6 +2471,7 @@ class PreparedIndexVolOverlayAmPmPanelManifest:
     trading_calendar_digest: str
     prepared_panel_digest: str
     signal_evidence_digest: str
+    lagged_feature_evidence_digest: str
     fill_outcome_evidence_digest: str
     temporal_contract_digest: str
     proxy_mapping_digest: str
@@ -2380,20 +2523,19 @@ class PreparedIndexVolOverlayAmPmPanelManifest:
             "trading_calendar_digest",
             "prepared_panel_digest",
             "signal_evidence_digest",
+            "lagged_feature_evidence_digest",
             "fill_outcome_evidence_digest",
             "temporal_contract_digest",
             "proxy_mapping_digest",
         ):
             if not _canonical_sha256(getattr(self, name)):
                 raise ValueError(f"{name} must be a canonical sha256 digest")
+        expected_spec, expected_cohort = verified_am_pm_base_digests()
         if (
-            self.strategy_spec_digest == EXPECTED_BASE_STRATEGY_SPEC_DIGEST
+            self.strategy_spec_digest != expected_spec
+            or self.cohort_digest != expected_cohort
+            or self.strategy_spec_digest == EXPECTED_BASE_STRATEGY_SPEC_DIGEST
             or self.cohort_digest == EXPECTED_BASE_COHORT_DIGEST
-        ):
-            raise AmPmBaseProducerUnavailable()
-        repo = _am_pm_repo_bindings()
-        if repo is not None and (
-            self.strategy_spec_digest != repo[0] or self.cohort_digest != repo[1]
         ):
             raise AmPmBaseProducerUnavailable()
         if self.temporal_contract_digest != am_pm_temporal_contract_digest():
@@ -2432,6 +2574,10 @@ def _validate_am_pm_observations(
             )
         if not isinstance(row.signal, AmPmSignalEvidence):
             raise TypeError("session signal evidence is required")
+        if row.lagged_features is not None and not isinstance(
+            row.lagged_features, AmPmLaggedFeatureEvidence
+        ):
+            raise TypeError("lagged feature evidence is invalid")
         if row.fill_outcome is not None and not isinstance(
             row.fill_outcome, AmPmFillOutcomeEvidence
         ):
@@ -2460,6 +2606,12 @@ def _validate_am_pm_manifest(
         raise TypeError(
             "AM/PM job must not accept an old next-close prepared panel"
         )
+    expected_spec, expected_cohort = verified_am_pm_base_digests()
+    if (
+        manifest.strategy_spec_digest != expected_spec
+        or manifest.cohort_digest != expected_cohort
+    ):
+        raise AmPmBaseProducerUnavailable()
     authoritative = _canonical_authoritative_session_dates(
         authoritative_session_dates
     )
@@ -2484,6 +2636,13 @@ def _validate_am_pm_manifest(
         observations
     ):
         raise ValueError("signal_evidence_digest does not match morning evidence")
+    if (
+        manifest.lagged_feature_evidence_digest
+        != canonical_am_pm_lagged_feature_evidence_digest(observations)
+    ):
+        raise ValueError(
+            "lagged_feature_evidence_digest does not match close-sourced features"
+        )
     if (
         manifest.fill_outcome_evidence_digest
         != canonical_am_pm_fill_outcome_evidence_digest(observations)
@@ -2524,7 +2683,7 @@ def build_prepared_am_pm_panel_manifest(
         raise ValueError(
             "observation dates must exactly match authoritative session dates"
         )
-    return PreparedIndexVolOverlayAmPmPanelManifest(
+    payload = dict(
         strategy_spec_digest=strategy_spec_digest,
         cohort_digest=cohort_digest,
         snapshot_digest=snapshot_digest,
@@ -2532,6 +2691,9 @@ def build_prepared_am_pm_panel_manifest(
         trading_calendar_digest=canonical_trading_calendar_digest(authoritative),
         prepared_panel_digest=canonical_prepared_am_pm_panel_digest(observations),
         signal_evidence_digest=canonical_am_pm_signal_evidence_digest(observations),
+        lagged_feature_evidence_digest=canonical_am_pm_lagged_feature_evidence_digest(
+            observations
+        ),
         fill_outcome_evidence_digest=canonical_am_pm_fill_outcome_evidence_digest(
             observations
         ),
@@ -2541,6 +2703,10 @@ def build_prepared_am_pm_panel_manifest(
         session_date_end=authoritative[-1],
         session_count=len(authoritative),
     )
+    if fixture_definition is None:
+        return PreparedIndexVolOverlayAmPmPanelManifest(**payload)
+    with am_pm_verified_base_binding(fixture_definition):
+        return PreparedIndexVolOverlayAmPmPanelManifest(**payload)
 
 
 def _nav_return(
@@ -2670,14 +2836,22 @@ def _am_pm_option_feature_value(
         )
 
         def __init__(self, source: IndexVolOverlayAmPmObservation) -> None:
-            signal = source.signal
-            self.n225_base_vol = signal.n225_base_vol
-            self.n225_atm_iv = signal.n225_atm_iv
-            self.topix_realized_vol_20 = signal.topix_realized_vol_20
-            self.n225_front_atm_iv = signal.n225_front_atm_iv
-            self.n225_next_atm_iv = signal.n225_next_atm_iv
-            self.n225_front_downside_wing_iv = signal.n225_front_downside_wing_iv
-            self.n225_next_downside_wing_iv = signal.n225_next_downside_wing_iv
+            lagged = source.lagged_features
+            self.n225_base_vol = None if lagged is None else lagged.n225_base_vol
+            self.n225_atm_iv = None if lagged is None else lagged.n225_atm_iv
+            self.topix_realized_vol_20 = (
+                None if lagged is None else lagged.topix_realized_vol_20
+            )
+            self.n225_front_atm_iv = (
+                None if lagged is None else lagged.n225_front_atm_iv
+            )
+            self.n225_next_atm_iv = None if lagged is None else lagged.n225_next_atm_iv
+            self.n225_front_downside_wing_iv = (
+                None if lagged is None else lagged.n225_front_downside_wing_iv
+            )
+            self.n225_next_downside_wing_iv = (
+                None if lagged is None else lagged.n225_next_downside_wing_iv
+            )
 
     viewed = [_OptionView(row) for row in rows]
     return _feature_value(candidate, viewed, option_index)  # type: ignore[arg-type]
@@ -2877,6 +3051,8 @@ def _evaluate_am_pm_unit_plans(
         execution_valid = sleeve_a is not None and (
             (etf_a is not None) if need_etf else True
         )
+        intended_delta_sleeve = target_sleeve_units - sleeve_units
+        intended_delta_etf = target_etf_units - etf_units
         delta_sleeve = 0.0
         delta_etf = 0.0
         sleeve_fill_notional = 0.0
@@ -2885,8 +3061,8 @@ def _evaluate_am_pm_unit_plans(
         no_fill = not execution_valid
         if execution_valid:
             assert sleeve_a is not None
-            delta_sleeve = target_sleeve_units - sleeve_units
-            delta_etf = target_etf_units - etf_units
+            delta_sleeve = intended_delta_sleeve
+            delta_etf = intended_delta_etf
             sleeve_fill_notional = delta_sleeve * sleeve_a
             etf_fill_notional = delta_etf * (etf_a if etf_a is not None else 0.0)
             fill_cost = ONE_WAY_COST_RATE * (
@@ -2923,15 +3099,19 @@ def _evaluate_am_pm_unit_plans(
                 if trade is not None:
                     trades.append(trade)
         else:
-            no_fill_intervals.append(
-                {
-                    "signal_date": row.date,
-                    "rebalance_date": row.date,
-                    "reason": "d_afternoon_unavailable_no_fill",
-                    "preserved_sleeve_units": sleeve_units,
-                    "preserved_etf_13060_units": etf_units,
-                }
-            )
+            if intended_delta_sleeve != 0.0 or intended_delta_etf != 0.0:
+                comparable = False
+                no_fill_intervals.append(
+                    {
+                        "signal_date": row.date,
+                        "rebalance_date": row.date,
+                        "reason": "d_afternoon_unavailable_no_fill",
+                        "unfilled_sleeve_units": intended_delta_sleeve,
+                        "unfilled_etf_13060_units": intended_delta_etf,
+                        "preserved_sleeve_units": sleeve_units,
+                        "preserved_etf_13060_units": etf_units,
+                    }
+                )
             if sleeve_units != 0.0 or etf_units != 0.0:
                 comparable = False
                 stale_marks.append(
@@ -3011,7 +3191,10 @@ def _evaluate_am_pm_unit_plans(
             etf_units = 0.0
         if not math.isfinite(report_equity) or report_equity <= 0.0:
             raise ValueError("overlay path produced non-positive or non-finite equity")
-        net_return = report_equity / opening - 1.0
+        previous_equity = (
+            starting_capital if not curve else float(curve[-1]["equity"])
+        )
+        net_return = report_equity / previous_equity - 1.0
         curve.append(
             {
                 **plan,
@@ -3019,6 +3202,8 @@ def _evaluate_am_pm_unit_plans(
                 "target_etf_13060_dollar": target_etf_dollar,
                 "target_sleeve_units": target_sleeve_units,
                 "target_etf_13060_units": target_etf_units,
+                "intended_delta_sleeve_units": intended_delta_sleeve,
+                "intended_delta_etf_13060_units": intended_delta_etf,
                 "delta_sleeve_units": delta_sleeve,
                 "delta_etf_13060_units": delta_etf,
                 "sleeve_fill_price": sleeve_a,
@@ -3078,7 +3263,11 @@ def _evaluate_am_pm_unit_plans(
             "reason": (
                 None
                 if comparable
-                else "valuation_a_missing_non_comparable"
+                else (
+                    "unfilled_d_a_order_non_comparable"
+                    if no_fill_intervals
+                    else "valuation_a_missing_non_comparable"
+                )
             ),
         },
     )
@@ -3345,6 +3534,8 @@ def _am_pm_report_framing(
         },
         "execution_policy": {
             "missing_d_a": "no_fill_preserve_prior_units",
+            "nonzero_intended_delta_missing_d_a": "unfilled_order_non_comparable",
+            "exact_zero_delta_missing_d_a": "no_invented_unfilled_order",
             "missing_valuation_a": "stale_trace_non_comparable",
             "never_retroactive_flatten": True,
             "never_prefilter_on_a": True,
@@ -3389,27 +3580,25 @@ def evaluate_index_vol_overlays_am_pm(
         signal_indices,
         starting_capital=capital,
     )
-    diagnostics = [
-        {
-            "date": observations[index].date,
-            "option_as_of_date": observations[index - 1].date if index else None,
-            "svi_equivalent_atm_term_ratio": (
-                _positive(observations[index - 1].signal.svi_equivalent_atm_term_ratio)
-                if index
-                else None
-            ),
-            "svi_equivalent_downside_smile_term_ratio": (
-                _positive(
-                    observations[
-                        index - 1
-                    ].signal.svi_equivalent_downside_smile_term_ratio
-                )
-                if index
-                else None
-            ),
-        }
-        for index in signal_indices
-    ]
+    diagnostics = []
+    for index in signal_indices:
+        lagged = observations[index - 1].lagged_features if index else None
+        diagnostics.append(
+            {
+                "date": observations[index].date,
+                "option_as_of_date": observations[index - 1].date if index else None,
+                "svi_equivalent_atm_term_ratio": (
+                    _positive(lagged.svi_equivalent_atm_term_ratio)
+                    if lagged is not None
+                    else None
+                ),
+                "svi_equivalent_downside_smile_term_ratio": (
+                    _positive(lagged.svi_equivalent_downside_smile_term_ratio)
+                    if lagged is not None
+                    else None
+                ),
+            }
+        )
     evaluated_count = sum(result["status"] == "EVALUATED" for result in results)
     report = _am_pm_report_framing(
         schema_version=PERSONAL_INDEX_VOL_OVERLAY_AM_PM_SCHEMA,
@@ -3514,6 +3703,37 @@ def _am_pm_transport_row_issues(
     return issues
 
 
+def _am_pm_lagged_close_pair_issues(
+    observations: Sequence[IndexVolOverlayAmPmObservation],
+    signal_index: int,
+) -> list[str]:
+    if signal_index < 2:
+        return ["d_minus_2_to_d_minus_1_lagged_close_unavailable"]
+    pair_end = observations[signal_index - 1]
+    pair_start = observations[signal_index - 2]
+    issues: list[str] = []
+    end_lagged = pair_end.lagged_features
+    start_lagged = pair_start.lagged_features
+    if end_lagged is None:
+        issues.append("d_minus_1_lagged_close_features_missing")
+    else:
+        if end_lagged.source_session_date != pair_end.date:
+            issues.append("d_minus_1_lagged_source_date_mismatch")
+        if not str(end_lagged.feature_available_at).startswith(f"{pair_end.date}T"):
+            issues.append("d_minus_1_feature_availability_mismatch")
+        if end_lagged.prior_source_session_date != pair_start.date:
+            issues.append("d_minus_2_prior_source_date_mismatch")
+        if end_lagged.prior_feature_available_at is None or not str(
+            end_lagged.prior_feature_available_at
+        ).startswith(f"{pair_start.date}T"):
+            issues.append("d_minus_2_prior_availability_mismatch")
+    if start_lagged is None:
+        issues.append("d_minus_2_lagged_close_features_missing")
+    elif start_lagged.source_session_date != pair_start.date:
+        issues.append("d_minus_2_lagged_source_date_mismatch")
+    return issues
+
+
 def _am_pm_common_validity_for_date(
     *,
     day: str,
@@ -3525,6 +3745,7 @@ def _am_pm_common_validity_for_date(
 ) -> dict[str, Any]:
     reasons: list[str] = []
     reasons.extend(_am_pm_decision_issues(observations, signal_index))
+    reasons.extend(_am_pm_lagged_close_pair_issues(observations, signal_index))
     if pair_end is None or pair_start is None:
         reasons.append("d_minus_2_to_d_minus_1_pair_unavailable")
     ids = [str(row.get("candidate_id") or "") for row in day_rows]
@@ -3645,6 +3866,9 @@ def canonical_smile_transport_am_pm_panel_digest(
             "schema_version": AM_PM_SMILE_TRANSPORT_PANEL_DIGEST_SCHEMA,
             "signal_evidence_digest": canonical_am_pm_signal_evidence_digest(
                 observations
+            ),
+            "lagged_feature_evidence_digest": (
+                canonical_am_pm_lagged_feature_evidence_digest(observations)
             ),
             "fill_outcome_evidence_digest": (
                 canonical_am_pm_fill_outcome_evidence_digest(observations)
@@ -3907,6 +4131,7 @@ __all__ = [
     "AM_PM_EXECUTION_MODE",
     "AmPmBaseProducerUnavailable",
     "AmPmFillOutcomeEvidence",
+    "AmPmLaggedFeatureEvidence",
     "AmPmSignalEvidence",
     "BASE_COHORT_ID",
     "BASE_NAV_SEMANTICS",
@@ -3945,11 +4170,13 @@ __all__ = [
     "TOPIX_PROXY_DATASET",
     "am_pm_base_producer_unavailable_reason",
     "am_pm_fixture_base_definition",
+    "am_pm_verified_base_binding",
     "am_pm_proxy_mapping",
     "am_pm_proxy_mapping_digest",
     "am_pm_temporal_contract_digest",
     "build_prepared_am_pm_panel_manifest",
     "canonical_am_pm_fill_outcome_evidence_digest",
+    "canonical_am_pm_lagged_feature_evidence_digest",
     "canonical_am_pm_signal_evidence_digest",
     "resolve_am_pm_base_digests",
     "build_prepared_panel_manifest",

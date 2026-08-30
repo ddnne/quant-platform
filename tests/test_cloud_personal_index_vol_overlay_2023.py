@@ -506,8 +506,19 @@ def test_am_pm_observations_keep_native_option_dates_and_etf_ma() -> None:
         base_vol_percent={day: 20.0 for day in dates},
         feature_rows=features,
     )
-    assert rows[2].signal.n225_atm_iv == pytest.approx(0.40)
-    assert rows[1].signal.n225_atm_iv == pytest.approx(0.25)
+    assert not hasattr(rows[2].signal, "n225_atm_iv")
+    assert rows[1].lagged_features is not None
+    assert rows[2].lagged_features is not None
+    assert rows[2].lagged_features.n225_atm_iv == pytest.approx(0.40)
+    assert rows[1].lagged_features.n225_atm_iv == pytest.approx(0.25)
+    assert rows[2].lagged_features.source_session_date == dates[2]
+    assert rows[2].lagged_features.feature_available_at == (
+        f"{dates[2]}T15:00:00+09:00"
+    )
+    assert rows[2].lagged_features.prior_source_session_date == dates[1]
+    assert rows[2].lagged_features.prior_feature_available_at == (
+        f"{dates[1]}T15:00:00+09:00"
+    )
     assert rows[2].signal.topix_etf_13060_madjc == pytest.approx(1002.0)
     assert rows[2].signal.signal_available_at == f"{dates[2]}T12:30:00+09:00"
     assert rows[2].fill_outcome.fill_available_at == f"{dates[2]}T15:00:00+09:00"

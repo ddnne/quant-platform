@@ -23,6 +23,7 @@ from research.personal_index_vol_overlay import (
     AM_PM_CONTROL_ID,
     AmPmBaseProducerUnavailable,
     AmPmFillOutcomeEvidence,
+    AmPmLaggedFeatureEvidence,
     AmPmSignalEvidence,
     BASE_COHORT_ID,
     BASE_SLEEVE_ID,
@@ -38,6 +39,7 @@ from research.personal_index_vol_overlay import (
     PERSONAL_INDEX_SMILE_TRANSPORT_AM_PM_SCHEMA,
     PERSONAL_INDEX_VOL_OVERLAY_AM_PM_SCHEMA,
     PERSONAL_INDEX_VOL_OVERLAY_SCHEMA,
+    PreparedIndexVolOverlayAmPmPanelManifest,
     PreparedIndexVolOverlayPanelManifest,
     SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS,
     SMILE_TRANSPORT_CANDIDATE_IDS,
@@ -45,8 +47,11 @@ from research.personal_index_vol_overlay import (
     am_pm_base_producer_unavailable_reason,
     am_pm_fixture_base_definition,
     am_pm_temporal_contract_digest,
+    am_pm_verified_base_binding,
     build_prepared_am_pm_panel_manifest,
     build_prepared_panel_manifest,
+    canonical_am_pm_lagged_feature_evidence_digest,
+    canonical_am_pm_signal_evidence_digest,
     evaluate_index_smile_transport_overlays_am_pm,
     evaluate_index_vol_overlays,
     evaluate_index_vol_overlays_am_pm,
@@ -76,6 +81,7 @@ def _session(
     cash: float,
     signal_at: str = "12:30:00+09:00",
     fill_at: str = "15:00:00+09:00",
+    previous: str | None = None,
     n225_base_vol: float | None = 20.0,
     n225_atm_iv: float | None = 20.0,
     topix_realized_vol_20: float | None = 10.0,
@@ -101,6 +107,14 @@ def _session(
             signal_available_at=f"{day}T{signal_at}",
             base_sleeve_am_nav=am_nav,
             topix_etf_13060_madjc=etf_m,
+        ),
+        lagged_features=AmPmLaggedFeatureEvidence(
+            source_session_date=day,
+            feature_available_at=f"{day}T15:00:00+09:00",
+            prior_source_session_date=previous,
+            prior_feature_available_at=(
+                f"{previous}T15:00:00+09:00" if previous else None
+            ),
             topix_cash_close=cash,
             n225_cash_close=cash * 20.0,
             n225_base_vol=n225_base_vol,
@@ -144,6 +158,7 @@ def _am_pm_rows(
             etf_a=etf_a[index],
             cash=cash[index],
             signal_at=signal_at,
+            previous=dates[index - 1] if index else None,
         )
         for index, day in enumerate(dates)
     ]
@@ -169,12 +184,13 @@ def _evaluate_overlay(
     **kwargs: Any,
 ) -> dict[str, Any]:
     dates = [row.date for row in rows]
-    return evaluate_index_vol_overlays_am_pm(
-        rows,
-        manifest=_am_pm_manifest(rows),
-        authoritative_session_dates=dates,
-        **kwargs,
-    )
+    with am_pm_verified_base_binding(AM_PM_FIXTURE):
+        return evaluate_index_vol_overlays_am_pm(
+            rows,
+            manifest=_am_pm_manifest(rows),
+            authoritative_session_dates=dates,
+            **kwargs,
+        )
 
 
 def _by_id(report: dict[str, Any], candidate_id: str) -> dict[str, Any]:
@@ -191,12 +207,28 @@ def _replace_signal(
     return replace(row, signal=replace(row.signal, **changes))
 
 
+def _replace_lagged(
+    row: IndexVolOverlayAmPmObservation, **changes: Any
+) -> IndexVolOverlayAmPmObservation:
+    if row.lagged_features is None:
+        raise AssertionError("lagged feature evidence is required")
+    return replace(row, lagged_features=replace(row.lagged_features, **changes))
+
+
 def _replace_fill(
     row: IndexVolOverlayAmPmObservation, **changes: Any
 ) -> IndexVolOverlayAmPmObservation:
     if row.fill_outcome is None:
         return replace(row, fill_outcome=None)
     return replace(row, fill_outcome=replace(row.fill_outcome, **changes))
+
+
+def _drop_fill(
+    rows: Sequence[IndexVolOverlayAmPmObservation], index: int
+) -> list[IndexVolOverlayAmPmObservation]:
+    copied = list(rows)
+    copied[index] = replace(copied[index], fill_outcome=None)
+    return copied
 
 
 def _transport_row(
@@ -304,15 +336,16 @@ def _evaluate_transport(
     signal_end: str | None = None,
 ) -> dict[str, Any]:
     dates = [row.date for row in rows]
-    return evaluate_index_smile_transport_overlays_am_pm(
-        rows,
-        features,
-        manifest=_am_pm_manifest(rows),
-        authoritative_session_dates=dates,
-        signal_start=signal_start,
-        signal_end=signal_end,
-        core_digest=smile_transport_core_digest(),
-    )
+    with am_pm_verified_base_binding(AM_PM_FIXTURE):
+        return evaluate_index_smile_transport_overlays_am_pm(
+            rows,
+            features,
+            manifest=_am_pm_manifest(rows),
+            authoritative_session_dates=dates,
+            signal_start=signal_start,
+            signal_end=signal_end,
+            core_digest=smile_transport_core_digest(),
+        )
 
 
 def test_legacy_overlay_serialized_identity_is_unchanged() -> None:
@@ -371,9 +404,13 @@ def test_am_pm_exact_four_ids_and_distinct_schemas() -> None:
     report = _evaluate_overlay(rows, signal_start=dates[130], signal_end=dates[130])
     assert report["schema_version"] == PERSONAL_INDEX_VOL_OVERLAY_AM_PM_SCHEMA
     assert report["prepared_panel_provenance"]["signal_evidence_digest"]
+    assert report["prepared_panel_provenance"]["lagged_feature_evidence_digest"]
     assert report["prepared_panel_provenance"]["fill_outcome_evidence_digest"]
     assert report["prepared_panel_provenance"]["signal_evidence_digest"] != (
         report["prepared_panel_provenance"]["fill_outcome_evidence_digest"]
+    )
+    assert report["prepared_panel_provenance"]["signal_evidence_digest"] != (
+        report["prepared_panel_provenance"]["lagged_feature_evidence_digest"]
     )
     assert report["candidate_policy"]["selection"] == "NOT_PERFORMED"
     assert report["hedge_proxy"]["code"] == TOPIX_ETF_CODE
@@ -487,7 +524,7 @@ def test_ordinary_overlay_d_signal_uses_d_minus_1_options_and_d_madjc() -> None:
     assert first["feature_ratio_x"] == pytest.approx(1.5)
 
     mutated_d_option = list(rows)
-    mutated_d_option[130] = _replace_signal(
+    mutated_d_option[130] = _replace_lagged(
         mutated_d_option[130],
         n225_front_atm_iv=999.0,
         n225_next_atm_iv=1.0,
@@ -495,7 +532,7 @@ def test_ordinary_overlay_d_signal_uses_d_minus_1_options_and_d_madjc() -> None:
         n225_atm_iv=999.0,
         n225_front_downside_wing_iv=999.0,
         n225_next_downside_wing_iv=1.0,
-        topix_cash_close=mutated_d_option[130].signal.topix_cash_close * 8.0,
+        topix_cash_close=mutated_d_option[130].lagged_features.topix_cash_close * 8.0,
         n225_cash_close=1.0,
     )
     mutated_d_option[130] = _replace_fill(
@@ -526,7 +563,7 @@ def test_ordinary_overlay_d_signal_uses_d_minus_1_options_and_d_madjc() -> None:
         assert after["net_return"] != pytest.approx(before["net_return"])
 
     mutated_d_minus_1 = list(rows)
-    mutated_d_minus_1[129] = _replace_signal(
+    mutated_d_minus_1[129] = _replace_lagged(
         mutated_d_minus_1[129],
         n225_front_atm_iv=10.0,
         n225_next_atm_iv=20.0,
@@ -576,12 +613,15 @@ def test_missing_d_a_does_not_change_morning_units_or_future_rebalance_date() ->
         original_first["topix_hedge_weight"]
     )
     assert first["no_fill"] is True
+    assert first["stale_mark"] is False
     assert first["delta_sleeve_units"] == pytest.approx(0.0)
     assert first["carried_sleeve_units"] == pytest.approx(0.0)
     assert second["rebalance_date"] == original_second["rebalance_date"]
     assert second["signal_date"] == dates[131]
-    assert first["execution_audit"] if False else True
-    audit = _by_id(changed, OVERLAY_AM_PM_CANDIDATE_IDS[0])["execution_audit"]
+    candidate = _by_id(changed, OVERLAY_AM_PM_CANDIDATE_IDS[0])
+    assert candidate["status"] == "NOT_EVALUATED"
+    audit = candidate["execution_audit"]
+    assert audit["comparable"] is False
     assert any(
         item["reason"] == "d_afternoon_unavailable_no_fill"
         for item in audit["no_fill_intervals"]
@@ -766,3 +806,351 @@ def test_smile_transport_single_stock_iv_is_rejected() -> None:
     features[0]["source_dataset_id"] = "equities_options_iv"
     with pytest.raises(ValueError, match="single-stock"):
         _evaluate_transport(rows, features, signal_start=dates[BETA_MIN_RETURNS])
+
+
+def _april_smile_gate():
+    return _gated_transport(
+        valid_months=("2023-04", "2023-05", "2023-06", "2023-07"),
+        per_month=10,
+    )
+
+
+def test_ordinary_missing_first_d_fill_is_non_comparable_while_flat() -> None:
+    dates = _dates(150)
+    report = _evaluate_overlay(
+        _drop_fill(_am_pm_rows(dates), 130),
+        signal_start=dates[130],
+        signal_end=dates[130],
+    )
+    assert report["status"] == "NOT_EVALUATED"
+    for candidate_id in OVERLAY_AM_PM_CANDIDATE_IDS:
+        candidate = _by_id(report, candidate_id)
+        path = candidate["daily_path"][0]
+        assert candidate["status"] == "NOT_EVALUATED"
+        assert path["no_fill"] is True
+        assert path["stale_mark"] is False
+        assert path["intended_delta_sleeve_units"] != pytest.approx(0.0)
+        assert path["delta_sleeve_units"] == pytest.approx(0.0)
+        assert candidate["execution_audit"]["comparable"] is False
+        assert any(
+            item["signal_date"] == dates[130]
+            for item in candidate["execution_audit"]["no_fill_intervals"]
+        )
+    control = report["diagnostic_control"]
+    assert control["status"] == "NOT_EVALUATED"
+    assert control["execution_audit"]["comparable"] is False
+
+
+def test_ordinary_missing_d_fill_with_held_delta_is_non_comparable() -> None:
+    dates = _dates(150)
+    report = _evaluate_overlay(
+        _drop_fill(_am_pm_rows(dates), 131),
+        signal_start=dates[130],
+        signal_end=dates[132],
+    )
+    candidate = _by_id(report, OVERLAY_AM_PM_CANDIDATE_IDS[0])
+    first, second, _third = candidate["daily_path"]
+    assert first["no_fill"] is False
+    assert first["carried_sleeve_units"] != pytest.approx(0.0)
+    assert second["no_fill"] is True
+    assert second["carried_sleeve_units"] == pytest.approx(first["carried_sleeve_units"])
+    assert candidate["status"] == "NOT_EVALUATED"
+    audit = candidate["execution_audit"]
+    assert audit["comparable"] is False
+    assert any(item["signal_date"] == dates[131] for item in audit["no_fill_intervals"])
+    assert any(item["date"] == dates[131] for item in audit["stale_marks"])
+
+
+def test_ordinary_exact_zero_delta_does_not_invent_unfilled_order() -> None:
+    dates = _dates(150)
+    report = _evaluate_overlay(
+        _drop_fill(_am_pm_rows(dates), 131),
+        signal_start=dates[130],
+        signal_end=dates[131],
+    )
+    control = report["diagnostic_control"]
+    first, second = control["daily_path"]
+    assert first["no_fill"] is False
+    assert first["carried_sleeve_units"] != pytest.approx(0.0)
+    assert second["intended_delta_sleeve_units"] == pytest.approx(0.0)
+    assert second["intended_delta_etf_13060_units"] == pytest.approx(0.0)
+    assert second["no_fill"] is True
+    audit = control["execution_audit"]
+    assert not any(item["signal_date"] == dates[131] for item in audit["no_fill_intervals"])
+    assert any(item["date"] == dates[131] for item in audit["stale_marks"])
+
+
+def test_smile_missing_first_intended_fill_is_non_comparable_while_flat() -> None:
+    rows, features, dates, chosen = _april_smile_gate()
+    first_valid = min(chosen)
+    report = _evaluate_transport(
+        _drop_fill(rows, dates.index(first_valid)),
+        features,
+        signal_start=dates[BETA_MIN_RETURNS],
+    )
+    candidate = _by_id(report, SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS[0])
+    path = next(
+        row
+        for row in candidate["daily_path"]
+        if row["signal_date"] == first_valid
+    )
+    assert candidate["status"] == "NOT_EVALUATED"
+    assert path["no_fill"] is True
+    assert path["stale_mark"] is False
+    assert path["intended_delta_sleeve_units"] != pytest.approx(0.0)
+    assert candidate["execution_audit"]["comparable"] is False
+    assert any(
+        item["signal_date"] == first_valid
+        for item in candidate["execution_audit"]["no_fill_intervals"]
+    )
+
+
+def test_smile_missing_d_fill_with_held_delta_is_non_comparable() -> None:
+    rows, features, dates, chosen = _april_smile_gate()
+    first_valid, second_valid = sorted(chosen)[:2]
+    report = _evaluate_transport(
+        _drop_fill(rows, dates.index(second_valid)),
+        features,
+        signal_start=dates[BETA_MIN_RETURNS],
+    )
+    candidate = _by_id(report, SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS[0])
+    first = next(
+        row
+        for row in candidate["daily_path"]
+        if row["signal_date"] == first_valid
+    )
+    second = next(
+        row
+        for row in candidate["daily_path"]
+        if row["signal_date"] == second_valid
+    )
+    assert first["no_fill"] is False
+    assert first["carried_sleeve_units"] != pytest.approx(0.0)
+    assert second["no_fill"] is True
+    assert second["carried_sleeve_units"] == pytest.approx(first["carried_sleeve_units"])
+    assert candidate["status"] == "NOT_EVALUATED"
+    audit = candidate["execution_audit"]
+    assert audit["comparable"] is False
+    assert any(item["date"] == second_valid for item in audit["stale_marks"])
+    assert any(item["signal_date"] == second_valid for item in audit["no_fill_intervals"])
+
+
+def test_smile_exact_zero_delta_does_not_invent_unfilled_order() -> None:
+    rows, features, dates, chosen = _april_smile_gate()
+    flatten_day = dates[BETA_MIN_RETURNS]
+    assert flatten_day not in chosen
+    report = _evaluate_transport(
+        _drop_fill(rows, dates.index(flatten_day)),
+        features,
+        signal_start=dates[BETA_MIN_RETURNS],
+    )
+    candidate = _by_id(report, SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS[0])
+    path = next(
+        row
+        for row in candidate["daily_path"]
+        if row["signal_date"] == flatten_day
+    )
+    assert path["flatten_applied"] is True
+    assert path["intended_delta_sleeve_units"] == pytest.approx(0.0)
+    assert path["intended_delta_etf_13060_units"] == pytest.approx(0.0)
+    assert path["no_fill"] is True
+    assert not any(
+        item["signal_date"] == flatten_day
+        for item in candidate["execution_audit"]["no_fill_intervals"]
+    )
+
+
+def test_same_d_close_cannot_enter_d_morning_signal_evidence() -> None:
+    dates = _dates(8)
+    with pytest.raises(TypeError):
+        AmPmSignalEvidence(
+            date=dates[1],
+            signal_available_at=f"{dates[1]}T12:30:00+09:00",
+            base_sleeve_am_nav=100.0,
+            topix_etf_13060_madjc=1000.0,
+            n225_atm_iv=0.40,
+        )
+    with pytest.raises(ValueError, match="D-morning 12:30"):
+        AmPmLaggedFeatureEvidence(
+            source_session_date=dates[1],
+            feature_available_at=f"{dates[1]}T12:30:00+09:00",
+            n225_atm_iv=0.40,
+        )
+    with pytest.raises(ValueError, match="source session date"):
+        AmPmLaggedFeatureEvidence(
+            source_session_date=dates[1],
+            feature_available_at=f"{dates[2]}T15:00:00+09:00",
+            n225_atm_iv=0.40,
+        )
+    row = _am_pm_rows(dates)[1]
+    assert row.lagged_features is not None
+    with pytest.raises(ValueError, match="source_session_date must match"):
+        replace(
+            row,
+            lagged_features=replace(
+                row.lagged_features,
+                source_session_date=dates[0],
+                feature_available_at=f"{dates[0]}T15:00:00+09:00",
+                prior_source_session_date=None,
+                prior_feature_available_at=None,
+            ),
+        )
+
+
+def test_lagged_close_digest_is_independent_of_morning_signal() -> None:
+    dates = _dates(150)
+    rows = _am_pm_rows(dates)
+    original_signal = canonical_am_pm_signal_evidence_digest(rows)
+    original_lagged = canonical_am_pm_lagged_feature_evidence_digest(rows)
+    mutated_d = list(rows)
+    mutated_d[130] = _replace_lagged(
+        mutated_d[130], n225_atm_iv=999.0, n225_base_vol=999.0
+    )
+    assert canonical_am_pm_signal_evidence_digest(mutated_d) == original_signal
+    assert canonical_am_pm_lagged_feature_evidence_digest(mutated_d) != original_lagged
+    original = _evaluate_overlay(rows, signal_start=dates[130], signal_end=dates[130])
+    after_d = _evaluate_overlay(
+        mutated_d, signal_start=dates[130], signal_end=dates[130]
+    )
+    assert _by_id(after_d, OVERLAY_AM_PM_CANDIDATE_IDS[2])["daily_path"][0][
+        "feature_ratio_x"
+    ] == pytest.approx(
+        _by_id(original, OVERLAY_AM_PM_CANDIDATE_IDS[2])["daily_path"][0][
+            "feature_ratio_x"
+        ]
+    )
+    mutated_d_minus_1 = list(rows)
+    mutated_d_minus_1[129] = _replace_lagged(
+        mutated_d_minus_1[129], n225_front_atm_iv=10.0, n225_next_atm_iv=20.0
+    )
+    after_lag = _evaluate_overlay(
+        mutated_d_minus_1, signal_start=dates[130], signal_end=dates[130]
+    )
+    assert _by_id(after_lag, OVERLAY_AM_PM_CANDIDATE_IDS[2])["daily_path"][0][
+        "feature_ratio_x"
+    ] == pytest.approx(0.5)
+    assert canonical_am_pm_lagged_feature_evidence_digest(mutated_d_minus_1) != (
+        original_lagged
+    )
+
+
+def test_smile_lagged_pair_carries_honest_d_minus_2_and_d_minus_1() -> None:
+    rows, features, dates, chosen = _april_smile_gate()
+    signal = sorted(chosen)[5]
+    index = dates.index(signal)
+    lagged = rows[index - 1].lagged_features
+    assert lagged is not None
+    assert lagged.source_session_date == dates[index - 1]
+    assert lagged.feature_available_at == f"{dates[index - 1]}T15:00:00+09:00"
+    assert lagged.prior_source_session_date == dates[index - 2]
+    assert lagged.prior_feature_available_at == f"{dates[index - 2]}T15:00:00+09:00"
+    assert rows[index].signal.signal_available_at == f"{signal}T12:30:00+09:00"
+    assert rows[index].lagged_features is not None
+    assert rows[index].lagged_features.feature_available_at == (
+        f"{signal}T15:00:00+09:00"
+    )
+    original = _evaluate_transport(rows, features, signal_start=dates[BETA_MIN_RETURNS])
+    path = next(
+        row
+        for row in _by_id(original, SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS[0])["daily_path"]
+        if row["signal_date"] == signal
+    )
+    mutated = list(rows)
+    mutated[index] = _replace_lagged(mutated[index], n225_front_atm_iv=999.0)
+    changed = _evaluate_transport(
+        mutated, features, signal_start=dates[BETA_MIN_RETURNS]
+    )
+    after = next(
+        row
+        for row in _by_id(changed, SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS[0])["daily_path"]
+        if row["signal_date"] == signal
+    )
+    assert after["feature_ratio_x"] == pytest.approx(path["feature_ratio_x"])
+    assert after["target_sleeve_units"] == pytest.approx(path["target_sleeve_units"])
+    assert canonical_am_pm_signal_evidence_digest(mutated) == (
+        canonical_am_pm_signal_evidence_digest(rows)
+    )
+
+
+def test_am_pm_evaluation_requires_verified_producer_binding() -> None:
+    dates = _dates(8)
+    rows = _am_pm_rows(dates)
+    manifest = _am_pm_manifest(rows)
+    with pytest.raises(AmPmBaseProducerUnavailable, match=AM_PM_BASE_PRODUCER_UNAVAILABLE):
+        evaluate_index_vol_overlays_am_pm(
+            rows,
+            manifest=manifest,
+            authoritative_session_dates=dates,
+            signal_start=dates[3],
+            signal_end=dates[3],
+        )
+    payload = dict(
+        strategy_spec_digest=AM_PM_SPEC,
+        cohort_digest=AM_PM_COHORT,
+        snapshot_digest="sha256:" + "3" * 64,
+        base_report_digest="sha256:" + "4" * 64,
+        trading_calendar_digest="sha256:" + "5" * 64,
+        prepared_panel_digest="sha256:" + "6" * 64,
+        signal_evidence_digest="sha256:" + "7" * 64,
+        lagged_feature_evidence_digest="sha256:" + "8" * 64,
+        fill_outcome_evidence_digest="sha256:" + "9" * 64,
+        temporal_contract_digest=am_pm_temporal_contract_digest(),
+        proxy_mapping_digest="sha256:" + "a" * 64,
+        session_date_start=dates[0],
+        session_date_end=dates[-1],
+        session_count=len(dates),
+    )
+    with pytest.raises(AmPmBaseProducerUnavailable, match=AM_PM_BASE_PRODUCER_UNAVAILABLE):
+        PreparedIndexVolOverlayAmPmPanelManifest(**payload)
+    with am_pm_verified_base_binding(AM_PM_FIXTURE):
+        with pytest.raises(AmPmBaseProducerUnavailable, match=AM_PM_BASE_PRODUCER_UNAVAILABLE):
+            PreparedIndexVolOverlayAmPmPanelManifest(
+                **{
+                    **payload,
+                    "strategy_spec_digest": "sha256:" + "e" * 64,
+                    "cohort_digest": "sha256:" + "f" * 64,
+                }
+            )
+
+
+def test_daily_path_net_return_matches_consecutive_equity_ratio() -> None:
+    dates = _dates(150)
+    report = _evaluate_overlay(
+        _am_pm_rows(dates), signal_start=dates[130], signal_end=dates[132]
+    )
+    starting = 1_000_000.0
+    for item in [*report["candidates"], report["diagnostic_control"]]:
+        previous = starting
+        assert item["daily_path"]
+        for row in item["daily_path"]:
+            assert row["net_return"] == pytest.approx(row["equity"] / previous - 1.0)
+            previous = row["equity"]
+    rows, features, dates_s, _chosen = _april_smile_gate()
+    smile = _evaluate_transport(rows, features, signal_start=dates_s[BETA_MIN_RETURNS])
+    for item in [*smile["candidates"], smile["diagnostic_control"]]:
+        if not item["daily_path"]:
+            continue
+        previous = starting
+        for row in item["daily_path"]:
+            assert row["net_return"] == pytest.approx(row["equity"] / previous - 1.0)
+            previous = row["equity"]
+
+
+def test_fill_outcome_rejects_outcome_before_fill() -> None:
+    dates = _dates(8)
+    with pytest.raises(ValueError, match="must not precede"):
+        AmPmFillOutcomeEvidence(
+            date=dates[0],
+            fill_available_at=f"{dates[0]}T16:00:00+09:00",
+            outcome_available_at=f"{dates[0]}T15:00:00+09:00",
+            base_sleeve_pm_nav=100.0,
+            topix_etf_13060_aadjc=1000.0,
+        )
+    equal = AmPmFillOutcomeEvidence(
+        date=dates[0],
+        fill_available_at=f"{dates[0]}T15:00:00+09:00",
+        outcome_available_at=f"{dates[0]}T15:00:00+09:00",
+        base_sleeve_pm_nav=100.0,
+        topix_etf_13060_aadjc=1000.0,
+    )
+    assert equal.outcome_available_at == equal.fill_available_at
