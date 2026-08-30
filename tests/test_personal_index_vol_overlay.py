@@ -12,10 +12,15 @@ import pytest
 from research.personal_index_vol_overlay import (
     BASE_SLEEVE_ID,
     BASE_UNIVERSE_ID,
+    EXPECTED_BASE_COHORT_DIGEST,
+    EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
     IndexVolOverlayObservation,
     ONE_WAY_COST_RATE,
     OVERLAY_CANDIDATES,
     PreparedIndexVolOverlayPanelManifest,
+    build_prepared_panel_manifest,
+    canonical_prepared_panel_digest,
+    canonical_trading_calendar_digest,
     evaluate_index_vol_overlays,
 )
 
@@ -37,6 +42,7 @@ def _panel(
     rows = [
         IndexVolOverlayObservation(
             date=day,
+            available_at=f"{day}T16:00:00+09:00",
             base_sleeve_return=beta * proxy_returns[index],
             topix_cash_close=closes[index],
             n225_base_vol=20.0,
@@ -65,19 +71,10 @@ def _by_id(report: dict, candidate_id: str) -> dict:
 def _manifest(
     rows: list[IndexVolOverlayObservation],
 ) -> PreparedIndexVolOverlayPanelManifest:
-    def digest(character: str) -> str:
-        return "sha256:" + character * 64
-
-    return PreparedIndexVolOverlayPanelManifest(
-        strategy_spec_digest=digest("1"),
-        cohort_digest=digest("2"),
-        snapshot_digest=digest("3"),
-        base_report_digest=digest("4"),
-        trading_calendar_digest=digest("5"),
-        prepared_panel_digest=digest("6"),
-        session_date_start=rows[0].date,
-        session_date_end=rows[-1].date,
-        session_count=len(rows),
+    return build_prepared_panel_manifest(
+        rows,
+        snapshot_digest="sha256:" + "3" * 64,
+        base_report_digest="sha256:" + "4" * 64,
     )
 
 
@@ -121,18 +118,19 @@ def test_prepared_panel_provenance_and_draft_lifecycle_are_required() -> None:
     )
 
     provenance = report["prepared_panel_provenance"]
-    assert provenance["strategy_spec_digest"] == manifest.strategy_spec_digest
-    assert provenance["cohort_digest"] == manifest.cohort_digest
+    assert provenance["strategy_spec_digest"] == EXPECTED_BASE_STRATEGY_SPEC_DIGEST
+    assert provenance["cohort_digest"] == EXPECTED_BASE_COHORT_DIGEST
     assert provenance["snapshot_digest"] == manifest.snapshot_digest
     assert provenance["base_report_digest"] == manifest.base_report_digest
     assert provenance["trading_calendar_digest"] == manifest.trading_calendar_digest
-    assert provenance["complete_consecutive_trading_session_rows"] is True
-    assert provenance["all_rows_available_by_rebalance_close"] is True
-    assert provenance["availability_semantics"] == (
-        "ALL_FIELDS_AVAILABLE_BY_D_PLUS_1_CLOSE"
-    )
     assert provenance["return_semantics"] == (
         "NET_AFTER_STOCK_EXECUTION_COSTS_AND_SHORT_FINANCING"
+    )
+    assert provenance["base_nav_semantics"] == (
+        "CONTINUOUS_PRE_EXISTING_INVESTABLE_NAV"
+    )
+    assert provenance["source_slice_wrapper_cost_semantics"] == (
+        "EXCLUDES_NAV_WRAPPER_ENTRY_AND_LIQUIDATION"
     )
     assert report["lifecycle"] == {
         "stage": "DRAFT_DIAGNOSTIC",
@@ -144,6 +142,9 @@ def test_prepared_panel_provenance_and_draft_lifecycle_are_required() -> None:
         "OVERLAY_INCREMENTAL_ONLY"
     )
     assert report["cost_model"]["not_total_strategy_cost_metrics"] is True
+    assert report["cost_model"][
+        "base_nav_source_slice_excludes_wrapper_entry_liquidation"
+    ] is True
 
     with pytest.raises(ValueError, match="session_count mismatch"):
         evaluate_index_vol_overlays(
@@ -154,6 +155,86 @@ def test_prepared_panel_provenance_and_draft_lifecycle_are_required() -> None:
         )
     with pytest.raises(ValueError, match="net of stock costs and financing"):
         replace(manifest, return_semantics="GROSS_BEFORE_COSTS")
+
+
+def test_repo_definition_and_canonical_panel_digests_reject_drift() -> None:
+    rows, dates = _panel()
+    manifest = _manifest(rows)
+    assert manifest.prepared_panel_digest == canonical_prepared_panel_digest(rows)
+    assert manifest.trading_calendar_digest == canonical_trading_calendar_digest(rows)
+
+    with pytest.raises(ValueError, match="repo definition"):
+        replace(manifest, strategy_spec_digest="sha256:" + "a" * 64)
+    with pytest.raises(ValueError, match="repo definition"):
+        replace(manifest, cohort_digest="sha256:" + "b" * 64)
+
+    mutated = list(rows)
+    mutated[130] = replace(mutated[130], n225_base_vol=21.0)
+    with pytest.raises(ValueError, match="prepared_panel_digest"):
+        evaluate_index_vol_overlays(
+            mutated,
+            manifest=manifest,
+            signal_start=dates[130],
+            signal_end=dates[130],
+        )
+
+    omitted = list(rows)
+    omitted[130] = replace(omitted[130], n225_atm_iv=None)
+    with pytest.raises(ValueError, match="prepared_panel_digest"):
+        evaluate_index_vol_overlays(
+            omitted,
+            manifest=manifest,
+            signal_start=dates[130],
+            signal_end=dates[130],
+        )
+
+
+def test_calendar_hash_and_strict_dplus1_availability_wall_are_verified() -> None:
+    rows, dates = _panel()
+    manifest = _manifest(rows)
+
+    changed_calendar = list(rows)
+    new_last_day = (date.fromisoformat(rows[-1].date) + timedelta(days=1)).isoformat()
+    changed_calendar[-1] = replace(
+        changed_calendar[-1],
+        date=new_last_day,
+        available_at=f"{new_last_day}T16:00:00+09:00",
+    )
+    calendar_manifest = replace(
+        manifest,
+        session_date_end=new_last_day,
+        prepared_panel_digest=canonical_prepared_panel_digest(changed_calendar),
+    )
+    with pytest.raises(ValueError, match="trading_calendar_digest"):
+        evaluate_index_vol_overlays(
+            changed_calendar,
+            manifest=calendar_manifest,
+            signal_start=dates[130],
+            signal_end=dates[130],
+        )
+
+    late = list(rows)
+    late[130] = replace(
+        late[130],
+        available_at=f"{dates[131]}T15:00:00+09:00",
+    )
+    with pytest.raises(ValueError, match="strictly before"):
+        evaluate_index_vol_overlays(
+            late,
+            manifest=manifest,
+            signal_start=dates[130],
+            signal_end=dates[130],
+        )
+
+    unavailable = list(rows)
+    unavailable[130] = replace(unavailable[130], available_at=None)
+    with pytest.raises(ValueError, match="available_at"):
+        evaluate_index_vol_overlays(
+            unavailable,
+            manifest=manifest,
+            signal_start=dates[130],
+            signal_end=dates[130],
+        )
 
 
 def test_ratio_scale_beta_cap_and_d_dplus1_dplus2_timing() -> None:
@@ -420,7 +501,7 @@ def test_base_g1_h0_control_is_diagnostic_and_outside_exact_four() -> None:
     report = _evaluate(
         rows,
         signal_start=dates[130],
-        signal_end=dates[130],
+        signal_end=dates[131],
     )
     control = report["diagnostic_control"]
 
@@ -428,12 +509,23 @@ def test_base_g1_h0_control_is_diagnostic_and_outside_exact_four() -> None:
     assert report["candidate_policy"]["declared_count"] == 4
     assert report["candidate_policy"]["diagnostic_control_in_declared_count"] is False
     assert control["control_id"] == "base_g1_h0_control_v1"
-    assert control["role"] == "DIAGNOSTIC_CONTROL_NOT_RANKED"
-    assert control["daily_path"][0]["gross_scale"] == 1.0
-    assert control["daily_path"][0]["topix_hedge_weight"] == 0.0
+    assert control["role"] == "NAV_WRAPPER_CONTROL_WITH_10BP_ENTRY_EXIT"
+    assert control["ranking_role"] == "DIAGNOSTIC_CONTROL_NOT_RANKED"
+    first, second = control["daily_path"]
+    assert first["gross_scale"] == 1.0
+    assert first["topix_hedge_weight"] == 0.0
+    assert first["sleeve_trade_notional"] > 0.0
+    assert first["terminal_close"] is False
+    assert second["sleeve_trade_notional"] == pytest.approx(0.0)
+    assert second["topix_proxy_trade_notional"] == pytest.approx(0.0)
+    assert second["terminal_close"] is True
+    assert control["performance"]["fill_count"] == 2
     assert control["control_id"] not in report["candidate_policy"]["candidate_order"]
     assert control["performance"]["cost_turnover_fill_scope"] == (
         "OVERLAY_INCREMENTAL_ONLY"
+    )
+    assert control["source_slice_wrapper_cost_semantics"] == (
+        "EXCLUDES_NAV_WRAPPER_ENTRY_AND_LIQUIDATION"
     )
 
 

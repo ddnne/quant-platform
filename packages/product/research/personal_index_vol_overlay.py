@@ -14,13 +14,17 @@ forward-filled.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, datetime, time, timedelta, timezone
 from statistics import mean, median
 from typing import Any, Final, Sequence
 
+from research.factor_cohorts import get_research_cohort
 from research.personal_metrics import summarize_performance
+from strategies.spec import strategy_spec_digest
 
 
 PERSONAL_INDEX_VOL_OVERLAY_SCHEMA: Final = "personal-index-vol-overlay/v1"
@@ -36,8 +40,33 @@ MAX_ABS_TOPIX_HEDGE: Final = 1.5
 BASE_RETURN_SEMANTICS: Final = (
     "NET_AFTER_STOCK_EXECUTION_COSTS_AND_SHORT_FINANCING"
 )
-PANEL_AVAILABILITY_SEMANTICS: Final = "ALL_FIELDS_AVAILABLE_BY_D_PLUS_1_CLOSE"
+BASE_NAV_SEMANTICS: Final = "CONTINUOUS_PRE_EXISTING_INVESTABLE_NAV"
+SOURCE_SLICE_WRAPPER_COST_SEMANTICS: Final = (
+    "EXCLUDES_NAV_WRAPPER_ENTRY_AND_LIQUIDATION"
+)
+PANEL_OBSERVATION_DIGEST_SCHEMA: Final = "index-vol-overlay-observations/v1"
+TRADING_CALENDAR_DIGEST_SCHEMA: Final = "ordered-trading-session-dates/v1"
+CONSERVATIVE_EXECUTION_CUTOFF_JST: Final = "15:00:00+09:00"
 LIFECYCLE_STAGE: Final = "DRAFT_DIAGNOSTIC"
+
+
+_BASE_COHORT_DEFINITION = get_research_cohort(BASE_COHORT_ID)
+_BASE_STRATEGY_DEFINITION = next(
+    (
+        spec
+        for spec in _BASE_COHORT_DEFINITION.strategy_specs
+        if spec.strategy_id == BASE_SLEEVE_ID
+    ),
+    None,
+)
+if _BASE_STRATEGY_DEFINITION is None:  # pragma: no cover - import-time drift guard
+    raise RuntimeError("frozen base strategy is absent from its declared cohort")
+EXPECTED_BASE_STRATEGY_SPEC_DIGEST: Final = strategy_spec_digest(
+    _BASE_STRATEGY_DEFINITION
+)
+EXPECTED_BASE_COHORT_DIGEST: Final = str(
+    _BASE_COHORT_DEFINITION.to_dict()["cohort_digest"]
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +79,10 @@ class IndexVolOverlayObservation:
     """
 
     date: str
+    # Timestamp at which every value in this prepared row was simultaneously
+    # available.  It must be strictly earlier than the next session's
+    # conservative 15:00 JST execution cutoff.
+    available_at: str
     base_sleeve_return: float | None
     topix_cash_close: float | None
     n225_base_vol: float | None
@@ -76,6 +109,43 @@ def _canonical_sha256(value: Any) -> bool:
     )
 
 
+def _canonical_digest(value: Any) -> str:
+    raw = json.dumps(
+        value,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def canonical_prepared_panel_digest(
+    observations: Sequence[IndexVolOverlayObservation],
+) -> str:
+    """Hash every typed row field, including its availability timestamp."""
+
+    return _canonical_digest(
+        {
+            "schema_version": PANEL_OBSERVATION_DIGEST_SCHEMA,
+            "rows": [asdict(row) for row in observations],
+        }
+    )
+
+
+def canonical_trading_calendar_digest(
+    observations: Sequence[IndexVolOverlayObservation],
+) -> str:
+    """Hash the complete ordered session-date vector independently."""
+
+    return _canonical_digest(
+        {
+            "schema_version": TRADING_CALENDAR_DIGEST_SCHEMA,
+            "ordered_session_dates": [row.date for row in observations],
+        }
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedIndexVolOverlayPanelManifest:
     """Typed provenance contract produced before overlay evaluation."""
@@ -93,9 +163,10 @@ class PreparedIndexVolOverlayPanelManifest:
     base_universe_id: str = BASE_UNIVERSE_ID
     base_cohort_id: str = BASE_COHORT_ID
     return_semantics: str = BASE_RETURN_SEMANTICS
-    complete_consecutive_trading_session_rows: bool = True
-    all_rows_available_by_rebalance_close: bool = True
-    availability_semantics: str = PANEL_AVAILABILITY_SEMANTICS
+    base_nav_semantics: str = BASE_NAV_SEMANTICS
+    source_slice_wrapper_cost_semantics: str = (
+        SOURCE_SLICE_WRAPPER_COST_SEMANTICS
+    )
     lifecycle: str = LIFECYCLE_STAGE
 
     def __post_init__(self) -> None:
@@ -111,12 +182,13 @@ class PreparedIndexVolOverlayPanelManifest:
             raise ValueError(
                 "base sleeve returns must be net of stock costs and financing"
             )
-        if self.complete_consecutive_trading_session_rows is not True:
-            raise ValueError("prepared panel must attest consecutive trading sessions")
-        if self.all_rows_available_by_rebalance_close is not True:
-            raise ValueError("prepared panel rows must be available by rebalance close")
-        if self.availability_semantics != PANEL_AVAILABILITY_SEMANTICS:
-            raise ValueError("prepared panel availability wall is invalid")
+        if self.base_nav_semantics != BASE_NAV_SEMANTICS:
+            raise ValueError("prepared panel base NAV semantics are invalid")
+        if (
+            self.source_slice_wrapper_cost_semantics
+            != SOURCE_SLICE_WRAPPER_COST_SEMANTICS
+        ):
+            raise ValueError("prepared panel wrapper-cost semantics are invalid")
         if self.lifecycle != LIFECYCLE_STAGE:
             raise ValueError("prepared panel must remain DRAFT_DIAGNOSTIC")
         for name in (
@@ -129,6 +201,10 @@ class PreparedIndexVolOverlayPanelManifest:
         ):
             if not _canonical_sha256(getattr(self, name)):
                 raise ValueError(f"{name} must be a canonical sha256 digest")
+        if self.strategy_spec_digest != EXPECTED_BASE_STRATEGY_SPEC_DIGEST:
+            raise ValueError("strategy_spec_digest does not match repo definition")
+        if self.cohort_digest != EXPECTED_BASE_COHORT_DIGEST:
+            raise ValueError("cohort_digest does not match repo definition")
         try:
             start = date.fromisoformat(self.session_date_start).isoformat()
             end = date.fromisoformat(self.session_date_end).isoformat()
@@ -224,12 +300,41 @@ def _clip(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
+_JST = timezone(timedelta(hours=9))
+_EXECUTION_CUTOFF_TIME = time(hour=15, minute=0, second=0, tzinfo=_JST)
+
+
+def _availability_timestamp(row: IndexVolOverlayObservation) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(row.available_at)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"observation available_at must be canonical ISO: {row.available_at!r}"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("observation available_at must include a UTC offset")
+    if (
+        parsed.microsecond != 0
+        or parsed.isoformat(timespec="seconds") != row.available_at
+    ):
+        raise ValueError("observation available_at must use canonical whole seconds")
+    return parsed
+
+
+def _next_session_execution_cutoff(next_session_date: str) -> datetime:
+    return datetime.combine(
+        date.fromisoformat(next_session_date),
+        _EXECUTION_CUTOFF_TIME,
+    )
+
+
 def _validate_observations(
     observations: Sequence[IndexVolOverlayObservation],
 ) -> None:
     if len(observations) < 3:
         raise ValueError("at least three ordered sessions are required")
     previous: str | None = None
+    availability: list[datetime] = []
     for row in observations:
         if not isinstance(row, IndexVolOverlayObservation):
             raise TypeError("observations must be IndexVolOverlayObservation values")
@@ -242,7 +347,15 @@ def _validate_observations(
             raise ValueError(f"observation date must be canonical ISO: {row.date!r}")
         if previous is not None and row.date <= previous:
             raise ValueError("observation dates must be unique and strictly increasing")
+        availability.append(_availability_timestamp(row))
         previous = row.date
+    for index, available_at in enumerate(availability[:-1]):
+        cutoff = _next_session_execution_cutoff(observations[index + 1].date)
+        if available_at >= cutoff:
+            raise ValueError(
+                "prepared row must be available strictly before its D+1 "
+                "execution cutoff"
+            )
 
 
 def _validate_manifest(
@@ -257,6 +370,37 @@ def _validate_manifest(
         raise ValueError("prepared panel manifest session_date_start mismatch")
     if manifest.session_date_end != observations[-1].date:
         raise ValueError("prepared panel manifest session_date_end mismatch")
+    try:
+        observed_panel_digest = canonical_prepared_panel_digest(observations)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("prepared panel rows are not canonically hashable") from exc
+    if manifest.prepared_panel_digest != observed_panel_digest:
+        raise ValueError("prepared_panel_digest does not match observation rows")
+    observed_calendar_digest = canonical_trading_calendar_digest(observations)
+    if manifest.trading_calendar_digest != observed_calendar_digest:
+        raise ValueError("trading_calendar_digest does not match ordered session dates")
+
+
+def build_prepared_panel_manifest(
+    observations: Sequence[IndexVolOverlayObservation],
+    *,
+    snapshot_digest: str,
+    base_report_digest: str,
+) -> PreparedIndexVolOverlayPanelManifest:
+    """Build the ergonomic manifest while deriving every repo/local digest."""
+
+    _validate_observations(observations)
+    return PreparedIndexVolOverlayPanelManifest(
+        strategy_spec_digest=EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
+        cohort_digest=EXPECTED_BASE_COHORT_DIGEST,
+        snapshot_digest=snapshot_digest,
+        base_report_digest=base_report_digest,
+        trading_calendar_digest=canonical_trading_calendar_digest(observations),
+        prepared_panel_digest=canonical_prepared_panel_digest(observations),
+        session_date_start=observations[0].date,
+        session_date_end=observations[-1].date,
+        session_count=len(observations),
+    )
 
 
 def _ratio(numerator: Any, denominator: Any) -> float | None:
@@ -458,6 +602,7 @@ def _evaluate_plans(
     plans: Sequence[dict[str, Any]],
     *,
     starting_capital: float,
+    continuous_nav_wrapper: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     equity = starting_capital
     carried_sleeve_notional = 0.0
@@ -468,8 +613,12 @@ def _evaluate_plans(
         gross_scale = float(plan["gross_scale"])
         hedge_weight = float(plan["topix_hedge_weight"])
         opening_equity = equity
-        target_sleeve_notional = gross_scale * opening_equity
-        target_proxy_notional = hedge_weight * opening_equity
+        if continuous_nav_wrapper and plan_index > 0:
+            target_sleeve_notional = carried_sleeve_notional
+            target_proxy_notional = carried_proxy_notional
+        else:
+            target_sleeve_notional = gross_scale * opening_equity
+            target_proxy_notional = hedge_weight * opening_equity
         sleeve_trade_notional = target_sleeve_notional - carried_sleeve_notional
         proxy_trade_notional = target_proxy_notional - carried_proxy_notional
         sleeve_turnover_amount = abs(sleeve_trade_notional)
@@ -584,6 +733,10 @@ def _evaluate_plans(
         {
             "cost_turnover_fill_scope": "OVERLAY_INCREMENTAL_ONLY",
             "base_sleeve_return_semantics": BASE_RETURN_SEMANTICS,
+            "base_nav_semantics": BASE_NAV_SEMANTICS,
+            "source_slice_wrapper_cost_semantics": (
+                SOURCE_SLICE_WRAPPER_COST_SEMANTICS
+            ),
             "total_strategy_cost_turnover_fill_comparable": False,
         }
     )
@@ -671,8 +824,15 @@ def _diagnostic_control_result(
         )
     declaration = {
         "control_id": "base_g1_h0_control_v1",
-        "role": "DIAGNOSTIC_CONTROL_NOT_RANKED",
-        "mechanics": "frozen base sleeve with g=1 and h=0",
+        "role": "NAV_WRAPPER_CONTROL_WITH_10BP_ENTRY_EXIT",
+        "ranking_role": "DIAGNOSTIC_CONTROL_NOT_RANKED",
+        "mechanics": (
+            "continuous pre-existing base NAV with g=1 and h=0, plus only "
+            "the wrapper's 10bp entry and liquidation accounting"
+        ),
+        "source_slice_wrapper_cost_semantics": (
+            SOURCE_SLICE_WRAPPER_COST_SEMANTICS
+        ),
     }
     if missing or not plans:
         return {
@@ -691,6 +851,7 @@ def _diagnostic_control_result(
     curve, trades, performance = _evaluate_plans(
         plans,
         starting_capital=starting_capital,
+        continuous_nav_wrapper=True,
     )
     return {
         **declaration,
@@ -785,18 +946,27 @@ def evaluate_index_vol_overlays(
             "single_stock_option_iv": "EXCLUDED_FROM_INPUT_SURFACE",
             "stock_price_realized_volatility": "ALLOWED_IN_FROZEN_BASE_SLEEVE",
             "return_semantics": BASE_RETURN_SEMANTICS,
+            "nav_semantics": BASE_NAV_SEMANTICS,
+            "source_slice_wrapper_cost_semantics": (
+                SOURCE_SLICE_WRAPPER_COST_SEMANTICS
+            ),
         },
         "timing": {
             "signal": "D_CLOSE",
             "rebalance": "D_PLUS_1_CLOSE",
             "first_pnl": "D_PLUS_1_CLOSE_TO_D_PLUS_2_CLOSE",
             "terminal_close": True,
+            "prepared_row_availability": (
+                "STRICTLY_BEFORE_D_PLUS_1_CONSERVATIVE_15_00_JST_CUTOFF"
+            ),
+            "conservative_execution_cutoff_jst": CONSERVATIVE_EXECUTION_CUTOFF_JST,
         },
         "cost_model": {
             "one_way_basis_points": 10.0,
             "applies_to": ["base_sleeve_turnover", "topix_proxy_turnover"],
             "reported_cost_turnover_fill_scope": "OVERLAY_INCREMENTAL_ONLY",
             "not_total_strategy_cost_metrics": True,
+            "base_nav_source_slice_excludes_wrapper_entry_liquidation": True,
         },
         "topix_proxy": {
             "dataset": TOPIX_PROXY_DATASET,
@@ -839,19 +1009,25 @@ def evaluate_index_vol_overlays(
 
 __all__ = [
     "BASE_COHORT_ID",
+    "BASE_NAV_SEMANTICS",
     "BASE_RETURN_SEMANTICS",
     "BASE_SLEEVE_ID",
     "BASE_UNIVERSE_ID",
     "BETA_LOOKBACK_RETURNS",
     "BETA_MIN_RETURNS",
+    "EXPECTED_BASE_COHORT_DIGEST",
+    "EXPECTED_BASE_STRATEGY_SPEC_DIGEST",
     "IndexVolOverlayObservation",
     "MAX_ABS_TOPIX_HEDGE",
     "ONE_WAY_COST_RATE",
     "OVERLAY_CANDIDATES",
-    "PANEL_AVAILABILITY_SEMANTICS",
     "PERSONAL_INDEX_VOL_OVERLAY_SCHEMA",
     "PREPARED_PANEL_MANIFEST_SCHEMA",
     "PreparedIndexVolOverlayPanelManifest",
+    "SOURCE_SLICE_WRAPPER_COST_SEMANTICS",
     "TOPIX_PROXY_DATASET",
+    "build_prepared_panel_manifest",
+    "canonical_prepared_panel_digest",
+    "canonical_trading_calendar_digest",
     "evaluate_index_vol_overlays",
 ]
