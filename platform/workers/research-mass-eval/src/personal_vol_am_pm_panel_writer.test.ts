@@ -312,17 +312,28 @@ describe("closed personal vol AM/PM panel-build request", () => {
     const mem = new MemoryR2();
     await seedClosedInputs(mem);
     const input = await buildPersonalVolAmPmPanelInputManifest(mem.asBucket(), REQUEST);
-    mem.seed(personalVolAmPmPanelBuildInputKey(REQUEST.job_id), input);
+    const inputKey = personalVolAmPmPanelBuildInputKey(REQUEST.job_id);
+    mem.seed(inputKey, input);
+    const inputDigest = `sha256:${await sha256Hex(mem.values.get(inputKey)!.bytes)}`;
+    mem.seed(personalVolAmPmPanelBuildTerminalKey(REQUEST.job_id), {
+      status: "COMPLETED",
+      job_id: REQUEST.job_id,
+      producer_id: PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
+      cohort_id: PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
+      input_manifest_digest: inputDigest,
+    });
+    const env = { STRUCTURED_BUCKET: mem.asBucket() } as Env;
+    const again = await submitPersonalVolAmPmPanelBuild(env, REQUEST);
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({ ok: true, idempotent: true });
     mem.seed(personalVolAmPmPanelBuildTerminalKey(REQUEST.job_id), {
       status: "COMPLETED",
       job_id: REQUEST.job_id,
       producer_id: PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
       cohort_id: PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
     });
-    const env = { STRUCTURED_BUCKET: mem.asBucket() } as Env;
-    const again = await submitPersonalVolAmPmPanelBuild(env, REQUEST);
-    expect(again.status).toBe(200);
-    expect(await again.json()).toMatchObject({ ok: true, idempotent: true });
+    const missingDigest = await submitPersonalVolAmPmPanelBuild(env, REQUEST);
+    expect(missingDigest.status).toBe(409);
     const conflict = await submitPersonalVolAmPmPanelBuild(env, {
       ...REQUEST,
       selection_snapshot_job_id: "snap-other",

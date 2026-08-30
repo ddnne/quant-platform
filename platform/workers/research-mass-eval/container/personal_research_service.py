@@ -880,6 +880,7 @@ def _get_json(spec: Any) -> dict[str, Any] | None:
             status = int(response.status)
             raw = response.read()
     except urllib.error.HTTPError as error:
+        # Absent terminal is retryable. Identity mismatch / forbidden is not.
         if error.code == 404:
             return None
         if error.code in {400, 403}:

@@ -40,13 +40,13 @@ SUPPORTED_OPTION_VERSIONS = (
 INDIVIDUAL_STOCK_DATASETS = frozenset(
     {
         "derivatives_bars_daily_options_equity",
+        "derivatives_bars_daily_single_stock_options",
         "equity_option_iv",
         "individual_stock_iv",
         "single_stock_option",
     }
 )
-ALLOWED_REGIME_MAPS = frozenset({"source", "basevol", "atm_iv", "skew", "cm_term_ratio"})
-ALLOWED_SERIES_MAPS = frozenset({"rv_short_by_date", "rv_long_by_date", "rv_abs_by_date"})
+INDIVIDUAL_STOCK_MAP_KEYS = frozenset({"by_code"})
 REQUIRED_LOOKBACK = 61
 IV_AVAILABLE_FROM = "2016-07-19"
 SELECTION_START = "2019-01-01"
@@ -100,7 +100,10 @@ TEMPORAL_CONTRACT = {
 MAX_INPUT_BYTES = 512 * 1024
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024
 MAX_LEGACY_PANEL_BYTES = 64 * 1024 * 1024
-MAX_OUTPUT_BYTES = 64 * 1024 * 1024
+# Fixed <=100-code membership, three fixed evaluation windows, and index-level
+# option maps: 100 codes * ~320 sessions * compact AM/PM bars stay well under
+# 8 MiB. Keep the child bound there rather than the unused 64 MiB ceiling.
+MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 OPTION_REBUILD_ERROR = "immutable raw option evidence must be rebuilt"
 COMMON_VALID_REASONS = (
     "predecessor_session_missing",
@@ -571,10 +574,15 @@ def _finite_map(raw: Any) -> dict[str, float]:
     return out
 
 
-def _reject_extra_maps(value: Mapping[str, Any], allowed: frozenset[str]) -> None:
+def _contains_individual_stock_maps(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
     for key, item in value.items():
-        if isinstance(item, dict) and key not in allowed:
-            raise RuntimeError(OPTION_REBUILD_ERROR)
+        if key in INDIVIDUAL_STOCK_MAP_KEYS and isinstance(item, dict):
+            return True
+        if isinstance(item, dict) and _contains_individual_stock_maps(item):
+            return True
+    return False
 
 
 def _extract_opt225_regime(raw: Any) -> dict[str, Any]:
@@ -583,37 +591,39 @@ def _extract_opt225_regime(raw: Any) -> dict[str, Any]:
     bundle = raw["opt225_regime"]
     if not isinstance(bundle, dict):
         raise RuntimeError(OPTION_REBUILD_ERROR)
-    source = bundle.get("source")
-    if not isinstance(source, dict):
-        source = {"dataset": bundle.get("dataset"), "version": bundle.get("version")}
-    dataset = source.get("dataset")
-    version = source.get("version")
+    nested_source = bundle.get("source")
+    if isinstance(nested_source, dict):
+        dataset = nested_source.get("dataset")
+        version = nested_source.get("version")
+    else:
+        dataset = bundle.get("dataset")
+        version = bundle.get("version")
     if dataset in INDIVIDUAL_STOCK_DATASETS:
         raise RuntimeError(OPTION_REBUILD_ERROR)
     if dataset != OPTION_DATASET or version not in SUPPORTED_OPTION_VERSIONS:
         raise RuntimeError(OPTION_REBUILD_ERROR)
-    _reject_extra_maps(bundle, ALLOWED_REGIME_MAPS)
+    if _contains_individual_stock_maps(bundle):
+        raise RuntimeError(OPTION_REBUILD_ERROR)
     extracted: dict[str, Any] = {"source": {"dataset": dataset, "version": version}}
     for field in ("basevol", "atm_iv", "skew"):
         series = bundle.get(field)
         if not isinstance(series, dict):
             raise RuntimeError(OPTION_REBUILD_ERROR)
-        _reject_extra_maps(series, ALLOWED_SERIES_MAPS)
-        if not _finite_map(series.get("rv_short_by_date")) or not _finite_map(
-            series.get("rv_long_by_date")
-        ):
+        short = _finite_map(series.get("rv_short_by_date"))
+        long = _finite_map(series.get("rv_long_by_date"))
+        if not short or not long:
             raise RuntimeError(OPTION_REBUILD_ERROR)
         extracted[field] = {
-            "rv_short_by_date": _finite_map(series.get("rv_short_by_date")),
-            "rv_long_by_date": _finite_map(series.get("rv_long_by_date")),
+            "rv_short_by_date": short,
+            "rv_long_by_date": long,
         }
     cm = bundle.get("cm_term_ratio")
     if not isinstance(cm, dict):
         raise RuntimeError(OPTION_REBUILD_ERROR)
-    _reject_extra_maps(cm, ALLOWED_SERIES_MAPS)
-    if not _finite_map(cm.get("rv_abs_by_date")):
+    absolute = _finite_map(cm.get("rv_abs_by_date"))
+    if not absolute:
         raise RuntimeError(OPTION_REBUILD_ERROR)
-    extracted["cm_term_ratio"] = {"rv_abs_by_date": _finite_map(cm.get("rv_abs_by_date"))}
+    extracted["cm_term_ratio"] = {"rv_abs_by_date": absolute}
     return extracted
 
 

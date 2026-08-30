@@ -347,6 +347,12 @@ async function putOutput(
     return json({ error: "vol panel output checksum rejected" }, 400);
   }
   if (put !== null) {
+    // Cheap diagnostic only: do not delete the shared content-addressed
+    // object. A FAILED terminal racing this PUT can leave an unreferenced
+    // orphan; consumers read only COMPLETED terminal child refs.
+    if (await env.STRUCTURED_BUCKET.head(terminalKey)) {
+      return json({ error: "vol panel child after terminal" }, 409);
+    }
     return json({ ok: true, created: true, key }, 201);
   }
   const raced = await env.STRUCTURED_BUCKET.head(key);

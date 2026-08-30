@@ -312,6 +312,17 @@ function sameClosedIdentity(
   );
 }
 
+function matchingClosedTerminal(
+  terminal: StoredTerminal,
+  request: PersonalVolAmPmPanelBuildRequest,
+  inputDigest: string,
+): boolean {
+  return (
+    sameClosedIdentity(terminal, request) &&
+    terminal.input_manifest_digest === inputDigest
+  );
+}
+
 async function loadLockedInput(
   bucket: R2Bucket,
   request: PersonalVolAmPmPanelBuildRequest,
@@ -390,10 +401,8 @@ export async function submitPersonalVolAmPmPanelBuild(
 ): Promise<Response> {
   const terminalBeforeAdmission = await storedTerminal(env, request.job_id);
   if (terminalBeforeAdmission) {
-    if (
-      !sameClosedIdentity(terminalBeforeAdmission, request) ||
-      !(await loadLockedInput(env.STRUCTURED_BUCKET, request))
-    ) {
+    const locked = await loadLockedInput(env.STRUCTURED_BUCKET, request);
+    if (!locked || !matchingClosedTerminal(terminalBeforeAdmission, request, locked.digest)) {
       return responseJson(
         { ok: false, error: "job_id_conflict", job_id: request.job_id, go: false },
         409,
@@ -467,10 +476,7 @@ export async function submitPersonalVolAmPmPanelBuild(
   }
   const existing = await storedTerminal(env, request.job_id);
   if (existing) {
-    if (
-      !sameClosedIdentity(existing, request) ||
-      existing.input_manifest_digest !== inputDigest
-    ) {
+    if (!matchingClosedTerminal(existing, request, inputDigest)) {
       return responseJson(
         { ok: false, error: "job_id_conflict", job_id: request.job_id, go: false },
         409,

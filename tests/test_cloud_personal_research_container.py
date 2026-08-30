@@ -1690,6 +1690,47 @@ def test_terminal_publication_succeeds_on_later_retry_below_cap() -> None:
             manager._retry_timer.cancel()
 
 
+def test_failed_terminal_put_and_get_404_retries_without_shutdown(monkeypatch) -> None:
+    terminal = threading.Event()
+
+    class _MissingTerminalR2:
+        def __init__(self) -> None:
+            self.puts = 0
+            self.gets = 0
+
+        def urlopen(self, request, timeout=None):
+            del timeout
+            method = request.get_method()
+            url = request.full_url
+            if method == "PUT":
+                self.puts += 1
+                raise urllib.error.HTTPError(
+                    url, 503, "unavailable", Message(), io.BytesIO(b"")
+                )
+            if method == "GET":
+                self.gets += 1
+                raise urllib.error.HTTPError(
+                    url, 404, "not found", Message(), io.BytesIO(b"")
+                )
+            raise AssertionError(method)
+
+    fake = _MissingTerminalR2()
+    monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05, 0.05),
+        max_job_seconds=30,
+    )
+    manager.submit(_job("a" * 64, "put-fail-get-404"))
+    assert not terminal.wait(0.2)
+    assert fake.puts >= 1
+    assert fake.gets >= 1
+    assert manager._shutdown_notified is False
+    assert manager._pending_terminal is not None
+    assert manager.status("put-fail-get-404")["status"] == "FAILED"
+
+
 def test_unavailable_terminal_upload_does_not_shutdown() -> None:
     terminal = threading.Event()
 

@@ -26,6 +26,7 @@ import {
 } from "./personal_vol_am_pm_panel";
 import {
   PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
+  PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
   personalVolAmPmCommonValidDigest,
@@ -380,23 +381,51 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+
+function digestFromChecksum(checksum: ArrayBuffer): string {
+  return `sha256:${[...new Uint8Array(checksum)]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+function trustedChildDigest(object: R2Object): string | null {
+  const metadata = object.customMetadata?.sha256;
+  const checksum = object.checksums?.sha256;
+  const fromChecksum = checksum ? digestFromChecksum(checksum) : null;
+  if (typeof metadata === "string" && DIGEST_RE.test(metadata)) {
+    if (fromChecksum && fromChecksum !== metadata) return null;
+    return metadata;
+  }
+  return fromChecksum && DIGEST_RE.test(fromChecksum) ? fromChecksum : null;
+}
+
 async function loadPanelFromBuildChild(
   bucket: R2Bucket,
   key: string,
   digest: string,
+  size: number,
   membership: readonly string[],
 ): Promise<PersonalVolAmPmPanel> {
   if (key !== personalVolAmPmPanelObjectKey(digest)) {
     failClosed("panel_build_child_key_mismatch");
   }
+  if (
+    !Number.isInteger(size) ||
+    size < 1 ||
+    size > PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES
+  ) {
+    failClosed("panel_build_child_size_denied");
+  }
   const object = await bucket.get(key);
   if (!object) failClosed("panel_build_child_missing");
-  const bytes = new Uint8Array(await object.arrayBuffer());
-  const actual = `sha256:${await sha256Hex(bytes)}`;
-  if (actual !== digest) failClosed("panel_build_child_digest_mismatch");
+  if (object.size !== size) failClosed("panel_build_child_size_mismatch");
+  if (trustedChildDigest(object) !== digest) {
+    failClosed("panel_build_child_digest_mismatch");
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(new TextDecoder().decode(bytes));
+    parsed = await object.json();
   } catch {
     failClosed("panel_build_child_invalid_json");
   }
@@ -414,9 +443,10 @@ export async function loadPersonalVolAmPmPanelsFromBuildJob(
 ): Promise<{
   panels: PersonalVolAmPmPanel[];
   notes: string[];
-  commonValid: Map<string, PersonalVolAmPmCommonValidRow[]>;
   comparisonNotEvaluated: boolean;
 }> {
+  // Consumers read only COMPLETED terminal child refs. An unreferenced
+  // content-addressed orphan from a FAILED-terminal race is never fetched.
   const terminalObject = await bucket.get(
     personalVolAmPmPanelBuildTerminalKey(panelBuildJobId),
   );
@@ -454,17 +484,19 @@ export async function loadPersonalVolAmPmPanelsFromBuildJob(
   }
   const panels: PersonalVolAmPmPanel[] = [];
   const notes: string[] = [];
-  const commonValid = new Map<string, PersonalVolAmPmCommonValidRow[]>();
   let comparisonNotEvaluated = false;
   for (const period of PERSONAL_VOL_PERIODS) {
     const row = terminal.periods[period.period_id];
     if (!isObjectRecord(row)) failClosed("panel_build_period_child_missing");
     const panelDigest = String(row.panel_sha256 ?? "");
     const maskDigest = String(row.common_valid_sha256 ?? "");
+    const panelSize = row.panel_size;
+    if (typeof panelSize !== "number") failClosed("panel_build_child_size_denied");
     const panel = await loadPanelFromBuildChild(
       bucket,
       String(row.panel_key ?? ""),
       panelDigest,
+      panelSize,
       membershipCodes,
     );
     if (
@@ -488,12 +520,11 @@ export async function loadPersonalVolAmPmPanelsFromBuildJob(
       comparisonNotEvaluated = true;
     }
     panels.push(panel);
-    commonValid.set(period.period_id, recomputed);
     notes.push(
       `loaded:${personalVolAmPmPanelObjectKey(panelDigest)}:codes=${equityCodes(panel).length}`,
     );
   }
-  return { panels, notes, commonValid, comparisonNotEvaluated };
+  return { panels, notes, comparisonNotEvaluated };
 }
 
 export function personalVolAmPmRebalanceDates(dates: string[]): string[] {

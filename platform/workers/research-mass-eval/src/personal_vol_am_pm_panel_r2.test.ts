@@ -385,4 +385,53 @@ describe("vol AM/PM panel writer R2 capability", () => {
     expect(response.status).toBe(201);
     expect(personalVolAmPmPanelObjectKey(panelDigest)).not.toContain("/panels/y2021_full.json");
   });
+
+  it("leaves a racing child as an unreferenced orphan instead of claiming atomic exclusion", async () => {
+    const fixed = await fixture();
+    const originalPut = fixed.mem.put.bind(fixed.mem);
+    fixed.mem.put = async (key, value, options) => {
+      const result = await originalPut(key, value, options);
+      if (key.startsWith("research/personal/vol-ratio-am-pm-v1/objects/")) {
+        const timeout = {
+          schema_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA,
+          status: "FAILED",
+          kind: PERSONAL_VOL_AM_PM_PANEL_WRITER_KIND,
+          job_id: JOB_ID,
+          runner_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
+          input_manifest_digest: fixed.inputDigest,
+          producer_id: PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
+          cohort_id: PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
+          go: false,
+          error: "timeout",
+        };
+        const bytes = new TextEncoder().encode(JSON.stringify(timeout));
+        fixed.mem.seed(
+          personalVolAmPmPanelBuildTerminalKey(JOB_ID),
+          bytes,
+          "term-race",
+          { sha256: `sha256:${await sha256Hex(bytes)}` },
+        );
+      }
+      return result;
+    };
+    const late = {
+      schema_version: PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
+      period_id: "y2021_full",
+    };
+    const lateBytes = new TextEncoder().encode(JSON.stringify(late));
+    const lateDigest = `sha256:${await sha256Hex(lateBytes)}`;
+    const lateKey = personalVolAmPmPanelObjectKey(lateDigest);
+    const raced = await put(fixed, lateKey, late);
+    expect(raced.response.status).toBe(409);
+    expect(fixed.mem.values.has(lateKey)).toBe(true);
+    expect(fixed.mem.values.has(personalVolAmPmPanelBuildTerminalKey(JOB_ID))).toBe(
+      true,
+    );
+    const terminal = JSON.parse(
+      new TextDecoder().decode(
+        fixed.mem.values.get(personalVolAmPmPanelBuildTerminalKey(JOB_ID))!.bytes,
+      ),
+    ) as { periods?: Record<string, unknown> };
+    expect(terminal.periods).toBeUndefined();
+  });
 });

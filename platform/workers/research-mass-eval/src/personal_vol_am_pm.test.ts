@@ -29,7 +29,6 @@ import {
   PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT,
   equityCodes,
   isLegacyPersonalVolPanel,
-  loadPersonalVolAmPmPanels,
   parsePersonalVolAmPmPanel,
   personalVolAmPmSessionDatesDigest,
   type PersonalVolAmPmPanel,
@@ -47,6 +46,7 @@ import {
 } from "./personal_vol_research";
 import {
   PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
+  PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA,
   PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
   personalVolAmPmCommonValidDigest,
@@ -160,26 +160,63 @@ async function panelForPeriod(
   return staged;
 }
 
+function digestBytes(digest: string): ArrayBuffer {
+  const hex = digest.slice("sha256:".length);
+  const bytes = new Uint8Array(32);
+  for (let index = 0; index < 32; index += 1) {
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes.buffer;
+}
+
 class MemR2 {
   readonly order: string[] = [];
-  private readonly objects = new Map<string, { body: Uint8Array }>();
+  readonly gets: string[] = [];
+  private readonly objects = new Map<
+    string,
+    {
+      body: Uint8Array;
+      customMetadata: Record<string, string>;
+      checksums: R2Checksums;
+    }
+  >();
 
-  seed(key: string, data: unknown): void {
-    this.objects.set(key, { body: new TextEncoder().encode(JSON.stringify(data)) });
+  seed(
+    key: string,
+    data: unknown,
+    customMetadata: Record<string, string> = {},
+    checksums: R2Checksums = {} as R2Checksums,
+  ): void {
+    const body =
+      data instanceof Uint8Array
+        ? data
+        : new TextEncoder().encode(JSON.stringify(data));
+    this.objects.set(key, { body, customMetadata, checksums });
   }
 
   async head(key: string) {
     const stored = this.objects.get(key);
-    return stored ? { key, size: stored.body.byteLength, etag: `etag-${key}` } : null;
+    return stored
+      ? {
+          key,
+          size: stored.body.byteLength,
+          etag: `etag-${key}`,
+          customMetadata: stored.customMetadata,
+          checksums: stored.checksums,
+        }
+      : null;
   }
 
   async get(key: string) {
     const stored = this.objects.get(key);
     if (!stored) return null;
+    this.gets.push(key);
     const text = async () => new TextDecoder().decode(stored.body);
     return {
       key,
       size: stored.body.byteLength,
+      customMetadata: stored.customMetadata,
+      checksums: stored.checksums,
       text,
       json: async () => JSON.parse(await text()),
       arrayBuffer: async () => stored.body.slice().buffer,
@@ -200,7 +237,13 @@ class MemR2 {
         : ArrayBuffer.isView(value)
           ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice()
           : new Uint8Array(value).slice();
-    this.objects.set(key, { body });
+    this.objects.set(key, {
+      body,
+      customMetadata: options?.customMetadata ?? {},
+      checksums: options?.sha256
+        ? ({ sha256: options.sha256 } as R2Checksums)
+        : ({} as R2Checksums),
+    });
     this.order.push(key);
     return { key, size: body.byteLength, etag: `etag-${key}` };
   }
@@ -222,7 +265,7 @@ async function seedPanelBuild(
     const bytes = new TextEncoder().encode(JSON.stringify(panel));
     const digest = `sha256:${await sha256Hex(bytes)}`;
     const key = personalVolAmPmPanelObjectKey(digest);
-    mem.seed(key, panel);
+    mem.seed(key, panel, { sha256: digest }, { sha256: digestBytes(digest) } as R2Checksums);
     const maskDigest = await personalVolAmPmCommonValidDigest(
       personalVolAmPmCommonValidMask(panel),
     );
@@ -376,38 +419,6 @@ describe("AM/PM panel schema", () => {
       ok: false,
       error: "cash_index_executable_fill_rejected",
     });
-  });
-
-  it("loads only the AM/PM prefix and never the legacy close panel", async () => {
-    const mem = new MemR2();
-    const period = PERSONAL_VOL_PERIODS[1];
-    mem.seed(`${PERSONAL_VOL_PANELS_PREFIX}/${period.period_id}.json`, legacyClosePanel());
-    const { panels, notes } = await loadPersonalVolAmPmPanels(mem.asBucket(), [period]);
-    expect(notes.some((note) => note.startsWith("missing:"))).toBe(true);
-    expect(panels[0].status).toBe("data_missing");
-    expect(panels[0].source).toBe("am_pm_panel_missing");
-  });
-
-  it("rejects a legacy panel stored at the AM/PM key", async () => {
-    const mem = new MemR2();
-    const period = PERSONAL_VOL_PERIODS[1];
-    mem.seed(
-      `${PERSONAL_VOL_AM_PM_PANELS_PREFIX}/${period.period_id}.json`,
-      {
-        ...legacyClosePanel(),
-        period_id: period.period_id,
-        year: period.year,
-        period_start: period.period_start,
-        period_end: period.period_end,
-      },
-    );
-    const { panels, notes } = await loadPersonalVolAmPmPanels(mem.asBucket(), [period]);
-    expect(notes).toEqual(
-      expect.arrayContaining([
-        `legacy_period_panel_rejected:${PERSONAL_VOL_AM_PM_PANELS_PREFIX}/${period.period_id}.json`,
-      ]),
-    );
-    expect(panels[0].source).toBe("legacy_period_panel_rejected");
   });
 
   it("rejects an arbitrary or unsorted session calendar", async () => {
@@ -948,10 +959,9 @@ describe("AM/PM immutable artifact", () => {
       PERSONAL_VOL_PERIODS.map((period) => period.period_id),
     );
     expect(loaded.comparisonNotEvaluated).toBe(false);
+    expect(loaded).not.toHaveProperty("commonValid");
 
     const first = PERSONAL_VOL_PERIODS[0]!;
-    const tampered = loaded.commonValid.get(first.period_id)!;
-    tampered[1] = { ...tampered[1]!, common_valid: !tampered[1]!.common_valid };
     const terminal = (await mem.get(
       personalVolAmPmPanelBuildTerminalKey(PANEL_BUILD_JOB_ID),
     )) as { json: () => Promise<Record<string, unknown>> };
@@ -1061,5 +1071,97 @@ describe("AM/PM immutable artifact", () => {
         }),
       ]),
     );
+  });
+
+  it("never fetches an unreferenced content-addressed orphan", async () => {
+    const mem = new MemR2();
+    const panels = await Promise.all(
+      PERSONAL_VOL_PERIODS.map((period) => panelForPeriod(period)),
+    );
+    await seedPanelBuild(mem, PANEL_BUILD_JOB_ID, panels);
+    const orphan = { schema_version: PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION, note: "orphan" };
+    const orphanBytes = new TextEncoder().encode(JSON.stringify(orphan));
+    const orphanDigest = `sha256:${await sha256Hex(orphanBytes)}`;
+    const orphanKey = personalVolAmPmPanelObjectKey(orphanDigest);
+    mem.seed(
+      orphanKey,
+      orphan,
+      { sha256: orphanDigest },
+      { sha256: digestBytes(orphanDigest) } as R2Checksums,
+    );
+    mem.gets.length = 0;
+    const loaded = await loadPersonalVolAmPmPanelsFromBuildJob(
+      mem.asBucket(),
+      PANEL_BUILD_JOB_ID,
+    );
+    expect(loaded.panels).toHaveLength(PERSONAL_VOL_PERIODS.length);
+    expect(mem.gets).not.toContain(orphanKey);
+  });
+
+  it("rejects child size and trusted-metadata mismatches", async () => {
+    const panels = await Promise.all(
+      PERSONAL_VOL_PERIODS.map((period) => panelForPeriod(period)),
+    );
+    const first = panels[0]!;
+    const firstBytes = new TextEncoder().encode(JSON.stringify(first));
+    const firstDigest = `sha256:${await sha256Hex(firstBytes)}`;
+    const firstKey = personalVolAmPmPanelObjectKey(firstDigest);
+
+    const oversized = new MemR2();
+    await seedPanelBuild(oversized, PANEL_BUILD_JOB_ID, panels, (terminal) => {
+      const periods = terminal.periods as Record<string, { panel_size: number }>;
+      periods[first.period_id]!.panel_size =
+        PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES + 1;
+    });
+    await expect(
+      loadPersonalVolAmPmPanelsFromBuildJob(oversized.asBucket(), PANEL_BUILD_JOB_ID),
+    ).rejects.toMatchObject({ code: "panel_build_child_size_denied" });
+
+    const sizeMismatch = new MemR2();
+    await seedPanelBuild(sizeMismatch, PANEL_BUILD_JOB_ID, panels, (terminal) => {
+      const periods = terminal.periods as Record<string, { panel_size: number }>;
+      periods[first.period_id]!.panel_size += 1;
+    });
+    await expect(
+      loadPersonalVolAmPmPanelsFromBuildJob(sizeMismatch.asBucket(), PANEL_BUILD_JOB_ID),
+    ).rejects.toMatchObject({ code: "panel_build_child_size_mismatch" });
+
+    const metadataMismatch = new MemR2();
+    await seedPanelBuild(metadataMismatch, PANEL_BUILD_JOB_ID, panels);
+    const wrong = `sha256:${"ab".repeat(32)}`;
+    metadataMismatch.seed(
+      firstKey,
+      first,
+      { sha256: wrong },
+      { sha256: digestBytes(wrong) } as R2Checksums,
+    );
+    await expect(
+      loadPersonalVolAmPmPanelsFromBuildJob(
+        metadataMismatch.asBucket(),
+        PANEL_BUILD_JOB_ID,
+      ),
+    ).rejects.toMatchObject({ code: "panel_build_child_digest_mismatch" });
+
+    const checksumClash = new MemR2();
+    await seedPanelBuild(checksumClash, PANEL_BUILD_JOB_ID, panels);
+    checksumClash.seed(
+      firstKey,
+      first,
+      { sha256: firstDigest },
+      { sha256: digestBytes(`sha256:${"cd".repeat(32)}`) } as R2Checksums,
+    );
+    await expect(
+      loadPersonalVolAmPmPanelsFromBuildJob(
+        checksumClash.asBucket(),
+        PANEL_BUILD_JOB_ID,
+      ),
+    ).rejects.toMatchObject({ code: "panel_build_child_digest_mismatch" });
+
+    const missingTrust = new MemR2();
+    await seedPanelBuild(missingTrust, PANEL_BUILD_JOB_ID, panels);
+    missingTrust.seed(firstKey, first);
+    await expect(
+      loadPersonalVolAmPmPanelsFromBuildJob(missingTrust.asBucket(), PANEL_BUILD_JOB_ID),
+    ).rejects.toMatchObject({ code: "panel_build_child_digest_mismatch" });
   });
 });

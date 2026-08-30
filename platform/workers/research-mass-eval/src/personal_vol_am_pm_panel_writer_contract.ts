@@ -35,7 +35,9 @@ export const PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_SNAPSHOT_MANIFEST_BYTES =
   64 * 1024;
 export const PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES =
   64 * 1024 * 1024;
-export const PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES = 64 * 1024 * 1024;
+// Fixed <=100-code, fixed-period AM/PM panel. 100 codes * ~320 sessions of
+// compact MAdjC/AAdjC rows plus index-level option maps stay well under 8 MiB.
+export const PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_PANEL_BYTES = 8 * 1024 * 1024;
 export const PERSONAL_VOL_AM_PM_PANEL_BUILD_TERMINAL_MAX_BYTES = 64 * 1024;
 export const PERSONAL_VOL_AM_PM_PANEL_TIMEOUT_GRACE_MS = 30 * 60 * 1000;
 export const PERSONAL_VOL_AM_PM_SELECTION_PERIOD = {

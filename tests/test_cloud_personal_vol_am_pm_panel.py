@@ -292,6 +292,56 @@ def test_sidecar_extract_is_structural_n225_only() -> None:
         job._extract_opt225_regime(mapped)
 
 
+def test_sidecar_extract_accepts_thicken_canonical_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import research.cf_mass_eval_thicken as thicken
+    from research.options_225_vol_series import (
+        DATASET_ID,
+        OPTIONS_225_VOL_SERIES_VERSION,
+    )
+
+    series = {
+        "rv_abs_by_date": {"2021-01-04": 20.0},
+        "rv_short_by_date": {"2021-01-04": 20.0},
+        "rv_long_by_date": {"2021-01-04": 19.0},
+        "rv_ratio_by_date": {"2021-01-04": 20.0 / 19.0},
+    }
+    monkeypatch.setattr(
+        thicken,
+        "load_opt225_regime_bundle_for_eval",
+        lambda: {
+            "dataset": DATASET_ID,
+            "version": OPTIONS_225_VOL_SERIES_VERSION,
+            "basevol": dict(series),
+            "atm_iv": dict(series),
+            "spread": dict(series),
+            "spread_change": dict(series),
+            "skew": dict(series),
+            "cm_term": dict(series),
+            "cm_term_ratio": dict(series),
+            "basevol_delta": dict(series),
+        },
+    )
+    attached = thicken.attach_opt225_regime()
+    assert "spread" in attached["opt225_regime"]
+    assert "rv_ratio_by_date" in attached["opt225_regime"]["basevol"]
+    extracted = job._extract_opt225_regime(attached)
+    assert extracted["source"] == {
+        "dataset": DATASET_ID,
+        "version": OPTIONS_225_VOL_SERIES_VERSION,
+    }
+    assert set(extracted) == {"source", "basevol", "atm_iv", "skew", "cm_term_ratio"}
+    assert set(extracted["basevol"]) == {"rv_short_by_date", "rv_long_by_date"}
+    assert "spread" not in extracted
+    assert "cm_term" not in extracted
+    assert "basevol_delta" not in extracted
+    by_code = json.loads(json.dumps(attached))
+    by_code["opt225_regime"]["by_code"] = {"13010": {"2021-01-04": 1.0}}
+    with pytest.raises(RuntimeError, match="must be rebuilt"):
+        job._extract_opt225_regime(by_code)
+
+
 def test_execute_writes_children_before_terminal_and_recomputes_common_mask(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
